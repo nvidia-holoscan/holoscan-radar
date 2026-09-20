@@ -67,7 +67,6 @@ The TX-applied waveform joins the processing outputs with `Exact{}`. CPIs from
 other profiles are consumed without updating the image or its histories, and
 Holoviz retains the last selected frame across the selected profile's maximum
 cyclic recurrence gap. Changing the selection requires restarting the
-application. Interactive arrow and numeric-key switching remains deferred
-until the HSDK 5 `HolovizOp` exposes public keyboard callbacks.
+application; runtime profile selection is not part of this example.
 
 Simulator-backed sources default `app.scene_visibility` to `front_half_space`, with radar-local `+x` as boresight. Select `frustum` with explicit horizontal/vertical FOVs in radians, or `all` to restore isotropic target synthesis. This binary coverage gate is separate from relative range loss and does not model antenna gain.

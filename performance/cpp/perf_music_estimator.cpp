@@ -9,7 +9,7 @@
 // size. Measurement tool only: no timing assertions. See
 // docs/planning/OPERATOR_DEVELOPMENT.md.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
+//  Graph-based rewrite of the HSDK 4.x Application harness.
 // Measures each live override independently through the production Exact
 // contract.
 //

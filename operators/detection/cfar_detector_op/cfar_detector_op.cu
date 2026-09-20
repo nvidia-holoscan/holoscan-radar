@@ -1089,10 +1089,12 @@ Contract CFARDetectorOp<T>::contract() const {
 
 template <typename T>
 expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive.
   HOLOSCAN_TRY(auto input, receive_tensor(rd_maps, kOpName));
 
   // Resolve this tick's Exact overrides over pinned Params.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const CFARParams& pinned = context.params<CFARParams>();
   HOLOSCAN_TRY(auto stage,
                resolve_params(
@@ -1101,6 +1103,7 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
                    max_leading_, max_alpha_lut_extent_, extents_));
 
   // Plan input admission, NCI, and output geometry.
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(auto plan,
                build_cfar_stage_plan<T>(
                    std::move(stage), input, extents_, max_leading_));
@@ -1123,6 +1126,7 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
 
   // Run the CFAR stage.
   try {
+    // Execute the device stage on the input runtime stream.
     detail::run_cfar_stage<T>(
         plan.stage, input.data(), plan.input_is_complex, plan.nci.batch_in,
         plan.nci.out_batch, plan.num_doppler, plan.num_range,
@@ -1149,6 +1153,7 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
   // any emit so a late fill failure cannot publish a partial output set.
   // detection_idx additionally gates its count sync and compaction.
   std::optional<TensorOutputLoan> idx_loan;
+  // Allocate exact-sized outputs before launching device work.
   if (detection_idx_out_.active()) {
     HOLOSCAN_TRY(auto loan,
                  prepare_detection_idx(detection_idx, context, plan, det_mask,
@@ -1194,6 +1199,7 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
 
   // Emit all active output loans.
   if (idx_loan) {
+    // Publish coherent outputs in dependency order and retain borrowed inputs.
     detection_idx_out_.emit(detection_idx, context, std::move(*idx_loan),
                             "CFARDetectorOp.detection_idx");
   }

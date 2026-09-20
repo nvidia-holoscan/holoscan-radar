@@ -6,11 +6,9 @@
 // the (chirps x samples) size ladder, the inline clutter stage (off /
 // mean subtraction), and a multi-channel batch.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application
-// harness.  Mid-session [live] clutter_filter override measurement is
-// deferred — ClutterFilterMethod Input is not exercised on EA
-// (HSDK5_PORT.md §1).  Params still select the clutter method under
-// test.  Measurement tool only: no timing assertions.
+// This driver measures Params-selected clutter-filter configurations; it does
+// not report mid-session live-override latency. Measurement tool only: no
+// timing assertions.
 //
 // This tool times the fused node alone; for an end-to-end split vs
 // fused comparison (range → [clutter] → Doppler vs this op), use
@@ -214,8 +212,7 @@ perf::ResultRow base_row(const FusedScenario& scen) {
   row.input_shape = cube_shape(scen);
   row.out_batch = scen.channels;
   row.k = scen.samples_per_chirp;
-  // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §1.
-  row.notes = "live_override=deferred_ea";
+  row.notes = "live_override=not_measured";
   return row;
 }
 
@@ -244,8 +241,7 @@ FusedScenario make_scenario(hr::ClutterFilterMethod clutter,
 }
 
 // -------------------------------------------------------------------
-// Traits.  [EA HSDK5 ONLY] live clutter_filter override is deferred
-// (HSDK5_PORT §1).
+// Traits: the operator-specific surface used by the shared driver.
 // -------------------------------------------------------------------
 struct FusedTraits : perf::PerfDriverDefaults {
   using Scenario = FusedScenario;
@@ -269,8 +265,7 @@ struct FusedTraits : perf::PerfDriverDefaults {
   static const char* full_help() {
     return "Full matrix (clutter modes x sizes x "
            "channel batch); live-override timing "
-           "deferred on HSDK 5 EA "
-           "(HSDK5_PORT.md §1)";
+           "live-override timing is not measured";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -367,8 +362,7 @@ struct FusedTraits : perf::PerfDriverDefaults {
         "cold_ms is first-frame latency including "
         "both FFT plan builds; median/p90 are "
         "post-warmup steady state; live "
-        "clutter_filter override timing deferred "
-        "(HSDK5_PORT.md §1); "
+        "clutter_filter override timing is not measured; "
         "cells/s is complex rd-map cells/s";
     report->results.push_back(row);
   }

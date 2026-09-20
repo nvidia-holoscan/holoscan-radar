@@ -92,8 +92,8 @@ objects, or Tensor members. Keep ordinary numeric bulk data on Tensor ports.
 - [ ] Install generated public headers with one include spelling that works
       in both build and install trees, and link every consumer to the one
       schema target.
-- [ ] Update `OPERATOR_API.md`, the operator's `OPEN_ITEMS.md`,
-      `HSDK5_PORT.md` §9, and this document's sync surface.
+- [ ] Update `OPERATOR_API.md`, the root `OPEN_ITEMS.md`, and this
+      document's synchronization surface.
 
 ## Evolution rules
 
@@ -123,11 +123,9 @@ Null is invalid. Marshaling must normalize absence to the zero-length Tensor
 and must not assign semantic meaning to a missing pointer. Tensor dtype and
 memory kind remain fixed by the schema field in both cases.
 
-HSDK 5 EA descriptor-traits generation does not currently compile FlatBuffers
-nullable scalars. Encode each optional scalar losslessly as a value plus an
-explicit `has_*` boolean; do not reserve an otherwise valid numeric value as
-an unset sentinel. Remove this workaround only after the SDK generator accepts
-nullable scalars and the schema version/compatibility change is reviewed.
+Encode each optional scalar losslessly as a value plus an explicit `has_*`
+boolean. This keeps presence explicit across generated-language bindings and
+avoids reserving an otherwise valid numeric value as an unset sentinel.
 
 ## Synchronization surface
 

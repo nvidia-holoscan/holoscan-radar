@@ -319,7 +319,7 @@ struct FeatTraits : perf::PerfDriverDefaults {
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
         "bins-only (range+velocity) — score/aoa optional ports "
-        "omitted on HSDK 5 EA Graph (covered by stage tests); "
+        "omitted from this Graph benchmark (covered by stage tests); "
         "cold_ms is first-frame latency; median/p90 are "
         "steady state; cells/s is detections/s";
     report->results.push_back(row);

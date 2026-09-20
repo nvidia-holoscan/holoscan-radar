@@ -31,7 +31,7 @@ namespace holoscan::radar {
 //               (N_rx, M·L, samples_per_chirp). No opaque leading batch.
 // Out: adc_cube_out — same dtype,
 //               (M_tx, N_rx, L, samples_per_chirp).
-//               [EA HSDK5 ONLY] unique in/out port names required.
+//                unique in/out port names required.
 //
 // Precision is fixed at compile time by the template instantiation.
 // Fat output pool sizing requires MaxTensorExtents at graph.op() (ctor).
@@ -73,7 +73,7 @@ class MIMODeinterleaveOp
   // HSDK 5 requires unique port names within an operator (inputs and
   // outputs share one namespace). OPERATOR_API.md's logical output channel
   // remains "adc_cube"; the physical port name is adc_cube_out.
-  // [EA HSDK5 ONLY] revisit naming once the full port is settled.
+  //  revisit naming once the full port is settled.
   Output<Tensor> adc_cube_out{"adc_cube_out"};
 
  private:

@@ -60,7 +60,7 @@ class PerfTensorSourceOp(Operator):
 
     def compute(self, op_input, op_output, context) -> None:
         # Start the frame clock *after* emit so CuPy→Holoscan wrap cost is not
-        # attributed to the operator under test (see performance/OPEN_ITEMS.md).
+        # attributed to the operator under test (see OPEN_ITEMS.md).
         if not self._collector.first_tick_set:
             self._collector.t_first_tick = now()
             self._collector.first_tick_set = True

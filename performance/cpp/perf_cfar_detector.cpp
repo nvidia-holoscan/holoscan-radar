@@ -6,7 +6,7 @@
 // one session and emits a single unified report. Measurement tool only: no
 // timing assertions.
 //
-// [EA HSDK5 ONLY] Graph-based harness. Measures a mid-session threshold_scale
+//  Graph-based harness. Measures a mid-session threshold_scale
 // override. The post_run calibration summary is kept for alpha_lut vs pfa
 // cold-start comparison; other live ports are not timed here.
 

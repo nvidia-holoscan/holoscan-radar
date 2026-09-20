@@ -1142,14 +1142,6 @@ ThreeOutGraphRunResult run_fused_descriptor_override_graph(
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest,
-     LiveClutterOverrideChangesShape) {
-  // [EA HSDK5 ONLY] Graph mid-stream override harness deferred —
-  // HSDK5_PORT.md §1 (EA device/partition binding issues).
-  GTEST_SKIP() << "HSDK 5 EA: live clutter_filter override harness "
-                  "deferred (HSDK5_PORT.md §1)";
-}
-
-TEST(FMCWRangeDopplerProcessorOpTest,
      LiveWindowAndWaveformOverride) {
   const auto base_waveform = to_descriptor(sim::SimWaveform{});
   sim::SimWaveform changed_sim_waveform{};

@@ -1,23 +1,68 @@
 # `CFARDetectorOp`
 
+## Purpose
+
 2-D CFAR detector on the (Doppler, range) plane: forms or accepts a power map, estimates local noise from a guard/training window, and emits a per-cell score, mask, noise map, the thresholded power surface, and a compacted list of detected cells. `detection_score > 1` is the detection test (`score = P / (threshold_scale · α · noise_estimate)`); `detection_idx` is exact-sized to the detection count.
 
-| Kind | Port | Dtype | Shape | Notes |
+## Responsibilities
+
+- Forms or accepts the detection power surface, estimates local noise, applies variant-specific threshold calibration, and optionally suppresses non-maxima.
+- Owns dense score/noise/power outputs and exact-size compaction of detected indices and masks.
+- Does not cluster detections, estimate angles, or perform physical-velocity clutter notching.
+
+## When to use
+
+Use after range-Doppler formation, dense beamforming, or DDM power folding when adaptive thresholding against local noise is needed. Choose CA for homogeneous backgrounds, GO/SO for asymmetric clutter-edge behavior, and OS for robustness to interfering training cells; configure NCI or peak suppression only when those axes and statistics match the data. Do not use CFAR as a clusterer, angle estimator, or substitute for a physical-velocity notch.
+
+```text
+rd_maps / rda_cube / power_map -> CFARDetectorOp
+  -> detection_idx + detection_score + noise_estimate [ + detection_mask ]
+```
+
+## Ports
+
+| Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
+| --- | --- | --- | --- | --- | --- |
+| in | `rd_maps` | complex64 / complex128, or float32 / float64 | `(num_doppler, num_range_bins)`, optional named leading axes | Required trigger/aligned input | Path auto-selected by dtype: complex → square-law abs2; real → already-formed power |
+| out (optional, latched) | `detection_mask` | uint8 (`0`/`1`) | same trailing plane; `nci_axes` reduced; other leading axes preserved | Optional latched output | Raw threshold mask for `none`; retained maxima for other peak modes |
+| out (optional, latched) | `detection_score` | float32 / float64 | same as `detection_mask` | Optional latched output | `P / (threshold_scale · α · noise_estimate)`; `> 1` ⇔ detected |
+| out (optional, latched) | `noise_estimate` | float32 / float64 | same as `detection_mask` | Optional latched output | Per-cell training-window noise |
+| out (optional, latched) | `cfar_power` | float32 / float64 | same as `detection_mask` | Optional latched output | Surface that was thresholded: square-law abs2, or post-NCI sum of abs2 |
+| out (optional, latched) | `detection_idx` | int64 | `(num_detections, 2 [+ n_preserved])` | Optional latched output | `(…preserved, doppler_bin, range_bin)` per row; row count *is* `num_detections` |
+| live | `pfa` | float64 | scalar | Optional Exact one-tick override; Params fallback on miss | Exact override; wire to enable |
+| live | `threshold_scale` | float64 | scalar | Optional Exact one-tick override; Params fallback on miss | Exact override; wire to enable |
+| live | `os_rank` | int64 | scalar | Optional Exact one-tick override; Params fallback on miss | Exact override (OS only); wire to enable |
+| live | `max_detections` | int64 | scalar | Optional Exact one-tick override; Params fallback on miss | Exact override (`<= 0` → uncapped); wire to enable |
+| live | `guard_cells` | `CfarCellWindowOverride` POD | int64 `(doppler, range)` pair | Optional Exact one-tick override; Params fallback on miss | Exact override; wire to enable |
+| live | `training_cells` | `CfarCellWindowOverride` POD | int64 `(doppler, range)` pair | Optional Exact one-tick override; Params fallback on miss | Exact override; wire to enable |
+| live | `nci_axes` | int64 config Tensor | `(num_nci_axes,)`, rank-1 pageable host | Optional Exact one-tick override; Params fallback on miss | Exact override; wire to enable; extent bounded by the named leading rank |
+| live | `alpha_lut` | float64 config Tensor | `(num_entries,)`, rank-1 pageable host | Optional Exact one-tick override; Params fallback on miss | Exact override; wire to enable; extent bound depends on the variant |
+
+## Construction
+
+| Item | Type | Requirement | Responsibility |
+| --- | --- | --- | --- |
+| Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
+| `extents` | `MaxTensorExtents` | `max_doppler_bins` and `max_range_bins` required; channel/TX and `max_detections` bounds optional | Sizes Tensor pools and bounded workspaces before `arm()`. |
+
+## Parameters
+
+| Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
-| in | `rd_maps` | complex64 / complex128, or float32 / float64 | `(num_doppler, num_range_bins)`, optional named leading axes | Path auto-selected by dtype: complex → square-law abs2; real → already-formed power |
-| out (optional, latched) | `detection_mask` | uint8 (`0`/`1`) | same trailing plane; `nci_axes` reduced; other leading axes preserved | Raw threshold mask for `none`; retained maxima for other peak modes |
-| out (optional, latched) | `detection_score` | float32 / float64 | same as `detection_mask` | `P / (threshold_scale · α · noise_estimate)`; `> 1` ⇔ detected |
-| out (optional, latched) | `noise_estimate` | float32 / float64 | same as `detection_mask` | Per-cell training-window noise |
-| out (optional, latched) | `cfar_power` | float32 / float64 | same as `detection_mask` | Surface that was thresholded: square-law abs2, or post-NCI sum of abs2 |
-| out (optional, latched) | `detection_idx` | int64 | `(num_detections, 2 [+ n_preserved])` | `(…preserved, doppler_bin, range_bin)` per row; row count *is* `num_detections` |
-| live | `pfa` | float64 | scalar | Exact override; wire to enable |
-| live | `threshold_scale` | float64 | scalar | Exact override; wire to enable |
-| live | `os_rank` | int64 | scalar | Exact override (OS only); wire to enable |
-| live | `max_detections` | int64 | scalar | Exact override (`<= 0` → uncapped); wire to enable |
-| live | `guard_cells` | `CfarCellWindowOverride` POD | int64 `(doppler, range)` pair | Exact override; wire to enable |
-| live | `training_cells` | `CfarCellWindowOverride` POD | int64 `(doppler, range)` pair | Exact override; wire to enable |
-| live | `nci_axes` | int64 config Tensor | `(num_nci_axes,)`, rank-1 pageable host | Exact override; wire to enable; extent bounded by the named leading rank |
-| live | `alpha_lut` | float64 config Tensor | `(num_entries,)`, rank-1 pageable host | Exact override; wire to enable; extent bound depends on the variant |
+| `cfar_variant` | enum {CA, GO, SO, OS} | `CA` | static | Noise-estimation kernel; instantiate a separate operator to vary it |
+| `os_rank` | int64 | none (`-1` sentinel) | `[live]` Exact | 0-based ascending rank into sorted training powers; required for OS, unused otherwise Cost: New rank rebuilds the pfa-derived LUT (OS); cached keys reuse. |
+| `guard_cells` | int64[2] `(doppler, range)` | none (required) | `[live]` Exact POD pair | Guard half-extent each side of the CUT Cost: May recalibrate the α LUT; no kernel rebuild. |
+| `training_cells` | int64[2] `(doppler, range)` | none (required) | `[live]` Exact POD pair | Training half-extent each side; sets `N` Cost: Same as `guard_cells`. |
+| `pfa` | float64 | `1e-6` | `[live]` Exact | Target Pfa when `alpha_lut` is empty; ignored for α while an external LUT is set Cost: Unseen `(variant, pfa, K, window, …)` key builds / queues an α LUT and warns once. |
+| `alpha_lut` | float64 vector | `[]` | `[live]` Exact host config Tensor | Precomputed α table; non-empty → used directly, `pfa` ignored for α Cost: Validation + H2D upload. |
+| `blocking_alpha_lut_rebuild` | bool | `false` | static | `true` blocks the tick on a pfa-LUT miss; `false` serves the previous LUT while a background build runs (first build still blocks) |
+| `nci_fold` | int64 | `0` (unset) | static | Optional `K` hint so `start()` can pre-warm when `nci_axes` is set; `<= 0` defers |
+| `preintegrated_looks` | int64 | `1` | static | Independent power looks already summed in each real input cell; effective `K = preintegrated_looks · NCI fold` Cost: Changes α calibration. |
+| `threshold_scale` | float64 | `1.0` | `[live]` Exact | Empirical multiplier: `threshold = threshold_scale · α · noise`; `1.0` = pure CFAR Cost: Free (kernel argument). |
+| `nci_axes` | int64 vector | `[]` | `[live]` Exact host config Tensor | Leading-axis indices to sum in power before CFAR Cost: Changes `K` and output shape; may recalibrate α. |
+| `max_detections` | int64 | `0` (uncapped) | `[live]` Exact | `> 0` caps `detection_idx` rows and warns on surplus Cost: Free (cap after count). |
+| `peak_mode` | enum {none, range_doppler, all} | `none` | static | Raw detections, per-plane RD maxima, or full N-D maxima Cost: NMS launch unless none. |
+| `peak_radius` | int64 vector | `[1]` | static | NMS half-width: scalar or RD pair for `range_doppler`; scalar or post-NCI-rank vector for `all`; zero excludes an axis Cost: Grows neighborhood traversal multiplicatively. |
 
 Contract: [`OPERATOR_API.md` § `CFARDetectorOp`](../../../docs/planning/OPERATOR_API.md) ·
 group: [`operators/detection/README.md`](../README.md)
@@ -30,7 +75,7 @@ group: [`operators/detection/README.md`](../README.md)
 
 2. **Non-coherent integration.** When `nci_axes` is non-empty, `nci_sum_kernel` sums power along those leading axes. The integration fold is `K = ∏ sizes of nci_axes` (`K = 1` when `nci_axes = []`). Other leading axes stay batched. The cell statistic is then Gamma(`K`).
 
-3. **Fused CFAR stencil** (one thread per cell). Guard cells around the cell under test (CUT) are excluded; training cells on each side form the noise estimate. Out-of-map cells are skipped (border-correct `N`). Shared score/mask rule, quoted from `cfar_ca_kernel`:
+3. **Fused CFAR stencil** (one thread per cell). Guard cells around the cell under test (CUT) are excluded; training cells on each side form the noise estimate. Out-of-map cells are skipped (border-correct `N`). The shared score and mask rule is:
 
    ```text
    threshold = threshold_scale * alpha * noise
@@ -84,47 +129,6 @@ group: [`operators/detection/README.md`](../README.md)
   | Missing ctor extent | `CFARDetectorOp: MaxTensorExtents.max_doppler_bins must be a positive value (required for Tensor pool sizing)` (same for `max_range_bins`) |
   | No CUDA stream | `CFARDetectorOp: no CUDA compute stream` (`ErrorCode::kNotSupported`) |
 
-## Parameters
-
-| Parameter | Type | Default | Override | Cost | Meaning |
-| --- | --- | --- | --- | --- | --- |
-| `cfar_variant` | enum {CA, GO, SO, OS} | `CA` | static | — | Noise-estimation kernel; instantiate a separate operator to vary it |
-| `os_rank` | int64 | none (`-1` sentinel) | `[live]` Exact | New rank rebuilds the pfa-derived LUT (OS); cached keys reuse | 0-based ascending rank into sorted training powers; required for OS, unused otherwise |
-| `guard_cells` | int64[2] `(doppler, range)` | none (required) | `[live]` Exact POD pair | May recalibrate the α LUT; no kernel rebuild | Guard half-extent each side of the CUT |
-| `training_cells` | int64[2] `(doppler, range)` | none (required) | `[live]` Exact POD pair | Same as `guard_cells` | Training half-extent each side; sets `N` |
-| `pfa` | float64 | `1e-6` | `[live]` Exact | Unseen `(variant, pfa, K, window, …)` key builds / queues an α LUT and warns once | Target Pfa when `alpha_lut` is empty; ignored for α while an external LUT is set |
-| `alpha_lut` | float64 vector | `[]` | `[live]` Exact host config Tensor | Validation + H2D upload | Precomputed α table; non-empty → used directly, `pfa` ignored for α |
-| `blocking_alpha_lut_rebuild` | bool | `false` | static | — | `true` blocks the tick on a pfa-LUT miss; `false` serves the previous LUT while a background build runs (first build still blocks) |
-| `nci_fold` | int64 | `0` (unset) | static | — | Optional `K` hint so `start()` can pre-warm when `nci_axes` is set; `<= 0` defers |
-| `preintegrated_looks` | int64 | `1` | static | Changes α calibration | Independent power looks already summed in each real input cell; effective `K = preintegrated_looks · NCI fold` |
-| `threshold_scale` | float64 | `1.0` | `[live]` Exact | Free (kernel argument) | Empirical multiplier: `threshold = threshold_scale · α · noise`; `1.0` = pure CFAR |
-| `nci_axes` | int64 vector | `[]` | `[live]` Exact host config Tensor | Changes `K` and output shape; may recalibrate α | Leading-axis indices to sum in power before CFAR |
-| `max_detections` | int64 | `0` (uncapped) | `[live]` Exact | Free (cap after count) | `> 0` caps `detection_idx` rows and warns on surplus |
-| `peak_mode` | enum {none, range_doppler, all} | `none` | static | NMS launch unless none | Raw detections, per-plane RD maxima, or full N-D maxima |
-| `peak_radius` | int64 vector | `[1]` | static | Grows neighborhood traversal multiplicatively | NMS half-width: scalar or RD pair for `range_doppler`; scalar or post-NCI-rank vector for `all`; zero excludes an axis |
-
-`os_rank` is contract-required when `cfar_variant = OS` (typical `≈ floor(0.75·N)`). Params and bindings use `-1` only as the unset sentinel; selecting OS without an explicit non-negative rank fails with a required-parameter error. `guard_cells` and `training_cells` have no Params default and are rejected if missing at the first tick.
-
-**α LUT indexing.** CA / OS: `alpha_lut[n]` for training-cell count `n`. GO / SO: `alpha_lut[go_lut_index(range_neg, range_pos, doppler_neg, doppler_pos)]`. Length must exceed the maximum index for the variant, footprint, and map (`len > max_n`). CA and OS `K = 1` require a positive dense `1..max_n` table. GO/SO and OS `K > 1` permit zero only at indices unreachable for the current map/window; every reachable index must be finite and positive. Negative and non-finite entries always reject. Border GO/SO geometries can alias to one index; pfa-derived builds store the max α across aliases so every aliased cell meets the target Pfa.
-
-**Deferred (not v1).** Interior scalar `alpha`, hybrid scalar/table or scalar/policy edge modes, offline LUT-generation helpers, and GO/SO start-time pre-warm. See the contract’s deferred list.
-
-## SDK implementation notes
-
-- **Construction.** `explicit CFARDetectorOp(const MaxTensorExtents& extents)`. Required: `max_doppler_bins`, `max_range_bins`. Optional: `max_rx` / `max_channels` (admit one leading axis), `max_tx` (admit two; requires `max_rx` or `max_channels`), `max_detections` (idx-pool cap; default = leading product × doppler × range). A tick whose doppler/range exceeds the ctor maxima is rejected. Dense `(az, el)` leading is **not** a first-class extents pair: `dense_beamforming` copies `max_az`/`max_el` into `max_tx`/`max_rx` so `named_tx_rx_leading_rank` reports 2.
-- **Triggering.** `contract()` is `OnEach{rd_maps}` plus an unconditional `Exact{}` + `on_missing SafeDefault{}` entry for every `[live]` override port. Wiring a port is the only thing that enables its override; an unwired entry compiles (warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT`), reports `kNotConnected` on every activation, and `compute()` reads that as no override this tick. All five outputs are optional/latched: the first unwired emit is absorbed and disables that output's dedicated loan/copy work for the rest of the run.
-- **Ports and queues.** `rd_maps` and every live Input: `queue_depth(2)`. `rd_maps` is a device tensor; `nci_axes` / `alpha_lut` are rank-1 pageable-host config Tensors. Fat map outs: `max_rank = 2 + named leading`, `max_byte_span` from the real-`T` cube of `(max_tx·max_rx, max_doppler, max_range)`, with frozen uint8 (`detection_mask`) or real-`T` (`detection_score`, `noise_estimate`, `cfar_power`) layouts. `detection_idx` freezes an int64 rank-2 layout with span from `(max_detections, 2 + leading) · sizeof(int64)`.
-- **Streams and lifetime.** Work is enqueued on `context.cuda_stream()`. The input Tensor is moved into `retained_input_` at the end of `compute()` as a stream-ordered lifetime guard. While `detection_idx` is active, `count_mask_detections` D2H-syncs the scalar detection count so the idx loan can be exact-sized; latching an unwired `detection_idx` skips that sync and compaction on later ticks. Exact sizing is ratified; a capacity plus count fast path remains deferred until profiling justifies an additive contract.
-- **Emission.** Stage results land in a ping-ponged device workspace. Each active output is pool-loaned, D2D-copied (`prepare_copy_device`), committed, and emitted — `detection_idx`, `cfar_power`, `detection_mask`, `detection_score`, `noise_estimate` in that order. All active loans are prepared before any emit so a late fill cannot publish a partial set. **[EA HSDK5 ONLY]** The D2D copies replace the HSDK 4.x no-copy workspace emit; each is skipped after its output latches unwired.
-- **Parameter authoring.** Schema `com.nvidia.holoscan.radar.CFARParams` version 1. YAML / `from_config` / `set_params` field names match the table above (`cfar_variant`, `os_rank`, `guard_cells`, …).
-- **Precision.** Explicit instantiations: `CFARDetectorOp<float>`, `CFARDetectorOp<double>`.
-- **Live override payloads.** Scalars ride typed Inputs (`Input<double> pfa` / `threshold_scale`, `Input<int64_t> os_rank` / `max_detections`) and resolve with `resolve_live_override`. `guard_cells` / `training_cells` ride padding-free `CfarCellWindowOverride` PODs converted by `from_wire`; `nci_axes` / `alpha_lut` ride rank-1 pageable-host config Tensors validated on arrival against a per-variant extent bound ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9).
-- **Background LUT builds.** `stop()` calls `detail::join_inflight_alpha_lut_builds()` so a detached GO/SO/OS Monte Carlo thread cannot launch after the CUDA context is torn down (STATUS.md L15).
-
-## Consumer lifetime notes
-
-**[EA HSDK5 ONLY]** Every active output is a fresh pool-loaned device buffer (D2D copy from the internal workspace). A consumer may retain any emitted port across ticks. The workspace is still ping-ponged internally (overwritten two ticks later) but is copied before emit.
-
 ## Performance
 
 **Cold.** First-seen α LUT (host incomplete-beta for CA; Monte Carlo for GO/SO/OS-`K>1` — seconds on large footprints); start-time CA/OS pre-warm when `nci_fold` is set; dense workspace allocation (score / noise / mask / peak_mask / power / integrated_power) on geometry change; CUB temps and NCI lookup-table H2D; first exact-size `detection_idx` loan.
@@ -142,38 +146,6 @@ Harness: `performance/cpp/perf_cfar_detector.cpp` (Graph). It wires all five out
 
 ```bash
 ctest --test-dir build -R perf_cfar_detector_smoke
-```
-
-## Tests and verification
-
-| Check | Proves |
-| --- | --- |
-| `DetectsSingleTargetRealPath` / `DetectsTwoTargets` / `NoFalseAlarmsOnFlatMap` | Target above threshold is detected; flat noise is not (`TESTING.md`) |
-| `MaskMatchesScoreInterior` / `NciMaskMatchesScoreOnIntegratedMap` | `detection_mask == (detection_score > 1)` (raw path) |
-| `CfarPowerIsSquareLawPowerWithoutNci` / `CfarPowerIsNciSumOverFold` | `cfar_power` is square-law abs2 or the NCI sum |
-| `RealAndComplexPathsAgree` / `ComplexInputFormsPower` | Real power ≡ complex abs2 path |
-| `DetectionIdxRasterOrder` / `MaxDetectionsCap` / `BatchIdxIncludesPreservedAxes` | Exact-sized idx, raster order, cap + warn, preserved-batch columns |
-| `BorderCellsUseInBoundsTrainingOnly` / `NoiseEstimateTracksFloor` | Border-correct `N`; noise tracks the floor |
-| `NciIntegratesChannelsForDetection` / `NciPreservesBatchAxis` | NCI raises detectability; non-listed leading axes stay batched |
-| `CaAlphaK1MatchesContractClosedForm` | `α = N·(pfa^(−1/N) − 1)` at `K = 1` |
-| GO/SO/OS `*AlphaInvertsMonteCarloPfa` + `test_cfar_detector_statistical` (`CaMonteCarloPfaK1`, `CaMonteCarloPfaNciK8`, and GO/SO/OS counterparts) | Realized interior Pfa ≈ configured `pfa`; NCI uses Gamma(`K`) |
-| `test_cfar_detector_alpha_lut` | External LUT precedence over `pfa`; length / negative / non-finite rejects; sparse GO/SO and OS-`K>1` zeros accepted only at unreachable indices |
-| `PeakOnlyOffMatchesRawMask` / `PeakOnlyKeepsSingleMax` / `PeakOnlyCollapsesStripRasterTiebreak` / `PeakOnlyNeighborhoodCross4VsSquare8` | NMS off is byte-identical; one peak per blob; raster tie-break; neighborhood difference |
-| `*ConfigurableFromParams` | YAML / `set_params` field names |
-| `LiveGuardCellsOverrideAppliesForOneTick` / `LiveAlphaLutOverrideAndClearing` / `RejectsMalformedLive*` | POD window and config-Tensor overrides: Exact match, revert-to-Params, malformed-payload reject |
-| `LivePfaOverrideMidStream` / `LiveThresholdScaleOverrideMidStream` / `LiveOsRankOverrideMidStream` / `LiveMaxDetectionsOverrideMidStream` | Every scalar Exact override applies for one tick and a miss reverts to Params |
-| `NonBlockingPfaOverrideServesStaleLut` | A non-blocking unseen pfa key uses the previous LUT for the transition tick |
-| `RejectsOpaqueLeadingBatch` | Input rank is limited to the ctor-admitted named leading axes |
-| `RejectsUnsetOsRank` | OS requires an explicit non-negative rank; the `-1` sentinel fails and logs a targeted error |
-| `OptionalOutputsMayBeLeftUnwired` | Any subset of the five outputs may be left unwired without failing sibling outputs or later ticks |
-
-Ground truth is a synthetic power map (known floor + injected peaks), not `radar_common/sim/`. Statistical tests use noise-only Monte Carlo; SO uses a relaxed `min_ratio_tol = 0.25` vs 0.15 for CA/GO/OS because its min-of-side statistic is more sensitive to correlation between neighboring CUTs that share training cells. Python tests exist under `tests/python/detection/` but are not built on this branch (`HOLOSCAN_RADAR_BUILD_PYTHON=OFF`).
-
-`TESTING.md` clauses covered: target cell + `score > 1` elsewhere `< 1`; mask consistency; per-variant Pfa; NCI Pfa; real ≡ complex; exact-sized `detection_idx` and `max_detections` cap; every live payload family; opaque-leading-rank rejection.
-
-```bash
-ctest --test-dir build -R test_cfar_detector --output-on-failure
-ctest --test-dir build -L statistical --output-on-failure
 ```
 
 ## Usage
@@ -197,11 +169,3 @@ graph.add_flow(cfar->detection_score, feat->detection_score, q);
 ```
 
 `extents` must set `max_doppler_bins` and `max_range_bins`. Sparse SIMO/MIMO with channel NCI also sets `max_rx` (and `max_tx` when a TX axis is present). Dense RDA CFAR must present a rank-2 leading admission — today that means `max_tx = max_az`, `max_rx = max_el`.
-
-Python bindings (`python/_cfar_detector_op_bindings.cpp`) are the HSDK 4.x trampoline and are **not built** on this branch.
-
-## Contract conformance
-
-Conforms on optional ports, dtypes, score formula, all four variants, NCI, all peak modes, exact-sized `detection_idx`, external-LUT reachability validation, and the locked α relations.
-
-Header comment block agrees with the implementation (five latched optional outputs, Exact live Inputs with unconditional `contract()` entries, POD windows and config-Tensor vectors). It describes named leading as none / `N_rx` / `(M_tx, N_rx)` and notes a separate dense instance — that matches the `max_tx`/`max_rx` stand-in, not a first-class `max_az`/`max_el` admission.

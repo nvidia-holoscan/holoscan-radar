@@ -139,6 +139,7 @@ Contract MultiSourceExpansionOp<T>::contract() const {
 template <typename T>
 expected<void, Error> MultiSourceExpansionOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   HOLOSCAN_TRY(auto idx, receive_tensor(detection_idx, kOpName));
   HOLOSCAN_TRY(auto baseline, receive_tensor(baseline_aoa, kOpName));
   HOLOSCAN_TRY(auto selected, receive_tensor(selected_idx, kOpName));
@@ -221,6 +222,7 @@ expected<void, Error> MultiSourceExpansionOp<T>::compute(
   HOLOSCAN_TRY(auto ordinal_ptr,
                writable(*state_->selected_ordinal, "selected ordinal"));
   HOLOSCAN_TRY(auto error_ptr, writable(*state_->error, "error scalar"));
+  // Build and validate the bounded execution plan for this input shape.
   detail::build_expansion_plan_kernel<T><<<1, 1, 0, stream>>>(
       static_cast<const int64_t*>(selected.data()), num_selected,
       static_cast<const T*>(resolved.data()), static_cast<const T*>(multi.data()),
@@ -247,6 +249,7 @@ expected<void, Error> MultiSourceExpansionOp<T>::compute(
   }
   try {
     if (items > 0) {
+      // Execute the device stage on the input runtime stream.
       detail::compact_detail::launch_exclusive_sum(
           state_->compact.d_offsets, items, &state_->compact, stream);
     }
@@ -257,6 +260,7 @@ expected<void, Error> MultiSourceExpansionOp<T>::compute(
 
   const std::vector<int64_t> idx_output_shape{output_rows, idx_cols};
   const std::vector<int64_t> aoa_output_shape{output_rows, 2};
+  // Allocate exact-sized outputs before launching device work.
   auto idx_loan = detection_idx_out.allocate_tensor(TensorLoanRequest{
       .shape = idx_output_shape, .dtype = kInt64Dtype});
   auto aoa_loan = aoa_estimates_out.allocate_tensor(TensorLoanRequest{
@@ -282,6 +286,7 @@ expected<void, Error> MultiSourceExpansionOp<T>::compute(
 
   HOLOSCAN_TRY(std::move(idx_writer).commit());
   HOLOSCAN_TRY(std::move(aoa_writer).commit());
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   HOLOSCAN_TRY(emit_prepared_tensor(
       aoa_estimates_out, context, std::move(*aoa_loan)));
   HOLOSCAN_TRY(emit_prepared_tensor(

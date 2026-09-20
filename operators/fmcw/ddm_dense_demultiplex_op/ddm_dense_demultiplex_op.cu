@@ -178,6 +178,7 @@ DDMDenseDemultiplexOp<T>::prepare_correlate(
 template <typename T>
 expected<void, Error> DDMDenseDemultiplexOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   HOLOSCAN_TRY(auto input, receive_tensor(rd_maps, kOpName));
   try {
     require_cuda_accessible(input, "rd_maps", kOpName);
@@ -189,6 +190,7 @@ expected<void, Error> DDMDenseDemultiplexOp<T>::compute(
   HOLOSCAN_TRY(auto maybe_velocity_bins,
                receive_optional_value(velocity_bins));
   detail::DdmRdMapsLayout layout;
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const auto& code = context.params<DDMDenseDemultiplexParams>().ddm_code;
   detail::DdmCodeMode mode;
   int64_t width = 0;
@@ -260,6 +262,7 @@ expected<void, Error> DDMDenseDemultiplexOp<T>::compute(
   HOLOSCAN_TRY(
       auto rd_loan,
       mode == detail::DdmCodeMode::kNonLinear
+          // Allocate exact-sized outputs before launching device work.
           ? prepare_correlate(context, layout, code, shape, input, stream)
           : prepare_demux(
                 context, layout, code, width, shape, input, stream));
@@ -279,6 +282,7 @@ expected<void, Error> DDMDenseDemultiplexOp<T>::compute(
             std::vector<int64_t>{num_doppler_out}, real_dtype<T>(),
             [&](void* output, std::size_t) -> expected<void, Error> {
               try {
+                // Execute the device stage on the input runtime stream.
                 detail::run_ddm_velocity_axis_stage<T>(
                     maybe_velocity_bins->data(), output,
                     layout.num_doppler, num_doppler_out, stream);
@@ -290,6 +294,7 @@ expected<void, Error> DDMDenseDemultiplexOp<T>::compute(
               }
               return {};
             }));
+    // Publish coherent outputs in dependency order and retain borrowed inputs.
     velocity_bins_out_.emit(
         velocity_bins_out, context, std::move(axis_loan),
         "DDMDenseDemultiplexOp.velocity_bins_out");

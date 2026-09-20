@@ -1,17 +1,47 @@
 # `VirtualArrayAssemblyOp`
 
+## Purpose
+
 MIMO marshaling: flatten a separated `(tx, rx)` RD block into one virtual channel axis and emit the matching virtual `ArrayGeometry`. It sits after `TDMDenseCompensationOp / DDMDenseDemultiplexOp` and feeds CFAR plus the angle path. Virtual positions are `p_virtual = p_tx + p_rx` in the array-local frame; coincident elements are handled by `overlap_policy` so `num_virtual ≤ M·N`.
 
-| Kind | Port | Dtype | Shape | Notes |
-| --- | --- | --- | --- | --- |
-| in | `rd_maps` | complex64 / complex128 | `(M_tx, N_rx, num_doppler, num_range_bins)` | Separated `(tx, rx)` block. TX/RX positions are parameters, not ports. Rank 4; no opaque leading batch |
-| out | `rd_maps_out` | complex64 / complex128 | `(num_virtual, num_doppler, num_range_bins)` | Channel flatten `c = tx·N_rx + rx`, then overlap policy. Doppler/range unchanged. **[EA HSDK5 ONLY]** physical name `rd_maps_out` |
-| out | `array_geometry` | `WireArrayGeometry` | descriptor-Tensor | Logical `ArrayGeometry`: post-policy virtual positions, effective wavelength, and optional geometry type. Directly connects to angle operators' same-schema live inputs |
-| live | `wavelength` | float64 scalar | scalar | Exact override; wire to enable, unwired = miss |
+## Responsibilities
+
+- Builds the virtual-position and gather/average plan from transmitter and receiver geometry.
+- Flattens dense TX/RX maps into channel maps and publishes geometry with identical ordering and overlap policy.
+- Does not perform TDM phase compensation, DDM separation, sparse gathering, or angle estimation.
+
+## When to use
+
+Use after dense TDM compensation or dense DDM demultiplexing to flatten TX/RX maps into virtual channels and publish matching geometry. It is the boundary between MIMO separation/compensation and channel-based CFAR or angle processing. Do not use it before TDM phase correction, as a sparse gather, or as an angle estimator.
 
 ```text
 … → TDMDenseCompensationOp / DDMDenseDemultiplexOp → VirtualArrayAssemblyOp → CFARDetectorOp / SnapshotGatherOp / ⟨angle op⟩
 ```
+
+## Ports
+
+| Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
+| --- | --- | --- | --- | --- | --- |
+| in | `rd_maps` | complex64 / complex128 | `(M_tx, N_rx, num_doppler, num_range_bins)` | Required trigger/aligned input | Separated `(tx, rx)` block. TX/RX positions are parameters, not ports. Rank 4; no opaque leading batch |
+| out | `rd_maps_out` | complex64 / complex128 | `(num_virtual, num_doppler, num_range_bins)` | Required output | Channel flatten `c = tx·N_rx + rx`, then overlap policy. Doppler/range unchanged. physical name `rd_maps_out` |
+| out | `array_geometry` | `WireArrayGeometry` | descriptor-Tensor | Required output | Logical `ArrayGeometry`: post-policy virtual positions, effective wavelength, and optional geometry type. Directly connects to angle operators' same-schema live inputs |
+| live | `wavelength` | float64 scalar | scalar | Optional Exact one-tick override; Params fallback on miss | Exact override; wire to enable, unwired = miss |
+
+## Construction
+
+| Item | Type | Requirement | Responsibility |
+| --- | --- | --- | --- |
+| Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
+| `extents` | `MaxTensorExtents` | `max_tx`, `max_rx`, `max_doppler_bins`, and `max_range_bins` required; `max_virtual_channels` optional | Sizes Tensor pools and bounded workspaces before `arm()`. |
+
+## Parameters
+
+| Parameter | Type | Default | Mutability | Responsibility |
+| --- | --- | --- | --- | --- |
+| `tx_positions` | float vector, row-major `(num_tx, 3)` | none (required) | static (Params-only) | TX element positions (m). Length must match input `M_tx` Cost: Rebuilds the virtual plan + H2D into the ctor-sized index tables. |
+| `rx_positions` | float vector, row-major `(num_rx, 3)` | none (required) | static (Params-only) | RX element positions (m). Length must match `N_rx` Cost: Same as `tx_positions`. |
+| `wavelength` | float | none (required) | `[live]` Exact | Operating wavelength (m) for emitted geometry (`c / carrier_frequency`) Cost: Free for the gather; wire geometry metadata is rewritten each tick. |
+| `overlap_policy` | enum `{dedup, average, keep_all}` | `dedup` | static (Params-only) | Coincident `p_virtual` handling; sets `num_virtual` Cost: Rebuilds the plan (gather vs average kernel). |
 
 Contract: [`OPERATOR_API.md` § `VirtualArrayAssemblyOp`](../../../docs/planning/OPERATOR_API.md) ·
 group: [`operators/fmcw/README.md`](../README.md)
@@ -83,35 +113,6 @@ Consumers receive the coherent descriptor with `from_wire`; direct angle operato
 
 **Mid-stream.** `overlap_policy`, `tx_positions`, and `rx_positions` are static. `wavelength` is `[live]` Exact: Params seeds the effective value, and an override whose `capture_time` matches the cube's replaces it for that tick only; a tick with no match uses the Params wavelength. Changing wavelength does **not** rebuild the gather plan (positions are wavelength-independent); the next tick's wire metadata updates. A new `M_tx`/`N_rx` (or Params positions/policy) rebuilds the host plan and re-uploads index tables. Downstream re-infers `num_virtual`. Extents past ctor pool bounds fail in the plan builder.
 
-## Parameters
-
-| Parameter | Type | Default | Override | Cost | Meaning |
-| --- | --- | --- | --- | --- | --- |
-| `tx_positions` | float vector, row-major `(num_tx, 3)` | none (required) | static (Params-only) | Rebuilds the virtual plan + H2D into the ctor-sized index tables | TX element positions (m). Length must match input `M_tx` |
-| `rx_positions` | float vector, row-major `(num_rx, 3)` | none (required) | static (Params-only) | Same as `tx_positions` | RX element positions (m). Length must match `N_rx` |
-| `wavelength` | float | none (required) | `[live]` Exact | Free for the gather; wire geometry metadata is rewritten each tick | Operating wavelength (m) for emitted geometry (`c / carrier_frequency`) |
-| `overlap_policy` | enum `{dedup, average, keep_all}` | `dedup` | static (Params-only) | Rebuilds the plan (gather vs average kernel) | Coincident `p_virtual` handling; sets `num_virtual` |
-
-YAML field names: `tx_positions`, `rx_positions`, `wavelength`, `overlap_policy` (`dedup` / `average` / `keep_all`). The MIMO app typically fills positions and wavelength from `tx_array` / `rx_array` / `waveform` rather than duplicating them under this block.
-
-`wavelength` is live because it describes the chirp that produced this cube (carrier → λ) and a producer can stamp it onto the same tick. Positions and `overlap_policy` describe the aperture, not a per-cube encoding, and stay Params-only — do not invent live ports to complete the surface. Schema-valued `override_ms` for this POD Exact is not deferred the same way as §9 descriptors; Graph perf already inlines a mid-session wavelength flip. Graph unit mid-stream coverage remains skipped (HSDK5_PORT §1).
-
-## SDK implementation notes
-
-- **Construction.** Requires `max_tx`, `max_rx`, `max_doppler_bins`, and `max_range_bins`. Virtual-channel bound is `max_virtual_channels` when set, else `max_tx * max_rx`. `rd_maps_out`: `max_rank = 3`, `max_byte_span = byte_span_complex_cube<T>({max_virtual, max_doppler, max_range})`. `array_geometry`: `max_rank = 2`, `max_byte_span = (max_virtual + 1) * 3 * sizeof(double)`.
-- **Index-table workspace.** `src_channel` (`max_virtual` int64s), `member_offsets` (`max_virtual + 1`), and `member_indices` (`max_tx * max_rx`) are allocated in the ctor as rank-1 int64 device Tensors (`make_device_tensor`) — operator-owned workspace, the same class as deinterleave's gather map. Tensor pools are per output port only; there is no scratch-loan API for these tables. A cache miss does not `cudaMalloc`.
-- **Triggering.** `contract()` is `OnEach{rd_maps}` plus an `Exact{}` + `SafeDefault{}` entry for `wavelength`, wired or not. An unwired override compiles to a `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT` warning and reads as `kNotConnected` on every tick, so wiring the port is the application's only obligation. This requires an SDK carrying CONTRACT-020 ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11). Both outputs are always emitted; C++ MIMO wires geometry directly to the angle stage.
-- **Ports and queues.** `rd_maps` and `wavelength`: `queue_depth(2)`. `rd_maps_out` uses a bounded device pool. `array_geometry` uses a bounded rank-2 pageable-host descriptor-Tensor pool and `max_emits_per_compute(1)`. `setup()` registers data-plane I/O first, then the `[live]` Exact input in Params field order.
-- **Streams and lifetime.** `context.cuda_stream()`. Index-table H2Ds use that stream. Geometry packing and schema publication are host-side. After emit, `rd_maps` is moved into `retained_input_` so the gather kernel can finish reading it after `compute()` returns. The hot path does not synchronize.
-- **Emission.** Prepare **both** loans (`rd_maps_out`, then the wire geometry) before either emit. Publish `WireArrayGeometry` before the required RD Tensor so downstream Exact joins see the sideband when the Tensor triggers; preparation remains all-or-nothing.
-- **Parameter authoring.** Schema `com.nvidia.holoscan.radar.VirtualArrayAssemblyParams`, version 1. Apps on this branch `set_params` a loaded `VirtualArrayAssemblyParams` ([EA HSDK5 ONLY] Graph has no `from_config()`).
-- **Precision.** `VirtualArrayAssemblyOp<float>` and `<double>` (`rd_maps` path). The wire geometry's Tensor member is always float64.
-- **[EA HSDK5 ONLY]** `rd_maps_out` unique-name rename (HSDK5_PORT §2). `WireArrayGeometry` is the settled descriptor transport (§9/§10). A POD Exact `Input<double> wavelength` is declared unconditionally; Graph perf `wavelength` `override_ms` is restored.
-
-## Consumer lifetime notes
-
-Both outputs are fresh pool loans each tick. The consumer may retain them. `array_geometry` is a generated wire payload backed by a pageable-host descriptor-Tensor member; consumers convert it through `from_wire`.
-
 ## Performance
 
 **Cold.** First `(tx_positions, rx_positions, overlap_policy, M_tx, N_rx)`: host plan (`p_tx+p_rx`, grouping) + async H2D of index tables into the ctor-sized buffers, then gather/average kernel + host wire preparation. **Steady.** Same plan key: kernel + per-tick host wire preparation (wavelength may change without a plan rebuild). No FFT. A cache miss does not `cudaMalloc`.
@@ -120,31 +121,6 @@ Harness `performance/cpp/perf_virtual_array_assembly.cpp`: size rungs `xs`–`xl
 
 ```bash
 ctest --test-dir build -R perf_virtual_array_assembly_smoke
-```
-
-## Tests and verification
-
-C++ Graph suite: `tests/cpp/fmcw/test_virtual_array_assembly.cpp`. Ground truth is analytic `p_tx + p_rx` on host (TESTING.md), plus marker RD cubes that prove which source channel survived `dedup` / `average` / `keep_all`. Emitted geometry is decoded with `from_wire`.
-
-| Check | What it proves |
-| --- | --- |
-| `EmittedGeometryMatchesAnalyticLayout` | `p_virtual = p_tx + p_rx`; wire descriptor decodes |
-| `GeometryDirectlyDrivesBeamscan` | Same-schema edge compiles, Exact capture-time alignment fires, and runtime geometry steers correctly |
-| `KeepAllPreservesChannels` | `num_virtual = M·N` |
-| `DedupCollapsesCoincidentPositions` / `DedupKeepsFirstRepresentativeChannel` / `DedupIsDefaultPolicy` | unique count; first scan-order representative; default |
-| `AverageCombinesCoincidentChannels` / `AverageCombinesAllCollidingChannels` | complex mean |
-| `WavelengthConfigurableFromParams` | Params wavelength in metadata row |
-| `RejectsMismatchedTxPositions` / `RejectsMismatchedRxPositions` / `RejectsInvalidWavelength` / `RejectsRankTooSmall` | error paths |
-| `RejectsOpaqueLeadingBatch` | extra leading dim is not a named axis; `parse_rd_maps_layout` fail-closes (Part B) |
-| `FloatDoubleAgreement` / `ComplexDoublePreservesValues` | precision |
-| `LiveWavelengthOverrideMidStream` | **[EA HSDK5 ONLY]** `GTEST_SKIP` (HSDK5_PORT §1) |
-
-Python `tests/python/fmcw/test_virtual_array_assembly.py` ports the layout/policy tests. **[EA HSDK5 ONLY]** Python Graph is phase-4 deferred; `test_LeadingBatchAxesPreservedAndIndependent` still asserts leading-batch preservation, which disagrees with the C++ Graph suite.
-
-Owed by TESTING.md and covered in C++: virtual layout, all three `overlap_policy` values, `num_virtual ≤ M·N`, opaque leading-batch rejection.
-
-```bash
-ctest --test-dir build -R VirtualArrayAssemblyOp --output-on-failure
 ```
 
 ## Usage
@@ -167,23 +143,3 @@ graph.add_flow(vaa->array_geometry, beamscan->array_geometry, q);
 ```
 
 `extents` must fill `max_tx`, `max_rx`, `max_doppler_bins`, `max_range_bins`, and optionally `max_virtual_channels` (else the virtual bound is `max_tx * max_rx`). Bind only the device `"rd_maps_out"`; the wire geometry pool declares pageable-host placement. Optional: wire a live scalar `wavelength`; leaving it unwired keeps Params.
-
-Python bindings exist (`VirtualArrayAssemblyOpF32` / `F64`). **[EA HSDK5 ONLY]** public Python Graph is deferred (HSDK5_PORT §6).
-
-```python
-from holoscan.radar import VirtualArrayAssemblyOpF32, OverlapPolicy
-
-op = VirtualArrayAssemblyOpF32(
-    fragment, tx_positions=tx, rx_positions=rx, wavelength=0.0039,
-    overlap_policy=OverlapPolicy.KEEP_ALL, name="virtual_array_assembly")
-```
-
-## Contract conformance
-
-Conforms on flatten order, `p_tx+p_rx`, the three overlap policies, complex `rd_maps`, required positions/wavelength, the Exact `wavelength` override Input, rank-4 input, and `WireArrayGeometry` output. Exception:
-
-| Contract claim | Verdict | Detail |
-| --- | --- | --- |
-| Output name `rd_maps` | renamed | **[EA HSDK5 ONLY]** Physical `rd_maps_out`. Already in the contract / HSDK5_PORT §2 |
-
-Audit scope (static, no build or test run): planning docs plus this operator's `*.hpp` / `*.cu`, bindings, `array_geometry_tensor.hpp`, `tests/cpp/fmcw/test_virtual_array_assembly.cpp`, `tests/python/fmcw/test_virtual_array_assembly.py`, `performance/cpp/perf_virtual_array_assembly.cpp`.

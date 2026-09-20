@@ -1,19 +1,48 @@
 # `ClusterDBSCANOp`
 
+## Purpose
+
 Density clustering (DBSCAN) over a caller-assembled N-D feature matrix — radar-agnostic, so it attaches either before or after angle estimation. It consumes `FeatureAssemblyOp.points` and emits `labels` (and `sizes`) for `DetectionReductionOp` and reports. The fact a caller must not miss: `labels` is a pure function of `(points, epsilon, min_points)` — cluster `0` is the largest; noise is `-1`; a straddling border point joins the core neighbor with the **numerically smallest component root**.
 
-| Kind | Port | Dtype | Shape | Notes |
-| --- | --- | --- | --- | --- |
-| in | `points` | float32 / float64 | `(num_points, num_features)` | Caller-assembled features (e.g. `[range, velocity, az, el]`); row order is `labels` row order |
-| out | `labels` | int64 | `(num_points,)` | Cluster id per point; noise = `-1`; ids by descending size (tie: ascending component root) |
-| out (optional, latched) | `sizes` | int64 | `(num_clusters,)` | Point count per cluster, non-increasing; sized to the reported count |
-| live | `epsilon` | float64 config Tensor | `(1,)` or `(num_features,)`, rank-1 pageable host | Exact override; wire to enable; extent bounded by `max_features` |
-| live | `min_points` | int64 | scalar | Exact override (`<= 0` → `2 · active_features`); wire to enable |
-| live | `max_clusters` | int64 | scalar | Exact override (`<= 0` → uncapped); wire to enable |
+## Responsibilities
+
+- Applies per-feature normalization, finds density-connected components, and marks noise rows.
+- Owns deterministic cluster ordering, optional size output, maximum-cluster truncation, and tick-local clustering overrides.
+- Does not assemble physical features, choose epsilon units, or reduce clusters to representatives.
+
+## When to use
+
+Use after `FeatureAssemblyOp` when detections should be grouped by density in a normalized feature space without choosing the number of clusters in advance. Follow it with `DetectionReductionOp` when downstream processing needs one representative per cluster. Do not feed raw RD tensors or mixed-unit features without meaningful per-axis `epsilon` scaling.
 
 ```text
 FeatureAssemblyOp.points → ClusterDBSCANOp → labels (+ sizes) → DetectionReductionOp
 ```
+
+## Ports
+
+| Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
+| --- | --- | --- | --- | --- | --- |
+| in | `points` | float32 / float64 | `(num_points, num_features)` | Required trigger/aligned input | Caller-assembled features (e.g. `[range, velocity, az, el]`); row order is `labels` row order |
+| out | `labels` | int64 | `(num_points,)` | Required output | Cluster id per point; noise = `-1`; ids by descending size (tie: ascending component root) |
+| out (optional, latched) | `sizes` | int64 | `(num_clusters,)` | Optional latched output | Point count per cluster, non-increasing; sized to the reported count |
+| live | `epsilon` | float64 config Tensor | `(1,)` or `(num_features,)`, rank-1 pageable host | Optional Exact one-tick override; Params fallback on miss | Exact override; wire to enable; extent bounded by `max_features` |
+| live | `min_points` | int64 | scalar | Optional Exact one-tick override; Params fallback on miss | Exact override (`<= 0` → `2 · active_features`); wire to enable |
+| live | `max_clusters` | int64 | scalar | Optional Exact one-tick override; Params fallback on miss | Exact override (`<= 0` → uncapped); wire to enable |
+
+## Construction
+
+| Item | Type | Requirement | Responsibility |
+| --- | --- | --- | --- |
+| Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
+| `extents` | `MaxTensorExtents` | `max_points` and `max_clusters` required; `max_features` optional for live `epsilon` | Sizes Tensor pools and bounded workspaces before `arm()`. |
+
+## Parameters
+
+| Parameter | Type | Default | Mutability | Responsibility |
+| --- | --- | --- | --- | --- |
+| `epsilon` | float64 vector, length `1` or `num_features` | none (required) | `[live]` Exact host config Tensor | Neighborhood radius; per-axis zero ignores a feature; `[0.5]` is isotropic Cost: H2D of `1/ε²` or zero on a new `(epsilon, num_features)` key. |
+| `min_points` | int64 | `0` → `2 · active_features` | `[live]` Exact | DBSCAN `minPts` (neighbors including self) Cost: Free (core threshold). |
+| `max_clusters` | int64 | `0` (uncapped) | `[live]` Exact | Keep the largest `max_clusters`; warn once on overflow Cost: Free (relabel surplus to noise). |
 
 Contract: [`OPERATOR_API.md` § `ClusterDBSCANOp`](../../../docs/planning/OPERATOR_API.md) ·
 group: [`operators/clustering/README.md`](../README.md)
@@ -28,7 +57,7 @@ geometry in `build_cluster_stage_plan`, then runs the launchers in
 `compact_component_roots`, and `prepare_ranked_clusters` keep the shell at
 orchestration level while retaining all tick scratch in one owning workspace.
 Custom CUDA (no MatX expression); CUB exclusive-sum densifies component roots.
-Neighbor test, quoted from `dbscan_neighbor`:
+The normalized neighborhood test is:
 
 ```text
 q is a neighbor of p when Σ_a ((p_a − q_a) · eps_inv2_a) ≤ 1
@@ -41,13 +70,13 @@ That is the contract ellipsoid `Σ_i ((p_i − q_i) / epsilon_i)² ≤ 1` over p
 
 2. **`cc_step` loop.** Iterative min-label propagation over **core–core** edges, ping-pong buffers, plus one pointer jump `cc_in[cc_in[i]]`. Converges to the minimum row index of each core component (the root). Each iteration D2H-syncs a `changed` flag. Cap: `num_points + 64` iterations, else `ClusterDBSCANOp: connected-components did not converge`.
 
-3. **`assign_border`.** Each non-core point joins the **lowest-root** core neighbor (if any); otherwise stays noise. This is the pinned inter-cluster border tie-break (STATUS.md L9).
+3. **`assign_border`.** Each non-core point joins the **lowest-root** core neighbor (if any); otherwise stays noise. This is the pinned inter-cluster border tie-break.
 
 4. **Dense ids.** Flag roots (`is_core && cc[i] == i`), CUB exclusive-sum → ascending-root dense ids, `finalize_labels` (noise → `-1`).
 
-5. **Renumber by descending size.** Host argsort of the per-id histogram (`stable_sort` so size ties keep ascending-root order), then `remap_labels`. Cluster `0` is the largest (STATUS.md L10). `labels` remains a pure function of `(points, epsilon, min_points)`.
+5. **Renumber by descending size.** Host argsort of the per-id histogram (`stable_sort` so size ties keep ascending-root order), then `remap_labels`. Cluster `0` is the largest. `labels` remains a pure function of `(points, epsilon, min_points)`.
 
-6. **`max_clusters` cap.** If `max_clusters > 0` and `num_clusters` exceeds it, `cap_labels` drops ids `>= max_clusters` to noise (the **smallest** clusters, after step 5) and warns once: `ClusterDBSCANOp: N clusters exceed max_clusters=M, dropping K surplus cluster(s) to noise` (STATUS.md L7).
+6. **`max_clusters` cap.** If `max_clusters > 0` and `num_clusters` exceeds it, `cap_labels` drops ids `>= max_clusters` to noise (the **smallest** clusters, after step 5) and warns once: `ClusterDBSCANOp: N clusters exceed max_clusters=M, dropping K surplus cluster(s) to noise`.
 
 7. **`sizes`.** The ordering histogram is reused: its sorted, possibly capped
    host counts are copied to the optional output; non-increasing.
@@ -78,33 +107,6 @@ Empty `points` → `labels` and `sizes` both shape `(0,)`.
   | Non-device / non-contiguous / wrong dtype | `ClusterDBSCANOp: tensor received on input port 'points' …` |
   | No CUDA stream | `ClusterDBSCANOp: no CUDA compute stream` |
 
-## Parameters
-
-| Parameter | Type | Default | Override | Cost | Meaning |
-| --- | --- | --- | --- | --- | --- |
-| `epsilon` | float64 vector, length `1` or `num_features` | none (required) | `[live]` Exact host config Tensor | H2D of `1/ε²` or zero on a new `(epsilon, num_features)` key | Neighborhood radius; per-axis zero ignores a feature; `[0.5]` is isotropic |
-| `min_points` | int64 | `0` → `2 · active_features` | `[live]` Exact | Free (core threshold) | DBSCAN `minPts` (neighbors including self) |
-| `max_clusters` | int64 | `0` (uncapped) | `[live]` Exact | Free (relabel surplus to noise) | Keep the largest `max_clusters`; warn once on overflow |
-
-YAML uses the one-element-list convention for isotropic `epsilon` (`epsilon: [0.5]`), consistent with other vector params (STATUS.md L8).
-
-## SDK implementation notes
-
-- **Construction.** `explicit ClusterDBSCANOp(const MaxTensorExtents& extents)`. Required: `max_points`, `max_clusters`. Optional `max_features` bounds an `epsilon` override payload. `labels` pool: `max_rank = 1`, span `max_points · sizeof(int64)`. `sizes` pool: `max_rank = 1`, span `max_clusters · sizeof(int64)`.
-- **Triggering.** `contract()` is `OnEach{points}` plus an unconditional `Exact{}` + `on_missing SafeDefault{}` entry for every `[live]` override port. Wiring a port enables its override; an unwired entry reports `kNotConnected` and takes Params for that tick.
-- **Optional output.** `sizes` is **latched**: the first unwired emit warns once, then later ticks skip its pool loan and H2D copy. The cluster-size histogram still runs because required `labels` uses it for deterministic descending-size numbering. See [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md), "Optional output convention".
-- **Ports and queues.** `points` and live Inputs: `queue_depth(2)`. `points` is a device tensor; `epsilon` is a rank-1 pageable-host config Tensor. Both outputs: device tensors with the bounds above.
-- **Streams and lifetime.** `context.cuda_stream()`. `points` is retained until the next tick. The hot path **does** synchronize: once per CC iteration (`changed` flag), plus cluster-count and size-histogram D2H for the host argsort and exact output shape.
-- **Emission.** Required `labels` is committed and emitted first. If still active, optional `sizes` then loans its exact shape and copies the already-sorted host counts.
-- **Workspace.** The device `1/ε²` vector is cached by effective `(epsilon, num_features)`. Other `make_device_tensor` temps (is_core, CC ping-pong, CUB scan, histogram, remap) remain per-tick operator workspace, not output loans; pooling them remains a profiling-driven optimization.
-- **Parameter authoring.** Schema `com.nvidia.holoscan.radar.ClusterDBSCANParams` version 1. Fields: `epsilon`, `min_points`, `max_clusters`.
-- **Precision.** `ClusterDBSCANOp<float>`, `ClusterDBSCANOp<double>`.
-- **Live override payloads.** `Input<int64_t> min_points` / `max_clusters` resolve with `resolve_live_override`. `epsilon` rides a rank-1 pageable-host float64 config Tensor, validated on arrival (rank, host memory, contiguity, dtype, `max_features` extent) and converted per tick, with no state kept ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9). Graph tests cover Exact matches, skewed misses, and reversion to Params for all three live families.
-
-## Consumer lifetime notes
-
-`labels` and `sizes` are fresh pool-loaned device buffers each tick. A consumer may retain them.
-
 ## Performance
 
 **Cold.** First-tick scratch allocs and `1/ε²` H2D.
@@ -117,30 +119,6 @@ Harness: `performance/cpp/perf_cluster_dbscan.cpp` (Graph). Axes: `(N, F)` ladde
 
 ```bash
 ctest --test-dir build -R perf_cluster_dbscan_smoke
-```
-
-## Tests and verification
-
-| Check | Proves |
-| --- | --- |
-| `TwoBlobsAndNoise` | Synthetic blobs → correct membership; noise = `-1` (`TESTING.md`) |
-| `AnisotropicPerAxisEpsilon` | Per-axis ellipsoid (`TESTING.md`) |
-| `MinPointsSeparatesCoreFromNoise` / `DefaultMinPointsIsTwiceNumFeatures` | `minPts` including the `2·F` default (`TESTING.md`) |
-| `NumbersClustersByDescendingSize` | Cluster `0` is largest; `sizes` non-increasing |
-| `MaxClustersCapsAndDropsSurplus` / `MaxClustersKeepsLargest` | Cap drops smallest; warn; `labels`/`sizes` consistent (`TESTING.md`) |
-| `BorderPointJoinsMinRootCluster` | A border point shared by two components takes the numerically smallest component root |
-| `EmptyPointsEmitsEmptyOutputs` | `(0,)` / `(0,)` |
-| `FloatAndDoubleAgree` | Both precisions |
-| `*ConfigurableFromParams` / `Rejects*` | Params fields and epsilon/shape errors |
-| `RejectsOpaqueLeadingBatch` | Rank is exactly `(num_points, num_features)` |
-| `LiveEpsilon*` (Exact match, skewed capture, revert-to-Params, malformed, bound overflow) | Config-Tensor override: Exact join, revert-to-Params, payload rejects |
-| `LiveMinPoints*` / `LiveMaxClustersRevertsToParamsAfterMiss` | Scalar Exact match/skew/miss behavior and one-tick reversion to Params |
-| `UnwiredSizesDoesNotFailTheRunOrDisturbLabels` | `sizes` may be omitted; latching does not remove the ordering histogram labels require |
-
-`TESTING.md` row-alignment is implicit (`labels.shape == (num_points,)`). Python tests exist but are not built.
-
-```bash
-ctest --test-dir build -R test_cluster_dbscan --output-on-failure
 ```
 
 ## Usage
@@ -161,12 +139,4 @@ graph.add_flow(cluster->labels, reduction->labels, q);
 graph.add_flow(cluster->sizes, report->sizes, q);  // Optional.
 ```
 
-`extents` must set `max_points` and `max_clusters`. Python bindings are the HSDK 4.x trampoline and are **not built** on this branch.
-
-## Contract conformance
-
-Conforms on ports, live payload forms, the ellipsoid neighborhood,
-core/`minPts` semantics, descending-size ids, min-root border tie-break,
-`max_clusters` keeps-largest, and exact-sized latched-optional `sizes`.
-
-Header comment block matches the implementation (config-Tensor `epsilon`, Exact scalar Inputs with unconditional `contract()` entries, descending-size numbering).
+`extents` must set `max_points` and `max_clusters`.

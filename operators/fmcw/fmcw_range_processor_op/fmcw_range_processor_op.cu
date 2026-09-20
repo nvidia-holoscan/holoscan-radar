@@ -209,6 +209,7 @@ Contract FMCWRangeProcessorOp<T>::contract() const {
 template <typename T>
 expected<void, Error> FMCWRangeProcessorOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive adc_cube; require a device-contiguous buffer.
   HOLOSCAN_TRY(auto input, receive_tensor(adc_cube, kOpName));
   try {
@@ -225,6 +226,7 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
                    input, extents_, "adc_cube", kOpName));
 
   // This tick's Params: pinned defaults with any matched [live] override.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const FMCWRangeProcessorParams& pinned =
       context.params<FMCWRangeProcessorParams>();
   HOLOSCAN_TRY(auto stage,
@@ -232,6 +234,7 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
                               fft_norm_in, nfft_in, pinned));
 
   // Bind the stage config to this input's dtype/shape.
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(auto plan,
                build_range_stage_plan(std::move(stage), complex_input,
                                       batched));
@@ -250,11 +253,13 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
   const void* input_ptr = input.data();
 
   // Compute range profiles and emit.
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(auto profiles_loan,
                prepare_device_tensor(
                    range_profiles, context, out_shape, out_dtype,
                    [&](void* dst, std::size_t) -> expected<void, Error> {
                      try {
+                       // Execute the device stage on the input runtime stream.
                        detail::run_range_stage<T>(
                            plan.stage, *state_, input_ptr, complex_input,
                            batched.batch, batched.rows, batched.cols, dst,
@@ -264,6 +269,7 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(
                      }
                      return {};
                    }));
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   HOLOSCAN_TRY(emit_prepared_tensor(range_profiles, context,
                                     std::move(profiles_loan)));
 

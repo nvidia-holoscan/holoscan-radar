@@ -700,45 +700,6 @@ TEST(TDMDenseCompensationOp, RejectsRankTooSmall) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(TDMDenseCompensationOp, AcceptsPinnedHostInput) {
-  // [EA HSDK5 ONLY] Graph harness only delivers device Tensors.
-  GTEST_SKIP() << "HSDK 5 Graph: pinned host input not deliverable "
-                  "through device-bound tensor loans";
-}
-
-TEST(TDMDenseCompensationOp, AcceptsManagedInput) {
-  // [EA HSDK5 ONLY] Graph harness only delivers device Tensors.
-  GTEST_SKIP() << "HSDK 5 Graph: managed input not deliverable "
-                  "through device-bound tensor loans";
-}
-
-TEST(TDMDenseCompensationOp, OutputEmittedOnDevice) {
-  // [EA HSDK5 ONLY] emit_device_tensor always produces kDLCUDA output;
-  // the Graph harness returns HostTensors via to_host(). Device origin
-  // is guaranteed by the produces_tensor(kDevice) declaration.
-  GTEST_SKIP() << "HSDK 5 Graph: device output guaranteed by "
-                  "produces_tensor(kDevice); no in-flight capture";
-}
-
-TEST(TDMDenseCompensationOp, AcceptsSingleEntryWithArbitraryKey) {
-  // [EA HSDK5 ONLY] HSDK 5 uses typed Input<Tensor> — no TensorMap,
-  // no map key semantics. Port name is the identity.
-  GTEST_SKIP() << "HSDK 5: typed Input<Tensor> replaces TensorMap; "
-                  "no arbitrary-key semantics";
-}
-
-TEST(TDMDenseCompensationOp, RejectsMultiEntryTensorMap) {
-  // [EA HSDK5 ONLY] HSDK 5 uses typed Input<Tensor> — no TensorMap.
-  GTEST_SKIP() << "HSDK 5: typed Input<Tensor> replaces TensorMap; "
-                  "multi-entry not applicable";
-}
-
-TEST(TDMDenseCompensationOp, RejectsNonContiguousInput) {
-  // [EA HSDK5 ONLY] Graph harness produces contiguous device tensors.
-  GTEST_SKIP() << "HSDK 5 Graph: non-contiguous input cannot reach "
-                  "the operator through device-bound tensor loans";
-}
-
 // ---- DDM tests ------------------------------------------------------------
 
 TEST(TDMDenseCompensationOp, RejectsMismatchedPrecision) {

@@ -91,6 +91,7 @@ Contract DDMPowerFoldOp<T>::contract() const {
 
 template <typename T>
 expected<void, Error> DDMPowerFoldOp<T>::compute(ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   HOLOSCAN_TRY(auto input, receive_tensor(rd_maps, kOpName));
   try {
     require_cuda_accessible(input, "rd_maps", kOpName);
@@ -102,6 +103,7 @@ expected<void, Error> DDMPowerFoldOp<T>::compute(ExecutionContext& context) {
 
   detail::DdmRdMapsLayout layout;
   int64_t width = 0;
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const auto& code = context.params<DDMPowerFoldParams>().ddm_code;
   try {
     layout = detail::parse_ddm_rd_maps_layout(input, "rd_maps");
@@ -127,6 +129,7 @@ expected<void, Error> DDMPowerFoldOp<T>::compute(ExecutionContext& context) {
         Error{ErrorCode::kNotSupported,
               "DDMPowerFoldOp: no CUDA compute stream"});
   }
+  // Prepare or reuse cached artifacts without changing tick coherence.
   const auto key = detail::ddm_demux_cache_key(code, layout.num_doppler);
   const CachedTable& cached =
       table_cache_.get_or_build(key, "DDM power-fold table", [&] {
@@ -148,6 +151,7 @@ expected<void, Error> DDMPowerFoldOp<T>::compute(ExecutionContext& context) {
 
   const int64_t total = width * layout.num_range;
   const std::vector<int64_t> output_shape{width, layout.num_range};
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   HOLOSCAN_TRY(emit_device_tensor(
       power_map, context, output_shape, real_dtype<T>(),
       [&](void* output, std::size_t) -> expected<void, Error> {

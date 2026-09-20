@@ -129,6 +129,7 @@ expected<void, Error> TDMDenseCompensationOp<T>::run_compute(
 template <typename T>
 expected<void, Error> TDMDenseCompensationOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   HOLOSCAN_TRY(auto input, receive_tensor(rd_maps, kOpName));
   try {
     require_cuda_accessible(input, "rd_maps", kOpName);
@@ -137,6 +138,7 @@ expected<void, Error> TDMDenseCompensationOp<T>::compute(
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const auto& pinned = context.params<TDMDenseCompensationParams>();
   HOLOSCAN_TRY(auto waveform, resolve_waveform(waveform_in, pinned));
   if (extents_.max_samples_per_chirp &&
@@ -171,8 +173,10 @@ expected<void, Error> TDMDenseCompensationOp<T>::compute(
     return make_unexpected(
         Error{ErrorCode::kNotSupported,
               std::string(kOpName) + ": no CUDA compute stream"});
+  // Execute the device stage on the input runtime stream.
   HOLOSCAN_TRY(run_compute(context, layout, waveform, slots,
                            detail::tdm_output_rd_shape(layout), input, stream));
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   retained_input_ = std::move(input);
   return {};
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Shared HSDK 5 Graph source / sink / runner for performance drivers.
-// [EA HSDK5 ONLY] Replaces HSDK 4.x Application helpers in perf_source.hpp /
+//  Replaces HSDK 4.x Application helpers in perf_source.hpp /
 // perf_sink.hpp. Mid-session POD [live] overrides use a source that co-emits
 // the override and Tensor on one clock so the graph stays plannable. EA
 // replay requires a sideband sample every tick, so the source emits the
@@ -70,7 +70,7 @@ inline constexpr auto kPerfPoll = std::chrono::milliseconds{25};
 // How PerfTensorSourceOp publishes each tick. Drivers pass this into
 // run_perf_graph* — default remains kCopy (stage once, D2D into the loan).
 // kFillInPlace / kZeroCopy are diagnostic: fill currently zero-fills the loan;
-// zero-copy republish is rejected on this EA (HSDK5_PORT.md §3).
+// zero-copy support depends on the active Graph output binding.
 enum class PerfPublishMode {
   kCopy,
   kFillInPlace,
@@ -201,9 +201,8 @@ inline void bind_tensor_out(holoscan::CompileOptions& options,
 namespace detail {
 
 // Zero-copy republish of a staged device Tensor (shared handle, no D2D) is
-// rejected under Graph + bind_tensor_output_device with
-// RUNTIME_PORT_BINDING_UNAVAILABLE (HSDK5_PORT.md §3). Default path is the
-// pool loan + D2D copy. Drivers select via PerfPublishMode on run_perf_graph*.
+// optional under Graph output binding. The default path uses a pool loan plus
+// D2D copy; drivers select the publication mode through PerfPublishMode.
 
 inline holoscan::expected<void, holoscan::Error> emit_device_zerocopy(
     holoscan::Output<holoscan::Tensor>& out,
@@ -388,9 +387,8 @@ class PerfTensorSourceOp final : public holoscan::Operator<> {
 // the configured initial value before `override_at`, then the override.
 // Publishing both outputs every activation satisfies replay. Callers must
 // put source, operator, and sinks in one explicit partition (independent
-// OnClock roots otherwise fail compile). Enum sidebands bind since the
-// kLocalEnum fix (HSDK5_PORT.md §12). ClutterFilterOp.method uses this
-// path for override_ms; other enum lives are not yet wired (§8).
+// OnClock roots otherwise fail compile). ClutterFilterOp.method uses this path
+// for override_ms; other enum-valued drivers can reuse the same source.
 template <typename Value>
 class PerfTensorOverrideSourceOp final : public holoscan::Operator<> {
  public:

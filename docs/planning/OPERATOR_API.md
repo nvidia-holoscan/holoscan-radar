@@ -264,7 +264,7 @@ Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a d
 
 - A parameter tagged **[live]** may additionally be overridden in-flight via a same-named input port. The port is listed under Parameters (with the tag), never duplicated under Inputs; only true data tensors appear under Inputs.
 - **Wiring is the application's only obligation.** Every `[live]` port's `Exact{}` + `on_missing SafeDefault{}` entry is in `contract()` unconditionally; an app enables the override by `add_flow`-ing the port and disables it by leaving it unwired. An unwired entry compiles (warning `TEMPORAL_INPUT_UNCONNECTED_SAFE_DEFAULT`) and reports `kNotConnected` on every activation, which the operator reads as "no override this tick". There is no per-port static: the parameter is the whole configuration surface.
-- **The rule holds under every trigger shape**, `OnEach` and `OnAligned` alike; `SnapshotGatherOp` and `DetectionReductionOp` are no longer special-cased. See [`HSDK5_PORT.md`](HSDK5_PORT.md) §11.
+- **The rule holds under every trigger shape**, `OnEach` and `OnAligned` alike; `SnapshotGatherOp` and `DetectionReductionOp` are not special-cased.
 - Join is **Exact** against the operator's data trigger (`OnEach` on the cube / map). Capture times must match. The override for frame *k* must already be published when the trigger sample arrives (application causal order — typically the sequencer stamps transmit time on both). A same-tick sibling that has not yet published yields `kNeverSeen`.
 - **The parameter is the default; an override lasts one tick.** Unwired → the Params/YAML value on every tick. Wired with an Exact match → that sample, **for that activation only**. Wired with a miss → the Params value again. Nothing is carried forward between ticks, and the operator keeps no last-value state. Never treat a SafeDefault default-constructed payload as an override.
 - **To hold an override, publish it every tick.** This is what `Exact{}` already asks for — the sequencer stamps the override and the trigger sample from one transmit time — so per-tick publication is the normal shape, not an extra burden. Unmatched ticks still run (SafeDefault); apps needing fail-closed coherence handle the miss at the application.
@@ -347,7 +347,7 @@ optional array is absent; null is invalid. See
 
 - **In:** `range_profiles` — complex64 / complex128, `(num_chirps, num_range_bins)` or with named leading `N_rx` / `(M_tx, N_rx)` (no opaque leading batch). Slow-time (chirp) axis second-to-last.
 - **In:** `doppler_window` (optional, **[live]**) — logical `WindowSpec`; the HSDK 5 physical payload is the generated `holoscan::radar::wire::WindowSpecT`. Same-named one-tick override joined to `range_profiles` with `Exact{}` + `SafeDefault{}`; a match applies only to that tick, while a miss uses Params without latching.
-- **Out:** `range_profiles_out` — complex64 / complex128, same leading + `(num_chirps_out, num_range_bins)`. `num_chirps_out = num_chirps` (`none` / `mean_subtraction`), `num_chirps − 1` (`single_delay`), `num_chirps − 2` (`double_delay`). `none` materializes an identity copy into the operator-owned output pool; it does not alias the input. HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `range_profiles_out` rather than repeating `range_profiles` ([EA HSDK5 ONLY] — same pattern will apply to other operators that previously reused an input name on the output).
+- **Out:** `range_profiles_out` — complex64 / complex128, same leading + `(num_chirps_out, num_range_bins)`. `num_chirps_out = num_chirps` (`none` / `mean_subtraction`), `num_chirps − 1` (`single_delay`), `num_chirps − 2` (`double_delay`). `none` materializes an identity copy into the operator-owned output pool; it does not alias the input. HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `range_profiles_out` rather than repeating `range_profiles` ( — same pattern will apply to other operators that previously reused an input name on the output).
 - **Ctor:** `MaxTensorExtents` required (`max_chirps`, `max_range_bins`; optional `max_rx` / `max_tx` / `max_channels` admit named leading axes).
 
 **Parameters:**
@@ -425,7 +425,7 @@ optional array is absent; null is invalid. See
 #### CFARDetectorOp
 
 - **In:** `rd_maps` — complex64 / complex128, **or** a real float32 / float64 power map, `(num_doppler, num_range_bins)`. CFAR plane = last two axes; leading axes batched/integrated per `nci_axes`. The path is auto-selected by input dtype (no parameter, mirroring the range processor): **complex** → form the square-law power `|·|²`; **real** → treat as an already-formed power map and threshold it directly.
-- **Out:** `detection_mask` (optional, **latched**) — uint8 (`0`/`1`), `(num_doppler, num_range_bins)` (axes in `nci_axes` reduced; other leading axes preserved). `1` where detected — equivalently `detection_score > 1`. When `peak_mode` selects NMS, the mask instead marks only retained local maxima (a strict subset of `detection_score > 1`), so it stays consistent with `detection_idx`; `detection_score` / `noise_estimate` remain dense. Emitted as `uint8` rather than `bool` because the HSDK 4.3 and current HSDK 5 EA NumPy bridges have no typestr for `kDLBool`; `arr.view(bool)` recovers a boolean view.
+- **Out:** `detection_mask` (optional, **latched**) — uint8 (`0`/`1`), `(num_doppler, num_range_bins)` (axes in `nci_axes` reduced; other leading axes preserved). `1` where detected — equivalently `detection_score > 1`. When `peak_mode` selects NMS, the mask instead marks only retained local maxima (a strict subset of `detection_score > 1`), so it stays consistent with `detection_idx`; `detection_score` / `noise_estimate` remain dense. Emitted as `uint8` rather than `bool` for broad DLPack consumer compatibility; `arr.view(bool)` recovers a boolean view.
 - **Out:** `detection_score` (optional, **latched**) — float32 / float64, same shape as `detection_mask`. The CFAR test statistic normalized by its per-cell adaptive threshold: `detection_score = P / (threshold_scale · α · noise_estimate)`, where `P` is the cell's power statistic (`|·|²`, or the NCI sum). `> 1` ⇔ detected; the value is the detection margin, and since the threshold tracks local noise it is proportional to the cell SNR — so it doubles as the per-detection **strength / ranking score** used downstream (gathered by feature-assembly into `points` for `ClusterDBSCANOp` / `DetectionReductionOp`). Replaces the former `detection_threshold` output (the absolute threshold is recoverable from `noise_estimate` and the params).
 - **Out:** `noise_estimate` (optional, **latched**) — float32 / float64, same shape as `detection_mask`. Per-cell noise from the training cells (`N`); kept for absolute calibration / diagnostics.
 - **Out:** `cfar_power` (optional, **latched**) — float32 / float64, same shape as `detection_mask`. The exact surface the threshold is applied to: the post-NCI integrated power `Σ_k |x_k|²` over the `nci_axes` fold, or the plain square-law power map `|x|²` when `nci_axes` is empty. **Power, not amplitude, and not noise-normalized** — that is `detection_score`. Exists so a consumer can display or analyze what the detector actually saw instead of re-deriving it from `rd_maps` (a re-derivation silently diverges the moment `nci_axes` / `nci_fold` change). HSDK 5 copies it from the operator's ping-ponged workspace into a pool loan when the output is active.
@@ -612,9 +612,9 @@ Selects a uniform ULA/URA sub-array from a (possibly holey) MIMO virtual array a
 
 - **In:** `snapshot` — complex64 / complex128, `(num_items, N_virtual)` or `(num_items, N_virtual, num_snapshots)`. Holey virtual-array snapshot from `SnapshotGatherOp`; `N_virtual` must match `array_geometry.num_elements`.
 - **In:** `is_valid` (optional) — bool or uint8, `(num_items, num_snapshots)`. Forwarded unchanged when present (channel selection leaves the mask intact).
-- **Out:** `snapshot_out` — complex64 / complex128, `(num_items, L[, num_snapshots])`. Selected-channel snapshot (`L` = sub-array size). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `snapshot_out` rather than repeating `snapshot` ([EA HSDK5 ONLY]).
+- **Out:** `snapshot_out` — complex64 / complex128, `(num_items, L[, num_snapshots])`. Selected-channel snapshot (`L` = sub-array size). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `snapshot_out` rather than repeating `snapshot` ().
 - **Out:** `array_geometry` (optional, **latched**) — `WireArrayGeometry`, carrying the reduced logical `ArrayGeometry` for the estimator in the shared generated descriptor-Tensor schema. When consumed, it is emitted on the same tick as `snapshot_out` and directly wires to an angle operator's same-schema `[live] array_geometry` input; Params side-channel is not acceptable for runtime-varying geometry. A consumer using a separately configured static geometry must keep geometry/subarray overrides disabled or maintain equivalent coherence itself.
-- **Out:** `is_valid_out` (optional, **latched**) — the input mask, forwarded. Physical name `is_valid_out` ([EA HSDK5 ONLY] unique in/out names).
+- **Out:** `is_valid_out` (optional, **latched**) — the input mask, forwarded. Physical name `is_valid_out` ( unique in/out names).
 
 **Parameters:**
 
@@ -811,7 +811,7 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 #### MIMODeinterleaveOp
 
 - **In:** `adc_cube` — complex64 / complex128 (IQ IF) **or** float32 / float64 (real IF), `(N_rx, M·L, samples_per_chirp)`. Slow-time interleaves the M TX per the TX schedule.
-- **Out:** `adc_cube_out` — complex64 / complex128 / float32 / float64 (dtype preserved), `(M_tx, N_rx, L, samples_per_chirp)`. TX split into an explicit axis. Pure marshaling (strided reshape/gather). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `adc_cube_out` rather than repeating `adc_cube` ([EA HSDK5 ONLY] — same pattern as ClutterFilterOp `range_profiles_out`).
+- **Out:** `adc_cube_out` — complex64 / complex128 / float32 / float64 (dtype preserved), `(M_tx, N_rx, L, samples_per_chirp)`. TX split into an explicit axis. Pure marshaling (strided reshape/gather). HSDK 5 requires unique port names within an operator (inputs and outputs share one namespace), so the physical output name is `adc_cube_out` rather than repeating `adc_cube` ( — same pattern as ClutterFilterOp `range_profiles_out`).
 
 **Parameters:**
 
@@ -820,7 +820,7 @@ An explicit `subarray_spec` and nonempty `spatial_smoothing` are mutually exclus
 #### TDMDenseCompensationOp
 
 - **In:** `rd_maps` — complex64 / complex128, `(M_tx, N_rx, num_doppler, num_range_bins)`. TX axis already explicit from de-interleave.
-- **Out:** `rd_maps_out` — complex64 / complex128, same shape. Per-Doppler-bin inter-TX motion phase removed. [EA HSDK5 ONLY] unique in/out port names required; logical output channel remains `rd_maps`.
+- **Out:** `rd_maps_out` — complex64 / complex128, same shape. Per-Doppler-bin inter-TX motion phase removed.  unique in/out port names required; logical output channel remains `rd_maps`.
 
 **Parameters:**
 
@@ -845,7 +845,7 @@ No waveform is required: the demultiplexing math is defined by `ddm_code` and te
 #### VirtualArrayAssemblyOp
 
 - **In:** `rd_maps` — complex64 / complex128, `(M_tx, N_rx, num_doppler, num_range_bins)`. Separated `(tx, rx)` block. (TX/RX element positions are parameters.)
-- **Out:** `rd_maps_out` — complex64 / complex128, `(num_virtual, num_doppler, num_range_bins)`. `(tx, rx)` flattened to a single virtual channel axis (`c = tx·N_rx + rx`), overlapped virtual elements deduped, so `num_virtual ≤ M·N`. [EA HSDK5 ONLY] physical port name `rd_maps_out` (unique in/out namespace).
+- **Out:** `rd_maps_out` — complex64 / complex128, `(num_virtual, num_doppler, num_range_bins)`. `(tx, rx)` flattened to a single virtual channel axis (`c = tx·N_rx + rx`), overlapped virtual elements deduped, so `num_virtual ≤ M·N`.  physical port name `rd_maps_out` (unique in/out namespace).
 - **Out:** `array_geometry` — `WireArrayGeometry`, carrying the logical virtual `ArrayGeometry` in the shared generated descriptor-Tensor schema: `element_positions` (`p_virtual = p_tx + p_rx`), wavelength, and optional geometry type. It directly wires to angle operators' same-schema `[live] array_geometry` inputs.
 
 **Parameters:**

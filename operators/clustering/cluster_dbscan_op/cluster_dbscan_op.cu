@@ -590,16 +590,19 @@ Contract ClusterDBSCANOp<T>::contract() const {
 
 template <typename T>
 expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive the device feature matrix.
   HOLOSCAN_TRY(auto points_in, receive_tensor(points, kOpName));
 
   // Resolve Params plus this tick's Exact overrides.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const ClusterDBSCANParams& pinned = context.params<ClusterDBSCANParams>();
   HOLOSCAN_TRY(
       auto stage,
       resolve_params(epsilon, min_points, max_clusters, pinned, max_features_));
 
   // Validate shape/dtype and derive tick geometry.
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(
       auto plan,
       (build_cluster_stage_plan<T>(points_in, std::move(stage))));
@@ -613,6 +616,8 @@ expected<void, Error> ClusterDBSCANOp<T>::compute(ExecutionContext& context) {
   }
 
   // Empty input: publish required labels, then the independent optional sizes.
+  // Allocate exact-sized outputs before launching device work.
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   if (num_points == 0) {
     const std::vector<int64_t> empty_shape = {0};
     auto noop = [](void*, std::size_t) -> expected<void, Error> {

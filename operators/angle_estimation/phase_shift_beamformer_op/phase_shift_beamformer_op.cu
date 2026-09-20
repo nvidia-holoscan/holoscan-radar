@@ -327,6 +327,7 @@ Contract PhaseShiftBeamformerOp<T>::contract() const {
 template <typename T>
 expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive and validate the trigger tensor.
   HOLOSCAN_TRY(auto rd, receive_tensor(rd_maps, kOpName));
   try {
@@ -339,12 +340,14 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
 
   // Resolve this tick's Exact overrides, then validate named axes and derive
   // output geometry.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const PhaseShiftBeamformerParams& pinned =
       context.params<PhaseShiftBeamformerParams>();
   HOLOSCAN_TRY(
       auto stage,
       resolve_params(array_geometry, az_coordinates, el_coordinates, array_taper,
                      pinned, max_az_, max_el_));
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(
       auto plan,
       build_phase_shift_beamformer_stage_plan(
@@ -357,6 +360,7 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
         Error{ErrorCode::kNotSupported,
               "PhaseShiftBeamformerOp: no CUDA compute stream"});
   }
+  // Prepare or reuse cached artifacts without changing tick coherence.
   HOLOSCAN_TRY(
       auto artifacts,
       prepare_steering_artifacts<T>(artifact_cache_, plan.stage, stream));
@@ -364,11 +368,13 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
   // Prepare the required dense cube before publishing optional sidebands.
   const void* input_ptr = rd.data();
   const void* weights_ptr = artifacts->weights->data();
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(auto cube_loan,
                prepare_device_tensor(
       rda_cube, context, plan.output_shape, complex_dtype<T>(),
       [&](void* out_ptr, std::size_t) -> expected<void, Error> {
         try {
+          // Execute the device stage on the input runtime stream.
           detail::run_phase_shift_beamform_stage<T>(
               static_cast<const cuda::std::complex<T>*>(input_ptr),
               static_cast<cuda::std::complex<T>*>(out_ptr), /*batch=*/1,
@@ -408,6 +414,7 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(
               }
               return {};
             }));
+    // Publish coherent outputs in dependency order and retain borrowed inputs.
     latched.emit(output, context, std::move(loan),
                  std::string(kOpName) + "." + port_name);
     return {};

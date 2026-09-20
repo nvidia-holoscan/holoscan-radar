@@ -4,13 +4,6 @@
 # Reusable harness headers (utils/) plus thin per-operator consumers. Shared
 # code lives in utils/ as an INTERFACE library; only the scenario matrix is
 # operator-specific.
-#
-# [EA HSDK5 ONLY] Operator allow-list alone is not enough: most perf_*.cpp
-# drivers are still HSDK 4.x Application / TensorMap code and will not
-# compile. Only build Graph-ported perf binaries listed in
-# HOLOSCAN_RADAR_HSDK5_PORTED_PERF (expand as each driver is rewritten —
-# see docs/planning/HSDK5_PORT.md §8).
-
 add_library(radar_perf_utils INTERFACE)
 target_include_directories(radar_perf_utils INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -21,9 +14,8 @@ target_link_libraries(radar_perf_utils INTERFACE
     holoscan::radar_schemas
     CUDA::cudart)
 
-# Perf drivers rewritten for HSDK 5 Graph (not the same as the operator
-# allow-list — an op can be ported while its perf_*.cpp remains 4.x).
-set(HOLOSCAN_RADAR_HSDK5_PORTED_PERF
+# Public performance targets, also used to register smoke tests.
+set(HOLOSCAN_RADAR_PERF_TARGETS
     clutter_filter
     mimo_deinterleave
     phase_shift_beamformer
@@ -55,15 +47,9 @@ set(HOLOSCAN_RADAR_HSDK5_PORTED_PERF
 
 function(radar_add_perf NAME)
     set(_op_target ${ARGN})
-    if(NOT "${NAME}" IN_LIST HOLOSCAN_RADAR_HSDK5_PORTED_PERF)
-        message(STATUS
-            "[EA HSDK5 ONLY] Skipping perf_${NAME} "
-            "(driver not Graph-ported yet)")
-        return()
-    endif()
     if(NOT TARGET ${_op_target})
         message(STATUS
-            "[EA HSDK5 ONLY] Skipping perf_${NAME} (missing ${_op_target})")
+            "Skipping perf_${NAME} (missing ${_op_target})")
         return()
     endif()
     add_executable(perf_${NAME} perf_${NAME}.cpp)
@@ -85,9 +71,8 @@ radar_add_perf(clutter_filter holoscan::clutter_filter_op)
 radar_add_perf(fmcw_range_doppler_processor
     holoscan::fmcw_range_doppler_processor_op)
 
-# Multi-op fused/split harness needs every constituent driver Graph-ported.
-if("fmcw_split_vs_fused" IN_LIST HOLOSCAN_RADAR_HSDK5_PORTED_PERF
-   AND TARGET holoscan::fmcw_range_processor_op
+# Multi-op fused/split harness needs every constituent operator target.
+if(TARGET holoscan::fmcw_range_processor_op
    AND TARGET holoscan::clutter_filter_op
    AND TARGET holoscan::fmcw_doppler_processor_op
    AND TARGET holoscan::fmcw_range_doppler_processor_op)
@@ -100,8 +85,7 @@ if("fmcw_split_vs_fused" IN_LIST HOLOSCAN_RADAR_HSDK5_PORTED_PERF
         holoscan::fmcw_range_doppler_processor_op)
 else()
     message(STATUS
-        "[EA HSDK5 ONLY] Skipping perf_fmcw_split_vs_fused "
-        "(driver not Graph-ported / missing deps)")
+        "Skipping perf_fmcw_split_vs_fused (missing operator targets)")
 endif()
 
 radar_add_perf(cluster_dbscan holoscan::cluster_dbscan_op)
@@ -129,7 +113,6 @@ radar_add_perf(tdm_sparse_compensation
 
 # Optional smoke: runs a tiny scenario subset and verifies a report file is
 # written. No timing thresholds — CI only checks the tool executes and emits.
-# [EA HSDK5 ONLY] Only register smokes for Graph-ported perf targets.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
     function(radar_add_perf_smoke NAME)
         if(NOT TARGET perf_${NAME})
@@ -142,7 +125,7 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
             LABELS "performance")
     endfunction()
 
-    foreach(_perf_name IN LISTS HOLOSCAN_RADAR_HSDK5_PORTED_PERF)
+    foreach(_perf_name IN LISTS HOLOSCAN_RADAR_PERF_TARGETS)
         radar_add_perf_smoke(${_perf_name})
     endforeach()
 endif()

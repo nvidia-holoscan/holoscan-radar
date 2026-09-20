@@ -5,7 +5,7 @@
 // covariance/Hermitian-eig/EFT front-end plus the device LS rotation solve.
 // Measurement only: no timing assertions.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
+//  Graph-based rewrite of the HSDK 4.x Application harness.
 // Measures each live override independently through the production Exact
 // contract. subarray_spec is static.
 

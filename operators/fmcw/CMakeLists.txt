@@ -4,7 +4,7 @@
 # FMCW signal-processing operators (see README.md in this directory).
 # Future MIMO marshaling operators also live in this group.
 #
-# [EA HSDK5 ONLY] holoscan_radar_add_operator skips operators not yet ported
+#  holoscan_radar_add_operator skips operators not yet ported
 # to the HSDK 5 Operator<> model (see HoloscanRadarOptionalFeatures.cmake).
 # The fused operator is declared first so its DEPENDS FORCE runs before
 # dependency option() binds — same ordering rule as pkg/.

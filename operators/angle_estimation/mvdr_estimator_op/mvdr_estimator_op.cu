@@ -879,6 +879,7 @@ Contract MVDREstimatorOp<T>::contract() const {
 
 template <typename T>
 expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // 1. Receive the snapshot cube and resolve this tick's live configuration
   // into one validated plan with all output shapes.
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
@@ -890,11 +891,13 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
     return fail_invalid(error.what());
   }
 
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const MVDRParams& pinned = context.params<MVDRParams>();
   HOLOSCAN_TRY(
       auto stage,
       resolve_params(array_geometry, az_coordinates, el_coordinates, spatial_smoothing,
                      diagonal_loading, max_sources, pinned, extents_));
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(
       auto plan,
       build_mvdr_stage_plan(snap, std::move(stage), extents_));
@@ -922,6 +925,7 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
   }
 
   HOLOSCAN_TRY(auto maybe_valid, receive_optional_value(is_valid));
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(auto mask_ptr,
                prepare_mvdr_mask(
                    maybe_valid, plan.num_items, plan.num_snapshots));
@@ -938,6 +942,7 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
     HOLOSCAN_TRY(emit_empty_mvdr_outputs<T>(
         aoa_estimates, angle_spectrum, doa_multi, source_count, eigenvalues,
         doa_multi_out_, source_count_out_, eigenvalues_out_, context, plan));
+    // Publish coherent outputs in dependency order and retain borrowed inputs.
     retained_snapshot_ = std::move(snap);
     if (maybe_valid.has_value()) {
       retained_is_valid_ = std::move(*maybe_valid);
@@ -978,6 +983,7 @@ expected<void, Error> MVDREstimatorOp<T>::compute(ExecutionContext& context) {
 
   // 6. Run covariance → diagonal loading / inversion → Capon scan and
   // optional diagnostics, then publish outputs in contract order.
+  // Execute the device stage on the input runtime stream.
   HOLOSCAN_TRY(
       execute_mvdr(estimation, plan, *steering, workspace, outputs, stream));
   HOLOSCAN_TRY(publish_mvdr_outputs(

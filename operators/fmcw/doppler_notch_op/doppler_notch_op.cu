@@ -122,6 +122,7 @@ Contract DopplerNotchOp<T>::contract() const {
 
 template <typename T>
 expected<void, Error> DopplerNotchOp<T>::compute(ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   HOLOSCAN_TRY(auto input, receive_tensor(rd_maps, kOpName));
   HOLOSCAN_TRY(auto axis, receive_tensor(velocity_bins, kOpName));
   try {
@@ -151,6 +152,7 @@ expected<void, Error> DopplerNotchOp<T>::compute(ExecutionContext& context) {
         ": rd_maps shape exceeds MaxTensorExtents");
   }
 
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const DopplerNotchParams& pinned =
       context.params<DopplerNotchParams>();
   HOLOSCAN_TRY(
@@ -168,10 +170,12 @@ expected<void, Error> DopplerNotchOp<T>::compute(ExecutionContext& context) {
       full_rank_shape(layout, layout.rows, layout.cols);
   const int64_t total =
       layout.batch * layout.rows * layout.cols;
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   HOLOSCAN_TRY(emit_device_tensor(
       rd_maps_out, context, shape, input.dtype(),
       [&](void* destination, std::size_t) -> expected<void, Error> {
         try {
+          // Execute the device stage on the input runtime stream.
           detail::run_doppler_notch_stage<T>(
               static_cast<const cuda::std::complex<T>*>(input.data()),
               static_cast<const T*>(axis.data()),

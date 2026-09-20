@@ -196,7 +196,7 @@ struct SubarrayTraits : perf::PerfDriverDefaults {
   }
   static const char* full_help() {
     return "Full item/channel/snapshot size ladder; schema and host-Tensor "
-           "live override timing deferred on HSDK 5 EA";
+           "live override timing is not measured";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {

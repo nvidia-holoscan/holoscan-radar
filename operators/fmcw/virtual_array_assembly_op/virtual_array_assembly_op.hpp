@@ -35,7 +35,7 @@ namespace holoscan::radar {
 //               num_range_bins). No opaque leading batch.
 // Out: rd_maps_out — same dtype, (num_virtual, num_doppler,
 //               num_range_bins).
-//               [EA HSDK5 ONLY] unique in/out port names required.
+//                unique in/out port names required.
 // Out: array_geometry — WireArrayGeometry carrying the virtual element
 //               positions, wavelength, and optional geometry type.
 //
@@ -95,7 +95,7 @@ class VirtualArrayAssemblyOp
   // HSDK 5 requires unique port names within an operator (inputs and
   // outputs share one namespace). OPERATOR_API.md's logical output channel
   // remains "rd_maps"; the physical port name is rd_maps_out.
-  // [EA HSDK5 ONLY] revisit naming once the full port is settled.
+  //  revisit naming once the full port is settled.
   Output<Tensor> rd_maps_out{"rd_maps_out"};
   Output<WireArrayGeometry> array_geometry{"array_geometry"};
 

@@ -6,14 +6,14 @@
 // vs fused
 //   FMCWRangeDopplerProcessorOp
 //
-// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application
+//  Graph-based rewrite of the HSDK 4.x Application
 // harness.  No [live] overrides — steady e2e comparison only.
 // Measurement tool only — no timing assertions and no keep/kill
 // verdict.  Summing the three per-operator perf tools overstates split
 // cost (extra Holoscan nodes / intermediate tensors are missing from a
 // naive sum); this tool times both graphs with identical I/O so the
 // team can fill the decision table in
-// operators/fmcw/fmcw_range_doppler_processor_op/OPEN_ITEMS.md §1.
+// OPEN_ITEMS.md §1.
 //
 // See docs/planning/OPERATOR_DEVELOPMENT.md.
 

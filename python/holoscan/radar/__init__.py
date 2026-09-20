@@ -89,7 +89,7 @@ from .root_music_estimator_op import (  # noqa: F401
 )
 from .snapshot_gather_op import SnapshotGatherOpF32, SnapshotGatherOpF64  # noqa: F401
 
-# [EA HSDK5 ONLY] The FMCW range/Doppler/fused-RD and MIMO marshaling operators
+#  The FMCW range/Doppler/fused-RD and MIMO marshaling operators
 # are not on the HSDK 5 port allow-list, so their extension modules are absent
 # from an EA build. Import each optionally — one missing module must not take
 # down `import holoscan.radar` for the operators that did port. Missing names
@@ -99,7 +99,7 @@ try:
         FMCWDopplerProcessorOpF32,
         FMCWDopplerProcessorOpF64,
     )
-except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+except ImportError:  # pragma: no cover - optional extension not built
     FMCWDopplerProcessorOpF32 = None  # type: ignore[misc, assignment]
     FMCWDopplerProcessorOpF64 = None  # type: ignore[misc, assignment]
 
@@ -108,7 +108,7 @@ try:
         FMCWRangeDopplerProcessorOpF32,
         FMCWRangeDopplerProcessorOpF64,
     )
-except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+except ImportError:  # pragma: no cover - optional extension not built
     FMCWRangeDopplerProcessorOpF32 = None  # type: ignore[misc, assignment]
     FMCWRangeDopplerProcessorOpF64 = None  # type: ignore[misc, assignment]
 
@@ -117,7 +117,7 @@ try:
         FMCWRangeProcessorOpF32,
         FMCWRangeProcessorOpF64,
     )
-except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+except ImportError:  # pragma: no cover - optional extension not built
     FMCWRangeProcessorOpF32 = None  # type: ignore[misc, assignment]
     FMCWRangeProcessorOpF64 = None  # type: ignore[misc, assignment]
 
@@ -126,7 +126,7 @@ try:
         TDMDenseCompensationOpF32,
         TDMDenseCompensationOpF64,
     )
-except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+except ImportError:  # pragma: no cover - optional extension not built
     TDMDenseCompensationOpF32 = None  # type: ignore[misc, assignment]
     TDMDenseCompensationOpF64 = None  # type: ignore[misc, assignment]
 
@@ -135,7 +135,7 @@ try:
         DDMDenseDemultiplexOpF32,
         DDMDenseDemultiplexOpF64,
     )
-except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+except ImportError:  # pragma: no cover - optional extension not built
     DDMDenseDemultiplexOpF32 = None  # type: ignore[misc, assignment]
     DDMDenseDemultiplexOpF64 = None  # type: ignore[misc, assignment]
 
@@ -144,7 +144,7 @@ try:
         DopplerNotchOpF32,
         DopplerNotchOpF64,
     )
-except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+except ImportError:  # pragma: no cover - optional extension not built
     DopplerNotchOpF32 = None  # type: ignore[misc, assignment]
     DopplerNotchOpF64 = None  # type: ignore[misc, assignment]
 
@@ -153,7 +153,7 @@ try:
         DDMPowerFoldOpF32,
         DDMPowerFoldOpF64,
     )
-except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+except ImportError:  # pragma: no cover - optional extension not built
     DDMPowerFoldOpF32 = None  # type: ignore[misc, assignment]
     DDMPowerFoldOpF64 = None  # type: ignore[misc, assignment]
 
@@ -162,7 +162,7 @@ try:
         DDMSparseDemultiplexOpF32,
         DDMSparseDemultiplexOpF64,
     )
-except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+except ImportError:  # pragma: no cover - optional extension not built
     DDMSparseDemultiplexOpF32 = None  # type: ignore[misc, assignment]
     DDMSparseDemultiplexOpF64 = None  # type: ignore[misc, assignment]
 
@@ -171,7 +171,7 @@ try:
         MIMODeinterleaveOpF32,
         MIMODeinterleaveOpF64,
     )
-except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+except ImportError:  # pragma: no cover - optional extension not built
     MIMODeinterleaveOpF32 = None  # type: ignore[misc, assignment]
     MIMODeinterleaveOpF64 = None  # type: ignore[misc, assignment]
 
@@ -180,7 +180,7 @@ try:
         VirtualArrayAssemblyOpF32,
         VirtualArrayAssemblyOpF64,
     )
-except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+except ImportError:  # pragma: no cover - optional extension not built
     VirtualArrayAssemblyOpF32 = None  # type: ignore[misc, assignment]
     VirtualArrayAssemblyOpF64 = None  # type: ignore[misc, assignment]
 
@@ -189,7 +189,7 @@ try:
         TDMSparseCompensationOpF32,
         TDMSparseCompensationOpF64,
     )
-except ImportError:  # pragma: no cover - unported on HSDK 5 EA builds
+except ImportError:  # pragma: no cover - optional extension not built
     TDMSparseCompensationOpF32 = None  # type: ignore[misc, assignment]
     TDMSparseCompensationOpF64 = None  # type: ignore[misc, assignment]
 

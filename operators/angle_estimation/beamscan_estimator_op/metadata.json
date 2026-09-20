@@ -16,7 +16,7 @@
             "0.5.0": "Apply non-custom aperture tapers separably on recognized filled URAs",
             "0.4.0": "Tick-shell cleanup, optional-mask Graph wiring, axis-wise interpolation, cached workspace, and inline live timing",
             "0.3.0": "Document radar_boresight as the default angle convention",
-            "0.2.0": "HSDK 5 EA port: Operator<Params>, typed Tensor ports, OnEach contract",
+            "0.2.0": "HSDK 5 migration: Operator<Params>, typed Tensor ports, OnEach contract",
             "0.1.0": "Initial Release"
         },
         "holoscan_sdk": {

@@ -915,6 +915,7 @@ Contract MUSICEstimatorOp<T>::contract() const {
 
 template <typename T>
 expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // 1. Receive the snapshot cube and resolve this tick's live configuration
   // into one validated plan with all output shapes.
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
@@ -926,12 +927,14 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
     return fail_invalid(error.what());
   }
 
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const MUSICParams& pinned = context.params<MUSICParams>();
   HOLOSCAN_TRY(
       auto stage,
       resolve_params(array_geometry, az_coordinates, el_coordinates, spatial_smoothing,
                      num_sources, source_count_pfa, max_sources, pinned,
                      extents_));
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(
       auto plan,
       build_music_stage_plan(snap, std::move(stage), extents_));
@@ -959,6 +962,7 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
   }
 
   HOLOSCAN_TRY(auto maybe_valid, receive_optional_value(is_valid));
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(auto mask_ptr,
                prepare_music_mask(
                    maybe_valid, plan.num_items, plan.num_snapshots));
@@ -975,6 +979,7 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
     HOLOSCAN_TRY(emit_empty_music_outputs<T>(
         aoa_estimates, angle_spectrum, doa_multi, source_count, eigenvalues,
         doa_multi_out_, source_count_out_, context, plan));
+    // Publish coherent outputs in dependency order and retain borrowed inputs.
     retained_snapshot_ = std::move(snap);
     if (maybe_valid.has_value()) {
       retained_is_valid_ = std::move(*maybe_valid);
@@ -1022,6 +1027,7 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
   // 6. Run covariance → eigendecomposition → source count → MUSIC scan /
   // peak extraction, then publish required and optional outputs in contract
   // order.
+  // Execute the device stage on the input runtime stream.
   HOLOSCAN_TRY(execute_music(
       estimation, plan, *steering, workspace, outputs, stream,
       warned_rank_deficient_));

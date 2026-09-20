@@ -14,7 +14,7 @@ repeating expensive mistakes.
 | [`TESTING.md`](TESTING.md) | What properties tests must assert. |
 | [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md) | Landing gate — verify before claiming done. |
 | [`STATUS.md`](STATUS.md) | Claim work; record decisions. |
-| [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) | Index of items blocked on a team decision (detail in operator `OPEN_ITEMS.md`). |
+| [`../../OPEN_ITEMS.md`](../../OPEN_ITEMS.md) | Consolidated deferred work and unresolved design questions. |
 | [`operators/common/README.md`](../../operators/common/README.md) | Shared conventions and helpers. |
 | This doc | *How* to implement well: hot-path discipline, diagnosis, perf, open items. |
 
@@ -24,6 +24,39 @@ slow?"
 
 ---
 
+## Operator documentation and compute narration
+
+Every metadata-backed public `operators/<group>/*_op` README starts with the
+same six H2 sections: `Purpose`, `Responsibilities`, `When to use`, `Ports`,
+`Construction`, and `Parameters`. Keep the opening compact and skimmable:
+
+- **Purpose** explains the transformation and pipeline role in two to four
+  sentences.
+- **Responsibilities** states owned behavior and important non-responsibilities.
+- **When to use** names suitable workflows, placement, alternatives, and
+  exclusions.
+- **Ports** uses `Kind | Port | Payload type / dtype | Shape | Timing /
+  optionality | Responsibility` for data, live, and sideband channels.
+- **Construction** uses `Item | Type | Requirement | Responsibility` for
+  template precision, constructor captures, and required
+  `MaxTensorExtents`. Constructor captures are never Params.
+- **Parameters** uses `Parameter | Type | Default | Mutability |
+  Responsibility`; write an explicit `None` row when no Params exist.
+
+Put contract and group links immediately after the opening. Algorithm, shape,
+SDK, performance, examples, verification, and conformance detail follows in
+lower sections. Run `check_operator_readmes.py` through pre-commit; it checks
+structure and minimum prose only, so human review still audits every row against
+`OPERATOR_API.md`, `contract()`, Params schemas, and constructor signatures.
+
+Within every `compute()`, add short named stage comments at real orchestration
+boundaries. Use applicable labels such as `Receive and validate inputs`,
+`Resolve tick-local configuration`, `Build the execution plan`, `Prepare or
+reuse cached artifacts`, `Allocate outputs`, `Execute the device stage`, and
+`Publish outputs and retain inputs`. Explain coherence, cache or synchronization
+intent, and publication order; do not narrate individual statements, force
+irrelevant labels, or extract helpers only to manufacture stages.
+
 ## Non-negotiables
 
 1. **Docs first.** Code matches `OPERATOR_API.md`. Contract changes need an
@@ -32,12 +65,10 @@ slow?"
    over inventing an interface in code; treat contract edits as a *hesitant*
    option after diagnosing whether the problem is implementation, wording, or
    a real gap.
-2. **Do not silently resolve open items.** Ambiguities go in
-   `operators/<group>/<op>/OPEN_ITEMS.md` and stay there until the team
-   decides. Index every *team* block in
-   [`TEAM_BLOCKED.md`](TEAM_BLOCKED.md) as well. If code must land ahead of
-   the contract (rare), record that fact in `OPEN_ITEMS.md` with the conflict
-   and the question for the team.
+2. **Do not silently resolve open items.** Record ambiguities in the root
+   [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md), including their source operator or
+   directory. If code must land ahead of the contract (rare), record the
+   conflict and the question for the team there.
 3. **Diagnose before guessing.** When something is wrong or slow, run the
    cheapest experiment that distinguishes plausible causes *before* proposing a
    retrain-scale fix (kernel rewrite, dataset regen, architecture change). A
@@ -91,7 +122,6 @@ operators/<group>/<op_snake>/
   <op>_stage.hpp     # kernels / MatX (CUDA-TU only)
   <op>.cu            # setup / compute / explicit instantiations
   metadata.json
-  OPEN_ITEMS.md      # when team questions arise
 ```
 
 Keep `compute()` thin: resolve overrides → obtain buffers → call stage → emit.
@@ -354,8 +384,8 @@ delivers activations out of order. When an input is absent, read
 `Input<T>::selection().reason` before concluding anything — it distinguishes
 "the producer had not run" from "the window gave up waiting".
 
-Verified experimentally against HSDK 5 EA `v5.0.0.1`; re-check if a later SDK
-changes activation-time, alignment, or window semantics.
+These bounds were measured against the current pinned SDK. Re-check them when
+activation-time, alignment, or window semantics change.
 
 ### MatX where it fits; custom CUDA where it does not
 
@@ -449,8 +479,7 @@ If a contract parameter implies caching but the implementation has nothing to
 cache, do not pretend eviction works: record the no-op in `OPEN_ITEMS.md` as a
 team question (keep-as-placeholder vs drop). Default to dropping a hollow knob
 from both the contract and the code once the team confirms — an inert parameter
-that implies behavior is worse than its absence (see the resolved
-`max_cached_kernels` item, TEAM_BLOCKED L3). Re-introduce it as a real, wired
+that implies behavior is worse than its absence (as demonstrated by the removed `max_cached_kernels` placeholder). Re-introduce it as a real, wired
 parameter if a variant ever needs it.
 
 ### 6. Keep host calibration off the fused kernel
@@ -706,28 +735,22 @@ Where a slow convenience path and a fast production path both exist (e.g.
 
 ## Open items and contract hygiene
 
-### Operator-local `OPEN_ITEMS.md`
+### Repository `OPEN_ITEMS.md`
 
-Create when the first team question appears. Keep items concrete:
+Keep all deferred work and unresolved questions in the repository root
+[`OPEN_ITEMS.md`](../../OPEN_ITEMS.md). Each entry names its source directory,
+context, user impact, and the decision or acceptance criteria still needed.
+Remove completed or superseded items rather than preserving a resolution diary.
 
-- Context (what we observed)
-- Impact (who breaks)
-- Questions for the team
-- Status (`open` / `landed with caveat` / resolved summary)
-
-Resolve into `STATUS.md` settled decisions when the answer affects the module;
-then archive or remove the section.
-
-Settled algorithm choices, imposed layouts, and accepted workspace trade-offs
-belong in the operator README, not `OPEN_ITEMS.md`. Remove an operator-local
-open-items file when no unresolved item remains. SDK-wide migration facts
-belong in `HSDK5_PORT.md`; do not retain an operator `SDK_WORKAROUNDS.md` that
-only restates module conventions or accepted operator-owned workspace.
+SDK source-build and packaging limitations belong in
+[`SDK_DEVELOPMENT.md`](../../SDK_DEVELOPMENT.md). Operator READMEs should state
+current user-visible limitations, not migration history or maintainer scratch
+notes.
 
 ### Code ahead of contract
 
 If implementation must proceed with a correct formula the contract has not
-pinned yet, say so explicitly in `OPEN_ITEMS.md` ("code is ahead of the
+pinned yet, say so explicitly in the root `OPEN_ITEMS.md` ("code is ahead of the
 contract") and either update the contract in a dedicated change or revert.
 Never leave reviewers to discover divergence from diffs alone.
 
@@ -787,7 +810,7 @@ Exemplar code to read (patterns, not copy-paste requirements):
 - Device compaction — `cfar_compact.cuh`
 - Slow vs fast calibration — `alpha_lut` live override + warn-once on `pfa` MC
 - Perf harness consumer — `performance/cpp/perf_cfar_detector.cpp`
-- Open-item style — `operators/clustering/cluster_dbscan_op/OPEN_ITEMS.md`
+- Open-item style — [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md)
 
 ---
 

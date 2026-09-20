@@ -170,6 +170,7 @@ expected<void, Error> MIMODeinterleaveOp<T>::ensure_device_gather_map(
 template <typename T>
 expected<void, Error> MIMODeinterleaveOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive adc_cube; require a device-contiguous cube (complex or real IF).
   HOLOSCAN_TRY(auto input, receive_tensor(adc_cube, kOpName));
   try {
@@ -182,8 +183,10 @@ expected<void, Error> MIMODeinterleaveOp<T>::compute(
 
   // Trailing rank is (N_rx, M·L, samples), not an FMCW (chirps, bins)
   // cube — layout parse lives in the plan builder. No [live] merge.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const MIMODeinterleaveParams& pinned =
       context.params<MIMODeinterleaveParams>();
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(auto plan,
                build_deinterleave_stage_plan(pinned.tx_schedule, input,
                                              extents_));
@@ -203,10 +206,12 @@ expected<void, Error> MIMODeinterleaveOp<T>::compute(
   const void* input_ptr = input.data();
   const int64_t* d_map =
       static_cast<const int64_t*>(gather_map_->data());
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   HOLOSCAN_TRY(emit_device_tensor(
       adc_cube_out, context, plan.out_shape, input.dtype(),
       [&](void* out_ptr, std::size_t) -> expected<void, Error> {
         try {
+          // Execute the device stage on the input runtime stream.
           detail::run_deinterleave_stage(
               input_ptr, out_ptr, plan.layout, plan.num_tx,
               plan.chirps_per_tx, d_map, elem_bytes_for(input.dtype()),

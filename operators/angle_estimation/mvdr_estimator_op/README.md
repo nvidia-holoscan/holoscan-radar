@@ -1,34 +1,63 @@
 # `MVDREstimatorOp`
 
-Adaptive MVDR / Capon sparse-path DOA: for each gathered snapshot item it forms a sample covariance, regularizes and inverts it, and scans an `(az, el)` grid for the Capon power peak.
+## Purpose
 
-It sits in the pluggable sparse slot after `SnapshotGatherOp`, the same wiring as Beamscan / MUSIC. It solves “one (or a few) DOAs per detection/cluster” with data-adaptive nulls that a conventional scan cannot place. The fact a caller must not miss: `angle_convention` defaults to `radar_boresight`, the scan grid is required, and there is no array taper (the beam is shaped from `R̂`).
+Adaptive MVDR / Capon sparse-path DOA: for each gathered snapshot item it forms a sample covariance, regularizes and inverts it, and scans an `(az, el)` grid for the Capon power peak. It fills the sparse-estimator slot after snapshot gathering when adaptive interference nulling is more important than a conventional scan.
 
-| Kind | Port | Dtype | Shape | Notes |
-| --- | --- | --- | --- | --- |
-| in | `snapshot` | complex64 / complex128 | `(num_items, num_channels, num_snapshots)` | Exact rank 3; no opaque leading batch |
-| in | `is_valid` | bool or uint8 (`0`/`1`) | `(num_items, num_snapshots)` | Optional same-tick mask; non-member Exact + SafeDefault. Publish before `snapshot` |
-| out | `aoa_estimates` | float32 / float64 | `(num_items, 2)` | Dominant Capon DOA `(az, el)` or `(u, v)` |
-| out | `angle_spectrum` | float32 / float64 | `(num_items, num_az, num_el)` | Capon spectrum. Optional (`always` disposition): the grid is the same pass that yields `aoa_estimates`, so it is produced regardless and an unwired sink is silently discarded |
-| out | `doa_multi` | float32 / float64 | `(num_items, max_sources, 2)` | Up to `max_sources` peaks; unused rows NaN |
-| out | `source_count` | int32 | `(num_items,)` | Peaks actually written into `doa_multi` |
-| out | `eigenvalues` | float32 / float64 | `(num_items, C_est)` | Ascending **unloaded** covariance spectrum |
-| live | `array_geometry` | `WireArrayGeometry` | descriptor wire object | `[live]` Exact override; always declared, wire to enable |
-| live | `az_coordinates` / `el_coordinates` | float64 config Tensor | `(num_az,)` / `(num_el,)`, rank-1 pageable host | `[live]` Exact override; extents bounded by `max_az` / `max_el` |
-| live | `spatial_smoothing` | `SpatialSmoothingOverride` | `{count, first, second}` int64 POD | `[live]` Exact override; `count` 0–2 selects 1-D / 2-D counts |
-| live | `diagonal_loading` | float64 | scalar | `[live]` Exact override; always declared, wire to enable. Negative → `auto` |
-| live | `max_sources` | int64 | scalar | `[live]` Exact override; always declared, wire to enable. `doa_multi` capacity |
+## Responsibilities
+
+- Forms and diagonally loads each covariance matrix, solves the Capon response, and extracts the strongest grid direction.
+- Owns scan-grid and geometry validation, optional spatial smoothing, validity propagation, and spectrum output.
+- Does not estimate model order, apply an array taper, or gather snapshots from range-Doppler maps.
+
+## When to use
+
+Use after `SnapshotGatherOp` when adaptive null placement and interference rejection matter more than conventional-beamforming simplicity. Supply enough valid snapshots for a useful covariance estimate and use diagonal loading for poorly conditioned cases. Prefer Beamscan when covariance adaptation is unnecessary, and do not use MVDR when model-order estimation or an array taper is required.
 
 ```text
 … → rd_maps → CFARDetectorOp
   → SnapshotGatherOp → snapshot → MVDREstimatorOp → aoa_estimates
 ```
 
-`num_snapshots` should be ≳ `num_channels` for a well-conditioned inverse; a singleton snapshot axis (`K = 1`) still runs because diagonal loading regularizes `R̂`.
+## Ports
+
+| Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
+| --- | --- | --- | --- | --- | --- |
+| in | `snapshot` | complex64 / complex128 | `(num_items, num_channels, num_snapshots)` | Required trigger/aligned input | Exact rank 3; no opaque leading batch |
+| in | `is_valid` | bool or uint8 (`0`/`1`) | `(num_items, num_snapshots)` | Optional Exact side input | Optional same-tick mask; non-member Exact + SafeDefault. Publish before `snapshot` |
+| out | `aoa_estimates` | float32 / float64 | `(num_items, 2)` | Required output | Dominant Capon DOA `(az, el)` or `(u, v)` |
+| out | `angle_spectrum` | float32 / float64 | `(num_items, num_az, num_el)` | Optional `always` output | Capon spectrum. Optional (`always` disposition): the grid is the same pass that yields `aoa_estimates`, so it is produced regardless and an unwired sink is silently discarded |
+| out | `doa_multi` | float32 / float64 | `(num_items, max_sources, 2)` | Required output | Up to `max_sources` peaks; unused rows NaN |
+| out | `source_count` | int32 | `(num_items,)` | Required output | Peaks actually written into `doa_multi` |
+| out | `eigenvalues` | float32 / float64 | `(num_items, C_est)` | Required output | Ascending **unloaded** covariance spectrum |
+| live | `array_geometry` | `WireArrayGeometry` | descriptor wire object | Optional Exact one-tick override; Params fallback on miss | `[live]` Exact override; always declared, wire to enable |
+| live | `az_coordinates` / `el_coordinates` | float64 config Tensor | `(num_az,)` / `(num_el,)`, rank-1 pageable host | Optional Exact one-tick override; Params fallback on miss | `[live]` Exact override; extents bounded by `max_az` / `max_el` |
+| live | `spatial_smoothing` | `SpatialSmoothingOverride` | `{count, first, second}` int64 POD | Optional Exact one-tick override; Params fallback on miss | `[live]` Exact override; `count` 0–2 selects 1-D / 2-D counts |
+| live | `diagonal_loading` | float64 | scalar | Optional Exact one-tick override; Params fallback on miss | `[live]` Exact override; always declared, wire to enable. Negative → `auto` |
+| live | `max_sources` | int64 | scalar | Optional Exact one-tick override; Params fallback on miss | `[live]` Exact override; always declared, wire to enable. `doa_multi` capacity |
+
+## Construction
+
+| Item | Type | Requirement | Responsibility |
+| --- | --- | --- | --- |
+| Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
+| `extents` | `MaxTensorExtents` | Omit both `max_items` and `max_az` for zero-span output bounds, or provide positive `max_items`, `max_az`, `max_el`, `max_sources`, and `max_channels` | Sizes Tensor pools and bounded workspaces before `arm()`. |
+
+## Parameters
+
+| Parameter | Type | Default | Mutability | Responsibility |
+| --- | --- | --- | --- | --- |
+| `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override | Element positions + `λ` Cost: Rebuilds steering (+ smoothing plan if enabled). |
+| `angle_convention` | `AngleConvention` | `radar_boresight` | static | Boundary `(az, el)` ↔ unit-vector map Cost: Fixes output meaning for the graph. |
+| `az_coordinates` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_az` | First coordinate: azimuth radians for angular conventions, dimensionless `u` for `direction_cosine` Cost: Rebuilds steering manifold. |
+| `el_coordinates` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_el` | Second coordinate: elevation radians for angular conventions, dimensionless `v` for `direction_cosine`; singleton gives a 1-D scan Cost: Rebuilds steering manifold. |
+| `diagonal_loading` | double | `-1` (`auto`) | `[live]` Exact | `R + δI`; `< 0` → `0.01 · trace(R̂)/C` Cost: Free (kernel reload of `δ`). |
+| `max_sources` | int64 | `1` | `[live]` Exact | Capon peaks to report (`aoa_estimates` is always the strongest) Cost: Reallocates `doa_multi`; cap `64`. |
+| `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD | Per-axis sub-array **counts** on a filled ULA/URA Cost: Rebuilds plan + index H2D; warns once. |
+| `forward_backward` | bool | `true` | static | Conjugate-reversed looks; ignored unless smoothing is on Cost: Part of the smoothing-plan key. |
 
 Contract: [`OPERATOR_API.md` § `MVDREstimatorOp`](../../../docs/planning/OPERATOR_API.md) ·
 group: [`operators/angle_estimation/README.md`](../README.md) ·
-open items: [`OPEN_ITEMS.md`](OPEN_ITEMS.md)
 
 ## Algorithm
 
@@ -97,40 +126,6 @@ Rejected combinations:
 
 `num_items`, scan grids, channels, and `max_sources` are checked against the captured extents before compute.
 
-## Parameters
-
-| Parameter | Type | Default | Override | Cost | Meaning |
-| --- | --- | --- | --- | --- | --- |
-| `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override (§9) | Rebuilds steering (+ smoothing plan if enabled) | Element positions + `λ` |
-| `angle_convention` | `AngleConvention` | `radar_boresight` | static | Fixes output meaning for the graph | Boundary `(az, el)` ↔ unit-vector map |
-| `az_coordinates` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_az` (§9) | Rebuilds steering manifold | First coordinate: azimuth radians for angular conventions, dimensionless `u` for `direction_cosine` |
-| `el_coordinates` | `vector<double>` | none (required, non-empty) | `[live]` Exact host config Tensor, extent bounded by `max_el` (§9) | Rebuilds steering manifold | Second coordinate: elevation radians for angular conventions, dimensionless `v` for `direction_cosine`; singleton gives a 1-D scan |
-| `diagonal_loading` | double | `-1` (`auto`) | `[live]` Exact | Free (kernel reload of `δ`) | `R + δI`; `< 0` → `0.01 · trace(R̂)/C` |
-| `max_sources` | int64 | `1` | `[live]` Exact | Reallocates `doa_multi`; cap `64` | Capon peaks to report (`aoa_estimates` is always the strongest) |
-| `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD (§9) | Rebuilds plan + index H2D; warns once | Per-axis sub-array **counts** on a filled ULA/URA |
-| `forward_backward` | bool | `true` | static | Part of the smoothing-plan key | Conjugate-reversed looks; ignored unless smoothing is on |
-
-Application YAML accepts explicit arrays or inclusive `{min: ..., max: ..., step: ...}` mappings for `az_coordinates` and `el_coordinates`. Range mappings require finite values, `step > 0`, `min <= max`, and endpoint alignment within floating-point tolerance. They expand to the same vector Params before construction; live ports remain rank-1 float64 Tensors. Every effective grid coordinate must be finite. Under `direction_cosine`, each authored axis value must lie in `[-1, 1]`; square-grid corners outside `u² + v² <= 1` remain legal and are masked per beam.
-
-No `num_sources` / EFT — Capon has no model-order concept. `diagonal_loading` encoding is `double`: negative → `auto`, non-negative → absolute `δ` (the app YAML `diagonal_loading: -1.0` is `auto`).
-
-## SDK implementation notes
-
-- **Construction.** `MVDREstimatorOp(const MaxTensorExtents&)`. If both `max_items` and `max_az` are unset, pool spans stay `0`. Otherwise `max_items`, `max_az`, `max_el`, `max_sources`, and `max_channels` must be positive. Constructor-created runtime state owns stable covariance/inverse/count workspace and the steering cache.
-- **Triggering.** `contract()` is `OnEach{snapshot}`. Optional `is_valid` and every live override are unconditional non-members with `Exact{}` + `SafeDefault{}`; unwired means absent/all-valid or Params for that tick. A producer must publish a same-tick mask before `snapshot`.
-- **Ports and queues.** Device Tensor ports, queue depth `2`. Output ranks: `aoa_estimates` 2, `angle_spectrum` 3, `doa_multi` 3, `source_count` 1, `eigenvalues` 2. Live Inputs also queue depth `2`; `az_coordinates` / `el_coordinates` are rank-1 pageable-host float64 config Tensors, the rest are wire-object / POD / scalar payloads.
-- **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>`, a generated descriptor-schema type; `spatial_smoothing` is `Input<SpatialSmoothingOverride>`, a bounded `{count, first, second}` int64 POD (`count` must be 0, 1, or 2). Both convert with `from_wire` inside `resolve_live_override_via`, so neither wire storage nor the POD reaches operator state. `az_coordinates` / `el_coordinates` ride rank-1 pageable-host float64 config Tensors validated on arrival (rank, host memory, contiguity, dtype, `max_az` / `max_el` extent). `diagonal_loading` / `max_sources` are plain scalar `Input<>` ports resolved with `resolve_live_override`. Logical Params types are unchanged (`HSDK5_PORT.md` §9).
-- **Tick flow.** `compute()` is the high-level shell: receive and plan → validate mask / stream → empty path → prepare smoothed input → prepare steering, workspace, and outputs → execute MVDR → publish and retain. Operator-local helpers own the cache, Tensor-loan, execution-call, and optional-output plumbing. Runtime state retains capacity-managed smoothing gather buffers and grows them only for a larger effective input.
-- **Streams and lifetime.** `context.cuda_stream()`. Inputs and smoothing gather buffers remain alive through estimator execution. `MVDRPreparedWorkspace` points into stable covariance/inverse/count buffers; `MVDRPreparedOutputs` keeps every active loan and write guard alive through execution and commits all siblings before required-first publication. Stable-pointer MatX eig/inv plans persist across ticks; `stop()` clears them and drains `GetAllocMap()` via `retire_matx_solver_caches()`.
-- **Emission.** Required `aoa_estimates` publishes first. `angle_spectrum` is optional/always; `doa_multi` and `source_count` share a latched peak pass; `eigenvalues` is independently latched.
-- **Parameter authoring.** Schema `com.nvidia.holoscan.radar.MVDRParams` version `1`.
-- **Precision.** `MVDREstimatorOp<float>` and `<double>`.
-- **[EA HSDK5 ONLY]** All six override ports are unconditionally in `contract()`; the descriptor / grid / smoothing Graph tests run. Runtime geometry producers connect directly to `array_geometry` with `WireArrayGeometry`; Python remains Params-only for schema payloads.
-
-## Consumer lifetime notes
-
-Every output is a fresh pool loan. A consumer may keep the Tensor for the usual Holoscan lifetime.
-
 ## Performance
 
 **Cold.** First unseen geometry / grid / smoothing key builds the steering manifold and (if enabled) the smoothing plan. First `matx::eig` and `matx::inv` create plans.
@@ -143,34 +138,7 @@ Every output is a fresh pool loan. A consumer may keep the Tensor for the usual 
 ctest --test-dir build -R perf_mvdr_estimator_smoke
 ```
 
-Size ladder axes: channels, detections, snapshots, `num_az × num_el` (`xs`…`xl`; default smoke `xs`/`sm`/`md`). Every size isolates production Exact timing for `array_geometry`, both scan grids, `spatial_smoothing`, `diagonal_loading`, and `max_sources`. Do not treat historical kernel notes as current Graph results.
-
-## Tests and verification
-
-| Check | Proves |
-| --- | --- |
-| `RecoversKnownDoaUra` / `RecoversKnownDoaUlaAzOnly` | Single-source `aoa_estimates ≈ θ` |
-| `FixedDiagonalLoadingRecoversDoa` / `DiagonalLoadingConfigurableFromParams` | Absolute `δ` vs `auto` |
-| `MultiSourceRecoversTwoDoa` / `MaxSourcesCapacityNanFillsUnusedRows` | `doa_multi` always targets `max_sources`; NaN pad |
-| `EigenvaluesRankOneSourceDominant` | Unloaded spectrum; one dominant eigenvalue |
-| `SpatialSmoothing*` | S1 1-D/2-D; eigenvalues shrink; holey reject |
-| `Rejects2DSingleSnapshot` | Locked exact-rank snapshot contract |
-| `DirectionCosineMasksInvisibleRegion` | Invisible `(u, v)` → zero Capon power |
-| `LiveAzGridAppliesForOneTick` / `LiveSpatialSmoothingAppliesForOneTick` | Mid-stream override applies for one tick; the next miss reverts to Params |
-| `LiveArrayGeometryAppliesForOneTick` | Same for `array_geometry`; active and passing |
-| `LiveSpatialSmoothingRejectsMalformedPod` / `LiveAzGridRejectsExtentAboveMaxAz` | Out-of-range `count` and an over-`max_az` grid are diagnosed, not consumed |
-| `IsValidMask…` / `AllInvalidMask…` | Connected Exact mask and all-invalid blanking |
-| `LiveDiagonalLoading…` / `LiveMaxSources…` | Scalar Exact override and revert |
-| `DeterministicAcrossTicks` / `…AboveMatInvThreshold` | Repeatable one-item inversion on both sides of MatX's 32-channel backend threshold |
-| Rejects / precision / multi-item | TESTING.md cross-cuts |
-
-Analytic ground truth is a host steering-vector snapshot. C++ Graph tests bind all five outputs.
-
-TESTING.md also asks that multi-snapshot MVDR **null an interferer better than Beamscan**. No C++ test in `test_mvdr_estimator.cpp` performs that comparison (coverage gap, not an algorithm fork).
-
-```bash
-ctest --test-dir build -R test_mvdr_estimator --output-on-failure
-```
+Size ladder axes: channels, detections, snapshots, `num_az × num_el` (`xs`…`xl`; default smoke `xs`/`sm`/`md`). Every size isolates production Exact timing for `array_geometry`, both scan grids, `spatial_smoothing`, `diagonal_loading`, and `max_sources`. Run the harness on the target GPU; results are hardware-dependent.
 
 ## Usage
 
@@ -204,21 +172,3 @@ graph.add_flow(mvdr->doa_multi, doa_sink->in);
 graph.add_flow(mvdr->source_count, count_sink->in);
 graph.add_flow(mvdr->eigenvalues, eig_sink->in);
 ```
-
-**[EA HSDK5 ONLY]** Bind all five device outputs. Python `MVDREstimatorOpF32` / `F64` bindings are deferred on this branch.
-
-## Contract conformance
-
-The HSDK 5 C++ compute path matches the locked Capon algorithm and optional-port convention.
-
-| Contract claim | Verdict | Detail |
-| --- | --- | --- |
-| `array_geometry` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` in `contract()`, not `Input<ArrayGeometry>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9) |
-| `az_coordinates` / `el_coordinates` **[live]** | conforms (payload form differs) | Rank-1 host config Tensors bounded by `max_az` / `max_el`, not `Input<std::vector<double>>` (§9) |
-| `spatial_smoothing` **[live]** | conforms (payload form differs) | Bounded `{count, first, second}` int64 POD, not `Input<std::vector<int64_t>>` (§9) |
-| `diagonal_loading` / `max_sources` **[live]** | conforms | Unconditional Exact `Input<>`; production-contract Graph performance and `max_sources` revert coverage |
-| Optional `is_valid` connected in Graph | conforms | Non-member Exact + SafeDefault; connected mask tests run |
-| Optional `angle_spectrum` / `doa_multi` / `source_count` / `eigenvalues` | conforms | `angle_spectrum` always (fused with `aoa`); the other three latched, and `eigenvalues` sheds its batched eig |
-| `max_sources` unbounded except by `doa_multi` capacity | deviates | Rejects values outside `[1, 64]` (`kMaxSourcesCap` in `mvdr_estimator_op.cu`) |
-
-Audit scope (static; no build or test run): `OPERATOR_API.md` § MVDREstimatorOp, `WORKFLOWS.md`, `TESTING.md`, `HSDK5_PORT.md`, `STATUS.md`, group/common READMEs, `OPEN_ITEMS.md`, `mvdr_estimator_op.hpp` / `.cu`, `mvdr_stage.hpp`, `metadata.json`, C++ tests, `perf_mvdr_estimator.cpp`. Deviations that are team questions are proposed in chat, not appended to `OPEN_ITEMS.md`.

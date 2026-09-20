@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Minimal HSDK 5 Graph harness for ported operator C++ tests.
-// [EA HSDK5 ONLY] — starts from the ClutterFilter pilot; DualIO helpers cover
+// Minimal HSDK 5 Graph harness for operator C++ tests. DualIO helpers cover
 // 2-in / 2-out graphs (SnapshotGatherOp). Every device-tensor producer must
 // be bind_tensor_output_device()'d.
 

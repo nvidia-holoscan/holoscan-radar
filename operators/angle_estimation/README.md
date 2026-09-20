@@ -1,171 +1,36 @@
 # Angle-estimation operators
 
-GPU operators for the sparse (and dense) angle paths. Module-wide port,
-batching, and parameter-override conventions are in
-[`operators/common/README.md`](../common/README.md); each operator header
-carries its full port/parameter reference.
-
-Typical sparse-path placement:
+GPU operators for dense and sparse direction-of-arrival estimation. Sparse
+workflows detect range-Doppler cells first and estimate angles only for those
+cells; dense workflows beamform every range-Doppler cell before detection.
 
 ```text
-… → rd_maps (per-channel)
-  → CFARDetectorOp (NCI over channel)
-  → SnapshotGatherOp → snapshot → ⟨sparse angle estimator⟩ → aoa_estimates
+Sparse: rd_maps -> CFAR -> SnapshotGatherOp -> estimator -> aoa_estimates
+Dense:  rd_maps -> PhaseShiftBeamformerOp -> RDA cube -> CFAR
 ```
 
-Typical dense-path placement (angle-then-cluster — angle is formed before
-detection; the `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps`):
+## Choosing an estimator
 
-```text
-… → rd_maps (per-channel)
-  → PhaseShiftBeamformerOp → rda_cube (num_az, num_el, D, R)
-  → CFARDetectorOp (on the RDA cube) → detections
-```
-
-In-tree `rd_maps` today: `FMCWDopplerProcessorOp`. A pulse-Doppler Doppler
-stage would occupy the same slot.
-
-## Operators
-
-| Operator | In → Out | Function |
+| Need | Operator | Trade-off |
 | --- | --- | --- |
-| [`SnapshotGatherOp<T>`](snapshot_gather_op/README.md) | `rd_maps` + `detection_idx` → `snapshot`, `is_valid` | Per-detection channel-vector gather from the RD neighborhood around each CFAR cell |
-| [`SubarraySelectionOp<T>`](subarray_selection_op/README.md) | `snapshot` + `array_geometry` → `snapshot`, `array_geometry` | Selects a uniform ULA/URA sub-array from a (possibly holey) MIMO virtual array (S3) — unblocks the gridless subspace estimators and holey-array spatial smoothing |
-| [`BeamscanEstimatorOp<T>`](beamscan_estimator_op/README.md) | `snapshot` [+ `is_valid`] → `aoa_estimates`, `angle_spectrum` | Conventional (Bartlett) sparse-path DOA on a scan grid |
-| [`RankOneResidualScreenOp<T>`](rank_one_residual_screen_op/README.md) | `snapshot` + baseline AOA → compacted snapshots | Rank-one directional-model mismatch routing for selective super-resolution |
-| [`MVDREstimatorOp<T>`](mvdr_estimator_op/README.md) | `snapshot` [+ `is_valid`] → `aoa_estimates`, `angle_spectrum`, `doa_multi`, `source_count`, `eigenvalues` | Adaptive (MVDR / Capon) sparse-path DOA on a scan grid (multi-snapshot covariance); multi-source + eigenvalue diagnostics |
-| [`MUSICEstimatorOp<T>`](music_estimator_op/README.md) | `snapshot` [+ `is_valid`] → `aoa_estimates`, `angle_spectrum`, `doa_multi`, `source_count`, `eigenvalues` | Subspace (MUSIC) sparse-path DOA on a scan grid; per-item model order fixed or auto (EFT); noise-subspace pseudospectrum |
-| [`RootMUSICEstimatorOp<T>`](root_music_estimator_op/README.md) | `snapshot` [+ `is_valid`] → `aoa_estimates`, `doa_multi`, `source_count`, `eigenvalues` | Gridless Root-MUSIC on a ULA; polynomial roots (no scan grid / no spectrum) |
-| [`ESPRITEstimatorOp<T>`](esprit_estimator_op/README.md) | `snapshot` [+ `is_valid`] → `aoa_estimates`, `doa_multi`, `source_count`, `eigenvalues` | Gridless LS-ESPRIT on shift-invariant geometry (ULA auto-pair or explicit `ShiftInvariantSubarrayPair`) |
-| [`PhaseShiftBeamformerOp<T>`](phase_shift_beamformer_op/README.md) | `rd_maps` → `rda_cube`, `az_grid`, `el_grid` | Conventional (Bartlett) dense-path beamformer: a beam for every RD cell → Range-Doppler-Angle cube plus coherent physical axes for CFAR and feature assembly |
+| Fast, robust grid scan | [`BeamscanEstimatorOp`](beamscan_estimator_op/README.md) | Conventional resolution; emits a spectrum |
+| Adaptive grid scan | [`MVDREstimatorOp`](mvdr_estimator_op/README.md) | Better interference rejection; covariance inversion and diagonal loading required |
+| Subspace super-resolution on a grid | [`MUSICEstimatorOp`](music_estimator_op/README.md) | Resolves multiple sources; requires a model order and sufficient snapshots |
+| Gridless ULA or filled-URA estimation | [`RootMUSICEstimatorOp`](root_music_estimator_op/README.md) | Avoids scan-grid quantization; polynomial rooting is comparatively expensive |
+| Gridless shift-invariant estimation | [`ESPRITEstimatorOp`](esprit_estimator_op/README.md) | Efficient continuous estimates; geometry must provide the required invariance |
+| Full range-Doppler-angle cube | [`PhaseShiftBeamformerOp`](phase_shift_beamformer_op/README.md) | Computes every beam for every cell; use only when dense angular output is needed |
 
-## Implementation status
+## Supporting operators
 
-- **`SnapshotGatherOp` (checklist-complete — dpc):** RD-neighborhood gather for the sparse
-  angle path; `[live] snapshot_window`; static `doppler_edge` /
-  `range_edge`; float/double complex `rd_maps`; unit tests (edge modes, batch
-  dims, error paths, live override); `performance/cpp/perf_snapshot_gather.cpp`
-  characterizes gather cost + the `[live] snapshot_window` override spike.
-  `is_valid` emits `uint8` (0/1), NumPy-visible on HSDK 4.3, aligned with CFAR
-  `detection_mask` (settled — STATUS.md L1).
-- **`BeamscanEstimatorOp` (checklist-complete — dpc):** conventional sparse-path
-  Bartlett DOA on a scan grid; lands `ArrayGeometry` + `AngleConvention`
-  descriptors in `operators/common/`; `[live]` overrides for geometry,
-  scan grid, taper, and peak interpolation; float/double; unit tests (2-D DOA
-  recovery on a planar URA, 3-D single-look input, direction-cosine masking,
-  error paths, live `az_coordinates` override); `performance/cpp/perf_beamscan_estimator.cpp`
-  characterizes scan cost + the `[live] az_coordinates` override spike. The `custom`
-  angle preset (STATUS.md L11) and `uint8` `is_valid` transport (STATUS.md L1)
-  are both settled.
-- **`SubarraySelectionOp` (checklist-complete — deustice):** selects a uniform
-  ULA/URA sub-array from a (possibly holey) MIMO virtual array (S3) — auto
-  picks the largest filled sub-block (holey-lattice detection + maximal
-  rectangle) or an explicit index set is validated; re-emits a reduced
-  `(snapshot, array_geometry)` pair. Unblocks the gridless subspace
-  estimators (Root-MUSIC/ESPRIT) and the holey-array path for spatial
-  smoothing. All four forks ratified (settled — STATUS.md L14); consumed by the
-  gridless Root-MUSIC / ESPRIT estimators and by MVDR on a reduced array.
-- **`MVDREstimatorOp` (checklist-complete — dpc):**
-  adaptive (MVDR / Capon) sparse-path DOA. Implements the per-item sample
-  covariance with `is_valid` masking, diagonal loading (`auto` = a small
-  multiple of the `trace(R̂)/C` noise-floor proxy, or a fixed absolute δ), a
-  batched Hermitian inverse (`matx::inv`), the Capon spectrum, and the dominant
-  DOA; plus the full multi-source surface — `max_sources` **[live]** with the
-  `doa_multi` / `source_count` outputs (pass 0 = Capon argmax matching
-  `aoa_estimates`; further peaks = strict 2-D local maxima, NaN-padded) — and the
-  `eigenvalues` output
-  (ascending spectrum of the raw covariance via batched `matx::eig`). Reuses the
-  untapered `build_steering_weights_device` manifold and the `ArrayGeometry` /
-  `AngleConvention` machinery from Beamscan; `[live]` overrides for
-  geometry, scan grid, `diagonal_loading`, and `max_sources`; static
-  `angle_convention`; float/double; the four estimator-specific outputs use the
-  shared optional-output dispositions, so a consumer wanting only
-  `aoa_estimates` leaves them unwired. Reusable smoothing/core workspace and
-  stable MatX plans avoid steady-state allocation; a one-item inversion is
-  internally duplicated to select MatX 1.0.0's repeatable batched backend
-  without changing public shapes. Unit tests cover analytic recovery,
-  repeatability across the 32-channel backend threshold, masks, lives, and
-  errors; `performance/cpp/perf_mvdr_estimator.cpp` isolates all six live
-  overrides. `spatial_smoothing` /
-  `forward_backward` are implemented as a front-end transform (settled — S1,
-  STATUS.md L13); see `mvdr_estimator_op/OPEN_ITEMS.md` for the residual notes
-  (the `diagonal_loading` float-or-`auto` encoding note and the eigenvalues
-  per-tick cost).
-- **`MUSICEstimatorOp` (checklist-complete, C++ and Python — dpc):** subspace
-  (MUSIC) sparse-path DOA. Forms the per-item sample covariance, a batched
-  Hermitian eigendecomposition (`matx::eig`, `EigenMode::VECTOR` — ascending
-  eigenvalues, column eigenvectors), resolves a per-item model order
-  (`num_sources`: a fixed integer, or `auto` = **EFT** on the eigenvalues via
-  the shared `radar_common/dsp/source_count` helper, `source_count_pfa`
-  **[live]** sets the target rate), builds the noise-subspace projector, and
-  scans for the MUSIC pseudospectrum peak (structurally the same `aᴴMa`
-  reduce as MVDR's Capon kernel, with the projector standing in for `R̂⁻¹` —
-  but a near-zero denominator is MUSIC's genuine sharp peak, so it is
-  floored rather than gated to zero, unlike Capon). `max_sources` **[live]**
-  - `doa_multi`/`source_count` target `min(num_sources_i, max_sources)`
-  peaks (not always `max_sources`, since MUSIC — unlike MVDR — has an actual
-  model order) + `eigenvalues`; `spatial_smoothing`/`forward_backward`
-  reused verbatim from MVDR; float/double; 40 C++ unit tests (analytic DOA
-  recovery on ULA/URA, super-resolution vs. Beamscan per `TESTING.md`,
-  `num_sources` fixed/auto, multi-source + `max_sources` capping, spatial
-  smoothing (1-D/2-D, forward/forward-backward), rank-deficient auto
-  fallback, `is_valid` masking, multi-item batches, live overrides
-  (all live parameters), CUDA memory spaces, determinism, and error paths)
-  - 38 Python behavioral tests (the pinned/managed DLPack transport checks
-  remain C++-only; `is_valid` input works via `uint8`);
-  `performance/cpp/perf_music_estimator.cpp` +
-  `performance/python/perf_music_estimator.py` (same size ladder as MVDR's,
-  inline `[live]` `az_coordinates` override). Two profile-driven `music_reduce_kernel`
-  fixes: (1) it was missing MVDR's 4-way-accumulator ILP unrolling — porting it
-  gave -25.8% at `xl` (26.9→19.9 ms); (2) `ncu` then showed the kernel is
-  L1-bandwidth-bound (not latency-bound as MVDR's inherited note assumed), so
-  `Pn` is now staged in shared memory, gated to grids of ≥1 occupancy wave —
-  another -18.7% at `xl` (21.0→17.2 ms) with no `lg` regression, leaving MUSIC
-  faster than MVDR at every measured size. See
-  [`OPEN_ITEMS.md`](OPEN_ITEMS.md) for the shared EFT fidelity item and
-  `music_estimator_op/OPEN_ITEMS.md` for MUSIC-specific numerical and
-  performance follow-ups.
-- **`RootMUSICEstimatorOp` (checklist-complete, C++ and Python — dpc):**
-  gridless Root-MUSIC on a **ULA or filled URA**. A ULA resolves azimuth
-  (single-axis cone, one polynomial); a URA resolves native `(az, el)` via
-  reduced-dimension per-axis rooting on row/column-averaged sub-covariances,
-  paired across axes by the full-subspace 2-D MUSIC metric. Reuses the MUSIC
-  covariance / Hermitian eig / EFT / noise-projector front-end; solves each
-  polynomial via companion + `cusolverDnXgeev` (one matrix per item) and maps
-  in-unit-circle roots to continuous DOAs (no `angle_spectrum`). **Contract
-  change:** geometry relaxed from ULA-only to ULA-or-URA (`OPERATOR_API.md`).
-  `spatial_smoothing` / `forward_backward` match MVDR/MUSIC; all named and
-  custom angle conventions; float/double; 45 C++ + 38 Python behavioral tests
-  (1-D ULA + 2-D URA recovery and cross-axis pairing);
-  `performance/cpp/perf_root_music_estimator.cpp` +
-  `performance/python/perf_root_music_estimator.py` (all five C++ live
-  overrides plus a separate fixed model-order sweep). Custom batched device root
-  solver tracked in `root_music_estimator_op/OPEN_ITEMS.md`.
-- **`ESPRITEstimatorOp` (checklist-complete, C++ and Python — dpc):**
-  gridless ESPRIT on a **ULA or filled URA**. A ULA uses a single-shift
-  LS-ESPRIT split via the global `ShiftInvariantSubarrayPair` descriptor (auto
-  maximum-overlap ULA pair or explicit corresponding indices); a URA uses
-  dual-invariance 2-D ESPRIT with automatic joint-diagonalization pairing
-  (`subarray_spec: auto` derives the two orthogonal invariances). Reuses the
-  MUSIC covariance / Hermitian eig / EFT front-end; the rotation eigenproblems
-  are solved in a per-item CUDA block (no `angle_spectrum`). **Contract
-  change:** geometry relaxed from shift-invariant-line to ULA-or-URA
-  (`OPERATOR_API.md`). All named and custom angle conventions; float/double;
-  48 C++ + 36 Python tests (1-D + 2-D az/el recovery and pairing); C++/Python
-  perf harnesses cover the full live-override bundle. Explicit `subarray_spec`
-  and `spatial_smoothing` are mutually exclusive. See
-  `esprit_estimator_op/OPEN_ITEMS.md`.
-- **`PhaseShiftBeamformerOp` (checklist-complete — dpc):** conventional
-  (Bartlett) dense-path beamformer; forms a beam for every range-Doppler cell,
-  replacing the channel axis with the `(num_az, num_el)` grid to build the
-  Range-Doppler-Angle cube CFAR detects on directly (the *only* dense
-  estimator — a dense MVDR/MUSIC cube is prohibitive). Reuses the
-  `ArrayGeometry` / `AngleConvention` / `array_taper` steering machinery from
-  Beamscan (one broadcast complex GEMM per tick); `[live]` overrides for
-  geometry, scan grid, and taper; static `angle_convention`; float/double;
-  exact rank-3 input; unit tests (dense DOA-bin recovery,
-  convention relabeling + direction-cosine masking, taper sidelobes,
-  effective grid outputs, live overrides, error paths);
-  `performance/cpp/perf_phase_shift_beamformer.cpp`
-  characterizes dense beamforming cold/steady cost plus each live override.
-  No operator-local open items remain.
+| Operator | Role |
+| --- | --- |
+| [`SnapshotGatherOp`](snapshot_gather_op/README.md) | Gathers channel vectors around detected range-Doppler cells |
+| [`SubarraySelectionOp`](subarray_selection_op/README.md) | Selects a valid uniform ULA/URA subset and emits matching geometry |
+| [`RankOneResidualScreenOp`](rank_one_residual_screen_op/README.md) | Routes likely multi-source cells to an expensive estimator |
+
+All estimators accept complex64 or complex128 according to their C++ template
+precision. Geometry, angle conventions, live-override behavior, and tensor
+conventions are described in [`operators/common/README.md`](../common/README.md).
+Each operator README is the user-level port, parameter, shape, and algorithm
+reference. Deferred research and optimization work is tracked in the repository
+[`OPEN_ITEMS.md`](../../OPEN_ITEMS.md).

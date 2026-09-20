@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // SO-CFAR contract tests for CFARDetectorOp on the HSDK 5 Graph harness.
-// Scalar live mid-stream Graph coverage remains deferred (HSDK5_PORT.md §1).
 
 #include <gtest/gtest.h>
 

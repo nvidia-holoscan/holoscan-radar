@@ -1,20 +1,55 @@
-# `DDMDenseDemultiplexOp<T>`
+# `DDMDenseDemultiplexOp`
 
-Separates simultaneous-TX DDM maps from `(N_rx, D, R)` into an explicit TX axis. Linear offsets or linear phase codes use the reduced gather path; nonlinear phase codes use the full-axis conjugate-correlation path. An optional physical velocity axis is transformed alongside the map.
+## Purpose
 
-| Kind | Port | Dtype | Shape | Notes |
+Separates simultaneous DDM transmitters from a dense pre-demultiplex range-Doppler cube. Linear codes gather integer-offset Doppler bands; nonlinear phase codes correlate across the full Doppler axis.
+
+## Responsibilities
+
+- Owns DDM code validation, TX separation, initial-code-phase removal, and velocity-axis transformation.
+- Publishes a coherent physical velocity sideband before the demultiplexed cube when available.
+- Does not resolve velocity ambiguity, assemble virtual channels, suppress clutter, or run CFAR.
+
+## When to use
+
+Use after Doppler processing when a dense MIMO-DDM pipeline needs every TX-separated map. Prefer `DDMPowerFoldOp` plus `DDMSparseDemultiplexOp` for detect-before-demultiplex workflows. Do not use it for TDM or to resolve the reduced-interval velocity ambiguity.
+
+```text
+FMCWDopplerProcessorOp -> DDMDenseDemultiplexOp -> [DopplerNotchOp] -> VirtualArrayAssemblyOp
+```
+
+## Ports
+
+| Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
+| --- | --- | --- | --- | --- | --- |
+| in | `rd_maps` | complex64 / complex128 | `(N_rx, D, R)` | Required trigger/aligned input | Pre-demultiplex center-zero DDM maps. |
+| in (optional) | `velocity_bins` | float32 / float64 | `(D,)` | Optional Exact side input | Physical axis aligned with `rd_maps`. |
+| out | `rd_maps_out` | complex64 / complex128 | `(M_tx, N_rx, D_out, R)` | Required output | TX-separated maps. |
+| out (optional, latched) | `velocity_bins_out` | float32 / float64 | `(D_out,)` | Optional latched output | Transformed axis emitted only when the input sideband is present. |
+
+## Construction
+
+| Item | Type | Requirement | Responsibility |
+| --- | --- | --- | --- |
+| Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
+| `extents` | `MaxTensorExtents` | `max_tx`, `max_rx`, `max_doppler_bins`, `max_range_bins` | Sizes Tensor pools and bounded device workspaces before `arm()`. |
+
+## Parameters
+
+| Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
-| in | `rd_maps` | complex64 / complex128 | `(N_rx, D, R)` | Center-zero coded DDM map; trigger |
-| in | `velocity_bins` | float32 / float64 | `(D,)` | Optional Exact physical axis matching `rd_maps` |
-| out | `rd_maps_out` | complex64 / complex128 | `(M_tx, N_rx, D_out, R)` | Required demultiplexed map |
-| out (cond.) | `velocity_bins_out` | float32 / float64 | `(D_out,)` | Optional/latched; emitted only when the input axis is present |
+| `ddm_code` | `DDMCodeDescriptor` | none (required) | static | Defines TX count and exactly one linear-offset or nonlinear phase-code layout. |
 
-The only parameter is static, required `ddm_code`; no waveform or multiplexing switch is exposed. Linear output shape is `(M_tx, N_rx, D/M_tx-guard_bands, R)` and nonlinear output keeps `D`. For the linear path, `velocity_bins_out` is the centered `D_out`-element slice of the input axis and keeps its physical spacing; for nonlinear correlation it is an identity copy. The operator does not unfold the reduced DDM velocity ambiguity.
+Contract: [`OPERATOR_API.md` section `DDMDenseDemultiplexOp`](../../../docs/planning/OPERATOR_API.md) - group: [`operators/fmcw/README.md`](../README.md)
 
-`contract()` triggers on `rd_maps`; optional `velocity_bins` joins by `Exact{} + SafeDefault{}`. Both active output loans are prepared before publication, then `velocity_bins_out` is emitted before `rd_maps_out`. That causal order is load-bearing when the map immediately triggers a downstream consumer with the axis as an Exact sideband. A declined `velocity_bins_out` emit is absorbed and latches off its later copy work without suppressing `rd_maps_out`.
+## Algorithm
 
-Construction requires `max_tx`, `max_rx`, `max_doppler_bins`, and `max_range_bins`. The map pool uses the full captured cube bound and the axis pool uses `max_doppler_bins` real elements. Inputs and outputs are CUDA-device tensors; the source map and optional axis are retained across the asynchronous stream work.
+Linear mode validates integer-bin offsets, builds a band-gather table, gathers the centered usable bins for every TX/RX/range cell, and removes initial code phase. Nonlinear mode builds correlation weights and retains the full Doppler axis. The optional velocity output takes the same centered slice or full-axis copy.
 
-The implementation reuses `radar_common/dsp/mimo_coherent_compensation_stage.*`.
+## Shape, dtype, and timing rules
 
-Contract: [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md) · group: [`operators/fmcw/README.md`](../README.md)
+`rd_maps` is exact rank three. A present axis is rank one, template-matching real data of length `D`. Linear output has per-band `D_out`; nonlinear output keeps `D`. The optional axis joins by `Exact{}` with `SafeDefault{}` and publishes before `rd_maps_out`.
+
+## Configuration and caching
+
+Linear gather/phase tables and nonlinear correlation weights use separate caches keyed by validated code and Doppler extent. Static `ddm_code` means rotating layouts require separate instances.

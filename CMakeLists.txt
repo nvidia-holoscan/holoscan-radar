@@ -121,7 +121,6 @@ list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(HoloHubConfigHelpers)
 
 # Optional SDK features (Holoviz, …) — see HoloscanRadarOptionalFeatures.cmake.
-# [EA HSDK5 ONLY] until domain operator modules ship with the public release.
 include(HoloscanRadarOptionalFeatures)
 
 # ---------------------------------------------------------------------------
@@ -190,5 +189,4 @@ file(WRITE ${_DEV_PTH_FILE}
 # add_holohub_package(holoscan-radar OPERATORS <operators> APPLICATIONS <apps>),
 # which defines the PKG_holoscan_radar option, FORCEs the OP_/APP_ deps to ON
 # when the package is enabled, and enters pkg/holoscan-radar/CMakeLists.txt for
-# the holohub_configure_deb() call. [EA HSDK5 ONLY] Those lists are gated on the
-# HSDK 5 port allow-list, so an EA package ships only the ported operators.
+# the holohub_configure_deb() call.

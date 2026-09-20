@@ -1,26 +1,53 @@
 # `RankOneResidualScreenOp`
 
+## Purpose
+
 `RankOneResidualScreenOp` is a cheap routing stage for sparse angle pipelines. For each item, it projects every valid array snapshot onto the steering vector named by a row-aligned single-source baseline angle. Items whose normalized unexplained energy reaches `residual_threshold` are compacted for a more expensive multi-source estimator.
 
-Beamscan is the normal baseline producer, but it is not part of this contract. Any producer may supply `baseline_aoa` when its rows, angle convention, geometry, and timestamp match the snapshots. The score detects mismatch with a single directional steering model. It is not a calibrated source count: noise, calibration error, near-field response, multipath, or an extended target can also increase it, while an unresolved coherent mixture can remain close to rank one.
+## Responsibilities
 
-| Kind | Port | Dtype | Shape | Notes |
-| --- | --- | --- | --- | --- |
-| in | `snapshot` | complex64 / complex128 | `(num_items, num_channels, num_snapshots)` | Exact rank 3; positive trailing extents. |
-| in | `baseline_aoa` | float32 / float64 | `(num_items, 2)` | Single-source `(az, el)` or `(u, v)`, row-aligned with `snapshot`. |
-| in | `is_valid` | bool or uint8 | `(num_items, num_snapshots)` | Optional Exact mask; missing means every look is valid. |
-| live | `array_geometry` | `WireArrayGeometry` | descriptor wire object | Optional Exact override; a miss uses Params for that tick. |
-| out | `snapshot_out` | complex64 / complex128 | `(num_selected, num_channels, num_snapshots)` | Selected rows, copied in original order. Required. |
-| out | `selected_idx` | int64 | `(num_selected,)` | Strictly ascending input-row indices. Required. |
-| out | `is_valid_out` | uint8 | `(num_selected, num_snapshots)` | Compacted mask; all ones when the input mask was absent. Optional/always. |
-| out | `residual_score` | float32 / float64 | `(num_items,)` | Row-aligned diagnostic score. Optional/always. |
-| out | `selection_mask` | uint8 | `(num_items,)` | Row-aligned `score >= threshold` decision. Optional/always. |
+- Computes normalized energy left after the supplied one-source steering model for every valid item.
+- Compacts threshold-crossing snapshots, source-row indices, and optional residual diagnostics without losing row alignment.
+- Does not calibrate a source-count probability or perform the downstream multi-source estimate.
+
+## When to use
+
+Use between a baseline single-source angle estimate and an expensive multi-source estimator to route only items that poorly fit one steering vector. The baseline rows, geometry, convention, and timestamps must match the snapshots exactly. Do not treat the residual as a calibrated source count: noise, calibration error, multipath, and extended targets can also trigger it.
 
 ```text
 snapshot + baseline_aoa [+ is_valid] [+ live array_geometry]
   → RankOneResidualScreenOp
   → snapshot_out + selected_idx [+ diagnostics]
 ```
+
+## Ports
+
+| Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
+| --- | --- | --- | --- | --- | --- |
+| in | `snapshot` | complex64 / complex128 | `(num_items, num_channels, num_snapshots)` | Required trigger/aligned input | Exact rank 3; positive trailing extents. |
+| in | `baseline_aoa` | float32 / float64 | `(num_items, 2)` | Required trigger/aligned input | Single-source `(az, el)` or `(u, v)`, row-aligned with `snapshot`. |
+| in | `is_valid` | bool or uint8 | `(num_items, num_snapshots)` | Optional Exact side input | Optional Exact mask; missing means every look is valid. |
+| live | `array_geometry` | `WireArrayGeometry` | descriptor wire object | Optional Exact one-tick override; Params fallback on miss | Optional Exact override; a miss uses Params for that tick. |
+| out | `snapshot_out` | complex64 / complex128 | `(num_selected, num_channels, num_snapshots)` | Required output | Selected rows, copied in original order. Required. |
+| out | `selected_idx` | int64 | `(num_selected,)` | Required output | Strictly ascending input-row indices. Required. |
+| out | `is_valid_out` | uint8 | `(num_selected, num_snapshots)` | Optional `always` output | Compacted mask; all ones when the input mask was absent. Optional/always. |
+| out | `residual_score` | float32 / float64 | `(num_items,)` | Optional `always` output | Row-aligned diagnostic score. Optional/always. |
+| out | `selection_mask` | uint8 | `(num_items,)` | Optional `always` output | Row-aligned `score >= threshold` decision. Optional/always. |
+
+## Construction
+
+| Item | Type | Requirement | Responsibility |
+| --- | --- | --- | --- |
+| Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
+| `extents` | `MaxTensorExtents` | `max_items`, `max_channels`, `max_snapshots` | Sizes Tensor pools and bounded workspaces before `arm()`. |
+
+## Parameters
+
+| Parameter | Type | Default | Mutability | Responsibility |
+| --- | --- | --- | --- | --- |
+| `array_geometry` | `ArrayGeometry` | none (required unless every tick supplies a live value) | `[live]` Exact wire override | Positions and wavelength for the snapshot channel axis. |
+| `angle_convention` | `AngleConvention` | `radar_boresight` | static | Boundary convention used by `baseline_aoa`. |
+| `residual_threshold` | double | `0.10` | static | Select finite scores greater than or equal to this value; constrained to `[0, 1]`. |
 
 Contract: [`OPERATOR_API.md` § `RankOneResidualScreenOp`](../../../docs/planning/OPERATOR_API.md) · group: [`operators/angle_estimation/README.md`](../README.md)
 
@@ -62,29 +89,6 @@ Rejected combinations and messages include:
 | invalid geometry or convention | shared descriptor/convention diagnostic |
 | missing stream | `RankOneResidualScreenOp: no CUDA stream` |
 
-## Parameters
-
-| Parameter | Type | Default | Override | Meaning |
-| --- | --- | --- | --- | --- |
-| `array_geometry` | `ArrayGeometry` | none (required unless every tick supplies a live value) | `[live]` Exact wire override | Positions and wavelength for the snapshot channel axis. |
-| `angle_convention` | `AngleConvention` | `radar_boresight` | static | Boundary convention used by `baseline_aoa`. |
-| `residual_threshold` | double | `0.10` | static | Select finite scores greater than or equal to this value; constrained to `[0, 1]`. |
-
-Schema id `com.nvidia.holoscan.radar.RankOneResidualScreenParams`, version 1. The threshold is deliberately static: changing routing policy is an application decision, whereas geometry legitimately follows a runtime virtual-array producer.
-
-## SDK implementation notes
-
-- **Construction.** `RankOneResidualScreenOp(const MaxTensorExtents&)` requires positive `max_items`, `max_channels`, and `max_snapshots`. Pools cover the full snapshot, selected indices, compacted mask, scores, and decision mask before arm.
-- **Triggering.** `OnAligned{snapshot, baseline_aoa}` at zero window; both inputs use `Exact{}`. `is_valid` and `array_geometry` are unconditional non-member Exact + SafeDefault inputs.
-- **Geometry.** Positions are uploaded and cached by effective geometry. A live override applies only to its matching tick; the next miss returns to Params without latching.
-- **Streams and lifetime.** Residual, compaction, and copies use `context.cuda_stream()`. Inputs are retained. Exact-size compaction performs one selected-count device-to-host synchronization.
-- **Emission.** Every output is prepared before publication. Required `selected_idx` is emitted first, optional diagnostics next, and required `snapshot_out` last. Optional outputs may remain unwired.
-- **Precision.** Explicit instantiations are `RankOneResidualScreenOp<float>` and `RankOneResidualScreenOp<double>`.
-
-## Consumer lifetime notes
-
-All outputs are fresh pool loans. `snapshot_out` is a compacted copy, so a downstream estimator may retain it. `selected_idx` refers to the item axis of this aligned activation, not a persistent global identifier.
-
 ## Performance
 
 Steady work is `O(num_items × num_channels × num_snapshots)` plus a linear selection scan and copies proportional to `num_selected`. A new geometry pays one position upload. Exact-size compaction incurs one synchronization per activation.
@@ -93,16 +97,6 @@ Steady work is `O(num_items × num_channels × num_snapshots)` plus a linear sel
 
 ```bash
 ctest --test-dir build-perf-check -R perf_rank_one_residual_screen_smoke
-```
-
-## Tests and verification
-
-`tests/cpp/angle_estimation/test_rank_one_residual_screen.cu` compares the GPU stage with an independent CPU projection and covers rank-one and multi-source mixtures, both precisions, masked/no-valid looks, empty and zero/all/mixed selection, conventions, invalid geometry, threshold bounds, captured extents, Exact timestamps, and live-geometry reversion.
-
-`tests/cpp/integration/test_selective_aoa_operators.cpp` supplies synthetic snapshots and baseline angles without a simulator or application, then sends selected rows through the common multi-source estimator contract and `MultiSourceExpansionOp`.
-
-```bash
-ctest --test-dir build -R 'test_rank_one_residual_screen|test_selective_aoa_operators' --output-on-failure
 ```
 
 ## Usage
@@ -129,7 +123,3 @@ graph.add_flow(compensation->is_valid, screen->is_valid, q);
 graph.add_flow(compensation->array_geometry, screen->array_geometry, q);
 graph.add_flow(screen->snapshot_out, multi_source_estimator->snapshot, q);
 ```
-
-## Contract conformance
-
-The operator fuses normalized directional residual, threshold decision, stable row compaction, and row-index publication. It intentionally does not expose calibrated multiplicity, estimator selection, an arbitrary predicate, or a generic row-selection policy.

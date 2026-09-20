@@ -13,7 +13,7 @@
         "changelog": {
             "0.4.0": "Cleanup: exact optional mask, reusable workspace, captured bounds, all-live production timing, and direct SubarraySelection integration",
             "0.3.0": "Document radar_boresight as the default angle convention",
-            "0.2.0": "HSDK 5 EA port: Operator<ESPRITParams>, typed Tensor ports, OnEach contract, single-tick POD live Inputs, always-emit optional outputs (no angle_spectrum), stop() MatX teardown",
+            "0.2.0": "HSDK 5 migration: Operator<ESPRITParams>, typed Tensor ports, OnEach contract, single-tick POD live Inputs, always-emit optional outputs (no angle_spectrum), stop() MatX teardown",
             "0.1.0": "Gridless 1-D ESPRIT with shared MUSIC covariance/eigenspace/EFT front-end, explicit or ULA-derived shift-invariant subarrays, spatial smoothing, diagnostics, and Python bindings."
         },
         "holoscan_sdk": {

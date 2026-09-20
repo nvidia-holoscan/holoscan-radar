@@ -1,33 +1,61 @@
 # `RootMUSICEstimatorOp`
 
-Gridless Root-MUSIC sparse-path DOA: the same covariance / eig / EFT front-end as `MUSICEstimatorOp`, then polynomial roots instead of a scan grid.
+## Purpose
 
-It occupies the same pluggable sparse slot after `SnapshotGatherOp`. A ULA (or single row/column) resolves one coordinate (azimuth; elevation degenerate); a filled URA resolves native `(az, el)` by reduced-dimension per-axis rooting plus 2-D MUSIC-metric pairing. The fact a caller must not miss: there is **no** `angle_spectrum` and **no** scan-grid parameter; `array_geometry` must be a ULA or a filled URA (`(iz` outer, `iy` inner)), and `angle_convention` defaults to `radar_boresight` and is locked after the first successful tick.
+Gridless Root-MUSIC sparse-path DOA: the same covariance / eig / EFT front-end as `MUSICEstimatorOp`, then polynomial roots instead of a scan grid. It fills the gridless sparse-estimator slot after snapshot gathering when the array is a supported ULA or filled URA.
 
-| Kind | Port | Dtype | Shape | Notes |
-| --- | --- | --- | --- | --- |
-| in | `snapshot` | complex64 / complex128 | `(num_items, num_channels, num_snapshots)` | Rank-2 rejected |
-| in | `is_valid` | bool or uint8 (`0`/`1`) | `(num_items, num_snapshots)` | Optional same-tick mask; non-member Exact + SafeDefault. Publish before `snapshot` |
-| out | `aoa_estimates` | float32 / float64 | `(num_items, 2)` | Dominant DOA; always emitted |
-| out | `doa_multi` | float32 / float64 | `(num_items, max_sources, 2)` | Selected roots / pairs; unused rows NaN |
-| out | `source_count` | int32 | `(num_items,)` | Roots / pairs actually written |
-| out | `eigenvalues` | float32 / float64 | `(num_items, C_est)` | Ascending full-aperture covariance spectrum |
-| live | `array_geometry` | `WireArrayGeometry` | descriptor wire object | `[live]` Exact override; always declared, wire to enable |
-| live | `spatial_smoothing` | `SpatialSmoothingOverride` | `{count, first, second}` int64 POD | `[live]` Exact override; `count` 0–2 selects 1-D / 2-D counts |
-| live | `num_sources` | int64 | scalar | `[live]` Exact override; always declared, wire to enable. Negative → per-item EFT `auto` |
-| live | `source_count_pfa` | float64 | scalar | `[live]` Exact override; always declared, wire to enable. EFT target Pfa for `auto` |
-| live | `max_sources` | int64 | scalar | `[live]` Exact override; always declared, wire to enable. `doa_multi` capacity and EFT `K_max` |
+## Responsibilities
+
+- Forms covariance matrices, selects the signal subspace, and obtains gridless directions from Root-MUSIC polynomials.
+- Owns ULA/filled-URA geometry validation, source-count handling, root selection, pairing, and validity diagnostics.
+- Does not emit a pseudospectrum or operate directly on arbitrary holey/conformal arrays.
+
+## When to use
+
+Use after `SnapshotGatherOp` for gridless multi-source estimation on a uniform linear array or supported filled URA. Prefer it when avoiding scan-grid cost is important and no spectrum output is needed. Do not use it with arbitrary conformal or holey arrays; select a valid subarray or choose a scan-based estimator instead.
 
 ```text
 … → rd_maps → CFARDetectorOp
   → SnapshotGatherOp → snapshot → RootMUSICEstimatorOp → aoa_estimates
 ```
 
-A holey MIMO virtual array needs `SubarraySelectionOp` (or spatial smoothing on an already-filled ULA/URA) before this slot.
+## Ports
+
+| Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
+| --- | --- | --- | --- | --- | --- |
+| in | `snapshot` | complex64 / complex128 | `(num_items, num_channels, num_snapshots)` | Required trigger/aligned input | Rank-2 rejected |
+| in | `is_valid` | bool or uint8 (`0`/`1`) | `(num_items, num_snapshots)` | Optional Exact side input | Optional same-tick mask; non-member Exact + SafeDefault. Publish before `snapshot` |
+| out | `aoa_estimates` | float32 / float64 | `(num_items, 2)` | Required output | Dominant DOA; always emitted |
+| out | `doa_multi` | float32 / float64 | `(num_items, max_sources, 2)` | Required output | Selected roots / pairs; unused rows NaN |
+| out | `source_count` | int32 | `(num_items,)` | Required output | Roots / pairs actually written |
+| out | `eigenvalues` | float32 / float64 | `(num_items, C_est)` | Required output | Ascending full-aperture covariance spectrum |
+| live | `array_geometry` | `WireArrayGeometry` | descriptor wire object | Optional Exact one-tick override; Params fallback on miss | `[live]` Exact override; always declared, wire to enable |
+| live | `spatial_smoothing` | `SpatialSmoothingOverride` | `{count, first, second}` int64 POD | Optional Exact one-tick override; Params fallback on miss | `[live]` Exact override; `count` 0–2 selects 1-D / 2-D counts |
+| live | `num_sources` | int64 | scalar | Optional Exact one-tick override; Params fallback on miss | `[live]` Exact override; always declared, wire to enable. Negative → per-item EFT `auto` |
+| live | `source_count_pfa` | float64 | scalar | Optional Exact one-tick override; Params fallback on miss | `[live]` Exact override; always declared, wire to enable. EFT target Pfa for `auto` |
+| live | `max_sources` | int64 | scalar | Optional Exact one-tick override; Params fallback on miss | `[live]` Exact override; always declared, wire to enable. `doa_multi` capacity and EFT `K_max` |
+
+## Construction
+
+| Item | Type | Requirement | Responsibility |
+| --- | --- | --- | --- |
+| Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
+| `extents` | `MaxTensorExtents` | Omit both `max_items` and `max_sources` for zero-span output bounds, or provide positive `max_items`, `max_sources`, and `max_channels` | Sizes Tensor pools and bounded workspaces before `arm()`. |
+
+## Parameters
+
+| Parameter | Type | Default | Mutability | Responsibility |
+| --- | --- | --- | --- | --- |
+| `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override | ULA or filled URA + `λ`; `num_elements` must match channels Cost: Revalidates ULA/URA; rebuilds smoothing plan; may resize cuSOLVER workspace. |
+| `angle_convention` | `AngleConvention` | `radar_boresight` | static (rejected if changed after first emit) | Boundary meaning of `(az, el)` / `(u, v)` Cost: Seeds device relabeling once. |
+| `num_sources` | int64 | `-1` (`auto`) | `[live]` Exact | Signal-subspace dimension / root count Cost: Free (EFT or fill). |
+| `source_count_pfa` | double | `1e-2` | `[live]` Exact | Target EFT Pfa; `auto` only. See the [shared fidelity item](../../../OPEN_ITEMS.md) Cost: Free. |
+| `max_sources` | int64 | `4` | `[live]` Exact | Capacity and EFT `K_max` Cost: Reallocates `doa_multi`; cap `64`. |
+| `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD | Per-axis counts on a filled ULA/URA Cost: Rebuilds plan + H2D; changes polynomial degree. |
+| `forward_backward` | bool | `true` | static | FB looks; ignored unless smoothing is on Cost: Part of the smoothing-plan key. |
 
 Contract: [`OPERATOR_API.md` § `RootMUSICEstimatorOp`](../../../docs/planning/OPERATOR_API.md) ·
 group: [`operators/angle_estimation/README.md`](../README.md) ·
-open items: [`OPEN_ITEMS.md`](OPEN_ITEMS.md)
 
 ## Algorithm
 
@@ -73,7 +101,7 @@ a_c = exp(j · (iy · k·dy · u + iz · k·dz · v)),   c = iz·ny + iy
 dir = u · y_axis + v · z_axis + sqrt(max(0, 1−u²−v²)) · normal
 ```
 
-There is no canonical single-polynomial 2-D Root-MUSIC; this reduced-dimension + pairing method is the documented `OPERATOR_API.md` design. A joint 2-D polynomial and explicit non-ULA-per-axis subarray specs are deferred.
+There is no canonical single-polynomial 2-D Root-MUSIC; this reduced-dimension + pairing method is the documented `OPERATOR_API.md` design. Joint 2-D polynomials and explicit non-ULA per-axis subarray specifications are not supported.
 
 **Spatial smoothing** is the same S1 front-end as MUSIC (per-axis counts, optional forward-backward). Changing an already-built plan logs:
 
@@ -119,37 +147,6 @@ Rejected combinations (operator’s message unless noted):
 
 `analyze_planar_aperture` also throws when a geometry tagged `kUra` is not a filled orthogonal lattice (helper text, not the operator prefix).
 
-## Parameters
-
-| Parameter | Type | Default | Override | Cost | Meaning |
-| --- | --- | --- | --- | --- | --- |
-| `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override (§9) | Revalidates ULA/URA; rebuilds smoothing plan; may resize cuSOLVER workspace | ULA or filled URA + `λ`; `num_elements` must match channels |
-| `angle_convention` | `AngleConvention` | `radar_boresight` | static (rejected if changed after first emit) | Seeds device relabeling once | Boundary meaning of `(az, el)` / `(u, v)` |
-| `num_sources` | int64 | `-1` (`auto`) | `[live]` Exact | Free (EFT or fill) | Signal-subspace dimension / root count |
-| `source_count_pfa` | double | `1e-2` | `[live]` Exact | Free | Target EFT Pfa; `auto` only. See the [shared fidelity item](../OPEN_ITEMS.md) |
-| `max_sources` | int64 | `4` | `[live]` Exact | Reallocates `doa_multi`; cap `64` | Capacity and EFT `K_max` |
-| `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD (§9) | Rebuilds plan + H2D; changes polynomial degree | Per-axis counts on a filled ULA/URA |
-| `forward_backward` | bool | `true` | static | Part of the smoothing-plan key | FB looks; ignored unless smoothing is on |
-
-No `az_coordinates` / `el_coordinates`. `num_sources` encoding is the same `int64` negative-`auto` convention as MUSIC.
-
-## SDK implementation notes
-
-- **Construction.** `RootMUSICEstimatorOp(const MaxTensorExtents&)`. If both `max_items` and `max_sources` are unset, pool spans stay `0`. Otherwise `max_items`, `max_sources`, and `max_channels` must be positive. Constructor-created runtime state owns stable covariance/eigenspace, ULA polynomial, bounded URA axis/pairing workspace, and both cuSOLVER states.
-- **Triggering.** `contract()` is `OnEach{snapshot}`. Optional `is_valid` and every live override are unconditional non-members with `Exact{}` + `SafeDefault{}`; unwired means absent/all-valid or Params for that tick. A producer must publish a same-tick mask before `snapshot`.
-- **Ports and queues.** Device Tensor ports, queue depth `2`. All four outputs declare `max_rank = 3` (the fat-cube bound; actual ranks are 1–3). Live Inputs also queue depth `2` — wire-object, POD, and scalar payloads only (no config Tensor, since there is no scan grid).
-- **Live override payloads.** `array_geometry` is `Input<WireArrayGeometry>`, a generated descriptor-schema type; `spatial_smoothing` is `Input<SpatialSmoothingOverride>`, a bounded `{count, first, second}` int64 POD (`count` must be 0, 1, or 2). Both convert with `from_wire` inside `resolve_live_override_via`, so neither wire storage nor the POD reaches operator state. `num_sources` / `source_count_pfa` / `max_sources` are plain scalar `Input<>` ports resolved with `resolve_live_override`. Logical `RootMUSICParams` types are unchanged (`HSDK5_PORT.md` §9).
-- **Tick flow.** `compute()` is the high-level shell: receive and plan → validate mask / stream / convention → empty path → prepare smoothed input and planar aperture → prepare common workspace and outputs → dispatch the explicit ULA or URA helper → warn, publish, seed the convention, and retain. Capacity-managed smoothing buffers grow only for a larger effective input; bounded URA workspace is reused every applicable tick.
-- **Streams and lifetime.** Work uses `context.cuda_stream()`. Inputs and smoothing gather buffers remain alive through estimator execution. `RootMUSICPreparedWorkspace` and `RootMUSICPreparedOutputs` keep common/axis scratch pointers, loans, and write guards valid across either variant; all siblings commit before required-first publication. `solve_companion_roots` synchronizes to read per-item `geev` info codes. `stop()` calls `retire_music_matx_caches()`; cuSOLVER workspaces die with the runtime state.
-- **Emission.** Required `aoa_estimates` publishes first; optional/always `doa_multi`, `source_count`, and `eigenvalues` absorb declined emits.
-- **Parameter authoring.** Schema `com.nvidia.holoscan.radar.RootMUSICParams` version `1`.
-- **Precision.** `RootMUSICEstimatorOp<float>` and `<double>`.
-- **[EA HSDK5 ONLY]** All five override ports are unconditionally in `contract()`; geometry / smoothing Graph tests run. Runtime geometry producers connect directly to `array_geometry` with `WireArrayGeometry`; Python remains Params-only for schema payloads.
-
-## Consumer lifetime notes
-
-Every output is a fresh pool loan. A consumer may keep the Tensor for the usual Holoscan lifetime.
-
 ## Performance
 
 **Cold.** The constructor creates both cuSOLVER states and bounded core workspace. First use initializes solver internals, an optional smoothing plan, and the first `matx::eig` plan. A new geometry key revalidates the aperture.
@@ -163,29 +160,6 @@ ctest --test-dir build -R perf_root_music_estimator_smoke
 ```
 
 Harness axes: channels, detections, snapshots (`xs`…`xl` ULA); `--full` also adds URA rungs (`ura_sm` 6×6, `ura_lg` 8×8). Every geometry isolates production Exact timing for `array_geometry`, `spatial_smoothing`, `num_sources`, `source_count_pfa`, and `max_sources`, plus separate fixed model-order scenarios at 1, 2, and `min(4, num_channels − 1)`.
-
-## Tests and verification
-
-| Check | Proves |
-| --- | --- |
-| `RecoversKnownDoaUlaFixedOneSource` / `RecoversTwoSources` / `ResolvesCloselySpacedSources` | Gridless ULA DOA ≈ truth; two-source + close spacing (TESTING.md) |
-| `RecoversUraSingleSourceAzEl` / `…TwoSourcesAzElPairing` / `…Float` | Native `(az, el)`; pairing with sources distinct in both coordinates |
-| `RejectsNonUniformLinearGeometry` / `RejectsUlaParallelToBoresight` | Geometry constraint; predictable fail |
-| `SpatialSmoothing1DRecoversDoa` | S1 on a ULA; eigenvalues shrink with `L` |
-| `DirectionCosineConventionMapsUlaProjection` / `CustomConvention*` / `…Zenith…` / `DirectionCosineNearEndfirePreservesSign` | Convention-free kernel + boundary relabel; endfire sign |
-| `MaxSourcesCapsReportedRoots` / `UnusedDoaRowsAreNan` | `doa_multi` capacity + NaN fill |
-| `LiveArrayGeometryAppliesForOneTick` / `LiveSpatialSmoothingAppliesForOneTick` | Mid-stream override applies for one tick; the next miss reverts to Params |
-| `RepeatedUraSmoothingSupportsChangingEffectiveAperture` | Reused smoothing and URA scratch remain correct as the effective aperture changes |
-| `IsValidMask…` / `AllInvalidMask…` | Connected Exact mask and all-invalid blanking |
-| `LiveNumSources…` / `LiveSourceCountPfa…` / `LiveMaxSources…` | Scalar Exact override and revert |
-| `RejectsSnapshotRank2` | Contract 3-D `snapshot` |
-| Memory-space / precision / determinism / rejects | TESTING.md cross-cuts |
-
-Analytic ground truth is a host steering-vector snapshot in the test file. C++ Graph tests bind all four outputs.
-
-```bash
-ctest --test-dir build -R test_root_music_estimator --output-on-failure
-```
 
 ## Usage
 
@@ -216,21 +190,3 @@ graph.add_flow(root->doa_multi, doa_sink->in);
 graph.add_flow(root->source_count, count_sink->in);
 graph.add_flow(root->eigenvalues, eig_sink->in);
 ```
-
-**[EA HSDK5 ONLY]** Bind all four device outputs. Python `RootMUSICEstimatorOpF32` / `F64` bindings are deferred on this branch.
-
-## Contract conformance
-
-The HSDK 5 C++ compute path matches the locked gridless ULA/URA algorithm and optional-port convention.
-
-| Contract claim | Verdict | Detail |
-| --- | --- | --- |
-| `array_geometry` **[live]** | conforms (payload form differs) | Unconditional Exact `Input<WireArrayGeometry>` in `contract()`, not `Input<ArrayGeometry>` ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9) |
-| `spatial_smoothing` **[live]** | conforms (payload form differs) | Bounded `{count, first, second}` int64 POD, not `Input<std::vector<int64_t>>` (§9) |
-| `num_sources` / `source_count_pfa` / `max_sources` **[live]** | conforms | Unconditional Exact inputs with active mid-stream/revert tests |
-| Optional `is_valid` connected in Graph | conforms | Non-member Exact + SafeDefault; connected mask tests run |
-| Optional `doa_multi` / `source_count` / `eigenvalues` | conforms | All `always`: fused with `aoa_estimates`, so unwired sinks are discarded. No `angle_spectrum` |
-| `max_sources` unbounded except by `doa_multi` capacity | deviates | Rejects values outside `[1, 64]` (`kMaxSourcesCap` in `root_music_estimator_op.cu`) |
-| URA of any filled size | deviates | Pairing kernel caps `ny·nz` at 64 (`kRootMusicPairChannelCap`, `root_music_stage.hpp`) and per-axis candidates at 8 (`kRootMusicPairCandCap`) |
-
-Audit scope (static; no build or test run): `OPERATOR_API.md` § RootMUSICEstimatorOp, `WORKFLOWS.md`, `TESTING.md`, `HSDK5_PORT.md`, `STATUS.md`, `operators/common/README.md`, `operators/angle_estimation/README.md`, `OPEN_ITEMS.md`, `root_music_estimator_op.hpp` / `.cu`, `root_music_stage.hpp`, `metadata.json`, Python bindings, C++/Python tests, `perf_root_music_estimator.cpp`, `planar_aperture.hpp`. Deviations that are team questions are proposed in chat, not appended to `OPEN_ITEMS.md`.

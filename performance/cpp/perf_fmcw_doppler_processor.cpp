@@ -5,11 +5,9 @@
 // slow-time (chirps). Sweeps the (chirps x range_bins) size ladder, the
 // Doppler window (rectangular / Hann), and a multi-channel batch.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
-// Mid-session [live] doppler_window override measurement is deferred —
-// the port exists, but override_ms timing remains open (HSDK5_PORT.md
-// §1 / §8). Params still select the window under test. Measurement tool only:
-// no timing assertions.
+// This driver measures Params-selected doppler_window configurations; it does not
+// report mid-session live-override latency. Measurement tool only: no timing
+// assertions.
 // See docs/planning/OPERATOR_DEVELOPMENT.md.
 
 #include <complex>
@@ -199,8 +197,7 @@ perf::ResultRow base_row(const DopplerScenario& scen) {
   row.input_shape = profiles_shape(scen);
   row.out_batch = scen.channels;
   row.k = scen.num_chirps;
-  // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §1 / §8.
-  row.notes = "live_override=deferred_ea";
+  row.notes = "live_override=not_measured";
   return row;
 }
 
@@ -224,8 +221,7 @@ DopplerScenario make_scenario(hr::WindowType window,
 }
 
 // ---------------------------------------------------------------------------
-// Traits. [EA HSDK5 ONLY] live doppler_window timing is deferred
-// (HSDK5_PORT §1 / §8).
+// Traits: the operator-specific surface used by the shared driver.
 // ---------------------------------------------------------------------------
 struct DopplerTraits : perf::PerfDriverDefaults {
   using Scenario = DopplerScenario;
@@ -247,8 +243,7 @@ struct DopplerTraits : perf::PerfDriverDefaults {
   }
   static const char* full_help() {
     return "Full matrix (windows x sizes x channel batch); "
-           "live-override timing deferred on HSDK 5 EA "
-           "(HSDK5_PORT.md §1 / §8)";
+           "live-override timing is not measured";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -331,8 +326,8 @@ struct DopplerTraits : perf::PerfDriverDefaults {
     row.notes =
         "cold_ms is first-frame latency including initial "
         "window/FFT plan build; median/p90 are post-warmup "
-        "steady state; live doppler_window override timing "
-        "deferred (HSDK5_PORT.md §1 / §8); "
+        "steady state; live doppler_window override timing is not "
+        "measured; "
         "cells/s is complex rd-map cells/s";
     report->results.push_back(row);
   }

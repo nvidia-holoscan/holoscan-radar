@@ -2,7 +2,7 @@
 
 GPU (MatX) operators for the FMCW radar chain. Each operator is templated on
 precision (`FMCWRangeProcessorOp<float>` / `<double>`); module-wide port,
-batching, and parameter-override conventions are documented in
+tensor, and parameter-override conventions are documented in
 [`operators/common/README.md`](../common/README.md), and each operator's
 header carries its full port/parameter reference.
 
@@ -48,11 +48,11 @@ and non-linear correlate share that chain.
 | Operator | In → Out | Function |
 | --- | --- | --- |
 | [`FMCWRangeProcessorOp<T>`](fmcw_range_processor_op/README.md) | `adc_cube` (…, chirps, samples; complex or real IF) → `range_profiles` (…, chirps, range bins) + optional `range_bins` axis | Range compression: optional software dechirp, windowed fast-time FFT (`nfft` zero-pad, `fft_norm`); real IF takes the R2C path (`nfft/2+1` bins); bin 0 = zero range (no fftshift) |
-| [`ClutterFilterOp<T>`](clutter_filter_op/README.md) | `range_profiles` → `range_profiles_out` (chirp count preserved / −1 / −2) | Slow-time clutter suppression: uniform or `doppler_window`-weighted `mean_subtraction` (zero-Doppler nulled, no chirp loss), or 1st/2nd-order MTI delay cancellers. **[EA HSDK5 ONLY]** ported on HSDK 5; see [`HSDK5_PORT.md`](../../docs/planning/HSDK5_PORT.md) |
+| [`ClutterFilterOp<T>`](clutter_filter_op/README.md) | `range_profiles` → `range_profiles_out` (chirp count preserved / −1 / −2) | Slow-time clutter suppression: uniform or `doppler_window`-weighted `mean_subtraction` (zero-Doppler nulled, no chirp loss), or 1st/2nd-order MTI delay cancellers. |
 | [`FMCWDopplerProcessorOp<T>`](fmcw_doppler_processor_op/README.md) | `range_profiles` → `rd_maps` (…, doppler, range bins) + optional `velocity_bins` axis | Doppler compression: windowed slow-time FFT (`nfft` zero-pad), zero-Doppler centered by default (numpy-style fftshift) |
 | [`DopplerNotchOp<T>`](doppler_notch_op/README.md) | complex `(D,R)`, `(N_rx,D,R)`, or `(M_tx,N_rx,D,R)` + physical `(D,)` velocity axis → same RD shape | Hard or raised-cosine physical-velocity stopband applied identically across channels |
 | [`FMCWRangeDopplerProcessorOp<T>`](fmcw_range_doppler_processor_op/README.md) | `adc_cube` → `rd_maps` + optional `range_bins`/`velocity_bins` | Fused range + optional inline clutter + Doppler in one node; `doppler_window` supplies both weighted mean projection and analysis taper under `mean_subtraction` |
-| [`MIMODeinterleaveOp<T>`](mimo_deinterleave_op/README.md) | `adc_cube` (`N_rx`, `M·L`, samples; complex or real IF) → `adc_cube_out` (`M_tx`, `N_rx`, `L`, samples) | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather. **Uniform round-robin TDM only** — non-uniform / staggered schedules are rejected (staggered TDM deferred; STATUS.md L12) |
+| [`MIMODeinterleaveOp<T>`](mimo_deinterleave_op/README.md) | `adc_cube` (`N_rx`, `M·L`, samples; complex or real IF) → `adc_cube_out` (`M_tx`, `N_rx`, `L`, samples) | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather. **Uniform repeating TDM only** — non-uniform or staggered schedules are rejected |
 | [`TDMDenseCompensationOp<T>`](tdm_dense_compensation_op/README.md) | `(M_tx, N_rx, D, R)` → same shape | Firing-slot-aware TDM inter-TX motion-phase correction |
 | [`DDMDenseDemultiplexOp<T>`](ddm_dense_demultiplex_op/README.md) | `(N_rx, D, R)` + optional `(D,)` velocity axis → `(M_tx, N_rx, D_out, R)` + optional `(D_out,)` axis | Linear DDM gather or nonlinear full-axis correlation with matching physical-axis transformation |
 | [`DDMPowerFoldOp<T>`](ddm_power_fold_op/README.md) | `(N_rx,D,R)` → real `(D/M-G,R)` | Fold all linear DDM bands and RX looks into detector power |
@@ -60,36 +60,27 @@ and non-linear correlate share that chain.
 | [`TDMSparseCompensationOp<T>`](tdm_sparse_compensation_op/README.md) | uncompensated `rd_maps` (`M_tx`, `N_rx`, D, R) + `detection_idx` → `snapshot` (`num_detections`, `num_virtual`, K) + mask + geometry | Sparse TDM bridge: gather detected cells, apply firing-slot-aware phase correction, and assemble virtual snapshots without processing the full cube |
 | [`VirtualArrayAssemblyOp<T>`](virtual_array_assembly_op/README.md) | `rd_maps` (`M_tx`, `N_rx`, D, R) → `rd_maps_out` (`num_virtual`, D, R) + `WireArrayGeometry` | MIMO marshaling: flatten separated TX×RX channels into a virtual axis (`p_tx + p_rx`) |
 
-MIMO marshaling operators document **imposed decisions** (contract pins) in
-each operator README. Deferred slices stay in `OPEN_ITEMS.md` where they
-still exist (none for deinterleave / compensation / virtual-array assembly).
-
 The optional axis outputs are emitted only when a waveform descriptor
 (`FMCWWaveformDescriptor`) is available; consumers map peaks back to
 physical units through them.
 
-## Shared kernel conventions
+## Signal conventions
 
-- **Stage functions.** Each operator's math is a pure stage function in its
-  own directory (`range_stage.hpp`, `clutter_stage.hpp`,
-  `doppler_stage.hpp` — CUDA-TU-only headers); `compute()` is a thin shell.
-  The fused operator calls the same stage functions back-to-back, which is
-  why its output is bitwise-identical to the split chain for matching
-  parameters (verified by the parity test suite).
-- **Weighted clutter parity.** For `mean_subtraction`, the fused processor
-  uses its `doppler_window` for both clutter projection and Doppler analysis.
-  A split chain must set the same window on `ClutterFilterOp` and
-  `FMCWDopplerProcessorOp`; `none` retains the uniform-mean behavior.
-- **Dechirp reference convention.** `apply_dechirp` conjugate-multiplies
-  the input against the reference chirp
-  `r[s] = exp(+j·π·slope·t_s²)`, `t_s = s / sample_rate` (or
-  `waveform.reference_samples` when provided). Software dechirp requires
-  complex-IF input — dechirping real IF would produce complex samples,
-  inconsistent with the real-IF output size.
-- **Sign conventions.** Radial velocity `v_r > 0` = receding; the velocity
-  axis satisfies `v = -f_d·λ/2`; the range axis is
-  `range_bins[i] = propagation_speed·(i·fs/nfft)/(2·slope)`.
-- **Streams.** [EA HSDK5 ONLY] Ported operators enqueue on
-  `context.cuda_stream()` (no hot-path synchronization) and retain the
-  received input until the next tick as a stream-ordered lifetime guard.
-  Unported operators still use the HSDK 4.x `receive_cuda_stream()` path.
+- `FMCWRangeProcessorOp` uses bin zero for zero range and does not shift the
+  range axis. `FMCWDopplerProcessorOp` centers zero Doppler by default.
+- Positive radial velocity means receding, with `v = -f_d * wavelength / 2`.
+  Range uses `propagation_speed * beat_frequency / (2 * slope)`.
+- Software dechirp conjugate-multiplies complex IF against the configured or
+  synthesized reference chirp. Real IF cannot use software dechirp because the
+  product would no longer match the real-input FFT shape.
+- Under `mean_subtraction`, the fused range-Doppler operator uses its Doppler
+  window for both weighted clutter projection and Doppler analysis. A split
+  chain must give `ClutterFilterOp` and `FMCWDopplerProcessorOp` the same window
+  to reproduce that result.
+- Range and velocity axis outputs require a waveform descriptor. Connect them
+  when downstream operators must translate bin indices to physical units.
+
+Shared precision, tensor, and live-override behavior is documented in
+[`operators/common/README.md`](../common/README.md). Deferred waveform and
+algorithm extensions are tracked in the repository
+[`OPEN_ITEMS.md`](../../OPEN_ITEMS.md).

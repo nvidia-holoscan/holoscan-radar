@@ -3,11 +3,9 @@
 
 #pragma once
 
-// [EA HSDK5 ONLY] Serialize ArrayGeometry to/from a plain float64 Tensor so
-// descriptor *output* ports (SubarraySelectionOp / VirtualArrayAssemblyOp) can
-// emit geometry under HSDK 5 PublishedPayload admission. ArrayGeometry owns
-// std::vector / std::optional and is not a ChannelPod or SchemaIdentity type,
-// so Output<ArrayGeometry> does not compile. See HSDK5_PORT.md §10.
+// Serialize ArrayGeometry to/from a plain float64 Tensor for descriptor output
+// ports. ArrayGeometry owns variable-length state and is therefore not a
+// ChannelPod; the Tensor encoding gives the graph a bounded payload type.
 //
 // Layout — float64, shape (num_elements + 1, 3):
 //   rows [0, num_elements): element_positions (x, y, z) meters

@@ -268,6 +268,7 @@ expected<void, Error> VirtualArrayAssemblyOp<T>::ensure_device_index_tables(
 template <typename T>
 expected<void, Error> VirtualArrayAssemblyOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive rd_maps; require a device-contiguous complex cube.
   HOLOSCAN_TRY(auto input, receive_tensor(rd_maps, kOpName));
   try {
@@ -279,12 +280,14 @@ expected<void, Error> VirtualArrayAssemblyOp<T>::compute(
   }
 
   // This tick's Params: pinned defaults with any matched [live] override.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const VirtualArrayAssemblyParams& pinned =
       context.params<VirtualArrayAssemblyParams>();
   HOLOSCAN_TRY(auto stage, resolve_params(wavelength, pinned));
 
   // Trailing rank is (M_tx, N_rx, D, R), not an FMCW (chirps, bins)
   // cube — layout parse lives in the plan builder.
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(auto plan,
                build_assembly_stage_plan(std::move(stage), input, extents_));
 
@@ -307,12 +310,14 @@ expected<void, Error> VirtualArrayAssemblyOp<T>::compute(
       static_cast<const int64_t*>(member_offsets_->data());
   const int64_t* d_idx =
       static_cast<const int64_t*>(member_indices_->data());
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(
       auto rd_loan,
       prepare_device_tensor(
           rd_maps_out, context, plan.out_shape, input.dtype(),
           [&](void* out_ptr, std::size_t) -> expected<void, Error> {
             try {
+              // Execute the device stage on the input runtime stream.
               detail::run_virtual_assembly_stage<T>(
                   input_ptr, out_ptr, plan.layout, plan.gather, d_src, d_off,
                   d_idx, stream);
@@ -330,6 +335,7 @@ expected<void, Error> VirtualArrayAssemblyOp<T>::compute(
       auto geom_prepared,
       prepare_wire_array_geometry(array_geometry, geom));
 
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   HOLOSCAN_TRY(emit_prepared_wire_array_geometry(
       array_geometry, context, std::move(geom_prepared)));
   HOLOSCAN_TRY(emit_prepared_tensor(rd_maps_out, context,

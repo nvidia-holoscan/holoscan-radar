@@ -87,6 +87,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: operator-readme-structure
+        name: check operator README structure
+        entry: python3 .github/workflows/scripts/check_operator_readmes.py
+        language: system
+        pass_filenames: false
+        files: >-
+          ^(operators/[^/]+/[^/]+_op/(README\.md|metadata\.json)|docs/planning/(OPERATOR_DEVELOPMENT|NEW_OPERATOR_CHECKLIST)\.md|\.github/workflows/scripts/check_operator_readmes\.py)$
       - id: holoscan-metadata-validate
         name: validate metadata.json files against schemas
         entry: python .github/workflows/scripts/validate_metadata.py

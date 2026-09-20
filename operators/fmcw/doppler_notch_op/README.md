@@ -1,53 +1,60 @@
 # `DopplerNotchOp`
 
-Post-Doppler physical-velocity stopband for already formed complex
-range-Doppler tensors. It is generic across SISO, SIMO, TDM, and dense DDM,
-although the first application integration is dense DDM after
-`DDMDenseDemultiplexOp`.
+## Purpose
+
+Suppresses a physical radial-velocity stopband on an already formed range-Doppler tensor. It applies the same hard or raised-cosine gain to every named channel while preserving shape, dtype, and relative channel phase.
+
+## Responsibilities
+
+- Owns physical-axis validation, cyclic or ordinary distance, and notch gain application.
+- Always nulls the nearest bin to the configured center, even at zero width.
+- Does not create a velocity axis, fold DDM bands, or provide a pass-through `none` mode.
+
+## When to use
+
+Use after Doppler processing or dense DDM demultiplexing when a known physical radial-velocity interval must be suppressed across all channels. Omit the operator for pass-through. Do not feed it folded DDM power, because one folded bin represents multiple physical velocities.
 
 ```text
-DDMDenseDemultiplexOp → DopplerNotchOp → VirtualArrayAssemblyOp
+rd_maps + velocity_bins -> DopplerNotchOp -> rd_maps_out
 ```
 
-| Kind | Port | Dtype | Shape | Notes |
+## Ports
+
+| Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
+| --- | --- | --- | --- | --- | --- |
+| in | `rd_maps` | complex64 / complex128 | `(D,R)`, `(N_rx,D,R)`, or `(M_tx,N_rx,D,R)` | Required trigger/aligned input | Maps with Doppler as the second-to-last axis. |
+| in | `velocity_bins` | float32 / float64 | `(D,)` | Required trigger/aligned input | Finite strictly increasing physical velocity in m/s. |
+| live | `center_velocity` | float64 scalar | scalar | Optional Exact one-tick override; Params fallback on miss | Notch center. |
+| live | `stop_half_width` | float64 scalar | scalar | Optional Exact one-tick override; Params fallback on miss | Full-rejection half-width. |
+| live | `transition_width` | float64 scalar | scalar | Optional Exact one-tick override; Params fallback on miss | Raised-cosine transition width. |
+| out | `rd_maps_out` | complex64 / complex128 | same as `rd_maps` | Required output | Notched maps with phase and layout preserved. |
+
+## Construction
+
+| Item | Type | Requirement | Responsibility |
+| --- | --- | --- | --- |
+| Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
+| `extents` | `MaxTensorExtents` | `max_doppler_bins`, `max_range_bins`; optional `max_rx` and `max_tx` admit named leading axes | Sizes Tensor pools and bounded device workspaces before `arm()`. |
+
+## Parameters
+
+| Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
-| in | `rd_maps` | complex64 / complex128 | `(D,R)`, `(N_rx,D,R)`, or `(M_tx,N_rx,D,R)` | Required aligned data |
-| in | `velocity_bins` | float32 / float64 | `(D,)` | Required physical m/s axis, matching precision |
-| out | `rd_maps_out` | input dtype | input shape | Same gain for every channel |
-| live | `center_velocity` | float64 | scalar | Exact one-tick override |
-| live | `stop_half_width` | float64 | scalar | Exact one-tick override |
-| live | `transition_width` | float64 | scalar | Exact one-tick override |
+| `center_velocity` | float64 | `0.0` m/s | `[live]` Exact | Center of the rejected interval. |
+| `stop_half_width` | float64 | `0.0` m/s | `[live]` Exact | Non-negative full-rejection half-width. |
+| `transition_width` | float64 | `0.0` m/s | `[live]` Exact | Non-negative raised-cosine width; zero is hard. |
+| `cyclic_velocity_axis` | bool | `true` | static | Wrap distance over the aliased interval. |
 
-`center_velocity`, `stop_half_width`, and `transition_width` are in m/s.
-Every bin inside the stop half-width is zeroed, and the bin nearest the center
-is always zeroed. A zero transition width is a hard notch. A positive
-transition width applies the gain
-`0.5 * (1 - cos(pi * distance_into_transition / transition_width))`.
-When `cyclic_velocity_axis` is true, distance wraps over the uniformly spaced
-aliased velocity interval.
+Contract: [`OPERATOR_API.md` section `DopplerNotchOp`](../../../docs/planning/OPERATOR_API.md) - group: [`operators/fmcw/README.md`](../README.md)
 
-The operation multiplies each TX/RX channel by the same real gain at a given
-Doppler bin, so surviving cells retain relative channel phase. There is no
-pass-through method; omit the operator from the graph to disable it.
+## Algorithm
 
-This is not a replacement for pre-Doppler `ClutterFilterOp`, which acts on
-slow-time range profiles. It also must not consume folded sparse-DDM power:
-one folded bin represents multiple physical velocities.
+Distance from each velocity bin to the center is optionally wrapped over `D * bin_spacing`. The stop interval receives zero gain, a positive transition receives a raised-cosine ramp, and remaining bins receive unity. The CUDA stage broadcasts gain across channel and range axes.
 
-## Implementation
+## Shape, dtype, and timing rules
 
-The HSDK 5 shell validates memory, dtype, named rank, axis length, and extents,
-then launches one stream-ordered CUDA kernel over the same-shape output pool.
-The kernel derives one cyclic physical distance per Doppler bin and broadcasts
-its gain over named channel and range axes. Both inputs are retained across the
-next tick for asynchronous lifetime safety.
+The velocity axis length equals `D`, matches template precision, and is finite and strictly increasing; cyclic mode also requires uniform spacing. No opaque leading batch is accepted. Live scalars join the map trigger with `Exact{}` and revert to Params after each tick.
 
-The required inputs meet under a zero-window `OnAligned` trigger with
-`Exact{}` timestamp matching. Live scalar overrides use `Exact{} +
-SafeDefault{}` and revert to Params after a miss. No notch-mask output exists
-in v1; its statistical interaction with CFAR is tracked in
-[`OPEN_ITEMS.md`](OPEN_ITEMS.md).
+## Configuration and caching
 
-Contract: [`OPERATOR_API.md`](../../../docs/planning/OPERATOR_API.md) · tests:
-[`TESTING.md`](../../../docs/planning/TESTING.md) · pool sizing:
-[`MAX_TENSOR_EXTENTS.md`](../../../docs/planning/MAX_TENSOR_EXTENTS.md)
+The plan contains validated layout and scalar notch values; no coefficient cache is required. Constructor extents determine admitted named leading rank and output pool capacity.

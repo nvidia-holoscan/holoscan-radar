@@ -711,8 +711,7 @@ TEST(BeamscanEstimatorOpTest, RejectsEmptyScanGrid) {
 }
 
 TEST(BeamscanEstimatorOpTest, PeakInterpolationConfigurableFromParams) {
-  // Authoring Params must select peak_interpolation (live Graph override
-  // deferred — HSDK5_PORT §1).
+  // Exercise the authoring-time Params value for peak_interpolation.
   constexpr int64_t kN = 8;
   constexpr double kTruthAz = 0.17;
 

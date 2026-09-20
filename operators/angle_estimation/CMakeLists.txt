@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Angle-estimation operators (see README.md in this directory).
-# [EA HSDK5 ONLY] Only HSDK-5-ported operators are added (see
-# HoloscanRadarOptionalFeatures.cmake).
 holoscan_radar_add_operator(snapshot_gather_op)
 holoscan_radar_add_operator(subarray_selection_op)
 holoscan_radar_add_operator(beamscan_estimator_op)

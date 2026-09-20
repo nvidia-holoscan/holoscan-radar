@@ -11,7 +11,7 @@
   "build": {
     "context": "..",
     "dockerfile": "../Dockerfile",
-    // [EA HSDK5 ONLY] Build this image first; remove this args block before GA.
+    // Build this image first; remove this args block before GA.
     "args": {
       "BASE_IMAGE": "holoscan-radar-hsdk5-ea:main-5x-8b7416a"
     }

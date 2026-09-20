@@ -416,6 +416,7 @@ Contract SubarraySelectionOp<T>::contract() const {
 template <typename T>
 expected<void, Error> SubarraySelectionOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive and classify the trigger tensor.
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
   try {
@@ -427,6 +428,7 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
   }
 
   // Merge Exact overrides into one tick-local config, then derive geometry.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const SubarraySelectionParams& pinned =
       context.params<SubarraySelectionParams>();
   const int64_t live_subarray_bound =
@@ -437,6 +439,7 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
       auto stage,
       resolve_params(array_geometry_in, subarray, pinned,
                      live_subarray_bound));
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(
       auto plan,
       build_subarray_stage_plan(
@@ -452,6 +455,7 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
     return make_unexpected(Error{ErrorCode::kNotSupported,
                                  "SubarraySelectionOp: no CUDA compute stream"});
   }
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(
       const auto* selection,
       prepare_selection(*state_, plan.stage, subarray_max_extent_, stream));
@@ -491,6 +495,7 @@ expected<void, Error> SubarraySelectionOp<T>::compute(
   // Publish geometry and mask before the Tensor that triggers downstream
   // Exact joins. Declined optional emits are absorbed before snapshot.
   if (geometry_prepared.has_value()) {
+    // Publish coherent outputs in dependency order and retain borrowed inputs.
     array_geometry_out_.emit_schema_tensor(
         array_geometry, context, std::move(geometry_prepared->loan),
         std::move(geometry_prepared->payload),

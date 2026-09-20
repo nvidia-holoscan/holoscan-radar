@@ -1044,28 +1044,6 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsBothOffsetForms) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(DDMDenseDemultiplexOp, DdmOutputEmittedOnDevice) {
-  // [EA HSDK5 ONLY] Device output guaranteed by produces_tensor(kDevice).
-  GTEST_SKIP() << "HSDK 5 Graph: device output guaranteed by "
-                  "produces_tensor(kDevice); no in-flight capture";
-}
-
-TEST(DDMDenseDemultiplexOp, DdmAcceptsSingleEntryWithArbitraryKey) {
-  // [EA HSDK5 ONLY] No TensorMap — typed Input<Tensor>.
-  GTEST_SKIP() << "HSDK 5: typed Input<Tensor> replaces TensorMap; "
-                  "no arbitrary-key semantics";
-}
-
-TEST(DDMDenseDemultiplexOp, DdmAcceptsPinnedHostInput) {
-  GTEST_SKIP() << "HSDK 5 Graph: pinned host input not deliverable "
-                  "through device-bound tensor loans";
-}
-
-TEST(DDMDenseDemultiplexOp, DdmAcceptsManagedInput) {
-  GTEST_SKIP() << "HSDK 5 Graph: managed input not deliverable "
-                  "through device-bound tensor loans";
-}
-
 TEST(DDMDenseDemultiplexOp, DdmRejectsMismatchedPrecision) {
   const auto code = make_offset_code(kDdmTx);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};

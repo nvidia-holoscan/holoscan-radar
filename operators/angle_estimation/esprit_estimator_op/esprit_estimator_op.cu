@@ -1069,6 +1069,7 @@ Contract ESPRITEstimatorOp<T>::contract() const {
 template <typename T>
 expected<void, Error> ESPRITEstimatorOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // 1. Receive the snapshot cube and resolve this tick's live configuration
   // into one validated plan with all output shapes.
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
@@ -1080,11 +1081,13 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
     return fail_invalid(error.what());
   }
 
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const ESPRITParams& pinned = context.params<ESPRITParams>();
   HOLOSCAN_TRY(
       auto stage,
       resolve_params(array_geometry, spatial_smoothing, num_sources,
                      source_count_pfa, max_sources, pinned, extents_));
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(
       auto plan,
       build_esprit_stage_plan(snap, std::move(stage), extents_));
@@ -1148,6 +1151,7 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
 
   // 3. Preserve the output contract for an empty item axis without entering
   // covariance, eigendecomposition, or rotational-invariance work.
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   if (plan.num_items == 0) {
     HOLOSCAN_TRY(
         emit_empty_outputs(
@@ -1169,6 +1173,7 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
   const bool geometry_changed =
       geometry_is_new && state_->seen_geometry_keys.size() > 1;
 
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(
       auto estimation,
       prepare_smoothed_input(*state_, snap, mask_ptr, plan, stream));
@@ -1186,6 +1191,7 @@ expected<void, Error> ESPRITEstimatorOp<T>::compute(
 
   // 5. Dispatch the geometry-specific algorithm. Auto URA uses two invariance
   // axes and pairs them; all explicit or linear cases use one subarray pair.
+  // Execute the device stage on the input runtime stream.
   if (planar.is_ura && plan.stage.subarray_spec.is_auto()) {
     HOLOSCAN_TRY(
         auto outputs,

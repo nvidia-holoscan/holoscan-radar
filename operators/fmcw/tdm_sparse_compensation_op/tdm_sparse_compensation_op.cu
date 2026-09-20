@@ -376,6 +376,7 @@ TDMSparseCompensationOp<T>::ensure_virtual_tables(
 template <typename T>
 expected<void, Error> TDMSparseCompensationOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   HOLOSCAN_TRY(auto rd, receive_tensor(rd_maps, kOpName));
   HOLOSCAN_TRY(auto idx, receive_tensor(detection_idx, kOpName));
   try {
@@ -389,12 +390,14 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
     return fail_invalid(error.what());
   }
 
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const TDMSparseCompensationParams& pinned =
       context.params<TDMSparseCompensationParams>();
   HOLOSCAN_TRY(
       auto stage,
       resolve_params(
           waveform_in, snapshot_window_in, pinned));
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(
       auto plan,
       build_stage_plan(
@@ -410,6 +413,7 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
       plan.virtual_plan, plan.stage.tx_positions,
       plan.stage.rx_positions, stream));
 
+  // Prepare or reuse cached artifacts without changing tick coherence.
   const std::string correction_key =
       detail::tdm_correction_cache_key(
           plan.stage.waveform, plan.layout.num_tx,
@@ -446,6 +450,7 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
       plan.num_detections, plan.num_snapshots};
   const ArrayGeometry geometry = detail::make_array_geometry(
       plan.virtual_plan, plan.stage.waveform.wavelength());
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(
       auto geometry_prepared,
       prepare_wire_array_geometry(array_geometry, geometry));
@@ -484,6 +489,7 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
           "TDMSparseCompensationOp: error-flag clear failed");
     }
     try {
+      // Execute the device stage on the input runtime stream.
       detail::run_tdm_sparse_compensation_stage<T>(
           rd.data(), static_cast<const int64_t*>(idx.data()),
           plan.num_detections, plan.layout, plan.num_snapshots,
@@ -526,6 +532,7 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
         std::move(valid_committed).error());
   }
 
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   HOLOSCAN_TRY(emit_prepared_wire_array_geometry(
       array_geometry, context, std::move(geometry_prepared)));
   (void)emit_prepared_tensor(

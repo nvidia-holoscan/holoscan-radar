@@ -45,7 +45,7 @@ struct ClutterStageState;  // kernel-side caches; defined in clutter_stage.hpp
 //                       num_chirps_out = num_chirps (mean_subtraction),
 //                       num_chirps - 1 (single_delay), or
 //                       num_chirps - 2 (double_delay).
-//                       [EA HSDK5 ONLY] unique in/out port names required.
+//                        unique in/out port names required.
 //
 // mean_subtraction uses a uniform mean when doppler_window is none and a
 // window-weighted mean otherwise. The chirp count is unchanged. Other methods
@@ -97,7 +97,7 @@ class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {
   // HSDK 5 requires unique port names within an operator (inputs and
   // outputs share one namespace). OPERATOR_API.md's logical output channel
   // remains "range_profiles"; the physical port name is range_profiles_out.
-  // [EA HSDK5 ONLY] revisit naming once the full port is settled.
+  //  revisit naming once the full port is settled.
   Output<Tensor> range_profiles_out{"range_profiles_out"};
 
   // [live] Exact override (OPERATOR_API.md).

@@ -19,7 +19,7 @@ that is expected. A slice is **never** enough to mark the checklist done or
 call the operator ready. Clear this checklist only when the **full**
 `OPERATOR_API.md` contract for the operator is implemented (every port,
 parameter, and documented mode), not when a useful subset works and the rest
-throws / sits in `OPEN_ITEMS.md`.
+throws or remains deferred in the root `OPEN_ITEMS.md`.
 
 ---
 
@@ -33,11 +33,17 @@ throws / sits in `OPEN_ITEMS.md`.
       remains unfinished.
 - [ ] **Build wired** — group + operator `CMakeLists.txt`, `metadata.json`,
       group `README.md`, SPDX on all new files.
-- [ ] **`setup()` complete** — single-entry `TensorMap` ports, `initialize()`
-      arg setters, `[live]` override ports where required.
-- [ ] **`compute()` correct** — Exact `[live]` resolve (wiring /
-      retention), rank-agnostic shapes,
-      stream-ordered CUDA, clear errors on unsupported paths.
+- [ ] **`contract()` complete** — typed Tensor/data ports, `Operator<Params>`
+      schema, output bounds, and `[live]` override entries where required.
+- [ ] **`compute()` correct** — Exact `[live]` resolution, named-axis shape
+      validation, stream-ordered CUDA, and clear errors on unsupported paths.
+- [ ] **`compute()` skimmable** — named comments expose the applicable receive,
+      configuration, planning/cache, allocation, device, and publication /
+      retention stages without restating individual statements.
+- [ ] **Operator README opening** — unique ordered `Purpose`,
+      `Responsibilities`, `When to use`, `Ports`, `Construction`, and
+      `Parameters` sections; exact shared table headers; contract/group links
+      close the opening; every row audited against contract and implementation.
 - [ ] **Tests** — `tests/cpp/<group>/test_<operator>.cpp` covers `TESTING.md`
       unit checks; all output ports wired in harness tests; float/double +
       error paths where applicable.
@@ -48,11 +54,10 @@ throws / sits in `OPEN_ITEMS.md`.
       operator is GPU/hot-path; **includes inline `[live]` override
       measurement** whenever the contract has live params (see
       `OPERATOR_DEVELOPMENT.md` → Performance characterization).
-- [ ] **Open items** — unresolved *team* questions (contract ambiguity, SDK
-      gaps, math decisions) recorded in
-      `operators/<group>/<operator>/OPEN_ITEMS.md`. Missing contract
-      features are not open items — they are unfinished work that blocks
-      checklist completion.
+- [ ] **Open items** — unresolved team questions are recorded in the root
+      [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md) with their source directory.
+      Missing contract features are unfinished work, not backlog items, and
+      block checklist completion.
 
 ---
 
@@ -64,8 +69,9 @@ throws / sits in `OPEN_ITEMS.md`.
       duplicate an active branch.
 - [ ] Read **`WORKFLOWS.md`** if the operator sits on a modality chain —
       confirm port wiring and upstream/downstream dtypes.
-- [ ] Check for an operator-local **`OPEN_ITEMS.md`** if this operator already
-      has one; do not silently pick answers to documented ambiguities.
+- [ ] Check the root [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md) for entries from
+      this operator or group; do not silently pick answers to documented
+      ambiguities.
 
 ---
 
@@ -140,6 +146,10 @@ throws / sits in `OPEN_ITEMS.md`.
       CUDA where MatX is a poor match (document if benchmarked).
 - [ ] **Errors:** `std::invalid_argument` with operator name and port in the
       message; unimplemented paths throw rather than returning garbage.
+- [ ] **Stage comments:** `compute()` names its real orchestration boundaries
+      and explains tick coherence, cache reuse, synchronization, and output
+      ordering where relevant. Skip inapplicable stages; comments are not a
+      reason to split helpers or alter behavior.
 
 ---
 
@@ -225,13 +235,13 @@ Exemplar: `performance/cpp/perf_cfar_detector.cpp`.
 ## Land the PR
 
 - [ ] Update **`STATUS.md`** — move claim to done or refresh state.
-- [ ] Add any new **team open items** to `operators/<group>/<operator>/OPEN_ITEMS.md`
-      (create it if needed) **and** index them in
-      [`docs/planning/TEAM_BLOCKED.md`](TEAM_BLOCKED.md).
+- [ ] Add new deferred work or unresolved team questions to the root
+      [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md), naming the source directory.
 - [ ] PR description notes **contract changes** explicitly if `OPERATOR_API.md`
       changed.
-- [ ] Python bindings — **deferred** module-wide unless this PR is explicitly
-      part of a bindings wave (`STATUS.md` settled decision).
+- [ ] Python bindings — add/update them when the SDK binding component is
+      available; until then, keep the limitation documented only in
+      [`SDK_DEVELOPMENT.md`](../../SDK_DEVELOPMENT.md).
 
 ---
 

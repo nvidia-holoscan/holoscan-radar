@@ -147,6 +147,7 @@ Contract ClutterFilterOp<T>::contract() const {
 
 template <typename T>
 expected<void, Error> ClutterFilterOp<T>::compute(ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive range_profiles; require a device-contiguous complex cube.
   HOLOSCAN_TRY(auto input, receive_tensor(range_profiles, kOpName));
   try {
@@ -163,11 +164,13 @@ expected<void, Error> ClutterFilterOp<T>::compute(ExecutionContext& context) {
                    input, extents_, "range_profiles", kOpName));
 
   // This tick's Params: pinned defaults with any matched [live] override.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const ClutterFilterParams& pinned = context.params<ClutterFilterParams>();
   HOLOSCAN_TRY(auto stage,
                resolve_params(method, doppler_window_in, pinned));
 
   // Bind the stage config to this input's shape.
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(auto plan,
                build_clutter_stage_plan(std::move(stage), batched, extents_));
 
@@ -185,10 +188,12 @@ expected<void, Error> ClutterFilterOp<T>::compute(ExecutionContext& context) {
   const DLDataType dtype = complex_dtype<T>();
   const void* input_ptr = input.data();
 
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   HOLOSCAN_TRY(emit_device_tensor(
       range_profiles_out, context, out_shape, dtype,
       [&](void* out_ptr, std::size_t) -> expected<void, Error> {
         try {
+          // Execute the device stage on the input runtime stream.
           detail::run_clutter_stage<T>(
               plan.stage, *state_, input_ptr, batched.batch, batched.rows,
               batched.cols, out_ptr, stream);

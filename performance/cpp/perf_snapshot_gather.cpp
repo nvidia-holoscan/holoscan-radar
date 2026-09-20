@@ -6,7 +6,7 @@
 // RD maps. Sweeps channel count, RD-map size, detection count, and snapshot
 // window. Measurement tool only: no timing assertions.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite: rd_maps, detection_idx, and any
+//  Graph-based rewrite: rd_maps, detection_idx, and any
 // snapshot_window override are co-emitted with the same capture time and
 // consumed through the production OnAligned + Exact contract.
 

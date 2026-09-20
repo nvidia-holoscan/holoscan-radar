@@ -305,6 +305,7 @@ Contract FMCWRangeDopplerProcessorOp<T>::contract() const {
 template <typename T>
 expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive adc_cube; require a device-contiguous buffer.
   HOLOSCAN_TRY(auto input, receive_tensor(adc_cube, kOpName));
   try {
@@ -321,6 +322,7 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
                    input, extents_, "adc_cube", kOpName));
 
   // This tick's Params: pinned defaults with any matched [live] override.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const FMCWRangeDopplerProcessorParams& pinned =
       context.params<FMCWRangeDopplerProcessorParams>();
   HOLOSCAN_TRY(auto stage,
@@ -330,6 +332,7 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
                               nfft_range_in, nfft_doppler_in, pinned));
 
   // Bind the fused config to this input's dtype/shape.
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(auto plan,
                build_fused_stage_plan(std::move(stage), complex_input,
                                       batched));
@@ -348,6 +351,7 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
       matx::MATX_ASYNC_DEVICE_MEMORY, stream);
   const void* input_ptr = input.data();
   try {
+    // Execute the device stage on the input runtime stream.
     detail::run_range_stage<T>(
         plan.stage.range, *range_state_, input_ptr, complex_input,
         batched.batch, batched.rows, batched.cols, profiles.Data(),
@@ -363,6 +367,7 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
       full_rank_shape(batched, plan.num_doppler, plan.num_range_bins);
   const DLDataType out_dtype = complex_dtype<T>();
 
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(auto rd_loan,
                prepare_device_tensor(
                    rd_maps, context, out_shape, out_dtype,
@@ -393,6 +398,7 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
                      }
                      return {};
                    }));
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   HOLOSCAN_TRY(emit_prepared_tensor(rd_maps, context, std::move(rd_loan)));
 
   // Optional axes: waveform present and each latched sink still active.

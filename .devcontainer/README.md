@@ -11,7 +11,7 @@ in-container layout.
   your local checkout.
 - **Exposes the GPUs.** The dev container passes `--gpus=all` (requires the
   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)).
-  On a GPU-less host, remove `runArgs` from `devcontainer.json`.
+  A CUDA-capable NVIDIA GPU is required to build and run the operator suite.
 - **Runs as a non-root `dev` user** (team convention). The devcontainer runtime
   updates its UID/GID to match your host account so the bind-mounted source stays
   writable.
@@ -60,98 +60,15 @@ Xauthority cookie (not enabled by default — paths vary by desktop).
 The in-repo `./data` folder is available at `/workspace/holoscan-radar/data`,
 the same path the `holohub` wrapper uses for `HOLOSCAN_CLI_DATA_DIR`.
 
-## [EA HSDK5 ONLY] Build the SDK base image
+## SDK base image
 
-This temporary workflow creates a devcontainer with HSDK 5 installed; it does
-not build the radar module. The C++ operators, tests, performance drivers, and
-applications are ported; Python remains gated off during the EA. See
-[`../docs/planning/HSDK5_PORT.md`](../docs/planning/HSDK5_PORT.md) for the
-current state.
-
-On the host, from the root of this repository, run:
+The dev container currently uses a locally built HSDK 5 `main-5x` image. Build
+that image before opening the container:
 
 ```bash
 ./.devcontainer/build-hsdk5-ea-image.sh
 ```
 
-The script clones the internal HSDK repository into the ignored `.cache/`
-directory, builds the SDK, and creates a local image. It requires internal
-GitLab SSH access and Docker.
-
-The current EA checkout builds visualization but does not install its separate
-`holoscan-visualization` component. The script installs that generated
-component through the SDK build container before creating the image, without
-modifying the SDK checkout. This workaround keeps native Holoviz available
-until the public HSDK 5 package ships it; remove the marked EA workflow at GA.
-
-The default pin is the SDK development branch `main-5x`, which
-carries the optional-unwired-input feature this module needs in order to retire
-its `expect_*` parameters ([`../docs/planning/HSDK5_PORT.md`](../docs/planning/HSDK5_PORT.md)
-§11), and [`devcontainer.json`](devcontainer.json) names the image it produces.
-The currently resolved SDK commit is
-`8b7416af9f29fee714e85576a2d481605e526934` (image tag
-`holoscan-radar-hsdk5-ea:main-5x-8b7416a`).
-The module no longer builds against the `v5.0.0.1` EA tag: it uses that
-branch's Tensor spec API, and its operators declare optional `[live]` inputs
-the tag rejects as unconnected. Because a branch pin's image tag carries its
-short sha, re-run with `--print-pin` and update `BASE_IMAGE` whenever the
-branch moves.
-
-After it completes, rebuild and reopen the devcontainer. Re-run the script only
-when the pinned HSDK build needs to be recreated.
-
-### Changing the SDK pin
-
-`--pin` accepts a tag, a branch, or a commit sha (`$HSDK_PIN` sets the same
-thing). Each pin gets its own `.cache/` checkout and its own image tag, so
-several pins can coexist:
-
-```bash
-./.devcontainer/build-hsdk5-ea-image.sh --pin v5.0.0.1
-./.devcontainer/build-hsdk5-ea-image.sh --pin 9bd905908
-./.devcontainer/build-hsdk5-ea-image.sh --pin main-5x
-```
-
-A tag or sha pin is immutable, and the script verifies the cached checkout
-against it without touching the network. A branch pin is resolved with
-`git ls-remote` and must sit exactly on the current tip — when the branch moves,
-the script refuses to build the stale checkout and tells you to remove it or pin
-the sha instead. Because a branch is mutable, its image tag carries the short
-sha (`holoscan-radar-hsdk5-ea:deustice-5x-optional-port-contracts-9bd905908`).
-
-`--print-pin` resolves and verifies the pin, prints the commit and the image
-name, and exits without building — use it to read off the value to record in
-`devcontainer.json`'s `BASE_IMAGE`, which the script does not edit. A pin other
-than the default therefore takes two steps: build the image, then point
-`BASE_IMAGE` at it before reopening the container.
-
-### Using `./holohub`
-
-The devcontainer configuration does not change the image selected by
-`./holohub`, which continues to default to HSDK 4.3. To launch its container
-against the EA image from the host, run:
-
-```bash
-./holohub run-container \
-  --base-img holoscan-radar-hsdk5-ea:main-5x-8b7416a
-```
-
-Inside the EA devcontainer, use local execution so `holohub` uses the HSDK 5
-installation already present instead of starting another 4.3 container:
-
-```bash
-./holohub build fmcw_siso --local
-./holohub run fmcw_siso --local
-./holohub test --local
-```
-
-### [EA HSDK5 ONLY] Removal before GA
-
-All temporary EA integration is marked `[EA HSDK5 ONLY]`. Before merging the
-HSDK 5 port into `main` for the public release:
-
-1. Delete `build-hsdk5-ea-image.sh` and `sdk-installed.Dockerfile`.
-2. Remove the marked `build.args.BASE_IMAGE` block from `devcontainer.json`.
-3. Remove this marked section from the devcontainer README.
-4. Search the repository for `[EA HSDK5 ONLY]` and remove any remaining
-   temporary paths.
+The complete source-build workflow, pin behavior, HoloHub commands, current
+packaging limitation, and removal criteria are documented once in
+[`SDK_DEVELOPMENT.md`](../SDK_DEVELOPMENT.md).

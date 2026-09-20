@@ -41,12 +41,6 @@ function(radar_add_test NAME)
     gtest_discover_tests(${_tgt} PROPERTIES LABELS "${_RAT_LABELS}")
 endfunction()
 
-# [EA HSDK5 ONLY] Only register tests for radar_common helpers that do not
-# depend on the removed 4.x harness / unported operators, plus ported ops.
-# Expand as each operator lands.
-message(STATUS
-    "[EA HSDK5 ONLY] C++ tests limited to common helpers + ported operators")
-
 radar_add_test(common/test_window)
 radar_add_test(common/test_uniform_grid)
 radar_add_test(common/test_steering_weights_device
@@ -69,20 +63,6 @@ radar_add_test(common/test_sim)
 radar_add_test(common/test_sim_gpu holoscan::radar_common_simulator)
 radar_add_test(common/test_tensor)
 radar_add_test(common/test_virtual_array)
-# Holoscan EA reproducer for mid-stream scalar override + device Tensor path
-# (HSDK5_PORT.md §1). Not in the default `unit` label — run with -L ea_repro.
-radar_add_test(utils/test_live_override_repro LABELS ea_repro)
-# Standalone kLocalEnum vs kUInt32 repro (also drop-in for HSDK; no GTest).
-add_executable(enum_tensor_bind_repro
-    utils/hsdk_enum_tensor_bind_repro/enum_tensor_bind_repro.cpp)
-target_link_libraries(enum_tensor_bind_repro PRIVATE
-    holoscan::core
-    CUDA::cudart)
-add_test(NAME EnumTensorBindRepro COMMAND enum_tensor_bind_repro)
-set_tests_properties(EnumTensorBindRepro PROPERTIES LABELS ea_repro)
-
-# Plain pageable-host Tensor config probe under OnEach + Exact + SafeDefault.
-radar_add_test(utils/test_host_tensor_exact_override LABELS ea_repro)
 radar_add_test(fmcw/test_clutter_filter
     holoscan::clutter_filter_op)
 radar_add_test(fmcw/test_mimo_deinterleave

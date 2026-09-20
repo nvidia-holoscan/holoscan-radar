@@ -796,8 +796,7 @@ TEST(MVDREstimatorOpTest, FixedDiagonalLoadingRecoversDoa) {
 }
 
 TEST(MVDREstimatorOpTest, DiagonalLoadingConfigurableFromParams) {
-  // Authoring Params must select diagonal_loading (live Graph override
-  // deferred — HSDK5_PORT §1).
+  // Exercise the authoring-time Params value for diagonal_loading.
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;
   constexpr double kTruthAz = 0.1;

@@ -13,7 +13,7 @@
         "changelog": {
             "0.4.0": "Publish is_valid before snapshot for downstream Exact coherence",
             "0.3.0": "Tick-shell cleanup, reusable workspace, complete coordinate validation",
-            "0.2.0": "HSDK 5 EA port: Operator<Params>, typed Tensor ports, OnAligned contract",
+            "0.2.0": "HSDK 5 migration: Operator<Params>, typed Tensor ports, OnAligned contract",
             "0.1.0": "Initial Release"
         },
         "holoscan_sdk": {

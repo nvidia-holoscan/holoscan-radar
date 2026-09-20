@@ -8,7 +8,7 @@
 // override so the method-switch cost (and output chirp-count change) is
 // measured.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
+//  Graph-based rewrite of the HSDK 4.x Application harness.
 // Measurement tool only: no timing assertions. See
 // docs/planning/OPERATOR_DEVELOPMENT.md.
 

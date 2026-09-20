@@ -1152,8 +1152,7 @@ TEST(ESPRITEstimatorOpTest, LiveMaxSourcesAppliesForOneTick) {
 }
 
 TEST(ESPRITEstimatorOpTest, NumSourcesConfigurableFromParams) {
-  // Authoring Params must select num_sources (live Graph override deferred —
-  // HSDK5_PORT §1).
+  // Exercise the authoring-time Params value for num_sources.
   constexpr int64_t kN = 12;
   constexpr int64_t kS = 128;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
@@ -1193,8 +1192,7 @@ TEST(ESPRITEstimatorOpTest, MaxSourcesConfigurableFromParams) {
 }
 
 TEST(ESPRITEstimatorOpTest, SourceCountPfaConfigurableFromParams) {
-  // Authoring Params must select source_count_pfa (live Graph override
-  // deferred — HSDK5_PORT §1).
+  // Exercise the authoring-time Params value for source_count_pfa.
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 40;
   constexpr double kTruthAz = 0.08;

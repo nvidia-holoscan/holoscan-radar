@@ -7,13 +7,8 @@
 // overlap policies. Measurement tool only: no timing
 // assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
-// Mid-session [live] wavelength override measurement is deferred until
-// docs/planning/HSDK5_PORT.md §1. Params still select the policy under
-// test. The always-emitted array_geometry output is drained by
-// PerfNullSinkOp. Source publish uses PerfPublishMode::kFillInPlace
-// (value-agnostic gather); remaining lg/xl gap vs Holoscan 4.3 is the
-// accepted Graph pool publish-path artifact (HSDK5_PORT.md §3).
+// Params select the overlap policy under test. The always-emitted geometry
+// output is drained by PerfNullSinkOp.
 
 #include <complex>
 #include <cstdint>
@@ -133,7 +128,7 @@ perf::TimingCollector run_assembly_graph(
   auto cube = perf::make_iq_cube_device<PerfPrecision>(
       separated_shape(scen));
   // Value-agnostic gather: zero-fill loan is valid. Remaining xl gap vs
-  // Holoscan 4.3 is accepted Graph publish-path cost (HSDK5_PORT.md §3).
+  // Include Graph publication cost in the measured path.
   constexpr double kOverrideWavelength = kDefaultWavelength * 1.1;
   return perf::run_perf_graph_with_override(
       std::move(cube), plan.total_frames, plan.override_at,

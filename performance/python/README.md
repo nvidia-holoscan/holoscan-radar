@@ -6,8 +6,14 @@ source → operator → sink graphs, time end-to-end frame latency with a device
 sync at the terminal sink, and print a unified text report (optional JSON via
 `--output`).
 
-Every C++ `perf_*.cpp` tool has a Python counterpart. Scenario matrices are
-hand-mirrored (see [OPEN_ITEMS.md](../OPEN_ITEMS.md)).
+Most C++ performance tools have a Python counterpart. The current exceptions
+are multi-source expansion, rank-one residual screening, and subarray
+selection. Shared scenario matrices are still hand-mirrored where both forms
+exist (see [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md)).
+
+The current `main-5x` source image does not export the SDK Python binding
+target, so these scripts are retained but are not built by the default
+container. See [`SDK_DEVELOPMENT.md`](../../SDK_DEVELOPMENT.md).
 
 ## Prerequisites
 
@@ -71,9 +77,6 @@ Default CLI (no flags): `--warmup 5`, `--measured 20`, `--repeats 1`,
   only in `--full`. Curated pfa↔lut calibration pairs are included. Default and
   `--full` also includes peak-mode NMS characterization rows
   (`_peak_radius1` / `_peak_radius2` scenario ids).
-- Import order: load `holoscan.radar` **before** CuPy (the package
-  `utils/__init__.py` stays import-light so `utils.bootstrap` cannot pull CuPy
-  early — that footgun aborted MVDR MatX cache retirement).
 
 ## CLI
 
@@ -105,5 +108,4 @@ Default CLI (no flags): `--warmup 5`, `--measured 20`, `--repeats 1`,
 ## Notes
 
 - No timing assertions — use for characterization and regression tracking, not CI pass/fail gates (see C++ `performance/cpp/CMakeLists.txt` smoke tests for the binary harness).
-- Live `[live]` override ports are wired inline (same spirit as C++); Python→C++ typed override transport may not spike on all Holoscan SDK builds — override columns may read `-` when the reconfig path is not exercised.
 - Latencies are valid only on the machine/GPU they were captured on.

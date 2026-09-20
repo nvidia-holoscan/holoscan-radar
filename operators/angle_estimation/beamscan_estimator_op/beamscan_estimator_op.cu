@@ -354,6 +354,7 @@ Contract BeamscanEstimatorOp<T>::contract() const {
 template <typename T>
 expected<void, Error> BeamscanEstimatorOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive and validate the trigger tensor.
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
   try {
@@ -366,11 +367,13 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
 
   // Resolve this tick's Exact overrides, then validate named axes and derive
   // output geometry.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const BeamscanParams& pinned = context.params<BeamscanParams>();
   HOLOSCAN_TRY(
       auto stage,
       resolve_params(array_geometry, az_coordinates, el_coordinates, array_taper,
                      peak_interpolation, pinned, max_az_, max_el_));
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(
       auto plan,
       build_beamscan_stage_plan(
@@ -399,6 +402,7 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
 
   const DLDataType out_dtype = real_dtype<T>();
   auto retain_inputs = [&] {
+    // Publish coherent outputs in dependency order and retain borrowed inputs.
     retained_snapshot_ = std::move(snap);
     if (maybe_valid.has_value()) {
       retained_is_valid_ = std::move(*maybe_valid);
@@ -407,6 +411,7 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
 
   // Empty items still publish both contract shapes without building steering
   // artifacts or launching the stage.
+  // Allocate exact-sized outputs before launching device work.
   if (plan.num_items == 0) {
     auto noop = [](void*, std::size_t) -> expected<void, Error> { return {}; };
     HOLOSCAN_TRY(
@@ -463,6 +468,7 @@ expected<void, Error> BeamscanEstimatorOp<T>::compute(
 
   try {
     if (plan.num_snapshots == 1) {
+      // Execute the device stage on the input runtime stream.
       detail::run_beamscan_stage<T>(
           static_cast<const cuda::std::complex<T>*>(snap.data()),
           plan.num_items, plan.num_channels,

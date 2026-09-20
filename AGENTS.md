@@ -2,41 +2,13 @@
 
 GPU radar signal-processing operator library for the NVIDIA Holoscan SDK: Holoscan operators implemented in C++/CUDA on [MatX](https://github.com/NVIDIA/MatX), composed into pipelines purely by port connections — no glue code between operators.
 
-**Current phase: HSDK 5 port close-out.** The operator contracts (ports,
-shapes, dtypes, parameters) are fully specified in `docs/planning/`;
-implementation lands against them. All 19 C++ operators, including FMCW MIMO
-marshaling, have completed the HSDK 5 operator and performance passes. Remaining
-SDK, application, Python, and cleanup work is tracked in
-[`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md).
-**[EA HSDK5 ONLY]**
-
-## [EA HSDK5 ONLY] Temporary development environment
-
-This development line temporarily builds the pinned HSDK 5 branch from the
-internal repository and installs it into a local devcontainer base image. The
-module has moved beyond the `v5.0.0.1` tag onto the `main-5x` Tensor API; the
-exact pin is recorded in [`.devcontainer/README.md`](.devcontainer/README.md).
-This workflow exists only until the public HSDK 5 release; see
-[`.devcontainer/README.md`](.devcontainer/README.md) for build, `holohub`, and
-cleanup instructions.
-
-Use the
-[HSDK 5 preview documentation](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/introduction/overview.md)
-as the documented baseline; prefer each page's `.md` form, and use the
-[documentation index](https://nvidia-preview-v5-0-0-1.docs.buildwithfern.com/holoscan/sdk-user-guide/llms.txt)
-to find applicable pages. For APIs changed on the pinned `main-5x` branch, use
-the pinned SDK source plus the recorded probes and decisions in
-[`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md); do not infer HSDK
-5 behavior from HSDK 4.x code. Repository planning documents remain
-authoritative for this library's operator contracts. Record durable migration
-decisions there rather than in this file. Track HSDK 5 / EA port friction in
-[`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md) (not
-`TEAM_BLOCKED.md`).
-
-Before merging the HSDK 5 port into `main` for the public release, search the
-entire repository for `[EA HSDK5 ONLY]` and remove every marked workaround,
-including this section and `HSDK5_PORT.md`. Do not rely on conversation
-context when performing that cleanup.
+**Current phase: HSDK 5 development.** Operator contracts are fully specified
+in `docs/planning/`, and all public C++ operators and example applications use
+the HSDK 5 Graph and Tensor APIs. The temporary local SDK-image workflow and
+its one remaining packaging limitation are documented in
+[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md). Use the pinned `main-5x` SDK source
+for APIs not yet covered by public documentation; do not infer HSDK 5 behavior
+from HSDK 4.x code.
 
 ## Source of truth
 
@@ -49,17 +21,16 @@ Read before starting non-trivial work, in this precedence order:
 5. [`docs/planning/NEW_OPERATOR_CHECKLIST.md`](docs/planning/NEW_OPERATOR_CHECKLIST.md) — landing gate; verify before claiming an operator (or variant slice) done.
 6. [`docs/planning/OPERATOR_DEVELOPMENT.md`](docs/planning/OPERATOR_DEVELOPMENT.md) — how to implement well: hot-path discipline, diagnosis, `[live]`/calibration pitfalls, tests, and performance characterization (lessons from landed operators).
 7. [`docs/planning/TEMPORAL_CONTRACTS.md`](docs/planning/TEMPORAL_CONTRACTS.md) — how the data plane joins the config plane: the measured selector/trigger behavior, the coherence design (shared transmit-time stamp + `Exact{}`), and what was rejected. Read before changing any `contract()`.
-8. [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md) — index of items blocked on a team decision (detail in each operator’s `OPEN_ITEMS.md`).
-9. [`docs/planning/HSDK5_PORT.md`](docs/planning/HSDK5_PORT.md) — **[EA HSDK5 ONLY]** HSDK 5 / EA migration issues (SDK gaps, durable API changes, deferred port work). Executive overview: [`docs/planning/HSDK5_BRANCH_SUMMARY.md`](docs/planning/HSDK5_BRANCH_SUMMARY.md).
+8. [`OPEN_ITEMS.md`](OPEN_ITEMS.md) — the single repository backlog for deferred product, algorithm, performance, and tooling work.
+9. [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md) — the temporary local SDK-image workflow and current SDK packaging limitation.
 
 Rules that follow from "lockdown":
 
 - **Docs first.** Code must match `OPERATOR_API.md` exactly — port names, shapes, dtype pairs, parameter names/defaults, `[live]` tags. To change an interface, change the doc (in the same PR at minimum), call it out as a contract change in the PR description, and get it reviewed as such. Never deviate silently in code.
-- **Do not silently resolve documented open items.** Team-blocked questions are
-  indexed in [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md)
-  (detail in each operator’s `OPEN_ITEMS.md`). Surface any listed question for
-  a team decision instead of picking an answer in code. There are currently no
-  team-blocked items; re-check the index rather than relying on this sentence.
+- **Do not silently resolve documented open items.** Deferred work and unresolved
+  design questions are consolidated in [`OPEN_ITEMS.md`](OPEN_ITEMS.md).
+  Surface contract questions for team review instead of picking an answer in
+  code, and update the root backlog when an item is added or resolved.
 - **Checklist + development guidance.** Follow `NEW_OPERATOR_CHECKLIST.md` as the done gate; use `OPERATOR_DEVELOPMENT.md` when designing `compute()`, live overrides, tests, or chasing performance.
 
 ## Design invariants (do not violate)

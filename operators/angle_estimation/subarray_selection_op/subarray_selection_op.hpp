@@ -46,12 +46,12 @@ struct SubarraySelectionState;
 // In:  is_valid       — optional bool/uint8, (num_items, num_snapshots).
 //                       Passed through unchanged when present.
 // Out: snapshot_out   — complex64/complex128, (num_items, L[, num_snapshots]).
-//                       [EA HSDK5 ONLY] unique in/out port names (was
+//                        unique in/out port names (was
 //                       "snapshot").
 // Out: array_geometry — optional/latched WireArrayGeometry carrying the
 //                       reduced positions, wavelength, and geometry type.
 // Out: is_valid_out   — optional; the input mask, forwarded.
-//                       [EA HSDK5 ONLY] renamed from "is_valid".
+//                        renamed from "is_valid".
 //
 // Precision is fixed at compile time (T = float | double).
 //
@@ -106,7 +106,7 @@ class SubarraySelectionOp
   // because HSDK 5 requires unique input/output port names.
   Input<WireArrayGeometry> array_geometry_in{"array_geometry_in"};
   Input<Tensor> subarray{"subarray"};
-  // [EA HSDK5 ONLY] unique in/out names — see OPERATOR_API.md / HSDK5_PORT §2.
+  // Distinct input/output names make graph wiring unambiguous.
   Output<Tensor> snapshot_out{"snapshot_out"};
   Output<WireArrayGeometry> array_geometry{"array_geometry"};
   Output<Tensor> is_valid_out{"is_valid_out"};

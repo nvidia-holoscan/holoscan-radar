@@ -574,6 +574,7 @@ expected<void, Error> FeatureAssemblyOp<T>::ensure_score_leading(
 template <typename T>
 expected<void, Error> FeatureAssemblyOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive detection_idx; require a device-contiguous int64 table.
   HOLOSCAN_TRY(auto detection_idx_in, receive_tensor(detection_idx, kOpName));
   try {
@@ -602,6 +603,7 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
   // Trailing rank is (num_points, 2 [+ n_preserved]), not a
   // (chirps, samples) ADC cube — layout parse lives in the plan builder.
   // No [live] merge.
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(auto plan,
                build_assembly_stage_plan<T>(
                    features_, detection_idx_in, gathers, extents_));
@@ -638,6 +640,7 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
   // Required points: assemble, then publish. prepare + emit_prepared_tensor
   // (not emit_device_tensor) so the error-flag D2H can reject the tick
   // before the loan is published. fill stays stream-ordered.
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(
       auto points_loan,
       prepare_device_tensor(
@@ -660,6 +663,7 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
               HOLOSCAN_TRY(auto off_mut,
                            writable_ptr(*score_offsets_, "score_offsets"));
               try {
+                // Execute the device stage on the input runtime stream.
                 detail::launch_score_plane_offsets(
                     static_cast<const int64_t*>(detection_idx_in.data()),
                     plan.layout.num_points, plan.layout.idx_cols,
@@ -709,6 +713,7 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
     }
   }
 
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   HOLOSCAN_TRY(emit_prepared_tensor(points, context, std::move(points_loan)));
   if (nonempty && !seeded_feature_ids_.has_value()) {
     seeded_feature_ids_ = plan.feature_ids;

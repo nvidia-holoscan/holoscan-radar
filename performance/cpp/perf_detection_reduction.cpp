@@ -6,7 +6,7 @@
 // cluster counts, and representative policies. Measurement tool only: no
 // timing assertions.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite via run_perf_graph_triple (labels /
+//  Graph-based rewrite via run_perf_graph_triple (labels /
 // detection_idx / points co-emitted on the same OnClock tick). Mid-session
 // [live] representative / feature_weights / score_method override timing is
 // not part of this harness. Params select the policy under test.

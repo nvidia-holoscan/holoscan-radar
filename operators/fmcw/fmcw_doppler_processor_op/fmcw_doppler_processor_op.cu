@@ -180,6 +180,7 @@ Contract FMCWDopplerProcessorOp<T>::contract() const {
 template <typename T>
 expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive range_profiles; require a device-contiguous complex cube.
   HOLOSCAN_TRY(auto input, receive_tensor(range_profiles, kOpName));
   try {
@@ -196,6 +197,7 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
                    input, extents_, "range_profiles", kOpName));
 
   // This tick's Params: pinned defaults with any matched [live] override.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const FMCWDopplerProcessorParams& pinned =
       context.params<FMCWDopplerProcessorParams>();
   HOLOSCAN_TRY(auto stage,
@@ -203,6 +205,7 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
                               waveform_in, fft_norm_in, nfft_in, pinned));
 
   // Bind the stage config to this input's shape.
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(auto plan,
                build_doppler_stage_plan(std::move(stage), batched));
 
@@ -219,11 +222,13 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
   const DLDataType dtype = complex_dtype<T>();
   const void* input_ptr = input.data();
 
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(auto rd_loan,
                prepare_device_tensor(
                    rd_maps, context, out_shape, dtype,
                    [&](void* dst, std::size_t) -> expected<void, Error> {
                      try {
+                       // Execute the device stage on the input runtime stream.
                        detail::run_doppler_stage<T>(
                            plan.stage, *state_, input_ptr, batched.batch,
                            batched.rows, batched.cols, dst,
@@ -255,6 +260,7 @@ expected<void, Error> FMCWDopplerProcessorOp<T>::compute(
                        }
                        return {};
                      }));
+    // Publish coherent outputs in dependency order and retain borrowed inputs.
     velocity_bins_out_.emit(velocity_bins, context, std::move(bins_loan),
                             "FMCWDopplerProcessorOp.velocity_bins");
   }

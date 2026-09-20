@@ -501,12 +501,14 @@ Contract DetectionReductionOp<T, ScoreFn>::contract() const {
 template <typename T, typename ScoreFn>
 expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive the aligned data plane.
   HOLOSCAN_TRY(auto labels_in, receive_tensor(labels, kOpName));
   HOLOSCAN_TRY(auto idx_in, receive_tensor(detection_idx, kOpName));
   HOLOSCAN_TRY(auto points_in, receive_tensor(points, kOpName));
 
   // Resolve this tick's Exact overrides onto pinned Params.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const DetectionReductionParams& pinned =
       context.params<DetectionReductionParams>();
   HOLOSCAN_TRY(
@@ -515,6 +517,7 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
                      max_features_));
 
   // Validate named shapes/dtypes and derive the stage geometry.
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(
       auto plan,
       (build_reduction_stage_plan<T, ScoreFn>(
@@ -559,6 +562,7 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
     }
   }
   try {
+    // Execute the device stage on the input runtime stream.
     detail::launch_find_max_label(
         static_cast<const int64_t*>(labels_in.data()), num_points,
         static_cast<int64_t*>(max_label_ptr),
@@ -579,6 +583,7 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
     return fail_runtime("DetectionReductionOp: max-label sync failed");
   }
+  // Allocate exact-sized outputs before launching device work.
   if (any_cluster == 0) {
     std::optional<TensorOutputLoan> reduced_loan;
     if (reduced_points_output_.active()) {
@@ -596,6 +601,7 @@ expected<void, Error> DetectionReductionOp<T, ScoreFn>::compute(
             rep_idx, context, std::vector<int64_t>{0, idx_cols}, kInt64Dtype,
             [](void*, std::size_t) -> expected<void, Error> { return {}; }));
     if (reduced_loan.has_value()) {
+      // Publish coherent outputs in dependency order and retain borrowed inputs.
       reduced_points_output_.emit(
           reduced_points, context, std::move(*reduced_loan),
           "DetectionReductionOp.reduced_points");

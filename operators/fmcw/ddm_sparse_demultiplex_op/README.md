@@ -1,39 +1,66 @@
-# DDMSparseDemultiplexOp
+# `DDMSparseDemultiplexOp`
 
-`DDMSparseDemultiplexOp<T>` is the detect-before-demultiplex bridge for sparse
-linear DDM. It gathers only folded CFAR neighborhoods, removes each TX code's
-initial phase, resolves an externally supplied Doppler fold, applies virtual
-overlap policy, and emits estimator-ready snapshots.
+## Purpose
 
-## Contract
+Gathers detected folded DDM cells, separates TX bands, applies code and ambiguity-fold correction, and assembles virtual snapshots. It is the sparse counterpart to dense demultiplexing, virtual assembly, and snapshot gathering.
 
-- `rd_maps`: device complex `(N_rx,D,R)`, before DDM demultiplexing.
-- `detection_idx`: device int64 `(N,2)` folded `(doppler,range)` rows.
-- `fold_idx`: optional Exact device int64 `(N)`; missing means zero.
-- `snapshot`: device complex `(N,num_virtual,num_snapshots)`.
-- `is_valid`: optional/always device uint8 `(N,num_snapshots)`.
-- `array_geometry`: required pageable-host `WireArrayGeometry`, emitted before
-  `snapshot` for Exact downstream coherence.
+## Responsibilities
 
-`ddm_code`, TX/RX positions, overlap policy, and edge modes are static.
-`wavelength` and the POD `snapshot_window` are one-tick Exact live overrides.
-The same neighborhood semantics and virtual grouping as
-`TDMSparseCompensationOp` are used, but Doppler edges apply to folded width
-`W=D/M-guard_bands`.
+- Owns linear band lookup, fold-aware TX permutation, phase removal, neighborhood gathering, and geometry.
+- Keeps snapshot, validity, and geometry ordering coherent.
+- Does not support nonlinear/fractional-bin codes, infer `fold_idx`, run CFAR, or suppress clutter.
 
-Virtual grouping and geometry construction use the CUDA-free
-`radar_common/dsp/virtual_array` planner shared with
-`VirtualArrayAssemblyOp` and `TDMSparseCompensationOp`. This operator fuses
-that plan into its sparse demultiplex kernel and does not build or link the
-public dense VAA operator.
+## When to use
 
-Sparse v1 accepts only a complete linear exact-bin M-band code. `fold_idx=k`
-in `[0,M)` undoes the cyclic TX-band permutation caused by velocity aliasing.
-The default `k=0` is correct only in the principal reduced interval; an
-unresolved nonzero fold can produce plausible but angle-wrong ordering.
-Applications needing wider velocity coverage must supply `fold_idx` from an
-external observation. An M+1 empty-band layout is a research item; no generic
-resolver operator is defined until that or another observable is selected.
-The static `ddm_code` parameter does not support frame-to-frame rotation in
-one instance. Nonlinear/fractional layouts and clutter-before-demux are
-unsupported.
+Use after `DDMPowerFoldOp` and CFAR when only detected DDM cells need TX separation and virtual snapshots. Supply `fold_idx` when targets may lie outside the principal reduced velocity interval. Use dense demultiplexing when the full separated cube or physical-velocity filtering is required; do not use this operator for TDM.
+
+```text
+rd_maps + folded detections [+ fold_idx] -> DDMSparseDemultiplexOp -> snapshot + geometry
+```
+
+## Ports
+
+| Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
+| --- | --- | --- | --- | --- | --- |
+| in | `rd_maps` | complex64 / complex128 | `(N_rx,D,R)` | Required trigger/aligned input | Pre-demultiplex DDM maps. |
+| in | `detection_idx` | int64 | `(N,2)` | Required trigger/aligned input | Folded Doppler/range rows. |
+| in (optional) | `fold_idx` | int64 | `(N,)` | Optional Exact side input; `SafeDefault{0}` | Ambiguity integer in `[0,M_tx)`. |
+| live | `wavelength` | float64 scalar | scalar | Optional Exact one-tick override; Params fallback on miss | Wavelength for geometry. |
+| live | `snapshot_window` | `DDMSparseWindowOverride` | POD `{doppler, range}` | Optional Exact one-tick override; Params fallback on miss | Folded neighborhood half-extents. |
+| out | `snapshot` | complex64 / complex128 | `(N,num_virtual,num_snapshots)` | Required output | Demultiplexed virtual snapshots. |
+| out (optional, always) | `is_valid` | uint8 | `(N,num_snapshots)` | Optional `always` output | Edge-validity mask. |
+| out | `array_geometry` | `WireArrayGeometry` | descriptor-Tensor | Required output | Virtual positions and wavelength. |
+
+## Construction
+
+| Item | Type | Requirement | Responsibility |
+| --- | --- | --- | --- |
+| Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
+| `extents` | `MaxTensorExtents` | `max_tx`, `max_rx`, `max_doppler_bins`, `max_range_bins`, `max_detections` or `max_items`, `max_snapshots`; optional `max_virtual_channels` | Sizes Tensor pools and bounded device workspaces before `arm()`. |
+
+## Parameters
+
+| Parameter | Type | Default | Mutability | Responsibility |
+| --- | --- | --- | --- | --- |
+| `ddm_code` | `DDMCodeDescriptor` | none (required) | static | Linear integer-bin code layout. |
+| `tx_positions` | `vector<double>` | none (required) | static | Row-major TX positions. |
+| `rx_positions` | `vector<double>` | none (required) | static | Row-major RX positions. |
+| `overlap_policy` | `OverlapPolicy` | `dedup` | static | Virtual collision handling. |
+| `wavelength` | float64 | none (required) | `[live]` Exact | Positive geometry wavelength. |
+| `snapshot_window` | `vector<int64_t>` | `{0,0}` | `[live]` Exact | Folded-surface half-extents. |
+| `doppler_edge` | `SnapshotEdgeMode` | `wrap` | static | Folded-Doppler edge policy. |
+| `range_edge` | `SnapshotEdgeMode` | `shift` | static | Range edge policy. |
+
+Contract: [`OPERATOR_API.md` section `DDMSparseDemultiplexOp`](../../../docs/planning/OPERATOR_API.md) - group: [`operators/fmcw/README.md`](../README.md)
+
+## Algorithm
+
+The linear DDM planner maps each folded coordinate and TX to a source bin. `fold_idx` cyclically permutes TX association for aliased targets, code phase is removed, and the neighborhood is gathered through the virtual-array plan. Zero fold is correct only in the principal reduced interval.
+
+## Shape, dtype, and timing rules
+
+Inputs are exact ranks three, two, and optionally one. Fold rows match detection rows and lie in `[0,M_tx)`. Codes must be linear and integer-bin aligned. Optional fold and live values join `detection_idx` with `Exact{}`. Geometry and mask publish before snapshot.
+
+## Configuration and caching
+
+DDM lookup/phase tables are cached by code and Doppler shape; virtual assembly is cached by positions and overlap policy. Live wavelength changes metadata only, while a live window changes exact shape within captured bounds.

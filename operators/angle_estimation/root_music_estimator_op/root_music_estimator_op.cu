@@ -1079,6 +1079,7 @@ Contract RootMUSICEstimatorOp<T>::contract() const {
 template <typename T>
 expected<void, Error> RootMUSICEstimatorOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // 1. Receive the snapshot cube and resolve this tick's live configuration
   // into one validated plan with all output shapes.
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
@@ -1090,11 +1091,13 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
     return fail_invalid(error.what());
   }
 
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const RootMUSICParams& pinned = context.params<RootMUSICParams>();
   HOLOSCAN_TRY(
       auto stage,
       resolve_params(array_geometry, spatial_smoothing, num_sources,
                      source_count_pfa, max_sources, pinned, extents_));
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(
       auto plan,
       build_root_music_stage_plan(snap, std::move(stage), extents_));
@@ -1158,6 +1161,7 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
 
   // 3. Preserve the output contract for an empty item axis without entering
   // covariance, eigendecomposition, or polynomial-root work.
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   if (plan.num_items == 0) {
     HOLOSCAN_TRY(
         emit_empty_outputs(
@@ -1173,6 +1177,7 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
 
   // 4. Form the effective covariance input and classify its reduced or
   // original aperture as ULA or filled URA.
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(
       auto estimation,
       prepare_smoothed_input(*state_, snap, mask, plan, stream));
@@ -1206,6 +1211,7 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
 
   // 6. Dispatch the geometry-specific algorithm: one companion polynomial for
   // a ULA, or reduced-dimension per-axis rooting plus 2-D pairing for a URA.
+  // Execute the device stage on the input runtime stream.
   if (planar.is_ura) {
     HOLOSCAN_TRY(
         execute_root_music_ura(

@@ -29,10 +29,8 @@
 
 namespace holoscan::radar {
 
-// [EA HSDK5 ONLY] Live override payload for snapshot_window. HSDK 5
-// PublishedPayload rejects std::vector (not a scalar / Tensor / POD
-// contract type). Params keep std::vector<int64_t> per OPERATOR_API.md;
-// the live Input uses this fixed two-int64 POD. See HSDK5_PORT.md §9.
+// Fixed-layout live payload for snapshot_window. Params retain the public
+// std::vector<int64_t> representation; the graph port uses this bounded POD.
 struct SnapshotWindowOverride {
   int64_t doppler{0};
   int64_t range{0};
@@ -139,7 +137,7 @@ class SnapshotGatherOp : public holoscan::Operator<SnapshotGatherParams> {
   Output<Tensor> is_valid{"is_valid"};
   // [live] Exact override of params().snapshot_window; the entry is
   // unconditional and wiring the port enables it (OPERATOR_API.md).
-  // [EA HSDK5 ONLY] POD payload — see SnapshotWindowOverride / HSDK5_PORT §9.
+  // Fixed-layout port payload; see SnapshotWindowOverride.
   // Edge modes are static Params only (no live ports).
   Input<SnapshotWindowOverride> snapshot_window{"snapshot_window"};
 

@@ -162,6 +162,7 @@ Contract RankOneResidualScreenOp<T>::contract() const {
 template <typename T>
 expected<void, Error> RankOneResidualScreenOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   HOLOSCAN_TRY(auto snap, receive_tensor(snapshot, kOpName));
   HOLOSCAN_TRY(auto aoa, receive_tensor(baseline_aoa, kOpName));
   HOLOSCAN_RETURN_IF_ERROR(validate_inputs<T>(
@@ -171,6 +172,7 @@ expected<void, Error> RankOneResidualScreenOp<T>::compute(
   const int64_t channels = shape[1];
   const int64_t snapshots = shape[2];
 
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const auto& params = context.params<RankOneResidualScreenParams>();
   if (!std::isfinite(params.residual_threshold) ||
       params.residual_threshold < 0.0 || params.residual_threshold > 1.0) {
@@ -226,6 +228,7 @@ expected<void, Error> RankOneResidualScreenOp<T>::compute(
   }
 
   const std::vector<int64_t> item_shape{items};
+  // Allocate exact-sized outputs before launching device work.
   auto score_loan = residual_score.allocate_tensor(
       TensorLoanRequest{.shape = item_shape, .dtype = real_dtype<T>()});
   auto mask_loan = selection_mask.allocate_tensor(
@@ -256,6 +259,7 @@ expected<void, Error> RankOneResidualScreenOp<T>::compute(
         reinterpret_cast<const bool*>(mask_writer.data()), items,
         &state_->compact, stream);
     if (items > 0) {
+      // Execute the device stage on the input runtime stream.
       detail::compact_detail::launch_exclusive_sum(
           state_->compact.d_offsets, items, &state_->compact, stream);
     }
@@ -299,6 +303,7 @@ expected<void, Error> RankOneResidualScreenOp<T>::compute(
   HOLOSCAN_TRY(std::move(snapshot_writer).commit());
   HOLOSCAN_TRY(std::move(idx_writer).commit());
   HOLOSCAN_TRY(std::move(valid_writer).commit());
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   HOLOSCAN_TRY(emit_prepared_tensor(
       selected_idx, context, std::move(*idx_loan)));
   (void)emit_prepared_tensor(is_valid_out, context, std::move(*valid_loan));

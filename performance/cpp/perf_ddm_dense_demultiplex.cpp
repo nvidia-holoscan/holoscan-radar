@@ -204,8 +204,8 @@ perf::ResultRow base_row(const CompensationScenario& scen) {
   row.size_id = scen.size_id;
   row.input_shape = input_shape(scen);
   row.k = scen.num_doppler;
-  // Schema-valued waveform override_ms deferred — HSDK5_PORT.md §9.
-  row.notes = "live_override=deferred_ea";
+  // This scenario measures the Params-selected waveform configuration.
+  row.notes = "live_override=not_measured";
   return row;
 }
 

@@ -531,14 +531,6 @@ TEST(VirtualArrayAssemblyOp, RejectsOpaqueLeadingBatch) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(VirtualArrayAssemblyOp, LiveWavelengthOverrideMidStream) {
-  // [EA HSDK5 ONLY] Graph mid-stream override harness is deferred
-  // (HSDK5_PORT.md §1). Skip until the Graph harness supports multi-tick
-  // override injection.
-  GTEST_SKIP() << "HSDK 5 Graph: mid-stream override harness "
-                  "deferred (HSDK5_PORT §1)";
-}
-
 TEST(VirtualArrayAssemblyOp, WavelengthConfigurableFromParams) {
   const std::vector<int64_t> shape = {kNumTx, kNumRx, kDoppler, kRange};
   constexpr double kCustomWl = 0.05;

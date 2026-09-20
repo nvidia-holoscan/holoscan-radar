@@ -1,21 +1,18 @@
 # `MultiSourceExpansionOp`
 
+## Purpose
+
 `MultiSourceExpansionOp` merges selectively evaluated multi-source angle results back into a complete sparse-detection row set. Unselected detections and selected detections not confirmed as multi-source retain their baseline angle. Confirmed rows expand to one row per resolved angle while duplicating the original detection index.
 
-The operator knows nothing about CFAR, Beamscan, a particular super-resolution algorithm, or radar modality. It consumes ordinary device tensors and the common estimator outputs `aoa_estimates`, `doa_multi`, and `source_count`.
+## Responsibilities
 
-| Kind | Port | Dtype | Shape | Notes |
-| --- | --- | --- | --- | --- |
-| in | `detection_idx` | int64 | `(num_items, num_index_columns)` | Original row identity; 2–10 columns preserved verbatim. |
-| in | `baseline_aoa` | float32 / float64 | `(num_items, 2)` | One fallback angle per original row. |
-| in | `selected_idx` | int64 | `(num_selected,)` | Strictly ascending, unique original-row indices. |
-| in | `resolved_aoa` | float32 / float64 | `(num_selected, 2)` | Dominant angle from the selected estimator. |
-| in | `doa_multi` | float32 / float64 | `(num_selected, source_slots, 2)` | Source list; `source_slots <= max_sources`. |
-| in | `source_count` | int32 | `(num_selected,)` | Valid sources in each selected estimator row. |
-| out | `detection_idx_out` | int64 | `(num_output, num_index_columns)` | Original index repeated for every emitted source. |
-| out | `aoa_estimates_out` | float32 / float64 | `(num_output, 2)` | Baseline or resolved angles aligned with output indices. |
+- Merges selected multi-source results with the complete baseline detection stream while preserving original row order.
+- Duplicates detection indices for confirmed resolved sources and emits matching angle rows plus source-slot metadata.
+- Does not decide which rows require multi-source processing or estimate any directions itself.
 
-All six inputs are required and form one zero-window Exact activation.
+## When to use
+
+Use after selective multi-source estimation to merge resolved rows back with the original detection stream and expand each reported source into its own row. It is appropriate when only a subset was routed through an expensive estimator but downstream consumers require one uniform detection/angle table. Do not use it when each input item has only the baseline direction or when selected-row alignment is unavailable.
 
 ```text
 original detection_idx + baseline_aoa
@@ -23,6 +20,32 @@ selected_idx + resolved_aoa + doa_multi + source_count
   → MultiSourceExpansionOp
   → detection_idx_out + aoa_estimates_out
 ```
+
+## Ports
+
+| Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
+| --- | --- | --- | --- | --- | --- |
+| in | `detection_idx` | int64 | `(num_items, num_index_columns)` | Required trigger/aligned input | Original row identity; 2–10 columns preserved verbatim. |
+| in | `baseline_aoa` | float32 / float64 | `(num_items, 2)` | Required trigger/aligned input | One fallback angle per original row. |
+| in | `selected_idx` | int64 | `(num_selected,)` | Required trigger/aligned input | Strictly ascending, unique original-row indices. |
+| in | `resolved_aoa` | float32 / float64 | `(num_selected, 2)` | Required trigger/aligned input | Dominant angle from the selected estimator. |
+| in | `doa_multi` | float32 / float64 | `(num_selected, source_slots, 2)` | Required trigger/aligned input | Source list; `source_slots <= max_sources`. |
+| in | `source_count` | int32 | `(num_selected,)` | Required trigger/aligned input | Valid sources in each selected estimator row. |
+| out | `detection_idx_out` | int64 | `(num_output, num_index_columns)` | Required output | Original index repeated for every emitted source. |
+| out | `aoa_estimates_out` | float32 / float64 | `(num_output, 2)` | Required output | Baseline or resolved angles aligned with output indices. |
+
+## Construction
+
+| Item | Type | Requirement | Responsibility |
+| --- | --- | --- | --- |
+| Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
+| `extents` | `MaxTensorExtents` | `max_items`, `max_sources`, and `max_points` required | Sizes Tensor pools and bounded workspaces before `arm()`. |
+
+## Parameters
+
+| Parameter | Type | Default | Mutability | Responsibility |
+| --- | --- | --- | --- | --- |
+| None | — | — | — | This operator has no Params; behavior is set by constructor captures and inputs. |
 
 Contract: [`OPERATOR_API.md` § `MultiSourceExpansionOp`](../../../docs/planning/OPERATOR_API.md) · group: [`operators/detection/README.md`](../README.md)
 
@@ -80,32 +103,6 @@ Rejected combinations and messages include:
 | output capacity exceeded | `expanded rows exceed max_points` |
 | missing stream | `MultiSourceExpansionOp: no CUDA stream` |
 
-## Parameters and sizing
-
-There are no runtime parameters or live overrides. Configuration is captured output sizing:
-
-| `MaxTensorExtents` field | Meaning |
-| --- | --- |
-| `max_items` | Maximum original rows and selected-ordinal workspace. |
-| `max_sources` | Maximum second axis accepted from `doa_multi`. |
-| `max_points` | Maximum expanded rows; normally `max_items × max_sources`. |
-
-The index pool is bounded as `(max_points, 10)` int64 and the angle pool as `(max_points, 2)` real. Runtime outputs remain exact-sized.
-
-## SDK implementation notes
-
-- **Construction.** All three extents are required and positive. The constructor captures pool spans and allocates ordinal/error workspaces.
-- **Triggering.** `OnAligned` names all six inputs at zero window and every input uses `Exact{}`. Partial estimator results cannot activate the op.
-- **Planning.** One device thread validates selection order, counts, and confirmed angles while building per-row expansion counts and estimator ordinals.
-- **Synchronization.** One device-to-host readback returns validation and exact output count; a prefix sum assigns stable output ranges.
-- **Emission.** Both loans are prepared before scatter. The angle output publishes before `detection_idx_out`, the final required boundary.
-- **Streams and lifetime.** Planning, scan, and scatter use `context.cuda_stream()`. All inputs are retained through activation.
-- **Precision.** Explicit instantiations are `MultiSourceExpansionOp<float>` and `MultiSourceExpansionOp<double>`.
-
-## Consumer lifetime notes
-
-Both outputs are fresh pool loans and may be retained. Repeated index rows are intentional: `FeatureAssemblyOp` gathers the same range, velocity, and score for each angular source while consuming the row-aligned expanded angles.
-
 ## Performance
 
 Planning is `O(num_items + num_selected × source_count)` and scatter is `O(num_output × num_index_columns)`. One synchronization validates and exact-sizes the output.
@@ -114,16 +111,6 @@ Planning is `O(num_items + num_selected × source_count)` and scatter is `O(num_
 
 ```bash
 ctest --test-dir build-perf-check -R perf_multi_source_expansion_smoke
-```
-
-## Tests and verification
-
-`tests/cpp/detection/test_multi_source_expansion.cu` covers mixed ordering, two through maximum-source plans, zero/one-source fallback, empty inputs and selections, malformed selected indices, inconsistent counts, non-finite confirmed angles, and both precisions.
-
-`tests/cpp/integration/test_selective_aoa_operators.cpp` verifies actual emitted index and angle tensors after a modality-independent screen and common-estimator mock. It covers widened indices, duplicated rows, fallback, deterministic ordering, Exact alignment, and timestamps.
-
-```bash
-ctest --test-dir build -R 'test_multi_source_expansion|test_selective_aoa_operators' --output-on-failure
 ```
 
 ## Usage
@@ -144,7 +131,3 @@ graph.add_flow(estimator->source_count, expansion->source_count, q);
 graph.add_flow(expansion->detection_idx_out, features->detection_idx, q);
 graph.add_flow(expansion->aoa_estimates_out, features->aoa_estimates, q);
 ```
-
-## Contract conformance
-
-The operator is estimator- and modality-independent. It preserves original order and complete index rows, accepts only confirmed multiplicity (`source_count >= 2`), and falls back to one baseline row otherwise. It intentionally does not cluster, choose estimators, reinterpret counts, or deduplicate angles.

@@ -92,9 +92,8 @@ only, while Holoviz holds the last selected image for the maximum cyclic gap
 derived from `profile_sequence`. Unknown or unscheduled selections are
 configuration errors even when visualization is disabled.
 
-Interactive profile selection is deferred to the HSDK 5 open item in
-`HSDK5_PORT.md` section 6; the fixed selection does not introduce an X11
-event workaround or a radar-owned presentation loop.
+Interactive profile selection remains deferred; the fixed selection does not
+introduce an X11 event workaround or a radar-owned presentation loop.
 
 ## Contracts and verification
 

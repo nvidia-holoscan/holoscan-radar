@@ -10,8 +10,7 @@ keep that file unchanged; edit this living doc for later revisions.
 Module convention for sizing HSDK 5 Tensor output pools, **plus** dropping
 opaque leading-batch as a module invariant. Pool sizing is **not** an HSDK 5
 SDK type — Holoscan only exposes per-output
-`tensor_allocation({.max_rank, .max_byte_span})`. See also
-[`HSDK5_PORT.md`](HSDK5_PORT.md).
+`tensor_allocation({.max_rank, .max_byte_span})`.
 
 ---
 
@@ -275,7 +274,7 @@ Expect **multi-PR / multi-day** work, not a single drive-by commit.
 ## After approval — implement
 
 1. **Invariant / docs:** `AGENTS.md`, `OPERATOR_API.md` (drop leading `...`),
-   checklist, `OPERATOR_DEVELOPMENT.md`, `HSDK5_PORT.md`, `STATUS.md` settled
+   checklist, `OPERATOR_DEVELOPMENT.md`, and `STATUS.md` with the settled
    decision.
 2. **`MaxTensorExtents`** + `from_yaml` + byte-span helpers in `radar_common`.
 3. **Fat ops:** ctor capture; `setup()` spans from extents; reject unexpected

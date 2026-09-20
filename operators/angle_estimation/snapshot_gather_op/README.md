@@ -1,27 +1,51 @@
 # `SnapshotGatherOp`
 
+## Purpose
+
 Gathers, for each detection, the per-channel complex snapshot(s) from the range-Doppler maps — the channel vector at the detected cell plus a configurable RD neighborhood — into the `snapshot` matrix the sparse angle estimators consume. It sits on the sparse path after an RD-map producer and `CFARDetectorOp` (or after `DetectionReductionOp` on the cluster-then-angle path) and before `⟨sparse angle estimator⟩`. Wire the **per-channel** `rd_maps`, not the NCI-integrated map CFAR thresholded on: the channel axis must stay intact. The gather is pure indexed copy — no arithmetic.
 
-| Kind | Port | Dtype | Shape | Notes |
-| --- | --- | --- | --- | --- |
-| in | `rd_maps` | complex64 / complex128 | `(num_channels, num_doppler, num_range)`, optional leading named batch axes | Channel axis immediately before the `(doppler, range)` plane. Leading rank must match `detection_idx` preserved-batch columns. |
-| in | `detection_idx` | int64 | `(num_detections, 2 [+ n_batch])` | Last two columns are `(doppler_bin, range_bin)`; leading columns are preserved batch coordinates. Row count *is* `num_detections`. |
-| out | `snapshot` | complex64 / complex128 | `(num_detections, num_channels, num_snapshots)` | Row *i* is detection *i*'s `(num_channels, num_snapshots)` block. Always emitted, including the empty (`num_detections == 0`) tick. |
-| out | `is_valid` | uint8 (`0`/`1`) | `(num_detections, num_snapshots)` | Per-slot mask of gathered cells. Always emitted on this branch ([EA HSDK5 ONLY] device-output binding). All `1` except `clamp`-truncated slots. |
-| live | `snapshot_window` | `SnapshotWindowOverride` `{doppler, range}` int64 POD | scalar POD | `[live]` Exact override; the entry is unconditional and wiring the port enables it — see Triggering. [EA HSDK5 ONLY] Params stay `std::vector<int64_t>`; the live Input is this fixed two-int64 POD. |
+## Responsibilities
+
+- Validates detection rows against the per-channel range-Doppler layout and gathers the configured neighborhood for each row.
+- Owns edge handling, output row order, validity emission, and tick-local snapshot-window overrides.
+- Does not perform TDM/DDM compensation, estimate angles, or gather from an NCI-collapsed map that lacks channels.
+
+## When to use
+
+Use in detect-then-angle workflows to gather per-channel RD neighborhoods around CFAR detections or reduced cluster representatives. It feeds Beamscan, MUSIC, MVDR, ESPRIT, or Root-MUSIC with row-aligned snapshots and edge validity. Do not place it after a dense beamforming cube, and use the fused TDM/DDM sparse bridge operators when compensation or demultiplexing must occur during gathering.
 
 ```text
 rd_maps (per-channel) + CFARDetectorOp.detection_idx
   → SnapshotGatherOp → ⟨sparse angle estimator⟩.snapshot  [+ is_valid]
 ```
 
-In-tree `rd_maps` today: `FMCWDopplerProcessorOp`.
+## Ports
 
-On the cluster-then-angle path, `DetectionReductionOp.rep_idx` feeds `detection_idx` (one cell per cluster) instead of CFAR's full list.
+| Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
+| --- | --- | --- | --- | --- | --- |
+| in | `rd_maps` | complex64 / complex128 | `(num_channels, num_doppler, num_range)`, optional leading named batch axes | Required trigger/aligned input | Channel axis immediately before the `(doppler, range)` plane. Leading rank must match `detection_idx` preserved-batch columns. |
+| in | `detection_idx` | int64 | `(num_detections, 2 [+ n_batch])` | Required trigger/aligned input | Last two columns are `(doppler_bin, range_bin)`; leading columns are preserved batch coordinates. Row count *is* `num_detections`. |
+| out | `snapshot` | complex64 / complex128 | `(num_detections, num_channels, num_snapshots)` | Required output | Row *i* is detection *i*'s `(num_channels, num_snapshots)` block. Always emitted, including the empty (`num_detections == 0`) tick. |
+| out (optional, always) | `is_valid` | uint8 (`0`/`1`) | `(num_detections, num_snapshots)` | Optional `always` output | Per-slot mask of gathered cells. Publication is attempted every tick. All `1` except `clamp`-truncated slots. |
+| live | `snapshot_window` | `SnapshotWindowOverride` `{doppler, range}` int64 POD | scalar POD | Optional Exact one-tick override; Params fallback on miss | `[live]` Exact override; the entry is unconditional and wiring the port enables it — see Triggering. Params stay `std::vector<int64_t>`; the live Input is this fixed two-int64 POD. |
+
+## Construction
+
+| Item | Type | Requirement | Responsibility |
+| --- | --- | --- | --- |
+| Precision | `float` or `double` template argument | Select at compile time | Fixes accepted and emitted real/complex precision. |
+| `extents` | `MaxTensorExtents` | all unset is allowed; otherwise `max_detections` or `max_items`, plus `max_channels` and `max_snapshots`, are required | Sizes Tensor pools and bounded workspaces before `arm()`. |
+
+## Parameters
+
+| Parameter | Type | Default | Mutability | Responsibility |
+| --- | --- | --- | --- | --- |
+| `snapshot_window` | `std::vector<int64_t>` (YAML); live POD `{doppler, range}` | `{0, 0}` | `[live]` Exact | Per-axis `(doppler, range)` neighborhood half-extent. `{0, 0}` → one snapshot (the detection cell). Empty → `{0, 0}`; size-1 → isotropic `{w, w}`. Cost: Free — a gather, no plan or coefficient rebuild. |
+| `doppler_edge` | `SnapshotEdgeMode` `{wrap, clamp, shift}` | `wrap` | static | Neighborhood behavior at the Doppler-axis edges. |
+| `range_edge` | `SnapshotEdgeMode` `{wrap, clamp, shift}` | `shift` | static | Same three behaviors on range. `wrap` is rarely physical for range bins. |
 
 Contract: [`OPERATOR_API.md` § `SnapshotGatherOp`](../../../docs/planning/OPERATOR_API.md) ·
 group: [`operators/angle_estimation/README.md`](../README.md) ·
-open items: [`OPEN_ITEMS.md`](OPEN_ITEMS.md)
 
 ## Algorithm
 
@@ -43,7 +67,7 @@ idx = start + (offset + half)     # always marked valid
 
 Slot *k* of row *i* is written channel-major, snapshot-minor — `out[c * num_snapshots + snap_slot]` — matching the estimators' `xi[c * num_snapshots + s]` indexing. This explicitly avoids the prior `(N, K, C)` write-order bug.
 
-`is_valid` is written and emitted as `uint8` (`0`/`1`), the NumPy-visible DLPack type (STATUS.md L1). Consumers still accept `bool` or `uint8`.
+`is_valid` is written and emitted as `uint8` (`0`/`1`), the NumPy-visible DLPack type. Consumers still accept `bool` or `uint8`.
 
 Spatial smoothing is **not** applied here — that is a downstream estimator parameter on the gathered channel axis. Multi-frame / temporal snapshots would need cross-tick state and are out of scope.
 
@@ -79,31 +103,6 @@ Rejected combinations and the operator's own messages:
 | non-contiguous or pageable-host input | `SnapshotGatherOp: tensor received on input port '<port>' must be contiguous (compact row-major)` / `… is not CUDA-accessible (device, managed, or pinned-host memory required)` |
 | no CUDA compute stream | `SnapshotGatherOp: no CUDA compute stream` |
 
-## Parameters
-
-| Parameter | Type | Default | Override | Cost | Meaning |
-| --- | --- | --- | --- | --- | --- |
-| `snapshot_window` | `std::vector<int64_t>` (YAML); live POD `{doppler, range}` | `{0, 0}` | `[live]` Exact | Free — a gather, no plan or coefficient rebuild | Per-axis `(doppler, range)` neighborhood half-extent. `{0, 0}` → one snapshot (the detection cell). Empty → `{0, 0}`; size-1 → isotropic `{w, w}`. |
-| `doppler_edge` | `SnapshotEdgeMode` `{wrap, clamp, shift}` | `wrap` | static | — | Neighborhood behavior at the Doppler-axis edges. |
-| `range_edge` | `SnapshotEdgeMode` `{wrap, clamp, shift}` | `shift` | static | — | Same three behaviors on range. `wrap` is rarely physical for range bins. |
-
-YAML / `from_config` / `set_params` field names are the table's Parameter column. The live Input is named `snapshot_window` and carries `SnapshotWindowOverride`, not the Params vector ([EA HSDK5 ONLY] — HSDK5_PORT.md §9). Override resolution: Params seed the effective value; the port joins the trigger with `Exact{}`, so a sample is selected only if its `capture_time` matches the tick's data. A match applies to that tick only; a miss reverts to Params. Leaving the port unwired is what disables the override — no parameter states the wiring.
-
-## SDK implementation notes
-
-- **Construction.** `SnapshotGatherOp(const MaxTensorExtents&)`. Constructor-created state owns fixed leading-dimension and error-flag buffers. If none of `max_detections` / `max_items`, `max_channels`, or `max_snapshots` is set, pool byte spans stay 0 (non-pooled / Python path) and the batch-linear table grows only when needed. If any is set, the constructor requires `max_detections` or `max_items`, plus `max_channels` and `max_snapshots`; it preallocates the batch-linear table and sizes `snapshot` as rank 3 and `is_valid` as rank 2. The plan builder rejects ticks beyond any captured extent with an operator-owned error before pool allocation.
-- **Triggering.** `contract()` triggers `OnAligned` on `rd_maps` and `detection_idx` with `window = 0`, both taken `Exact{}`, plus an unconditional `Exact{}` + `SafeDefault{}` entry for `snapshot_window`. The entry stands whether or not the app wires the port: an unwired non-trigger `Exact{}` entry compiles under `OnAligned` exactly as it does under `OnEach` and reports `kNotConnected` every activation ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §11).
-- **Ports and queues.** Both data Inputs use `queue_depth(2)`, `MemoryKind::kCudaDevice`, and rank-agnostic declarations (dtype enforced in `compute()`). `snapshot` declares pooled rank 3; `is_valid` declares pooled rank 2. The live Input is `queue_depth(2)` with no tensor layout.
-- **Streams and lifetime.** Work is enqueued on `context.cuda_stream()`. `rd_maps` and `detection_idx` are retained across ticks as a stream-ordered lifetime guard. The hot path **does** synchronize: after `batch_linear`, a D2H of a one-int error flag plus `cudaStreamSynchronize` validates preserved-batch coordinates before the gather kernel. Empty-detection ticks skip that sync.
-- **Emission.** Both loans are allocated before either is published because one gather kernel fills both buffers. Optional/always `is_valid` publishes first for downstream Exact coherence and absorbs an unwired emit; required `snapshot` then publishes regardless. Zero-detection ticks use `prepare_device_tensor` no-ops in the same order.
-- **Parameter authoring.** Schema id `com.nvidia.holoscan.radar.SnapshotGatherParams`, version 1. Live POD identity `com.nvidia.holoscan.radar.SnapshotWindowOverride`, version 1.
-- **Precision.** Explicit instantiations: `SnapshotGatherOp<float>`, `SnapshotGatherOp<double>`.
-- **[EA HSDK5 ONLY]** The `snapshot_window` live payload is `SnapshotWindowOverride` rather than the Params vector (HSDK5_PORT.md §9); the Exact `Input<>` is declared unconditionally. The Graph test drives a matched middle tick and verifies the next miss reverts to Params.
-
-## Consumer lifetime notes
-
-Both `snapshot` and `is_valid` are fresh pool loans filled and committed each tick. A consumer may retain them; they are not operator-owned ping-pong workspace.
-
 ## Performance
 
 Constructor-created state reuses the leading-dimension vector, batch-linear table, and one-int error flag. With constructor extents the tables never allocate on the hot path; the non-pooled path grows the batch-linear table only when a larger detection count arrives. Each non-empty tick H2D-copies the used leading extents and host-syncs the validation flag. A `[live] snapshot_window` change rebuilds no cached artifact; it only changes gather and output extents.
@@ -112,31 +111,6 @@ Harness: `performance/cpp/perf_snapshot_gather.cpp` (Graph dual-input runner). S
 
 ```bash
 ctest --test-dir build -R perf_snapshot_gather_smoke
-```
-
-## Tests and verification
-
-C++: `tests/cpp/angle_estimation/test_snapshot_gather.cpp` (Graph dual-IO harness). Python: `tests/python/angle_estimation/test_snapshot_gather.py` (legacy HSDK 4.x bindings; module-wide HSDK 5 Python work is deferred in `HSDK5_PORT.md` §6). Ground truth is a synthetic RD cube whose cell `(c, d, r)` is the deterministic complex `c·100 + d·10 + r + j(c+d+r)` — not `radar_common/sim/`.
-
-| Check | Proves |
-| --- | --- |
-| `SingleCellGather` | Default `(0,0)` window → shape `(N, C, 1)` and the cell's channel vector |
-| `WindowGatherPreservesChannelAxis` / `SnapshotWindowConfigurableFromParams` | `num_snapshots = (2d+1)(2r+1)`; Params author `snapshot_window`; channel-major layout |
-| `DopplerWrapAtBoundary` | `wrap` at Doppler bin 0 yields `{n−1, 0, 1}` |
-| `ClampMarksInvalidSlots` | `clamp` at `(0,0)` with window `(1,1)` marks 4 of 9 slots valid |
-| `ShiftKeepsSnapshotCount` | `shift` at `(0,0)` keeps 9 valid slots and slides to real cells |
-| `PreservedBatchSelectsCorrectSlice` | Leading batch column selects the matching `rd_maps` slice |
-| `EmptyDetections` | Zero-row `detection_idx` emits zero-row outputs |
-| `OptionalValidityMayBeLeftUnwired` | Declining optional/always `is_valid` does not suppress required `snapshot` |
-| `FloatInstantiationSmoke` / `FloatAndDoubleAgree` | Both precisions; values agree to `1e-5` |
-| `RejectsRdMapsDtypeMismatch` / `RejectsNarrowDetectionIdx` / `RejectsNegativeSnapshotWindow` / `RejectsNegativeIsotropicSnapshotWindow` | Dtype, shape, and both vector normalization error paths |
-| `RejectsBatchCoordOutOfRange` / `RejectsCellCoordOutOfRange` / `RejectsOversizedShiftWindow` | All index columns are bounded and `shift` cannot read past an axis |
-| `LiveSnapshotWindowAppliesForOneTick` | A matched Exact override changes one output shape; the following miss reverts to Params |
-
-TESTING.md also asks that the channel axis stay intact (covered) and that a non-trivial window gather the correct neighborhood (covered). Memory-space and determinism cross-cuts are not dedicated tests here.
-
-```bash
-ctest --test-dir build -R test_snapshot_gather --output-on-failure
 ```
 
 ## Usage
@@ -160,18 +134,3 @@ graph.add_flow(gather->snapshot, estimator->snapshot, q);
 // Optional: wire the validity mask when clamp edges need to be excluded.
 graph.add_flow(gather->is_valid, estimator->is_valid, q);
 ```
-
-Python bindings exist at `python/_snapshot_gather_op_bindings.cpp` as a legacy HSDK 4.x `Fragment` / `Arg` trampoline and are not built on this branch (`HOLOSCAN_RADAR_BUILD_PYTHON=OFF`; see `HSDK5_PORT.md` §6).
-
-## Contract conformance
-
-Matches the locked contract on ports, shapes, edge-mode math, `snapshot_window` semantics, defaults, and optional-output disposition, with the [EA HSDK5 ONLY] live payload form below.
-
-| Contract claim | Verdict | Detail |
-| --- | --- | --- |
-| `snapshot_window` **[live]** as a vector | conforms (payload form differs) | Params stay `std::vector<int64_t>`; the live Input is the fixed `{doppler, range}` `SnapshotWindowOverride` POD ([`HSDK5_PORT.md`](../../../docs/planning/HSDK5_PORT.md) §9). The unconditional Exact contract entry, single-tick resolve, and mid-stream Graph test are implemented. |
-| `is_valid` optional; emit when either axis uses `clamp` | Done | `always` disposition: the validity bits are written inside the existing gather kernel, so it is produced regardless (all-`1` when neither axis is `clamp`) and an unwired sink is discarded |
-| Custom CUDA gather | conforms | `batch_linear_kernel` validates/folds named leading coordinates; `gather_snapshots_kernel` performs the channel-neighborhood copy. |
-| `shift` keeps `num_snapshots` using real distinct cells | conforms | The plan rejects a shift window longer than its axis before launching the gather. |
-
-Verified in the HSDK 5 container with all `SnapshotGatherOpTest` cases and `perf_snapshot_gather_smoke`.

@@ -416,6 +416,7 @@ Contract SnapshotGatherOp<T>::contract() const {
 template <typename T>
 expected<void, Error> SnapshotGatherOp<T>::compute(
     ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
   // Receive and classify the two aligned data-plane tensors.
   HOLOSCAN_TRY(auto rd, receive_tensor(rd_maps, kOpName));
   HOLOSCAN_TRY(auto idx, receive_tensor(detection_idx, kOpName));
@@ -432,10 +433,12 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
 
   // Merge the Exact live window onto Params, then validate this tick's
   // named axes and derive output geometry.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   HOLOSCAN_TRY(
       auto stage,
       resolve_params(snapshot_window,
                      context.params<SnapshotGatherParams>()));
+  // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(
       auto plan,
       build_snapshot_gather_stage_plan(
@@ -454,6 +457,7 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
       plan.num_detections, plan.num_snapshots};
   const DLDataType snap_dtype = complex_dtype<T>();
 
+  // Allocate exact-sized outputs before launching device work.
   if (plan.num_detections == 0) {
     // Prepare both loans before any publish so a late allocate/commit
     // failure cannot leave a sibling port already downstream.
@@ -468,6 +472,7 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
                                       kMaskDtype, noop));
     // Publish the optional sideband first so a downstream Exact selector sees
     // it when snapshot triggers. A declined optional emit remains harmless.
+    // Publish coherent outputs in dependency order and retain borrowed inputs.
     (void)emit_prepared_tensor(is_valid, context, std::move(valid_loan));
     HOLOSCAN_TRY(
         emit_prepared_tensor(snapshot, context, std::move(snap_loan)));
