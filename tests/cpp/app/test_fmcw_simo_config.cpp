@@ -15,7 +15,7 @@
 
 #include <holoscan/config/io.hpp>
 
-#include "radar_app/simple/simo/config.hpp"
+#include "radar_app/fmcw/simo_config.hpp"
 
 namespace {
 

@@ -25,11 +25,19 @@
 #include "fmcw/fmcw_doppler_processor_op/params_config.hpp"
 #include "fmcw/fmcw_range_processor_op/params_config.hpp"
 #include "radar_app/app/run_config.hpp"
-#include "radar_app/simple/siso/config_schema.hpp"
+#include "radar_app/app/config_utils.hpp"
+#include "config_schema.hpp"  // NOLINT(build/include_subdir)
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/sim/scene.hpp"
 
 namespace holoscan::radar::app::siso {
+
+using config::decode_params;
+using config::load_document;
+using config::normalize_enum_field;
+using config::require_positive;
+using config::validate_frame_period;
+using config::reject_authored;
 
 struct RuntimeConfig : CommonRunConfig {
   sim::SimScene scene;
@@ -47,90 +55,6 @@ struct Config : RuntimeConfig {
   holoscan::PreparedParams<ClusterDBSCANParams> dbscan_params;
   holoscan::PreparedParams<DetectionReductionParams> reduction_params;
 };
-
-template <typename T>
-inline void require_positive(std::string_view key, T value) {
-  if (value <= 0) {
-    throw std::runtime_error(std::string(key) + " must be > 0, got " +
-                             std::to_string(value));
-  }
-}
-
-inline void validate_frame_period(double seconds) {
-  if (!std::isfinite(seconds)) {
-    throw std::runtime_error("app.run.frame_period must be finite");
-  }
-  const double nanoseconds = seconds * 1e9;
-  if (nanoseconds < 1.0 ||
-      nanoseconds > static_cast<double>(std::numeric_limits<int64_t>::max())) {
-    throw std::runtime_error(
-        "app.run.frame_period must be within [1 ns, INT64_MAX ns], got " +
-        std::to_string(seconds) + " s");
-  }
-}
-
-template <typename Params>
-inline holoscan::PreparedParams<Params> decode_params(
-    const holoscan::config::Document& document, std::string_view path,
-    Params baseline = Params{}) {
-  auto decoded = holoscan::params::try_decode<Params>(
-      document, path, std::move(baseline));
-  if (!decoded) {
-    throw std::runtime_error(
-        std::string(path) + ": " +
-        holoscan::params::format_error(decoded.error()));
-  }
-  return std::move(*decoded);
-}
-
-inline void reject_authored(const holoscan::config::Document& document,
-                            std::string_view path) {
-  auto value = document.try_find(path);
-  if (!value) {
-    throw std::runtime_error(holoscan::config::format_error(value.error()));
-  }
-  if (value->has_value()) {
-    throw std::runtime_error(
-        std::string(path) + " is app-derived and must not be authored");
-  }
-}
-
-inline holoscan::config::Document load_document(
-    const std::filesystem::path& path) {
-  if (!std::filesystem::exists(path)) {
-    throw std::runtime_error("config file not found: " + path.string());
-  }
-  auto loaded = holoscan::config_io::try_load(
-      path, holoscan::config_io::Format::kYaml);
-  if (!loaded) {
-    throw std::runtime_error(holoscan::config::format_error(loaded.error()));
-  }
-  return std::move(*loaded);
-}
-
-template <typename Enum>
-inline holoscan::config::Document normalize_enum_field(
-    holoscan::config::Document document, std::string_view path) {
-  auto found = document.try_find(path);
-  if (!found) {
-    throw std::runtime_error(holoscan::config::format_error(found.error()));
-  }
-  if (!found->has_value()) {
-    return document;
-  }
-  auto decoded = document.try_get<Enum>(path);
-  if (!decoded) {
-    throw std::runtime_error(
-        holoscan::config::format_error(decoded.error()));
-  }
-  using Underlying = std::underlying_type_t<Enum>;
-  auto replaced = document.try_replace(path, static_cast<Underlying>(*decoded));
-  if (!replaced) {
-    throw std::runtime_error(
-        holoscan::config::format_error(replaced.error()));
-  }
-  return std::move(*replaced);
-}
 
 inline holoscan::config::Document normalize_operator_enums(
     holoscan::config::Document document) {

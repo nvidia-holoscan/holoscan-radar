@@ -35,7 +35,7 @@
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/sim/simulator.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "radar_app/simple/mimo/config.hpp"
+#include "radar_app/fmcw/mimo_config.hpp"
 
 namespace holoscan::radar::app::mimo {
 

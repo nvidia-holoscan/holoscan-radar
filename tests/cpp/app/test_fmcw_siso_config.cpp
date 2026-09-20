@@ -11,7 +11,7 @@
 
 #include <holoscan/config/io.hpp>
 
-#include "radar_app/simple/siso/config.hpp"
+#include "config.hpp"  // NOLINT(build/include_subdir): app-private header
 #include "radar_common/math/constants.hpp"
 
 namespace {

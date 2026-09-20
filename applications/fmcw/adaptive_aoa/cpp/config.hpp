@@ -20,7 +20,7 @@
 #include "angle_estimation/music_estimator_op/music_estimator_op.hpp"
 #include "angle_estimation/mvdr_estimator_op/mvdr_estimator_op.hpp"
 #include "angle_estimation/root_music_estimator_op/root_music_estimator_op.hpp"
-#include "radar_app/simple/mimo/config.hpp"
+#include "radar_app/fmcw/mimo_config.hpp"
 
 namespace holoscan::radar::app::adaptive_aoa {
 

@@ -19,7 +19,7 @@
 #include "radar_app/app/graph_driver.hpp"
 #include "radar_app/app/source.hpp"
 #include "radar_app/report/report_ops.hpp"
-#include "radar_app/simple/siso/config.hpp"
+#include "config.hpp"  // NOLINT(build/include_subdir)
 
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
 #include "radar_app/viz/fmcw_dashboard_graph.hpp"

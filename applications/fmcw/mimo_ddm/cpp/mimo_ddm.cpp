@@ -21,8 +21,8 @@
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
 #include "radar_app/app/graph_driver.hpp"
 #include "radar_app/report/report_ops.hpp"
-#include "radar_app/simple/mimo/mimo_ddm_config.hpp"
-#include "radar_app/simple/mimo/custom_ops.hpp"
+#include "config.hpp"  // NOLINT(build/include_subdir)
+#include "radar_app/fmcw/mimo_sources.hpp"
 
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
 #include "radar_app/viz/fmcw_dashboard_graph.hpp"

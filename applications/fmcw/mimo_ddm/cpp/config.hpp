@@ -5,14 +5,14 @@
 
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 
-#include "radar_app/simple/mimo/config.hpp"
+#include "radar_app/fmcw/mimo_config.hpp"
 
-namespace holoscan::radar::app::mimo_tdm {
+namespace holoscan::radar::app::mimo_ddm {
 
-using Config = mimo::TdmConfig;
+using Config = mimo::DdmConfig;
 
 inline Config load_config(const std::filesystem::path& path) {
-  return mimo::load_tdm_config(path);
+  return mimo::load_ddm_config(path);
 }
 
-}  // namespace holoscan::radar::app::mimo_tdm
+}  // namespace holoscan::radar::app::mimo_ddm

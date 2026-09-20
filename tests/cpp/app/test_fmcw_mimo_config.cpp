@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "radar_app/simple/mimo/config.hpp"
+#include "radar_app/fmcw/mimo_config.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 
 namespace {

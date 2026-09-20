@@ -217,6 +217,7 @@ radar_add_test(app/test_fmcw_siso_config
     holoscan::feature_assembly_op
     holoscan::detection_reduction_op)
 target_include_directories(test_fmcw_siso_config PRIVATE
+    ${PROJECT_SOURCE_DIR}/applications/fmcw/siso/cpp
     ${PROJECT_SOURCE_DIR}/applications/common
     ${PROJECT_SOURCE_DIR}/operators)
 target_compile_definitions(test_fmcw_siso_config PRIVATE

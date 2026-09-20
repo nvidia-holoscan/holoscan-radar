@@ -5,7 +5,7 @@
 
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 
-#include "radar_app/simple/simo/config.hpp"
+#include "radar_app/fmcw/simo_config.hpp"
 
 namespace holoscan::radar::app::simo {
 

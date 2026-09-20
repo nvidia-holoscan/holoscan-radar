@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "radar_app/app/multi_profile_source.hpp"
-#include "radar_app/simple/mimo/config.hpp"
+#include "radar_app/fmcw/mimo_config.hpp"
 
 namespace holoscan::radar::app::multi_waveform {
 
