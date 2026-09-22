@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -143,7 +144,8 @@ expected<SparseStageConfig, Error> resolve_params(
 
 expected<SparseStagePlan, Error> build_stage_plan(
     SparseStageConfig stage, const Tensor& rd_maps,
-    const Tensor& detection_idx, const MaxTensorExtents& extents) {
+    const Tensor& detection_idx, const std::optional<Tensor>& fold_idx,
+    const MaxTensorExtents& extents) {
   SparseStagePlan plan;
   plan.stage = std::move(stage);
   try {
@@ -173,6 +175,15 @@ expected<SparseStagePlan, Error> build_stage_plan(
   if (plan.num_detections < 0) {
     return fail_invalid(
         "TDMSparseCompensationOp: negative detection count");
+  }
+  if (fold_idx.has_value()) {
+    const auto& fold_shape = fold_idx->shape();
+    if (fold_shape.size() != 1U ||
+        fold_shape[0] != plan.num_detections) {
+      return fail_invalid(
+          "TDMSparseCompensationOp: fold_idx must have shape "
+          "(num_detections)");
+    }
   }
 
   const int64_t max_detections =
@@ -317,6 +328,10 @@ void TDMSparseCompensationOp<T>::setup(OperatorSpec& spec) {
   spec.input(detection_idx)
       .queue_depth(2U)
       .expects_tensor(tensor_input(kDevice));
+  spec.input(fold_idx)
+      .optional()
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kDevice));
   spec.input(waveform_in).optional().queue_depth(2U);
   spec.input(snapshot_window_in).optional().queue_depth(2U);
   spec.output(snapshot).produces_tensor(
@@ -337,7 +352,9 @@ Contract TDMSparseCompensationOp<T>::contract() const {
           .ports = ports(rd_maps, detection_idx),
           .window = std::chrono::nanoseconds{0}})
       .input(rd_maps, Exact{})
-      .input(detection_idx, Exact{});
+      .input(detection_idx, Exact{})
+      .input(fold_idx, Exact{})
+      .on_missing(fold_idx, SafeDefault{});
   add_live_override_to_contract(result, waveform_in);
   add_live_override_to_contract(result, snapshot_window_in);
   return result;
@@ -379,6 +396,7 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
   // Receive and validate inputs before deriving any tick-local state.
   HOLOSCAN_TRY(auto rd, receive_tensor(rd_maps, kOpName));
   HOLOSCAN_TRY(auto idx, receive_tensor(detection_idx, kOpName));
+  HOLOSCAN_TRY(auto maybe_fold, receive_optional_value(fold_idx));
   try {
     require_complex<T>(rd, "rd_maps");
     require_cuda_accessible(rd, "rd_maps", kOpName);
@@ -386,6 +404,11 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
     require_cuda_accessible(idx, "detection_idx", kOpName);
     require_contiguous(idx, "detection_idx", kOpName);
     require_dtype(idx, kInt64Dtype, "detection_idx", kOpName);
+    if (maybe_fold.has_value()) {
+      require_cuda_accessible(*maybe_fold, "fold_idx", kOpName);
+      require_contiguous(*maybe_fold, "fold_idx", kOpName);
+      require_dtype(*maybe_fold, kInt64Dtype, "fold_idx", kOpName);
+    }
   } catch (const std::invalid_argument& error) {
     return fail_invalid(error.what());
   }
@@ -401,7 +424,7 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
   HOLOSCAN_TRY(
       auto plan,
       build_stage_plan(
-          std::move(stage), rd, idx, extents_));
+          std::move(stage), rd, idx, maybe_fold, extents_));
 
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
@@ -425,13 +448,19 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
             plan.stage.waveform, plan.layout.num_tx,
             plan.layout.num_doppler, plan.slot_by_tx);
         const auto typed = cast_correction<T>(host);
+        const auto fold_host = detail::build_tdm_fold_correction_table(
+            plan.layout.num_tx, plan.slot_by_tx);
+        const auto fold_typed = cast_correction<T>(fold_host);
         result.device_table = make_device_tensor(
             {plan.layout.num_tx, plan.layout.num_doppler},
             complex_dtype<T>());
+        result.device_fold_table = make_device_tensor(
+            {plan.layout.num_tx, plan.layout.num_tx}, complex_dtype<T>());
         auto pointer = result.device_table->mutable_data();
-        if (!pointer) {
+        auto fold_pointer = result.device_fold_table->mutable_data();
+        if (!pointer || !fold_pointer) {
           throw std::runtime_error(
-              "TDMSparseCompensationOp: correction table not writable");
+              "TDMSparseCompensationOp: correction tables not writable");
         }
         if (cudaMemcpyAsync(
                 *pointer, typed.data(),
@@ -439,6 +468,13 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
                 cudaMemcpyHostToDevice, stream) != cudaSuccess) {
           throw std::runtime_error(
               "TDMSparseCompensationOp: correction-table H2D failed");
+        }
+        if (cudaMemcpyAsync(
+                *fold_pointer, fold_typed.data(),
+                fold_typed.size() * sizeof(std::complex<T>),
+                cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+          throw std::runtime_error(
+              "TDMSparseCompensationOp: fold-correction H2D failed");
         }
         return result;
       });
@@ -492,10 +528,14 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
       // Execute the device stage on the input runtime stream.
       detail::run_tdm_sparse_compensation_stage<T>(
           rd.data(), static_cast<const int64_t*>(idx.data()),
+          maybe_fold.has_value()
+              ? static_cast<const int64_t*>(maybe_fold->data())
+              : nullptr,
           plan.num_detections, plan.layout, plan.num_snapshots,
           plan.stage.doppler_half, plan.stage.range_half,
           plan.stage.doppler_edge, plan.stage.range_edge,
           plan.virtual_plan, correction.device_table->data(),
+          correction.device_fold_table->data(),
           static_cast<const int64_t*>(src_channel_->data()),
           static_cast<const int64_t*>(member_offsets_->data()),
           static_cast<const int64_t*>(member_indices_->data()),
@@ -517,6 +557,10 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
       return fail_invalid(
           "TDMSparseCompensationOp: detection_idx coordinate "
           "out of range");
+    }
+    if (host_error == detail::kSparseTdmErrFold) {
+      return fail_invalid(
+          "TDMSparseCompensationOp: fold_idx must be in [0,M_tx)");
     }
   }
 
@@ -542,6 +586,9 @@ expected<void, Error> TDMSparseCompensationOp<T>::compute(
 
   retained_rd_maps_ = std::move(rd);
   retained_detection_idx_ = std::move(idx);
+  if (maybe_fold.has_value()) {
+    retained_fold_idx_ = std::move(*maybe_fold);
+  }
   return {};
 }
 

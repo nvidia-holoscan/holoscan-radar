@@ -6,7 +6,7 @@ Fuses detection-centered snapshot gathering, TDM motion-phase compensation, and 
 
 ## Responsibilities
 
-- Owns per-cell TDM correction, virtual ordering/overlap policy, edge masks, and coherent geometry.
+- Owns per-cell TDM and externally supplied fold correction, virtual ordering/overlap policy, edge masks, and coherent geometry.
 - Publishes geometry and validity before snapshots for downstream Exact joins.
 - Does not run CFAR, estimate direction, or support DDM coding.
 
@@ -15,7 +15,7 @@ Fuses detection-centered snapshot gathering, TDM motion-phase compensation, and 
 Use after CFAR on uncompensated TDM maps to gather, phase-correct, and assemble only detected neighborhoods. It replaces dense compensation, virtual assembly, and snapshot gathering when downstream consumers need sparse angle snapshots rather than every RD cell. Use the dense path for full-cube consumers and `DDMSparseDemultiplexOp` for DDM.
 
 ```text
-rd_maps + detection_idx -> TDMSparseCompensationOp -> snapshot + geometry -> angle estimator
+rd_maps + detection_idx + optional fold_idx -> TDMSparseCompensationOp -> snapshot + geometry -> angle estimator
 ```
 
 ## Ports
@@ -24,6 +24,7 @@ rd_maps + detection_idx -> TDMSparseCompensationOp -> snapshot + geometry -> ang
 | --- | --- | --- | --- | --- | --- |
 | in | `rd_maps` | complex64 / complex128 | `(M_tx,N_rx,D,R)` | Required trigger/aligned input | Uncompensated center-zero TDM maps. |
 | in | `detection_idx` | int64 | `(N,2)` | Required trigger/aligned input | In-bounds Doppler/range rows. |
+| in | `fold_idx` | int64 | `(N)` | Optional Exact side input; `SafeDefault{0}` on miss | External TDM Doppler-ambiguity class in `[0,M_tx)`. |
 | live | `waveform` | `holoscan::radar::wire::FMCWWaveformT` | schema metadata + descriptor Tensor | Optional Exact one-tick override; Params fallback on miss | PRI for correction and carrier for geometry. |
 | live | `snapshot_window` | `TDMSparseWindowOverride` | POD `{doppler, range}` | Optional Exact one-tick override; Params fallback on miss | Neighborhood half-extents. |
 | out | `snapshot` | complex64 / complex128 | `(N,num_virtual,num_snapshots)` | Required output | Corrected virtual snapshots. |
@@ -54,11 +55,11 @@ Contract: [`OPERATOR_API.md` section `TDMSparseCompensationOp`](../../../docs/pl
 
 ## Algorithm
 
-The planner resolves each detection neighborhood. Every valid cell is corrected by firing slot and Doppler bin, then passed through the shared virtual gather/average plan. Geometry uses `p_virtual = p_tx + p_rx` and the wavelength derived from the same effective waveform.
+The planner resolves each detection neighborhood. Every valid cell is corrected by firing slot, Doppler bin, and the detection's external fold class, then passed through the shared virtual gather/average plan. A Doppler-window cell crossing the reduced-axis wrap adjusts the class modulo `M_tx`. Geometry uses `p_virtual = p_tx + p_rx` and the wavelength derived from the same effective waveform.
 
 ## Shape, dtype, and timing rules
 
-Inputs are exact rank four and two; detection coordinates must be in bounds. `num_snapshots` follows the resolved window. Live waveform/window ports join `detection_idx` with `Exact{}` and never latch. Geometry and mask publish before snapshot.
+Inputs are exact rank four and two; detection coordinates must be in bounds. A connected rank-one `fold_idx` must have one `[0,M_tx)` entry per detection; an unwired port means fold zero. `num_snapshots` follows the resolved window. Fold and live waveform/window ports join `detection_idx` with `Exact{}` and never latch. Fold correction restores spatial coherence but does not estimate ambiguity or unfold velocity. Geometry and mask publish before snapshot.
 
 ## Configuration and caching
 

@@ -57,7 +57,7 @@ and non-linear correlate share that chain.
 | [`DDMDenseDemultiplexOp<T>`](ddm_dense_demultiplex_op/README.md) | `(N_rx, D, R)` + optional `(D,)` velocity axis → `(M_tx, N_rx, D_out, R)` + optional `(D_out,)` axis | Linear DDM gather or nonlinear full-axis correlation with matching physical-axis transformation |
 | [`DDMPowerFoldOp<T>`](ddm_power_fold_op/README.md) | `(N_rx,D,R)` → real `(D/M-G,R)` | Fold all linear DDM bands and RX looks into detector power |
 | [`DDMSparseDemultiplexOp<T>`](ddm_sparse_demultiplex_op/README.md) | pre-demux maps + folded detections + optional fold index → snapshots + mask + geometry | Sparse linear DDM gather, fold recovery, and virtual assembly |
-| [`TDMSparseCompensationOp<T>`](tdm_sparse_compensation_op/README.md) | uncompensated `rd_maps` (`M_tx`, `N_rx`, D, R) + `detection_idx` → `snapshot` (`num_detections`, `num_virtual`, K) + mask + geometry | Sparse TDM bridge: gather detected cells, apply firing-slot-aware phase correction, and assemble virtual snapshots without processing the full cube |
+| [`TDMSparseCompensationOp<T>`](tdm_sparse_compensation_op/README.md) | uncompensated `rd_maps` + detections + optional fold index → snapshots + mask + geometry | Sparse TDM bridge: gather detected cells, apply firing-slot-aware Doppler/fold correction, and assemble virtual snapshots without processing the full cube |
 | [`VirtualArrayAssemblyOp<T>`](virtual_array_assembly_op/README.md) | `rd_maps` (`M_tx`, `N_rx`, D, R) → `rd_maps_out` (`num_virtual`, D, R) + `WireArrayGeometry` | MIMO marshaling: flatten separated TX×RX channels into a virtual axis (`p_tx + p_rx`) |
 
 The optional axis outputs are emitted only when a waveform descriptor

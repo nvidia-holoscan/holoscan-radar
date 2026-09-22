@@ -124,6 +124,15 @@ per-TX slow-time sample period for the current uniform workflow. The future
 contract must define how timing is represented and kept coherent across both
 TDM operators before relaxing `TXSchedule` validation.
 
+`TDMSparseCompensationOp.fold_idx` is now an external ambiguity-class escape
+hatch for angle coherence, but no current application supplies it and it does
+not unfold reported velocity. A complete extension must select a concrete
+producer (for example staggered PRI, overlapping-array phase, or tracking),
+keep its result row-aligned with detections across any multi-frame latency, and
+define where physical velocity is unfolded. Dense TDM remains
+principal-interval-only until a full-cube representation and same-cell
+multi-fold semantics are defined.
+
 ### 3. Support M+1 empty-band DDM ambiguity resolution
 
 **Status:** research item deferred 2026-09-09; current DDM uses M occupied

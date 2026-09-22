@@ -201,6 +201,42 @@ std::vector<std::complex<double>> build_tdm_correction_table(
   return table;
 }
 
+std::vector<std::complex<double>> build_tdm_fold_correction_table(
+    int64_t num_tx, const std::vector<int64_t>& slot_by_tx) {
+  if (num_tx <= 0) {
+    throw std::invalid_argument(
+        "dense MIMO stage: num_tx must be positive");
+  }
+  std::vector<int64_t> slots = slot_by_tx;
+  if (slots.empty()) {
+    slots.resize(static_cast<size_t>(num_tx));
+    for (int64_t tx = 0; tx < num_tx; ++tx) {
+      slots[static_cast<size_t>(tx)] = tx;
+    }
+  } else if (static_cast<int64_t>(slots.size()) != num_tx) {
+    throw std::invalid_argument(
+        "dense MIMO stage: slot_by_tx length must equal num_tx");
+  }
+
+  std::vector<std::complex<double>> table(
+      static_cast<size_t>(num_tx * num_tx));
+  for (int64_t fold = 0; fold < num_tx; ++fold) {
+    for (int64_t tx = 0; tx < num_tx; ++tx) {
+      const int64_t slot = slots[static_cast<size_t>(tx)];
+      if (slot < 0 || slot >= num_tx) {
+        throw std::invalid_argument(
+            "dense MIMO stage: firing slot out of range [0, num_tx)");
+      }
+      const double phase =
+          -2.0 * kPi * static_cast<double>(fold * slot) /
+          static_cast<double>(num_tx);
+      table[static_cast<size_t>(fold * num_tx + tx)] =
+          std::complex<double>(std::cos(phase), std::sin(phase));
+    }
+  }
+  return table;
+}
+
 std::string tdm_correction_cache_key(const FMCWWaveformDescriptor& waveform,
                                      int64_t num_tx, int64_t num_doppler,
                                      const std::vector<int64_t>& slot_by_tx) {

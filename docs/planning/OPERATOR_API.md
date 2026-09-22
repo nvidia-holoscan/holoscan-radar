@@ -861,6 +861,7 @@ Sparse TDM bridge for detect-before-compensate workflows. It replaces the dense 
 
 - **In:** `rd_maps` — complex64 / complex128, `(M_tx, N_rx, num_doppler, num_range_bins)`. Uncompensated, center-zero post-Doppler TDM maps with an explicit TX axis. No opaque leading batch.
 - **In:** `detection_idx` — int64, `(num_detections, 2)`. Detected `(doppler_bin, range_bin)` cells in the uncompensated map. Both coordinates must be in bounds. The exact row count is `num_detections`.
+- **In:** `fold_idx` — int64, `(num_detections)`. TDM Doppler-ambiguity class in `[0,M_tx)`, row-aligned with `detection_idx`. Unconditional Exact side input with `SafeDefault{0}`; when connected its row count must equal `num_detections`.
 - **Out:** `snapshot` — complex64 / complex128, `(num_detections, num_virtual, num_snapshots)`. Per-detection virtual-array snapshots, phase-corrected at each gathered neighborhood cell and assembled according to `overlap_policy`. `num_snapshots` has the same definition as `SnapshotGatherOp`.
 - **Out:** `is_valid` (optional, **always**) — uint8 (`0`/`1`), `(num_detections, num_snapshots)`. Same edge-mask semantics as `SnapshotGatherOp`; emitted before `snapshot` when connected.
 - **Out:** `array_geometry` — `WireArrayGeometry`, carrying the virtual positions generated from `tx_positions + rx_positions` and the wavelength derived from the effective `waveform.carrier_frequency`. It is emitted before `snapshot`, so the estimator's `Exact{}` join sees geometry and data from the same tick.
@@ -879,11 +880,13 @@ Sparse TDM bridge for detect-before-compensate workflows. It replaces the dense 
 **Algorithm and detection boundary:**
 
 1. For each `detection_idx` row, resolve the configured RD neighborhood and edge behavior.
-2. For each valid neighborhood cell `(d, r)`, multiply every `(tx, rx)` sample by the cached TDM correction for `(tx, d)`.
+2. For each valid neighborhood cell `(d, r)`, multiply every `(tx, rx)` sample by the cached TDM correction for `(tx, d)` and the detection's firing-slot-indexed fold correction. A Doppler-window cell that wraps across the reduced-axis boundary increments or decrements the center fold class modulo `M_tx`.
 3. Apply the same virtual assembly plan as `VirtualArrayAssemblyOp`, including overlap handling, and write the virtual vector into the estimator-facing snapshot.
 4. Derive `array_geometry.wavelength = c / waveform.carrier_frequency` from the same effective build-time or live waveform used for correction.
 
 TDM correction is unit magnitude, so pre-compensation CFAR with non-coherent integration over both TX and RX (`nci_axes = {0, 1}`) is power-equivalent when channels remain independent (`keep_all`, or no coincident virtual elements). It is not generally byte- or statistic-equivalent to CFAR after `dedup` or coherent `average`, because those policies change the channel set before detection.
+
+`fold_idx` removes the residual TX phase ramp for a target whose true Doppler lies outside the reduced per-TX principal interval. Missing input means zero, preserving principal-interval behavior. The operator does not estimate the fold or unfold reported velocity; callers needing wider velocity coverage must supply a row-aligned class from an external staggered-PRI, overlapping-array, tracker, or other observation. Multiple targets in the same folded range-Doppler cell but different folds remain unresolved. `TDMDenseCompensationOp` remains principal-interval-only because a detection-row fold does not define a dense per-cell correction.
 
 #### DDMPowerFoldOp
 

@@ -116,6 +116,7 @@ class TDMSparseCompensationOp
 
   Input<Tensor> rd_maps{"rd_maps"};
   Input<Tensor> detection_idx{"detection_idx"};
+  Input<Tensor> fold_idx{"fold_idx"};
   Input<wire::FMCWWaveformT> waveform_in{"waveform"};
   Input<TDMSparseWindowOverride> snapshot_window_in{"snapshot_window"};
 
@@ -126,6 +127,7 @@ class TDMSparseCompensationOp
  private:
   struct CachedCorrection {
     std::shared_ptr<Tensor> device_table;
+    std::shared_ptr<Tensor> device_fold_table;
   };
 
   expected<void, Error> ensure_virtual_tables(
@@ -136,6 +138,7 @@ class TDMSparseCompensationOp
   ConfigCache<CachedCorrection> correction_cache_{};
   Tensor retained_rd_maps_;
   Tensor retained_detection_idx_;
+  Tensor retained_fold_idx_;
   std::shared_ptr<Tensor> src_channel_;
   std::shared_ptr<Tensor> member_offsets_;
   std::shared_ptr<Tensor> member_indices_;

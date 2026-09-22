@@ -40,6 +40,12 @@ std::vector<std::complex<double>> build_tdm_correction_table(
     const FMCWWaveformDescriptor& waveform, int64_t num_tx,
     int64_t num_doppler, const std::vector<int64_t>& slot_by_tx = {});
 
+// Per-(fold, tx) correction for the residual firing-slot phase left when a
+// target's true Doppler lies outside the reduced per-TX principal interval.
+// Fold zero is identity; higher folds repeat modulo num_tx.
+std::vector<std::complex<double>> build_tdm_fold_correction_table(
+    int64_t num_tx, const std::vector<int64_t>& slot_by_tx = {});
+
 std::string tdm_correction_cache_key(const FMCWWaveformDescriptor& waveform,
                                      int64_t num_tx, int64_t num_doppler,
                                      const std::vector<int64_t>& slot_by_tx);

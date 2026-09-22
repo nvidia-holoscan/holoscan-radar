@@ -231,12 +231,15 @@ flowchart TD
   DOPP["Uncompensated RD maps (M_tx, N_rx, D, R)"] -->|"rd_maps"| CFAR["CFARDetectorOp (nci_axes: [0, 1])"]
   DOPP -->|"rd_maps"| SPARSE["TDMSparseCompensationOp"]
   CFAR -->|"detection_idx"| SPARSE
+  FOLD_SOURCE["External fold observation"] -.->|"fold_idx k; default 0"| SPARSE
   SPARSE -->|"snapshot (num_detections, num_virtual, num_snapshots)"| EST["⟨sparse angle estimator⟩"]
   SPARSE -.->|"is_valid (optional)"| EST
   SPARSE -->|"array_geometry (WireArrayGeometry)"| EST
 ```
 
 TDM correction is a unit-magnitude phase rotation, so TX/RX non-coherent power is unchanged when channels remain independent. The pre-compensation detector is therefore equivalent to the dense-first detector for `keep_all` or an array without coincident virtual elements. It is not generally statistic-equivalent when the dense path uses `dedup` or coherent `average`, because virtual assembly then changes the channel set before CFAR. The sparse path intentionally trades full-cube compensation and assembly cost for work proportional to the detection count.
+
+The reduced per-TX Doppler axis does not identify which of the `M` velocity folds produced a detection. `TDMSparseCompensationOp.fold_idx` accepts that class from an external observation and removes its otherwise angle-biasing TX phase ramp; missing input means the principal class zero. This preserves spatial coherence but does not unfold the reported velocity. No current application supplies the sideband. Dense TDM remains principal-interval-only because one detection-row class cannot describe a full cube or separate multiple folds superposed in one cell.
 
 ### MIMO — DDM (M × N, Doppler-division)
 
@@ -338,6 +341,6 @@ clustering. See [`ADAPTIVE_AOA.md`](ADAPTIVE_AOA.md).
 
 - **Bridges are locked, not handwaved.** The snapshot gather, feature assembly, and cluster reduction are the operators `SnapshotGatherOp`, `FeatureAssemblyOp`, and `DetectionReductionOp` (contracts in the operator API doc); their delivery models (mainstream ops / thin op over a shared reduction primitive) are settled there.
 - **Detection before or after virtual assembly:** detection uses non-coherent power, so it can run on the per-channel RD maps (with `nci_axes` over the channel set) or on the assembled cube; only the *angle* path requires the coherent compensation + virtual assembly. The chains show assembly first for a single clear ordering.
-- **Velocity ambiguity (TDM and DDM):** both reduce unambiguous velocity by `M`. Dense downstream sees that aliased per-TX Doppler axis. Sparse DDM makes the fold explicit through `fold_idx`; resolution remains a separate future operator or external observation.
+- **Velocity ambiguity (TDM and DDM):** both reduce unambiguous velocity by `M`. Dense downstream sees that aliased per-TX Doppler axis. Sparse TDM and sparse DDM make the fold explicit through row-aligned `fold_idx`; resolution and physical-velocity unfolding remain separate future operators or external observations.
 - **CDM / BPM (future):** may reuse the dense DDM correlation machinery with a separate locked contract. Fast-time / PMCW code division remains excluded.
 - **Covariance-estimator open items:** shared across `MVDR` / `MUSIC` / `RootMUSIC` / `ESPRIT` — the multi-snapshot / spatial-smoothing input form, the source-count source (fixed vs. MDL/AIC vs. CFAR-cluster), and — for the gridless pair — the ULA/subarray-selection step on non-uniform virtual arrays.

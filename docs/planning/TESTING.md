@@ -276,6 +276,8 @@ Common check (all five): default-constructed Params select `radar_boresight`; `s
 
 - For identical detections and configuration, output snapshots and geometry match the corresponding cells from `TDMDenseCompensationOp → VirtualArrayAssemblyOp → SnapshotGatherOp` under every overlap policy.
 - A moving target's gathered virtual snapshot yields an unbiased DOA; omitting the sparse correction biases it by the same amount as omitting dense TDM compensation.
+- A principal-fold target recovers with missing `fold_idx` (`SafeDefault{0}`). A nonzero-fold target retains the expected firing-slot phase ramp with unresolved zero and recovers the reference snapshot when the row-aligned class is supplied; wrapped Doppler neighborhoods adjust the class across the reduced-axis boundary.
+- `fold_idx` values outside `[0,M_tx)` or with a row count different from `detection_idx` fail predictably. Supplying a fold changes snapshot phase only: detection coordinates, shapes, geometry, and reported velocity remain unchanged.
 - Each cell in a nonzero `snapshot_window` uses its own resolved Doppler bin for phase correction. Edge modes, `is_valid`, exact-sized zero/nonzero detection outputs, and `[live] snapshot_window` override/revert match `SnapshotGatherOp`.
 - Round-robin and custom uniform `tx_schedule` mappings produce the same firing-slot correction as `TDMDenseCompensationOp`; malformed shapes, indices, extents, schedules, and live waveforms fail predictably.
 - The emitted `WireArrayGeometry` matches the virtual snapshot ordering and overlap policy, derives wavelength from the same effective waveform used for correction, and directly drives an angle estimator under an `Exact{}` join.
