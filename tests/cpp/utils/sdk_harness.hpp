@@ -1001,7 +1001,8 @@ GraphRunResult run_exact_override_single_io_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
     std::vector<std::optional<Payload>> payloads, ParamsT params,
     const char* out_port, WireFn&& wire,
-    const MaxTensorExtents& extents = default_test_extents()) {
+    const MaxTensorExtents& extents = default_test_extents(),
+    std::initializer_list<const char*> extra_op_out_ports = {}) {
   GraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBank::input_frames = std::move(inputs);
@@ -1019,6 +1020,9 @@ GraphRunResult run_exact_override_single_io_operator_graph_result(
 
   holoscan::CompileOptions options;
   detail::bind_single_io_device_pools(options, out_port);
+  for (const char* port : extra_op_out_ports) {
+    detail::bind_op_device_output(options, port);
+  }
 
   try {
     const holoscan::ExecutionPlan plan =

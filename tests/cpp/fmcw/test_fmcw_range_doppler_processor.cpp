@@ -1191,6 +1191,50 @@ TEST(FMCWRangeDopplerProcessorOpTest,
             out.frames2[0].as<float>()[1]);
 }
 
+TEST(FMCWRangeDopplerProcessorOpTest,
+     LiveClutterFilterAppliesOneTickThenReverts) {
+  const auto input = [] {
+    return complex_cube_to_device<float>(parity_sim().cube,
+                                          parity_sim().shape);
+  };
+  FMCWRangeDopplerProcessorParams params;
+  params.clutter_filter = ClutterFilterMethod::kNone;
+  const GraphRunResult out = holoscan::radar::testing::
+      run_exact_override_single_io_operator_graph_result<
+          FMCWRangeDopplerProcessorOp<float>, ClutterFilterMethod>(
+          {input(), input(), input()},
+          {std::nullopt, ClutterFilterMethod::kDoubleDelay, std::nullopt},
+          std::move(params), "rd_maps",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+            graph.add_flow(source->override_out, op->clutter_filter_in,
+                           queue);
+            graph.add_flow(source->out, op->adc_cube, queue);
+            graph.add_flow(op->rd_maps, sink->in, queue);
+          },
+          holoscan::radar::testing::default_test_extents(),
+          {"range_bins", "velocity_bins"});
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 3U);
+  EXPECT_EQ(out.frames[0].shape,
+            (std::vector<int64_t>{kChirps, kSamples}));
+  EXPECT_EQ(out.frames[1].shape,
+            (std::vector<int64_t>{kChirps - 2, kSamples}));
+  EXPECT_EQ(out.frames[2].shape, out.frames[0].shape);
+
+  ParityConfig expected_cfg;
+  expected_cfg.clutter = ClutterFilterMethod::kDoubleDelay;
+  const ChainOutputs expected = run_fused<float>(input(), expected_cfg,
+                                              to_descriptor(sim::SimWaveform{}));
+  const double reference = std::max(max_abs<float>(expected.rd), 1.0);
+  EXPECT_LT(max_abs_diff<float>(out.frames[1], expected.rd),
+            1e-5 * reference);
+  EXPECT_LT(max_abs_diff<float>(out.frames[2], out.frames[0]),
+            1e-6 * reference);
+}
+
 TEST(FMCWRangeDopplerProcessorOpTest, FloatAndDoubleAgree) {
   const auto waveform = to_descriptor(sim::SimWaveform{});
   ParityConfig cfg;

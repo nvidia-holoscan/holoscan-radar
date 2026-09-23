@@ -3,9 +3,8 @@
 
 // Contract tests for VirtualArrayAssemblyOp (HSDK 5 Graph harness):
 // virtual layout, overlap policies, WireArrayGeometry emission,
-// opaque leading-batch rejection, [live] wavelength overrides (mid-stream
-// harness §1 deferred), cross-cutting input validation, and float/double
-// agreement.
+// opaque leading-batch rejection, [live] wavelength overrides, cross-cutting
+// input validation, and float/double agreement.
 
 #include <gtest/gtest.h>
 
@@ -16,6 +15,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -538,6 +538,59 @@ TEST(VirtualArrayAssemblyOp, WavelengthConfigurableFromParams) {
       build_rd_host<float>(shape), shape, separated_tx_positions(),
       default_rx_positions(), kCustomWl, OverlapPolicy::kKeepAll);
   EXPECT_NEAR(result.geometry.wavelength, kCustomWl, 1e-12);
+}
+
+TEST(VirtualArrayAssemblyOp, LiveWavelengthAppliesOneTickThenReverts) {
+  using Bank = holoscan::radar::testing::WireCaptureBank<WireArrayGeometry>;
+  Bank::reset();
+  const std::vector<int64_t> shape = {
+      kNumTx, kNumRx, kDoppler, kRange};
+  const auto input = [&] {
+    return to_device_tensor(build_rd_host<float>(shape), shape,
+                            complex_dtype<float>());
+  };
+  VirtualArrayAssemblyParams params;
+  params.tx_positions = separated_tx_positions();
+  params.rx_positions = default_rx_positions();
+  params.wavelength = kWavelength;
+  params.overlap_policy = OverlapPolicy::kKeepAll;
+  const auto result = holoscan::radar::testing::
+      run_exact_override_single_io_operator_graph_result<
+          VirtualArrayAssemblyOp<float>, double>(
+          {input(), input(), input()},
+          {std::nullopt, 2.0 * kWavelength, std::nullopt},
+          std::move(params), "rd_maps_out",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+            graph.add_flow(source->override_out, op->wavelength, queue);
+            graph.add_flow(source->out, op->rd_maps, queue);
+            graph.add_flow(op->rd_maps_out, sink->in, queue);
+            const auto geometry_sink =
+                graph.op<holoscan::radar::testing::
+                             WireCaptureOp<WireArrayGeometry>>(
+                    "geometry_sink");
+            graph.add_flow(op->array_geometry, geometry_sink->in, queue);
+          });
+  ASSERT_TRUE(result.plan_ok) << result.plan_json;
+  ASSERT_TRUE(result.diagnostics.empty());
+  ASSERT_EQ(result.frames.size(), 3U);
+
+  std::vector<WireArrayGeometry> captured;
+  {
+    const std::lock_guard lock(Bank::mutex);
+    captured = std::move(Bank::payloads);
+  }
+  ASSERT_EQ(captured.size(), 3U);
+  std::vector<double> wavelengths;
+  for (const auto& wire : captured) {
+    const auto geometry = from_wire(wire);
+    ASSERT_TRUE(geometry.has_value());
+    wavelengths.push_back(geometry->wavelength);
+  }
+  EXPECT_DOUBLE_EQ(wavelengths[0], kWavelength);
+  EXPECT_DOUBLE_EQ(wavelengths[1], 2.0 * kWavelength);
+  EXPECT_DOUBLE_EQ(wavelengths[2], kWavelength);
 }
 
 TEST(VirtualArrayAssemblyOp, FloatDoubleAgreement) {

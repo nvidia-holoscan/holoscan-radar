@@ -151,6 +151,8 @@ locking a contract, establish behavior for multiple targets and comb
 collisions in one range bin, guard-band loss, noise/clutter, and band-boundary
 crossings. Compare the usable velocity and detection performance against
 packed M-band DDM and external staggered-CRI or code-rotation observations.
+Also evaluate M+1 as an exact-bin layout for transmitter counts that do not
+divide the Doppler FFT length, such as three transmitters with a 256-point FFT.
 
 Implementation would affect `DDMCodeDescriptor`, dense and sparse demultiplex
 tables, `DDMPowerFoldOp` shape/index semantics, simulators, applications, and
@@ -158,40 +160,25 @@ cross-path tests. Do not introduce a generic `DDMFoldResolverOp` until a
 specific observable and resolution algorithm are selected. Keep `fold_idx`
 available for applications that resolve the ambiguity externally.
 
-### 4. Add code-aware DDM clutter suppression
+### 4. Evaluate sparse DDM recovery for nonlinear codes
 
-**Status:** corrected and deferred 2026-09-16; dense and sparse DDM v1
-explicitly do not support clutter filtering.
-
-The existing `ClutterFilterOp` is not valid after `DDMDenseDemultiplexOp`:
-demultiplexed outputs are already Doppler-domain maps, so mean subtraction acts
-across Doppler bins and creates a range-aligned pedestal. Applying that filter
-directly to coded pre-demux chirps is not equivalent either, while power folding
-concentrates zero-Doppler clutter into the folded zero bin. Both DDM workflows
-therefore currently require scenes where omitting clutter suppression is
-acceptable.
-
-Design a code-aware pre-demux or folded-domain suppression method and validate
-its Pfa/Pd impact before adding it to either workflow, or define a dedicated
-post-demux operator that notches physical zero velocity in the RD domain. Any
-new operator or parameter is a contract change.
-
-### 5. Extend sparse DDM beyond linear integer-bin codes
-
-**Status:** deferred 2026-09-09; dense DDM retains broader code support.
+**Status:** P3 research item deferred 2026-09-09; complete the sparse DDM
+application workflow before extending its supported code types.
 
 `DDMPowerFoldOp` and `DDMSparseDemultiplexOp` currently require a linear
-M-band code whose offsets map exactly to Doppler bins. Fractional-bin offsets
-and nonlinear codes reject. `DDMDenseDemultiplexOp` continues to support
-nonlinear full-axis correlation.
+M-band code whose offsets map exactly to Doppler bins. Nonlinear codes reject,
+while `DDMDenseDemultiplexOp` supports them through full-axis correlation.
 
-Fractional offsets require an interpolation/leakage model rather than the
-current exact gather table. Nonlinear codes require detection and sparse
-recovery definitions based on correlation, not band folding. Treat these as
-separate algorithm and contract extensions; retain dense-versus-sparse
-snapshot parity as the acceptance oracle wherever both paths are defined.
+Before changing the contract, identify a real sensor or waveform configuration
+that needs nonlinear codes and cannot reasonably use the dense path. Measure a
+per-detection correlation prototype against dense demultiplexing across useful
+detection densities. Continue only if it provides a meaningful compute or
+memory advantage; otherwise record the result and close the item as a no-go.
 
-### 6. Support frame-to-frame DDM code rotation
+If justified, define correlation-based detection and sparse recovery semantics
+and retain dense-versus-sparse snapshot parity as the acceptance oracle.
+
+### 5. Support frame-to-frame DDM code rotation
 
 **Status:** deferred 2026-09-09; `ddm_code` is static in all current DDM
 operators.
@@ -208,7 +195,7 @@ invalidate/reuse mapping and phase caches safely, and warn once per unseen
 configuration. It must also define how detections and `fold_idx` stay paired
 with the code that produced them.
 
-### 7. Add a sparse DDM application workflow
+### 6. Add a sparse DDM application workflow
 
 **Status:** deferred 2026-09-09; intentionally excluded from the first
 operator implementation.
@@ -255,25 +242,6 @@ aperture sizes, and float/double agreement. Any change must preserve invisible
 direction-cosine blanking, deterministic peak ordering, and both MUSIC and
 Root-MUSIC behavior.
 
-### Subspace model-order performance sweeps
-
-MUSIC and Root-MUSIC now measure fixed source counts 1, 2, and
-`min(4, num_channels - 1)` independently from their live-override matrices.
-ESPRIT also has model-order-dependent work but does not yet carry an equivalent
-sweep. Add estimator-specific fixed-order scenarios when its performance
-harness is next revised; do not multiply the full live-override matrix by every
-model order.
-
-## ESPRIT backlog
-
-_Original source: `operators/angle_estimation/esprit_estimator_op/OPEN_ITEMS.md`_
-
-### Estimator variants
-
-Version 1 implements LS-ESPRIT. TLS-ESPRIT and Unitary ESPRIT remain accuracy
-and performance follow-ups. The filled-URA 2-D path is landed; explicit
-two-pair non-ULA subarray specifications remain deferred.
-
 ## MUSIC backlog
 
 _Original source: `operators/angle_estimation/music_estimator_op/OPEN_ITEMS.md`_
@@ -298,11 +266,6 @@ precision.
 ## MVDR backlog
 
 _Original source: `operators/angle_estimation/mvdr_estimator_op/OPEN_ITEMS.md`_
-
-### Automatic diagonal-loading calibration
-
-Auto diagonal loading uses
-`1e-2 * trace(covariance) / num_channels`; the factor remains a first cut.
 
 ### Capon reduction performance
 
@@ -386,30 +349,6 @@ Before locking a contract, settle:
 Characterize realized Pfa at mask boundaries and ordinary map edges before
 implementation. Any new input is an additive contract change to
 `OPERATOR_API.md`.
-
-## Doppler-notch backlog
-
-_Original source: `operators/fmcw/doppler_notch_op/OPEN_ITEMS.md`_
-
-### 1. Determine whether the operator should emit a notch mask
-
-**Status:** deferred from the initial operator contract on 2026-09-16. The
-first pass emits only the filtered RD tensor.
-
-A hard or tapered post-Doppler notch creates a deterministic low-power region.
-CFAR training windows that cross its boundary may underestimate interference
-and raise realized Pfa. Before adding a public `notch_mask` output, measure
-hard-null and cosine-transition behavior at the notch interior and edges for
-CA, GO, SO, and OS CFAR. Compare against the existing pre-Doppler
-`ClutterFilterOp` methods so the decision is based on observed statistical
-impact rather than assuming post-Doppler filtering is unique.
-
-If a mask is justified, decide whether it marks only the full-rejection
-stopband or also some/all of the transition, whether it is a rank-1 Doppler
-mask or a broadcastable RD mask, and whether it is a causal sideband emitted
-before `rd_maps_out`. Coordinate the contract with
-`CFARDetectorOp`'s generic exclusion-mask investigation; do not add a
-notch-specific CFAR port.
 
 ## Doppler-processor backlog
 
@@ -551,92 +490,3 @@ hand-mirrored. Default CLI matches C++ (`--full` off). CFAR mid/large
 GO/SO/OS Monte Carlo cold builds remain `--full`-only on both sides.
 
 **Status:** open — decide later; do not invent a sync mechanism in the meantime.
-
-## Test and simulator backlog
-
-_Original source: `tests/OPEN_ITEMS.md`_
-
-### 1. MatX / GPU path for the analytic point-target simulator?
-
-**Open question (2026-07-19).** Should C++ demos synthesize ADC cubes on the
-GPU via MatX, instead of (or in addition to) the host STL
-`radar_common/sim/point_target_sim.hpp` path?
-
-**Context.**
-
-- `point_target_sim.hpp` is **host-only by design** (`STATUS.md` settled:
-  simulator + window generation). STL-only, no MatX/CUDA — so tests assert
-  against a signal model independent of the operator stack (`TESTING.md`
-  tautology guard; fixed `mt19937_64` seed → bit-identical cubes).
-- Python demos already synthesize on GPU (CuPy) and emit device tensors;
-  C++ demos still call host `simulate()` then upload.
-- Dense / MIMO cubes are large enough that host synthesis can matter for
-  demo cadence; operators themselves are not the bottleneck in those cases.
-
-**Constraints (do not silently violate).**
-
-- Do **not** replace or MatX-ify the shared SoT header used by unit /
-  integration tests. Ground truth must stay derived from the signal model,
-  not from MatX code under test.
-- A GPU path, if added, must mirror the same far-field dechirped formula and
-  noise-power convention; bit-identical noise vs host `mt19937_64` is not
-  required (CuPy already differs) unless someone explicitly needs cross-lang
-  cube dumps.
-
-**Candidate answers (not chosen).**
-
-1. **Status quo** — keep host SoT + host C++ demo sources; Python stays on
-   CuPy. Only revisit if profiling shows host sim blocking a target frame
-   period.
-2. **Demo-only MatX synthesizer** — e.g. `applications/common/...` or a
-   non-SoT helper that emits device tensors; tests keep calling
-   `point_target_sim.hpp`.
-3. **Shared MatX helper + host SoT** — same as (2), but factored for reuse
-   across C++ demos; still never the tautology source.
-
-**Interim.** Leave host SoT alone. Measure dense-SIMO / MIMO C++ host-sim
-cost before building a MatX path. Python CuPy already covers the “GPU-side
-demo sim” experiment on that side.
-
-**Status:** open — needs a deliberate pick (likely after a cheap timing
-diagnostic), not a contract blocker.
-
-### 2. Simulator should regenerate noise each frame
-
-**Status:** open — low-impact change; performance hit needs to be studied before landing.
-
-The host `point_target_sim.hpp` path draws noise once at construction with a
-fixed `mt19937_64` seed, so every frame gets identical noise. For demo realism
-the simulator should reseed or draw fresh noise on each `simulate()` call.
-
-**Constraints before landing.**
-
-- Unit / integration tests depend on bit-identical cubes across runs (fixed
-  seed is a tautology guard; see `TESTING.md`). The fresh-noise path must be
-  opt-in (e.g. a `per_frame_noise` flag or a separate entry point) so the
-  deterministic SoT header is untouched.
-- The Python / CuPy demo path already draws per-frame noise; the concern is
-  the C++ host path only.
-- Measure the host noise-generation cost at demo cube sizes (dense-SIMO / MIMO
-  xl) before landing — noise draw is O(N) random samples and may be negligible
-  relative to upload, or may matter at high frame rates.
-
-<!--
-Recently landed:
-- Mirror the operator tree under `tests/cpp/` (common/, fmcw/, detection/,
-  clustering/; integration label for cross-family tests).
-- Split `test_common.cpp` along `radar_common` layers into common/test_window,
-  test_descriptors, test_sdk, test_sim, test_tensor.
--->
-
-## Additional coverage identified during consolidation
-
-_Source directories: `tests/cpp/fmcw/`_
-
-### Remaining live-override coverage
-
-Add multi-tick Graph tests for `VirtualArrayAssemblyOp.wavelength` and
-`FMCWRangeDopplerProcessorOp.clutter_filter`. The former must verify that the
-emitted geometry matches the override for exactly one tick; the latter must
-exercise an override whose method changes the required clutter workspace and
-then verify reversion to Params on the following unmatched tick.
