@@ -31,28 +31,23 @@ class PyMVDREstimatorOp : public MVDREstimatorOp<T> {
  public:
   using MVDREstimatorOp<T>::MVDREstimatorOp;
 
-  PyMVDREstimatorOp(
-      Fragment* fragment, const py::args& args,
-      const ArrayGeometry& array_geometry = ArrayGeometry{},
-      const AngleConvention& angle_convention = AngleConvention{},
-      const std::vector<double>& az_coordinates = {},
-      const std::vector<double>& el_coordinates = {},
-      double diagonal_loading = -1.0,
-      int64_t max_sources = 1,
-      int64_t max_items = 16384,
-      int64_t max_az = 101,
-      int64_t max_el = 51,
-      int64_t max_channels = 16,
-      const std::string& name = "mvdr_estimator")
-      : MVDREstimatorOp<T>([&] {
-          MaxTensorExtents extents;
-          extents.max_items = max_items;
-          extents.max_az = max_az;
-          extents.max_el = max_el;
-          extents.max_sources = max_sources;
-          extents.max_channels = max_channels;
-          return extents;
-        }()) {
+  PyMVDREstimatorOp(Fragment* fragment, const py::args& args,
+                    const ArrayGeometry& array_geometry = ArrayGeometry{},
+                    const AngleConvention& angle_convention = AngleConvention{},
+                    const std::vector<double>& az_coordinates = {},
+                    const std::vector<double>& el_coordinates = {}, double diagonal_loading = -1.0,
+                    int64_t max_sources = 1, int64_t max_items = 16384, int64_t max_az = 101,
+                    int64_t max_el = 51, int64_t max_channels = 16,
+                    const std::string& name = "mvdr_estimator")
+  : MVDREstimatorOp<T>([&] {
+      MaxTensorExtents extents;
+      extents.max_items = max_items;
+      extents.max_az = max_az;
+      extents.max_el = max_el;
+      extents.max_sources = max_sources;
+      extents.max_channels = max_channels;
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -84,22 +79,16 @@ void bind_mvdr_estimator(py::module_& m, const char* class_name) {
       "diagonal_loading : float, optional\n"
       "max_sources : int, optional\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&, const ArrayGeometry&,
-                    const AngleConvention&, const std::vector<double>&,
-                    const std::vector<double>&, double, int64_t, int64_t,
-                    int64_t, int64_t, int64_t, const std::string&>(),
-           py::arg("fragment"),
-           py::arg("array_geometry") = ArrayGeometry{},
+      .def(py::init<Fragment*, const py::args&, const ArrayGeometry&, const AngleConvention&,
+                    const std::vector<double>&, const std::vector<double>&, double, int64_t,
+                    int64_t, int64_t, int64_t, int64_t, const std::string&>(),
+           py::arg("fragment"), py::arg("array_geometry") = ArrayGeometry{},
            py::arg("angle_convention") = AngleConvention{},
            py::arg("az_coordinates") = std::vector<double>{},
-           py::arg("el_coordinates") = std::vector<double>{},
-           py::arg("diagonal_loading") = -1.0,
-           py::arg("max_sources") = int64_t{1},
-           py::arg("max_items") = int64_t{16384},
-           py::arg("max_az") = int64_t{101},
-           py::arg("max_el") = int64_t{51},
-           py::arg("max_channels") = int64_t{16},
-           py::arg("name") = "mvdr_estimator")
+           py::arg("el_coordinates") = std::vector<double>{}, py::arg("diagonal_loading") = -1.0,
+           py::arg("max_sources") = int64_t{1}, py::arg("max_items") = int64_t{16384},
+           py::arg("max_az") = int64_t{101}, py::arg("max_el") = int64_t{51},
+           py::arg("max_channels") = int64_t{16}, py::arg("name") = "mvdr_estimator")
       .def("setup", &Op::setup, py::arg("spec"));
 }
 
@@ -113,8 +102,7 @@ PYBIND11_MODULE(_mvdr_estimator_op, m) {
   holoscan::radar::bind_mvdr_estimator<float>(m, "MVDREstimatorOpF32");
   holoscan::radar::bind_mvdr_estimator<double>(m, "MVDREstimatorOpF64");
 
-  m.def("retire_matx_solver_caches",
-        &holoscan::radar::retire_matx_solver_caches,
+  m.def("retire_matx_solver_caches", &holoscan::radar::retire_matx_solver_caches,
         "Destroy MatX eig/inv plan caches while CUDA is still alive. "
         "Register via install_matx_cache_atexit() after importing cupy.");
 }

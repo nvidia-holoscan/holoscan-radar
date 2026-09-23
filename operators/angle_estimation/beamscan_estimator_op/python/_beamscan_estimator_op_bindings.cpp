@@ -33,26 +33,22 @@ class PyBeamscanEstimatorOp : public BeamscanEstimatorOp<T> {
  public:
   using BeamscanEstimatorOp<T>::BeamscanEstimatorOp;
 
-  PyBeamscanEstimatorOp(
-      Fragment* fragment, const py::args& args,
-      const ArrayGeometry& array_geometry = ArrayGeometry{},
-      const AngleConvention& angle_convention = AngleConvention{},
-      const std::vector<double>& az_coordinates = {},
-      const std::vector<double>& el_coordinates = {},
-      const WindowSpec& array_taper = WindowSpec{},
-      PeakInterpolation peak_interpolation =
-          PeakInterpolation::kNone,
-      std::int64_t max_items = 16384,
-      std::int64_t max_az = 101,
-      std::int64_t max_el = 51,
-      const std::string& name = "beamscan_estimator")
-      : BeamscanEstimatorOp<T>([&] {
-          MaxTensorExtents extents;
-          extents.max_items = max_items;
-          extents.max_az = max_az;
-          extents.max_el = max_el;
-          return extents;
-        }()) {
+  PyBeamscanEstimatorOp(Fragment* fragment, const py::args& args,
+                        const ArrayGeometry& array_geometry = ArrayGeometry{},
+                        const AngleConvention& angle_convention = AngleConvention{},
+                        const std::vector<double>& az_coordinates = {},
+                        const std::vector<double>& el_coordinates = {},
+                        const WindowSpec& array_taper = WindowSpec{},
+                        PeakInterpolation peak_interpolation = PeakInterpolation::kNone,
+                        std::int64_t max_items = 16384, std::int64_t max_az = 101,
+                        std::int64_t max_el = 51, const std::string& name = "beamscan_estimator")
+  : BeamscanEstimatorOp<T>([&] {
+      MaxTensorExtents extents;
+      extents.max_items = max_items;
+      extents.max_az = max_az;
+      extents.max_el = max_el;
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -84,26 +80,16 @@ void bind_beamscan_estimator(py::module_& m, const char* class_name) {
       "array_taper : WindowSpec, optional\n"
       "peak_interpolation : PeakInterpolation, optional\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&,
-                    const ArrayGeometry&,
-                    const AngleConvention&,
-                    const std::vector<double>&,
-                    const std::vector<double>&,
-                    const WindowSpec&, PeakInterpolation,
-                    std::int64_t, std::int64_t,
-                    std::int64_t, const std::string&>(),
-           py::arg("fragment"),
-           py::arg("array_geometry") = ArrayGeometry{},
+      .def(py::init<Fragment*, const py::args&, const ArrayGeometry&, const AngleConvention&,
+                    const std::vector<double>&, const std::vector<double>&, const WindowSpec&,
+                    PeakInterpolation, std::int64_t, std::int64_t, std::int64_t,
+                    const std::string&>(),
+           py::arg("fragment"), py::arg("array_geometry") = ArrayGeometry{},
            py::arg("angle_convention") = AngleConvention{},
            py::arg("az_coordinates") = std::vector<double>{},
-           py::arg("el_coordinates") = std::vector<double>{},
-           py::arg("array_taper") = WindowSpec{},
-           py::arg("peak_interpolation") =
-               PeakInterpolation::kNone,
-           py::arg("max_items") = 16384,
-           py::arg("max_az") = 101,
-           py::arg("max_el") = 51,
-           py::arg("name") = "beamscan_estimator")
+           py::arg("el_coordinates") = std::vector<double>{}, py::arg("array_taper") = WindowSpec{},
+           py::arg("peak_interpolation") = PeakInterpolation::kNone, py::arg("max_items") = 16384,
+           py::arg("max_az") = 101, py::arg("max_el") = 51, py::arg("name") = "beamscan_estimator")
       .def("setup", &Op::setup, py::arg("spec"));
 }
 
@@ -114,8 +100,6 @@ void bind_beamscan_estimator(py::module_& m, const char* class_name) {
 PYBIND11_MODULE(_beamscan_estimator_op, m) {
   holoscan::radar::ensure_radar_arg_setters();
   m.doc() = "BeamscanEstimatorOp Python bindings";
-  holoscan::radar::bind_beamscan_estimator<float>(
-      m, "BeamscanEstimatorOpF32");
-  holoscan::radar::bind_beamscan_estimator<double>(
-      m, "BeamscanEstimatorOpF64");
+  holoscan::radar::bind_beamscan_estimator<float>(m, "BeamscanEstimatorOpF32");
+  holoscan::radar::bind_beamscan_estimator<double>(m, "BeamscanEstimatorOpF64");
 }

@@ -33,26 +33,20 @@ struct RankOneResidualScreenParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     RankOneResidualScreenParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.RankOneResidualScreenParams", 1),
-    holoscan::field<&RankOneResidualScreenParams::array_geometry>(
-        "array_geometry")
+    holoscan::param_schema("com.nvidia.holoscan.radar.RankOneResidualScreenParams", 1),
+    holoscan::field<&RankOneResidualScreenParams::array_geometry>("array_geometry")
         .description("Element positions and wavelength; live Exact override"),
-    holoscan::field<&RankOneResidualScreenParams::angle_convention>(
-        "angle_convention")
+    holoscan::field<&RankOneResidualScreenParams::angle_convention>("angle_convention")
         .description("Static convention of the input baseline angles"),
-    holoscan::field<&RankOneResidualScreenParams::residual_threshold>(
-        "residual_threshold")
+    holoscan::field<&RankOneResidualScreenParams::residual_threshold>("residual_threshold")
         .description("Rank-one residual threshold in [0,1]; static"));
 
-static_assert(
-    holoscan::param_schema_availability<RankOneResidualScreenParams>() ==
-        holoscan::ParamSchemaAvailability::kDeclared,
-    "HOLOSCAN_PARAM_SCHEMA must be in RankOneResidualScreenParams namespace");
+static_assert(holoscan::param_schema_availability<RankOneResidualScreenParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in RankOneResidualScreenParams namespace");
 
 template <typename T>
-class RankOneResidualScreenOp
-    : public holoscan::Operator<RankOneResidualScreenParams> {
+class RankOneResidualScreenOp : public holoscan::Operator<RankOneResidualScreenParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "RankOneResidualScreenOp supports float and double precision");
 
@@ -61,8 +55,7 @@ class RankOneResidualScreenOp
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> snapshot{"snapshot"};
   Input<Tensor> baseline_aoa{"baseline_aoa"};

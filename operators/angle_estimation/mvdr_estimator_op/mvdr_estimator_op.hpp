@@ -84,39 +84,30 @@ struct MVDRParams {
 };
 
 HOLOSCAN_PARAM_SCHEMA(
-    MVDRParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.MVDRParams", 2),
+    MVDRParams, holoscan::param_schema("com.nvidia.holoscan.radar.MVDRParams", 2),
     holoscan::field<&MVDRParams::array_geometry>("array_geometry")
-        .description(
-            "Element positions and wavelength; num_elements must match "
-            "snapshot channels"),
+        .description("Element positions and wavelength; num_elements must match "
+                     "snapshot channels"),
     holoscan::field<&MVDRParams::angle_convention>("angle_convention")
-        .description(
-            "Static AER labeling for the scan grid and DOA output "
-            "(default radar_boresight; no live port)"),
+        .description("Static AER labeling for the scan grid and DOA output "
+                     "(default radar_boresight; no live port)"),
     holoscan::field<&MVDRParams::az_coordinates>("az_coordinates")
-        .description(
-            "First scan-coordinate grid: azimuth radians for angular "
-            "conventions, or dimensionless u under direction_cosine; "
-            "required non-empty"),
+        .description("First scan-coordinate grid: azimuth radians for angular "
+                     "conventions, or dimensionless u under direction_cosine; "
+                     "required non-empty"),
     holoscan::field<&MVDRParams::el_coordinates>("el_coordinates")
-        .description(
-            "Second scan-coordinate grid: elevation radians for angular "
-            "conventions, or dimensionless v under direction_cosine; "
-            "required non-empty"),
+        .description("Second scan-coordinate grid: elevation radians for angular "
+                     "conventions, or dimensionless v under direction_cosine; "
+                     "required non-empty"),
     holoscan::field<&MVDRParams::diagonal_loading>("diagonal_loading")
-        .description(
-            "R + delta*I regularization; negative selects auto"),
+        .description("R + delta*I regularization; negative selects auto"),
     holoscan::field<&MVDRParams::max_sources>("max_sources")
-        .description(
-            "Capacity of doa_multi/source_count — Capon peaks to report"),
+        .description("Capacity of doa_multi/source_count — Capon peaks to report"),
     holoscan::field<&MVDRParams::spatial_smoothing>("spatial_smoothing")
-        .description(
-            "Per-aperture-axis sub-array counts on a filled ULA/URA "
-            "(empty = off)"),
+        .description("Per-aperture-axis sub-array counts on a filled ULA/URA "
+                     "(empty = off)"),
     holoscan::field<&MVDRParams::forward_backward>("forward_backward")
-        .description(
-            "Include conjugate-reversed looks when spatial_smoothing is set"));
+        .description("Include conjugate-reversed looks when spatial_smoothing is set"));
 
 static_assert(holoscan::param_schema_availability<MVDRParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -132,8 +123,7 @@ class MVDREstimatorOp : public holoscan::Operator<MVDRParams> {
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
   // Drain MatX solver plan caches + the global MemTracker once at graph stop,
   // while CUDA and the stable operator-owned solver buffers are still valid.
   // HSDK 5 still exposes OperatorBase::stop().

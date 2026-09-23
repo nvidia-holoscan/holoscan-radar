@@ -59,32 +59,26 @@ struct BeamscanParams {
   PeakInterpolation peak_interpolation{PeakInterpolation::kNone};
 };
 
-HOLOSCAN_PARAM_SCHEMA(
-    BeamscanParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.BeamscanParams", 2),
-    holoscan::field<&BeamscanParams::array_geometry>("array_geometry")
-        .description(
-            "Element positions and wavelength; num_elements must match "
-            "snapshot channels"),
-    holoscan::field<&BeamscanParams::angle_convention>("angle_convention")
-        .description(
-            "Static AER labeling for the scan grid and DOA output "
-            "(default radar_boresight; no live port)"),
-    holoscan::field<&BeamscanParams::az_coordinates>("az_coordinates")
-        .description(
-            "First scan-coordinate grid: azimuth radians for angular "
-            "conventions, or dimensionless u under direction_cosine; "
-            "required non-empty"),
-    holoscan::field<&BeamscanParams::el_coordinates>("el_coordinates")
-        .description(
-            "Second scan-coordinate grid: elevation radians for angular "
-            "conventions, or dimensionless v under direction_cosine; "
-            "required non-empty"),
-    holoscan::field<&BeamscanParams::array_taper>("array_taper")
-        .description("Amplitude taper across array elements"),
-    holoscan::field<&BeamscanParams::peak_interpolation>("peak_interpolation")
-        .description(
-            "Sub-grid peak refinement {none, parabolic}"));
+HOLOSCAN_PARAM_SCHEMA(BeamscanParams,
+                      holoscan::param_schema("com.nvidia.holoscan.radar.BeamscanParams", 2),
+                      holoscan::field<&BeamscanParams::array_geometry>("array_geometry")
+                          .description("Element positions and wavelength; num_elements must match "
+                                       "snapshot channels"),
+                      holoscan::field<&BeamscanParams::angle_convention>("angle_convention")
+                          .description("Static AER labeling for the scan grid and DOA output "
+                                       "(default radar_boresight; no live port)"),
+                      holoscan::field<&BeamscanParams::az_coordinates>("az_coordinates")
+                          .description("First scan-coordinate grid: azimuth radians for angular "
+                                       "conventions, or dimensionless u under direction_cosine; "
+                                       "required non-empty"),
+                      holoscan::field<&BeamscanParams::el_coordinates>("el_coordinates")
+                          .description("Second scan-coordinate grid: elevation radians for angular "
+                                       "conventions, or dimensionless v under direction_cosine; "
+                                       "required non-empty"),
+                      holoscan::field<&BeamscanParams::array_taper>("array_taper")
+                          .description("Amplitude taper across array elements"),
+                      holoscan::field<&BeamscanParams::peak_interpolation>("peak_interpolation")
+                          .description("Sub-grid peak refinement {none, parabolic}"));
 
 static_assert(holoscan::param_schema_availability<BeamscanParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -101,8 +95,7 @@ class BeamscanEstimatorOp : public holoscan::Operator<BeamscanParams> {
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> snapshot{"snapshot"};
   // Optional same-tick mask; Exact + SafeDefault admits an unwired port.

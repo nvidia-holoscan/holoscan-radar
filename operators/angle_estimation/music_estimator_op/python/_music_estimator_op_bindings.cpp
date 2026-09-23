@@ -31,30 +31,25 @@ class PyMUSICEstimatorOp : public MUSICEstimatorOp<T> {
  public:
   using MUSICEstimatorOp<T>::MUSICEstimatorOp;
 
-  PyMUSICEstimatorOp(
-      Fragment* fragment, const py::args& args,
-      const ArrayGeometry& array_geometry = ArrayGeometry{},
-      const AngleConvention& angle_convention = AngleConvention{},
-      const std::vector<double>& az_coordinates = {},
-      const std::vector<double>& el_coordinates = {},
-      int64_t num_sources = -1, double source_count_pfa = 1e-2,
-      int64_t max_sources = 4,
-      const std::vector<int64_t>& spatial_smoothing = {},
-      bool forward_backward = true,
-      int64_t max_items = 16384,
-      int64_t max_az = 101,
-      int64_t max_el = 51,
-      int64_t max_channels = 16,
-      const std::string& name = "music_estimator")
-      : MUSICEstimatorOp<T>([&] {
-          MaxTensorExtents extents;
-          extents.max_items = max_items;
-          extents.max_az = max_az;
-          extents.max_el = max_el;
-          extents.max_sources = max_sources;
-          extents.max_channels = max_channels;
-          return extents;
-        }()) {
+  PyMUSICEstimatorOp(Fragment* fragment, const py::args& args,
+                     const ArrayGeometry& array_geometry = ArrayGeometry{},
+                     const AngleConvention& angle_convention = AngleConvention{},
+                     const std::vector<double>& az_coordinates = {},
+                     const std::vector<double>& el_coordinates = {}, int64_t num_sources = -1,
+                     double source_count_pfa = 1e-2, int64_t max_sources = 4,
+                     const std::vector<int64_t>& spatial_smoothing = {},
+                     bool forward_backward = true, int64_t max_items = 16384, int64_t max_az = 101,
+                     int64_t max_el = 51, int64_t max_channels = 16,
+                     const std::string& name = "music_estimator")
+  : MUSICEstimatorOp<T>([&] {
+      MaxTensorExtents extents;
+      extents.max_items = max_items;
+      extents.max_az = max_az;
+      extents.max_el = max_el;
+      extents.max_sources = max_sources;
+      extents.max_channels = max_channels;
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -93,26 +88,19 @@ void bind_music_estimator(py::module_& m, const char* class_name) {
       "spatial_smoothing : list[int], optional\n"
       "forward_backward : bool, optional\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&, const ArrayGeometry&,
-                    const AngleConvention&, const std::vector<double>&,
-                    const std::vector<double>&, int64_t, double, int64_t,
-                    const std::vector<int64_t>&, bool, int64_t, int64_t,
-                    int64_t, int64_t, const std::string&>(),
-           py::arg("fragment"),
-           py::arg("array_geometry") = ArrayGeometry{},
+      .def(py::init<Fragment*, const py::args&, const ArrayGeometry&, const AngleConvention&,
+                    const std::vector<double>&, const std::vector<double>&, int64_t, double,
+                    int64_t, const std::vector<int64_t>&, bool, int64_t, int64_t, int64_t, int64_t,
+                    const std::string&>(),
+           py::arg("fragment"), py::arg("array_geometry") = ArrayGeometry{},
            py::arg("angle_convention") = AngleConvention{},
            py::arg("az_coordinates") = std::vector<double>{},
-           py::arg("el_coordinates") = std::vector<double>{},
-           py::arg("num_sources") = int64_t{-1},
-           py::arg("source_count_pfa") = 1e-2,
-           py::arg("max_sources") = int64_t{4},
+           py::arg("el_coordinates") = std::vector<double>{}, py::arg("num_sources") = int64_t{-1},
+           py::arg("source_count_pfa") = 1e-2, py::arg("max_sources") = int64_t{4},
            py::arg("spatial_smoothing") = std::vector<int64_t>{},
-           py::arg("forward_backward") = true,
-           py::arg("max_items") = int64_t{16384},
-           py::arg("max_az") = int64_t{101},
-           py::arg("max_el") = int64_t{51},
-           py::arg("max_channels") = int64_t{16},
-           py::arg("name") = "music_estimator")
+           py::arg("forward_backward") = true, py::arg("max_items") = int64_t{16384},
+           py::arg("max_az") = int64_t{101}, py::arg("max_el") = int64_t{51},
+           py::arg("max_channels") = int64_t{16}, py::arg("name") = "music_estimator")
       .def("setup", &Op::setup, py::arg("spec"));
 }
 
@@ -126,8 +114,7 @@ PYBIND11_MODULE(_music_estimator_op, m) {
   holoscan::radar::bind_music_estimator<float>(m, "MUSICEstimatorOpF32");
   holoscan::radar::bind_music_estimator<double>(m, "MUSICEstimatorOpF64");
 
-  m.def("retire_music_matx_caches",
-        &holoscan::radar::retire_music_matx_caches,
+  m.def("retire_music_matx_caches", &holoscan::radar::retire_music_matx_caches,
         "Destroy MatX eig plan cache while CUDA is still alive. "
         "Register via install_matx_cache_atexit() after importing cupy.");
 }

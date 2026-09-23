@@ -22,18 +22,24 @@ struct DeviceDirection {
 
 __device__ inline DeviceDirection screen_axis(SignedAxis axis) {
   switch (axis) {
-    case SignedAxis::kPlusX: return {1.0, 0.0, 0.0};
-    case SignedAxis::kMinusX: return {-1.0, 0.0, 0.0};
-    case SignedAxis::kPlusY: return {0.0, 1.0, 0.0};
-    case SignedAxis::kMinusY: return {0.0, -1.0, 0.0};
-    case SignedAxis::kPlusZ: return {0.0, 0.0, 1.0};
-    case SignedAxis::kMinusZ: return {0.0, 0.0, -1.0};
+    case SignedAxis::kPlusX:
+      return {1.0, 0.0, 0.0};
+    case SignedAxis::kMinusX:
+      return {-1.0, 0.0, 0.0};
+    case SignedAxis::kPlusY:
+      return {0.0, 1.0, 0.0};
+    case SignedAxis::kMinusY:
+      return {0.0, -1.0, 0.0};
+    case SignedAxis::kPlusZ:
+      return {0.0, 0.0, 1.0};
+    case SignedAxis::kMinusZ:
+      return {0.0, 0.0, -1.0};
   }
   return {1.0, 0.0, 0.0};
 }
 
-__device__ inline DeviceDirection screen_direction(
-    const AngleConvention& convention, double az, double el) {
+__device__ inline DeviceDirection screen_direction(const AngleConvention& convention, double az,
+                                                   double el) {
   if (convention.preset == AngleConventionPreset::kDirectionCosine) {
     const double r2 = az * az + el * el;
     return r2 <= 1.0 ? DeviceDirection{sqrt(fmax(0.0, 1.0 - r2)), az, el}
@@ -45,23 +51,19 @@ __device__ inline DeviceDirection screen_direction(
     el = -el;
   } else if (convention.preset == AngleConventionPreset::kGeodeticEnu) {
     az -= kHalfPi;
-  } else if (convention.preset ==
-             AngleConventionPreset::kPhysicsSpherical) {
+  } else if (convention.preset == AngleConventionPreset::kPhysicsSpherical) {
     el = kHalfPi - el;
   } else if (convention.preset == AngleConventionPreset::kCustom) {
     const auto b = screen_axis(convention.boresight_axis);
     const auto a = screen_axis(convention.azimuth_positive_axis);
     const auto e = screen_axis(convention.elevation_positive_axis);
-    const double eh = convention.elevation_reference ==
-                              ElevationReference::kZenith
-                          ? kHalfPi - el
-                          : el;
+    const double eh =
+        convention.elevation_reference == ElevationReference::kZenith ? kHalfPi - el : el;
     const double ce = cos(eh);
     const double se = sin(eh);
     const double ca = cos(az);
     const double sa = sin(az);
-    return {ce * ca * b.x + ce * sa * a.x + se * e.x,
-            ce * ca * b.y + ce * sa * a.y + se * e.y,
+    return {ce * ca * b.x + ce * sa * a.x + se * e.x, ce * ca * b.y + ce * sa * a.y + se * e.y,
             ce * ca * b.z + ce * sa * a.z + se * e.z};
   }
   const double ce = cos(el);
@@ -69,14 +71,13 @@ __device__ inline DeviceDirection screen_direction(
 }
 
 template <typename T>
-__global__ void residual_screen_kernel(
-    const cuda::std::complex<T>* snapshot, const T* aoa,
-    const unsigned char* valid, const double* positions, int64_t num_items,
-    int64_t channels, int64_t snapshots, double wavelength,
-    AngleConvention convention, T threshold, T* scores,
-    unsigned char* selected) {
-  const int64_t item = static_cast<int64_t>(blockIdx.x) * blockDim.x +
-                       static_cast<int64_t>(threadIdx.x);
+__global__ void residual_screen_kernel(const cuda::std::complex<T>* snapshot, const T* aoa,
+                                       const unsigned char* valid, const double* positions,
+                                       int64_t num_items, int64_t channels, int64_t snapshots,
+                                       double wavelength, AngleConvention convention, T threshold,
+                                       T* scores, unsigned char* selected) {
+  const int64_t item =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + static_cast<int64_t>(threadIdx.x);
   if (item >= num_items) {
     return;
   }
@@ -110,10 +111,8 @@ __global__ void residual_screen_kernel(
       const double xr = static_cast<double>(x.real());
       const double xi = static_cast<double>(x.imag());
       total += xr * xr + xi * xi;
-      const double phase = wave_number *
-                           (positions[c * 3] * d.x +
-                            positions[c * 3 + 1] * d.y +
-                            positions[c * 3 + 2] * d.z);
+      const double phase = wave_number * (positions[c * 3] * d.x + positions[c * 3 + 1] * d.y +
+                                          positions[c * 3 + 2] * d.z);
       const double cr = cos(phase);
       const double ci = -sin(phase);
       sum_re += cr * xr - ci * xi;
@@ -133,12 +132,11 @@ __global__ void residual_screen_kernel(
 }
 
 template <typename T>
-__global__ void compact_screen_kernel(
-    const cuda::std::complex<T>* snapshot, const unsigned char* valid,
-    const unsigned char* selected, const uint32_t* offsets,
-    int64_t num_items, int64_t channels, int64_t snapshots,
-    cuda::std::complex<T>* snapshot_out, unsigned char* valid_out,
-    int64_t* selected_idx) {
+__global__ void compact_screen_kernel(const cuda::std::complex<T>* snapshot,
+                                      const unsigned char* valid, const unsigned char* selected,
+                                      const uint32_t* offsets, int64_t num_items, int64_t channels,
+                                      int64_t snapshots, cuda::std::complex<T>* snapshot_out,
+                                      unsigned char* valid_out, int64_t* selected_idx) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items || selected[item] == 0) {
     return;
@@ -147,14 +145,11 @@ __global__ void compact_screen_kernel(
   if (threadIdx.x == 0) {
     selected_idx[dst_item] = item;
   }
-  for (int64_t i = threadIdx.x; i < channels * snapshots;
-       i += blockDim.x) {
-    snapshot_out[dst_item * channels * snapshots + i] =
-        snapshot[item * channels * snapshots + i];
+  for (int64_t i = threadIdx.x; i < channels * snapshots; i += blockDim.x) {
+    snapshot_out[dst_item * channels * snapshots + i] = snapshot[item * channels * snapshots + i];
   }
   for (int64_t s = threadIdx.x; s < snapshots; s += blockDim.x) {
-    valid_out[dst_item * snapshots + s] =
-        valid == nullptr ? 1 : valid[item * snapshots + s];
+    valid_out[dst_item * snapshots + s] = valid == nullptr ? 1 : valid[item * snapshots + s];
   }
 }
 

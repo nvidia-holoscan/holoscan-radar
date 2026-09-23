@@ -76,53 +76,41 @@ struct PhaseShiftBeamformerParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     PhaseShiftBeamformerParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.PhaseShiftBeamformerParams", 2),
-    holoscan::field<&PhaseShiftBeamformerParams::array_geometry>(
-        "array_geometry")
-        .description(
-            "Element positions and wavelength; num_elements must match "
-            "rd_maps channel axis"),
-    holoscan::field<&PhaseShiftBeamformerParams::angle_convention>(
-        "angle_convention")
-        .description(
-            "Boundary AER labeling for scan grid and beam axes; defaults to "
-            "radar_boresight (STATIC)"),
+    holoscan::param_schema("com.nvidia.holoscan.radar.PhaseShiftBeamformerParams", 2),
+    holoscan::field<&PhaseShiftBeamformerParams::array_geometry>("array_geometry")
+        .description("Element positions and wavelength; num_elements must match "
+                     "rd_maps channel axis"),
+    holoscan::field<&PhaseShiftBeamformerParams::angle_convention>("angle_convention")
+        .description("Boundary AER labeling for scan grid and beam axes; defaults to "
+                     "radar_boresight (STATIC)"),
     holoscan::field<&PhaseShiftBeamformerParams::az_coordinates>("az_coordinates")
-        .description(
-            "First scan-coordinate grid: azimuth radians for angular "
-            "conventions, or dimensionless u under direction_cosine"),
+        .description("First scan-coordinate grid: azimuth radians for angular "
+                     "conventions, or dimensionless u under direction_cosine"),
     holoscan::field<&PhaseShiftBeamformerParams::el_coordinates>("el_coordinates")
-        .description(
-            "Second scan-coordinate grid: elevation radians for angular "
-            "conventions, or dimensionless v under direction_cosine; size-1 "
-            "yields a 1-D azimuth scan"),
+        .description("Second scan-coordinate grid: elevation radians for angular "
+                     "conventions, or dimensionless v under direction_cosine; size-1 "
+                     "yields a 1-D azimuth scan"),
     holoscan::field<&PhaseShiftBeamformerParams::array_taper>("array_taper")
-        .description(
-            "Amplitude taper across elements for spatial sidelobe control"));
+        .description("Amplitude taper across elements for spatial sidelobe control"));
 
-static_assert(
-    holoscan::param_schema_availability<PhaseShiftBeamformerParams>() ==
-        holoscan::ParamSchemaAvailability::kDeclared,
-    "HOLOSCAN_PARAM_SCHEMA must be in PhaseShiftBeamformerParams's "
-    "namespace");
+static_assert(holoscan::param_schema_availability<PhaseShiftBeamformerParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in PhaseShiftBeamformerParams's "
+              "namespace");
 
 template <typename T>
-class PhaseShiftBeamformerOp
-    : public holoscan::Operator<PhaseShiftBeamformerParams> {
+class PhaseShiftBeamformerOp : public holoscan::Operator<PhaseShiftBeamformerParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "PhaseShiftBeamformerOp supports float and double "
                 "precision");
 
  public:
   // Required: sizes the rda_cube Tensor pool at setup().
-  explicit PhaseShiftBeamformerOp(
-      const MaxTensorExtents& extents);
+  explicit PhaseShiftBeamformerOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> rd_maps{"rd_maps"};
   Output<Tensor> rda_cube{"rda_cube"};

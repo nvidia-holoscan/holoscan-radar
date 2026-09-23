@@ -58,8 +58,7 @@ expected<void, Error> fail_runtime(const std::string& message) {
   return make_unexpected(Error{ErrorCode::kFailure, message});
 }
 
-std::array<int64_t, 2> normalize_snapshot_window(
-    const std::vector<int64_t>& window) {
+std::array<int64_t, 2> normalize_snapshot_window(const std::vector<int64_t>& window) {
   std::array<int64_t, 2> normalized{};
   if (window.empty()) {
     normalized = {0, 0};
@@ -73,8 +72,7 @@ std::array<int64_t, 2> normalize_snapshot_window(
         "(doppler, range)");
   }
   if (normalized[0] < 0 || normalized[1] < 0) {
-    throw std::invalid_argument(
-        "SnapshotGatherOp: snapshot_window half-extents must be >= 0");
+    throw std::invalid_argument("SnapshotGatherOp: snapshot_window half-extents must be >= 0");
   }
   return normalized;
 }
@@ -100,21 +98,17 @@ struct SnapshotGatherStagePlan {
 };
 
 expected<SnapshotGatherStageConfig, Error> resolve_params(
-    Input<SnapshotWindowOverride>& window_port,
-    const SnapshotGatherParams& pinned) {
+    Input<SnapshotWindowOverride>& window_port, const SnapshotGatherParams& pinned) {
   SnapshotWindowOverride seed;
   try {
     const auto normalized = normalize_snapshot_window(pinned.snapshot_window);
     seed = {normalized[0], normalized[1]};
   } catch (const std::invalid_argument& e) {
-    return make_unexpected(
-        Error{ErrorCode::kInvalidArgument, e.what()});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument, e.what()});
   }
-  HOLOSCAN_TRY(auto window,
-               resolve_live_override(window_port, seed));
+  HOLOSCAN_TRY(auto window, resolve_live_override(window_port, seed));
   try {
-    const auto normalized =
-        normalize_snapshot_window({window.doppler, window.range});
+    const auto normalized = normalize_snapshot_window({window.doppler, window.range});
     return SnapshotGatherStageConfig{
         .doppler_half = normalized[0],
         .range_half = normalized[1],
@@ -122,104 +116,84 @@ expected<SnapshotGatherStageConfig, Error> resolve_params(
         .range_edge = pinned.range_edge,
     };
   } catch (const std::invalid_argument& e) {
-    return make_unexpected(
-        Error{ErrorCode::kInvalidArgument, e.what()});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument, e.what()});
   }
 }
 
 expected<SnapshotGatherStagePlan, Error> build_snapshot_gather_stage_plan(
-    const Tensor& rd, const Tensor& idx, SnapshotGatherStageConfig stage,
-    int64_t max_detections, int64_t max_channels, int64_t max_snapshots) {
+    const Tensor& rd, const Tensor& idx, SnapshotGatherStageConfig stage, int64_t max_detections,
+    int64_t max_channels, int64_t max_snapshots) {
   const auto& idx_shape = idx.shape();
   if (idx_shape.size() != 2U || idx_shape[1] < 2) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": detection_idx must have shape "
-            "(num_detections, 2 [+ n_batch])"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 std::string(kOpName) + ": detection_idx must have shape "
+                                                        "(num_detections, 2 [+ n_batch])"});
   }
   const int64_t num_detections = idx_shape[0];
   if (max_detections > 0 && num_detections > max_detections) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": detection_idx rows (" +
-            std::to_string(num_detections) +
-            ") exceed MaxTensorExtents max_detections/max_items (" +
-            std::to_string(max_detections) + ")"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 std::string(kOpName) + ": detection_idx rows (" +
+                                     std::to_string(num_detections) +
+                                     ") exceed MaxTensorExtents max_detections/max_items (" +
+                                     std::to_string(max_detections) + ")"});
   }
   const int64_t idx_cols = idx_shape[1];
   const int64_t n_preserved = idx_cols - 2;
   if (n_preserved > detail::kMaxSnapshotPreservedBatchDims) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": too many preserved batch dims in detection_idx"});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              std::string(kOpName) + ": too many preserved batch dims in detection_idx"});
   }
 
   const auto& rd_shape = rd.shape();
   if (rd_shape.size() < 3U) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": rd_maps must end with "
-            "(num_channels, num_doppler, num_range)"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 std::string(kOpName) + ": rd_maps must end with "
+                                                        "(num_channels, num_doppler, num_range)"});
   }
   const int64_t num_range = rd_shape[rd_shape.size() - 1U];
   const int64_t num_doppler = rd_shape[rd_shape.size() - 2U];
   const int64_t num_channels = rd_shape[rd_shape.size() - 3U];
   if (num_channels <= 0 || num_doppler <= 0 || num_range <= 0) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": rd_maps trailing axes must be positive"});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              std::string(kOpName) + ": rd_maps trailing axes must be positive"});
   }
-  std::vector<int64_t> leading_dims(
-      rd_shape.begin(), rd_shape.end() - 3);
+  std::vector<int64_t> leading_dims(rd_shape.begin(), rd_shape.end() - 3);
   if (static_cast<int64_t>(leading_dims.size()) != n_preserved) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": rd_maps leading rank must match detection_idx "
-            "preserved batch columns"});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, std::string(kOpName) +
+                                               ": rd_maps leading rank must match detection_idx "
+                                               "preserved batch columns"});
   }
   if (max_channels > 0 && num_channels > max_channels) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": rd_maps num_channels exceeds "
-            "MaxTensorExtents.max_channels"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument, std::string(kOpName) +
+                                                                  ": rd_maps num_channels exceeds "
+                                                                  "MaxTensorExtents.max_channels"});
   }
 
-  constexpr int64_t kMaxHalf =
-      (std::numeric_limits<int64_t>::max() - 1) / 2;
+  constexpr int64_t kMaxHalf = (std::numeric_limits<int64_t>::max() - 1) / 2;
   if (stage.doppler_half > kMaxHalf || stage.range_half > kMaxHalf) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": snapshot_window is too large"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 std::string(kOpName) + ": snapshot_window is too large"});
   }
   const int64_t doppler_len = 2 * stage.doppler_half + 1;
   const int64_t range_len = 2 * stage.range_half + 1;
-  if ((stage.doppler_edge == SnapshotEdgeMode::kShift &&
-       doppler_len > num_doppler) ||
-      (stage.range_edge == SnapshotEdgeMode::kShift &&
-       range_len > num_range)) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": shift window length must not exceed its rd_maps axis"});
+  if ((stage.doppler_edge == SnapshotEdgeMode::kShift && doppler_len > num_doppler) ||
+      (stage.range_edge == SnapshotEdgeMode::kShift && range_len > num_range)) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              std::string(kOpName) + ": shift window length must not exceed its rd_maps axis"});
   }
   if (doppler_len > std::numeric_limits<int64_t>::max() / range_len) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": snapshot_window product is too large"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 std::string(kOpName) + ": snapshot_window product is too large"});
   }
   const int64_t num_snapshots = doppler_len * range_len;
   if (max_snapshots > 0 && num_snapshots > max_snapshots) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": snapshot count exceeds "
-            "MaxTensorExtents.max_snapshots"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 std::string(kOpName) + ": snapshot count exceeds "
+                                                        "MaxTensorExtents.max_snapshots"});
   }
   return SnapshotGatherStagePlan{
       .stage = stage,
@@ -235,63 +209,52 @@ expected<SnapshotGatherStagePlan, Error> build_snapshot_gather_stage_plan(
   };
 }
 
-expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
-                                    const char* what) {
+expected<void*, Error> writable_ptr(holoscan::Tensor& tensor, const char* what) {
   auto mut = tensor.mutable_data();
   if (!mut) {
-    return make_unexpected(Error{
-        ErrorCode::kFailure,
-        std::string(kOpName) + ": " + what + " is not writable: " +
-            mut.error().message});
+    return make_unexpected(
+        Error{ErrorCode::kFailure,
+              std::string(kOpName) + ": " + what + " is not writable: " + mut.error().message});
   }
   return *mut;
 }
 
-expected<void, Error> prepare_gather_workspace(
-    detail::SnapshotGatherState& state,
-    const SnapshotGatherStagePlan& plan, const Tensor& idx,
-    cudaStream_t stream) {
+expected<void, Error> prepare_gather_workspace(detail::SnapshotGatherState& state,
+                                               const SnapshotGatherStagePlan& plan,
+                                               const Tensor& idx, cudaStream_t stream) {
   if (state.batch_linear_capacity < plan.num_detections) {
-    state.batch_linear =
-        make_device_tensor({plan.num_detections}, kInt64Dtype);
+    state.batch_linear = make_device_tensor({plan.num_detections}, kInt64Dtype);
     state.batch_linear_capacity = plan.num_detections;
   }
   if (plan.n_preserved > 0) {
-    HOLOSCAN_TRY(auto leading_ptr,
-                 writable_ptr(*state.leading_dims, "leading_dims"));
+    HOLOSCAN_TRY(auto leading_ptr, writable_ptr(*state.leading_dims, "leading_dims"));
     if (cudaMemcpyAsync(leading_ptr, plan.leading_dims.data(),
-                        plan.leading_dims.size() * sizeof(int64_t),
-                        cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-      return fail_runtime(
-          "SnapshotGatherOp: leading-dims H2D copy failed");
+                        plan.leading_dims.size() * sizeof(int64_t), cudaMemcpyHostToDevice,
+                        stream) != cudaSuccess) {
+      return fail_runtime("SnapshotGatherOp: leading-dims H2D copy failed");
     }
   }
 
-  HOLOSCAN_TRY(auto batch_ptr,
-               writable_ptr(*state.batch_linear, "batch_linear"));
-  HOLOSCAN_TRY(auto error_ptr,
-               writable_ptr(*state.error_flag, "error_flag"));
+  HOLOSCAN_TRY(auto batch_ptr, writable_ptr(*state.batch_linear, "batch_linear"));
+  HOLOSCAN_TRY(auto error_ptr, writable_ptr(*state.error_flag, "error_flag"));
   if (cudaMemsetAsync(error_ptr, 0, sizeof(int), stream) != cudaSuccess) {
     return fail_runtime("SnapshotGatherOp: error-flag clear failed");
   }
   try {
     detail::launch_batch_linear(
-        static_cast<const int64_t*>(idx.data()), plan.num_detections,
-        plan.idx_cols, plan.n_preserved,
-        plan.n_preserved > 0
-            ? static_cast<const int64_t*>(state.leading_dims->data())
-            : nullptr,
-        plan.num_doppler, plan.num_range,
-        static_cast<int64_t*>(batch_ptr), static_cast<int*>(error_ptr),
-        stream);
+        static_cast<const int64_t*>(idx.data()), plan.num_detections, plan.idx_cols,
+        plan.n_preserved,
+        plan.n_preserved > 0 ? static_cast<const int64_t*>(state.leading_dims->data()) : nullptr,
+        plan.num_doppler, plan.num_range, static_cast<int64_t*>(batch_ptr),
+        static_cast<int*>(error_ptr), stream);
     check_cuda("batch linear kernel", kOpName);
   } catch (const std::runtime_error& e) {
     return fail_runtime(e.what());
   }
 
   int host_error = 0;
-  if (cudaMemcpyAsync(&host_error, state.error_flag->data(), sizeof(int),
-                      cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
+  if (cudaMemcpyAsync(&host_error, state.error_flag->data(), sizeof(int), cudaMemcpyDeviceToHost,
+                      stream) != cudaSuccess) {
     return fail_runtime("SnapshotGatherOp: error-flag D2H failed");
   }
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
@@ -311,26 +274,22 @@ expected<void, Error> prepare_gather_workspace(
 }
 
 template <typename T>
-expected<void, Error> run_snapshot_gather(
-    const Tensor& rd, const Tensor& idx,
-    const SnapshotGatherStagePlan& plan,
-    const detail::SnapshotGatherState& state, void* snapshot_ptr,
-    void* valid_ptr, std::size_t snapshot_bytes, cudaStream_t stream) {
-  if (cudaMemsetAsync(snapshot_ptr, 0, snapshot_bytes, stream) !=
-      cudaSuccess) {
+expected<void, Error> run_snapshot_gather(const Tensor& rd, const Tensor& idx,
+                                          const SnapshotGatherStagePlan& plan,
+                                          const detail::SnapshotGatherState& state,
+                                          void* snapshot_ptr, void* valid_ptr,
+                                          std::size_t snapshot_bytes, cudaStream_t stream) {
+  if (cudaMemsetAsync(snapshot_ptr, 0, snapshot_bytes, stream) != cudaSuccess) {
     return fail_runtime("SnapshotGatherOp: snapshot zero failed");
   }
   try {
     detail::launch_gather_snapshots<T>(
         static_cast<const cuda::std::complex<T>*>(rd.data()),
-        static_cast<const int64_t*>(idx.data()), plan.num_detections,
-        plan.idx_cols, plan.n_preserved,
-        static_cast<const int64_t*>(state.batch_linear->data()),
-        plan.num_channels, plan.num_doppler, plan.num_range,
-        plan.stage.doppler_half, plan.stage.range_half,
-        plan.stage.doppler_edge, plan.stage.range_edge,
-        plan.num_snapshots, plan.slice_elems,
-        static_cast<cuda::std::complex<T>*>(snapshot_ptr),
+        static_cast<const int64_t*>(idx.data()), plan.num_detections, plan.idx_cols,
+        plan.n_preserved, static_cast<const int64_t*>(state.batch_linear->data()),
+        plan.num_channels, plan.num_doppler, plan.num_range, plan.stage.doppler_half,
+        plan.stage.range_half, plan.stage.doppler_edge, plan.stage.range_edge, plan.num_snapshots,
+        plan.slice_elems, static_cast<cuda::std::complex<T>*>(snapshot_ptr),
         static_cast<uint8_t*>(valid_ptr), stream);
     check_cuda("gather snapshots kernel", kOpName);
   } catch (const std::runtime_error& e) {
@@ -342,41 +301,28 @@ expected<void, Error> run_snapshot_gather(
 }  // namespace
 
 template <typename T>
-SnapshotGatherOp<T>::SnapshotGatherOp(
-    const MaxTensorExtents& extents)
-    : state_(std::make_shared<detail::SnapshotGatherState>()) {  // NOLINT
-  state_->leading_dims = make_device_tensor(
-      {detail::kMaxSnapshotPreservedBatchDims}, kInt64Dtype);
+SnapshotGatherOp<T>::SnapshotGatherOp(const MaxTensorExtents& extents)
+: state_(std::make_shared<detail::SnapshotGatherState>()) {  // NOLINT
+  state_->leading_dims = make_device_tensor({detail::kMaxSnapshotPreservedBatchDims}, kInt64Dtype);
   state_->error_flag = make_device_tensor({1}, kInt32Dtype);
 
-  const bool has_det = extents.max_detections.has_value() ||
-                       extents.max_items.has_value();
-  if (!has_det && !extents.max_channels.has_value() &&
-      !extents.max_snapshots.has_value()) {
+  const bool has_det = extents.max_detections.has_value() || extents.max_items.has_value();
+  if (!has_det && !extents.max_channels.has_value() && !extents.max_snapshots.has_value()) {
     return;  // Python / non-pooled: leave byte spans at 0.
   }
   const char* who = "SnapshotGatherOp";
-  const std::int64_t max_det =
-      extents.max_detections.has_value()
-          ? require_extent(extents.max_detections,
-                           "max_detections", who)
-          : require_extent(extents.max_items,
-                           "max_items", who);
-  const std::int64_t max_ch =
-      require_extent(extents.max_channels,
-                     "max_channels", who);
-  const std::int64_t max_snap =
-      require_extent(extents.max_snapshots,
-                     "max_snapshots", who);
+  const std::int64_t max_det = extents.max_detections.has_value()
+                                   ? require_extent(extents.max_detections, "max_detections", who)
+                                   : require_extent(extents.max_items, "max_items", who);
+  const std::int64_t max_ch = require_extent(extents.max_channels, "max_channels", who);
+  const std::int64_t max_snap = require_extent(extents.max_snapshots, "max_snapshots", who);
   max_detections_ = max_det;
   max_channels_ = max_ch;
   max_snapshots_ = max_snap;
   state_->batch_linear = make_device_tensor({max_det}, kInt64Dtype);
   state_->batch_linear_capacity = max_det;
-  snapshot_max_byte_span_ = byte_span_complex_cube<T>(
-      {max_det, max_ch, max_snap}, who);
-  is_valid_max_byte_span_ = byte_span_elems(
-      product_extents({max_det, max_snap}, who), 1U, who);
+  snapshot_max_byte_span_ = byte_span_complex_cube<T>({max_det, max_ch, max_snap}, who);
+  is_valid_max_byte_span_ = byte_span_elems(product_extents({max_det, max_snap}, who), 1U, who);
 }
 
 template <typename T>
@@ -390,12 +336,8 @@ void SnapshotGatherOp<T>::setup(OperatorSpec& spec) {
   };
   spec.input(rd_maps).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.input(detection_idx).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.output(snapshot)
-      .produces_tensor(pooled_tensor_output(
-          kDevice, 3U, snapshot_max_byte_span_));
-  spec.output(is_valid)
-      .produces_tensor(pooled_tensor_output(
-          kDevice, 2U, is_valid_max_byte_span_));
+  spec.output(snapshot).produces_tensor(pooled_tensor_output(kDevice, 3U, snapshot_max_byte_span_));
+  spec.output(is_valid).produces_tensor(pooled_tensor_output(kDevice, 2U, is_valid_max_byte_span_));
 
   // [live] Exact overrides, Params order.
   spec.input(snapshot_window).optional().queue_depth(2U);
@@ -405,8 +347,8 @@ template <typename T>
 Contract SnapshotGatherOp<T>::contract() const {
   Contract result;
   result
-      .trigger(OnAligned{.ports = ports(rd_maps, detection_idx),
-                         .window = std::chrono::nanoseconds{0}})
+      .trigger(
+          OnAligned{.ports = ports(rd_maps, detection_idx), .window = std::chrono::nanoseconds{0}})
       .input(rd_maps, Exact{})
       .input(detection_idx, Exact{});
   add_live_override_to_contract(result, snapshot_window);
@@ -414,8 +356,7 @@ Contract SnapshotGatherOp<T>::contract() const {
 }
 
 template <typename T>
-expected<void, Error> SnapshotGatherOp<T>::compute(
-    ExecutionContext& context) {
+expected<void, Error> SnapshotGatherOp<T>::compute(ExecutionContext& context) {
   // Receive and validate inputs before deriving any tick-local state.
   // Receive and classify the two aligned data-plane tensors.
   HOLOSCAN_TRY(auto rd, receive_tensor(rd_maps, kOpName));
@@ -434,27 +375,21 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
   // Merge the Exact live window onto Params, then validate this tick's
   // named axes and derive output geometry.
   // Resolve tick-local configuration; Exact misses revert to pinned Params.
-  HOLOSCAN_TRY(
-      auto stage,
-      resolve_params(snapshot_window,
-                     context.params<SnapshotGatherParams>()));
+  HOLOSCAN_TRY(auto stage, resolve_params(snapshot_window, context.params<SnapshotGatherParams>()));
   // Build and validate the bounded execution plan for this input shape.
-  HOLOSCAN_TRY(
-      auto plan,
-      build_snapshot_gather_stage_plan(
-          rd, idx, std::move(stage), max_detections_, max_channels_,
-          max_snapshots_));
+  HOLOSCAN_TRY(auto plan,
+               build_snapshot_gather_stage_plan(rd, idx, std::move(stage), max_detections_,
+                                                max_channels_, max_snapshots_));
 
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
-    return make_unexpected(Error{ErrorCode::kNotSupported,
-                                 "SnapshotGatherOp: no CUDA compute stream"});
+    return make_unexpected(
+        Error{ErrorCode::kNotSupported, "SnapshotGatherOp: no CUDA compute stream"});
   }
 
-  const std::vector<int64_t> snap_shape = {
-      plan.num_detections, plan.num_channels, plan.num_snapshots};
-  const std::vector<int64_t> valid_shape = {
-      plan.num_detections, plan.num_snapshots};
+  const std::vector<int64_t> snap_shape = {plan.num_detections, plan.num_channels,
+                                           plan.num_snapshots};
+  const std::vector<int64_t> valid_shape = {plan.num_detections, plan.num_snapshots};
   const DLDataType snap_dtype = complex_dtype<T>();
 
   // Allocate exact-sized outputs before launching device work.
@@ -465,17 +400,14 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
       return {};
     };
     HOLOSCAN_TRY(auto snap_loan,
-                 prepare_device_tensor(snapshot, context, snap_shape,
-                                      snap_dtype, noop));
+                 prepare_device_tensor(snapshot, context, snap_shape, snap_dtype, noop));
     HOLOSCAN_TRY(auto valid_loan,
-                 prepare_device_tensor(is_valid, context, valid_shape,
-                                      kMaskDtype, noop));
+                 prepare_device_tensor(is_valid, context, valid_shape, kMaskDtype, noop));
     // Publish the optional sideband first so a downstream Exact selector sees
     // it when snapshot triggers. A declined optional emit remains harmless.
     // Publish coherent outputs in dependency order and retain borrowed inputs.
     (void)emit_prepared_tensor(is_valid, context, std::move(valid_loan));
-    HOLOSCAN_TRY(
-        emit_prepared_tensor(snapshot, context, std::move(snap_loan)));
+    HOLOSCAN_TRY(emit_prepared_tensor(snapshot, context, std::move(snap_loan)));
     retained_rd_maps_ = std::move(rd);
     retained_detection_idx_ = std::move(idx);
     return {};
@@ -486,13 +418,13 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
 
   // One kernel fills the required snapshot and optional/always mask. Prepare
   // both loans before publication so downstream cannot observe half a pair.
-  auto snap_loan = snapshot.allocate_tensor(
-      TensorLoanRequest{.shape = snap_shape, .dtype = snap_dtype});
+  auto snap_loan =
+      snapshot.allocate_tensor(TensorLoanRequest{.shape = snap_shape, .dtype = snap_dtype});
   if (!snap_loan) {
     return make_unexpected(std::move(snap_loan).error());
   }
-  auto valid_loan = is_valid.allocate_tensor(
-      TensorLoanRequest{.shape = valid_shape, .dtype = kMaskDtype});
+  auto valid_loan =
+      is_valid.allocate_tensor(TensorLoanRequest{.shape = valid_shape, .dtype = kMaskDtype});
   if (!valid_loan) {
     return make_unexpected(std::move(valid_loan).error());
   }
@@ -506,9 +438,8 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
     return make_unexpected(std::move(valid_writer).error());
   }
 
-  HOLOSCAN_TRY(run_snapshot_gather<T>(
-      rd, idx, plan, *state_, snap_writer->data(), valid_writer->data(),
-      snap_writer->byte_size(), stream));
+  HOLOSCAN_TRY(run_snapshot_gather<T>(rd, idx, plan, *state_, snap_writer->data(),
+                                      valid_writer->data(), snap_writer->byte_size(), stream));
 
   auto snap_committed = std::move(*snap_writer).commit();
   if (!snap_committed) {
@@ -522,8 +453,7 @@ expected<void, Error> SnapshotGatherOp<T>::compute(
   // Publish the optional sideband before the triggering snapshot for Exact
   // downstream coherence. A declined optional emit cannot suppress snapshot.
   (void)emit_prepared_tensor(is_valid, context, std::move(*valid_loan));
-  HOLOSCAN_TRY(
-      emit_prepared_tensor(snapshot, context, std::move(*snap_loan)));
+  HOLOSCAN_TRY(emit_prepared_tensor(snapshot, context, std::move(*snap_loan)));
 
   // Retain source buffers until the next tick after asynchronous reads.
   retained_rd_maps_ = std::move(rd);

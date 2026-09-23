@@ -10,11 +10,9 @@
 
 namespace holoscan::config {
 
-using BeamscanParamsCodec =
-    params::DefaultedParamSchemaCodec<radar::BeamscanParams>;  // NOLINT
+using BeamscanParamsCodec = params::DefaultedParamSchemaCodec<radar::BeamscanParams>;  // NOLINT
 
 template <>
-struct ConfigCodec<radar::BeamscanParams>
-    : BeamscanParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::BeamscanParams> : BeamscanParamsCodec {};  // NOLINT
 
 }  // namespace holoscan::config

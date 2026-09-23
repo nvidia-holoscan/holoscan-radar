@@ -14,7 +14,6 @@ using SnapshotParamsCodec =
     params::DefaultedParamSchemaCodec<radar::SnapshotGatherParams>;  // NOLINT
 
 template <>
-struct ConfigCodec<radar::SnapshotGatherParams>
-    : SnapshotParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::SnapshotGatherParams> : SnapshotParamsCodec {};  // NOLINT
 
 }  // namespace holoscan::config

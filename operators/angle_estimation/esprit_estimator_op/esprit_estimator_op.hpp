@@ -76,35 +76,26 @@ struct ESPRITParams {
 };
 
 HOLOSCAN_PARAM_SCHEMA(
-    ESPRITParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.ESPRITParams", 1),
+    ESPRITParams, holoscan::param_schema("com.nvidia.holoscan.radar.ESPRITParams", 1),
     holoscan::field<&ESPRITParams::array_geometry>("array_geometry")
-        .description(
-            "Shift-invariant array positions and wavelength; num_elements "
-            "must match snapshot channels"),
+        .description("Shift-invariant array positions and wavelength; num_elements "
+                     "must match snapshot channels"),
     holoscan::field<&ESPRITParams::angle_convention>("angle_convention")
-        .description(
-            "Static AER labeling for the gridless DOA output "
-            "(default radar_boresight; no live port)"),
+        .description("Static AER labeling for the gridless DOA output "
+                     "(default radar_boresight; no live port)"),
     holoscan::field<&ESPRITParams::num_sources>("num_sources")
-        .description(
-            "Signal-subspace dimension; negative selects per-item EFT auto"),
+        .description("Signal-subspace dimension; negative selects per-item EFT auto"),
     holoscan::field<&ESPRITParams::source_count_pfa>("source_count_pfa")
-        .description(
-            "EFT over-estimation probability for num_sources: auto"),
+        .description("EFT over-estimation probability for num_sources: auto"),
     holoscan::field<&ESPRITParams::max_sources>("max_sources")
-        .description(
-            "doa_multi / source_count capacity and auto source-count cap"),
+        .description("doa_multi / source_count capacity and auto source-count cap"),
     holoscan::field<&ESPRITParams::spatial_smoothing>("spatial_smoothing")
-        .description(
-            "Per-aperture-axis sub-array counts on a filled ULA/URA "
-            "(empty = off)"),
+        .description("Per-aperture-axis sub-array counts on a filled ULA/URA "
+                     "(empty = off)"),
     holoscan::field<&ESPRITParams::forward_backward>("forward_backward")
-        .description(
-            "Include conjugate-reversed looks when spatial_smoothing is set"),
+        .description("Include conjugate-reversed looks when spatial_smoothing is set"),
     holoscan::field<&ESPRITParams::subarray_spec>("subarray_spec")
-        .description(
-            "Shift-invariant subarray pair; empty derives ULA/URA auto"));
+        .description("Shift-invariant subarray pair; empty derives ULA/URA auto"));
 
 static_assert(holoscan::param_schema_availability<ESPRITParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -121,8 +112,7 @@ class ESPRITEstimatorOp : public holoscan::Operator<ESPRITParams> {
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
   // Drain MatX eig plan caches + global MemTracker once at graph stop, while
   // CUDA is still valid. HSDK 5 still exposes OperatorBase::stop().
   void stop() override;

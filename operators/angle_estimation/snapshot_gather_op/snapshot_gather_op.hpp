@@ -47,18 +47,17 @@ namespace holoscan {
 
 template <>
 struct ChannelTypeIdentity<radar::SnapshotWindowOverride> {
-  static constexpr std::string_view name =
-      "com.nvidia.holoscan.radar.SnapshotWindowOverride";
+  static constexpr std::string_view name = "com.nvidia.holoscan.radar.SnapshotWindowOverride";
   static constexpr std::uint32_t version = 1U;
 };
 
 template <>
 struct ChannelPodLayout<radar::SnapshotWindowOverride> {
-  static constexpr auto fields = pod_fields(
-      pod_field("doppler", &radar::SnapshotWindowOverride::doppler,
-                offsetof(radar::SnapshotWindowOverride, doppler)),
-      pod_field("range", &radar::SnapshotWindowOverride::range,
-                offsetof(radar::SnapshotWindowOverride, range)));
+  static constexpr auto fields =
+      pod_fields(pod_field("doppler", &radar::SnapshotWindowOverride::doppler,
+                           offsetof(radar::SnapshotWindowOverride, doppler)),
+                 pod_field("range", &radar::SnapshotWindowOverride::range,
+                           offsetof(radar::SnapshotWindowOverride, range)));
 };
 
 }  // namespace holoscan
@@ -101,17 +100,14 @@ HOLOSCAN_PARAM_SCHEMA(
     SnapshotGatherParams,
     holoscan::param_schema("com.nvidia.holoscan.radar.SnapshotGatherParams", 1),
     holoscan::field<&SnapshotGatherParams::snapshot_window>("snapshot_window")
-        .description(
-            "Per-axis (doppler, range) neighborhood half-size around each "
-            "detection; empty→{0,0}, size-1→isotropic"),
+        .description("Per-axis (doppler, range) neighborhood half-size around each "
+                     "detection; empty→{0,0}, size-1→isotropic"),
     holoscan::field<&SnapshotGatherParams::doppler_edge>("doppler_edge")
-        .description(
-            "Neighborhood behavior at the Doppler-axis edges "
-            "{wrap, clamp, shift}"),
+        .description("Neighborhood behavior at the Doppler-axis edges "
+                     "{wrap, clamp, shift}"),
     holoscan::field<&SnapshotGatherParams::range_edge>("range_edge")
-        .description(
-            "Neighborhood behavior at the range-axis edges "
-            "{wrap, clamp, shift}"));
+        .description("Neighborhood behavior at the range-axis edges "
+                     "{wrap, clamp, shift}"));
 
 static_assert(holoscan::param_schema_availability<SnapshotGatherParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -128,8 +124,7 @@ class SnapshotGatherOp : public holoscan::Operator<SnapshotGatherParams> {
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> rd_maps{"rd_maps"};
   Input<Tensor> detection_idx{"detection_idx"};

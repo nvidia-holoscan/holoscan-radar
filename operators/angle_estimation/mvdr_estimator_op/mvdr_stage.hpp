@@ -68,10 +68,8 @@ inline void clear_matx_inv_cache() {
 // is still valid. Call once from the operator's stop() (and from Python atexit
 // as backup) — never per tick. Safe no-op if solvers were never used.
 inline void retire_matx_solver_caches() {
-  const bool eig =
-      matx_eig_plans_live_flag().exchange(false, std::memory_order_relaxed);
-  const bool inv =
-      matx_inv_plans_live_flag().exchange(false, std::memory_order_relaxed);
+  const bool eig = matx_eig_plans_live_flag().exchange(false, std::memory_order_relaxed);
+  const bool inv = matx_inv_plans_live_flag().exchange(false, std::memory_order_relaxed);
   if (!eig && !inv) {
     return;
   }
@@ -98,11 +96,10 @@ inline void retire_matx_solver_caches() {
 // stage can blank Capon / DOA outputs after a safe absolute load + inv.
 template <typename T>
 __global__ void covariance_kernel(const cuda::std::complex<T>* __restrict__ x,
-                                   const unsigned char* __restrict__ mask,
-                                   int64_t num_items, int64_t num_channels,
-                                   int64_t num_snapshots,
-                                   cuda::std::complex<T>* __restrict__ cov,
-                                   int64_t* __restrict__ k_counts) {
+                                  const unsigned char* __restrict__ mask, int64_t num_items,
+                                  int64_t num_channels, int64_t num_snapshots,
+                                  cuda::std::complex<T>* __restrict__ cov,
+                                  int64_t* __restrict__ k_counts) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items) {
     return;
@@ -112,8 +109,7 @@ __global__ void covariance_kernel(const cuda::std::complex<T>* __restrict__ x,
   if (threadIdx.x == 0) {
     int64_t count = 0;
     for (int64_t s = 0; s < num_snapshots; ++s) {
-      const bool valid =
-          mask == nullptr || mask[item * num_snapshots + s] != 0;
+      const bool valid = mask == nullptr || mask[item * num_snapshots + s] != 0;
       count += valid ? 1 : 0;
     }
     k_valid = count;
@@ -131,8 +127,7 @@ __global__ void covariance_kernel(const cuda::std::complex<T>* __restrict__ x,
     const int64_t c2 = e % num_channels;
     cuda::std::complex<T> acc{T{0}, T{0}};
     for (int64_t s = 0; s < num_snapshots; ++s) {
-      const bool valid =
-          mask == nullptr || mask[item * num_snapshots + s] != 0;
+      const bool valid = mask == nullptr || mask[item * num_snapshots + s] != 0;
       if (!valid) {
         continue;
       }
@@ -156,9 +151,8 @@ __global__ void covariance_kernel(const cuda::std::complex<T>* __restrict__ x,
 // (loading < 0) δ_i = kAutoLoadingFactor · trace(R̂_i)/C; otherwise δ_i is the
 // fixed absolute `loading`. Block reduces the real diagonal to get the trace.
 template <typename T>
-__global__ void load_diagonal_kernel(cuda::std::complex<T>* __restrict__ cov,
-                                     int64_t num_items, int64_t num_channels,
-                                     double loading) {
+__global__ void load_diagonal_kernel(cuda::std::complex<T>* __restrict__ cov, int64_t num_items,
+                                     int64_t num_channels, double loading) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items) {
     return;
@@ -206,8 +200,7 @@ __global__ void load_diagonal_kernel(cuda::std::complex<T>* __restrict__ cov,
 // spectrum is stored (num_az, num_el) per item; beams are el-major
 // (beam = ie·num_az + ia) matching the steering-manifold build.
 template <typename T>
-__device__ inline T& mvdr_spectrum_at(T* spec, int64_t ia, int64_t ie,
-                                      int64_t num_el) {
+__device__ inline T& mvdr_spectrum_at(T* spec, int64_t ia, int64_t ie, int64_t num_el) {
   return spec[ia * num_el + ie];
 }
 
@@ -221,12 +214,12 @@ __device__ inline T& mvdr_spectrum_at(T* spec, int64_t ia, int64_t ie,
 // lockstep it broadcasts from L1/L2 and is not the limiter (staging it in
 // shared measured slower — occupancy loss outweighs the already-cached reads).
 template <typename T>
-__global__ void capon_reduce_kernel(
-    const cuda::std::complex<T>* __restrict__ rinv,
-    const cuda::std::complex<T>* __restrict__ manifold, int64_t num_items,
-    int64_t num_channels, int64_t num_az, int64_t num_el,
-    const T* __restrict__ az_grid, const T* __restrict__ el_grid,
-    T* __restrict__ spectrum, T* __restrict__ aoa) {
+__global__ void capon_reduce_kernel(const cuda::std::complex<T>* __restrict__ rinv,
+                                    const cuda::std::complex<T>* __restrict__ manifold,
+                                    int64_t num_items, int64_t num_channels, int64_t num_az,
+                                    int64_t num_el, const T* __restrict__ az_grid,
+                                    const T* __restrict__ el_grid, T* __restrict__ spectrum,
+                                    T* __restrict__ aoa) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items) {
     return;
@@ -238,8 +231,7 @@ __global__ void capon_reduce_kernel(
 
   extern __shared__ __align__(16) unsigned char smem[];
   auto* red_pow = reinterpret_cast<T*>(smem);
-  auto* red_idx =
-      reinterpret_cast<int64_t*>(red_pow + static_cast<int64_t>(blockDim.x));
+  auto* red_idx = reinterpret_cast<int64_t*>(red_pow + static_cast<int64_t>(blockDim.x));
 
   const int tid = static_cast<int>(threadIdx.x);
   const int nthreads = static_cast<int>(blockDim.x);
@@ -305,9 +297,9 @@ __global__ void capon_reduce_kernel(
     if (tid < stride) {
       const T other_pow = red_pow[tid + stride];
       const int64_t other_idx = red_idx[tid + stride];
-      const bool take = other_pow > red_pow[tid] ||
-                        (other_pow == red_pow[tid] && other_idx >= 0 &&
-                         (red_idx[tid] < 0 || other_idx < red_idx[tid]));
+      const bool take =
+          other_pow > red_pow[tid] || (other_pow == red_pow[tid] && other_idx >= 0 &&
+                                       (red_idx[tid] < 0 || other_idx < red_idx[tid]));
       if (take) {
         red_pow[tid] = other_pow;
         red_idx[tid] = other_idx;
@@ -338,9 +330,8 @@ __global__ void capon_reduce_kernel(
 // only against the neighbors that exist, so an edge cell can be a peak; a flat
 // plateau (neighbor == p) is not (avoids double-reporting the same lobe).
 template <typename T>
-__device__ inline bool mvdr_is_local_max(const T* __restrict__ spec, int64_t ia,
-                                         int64_t ie, int64_t num_az,
-                                         int64_t num_el, T p) {
+__device__ inline bool mvdr_is_local_max(const T* __restrict__ spec, int64_t ia, int64_t ie,
+                                         int64_t num_az, int64_t num_el, T p) {
   if (ia > 0 && spec[(ia - 1) * num_el + ie] >= p) {
     return false;
   }
@@ -368,13 +359,10 @@ __device__ inline bool mvdr_is_local_max(const T* __restrict__ spec, int64_t ia,
 // shared: [power T[blockDim]] [index int64_t[blockDim]]
 // [sel int64_t[max_sources]].
 template <typename T>
-__global__ void peak_extract_kernel(const T* __restrict__ spectrum,
-                                    int64_t num_items, int64_t num_az,
-                                    int64_t num_el, int64_t max_sources,
-                                    const T* __restrict__ az_grid,
-                                    const T* __restrict__ el_grid,
-                                    T* __restrict__ doa_multi,
-                                    int32_t* __restrict__ source_count) {
+__global__ void peak_extract_kernel(const T* __restrict__ spectrum, int64_t num_items,
+                                    int64_t num_az, int64_t num_el, int64_t max_sources,
+                                    const T* __restrict__ az_grid, const T* __restrict__ el_grid,
+                                    T* __restrict__ doa_multi, int32_t* __restrict__ source_count) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items) {
     return;
@@ -384,8 +372,7 @@ __global__ void peak_extract_kernel(const T* __restrict__ spectrum,
 
   extern __shared__ __align__(16) unsigned char smem_pk[];
   auto* red_pow = reinterpret_cast<T*>(smem_pk);
-  auto* red_idx =
-      reinterpret_cast<int64_t*>(red_pow + static_cast<int64_t>(blockDim.x));
+  auto* red_idx = reinterpret_cast<int64_t*>(red_pow + static_cast<int64_t>(blockDim.x));
   int64_t* sel = red_idx + static_cast<int64_t>(blockDim.x);
 
   const int tid = static_cast<int>(threadIdx.x);
@@ -416,8 +403,7 @@ __global__ void peak_extract_kernel(const T* __restrict__ spectrum,
       if (taken) {
         continue;
       }
-      if (p > best_power ||
-          (p == best_power && (best_beam < 0 || beam < best_beam))) {
+      if (p > best_power || (p == best_power && (best_beam < 0 || beam < best_beam))) {
         best_power = p;
         best_beam = beam;
       }
@@ -430,9 +416,9 @@ __global__ void peak_extract_kernel(const T* __restrict__ spectrum,
       if (tid < stride) {
         const T other_pow = red_pow[tid + stride];
         const int64_t other_idx = red_idx[tid + stride];
-        const bool take = other_pow > red_pow[tid] ||
-                          (other_pow == red_pow[tid] && other_idx >= 0 &&
-                           (red_idx[tid] < 0 || other_idx < red_idx[tid]));
+        const bool take =
+            other_pow > red_pow[tid] || (other_pow == red_pow[tid] && other_idx >= 0 &&
+                                         (red_idx[tid] < 0 || other_idx < red_idx[tid]));
         if (take) {
           red_pow[tid] = other_pow;
           red_idx[tid] = other_idx;
@@ -480,11 +466,11 @@ __global__ void peak_extract_kernel(const T* __restrict__ spectrum,
 // spectrum and NaN-fill DOA outputs so callers never see the loaded-identity
 // Capon response that the absolute auto-load floor leaves behind for inv.
 template <typename T>
-__global__ void blank_empty_items_kernel(
-    const int64_t* __restrict__ k_counts, int64_t num_items, int64_t num_az,
-    int64_t num_el, int64_t max_sources, T* __restrict__ spectrum,
-    T* __restrict__ aoa, T* __restrict__ doa_multi,
-    int32_t* __restrict__ source_count) {
+__global__ void blank_empty_items_kernel(const int64_t* __restrict__ k_counts, int64_t num_items,
+                                         int64_t num_az, int64_t num_el, int64_t max_sources,
+                                         T* __restrict__ spectrum, T* __restrict__ aoa,
+                                         T* __restrict__ doa_multi,
+                                         int32_t* __restrict__ source_count) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items || k_counts[item] > 0) {
     return;
@@ -540,16 +526,12 @@ __global__ void blank_empty_items_kernel(
 // a null `doa_multi` *and* `source_count` skips peak extraction. `spectrum`
 // and `aoa` are required.
 template <typename T>
-inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
-                           const unsigned char* mask, int64_t num_items,
-                           int64_t num_channels, int64_t num_snapshots,
-                           double loading,
-                           const cuda::std::complex<T>* manifold,
-                           int64_t num_az, int64_t num_el, const T* az_grid,
-                           const T* el_grid, int64_t max_sources,
-                           cuda::std::complex<T>* cov,
-                           cuda::std::complex<T>* rinv, int64_t* k_counts,
-                           T* spectrum, T* aoa, T* eigenvalues, T* doa_multi,
+inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots, const unsigned char* mask,
+                           int64_t num_items, int64_t num_channels, int64_t num_snapshots,
+                           double loading, const cuda::std::complex<T>* manifold, int64_t num_az,
+                           int64_t num_el, const T* az_grid, const T* el_grid, int64_t max_sources,
+                           cuda::std::complex<T>* cov, cuda::std::complex<T>* rinv,
+                           int64_t* k_counts, T* spectrum, T* aoa, T* eigenvalues, T* doa_multi,
                            int32_t* source_count, cudaStream_t stream) {
   if (num_items <= 0 || num_channels <= 0) {
     return;
@@ -557,8 +539,8 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
 
   constexpr int cov_block = 256;
   const int grid = static_cast<int>(num_items);
-  covariance_kernel<T><<<grid, cov_block, 0, stream>>>(
-      snapshots, mask, num_items, num_channels, num_snapshots, cov, k_counts);
+  covariance_kernel<T><<<grid, cov_block, 0, stream>>>(snapshots, mask, num_items, num_channels,
+                                                       num_snapshots, cov, k_counts);
 
   // The solver plans reference stable operator-owned covariance/inverse
   // buffers. Mark them before first use so stop() retires any plan that MatX
@@ -574,22 +556,19 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
   // Nothing downstream reads these, so a null `eigenvalues` skips the solve
   // outright — the single largest saving available to a latched port here.
   if (eigenvalues != nullptr) {
-    auto cov_v = matx::make_tensor<cuda::std::complex<T>, 3>(
-        cov, {num_items, num_channels, num_channels});
-    auto evec_scratch = matx::make_tensor<cuda::std::complex<T>, 3>(
-        rinv, {num_items, num_channels, num_channels});
-    auto eval_v =
-        matx::make_tensor<T, 2>(eigenvalues, {num_items, num_channels});
+    auto cov_v =
+        matx::make_tensor<cuda::std::complex<T>, 3>(cov, {num_items, num_channels, num_channels});
+    auto evec_scratch =
+        matx::make_tensor<cuda::std::complex<T>, 3>(rinv, {num_items, num_channels, num_channels});
+    auto eval_v = matx::make_tensor<T, 2>(eigenvalues, {num_items, num_channels});
     matx::cudaExecutor eig_exec{stream};
-    (matx::mtie(evec_scratch, eval_v) =
-         matx::eig(cov_v, matx::EigenMode::NO_VECTOR))
-        .run(eig_exec);
+    (matx::mtie(evec_scratch, eval_v) = matx::eig(cov_v, matx::EigenMode::NO_VECTOR)).run(eig_exec);
   }
 
   const int dl_block = 256;
   const size_t dl_smem = static_cast<size_t>(dl_block) * sizeof(T);
-  load_diagonal_kernel<T><<<grid, dl_block, dl_smem, stream>>>(
-      cov, num_items, num_channels, loading);
+  load_diagonal_kernel<T>
+      <<<grid, dl_block, dl_smem, stream>>>(cov, num_items, num_channels, loading);
 
   // MatX 1.0's cached batch_size==1 inverse selects a cuSolver getrf/getrs
   // path that is not repeatable across executions. Promote only that inverse
@@ -598,45 +577,39 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
   // the first inverse and retains the public one-item shape.
   const int64_t inverse_items = num_items == 1 ? 2 : num_items;
   if (num_items == 1) {
-    const size_t matrix_bytes =
-        static_cast<size_t>(num_channels) *
-        static_cast<size_t>(num_channels) *
-        sizeof(cuda::std::complex<T>);
+    const size_t matrix_bytes = static_cast<size_t>(num_channels) *
+                                static_cast<size_t>(num_channels) * sizeof(cuda::std::complex<T>);
     (void)cudaMemcpyAsync(cov + num_channels * num_channels, cov, matrix_bytes,
                           cudaMemcpyDeviceToDevice, stream);
   }
 
   // Batched Hermitian inverse (cuBLAS matinv for C <= 32, else getrf/getri).
-  auto cov_view = matx::make_tensor<cuda::std::complex<T>, 3>(
-      cov, {inverse_items, num_channels, num_channels});
+  auto cov_view =
+      matx::make_tensor<cuda::std::complex<T>, 3>(cov, {inverse_items, num_channels, num_channels});
   auto rinv_view = matx::make_tensor<cuda::std::complex<T>, 3>(
       rinv, {inverse_items, num_channels, num_channels});
   matx::cudaExecutor exec{stream};
   (rinv_view = matx::inv(cov_view)).run(exec);
 
   constexpr int capon_block = 256;
-  const size_t capon_smem =
-      static_cast<size_t>(capon_block) * (sizeof(T) + sizeof(int64_t));
+  const size_t capon_smem = static_cast<size_t>(capon_block) * (sizeof(T) + sizeof(int64_t));
   capon_reduce_kernel<T><<<grid, capon_block, capon_smem, stream>>>(
-      rinv, manifold, num_items, num_channels, num_az, num_el, az_grid, el_grid,
-      spectrum, aoa);
+      rinv, manifold, num_items, num_channels, num_az, num_el, az_grid, el_grid, spectrum, aoa);
 
   // Multi-source: top-max_sources Capon peaks → doa_multi + source_count.
   // One pass writes both, so it runs unless both are null.
   if (doa_multi != nullptr || source_count != nullptr) {
     constexpr int peak_block = 256;
-    const size_t peak_smem =
-        static_cast<size_t>(peak_block) * (sizeof(T) + sizeof(int64_t)) +
-        static_cast<size_t>(max_sources) * sizeof(int64_t);
-    peak_extract_kernel<T><<<grid, peak_block, peak_smem, stream>>>(
-        spectrum, num_items, num_az, num_el, max_sources, az_grid, el_grid,
-        doa_multi, source_count);
+    const size_t peak_smem = static_cast<size_t>(peak_block) * (sizeof(T) + sizeof(int64_t)) +
+                             static_cast<size_t>(max_sources) * sizeof(int64_t);
+    peak_extract_kernel<T>
+        <<<grid, peak_block, peak_smem, stream>>>(spectrum, num_items, num_az, num_el, max_sources,
+                                                  az_grid, el_grid, doa_multi, source_count);
   }
 
   constexpr int blank_block = 256;
   blank_empty_items_kernel<T><<<grid, blank_block, 0, stream>>>(
-      k_counts, num_items, num_az, num_el, max_sources, spectrum, aoa,
-      doa_multi, source_count);
+      k_counts, num_items, num_az, num_el, max_sources, spectrum, aoa, doa_multi, source_count);
 }
 
 }  // namespace holoscan::radar::detail
