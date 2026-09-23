@@ -41,12 +41,12 @@ EOF
 chmod +x "$fake_python"
 
 export HOLOSCAN_CLI_PYTHON_BIN="$fake_python"
-export HOLOSCAN_CLI_INSTALL_ARGS='--pre --extra-index-url https://pypi.nvidia.com holoscan-cli>4.2.0 *'
+export HOLOSCAN_CLI_INSTALL_ARGS='--no-index --find-links *'
 export TEST_ARGS_FILE="$test_dir/pip-args"
 export TEST_STATE_FILE="$test_dir/cli-installed"
 
 "$wrapper" --help > /dev/null
 
 diff -u <(printf '%s\n' \
-    -m pip install --pre --extra-index-url https://pypi.nvidia.com \
-    'holoscan-cli>4.2.0' '*') "$TEST_ARGS_FILE"
+    -m pip install --quiet --disable-pip-version-check --no-index --find-links '*' \
+    -r "$(cd "$(dirname "$wrapper")" && pwd)/requirements-cli.txt") "$TEST_ARGS_FILE"

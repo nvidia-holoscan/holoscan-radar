@@ -11,9 +11,13 @@ Holoscan Radar is a **Holoscan Module** — a self-contained, redistributable li
 ## Quick Start
 
 ```bash
+# Install the CLI in your Python environment
+python -m pip install -r requirements-cli.txt
 # Run the C++ demo application (synthetic SISO FMCW chain)
-./holohub run fmcw_siso
+holoscan run fmcw_siso
 ```
+
+The existing `./holohub` wrapper also bootstraps the pinned CLI automatically.
 
 ---
 

@@ -35,6 +35,13 @@ cmake.args = [
 # Setting wheel.install-dir = "/" would require the experimental flag.
 wheel.packages = []
 
+[tool.holoscan]
+repo-prefix = "holoscan-radar"
+container-prefix = "holoscan-radar"
+workspace-name = "holoscan-radar"
+cuda = 13
+ctest-script = "ci/container.ctest"
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

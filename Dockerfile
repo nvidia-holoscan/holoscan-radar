@@ -33,14 +33,13 @@ ARG DEV_USER=dev
 ARG DEV_UID=1000
 ARG DEV_GID=1000
 
-# Install holoscan-cli developer tools
-ARG HOLOSCAN_CLI_INSTALL_ARGS="--pre --extra-index-url https://pypi.nvidia.com holoscan-cli>4.2.0"
-# Disable pathname expansion while preserving the documented whitespace-separated
-# pip argument override.
-RUN if ! python3 -m holoscan_cli --help 2>/dev/null | grep -qw build; then \
-        set -f; \
-        python3 -m pip install ${HOLOSCAN_CLI_INSTALL_ARGS} \
-    ; fi
+# Install the same CLI and optional dependencies as the host wrapper.
+COPY requirements-cli.txt /tmp/requirements-cli.txt
+ARG HOLOSCAN_CLI_INSTALL_ARGS=""
+# Preserve whitespace-separated pip options without pathname expansion.
+RUN set -f; \
+    PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir \
+        ${HOLOSCAN_CLI_INSTALL_ARGS} -r /tmp/requirements-cli.txt
 
 # TODO: add module-specific runtime / build dependencies below.
 #

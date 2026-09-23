@@ -4,132 +4,120 @@
 #
 # Holoscan Radar CLI wrapper.
 # Delegates to the standalone `holoscan-cli` package with module-specific
-# defaults baked in, defaulting to NVIDIA PyPI release-candidate-capable
-# install args.
+# defaults in pyproject.toml and a pinned prerelease from NVIDIA PyPI.
 #
 # Usage:
 #   ./holohub run-container
 #   ./holohub build fmcw_siso
-#   ./holohub run   fmcw_siso --language python
+#   ./holohub run   fmcw_siso --language cpp
 #   ./holohub test
 #   ./holohub --help
 #
 # Optional overrides (rarely needed):
 #   HOLOSCAN_CLI_SOURCE   Local checkout — wins over the package install.
 #   HOLOSCAN_CLI_INSTALL_ARGS  Pip install arguments.
-#   HOLOSCAN_CLI_PYTHON_BIN  Python interpreter (default: python3).
+#   HOLOSCAN_CLI_PYTHON_BIN  Caller-owned Python interpreter.
+#   HOLOSCAN_CLI_VENV         Wrapper-managed venv location.
 #   HOLOHUB_PYTHON_BIN       Legacy fallback for HOLOSCAN_CLI_PYTHON_BIN.
 
 set -euo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
-# ==============================================================================
-# Module identity — defaults consumed by holoscan-cli
-# ==============================================================================
-
-# HOLOSCAN_CLI_ROOT: the CLI uses this as the project root for cmake -S and container paths.
+# Project naming, CUDA, and CTest defaults live in pyproject.toml.
 export HOLOSCAN_CLI_ROOT="${HOLOSCAN_CLI_ROOT:-${SCRIPT_DIR}}"
-# HOLOSCAN_CLI_CMD_NAME: shown in help output and error messages.
 export HOLOSCAN_CLI_CMD_NAME="${HOLOSCAN_CLI_CMD_NAME:-${BASH_SOURCE[0]}}"
-# HOLOSCAN_CLI_REPO_PREFIX: base for naming build dirs, images, etc.
-export HOLOSCAN_CLI_REPO_PREFIX="${HOLOSCAN_CLI_REPO_PREFIX:-holoscan-radar}"
-# HOLOSCAN_CLI_CONTAINER_PREFIX: Docker image name prefix.
-export HOLOSCAN_CLI_CONTAINER_PREFIX="${HOLOSCAN_CLI_CONTAINER_PREFIX:-holoscan-radar}"
-# HOLOSCAN_CLI_WORKSPACE_NAME: directory name inside the container at /workspace/.
-export HOLOSCAN_CLI_WORKSPACE_NAME="${HOLOSCAN_CLI_WORKSPACE_NAME:-holoscan-radar}"
-# HOLOSCAN_CLI_HOSTNAME_PREFIX: container hostname prefix.
-export HOLOSCAN_CLI_HOSTNAME_PREFIX="${HOLOSCAN_CLI_HOSTNAME_PREFIX:-holoscan-radar}"
-
-# ==============================================================================
-# Paths
-# ==============================================================================
-
-export HOLOSCAN_CLI_DEFAULT_DOCKERFILE="${HOLOSCAN_CLI_DEFAULT_DOCKERFILE:-${SCRIPT_DIR}/Dockerfile}"
-# Recursive walk from working directory — picks up the top-level metadata.json
-# (project_type=module) along with operators/<x>/metadata.json and
-# applications/<y>/metadata.json. The narrower default
-# `applications,operators` skipped the module's own descriptor, so
-# `./holohub list` showed no MODULES section and `./holohub package
-# <name>` couldn't find the module by name. (holohub#1582)
-export HOLOSCAN_CLI_SEARCH_PATH="${HOLOSCAN_CLI_SEARCH_PATH:-./}"
-export HOLOSCAN_CLI_BUILD_PARENT_DIR="${HOLOSCAN_CLI_BUILD_PARENT_DIR:-${SCRIPT_DIR}/build}"
-export HOLOSCAN_CLI_DATA_DIR="${HOLOSCAN_CLI_DATA_DIR:-${SCRIPT_DIR}/data}"
-
-# ==============================================================================
-# Build defaults
-# ==============================================================================
-
 export CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 
-# ==============================================================================
-# Test defaults
-# ==============================================================================
-
-# CTest driver for `./holohub test`. The CLI's bundled driver resolves its
-# source directory inside the pip install tree, so a bare `./holohub test`
-# never sees this repo; ci/container.ctest fixes that (see the file header).
-#
-# Keep this RELATIVE: the CLI emits it as a literal `ctest -S <path>`, and it
-# has to resolve both in-container (cwd /workspace/holoscan-radar) and under
-# `--local` (cwd = repo root). An absolute host path would not exist in the
-# container.
-#
-# Note the in-container resolution differs by CLI version: 4.5.0rc2+ emits a
-# shell default, `-S "${HOLOSCAN_CLI_CTEST_SCRIPT:-$(python3 -c ...)}"`, and
-# uses this value directly; older releases always resolved it by importing the
-# in-container package. Either way holoscan-cli forwards this variable into the
-# container, which is what makes the relative path work.
-export HOLOSCAN_CLI_CTEST_SCRIPT="${HOLOSCAN_CLI_CTEST_SCRIPT:-ci/container.ctest}"
-
-# ==============================================================================
-# holoscan-cli bootstrap + exec
-# ==============================================================================
-
-PYTHON_BIN="${HOLOSCAN_CLI_PYTHON_BIN:-${HOLOHUB_PYTHON_BIN:-python3}}"
-export HOLOSCAN_CLI_INSTALL_ARGS="${HOLOSCAN_CLI_INSTALL_ARGS:---pre --extra-index-url https://pypi.nvidia.com holoscan-cli>4.2.0}"
-
-# Default Holoscan SDK version for this module's container base image.
-# holoscan-cli decoupled the base image from its own version (holoscan-cli#177)
-# and no longer ships a built-in default, so it errors unless this is set (or
-# --base-img is passed). Defaults to the module's holoscan_version.
-export HOLOSCAN_CLI_BASE_SDK_VERSION="${HOLOSCAN_CLI_BASE_SDK_VERSION:-4.3.0}"
+export HOLOSCAN_CLI_INSTALL_ARGS="${HOLOSCAN_CLI_INSTALL_ARGS:-}"
+CLI_REQUIREMENTS="${SCRIPT_DIR}/requirements-cli.txt"
+read -r -a CLI_INSTALL_ARGS <<< "${HOLOSCAN_CLI_INSTALL_ARGS}"
+CLI_VENV_EXPLICIT="${HOLOSCAN_CLI_VENV:+1}"
+if [[ -z "${HOLOSCAN_CLI_VENV:-}" && -n "${XDG_DATA_HOME:-}${HOME:-}" ]]; then
+    HOLOSCAN_CLI_VENV="${XDG_DATA_HOME:-${HOME}/.local/share}/holoscan-cli/venv"
+fi
+export HOLOSCAN_CLI_VENV="${HOLOSCAN_CLI_VENV:-}"
 
 if [[ -n "${HOLOSCAN_CLI_SOURCE:-}" ]]; then
     export PYTHONPATH="${HOLOSCAN_CLI_SOURCE%/}/src${PYTHONPATH:+:${PYTHONPATH}}"
 fi
 
-# Install holoscan-cli unless a source-project-capable one is already present.
-# Probe the command surface (not just importability) so a stale legacy
-# holoscan-cli (<= 4.2.0) doesn't satisfy the check.
-_holoscan_cli_help=$("${PYTHON_BIN}" -m holoscan_cli --help 2>/dev/null || true)
-if ! grep -qw build <<< "${_holoscan_cli_help}"; then
-    # Bootstrap pip if the interpreter lacks it (minimal Python installs omit
-    # it). `pip install` below would otherwise fail with a confusing error.
+_cli_ok() {
+    "$1" -c 'import holoscan_cli.project_context, cookiecutter, jsonschema, referencing' 2>/dev/null
+}
+_is_container() {
+    [[ -f /.dockerenv || -f /run/.containerenv || -f /run/systemd/container ]] ||
+        grep -Eq '(docker|containerd|kubepods|podman|buildkit)' /proc/1/cgroup 2>/dev/null
+}
+_managed_venv_ready() {
+    [[ -n "${HOLOSCAN_CLI_VENV}" && -x "${HOLOSCAN_CLI_VENV}/bin/python" ]] &&
+        "${HOLOSCAN_CLI_VENV}/bin/python" -m pip --version >/dev/null 2>&1
+}
+_use_managed_venv() {
+    if [[ -z "${HOLOSCAN_CLI_VENV}" ]]; then
+        echo "[holoscan-radar] Set HOME, XDG_DATA_HOME, or HOLOSCAN_CLI_VENV." >&2
+        exit 1
+    fi
+    if ! python3 -m venv "${HOLOSCAN_CLI_VENV}"; then
+        echo "[holoscan-radar] Could not create ${HOLOSCAN_CLI_VENV}; install python3-venv." >&2
+        exit 1
+    fi
+    PYTHON_BIN="${HOLOSCAN_CLI_VENV}/bin/python"
+}
+
+CLI_INSTALL_REQUIRED=true
+PYTHON_BIN="${HOLOSCAN_CLI_PYTHON_BIN:-${HOLOHUB_PYTHON_BIN:-${VIRTUAL_ENV:+$VIRTUAL_ENV/bin/python}}}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+    unset PYTHONHOME
+fi
+if [[ -n "${PYTHON_BIN}" ]]; then
+    :
+elif [[ "${EUID}" -eq 0 ]] && _is_container; then
+    PYTHON_BIN="python3"
+    export PIP_BREAK_SYSTEM_PACKAGES="${PIP_BREAK_SYSTEM_PACKAGES:-1}"
+elif _managed_venv_ready; then
+    PYTHON_BIN="${HOLOSCAN_CLI_VENV}/bin/python"
+elif [[ -n "${CLI_VENV_EXPLICIT}" ]]; then
+    _use_managed_venv
+elif _is_container && [[ -z "${HOLOSCAN_CLI_SOURCE:-}" ]] && _cli_ok python3; then
+    PYTHON_BIN="python3"
+    # The image build installs requirements-cli.txt. Runtime users consume
+    # that environment without trying to modify the container's system Python.
+    CLI_INSTALL_REQUIRED=false
+elif _is_container; then
+    echo "[holoscan-radar] This container lacks CLI 5 project support or its dependencies; rebuild the image." >&2
+    exit 1
+else
+    _use_managed_venv
+fi
+
+if [[ "${CLI_INSTALL_REQUIRED}" == true ]] &&
+    { [[ -z "${HOLOSCAN_CLI_SOURCE:-}" ]] || ! _cli_ok "${PYTHON_BIN}"; }; then
     if ! "${PYTHON_BIN}" -m pip --version >/dev/null 2>&1; then
         "${PYTHON_BIN}" -m ensurepip --upgrade >/dev/null 2>&1 || {
             echo "[holoscan-radar] ${PYTHON_BIN} has no pip and ensurepip is unavailable;" \
-                 "install pip (or set HOLOSCAN_CLI_PYTHON_BIN, or legacy HOLOHUB_PYTHON_BIN," \
-                 "to an interpreter that has it) and retry" >&2
+                 "install pip or set HOLOSCAN_CLI_PYTHON_BIN to an interpreter that has it" \
+                 "and retry" >&2
             exit 1
         }
     fi
     if [[ -n "${HOLOSCAN_CLI_SOURCE:-}" ]]; then
         echo "[holoscan-radar] installing holoscan-cli from ${HOLOSCAN_CLI_SOURCE}" >&2
-        "${PYTHON_BIN}" -m pip install --upgrade "${HOLOSCAN_CLI_SOURCE}"
+        "${PYTHON_BIN}" -m pip install --upgrade "${CLI_INSTALL_ARGS[@]}" "${HOLOSCAN_CLI_SOURCE%/}[create]" >&2
     else
-        echo "[holoscan-radar] installing with args: ${HOLOSCAN_CLI_INSTALL_ARGS}" >&2
-        # This override is a whitespace-separated pip argument list. Suppress
-        # pathname expansion without changing the caller's shell options.
-        (
-            set -f
-            "${PYTHON_BIN}" -m pip install ${HOLOSCAN_CLI_INSTALL_ARGS}
-        )
+        # Let pip enforce the pin and dependencies without parsing the file.
+        # Keep stdout reserved for the CLI, including its JSON output.
+        "${PYTHON_BIN}" -m pip install --quiet --disable-pip-version-check \
+            "${CLI_INSTALL_ARGS[@]}" -r "${CLI_REQUIREMENTS}" >&2 || {
+            _is_container && echo "[holoscan-radar] Install failed in this" \
+                "container; rebuild the image (./holohub build-container)." >&2
+            exit 1
+        }
     fi
 fi
 
-# Forward wrapper-selected CLI install args into project Docker builds so the
-# in-container CLI matches the host wrapper. holoscan-cli shlex-splits
+# Forward wrapper-selected CLI install args into project Docker builds as additional pip
+# options; requirements-cli.txt supplies the shared pin. holoscan-cli shlex-splits
 # HOLOSCAN_CLI_DEFAULT_DOCKER_BUILD_ARGS, so single-quote each KEY=VALUE to
 # preserve spaces and quotes in pip arguments.
 _q() {
@@ -138,6 +126,12 @@ _q() {
 }
 extras=" --build-arg $(_q "HOLOSCAN_CLI_INSTALL_ARGS=${HOLOSCAN_CLI_INSTALL_ARGS}")"
 export HOLOSCAN_CLI_DEFAULT_DOCKER_BUILD_ARGS="${HOLOSCAN_CLI_DEFAULT_DOCKER_BUILD_ARGS:-}${extras}"
+
+# Keep subprocesses launched by the CLI (including system-language pre-commit
+# hooks) on the interpreter that bootstrapped Holoscan CLI.
+PYTHON_BIN="$(command -v "${PYTHON_BIN}")"
+export HOLOSCAN_CLI_PYTHON_BIN="${PYTHON_BIN}"
+export PATH="${PYTHON_BIN%/*}:${PATH}"
 
 # exec so signals reach the CLI directly; `python -m` so the same interpreter
 # that bootstrapped the CLI above runs it (a `holoscan` console script on PATH
