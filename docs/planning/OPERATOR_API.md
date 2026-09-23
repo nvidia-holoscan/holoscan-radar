@@ -13,7 +13,7 @@ data input is rejected; amended 2026-07-10), with a narrow pageable-host
 exception for rank-1 scalar-vector `[live]` payloads, and producing device
 memory; **named contract axes with no opaque leading `...` batch** (multi-item
 throughput is an application concern; see
-[`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md)); industry-standard operator
+[`operators/common/README.md`](../../operators/common/README.md#maxtensorextents)); industry-standard operator
 names; and angle operators that make the az/el convention explicit at the API
 boundary (standalone, defaulting to `radar_boresight`).
 
@@ -258,7 +258,7 @@ The small add-on operators that connect detection, clustering, and the sparse an
 
 ## Operator APIs
 
-Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a dtype + shape; every parameter carries a `Default:` (required parameters shown as `Default: none (required)`). Algorithm and Notes are added when each operator is fully locked. Each port lists both precision forms (`complex64 / complex128`, `float32 / float64`); an operator instance uses one, fixed by its template instantiation, with inputs and outputs matching. Port shapes use **named** axes only (no opaque leading batch; see [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md)).
+Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a dtype + shape; every parameter carries a `Default:` (required parameters shown as `Default: none (required)`). Algorithm and Notes are added when each operator is fully locked. Each port lists both precision forms (`complex64 / complex128`, `float32 / float64`); an operator instance uses one, fixed by its template instantiation, with inputs and outputs matching. Port shapes use **named** axes only (no opaque leading batch; see [`operators/common/README.md`](../../operators/common/README.md#maxtensorextents)).
 
 **Parameter override convention.** Parameters are configuration set at graph build.
 

@@ -37,6 +37,29 @@ an operator documents a live override. `MaxTensorExtents` is different: it is a
 constructor sizing object used to bound tensor pools before graph activation;
 it never travels on a port.
 
+## `MaxTensorExtents`
+
+Fat-output operators capture `MaxTensorExtents` at construction so HSDK 5 can
+size Tensor pools before `arm()`. The field list in
+`radar_common/descriptors/max_tensor_extents.hpp` is the public sizing surface;
+each operator README Construction table identifies the fields that operator
+requires. Applications may construct the value directly or decode the same
+`max_*` keys with `MaxTensorExtentsFromYaml` from
+`radar_common/sdk/max_tensor_extents_yaml.hpp`.
+
+The values are maxima for the graph lifetime, not fixed per-tick shapes.
+Operators continue to infer named extents from each input and accept shape
+changes within the captured bounds. An absent required field, a non-positive
+value, or a tick exceeding a bound fails closed. There is deliberately no
+opaque leading-batch extent; application-level loop or fan-out owns multi-item
+throughput.
+
+Size every field from the real application or test scenario. Pool dimensions
+multiply, so generous unrelated defaults can request many GiB; on unified-
+memory systems that can exhaust host RAM and make the machine unavailable.
+Keep concurrent GPU test jobs low enough that their combined pools fit physical
+memory.
+
 ## Operator conventions
 
 - Precision is selected by the C++ template (`float` or `double`), never by a

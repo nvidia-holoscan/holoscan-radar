@@ -348,8 +348,8 @@ TEST(FeatureAssemblyOpTest, RejectsBadDetectionIdxRank) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsOpaqueLeadingBatch) {
-  // Rank 3 is not a named axis; parse_detection_idx_layout fail-closes
-  // (MAX_TENSOR_EXTENTS.md Part B).
+  // Rank 3 is not a named axis; parse_detection_idx_layout enforces
+  // the module named-axis invariant.
   std::vector<int64_t> idx = {0, 1, 2, 3};
   auto idx_t = to_device_tensor(idx, {2, 1, 2}, kInt64Dtype);
   const auto result = run_assembly_result<double>(

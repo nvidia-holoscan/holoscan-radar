@@ -12,7 +12,7 @@
 namespace holoscan::radar::detail {
 
 // Contract input is exactly rank 3. Extra leading axes are not a module
-// batch (MAX_TENSOR_EXTENTS.md Part B).
+// batch (the module named-axis invariant).
 struct AdcCubeLayout {
   int64_t num_rx{0};
   int64_t slow_time{0};

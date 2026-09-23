@@ -201,7 +201,7 @@ an open-ended opaque leading `...` batch at the module level — multi-item
 throughput is an app concern. Shape-changing `[live]` overrides remain legal
 because downstream re-infers named extents. Fat Tensor outs take
 `MaxTensorExtents` at `graph.op()` so HSDK 5 pools can be sized before arm
-(see [`MAX_TENSOR_EXTENTS.md`](MAX_TENSOR_EXTENTS.md)).
+(see [`operators/common/README.md`](../../operators/common/README.md#maxtensorextents)).
 
 ### Streams and lifetimes
 

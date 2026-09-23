@@ -30,7 +30,7 @@ constexpr int kFeatElBin = 10;
 constexpr int kMaxPreservedBatchDims = 8;
 
 // Contract input is exactly rank 2. Extra leading axes are not a module
-// batch (MAX_TENSOR_EXTENTS.md Part B). num_points == 0 is legal.
+// batch (the module named-axis invariant). num_points == 0 is legal.
 struct DetectionIdxLayout {
   int64_t num_points{0};
   int64_t idx_cols{0};

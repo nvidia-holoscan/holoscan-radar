@@ -136,7 +136,7 @@ throws or remains deferred in the Jira backlog.
       leading-rank / `max_tx*max_rx` checks). Use `full_rank_shape` only
       as a MatX layout helper over **named** axes; reject unexpected extra
       leading dims. Fat outs take `MaxTensorExtents` at `graph.op()` (see
-      `MAX_TENSOR_EXTENTS.md`).
+      [`operators/common/README.md`](../../operators/common/README.md#maxtensorextents)).
 - [ ] **Output shapes** follow the contract when `[live]` params change
       leading dimensions (downstream re-infers).
 - [ ] **CUDA stream:** `receive_cuda_stream()` on the primary data input;

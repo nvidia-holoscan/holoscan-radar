@@ -337,10 +337,9 @@ the MIMO-TDM sparse path: multi-look Beamscan feeds
 multi-source estimator; `MultiSourceExpansionOp` merges resolved 1..N angles
 with the unflagged Beamscan rows before `FeatureAssemblyOp`. CFAR uses TX/RX
 NCI plus `range_doppler` peak selection and the application deliberately omits
-clustering. See [`ADAPTIVE_AOA.md`](ADAPTIVE_AOA.md).
+clustering. See [`applications/fmcw/adaptive_aoa/README.md`](../../applications/fmcw/adaptive_aoa/README.md).
 
 - **Bridges are locked, not handwaved.** The snapshot gather, feature assembly, and cluster reduction are the operators `SnapshotGatherOp`, `FeatureAssemblyOp`, and `DetectionReductionOp` (contracts in the operator API doc); their delivery models (mainstream ops / thin op over a shared reduction primitive) are settled there.
 - **Detection before or after virtual assembly:** detection uses non-coherent power, so it can run on the per-channel RD maps (with `nci_axes` over the channel set) or on the assembled cube; only the *angle* path requires the coherent compensation + virtual assembly. The chains show assembly first for a single clear ordering.
 - **Velocity ambiguity (TDM and DDM):** both reduce unambiguous velocity by `M`. Dense downstream sees that aliased per-TX Doppler axis. Sparse TDM and sparse DDM make the fold explicit through row-aligned `fold_idx`; resolution and physical-velocity unfolding remain separate future operators or external observations.
 - **CDM / BPM (future):** may reuse the dense DDM correlation machinery with a separate locked contract. Fast-time / PMCW code division remains excluded.
-- **Covariance-estimator open items:** shared across `MVDR` / `MUSIC` / `RootMUSIC` / `ESPRIT` — the multi-snapshot / spatial-smoothing input form, the source-count source (fixed vs. MDL/AIC vs. CFAR-cluster), and — for the gridless pair — the ULA/subarray-selection step on non-uniform virtual arrays.

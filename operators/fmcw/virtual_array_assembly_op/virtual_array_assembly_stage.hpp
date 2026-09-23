@@ -27,7 +27,7 @@ struct VirtualAssemblyStageConfig {
 };
 
 // Contract input is exactly rank 4. Extra leading axes are not a module
-// batch (MAX_TENSOR_EXTENTS.md Part B).
+// batch (the module named-axis invariant).
 struct RdMapsLayout {
   int64_t num_tx{0};
   int64_t num_rx{0};
