@@ -25,9 +25,7 @@ class PerfTerminalSinkOp : public holoscan::Operator {
   HOLOSCAN_OPERATOR_FORWARD_ARGS(PerfTerminalSinkOp)
   PerfTerminalSinkOp() = default;
 
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.input<gxf::Entity>("input");
-  }
+  void setup(holoscan::OperatorSpec& spec) override { spec.input<gxf::Entity>("input"); }
 
   void compute(holoscan::InputContext& op_input, holoscan::OutputContext&,
                holoscan::ExecutionContext&) override {
@@ -49,9 +47,7 @@ class PerfNullSinkOp : public holoscan::Operator {
   HOLOSCAN_OPERATOR_FORWARD_ARGS(PerfNullSinkOp)
   PerfNullSinkOp() = default;
 
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.input<gxf::Entity>("input");
-  }
+  void setup(holoscan::OperatorSpec& spec) override { spec.input<gxf::Entity>("input"); }
 
   void compute(holoscan::InputContext& op_input, holoscan::OutputContext&,
                holoscan::ExecutionContext&) override {

@@ -91,18 +91,20 @@ const SizeSpec& must_find_size(const std::string& id) {
 
 std::string method_tag(hr::ClutterFilterMethod m) {
   switch (m) {
-    case hr::ClutterFilterMethod::kMeanSubtraction: return "msub";
-    case hr::ClutterFilterMethod::kSingleDelay: return "sdel";
-    case hr::ClutterFilterMethod::kDoubleDelay: return "ddel";
-    case hr::ClutterFilterMethod::kNone: return "none";
+    case hr::ClutterFilterMethod::kMeanSubtraction:
+      return "msub";
+    case hr::ClutterFilterMethod::kSingleDelay:
+      return "sdel";
+    case hr::ClutterFilterMethod::kDoubleDelay:
+      return "ddel";
+    case hr::ClutterFilterMethod::kNone:
+      return "none";
   }
   return "unk";
 }
 
 std::string window_tag(const hr::WindowSpec& window) {
-  return window.type == hr::WindowType::kNone
-             ? "rect"
-             : std::string(hr::to_string(window.type));
+  return window.type == hr::WindowType::kNone ? "rect" : std::string(hr::to_string(window.type));
 }
 
 // Flip to a different valid method so a live override always changes the
@@ -121,10 +123,8 @@ std::vector<int64_t> profiles_shape(const ClutterScenario& scen) {
   return {scen.num_chirps, scen.num_range_bins};
 }
 
-perf::TimingCollector run_clutter_graph(const ClutterScenario& scen,
-                                        const perf::RunPlan& plan) {
-  auto cube =
-      perf::make_iq_cube_device<PerfPrecision>(profiles_shape(scen));
+perf::TimingCollector run_clutter_graph(const ClutterScenario& scen, const perf::RunPlan& plan) {
+  auto cube = perf::make_iq_cube_device<PerfPrecision>(profiles_shape(scen));
   hr::MaxTensorExtents extents;
   extents.max_chirps = scen.num_chirps;
   extents.max_range_bins = scen.num_range_bins;
@@ -138,10 +138,9 @@ perf::TimingCollector run_clutter_graph(const ClutterScenario& scen,
     hr::WindowSpec unseen;
     unseen.type = hr::WindowType::kHamming;
     return perf::run_perf_graph_with_window_override(
-        std::move(cube), plan.total_frames, plan.override_at,
-        scen.window, unseen, "clutter-window-perf",
-        [&](holoscan::Graph& graph, const auto& src,
-            holoscan::CompileOptions& options) {
+        std::move(cube), plan.total_frames, plan.override_at, scen.window, unseen,
+        "clutter-window-perf",
+        [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
           auto op = graph.op<BaseOp>("clutter", extents);
           hr::ClutterFilterParams params;
           params.method = scen.method;
@@ -158,10 +157,9 @@ perf::TimingCollector run_clutter_graph(const ClutterScenario& scen,
   }
   const hr::ClutterFilterMethod override_method = flip_method(scen.method);
   return perf::run_perf_graph_with_override(
-      std::move(cube), plan.total_frames, plan.override_at, scen.method,
-      override_method, "clutter-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
+      std::move(cube), plan.total_frames, plan.override_at, scen.method, override_method,
+      "clutter-perf",
+      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         auto op = graph.op<BaseOp>("clutter", extents);
         hr::ClutterFilterParams params;
         params.method = scen.method;
@@ -177,8 +175,7 @@ perf::TimingCollector run_clutter_graph(const ClutterScenario& scen,
       });
 }
 
-void fill_throughput(perf::ResultRow* row, const ClutterScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const ClutterScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
@@ -204,15 +201,13 @@ perf::ResultRow base_row(const ClutterScenario& scen) {
   row.input_shape = profiles_shape(scen);
   row.out_batch = scen.channels;
   row.k = scen.num_chirps;
-  row.notes = scen.time_window_override
-                  ? "live_override=doppler_window(unseen_hamming)"
-                  : "live_override=method";
+  row.notes = scen.time_window_override ? "live_override=doppler_window(unseen_hamming)"
+                                        : "live_override=method";
   return row;
 }
 
 ClutterScenario make_scenario(hr::ClutterFilterMethod method, const SizeSpec& s,
-                              int64_t channels = 1,
-                              hr::WindowType window = hr::WindowType::kNone,
+                              int64_t channels = 1, hr::WindowType window = hr::WindowType::kNone,
                               bool time_window_override = false) {
   ClutterScenario sc;
   sc.size_id = s.id;
@@ -223,8 +218,7 @@ ClutterScenario make_scenario(hr::ClutterFilterMethod method, const SizeSpec& s,
   sc.window.type = window;
   sc.time_window_override = time_window_override;
   std::ostringstream id;
-  id << "clutter_" << method_tag(method) << "_" << window_tag(sc.window)
-     << "_" << s.id;
+  id << "clutter_" << method_tag(method) << "_" << window_tag(sc.window) << "_" << s.id;
   if (channels > 1) {
     id << "_ch" << channels;
   }
@@ -267,22 +261,18 @@ struct ClutterTraits : perf::PerfDriverDefaults {
   static std::vector<ClutterScenario> build_default_matrix() {
     std::vector<ClutterScenario> out;
     for (const char* sid : {"xs", "md", "lg", "xl"}) {
-      out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction,
-                                  must_find_size(sid)));
+      out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, must_find_size(sid)));
     }
     const SizeSpec& md = must_find_size("md");
     out.push_back(make_scenario(hr::ClutterFilterMethod::kSingleDelay, md));
     out.push_back(make_scenario(hr::ClutterFilterMethod::kDoubleDelay, md));
-    out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, md,
-                                4));
-    out.push_back(make_scenario(
-        hr::ClutterFilterMethod::kMeanSubtraction, md, 1,
-        hr::WindowType::kHann, /*time_window_override=*/true));
+    out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, md, 4));
+    out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, md, 1,
+                                hr::WindowType::kHann, /*time_window_override=*/true));
     return out;
   }
 
-  static std::vector<ClutterScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<ClutterScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<ClutterScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
@@ -290,8 +280,7 @@ struct ClutterTraits : perf::PerfDriverDefaults {
         std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
         continue;
       }
-      out.push_back(
-          make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, *s));
+      out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, *s));
     }
     return out;
   }
@@ -305,26 +294,23 @@ struct ClutterTraits : perf::PerfDriverDefaults {
       for (auto m : methods) {
         out.push_back(make_scenario(m, s));
       }
-      out.push_back(make_scenario(
-          hr::ClutterFilterMethod::kMeanSubtraction, s, 1,
-          hr::WindowType::kHann, /*time_window_override=*/true));
+      out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, s, 1,
+                                  hr::WindowType::kHann, /*time_window_override=*/true));
     }
     for (const char* sid : {"md", "lg"}) {
       const SizeSpec& s = must_find_size(sid);
       for (int64_t ch : {4, 16}) {
-        out.push_back(
-            make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, s, ch));
+        out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, s, ch));
       }
     }
     return out;
   }
 
-  static void run_scenario(const ClutterScenario& scen,
-                           const perf::RunSettings& rs,
+  static void run_scenario(const ClutterScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_clutter_graph(scen, p);
         });
 
@@ -350,8 +336,7 @@ struct ClutterTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction,
-                                 must_find_size("xs")),
+      run_scenario(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, must_find_size("xs")),
                    warm, &discarded);
     });
   }

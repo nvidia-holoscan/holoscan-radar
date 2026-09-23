@@ -55,44 +55,37 @@ const std::vector<SizeSpec>& size_ladder() {
 
 const SizeSpec* find_size(const std::string& id) {
   for (const auto& size : size_ladder()) {
-    if (size.id == id) return &size;
+    if (size.id == id)
+      return &size;
   }
   return nullptr;
 }
 
-NotchScenario make_scenario(const SizeSpec& size, bool cosine,
-                            bool rank4, bool live_override = false) {
-  const std::string variant =
-      std::string(cosine ? "cosine" : "hard") +
-      (rank4 ? "_mimo" : "_siso") +
-      (live_override ? "_live" : "");
-  return NotchScenario{
-      .id = "doppler_notch_" + variant + "_" + size.id,
-      .size_id = size.id,
-      .num_doppler = size.doppler,
-      .num_range = size.range,
-      .num_tx = rank4 ? 4 : 1,
-      .num_rx = rank4 ? 4 : 1,
-      .cosine = cosine,
-      .live_override = live_override};
+NotchScenario make_scenario(const SizeSpec& size, bool cosine, bool rank4,
+                            bool live_override = false) {
+  const std::string variant = std::string(cosine ? "cosine" : "hard") +
+                              (rank4 ? "_mimo" : "_siso") + (live_override ? "_live" : "");
+  return NotchScenario{.id = "doppler_notch_" + variant + "_" + size.id,
+                       .size_id = size.id,
+                       .num_doppler = size.doppler,
+                       .num_range = size.range,
+                       .num_tx = rank4 ? 4 : 1,
+                       .num_rx = rank4 ? 4 : 1,
+                       .cosine = cosine,
+                       .live_override = live_override};
 }
 
 std::vector<int64_t> input_shape(const NotchScenario& scenario) {
   if (scenario.num_tx > 1) {
-    return {scenario.num_tx, scenario.num_rx, scenario.num_doppler,
-            scenario.num_range};
+    return {scenario.num_tx, scenario.num_rx, scenario.num_doppler, scenario.num_range};
   }
   return {scenario.num_doppler, scenario.num_range};
 }
 
-perf::TimingCollector run_notch_graph(const NotchScenario& scenario,
-                                      const perf::RunPlan& plan) {
-  auto axis =
-      perf::make_power_map_device<PerfPrecision>({scenario.num_doppler});
-  auto maps =
-      perf::make_iq_cube_device<PerfPrecision>(input_shape(scenario));
-  const auto configure = [&](holoscan::Graph& graph,
-                             holoscan::CompileOptions& options) {
+perf::TimingCollector run_notch_graph(const NotchScenario& scenario, const perf::RunPlan& plan) {
+  auto axis = perf::make_power_map_device<PerfPrecision>({scenario.num_doppler});
+  auto maps = perf::make_iq_cube_device<PerfPrecision>(input_shape(scenario));
+  const auto configure = [&](holoscan::Graph& graph, holoscan::CompileOptions& options) {
     hr::MaxTensorExtents extents;
     extents.max_doppler_bins = scenario.num_doppler;
     extents.max_range_bins = scenario.num_range;
@@ -100,8 +93,7 @@ perf::TimingCollector run_notch_graph(const NotchScenario& scenario,
       extents.max_tx = scenario.num_tx;
       extents.max_rx = scenario.num_rx;
     }
-    auto op =
-        graph.op<hr::DopplerNotchOp<PerfPrecision>>("notch", extents);
+    auto op = graph.op<hr::DopplerNotchOp<PerfPrecision>>("notch", extents);
     hr::DopplerNotchParams params;
     params.stop_half_width = 0.5;
     params.transition_width = scenario.cosine ? 1.0 : 0.0;
@@ -112,10 +104,9 @@ perf::TimingCollector run_notch_graph(const NotchScenario& scenario,
   };
   if (scenario.live_override) {
     return perf::run_perf_graph_dual_with_override(
-        std::move(axis), std::move(maps), plan.total_frames,
-        plan.override_at, 0.0, 1.0, "doppler-notch-perf",
-        [&](holoscan::Graph& graph, const auto& source,
-            holoscan::CompileOptions& options) {
+        std::move(axis), std::move(maps), plan.total_frames, plan.override_at, 0.0, 1.0,
+        "doppler-notch-perf",
+        [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
           auto [op, sink] = configure(graph, options);
           const holoscan::ConnectionOptions queue{.queue_depth = 4U};
           graph.add_flow(source->out_a, op->velocity_bins, queue);
@@ -126,10 +117,8 @@ perf::TimingCollector run_notch_graph(const NotchScenario& scenario,
         });
   }
   return perf::run_perf_graph_dual(
-      std::move(axis), std::move(maps), plan.total_frames,
-      "doppler-notch-perf",
-      [&](holoscan::Graph& graph, const auto& source,
-          holoscan::CompileOptions& options) {
+      std::move(axis), std::move(maps), plan.total_frames, "doppler-notch-perf",
+      [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
         auto [op, sink] = configure(graph, options);
         const holoscan::ConnectionOptions queue{.queue_depth = 4U};
         graph.add_flow(source->out_a, op->velocity_bins, queue);
@@ -152,53 +141,44 @@ perf::ResultRow base_row(const NotchScenario& scenario) {
   return row;
 }
 
-void fill_throughput(perf::ResultRow* row,
-                     const NotchScenario& scenario) {
-  if (row->latency.median_ms <= 0.0) return;
+void fill_throughput(perf::ResultRow* row, const NotchScenario& scenario) {
+  if (row->latency.median_ms <= 0.0)
+    return;
   int64_t elements = 1;
-  for (const int64_t extent : input_shape(scenario)) elements *= extent;
+  for (const int64_t extent : input_shape(scenario))
+    elements *= extent;
   const double seconds = row->latency.median_ms / 1000.0;
   row->cells_per_second = static_cast<double>(elements) / seconds;
   row->estimated_effective_gbps =
-      2.0 * static_cast<double>(elements) *
-      sizeof(std::complex<PerfPrecision>) / seconds / 1e9;
+      2.0 * static_cast<double>(elements) * sizeof(std::complex<PerfPrecision>) / seconds / 1e9;
 }
 
 struct NotchTraits : perf::PerfDriverDefaults {
   using Scenario = NotchScenario;
 
   static const char* tool_name() { return "perf_doppler_notch"; }
-  static const char* tool_description() {
-    return "DopplerNotchOp performance characterization";
-  }
-  static const char* sizes_all_help() {
-    return "Hard/cosine and rank-2/rank-4 sweep";
-  }
-  static const char* sizes_subset_help() {
-    return "Notch sweep over selected sizes";
-  }
-  static const char* full_help() {
-    return "Full notch variant and size matrix";
-  }
+  static const char* tool_description() { return "DopplerNotchOp performance characterization"; }
+  static const char* sizes_all_help() { return "Hard/cosine and rank-2/rank-4 sweep"; }
+  static const char* sizes_subset_help() { return "Notch sweep over selected sizes"; }
+  static const char* full_help() { return "Full notch variant and size matrix"; }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
     std::vector<perf::SizeDef> result;
     for (const auto& size : size_ladder()) {
-      result.push_back(perf::SizeDef{
-          .id = size.id,
-          .shape = {size.doppler, size.range},
-          .cells = size.doppler * size.range,
-          .role = size.role});
+      result.push_back(perf::SizeDef{.id = size.id,
+                                     .shape = {size.doppler, size.range},
+                                     .cells = size.doppler * size.range,
+                                     .role = size.role});
     }
     return result;
   }
 
-  static std::vector<Scenario> build_size_sweep(
-      const std::vector<std::string>& ids) {
+  static std::vector<Scenario> build_size_sweep(const std::vector<std::string>& ids) {
     std::vector<Scenario> result;
     for (const auto& id : ids) {
       const SizeSpec* size = find_size(id);
-      if (size == nullptr) continue;
+      if (size == nullptr)
+        continue;
       for (const bool cosine : {false, true}) {
         result.push_back(make_scenario(*size, cosine, false));
         result.push_back(make_scenario(*size, cosine, true));
@@ -209,22 +189,17 @@ struct NotchTraits : perf::PerfDriverDefaults {
 
   static std::vector<Scenario> build_default_matrix() {
     auto result = build_size_sweep({"xs", "md", "xl"});
-    result.push_back(
-        make_scenario(*find_size("md"), true, true, true));
+    result.push_back(make_scenario(*find_size("md"), true, true, true));
     return result;
   }
 
-  static std::vector<Scenario> build_full_matrix() {
-    return build_size_sweep({"xs", "md", "xl"});
-  }
+  static std::vector<Scenario> build_full_matrix() { return build_size_sweep({"xs", "md", "xl"}); }
 
-  static void run_scenario(const Scenario& scenario,
-                           const perf::RunSettings& settings,
+  static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan =
-        perf::make_run_plan(settings, scenario.live_override);
-    const auto samples = perf::collect_scenario_samples(
-        settings, plan, [&](int, const perf::RunPlan& run) {
+    const perf::RunPlan plan = perf::make_run_plan(settings, scenario.live_override);
+    const auto samples =
+        perf::collect_scenario_samples(settings, plan, [&](int, const perf::RunPlan& run) {
           return run_notch_graph(scenario, run);
         });
     perf::append_setup_row(base_row(scenario), samples, report);
@@ -241,8 +216,7 @@ struct NotchTraits : perf::PerfDriverDefaults {
       settings.warmup_frames = 0;
       settings.measured_frames = 2;
       settings.repeats = 1;
-      run_scenario(make_scenario(*find_size("xs"), false, false),
-                   settings, &discarded);
+      run_scenario(make_scenario(*find_size("xs"), false, false), settings, &discarded);
     });
   }
 };

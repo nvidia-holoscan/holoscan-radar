@@ -55,7 +55,7 @@ struct RangeScenario {
   std::string size_id;
   int64_t num_chirps{0};
   int64_t samples_per_chirp{0};
-  int64_t channels{1};  // leading batch axis (e.g. rx elements)
+  int64_t channels{1};                           // leading batch axis (e.g. rx elements)
   hr::WindowType window{hr::WindowType::kNone};  // build-time range window
 };
 
@@ -123,10 +123,8 @@ std::vector<int64_t> cube_shape(const RangeScenario& scen) {
 // Graph: adc_cube source -> range op -> terminal (profiles) + null (bins).
 // range_bins is always emitted here because we set a valid waveform.
 // ---------------------------------------------------------------------------
-perf::TimingCollector run_range_graph(const RangeScenario& scen,
-                                      int total_frames) {
-  auto cube =
-      perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen));
+perf::TimingCollector run_range_graph(const RangeScenario& scen, int total_frames) {
+  auto cube = perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen));
   hr::MaxTensorExtents extents;
   extents.max_chirps = scen.num_chirps;
   extents.max_range_bins = scen.samples_per_chirp;
@@ -135,32 +133,24 @@ perf::TimingCollector run_range_graph(const RangeScenario& scen,
   }
   return perf::run_perf_graph(
       std::move(cube), total_frames, "range-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
-        auto op =
-            graph.op<hr::FMCWRangeProcessorOp<PerfPrecision>>(
-                "range", extents);
+      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
+        auto op = graph.op<hr::FMCWRangeProcessorOp<PerfPrecision>>("range", extents);
         hr::FMCWRangeProcessorParams params;
         params.waveform = make_waveform();
         params.range_window = window_of(scen.window);
         op.set_params(std::move(params));
-        const auto sink =
-            graph.op<perf::PerfTerminalSinkOp>("out_sink");
-        const auto ns =
-            graph.op<perf::PerfNullSinkOp>("bins_sink");
+        const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
+        const auto ns = graph.op<perf::PerfNullSinkOp>("bins_sink");
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
         graph.add_flow(src->out, op->adc_cube, q);
         graph.add_flow(op->range_profiles, sink->in, q);
         graph.add_flow(op->range_bins, ns->in, q);
-        perf::bind_tensor_out(
-            options, "range", "range_profiles");
-        perf::bind_tensor_out(
-            options, "range", "range_bins");
+        perf::bind_tensor_out(options, "range", "range_profiles");
+        perf::bind_tensor_out(options, "range", "range_bins");
       });
 }
 
-void fill_throughput(perf::ResultRow* row, const RangeScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const RangeScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
@@ -173,10 +163,8 @@ void fill_throughput(perf::ResultRow* row, const RangeScenario& scen,
 
   const double csz = sizeof(std::complex<PerfPrecision>);
   const double in_bytes = batch * chirps * n * csz;
-  const double out_bytes = batch * chirps * n * csz +
-                           n * sizeof(PerfPrecision);
-  row->estimated_effective_gbps =
-      (in_bytes + out_bytes) / sec / 1e9;
+  const double out_bytes = batch * chirps * n * csz + n * sizeof(PerfPrecision);
+  row->estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9;
 }
 
 perf::ResultRow base_row(const RangeScenario& scen) {
@@ -193,8 +181,7 @@ perf::ResultRow base_row(const RangeScenario& scen) {
   return row;
 }
 
-RangeScenario make_scenario(hr::WindowType window, const SizeSpec& s,
-                            int64_t channels = 1) {
+RangeScenario make_scenario(hr::WindowType window, const SizeSpec& s, int64_t channels = 1) {
   RangeScenario sc;
   sc.size_id = s.id;
   sc.num_chirps = s.num_chirps;
@@ -217,9 +204,7 @@ RangeScenario make_scenario(hr::WindowType window, const SizeSpec& s,
 struct RangeTraits : perf::PerfDriverDefaults {
   using Scenario = RangeScenario;
 
-  static const char* tool_name() {
-    return "perf_fmcw_range_processor";
-  }
+  static const char* tool_name() { return "perf_fmcw_range_processor"; }
   static const char* tool_description() {
     return "FMCWRangeProcessorOp performance characterization "
            "(HSDK 5 Graph)";
@@ -252,29 +237,23 @@ struct RangeTraits : perf::PerfDriverDefaults {
   static std::vector<RangeScenario> build_default_matrix() {
     std::vector<RangeScenario> out;
     for (const char* sid : {"xs", "md", "lg", "xl"}) {
-      out.push_back(make_scenario(
-          hr::WindowType::kNone, must_find_size(sid)));
+      out.push_back(make_scenario(hr::WindowType::kNone, must_find_size(sid)));
     }
     const SizeSpec& md = must_find_size("md");
-    out.push_back(
-        make_scenario(hr::WindowType::kHann, md));
-    out.push_back(
-        make_scenario(hr::WindowType::kNone, md, 4));
+    out.push_back(make_scenario(hr::WindowType::kHann, md));
+    out.push_back(make_scenario(hr::WindowType::kNone, md, 4));
     return out;
   }
 
-  static std::vector<RangeScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<RangeScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<RangeScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '"
-                  << sid << "', skipping\n";
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
         continue;
       }
-      out.push_back(
-          make_scenario(hr::WindowType::kNone, *s));
+      out.push_back(make_scenario(hr::WindowType::kNone, *s));
     }
     return out;
   }
@@ -282,29 +261,25 @@ struct RangeTraits : perf::PerfDriverDefaults {
   static std::vector<RangeScenario> build_full_matrix() {
     std::vector<RangeScenario> out;
     for (const auto& s : size_ladder()) {
-      for (auto w : {hr::WindowType::kNone,
-                     hr::WindowType::kHann}) {
+      for (auto w : {hr::WindowType::kNone, hr::WindowType::kHann}) {
         out.push_back(make_scenario(w, s));
       }
     }
     for (const char* sid : {"md", "lg"}) {
       const SizeSpec& s = must_find_size(sid);
       for (int64_t ch : {4, 16}) {
-        out.push_back(make_scenario(
-            hr::WindowType::kNone, s, ch));
+        out.push_back(make_scenario(hr::WindowType::kNone, s, ch));
       }
     }
     return out;
   }
 
-  static void run_scenario(const RangeScenario& scen,
-                           const perf::RunSettings& rs,
+  static void run_scenario(const RangeScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     // Port coverage is landed; override_ms timing remains deferred (§1 / §8).
-    const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/false);
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_range_graph(scen, p.total_frames);
         });
 
@@ -329,10 +304,7 @@ struct RangeTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(
-          make_scenario(hr::WindowType::kNone,
-                        must_find_size("xs")),
-          warm, &discarded);
+      run_scenario(make_scenario(hr::WindowType::kNone, must_find_size("xs")), warm, &discarded);
     });
   }
 };
@@ -340,6 +312,5 @@ struct RangeTraits : perf::PerfDriverDefaults {
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<RangeTraits>(
-      argc, argv);
+  return holoscan::radar::perf::perf_main<RangeTraits>(argc, argv);
 }

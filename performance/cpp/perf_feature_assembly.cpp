@@ -63,8 +63,7 @@ const std::vector<SizeSpec>& size_ladder() {
       {"sm", 128, 512, "compact sensor"},
       {"md", 256, 512, "common dev size"},
       {"lg", 512, 1024, "moderate production-scale"},
-      {"xlw", 1024, 2048,
-       "range-heavy moderate (v1 upper bound)"}};
+      {"xlw", 1024, 2048, "range-heavy moderate (v1 upper bound)"}};
   return ladder;
 }
 
@@ -87,84 +86,63 @@ const SizeSpec& must_find_size(const std::string& id) {
 }
 
 std::vector<hr::AssemblyFeature> pack_features() {
-  return {hr::AssemblyFeature::kRange,
-          hr::AssemblyFeature::kVelocity};
+  return {hr::AssemblyFeature::kRange, hr::AssemblyFeature::kVelocity};
 }
 
 template <typename T>
-std::shared_ptr<holoscan::Tensor> make_device_from_host(
-    const std::vector<T>& host, const std::vector<int64_t>& shape,
-    DLDataType dtype) {
+std::shared_ptr<holoscan::Tensor> make_device_from_host(const std::vector<T>& host,
+                                                        const std::vector<int64_t>& shape,
+                                                        DLDataType dtype) {
   auto tensor = hr::make_device_tensor(shape, dtype);
   if (!host.empty()) {
     auto mut = tensor->mutable_data();
     if (!mut) {
-      throw std::runtime_error(
-          "perf_feature_assembly: tensor not writable");
+      throw std::runtime_error("perf_feature_assembly: tensor not writable");
     }
-    if (cudaMemcpy(mut.value(), host.data(), sizeof(T) * host.size(),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error(
-          "perf_feature_assembly: cudaMemcpy H2D failed");
+    if (cudaMemcpy(mut.value(), host.data(), sizeof(T) * host.size(), cudaMemcpyHostToDevice) !=
+        cudaSuccess) {
+      throw std::runtime_error("perf_feature_assembly: cudaMemcpy H2D failed");
     }
   }
   return tensor;
 }
 
-std::shared_ptr<holoscan::Tensor> make_detection_idx(
-    int64_t num_detections, int64_t doppler, int64_t range) {
-  std::vector<int64_t> host(
-      static_cast<size_t>(
-          std::max<int64_t>(num_detections, 0) * 2),
-      0);
+std::shared_ptr<holoscan::Tensor> make_detection_idx(int64_t num_detections, int64_t doppler,
+                                                     int64_t range) {
+  std::vector<int64_t> host(static_cast<size_t>(std::max<int64_t>(num_detections, 0) * 2), 0);
   const int64_t cells = std::max<int64_t>(doppler * range, 1);
   for (int64_t i = 0; i < num_detections; ++i) {
     const int64_t cell = (i * 997) % cells;
     host[static_cast<size_t>(i * 2)] = cell / range;
     host[static_cast<size_t>(i * 2 + 1)] = cell % range;
   }
-  return make_device_from_host(host, {num_detections, 2},
-                               kInt64Dtype);
+  return make_device_from_host(host, {num_detections, 2}, kInt64Dtype);
 }
 
-
-perf::TimingCollector run_feat_graph(const FeatScenario& scen,
-                                     int total_frames) {
-  auto idx_t = make_detection_idx(scen.num_detections,
-                                  scen.doppler, scen.range);
-  std::vector<PerfPrecision> range_host(
-      static_cast<std::size_t>(scen.range));
-  std::vector<PerfPrecision> velocity_host(
-      static_cast<std::size_t>(scen.doppler));
+perf::TimingCollector run_feat_graph(const FeatScenario& scen, int total_frames) {
+  auto idx_t = make_detection_idx(scen.num_detections, scen.doppler, scen.range);
+  std::vector<PerfPrecision> range_host(static_cast<std::size_t>(scen.range));
+  std::vector<PerfPrecision> velocity_host(static_cast<std::size_t>(scen.doppler));
   for (int64_t i = 0; i < scen.range; ++i) {
-    range_host[static_cast<std::size_t>(i)] =
-        static_cast<PerfPrecision>(i);
+    range_host[static_cast<std::size_t>(i)] = static_cast<PerfPrecision>(i);
   }
   for (int64_t i = 0; i < scen.doppler; ++i) {
-    velocity_host[static_cast<std::size_t>(i)] =
-        static_cast<PerfPrecision>(i);
+    velocity_host[static_cast<std::size_t>(i)] = static_cast<PerfPrecision>(i);
   }
-  auto range_t = make_device_from_host(
-      range_host, {scen.range}, hr::real_dtype<PerfPrecision>());
-  auto velocity_t = make_device_from_host(
-      velocity_host, {scen.doppler}, hr::real_dtype<PerfPrecision>());
+  auto range_t = make_device_from_host(range_host, {scen.range}, hr::real_dtype<PerfPrecision>());
+  auto velocity_t =
+      make_device_from_host(velocity_host, {scen.doppler}, hr::real_dtype<PerfPrecision>());
   return perf::run_perf_graph_triple(
-      std::move(idx_t), std::move(range_t), std::move(velocity_t),
-      total_frames, "feat-asm-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
+      std::move(idx_t), std::move(range_t), std::move(velocity_t), total_frames, "feat-asm-perf",
+      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
-        extents.max_points = std::max<int64_t>(
-            scen.num_detections, 1);
-        extents.max_features = static_cast<int64_t>(
-            pack_features().size());
+        extents.max_points = std::max<int64_t>(scen.num_detections, 1);
+        extents.max_features = static_cast<int64_t>(pack_features().size());
         auto features = pack_features();
         auto op =
-            graph.op<hr::FeatureAssemblyOp<PerfPrecision>>(
-                "feat", extents, std::move(features));
+            graph.op<hr::FeatureAssemblyOp<PerfPrecision>>("feat", extents, std::move(features));
 
-        const auto pts_sink =
-            graph.op<perf::PerfTerminalSinkOp>("pts_sink");
+        const auto pts_sink = graph.op<perf::PerfTerminalSinkOp>("pts_sink");
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
 
         graph.add_flow(src->out_a, op->detection_idx, q);
@@ -176,9 +154,7 @@ perf::TimingCollector run_feat_graph(const FeatScenario& scen,
       });
 }
 
-void fill_throughput(perf::ResultRow* row,
-                     const FeatScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const FeatScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
@@ -187,16 +163,11 @@ void fill_throughput(perf::ResultRow* row,
   row->cells_per_second = n / sec;
 
   const double tsz = sizeof(PerfPrecision);
-  const double idx_bytes =
-      n * 2.0 * static_cast<double>(sizeof(int64_t));
-  const double axis_bytes =
-      static_cast<double>(scen.doppler + scen.range) * tsz;
-  const int64_t num_features =
-      static_cast<int64_t>(pack_features().size());
-  const double points_bytes =
-      n * static_cast<double>(num_features) * tsz;
-  row->estimated_effective_gbps =
-      (idx_bytes + axis_bytes + points_bytes) / sec / 1e9;
+  const double idx_bytes = n * 2.0 * static_cast<double>(sizeof(int64_t));
+  const double axis_bytes = static_cast<double>(scen.doppler + scen.range) * tsz;
+  const int64_t num_features = static_cast<int64_t>(pack_features().size());
+  const double points_bytes = n * static_cast<double>(num_features) * tsz;
+  row->estimated_effective_gbps = (idx_bytes + axis_bytes + points_bytes) / sec / 1e9;
 }
 
 perf::ResultRow base_row(const FeatScenario& scen) {
@@ -213,16 +184,14 @@ perf::ResultRow base_row(const FeatScenario& scen) {
   return row;
 }
 
-FeatScenario make_scenario(const SizeSpec& s,
-                           int64_t num_detections) {
+FeatScenario make_scenario(const SizeSpec& s, int64_t num_detections) {
   FeatScenario sc;
   sc.size_id = s.id;
   sc.doppler = s.doppler;
   sc.range = s.range;
   sc.num_detections = num_detections;
   std::ostringstream id;
-  id << "feat_asm_physical_" << s.id << "_n" << num_detections
-     << "_compute";
+  id << "feat_asm_physical_" << s.id << "_n" << num_detections << "_compute";
   sc.id = id.str();
   return sc;
 }
@@ -230,9 +199,7 @@ FeatScenario make_scenario(const SizeSpec& s,
 struct FeatTraits : perf::PerfDriverDefaults {
   using Scenario = FeatScenario;
 
-  static const char* tool_name() {
-    return "perf_feature_assembly";
-  }
+  static const char* tool_name() { return "perf_feature_assembly"; }
   static const char* tool_description() {
     return "FeatureAssemblyOp performance characterization "
            "(HSDK 5 Graph)";
@@ -275,14 +242,12 @@ struct FeatTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<FeatScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<FeatScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<FeatScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid
-                  << "', skipping\n";
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
         continue;
       }
       out.push_back(make_scenario(*s, 1024));
@@ -292,8 +257,7 @@ struct FeatTraits : perf::PerfDriverDefaults {
 
   static std::vector<FeatScenario> build_full_matrix() {
     std::vector<FeatScenario> out;
-    const std::vector<int64_t> counts = {0,    64,    256, 1024,
-                                         4096, 16384, 65536};
+    const std::vector<int64_t> counts = {0, 64, 256, 1024, 4096, 16384, 65536};
     for (const auto& s : size_ladder()) {
       for (int64_t n : counts) {
         out.push_back(make_scenario(s, n));
@@ -302,13 +266,11 @@ struct FeatTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static void run_scenario(const FeatScenario& scen,
-                           const perf::RunSettings& rs,
+  static void run_scenario(const FeatScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/false);
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_feat_graph(scen, p.total_frames);
         });
 

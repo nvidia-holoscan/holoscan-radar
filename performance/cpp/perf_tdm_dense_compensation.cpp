@@ -116,8 +116,7 @@ hr::DDMCodeDescriptor make_ddm_nl_code(int64_t num_tx, int64_t num_doppler) {
   code.phase_codes.resize(static_cast<size_t>(num_tx * num_doppler));
   for (int64_t m = 0; m < num_tx; ++m) {
     for (int64_t k = 0; k < num_doppler; ++k) {
-      const double phase =
-          std::sin(0.7 * static_cast<double>(k) + static_cast<double>(m)) * 2.0;
+      const double phase = std::sin(0.7 * static_cast<double>(k) + static_cast<double>(m)) * 2.0;
       code.phase_codes[static_cast<size_t>(m * num_doppler + k)] =
           std::complex<double>(std::cos(phase), std::sin(phase));
     }
@@ -129,20 +128,17 @@ std::vector<int64_t> input_shape(const CompensationScenario& scen) {
   return {scen.num_tx, scen.num_rx, scen.num_doppler, scen.num_range_bins};
 }
 
-perf::TimingCollector run_compensation_graph(const CompensationScenario& scen,
-                                             int total_frames) {
+perf::TimingCollector run_compensation_graph(const CompensationScenario& scen, int total_frames) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(input_shape(scen));
   return perf::run_perf_graph(
       std::move(cube), total_frames, "compensation-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
+      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_tx = scen.num_tx;
         extents.max_rx = scen.num_rx;
         extents.max_doppler_bins = scen.num_doppler;
         extents.max_range_bins = scen.num_range_bins;
-        auto op = graph.op<hr::TDMDenseCompensationOp<PerfPrecision>>(
-            "compensation", extents);
+        auto op = graph.op<hr::TDMDenseCompensationOp<PerfPrecision>>("compensation", extents);
         hr::TDMDenseCompensationParams params;
         params.waveform = make_waveform(kDefaultPri);
         op.set_params(std::move(params));
@@ -154,8 +150,7 @@ perf::TimingCollector run_compensation_graph(const CompensationScenario& scen,
       });
 }
 
-void fill_throughput(perf::ResultRow* row, const CompensationScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const CompensationScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
@@ -209,9 +204,7 @@ struct CompensationTraits : perf::PerfDriverDefaults {
   static const char* sizes_subset_help() {
     return "TDM dense compensation sweep across an explicit subset";
   }
-  static const char* full_help() {
-    return "Full TDM dense compensation size matrix";
-  }
+  static const char* full_help() { return "Full TDM dense compensation size matrix"; }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
     std::vector<perf::SizeDef> out;
@@ -234,28 +227,28 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<CompensationScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<CompensationScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<CompensationScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* size = find_size(sid);
-      if (size != nullptr) out.push_back(make_scenario(*size));
+      if (size != nullptr)
+        out.push_back(make_scenario(*size));
     }
     return out;
   }
 
   static std::vector<CompensationScenario> build_full_matrix() {
     std::vector<CompensationScenario> out;
-    for (const auto& size : size_ladder()) out.push_back(make_scenario(size));
+    for (const auto& size : size_ladder())
+      out.push_back(make_scenario(size));
     return out;
   }
 
-  static void run_scenario(const CompensationScenario& scen,
-                           const perf::RunSettings& rs,
+  static void run_scenario(const CompensationScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_compensation_graph(scen, p.total_frames);
         });
 

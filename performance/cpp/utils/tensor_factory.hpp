@@ -33,8 +33,7 @@ namespace holoscan::radar::perf {
 
 //  TensorMap is gone; ports carry a plain Tensor. Keep a
 // shared_ptr alias helper so unported consumers can migrate incrementally.
-inline std::shared_ptr<holoscan::Tensor> as_tensor(
-    std::shared_ptr<holoscan::Tensor> tensor) {
+inline std::shared_ptr<holoscan::Tensor> as_tensor(std::shared_ptr<holoscan::Tensor> tensor) {
   return tensor;
 }
 
@@ -54,26 +53,23 @@ std::vector<T> deterministic_power_host(const std::vector<int64_t>& shape) {
   // common row widths so peaks do not all land in one column.
   const int64_t stride = 997;
   for (int64_t i = 0; i < count; ++i) {
-    host[static_cast<size_t>(i)] =
-        (i % stride == 0) ? static_cast<T>(500.0) : floor;
+    host[static_cast<size_t>(i)] = (i % stride == 0) ? static_cast<T>(500.0) : floor;
   }
   return host;
 }
 
 // Allocate a device tensor of `shape` and upload the deterministic power map.
 template <typename T>
-std::shared_ptr<holoscan::Tensor> make_power_map_device(
-    const std::vector<int64_t>& shape) {
+std::shared_ptr<holoscan::Tensor> make_power_map_device(const std::vector<int64_t>& shape) {
   const auto host = deterministic_power_host<T>(shape);
   auto tensor = make_device_tensor(shape, real_dtype<T>());
   auto mut = tensor->mutable_data();
   if (!mut) {
-    throw std::runtime_error(
-        std::string("make_power_map_device: tensor not writable: ") +
-        mut.error().message);
+    throw std::runtime_error(std::string("make_power_map_device: tensor not writable: ") +
+                             mut.error().message);
   }
-  if (cudaMemcpy(mut.value(), host.data(), sizeof(T) * host.size(),
-                 cudaMemcpyHostToDevice) != cudaSuccess) {
+  if (cudaMemcpy(mut.value(), host.data(), sizeof(T) * host.size(), cudaMemcpyHostToDevice) !=
+      cudaSuccess) {
     throw std::runtime_error("make_power_map_device: cudaMemcpy H2D failed");
   }
   return tensor;
@@ -85,8 +81,7 @@ std::shared_ptr<holoscan::Tensor> make_power_map_device(
 // spectral structure. Patterned (not random) so the same shape yields the same
 // payload across commits on the same box.
 template <typename T>
-std::vector<std::complex<T>> deterministic_iq_host(
-    const std::vector<int64_t>& shape) {
+std::vector<std::complex<T>> deterministic_iq_host(const std::vector<int64_t>& shape) {
   int64_t count = 1;
   for (int64_t d : shape) {
     count *= d;
@@ -99,14 +94,11 @@ std::vector<std::complex<T>> deterministic_iq_host(
   const double k2 = 17.0;
   for (int64_t i = 0; i < count; ++i) {
     const int64_t s = (n > 0) ? (i % n) : 0;
-    const double phase1 = kTwoPi * k1 * static_cast<double>(s) /
-                          static_cast<double>(n > 0 ? n : 1);
-    const double phase2 = kTwoPi * k2 * static_cast<double>(s) /
-                          static_cast<double>(n > 0 ? n : 1);
+    const double phase1 = kTwoPi * k1 * static_cast<double>(s) / static_cast<double>(n > 0 ? n : 1);
+    const double phase2 = kTwoPi * k2 * static_cast<double>(s) / static_cast<double>(n > 0 ? n : 1);
     const double re = std::cos(phase1) + 0.5 * std::cos(phase2) + 0.1;
     const double im = std::sin(phase1) + 0.5 * std::sin(phase2);
-    host[static_cast<size_t>(i)] =
-        std::complex<T>(static_cast<T>(re), static_cast<T>(im));
+    host[static_cast<size_t>(i)] = std::complex<T>(static_cast<T>(re), static_cast<T>(im));
   }
   return host;
 }
@@ -115,18 +107,15 @@ std::vector<std::complex<T>> deterministic_iq_host(
 // deterministic IQ payload. Used for adc_cube (range/fused) and range_profiles
 // (Doppler/clutter) inputs.
 template <typename T>
-std::shared_ptr<holoscan::Tensor> make_iq_cube_device(
-    const std::vector<int64_t>& shape) {
+std::shared_ptr<holoscan::Tensor> make_iq_cube_device(const std::vector<int64_t>& shape) {
   const auto host = deterministic_iq_host<T>(shape);
   auto tensor = make_device_tensor(shape, complex_dtype<T>());
   auto mut = tensor->mutable_data();
   if (!mut) {
-    throw std::runtime_error(
-        std::string("make_iq_cube_device: tensor not writable: ") +
-        mut.error().message);
+    throw std::runtime_error(std::string("make_iq_cube_device: tensor not writable: ") +
+                             mut.error().message);
   }
-  if (cudaMemcpy(mut.value(), host.data(),
-                 sizeof(std::complex<T>) * host.size(),
+  if (cudaMemcpy(mut.value(), host.data(), sizeof(std::complex<T>) * host.size(),
                  cudaMemcpyHostToDevice) != cudaSuccess) {
     throw std::runtime_error("make_iq_cube_device: cudaMemcpy H2D failed");
   }

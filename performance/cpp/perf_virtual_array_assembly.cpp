@@ -69,8 +69,7 @@ const std::vector<SizeSpec>& size_ladder() {
       {"sm", 4, 8, 64, 256, "compact MIMO"},
       {"md", 4, 16, 128, 512, "common dev size"},
       {"lg", 8, 32, 256, 1024, "moderate MIMO"},
-      {"xl", 8, 64, 512, 2048,
-       "upper characterization bound"}};
+      {"xl", 8, 64, 512, 2048, "upper characterization bound"}};
   return ladder;
 }
 
@@ -86,15 +85,13 @@ const SizeSpec* find_size(const std::string& id) {
 const SizeSpec& must_find_size(const std::string& id) {
   const SizeSpec* s = find_size(id);
   if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id
-              << "'\n";
+    std::cerr << "internal error: unknown size id '" << id << "'\n";
     std::abort();
   }
   return *s;
 }
 
-std::vector<double> linear_positions(int64_t count,
-                                     double spacing) {
+std::vector<double> linear_positions(int64_t count, double spacing) {
   std::vector<double> out(static_cast<size_t>(count * 3));
   for (int64_t i = 0; i < count; ++i) {
     const size_t base = static_cast<size_t>(i * 3);
@@ -107,9 +104,12 @@ std::vector<double> linear_positions(int64_t count,
 
 std::string policy_tag(hr::OverlapPolicy policy) {
   switch (policy) {
-    case hr::OverlapPolicy::kDedup: return "dedup";
-    case hr::OverlapPolicy::kAverage: return "avg";
-    case hr::OverlapPolicy::kKeepAll: return "keep";
+    case hr::OverlapPolicy::kDedup:
+      return "dedup";
+    case hr::OverlapPolicy::kAverage:
+      return "avg";
+    case hr::OverlapPolicy::kKeepAll:
+      return "keep";
   }
   return "unk";
 }
@@ -117,85 +117,60 @@ std::string policy_tag(hr::OverlapPolicy policy) {
 // The contract input is exactly (M_tx, N_rx, num_doppler, num_range_bins).
 // There is no leading batch rung: an extra leading dim is opaque batch, which
 // the operator rejects (see VirtualArrayAssemblyOp.RejectsOpaqueLeadingBatch).
-std::vector<int64_t> separated_shape(
-    const AssemblyScenario& scen) {
-  return {scen.num_tx, scen.num_rx, scen.num_doppler,
-          scen.num_range_bins};
+std::vector<int64_t> separated_shape(const AssemblyScenario& scen) {
+  return {scen.num_tx, scen.num_rx, scen.num_doppler, scen.num_range_bins};
 }
 
-perf::TimingCollector run_assembly_graph(
-    const AssemblyScenario& scen, const perf::RunPlan& plan) {
-  auto cube = perf::make_iq_cube_device<PerfPrecision>(
-      separated_shape(scen));
+perf::TimingCollector run_assembly_graph(const AssemblyScenario& scen, const perf::RunPlan& plan) {
+  auto cube = perf::make_iq_cube_device<PerfPrecision>(separated_shape(scen));
   // Value-agnostic gather: zero-fill loan is valid. Remaining xl gap vs
   // Include Graph publication cost in the measured path.
   constexpr double kOverrideWavelength = kDefaultWavelength * 1.1;
   return perf::run_perf_graph_with_override(
-      std::move(cube), plan.total_frames, plan.override_at,
-      kDefaultWavelength, kOverrideWavelength, "assembly-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
+      std::move(cube), plan.total_frames, plan.override_at, kDefaultWavelength, kOverrideWavelength,
+      "assembly-perf",
+      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_tx = scen.num_tx;
         extents.max_rx = scen.num_rx;
         extents.max_doppler_bins = scen.num_doppler;
         extents.max_range_bins = scen.num_range_bins;
-        auto op = graph.op<hr::VirtualArrayAssemblyOp<PerfPrecision>>(
-            "virtual_array", extents);
+        auto op = graph.op<hr::VirtualArrayAssemblyOp<PerfPrecision>>("virtual_array", extents);
         hr::VirtualArrayAssemblyParams params;
-        params.tx_positions =
-            linear_positions(scen.num_tx, 0.5);
-        params.rx_positions =
-            linear_positions(scen.num_rx, 0.5);
+        params.tx_positions = linear_positions(scen.num_tx, 0.5);
+        params.rx_positions = linear_positions(scen.num_rx, 0.5);
         params.wavelength = kDefaultWavelength;
         params.overlap_policy = scen.policy;
         op.set_params(std::move(params));
-        const auto sink =
-            graph.op<perf::PerfTerminalSinkOp>("out_sink");
+        const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
         const auto geom_drain =
-            graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>(
-                "geom_drain");
-        const holoscan::ConnectionOptions q{
-            .queue_depth = 4U};
+            graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>("geom_drain");
+        const holoscan::ConnectionOptions q{.queue_depth = 4U};
         graph.add_flow(src->out, op->rd_maps, q);
         graph.add_flow(src->override_out, op->wavelength, q);
         graph.add_flow(op->rd_maps_out, sink->in, q);
-        graph.add_flow(
-            op->array_geometry, geom_drain->in, q);
-        graph.partition("perf")
-            .add(src)
-            .add(op)
-            .add(sink)
-            .add(geom_drain);
-        perf::bind_tensor_out(
-            options, "virtual_array", "rd_maps_out");
+        graph.add_flow(op->array_geometry, geom_drain->in, q);
+        graph.partition("perf").add(src).add(op).add(sink).add(geom_drain);
+        perf::bind_tensor_out(options, "virtual_array", "rd_maps_out");
       },
       perf::PerfPublishMode::kFillInPlace);
 }
 
-void fill_throughput(perf::ResultRow* row,
-                     const AssemblyScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const AssemblyScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
   const double sec = median_ms / 1000.0;
-  const double elems =
-      static_cast<double>(scen.num_tx) *
-      static_cast<double>(scen.num_rx) *
-      static_cast<double>(scen.num_doppler) *
-      static_cast<double>(scen.num_range_bins);
+  const double elems = static_cast<double>(scen.num_tx) * static_cast<double>(scen.num_rx) *
+                       static_cast<double>(scen.num_doppler) *
+                       static_cast<double>(scen.num_range_bins);
   row->cells_per_second = elems / sec;
   const double csz = sizeof(std::complex<PerfPrecision>);
-  const double out_virtual =
-      static_cast<double>(scen.num_tx * scen.num_rx);
+  const double out_virtual = static_cast<double>(scen.num_tx * scen.num_rx);
   const double in_bytes = elems * csz;
-  const double out_bytes =
-      out_virtual *
-      static_cast<double>(scen.num_doppler) *
-      static_cast<double>(scen.num_range_bins) * csz;
-  row->estimated_effective_gbps =
-      (in_bytes + out_bytes) / sec / 1e9;
+  const double out_bytes = out_virtual * static_cast<double>(scen.num_doppler) *
+                           static_cast<double>(scen.num_range_bins) * csz;
+  row->estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9;
 }
 
 perf::ResultRow base_row(const AssemblyScenario& scen) {
@@ -210,9 +185,8 @@ perf::ResultRow base_row(const AssemblyScenario& scen) {
   return row;
 }
 
-AssemblyScenario make_scenario(
-    const SizeSpec& s,
-    hr::OverlapPolicy policy = hr::OverlapPolicy::kDedup) {
+AssemblyScenario make_scenario(const SizeSpec& s,
+                               hr::OverlapPolicy policy = hr::OverlapPolicy::kDedup) {
   AssemblyScenario sc;
   sc.size_id = s.id;
   sc.num_tx = s.num_tx;
@@ -229,16 +203,12 @@ AssemblyScenario make_scenario(
 struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
   using Scenario = AssemblyScenario;
 
-  static const char* tool_name() {
-    return "perf_virtual_array_assembly";
-  }
+  static const char* tool_name() { return "perf_virtual_array_assembly"; }
   static const char* tool_description() {
     return "VirtualArrayAssemblyOp performance "
            "characterization (HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() {
-    return "Dedup policy size sweep across the full ladder";
-  }
+  static const char* sizes_all_help() { return "Dedup policy size sweep across the full ladder"; }
   static const char* sizes_subset_help() {
     return "Dedup policy size sweep across an explicit "
            "subset";
@@ -253,18 +223,15 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
     for (const auto& s : size_ladder()) {
       perf::SizeDef def;
       def.id = s.id;
-      def.shape = {s.num_tx, s.num_rx, s.num_doppler,
-                   s.num_range_bins};
-      def.cells = s.num_tx * s.num_rx * s.num_doppler *
-                  s.num_range_bins;
+      def.shape = {s.num_tx, s.num_rx, s.num_doppler, s.num_range_bins};
+      def.cells = s.num_tx * s.num_rx * s.num_doppler * s.num_range_bins;
       def.role = s.role;
       out.push_back(def);
     }
     return out;
   }
 
-  static std::vector<AssemblyScenario>
-  build_default_matrix() {
+  static std::vector<AssemblyScenario> build_default_matrix() {
     std::vector<AssemblyScenario> out;
     for (const char* sid : {"xs", "md", "lg", "xl"}) {
       out.push_back(make_scenario(must_find_size(sid)));
@@ -272,14 +239,12 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<AssemblyScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<AssemblyScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<AssemblyScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid
-                  << "', skipping\n";
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
         continue;
       }
       out.push_back(make_scenario(*s));
@@ -287,34 +252,26 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<AssemblyScenario>
-  build_full_matrix() {
+  static std::vector<AssemblyScenario> build_full_matrix() {
     std::vector<AssemblyScenario> out;
     for (const auto& s : size_ladder()) {
       out.push_back(make_scenario(s));
     }
     const SizeSpec& md = must_find_size("md");
-    out.push_back(make_scenario(
-        md, hr::OverlapPolicy::kAverage));
-    out.push_back(make_scenario(
-        md, hr::OverlapPolicy::kKeepAll));
+    out.push_back(make_scenario(md, hr::OverlapPolicy::kAverage));
+    out.push_back(make_scenario(md, hr::OverlapPolicy::kKeepAll));
     return out;
   }
 
-  static void run_scenario(
-      const AssemblyScenario& scen,
-      const perf::RunSettings& rs,
-      perf::PerfReport* report) {
-    const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/true);
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan,
-        [&](int /*rep*/, const perf::RunPlan& p) {
+  static void run_scenario(const AssemblyScenario& scen, const perf::RunSettings& rs,
+                           perf::PerfReport* report) {
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_assembly_graph(scen, p);
         });
 
-    perf::append_setup_row(
-        base_row(scen), samples, report);
+    perf::append_setup_row(base_row(scen), samples, report);
 
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
@@ -335,8 +292,7 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs")),
-                   warm, &discarded);
+      run_scenario(make_scenario(must_find_size("xs")), warm, &discarded);
     });
   }
 };
@@ -344,6 +300,5 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<
-      VirtualAssemblyTraits>(argc, argv);
+  return holoscan::radar::perf::perf_main<VirtualAssemblyTraits>(argc, argv);
 }

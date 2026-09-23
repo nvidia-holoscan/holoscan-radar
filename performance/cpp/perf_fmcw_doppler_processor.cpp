@@ -45,7 +45,7 @@ using PerfPrecision = float;  // v1 characterizes single precision (complex64).
 
 struct SizeSpec {
   std::string id;
-  int64_t num_chirps;     // slow-time FFT length
+  int64_t num_chirps;  // slow-time FFT length
   int64_t num_range_bins;
   std::string role;
 };
@@ -65,8 +65,7 @@ const std::vector<SizeSpec>& size_ladder() {
       {"sm", 32, 256, "compact sensor / few chirps"},
       {"md", 64, 512, "common dev size"},
       {"lg", 128, 1024, "moderate production-scale"},
-      {"xl", 256, 2048,
-       "range-heavy moderate (v1 upper bound)"}};
+      {"xl", 256, 2048, "range-heavy moderate (v1 upper bound)"}};
   return ladder;
 }
 
@@ -82,8 +81,7 @@ const SizeSpec* find_size(const std::string& id) {
 const SizeSpec& must_find_size(const std::string& id) {
   const SizeSpec* s = find_size(id);
   if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '"
-              << id << "'\n";
+    std::cerr << "internal error: unknown size id '" << id << "'\n";
     std::abort();
   }
   return *s;
@@ -111,11 +109,9 @@ hr::FMCWWaveformDescriptor make_waveform() {
   return hr::FMCWWaveformDescriptor(spec);
 }
 
-std::vector<int64_t> profiles_shape(
-    const DopplerScenario& scen) {
+std::vector<int64_t> profiles_shape(const DopplerScenario& scen) {
   if (scen.channels > 1) {
-    return {scen.channels, scen.num_chirps,
-            scen.num_range_bins};
+    return {scen.channels, scen.num_chirps, scen.num_range_bins};
   }
   return {scen.num_chirps, scen.num_range_bins};
 }
@@ -125,66 +121,48 @@ std::vector<int64_t> profiles_shape(
 // (velocity_bins). velocity_bins is always emitted because we set a valid
 // waveform.
 // ---------------------------------------------------------------------------
-perf::TimingCollector run_doppler_graph(
-    const DopplerScenario& scen, int total_frames) {
-  auto cube = perf::make_iq_cube_device<PerfPrecision>(
-      profiles_shape(scen));
+perf::TimingCollector run_doppler_graph(const DopplerScenario& scen, int total_frames) {
+  auto cube = perf::make_iq_cube_device<PerfPrecision>(profiles_shape(scen));
   return perf::run_perf_graph(
       std::move(cube), total_frames, "doppler-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
+      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_chirps = scen.num_chirps;
         extents.max_range_bins = scen.num_range_bins;
         if (scen.channels > 1) {
           extents.max_rx = scen.channels;
         }
-        auto op =
-            graph.op<hr::FMCWDopplerProcessorOp<
-                PerfPrecision>>(
-                "doppler", extents);
+        auto op = graph.op<hr::FMCWDopplerProcessorOp<PerfPrecision>>("doppler", extents);
         hr::FMCWDopplerProcessorParams params;
         params.waveform = make_waveform();
         params.doppler_window = window_of(scen.window);
         op.set_params(std::move(params));
-        const auto sink =
-            graph.op<perf::PerfTerminalSinkOp>("out_sink");
-        const auto ns =
-            graph.op<perf::PerfNullSinkOp>("vel_sink");
-        const holoscan::ConnectionOptions q{
-            .queue_depth = 4U};
+        const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
+        const auto ns = graph.op<perf::PerfNullSinkOp>("vel_sink");
+        const holoscan::ConnectionOptions q{.queue_depth = 4U};
         graph.add_flow(src->out, op->range_profiles, q);
         graph.add_flow(op->rd_maps, sink->in, q);
         graph.add_flow(op->velocity_bins, ns->in, q);
-        perf::bind_tensor_out(
-            options, "doppler", "rd_maps");
-        perf::bind_tensor_out(
-            options, "doppler", "velocity_bins");
+        perf::bind_tensor_out(options, "doppler", "rd_maps");
+        perf::bind_tensor_out(options, "doppler", "velocity_bins");
       });
 }
 
-void fill_throughput(perf::ResultRow* row,
-                     const DopplerScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const DopplerScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
   const double sec = median_ms / 1000.0;
   const double batch = static_cast<double>(scen.channels);
-  const double doppler =
-      static_cast<double>(scen.num_chirps);
-  const double bins =
-      static_cast<double>(scen.num_range_bins);
+  const double doppler = static_cast<double>(scen.num_chirps);
+  const double bins = static_cast<double>(scen.num_range_bins);
   row->cells_per_second = batch * doppler * bins / sec;
   row->slices_per_second = batch * bins / sec;
 
   const double csz = sizeof(std::complex<PerfPrecision>);
   const double in_bytes = batch * doppler * bins * csz;
-  const double out_bytes =
-      batch * doppler * bins * csz +
-      doppler * sizeof(PerfPrecision);
-  row->estimated_effective_gbps =
-      (in_bytes + out_bytes) / sec / 1e9;
+  const double out_bytes = batch * doppler * bins * csz + doppler * sizeof(PerfPrecision);
+  row->estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9;
 }
 
 perf::ResultRow base_row(const DopplerScenario& scen) {
@@ -201,9 +179,7 @@ perf::ResultRow base_row(const DopplerScenario& scen) {
   return row;
 }
 
-DopplerScenario make_scenario(hr::WindowType window,
-                              const SizeSpec& s,
-                              int64_t channels = 1) {
+DopplerScenario make_scenario(hr::WindowType window, const SizeSpec& s, int64_t channels = 1) {
   DopplerScenario sc;
   sc.size_id = s.id;
   sc.num_chirps = s.num_chirps;
@@ -226,9 +202,7 @@ DopplerScenario make_scenario(hr::WindowType window,
 struct DopplerTraits : perf::PerfDriverDefaults {
   using Scenario = DopplerScenario;
 
-  static const char* tool_name() {
-    return "perf_fmcw_doppler_processor";
-  }
+  static const char* tool_name() { return "perf_fmcw_doppler_processor"; }
   static const char* tool_description() {
     return "FMCWDopplerProcessorOp performance "
            "characterization (HSDK 5 Graph)";
@@ -262,29 +236,23 @@ struct DopplerTraits : perf::PerfDriverDefaults {
   static std::vector<DopplerScenario> build_default_matrix() {
     std::vector<DopplerScenario> out;
     for (const char* sid : {"xs", "md", "lg", "xl"}) {
-      out.push_back(make_scenario(
-          hr::WindowType::kNone, must_find_size(sid)));
+      out.push_back(make_scenario(hr::WindowType::kNone, must_find_size(sid)));
     }
     const SizeSpec& md = must_find_size("md");
-    out.push_back(
-        make_scenario(hr::WindowType::kHann, md));
-    out.push_back(
-        make_scenario(hr::WindowType::kNone, md, 4));
+    out.push_back(make_scenario(hr::WindowType::kHann, md));
+    out.push_back(make_scenario(hr::WindowType::kNone, md, 4));
     return out;
   }
 
-  static std::vector<DopplerScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<DopplerScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<DopplerScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '"
-                  << sid << "', skipping\n";
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
         continue;
       }
-      out.push_back(
-          make_scenario(hr::WindowType::kNone, *s));
+      out.push_back(make_scenario(hr::WindowType::kNone, *s));
     }
     return out;
   }
@@ -292,29 +260,25 @@ struct DopplerTraits : perf::PerfDriverDefaults {
   static std::vector<DopplerScenario> build_full_matrix() {
     std::vector<DopplerScenario> out;
     for (const auto& s : size_ladder()) {
-      for (auto w : {hr::WindowType::kNone,
-                     hr::WindowType::kHann}) {
+      for (auto w : {hr::WindowType::kNone, hr::WindowType::kHann}) {
         out.push_back(make_scenario(w, s));
       }
     }
     for (const char* sid : {"md", "lg"}) {
       const SizeSpec& s = must_find_size(sid);
       for (int64_t ch : {4, 16}) {
-        out.push_back(make_scenario(
-            hr::WindowType::kNone, s, ch));
+        out.push_back(make_scenario(hr::WindowType::kNone, s, ch));
       }
     }
     return out;
   }
 
-  static void run_scenario(const DopplerScenario& scen,
-                           const perf::RunSettings& rs,
+  static void run_scenario(const DopplerScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     // Port coverage is landed; override_ms timing remains deferred (§1 / §8).
-    const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/false);
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_doppler_graph(scen, p.total_frames);
         });
 
@@ -339,10 +303,7 @@ struct DopplerTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(
-          make_scenario(hr::WindowType::kNone,
-                        must_find_size("xs")),
-          warm, &discarded);
+      run_scenario(make_scenario(hr::WindowType::kNone, must_find_size("xs")), warm, &discarded);
     });
   }
 };
@@ -350,6 +311,5 @@ struct DopplerTraits : perf::PerfDriverDefaults {
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<DopplerTraits>(
-      argc, argv);
+  return holoscan::radar::perf::perf_main<DopplerTraits>(argc, argv);
 }

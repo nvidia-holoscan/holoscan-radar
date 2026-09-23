@@ -102,19 +102,17 @@ const SizeSpec& must_find_size(const std::string& id) {
 }
 
 template <typename T>
-std::shared_ptr<holoscan::Tensor> make_device_from_host(
-    const std::vector<T>& host, const std::vector<int64_t>& shape) {
+std::shared_ptr<holoscan::Tensor> make_device_from_host(const std::vector<T>& host,
+                                                        const std::vector<int64_t>& shape) {
   auto tensor = hr::make_device_tensor(shape, hr::real_dtype<T>());
   if (!host.empty()) {
     auto mut = tensor->mutable_data();
     if (!mut) {
-      throw std::runtime_error(
-          "perf_cluster_dbscan: tensor not writable");
+      throw std::runtime_error("perf_cluster_dbscan: tensor not writable");
     }
-    if (cudaMemcpy(mut.value(), host.data(), sizeof(T) * host.size(),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error(
-          "perf_cluster_dbscan: cudaMemcpy H2D failed");
+    if (cudaMemcpy(mut.value(), host.data(), sizeof(T) * host.size(), cudaMemcpyHostToDevice) !=
+        cudaSuccess) {
+      throw std::runtime_error("perf_cluster_dbscan: cudaMemcpy H2D failed");
     }
   }
   return tensor;
@@ -124,91 +122,66 @@ std::shared_ptr<holoscan::Tensor> make_device_from_host(
 // a small (±0.1) per-axis jitter so within-blob points are eps-neighbors
 // and separate blobs are not. No RNG (keeps runs reproducible).
 template <typename T>
-std::shared_ptr<holoscan::Tensor> make_points(
-    int64_t num_points, int64_t num_features, int64_t num_clusters) {
+std::shared_ptr<holoscan::Tensor> make_points(int64_t num_points, int64_t num_features,
+                                              int64_t num_clusters) {
   const int64_t nclus = std::max<int64_t>(num_clusters, 1);
   const double spacing = 100.0;
-  std::vector<T> host(static_cast<size_t>(
-      std::max<int64_t>(num_points, 0) *
-      std::max<int64_t>(num_features, 0)));
+  std::vector<T> host(
+      static_cast<size_t>(std::max<int64_t>(num_points, 0) * std::max<int64_t>(num_features, 0)));
   for (int64_t i = 0; i < num_points; ++i) {
     const int64_t c = i % nclus;
     for (int64_t f = 0; f < num_features; ++f) {
-      const double base =
-          (f == 0) ? static_cast<double>(c) * spacing : 0.0;
-      const double jitter =
-          static_cast<double>(((i * 131 + f * 17) % 21) - 10) /
-          100.0;
-      host[static_cast<size_t>(i * num_features + f)] =
-          static_cast<T>(base + jitter);
+      const double base = (f == 0) ? static_cast<double>(c) * spacing : 0.0;
+      const double jitter = static_cast<double>(((i * 131 + f * 17) % 21) - 10) / 100.0;
+      host[static_cast<size_t>(i * num_features + f)] = static_cast<T>(base + jitter);
     }
   }
   return make_device_from_host(host, {num_points, num_features});
 }
 
-perf::TimingCollector run_dbscan_graph(
-    const DbscanScenario& scen, const perf::RunPlan& plan) {
-  auto pts = make_points<PerfPrecision>(
-      scen.num_points, scen.num_features, scen.num_clusters);
+perf::TimingCollector run_dbscan_graph(const DbscanScenario& scen, const perf::RunPlan& plan) {
+  auto pts = make_points<PerfPrecision>(scen.num_points, scen.num_features, scen.num_clusters);
   using BaseOp = hr::ClusterDBSCANOp<PerfPrecision>;
   const int64_t override_min_points = scen.min_points + 1;
   return perf::run_perf_graph_with_override(
-      std::move(pts), plan.total_frames, plan.override_at,
-      scen.min_points, override_min_points, "dbscan-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
+      std::move(pts), plan.total_frames, plan.override_at, scen.min_points, override_min_points,
+      "dbscan-perf",
+      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
-        extents.max_points = std::max<int64_t>(
-            scen.num_points, 1);
-        extents.max_clusters = std::max<int64_t>(
-            scen.num_clusters, 1);
+        extents.max_points = std::max<int64_t>(scen.num_points, 1);
+        extents.max_clusters = std::max<int64_t>(scen.num_clusters, 1);
         auto op = graph.op<BaseOp>("dbscan", extents);
         hr::ClusterDBSCANParams params;
         params.epsilon = scen.epsilon;
         params.min_points = scen.min_points;
         params.max_clusters = scen.max_clusters;
         op.set_params(std::move(params));
-        const auto sink =
-            graph.op<perf::PerfTerminalSinkOp>("labels_sink");
-        const auto null =
-            graph.op<perf::PerfNullSinkOp>("sizes_drain");
-        const holoscan::ConnectionOptions q{
-            .queue_depth = 4U};
+        const auto sink = graph.op<perf::PerfTerminalSinkOp>("labels_sink");
+        const auto null = graph.op<perf::PerfNullSinkOp>("sizes_drain");
+        const holoscan::ConnectionOptions q{.queue_depth = 4U};
         graph.add_flow(src->out, op->points, q);
         graph.add_flow(src->override_out, op->min_points, q);
         graph.add_flow(op->labels, sink->in, q);
         graph.add_flow(op->sizes, null->in, q);
-        graph.partition("perf")
-            .add(src)
-            .add(op)
-            .add(sink)
-            .add(null);
+        graph.partition("perf").add(src).add(op).add(sink).add(null);
         perf::bind_tensor_out(options, "dbscan", "labels");
         perf::bind_tensor_out(options, "dbscan", "sizes");
       });
 }
 
-void fill_throughput(perf::ResultRow* row,
-                     const DbscanScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const DbscanScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
   const double sec = median_ms / 1000.0;
   const double n = static_cast<double>(scen.num_points);
   row->cells_per_second = n / sec;
-  row->slices_per_second =
-      static_cast<double>(
-          std::max<int64_t>(scen.num_clusters, 1)) /
-      sec;
+  row->slices_per_second = static_cast<double>(std::max<int64_t>(scen.num_clusters, 1)) / sec;
 
   const double tsz = sizeof(PerfPrecision);
-  const double pts_bytes =
-      n * static_cast<double>(scen.num_features) * tsz;
-  const double labels_bytes =
-      n * static_cast<double>(sizeof(int64_t));
-  row->estimated_effective_gbps =
-      (pts_bytes + labels_bytes) / sec / 1e9;
+  const double pts_bytes = n * static_cast<double>(scen.num_features) * tsz;
+  const double labels_bytes = n * static_cast<double>(sizeof(int64_t));
+  row->estimated_effective_gbps = (pts_bytes + labels_bytes) / sec / 1e9;
 }
 
 perf::ResultRow base_row(const DbscanScenario& scen) {
@@ -235,8 +208,7 @@ DbscanScenario make_scenario(const SizeSpec& s) {
   sc.min_points = 2 * s.num_features;
   sc.max_clusters = 0;
   std::ostringstream id;
-  id << "dbscan_" << s.id << "_n" << s.num_points
-     << "_f" << s.num_features << "_compute";
+  id << "dbscan_" << s.id << "_n" << s.num_points << "_f" << s.num_features << "_compute";
   sc.id = id.str();
   return sc;
 }
@@ -244,19 +216,13 @@ DbscanScenario make_scenario(const SizeSpec& s) {
 struct DbscanTraits : perf::PerfDriverDefaults {
   using Scenario = DbscanScenario;
 
-  static const char* tool_name() {
-    return "perf_cluster_dbscan";
-  }
+  static const char* tool_name() { return "perf_cluster_dbscan"; }
   static const char* tool_description() {
     return "ClusterDBSCANOp performance characterization "
            "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() {
-    return "Size sweep across the full ladder";
-  }
-  static const char* sizes_subset_help() {
-    return "Size sweep across an explicit subset";
-  }
+  static const char* sizes_all_help() { return "Size sweep across the full ladder"; }
+  static const char* sizes_subset_help() { return "Size sweep across an explicit subset"; }
   static const char* full_help() {
     return "Full size x feature ladder with min_points override timing";
   }
@@ -276,22 +242,18 @@ struct DbscanTraits : perf::PerfDriverDefaults {
 
   static std::vector<DbscanScenario> build_default_matrix() {
     std::vector<DbscanScenario> out;
-    for (const char* sid :
-         {"xs", "sm", "sm3", "md", "md3", "md5",
-          "lg", "lg5"}) {
+    for (const char* sid : {"xs", "sm", "sm3", "md", "md3", "md5", "lg", "lg5"}) {
       out.push_back(make_scenario(must_find_size(sid)));
     }
     return out;
   }
 
-  static std::vector<DbscanScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<DbscanScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<DbscanScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '"
-                  << sid << "', skipping\n";
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
         continue;
       }
       out.push_back(make_scenario(*s));
@@ -307,13 +269,11 @@ struct DbscanTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static void run_scenario(const DbscanScenario& scen,
-                           const perf::RunSettings& rs,
+  static void run_scenario(const DbscanScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/true);
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_dbscan_graph(scen, p);
         });
 
@@ -337,8 +297,7 @@ struct DbscanTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs")),
-                   warm, &discarded);
+      run_scenario(make_scenario(must_find_size("xs")), warm, &discarded);
     });
   }
 };
@@ -346,6 +305,5 @@ struct DbscanTraits : perf::PerfDriverDefaults {
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<DbscanTraits>(
-      argc, argv);
+  return holoscan::radar::perf::perf_main<DbscanTraits>(argc, argv);
 }

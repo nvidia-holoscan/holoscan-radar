@@ -88,9 +88,8 @@ SubarrayScenario make_scenario(const SizeSpec& size) {
   scenario.selected_channels = size.channels - size.channels / 4;
   scenario.snapshots = size.snapshots;
   std::ostringstream id;
-  id << "subarray_" << size.id << "_n" << size.items << "_c"
-     << size.channels << "_l" << scenario.selected_channels << "_k"
-     << size.snapshots;
+  id << "subarray_" << size.id << "_n" << size.items << "_c" << size.channels << "_l"
+     << scenario.selected_channels << "_k" << size.snapshots;
   scenario.id = id.str();
   return scenario;
 }
@@ -99,70 +98,55 @@ hr::ArrayGeometry make_holey_ula(const SubarrayScenario& scenario) {
   hr::ArrayGeometry geometry;
   geometry.wavelength = 1.0;
   geometry.geometry_type = hr::ArrayGeometryType::kUla;
-  geometry.element_positions.reserve(
-      static_cast<size_t>(scenario.channels * 3));
+  geometry.element_positions.reserve(static_cast<size_t>(scenario.channels * 3));
   for (int64_t channel = 0; channel < scenario.channels; ++channel) {
-    const int64_t lattice_index =
-        channel < scenario.selected_channels ? channel : channel + 1;
-    geometry.element_positions.insert(
-        geometry.element_positions.end(),
-        {0.0, 0.5 * static_cast<double>(lattice_index), 0.0});
+    const int64_t lattice_index = channel < scenario.selected_channels ? channel : channel + 1;
+    geometry.element_positions.insert(geometry.element_positions.end(),
+                                      {0.0, 0.5 * static_cast<double>(lattice_index), 0.0});
   }
   return geometry;
 }
 
-perf::TimingCollector run_subarray_graph(
-    const SubarrayScenario& scenario, int total_frames) {
+perf::TimingCollector run_subarray_graph(const SubarrayScenario& scenario, int total_frames) {
   auto snapshot = perf::make_iq_cube_device<PerfPrecision>(
       {scenario.items, scenario.channels, scenario.snapshots});
   return perf::run_perf_graph(
       std::move(snapshot), total_frames, "subarray-selection-perf",
-      [&](holoscan::Graph& graph, const auto& source,
-          holoscan::CompileOptions& options) {
+      [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_items = scenario.items;
         extents.max_subarray_channels = scenario.channels;
         extents.max_snapshots = scenario.snapshots;
-        auto op = graph.op<hr::SubarraySelectionOp<PerfPrecision>>(
-            "subarray_selection", extents);
+        auto op = graph.op<hr::SubarraySelectionOp<PerfPrecision>>("subarray_selection", extents);
         hr::SubarraySelectionParams params;
         params.array_geometry = make_holey_ula(scenario);
         op.set_params(std::move(params));
 
-        const auto snapshot_sink =
-            graph.op<perf::PerfTerminalSinkOp>("snapshot_sink");
+        const auto snapshot_sink = graph.op<perf::PerfTerminalSinkOp>("snapshot_sink");
         const auto geometry_drain =
-            graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>(
-                "geometry_drain");
+            graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>("geometry_drain");
         const holoscan::ConnectionOptions queue{.queue_depth = 4U};
         graph.add_flow(source->out, op->snapshot, queue);
         graph.add_flow(op->snapshot_out, snapshot_sink->in, queue);
         graph.add_flow(op->array_geometry, geometry_drain->in, queue);
-        perf::bind_tensor_out(
-            options, "subarray_selection", "snapshot_out");
+        perf::bind_tensor_out(options, "subarray_selection", "snapshot_out");
         // Declared optional device outputs still require placement on EA.
-        perf::bind_tensor_out(
-            options, "subarray_selection", "is_valid_out");
+        perf::bind_tensor_out(options, "subarray_selection", "is_valid_out");
       });
 }
 
-void fill_throughput(perf::ResultRow* row,
-                     const SubarrayScenario& scenario,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const SubarrayScenario& scenario, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
   const double seconds = median_ms / 1000.0;
   const double items = static_cast<double>(scenario.items);
-  const double values =
-      items * static_cast<double>(scenario.selected_channels) *
-      static_cast<double>(scenario.snapshots);
+  const double values = items * static_cast<double>(scenario.selected_channels) *
+                        static_cast<double>(scenario.snapshots);
   row->cells_per_second = items / seconds;
   row->slices_per_second = values / seconds;
-  const double complex_bytes =
-      2.0 * static_cast<double>(sizeof(PerfPrecision));
-  row->estimated_effective_gbps =
-      (2.0 * values * complex_bytes) / seconds / 1e9;
+  const double complex_bytes = 2.0 * static_cast<double>(sizeof(PerfPrecision));
+  row->estimated_effective_gbps = (2.0 * values * complex_bytes) / seconds / 1e9;
 }
 
 perf::ResultRow base_row(const SubarrayScenario& scenario) {
@@ -171,8 +155,7 @@ perf::ResultRow base_row(const SubarrayScenario& scenario) {
   row.op_name = "SubarraySelectionOp";
   row.variant = "holey_ula";
   row.size_id = scenario.size_id;
-  row.input_shape = {
-      scenario.items, scenario.channels, scenario.snapshots};
+  row.input_shape = {scenario.items, scenario.channels, scenario.snapshots};
   row.out_batch = scenario.items;
   row.k = scenario.selected_channels;
   return row;
@@ -181,16 +164,12 @@ perf::ResultRow base_row(const SubarrayScenario& scenario) {
 struct SubarrayTraits : perf::PerfDriverDefaults {
   using Scenario = SubarrayScenario;
 
-  static const char* tool_name() {
-    return "perf_subarray_selection";
-  }
+  static const char* tool_name() { return "perf_subarray_selection"; }
   static const char* tool_description() {
     return "SubarraySelectionOp performance characterization "
            "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() {
-    return "Default holey-ULA size sweep";
-  }
+  static const char* sizes_all_help() { return "Default holey-ULA size sweep"; }
   static const char* sizes_subset_help() {
     return "Holey-ULA sweep across an explicit size subset";
   }
@@ -220,8 +199,7 @@ struct SubarrayTraits : perf::PerfDriverDefaults {
     return output;
   }
 
-  static std::vector<SubarrayScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<SubarrayScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<SubarrayScenario> output;
     for (const auto& id : sizes) {
       const SizeSpec* size = find_size(id);
@@ -242,11 +220,9 @@ struct SubarrayTraits : perf::PerfDriverDefaults {
     return output;
   }
 
-  static void run_scenario(const SubarrayScenario& scenario,
-                           const perf::RunSettings& settings,
+  static void run_scenario(const SubarrayScenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan =
-        perf::make_run_plan(settings, /*has_override=*/false);
+    const perf::RunPlan plan = perf::make_run_plan(settings, /*has_override=*/false);
     const auto samples = perf::collect_scenario_samples(
         settings, plan, [&](int /*repeat*/, const perf::RunPlan& current) {
           return run_subarray_graph(scenario, current.total_frames);
@@ -270,8 +246,7 @@ struct SubarrayTraits : perf::PerfDriverDefaults {
       settings.warmup_frames = 0;
       settings.measured_frames = 2;
       settings.repeats = 1;
-      run_scenario(
-          make_scenario(must_find_size("xs")), settings, &discarded);
+      run_scenario(make_scenario(must_find_size("xs")), settings, &discarded);
     });
   }
 };

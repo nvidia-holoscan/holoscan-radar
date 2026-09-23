@@ -74,8 +74,8 @@ struct ResultRow {
 
   std::string status{"ok"};  // "ok" | "skipped" | "timeout"
   std::string notes;
-  std::string calibration_pair;   // paired slow/fast id, empty if none
-  std::string calibration_mode;   // "pfa" | "alpha_lut"
+  std::string calibration_pair;  // paired slow/fast id, empty if none
+  std::string calibration_mode;  // "pfa" | "alpha_lut"
 };
 
 struct AlphaCalibrationRow {
@@ -102,16 +102,25 @@ struct PerfReport {
 
 namespace detail {
 
-inline bool is_num(double v) { return !std::isnan(v); }
+inline bool is_num(double v) {
+  return !std::isnan(v);
+}
 
 inline std::string json_escape(const std::string& s) {
   std::string out;
   for (char c : s) {
     switch (c) {
-      case '"': out += "\\\""; break;
-      case '\\': out += "\\\\"; break;
-      case '\n': out += "\\n"; break;
-      default: out += c;
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      default:
+        out += c;
     }
   }
   return out;
@@ -191,8 +200,7 @@ inline std::string sci(double v) {
 inline int shape_column_width(const PerfReport& r, int min_width = 14) {
   int width = min_width;
   auto consider = [&](const std::vector<int64_t>& shape) {
-    width = std::max(width,
-                     static_cast<int>(shape_text(shape).size()) + 2);
+    width = std::max(width, static_cast<int>(shape_text(shape).size()) + 2);
   };
   for (const auto& s : r.sizes) {
     consider(s.shape);
@@ -209,47 +217,34 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
   os << "{\n";
   os << "  \"schema_version\": 2,\n";
   os << "  \"provenance\": {\n";
-  os << "    \"git_commit\": \"" << detail::json_escape(r.provenance.git_commit)
-     << "\",\n";
-  os << "    \"git_dirty\": " << (r.provenance.git_dirty ? "true" : "false")
-     << ",\n";
-  os << "    \"timestamp_utc\": \""
-     << detail::json_escape(r.provenance.timestamp_utc) << "\"\n";
+  os << "    \"git_commit\": \"" << detail::json_escape(r.provenance.git_commit) << "\",\n";
+  os << "    \"git_dirty\": " << (r.provenance.git_dirty ? "true" : "false") << ",\n";
+  os << "    \"timestamp_utc\": \"" << detail::json_escape(r.provenance.timestamp_utc) << "\"\n";
   os << "  },\n";
   os << "  \"platform\": {\n";
-  os << "    \"gpu_name\": \"" << detail::json_escape(r.platform.gpu_name)
+  os << "    \"gpu_name\": \"" << detail::json_escape(r.platform.gpu_name) << "\",\n";
+  os << "    \"gpu_driver\": \"" << detail::json_escape(r.platform.gpu_driver) << "\",\n";
+  os << "    \"cuda_runtime\": \"" << detail::json_escape(r.platform.cuda_runtime) << "\",\n";
+  os << "    \"holoscan_version\": \"" << detail::json_escape(r.platform.holoscan_version)
      << "\",\n";
-  os << "    \"gpu_driver\": \"" << detail::json_escape(r.platform.gpu_driver)
-     << "\",\n";
-  os << "    \"cuda_runtime\": \""
-     << detail::json_escape(r.platform.cuda_runtime) << "\",\n";
-  os << "    \"holoscan_version\": \""
-     << detail::json_escape(r.platform.holoscan_version) << "\",\n";
-  os << "    \"cpu_model\": \"" << detail::json_escape(r.platform.cpu_model)
-     << "\",\n";
+  os << "    \"cpu_model\": \"" << detail::json_escape(r.platform.cpu_model) << "\",\n";
   os << "    \"os\": \"" << detail::json_escape(r.platform.os_name) << "\"\n";
   os << "  },\n";
   os << "  \"run_settings\": {\n";
   os << "    \"warmup_frames\": " << r.run_settings.warmup_frames << ",\n";
   os << "    \"measured_frames\": " << r.run_settings.measured_frames << ",\n";
   os << "    \"repeats\": " << r.run_settings.repeats << ",\n";
-  os << "    \"sync_policy\": \""
-     << detail::json_escape(r.run_settings.sync_policy) << "\",\n";
-  os << "    \"stop_after_s\": "
-     << detail::num_or_null(r.run_settings.stop_after_s) << ",\n";
-  os << "    \"stopped_early\": "
-     << (r.run_settings.stopped_early ? "true" : "false") << ",\n";
-  os << "    \"scenarios_planned\": " << r.run_settings.scenarios_planned
-     << ",\n";
-  os << "    \"scenarios_completed\": " << r.run_settings.scenarios_completed
-     << "\n";
+  os << "    \"sync_policy\": \"" << detail::json_escape(r.run_settings.sync_policy) << "\",\n";
+  os << "    \"stop_after_s\": " << detail::num_or_null(r.run_settings.stop_after_s) << ",\n";
+  os << "    \"stopped_early\": " << (r.run_settings.stopped_early ? "true" : "false") << ",\n";
+  os << "    \"scenarios_planned\": " << r.run_settings.scenarios_planned << ",\n";
+  os << "    \"scenarios_completed\": " << r.run_settings.scenarios_completed << "\n";
   os << "  },\n";
   os << "  \"sizes\": [\n";
   for (size_t i = 0; i < r.sizes.size(); ++i) {
     const auto& s = r.sizes[i];
-    os << "    {\"id\": \"" << s.id << "\", \"shape\": "
-       << detail::shape_json(s.shape) << ", \"cells\": " << s.cells
-       << ", \"role\": \"" << detail::json_escape(s.role) << "\"}"
+    os << "    {\"id\": \"" << s.id << "\", \"shape\": " << detail::shape_json(s.shape)
+       << ", \"cells\": " << s.cells << ", \"role\": \"" << detail::json_escape(s.role) << "\"}"
        << (i + 1 < r.sizes.size() ? "," : "") << "\n";
   }
   os << "  ],\n";
@@ -257,49 +252,35 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
   for (size_t i = 0; i < r.results.size(); ++i) {
     const auto& row = r.results[i];
     os << "    {\n";
-    os << "      \"scenario_id\": \"" << detail::json_escape(row.scenario_id)
-       << "\",\n";
-    os << "      \"operator\": \"" << detail::json_escape(row.op_name)
-       << "\",\n";
+    os << "      \"scenario_id\": \"" << detail::json_escape(row.scenario_id) << "\",\n";
+    os << "      \"operator\": \"" << detail::json_escape(row.op_name) << "\",\n";
     os << "      \"bucket\": \"" << row.bucket << "\",\n";
     os << "      \"variant\": \"" << row.variant << "\",\n";
     os << "      \"precision\": \"" << row.precision << "\",\n";
     os << "      \"size_id\": \"" << row.size_id << "\",\n";
     os << "      \"map_shape\": " << detail::shape_json(row.map_shape) << ",\n";
-    os << "      \"input_shape\": " << detail::shape_json(row.input_shape)
-       << ",\n";
+    os << "      \"input_shape\": " << detail::shape_json(row.input_shape) << ",\n";
     os << "      \"out_batch\": " << row.out_batch << ",\n";
     os << "      \"guard\": " << detail::shape_json(row.guard) << ",\n";
     os << "      \"training\": " << detail::shape_json(row.training) << ",\n";
     os << "      \"k\": " << row.k << ",\n";
     os << "      \"setup_ms\": " << detail::num_or_null(row.setup_ms) << ",\n";
     os << "      \"cold_ms\": " << detail::num_or_null(row.cold_ms) << ",\n";
-    os << "      \"min_ms\": " << detail::num_or_null(row.latency.min_ms)
-       << ",\n";
-    os << "      \"median_ms\": " << detail::num_or_null(row.latency.median_ms)
-       << ",\n";
-    os << "      \"p90_ms\": " << detail::num_or_null(row.latency.p90_ms)
-       << ",\n";
-    os << "      \"p99_ms\": " << detail::num_or_null(row.latency.p99_ms)
-       << ",\n";
-    os << "      \"max_ms\": " << detail::num_or_null(row.latency.max_ms)
-       << ",\n";
-    os << "      \"override_ms\": " << detail::num_or_null(row.override_ms)
-       << ",\n";
-    os << "      \"override_delta_ms\": "
-       << detail::num_or_null(row.override_delta_ms) << ",\n";
-    os << "      \"cells_per_second\": "
-       << detail::num_or_null(row.cells_per_second) << ",\n";
-    os << "      \"slices_per_second\": "
-       << detail::num_or_null(row.slices_per_second) << ",\n";
+    os << "      \"min_ms\": " << detail::num_or_null(row.latency.min_ms) << ",\n";
+    os << "      \"median_ms\": " << detail::num_or_null(row.latency.median_ms) << ",\n";
+    os << "      \"p90_ms\": " << detail::num_or_null(row.latency.p90_ms) << ",\n";
+    os << "      \"p99_ms\": " << detail::num_or_null(row.latency.p99_ms) << ",\n";
+    os << "      \"max_ms\": " << detail::num_or_null(row.latency.max_ms) << ",\n";
+    os << "      \"override_ms\": " << detail::num_or_null(row.override_ms) << ",\n";
+    os << "      \"override_delta_ms\": " << detail::num_or_null(row.override_delta_ms) << ",\n";
+    os << "      \"cells_per_second\": " << detail::num_or_null(row.cells_per_second) << ",\n";
+    os << "      \"slices_per_second\": " << detail::num_or_null(row.slices_per_second) << ",\n";
     os << "      \"estimated_effective_gbps\": "
        << detail::num_or_null(row.estimated_effective_gbps) << ",\n";
     os << "      \"status\": \"" << row.status << "\",\n";
     os << "      \"notes\": \"" << detail::json_escape(row.notes) << "\",\n";
-    os << "      \"calibration_pair\": \""
-       << detail::json_escape(row.calibration_pair) << "\",\n";
-    os << "      \"calibration_mode\": \""
-       << detail::json_escape(row.calibration_mode) << "\"\n";
+    os << "      \"calibration_pair\": \"" << detail::json_escape(row.calibration_pair) << "\",\n";
+    os << "      \"calibration_mode\": \"" << detail::json_escape(row.calibration_mode) << "\"\n";
     os << "    }" << (i + 1 < r.results.size() ? "," : "") << "\n";
   }
   os << "  ],\n";
@@ -307,24 +288,16 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
   for (size_t i = 0; i < r.alpha_calibration.size(); ++i) {
     const auto& row = r.alpha_calibration[i];
     os << "    {\n";
-    os << "      \"pair_id\": \"" << detail::json_escape(row.pair_id)
-       << "\",\n";
-    os << "      \"variant\": \"" << detail::json_escape(row.variant)
-       << "\",\n";
+    os << "      \"pair_id\": \"" << detail::json_escape(row.pair_id) << "\",\n";
+    os << "      \"variant\": \"" << detail::json_escape(row.variant) << "\",\n";
     os << "      \"size_id\": \"" << row.size_id << "\",\n";
     os << "      \"k\": " << row.k << ",\n";
-    os << "      \"slow_cold_ms\": " << detail::num_or_null(row.slow_cold_ms)
-       << ",\n";
-    os << "      \"fast_cold_ms\": " << detail::num_or_null(row.fast_cold_ms)
-       << ",\n";
-    os << "      \"slow_ovr_ms\": " << detail::num_or_null(row.slow_ovr_ms)
-       << ",\n";
-    os << "      \"fast_ovr_ms\": " << detail::num_or_null(row.fast_ovr_ms)
-       << ",\n";
-    os << "      \"cold_speedup\": " << detail::num_or_null(row.cold_speedup)
-       << ",\n";
-    os << "      \"ovr_speedup\": " << detail::num_or_null(row.ovr_speedup)
-       << "\n";
+    os << "      \"slow_cold_ms\": " << detail::num_or_null(row.slow_cold_ms) << ",\n";
+    os << "      \"fast_cold_ms\": " << detail::num_or_null(row.fast_cold_ms) << ",\n";
+    os << "      \"slow_ovr_ms\": " << detail::num_or_null(row.slow_ovr_ms) << ",\n";
+    os << "      \"fast_ovr_ms\": " << detail::num_or_null(row.fast_ovr_ms) << ",\n";
+    os << "      \"cold_speedup\": " << detail::num_or_null(row.cold_speedup) << ",\n";
+    os << "      \"ovr_speedup\": " << detail::num_or_null(row.ovr_speedup) << "\n";
     os << "    }" << (i + 1 < r.alpha_calibration.size() ? "," : "") << "\n";
   }
   os << "  ]\n";
@@ -333,25 +306,20 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
 
 inline void write_text(std::ostream& os, const PerfReport& r) {
   os << "=== holoscan-radar performance report ===\n";
-  os << "commit: " << r.provenance.git_commit
-     << (r.provenance.git_dirty ? " (dirty)" : " (clean)") << "  "
-     << r.provenance.timestamp_utc << "\n";
-  os << "platform: " << r.platform.gpu_name << " | driver "
-     << r.platform.gpu_driver << " | CUDA " << r.platform.cuda_runtime
-     << " | Holoscan " << r.platform.holoscan_version << "\n";
-  os << "          " << r.platform.cpu_model << " | " << r.platform.os_name
-     << "\n";
+  os << "commit: " << r.provenance.git_commit << (r.provenance.git_dirty ? " (dirty)" : " (clean)")
+     << "  " << r.provenance.timestamp_utc << "\n";
+  os << "platform: " << r.platform.gpu_name << " | driver " << r.platform.gpu_driver << " | CUDA "
+     << r.platform.cuda_runtime << " | Holoscan " << r.platform.holoscan_version << "\n";
+  os << "          " << r.platform.cpu_model << " | " << r.platform.os_name << "\n";
   os << "run: warmup=" << r.run_settings.warmup_frames
-     << " measured=" << r.run_settings.measured_frames
-     << " repeats=" << r.run_settings.repeats;
+     << " measured=" << r.run_settings.measured_frames << " repeats=" << r.run_settings.repeats;
   if (r.run_settings.stop_after_s > 0.0) {
     os << " stop_after_s=" << r.run_settings.stop_after_s;
   }
   os << "\n";
   if (r.run_settings.stopped_early) {
     os << "stopped early after " << r.run_settings.scenarios_completed << "/"
-       << r.run_settings.scenarios_planned
-       << " scenarios (last exceeded stop_after_s)\n";
+       << r.run_settings.scenarios_planned << " scenarios (last exceeded stop_after_s)\n";
   }
   os << "note: latencies are valid only on the machine/GPU they were captured "
         "on.\n";
@@ -360,19 +328,18 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
   const int shape_w = detail::shape_column_width(r);
   if (!r.sizes.empty()) {
     os << "\n--- sizes ---\n";
-    os << detail::col("id", 6) << detail::col("shape (DxR)", shape_w)
-       << detail::col("cells", 10) << "role\n";
+    os << detail::col("id", 6) << detail::col("shape (DxR)", shape_w) << detail::col("cells", 10)
+       << "role\n";
     for (const auto& s : r.sizes) {
-      os << detail::col(s.id, 6)
-         << detail::col(detail::shape_text(s.shape), shape_w)
+      os << detail::col(s.id, 6) << detail::col(detail::shape_text(s.shape), shape_w)
          << detail::col(std::to_string(s.cells), 10) << s.role << "\n";
     }
   }
 
   // --- setup ---
   os << "\n--- setup ---\n";
-  os << detail::col("scenario", 40) << detail::col("size", 6)
-     << detail::col("setup_ms", 10) << "\n";
+  os << detail::col("scenario", 40) << detail::col("size", 6) << detail::col("setup_ms", 10)
+     << "\n";
   for (const auto& row : r.results) {
     if (row.bucket != "setup") {
       continue;
@@ -387,11 +354,10 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
 
   // --- compute (steady state + inline live override) ---
   os << "\n--- compute ---\n";
-  os << detail::col("scenario", 40) << detail::col("size", 6)
-     << detail::col("shape", shape_w) << detail::col("cold_ms", 10)
-     << detail::col("median_ms", 10) << detail::col("p90_ms", 10)
-     << detail::col("ovr_ms", 10) << detail::col("ovr_d_ms", 10)
-     << detail::col("cells/s", 11) << detail::col("GB/s", 8) << "\n";
+  os << detail::col("scenario", 40) << detail::col("size", 6) << detail::col("shape", shape_w)
+     << detail::col("cold_ms", 10) << detail::col("median_ms", 10) << detail::col("p90_ms", 10)
+     << detail::col("ovr_ms", 10) << detail::col("ovr_d_ms", 10) << detail::col("cells/s", 11)
+     << detail::col("GB/s", 8) << "\n";
   for (const auto& row : r.results) {
     if (row.bucket != "compute") {
       continue;
@@ -413,11 +379,10 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
 
   if (!r.alpha_calibration.empty()) {
     os << "--- alpha calibration ---\n";
-    os << detail::col("pair", 14) << detail::col("variant", 6)
-       << detail::col("size", 6) << detail::col("k", 4)
-       << detail::col("slow_cold", 10) << detail::col("fast_cold", 10)
-       << detail::col("cold_x", 8) << detail::col("slow_ovr", 10)
-       << detail::col("fast_ovr", 10) << detail::col("ovr_x", 8) << "\n";
+    os << detail::col("pair", 14) << detail::col("variant", 6) << detail::col("size", 6)
+       << detail::col("k", 4) << detail::col("slow_cold", 10) << detail::col("fast_cold", 10)
+       << detail::col("cold_x", 8) << detail::col("slow_ovr", 10) << detail::col("fast_ovr", 10)
+       << detail::col("ovr_x", 8) << "\n";
     for (const auto& row : r.alpha_calibration) {
       os << detail::col(row.pair_id, 14) << detail::col(row.variant, 6)
          << detail::col(row.size_id, 6) << detail::col(std::to_string(row.k), 4)

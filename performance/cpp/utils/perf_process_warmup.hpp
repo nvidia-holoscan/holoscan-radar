@@ -24,14 +24,12 @@ namespace holoscan::radar::perf {
 inline void run_process_warmup(const std::function<void()>& prime) {
   // Force primary CUDA context creation before Holoscan graph setup.
   if (cudaFree(0) != cudaSuccess) {
-    throw std::runtime_error(
-        "perf process warmup: cudaFree(0) failed (no usable CUDA device?)");
+    throw std::runtime_error("perf process warmup: cudaFree(0) failed (no usable CUDA device?)");
   }
   std::cerr << "process warmup (discarded)...\n";
   prime();
   if (cudaDeviceSynchronize() != cudaSuccess) {
-    throw std::runtime_error(
-        "perf process warmup: cudaDeviceSynchronize failed");
+    throw std::runtime_error("perf process warmup: cudaDeviceSynchronize failed");
   }
 }
 

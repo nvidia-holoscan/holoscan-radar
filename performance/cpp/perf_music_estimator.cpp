@@ -121,10 +121,8 @@ const std::vector<SizeSpec>& size_ladder() {
       {"xs", 4, 64, 16, 21, 11, "small array; fast smoke"},
       {"sm", 8, 128, 32, 41, 21, "compact SIMO array"},
       {"md", 16, 256, 48, 61, 31, "common dev size"},
-      {"lg", 32, 512, 64, 81, 41,
-       "wide aperture, many looks"},
-      {"xl", 32, 1024, 96, 101, 51,
-       "upper characterization bound"}};
+      {"lg", 32, 512, 64, 81, 41, "wide aperture, many looks"},
+      {"xl", 32, 1024, 96, 101, 51, "upper characterization bound"}};
   return ladder;
 }
 
@@ -140,94 +138,80 @@ const SizeSpec* find_size(const std::string& id) {
 const SizeSpec& must_find_size(const std::string& id) {
   const SizeSpec* s = find_size(id);
   if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '"
-              << id << "'\n";
+    std::cerr << "internal error: unknown size id '" << id << "'\n";
     std::abort();
   }
   return *s;
 }
 
-std::vector<double> linspace(double start, double stop,
-                             int64_t n) {
+std::vector<double> linspace(double start, double stop, int64_t n) {
   std::vector<double> out(static_cast<size_t>(n));
   if (n == 1) {
     out[0] = start;
     return out;
   }
-  const double step =
-      (stop - start) / static_cast<double>(n - 1);
+  const double step = (stop - start) / static_cast<double>(n - 1);
   for (int64_t i = 0; i < n; ++i) {
-    out[static_cast<size_t>(i)] =
-        start + step * static_cast<double>(i);
+    out[static_cast<size_t>(i)] = start + step * static_cast<double>(i);
   }
   return out;
 }
 
-hr::ArrayGeometry make_ula_geometry(int64_t num_elements,
-                                    double spacing,
-                                    double wavelength) {
+hr::ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing, double wavelength) {
   hr::ArrayGeometry geom;
   geom.wavelength = wavelength;
   geom.geometry_type = hr::ArrayGeometryType::kUla;
-  geom.element_positions.reserve(
-      static_cast<size_t>(num_elements * 3));
+  geom.element_positions.reserve(static_cast<size_t>(num_elements * 3));
   for (int64_t m = 0; m < num_elements; ++m) {
     geom.element_positions.push_back(0.0);
-    geom.element_positions.push_back(
-        static_cast<double>(m) * spacing);
+    geom.element_positions.push_back(static_cast<double>(m) * spacing);
     geom.element_positions.push_back(0.0);
   }
   return geom;
 }
 
 holoscan::expected<void, holoscan::Error> emit_host_vector(
-    holoscan::Output<holoscan::Tensor>& output,
-    std::span<const double> values, holoscan::TimePoint capture_time) {
-  const std::array<int64_t, 1> shape{
-      static_cast<int64_t>(values.size())};
+    holoscan::Output<holoscan::Tensor>& output, std::span<const double> values,
+    holoscan::TimePoint capture_time) {
+  const std::array<int64_t, 1> shape{static_cast<int64_t>(values.size())};
   constexpr DLDataType dtype{kDLFloat, 64U, 1U};
-  auto loan = output.allocate_tensor(
-      holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
   if (!loan) {
     return holoscan::make_unexpected(std::move(loan).error());
   }
-  auto written = loan->write_host_and_commit(
-      [values](const holoscan::TensorOutputWriteGuard& writer) {
+  auto written =
+      loan->write_host_and_commit([values](const holoscan::TensorOutputWriteGuard& writer) {
         std::copy(values.begin(), values.end(), writer.data_as<double>());
       });
   if (!written) {
     return holoscan::make_unexpected(std::move(written).error());
   }
-  return output.emit(
-      std::move(*loan),
-      holoscan::EmitOptions{.capture_time = capture_time});
+  return output.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = capture_time});
 }
 
 template <typename Wire>
-holoscan::expected<void, holoscan::Error> emit_wire_doubles(
-    holoscan::Output<Wire>& output, Wire wire,
-    std::span<const double> values, std::span<const int64_t> shape,
-    holoscan::TimePoint capture_time) {
+holoscan::expected<void, holoscan::Error> emit_wire_doubles(holoscan::Output<Wire>& output,
+                                                            Wire wire,
+                                                            std::span<const double> values,
+                                                            std::span<const int64_t> shape,
+                                                            holoscan::TimePoint capture_time) {
   constexpr DLDataType dtype{kDLFloat, 64U, 1U};
-  auto loan = output.allocate_tensor(
-      holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
   if (!loan) {
     return holoscan::make_unexpected(std::move(loan).error());
   }
-  auto written = loan->write_host_and_commit(
-      [values](const holoscan::TensorOutputWriteGuard& writer) {
+  auto written =
+      loan->write_host_and_commit([values](const holoscan::TensorOutputWriteGuard& writer) {
         std::copy(values.begin(), values.end(), writer.data_as<double>());
       });
   if (!written) {
     return holoscan::make_unexpected(std::move(written).error());
   }
-  return output.emit_tensor(
-      std::move(*loan), std::move(wire),
-      holoscan::EmitOptions{.capture_time = capture_time});
+  return output.emit_tensor(std::move(*loan), std::move(wire),
+                            holoscan::EmitOptions{.capture_time = capture_time});
 }
 
-hr::SpatialSmoothingOverride smoothing_wire(
-    const std::vector<int64_t>& smoothing) {
+hr::SpatialSmoothingOverride smoothing_wire(const std::vector<int64_t>& smoothing) {
   hr::SpatialSmoothingOverride wire;
   wire.count = static_cast<int64_t>(smoothing.size());
   if (!smoothing.empty()) {
@@ -241,11 +225,8 @@ hr::SpatialSmoothingOverride smoothing_wire(
 
 class PerfMUSICOverrideSourceOp final : public holoscan::Operator<> {
  public:
-  PerfMUSICOverrideSourceOp(int64_t override_at, hr::MUSICParams initial,
-                            hr::MUSICParams override)
-      : override_at_(override_at),
-        initial_(std::move(initial)),
-        override_(std::move(override)) {}
+  PerfMUSICOverrideSourceOp(int64_t override_at, hr::MUSICParams initial, hr::MUSICParams override)
+  : override_at_(override_at), initial_(std::move(initial)), override_(std::move(override)) {}
 
   void setup(holoscan::OperatorSpec& spec) override {
     constexpr holoscan::TensorRepresentation kDevice{
@@ -264,21 +245,17 @@ class PerfMUSICOverrideSourceOp final : public holoscan::Operator<> {
         .rank = 2U,
     };
     constexpr std::size_t kHostPayloadSpan = 4096U * sizeof(double);
-    spec.output(snapshot)
-        .produces_tensor(hr::pooled_tensor_output(
-            kDevice, 8U, perf::PerfFrameBank::span_a()));
+    spec.output(snapshot).produces_tensor(
+        hr::pooled_tensor_output(kDevice, 8U, perf::PerfFrameBank::span_a()));
     spec.output(array_geometry)
         .max_emits_per_compute(1U)
-        .produces_tensor(
-            hr::pooled_tensor_output(kHostMatrix, 2U, kHostPayloadSpan));
+        .produces_tensor(hr::pooled_tensor_output(kHostMatrix, 2U, kHostPayloadSpan));
     spec.output(az_coordinates)
         .max_emits_per_compute(1U)
-        .produces_tensor(
-            hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
+        .produces_tensor(hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
     spec.output(el_coordinates)
         .max_emits_per_compute(1U)
-        .produces_tensor(
-            hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
+        .produces_tensor(hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
     spec.output(spatial_smoothing).max_emits_per_compute(1U);
     spec.output(num_sources).max_emits_per_compute(1U);
     spec.output(source_count_pfa).max_emits_per_compute(1U);
@@ -306,16 +283,13 @@ class PerfMUSICOverrideSourceOp final : public holoscan::Operator<> {
       mode = perf::PerfFrameBank::publish_mode;
     }
 
-    const auto& values =
-        frame_index_ < override_at_ ? initial_ : override_;
+    const auto& values = frame_index_ < override_at_ ? initial_ : override_;
     const holoscan::TimePoint time = context.activation_time();
     const auto packed = hr::pack_array_geometry(values.array_geometry);
     auto geometry_wire = hr::to_wire(values.array_geometry);
-    const std::array<int64_t, 2> geometry_shape{
-        values.array_geometry.num_elements() + 1, 3};
-    auto emitted = emit_wire_doubles(
-        array_geometry, std::move(geometry_wire), packed, geometry_shape,
-        time);
+    const std::array<int64_t, 2> geometry_shape{values.array_geometry.num_elements() + 1, 3};
+    auto emitted =
+        emit_wire_doubles(array_geometry, std::move(geometry_wire), packed, geometry_shape, time);
     if (!emitted) {
       return emitted;
     }
@@ -327,27 +301,21 @@ class PerfMUSICOverrideSourceOp final : public holoscan::Operator<> {
     if (!emitted) {
       return emitted;
     }
-    emitted = spatial_smoothing.emit(
-        smoothing_wire(values.spatial_smoothing),
-        holoscan::EmitOptions{.capture_time = time});
+    emitted = spatial_smoothing.emit(smoothing_wire(values.spatial_smoothing),
+                                     holoscan::EmitOptions{.capture_time = time});
     if (!emitted) {
       return emitted;
     }
-    emitted = num_sources.emit(
-        values.num_sources,
-        holoscan::EmitOptions{.capture_time = time});
+    emitted = num_sources.emit(values.num_sources, holoscan::EmitOptions{.capture_time = time});
     if (!emitted) {
       return emitted;
     }
-    emitted = source_count_pfa.emit(
-        values.source_count_pfa,
-        holoscan::EmitOptions{.capture_time = time});
+    emitted =
+        source_count_pfa.emit(values.source_count_pfa, holoscan::EmitOptions{.capture_time = time});
     if (!emitted) {
       return emitted;
     }
-    emitted = max_sources.emit(
-        values.max_sources,
-        holoscan::EmitOptions{.capture_time = time});
+    emitted = max_sources.emit(values.max_sources, holoscan::EmitOptions{.capture_time = time});
     if (!emitted) {
       return emitted;
     }
@@ -360,12 +328,10 @@ class PerfMUSICOverrideSourceOp final : public holoscan::Operator<> {
   }
 
   holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
-  holoscan::Output<hr::WireArrayGeometry>
-      array_geometry{"array_geometry"};
+  holoscan::Output<hr::WireArrayGeometry> array_geometry{"array_geometry"};
   holoscan::Output<holoscan::Tensor> az_coordinates{"az_coordinates"};
   holoscan::Output<holoscan::Tensor> el_coordinates{"el_coordinates"};
-  holoscan::Output<hr::SpatialSmoothingOverride>
-      spatial_smoothing{"spatial_smoothing"};
+  holoscan::Output<hr::SpatialSmoothingOverride> spatial_smoothing{"spatial_smoothing"};
   holoscan::Output<int64_t> num_sources{"num_sources"};
   holoscan::Output<double> source_count_pfa{"source_count_pfa"};
   holoscan::Output<int64_t> max_sources{"max_sources"};
@@ -377,30 +343,24 @@ class PerfMUSICOverrideSourceOp final : public holoscan::Operator<> {
   int64_t frame_index_{0};
 };
 
-perf::TimingCollector run_music_graph(
-    const MusicScenario& scen, const perf::RunPlan& plan) {
-  auto snap = perf::make_iq_cube_device<PerfPrecision>(
-      {scen.detections, scen.channels, scen.snapshots});
+perf::TimingCollector run_music_graph(const MusicScenario& scen, const perf::RunPlan& plan) {
+  auto snap =
+      perf::make_iq_cube_device<PerfPrecision>({scen.detections, scen.channels, scen.snapshots});
   constexpr int64_t kInitialMaxSources = 4;
   constexpr int64_t kOverrideMaxSources = 3;
   hr::MUSICParams initial;
-  initial.array_geometry =
-      make_ula_geometry(scen.channels, 0.5, 1.0);
-  initial.angle_convention.preset =
-      hr::AngleConventionPreset::kRadarBoresight;
+  initial.array_geometry = make_ula_geometry(scen.channels, 0.5, 1.0);
+  initial.angle_convention.preset = hr::AngleConventionPreset::kRadarBoresight;
   initial.az_coordinates = linspace(-0.5, 0.5, scen.num_az);
   initial.el_coordinates = linspace(-0.3, 0.3, scen.num_el);
   initial.num_sources = scen.fixed_model_order.value_or(
-      scen.override_kind == MusicScenario::OverrideKind::kSourceCountPfa
-          ? -1
-          : 1);
+      scen.override_kind == MusicScenario::OverrideKind::kSourceCountPfa ? -1 : 1);
   initial.source_count_pfa = 1e-4;
   initial.max_sources = kInitialMaxSources;
   hr::MUSICParams override = initial;
   switch (scen.override_kind) {
     case MusicScenario::OverrideKind::kArrayGeometry:
-      override.array_geometry =
-          make_ula_geometry(scen.channels, 0.45, 1.0);
+      override.array_geometry = make_ula_geometry(scen.channels, 0.45, 1.0);
       break;
     case MusicScenario::OverrideKind::kAzAngles:
       override.az_coordinates = linspace(-0.45, 0.55, scen.num_az);
@@ -433,18 +393,15 @@ perf::TimingCollector run_music_graph(
   extents.max_channels = scen.channels;
   perf::TimingCollector collector;
   collector.t_construct = perf::Clock::now();
-  perf::PerfFrameBank::reset(
-      std::move(snap), plan.total_frames, &collector);
+  perf::PerfFrameBank::reset(std::move(snap), plan.total_frames, &collector);
 
   holoscan::Graph graph{"music-perf"};
-  const auto source = graph.op<PerfMUSICOverrideSourceOp>(
-      "src", plan.override_at, initial, override);
-  auto op =
-      graph.op<hr::MUSICEstimatorOp<PerfPrecision>>("music", extents);
+  const auto source =
+      graph.op<PerfMUSICOverrideSourceOp>("src", plan.override_at, initial, override);
+  auto op = graph.op<hr::MUSICEstimatorOp<PerfPrecision>>("music", extents);
   op.set_params(std::move(initial));
   const auto sink = graph.op<perf::PerfTerminalSinkOp>("aoa_sink");
-  const auto spectrum =
-      graph.op<perf::PerfNullSinkOp>("spectrum_drain");
+  const auto spectrum = graph.op<perf::PerfNullSinkOp>("spectrum_drain");
   const auto doa = graph.op<perf::PerfNullSinkOp>("doa_drain");
   const auto count = graph.op<perf::PerfNullSinkOp>("count_drain");
   const auto eigen = graph.op<perf::PerfNullSinkOp>("eig_drain");
@@ -470,13 +427,10 @@ perf::TimingCollector run_music_graph(
   perf::bind_tensor_out(options, "music", "doa_multi");
   perf::bind_tensor_out(options, "music", "source_count");
   perf::bind_tensor_out(options, "music", "eigenvalues");
-  graph.set_default_clock(
-      graph.add_clock<holoscan::RealtimeClock>("clock"));
-  const holoscan::ExecutionPlan compiled =
-      holoscan::compile(graph, std::move(options));
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+  const holoscan::ExecutionPlan compiled = holoscan::compile(graph, std::move(options));
   if (!compiled.ok()) {
-    throw std::runtime_error(
-        "music-perf compile failed: " + std::string(compiled.json()));
+    throw std::runtime_error("music-perf compile failed: " + std::string(compiled.json()));
   }
   holoscan::RunSession session = holoscan::run_async(compiled);
   perf::detail::wait_for_frames(session, plan.total_frames);
@@ -490,26 +444,21 @@ perf::TimingCollector run_music_graph(
     }
     throw std::runtime_error(message);
   }
-  if (collector.ends.size() <
-      static_cast<std::size_t>(plan.total_frames)) {
-    throw std::runtime_error(perf::detail::stall_message(
-        "music-perf", collector.ends.size(), plan.total_frames));
+  if (collector.ends.size() < static_cast<std::size_t>(plan.total_frames)) {
+    throw std::runtime_error(
+        perf::detail::stall_message("music-perf", collector.ends.size(), plan.total_frames));
   }
   return collector;
 }
 
-void fill_throughput(perf::ResultRow* row,
-                     const MusicScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const MusicScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
   const double sec = median_ms / 1000.0;
   const double n = static_cast<double>(scen.detections);
   row->cells_per_second = n / sec;
-  const double beams =
-      static_cast<double>(scen.num_az) *
-      static_cast<double>(scen.num_el);
+  const double beams = static_cast<double>(scen.num_az) * static_cast<double>(scen.num_el);
   row->slices_per_second = n * beams / sec;
 }
 
@@ -518,26 +467,20 @@ perf::ResultRow base_row(const MusicScenario& scen) {
   row.scenario_id = scen.id;
   row.op_name = "MUSICEstimatorOp";
   row.variant = scen.fixed_model_order.has_value()
-                    ? "music_model_order_" +
-                          std::to_string(*scen.fixed_model_order)
-                    : std::string("music_live_") +
-                          override_name(scen.override_kind);
+                    ? "music_model_order_" + std::to_string(*scen.fixed_model_order)
+                    : std::string("music_live_") + override_name(scen.override_kind);
   row.size_id = scen.size_id;
   row.map_shape = {scen.num_az, scen.num_el};
-  row.input_shape = {scen.detections, scen.channels,
-                     scen.snapshots};
+  row.input_shape = {scen.detections, scen.channels, scen.snapshots};
   row.out_batch = scen.detections;
   row.k = scen.channels;
   row.notes = scen.fixed_model_order.has_value()
-                  ? "fixed_model_order=" +
-                        std::to_string(*scen.fixed_model_order)
-                  : std::string("live_override=") +
-                        override_name(scen.override_kind);
+                  ? "fixed_model_order=" + std::to_string(*scen.fixed_model_order)
+                  : std::string("live_override=") + override_name(scen.override_kind);
   return row;
 }
 
-MusicScenario make_scenario(
-    const SizeSpec& s, MusicScenario::OverrideKind kind) {
+MusicScenario make_scenario(const SizeSpec& s, MusicScenario::OverrideKind kind) {
   MusicScenario sc;
   sc.size_id = s.id;
   sc.channels = s.channels;
@@ -547,61 +490,47 @@ MusicScenario make_scenario(
   sc.num_el = s.num_el;
   sc.override_kind = kind;
   std::ostringstream id;
-  id << "music_" << s.id << "_c" << s.channels
-     << "_n" << s.detections << "_s" << s.snapshots
-     << "_g" << s.num_az << "x" << s.num_el
-     << "_live_" << override_name(kind);
+  id << "music_" << s.id << "_c" << s.channels << "_n" << s.detections << "_s" << s.snapshots
+     << "_g" << s.num_az << "x" << s.num_el << "_live_" << override_name(kind);
   sc.id = id.str();
   return sc;
 }
 
-MusicScenario make_model_order_scenario(const SizeSpec& size,
-                                         int64_t model_order) {
-  MusicScenario scenario = make_scenario(
-      size, MusicScenario::OverrideKind::kMaxSources);
+MusicScenario make_model_order_scenario(const SizeSpec& size, int64_t model_order) {
+  MusicScenario scenario = make_scenario(size, MusicScenario::OverrideKind::kMaxSources);
   scenario.fixed_model_order = model_order;
   std::ostringstream id;
-  id << "music_" << size.id << "_c" << size.channels
-     << "_n" << size.detections << "_s" << size.snapshots
-     << "_g" << size.num_az << "x" << size.num_el
-     << "_model_order_" << model_order;
+  id << "music_" << size.id << "_c" << size.channels << "_n" << size.detections << "_s"
+     << size.snapshots << "_g" << size.num_az << "x" << size.num_el << "_model_order_"
+     << model_order;
   scenario.id = id.str();
   return scenario;
 }
 
-void append_override_scenarios(std::vector<MusicScenario>* result,
-                               const SizeSpec& size) {
-  for (const auto kind : {
-           MusicScenario::OverrideKind::kArrayGeometry,
-           MusicScenario::OverrideKind::kAzAngles,
-           MusicScenario::OverrideKind::kElAngles,
-           MusicScenario::OverrideKind::kSpatialSmoothing,
-           MusicScenario::OverrideKind::kNumSources,
-           MusicScenario::OverrideKind::kSourceCountPfa,
-           MusicScenario::OverrideKind::kMaxSources}) {
+void append_override_scenarios(std::vector<MusicScenario>* result, const SizeSpec& size) {
+  for (const auto kind :
+       {MusicScenario::OverrideKind::kArrayGeometry, MusicScenario::OverrideKind::kAzAngles,
+        MusicScenario::OverrideKind::kElAngles, MusicScenario::OverrideKind::kSpatialSmoothing,
+        MusicScenario::OverrideKind::kNumSources, MusicScenario::OverrideKind::kSourceCountPfa,
+        MusicScenario::OverrideKind::kMaxSources}) {
     result->push_back(make_scenario(size, kind));
   }
 }
 
-void append_model_order_scenarios(std::vector<MusicScenario>* result,
-                                  const SizeSpec& size) {
+void append_model_order_scenarios(std::vector<MusicScenario>* result, const SizeSpec& size) {
   const int64_t upper = std::min<int64_t>(4, size.channels - 1);
   for (const int64_t order : {int64_t{1}, int64_t{2}, upper}) {
     if (order <= 0 ||
-        std::any_of(
-            result->begin(), result->end(),
-            [&](const MusicScenario& scenario) {
-              return scenario.size_id == size.id &&
-                     scenario.fixed_model_order == order;
-            })) {
+        std::any_of(result->begin(), result->end(), [&](const MusicScenario& scenario) {
+          return scenario.size_id == size.id && scenario.fixed_model_order == order;
+        })) {
       continue;
     }
     result->push_back(make_model_order_scenario(size, order));
   }
 }
 
-void append_scenarios(std::vector<MusicScenario>* result,
-                      const SizeSpec& size) {
+void append_scenarios(std::vector<MusicScenario>* result, const SizeSpec& size) {
   append_override_scenarios(result, size);
   append_model_order_scenarios(result, size);
 }
@@ -609,9 +538,7 @@ void append_scenarios(std::vector<MusicScenario>* result,
 struct MusicTraits : perf::PerfDriverDefaults {
   using Scenario = MusicScenario;
 
-  static const char* tool_name() {
-    return "perf_music_estimator";
-  }
+  static const char* tool_name() { return "perf_music_estimator"; }
   static const char* tool_description() {
     return "MUSICEstimatorOp performance "
            "characterization (HSDK 5 Graph)";
@@ -619,9 +546,7 @@ struct MusicTraits : perf::PerfDriverDefaults {
   static const char* sizes_all_help() {
     return "Default sizes with seven live overrides and model-order sweep";
   }
-  static const char* sizes_subset_help() {
-    return "Size sweep across an explicit subset";
-  }
+  static const char* sizes_subset_help() { return "Size sweep across an explicit subset"; }
   static const char* full_help() {
     return "Full sizes with seven live overrides and model-order sweep";
   }
@@ -647,14 +572,12 @@ struct MusicTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<MusicScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<MusicScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<MusicScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '"
-                  << sid << "', skipping\n";
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
         continue;
       }
       append_scenarios(&out, *s);
@@ -670,36 +593,28 @@ struct MusicTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static void run_scenario(const MusicScenario& scen,
-                           const perf::RunSettings& rs,
+  static void run_scenario(const MusicScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     const perf::RunPlan plan =
-        perf::make_run_plan(
-            rs, /*has_override=*/!scen.fixed_model_order.has_value());
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan,
-        [&](int /*rep*/, const perf::RunPlan& p) {
+        perf::make_run_plan(rs, /*has_override=*/!scen.fixed_model_order.has_value());
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_music_graph(scen, p);
         });
 
-    perf::append_setup_row(
-        base_row(scen), samples, report);
+    perf::append_setup_row(base_row(scen), samples, report);
 
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
     if (scen.fixed_model_order.has_value()) {
-      row.notes =
-          "fixed num_sources=" +
-          std::to_string(*scen.fixed_model_order) +
-          " model-order characterization; no inline override; "
-          "cells/s is detections/s";
+      row.notes = "fixed num_sources=" + std::to_string(*scen.fixed_model_order) +
+                  " model-order characterization; no inline override; "
+                  "cells/s is detections/s";
     } else {
-      row.notes =
-          "override_ms isolates inline " +
-          std::string(override_name(scen.override_kind)) +
-          "; steady num_sources is fixed at one except the "
-          "source_count_pfa scenario, which uses auto; cells/s is detections/s";
+      row.notes = "override_ms isolates inline " + std::string(override_name(scen.override_kind)) +
+                  "; steady num_sources is fixed at one except the "
+                  "source_count_pfa scenario, which uses auto; cells/s is detections/s";
     }
     report->results.push_back(row);
   }
@@ -711,10 +626,8 @@ struct MusicTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(
-          make_scenario(must_find_size("xs"),
-                        MusicScenario::OverrideKind::kMaxSources),
-          warm, &discarded);
+      run_scenario(make_scenario(must_find_size("xs"), MusicScenario::OverrideKind::kMaxSources),
+                   warm, &discarded);
     });
   }
 };
@@ -722,6 +635,5 @@ struct MusicTraits : perf::PerfDriverDefaults {
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<MusicTraits>(
-      argc, argv);
+  return holoscan::radar::perf::perf_main<MusicTraits>(argc, argv);
 }

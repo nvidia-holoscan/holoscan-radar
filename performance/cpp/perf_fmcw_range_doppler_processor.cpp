@@ -71,8 +71,7 @@ const std::vector<SizeSpec>& size_ladder() {
       {"sm", 32, 256, "compact sensor"},
       {"md", 64, 512, "common dev size"},
       {"lg", 128, 1024, "moderate production-scale"},
-      {"xl", 256, 2048,
-       "range-heavy moderate (v1 upper bound)"}};
+      {"xl", 256, 2048, "range-heavy moderate (v1 upper bound)"}};
   return ladder;
 }
 
@@ -88,8 +87,7 @@ const SizeSpec* find_size(const std::string& id) {
 const SizeSpec& must_find_size(const std::string& id) {
   const SizeSpec* s = find_size(id);
   if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '"
-              << id << "'\n";
+    std::cerr << "internal error: unknown size id '" << id << "'\n";
     std::abort();
   }
   return *s;
@@ -97,7 +95,8 @@ const SizeSpec& must_find_size(const std::string& id) {
 
 std::string clutter_tag(hr::ClutterFilterMethod m) {
   switch (m) {
-    case hr::ClutterFilterMethod::kNone: return "noclt";
+    case hr::ClutterFilterMethod::kNone:
+      return "noclt";
     case hr::ClutterFilterMethod::kMeanSubtraction:
       return "msub";
     case hr::ClutterFilterMethod::kSingleDelay:
@@ -120,8 +119,7 @@ hr::FMCWWaveformDescriptor make_waveform() {
 
 std::vector<int64_t> cube_shape(const FusedScenario& scen) {
   if (scen.channels > 1) {
-    return {scen.channels, scen.num_chirps,
-            scen.samples_per_chirp};
+    return {scen.channels, scen.num_chirps, scen.samples_per_chirp};
   }
   return {scen.num_chirps, scen.samples_per_chirp};
 }
@@ -131,84 +129,61 @@ std::vector<int64_t> cube_shape(const FusedScenario& scen) {
 // (range_bins, velocity_bins).  Both axis outputs are always emitted
 // here because a valid waveform is set.
 // -------------------------------------------------------------------
-perf::TimingCollector run_fused_graph(
-    const FusedScenario& scen, int total_frames) {
-  auto cube = perf::make_iq_cube_device<PerfPrecision>(
-      cube_shape(scen));
+perf::TimingCollector run_fused_graph(const FusedScenario& scen, int total_frames) {
+  auto cube = perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen));
   return perf::run_perf_graph(
       std::move(cube), total_frames, "rdproc-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
+      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_chirps = scen.num_chirps;
         extents.max_range_bins = scen.samples_per_chirp;
         if (scen.channels > 1) {
           extents.max_rx = scen.channels;
         }
-        auto op =
-            graph.op<hr::FMCWRangeDopplerProcessorOp<
-                PerfPrecision>>("fused", extents);
+        auto op = graph.op<hr::FMCWRangeDopplerProcessorOp<PerfPrecision>>("fused", extents);
         hr::FMCWRangeDopplerProcessorParams params;
         params.waveform = make_waveform();
         params.clutter_filter = scen.clutter;
         params.doppler_window.type = scen.doppler_window;
         op.set_params(std::move(params));
-        const auto sink =
-            graph.op<perf::PerfTerminalSinkOp>(
-                "out_sink");
-        const auto rb =
-            graph.op<perf::PerfNullSinkOp>("rb_sink");
-        const auto vb =
-            graph.op<perf::PerfNullSinkOp>("vb_sink");
-        const holoscan::ConnectionOptions q{
-            .queue_depth = 4U};
+        const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
+        const auto rb = graph.op<perf::PerfNullSinkOp>("rb_sink");
+        const auto vb = graph.op<perf::PerfNullSinkOp>("vb_sink");
+        const holoscan::ConnectionOptions q{.queue_depth = 4U};
         graph.add_flow(src->out, op->adc_cube, q);
         graph.add_flow(op->rd_maps, sink->in, q);
         graph.add_flow(op->range_bins, rb->in, q);
         graph.add_flow(op->velocity_bins, vb->in, q);
-        perf::bind_tensor_out(
-            options, "fused", "rd_maps");
-        perf::bind_tensor_out(
-            options, "fused", "range_bins");
-        perf::bind_tensor_out(
-            options, "fused", "velocity_bins");
+        perf::bind_tensor_out(options, "fused", "rd_maps");
+        perf::bind_tensor_out(options, "fused", "range_bins");
+        perf::bind_tensor_out(options, "fused", "velocity_bins");
       });
 }
 
-void fill_throughput(perf::ResultRow* row,
-                     const FusedScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const FusedScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
   const double sec = median_ms / 1000.0;
   const double batch = static_cast<double>(scen.channels);
-  const double chirps =
-      static_cast<double>(scen.num_chirps);
-  const double n =
-      static_cast<double>(scen.samples_per_chirp);
-  row->cells_per_second =
-      batch * chirps * n / sec;  // complex rd-map cells/s
-  row->slices_per_second = batch / sec;  // full cubes/s
+  const double chirps = static_cast<double>(scen.num_chirps);
+  const double n = static_cast<double>(scen.samples_per_chirp);
+  row->cells_per_second = batch * chirps * n / sec;  // complex rd-map cells/s
+  row->slices_per_second = batch / sec;              // full cubes/s
 
   const double csz = sizeof(std::complex<PerfPrecision>);
   const double in_bytes = batch * chirps * n * csz;
-  const double out_bytes =
-      batch * chirps * n * csz +
-      (chirps + n) * sizeof(PerfPrecision);
-  row->estimated_effective_gbps =
-      (in_bytes + out_bytes) / sec / 1e9;
+  const double out_bytes = batch * chirps * n * csz + (chirps + n) * sizeof(PerfPrecision);
+  row->estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9;
 }
 
 perf::ResultRow base_row(const FusedScenario& scen) {
   perf::ResultRow row;
   row.scenario_id = scen.id;
   row.op_name = "FMCWRangeDopplerProcessorOp";
-  row.variant = clutter_tag(scen.clutter) + "_" +
-      std::string(hr::to_string(scen.doppler_window));
+  row.variant = clutter_tag(scen.clutter) + "_" + std::string(hr::to_string(scen.doppler_window));
   row.size_id = scen.size_id;
-  row.map_shape = {scen.num_chirps,
-                   scen.samples_per_chirp};
+  row.map_shape = {scen.num_chirps, scen.samples_per_chirp};
   row.input_shape = cube_shape(scen);
   row.out_batch = scen.channels;
   row.k = scen.samples_per_chirp;
@@ -216,11 +191,9 @@ perf::ResultRow base_row(const FusedScenario& scen) {
   return row;
 }
 
-FusedScenario make_scenario(hr::ClutterFilterMethod clutter,
-                            const SizeSpec& s,
+FusedScenario make_scenario(hr::ClutterFilterMethod clutter, const SizeSpec& s,
                             int64_t channels = 1,
-                            hr::WindowType doppler_window =
-                                hr::WindowType::kNone) {
+                            hr::WindowType doppler_window = hr::WindowType::kNone) {
   FusedScenario sc;
   sc.size_id = s.id;
   sc.num_chirps = s.num_chirps;
@@ -229,9 +202,7 @@ FusedScenario make_scenario(hr::ClutterFilterMethod clutter,
   sc.clutter = clutter;
   sc.doppler_window = doppler_window;
   std::ostringstream id;
-  id << "rdproc_" << clutter_tag(clutter) << "_"
-     << hr::to_string(doppler_window) << "_"
-     << s.id;
+  id << "rdproc_" << clutter_tag(clutter) << "_" << hr::to_string(doppler_window) << "_" << s.id;
   if (channels > 1) {
     id << "_ch" << channels;
   }
@@ -246,9 +217,7 @@ FusedScenario make_scenario(hr::ClutterFilterMethod clutter,
 struct FusedTraits : perf::PerfDriverDefaults {
   using Scenario = FusedScenario;
 
-  static const char* tool_name() {
-    return "perf_fmcw_range_doppler_processor";
-  }
+  static const char* tool_name() { return "perf_fmcw_range_doppler_processor"; }
   static const char* tool_description() {
     return "FMCWRangeDopplerProcessorOp (fused) "
            "performance characterization "
@@ -281,79 +250,60 @@ struct FusedTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<FusedScenario>
-  build_default_matrix() {
+  static std::vector<FusedScenario> build_default_matrix() {
     std::vector<FusedScenario> out;
     for (const char* sid : {"xs", "md", "lg", "xl"}) {
-      out.push_back(make_scenario(
-          hr::ClutterFilterMethod::kNone,
-          must_find_size(sid)));
+      out.push_back(make_scenario(hr::ClutterFilterMethod::kNone, must_find_size(sid)));
     }
     const SizeSpec& md = must_find_size("md");
-    out.push_back(make_scenario(
-        hr::ClutterFilterMethod::kMeanSubtraction, md));
-    out.push_back(make_scenario(
-        hr::ClutterFilterMethod::kMeanSubtraction, md, 1,
-        hr::WindowType::kHann));
-    out.push_back(make_scenario(
-        hr::ClutterFilterMethod::kNone, md, 4));
+    out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, md));
+    out.push_back(
+        make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, md, 1, hr::WindowType::kHann));
+    out.push_back(make_scenario(hr::ClutterFilterMethod::kNone, md, 4));
     return out;
   }
 
-  static std::vector<FusedScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<FusedScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<FusedScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '"
-                  << sid << "', skipping\n";
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
         continue;
       }
-      out.push_back(make_scenario(
-          hr::ClutterFilterMethod::kNone, *s));
+      out.push_back(make_scenario(hr::ClutterFilterMethod::kNone, *s));
     }
     return out;
   }
 
-  static std::vector<FusedScenario>
-  build_full_matrix() {
+  static std::vector<FusedScenario> build_full_matrix() {
     std::vector<FusedScenario> out;
     for (const auto& s : size_ladder()) {
-      for (auto c :
-           {hr::ClutterFilterMethod::kNone,
-            hr::ClutterFilterMethod::kMeanSubtraction,
-            hr::ClutterFilterMethod::kSingleDelay}) {
+      for (auto c : {hr::ClutterFilterMethod::kNone, hr::ClutterFilterMethod::kMeanSubtraction,
+                     hr::ClutterFilterMethod::kSingleDelay}) {
         out.push_back(make_scenario(c, s));
       }
-      out.push_back(make_scenario(
-          hr::ClutterFilterMethod::kMeanSubtraction, s, 1,
-          hr::WindowType::kHann));
+      out.push_back(
+          make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, s, 1, hr::WindowType::kHann));
     }
     for (const char* sid : {"md", "lg"}) {
       const SizeSpec& s = must_find_size(sid);
       for (int64_t ch : {4, 16}) {
-        out.push_back(make_scenario(
-            hr::ClutterFilterMethod::kNone, s, ch));
+        out.push_back(make_scenario(hr::ClutterFilterMethod::kNone, s, ch));
       }
     }
     return out;
   }
 
-  static void run_scenario(const FusedScenario& scen,
-                           const perf::RunSettings& rs,
+  static void run_scenario(const FusedScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/false);
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_fused_graph(
-              scen, p.total_frames);
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+          return run_fused_graph(scen, p.total_frames);
         });
 
-    perf::append_setup_row(
-        base_row(scen), samples, report);
+    perf::append_setup_row(base_row(scen), samples, report);
 
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
@@ -367,19 +317,15 @@ struct FusedTraits : perf::PerfDriverDefaults {
     report->results.push_back(row);
   }
 
-  static void process_warmup(
-      const perf::RunSettings&) {
+  static void process_warmup(const perf::RunSettings&) {
     perf::run_process_warmup([] {
       perf::PerfReport discarded;
       perf::RunSettings warm;
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(
-          make_scenario(
-              hr::ClutterFilterMethod::kNone,
-              must_find_size("xs")),
-          warm, &discarded);
+      run_scenario(make_scenario(hr::ClutterFilterMethod::kNone, must_find_size("xs")), warm,
+                   &discarded);
     });
   }
 };
@@ -387,6 +333,5 @@ struct FusedTraits : perf::PerfDriverDefaults {
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<FusedTraits>(
-      argc, argv);
+  return holoscan::radar::perf::perf_main<FusedTraits>(argc, argv);
 }

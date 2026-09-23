@@ -92,22 +92,17 @@ std::vector<int64_t> interleaved_shape(const DeinterleaveScenario& scen) {
   return {scen.num_rx, slow, scen.samples};
 }
 
-perf::TimingCollector run_deinterleave_graph(const DeinterleaveScenario& scen,
-                                             int total_frames) {
-  auto cube = perf::make_iq_cube_device<PerfPrecision>(
-      interleaved_shape(scen));
+perf::TimingCollector run_deinterleave_graph(const DeinterleaveScenario& scen, int total_frames) {
+  auto cube = perf::make_iq_cube_device<PerfPrecision>(interleaved_shape(scen));
   return perf::run_perf_graph(
       std::move(cube), total_frames, "deinterleave-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
+      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_tx = scen.num_tx;
         extents.max_rx = scen.num_rx;
         extents.max_chirps = scen.chirps_per_tx;
         extents.max_samples_per_chirp = scen.samples;
-        auto op =
-            graph.op<hr::MIMODeinterleaveOp<PerfPrecision>>(
-                "deinterleave", extents);
+        auto op = graph.op<hr::MIMODeinterleaveOp<PerfPrecision>>("deinterleave", extents);
         hr::MIMODeinterleaveParams params;
         params.tx_schedule.num_tx = scen.num_tx;
         op.set_params(std::move(params));
@@ -119,22 +114,18 @@ perf::TimingCollector run_deinterleave_graph(const DeinterleaveScenario& scen,
       });
 }
 
-void fill_throughput(perf::ResultRow* row, const DeinterleaveScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const DeinterleaveScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
   const double sec = median_ms / 1000.0;
-  const double elems = static_cast<double>(scen.num_tx) *
-                       static_cast<double>(scen.num_rx) *
-                       static_cast<double>(scen.chirps_per_tx) *
-                       static_cast<double>(scen.samples);
+  const double elems = static_cast<double>(scen.num_tx) * static_cast<double>(scen.num_rx) *
+                       static_cast<double>(scen.chirps_per_tx) * static_cast<double>(scen.samples);
   row->cells_per_second = elems / sec;
   const double csz = sizeof(std::complex<PerfPrecision>);
   const double slow = static_cast<double>(scen.num_tx * scen.chirps_per_tx);
   const double in_bytes =
-      static_cast<double>(scen.num_rx) * slow *
-      static_cast<double>(scen.samples) * csz;
+      static_cast<double>(scen.num_rx) * slow * static_cast<double>(scen.samples) * csz;
   const double out_bytes = elems * csz;
   row->estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9;
 }
@@ -170,15 +161,11 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
   static const char* tool_description() {
     return "MIMODeinterleaveOp performance characterization (HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() {
-    return "Round-robin TDM gather across the full ladder";
-  }
+  static const char* sizes_all_help() { return "Round-robin TDM gather across the full ladder"; }
   static const char* sizes_subset_help() {
     return "Round-robin TDM gather across an explicit subset";
   }
-  static const char* full_help() {
-    return "Round-robin TDM gather across the full ladder";
-  }
+  static const char* full_help() { return "Round-robin TDM gather across the full ladder"; }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
     std::vector<perf::SizeDef> out;
@@ -202,8 +189,7 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<DeinterleaveScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<DeinterleaveScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<DeinterleaveScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
@@ -224,12 +210,11 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static void run_scenario(const DeinterleaveScenario& scen,
-                           const perf::RunSettings& rs,
+  static void run_scenario(const DeinterleaveScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_deinterleave_graph(scen, p.total_frames);
         });
 

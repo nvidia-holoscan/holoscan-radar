@@ -81,8 +81,7 @@ const std::vector<SizeSpec>& size_ladder() {
       {"sm", 8, 128, 512, 256, "compact SIMO array"},
       {"md", 16, 256, 512, 1024, "common dev size"},
       {"lg", 32, 512, 1024, 4096, "dense virtual array"},
-      {"xl", 64, 512, 2048, 16384,
-       "upper characterization bound"}};
+      {"xl", 64, 512, 2048, 16384, "upper characterization bound"}};
   return ladder;
 }
 
@@ -111,38 +110,31 @@ std::string window_tag(const Window& w) {
 }
 
 template <typename T>
-std::shared_ptr<holoscan::Tensor> make_device_from_host(
-    const std::vector<T>& host, const std::vector<int64_t>& shape,
-    DLDataType dtype) {
+std::shared_ptr<holoscan::Tensor> make_device_from_host(const std::vector<T>& host,
+                                                        const std::vector<int64_t>& shape,
+                                                        DLDataType dtype) {
   auto tensor = hr::make_device_tensor(shape, dtype);
   if (!host.empty()) {
     auto mut = tensor->mutable_data();
     if (!mut) {
-      throw std::runtime_error(
-          "perf_snapshot_gather: tensor not writable");
+      throw std::runtime_error("perf_snapshot_gather: tensor not writable");
     }
-    if (cudaMemcpy(mut.value(), host.data(), sizeof(T) * host.size(),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error(
-          "perf_snapshot_gather: cudaMemcpy H2D failed");
+    if (cudaMemcpy(mut.value(), host.data(), sizeof(T) * host.size(), cudaMemcpyHostToDevice) !=
+        cudaSuccess) {
+      throw std::runtime_error("perf_snapshot_gather: cudaMemcpy H2D failed");
     }
   }
   return tensor;
 }
 
 template <typename T>
-std::shared_ptr<holoscan::Tensor> make_rd_maps(int64_t channels,
-                                               int64_t doppler,
-                                               int64_t range) {
+std::shared_ptr<holoscan::Tensor> make_rd_maps(int64_t channels, int64_t doppler, int64_t range) {
   return perf::make_iq_cube_device<T>({channels, doppler, range});
 }
 
-std::shared_ptr<holoscan::Tensor> make_detection_idx(
-    int64_t detections, int64_t doppler, int64_t range) {
-  std::vector<int64_t> host(
-      static_cast<size_t>(
-          std::max<int64_t>(detections, 0) * 2),
-      0);
+std::shared_ptr<holoscan::Tensor> make_detection_idx(int64_t detections, int64_t doppler,
+                                                     int64_t range) {
+  std::vector<int64_t> host(static_cast<size_t>(std::max<int64_t>(detections, 0) * 2), 0);
   const int64_t cells = std::max<int64_t>(doppler * range, 1);
   for (int64_t i = 0; i < detections; ++i) {
     const int64_t cell = (i * 997) % cells;
@@ -152,30 +144,24 @@ std::shared_ptr<holoscan::Tensor> make_detection_idx(
   return make_device_from_host(host, {detections, 2}, kInt64Dtype);
 }
 
-perf::TimingCollector run_snapshot_graph(const SnapScenario& scen,
-                                         const perf::RunPlan& plan) {
-  auto rd = make_rd_maps<PerfPrecision>(scen.channels, scen.doppler,
-                                        scen.range);
-  auto idx = make_detection_idx(scen.detections, scen.doppler,
-                                scen.range);
+perf::TimingCollector run_snapshot_graph(const SnapScenario& scen, const perf::RunPlan& plan) {
+  auto rd = make_rd_maps<PerfPrecision>(scen.channels, scen.doppler, scen.range);
+  auto idx = make_detection_idx(scen.detections, scen.doppler, scen.range);
   const Window override_window =
-      scen.window.wd == 0 && scen.window.wr == 0 ? Window{1, 1}
-                                                 : Window{0, 0};
-  const hr::SnapshotWindowOverride initial{
-      .doppler = scen.window.wd, .range = scen.window.wr};
-  const hr::SnapshotWindowOverride override{
-      .doppler = override_window.wd, .range = override_window.wr};
+      scen.window.wd == 0 && scen.window.wr == 0 ? Window{1, 1} : Window{0, 0};
+  const hr::SnapshotWindowOverride initial{.doppler = scen.window.wd, .range = scen.window.wr};
+  const hr::SnapshotWindowOverride override{.doppler = override_window.wd,
+                                            .range = override_window.wr};
   using BaseOp = hr::SnapshotGatherOp<PerfPrecision>;
   return perf::run_perf_graph_dual_with_override(
-      std::move(rd), std::move(idx), plan.total_frames, plan.override_at,
-      initial, override, "snapshot-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
+      std::move(rd), std::move(idx), plan.total_frames, plan.override_at, initial, override,
+      "snapshot-perf",
+      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_detections = scen.detections;
         extents.max_channels = scen.channels;
-        extents.max_snapshots = std::max(
-            snapshots_for(scen.window), snapshots_for(override_window));
+        extents.max_snapshots =
+            std::max(snapshots_for(scen.window), snapshots_for(override_window));
         auto op = graph.op<BaseOp>("gather", extents);
         hr::SnapshotGatherParams params;
         params.snapshot_window = {scen.window.wd, scen.window.wr};
@@ -183,52 +169,39 @@ perf::TimingCollector run_snapshot_graph(const SnapScenario& scen,
         params.range_edge = hr::SnapshotEdgeMode::kShift;
         op.set_params(std::move(params));
 
-        const auto snap_sink =
-            graph.op<perf::PerfTerminalSinkOp>("snap_sink");
-        const auto valid_drain =
-            graph.op<perf::PerfNullSinkOp>("valid_drain");
+        const auto snap_sink = graph.op<perf::PerfTerminalSinkOp>("snap_sink");
+        const auto valid_drain = graph.op<perf::PerfNullSinkOp>("valid_drain");
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
 
         graph.add_flow(src->out_a, op->rd_maps, q);
         graph.add_flow(src->out_b, op->detection_idx, q);
-        graph.add_flow(
-            src->override_out, op->snapshot_window, q);
+        graph.add_flow(src->override_out, op->snapshot_window, q);
         graph.add_flow(op->snapshot, snap_sink->in, q);
         graph.add_flow(op->is_valid, valid_drain->in, q);
-        graph.partition("perf")
-            .add(src)
-            .add(op)
-            .add(snap_sink)
-            .add(valid_drain);
+        graph.partition("perf").add(src).add(op).add(snap_sink).add(valid_drain);
 
         perf::bind_tensor_out(options, "gather", "snapshot");
         perf::bind_tensor_out(options, "gather", "is_valid");
       });
 }
 
-void fill_throughput(perf::ResultRow* row, const SnapScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const SnapScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
   const double sec = median_ms / 1000.0;
   const double n = static_cast<double>(scen.detections);
-  const double snaps =
-      static_cast<double>(snapshots_for(scen.window));
-  const double gathered =
-      n * static_cast<double>(scen.channels) * snaps;
+  const double snaps = static_cast<double>(snapshots_for(scen.window));
+  const double gathered = n * static_cast<double>(scen.channels) * snaps;
 
   row->cells_per_second = n / sec;
   row->slices_per_second = n * snaps / sec;
 
-  const double complex_sz =
-      2.0 * static_cast<double>(sizeof(PerfPrecision));
-  const double idx_bytes =
-      n * 2.0 * static_cast<double>(sizeof(int64_t));
+  const double complex_sz = 2.0 * static_cast<double>(sizeof(PerfPrecision));
+  const double idx_bytes = n * 2.0 * static_cast<double>(sizeof(int64_t));
   const double valid_bytes = n * snaps;
   row->estimated_effective_gbps =
-      (2.0 * gathered * complex_sz + valid_bytes + idx_bytes) / sec /
-      1e9;
+      (2.0 * gathered * complex_sz + valid_bytes + idx_bytes) / sec / 1e9;
 }
 
 perf::ResultRow base_row(const SnapScenario& scen) {
@@ -254,8 +227,8 @@ SnapScenario make_scenario(const SizeSpec& s, Window w) {
   sc.detections = s.detections;
   sc.window = w;
   std::ostringstream id;
-  id << "snap_gather_" << s.id << "_c" << s.channels << "_n"
-     << s.detections << "_" << window_tag(w);
+  id << "snap_gather_" << s.id << "_c" << s.channels << "_n" << s.detections << "_"
+     << window_tag(w);
   sc.id = id.str();
   return sc;
 }
@@ -295,25 +268,21 @@ struct SnapTraits : perf::PerfDriverDefaults {
   static std::vector<SnapScenario> build_default_matrix() {
     std::vector<SnapScenario> out;
     const SizeSpec& md = must_find_size("md");
-    for (const Window w :
-         {Window{0, 0}, Window{1, 1}, Window{2, 2}}) {
+    for (const Window w : {Window{0, 0}, Window{1, 1}, Window{2, 2}}) {
       out.push_back(make_scenario(md, w));
     }
     for (const char* sid : {"xs", "sm", "md", "lg"}) {
-      out.push_back(
-          make_scenario(must_find_size(sid), Window{1, 1}));
+      out.push_back(make_scenario(must_find_size(sid), Window{1, 1}));
     }
     return out;
   }
 
-  static std::vector<SnapScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<SnapScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<SnapScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid
-                  << "', skipping\n";
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
         continue;
       }
       out.push_back(make_scenario(*s, Window{1, 1}));
@@ -324,21 +293,18 @@ struct SnapTraits : perf::PerfDriverDefaults {
   static std::vector<SnapScenario> build_full_matrix() {
     std::vector<SnapScenario> out;
     for (const auto& s : size_ladder()) {
-      for (const Window w :
-           {Window{0, 0}, Window{1, 1}, Window{2, 2}}) {
+      for (const Window w : {Window{0, 0}, Window{1, 1}, Window{2, 2}}) {
         out.push_back(make_scenario(s, w));
       }
     }
     return out;
   }
 
-  static void run_scenario(const SnapScenario& scen,
-                           const perf::RunSettings& rs,
+  static void run_scenario(const SnapScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/true);
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_snapshot_graph(scen, p);
         });
 
@@ -361,9 +327,7 @@ struct SnapTraits : perf::PerfDriverDefaults {
       warm_rs.warmup_frames = 0;
       warm_rs.measured_frames = 2;
       warm_rs.repeats = 1;
-      run_scenario(
-          make_scenario(must_find_size("xs"), Window{1, 1}),
-          warm_rs, &discarded);
+      run_scenario(make_scenario(must_find_size("xs"), Window{1, 1}), warm_rs, &discarded);
     });
   }
 };
