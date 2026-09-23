@@ -10,11 +10,9 @@
 
 namespace holoscan::config {
 
-using ClutterParamsCodec =
-    params::DefaultedParamSchemaCodec<radar::ClutterFilterParams>;  // NOLINT
+using ClutterParamsCodec = params::DefaultedParamSchemaCodec<radar::ClutterFilterParams>;  // NOLINT
 
 template <>
-struct ConfigCodec<radar::ClutterFilterParams>
-    : ClutterParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::ClutterFilterParams> : ClutterParamsCodec {};  // NOLINT
 
 }  // namespace holoscan::config

@@ -29,23 +29,18 @@ struct DopplerNotchParams {
 };
 
 HOLOSCAN_PARAM_SCHEMA(
-    DopplerNotchParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.DopplerNotchParams", 1),
+    DopplerNotchParams, holoscan::param_schema("com.nvidia.holoscan.radar.DopplerNotchParams", 1),
     holoscan::field<&DopplerNotchParams::center_velocity>("center_velocity")
         .description("Notch center velocity in m/s. Default: 0."),
     holoscan::field<&DopplerNotchParams::stop_half_width>("stop_half_width")
-        .description(
-            "Full-rejection half-width in m/s. The nearest bin is always "
-            "nulled. Default: 0."),
+        .description("Full-rejection half-width in m/s. The nearest bin is always "
+                     "nulled. Default: 0."),
     holoscan::field<&DopplerNotchParams::transition_width>("transition_width")
-        .description(
-            "Raised-cosine transition width in m/s; 0 selects a hard notch. "
-            "Default: 0."),
-    holoscan::field<&DopplerNotchParams::cyclic_velocity_axis>(
-        "cyclic_velocity_axis")
-        .description(
-            "Measure distance cyclically over the aliased velocity interval. "
-            "Static. Default: true."));
+        .description("Raised-cosine transition width in m/s; 0 selects a hard notch. "
+                     "Default: 0."),
+    holoscan::field<&DopplerNotchParams::cyclic_velocity_axis>("cyclic_velocity_axis")
+        .description("Measure distance cyclically over the aliased velocity interval. "
+                     "Static. Default: true."));
 
 static_assert(holoscan::param_schema_availability<DopplerNotchParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -62,8 +57,7 @@ class DopplerNotchOp : public holoscan::Operator<DopplerNotchParams> {
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> rd_maps{"rd_maps"};
   Input<Tensor> velocity_bins{"velocity_bins"};

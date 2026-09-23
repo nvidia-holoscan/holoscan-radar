@@ -24,20 +24,19 @@ template <typename T>
 class PyDDMDenseDemultiplexOp : public DDMDenseDemultiplexOp<T> {
  public:
   using DDMDenseDemultiplexOp<T>::DDMDenseDemultiplexOp;
-  PyDDMDenseDemultiplexOp(
-      Fragment* fragment, const py::args& args, int64_t max_tx = 8,
-      int64_t max_rx = 16, int64_t max_doppler_bins = 512,
-      int64_t max_range_bins = 4096,
-      const DDMCodeDescriptor& ddm_code = DDMCodeDescriptor{},
-      const std::string& name = "ddm_dense_demultiplex")
-      : DDMDenseDemultiplexOp<T>([&] {
-          MaxTensorExtents e;
-          e.max_tx = max_tx;
-          e.max_rx = max_rx;
-          e.max_doppler_bins = max_doppler_bins;
-          e.max_range_bins = max_range_bins;
-          return e;
-        }()) {
+  PyDDMDenseDemultiplexOp(Fragment* fragment, const py::args& args, int64_t max_tx = 8,
+                          int64_t max_rx = 16, int64_t max_doppler_bins = 512,
+                          int64_t max_range_bins = 4096,
+                          const DDMCodeDescriptor& ddm_code = DDMCodeDescriptor{},
+                          const std::string& name = "ddm_dense_demultiplex")
+  : DDMDenseDemultiplexOp<T>([&] {
+      MaxTensorExtents e;
+      e.max_tx = max_tx;
+      e.max_rx = max_rx;
+      e.max_doppler_bins = max_doppler_bins;
+      e.max_range_bins = max_range_bins;
+      return e;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -51,12 +50,11 @@ void bind(py::module_& m, const char* name) {
   using Op = DDMDenseDemultiplexOp<T>;
   using PyOp = PyDDMDenseDemultiplexOp<T>;
   py::class_<Op, PyOp, Operator, std::shared_ptr<Op>>(m, name)
-      .def(py::init<Fragment*, const py::args&, int64_t, int64_t, int64_t,
-                    int64_t, const DDMCodeDescriptor&, const std::string&>(),
+      .def(py::init<Fragment*, const py::args&, int64_t, int64_t, int64_t, int64_t,
+                    const DDMCodeDescriptor&, const std::string&>(),
            py::arg("fragment"), py::arg("max_tx") = 8, py::arg("max_rx") = 16,
            py::arg("max_doppler_bins") = 512, py::arg("max_range_bins") = 4096,
-           py::arg("ddm_code") = DDMCodeDescriptor{},
-           py::arg("name") = "ddm_dense_demultiplex")
+           py::arg("ddm_code") = DDMCodeDescriptor{}, py::arg("name") = "ddm_dense_demultiplex")
       .def("setup", &Op::setup, py::arg("spec"));
 }
 }  // namespace

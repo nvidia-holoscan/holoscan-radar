@@ -31,28 +31,24 @@ class PyClutterFilterOp : public ClutterFilterOp<T> {
  public:
   using ClutterFilterOp<T>::ClutterFilterOp;
 
-  PyClutterFilterOp(
-      Fragment* fragment, const py::args& args,
-      ClutterFilterMethod method = ClutterFilterMethod::kMeanSubtraction,
-      WindowSpec doppler_window = {},
-      std::int64_t max_chirps = 512,
-      std::int64_t max_range_bins = 4096,
-      std::int64_t max_rx = 1,
-      std::int64_t max_tx = 0,
-      const std::string& name = "clutter_filter")
-      : ClutterFilterOp<T>([&] {
-          MaxTensorExtents extents;
-          extents.max_chirps = max_chirps;
-          extents.max_range_bins = max_range_bins;
-          if (max_rx > 1) {
-            extents.max_rx = max_rx;
-          }
-          if (max_tx > 0) {
-            extents.max_tx = max_tx;
-            extents.max_rx = max_rx;
-          }
-          return extents;
-        }()) {
+  PyClutterFilterOp(Fragment* fragment, const py::args& args,
+                    ClutterFilterMethod method = ClutterFilterMethod::kMeanSubtraction,
+                    WindowSpec doppler_window = {}, std::int64_t max_chirps = 512,
+                    std::int64_t max_range_bins = 4096, std::int64_t max_rx = 1,
+                    std::int64_t max_tx = 0, const std::string& name = "clutter_filter")
+  : ClutterFilterOp<T>([&] {
+      MaxTensorExtents extents;
+      extents.max_chirps = max_chirps;
+      extents.max_range_bins = max_range_bins;
+      if (max_rx > 1) {
+        extents.max_rx = max_rx;
+      }
+      if (max_tx > 0) {
+        extents.max_tx = max_tx;
+        extents.max_rx = max_rx;
+      }
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -78,16 +74,11 @@ void bind_clutter_filter(py::module_& m, const char* class_name) {
       "    Slow-time weighting for mean_subtraction; default none uses a "
       "uniform mean.\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&, ClutterFilterMethod, WindowSpec,
-                    std::int64_t, std::int64_t, std::int64_t, std::int64_t,
-                    const std::string&>(),
-           py::arg("fragment"),
-           py::arg("method") = ClutterFilterMethod::kMeanSubtraction,
-           py::arg("doppler_window") = WindowSpec{},
-           py::arg("max_chirps") = 512,
-           py::arg("max_range_bins") = 4096,
-           py::arg("max_rx") = 1,
-           py::arg("max_tx") = 0,
+      .def(py::init<Fragment*, const py::args&, ClutterFilterMethod, WindowSpec, std::int64_t,
+                    std::int64_t, std::int64_t, std::int64_t, const std::string&>(),
+           py::arg("fragment"), py::arg("method") = ClutterFilterMethod::kMeanSubtraction,
+           py::arg("doppler_window") = WindowSpec{}, py::arg("max_chirps") = 512,
+           py::arg("max_range_bins") = 4096, py::arg("max_rx") = 1, py::arg("max_tx") = 0,
            py::arg("name") = "clutter_filter")
       .def("setup", &Op::setup, py::arg("spec"));
 }

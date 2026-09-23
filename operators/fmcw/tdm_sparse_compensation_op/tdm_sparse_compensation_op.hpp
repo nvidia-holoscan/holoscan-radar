@@ -47,18 +47,17 @@ namespace holoscan {
 
 template <>
 struct ChannelTypeIdentity<radar::TDMSparseWindowOverride> {
-  static constexpr std::string_view name =
-      "com.nvidia.holoscan.radar.TDMSparseWindowOverride";
+  static constexpr std::string_view name = "com.nvidia.holoscan.radar.TDMSparseWindowOverride";
   static constexpr std::uint32_t version = 1U;
 };
 
 template <>
 struct ChannelPodLayout<radar::TDMSparseWindowOverride> {
-  static constexpr auto fields = pod_fields(
-      pod_field("doppler", &radar::TDMSparseWindowOverride::doppler,
-                offsetof(radar::TDMSparseWindowOverride, doppler)),
-      pod_field("range", &radar::TDMSparseWindowOverride::range,
-                offsetof(radar::TDMSparseWindowOverride, range)));
+  static constexpr auto fields =
+      pod_fields(pod_field("doppler", &radar::TDMSparseWindowOverride::doppler,
+                           offsetof(radar::TDMSparseWindowOverride, doppler)),
+                 pod_field("range", &radar::TDMSparseWindowOverride::range,
+                           offsetof(radar::TDMSparseWindowOverride, range)));
 };
 
 }  // namespace holoscan
@@ -78,8 +77,7 @@ struct TDMSparseCompensationParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     TDMSparseCompensationParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.TDMSparseCompensationParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.TDMSparseCompensationParams", 1),
     holoscan::field<&TDMSparseCompensationParams::waveform>("waveform")
         .description("TDM PRI and carrier frequency. [live]."),
     holoscan::field<&TDMSparseCompensationParams::tx_schedule>("tx_schedule")
@@ -88,21 +86,17 @@ HOLOSCAN_PARAM_SCHEMA(
         .description("TX positions (m), row-major (num_tx, 3). Static."),
     holoscan::field<&TDMSparseCompensationParams::rx_positions>("rx_positions")
         .description("RX positions (m), row-major (num_rx, 3). Static."),
-    holoscan::field<&TDMSparseCompensationParams::overlap_policy>(
-        "overlap_policy")
+    holoscan::field<&TDMSparseCompensationParams::overlap_policy>("overlap_policy")
         .description("Virtual overlap policy: dedup, average, or keep_all."),
-    holoscan::field<&TDMSparseCompensationParams::snapshot_window>(
-        "snapshot_window")
+    holoscan::field<&TDMSparseCompensationParams::snapshot_window>("snapshot_window")
         .description("RD neighborhood half-size (doppler, range). [live]."),
-    holoscan::field<&TDMSparseCompensationParams::doppler_edge>(
-        "doppler_edge")
+    holoscan::field<&TDMSparseCompensationParams::doppler_edge>("doppler_edge")
         .description("Doppler window edge policy."),
     holoscan::field<&TDMSparseCompensationParams::range_edge>("range_edge")
         .description("Range window edge policy."));
 
 template <typename T>
-class TDMSparseCompensationOp
-    : public holoscan::Operator<TDMSparseCompensationParams> {
+class TDMSparseCompensationOp : public holoscan::Operator<TDMSparseCompensationParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "TDMSparseCompensationOp supports float and double only");
 
@@ -111,8 +105,7 @@ class TDMSparseCompensationOp
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> rd_maps{"rd_maps"};
   Input<Tensor> detection_idx{"detection_idx"};
@@ -130,10 +123,10 @@ class TDMSparseCompensationOp
     std::shared_ptr<Tensor> device_fold_table;
   };
 
-  expected<void, Error> ensure_virtual_tables(
-      const detail::VirtualAssemblyPlan& plan,
-      const std::vector<double>& tx_positions,
-      const std::vector<double>& rx_positions, cudaStream_t stream);
+  expected<void, Error> ensure_virtual_tables(const detail::VirtualAssemblyPlan& plan,
+                                              const std::vector<double>& tx_positions,
+                                              const std::vector<double>& rx_positions,
+                                              cudaStream_t stream);
 
   ConfigCache<CachedCorrection> correction_cache_{};
   Tensor retained_rd_maps_;

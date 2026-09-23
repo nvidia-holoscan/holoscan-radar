@@ -29,18 +29,15 @@ namespace holoscan::radar {
 struct DDMDenseDemultiplexParams {
   DDMCodeDescriptor ddm_code{};
 };
-HOLOSCAN_PARAM_SCHEMA(
-    DDMDenseDemultiplexParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.DDMDenseDemultiplexParams", 1),
-    holoscan::field<&DDMDenseDemultiplexParams::ddm_code>("ddm_code")
-        .description("Static DDM Doppler-band or phase-code layout."));
-static_assert(
-    holoscan::param_schema_availability<DDMDenseDemultiplexParams>() ==
-    holoscan::ParamSchemaAvailability::kDeclared);
+HOLOSCAN_PARAM_SCHEMA(DDMDenseDemultiplexParams,
+                      holoscan::param_schema("com.nvidia.holoscan.radar.DDMDenseDemultiplexParams",
+                                             1),
+                      holoscan::field<&DDMDenseDemultiplexParams::ddm_code>("ddm_code")
+                          .description("Static DDM Doppler-band or phase-code layout."));
+static_assert(holoscan::param_schema_availability<DDMDenseDemultiplexParams>() ==
+              holoscan::ParamSchemaAvailability::kDeclared);
 template <typename T>
-class DDMDenseDemultiplexOp
-    : public holoscan::Operator<DDMDenseDemultiplexParams> {
+class DDMDenseDemultiplexOp : public holoscan::Operator<DDMDenseDemultiplexParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
 
  public:
@@ -48,8 +45,7 @@ class DDMDenseDemultiplexOp
   ~DDMDenseDemultiplexOp() override;
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
   Input<Tensor> rd_maps{"rd_maps"};
   Input<Tensor> velocity_bins{"velocity_bins"};
   Output<Tensor> rd_maps_out{"rd_maps_out"};
@@ -63,15 +59,17 @@ class DDMDenseDemultiplexOp
   struct CachedCorrelate {
     std::shared_ptr<Tensor> device_corr_weights;
   };
-  expected<TensorOutputLoan, Error> prepare_demux(
-      ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
-      const DDMCodeDescriptor& code, int64_t num_doppler_per_tx,
-      const std::vector<int64_t>& out_shape, const Tensor& input,
-      cudaStream_t stream);
-  expected<TensorOutputLoan, Error> prepare_correlate(
-      ExecutionContext& context, const detail::DdmRdMapsLayout& layout,
-      const DDMCodeDescriptor& code, const std::vector<int64_t>& out_shape,
-      const Tensor& input, cudaStream_t stream);
+  expected<TensorOutputLoan, Error> prepare_demux(ExecutionContext& context,
+                                                  const detail::DdmRdMapsLayout& layout,
+                                                  const DDMCodeDescriptor& code,
+                                                  int64_t num_doppler_per_tx,
+                                                  const std::vector<int64_t>& out_shape,
+                                                  const Tensor& input, cudaStream_t stream);
+  expected<TensorOutputLoan, Error> prepare_correlate(ExecutionContext& context,
+                                                      const detail::DdmRdMapsLayout& layout,
+                                                      const DDMCodeDescriptor& code,
+                                                      const std::vector<int64_t>& out_shape,
+                                                      const Tensor& input, cudaStream_t stream);
   Tensor retained_input_;
   Tensor retained_velocity_bins_;
   ConfigCache<CachedDemux> demux_cache_{};

@@ -51,33 +51,25 @@ struct VirtualArrayAssemblyParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     VirtualArrayAssemblyParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.VirtualArrayAssemblyParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.VirtualArrayAssemblyParams", 1),
     holoscan::field<&VirtualArrayAssemblyParams::tx_positions>("tx_positions")
-        .description(
-            "TX element positions (m), row-major (num_tx, 3). Static."),
+        .description("TX element positions (m), row-major (num_tx, 3). Static."),
     holoscan::field<&VirtualArrayAssemblyParams::rx_positions>("rx_positions")
-        .description(
-            "RX element positions (m), row-major (num_rx, 3). Static."),
+        .description("RX element positions (m), row-major (num_rx, 3). Static."),
     holoscan::field<&VirtualArrayAssemblyParams::wavelength>("wavelength")
-        .description(
-            "Operating wavelength (m) for the emitted array_geometry. "
-            "Seeds the [live] Exact override."),
-    holoscan::field<&VirtualArrayAssemblyParams::overlap_policy>(
-        "overlap_policy")
-        .description(
-            "How coincident virtual elements are handled: dedup, average, "
-            "or keep_all. Static."));
+        .description("Operating wavelength (m) for the emitted array_geometry. "
+                     "Seeds the [live] Exact override."),
+    holoscan::field<&VirtualArrayAssemblyParams::overlap_policy>("overlap_policy")
+        .description("How coincident virtual elements are handled: dedup, average, "
+                     "or keep_all. Static."));
 
-static_assert(
-    holoscan::param_schema_availability<VirtualArrayAssemblyParams>() ==
-        holoscan::ParamSchemaAvailability::kDeclared,
-    "HOLOSCAN_PARAM_SCHEMA must be in VirtualArrayAssemblyParams's "
-    "namespace");
+static_assert(holoscan::param_schema_availability<VirtualArrayAssemblyParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in VirtualArrayAssemblyParams's "
+              "namespace");
 
 template <typename T>
-class VirtualArrayAssemblyOp
-    : public holoscan::Operator<VirtualArrayAssemblyParams> {
+class VirtualArrayAssemblyOp : public holoscan::Operator<VirtualArrayAssemblyParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "VirtualArrayAssemblyOp supports float and double precision");
 
@@ -88,8 +80,7 @@ class VirtualArrayAssemblyOp
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> rd_maps{"rd_maps"};
   // HSDK 5 requires unique port names within an operator (inputs and
@@ -103,9 +94,9 @@ class VirtualArrayAssemblyOp
   Input<double> wavelength{"wavelength"};
 
  private:
-  expected<void, Error> ensure_device_index_tables(
-      const detail::VirtualAssemblyStageConfig& stage,
-      const detail::VirtualAssemblyPlan& plan, cudaStream_t stream);
+  expected<void, Error> ensure_device_index_tables(const detail::VirtualAssemblyStageConfig& stage,
+                                                   const detail::VirtualAssemblyPlan& plan,
+                                                   cudaStream_t stream);
 
   // Keep the previous activation's input alive across ticks so async
   // device reads cannot outlive the buffer.

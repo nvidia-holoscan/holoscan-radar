@@ -31,29 +31,25 @@ struct TDMDenseCompensationParams {
   FMCWWaveformDescriptor waveform{};
   TXSchedule tx_schedule{};
 };
-HOLOSCAN_PARAM_SCHEMA(
-    TDMDenseCompensationParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.TDMDenseCompensationParams", 1),
-    holoscan::field<&TDMDenseCompensationParams::waveform>("waveform")
-        .description("Per-TX PRI for Doppler-dependent inter-TX phase "
-                     "correction. [live]."),
-    holoscan::field<&TDMDenseCompensationParams::tx_schedule>("tx_schedule")
-        .description("Static TDM firing cycle. Empty = identity round-robin."));
-static_assert(
-    holoscan::param_schema_availability<TDMDenseCompensationParams>() ==
-    holoscan::ParamSchemaAvailability::kDeclared);
+HOLOSCAN_PARAM_SCHEMA(TDMDenseCompensationParams,
+                      holoscan::param_schema("com.nvidia.holoscan.radar.TDMDenseCompensationParams",
+                                             1),
+                      holoscan::field<&TDMDenseCompensationParams::waveform>("waveform")
+                          .description("Per-TX PRI for Doppler-dependent inter-TX phase "
+                                       "correction. [live]."),
+                      holoscan::field<&TDMDenseCompensationParams::tx_schedule>("tx_schedule")
+                          .description("Static TDM firing cycle. Empty = identity round-robin."));
+static_assert(holoscan::param_schema_availability<TDMDenseCompensationParams>() ==
+              holoscan::ParamSchemaAvailability::kDeclared);
 template <typename T>
-class TDMDenseCompensationOp
-    : public holoscan::Operator<TDMDenseCompensationParams> {
+class TDMDenseCompensationOp : public holoscan::Operator<TDMDenseCompensationParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
 
  public:
   explicit TDMDenseCompensationOp(const MaxTensorExtents& extents);
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
   Input<Tensor> rd_maps{"rd_maps"};
   Output<Tensor> rd_maps_out{"rd_maps_out"};
   Input<wire::FMCWWaveformT> waveform_in{"waveform"};
@@ -66,8 +62,8 @@ class TDMDenseCompensationOp
                                     const detail::TdmRdMapsLayout& layout,
                                     const FMCWWaveformDescriptor& waveform,
                                     const std::vector<int64_t>& slot_by_tx,
-                                    const std::vector<int64_t>& out_shape,
-                                    const Tensor& input, cudaStream_t stream);
+                                    const std::vector<int64_t>& out_shape, const Tensor& input,
+                                    cudaStream_t stream);
   Tensor retained_input_;
   ConfigCache<CachedCorrection> correction_cache_{};
   MaxTensorExtents extents_;

@@ -21,25 +21,24 @@ template <typename T>
 using Complex = cuda::std::complex<T>;
 
 template <typename T>
-__global__ void gather_single_source_kernel(
-    const Complex<T>* input, Complex<T>* output, int64_t num_doppler,
-    int64_t num_range, const int64_t* src_channel) {
+__global__ void gather_single_source_kernel(const Complex<T>* input, Complex<T>* output,
+                                            int64_t num_doppler, int64_t num_range,
+                                            const int64_t* src_channel) {
   const int64_t plane = num_doppler * num_range;
   const int64_t v = static_cast<int64_t>(blockIdx.x);
   const int64_t src = src_channel[v];
   const int64_t in_base = src * plane;
   const int64_t out_base = v * plane;
-  for (int64_t i = static_cast<int64_t>(threadIdx.x); i < plane;
-       i += blockDim.x) {
+  for (int64_t i = static_cast<int64_t>(threadIdx.x); i < plane; i += blockDim.x) {
     output[out_base + i] = input[in_base + i];
   }
 }
 
 template <typename T>
-__global__ void gather_average_kernel(
-    const Complex<T>* input, Complex<T>* output, int64_t num_doppler,
-    int64_t num_range, const int64_t* member_offsets,
-    const int64_t* member_indices) {
+__global__ void gather_average_kernel(const Complex<T>* input, Complex<T>* output,
+                                      int64_t num_doppler, int64_t num_range,
+                                      const int64_t* member_offsets,
+                                      const int64_t* member_indices) {
   const int64_t plane = num_doppler * num_range;
   const int64_t v = static_cast<int64_t>(blockIdx.x);
   const int64_t begin = member_offsets[v];
@@ -50,8 +49,7 @@ __global__ void gather_average_kernel(
   }
 
   const int64_t out_base = v * plane;
-  for (int64_t i = static_cast<int64_t>(threadIdx.x); i < plane;
-       i += blockDim.x) {
+  for (int64_t i = static_cast<int64_t>(threadIdx.x); i < plane; i += blockDim.x) {
     Complex<T> sum{};
     for (int64_t m = begin; m < end; ++m) {
       const int64_t src = member_indices[m];
@@ -63,14 +61,12 @@ __global__ void gather_average_kernel(
 
 }  // namespace
 
-RdMapsLayout parse_rd_maps_layout(const holoscan::Tensor& tensor,
-                                  const char* port_name) {
+RdMapsLayout parse_rd_maps_layout(const holoscan::Tensor& tensor, const char* port_name) {
   const auto& shape = tensor.shape();
   if (shape.size() != 4) {
-    throw std::invalid_argument(
-        std::string(port_name) +
-        ": expected rank 4 (M_tx, N_rx, num_doppler, num_range), got " +
-        std::to_string(shape.size()));
+    throw std::invalid_argument(std::string(port_name) +
+                                ": expected rank 4 (M_tx, N_rx, num_doppler, num_range), got " +
+                                std::to_string(shape.size()));
   }
   RdMapsLayout layout;
   layout.num_tx = shape[0];
@@ -79,50 +75,43 @@ RdMapsLayout parse_rd_maps_layout(const holoscan::Tensor& tensor,
   layout.num_range = shape[3];
   if (layout.num_tx <= 0 || layout.num_rx <= 0 || layout.num_doppler <= 0 ||
       layout.num_range <= 0) {
-    throw std::invalid_argument(std::string(port_name) +
-                                ": trailing axes must be positive");
+    throw std::invalid_argument(std::string(port_name) + ": trailing axes must be positive");
   }
   return layout;
 }
 
-std::vector<int64_t> assembled_rd_shape(const RdMapsLayout& in,
-                                        int64_t num_virtual) {
+std::vector<int64_t> assembled_rd_shape(const RdMapsLayout& in, int64_t num_virtual) {
   return {num_virtual, in.num_doppler, in.num_range};
 }
 
 template <typename T>
-void run_virtual_assembly_stage(
-    const void* input, void* output, const RdMapsLayout& layout,
-    const VirtualAssemblyPlan& plan, const int64_t* d_src_channel,
-    const int64_t* d_member_offsets, const int64_t* d_member_indices,
-    cudaStream_t stream) {
+void run_virtual_assembly_stage(const void* input, void* output, const RdMapsLayout& layout,
+                                const VirtualAssemblyPlan& plan, const int64_t* d_src_channel,
+                                const int64_t* d_member_offsets, const int64_t* d_member_indices,
+                                cudaStream_t stream) {
   const int grid = static_cast<int>(plan.num_virtual);
   const auto* in = static_cast<const Complex<T>*>(input);
   auto* out = static_cast<Complex<T>*>(output);
 
   if (plan.policy == OverlapPolicy::kAverage) {
     gather_average_kernel<T><<<grid, kBlock, 0, stream>>>(
-        in, out, layout.num_doppler, layout.num_range, d_member_offsets,
-        d_member_indices);
+        in, out, layout.num_doppler, layout.num_range, d_member_offsets, d_member_indices);
   } else {
-    gather_single_source_kernel<T><<<grid, kBlock, 0, stream>>>(
-        in, out, layout.num_doppler, layout.num_range, d_src_channel);
+    gather_single_source_kernel<T>
+        <<<grid, kBlock, 0, stream>>>(in, out, layout.num_doppler, layout.num_range, d_src_channel);
   }
   if (cudaGetLastError() != cudaSuccess) {
-    throw std::runtime_error(
-        "virtual assembly stage: kernel launch failed");
+    throw std::runtime_error("virtual assembly stage: kernel launch failed");
   }
 }
 
 template void run_virtual_assembly_stage<float>(
-    const void* input, void* output, const RdMapsLayout& layout,
-    const VirtualAssemblyPlan& plan, const int64_t* d_src_channel,
-    const int64_t* d_member_offsets, const int64_t* d_member_indices,
+    const void* input, void* output, const RdMapsLayout& layout, const VirtualAssemblyPlan& plan,
+    const int64_t* d_src_channel, const int64_t* d_member_offsets, const int64_t* d_member_indices,
     cudaStream_t stream);
 template void run_virtual_assembly_stage<double>(
-    const void* input, void* output, const RdMapsLayout& layout,
-    const VirtualAssemblyPlan& plan, const int64_t* d_src_channel,
-    const int64_t* d_member_offsets, const int64_t* d_member_indices,
+    const void* input, void* output, const RdMapsLayout& layout, const VirtualAssemblyPlan& plan,
+    const int64_t* d_src_channel, const int64_t* d_member_offsets, const int64_t* d_member_indices,
     cudaStream_t stream);
 
 }  // namespace holoscan::radar::detail

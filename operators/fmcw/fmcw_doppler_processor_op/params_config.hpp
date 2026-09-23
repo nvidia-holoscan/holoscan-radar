@@ -14,7 +14,6 @@ using DopplerParamsCodec =
     params::DefaultedParamSchemaCodec<radar::FMCWDopplerProcessorParams>;  // NOLINT
 
 template <>
-struct ConfigCodec<radar::FMCWDopplerProcessorParams>
-    : DopplerParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::FMCWDopplerProcessorParams> : DopplerParamsCodec {};  // NOLINT
 
 }  // namespace holoscan::config

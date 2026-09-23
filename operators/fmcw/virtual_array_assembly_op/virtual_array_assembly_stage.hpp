@@ -35,17 +35,14 @@ struct RdMapsLayout {
   int64_t num_range{0};
 };
 
-RdMapsLayout parse_rd_maps_layout(const holoscan::Tensor& tensor,
-                                  const char* port_name);
+RdMapsLayout parse_rd_maps_layout(const holoscan::Tensor& tensor, const char* port_name);
 
-std::vector<int64_t> assembled_rd_shape(const RdMapsLayout& in,
-                                        int64_t num_virtual);
+std::vector<int64_t> assembled_rd_shape(const RdMapsLayout& in, int64_t num_virtual);
 
 template <typename T>
-void run_virtual_assembly_stage(
-    const void* input, void* output, const RdMapsLayout& layout,
-    const VirtualAssemblyPlan& plan, const int64_t* d_src_channel,
-    const int64_t* d_member_offsets, const int64_t* d_member_indices,
-    cudaStream_t stream);
+void run_virtual_assembly_stage(const void* input, void* output, const RdMapsLayout& layout,
+                                const VirtualAssemblyPlan& plan, const int64_t* d_src_channel,
+                                const int64_t* d_member_offsets, const int64_t* d_member_indices,
+                                cudaStream_t stream);
 
 }  // namespace holoscan::radar::detail

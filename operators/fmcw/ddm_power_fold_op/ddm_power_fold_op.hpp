@@ -28,11 +28,10 @@ struct DDMPowerFoldParams {
   DDMCodeDescriptor ddm_code{};
 };
 
-HOLOSCAN_PARAM_SCHEMA(
-    DDMPowerFoldParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.DDMPowerFoldParams", 1),
-    holoscan::field<&DDMPowerFoldParams::ddm_code>("ddm_code")
-        .description("Required static linear exact-bin DDM layout."));
+HOLOSCAN_PARAM_SCHEMA(DDMPowerFoldParams,
+                      holoscan::param_schema("com.nvidia.holoscan.radar.DDMPowerFoldParams", 1),
+                      holoscan::field<&DDMPowerFoldParams::ddm_code>("ddm_code")
+                          .description("Required static linear exact-bin DDM layout."));
 
 template <typename T>
 class DDMPowerFoldOp : public holoscan::Operator<DDMPowerFoldParams> {
@@ -43,8 +42,7 @@ class DDMPowerFoldOp : public holoscan::Operator<DDMPowerFoldParams> {
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> rd_maps{"rd_maps"};
   Output<Tensor> power_map{"power_map"};

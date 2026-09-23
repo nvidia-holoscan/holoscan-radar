@@ -29,24 +29,20 @@ struct CachedWindow {
 };
 
 template <typename T>
-const CachedWindow<T>& get_cached_window(
-    const WindowSpec& spec, int64_t length,
-    ConfigCache<CachedWindow<T>>& cache, const char* what,
-    cudaStream_t stream) {
+const CachedWindow<T>& get_cached_window(const WindowSpec& spec, int64_t length,
+                                         ConfigCache<CachedWindow<T>>& cache, const char* what,
+                                         cudaStream_t stream) {
   return cache.get_or_build(window_cache_key(spec, length), what, [&]() {
     std::vector<double> host = generate_window(spec, length);
     double sum = 0.0;
     double absolute_sum = 0.0;
     for (const double coefficient : host) {
-      const double device_coefficient =
-          static_cast<double>(static_cast<T>(coefficient));
+      const double device_coefficient = static_cast<double>(static_cast<T>(coefficient));
       sum += device_coefficient;
       absolute_sum += std::abs(device_coefficient);
     }
     return CachedWindow<T>{
-        .taps = upload_coefficients<T>(host, stream),
-        .sum = sum,
-        .absolute_sum = absolute_sum};
+        .taps = upload_coefficients<T>(host, stream), .sum = sum, .absolute_sum = absolute_sum};
   });
 }
 
@@ -54,17 +50,13 @@ const CachedWindow<T>& get_cached_window(
 // custom unnormalized taps may legitimately reach generation with zero sum,
 // unlike coherent-gain-normalized taps, which generation already rejects.
 template <typename T>
-void require_nonzero_window_sum(const WindowSpec& spec,
-                                const CachedWindow<T>& window) {
-  const double tolerance =
-      8.0 * static_cast<double>(std::numeric_limits<T>::epsilon()) *
-      static_cast<double>(window.taps.Size(0)) * window.absolute_sum;
+void require_nonzero_window_sum(const WindowSpec& spec, const CachedWindow<T>& window) {
+  const double tolerance = 8.0 * static_cast<double>(std::numeric_limits<T>::epsilon()) *
+                           static_cast<double>(window.taps.Size(0)) * window.absolute_sum;
   if (!std::isfinite(window.sum) || std::abs(window.sum) <= tolerance) {
-    const char* kind =
-        spec.type == WindowType::kCustom ? "custom window" : "window";
-    throw std::invalid_argument(
-        std::string("clutter stage: ") + kind +
-        " coefficient sum is numerically zero; weighted mean is undefined");
+    const char* kind = spec.type == WindowType::kCustom ? "custom window" : "window";
+    throw std::invalid_argument(std::string("clutter stage: ") + kind +
+                                " coefficient sum is numerically zero; weighted mean is undefined");
   }
 }
 

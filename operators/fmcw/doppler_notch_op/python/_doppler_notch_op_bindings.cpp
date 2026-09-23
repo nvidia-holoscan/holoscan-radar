@@ -26,24 +26,23 @@ class PyDopplerNotchOp : public DopplerNotchOp<T> {
  public:
   using DopplerNotchOp<T>::DopplerNotchOp;
 
-  PyDopplerNotchOp(
-      Fragment* fragment, const py::args& args,
-      double center_velocity = 0.0, double stop_half_width = 0.0,
-      double transition_width = 0.0, bool cyclic_velocity_axis = true,
-      int64_t max_doppler_bins = 512, int64_t max_range_bins = 4096,
-      int64_t max_rx = 1, int64_t max_tx = 0,
-      const std::string& name = "doppler_notch")
-      : DopplerNotchOp<T>([&] {
-          MaxTensorExtents extents;
-          extents.max_doppler_bins = max_doppler_bins;
-          extents.max_range_bins = max_range_bins;
-          if (max_rx > 1) extents.max_rx = max_rx;
-          if (max_tx > 0) {
-            extents.max_tx = max_tx;
-            extents.max_rx = max_rx;
-          }
-          return extents;
-        }()) {
+  PyDopplerNotchOp(Fragment* fragment, const py::args& args, double center_velocity = 0.0,
+                   double stop_half_width = 0.0, double transition_width = 0.0,
+                   bool cyclic_velocity_axis = true, int64_t max_doppler_bins = 512,
+                   int64_t max_range_bins = 4096, int64_t max_rx = 1, int64_t max_tx = 0,
+                   const std::string& name = "doppler_notch")
+  : DopplerNotchOp<T>([&] {
+      MaxTensorExtents extents;
+      extents.max_doppler_bins = max_doppler_bins;
+      extents.max_range_bins = max_range_bins;
+      if (max_rx > 1)
+        extents.max_rx = max_rx;
+      if (max_tx > 0) {
+        extents.max_tx = max_tx;
+        extents.max_rx = max_rx;
+      }
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -61,16 +60,12 @@ void bind_doppler_notch(py::module_& module, const char* class_name) {
   using Op = DopplerNotchOp<T>;
   using PyOp = PyDopplerNotchOp<T>;
   py::class_<Op, PyOp, Operator, std::shared_ptr<Op>>(module, class_name)
-      .def(py::init<Fragment*, const py::args&, double, double, double, bool,
-                    int64_t, int64_t, int64_t, int64_t,
-                    const std::string&>(),
-           py::arg("fragment"), py::arg("center_velocity") = 0.0,
-           py::arg("stop_half_width") = 0.0,
-           py::arg("transition_width") = 0.0,
-           py::arg("cyclic_velocity_axis") = true,
-           py::arg("max_doppler_bins") = 512,
-           py::arg("max_range_bins") = 4096, py::arg("max_rx") = 1,
-           py::arg("max_tx") = 0, py::arg("name") = "doppler_notch")
+      .def(py::init<Fragment*, const py::args&, double, double, double, bool, int64_t, int64_t,
+                    int64_t, int64_t, const std::string&>(),
+           py::arg("fragment"), py::arg("center_velocity") = 0.0, py::arg("stop_half_width") = 0.0,
+           py::arg("transition_width") = 0.0, py::arg("cyclic_velocity_axis") = true,
+           py::arg("max_doppler_bins") = 512, py::arg("max_range_bins") = 4096,
+           py::arg("max_rx") = 1, py::arg("max_tx") = 0, py::arg("name") = "doppler_notch")
       .def("setup", &Op::setup, py::arg("spec"));
 }
 
@@ -79,8 +74,6 @@ void bind_doppler_notch(py::module_& module, const char* class_name) {
 
 PYBIND11_MODULE(_doppler_notch_op, module) {
   holoscan::radar::ensure_radar_arg_setters();
-  holoscan::radar::bind_doppler_notch<float>(
-      module, "DopplerNotchOpF32");
-  holoscan::radar::bind_doppler_notch<double>(
-      module, "DopplerNotchOpF64");
+  holoscan::radar::bind_doppler_notch<float>(module, "DopplerNotchOpF32");
+  holoscan::radar::bind_doppler_notch<double>(module, "DopplerNotchOpF64");
 }

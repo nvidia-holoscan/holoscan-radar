@@ -92,18 +92,17 @@ inline int64_t range_num_bins(bool complex_input, int64_t samples_per_chirp,
 // Throws std::invalid_argument for contract violations (dechirp without a
 // waveform or with real input, nfft < samples_per_chirp, ...).
 template <typename T>
-void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
-                     const void* in, bool complex_input, int64_t batch,
-                     int64_t num_chirps, int64_t samples_per_chirp, void* out,
-                     int64_t num_bins, cudaStream_t stream);
+void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state, const void* in,
+                     bool complex_input, int64_t batch, int64_t num_chirps,
+                     int64_t samples_per_chirp, void* out, int64_t num_bins, cudaStream_t stream);
 
 // Compute the range_bins axis (meters, relative to zero beat) for the
 // current configuration into a device buffer of length num_bins:
 //   range_bins[i] = propagation_speed * (i * fs / nfft) / (2 * slope).
 // Requires cfg.waveform. Enqueued on `stream`.
 template <typename T>
-void fill_range_bins(const RangeStageConfig& cfg, int64_t samples_per_chirp,
-                     int64_t num_bins, T* out, cudaStream_t stream);
+void fill_range_bins(const RangeStageConfig& cfg, int64_t samples_per_chirp, int64_t num_bins,
+                     T* out, cudaStream_t stream);
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -136,11 +135,9 @@ inline std::string dechirp_cache_key(const FMCWWaveformDescriptor& waveform,
   std::string key = "n=" + std::to_string(samples_per_chirp);
   if (!waveform.reference_samples().empty()) {
     key += ";ref_len=" + std::to_string(waveform.reference_samples().size());
-    key += ";ref_hash=" +
-           std::to_string(range_stage_fnv1a(
-               waveform.reference_samples().data(),
-               waveform.reference_samples().size() *
-                   sizeof(std::complex<double>)));
+    key += ";ref_hash=" + std::to_string(range_stage_fnv1a(
+                              waveform.reference_samples().data(),
+                              waveform.reference_samples().size() * sizeof(std::complex<double>)));
   } else {
     key += ";slope=" + range_stage_double_key(waveform.slope());
     key += ";fs=" + range_stage_double_key(waveform.sample_rate());
@@ -155,13 +152,11 @@ inline std::string dechirp_cache_key(const FMCWWaveformDescriptor& waveform,
 inline std::vector<std::complex<double>> host_dechirp_reference(
     const FMCWWaveformDescriptor& waveform, int64_t samples_per_chirp) {
   if (!waveform.reference_samples().empty()) {
-    if (static_cast<int64_t>(waveform.reference_samples().size()) !=
-        samples_per_chirp) {
-      throw std::invalid_argument(
-          "range stage: waveform.reference_samples length (" +
-          std::to_string(waveform.reference_samples().size()) +
-          ") does not match samples_per_chirp (" +
-          std::to_string(samples_per_chirp) + ")");
+    if (static_cast<int64_t>(waveform.reference_samples().size()) != samples_per_chirp) {
+      throw std::invalid_argument("range stage: waveform.reference_samples length (" +
+                                  std::to_string(waveform.reference_samples().size()) +
+                                  ") does not match samples_per_chirp (" +
+                                  std::to_string(samples_per_chirp) + ")");
     }
     return waveform.reference_samples();
   }
@@ -171,29 +166,23 @@ inline std::vector<std::complex<double>> host_dechirp_reference(
         "cannot synthesize the dechirp reference");
   }
   const double slope = waveform.slope();
-  std::vector<std::complex<double>> host(
-      static_cast<size_t>(samples_per_chirp));
+  std::vector<std::complex<double>> host(static_cast<size_t>(samples_per_chirp));
   for (int64_t s = 0; s < samples_per_chirp; ++s) {
     const double t = static_cast<double>(s) / waveform.sample_rate();
     const double phase = kPi * slope * t * t;
-    host[static_cast<size_t>(s)] =
-        std::complex<double>(std::cos(phase), std::sin(phase));
+    host[static_cast<size_t>(s)] = std::complex<double>(std::cos(phase), std::sin(phase));
   }
   return host;
 }
 
 // Cache key for the combined pre-FFT multiplier: exactly the window and
 // dechirp inputs build_premultiplier consumes.
-inline std::string premultiplier_cache_key(const RangeStageConfig& cfg,
-                                           int64_t samples_per_chirp) {
+inline std::string premultiplier_cache_key(const RangeStageConfig& cfg, int64_t samples_per_chirp) {
   std::string key = "win=";
-  key += cfg.window.type != WindowType::kNone
-             ? window_cache_key(cfg.window, samples_per_chirp)
-             : "none";
+  key += cfg.window.type != WindowType::kNone ? window_cache_key(cfg.window, samples_per_chirp)
+                                              : "none";
   key += ";dechirp=";
-  key += cfg.apply_dechirp
-             ? dechirp_cache_key(*cfg.waveform, samples_per_chirp)
-             : "none";
+  key += cfg.apply_dechirp ? dechirp_cache_key(*cfg.waveform, samples_per_chirp) : "none";
   return key;
 }
 
@@ -202,14 +191,12 @@ inline std::string premultiplier_cache_key(const RangeStageConfig& cfg,
 // in double precision once per configuration, then cast and uploaded.
 // Requires cfg.apply_dechirp or an active window.
 template <typename T>
-matx::tensor_t<cuda::std::complex<T>, 1> build_premultiplier(
-    const RangeStageConfig& cfg, int64_t samples_per_chirp,
-    cudaStream_t stream) {
-  std::vector<std::complex<double>> mult(
-      static_cast<size_t>(samples_per_chirp), {1.0, 0.0});
+matx::tensor_t<cuda::std::complex<T>, 1> build_premultiplier(const RangeStageConfig& cfg,
+                                                             int64_t samples_per_chirp,
+                                                             cudaStream_t stream) {
+  std::vector<std::complex<double>> mult(static_cast<size_t>(samples_per_chirp), {1.0, 0.0});
   if (cfg.apply_dechirp) {
-    const auto reference =
-        host_dechirp_reference(*cfg.waveform, samples_per_chirp);
+    const auto reference = host_dechirp_reference(*cfg.waveform, samples_per_chirp);
     for (size_t s = 0; s < mult.size(); ++s) {
       mult[s] = std::conj(reference[s]);
     }
@@ -224,25 +211,20 @@ matx::tensor_t<cuda::std::complex<T>, 1> build_premultiplier(
 }
 
 template <typename T>
-void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
-                     const void* in, bool complex_input, int64_t batch,
-                     int64_t num_chirps, int64_t samples_per_chirp, void* out,
-                     int64_t num_bins, cudaStream_t stream) {
+void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state, const void* in,
+                     bool complex_input, int64_t batch, int64_t num_chirps,
+                     int64_t samples_per_chirp, void* out, int64_t num_bins, cudaStream_t stream) {
   const int64_t nfft = cfg.nfft.value_or(samples_per_chirp);
   if (nfft < samples_per_chirp) {
-    throw std::invalid_argument(
-        "range stage: nfft (" + std::to_string(nfft) +
-        ") must be >= samples_per_chirp (" +
-        std::to_string(samples_per_chirp) + ")");
+    throw std::invalid_argument("range stage: nfft (" + std::to_string(nfft) +
+                                ") must be >= samples_per_chirp (" +
+                                std::to_string(samples_per_chirp) + ")");
   }
-  if (num_bins != range_num_bins(complex_input, samples_per_chirp,
-                                 cfg.nfft)) {
+  if (num_bins != range_num_bins(complex_input, samples_per_chirp, cfg.nfft)) {
     throw std::invalid_argument(
         "range stage: num_bins (" + std::to_string(num_bins) +
         ") does not match the configured FFT length (expected " +
-        std::to_string(range_num_bins(complex_input, samples_per_chirp,
-                                      cfg.nfft)) +
-        ")");
+        std::to_string(range_num_bins(complex_input, samples_per_chirp, cfg.nfft)) + ")");
   }
   if (cfg.apply_dechirp) {
     if (!cfg.waveform.has_value()) {
@@ -264,14 +246,14 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
   // Warn-once bookkeeping for reconfigured FFT lengths; the plan itself is
   // cached inside MatX.
   {
-    const std::string fft_key =
-        std::string(complex_input ? "c2c" : "r2c") +
-        ":nfft=" + std::to_string(nfft) +
-        ":len=" + std::to_string(samples_per_chirp) +
-        ":batch=" + std::to_string(batch * num_chirps) +
-        ":dtype=" + (sizeof(T) == 4 ? "f32" : "f64");
-    state.seen_fft_keys.get_or_build(fft_key, "FFT length",
-                                     [] { return true; });
+    const std::string fft_key = std::string(complex_input ? "c2c" : "r2c") +
+                                ":nfft=" + std::to_string(nfft) +
+                                ":len=" + std::to_string(samples_per_chirp) +
+                                ":batch=" + std::to_string(batch * num_chirps) +
+                                ":dtype=" + (sizeof(T) == 4 ? "f32" : "f64");
+    state.seen_fft_keys.get_or_build(fft_key, "FFT length", [] {
+      return true;
+    });
   }
 
   const bool apply_window = cfg.window.type != WindowType::kNone;
@@ -288,12 +270,10 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
   };
 
   if (complex_input) {
-    auto in_view = make_const_complex_view3<T>(in, batch, num_chirps,
-                                               samples_per_chirp);
+    auto in_view = make_const_complex_view3<T>(in, batch, num_chirps, samples_per_chirp);
     if (cfg.apply_dechirp || apply_window) {
       const auto& mult = state.premultipliers.get_or_build(
-          premultiplier_cache_key(cfg, samples_per_chirp),
-          "pre-FFT multiplier", [&] {
+          premultiplier_cache_key(cfg, samples_per_chirp), "pre-FFT multiplier", [&] {
             return build_premultiplier<T>(cfg, samples_per_chirp, stream);
           });
       fft_into_out(in_view * bcast(mult));
@@ -301,14 +281,11 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
       fft_into_out(in_view);
     }
   } else {
-    auto in_view = make_real_view3<T>(in, batch, num_chirps,
-                                      samples_per_chirp);
+    auto in_view = make_real_view3<T>(in, batch, num_chirps, samples_per_chirp);
     if (apply_window) {
       const auto& taps = state.windows.get_or_build(
-          window_cache_key(cfg.window, samples_per_chirp),
-          "window coefficient", [&] {
-            return upload_coefficients<T>(
-                generate_window(cfg.window, samples_per_chirp), stream);
+          window_cache_key(cfg.window, samples_per_chirp), "window coefficient", [&] {
+            return upload_coefficients<T>(generate_window(cfg.window, samples_per_chirp), stream);
           });
       fft_into_out(in_view * bcast(taps));
     } else {
@@ -318,11 +295,10 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
 }
 
 template <typename T>
-void fill_range_bins(const RangeStageConfig& cfg, int64_t samples_per_chirp,
-                     int64_t num_bins, T* out, cudaStream_t stream) {
+void fill_range_bins(const RangeStageConfig& cfg, int64_t samples_per_chirp, int64_t num_bins,
+                     T* out, cudaStream_t stream) {
   if (!cfg.waveform.has_value()) {
-    throw std::invalid_argument(
-        "range stage: range_bins requires a waveform descriptor");
+    throw std::invalid_argument("range stage: range_bins requires a waveform descriptor");
   }
   if (!cfg.waveform->is_valid()) {
     throw std::invalid_argument(
@@ -335,8 +311,8 @@ void fill_range_bins(const RangeStageConfig& cfg, int64_t samples_per_chirp,
 
   matx::cudaExecutor exec{stream};
   auto bins = matx::make_tensor<T, 1>(out, {num_bins});
-  const T step = static_cast<T>(
-      cfg.propagation_speed * fs / (2.0 * slope * static_cast<double>(nfft)));
+  const T step =
+      static_cast<T>(cfg.propagation_speed * fs / (2.0 * slope * static_cast<double>(nfft)));
   (bins = matx::range<0>(bins.Shape(), T{0}, step)).run(exec);
 }
 

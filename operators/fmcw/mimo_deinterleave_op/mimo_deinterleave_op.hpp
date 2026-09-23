@@ -42,12 +42,10 @@ struct MIMODeinterleaveParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     MIMODeinterleaveParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.MIMODeinterleaveParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.MIMODeinterleaveParams", 1),
     holoscan::field<&MIMODeinterleaveParams::tx_schedule>("tx_schedule")
-        .description(
-            "TXSchedule describing how the interleaved slow-time axis "
-            "splits into (M_tx, L). Required; static for the instance."));
+        .description("TXSchedule describing how the interleaved slow-time axis "
+                     "splits into (M_tx, L). Required; static for the instance."));
 
 static_assert(holoscan::param_schema_availability<MIMODeinterleaveParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -55,8 +53,7 @@ static_assert(holoscan::param_schema_availability<MIMODeinterleaveParams>() ==
               "namespace");
 
 template <typename T>
-class MIMODeinterleaveOp
-    : public holoscan::Operator<MIMODeinterleaveParams> {
+class MIMODeinterleaveOp : public holoscan::Operator<MIMODeinterleaveParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "MIMODeinterleaveOp supports float and double precision");
 
@@ -66,8 +63,7 @@ class MIMODeinterleaveOp
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> adc_cube{"adc_cube"};
   // HSDK 5 requires unique port names within an operator (inputs and
@@ -77,9 +73,8 @@ class MIMODeinterleaveOp
   Output<Tensor> adc_cube_out{"adc_cube_out"};
 
  private:
-  expected<void, Error> ensure_device_gather_map(int64_t slow_time,
-                                                const TXSchedule& schedule,
-                                                cudaStream_t stream);
+  expected<void, Error> ensure_device_gather_map(int64_t slow_time, const TXSchedule& schedule,
+                                                 cudaStream_t stream);
 
   // Keep the previous activation's input alive across ticks so async
   // device reads cannot outlive the buffer.
