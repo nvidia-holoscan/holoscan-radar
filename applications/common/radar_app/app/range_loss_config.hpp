@@ -22,11 +22,11 @@ struct RangeLossConfig {
   std::optional<double> reference_range{};
 };
 
-using RangeLossStorage = radar::config_detail::PortableParamStorageTraits<
-    RangeLossConfig>;  // NOLINT
+using RangeLossStorage =
+    radar::config_detail::PortableParamStorageTraits<RangeLossConfig>;  // NOLINT
 
-inline void configure_range_loss(
-    const std::optional<RangeLossConfig>& authored, sim::SimScene* scene) {
+inline void configure_range_loss(const std::optional<RangeLossConfig>& authored,
+                                 sim::SimScene* scene) {
   scene->range_loss = {};
   if (!authored.has_value()) {
     HOLOSCAN_LOG_WARN(
@@ -38,10 +38,8 @@ inline void configure_range_loss(
   }
   if (authored->model == "none") {
     if (authored->reference_range.has_value() &&
-        (!std::isfinite(*authored->reference_range) ||
-         *authored->reference_range <= 0.0)) {
-      throw std::runtime_error(
-          "app.range_loss.reference_range must be finite and positive");
+        (!std::isfinite(*authored->reference_range) || *authored->reference_range <= 0.0)) {
+      throw std::runtime_error("app.range_loss.reference_range must be finite and positive");
     }
     HOLOSCAN_LOG_WARN(
         "app.range_loss.model is none; target amplitudes remain independent "
@@ -50,11 +48,9 @@ inline void configure_range_loss(
     return;
   }
   if (authored->model != "monostatic_free_space") {
-    throw std::runtime_error(
-        "app.range_loss.model must be none or monostatic_free_space");
+    throw std::runtime_error("app.range_loss.model must be none or monostatic_free_space");
   }
-  if (!authored->reference_range.has_value() ||
-      !std::isfinite(*authored->reference_range) ||
+  if (!authored->reference_range.has_value() || !std::isfinite(*authored->reference_range) ||
       *authored->reference_range <= 0.0) {
     throw std::runtime_error(
         "app.range_loss.reference_range must be finite and positive for "
@@ -69,8 +65,7 @@ inline void configure_range_loss(
 namespace holoscan {
 
 template <>
-struct ParamStorageTraits<radar::app::RangeLossConfig>
-    : radar::app::RangeLossStorage {};  // NOLINT
+struct ParamStorageTraits<radar::app::RangeLossConfig> : radar::app::RangeLossStorage {};  // NOLINT
 
 }  // namespace holoscan
 
@@ -78,11 +73,11 @@ namespace holoscan::config {
 
 template <>
 struct ConfigCodec<radar::app::RangeLossConfig>
-    : ObjectCodec<radar::app::RangeLossConfig> {  // NOLINT
+: ObjectCodec<radar::app::RangeLossConfig> {  // NOLINT
   using Config = radar::app::RangeLossConfig;
-  static constexpr auto fields = std::make_tuple(
-      object_field("model", &Config::model),
-      defaulted_object_field("reference_range", &Config::reference_range));
+  static constexpr auto fields =
+      std::make_tuple(object_field("model", &Config::model),
+                      defaulted_object_field("reference_range", &Config::reference_range));
 };
 
 }  // namespace holoscan::config

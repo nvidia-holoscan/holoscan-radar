@@ -54,18 +54,16 @@ struct SimAdcSourceConfig {
 class SimAdcSourceOp : public holoscan::Operator<> {
  public:
   SimAdcSourceOp(const MaxTensorExtents& extents, SimAdcSourceConfig config)
-      : config_(std::move(config)) {
-    const int64_t chirps =
-        require_extent(extents.max_chirps, "max_chirps", "SimAdcSourceOp");
-    const int64_t samples = require_extent(extents.max_samples_per_chirp,
-                                           "max_samples_per_chirp",
-                                           "SimAdcSourceOp");
+  : config_(std::move(config)) {
+    const int64_t chirps = require_extent(extents.max_chirps, "max_chirps", "SimAdcSourceOp");
+    const int64_t samples =
+        require_extent(extents.max_samples_per_chirp, "max_samples_per_chirp", "SimAdcSourceOp");
     int64_t leading = 1;
     if (extents.max_rx.has_value() && *extents.max_rx > 1) {
       leading = *extents.max_rx;
     }
-    max_byte_span_ = tensor_byte_span(
-        std::vector<int64_t>{leading, chirps, samples}, complex_dtype<float>());
+    max_byte_span_ =
+        tensor_byte_span(std::vector<int64_t>{leading, chirps, samples}, complex_dtype<float>());
     max_rank_ = (leading > 1) ? 3U : 2U;
   }
 
@@ -75,9 +73,8 @@ class SimAdcSourceOp : public holoscan::Operator<> {
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    spec.output(adc_cube)
-        .produces_tensor(holoscan::radar::pooled_tensor_output(
-            kDevice, max_rank_, max_byte_span_));
+    spec.output(adc_cube).produces_tensor(
+        holoscan::radar::pooled_tensor_output(kDevice, max_rank_, max_byte_span_));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -97,23 +94,22 @@ class SimAdcSourceOp : public holoscan::Operator<> {
     cudaStream_t stream = context.cuda_stream().get();
     std::shared_ptr<holoscan::Tensor> staged;
     try {
-      staged = sim::simulate_gpu(
-          sim::visible_scene(config_.scene, config_.scene_visibility), stream);
+      staged =
+          sim::simulate_gpu(sim::visible_scene(config_.scene, config_.scene_visibility), stream);
       sim::add_thermal_noise_gpu(*staged, config_.scene.snr_db,
                                  config_.scene.seed + frames_emitted_, stream);
       if (cudaStreamSynchronize(stream) != cudaSuccess) {
-        return holoscan::make_unexpected(holoscan::Error{
-            holoscan::ErrorCode::kFailure,
-            "SimAdcSourceOp: stream sync failed"});
+        return holoscan::make_unexpected(
+            holoscan::Error{holoscan::ErrorCode::kFailure, "SimAdcSourceOp: stream sync failed"});
       }
     } catch (const std::exception& e) {
-      return holoscan::make_unexpected(holoscan::Error{
-          holoscan::ErrorCode::kFailure,
-          std::string("SimAdcSourceOp: simulate failed: ") + e.what()});
+      return holoscan::make_unexpected(
+          holoscan::Error{holoscan::ErrorCode::kFailure,
+                          std::string("SimAdcSourceOp: simulate failed: ") + e.what()});
     }
 
-    auto loan = adc_cube.allocate_tensor(holoscan::TensorLoanRequest{
-        .shape = staged->shape(), .dtype = staged->dtype()});
+    auto loan = adc_cube.allocate_tensor(
+        holoscan::TensorLoanRequest{.shape = staged->shape(), .dtype = staged->dtype()});
     if (!loan) {
       return holoscan::make_unexpected(std::move(loan).error());
     }
@@ -123,16 +119,15 @@ class SimAdcSourceOp : public holoscan::Operator<> {
     }
     if (cudaMemcpyAsync(writer->data(), staged->data(), writer->byte_size(),
                         cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
-      return holoscan::make_unexpected(holoscan::Error{
-          holoscan::ErrorCode::kFailure, "SimAdcSourceOp: D2D failed"});
+      return holoscan::make_unexpected(
+          holoscan::Error{holoscan::ErrorCode::kFailure, "SimAdcSourceOp: D2D failed"});
     }
     auto committed = std::move(*writer).commit();
     if (!committed) {
       return holoscan::make_unexpected(std::move(committed).error());
     }
     HOLOSCAN_RETURN_IF_ERROR(adc_cube.emit(
-        std::move(*loan),
-        holoscan::EmitOptions{.capture_time = context.activation_time()}));
+        std::move(*loan), holoscan::EmitOptions{.capture_time = context.activation_time()}));
 
     if (config_.cadence) {
       config_.cadence->on_source_emit();

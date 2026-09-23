@@ -32,8 +32,7 @@ namespace holoscan {
 
 template <>
 struct ParamStorageTraits<radar::app::VisualizationConfig>
-    : radar::config_detail::PortableParamStorageTraits<
-          radar::app::VisualizationConfig> {};  // NOLINT
+: radar::config_detail::PortableParamStorageTraits<radar::app::VisualizationConfig> {};  // NOLINT
 
 }  // namespace holoscan
 
@@ -41,7 +40,7 @@ namespace holoscan::config {
 
 template <>
 struct ConfigCodec<radar::app::VisualizationConfig>
-    : ObjectCodec<radar::app::VisualizationConfig> {  // NOLINT
+: ObjectCodec<radar::app::VisualizationConfig> {  // NOLINT
   using Config = radar::app::VisualizationConfig;
   static constexpr auto fields = std::make_tuple(
       defaulted_object_field("enabled", &Config::enabled),
@@ -52,8 +51,7 @@ struct ConfigCodec<radar::app::VisualizationConfig>
       defaulted_object_field("dynamic_range_db", &Config::dynamic_range_db),
       defaulted_object_field("detection_radius", &Config::detection_radius),
       defaulted_object_field("history_frames", &Config::history_frames),
-      defaulted_object_field("detection_trail_frames",
-                             &Config::detection_trail_frames),
+      defaulted_object_field("detection_trail_frames", &Config::detection_trail_frames),
       defaulted_object_field("profile", &Config::profile));
 };
 

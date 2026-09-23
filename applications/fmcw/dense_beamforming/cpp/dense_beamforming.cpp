@@ -29,14 +29,12 @@ namespace workflow = holoscan::radar::app::dense_beamforming;
 
 namespace {
 
-void bind_output(holoscan::CompileOptions& options, const char* op,
-                 const char* port) {
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = op,
-          .output_port = port,
-          .device = holoscan::DeviceId{0},
-      });
+void bind_output(holoscan::CompileOptions& options, const char* op, const char* port) {
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = op,
+      .output_port = port,
+      .device = holoscan::DeviceId{0},
+  });
 }
 
 void bind_outputs(holoscan::CompileOptions& options, const char* op,
@@ -50,10 +48,8 @@ void bind_outputs(holoscan::CompileOptions& options, const char* op,
 
 int main(int argc, char** argv) {
   return app::run_fmcw_graph_app<workflow::Config>(
-      argc, argv, "dense_beamforming", "dense_beamforming.yaml",
-      workflow::load_config,
-      [](holoscan::Graph& graph, holoscan::CompileOptions& options,
-         workflow::Config& cfg,
+      argc, argv, "dense_beamforming", "dense_beamforming.yaml", workflow::load_config,
+      [](holoscan::Graph& graph, holoscan::CompileOptions& options, workflow::Config& cfg,
          std::shared_ptr<app::CadenceMeter>* cadence_out) {
         const holoscan::ConnectionOptions queue{.queue_depth = 4U};
         const radar::MaxTensorExtents& extents = cfg.extents;
@@ -73,58 +69,49 @@ int main(int argc, char** argv) {
         }
 
         // Simulated ADC source.
-        auto source = graph.op<app::SimAdcSourceOp>(
-            "adc_source", extents, std::move(source_config));
+        auto source =
+            graph.op<app::SimAdcSourceOp>("adc_source", extents, std::move(source_config));
         bind_outputs(options, "adc_source", {"adc_cube"});
 
         // Range processing.
-        auto range = graph.op<radar::FMCWRangeProcessorOp<float>>(
-            "range_processor", extents);
+        auto range = graph.op<radar::FMCWRangeProcessorOp<float>>("range_processor", extents);
         range.set_params(cfg.range_params);
-        bind_outputs(options, "range_processor",
-                     {"range_profiles", "range_bins"});
+        bind_outputs(options, "range_processor", {"range_profiles", "range_bins"});
 
         // Static-clutter suppression.
-        auto clutter = graph.op<radar::ClutterFilterOp<float>>(
-            "clutter_filter", extents);
+        auto clutter = graph.op<radar::ClutterFilterOp<float>>("clutter_filter", extents);
         clutter.set_params(cfg.clutter_params);
         bind_outputs(options, "clutter_filter", {"range_profiles_out"});
 
         // Doppler processing.
-        auto doppler = graph.op<radar::FMCWDopplerProcessorOp<float>>(
-            "doppler_processor", extents);
+        auto doppler = graph.op<radar::FMCWDopplerProcessorOp<float>>("doppler_processor", extents);
         doppler.set_params(cfg.doppler_params);
-        bind_outputs(options, "doppler_processor",
-                     {"rd_maps", "velocity_bins"});
+        bind_outputs(options, "doppler_processor", {"rd_maps", "velocity_bins"});
 
         // Dense angle beamforming.
-        auto beamformer = graph.op<radar::PhaseShiftBeamformerOp<float>>(
-            "phase_shift_beamformer", extents);
+        auto beamformer =
+            graph.op<radar::PhaseShiftBeamformerOp<float>>("phase_shift_beamformer", extents);
         beamformer.set_params(cfg.beamformer_params);
-        bind_outputs(options, "phase_shift_beamformer",
-                     {"rda_cube", "az_grid", "el_grid"});
+        bind_outputs(options, "phase_shift_beamformer", {"rda_cube", "az_grid", "el_grid"});
 
         // CFAR detection plus full az/el/Doppler/range peak suppression.
-        auto cfar = graph.op<radar::CFARDetectorOp<float>>(
-            "cfar_detector", cfg.cfar_extents);
+        auto cfar = graph.op<radar::CFARDetectorOp<float>>("cfar_detector", cfg.cfar_extents);
         cfar.set_params(cfg.cfar_params);
-        bind_outputs(options, "cfar_detector",
-                     {"detection_mask", "detection_score", "noise_estimate",
-                      "detection_idx", "cfar_power"});
+        bind_outputs(
+            options, "cfar_detector",
+            {"detection_mask", "detection_score", "noise_estimate", "detection_idx", "cfar_power"});
 
         // Feature assembly: physical columns plus RD bins (YAML).
-        auto features = graph.op<radar::FeatureAssemblyOp<float>>(
-            "feature_assembly", extents, cfg.assembly_params->features);
+        auto features = graph.op<radar::FeatureAssemblyOp<float>>("feature_assembly", extents,
+                                                                  cfg.assembly_params->features);
         bind_outputs(options, "feature_assembly", {"points"});
 
         // Final log report.
         auto report = graph.op<app::DetectionReportOp>(
-            "detection_report",
-            app::DetectionReportOp::Config{
-                .mode = app::DetectionReportMode::kRawDetections,
-                .angle_convention =
-                    cfg.beamformer_params->angle_convention,
-                .cadence = cadence});
+            "detection_report", app::DetectionReportOp::Config{
+                                    .mode = app::DetectionReportMode::kRawDetections,
+                                    .angle_convention = cfg.beamformer_params->angle_convention,
+                                    .cadence = cadence});
 
         // Processing and reporting share one source-driven partition.
         auto application = graph.partition("application");
@@ -140,8 +127,7 @@ int main(int argc, char** argv) {
         // FMCW front end: ADC cube -> per-channel range-Doppler maps.
         graph.add_flow(source->adc_cube, range->adc_cube, queue);
         graph.add_flow(range->range_profiles, clutter->range_profiles, queue);
-        graph.add_flow(clutter->range_profiles_out, doppler->range_profiles,
-                       queue);
+        graph.add_flow(clutter->range_profiles_out, doppler->range_profiles, queue);
 
         // Beamforming-first branch: form the complete range-Doppler-angle
         // cube, then detect independently across its angle planes.
@@ -166,15 +152,12 @@ int main(int argc, char** argv) {
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
         if (cfg.visualize) {
           app::viz::add_fmcw_dashboard(
-              graph, application, options, cfg.visualization,
-              cfg.frame_period, true, cfg.beamformer_params->az_coordinates,
-              cfg.beamformer_params->el_coordinates,
-              cfg.beamformer_params->angle_convention, cfg.scene.targets,
-              cfg.scene_visibility,
+              graph, application, options, cfg.visualization, cfg.frame_period, true,
+              cfg.beamformer_params->az_coordinates, cfg.beamformer_params->el_coordinates,
+              cfg.beamformer_params->angle_convention, cfg.scene.targets, cfg.scene_visibility,
               "SIMO Dense Beamforming",
-              app::viz::RawDashboardInputs{
-                  cfar->cfar_power, cfar->detection_idx, features->points,
-                  range->range_bins, doppler->velocity_bins});
+              app::viz::RawDashboardInputs{cfar->cfar_power, cfar->detection_idx, features->points,
+                                           range->range_bins, doppler->velocity_bins});
         }
 #endif
       });

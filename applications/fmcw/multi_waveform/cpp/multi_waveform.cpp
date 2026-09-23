@@ -33,14 +33,12 @@ namespace workflow = holoscan::radar::app::multi_waveform;
 
 namespace {
 
-void bind_output(holoscan::CompileOptions& options, const char* op,
-                 const char* port) {
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = op,
-          .output_port = port,
-          .device = holoscan::DeviceId{0},
-      });
+void bind_output(holoscan::CompileOptions& options, const char* op, const char* port) {
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = op,
+      .output_port = port,
+      .device = holoscan::DeviceId{0},
+  });
 }
 
 void bind_outputs(holoscan::CompileOptions& options, const char* op,
@@ -54,30 +52,27 @@ void bind_outputs(holoscan::CompileOptions& options, const char* op,
 
 int main(int argc, char** argv) {
   return app::run_fmcw_graph_app<workflow::Config>(
-      argc, argv, "multi_waveform", "multi_waveform.yaml",
-      workflow::load_config,
-      [](holoscan::Graph& graph, holoscan::CompileOptions& options,
-         workflow::Config& cfg,
+      argc, argv, "multi_waveform", "multi_waveform.yaml", workflow::load_config,
+      [](holoscan::Graph& graph, holoscan::CompileOptions& options, workflow::Config& cfg,
          std::shared_ptr<app::CadenceMeter>* cadence_out) {
         const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-        const holoscan::ConnectionOptions waveform_queue{
-            .queue_depth = cfg.max_frames_in_flight + 1U};
+        const holoscan::ConnectionOptions waveform_queue{.queue_depth =
+                                                             cfg.max_frames_in_flight + 1U};
         const radar::MaxTensorExtents& extents = cfg.extents;
 
         // The two source operators tick independently. The coordinator matches
         // receive completions to the transmit event that produced each frame.
-        auto coordinator = std::make_shared<app::TransmitFrameCoordinator>(
-            cfg.max_frames_in_flight);
+        auto coordinator =
+            std::make_shared<app::TransmitFrameCoordinator>(cfg.max_frames_in_flight);
 
         // One simulated hardware backend implements both driver interfaces.
         auto link = std::make_shared<app::SimulatedTdmLink>(
-            app::SimulatedTdmLinkConfig{
-                .profiles = cfg.profiles,
-                .scene = cfg.scene,
-                .scene_visibility = cfg.scene_visibility,
-                .tx_schedule = cfg.tx_schedule,
-                .frame_period = cfg.frame_period,
-                .polls_before_ready = cfg.simulated_receive_polls});
+            app::SimulatedTdmLinkConfig{.profiles = cfg.profiles,
+                                        .scene = cfg.scene,
+                                        .scene_visibility = cfg.scene_visibility,
+                                        .tx_schedule = cfg.tx_schedule,
+                                        .frame_period = cfg.frame_period,
+                                        .polls_before_ready = cfg.simulated_receive_polls});
 
         // TX selects the next profile and publishes the descriptor at the
         // hardware-applied transmit time.
@@ -89,8 +84,7 @@ int main(int argc, char** argv) {
             .driver = link,
             .coordinator = coordinator,
         };
-        auto tx = graph.op<app::FMCWTransmitSourceOp>(
-            "waveform_source", std::move(tx_config));
+        auto tx = graph.op<app::FMCWTransmitSourceOp>("waveform_source", std::move(tx_config));
 
         std::shared_ptr<app::CadenceMeter> cadence;
         if (cfg.meter_cadence) {
@@ -111,88 +105,90 @@ int main(int argc, char** argv) {
             .coordinator = coordinator,
             .cadence = cadence,
         };
-        auto source = graph.op<app::CorrelatedMimoTdmAdcSourceOp>(
-            "adc_source", extents, std::move(rx_config));
+        auto source = graph.op<app::CorrelatedMimoTdmAdcSourceOp>("adc_source", extents,
+                                                                  std::move(rx_config));
         bind_outputs(options, "adc_source", {"adc_cube"});
 
         // Restore the explicit TX axis from the interleaved slow-time stream.
-        auto deinterleave = graph.op<radar::MIMODeinterleaveOp<float>>(
-            "mimo_deinterleave", extents);
+        auto deinterleave =
+            graph.op<radar::MIMODeinterleaveOp<float>>("mimo_deinterleave", extents);
         deinterleave.set_params(cfg.deinterleave_params);
         bind_outputs(options, "mimo_deinterleave", {"adc_cube_out"});
 
         // Per-profile range processing; waveform arrives through Exact{}.
-        auto range = graph.op<radar::FMCWRangeProcessorOp<float>>(
-            "range_processor", extents);
+        auto range = graph.op<radar::FMCWRangeProcessorOp<float>>("range_processor", extents);
         range.set_params(cfg.range_params);
         bind_outputs(options, "range_processor", {"range_profiles", "range_bins"});
 
         // Static-clutter suppression before Doppler processing.
-        auto clutter = graph.op<radar::ClutterFilterOp<float>>(
-            "clutter_filter", extents);
+        auto clutter = graph.op<radar::ClutterFilterOp<float>>("clutter_filter", extents);
         clutter.set_params(cfg.clutter_params);
         bind_outputs(options, "clutter_filter", {"range_profiles_out"});
 
         // Per-TX Doppler processing on the active profile's effective PRI.
-        auto doppler = graph.op<radar::FMCWDopplerProcessorOp<float>>(
-            "doppler_processor", extents);
+        auto doppler = graph.op<radar::FMCWDopplerProcessorOp<float>>("doppler_processor", extents);
         doppler.set_params(cfg.doppler_params);
         bind_outputs(options, "doppler_processor", {"rd_maps", "velocity_bins"});
 
         // TX/RX-integrated CFAR detection before phase compensation.
-        auto cfar = graph.op<radar::CFARDetectorOp<float>>(
-            "cfar_detector", extents);
+        auto cfar = graph.op<radar::CFARDetectorOp<float>>("cfar_detector", extents);
         cfar.set_params(cfg.cfar_params);
-        bind_outputs(options, "cfar_detector",
-                     {"detection_mask", "detection_score", "noise_estimate",
-                      "detection_idx", "cfar_power"});
+        bind_outputs(
+            options, "cfar_detector",
+            {"detection_mask", "detection_score", "noise_estimate", "detection_idx", "cfar_power"});
 
         // Detection-indexed TDM correction and virtual snapshot assembly.
-        auto compensation = graph.op<radar::TDMSparseCompensationOp<float>>(
-            "tdm_sparse_compensation", extents);
+        auto compensation =
+            graph.op<radar::TDMSparseCompensationOp<float>>("tdm_sparse_compensation", extents);
         compensation.set_params(cfg.compensation_params);
         bind_outputs(options, "tdm_sparse_compensation", {"snapshot", "is_valid"});
 
         // Per-detection angle estimation.
-        auto beamscan = graph.op<radar::BeamscanEstimatorOp<float>>(
-            "beamscan_estimator", extents);
+        auto beamscan = graph.op<radar::BeamscanEstimatorOp<float>>("beamscan_estimator", extents);
         beamscan.set_params(cfg.beamscan_params);
         bind_outputs(options, "beamscan_estimator", {"aoa_estimates", "angle_spectrum"});
 
         // Assemble physical features, score, and RD-bin clustering columns.
-        auto features = graph.op<radar::FeatureAssemblyOp<float>>(
-            "feature_assembly", extents, cfg.assembly_params->features);
+        auto features = graph.op<radar::FeatureAssemblyOp<float>>("feature_assembly", extents,
+                                                                  cfg.assembly_params->features);
         bind_outputs(options, "feature_assembly", {"points"});
 
         // Cluster neighboring detections in range-Doppler bin space.
-        auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
-            "cluster_dbscan", extents);
+        auto cluster = graph.op<radar::ClusterDBSCANOp<float>>("cluster_dbscan", extents);
         cluster.set_params(cfg.dbscan_params);
         bind_outputs(options, "cluster_dbscan", {"labels", "sizes"});
 
         // Reduce each cluster to its score-weighted physical feature row.
-        auto reduction = graph.op<radar::DetectionReductionOp<float>>(
-            "detection_reduction", extents);
+        auto reduction =
+            graph.op<radar::DetectionReductionOp<float>>("detection_reduction", extents);
         reduction.set_params(cfg.reduction_params);
         bind_outputs(options, "detection_reduction", {"rep_idx", "reduced_points"});
 
         // Final clustered detection report.
         auto report = graph.op<app::DetectionReportOp>(
             "cluster_report", app::DetectionReportOp::Config{
-                .mode = app::DetectionReportMode::kClusters,
-                .point_index_columns = cfg.report_index_columns,
-                .use_reduced_points = true,
-                .angle_convention = cfg.beamscan_params->angle_convention,
-                .cadence = cadence});
+                                  .mode = app::DetectionReportMode::kClusters,
+                                  .point_index_columns = cfg.report_index_columns,
+                                  .use_reduced_points = true,
+                                  .angle_convention = cfg.beamscan_params->angle_convention,
+                                  .cadence = cadence});
 
         // Independent TX and RX partitions preserve their source clocks; the
         // processing partition is driven by the correlated RX frame.
         graph.partition("transmit").add(tx);
         graph.partition("receive").add(source);
         auto processing = graph.partition("processing");
-        processing.add(deinterleave).add(range).add(clutter).add(doppler)
-            .add(cfar).add(compensation).add(beamscan).add(features)
-            .add(cluster).add(reduction).add(report);
+        processing.add(deinterleave)
+            .add(range)
+            .add(clutter)
+            .add(doppler)
+            .add(cfar)
+            .add(compensation)
+            .add(beamscan)
+            .add(features)
+            .add(cluster)
+            .add(reduction)
+            .add(report);
 
         // TDM front end. Exact waveform sidebands carry the descriptor that
         // produced each cube; downstream operators never infer profile identity.
@@ -241,16 +237,14 @@ int main(int argc, char** argv) {
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
         if (cfg.visualize) {
           app::viz::add_fmcw_dashboard(
-              graph, processing, options, cfg.visualization, cfg.frame_period,
-              true, cfg.beamscan_params->az_coordinates,
-              cfg.beamscan_params->el_coordinates,
-              cfg.beamscan_params->angle_convention, cfg.scene.targets,
-              cfg.scene_visibility,
+              graph, processing, options, cfg.visualization, cfg.frame_period, true,
+              cfg.beamscan_params->az_coordinates, cfg.beamscan_params->el_coordinates,
+              cfg.beamscan_params->angle_convention, cfg.scene.targets, cfg.scene_visibility,
               "Multi-Waveform",
               app::viz::ProfiledClusterDashboardInputs{
-                  cfar->cfar_power, cfar->detection_idx, features->points,
-                  cluster->labels, cluster->sizes, range->range_bins,
-                  doppler->velocity_bins, reduction->reduced_points, tx->waveform,
+                  cfar->cfar_power, cfar->detection_idx, features->points, cluster->labels,
+                  cluster->sizes, range->range_bins, doppler->velocity_bins,
+                  reduction->reduced_points, tx->waveform,
                   cfg.profiles[cfg.visualization_profile_index].waveform,
                   cfg.visualization_profile_max_gap_frames});
         }

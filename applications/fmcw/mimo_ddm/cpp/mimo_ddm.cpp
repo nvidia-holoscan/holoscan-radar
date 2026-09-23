@@ -35,14 +35,12 @@ namespace workflow = holoscan::radar::app::mimo_ddm;
 
 namespace {
 
-void bind_output(holoscan::CompileOptions& options, const char* op,
-                 const char* port) {
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = op,
-          .output_port = port,
-          .device = holoscan::DeviceId{0},
-      });
+void bind_output(holoscan::CompileOptions& options, const char* op, const char* port) {
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = op,
+      .output_port = port,
+      .device = holoscan::DeviceId{0},
+  });
 }
 
 void bind_outputs(holoscan::CompileOptions& options, const char* op,
@@ -57,8 +55,7 @@ void bind_outputs(holoscan::CompileOptions& options, const char* op,
 int main(int argc, char** argv) {
   return app::run_fmcw_graph_app<workflow::Config>(
       argc, argv, "mimo_ddm", "mimo_ddm_linear.yaml", workflow::load_config,
-      [](holoscan::Graph& graph, holoscan::CompileOptions& options,
-         workflow::Config& cfg,
+      [](holoscan::Graph& graph, holoscan::CompileOptions& options, workflow::Config& cfg,
          std::shared_ptr<app::CadenceMeter>* cadence_out) {
         const holoscan::ConnectionOptions queue{.queue_depth = 4U};
         const radar::MaxTensorExtents& extents = cfg.extents;
@@ -82,92 +79,78 @@ int main(int argc, char** argv) {
           *cadence_out = cadence;
         }
 
-        auto source = graph.op<mimo::MimoDdmAdcSourceOp>(
-            "adc_source", extents, std::move(source_config));
+        auto source =
+            graph.op<mimo::MimoDdmAdcSourceOp>("adc_source", extents, std::move(source_config));
         bind_outputs(options, "adc_source", {"adc_cube"});
 
         // Shared-channel range processing before TX separation.
-        auto range = graph.op<radar::FMCWRangeProcessorOp<float>>(
-            "range_processor", extents);
+        auto range = graph.op<radar::FMCWRangeProcessorOp<float>>("range_processor", extents);
         range.set_params(cfg.range_params);
-        bind_outputs(options, "range_processor",
-                     {"range_profiles", "range_bins"});
+        bind_outputs(options, "range_processor", {"range_profiles", "range_bins"});
 
         // Form the coded range-Doppler maps.
-        auto doppler = graph.op<radar::FMCWDopplerProcessorOp<float>>(
-            "doppler_processor", extents);
+        auto doppler = graph.op<radar::FMCWDopplerProcessorOp<float>>("doppler_processor", extents);
         doppler.set_params(cfg.doppler_params);
-        bind_outputs(options, "doppler_processor",
-                     {"rd_maps", "velocity_bins"});
+        bind_outputs(options, "doppler_processor", {"rd_maps", "velocity_bins"});
 
         // Separate TX channels by linear band gather or phase-code correlation.
-        auto demultiplex = graph.op<radar::DDMDenseDemultiplexOp<float>>(
-            "ddm_dense_demultiplex", extents);
+        auto demultiplex =
+            graph.op<radar::DDMDenseDemultiplexOp<float>>("ddm_dense_demultiplex", extents);
         demultiplex.set_params(cfg.demultiplex_params);
-        bind_outputs(options, "ddm_dense_demultiplex",
-                     {"velocity_bins_out", "rd_maps_out"});
+        bind_outputs(options, "ddm_dense_demultiplex", {"velocity_bins_out", "rd_maps_out"});
 
         // Suppress a physical-velocity band after the DDM codes are removed.
-        auto notch = graph.op<radar::DopplerNotchOp<float>>(
-            "doppler_notch", extents);
+        auto notch = graph.op<radar::DopplerNotchOp<float>>("doppler_notch", extents);
         notch.set_params(cfg.notch_params);
         bind_outputs(options, "doppler_notch", {"rd_maps_out"});
 
         // Flatten TX/RX channels into the physical virtual array.
-        auto vaa = graph.op<radar::VirtualArrayAssemblyOp<float>>(
-            "virtual_array_assembly", extents);
+        auto vaa =
+            graph.op<radar::VirtualArrayAssemblyOp<float>>("virtual_array_assembly", extents);
         vaa.set_params(cfg.vaa_params);
         bind_outputs(options, "virtual_array_assembly", {"rd_maps_out"});
 
         // Detect after non-coherently integrating the virtual channels.
-        auto cfar = graph.op<radar::CFARDetectorOp<float>>(
-            "cfar_detector", extents);
+        auto cfar = graph.op<radar::CFARDetectorOp<float>>("cfar_detector", extents);
         cfar.set_params(cfg.cfar_params);
-        bind_outputs(options, "cfar_detector",
-                     {"detection_mask", "detection_score", "noise_estimate",
-                      "detection_idx", "cfar_power"});
+        bind_outputs(
+            options, "cfar_detector",
+            {"detection_mask", "detection_score", "noise_estimate", "detection_idx", "cfar_power"});
 
         // Gather coherent virtual-array snapshots only at detected RD cells.
-        auto gather = graph.op<radar::SnapshotGatherOp<float>>(
-            "snapshot_gather", extents);
+        auto gather = graph.op<radar::SnapshotGatherOp<float>>("snapshot_gather", extents);
         gather.set_params(cfg.gather_params);
         bind_outputs(options, "snapshot_gather", {"snapshot", "is_valid"});
 
         // Estimate one sparse angle pair per gathered detection.
-        auto beamscan = graph.op<radar::BeamscanEstimatorOp<float>>(
-            "beamscan_estimator", extents);
+        auto beamscan = graph.op<radar::BeamscanEstimatorOp<float>>("beamscan_estimator", extents);
         beamscan.set_params(cfg.beamscan_params);
-        bind_outputs(options, "beamscan_estimator",
-                     {"aoa_estimates", "angle_spectrum"});
+        bind_outputs(options, "beamscan_estimator", {"aoa_estimates", "angle_spectrum"});
 
         // Assemble physical features, score, and RD-bin clustering columns.
-        auto features = graph.op<radar::FeatureAssemblyOp<float>>(
-            "feature_assembly", extents, cfg.assembly_params->features);
+        auto features = graph.op<radar::FeatureAssemblyOp<float>>("feature_assembly", extents,
+                                                                  cfg.assembly_params->features);
         bind_outputs(options, "feature_assembly", {"points"});
 
         // Cluster neighboring detections in range-Doppler bin space.
-        auto cluster = graph.op<radar::ClusterDBSCANOp<float>>(
-            "cluster_dbscan", extents);
+        auto cluster = graph.op<radar::ClusterDBSCANOp<float>>("cluster_dbscan", extents);
         cluster.set_params(cfg.dbscan_params);
         bind_outputs(options, "cluster_dbscan", {"labels", "sizes"});
 
         // Reduce each cluster to its score-weighted physical feature row.
-        auto reduction = graph.op<radar::DetectionReductionOp<float>>(
-            "detection_reduction", extents);
+        auto reduction =
+            graph.op<radar::DetectionReductionOp<float>>("detection_reduction", extents);
         reduction.set_params(cfg.reduction_params);
-        bind_outputs(options, "detection_reduction",
-                     {"rep_idx", "reduced_points"});
+        bind_outputs(options, "detection_reduction", {"rep_idx", "reduced_points"});
 
         // Final clustered detection report.
         auto report = graph.op<app::DetectionReportOp>(
-            "cluster_report",
-            app::DetectionReportOp::Config{
-                .mode = app::DetectionReportMode::kClusters,
-                .point_index_columns = cfg.report_index_columns,
-                .use_reduced_points = true,
-                .angle_convention =
-                    cfg.beamscan_params->angle_convention,
-                .cadence = cadence});
+            "cluster_report", app::DetectionReportOp::Config{
+                                  .mode = app::DetectionReportMode::kClusters,
+                                  .point_index_columns = cfg.report_index_columns,
+                                  .use_reduced_points = true,
+                                  .angle_convention = cfg.beamscan_params->angle_convention,
+                                  .cadence = cadence});
 
         // Processing and reporting share one source-driven partition.
         auto application = graph.partition("application");
@@ -189,12 +172,10 @@ int main(int argc, char** argv) {
         // demultiplexer transforms the same-tick physical velocity axis.
         graph.add_flow(source->adc_cube, range->adc_cube, queue);
         graph.add_flow(range->range_profiles, doppler->range_profiles, queue);
-        graph.add_flow(doppler->velocity_bins, demultiplex->velocity_bins,
-                       queue);
+        graph.add_flow(doppler->velocity_bins, demultiplex->velocity_bins, queue);
         graph.add_flow(doppler->rd_maps, demultiplex->rd_maps, queue);
         graph.add_flow(demultiplex->rd_maps_out, notch->rd_maps, queue);
-        graph.add_flow(demultiplex->velocity_bins_out,
-                       notch->velocity_bins, queue);
+        graph.add_flow(demultiplex->velocity_bins_out, notch->velocity_bins, queue);
         graph.add_flow(notch->rd_maps_out, vaa->rd_maps, queue);
 
         // Detection-first angle branch. Runtime VAA geometry remains coherent
@@ -210,8 +191,7 @@ int main(int argc, char** argv) {
         // while retaining its score and original range-Doppler indices.
         graph.add_flow(cfar->detection_idx, features->detection_idx, queue);
         graph.add_flow(range->range_bins, features->range_bins, queue);
-        graph.add_flow(demultiplex->velocity_bins_out,
-                       features->velocity_bins, queue);
+        graph.add_flow(demultiplex->velocity_bins_out, features->velocity_bins, queue);
         graph.add_flow(beamscan->aoa_estimates, features->aoa_estimates, queue);
         graph.add_flow(cfar->detection_score, features->detection_score, queue);
 
@@ -226,26 +206,21 @@ int main(int argc, char** argv) {
         graph.add_flow(cluster->labels, report->labels, queue);
         graph.add_flow(cluster->sizes, report->sizes, queue);
         graph.add_flow(reduction->rep_idx, report->detection_idx, queue);
-        graph.add_flow(reduction->reduced_points, report->reduced_points,
-                       queue);
+        graph.add_flow(reduction->reduced_points, report->reduced_points, queue);
         graph.add_flow(range->range_bins, report->range_bins, queue);
-        graph.add_flow(demultiplex->velocity_bins_out,
-                       report->velocity_bins, queue);
+        graph.add_flow(demultiplex->velocity_bins_out, report->velocity_bins, queue);
 
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
         if (cfg.visualize) {
           app::viz::add_fmcw_dashboard(
-              graph, application, options, cfg.visualization,
-              cfg.frame_period, true, cfg.beamscan_params->az_coordinates,
-              cfg.beamscan_params->el_coordinates,
-              cfg.beamscan_params->angle_convention, cfg.scene.targets,
-              cfg.scene_visibility,
+              graph, application, options, cfg.visualization, cfg.frame_period, true,
+              cfg.beamscan_params->az_coordinates, cfg.beamscan_params->el_coordinates,
+              cfg.beamscan_params->angle_convention, cfg.scene.targets, cfg.scene_visibility,
               "MIMO DDM",
-              app::viz::ClusterDashboardInputs{
-                  cfar->cfar_power, cfar->detection_idx, features->points,
-                  cluster->labels, cluster->sizes, range->range_bins,
-                  demultiplex->velocity_bins_out,
-                  reduction->reduced_points});
+              app::viz::ClusterDashboardInputs{cfar->cfar_power, cfar->detection_idx,
+                                               features->points, cluster->labels, cluster->sizes,
+                                               range->range_bins, demultiplex->velocity_bins_out,
+                                               reduction->reduced_points});
         }
 #endif
       });

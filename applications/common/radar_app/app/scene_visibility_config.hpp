@@ -24,11 +24,10 @@ struct SceneVisibilityConfig {
   std::optional<double> vertical_fov{};
 };
 
-using SceneVisibilityStorage = radar::config_detail::PortableParamStorageTraits<
-    SceneVisibilityConfig>;  // NOLINT
+using SceneVisibilityStorage =
+    radar::config_detail::PortableParamStorageTraits<SceneVisibilityConfig>;  // NOLINT
 
-inline sim::SceneVisibility configure_scene_visibility(
-    const SceneVisibilityConfig& authored) {
+inline sim::SceneVisibility configure_scene_visibility(const SceneVisibilityConfig& authored) {
   sim::SceneVisibility result;
   if (authored.model == "front_half_space") {
     result.model = sim::SceneVisibilityModel::kFrontHalfSpace;
@@ -48,8 +47,7 @@ inline sim::SceneVisibility configure_scene_visibility(
   try {
     sim::validate_scene_visibility(result);
   } catch (const std::invalid_argument& error) {
-    throw std::runtime_error(std::string("app.scene_visibility: ") +
-                             error.what());
+    throw std::runtime_error(std::string("app.scene_visibility: ") + error.what());
   }
   return result;
 }
@@ -59,8 +57,8 @@ inline sim::SceneVisibility configure_scene_visibility(
 namespace holoscan {
 
 template <>
-struct ParamStorageTraits<radar::app::SceneVisibilityConfig>
-    : radar::app::SceneVisibilityStorage {};  // NOLINT
+struct ParamStorageTraits<radar::app::SceneVisibilityConfig> : radar::app::SceneVisibilityStorage {
+};  // NOLINT
 
 }  // namespace holoscan
 
@@ -68,15 +66,14 @@ namespace holoscan::config {
 
 template <>
 struct ConfigCodec<radar::app::SceneVisibilityConfig>
-    : ObjectCodec<radar::app::SceneVisibilityConfig> {  // NOLINT
+: ObjectCodec<radar::app::SceneVisibilityConfig> {  // NOLINT
   using Config = radar::app::SceneVisibilityConfig;
-  static constexpr auto fields = std::make_tuple(
-      object_field("model", &Config::model),
-      defaulted_object_field("boresight_direction",
-                             &Config::boresight_direction),
-      defaulted_object_field("up_direction", &Config::up_direction),
-      defaulted_object_field("horizontal_fov", &Config::horizontal_fov),
-      defaulted_object_field("vertical_fov", &Config::vertical_fov));
+  static constexpr auto fields =
+      std::make_tuple(object_field("model", &Config::model),
+                      defaulted_object_field("boresight_direction", &Config::boresight_direction),
+                      defaulted_object_field("up_direction", &Config::up_direction),
+                      defaulted_object_field("horizontal_fov", &Config::horizontal_fov),
+                      defaulted_object_field("vertical_fov", &Config::vertical_fov));
 };
 
 }  // namespace holoscan::config

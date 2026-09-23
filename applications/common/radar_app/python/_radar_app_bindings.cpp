@@ -29,13 +29,11 @@ class PyDetectionReportOp : public DetectionReportOp {
  public:
   using DetectionReportOp::DetectionReportOp;
 
-  PyDetectionReportOp(Fragment* fragment, const py::args& args,
-                      DetectionReportMode mode,
+  PyDetectionReportOp(Fragment* fragment, const py::args& args, DetectionReportMode mode,
                       std::vector<int64_t> point_index_columns,
                       const std::string& name = "detection_report")
-      : DetectionReportOp(DetectionReportOp::Config{
-            .mode = mode,
-            .point_index_columns = std::move(point_index_columns)}) {
+  : DetectionReportOp(DetectionReportOp::Config{
+        .mode = mode, .point_index_columns = std::move(point_index_columns)}) {
     name_ = name;
     fragment_ = fragment;
     spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -48,9 +46,8 @@ class PyNullSinkOp : public NullSinkOp {
  public:
   using NullSinkOp::NullSinkOp;
 
-  PyNullSinkOp(Fragment* fragment, const py::args& args,
-               const std::string& name = "null_sink")
-      : NullSinkOp() {
+  PyNullSinkOp(Fragment* fragment, const py::args& args, const std::string& name = "null_sink")
+  : NullSinkOp() {
     name_ = name;
     fragment_ = fragment;
     spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -59,11 +56,9 @@ class PyNullSinkOp : public NullSinkOp {
   }
 };
 
-
 void bind_radar_app(py::module_& m) {
   py::class_<CadenceMeter, std::shared_ptr<CadenceMeter>>(
-      m, "CadenceMeter",
-      "Wall-clock source / end-to-end cadence probe for the FMCW demos.")
+      m, "CadenceMeter", "Wall-clock source / end-to-end cadence probe for the FMCW demos.")
       .def(py::init<>())
       .def_readwrite("frame_period_s", &CadenceMeter::frame_period_s)
       .def_readwrite("slack_s", &CadenceMeter::slack_s)
@@ -82,24 +77,20 @@ void bind_radar_app(py::module_& m) {
       .value("RAW_DETECTIONS", DetectionReportMode::kRawDetections)
       .value("CLUSTERS", DetectionReportMode::kClusters);
 
-  py::class_<DetectionReportOp, PyDetectionReportOp, Operator,
-             std::shared_ptr<DetectionReportOp>>(
-      m, "DetectionReportOp",
-      "Log raw or clustered detections in physical units.")
-      .def(py::init<Fragment*, const py::args&, DetectionReportMode,
-                    std::vector<int64_t>, const std::string&>(),
-           py::arg("fragment"),
-           py::arg("mode") = DetectionReportMode::kRawDetections,
+  py::class_<DetectionReportOp, PyDetectionReportOp, Operator, std::shared_ptr<DetectionReportOp>>(
+      m, "DetectionReportOp", "Log raw or clustered detections in physical units.")
+      .def(py::init<Fragment*, const py::args&, DetectionReportMode, std::vector<int64_t>,
+                    const std::string&>(),
+           py::arg("fragment"), py::arg("mode") = DetectionReportMode::kRawDetections,
            py::arg("point_index_columns") = std::vector<int64_t>{},
            py::arg("name") = "detection_report")
       .def("setup", &DetectionReportOp::setup, py::arg("spec"))
       .def_readwrite("cadence", &DetectionReportOp::cadence);
 
   py::class_<NullSinkOp, PyNullSinkOp, Operator, std::shared_ptr<NullSinkOp>>(
-      m, "NullSinkOp",
-      "Drain an input Entity without deserializing as a TensorMap.")
-      .def(py::init<Fragment*, const py::args&, const std::string&>(),
-           py::arg("fragment"), py::arg("name") = "null_sink")
+      m, "NullSinkOp", "Drain an input Entity without deserializing as a TensorMap.")
+      .def(py::init<Fragment*, const py::args&, const std::string&>(), py::arg("fragment"),
+           py::arg("name") = "null_sink")
       .def("setup", &NullSinkOp::setup, py::arg("spec"));
 }
 

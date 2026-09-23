@@ -54,43 +54,37 @@ struct FeatureAssemblyParams {
   std::vector<AssemblyFeature> features{};
 };
 
-using CubeStorage = radar::config_detail::PortableParamStorageTraits<
-    CubeConfig>;  // NOLINT
-using RunStorage = radar::config_detail::PortableParamStorageTraits<
-    RunConfig>;  // NOLINT
-using RxArrayStorage = radar::config_detail::PortableParamStorageTraits<
-    RxArrayConfig>;  // NOLINT
-using TargetStorage = radar::config_detail::PortableParamStorageTraits<
-    TargetConfig>;  // NOLINT
-using FeatureAssemblyStorage = radar::config_detail::PortableParamStorageTraits<
-    FeatureAssemblyParams>;  // NOLINT
+using CubeStorage = radar::config_detail::PortableParamStorageTraits<CubeConfig>;        // NOLINT
+using RunStorage = radar::config_detail::PortableParamStorageTraits<RunConfig>;          // NOLINT
+using RxArrayStorage = radar::config_detail::PortableParamStorageTraits<RxArrayConfig>;  // NOLINT
+using TargetStorage = radar::config_detail::PortableParamStorageTraits<TargetConfig>;    // NOLINT
+using FeatureAssemblyStorage =
+    radar::config_detail::PortableParamStorageTraits<FeatureAssemblyParams>;  // NOLINT
 
 }  // namespace holoscan::radar::app::simo
 
 namespace holoscan {
 
 template <>
-struct ParamStorageTraits<radar::app::simo::CubeConfig>
-    : radar::app::simo::CubeStorage {};  // NOLINT
+struct ParamStorageTraits<radar::app::simo::CubeConfig> : radar::app::simo::CubeStorage {
+};  // NOLINT
 template <>
-struct ParamStorageTraits<radar::app::simo::RunConfig>
-    : radar::app::simo::RunStorage {};  // NOLINT
+struct ParamStorageTraits<radar::app::simo::RunConfig> : radar::app::simo::RunStorage {};  // NOLINT
 template <>
-struct ParamStorageTraits<radar::app::simo::RxArrayConfig>
-    : radar::app::simo::RxArrayStorage {};  // NOLINT
+struct ParamStorageTraits<radar::app::simo::RxArrayConfig> : radar::app::simo::RxArrayStorage {
+};  // NOLINT
 template <>
-struct ParamStorageTraits<radar::app::simo::TargetConfig>
-    : radar::app::simo::TargetStorage {};  // NOLINT
+struct ParamStorageTraits<radar::app::simo::TargetConfig> : radar::app::simo::TargetStorage {
+};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::app::simo::FeatureAssemblyParams>
-    : radar::app::simo::FeatureAssemblyStorage {};  // NOLINT
+: radar::app::simo::FeatureAssemblyStorage {};  // NOLINT
 
 }  // namespace holoscan
 
 namespace holoscan::radar::app::simo {
 
-inline ::holoscan::radar::app::VisualizationConfig
-default_visualization_config() {
+inline ::holoscan::radar::app::VisualizationConfig default_visualization_config() {
   ::holoscan::radar::app::VisualizationConfig config;
   config.window_title = "FMCW SIMO";
   return config;
@@ -100,8 +94,7 @@ struct AppParams {
   FMCWWaveformDescriptor waveform;
   CubeConfig cube;
   RunConfig run;
-  ::holoscan::radar::app::VisualizationConfig visualization{
-      default_visualization_config()};
+  ::holoscan::radar::app::VisualizationConfig visualization{default_visualization_config()};
   std::optional<::holoscan::radar::app::RangeLossConfig> range_loss{};
   ::holoscan::radar::app::SceneVisibilityConfig scene_visibility{};
   RxArrayConfig rx_array;
@@ -109,19 +102,17 @@ struct AppParams {
   std::optional<double> noise_snr_db{};
 };
 
-HOLOSCAN_PARAM_SCHEMA(
-    AppParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.app.simo.AppParams", 1),
-    holoscan::field<&AppParams::waveform>("waveform"),
-    holoscan::field<&AppParams::cube>("cube"),
-    holoscan::field<&AppParams::run>("run"),
-    holoscan::field<&AppParams::visualization>("visualization"),
-    holoscan::field<&AppParams::range_loss>("range_loss"),
-    holoscan::field<&AppParams::scene_visibility>("scene_visibility"),
-    holoscan::field<&AppParams::rx_array>("rx_array"),
-    holoscan::field<&AppParams::targets>("targets"),
-    holoscan::field<&AppParams::noise_snr_db>("noise_snr_db"));
+HOLOSCAN_PARAM_SCHEMA(AppParams,
+                      holoscan::param_schema("com.nvidia.holoscan.radar.app.simo.AppParams", 1),
+                      holoscan::field<&AppParams::waveform>("waveform"),
+                      holoscan::field<&AppParams::cube>("cube"),
+                      holoscan::field<&AppParams::run>("run"),
+                      holoscan::field<&AppParams::visualization>("visualization"),
+                      holoscan::field<&AppParams::range_loss>("range_loss"),
+                      holoscan::field<&AppParams::scene_visibility>("scene_visibility"),
+                      holoscan::field<&AppParams::rx_array>("rx_array"),
+                      holoscan::field<&AppParams::targets>("targets"),
+                      holoscan::field<&AppParams::noise_snr_db>("noise_snr_db"));
 
 static_assert(holoscan::param_schema_availability<AppParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -129,76 +120,68 @@ static_assert(holoscan::param_schema_availability<AppParams>() ==
 
 HOLOSCAN_PARAM_SCHEMA(
     FeatureAssemblyParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.app.simo.FeatureAssemblyParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.app.simo.FeatureAssemblyParams", 1),
     holoscan::field<&FeatureAssemblyParams::features>("features")
-        .description(
-            "Ordered FeatureAssemblyOp column tokens; constructor-capture "
-            "only"));
+        .description("Ordered FeatureAssemblyOp column tokens; constructor-capture "
+                     "only"));
 
-static_assert(
-    holoscan::param_schema_availability<FeatureAssemblyParams>() ==
-        holoscan::ParamSchemaAvailability::kDeclared,
-    "HOLOSCAN_PARAM_SCHEMA must be in FeatureAssemblyParams's namespace");
+static_assert(holoscan::param_schema_availability<FeatureAssemblyParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in FeatureAssemblyParams's namespace");
 
 }  // namespace holoscan::radar::app::simo
 
 namespace holoscan::config {
 
-using AppParamsCodec =
-    params::DefaultedParamSchemaCodec<radar::app::simo::AppParams>;  // NOLINT
+using AppParamsCodec = params::DefaultedParamSchemaCodec<radar::app::simo::AppParams>;  // NOLINT
 
 template <>
 struct ConfigCodec<radar::app::simo::CubeConfig>
-    : ObjectCodec<radar::app::simo::CubeConfig> {  // NOLINT
+: ObjectCodec<radar::app::simo::CubeConfig> {  // NOLINT
   using Config = radar::app::simo::CubeConfig;
-  static constexpr auto fields = std::make_tuple(
-      object_field("num_chirps", &Config::num_chirps),
-      object_field("samples_per_chirp", &Config::samples_per_chirp));
+  static constexpr auto fields =
+      std::make_tuple(object_field("num_chirps", &Config::num_chirps),
+                      object_field("samples_per_chirp", &Config::samples_per_chirp));
 };
 
 template <>
 struct ConfigCodec<radar::app::simo::RunConfig>
-    : ObjectCodec<radar::app::simo::RunConfig> {  // NOLINT
+: ObjectCodec<radar::app::simo::RunConfig> {  // NOLINT
   using Config = radar::app::simo::RunConfig;
-  static constexpr auto fields = std::make_tuple(
-      object_field("num_frames", &Config::num_frames),
-      object_field("frame_period", &Config::frame_period),
-      defaulted_object_field("meter_cadence", &Config::meter_cadence),
-      defaulted_object_field("meter_log_every", &Config::meter_log_every));
+  static constexpr auto fields =
+      std::make_tuple(object_field("num_frames", &Config::num_frames),
+                      object_field("frame_period", &Config::frame_period),
+                      defaulted_object_field("meter_cadence", &Config::meter_cadence),
+                      defaulted_object_field("meter_log_every", &Config::meter_log_every));
 };
 
 template <>
 struct ConfigCodec<radar::app::simo::RxArrayConfig>
-    : ObjectCodec<radar::app::simo::RxArrayConfig> {  // NOLINT
+: ObjectCodec<radar::app::simo::RxArrayConfig> {  // NOLINT
   using Config = radar::app::simo::RxArrayConfig;
-  static constexpr auto fields = std::make_tuple(
-      object_field("az_elements", &Config::az_elements),
-      object_field("el_elements", &Config::el_elements),
-      object_field("spacing", &Config::spacing));
+  static constexpr auto fields = std::make_tuple(object_field("az_elements", &Config::az_elements),
+                                                 object_field("el_elements", &Config::el_elements),
+                                                 object_field("spacing", &Config::spacing));
 };
 
 template <>
 struct ConfigCodec<radar::app::simo::TargetConfig>
-    : ObjectCodec<radar::app::simo::TargetConfig> {  // NOLINT
+: ObjectCodec<radar::app::simo::TargetConfig> {  // NOLINT
   using Config = radar::app::simo::TargetConfig;
   static constexpr auto fields = std::make_tuple(
-      object_field("range", &Config::range),
-      object_field("azimuth", &Config::azimuth),
-      object_field("elevation", &Config::elevation),
-      object_field("velocity", &Config::velocity),
+      object_field("range", &Config::range), object_field("azimuth", &Config::azimuth),
+      object_field("elevation", &Config::elevation), object_field("velocity", &Config::velocity),
       object_field("amplitude", &Config::amplitude));
 };
 
 template <>
-struct ConfigCodec<radar::app::simo::AppParams>
-    : AppParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::app::simo::AppParams> : AppParamsCodec {};  // NOLINT
 
-using FeatureAssemblyParamsCodec = params::DefaultedParamSchemaCodec<
-    radar::app::simo::FeatureAssemblyParams>;  // NOLINT
+using FeatureAssemblyParamsCodec =
+    params::DefaultedParamSchemaCodec<radar::app::simo::FeatureAssemblyParams>;  // NOLINT
 
 template <>
-struct ConfigCodec<radar::app::simo::FeatureAssemblyParams>
-    : FeatureAssemblyParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::app::simo::FeatureAssemblyParams> : FeatureAssemblyParamsCodec {
+};  // NOLINT
 
 }  // namespace holoscan::config

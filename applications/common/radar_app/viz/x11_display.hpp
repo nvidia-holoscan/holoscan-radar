@@ -21,6 +21,8 @@ inline bool x11_display_available() {
   return true;
 }
 
-inline bool gui_available() { return x11_display_available(); }
+inline bool gui_available() {
+  return x11_display_available();
+}
 
 }  // namespace holoscan::radar::app

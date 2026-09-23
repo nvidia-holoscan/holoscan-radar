@@ -111,56 +111,45 @@ class FmcwDashboardOp : public holoscan::Operator<> {
 namespace detail {
 
 expected<bool, Error> selected_profile_matches(
-    const std::optional<wire::FMCWWaveformT>& applied_waveform,
-    std::string_view selected_profile,
+    const std::optional<wire::FMCWWaveformT>& applied_waveform, std::string_view selected_profile,
     const FMCWWaveformDescriptor& selected_waveform);
 
-std::vector<std::uint8_t> make_heatmap_rgba_reference(
-    const std::vector<float>& power, const std::vector<std::int64_t>& shape,
-    float dynamic_range_db);
+std::vector<std::uint8_t> make_heatmap_rgba_reference(const std::vector<float>& power,
+                                                      const std::vector<std::int64_t>& shape,
+                                                      float dynamic_range_db);
 
 std::vector<DetectionMarker> make_cluster_markers(
-    const std::vector<std::int64_t>& detection_idx,
-    const std::vector<float>& points, const std::vector<std::int64_t>& labels,
-    const std::vector<std::int64_t>& sizes, std::int64_t idx_cols,
-    std::int64_t point_cols,
-    const AngleConvention& angle_convention = AngleConvention{},
-    bool show_angles = true);
+    const std::vector<std::int64_t>& detection_idx, const std::vector<float>& points,
+    const std::vector<std::int64_t>& labels, const std::vector<std::int64_t>& sizes,
+    std::int64_t idx_cols, std::int64_t point_cols,
+    const AngleConvention& angle_convention = AngleConvention{}, bool show_angles = true);
 
 std::vector<DetectionMarker> make_raw_detection_markers(
-    const std::vector<std::int64_t>& detection_idx,
-    const std::vector<float>& points, std::int64_t idx_cols,
-    std::int64_t point_cols,
-    const AngleConvention& angle_convention = AngleConvention{},
-    bool show_angles = true);
+    const std::vector<std::int64_t>& detection_idx, const std::vector<float>& points,
+    std::int64_t idx_cols, std::int64_t point_cols,
+    const AngleConvention& angle_convention = AngleConvention{}, bool show_angles = true);
 
 void apply_reduced_features(std::vector<DetectionMarker>* markers,
-                            const std::vector<float>& reduced_points,
-                            std::int64_t reduced_cols,
-                            const AngleConvention& angle_convention =
-                                AngleConvention{},
+                            const std::vector<float>& reduced_points, std::int64_t reduced_cols,
+                            const AngleConvention& angle_convention = AngleConvention{},
                             bool show_angles = true);
 
-void append_history(std::deque<HistorySample>* history,
-                    const std::vector<DetectionMarker>& markers,
+void append_history(std::deque<HistorySample>* history, const std::vector<DetectionMarker>& markers,
                     std::int64_t frame, std::int64_t history_frames);
 
-std::array<float, 2> rd_plot_position(float doppler_bin, float range_bin,
-                                      std::int64_t rows, std::int64_t cols);
+std::array<float, 2> rd_plot_position(float doppler_bin, float range_bin, std::int64_t rows,
+                                      std::int64_t cols);
 
 bool use_azimuth_sector(const std::array<float, 2>& az_bounds);
 
-std::array<float, 2> history_plot_position(
-    const HistorySample& sample, std::int64_t current_frame,
-    std::int64_t history_frames, int feature,
-    std::array<float, 2> bounds);
+std::array<float, 2> history_plot_position(const HistorySample& sample, std::int64_t current_frame,
+                                           std::int64_t history_frames, int feature,
+                                           std::array<float, 2> bounds);
 
-std::array<float, 4> truth_features_at_time(const TruthTarget& target,
-                                            double time);
+std::array<float, 4> truth_features_at_time(const TruthTarget& target, double time);
 
-bool truth_target_is_visible_at_time(
-    const TruthTarget& target, double time,
-    const sim::SceneVisibility& visibility);
+bool truth_target_is_visible_at_time(const TruthTarget& target, double time,
+                                     const sim::SceneVisibility& visibility);
 
 }  // namespace detail
 
