@@ -36,9 +36,7 @@ struct WireCaptureBank {
 template <typename Payload, typename Tag = void>
 class WireCaptureOp final : public Operator<> {
  public:
-  void setup(OperatorSpec& spec) override {
-    spec.input(in, "in").queue_depth(8U);
-  }
+  void setup(OperatorSpec& spec) override { spec.input(in, "in").queue_depth(8U); }
 
   [[nodiscard]] Contract contract() const override {
     Contract result;
@@ -46,8 +44,7 @@ class WireCaptureOp final : public Operator<> {
     return result;
   }
 
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override {
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override {
     auto sample = in.receive_data();
     if (!sample) {
       return make_unexpected(std::move(sample).error());
@@ -55,8 +52,7 @@ class WireCaptureOp final : public Operator<> {
     {
       const std::lock_guard lock(WireCaptureBank<Payload, Tag>::mutex);
       WireCaptureBank<Payload, Tag>::payloads.push_back(std::move(*sample));
-      WireCaptureBank<Payload, Tag>::capture_times.push_back(
-          context.activation_time());
+      WireCaptureBank<Payload, Tag>::capture_times.push_back(context.activation_time());
     }
     WireCaptureBank<Payload, Tag>::ready.notify_all();
     return {};

@@ -38,25 +38,20 @@ sim::SimScene base_scene() {
   scene.waveform.chirp_repetition_interval = 25e-6;
   scene.num_chirps = 64;
   scene.samples_per_chirp = 128;
-  scene.targets.push_back(
-      {sim::Vec3{0.0, 60.0, 0.0}, sim::Vec3{0.0, 0.0, 0.0}, {2.0, 0.0}});
-  scene.targets.push_back(
-      {sim::Vec3{5.0, 42.0, 0.0}, sim::Vec3{0.0, 5.5, 0.0}, {1.0, -0.3}});
+  scene.targets.push_back({sim::Vec3{0.0, 60.0, 0.0}, sim::Vec3{0.0, 0.0, 0.0}, {2.0, 0.0}});
+  scene.targets.push_back({sim::Vec3{5.0, 42.0, 0.0}, sim::Vec3{0.0, 5.5, 0.0}, {1.0, -0.3}});
   return scene;
 }
 
-sim::SimScene scene_for_beat(double beat_frequency,
-                             int64_t ambiguity_order = 0) {
+sim::SimScene scene_for_beat(double beat_frequency, int64_t ambiguity_order = 0) {
   auto scene = base_scene();
   scene.num_chirps = 2;
   scene.targets.clear();
   const double delay =
       beat_frequency / scene.waveform.slope() +
-      static_cast<double>(ambiguity_order) *
-          scene.waveform.chirp_repetition_interval;
+      static_cast<double>(ambiguity_order) * scene.waveform.chirp_repetition_interval;
   const double range = 0.5 * scene.propagation_speed * delay;
-  scene.targets.push_back(
-      {sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}});
+  scene.targets.push_back({sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}});
   return scene;
 }
 
@@ -134,8 +129,7 @@ TEST(SimGpu, MatchesCpuWithExplicitUnfilteredResponse) {
 TEST(SimGpu, MatchesCpuSimoAcrossMultipleCriIntervals) {
   const double fs = base_scene().waveform.sample_rate;
   auto scene = scene_for_beat(0.2 * fs, 2);
-  scene.rx_positions = {sim::Vec3{0.0, 0.0, 0.0},
-                        sim::Vec3{0.002, 0.0, 0.0},
+  scene.rx_positions = {sim::Vec3{0.0, 0.0, 0.0}, sim::Vec3{0.002, 0.0, 0.0},
                         sim::Vec3{0.004, 0.0, 0.0}};
   EXPECT_LT(max_abs_diff(scene), 1e-3);
 }
@@ -143,18 +137,14 @@ TEST(SimGpu, MatchesCpuSimoAcrossMultipleCriIntervals) {
 TEST(SimGpu, MatchesCpuWithRangeLossAtReferenceTwiceAndFolded) {
   for (const double range : {40.0, 80.0, 3787.405725}) {
     auto scene = base_scene();
-    scene.targets = {
-        {sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, -0.2}}};
-    scene.range_loss = {
-        sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+    scene.targets = {{sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, -0.2}}};
+    scene.range_loss = {sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
     EXPECT_LT(max_abs_diff(scene), 1e-3);
   }
 
   auto pre_mixer = base_scene();
-  pre_mixer.targets = {
-      {sim::Vec3{80.0, 0.0, 0.0}, sim::Vec3{}, {1.0, -0.2}}};
-  pre_mixer.range_loss = {
-      sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+  pre_mixer.targets = {{sim::Vec3{80.0, 0.0, 0.0}, sim::Vec3{}, {1.0, -0.2}}};
+  pre_mixer.range_loss = {sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
   pre_mixer.analog_if.response = sim::AnalogIfResponseType::kNone;
   pre_mixer.dechirped = false;
   EXPECT_LT(max_abs_diff(pre_mixer), 1e-3);
@@ -189,13 +179,10 @@ using holoscan::radar::kPi;
 
 sim::SimScene mimo_scene() {
   auto scene = base_scene();
-  scene.targets = {{sim::Vec3{0.0, 40.0, 0.0}, sim::Vec3{0.0, 5.0, 0.0},
-                    {1.0, 0.0}}};
+  scene.targets = {{sim::Vec3{0.0, 40.0, 0.0}, sim::Vec3{0.0, 5.0, 0.0}, {1.0, 0.0}}};
   const double lambda = scene.waveform.wavelength();
-  scene.tx_positions = {sim::Vec3{0.0, 0.0, 0.0},
-                        sim::Vec3{0.0, 2.0 * lambda, 0.0}};
-  scene.rx_positions = {sim::Vec3{0.0, 0.0, 0.0},
-                        sim::Vec3{0.0, 0.5 * lambda, 0.0}};
+  scene.tx_positions = {sim::Vec3{0.0, 0.0, 0.0}, sim::Vec3{0.0, 2.0 * lambda, 0.0}};
+  scene.rx_positions = {sim::Vec3{0.0, 0.0, 0.0}, sim::Vec3{0.0, 0.5 * lambda, 0.0}};
   return scene;
 }
 
@@ -217,20 +204,16 @@ double cube_diff(const std::shared_ptr<holoscan::Tensor>& dev,
 TEST(SimGpuMimo, TdmCriAmbiguousMatchesCpu) {
   auto scene = mimo_scene();
   scene.targets[0].position[1] +=
-      0.5 * scene.propagation_speed *
-      scene.waveform.chirp_repetition_interval;
-  scene.range_loss = {
-      sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+      0.5 * scene.propagation_speed * scene.waveform.chirp_repetition_interval;
+  scene.range_loss = {sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
   const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
   const int64_t slow = num_tx * scene.num_chirps;
   rd::TXSchedule sched;
   sched.num_tx = num_tx;
   const auto pattern = sched.expand_chirp_tx_index(slow);
-  std::vector<std::complex<double>> w(static_cast<size_t>(num_tx * slow),
-                                      {0.0, 0.0});
+  std::vector<std::complex<double>> w(static_cast<size_t>(num_tx * slow), {0.0, 0.0});
   for (int64_t k = 0; k < slow; ++k) {
-    w[static_cast<size_t>(pattern[static_cast<size_t>(k)] * slow + k)] = {1.0,
-                                                                          0.0};
+    w[static_cast<size_t>(pattern[static_cast<size_t>(k)] * slow + k)] = {1.0, 0.0};
   }
   cudaStream_t stream = nullptr;
   ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
@@ -243,18 +226,15 @@ TEST(SimGpuMimo, TdmCriAmbiguousMatchesCpu) {
 TEST(SimGpuMimo, DdmCodedCriAmbiguousMatchesCpu) {
   auto scene = mimo_scene();
   scene.targets[0].position[1] +=
-      0.5 * scene.propagation_speed *
-      scene.waveform.chirp_repetition_interval;
-  scene.range_loss = {
-      sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+      0.5 * scene.propagation_speed * scene.waveform.chirp_repetition_interval;
+  scene.range_loss = {sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
   const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
   const int64_t slow = scene.num_chirps;
   const auto offsets = sim::uniform_ddm_offsets(num_tx);
   std::vector<std::complex<double>> w(static_cast<size_t>(num_tx * slow));
   for (int64_t tx = 0; tx < num_tx; ++tx) {
     for (int64_t k = 0; k < slow; ++k) {
-      const double ph = 2.0 * kPi * offsets[static_cast<size_t>(tx)] *
-                        static_cast<double>(k);
+      const double ph = 2.0 * kPi * offsets[static_cast<size_t>(tx)] * static_cast<double>(k);
       w[static_cast<size_t>(tx * slow + k)] = {std::cos(ph), std::sin(ph)};
     }
   }
@@ -270,17 +250,14 @@ TEST(SimGpuMimo, DdmPhaseCodedPreMixerCriAmbiguousMatchesCpu) {
   auto scene = mimo_scene();
   scene.dechirped = false;
   scene.targets[0].position[1] +=
-      0.5 * scene.propagation_speed *
-      scene.waveform.chirp_repetition_interval;
-  scene.range_loss = {
-      sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+      0.5 * scene.propagation_speed * scene.waveform.chirp_repetition_interval;
+  scene.range_loss = {sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
   const int64_t num_tx = static_cast<int64_t>(scene.tx_positions.size());
   const int64_t slow = scene.num_chirps;
   std::vector<std::complex<double>> codes(static_cast<size_t>(num_tx * slow));
   for (int64_t tx = 0; tx < num_tx; ++tx) {
     for (int64_t k = 0; k < slow; ++k) {
-      const double ph = 0.3 * static_cast<double>(tx) +
-                        0.11 * static_cast<double>(k);
+      const double ph = 0.3 * static_cast<double>(tx) + 0.11 * static_cast<double>(k);
       codes[static_cast<size_t>(tx * slow + k)] = {std::cos(ph), std::sin(ph)};
     }
   }

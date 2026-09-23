@@ -29,21 +29,21 @@ class SelectedConfig {
  public:
   explicit SelectedConfig(const std::string& name) {
     std::ifstream input(source_config());
-    if (!input) throw std::runtime_error("cannot read adaptive config");
-    std::string contents{std::istreambuf_iterator<char>(input),
-                         std::istreambuf_iterator<char>()};
+    if (!input)
+      throw std::runtime_error("cannot read adaptive config");
+    std::string contents{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     constexpr char kAnchor[] = "aoa_algorithm: music";
     const auto position = contents.find(kAnchor);
     if (position == std::string::npos) {
       throw std::runtime_error("adaptive selector anchor is missing");
     }
-    contents.replace(position, sizeof(kAnchor) - 1,
-                     "aoa_algorithm: " + name);
+    contents.replace(position, sizeof(kAnchor) - 1, "aoa_algorithm: " + name);
     path_ = std::filesystem::temp_directory_path() /
             ("adaptive_aoa_" + std::to_string(next_id_++) + ".yaml");
     std::ofstream output(path_);
     output << contents;
-    if (!output) throw std::runtime_error("cannot write adaptive config");
+    if (!output)
+      throw std::runtime_error("cannot write adaptive config");
   }
 
   ~SelectedConfig() { std::filesystem::remove(path_); }
@@ -63,16 +63,12 @@ TEST(AdaptiveAoAConfig, DecodesTopologyAndFoldedPeakCfar) {
   EXPECT_EQ(config.cfar_params->nci_axes, (std::vector<int64_t>{0, 1}));
   EXPECT_EQ(config.cfar_params->peak_mode, CfarPeakMode::kRangeDoppler);
   EXPECT_EQ(config.compensation_params->overlap_policy, OverlapPolicy::kDedup);
-  EXPECT_EQ(config.compensation_params->snapshot_window,
-            (std::vector<int64_t>{1, 1}));
-  EXPECT_EQ(config.compensation_params->doppler_edge,
-            SnapshotEdgeMode::kWrap);
-  EXPECT_EQ(config.compensation_params->range_edge,
-            SnapshotEdgeMode::kShift);
+  EXPECT_EQ(config.compensation_params->snapshot_window, (std::vector<int64_t>{1, 1}));
+  EXPECT_EQ(config.compensation_params->doppler_edge, SnapshotEdgeMode::kWrap);
+  EXPECT_EQ(config.compensation_params->range_edge, SnapshotEdgeMode::kShift);
   EXPECT_EQ(config.extents.max_snapshots, 9);
   EXPECT_EQ(config.extents.max_sources, 2);
-  EXPECT_EQ(config.extents.max_points,
-            *config.extents.max_detections * 2);
+  EXPECT_EQ(config.extents.max_points, *config.extents.max_detections * 2);
   ASSERT_TRUE(config.music_params.has_value());
   EXPECT_FALSE(config.root_music_params.has_value());
   EXPECT_FALSE(config.esprit_params.has_value());
@@ -80,8 +76,7 @@ TEST(AdaptiveAoAConfig, DecodesTopologyAndFoldedPeakCfar) {
 }
 
 TEST(AdaptiveAoAConfig, InstantiatesOnlySelectedEstimatorParameters) {
-  for (const auto& [name, expected] :
-       std::vector<std::pair<std::string, adaptive::Algorithm>>{
+  for (const auto& [name, expected] : std::vector<std::pair<std::string, adaptive::Algorithm>>{
            {"music", adaptive::Algorithm::kMusic},
            {"root_music", adaptive::Algorithm::kRootMusic},
            {"esprit", adaptive::Algorithm::kEsprit},
@@ -89,14 +84,11 @@ TEST(AdaptiveAoAConfig, InstantiatesOnlySelectedEstimatorParameters) {
     const SelectedConfig selected(name);
     const auto config = adaptive::load_config(selected.path());
     EXPECT_EQ(config.algorithm, expected) << name;
-    EXPECT_EQ(config.music_params.has_value(),
-              expected == adaptive::Algorithm::kMusic) << name;
-    EXPECT_EQ(config.root_music_params.has_value(),
-              expected == adaptive::Algorithm::kRootMusic) << name;
-    EXPECT_EQ(config.esprit_params.has_value(),
-              expected == adaptive::Algorithm::kEsprit) << name;
-    EXPECT_EQ(config.mvdr_params.has_value(),
-              expected == adaptive::Algorithm::kMvdr) << name;
+    EXPECT_EQ(config.music_params.has_value(), expected == adaptive::Algorithm::kMusic) << name;
+    EXPECT_EQ(config.root_music_params.has_value(), expected == adaptive::Algorithm::kRootMusic)
+        << name;
+    EXPECT_EQ(config.esprit_params.has_value(), expected == adaptive::Algorithm::kEsprit) << name;
+    EXPECT_EQ(config.mvdr_params.has_value(), expected == adaptive::Algorithm::kMvdr) << name;
   }
 }
 

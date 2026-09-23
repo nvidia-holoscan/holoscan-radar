@@ -31,10 +31,10 @@ struct Col0MinusCol1 {
 
 }  // namespace detection_reduction_test
 
-template class holoscan::radar::DetectionReductionOp<
-    float, detection_reduction_test::Col0MinusCol1>;
-template class holoscan::radar::DetectionReductionOp<
-    double, detection_reduction_test::Col0MinusCol1>;
+template class holoscan::radar::DetectionReductionOp<float,
+                                                     detection_reduction_test::Col0MinusCol1>;
+template class holoscan::radar::DetectionReductionOp<double,
+                                                     detection_reduction_test::Col0MinusCol1>;
 
 namespace {
 
@@ -61,22 +61,18 @@ TEST(DetectionReductionOpCustomTest, CustomScoreFnSelectsPeak) {
   params.score_method = ScoreMethod::kCustom;
 
   GraphRunResult result =
-      run_triple_in_single_out_operator_graph_result<
-          DetectionReductionOp<double, Col0MinusCol1>>(
+      run_triple_in_single_out_operator_graph_result<DetectionReductionOp<double, Col0MinusCol1>>(
           {to_device_tensor(labels, {2}, kInt64Dtype)},
           {to_device_tensor(idx, {2, 2}, kInt64Dtype)},
-          {to_device_tensor(points, {2, 2}, real_dtype<double>())},
-          std::move(params), "rep_idx",
-          [](holoscan::Graph& graph, const auto& source, auto& op,
-             const auto& sink) {
+          {to_device_tensor(points, {2, 2}, real_dtype<double>())}, std::move(params), "rep_idx",
+          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
             const holoscan::ConnectionOptions q{.queue_depth = 4U};
             graph.add_flow(source->out0, op->labels, q);
             graph.add_flow(source->out1, op->detection_idx, q);
             graph.add_flow(source->out2, op->points, q);
             graph.add_flow(op->rep_idx, sink->in, q);
           },
-          holoscan::radar::testing::default_test_extents(),
-          {"reduced_points"});
+          holoscan::radar::testing::default_test_extents(), {"reduced_points"});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());

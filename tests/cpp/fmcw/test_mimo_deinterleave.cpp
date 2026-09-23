@@ -49,12 +49,9 @@ constexpr int64_t kChirpsPerTx = 3;
 constexpr int64_t kSamples = 4;
 constexpr int64_t kSlowTime = kNumTx * kChirpsPerTx;
 
-double marker_value(int64_t batch, int64_t tx, int64_t l, int64_t rx,
-                    int64_t sample) {
-  return 10000.0 * static_cast<double>(batch) +
-         1000.0 * static_cast<double>(tx) +
-         10.0 * static_cast<double>(l) +
-         0.1 * static_cast<double>(rx) +
+double marker_value(int64_t batch, int64_t tx, int64_t l, int64_t rx, int64_t sample) {
+  return 10000.0 * static_cast<double>(batch) + 1000.0 * static_cast<double>(tx) +
+         10.0 * static_cast<double>(l) + 0.1 * static_cast<double>(rx) +
          0.01 * static_cast<double>(sample);
 }
 
@@ -89,9 +86,8 @@ std::vector<int64_t> pattern_for(const TXSchedule& schedule) {
 }
 
 template <typename ElementT>
-std::vector<ElementT> build_interleaved_cube(
-    const std::vector<int64_t>& pattern,
-    const std::vector<int64_t>& shape) {
+std::vector<ElementT> build_interleaved_cube(const std::vector<int64_t>& pattern,
+                                             const std::vector<int64_t>& shape) {
   const int64_t num_rx = shape[shape.size() - 3];
   const int64_t slow_time = shape[shape.size() - 2];
   const int64_t samples = shape.back();
@@ -105,16 +101,14 @@ std::vector<ElementT> build_interleaved_cube(
       const int64_t l = seen[static_cast<size_t>(tx)]++;
       for (int64_t rx = 0; rx < num_rx; ++rx) {
         for (int64_t s = 0; s < samples; ++s) {
-          const size_t idx = static_cast<size_t>(
-              b * slice_elems + (rx * slow_time + k) * samples + s);
+          const size_t idx =
+              static_cast<size_t>(b * slice_elems + (rx * slow_time + k) * samples + s);
           const double m = marker_value(b, tx, l, rx, s);
-          if constexpr (std::is_same_v<ElementT, float> ||
-                        std::is_same_v<ElementT, double>) {
+          if constexpr (std::is_same_v<ElementT, float> || std::is_same_v<ElementT, double>) {
             data[idx] = static_cast<ElementT>(m);
           } else {
-            data[idx] =
-                ElementT(static_cast<typename ElementT::value_type>(m),
-                         static_cast<typename ElementT::value_type>(0));
+            data[idx] = ElementT(static_cast<typename ElementT::value_type>(m),
+                                 static_cast<typename ElementT::value_type>(0));
           }
         }
       }
@@ -125,8 +119,7 @@ std::vector<ElementT> build_interleaved_cube(
 
 // Graph wiring lambda for 1-in / 1-out MIMODeinterleaveOp.
 auto deinterleave_wire() {
-  return [](holoscan::Graph& graph, const auto& source, auto& op,
-            const auto& sink) {
+  return [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(source->out, op->adc_cube, q);
     graph.add_flow(op->adc_cube_out, sink->in, q);
@@ -134,23 +127,18 @@ auto deinterleave_wire() {
 }
 
 template <typename T>
-GraphRunResult run_deinterleave_result(
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
-    MIMODeinterleaveParams params) {
+GraphRunResult run_deinterleave_result(std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
+                                       MIMODeinterleaveParams params) {
   return run_single_io_operator_graph_result<MIMODeinterleaveOp<T>>(
-      std::move(inputs), std::move(params), "adc_cube_out",
-      deinterleave_wire());
+      std::move(inputs), std::move(params), "adc_cube_out", deinterleave_wire());
 }
 
 template <typename T>
-HostTensor run_deinterleave_once(
-    std::shared_ptr<holoscan::Tensor> input,
-    MIMODeinterleaveParams params) {
-  GraphRunResult result =
-      run_deinterleave_result<T>({std::move(input)}, std::move(params));
+HostTensor run_deinterleave_once(std::shared_ptr<holoscan::Tensor> input,
+                                 MIMODeinterleaveParams params) {
+  GraphRunResult result = run_deinterleave_result<T>({std::move(input)}, std::move(params));
   if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") +
-                             result.plan_json);
+    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
   }
   if (!result.diagnostics.empty()) {
     std::string msg = "run diagnostics:";
@@ -161,26 +149,20 @@ HostTensor run_deinterleave_once(
     throw std::runtime_error(msg);
   }
   if (result.frames.size() != 1U) {
-    throw std::runtime_error(
-        "expected 1 frame, got " +
-        std::to_string(result.frames.size()));
+    throw std::runtime_error("expected 1 frame, got " + std::to_string(result.frames.size()));
   }
   return std::move(result.frames.front());
 }
 
 template <typename T, typename ElementT>
-HostTensor run_deinterleave(const std::vector<ElementT>& host,
-                            const std::vector<int64_t>& shape,
-                            DLDataType dtype,
-                            const TXSchedule& schedule) {
-  return run_deinterleave_once<T>(
-      to_device_tensor(host, shape, dtype),
-      MIMODeinterleaveParams{.tx_schedule = schedule});
+HostTensor run_deinterleave(const std::vector<ElementT>& host, const std::vector<int64_t>& shape,
+                            DLDataType dtype, const TXSchedule& schedule) {
+  return run_deinterleave_once<T>(to_device_tensor(host, shape, dtype),
+                                  MIMODeinterleaveParams{.tx_schedule = schedule});
 }
 
 template <typename ElementT>
-void expect_deinterleaved(const HostTensor& out,
-                          const std::vector<int64_t>& shape) {
+void expect_deinterleaved(const HostTensor& out, const std::vector<int64_t>& shape) {
   ASSERT_GE(shape.size(), 4U);
   const int64_t samples = shape.back();
   const int64_t chirps_per_tx = shape[shape.size() - 2];
@@ -200,22 +182,17 @@ void expect_deinterleaved(const HostTensor& out,
         for (int64_t l = 0; l < chirps_per_tx; ++l) {
           for (int64_t s = 0; s < samples; ++s) {
             const size_t idx = static_cast<size_t>(
-                b * slice_elems +
-                (((tx * num_rx + rx) * chirps_per_tx + l) * samples) +
-                s);
+                b * slice_elems + (((tx * num_rx + rx) * chirps_per_tx + l) * samples) + s);
             const double expected = marker_value(b, tx, l, rx, s);
             double got = 0.0;
-            if constexpr (std::is_same_v<ElementT, float> ||
-                          std::is_same_v<ElementT, double>) {
+            if constexpr (std::is_same_v<ElementT, float> || std::is_same_v<ElementT, double>) {
               got = static_cast<double>(data[idx]);
             } else {
               got = static_cast<double>(data[idx].real());
             }
-            const double tol =
-                std::max(1e-4, 1e-6 * std::abs(expected));
+            const double tol = std::max(1e-4, 1e-6 * std::abs(expected));
             EXPECT_NEAR(got, expected, tol)
-                << "batch=" << b << " tx=" << tx << " rx=" << rx
-                << " l=" << l << " s=" << s;
+                << "batch=" << b << " tx=" << tx << " rx=" << rx << " l=" << l << " s=" << s;
           }
         }
       }
@@ -247,12 +224,9 @@ TEST(MIMODeinterleaveOp, RoundRobinComplexFloat) {
   const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
-  const auto host =
-      build_interleaved_cube<std::complex<float>>(pattern, shape);
-  const HostTensor out = run_deinterleave<float>(
-      host, shape, complex_dtype<float>(), schedule);
-  EXPECT_TRUE(holoscan::radar::dldatatype_equals(
-      out.dtype, complex_dtype<float>()));
+  const auto host = build_interleaved_cube<std::complex<float>>(pattern, shape);
+  const HostTensor out = run_deinterleave<float>(host, shape, complex_dtype<float>(), schedule);
+  EXPECT_TRUE(holoscan::radar::dldatatype_equals(out.dtype, complex_dtype<float>()));
   expect_deinterleaved<std::complex<float>>(out, out.shape);
 }
 
@@ -276,10 +250,8 @@ TEST(MIMODeinterleaveOp, CustomTxOrderComplexFloat) {
   const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
   const TXSchedule schedule = custom_order_schedule();
   const auto pattern = pattern_for(schedule);
-  const auto host =
-      build_interleaved_cube<std::complex<float>>(pattern, shape);
-  const HostTensor out = run_deinterleave<float>(
-      host, shape, complex_dtype<float>(), schedule);
+  const auto host = build_interleaved_cube<std::complex<float>>(pattern, shape);
+  const HostTensor out = run_deinterleave<float>(host, shape, complex_dtype<float>(), schedule);
   expect_deinterleaved<std::complex<float>>(out, out.shape);
 }
 
@@ -287,10 +259,8 @@ TEST(MIMODeinterleaveOp, ExplicitChirpTxIndexUniformPattern) {
   const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
   const TXSchedule schedule = explicit_chirp_index_schedule();
   const auto pattern = pattern_for(schedule);
-  const auto host =
-      build_interleaved_cube<std::complex<float>>(pattern, shape);
-  const HostTensor out = run_deinterleave<float>(
-      host, shape, complex_dtype<float>(), schedule);
+  const auto host = build_interleaved_cube<std::complex<float>>(pattern, shape);
+  const HostTensor out = run_deinterleave<float>(host, shape, complex_dtype<float>(), schedule);
   expect_deinterleaved<std::complex<float>>(out, out.shape);
 }
 
@@ -299,10 +269,8 @@ TEST(MIMODeinterleaveOp, RealIfPreserved) {
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
   const auto host = build_interleaved_cube<float>(pattern, shape);
-  const HostTensor out = run_deinterleave<float>(
-      host, shape, real_dtype<float>(), schedule);
-  EXPECT_TRUE(holoscan::radar::dldatatype_equals(
-      out.dtype, real_dtype<float>()));
+  const HostTensor out = run_deinterleave<float>(host, shape, real_dtype<float>(), schedule);
+  EXPECT_TRUE(holoscan::radar::dldatatype_equals(out.dtype, real_dtype<float>()));
   expect_deinterleaved<float>(out, out.shape);
 }
 
@@ -310,12 +278,9 @@ TEST(MIMODeinterleaveOp, ComplexDoublePreserved) {
   const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
-  const auto host =
-      build_interleaved_cube<std::complex<double>>(pattern, shape);
-  const HostTensor out = run_deinterleave<double>(
-      host, shape, complex_dtype<double>(), schedule);
-  EXPECT_TRUE(holoscan::radar::dldatatype_equals(
-      out.dtype, complex_dtype<double>()));
+  const auto host = build_interleaved_cube<std::complex<double>>(pattern, shape);
+  const HostTensor out = run_deinterleave<double>(host, shape, complex_dtype<double>(), schedule);
+  EXPECT_TRUE(holoscan::radar::dldatatype_equals(out.dtype, complex_dtype<double>()));
   expect_deinterleaved<std::complex<double>>(out, out.shape);
 }
 
@@ -324,10 +289,8 @@ TEST(MIMODeinterleaveOp, RealDoublePreserved) {
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
   const auto host = build_interleaved_cube<double>(pattern, shape);
-  const HostTensor out = run_deinterleave<double>(
-      host, shape, real_dtype<double>(), schedule);
-  EXPECT_TRUE(holoscan::radar::dldatatype_equals(
-      out.dtype, real_dtype<double>()));
+  const HostTensor out = run_deinterleave<double>(host, shape, real_dtype<double>(), schedule);
+  EXPECT_TRUE(holoscan::radar::dldatatype_equals(out.dtype, real_dtype<double>()));
   expect_deinterleaved<double>(out, out.shape);
 }
 
@@ -337,11 +300,10 @@ TEST(MIMODeinterleaveOp, RejectsOpaqueLeadingBatch) {
   const std::vector<int64_t> shape = {2, kNumRx, kSlowTime, kSamples};
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
-  const auto host =
-      build_interleaved_cube<std::complex<float>>(pattern, shape);
-  const GraphRunResult result = run_deinterleave_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())},
-      MIMODeinterleaveParams{.tx_schedule = schedule});
+  const auto host = build_interleaved_cube<std::complex<float>>(pattern, shape);
+  const GraphRunResult result =
+      run_deinterleave_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
+                                     MIMODeinterleaveParams{.tx_schedule = schedule});
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -353,12 +315,10 @@ TEST(MIMODeinterleaveOp, RejectsNonUniformSchedule) {
   schedule.chirp_tx_index = {0, 1, 0, 1, 0, 0};
   const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
   const auto host = std::vector<std::complex<float>>(
-      static_cast<size_t>(kNumRx * kSlowTime * kSamples),
-      {1.0f, 0.0f});
+      static_cast<size_t>(kNumRx * kSlowTime * kSamples), {1.0f, 0.0f});
   const GraphRunResult result =
-      run_deinterleave_result<float>(
-          {to_device_tensor(host, shape, complex_dtype<float>())},
-          MIMODeinterleaveParams{.tx_schedule = schedule});
+      run_deinterleave_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
+                                     MIMODeinterleaveParams{.tx_schedule = schedule});
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -368,12 +328,10 @@ TEST(MIMODeinterleaveOp, RejectsIndivisibleSlowTime) {
   TXSchedule schedule = round_robin_schedule();
   const std::vector<int64_t> shape = {kNumRx, kSlowTime + 1, kSamples};
   const auto host = std::vector<std::complex<float>>(
-      static_cast<size_t>(kNumRx * (kSlowTime + 1) * kSamples),
-      {1.0f, 0.0f});
+      static_cast<size_t>(kNumRx * (kSlowTime + 1) * kSamples), {1.0f, 0.0f});
   const GraphRunResult result =
-      run_deinterleave_result<float>(
-          {to_device_tensor(host, shape, complex_dtype<float>())},
-          MIMODeinterleaveParams{.tx_schedule = schedule});
+      run_deinterleave_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
+                                     MIMODeinterleaveParams{.tx_schedule = schedule});
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -383,22 +341,17 @@ TEST(MIMODeinterleaveOp, FloatDoubleAgreement) {
   const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
-  const auto host_f =
-      build_interleaved_cube<std::complex<float>>(pattern, shape);
-  const auto host_d =
-      build_interleaved_cube<std::complex<double>>(pattern, shape);
-  const HostTensor out_f = run_deinterleave<float>(
-      host_f, shape, complex_dtype<float>(), schedule);
-  const HostTensor out_d = run_deinterleave<double>(
-      host_d, shape, complex_dtype<double>(), schedule);
+  const auto host_f = build_interleaved_cube<std::complex<float>>(pattern, shape);
+  const auto host_d = build_interleaved_cube<std::complex<double>>(pattern, shape);
+  const HostTensor out_f = run_deinterleave<float>(host_f, shape, complex_dtype<float>(), schedule);
+  const HostTensor out_d =
+      run_deinterleave<double>(host_d, shape, complex_dtype<double>(), schedule);
   ASSERT_EQ(out_f.shape, out_d.shape);
   const auto* f = out_f.as<std::complex<float>>();
   const auto* d = out_d.as<std::complex<double>>();
   for (int64_t i = 0; i < out_f.size(); ++i) {
-    EXPECT_NEAR(static_cast<double>(f[i].real()),
-                static_cast<double>(d[i].real()), 1e-4);
-    EXPECT_NEAR(static_cast<double>(f[i].imag()),
-                static_cast<double>(d[i].imag()), 1e-4);
+    EXPECT_NEAR(static_cast<double>(f[i].real()), static_cast<double>(d[i].real()), 1e-4);
+    EXPECT_NEAR(static_cast<double>(f[i].imag()), static_cast<double>(d[i].imag()), 1e-4);
   }
 }
 

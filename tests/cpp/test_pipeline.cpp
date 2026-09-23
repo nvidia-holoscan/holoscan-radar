@@ -63,10 +63,8 @@ psim::SimScene chain_scene() {
   scene.snr_db = 30.0;
   scene.seed = 0xC0FFEE;
   // Static clutter (stronger) + moving target.
-  scene.targets.push_back(
-      {psim::Vec3{0.0, 60.0, 0.0}, psim::Vec3{0.0, 0.0, 0.0}, {2.0, 0.0}});
-  scene.targets.push_back(
-      {psim::Vec3{0.0, 42.0, 0.0}, psim::Vec3{0.0, 5.5, 0.0}, {1.0, 0.0}});
+  scene.targets.push_back({psim::Vec3{0.0, 60.0, 0.0}, psim::Vec3{0.0, 0.0, 0.0}, {2.0, 0.0}});
+  scene.targets.push_back({psim::Vec3{0.0, 42.0, 0.0}, psim::Vec3{0.0, 5.5, 0.0}, {1.0, 0.0}});
   return scene;
 }
 
@@ -85,12 +83,11 @@ class SplitChainApp : public holoscan::Application {
     using holoscan::Arg;
     const FMCWWaveformDescriptor waveform = chain_waveform();
 
-    auto range = make_operator<FMCWRangeProcessorOp<float>>(
-        "range", Arg("waveform") = waveform);
+    auto range = make_operator<FMCWRangeProcessorOp<float>>("range", Arg("waveform") = waveform);
     auto clutter = make_operator<ClutterFilterOp<float>>(
         "clutter", Arg("method") = ClutterFilterMethod::kMeanSubtraction);
-    auto doppler = make_operator<FMCWDopplerProcessorOp<float>>(
-        "doppler", Arg("waveform") = waveform);
+    auto doppler =
+        make_operator<FMCWDopplerProcessorOp<float>>("doppler", Arg("waveform") = waveform);
 
     add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
     add_flow(clutter, doppler, {{"range_profiles_out", "range_profiles"}});
@@ -167,15 +164,13 @@ TEST(EndToEndPipeline, SisoChainDetectsMovingTargetAtTruth) {
 
   // The static return's cell (its range bin at the zero-Doppler column) is
   // well below the moving target's peak.
-  const int64_t clutter_range_bin = rt::expected_range_bin(
-      60.0, scene.waveform.slope(), scene.waveform.sample_rate,
-      scene.samples_per_chirp, scene.propagation_speed);
+  const int64_t clutter_range_bin =
+      rt::expected_range_bin(60.0, scene.waveform.slope(), scene.waveform.sample_rate,
+                             scene.samples_per_chirp, scene.propagation_speed);
   const int64_t zero_doppler_bin = rt::expected_doppler_bin(
-      0.0, scene.waveform.wavelength(),
-      scene.waveform.chirp_repetition_interval, num_doppler,
+      0.0, scene.waveform.wavelength(), scene.waveform.chirp_repetition_interval, num_doppler,
       /*center_zero_doppler=*/true);
-  const float clutter_mag =
-      std::abs(rd[zero_doppler_bin * num_range + clutter_range_bin]);
+  const float clutter_mag = std::abs(rd[zero_doppler_bin * num_range + clutter_range_bin]);
   EXPECT_LT(clutter_mag, 0.05F * peak_mag);
 }
 

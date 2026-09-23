@@ -126,13 +126,11 @@ struct FrameBankE {
 // Emit one frame from `bank` onto `out` using the runtime stream. Shared by
 // the single- and dual-output harness sources.
 inline holoscan::expected<void, holoscan::Error> emit_bank_frame(
-    holoscan::Output<holoscan::Tensor>& out,
-    holoscan::ExecutionContext& context,
+    holoscan::Output<holoscan::Tensor>& out, holoscan::ExecutionContext& context,
     const std::shared_ptr<holoscan::Tensor>& frame, const char* who) {
   const auto shape = frame->shape();
   const DLDataType dtype = frame->dtype();
-  auto loan = out.allocate_tensor(
-      holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+  auto loan = out.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
   if (!loan) {
     return holoscan::make_unexpected(std::move(loan).error());
   }
@@ -142,20 +140,17 @@ inline holoscan::expected<void, holoscan::Error> emit_bank_frame(
   }
   cudaStream_t stream = context.cuda_stream().get();
   // Zero-byte loans (e.g. empty detection_idx) have null data pointers.
-  if (writer->byte_size() > 0 &&
-      cudaMemcpyAsync(writer->data(), frame->data(), writer->byte_size(),
-                      cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
+  if (writer->byte_size() > 0 && cudaMemcpyAsync(writer->data(), frame->data(), writer->byte_size(),
+                                                 cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
     return holoscan::make_unexpected(holoscan::Error{
-        holoscan::ErrorCode::kFailure,
-        std::string(who) + ": cudaMemcpyAsync failed"});
+        holoscan::ErrorCode::kFailure, std::string(who) + ": cudaMemcpyAsync failed"});
   }
   auto committed = std::move(*writer).commit();
   if (!committed) {
     return holoscan::make_unexpected(std::move(committed).error());
   }
-  return out.emit(
-      std::move(*loan),
-      holoscan::EmitOptions{.capture_time = context.activation_time()});
+  return out.emit(std::move(*loan),
+                  holoscan::EmitOptions{.capture_time = context.activation_time()});
 }
 
 class TensorSourceOp final : public holoscan::Operator<> {
@@ -167,8 +162,8 @@ class TensorSourceOp final : public holoscan::Operator<> {
         .rank = std::nullopt,
     };
     spec.output(out, "out")
-        .produces_tensor(holoscan::radar::pooled_tensor_output(
-            kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
+        .produces_tensor(
+            holoscan::radar::pooled_tensor_output(kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -211,8 +206,8 @@ class TensorOverrideSourceOp final : public holoscan::Operator<> {
         .rank = std::nullopt,
     };
     spec.output(out, "out")
-        .produces_tensor(holoscan::radar::pooled_tensor_output(
-            kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
+        .produces_tensor(
+            holoscan::radar::pooled_tensor_output(kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
     spec.output(override_out, "override_out");
   }
 
@@ -239,14 +234,12 @@ class TensorOverrideSourceOp final : public holoscan::Operator<> {
     }
     if (payload.has_value()) {
       auto override_emitted = override_out.emit(
-          std::move(*payload),
-          holoscan::EmitOptions{.capture_time = context.activation_time()});
+          std::move(*payload), holoscan::EmitOptions{.capture_time = context.activation_time()});
       if (!override_emitted) {
         return override_emitted;
       }
     }
-    auto tensor_emitted =
-        emit_bank_frame(out, context, frame, "TensorOverrideSourceOp");
+    auto tensor_emitted = emit_bank_frame(out, context, frame, "TensorOverrideSourceOp");
     if (!tensor_emitted) {
       return tensor_emitted;
     }
@@ -277,8 +270,8 @@ class DualTensorSourceOp final : public holoscan::Operator<> {
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    const holoscan::TensorBounds bounds{
-        .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL};
+    const holoscan::TensorBounds bounds{.max_rank = 8U,
+                                        .max_byte_span = 256ULL * 1024ULL * 1024ULL};
     spec.output(out0, "out0")
         .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, bounds));
     spec.output(out1, "out1")
@@ -305,8 +298,7 @@ class DualTensorSourceOp final : public holoscan::Operator<> {
       frame0 = FrameBank::input_frames[FrameBank::input_index++];
       frame1 = FrameBankB::input_frames[FrameBankB::input_index++];
     }
-    auto first = emit_bank_frame(out0, context, frame0,
-                                 "DualTensorSourceOp.out0");
+    auto first = emit_bank_frame(out0, context, frame0, "DualTensorSourceOp.out0");
     if (!first) {
       return first;
     }
@@ -327,8 +319,8 @@ class DualTensorOverrideSourceOp final : public holoscan::Operator<> {
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    const holoscan::TensorBounds bounds{
-        .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL};
+    const holoscan::TensorBounds bounds{.max_rank = 8U,
+                                        .max_byte_span = 256ULL * 1024ULL * 1024ULL};
     spec.output(out0, "out0")
         .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, bounds));
     spec.output(out1, "out1")
@@ -363,19 +355,16 @@ class DualTensorOverrideSourceOp final : public holoscan::Operator<> {
     }
     if (payload.has_value()) {
       auto emitted = override_out.emit(
-          std::move(*payload),
-          holoscan::EmitOptions{.capture_time = context.activation_time()});
+          std::move(*payload), holoscan::EmitOptions{.capture_time = context.activation_time()});
       if (!emitted) {
         return emitted;
       }
     }
-    auto first = emit_bank_frame(
-        out0, context, frame0, "DualTensorOverrideSourceOp.out0");
+    auto first = emit_bank_frame(out0, context, frame0, "DualTensorOverrideSourceOp.out0");
     if (!first) {
       return first;
     }
-    return emit_bank_frame(
-        out1, context, frame1, "DualTensorOverrideSourceOp.out1");
+    return emit_bank_frame(out1, context, frame1, "DualTensorOverrideSourceOp.out1");
   }
 
   holoscan::Output<holoscan::Tensor> out0{"out0"};
@@ -395,8 +384,8 @@ class TripleTensorSourceOp final : public holoscan::Operator<> {
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    const holoscan::TensorBounds bounds{
-        .max_rank = 8U, .max_byte_span = 256ULL * 1024ULL * 1024ULL};
+    const holoscan::TensorBounds bounds{.max_rank = 8U,
+                                        .max_byte_span = 256ULL * 1024ULL * 1024ULL};
     spec.output(out0, "out0")
         .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, bounds));
     spec.output(out1, "out1")
@@ -430,31 +419,25 @@ class TripleTensorSourceOp final : public holoscan::Operator<> {
       frame2 = FrameBankC::input_frames[FrameBankC::input_index++];
     }
     if constexpr (OptionalThirdFirst) {
-      auto optional = emit_bank_frame(out2, context, frame2,
-                                      "TripleTensorSourceOp.out2");
+      auto optional = emit_bank_frame(out2, context, frame2, "TripleTensorSourceOp.out2");
       if (!optional) {
         return optional;
       }
-      auto first = emit_bank_frame(out0, context, frame0,
-                                   "TripleTensorSourceOp.out0");
+      auto first = emit_bank_frame(out0, context, frame0, "TripleTensorSourceOp.out0");
       if (!first) {
         return first;
       }
-      return emit_bank_frame(out1, context, frame1,
-                             "TripleTensorSourceOp.out1");
+      return emit_bank_frame(out1, context, frame1, "TripleTensorSourceOp.out1");
     } else {
-      auto first = emit_bank_frame(out0, context, frame0,
-                                   "TripleTensorSourceOp.out0");
+      auto first = emit_bank_frame(out0, context, frame0, "TripleTensorSourceOp.out0");
       if (!first) {
         return first;
       }
-      auto second = emit_bank_frame(out1, context, frame1,
-                                    "TripleTensorSourceOp.out1");
+      auto second = emit_bank_frame(out1, context, frame1, "TripleTensorSourceOp.out1");
       if (!second) {
         return second;
       }
-      return emit_bank_frame(out2, context, frame2,
-                             "TripleTensorSourceOp.out2");
+      return emit_bank_frame(out2, context, frame2, "TripleTensorSourceOp.out2");
     }
   }
 
@@ -465,9 +448,7 @@ class TripleTensorSourceOp final : public holoscan::Operator<> {
 
 class TensorCaptureOp final : public holoscan::Operator<> {
  public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.input(in, "in").queue_depth(8U);
-  }
+  void setup(holoscan::OperatorSpec& spec) override { spec.input(in, "in").queue_depth(8U); }
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
@@ -495,9 +476,7 @@ class TensorCaptureOp final : public holoscan::Operator<> {
 
 class TensorCaptureBOp final : public holoscan::Operator<> {
  public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.input(in, "in").queue_depth(8U);
-  }
+  void setup(holoscan::OperatorSpec& spec) override { spec.input(in, "in").queue_depth(8U); }
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
@@ -532,11 +511,9 @@ class DualTensorCaptureOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
-    result.trigger(holoscan::OnAligned{
-        .ports = holoscan::ports(in0, in1),
-        .window = std::chrono::nanoseconds{0}});
-    result.input(in0, holoscan::Exact{})
-        .input(in1, holoscan::Exact{});
+    result.trigger(holoscan::OnAligned{.ports = holoscan::ports(in0, in1),
+                                       .window = std::chrono::nanoseconds{0}});
+    result.input(in0, holoscan::Exact{}).input(in1, holoscan::Exact{});
     return result;
   }
 
@@ -571,9 +548,7 @@ class DualTensorCaptureOp final : public holoscan::Operator<> {
 
 class TensorCaptureCOp final : public holoscan::Operator<> {
  public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.input(in, "in").queue_depth(8U);
-  }
+  void setup(holoscan::OperatorSpec& spec) override { spec.input(in, "in").queue_depth(8U); }
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
@@ -600,9 +575,7 @@ class TensorCaptureCOp final : public holoscan::Operator<> {
 
 class TensorCaptureDOp final : public holoscan::Operator<> {
  public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.input(in, "in").queue_depth(8U);
-  }
+  void setup(holoscan::OperatorSpec& spec) override { spec.input(in, "in").queue_depth(8U); }
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
@@ -629,9 +602,7 @@ class TensorCaptureDOp final : public holoscan::Operator<> {
 
 class TensorCaptureEOp final : public holoscan::Operator<> {
  public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.input(in, "in").queue_depth(8U);
-  }
+  void setup(holoscan::OperatorSpec& spec) override { spec.input(in, "in").queue_depth(8U); }
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
@@ -656,123 +627,105 @@ class TensorCaptureEOp final : public holoscan::Operator<> {
   holoscan::Input<holoscan::Tensor> in{"in"};
 };
 
-inline void bind_single_io_device_pools(holoscan::CompileOptions& options,
-                                        const char* out_port) {
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "source",
-          .output_port = "out",
-          .device = holoscan::DeviceId{0},
-      });
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "op",
-          .output_port = out_port,
-          .device = holoscan::DeviceId{0},
-      });
+inline void bind_single_io_device_pools(holoscan::CompileOptions& options, const char* out_port) {
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "source",
+      .output_port = "out",
+      .device = holoscan::DeviceId{0},
+  });
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "op",
+      .output_port = out_port,
+      .device = holoscan::DeviceId{0},
+  });
 }
 
 inline void bind_device_pools(holoscan::CompileOptions& options) {
   bind_single_io_device_pools(options, "range_profiles_out");
 }
 
-inline void bind_dual_io_device_pools(
-    holoscan::CompileOptions& options,
-    const char* out0_port, const char* out1_port) {
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "source",
-          .output_port = "out0",
-          .device = holoscan::DeviceId{0},
-      });
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "source",
-          .output_port = "out1",
-          .device = holoscan::DeviceId{0},
-      });
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "op",
-          .output_port = out0_port,
-          .device = holoscan::DeviceId{0},
-      });
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "op",
-          .output_port = out1_port,
-          .device = holoscan::DeviceId{0},
-      });
+inline void bind_dual_io_device_pools(holoscan::CompileOptions& options, const char* out0_port,
+                                      const char* out1_port) {
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "source",
+      .output_port = "out0",
+      .device = holoscan::DeviceId{0},
+  });
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "source",
+      .output_port = "out1",
+      .device = holoscan::DeviceId{0},
+  });
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "op",
+      .output_port = out0_port,
+      .device = holoscan::DeviceId{0},
+  });
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "op",
+      .output_port = out1_port,
+      .device = holoscan::DeviceId{0},
+  });
 }
 
 // 1-in / 2-out device binds (TensorSourceOp "out" + two op outputs).
-inline void bind_single_in_dual_out_device_pools(
-    holoscan::CompileOptions& options, const char* out0_port,
-    const char* out1_port) {
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "source",
-          .output_port = "out",
-          .device = holoscan::DeviceId{0},
-      });
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "op",
-          .output_port = out0_port,
-          .device = holoscan::DeviceId{0},
-      });
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "op",
-          .output_port = out1_port,
-          .device = holoscan::DeviceId{0},
-      });
+inline void bind_single_in_dual_out_device_pools(holoscan::CompileOptions& options,
+                                                 const char* out0_port, const char* out1_port) {
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "source",
+      .output_port = "out",
+      .device = holoscan::DeviceId{0},
+  });
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "op",
+      .output_port = out0_port,
+      .device = holoscan::DeviceId{0},
+  });
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "op",
+      .output_port = out1_port,
+      .device = holoscan::DeviceId{0},
+  });
 }
 
-inline void bind_op_device_output(holoscan::CompileOptions& options,
-                                  const char* out_port) {
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "op",
-          .output_port = out_port,
-          .device = holoscan::DeviceId{0},
-      });
+inline void bind_op_device_output(holoscan::CompileOptions& options, const char* out_port) {
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "op",
+      .output_port = out_port,
+      .device = holoscan::DeviceId{0},
+  });
 }
 
 // 2-in / 1-out device binds (DualTensorSourceOp out0/out1 + one op output).
-inline void bind_dual_in_single_out_device_pools(
-    holoscan::CompileOptions& options, const char* out_port) {
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "source",
-          .output_port = "out0",
-          .device = holoscan::DeviceId{0},
-      });
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "source",
-          .output_port = "out1",
-          .device = holoscan::DeviceId{0},
-      });
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "op",
-          .output_port = out_port,
-          .device = holoscan::DeviceId{0},
-      });
+inline void bind_dual_in_single_out_device_pools(holoscan::CompileOptions& options,
+                                                 const char* out_port) {
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "source",
+      .output_port = "out0",
+      .device = holoscan::DeviceId{0},
+  });
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "source",
+      .output_port = "out1",
+      .device = holoscan::DeviceId{0},
+  });
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "op",
+      .output_port = out_port,
+      .device = holoscan::DeviceId{0},
+  });
 }
 
 // 3-in / 1-out device binds (TripleTensorSourceOp out0/out1/out2 + one op
 // output).
-inline void bind_triple_in_single_out_device_pools(
-    holoscan::CompileOptions& options, const char* out_port) {
+inline void bind_triple_in_single_out_device_pools(holoscan::CompileOptions& options,
+                                                   const char* out_port) {
   bind_dual_in_single_out_device_pools(options, out_port);
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "source",
-          .output_port = "out2",
-          .device = holoscan::DeviceId{0},
-      });
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "source",
+      .output_port = "out2",
+      .device = holoscan::DeviceId{0},
+  });
 }
 
 }  // namespace detail
@@ -814,10 +767,9 @@ inline MaxTensorExtents default_test_extents() {
 // widening the grid is what makes these pools enormous: a 101x61 grid against
 // the default 256x512 asks for ~13 GiB of complex<double> for a cube whose
 // real extent is 1x1. Pass the actual cube's doppler/range extents.
-inline MaxTensorExtents extents_for_scan_grid(
-    std::size_t num_az, std::size_t num_el,
-    std::optional<std::size_t> num_doppler = std::nullopt,
-    std::optional<std::size_t> num_range = std::nullopt) {
+inline MaxTensorExtents extents_for_scan_grid(std::size_t num_az, std::size_t num_el,
+                                              std::optional<std::size_t> num_doppler = std::nullopt,
+                                              std::optional<std::size_t> num_range = std::nullopt) {
   const auto at_least_one = [](std::size_t value) {
     return std::max<std::int64_t>(1, static_cast<std::int64_t>(value));
   };
@@ -834,8 +786,7 @@ inline MaxTensorExtents extents_for_scan_grid(
 }
 
 template <typename OpT>
-auto emplace_harness_op(holoscan::Graph& graph,
-                        const MaxTensorExtents& extents) {
+auto emplace_harness_op(holoscan::Graph& graph, const MaxTensorExtents& extents) {
   if constexpr (std::is_constructible_v<OpT, const MaxTensorExtents&>) {
     return graph.op<OpT>("op", extents);
   } else {
@@ -844,11 +795,9 @@ auto emplace_harness_op(holoscan::Graph& graph,
 }
 
 template <typename OpT, typename ParamsT>
-auto emplace_configured_harness_op(holoscan::Graph& graph,
-                                   const MaxTensorExtents& extents,
+auto emplace_configured_harness_op(holoscan::Graph& graph, const MaxTensorExtents& extents,
                                    ParamsT params) {
-  if constexpr (std::is_constructible_v<
-                    OpT, const MaxTensorExtents&, ParamsT>) {
+  if constexpr (std::is_constructible_v<OpT, const MaxTensorExtents&, ParamsT>) {
     return graph.op<OpT>("op", extents, std::move(params));
   } else {
     auto op = emplace_harness_op<OpT>(graph, extents);
@@ -931,9 +880,8 @@ struct FiveOutGraphRunResult {
 // — unbound device producers fail compile with IMPLICIT_DEVICE_ZERO_REJECTED.
 template <typename OpT, typename ParamsT, typename WireFn>
 GraphRunResult run_single_io_operator_graph_result(
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
-    const char* out_port, WireFn&& wire,
-    std::initializer_list<const char*> extra_op_out_ports = {},
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params, const char* out_port,
+    WireFn&& wire, std::initializer_list<const char*> extra_op_out_ports = {},
     const MaxTensorExtents& extents = default_test_extents()) {
   GraphRunResult result;
   detail::FrameBank::reset();
@@ -942,8 +890,7 @@ GraphRunResult run_single_io_operator_graph_result(
 
   holoscan::Graph graph{"single-io-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
@@ -955,8 +902,7 @@ GraphRunResult run_single_io_operator_graph_result(
   }
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -969,8 +915,7 @@ GraphRunResult run_single_io_operator_graph_result(
       // instead of waiting once on the full deadline.
       const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
       std::unique_lock lock(detail::FrameBank::mutex);
-      while (detail::FrameBank::captured.size() < expected &&
-             session.diagnostics().empty() &&
+      while (detail::FrameBank::captured.size() < expected && session.diagnostics().empty() &&
              std::chrono::steady_clock::now() < deadline) {
         detail::FrameBank::ready.wait_for(lock, detail::kHarnessPoll);
       }
@@ -999,9 +944,8 @@ GraphRunResult run_single_io_operator_graph_result(
 template <typename OpT, typename Payload, typename ParamsT, typename WireFn>
 GraphRunResult run_exact_override_single_io_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
-    std::vector<std::optional<Payload>> payloads, ParamsT params,
-    const char* out_port, WireFn&& wire,
-    const MaxTensorExtents& extents = default_test_extents(),
+    std::vector<std::optional<Payload>> payloads, ParamsT params, const char* out_port,
+    WireFn&& wire, const MaxTensorExtents& extents = default_test_extents(),
     std::initializer_list<const char*> extra_op_out_ports = {}) {
   GraphRunResult result;
   detail::FrameBank::reset();
@@ -1010,10 +954,8 @@ GraphRunResult run_exact_override_single_io_operator_graph_result(
   const std::size_t expected = detail::FrameBank::input_frames.size();
 
   holoscan::Graph graph{"exact-override-single-io-harness"};
-  const auto source =
-      graph.op<detail::TensorOverrideSourceOp<Payload>>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  const auto source = graph.op<detail::TensorOverrideSourceOp<Payload>>("source");
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
@@ -1025,8 +967,7 @@ GraphRunResult run_exact_override_single_io_operator_graph_result(
   }
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -1035,11 +976,9 @@ GraphRunResult run_exact_override_single_io_operator_graph_result(
 
     holoscan::RunSession session = holoscan::run_async(plan);
     {
-      const auto deadline =
-          std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+      const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
       std::unique_lock lock(detail::FrameBank::mutex);
-      while (detail::FrameBank::captured.size() < expected &&
-             session.diagnostics().empty() &&
+      while (detail::FrameBank::captured.size() < expected && session.diagnostics().empty() &&
              std::chrono::steady_clock::now() < deadline) {
         detail::FrameBank::ready.wait_for(lock, detail::kHarnessPoll);
       }
@@ -1063,33 +1002,28 @@ GraphRunResult run_exact_override_single_io_operator_graph_result(
 }
 
 template <typename OpT>
-GraphRunResult run_operator_graph_result(
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
-    ClutterFilterParams params = {},
-    const MaxTensorExtents& extents = default_test_extents()) {
+GraphRunResult run_operator_graph_result(std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
+                                         ClutterFilterParams params = {},
+                                         const MaxTensorExtents& extents = default_test_extents()) {
   return run_single_io_operator_graph_result<OpT>(
       std::move(inputs), std::move(params), "range_profiles_out",
-      [](holoscan::Graph& graph, const auto& source, auto& op,
-         const auto& sink) {
+      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
         graph.add_flow(source->out, op->range_profiles, q);
         graph.add_flow(op->range_profiles_out, sink->in, q);
       },
-      {},
-      extents);
+      {}, extents);
 }
 
 template <typename OpT>
 std::vector<HostTensor> run_operator_graph(
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
-    ClutterFilterParams params = {},
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ClutterFilterParams params = {},
     const MaxTensorExtents& extents = default_test_extents()) {
   const std::size_t expected = inputs.size();
-  GraphRunResult result = run_operator_graph_result<OpT>(
-      std::move(inputs), std::move(params), extents);
+  GraphRunResult result =
+      run_operator_graph_result<OpT>(std::move(inputs), std::move(params), extents);
   if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") +
-                             result.plan_json);
+    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
   }
   if (!result.diagnostics.empty()) {
     std::string msg = "run diagnostics:";
@@ -1100,24 +1034,20 @@ std::vector<HostTensor> run_operator_graph(
     throw std::runtime_error(msg);
   }
   if (result.frames.size() != expected) {
-    throw std::runtime_error(
-        "expected " + std::to_string(expected) + " captured frames, got " +
-        std::to_string(result.frames.size()));
+    throw std::runtime_error("expected " + std::to_string(expected) + " captured frames, got " +
+                             std::to_string(result.frames.size()));
   }
   return std::move(result.frames);
 }
 
 template <typename OpT>
-HostTensor run_operator_once(
-    std::shared_ptr<holoscan::Tensor> input,
-    ClutterFilterParams params = {},
-    const MaxTensorExtents& extents = default_test_extents()) {
-  auto frames = run_operator_graph<OpT>(
-      {std::move(input)}, std::move(params), extents);
+HostTensor run_operator_once(std::shared_ptr<holoscan::Tensor> input,
+                             ClutterFilterParams params = {},
+                             const MaxTensorExtents& extents = default_test_extents()) {
+  auto frames = run_operator_graph<OpT>({std::move(input)}, std::move(params), extents);
   if (frames.size() != 1U) {
-    throw std::runtime_error(
-        "expected exactly one captured output frame, got " +
-        std::to_string(frames.size()));
+    throw std::runtime_error("expected exactly one captured output frame, got " +
+                             std::to_string(frames.size()));
   }
   return std::move(frames.front());
 }
@@ -1131,8 +1061,8 @@ HostTensor run_operator_once(
 // IMPLICIT_DEVICE_ZERO_REJECTED.
 template <typename OpT, typename ParamsT, typename WireFn>
 DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
-    const char* out0_port, const char* out1_port, WireFn&& wire,
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params, const char* out0_port,
+    const char* out1_port, WireFn&& wire,
     std::initializer_list<const char*> extra_op_out_ports = {},
     const MaxTensorExtents& extents = default_test_extents()) {
   DualIOGraphRunResult result;
@@ -1143,8 +1073,7 @@ DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-dual-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
   wire(graph, source, op, sink0, sink1);
@@ -1153,17 +1082,15 @@ DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
   holoscan::CompileOptions options;
   detail::bind_single_in_dual_out_device_pools(options, out0_port, out1_port);
   for (const char* port : extra_op_out_ports) {
-    options.deployment.bind_tensor_output_device(
-        holoscan::TensorOutputDevicePlacement{
-            .operator_path = "op",
-            .output_port = port,
-            .device = holoscan::DeviceId{0},
-        });
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = "op",
+        .output_port = port,
+        .device = holoscan::DeviceId{0},
+    });
   }
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -1173,8 +1100,7 @@ DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
     holoscan::RunSession session = holoscan::run_async(plan);
     {
       const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
-      while (session.diagnostics().empty() &&
-             std::chrono::steady_clock::now() < deadline) {
+      while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
         std::size_t n0 = 0;
         std::size_t n1 = 0;
         {
@@ -1217,8 +1143,7 @@ DualIOGraphRunResult run_single_in_dual_out_operator_graph_result(
 // receives a device placement; the schema's DescriptorTensor pool declares
 // its own host representation.
 template <typename Payload, typename OpT, typename ParamsT, typename WireFn>
-TensorWireGraphRunResult<Payload>
-run_single_in_tensor_wire_out_operator_graph_result(
+TensorWireGraphRunResult<Payload> run_single_in_tensor_wire_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
     const char* tensor_out_port, WireFn&& wire,
     std::initializer_list<const char*> extra_op_out_ports = {},
@@ -1231,8 +1156,7 @@ run_single_in_tensor_wire_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-tensor-wire-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<WireCaptureOp<Payload>>("sink1");
   wire(graph, source, op, sink0, sink1);
@@ -1245,8 +1169,7 @@ run_single_in_tensor_wire_out_operator_graph_result(
   }
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -1254,10 +1177,8 @@ run_single_in_tensor_wire_out_operator_graph_result(
     }
 
     holoscan::RunSession session = holoscan::run_async(plan);
-    const auto deadline =
-        std::chrono::steady_clock::now() + detail::kHarnessDeadline;
-    while (session.diagnostics().empty() &&
-           std::chrono::steady_clock::now() < deadline) {
+    const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+    while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
       std::size_t tensor_count = 0;
       std::size_t wire_count = 0;
       {
@@ -1291,8 +1212,7 @@ run_single_in_tensor_wire_out_operator_graph_result(
   {
     const std::lock_guard lock(WireCaptureBank<Payload>::mutex);
     result.frames1 = std::move(WireCaptureBank<Payload>::payloads);
-    result.frame1_capture_times =
-        std::move(WireCaptureBank<Payload>::capture_times);
+    result.frame1_capture_times = std::move(WireCaptureBank<Payload>::capture_times);
   }
   return result;
 }
@@ -1304,9 +1224,8 @@ run_single_in_tensor_wire_out_operator_graph_result(
 // Tensor outputs that are declared but unwired.
 template <typename OpT, typename ParamsT, typename WireFn>
 ThreeOutGraphRunResult run_single_in_three_out_operator_graph_result(
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
-    const char* out0_port, const char* out1_port, const char* out2_port,
-    WireFn&& wire,
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params, const char* out0_port,
+    const char* out1_port, const char* out2_port, WireFn&& wire,
     std::initializer_list<const char*> extra_op_out_ports = {},
     const MaxTensorExtents& extents = default_test_extents()) {
   ThreeOutGraphRunResult result;
@@ -1318,8 +1237,7 @@ ThreeOutGraphRunResult run_single_in_three_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-three-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
   const auto sink2 = graph.op<detail::TensorCaptureCOp>("sink2");
@@ -1334,8 +1252,7 @@ ThreeOutGraphRunResult run_single_in_three_out_operator_graph_result(
   }
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -1344,10 +1261,8 @@ ThreeOutGraphRunResult run_single_in_three_out_operator_graph_result(
 
     holoscan::RunSession session = holoscan::run_async(plan);
     {
-      const auto deadline =
-          std::chrono::steady_clock::now() + detail::kHarnessDeadline;
-      while (session.diagnostics().empty() &&
-             std::chrono::steady_clock::now() < deadline) {
+      const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+      while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
         std::size_t n0 = 0;
         std::size_t n1 = 0;
         std::size_t n2 = 0;
@@ -1399,9 +1314,8 @@ ThreeOutGraphRunResult run_single_in_three_out_operator_graph_result(
 // `WireFn` receives (graph, source, op, sink0..sink3).
 template <typename OpT, typename ParamsT, typename WireFn>
 FourOutGraphRunResult run_single_in_four_out_operator_graph_result(
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
-    const char* out0_port, const char* out1_port, const char* out2_port,
-    const char* out3_port, WireFn&& wire,
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params, const char* out0_port,
+    const char* out1_port, const char* out2_port, const char* out3_port, WireFn&& wire,
     const MaxTensorExtents& extents = default_test_extents()) {
   FourOutGraphRunResult result;
   detail::FrameBank::reset();
@@ -1413,8 +1327,7 @@ FourOutGraphRunResult run_single_in_four_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-four-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
   const auto sink2 = graph.op<detail::TensorCaptureCOp>("sink2");
@@ -1428,8 +1341,7 @@ FourOutGraphRunResult run_single_in_four_out_operator_graph_result(
   detail::bind_op_device_output(options, out3_port);
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -1439,8 +1351,7 @@ FourOutGraphRunResult run_single_in_four_out_operator_graph_result(
     holoscan::RunSession session = holoscan::run_async(plan);
     {
       const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
-      while (session.diagnostics().empty() &&
-             std::chrono::steady_clock::now() < deadline) {
+      while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
         std::size_t n0 = 0;
         std::size_t n1 = 0;
         std::size_t n2 = 0;
@@ -1461,8 +1372,7 @@ FourOutGraphRunResult run_single_in_four_out_operator_graph_result(
           const std::lock_guard lock3(detail::FrameBankD::mutex);
           n3 = detail::FrameBankD::captured.size();
         }
-        if (n0 >= expected && n1 >= expected && n2 >= expected &&
-            n3 >= expected) {
+        if (n0 >= expected && n1 >= expected && n2 >= expected && n3 >= expected) {
           break;
         }
         std::this_thread::sleep_for(detail::kHarnessPoll);
@@ -1503,9 +1413,8 @@ FourOutGraphRunResult run_single_in_four_out_operator_graph_result(
 template <typename OpT, typename Payload, typename ParamsT, typename WireFn>
 FourOutGraphRunResult run_exact_override_four_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
-    std::vector<std::optional<Payload>> payloads, ParamsT params,
-    const char* out0_port, const char* out1_port, const char* out2_port,
-    const char* out3_port, WireFn&& wire,
+    std::vector<std::optional<Payload>> payloads, ParamsT params, const char* out0_port,
+    const char* out1_port, const char* out2_port, const char* out3_port, WireFn&& wire,
     const MaxTensorExtents& extents = default_test_extents()) {
   FourOutGraphRunResult result;
   detail::FrameBank::reset();
@@ -1517,10 +1426,8 @@ FourOutGraphRunResult run_exact_override_four_out_operator_graph_result(
   detail::OverrideBank<Payload>::payloads = std::move(payloads);
 
   holoscan::Graph graph{"exact-override-four-out-harness"};
-  const auto source =
-      graph.op<detail::TensorOverrideSourceOp<Payload>>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  const auto source = graph.op<detail::TensorOverrideSourceOp<Payload>>("source");
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
   const auto sink2 = graph.op<detail::TensorCaptureCOp>("sink2");
@@ -1534,8 +1441,7 @@ FourOutGraphRunResult run_exact_override_four_out_operator_graph_result(
   detail::bind_op_device_output(options, out3_port);
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -1544,10 +1450,8 @@ FourOutGraphRunResult run_exact_override_four_out_operator_graph_result(
 
     holoscan::RunSession session = holoscan::run_async(plan);
     {
-      const auto deadline =
-          std::chrono::steady_clock::now() + detail::kHarnessDeadline;
-      while (session.diagnostics().empty() &&
-             std::chrono::steady_clock::now() < deadline) {
+      const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+      while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
         std::size_t n0 = 0;
         std::size_t n1 = 0;
         std::size_t n2 = 0;
@@ -1568,8 +1472,7 @@ FourOutGraphRunResult run_exact_override_four_out_operator_graph_result(
           const std::lock_guard lock3(detail::FrameBankD::mutex);
           n3 = detail::FrameBankD::captured.size();
         }
-        if (n0 >= expected && n1 >= expected && n2 >= expected &&
-            n3 >= expected) {
+        if (n0 >= expected && n1 >= expected && n2 >= expected && n3 >= expected) {
           break;
         }
         std::this_thread::sleep_for(detail::kHarnessPoll);
@@ -1610,10 +1513,9 @@ FourOutGraphRunResult run_exact_override_four_out_operator_graph_result(
 // five op outputs. Device binds cover source/out and every named op port.
 template <typename OpT, typename ParamsT, typename WireFn>
 FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params,
-    const char* out0_port, const char* out1_port, const char* out2_port,
-    const char* out3_port, const char* out4_port, WireFn&& wire,
-    const MaxTensorExtents& extents = default_test_extents()) {
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, ParamsT params, const char* out0_port,
+    const char* out1_port, const char* out2_port, const char* out3_port, const char* out4_port,
+    WireFn&& wire, const MaxTensorExtents& extents = default_test_extents()) {
   FiveOutGraphRunResult result;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -1625,8 +1527,7 @@ FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
 
   holoscan::Graph graph{"single-in-five-out-harness"};
   const auto source = graph.op<detail::TensorSourceOp>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
   const auto sink2 = graph.op<detail::TensorCaptureCOp>("sink2");
@@ -1642,8 +1543,7 @@ FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
   detail::bind_op_device_output(options, out4_port);
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -1653,8 +1553,7 @@ FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
     holoscan::RunSession session = holoscan::run_async(plan);
     {
       const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
-      while (session.diagnostics().empty() &&
-             std::chrono::steady_clock::now() < deadline) {
+      while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
         std::size_t n0 = 0;
         std::size_t n1 = 0;
         std::size_t n2 = 0;
@@ -1680,8 +1579,8 @@ FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
           const std::lock_guard lock4(detail::FrameBankE::mutex);
           n4 = detail::FrameBankE::captured.size();
         }
-        if (n0 >= expected && n1 >= expected && n2 >= expected &&
-            n3 >= expected && n4 >= expected) {
+        if (n0 >= expected && n1 >= expected && n2 >= expected && n3 >= expected &&
+            n4 >= expected) {
           break;
         }
         std::this_thread::sleep_for(detail::kHarnessPoll);
@@ -1727,9 +1626,8 @@ FiveOutGraphRunResult run_single_in_five_out_operator_graph_result(
 template <typename OpT, typename ParamsT, typename WireFn>
 DualIOGraphRunResult run_dual_io_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs1, ParamsT params,
-    const char* out0_port, const char* out1_port, WireFn&& wire,
-    const MaxTensorExtents& extents = default_test_extents(),
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs1, ParamsT params, const char* out0_port,
+    const char* out1_port, WireFn&& wire, const MaxTensorExtents& extents = default_test_extents(),
     std::initializer_list<const char*> extra_op_out_ports = {}) {
   DualIOGraphRunResult result;
   detail::FrameBank::reset();
@@ -1745,8 +1643,7 @@ DualIOGraphRunResult run_dual_io_operator_graph_result(
 
   holoscan::Graph graph{"dual-io-harness"};
   const auto source = graph.op<detail::DualTensorSourceOp>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink0 = graph.op<detail::TensorCaptureOp>("sink0");
   const auto sink1 = graph.op<detail::TensorCaptureBOp>("sink1");
   wire(graph, source, op, sink0, sink1);
@@ -1759,8 +1656,7 @@ DualIOGraphRunResult run_dual_io_operator_graph_result(
   }
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -1770,8 +1666,7 @@ DualIOGraphRunResult run_dual_io_operator_graph_result(
     holoscan::RunSession session = holoscan::run_async(plan);
     {
       const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
-      while (session.diagnostics().empty() &&
-             std::chrono::steady_clock::now() < deadline) {
+      while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
         std::size_t n0 = 0;
         std::size_t n1 = 0;
         {
@@ -1816,9 +1711,8 @@ DualIOGraphRunResult run_dual_io_operator_graph_result(
 template <typename OpT, typename ParamsT, typename WireFn>
 GraphRunResult run_dual_in_single_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs1, ParamsT params,
-    const char* out_port, WireFn&& wire,
-    const MaxTensorExtents& extents = default_test_extents(),
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs1, ParamsT params, const char* out_port,
+    WireFn&& wire, const MaxTensorExtents& extents = default_test_extents(),
     std::initializer_list<const char*> extra_op_out_ports = {}) {
   GraphRunResult result;
   detail::FrameBank::reset();
@@ -1834,8 +1728,7 @@ GraphRunResult run_dual_in_single_out_operator_graph_result(
 
   holoscan::Graph graph{"dual-in-single-out-harness"};
   const auto source = graph.op<detail::DualTensorSourceOp>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
@@ -1847,8 +1740,7 @@ GraphRunResult run_dual_in_single_out_operator_graph_result(
   }
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -1859,8 +1751,7 @@ GraphRunResult run_dual_in_single_out_operator_graph_result(
     {
       const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
       std::unique_lock lock(detail::FrameBank::mutex);
-      while (detail::FrameBank::captured.size() < expected &&
-             session.diagnostics().empty() &&
+      while (detail::FrameBank::captured.size() < expected && session.diagnostics().empty() &&
              std::chrono::steady_clock::now() < deadline) {
         detail::FrameBank::ready.wait_for(lock, detail::kHarnessPoll);
       }
@@ -1889,9 +1780,8 @@ template <typename OpT, typename Payload, typename ParamsT, typename WireFn>
 GraphRunResult run_exact_override_dual_in_single_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs1,
-    std::vector<std::optional<Payload>> payloads, ParamsT params,
-    const char* out_port, WireFn&& wire,
-    const MaxTensorExtents& extents = default_test_extents(),
+    std::vector<std::optional<Payload>> payloads, ParamsT params, const char* out_port,
+    WireFn&& wire, const MaxTensorExtents& extents = default_test_extents(),
     std::initializer_list<const char*> extra_op_out_ports = {}) {
   GraphRunResult result;
   detail::FrameBank::reset();
@@ -1907,10 +1797,8 @@ GraphRunResult run_exact_override_dual_in_single_out_operator_graph_result(
   }
 
   holoscan::Graph graph{"exact-override-dual-in-harness"};
-  const auto source =
-      graph.op<detail::DualTensorOverrideSourceOp<Payload>>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  const auto source = graph.op<detail::DualTensorOverrideSourceOp<Payload>>("source");
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
@@ -1922,8 +1810,7 @@ GraphRunResult run_exact_override_dual_in_single_out_operator_graph_result(
   }
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -1932,11 +1819,9 @@ GraphRunResult run_exact_override_dual_in_single_out_operator_graph_result(
 
     holoscan::RunSession session = holoscan::run_async(plan);
     {
-      const auto deadline =
-          std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+      const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
       std::unique_lock lock(detail::FrameBank::mutex);
-      while (detail::FrameBank::captured.size() < expected &&
-             session.diagnostics().empty() &&
+      while (detail::FrameBank::captured.size() < expected && session.diagnostics().empty() &&
              std::chrono::steady_clock::now() < deadline) {
         detail::FrameBank::ready.wait_for(lock, detail::kHarnessPoll);
       }
@@ -1961,14 +1846,12 @@ GraphRunResult run_exact_override_dual_in_single_out_operator_graph_result(
 
 // 3-in / 1-out Graph runner (e.g. DetectionReductionOp with points).
 // `WireFn` receives (graph, source, op, sink); source is TripleTensorSourceOp.
-template <typename OpT, bool OptionalThirdFirst = false, typename ParamsT,
-typename WireFn>
+template <typename OpT, bool OptionalThirdFirst = false, typename ParamsT, typename WireFn>
 GraphRunResult run_triple_in_single_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs1,
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs2, ParamsT params,
-    const char* out_port, WireFn&& wire,
-    const MaxTensorExtents& extents = default_test_extents(),
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs2, ParamsT params, const char* out_port,
+    WireFn&& wire, const MaxTensorExtents& extents = default_test_extents(),
     std::initializer_list<const char*> extra_op_out_ports = {}) {
   GraphRunResult result;
   detail::FrameBank::reset();
@@ -1986,10 +1869,8 @@ GraphRunResult run_triple_in_single_out_operator_graph_result(
   }
 
   holoscan::Graph graph{"triple-in-single-out-harness"};
-  const auto source =
-      graph.op<detail::TripleTensorSourceOp<OptionalThirdFirst>>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  const auto source = graph.op<detail::TripleTensorSourceOp<OptionalThirdFirst>>("source");
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink = graph.op<detail::TensorCaptureOp>("sink");
   wire(graph, source, op, sink);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
@@ -2001,8 +1882,7 @@ GraphRunResult run_triple_in_single_out_operator_graph_result(
   }
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -2013,8 +1893,7 @@ GraphRunResult run_triple_in_single_out_operator_graph_result(
     {
       const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
       std::unique_lock lock(detail::FrameBank::mutex);
-      while (detail::FrameBank::captured.size() < expected &&
-             session.diagnostics().empty() &&
+      while (detail::FrameBank::captured.size() < expected && session.diagnostics().empty() &&
              std::chrono::steady_clock::now() < deadline) {
         detail::FrameBank::ready.wait_for(lock, detail::kHarnessPoll);
       }
@@ -2039,13 +1918,12 @@ GraphRunResult run_triple_in_single_out_operator_graph_result(
 
 // 3-in / 2-out Graph runner (e.g. DetectionReductionOp with reduced_points).
 // `WireFn` receives (graph, source, op, sink).
-template <typename OpT, bool OptionalThirdFirst = false, typename ParamsT,
-typename WireFn>
+template <typename OpT, bool OptionalThirdFirst = false, typename ParamsT, typename WireFn>
 DualIOGraphRunResult run_triple_in_dual_out_operator_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs0,
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs1,
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs2, ParamsT params,
-    const char* out0_port, const char* out1_port, WireFn&& wire,
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs2, ParamsT params, const char* out0_port,
+    const char* out1_port, WireFn&& wire,
     const MaxTensorExtents& extents = default_test_extents()) {
   DualIOGraphRunResult result;
   detail::FrameBank::reset();
@@ -2063,10 +1941,8 @@ DualIOGraphRunResult run_triple_in_dual_out_operator_graph_result(
   }
 
   holoscan::Graph graph{"triple-in-dual-out-harness"};
-  const auto source =
-      graph.op<detail::TripleTensorSourceOp<OptionalThirdFirst>>("source");
-  auto op = emplace_configured_harness_op<OpT>(
-      graph, extents, std::move(params));
+  const auto source = graph.op<detail::TripleTensorSourceOp<OptionalThirdFirst>>("source");
+  auto op = emplace_configured_harness_op<OpT>(graph, extents, std::move(params));
   const auto sink = graph.op<detail::DualTensorCaptureOp>("sink");
   wire(graph, source, op, sink);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
@@ -2076,8 +1952,7 @@ DualIOGraphRunResult run_triple_in_dual_out_operator_graph_result(
   detail::bind_op_device_output(options, out1_port);
 
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
@@ -2086,10 +1961,8 @@ DualIOGraphRunResult run_triple_in_dual_out_operator_graph_result(
 
     holoscan::RunSession session = holoscan::run_async(plan);
     {
-      const auto deadline =
-          std::chrono::steady_clock::now() + detail::kHarnessDeadline;
-      while (session.diagnostics().empty() &&
-             std::chrono::steady_clock::now() < deadline) {
+      const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+      while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
         std::size_t n0 = 0;
         std::size_t n1 = 0;
         {

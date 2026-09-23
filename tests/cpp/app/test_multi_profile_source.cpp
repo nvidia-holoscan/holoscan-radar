@@ -31,12 +31,10 @@ class MutatedConfig {
                         "applications/fmcw/multi_waveform/config/"
                         "multi_waveform_smoke.yaml";
     std::ifstream input(source);
-    std::string contents{std::istreambuf_iterator<char>(input),
-                         std::istreambuf_iterator<char>()};
+    std::string contents{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     const std::size_t position = contents.find(old_text);
     if (position == std::string::npos ||
-        contents.find(old_text, position + old_text.size()) !=
-            std::string::npos) {
+        contents.find(old_text, position + old_text.size()) != std::string::npos) {
       throw std::runtime_error("mutation anchor must occur exactly once");
     }
     contents.replace(position, old_text.size(), new_text);
@@ -54,14 +52,12 @@ class MutatedConfig {
   std::filesystem::path path_;
 };
 
-TEST(TransmitFrameCoordinator,
-     PreservesTransmitStampAcrossDifferentSourceActivations) {
+TEST(TransmitFrameCoordinator, PreservesTransmitStampAcrossDifferentSourceActivations) {
   app::TransmitFrameCoordinator coordinator(2U);
   coordinator.register_transmit(app::TransmitReceipt{11U, time_at(100), 1U});
 
   const auto early = coordinator.claim(11U);
-  EXPECT_EQ(early.status,
-            app::TransmitFrameCoordinator::ClaimStatus::kNotReady);
+  EXPECT_EQ(early.status, app::TransmitFrameCoordinator::ClaimStatus::kNotReady);
   EXPECT_EQ(early.transmit_time, time_at(100));
   const holoscan::TimePoint rx_activation_time = time_at(900);
   EXPECT_NE(early.transmit_time, rx_activation_time);
@@ -88,11 +84,9 @@ TEST(TransmitFrameCoordinator, ExpiresAndFinalizesUnmatchedFrames) {
 TEST(TransmitFrameCoordinator, RejectsDuplicatesOverflowAndDoubleReady) {
   app::TransmitFrameCoordinator coordinator(1U);
   coordinator.register_transmit(app::TransmitReceipt{1U, time_at(1), 0U});
-  EXPECT_THROW(coordinator.register_transmit(
-                   app::TransmitReceipt{1U, time_at(2), 0U}),
+  EXPECT_THROW(coordinator.register_transmit(app::TransmitReceipt{1U, time_at(2), 0U}),
                std::runtime_error);
-  EXPECT_THROW(coordinator.register_transmit(
-                   app::TransmitReceipt{2U, time_at(2), 0U}),
+  EXPECT_THROW(coordinator.register_transmit(app::TransmitReceipt{2U, time_at(2), 0U}),
                std::runtime_error);
   coordinator.mark_ready(1U);
   EXPECT_THROW(coordinator.mark_ready(1U), std::runtime_error);
@@ -136,20 +130,12 @@ TEST(MultiProfileConfig, DecodesProfilesAndMaximumExtents) {
   EXPECT_EQ(config.extents.max_samples_per_chirp, 512);
   EXPECT_EQ(config.extents.max_chirps, 64);
   EXPECT_EQ(config.extents.max_interleaved_chirps, 128);
-  EXPECT_DOUBLE_EQ(
-      config.profiles[0].waveform.chirp_repetition_interval(), 50.0e-6);
-  EXPECT_DOUBLE_EQ(
-      config.profiles[1].waveform.chirp_repetition_interval(), 90.0e-6);
-  EXPECT_DOUBLE_EQ(
-      config.profiles[0].physical_waveform.chirp_repetition_interval,
-      25.0e-6);
-  EXPECT_DOUBLE_EQ(
-      config.profiles[1].physical_waveform.chirp_repetition_interval,
-      45.0e-6);
-  EXPECT_EQ(config.scene.range_loss.model,
-            holoscan::radar::sim::RangeLossModel::kNone);
-  EXPECT_EQ(config.scene.analog_if.sampling_mode,
-            holoscan::radar::sim::IfSamplingMode::kComplexIq);
+  EXPECT_DOUBLE_EQ(config.profiles[0].waveform.chirp_repetition_interval(), 50.0e-6);
+  EXPECT_DOUBLE_EQ(config.profiles[1].waveform.chirp_repetition_interval(), 90.0e-6);
+  EXPECT_DOUBLE_EQ(config.profiles[0].physical_waveform.chirp_repetition_interval, 25.0e-6);
+  EXPECT_DOUBLE_EQ(config.profiles[1].physical_waveform.chirp_repetition_interval, 45.0e-6);
+  EXPECT_EQ(config.scene.range_loss.model, holoscan::radar::sim::RangeLossModel::kNone);
+  EXPECT_EQ(config.scene.analog_if.sampling_mode, holoscan::radar::sim::IfSamplingMode::kComplexIq);
   EXPECT_EQ(config.scene.analog_if.response,
             holoscan::radar::sim::AnalogIfResponseType::kRaisedCosine);
   EXPECT_DOUBLE_EQ(config.scene.analog_if.passband_fraction, 0.9);
@@ -183,35 +169,27 @@ TEST(MultiProfileConfig, RejectsUnknownVisualizationProfileWhenDisabled) {
 }
 
 TEST(MultiProfileConfig, ComputesMaximumCyclicVisualizationGap) {
-  EXPECT_EQ(workflow::maximum_cyclic_profile_gap(
-                {0U, 1U, 1U, 0U, 1U}, 0U),
-            3U);
-  EXPECT_THROW(workflow::maximum_cyclic_profile_gap({0U, 0U}, 1U),
-               std::runtime_error);
+  EXPECT_EQ(workflow::maximum_cyclic_profile_gap({0U, 1U, 1U, 0U, 1U}, 0U), 3U);
+  EXPECT_THROW(workflow::maximum_cyclic_profile_gap({0U, 0U}, 1U), std::runtime_error);
 }
 
 TEST(MultiProfileConfig, RejectsDuplicateNames) {
-  const MutatedConfig config(
-      "name: far, carrier_frequency", "name: near, carrier_frequency");
+  const MutatedConfig config("name: far, carrier_frequency", "name: near, carrier_frequency");
   EXPECT_THROW(workflow::load_config(config.path()), std::runtime_error);
 }
 
 TEST(MultiProfileConfig, RejectsUnknownSequenceProfile) {
-  const MutatedConfig config(
-      "profile_sequence: [near, far]",
-      "profile_sequence: [near, missing]");
+  const MutatedConfig config("profile_sequence: [near, far]", "profile_sequence: [near, missing]");
   EXPECT_THROW(workflow::load_config(config.path()), std::runtime_error);
 }
 
 TEST(MultiProfileConfig, RejectsNonIntegralSamples) {
-  const MutatedConfig config(
-      "samples_per_chirp: 512}", "samples_per_chirp: 511}");
+  const MutatedConfig config("samples_per_chirp: 512}", "samples_per_chirp: 511}");
   EXPECT_THROW(workflow::load_config(config.path()), std::runtime_error);
 }
 
 TEST(MultiProfileConfig, RejectsDuplicatedLegacyWaveformAuthoring) {
-  const MutatedConfig config(
-      "app:\n", "app:\n    waveform: {carrier_frequency: 77.0e9}\n");
+  const MutatedConfig config("app:\n", "app:\n    waveform: {carrier_frequency: 77.0e9}\n");
   EXPECT_THROW(workflow::load_config(config.path()), std::runtime_error);
 }
 

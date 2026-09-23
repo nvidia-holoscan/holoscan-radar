@@ -75,48 +75,35 @@ sim::SimScene make_scene(double clutter_velocity = 0.0) {
   scene.waveform.chirp_repetition_interval = 25.0e-6;
   scene.num_chirps = kNumChirps;
   scene.samples_per_chirp = kNumSamples;
-  scene.tx_positions = {
-      sim::Vec3{0.0, 0.0, 0.0},
-      sim::Vec3{0.5 * scene.waveform.wavelength(), 0.0, 0.0}};
-  scene.rx_positions = {
-      sim::Vec3{0.0, 0.0, 0.0},
-      sim::Vec3{0.0, 0.5 * scene.waveform.wavelength(), 0.0}};
-  scene.targets = {
-      {sim::Vec3{0.0, 30.0, 0.0},
-       sim::Vec3{0.0, clutter_velocity, 0.0}, {4.0, 0.0}},
-      {sim::Vec3{0.0, 45.0, 0.0}, sim::Vec3{0.0, 5.0, 0.0},
-       {1.0, 0.0}}};
+  scene.tx_positions = {sim::Vec3{0.0, 0.0, 0.0},
+                        sim::Vec3{0.5 * scene.waveform.wavelength(), 0.0, 0.0}};
+  scene.rx_positions = {sim::Vec3{0.0, 0.0, 0.0},
+                        sim::Vec3{0.0, 0.5 * scene.waveform.wavelength(), 0.0}};
+  scene.targets = {{sim::Vec3{0.0, 30.0, 0.0}, sim::Vec3{0.0, clutter_velocity, 0.0}, {4.0, 0.0}},
+                   {sim::Vec3{0.0, 45.0, 0.0}, sim::Vec3{0.0, 5.0, 0.0}, {1.0, 0.0}}};
   return scene;
 }
 
 std::vector<std::complex<double>> zadoff_chu_codes() {
-  std::vector<std::complex<double>> codes(
-      static_cast<size_t>(kNumTx * kNumChirps));
+  std::vector<std::complex<double>> codes(static_cast<size_t>(kNumTx * kNumChirps));
   const std::vector<int64_t> roots{1, 3};
   for (int64_t tx = 0; tx < kNumTx; ++tx) {
     for (int64_t chirp = 0; chirp < kNumChirps; ++chirp) {
       const double k = static_cast<double>(chirp);
-      const double phase =
-          -hr::kPi * static_cast<double>(roots[static_cast<size_t>(tx)]) *
-          k * k / static_cast<double>(kNumChirps);
-      codes[static_cast<size_t>(tx * kNumChirps + chirp)] =
-          std::polar(1.0, phase);
+      const double phase = -hr::kPi * static_cast<double>(roots[static_cast<size_t>(tx)]) * k * k /
+                           static_cast<double>(kNumChirps);
+      codes[static_cast<size_t>(tx * kNumChirps + chirp)] = std::polar(1.0, phase);
     }
   }
   return codes;
 }
 
-void bind_output(holoscan::CompileOptions* options, const char* op,
-                 const char* port) {
-  options->deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = op,
-          .output_port = port,
-          .device = holoscan::DeviceId{0}});
+void bind_output(holoscan::CompileOptions* options, const char* op, const char* port) {
+  options->deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = op, .output_port = port, .device = holoscan::DeviceId{0}});
 }
 
-PipelineResult run_pipeline(const sim::SimResult& simulated,
-                            const hr::DDMCodeDescriptor& code,
+PipelineResult run_pipeline(const sim::SimResult& simulated, const hr::DDMCodeDescriptor& code,
                             bool apply_notch) {
   rt::detail::FrameBank::reset();
   rt::detail::FrameBankB::reset();
@@ -136,29 +123,24 @@ PipelineResult run_pipeline(const sim::SimResult& simulated,
 
   holoscan::Graph graph{"ddm-notch-pipeline"};
   const auto source = graph.op<rt::detail::TensorSourceOp>("source");
-  auto range =
-      graph.op<hr::FMCWRangeProcessorOp<float>>("range", range_extents);
+  auto range = graph.op<hr::FMCWRangeProcessorOp<float>>("range", range_extents);
   hr::FMCWRangeProcessorParams range_params;
   range_params.waveform = waveform;
   range.set_params(std::move(range_params));
 
-  auto doppler = graph.op<hr::FMCWDopplerProcessorOp<float>>(
-      "doppler", doppler_extents);
+  auto doppler = graph.op<hr::FMCWDopplerProcessorOp<float>>("doppler", doppler_extents);
   hr::FMCWDopplerProcessorParams doppler_params;
   doppler_params.waveform = waveform;
   doppler_params.doppler_window.type = hr::WindowType::kHann;
   doppler.set_params(std::move(doppler_params));
 
-  auto demux = graph.op<hr::DDMDenseDemultiplexOp<float>>(
-      "demux", demux_extents);
+  auto demux = graph.op<hr::DDMDenseDemultiplexOp<float>>("demux", demux_extents);
   hr::DDMDenseDemultiplexParams demux_params;
   demux_params.ddm_code = code;
   demux.set_params(std::move(demux_params));
 
-  const auto map_sink =
-      graph.op<rt::detail::TensorCaptureOp>("map_sink");
-  const auto axis_sink =
-      graph.op<rt::detail::TensorCaptureBOp>("axis_sink");
+  const auto map_sink = graph.op<rt::detail::TensorCaptureOp>("map_sink");
+  const auto axis_sink = graph.op<rt::detail::TensorCaptureBOp>("axis_sink");
 
   const holoscan::ConnectionOptions queue{.queue_depth = 4U};
   graph.add_flow(source->out, range->adc_cube, queue);
@@ -166,8 +148,7 @@ PipelineResult run_pipeline(const sim::SimResult& simulated,
   graph.add_flow(doppler->velocity_bins, demux->velocity_bins, queue);
   graph.add_flow(doppler->rd_maps, demux->rd_maps, queue);
   if (apply_notch) {
-    auto notch =
-        graph.op<hr::DopplerNotchOp<float>>("notch", demux_extents);
+    auto notch = graph.op<hr::DopplerNotchOp<float>>("notch", demux_extents);
     notch.set_params(hr::DopplerNotchParams{});
     graph.add_flow(demux->velocity_bins_out, notch->velocity_bins, queue);
     graph.add_flow(demux->rd_maps_out, notch->rd_maps, queue);
@@ -176,8 +157,7 @@ PipelineResult run_pipeline(const sim::SimResult& simulated,
     graph.add_flow(demux->rd_maps_out, map_sink->in, queue);
   }
   graph.add_flow(demux->velocity_bins_out, axis_sink->in, queue);
-  graph.set_default_clock(
-      graph.add_clock<holoscan::RealtimeClock>("clock"));
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
   holoscan::CompileOptions options;
   bind_output(&options, "source", "out");
@@ -187,20 +167,19 @@ PipelineResult run_pipeline(const sim::SimResult& simulated,
   bind_output(&options, "doppler", "rd_maps");
   bind_output(&options, "demux", "velocity_bins_out");
   bind_output(&options, "demux", "rd_maps_out");
-  if (apply_notch) bind_output(&options, "notch", "rd_maps_out");
+  if (apply_notch)
+    bind_output(&options, "notch", "rd_maps_out");
 
   PipelineResult result;
-  const holoscan::ExecutionPlan plan =
-      holoscan::compile(graph, std::move(options));
+  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
   result.plan_ok = plan.ok();
   result.plan_json = plan.json();
-  if (!plan.ok()) return result;
+  if (!plan.ok())
+    return result;
 
   holoscan::RunSession session = holoscan::run_async(plan);
-  const auto deadline =
-      std::chrono::steady_clock::now() + rt::detail::kHarnessDeadline;
-  while (session.diagnostics().empty() &&
-         std::chrono::steady_clock::now() < deadline) {
+  const auto deadline = std::chrono::steady_clock::now() + rt::detail::kHarnessDeadline;
+  while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
     std::size_t maps = 0;
     std::size_t axes = 0;
     {
@@ -211,7 +190,8 @@ PipelineResult run_pipeline(const sim::SimResult& simulated,
       const std::lock_guard lock(rt::detail::FrameBankB::mutex);
       axes = rt::detail::FrameBankB::captured.size();
     }
-    if (maps >= 1U && axes >= 1U) break;
+    if (maps >= 1U && axes >= 1U)
+      break;
     std::this_thread::sleep_for(rt::detail::kHarnessPoll);
   }
   session.request_stop();
@@ -228,15 +208,13 @@ PipelineResult run_pipeline(const sim::SimResult& simulated,
   {
     const std::lock_guard lock(rt::detail::FrameBankB::mutex);
     if (!rt::detail::FrameBankB::captured.empty()) {
-      result.velocity =
-          std::move(rt::detail::FrameBankB::captured.front());
+      result.velocity = std::move(rt::detail::FrameBankB::captured.front());
     }
   }
   return result;
 }
 
-void expect_notch_behavior(const PipelineResult& baseline,
-                           const PipelineResult& notched,
+void expect_notch_behavior(const PipelineResult& baseline, const PipelineResult& notched,
                            const sim::SimScene& scene) {
   ASSERT_TRUE(baseline.plan_ok) << baseline.plan_json;
   ASSERT_TRUE(notched.plan_ok) << notched.plan_json;
@@ -251,46 +229,39 @@ void expect_notch_behavior(const PipelineResult& baseline,
   const auto* axis = notched.velocity.as<float>();
   int64_t zero = 0;
   for (int64_t index = 1; index < num_doppler; ++index) {
-    if (std::abs(axis[index]) < std::abs(axis[zero])) zero = index;
+    if (std::abs(axis[index]) < std::abs(axis[zero]))
+      zero = index;
   }
-  const int64_t clutter_range = rt::expected_range_bin(
-      30.0, scene.waveform.slope(), scene.waveform.sample_rate,
-      scene.samples_per_chirp, scene.propagation_speed);
-  const int64_t moving_range = rt::expected_range_bin(
-      45.0, scene.waveform.slope(), scene.waveform.sample_rate,
-      scene.samples_per_chirp, scene.propagation_speed);
+  const int64_t clutter_range =
+      rt::expected_range_bin(30.0, scene.waveform.slope(), scene.waveform.sample_rate,
+                             scene.samples_per_chirp, scene.propagation_speed);
+  const int64_t moving_range =
+      rt::expected_range_bin(45.0, scene.waveform.slope(), scene.waveform.sample_rate,
+                             scene.samples_per_chirp, scene.propagation_speed);
   int64_t moving_doppler = 0;
   for (int64_t index = 1; index < num_doppler; ++index) {
-    if (std::abs(axis[index] - 5.0F) <
-        std::abs(axis[moving_doppler] - 5.0F)) {
+    if (std::abs(axis[index] - 5.0F) < std::abs(axis[moving_doppler] - 5.0F)) {
       moving_doppler = index;
     }
   }
   EXPECT_NEAR(axis[zero], 0.0F, 1e-6F);
-  EXPECT_NEAR(axis[moving_doppler], 5.0F,
-              std::abs(axis[1] - axis[0]));
+  EXPECT_NEAR(axis[moving_doppler], 5.0F, std::abs(axis[1] - axis[0]));
 
   const auto* before = baseline.maps.as<std::complex<float>>();
   const auto* after = notched.maps.as<std::complex<float>>();
   const int64_t cells_per_channel = num_doppler * num_range;
   for (int64_t channel = 0; channel < kNumTx * kNumRx; ++channel) {
-    const int64_t clutter_index =
-        channel * cells_per_channel + zero * num_range + clutter_range;
+    const int64_t clutter_index = channel * cells_per_channel + zero * num_range + clutter_range;
     EXPECT_NEAR(std::abs(after[clutter_index]), 0.0F, 1e-5F);
-    const int64_t moving_index = channel * cells_per_channel +
-                                 moving_doppler * num_range + moving_range;
-    const float tolerance =
-        1e-4F * std::abs(before[moving_index]) + 1e-4F;
-    EXPECT_NEAR(after[moving_index].real(),
-                before[moving_index].real(), tolerance);
-    EXPECT_NEAR(after[moving_index].imag(),
-                before[moving_index].imag(), tolerance);
+    const int64_t moving_index =
+        channel * cells_per_channel + moving_doppler * num_range + moving_range;
+    const float tolerance = 1e-4F * std::abs(before[moving_index]) + 1e-4F;
+    EXPECT_NEAR(after[moving_index].real(), before[moving_index].real(), tolerance);
+    EXPECT_NEAR(after[moving_index].imag(), before[moving_index].imag(), tolerance);
   }
-  for (std::size_t index = 0; index < baseline.maps.data.size() /
-                                      sizeof(std::complex<float>);
+  for (std::size_t index = 0; index < baseline.maps.data.size() / sizeof(std::complex<float>);
        ++index) {
-    EXPECT_LE(std::abs(after[index]),
-              std::abs(before[index]) + 1e-3F);
+    EXPECT_LE(std::abs(after[index]), std::abs(before[index]) + 1e-3F);
   }
 }
 
@@ -299,10 +270,9 @@ TEST(DopplerNotchPipeline, LinearDdmSuppressesStaticPhysicalBin) {
   hr::DDMCodeDescriptor code;
   code.num_tx = kNumTx;
   code.doppler_offsets = sim::uniform_ddm_offsets(kNumTx);
-  const sim::SimResult simulated =
-      sim::simulate_mimo_ddm_coded(scene, code.doppler_offsets);
-  expect_notch_behavior(run_pipeline(simulated, code, false),
-                        run_pipeline(simulated, code, true), scene);
+  const sim::SimResult simulated = sim::simulate_mimo_ddm_coded(scene, code.doppler_offsets);
+  expect_notch_behavior(run_pipeline(simulated, code, false), run_pipeline(simulated, code, true),
+                        scene);
 }
 
 TEST(DopplerNotchPipeline, LinearDdmPreservesNearStaticOutsideCenter) {
@@ -310,8 +280,7 @@ TEST(DopplerNotchPipeline, LinearDdmPreservesNearStaticOutsideCenter) {
   hr::DDMCodeDescriptor code;
   code.num_tx = kNumTx;
   code.doppler_offsets = sim::uniform_ddm_offsets(kNumTx);
-  const sim::SimResult simulated =
-      sim::simulate_mimo_ddm_coded(scene, code.doppler_offsets);
+  const sim::SimResult simulated = sim::simulate_mimo_ddm_coded(scene, code.doppler_offsets);
   const PipelineResult baseline = run_pipeline(simulated, code, false);
   const PipelineResult notched = run_pipeline(simulated, code, true);
   ASSERT_TRUE(baseline.plan_ok) << baseline.plan_json;
@@ -322,8 +291,7 @@ TEST(DopplerNotchPipeline, LinearDdmPreservesNearStaticOutsideCenter) {
   float before_peak = 0.0F;
   float after_peak = 0.0F;
   std::size_t before_peak_index = 0;
-  for (std::size_t index = 0; index < baseline.maps.data.size() /
-                                      sizeof(std::complex<float>);
+  for (std::size_t index = 0; index < baseline.maps.data.size() / sizeof(std::complex<float>);
        ++index) {
     if (std::abs(before[index]) > before_peak) {
       before_peak = std::abs(before[index]);
@@ -334,12 +302,10 @@ TEST(DopplerNotchPipeline, LinearDdmPreservesNearStaticOutsideCenter) {
   const int64_t num_doppler = baseline.maps.shape[2];
   const int64_t num_range = baseline.maps.shape[3];
   const int64_t doppler_index =
-      static_cast<int64_t>(before_peak_index %
-                           static_cast<std::size_t>(num_doppler * num_range)) /
+      static_cast<int64_t>(before_peak_index % static_cast<std::size_t>(num_doppler * num_range)) /
       num_range;
   const auto* axis = baseline.velocity.as<float>();
-  EXPECT_NEAR(axis[doppler_index], 1.25F,
-              std::abs(axis[1] - axis[0]));
+  EXPECT_NEAR(axis[doppler_index], 1.25F, std::abs(axis[1] - axis[0]));
   EXPECT_GT(after_peak, 0.9F * before_peak);
 }
 
@@ -349,10 +315,9 @@ TEST(DopplerNotchPipeline, NonlinearCodesKeepPhysicalZeroBin) {
   hr::DDMCodeDescriptor code;
   code.num_tx = kNumTx;
   code.phase_codes = codes;
-  const sim::SimResult simulated =
-      sim::simulate_mimo_ddm_phase_coded(scene, codes);
-  expect_notch_behavior(run_pipeline(simulated, code, false),
-                        run_pipeline(simulated, code, true), scene);
+  const sim::SimResult simulated = sim::simulate_mimo_ddm_phase_coded(scene, codes);
+  expect_notch_behavior(run_pipeline(simulated, code, false), run_pipeline(simulated, code, true),
+                        scene);
 }
 
 }  // namespace

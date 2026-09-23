@@ -23,14 +23,12 @@
 namespace holoscan::radar {
 namespace {
 
-static_assert(
-    wire_bridge_detail::aggregate_field_count<WindowSpec>() == 7);
-static_assert(
-    wire_bridge_detail::aggregate_field_count<FMCWWaveformSpec>() == 7);
-static_assert(
-    wire_bridge_detail::aggregate_field_count<ArrayGeometry>() == 3);
+static_assert(wire_bridge_detail::aggregate_field_count<WindowSpec>() == 7);
+static_assert(wire_bridge_detail::aggregate_field_count<FMCWWaveformSpec>() == 7);
+static_assert(wire_bridge_detail::aggregate_field_count<ArrayGeometry>() == 3);
 
 TEST(WireArrayGeometry, PackedLayoutRoundTrips) {
+  // clang-format off
   const ArrayGeometry source{
       .element_positions = {
           0.0, 0.0, 0.0,
@@ -40,6 +38,7 @@ TEST(WireArrayGeometry, PackedLayoutRoundTrips) {
       .wavelength = 0.0039,
       .geometry_type = ArrayGeometryType::kUla,
   };
+  // clang-format on
   const WireArrayGeometry wire_value = to_wire(source);
   ASSERT_NE(wire_value.packed_geometry, nullptr);
   ASSERT_EQ(wire_value.packed_geometry->shape().size(), 2U);
@@ -54,10 +53,8 @@ TEST(WireArrayGeometry, PackedLayoutRoundTrips) {
 TEST(WireArrayGeometry, RejectsWrongTensorRank) {
   WireArrayGeometry wire_value;
   const std::vector<double> packed(12U, 0.0);
-  wire_value.packed_geometry =
-      wire_bridge_detail::make_host_tensor<double>(
-          std::span<const double>{packed},
-          DLDataType{kDLFloat, 64U, 1U});
+  wire_value.packed_geometry = wire_bridge_detail::make_host_tensor<double>(
+      std::span<const double>{packed}, DLDataType{kDLFloat, 64U, 1U});
   const auto result = from_wire(wire_value);
   ASSERT_FALSE(result);
   EXPECT_EQ(result.error().code, ErrorCode::kInvalidArgument);
@@ -166,8 +163,7 @@ TEST(WireFMCWWaveform, EverySourceFieldRoundTrips) {
   expect_waveform_round_trip(value);
 
   value = baseline_waveform();
-  value.reference_samples = {
-      {1.0, -2.0}, {3.5, 4.25}, {-1.0, 0.5}};
+  value.reference_samples = {{1.0, -2.0}, {3.5, 4.25}, {-1.0, 0.5}};
   expect_waveform_round_trip(value);
 }
 
@@ -200,11 +196,9 @@ struct ReflectedField {
 };
 
 template <typename BinarySchema>
-void expect_reflected_fields(
-    std::string_view root_name,
-    const std::vector<ReflectedField>& expected_fields) {
-  const reflection::Schema* schema =
-      reflection::GetSchema(BinarySchema::data());
+void expect_reflected_fields(std::string_view root_name,
+                             const std::vector<ReflectedField>& expected_fields) {
+  const reflection::Schema* schema = reflection::GetSchema(BinarySchema::data());
   ASSERT_NE(schema, nullptr);
   ASSERT_NE(schema->root_table(), nullptr);
   ASSERT_NE(schema->root_table()->name(), nullptr);
@@ -224,8 +218,7 @@ void expect_reflected_fields(
     ASSERT_NE(found, nullptr) << expected.name;
     EXPECT_EQ(found->id(), expected.id) << expected.name;
     ASSERT_NE(found->type(), nullptr);
-    EXPECT_EQ(found->type()->base_type(), expected.base_type)
-        << expected.name;
+    EXPECT_EQ(found->type()->base_type(), expected.base_type) << expected.name;
   }
 }
 
@@ -234,15 +227,13 @@ TEST(WireSchemas, EmbeddedReflectionMatchesWindowSpecContract) {
       "holoscan.radar.wire.WindowSpec",
       {
           {"type", 0U, reflection::BaseType::UByte},
-          {"sidelobe_attenuation_db", 1U,
-           reflection::BaseType::Double},
+          {"sidelobe_attenuation_db", 1U, reflection::BaseType::Double},
           {"kaiser_beta", 2U, reflection::BaseType::Double},
           {"has_kaiser_beta", 3U, reflection::BaseType::Bool},
           {"taylor_nbar", 4U, reflection::BaseType::Int},
           {"tukey_alpha", 5U, reflection::BaseType::Double},
           {"coefficients", 6U, reflection::BaseType::Obj},
-          {"coherent_gain_normalization", 7U,
-           reflection::BaseType::Bool},
+          {"coherent_gain_normalization", 7U, reflection::BaseType::Bool},
       });
 }
 
@@ -267,8 +258,7 @@ TEST(WireSchemas, EmbeddedReflectionMatchesWaveformContract) {
           {"has_chirp_slope", 4U, reflection::BaseType::Bool},
           {"chirp_duration", 5U, reflection::BaseType::Double},
           {"sample_rate", 6U, reflection::BaseType::Double},
-          {"chirp_repetition_interval", 7U,
-           reflection::BaseType::Double},
+          {"chirp_repetition_interval", 7U, reflection::BaseType::Double},
           {"reference_samples", 8U, reflection::BaseType::Obj},
       });
 }

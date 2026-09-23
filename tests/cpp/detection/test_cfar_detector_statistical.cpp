@@ -89,11 +89,10 @@ CFARParams os_params(double pfa) {
 
 // cpplint misreads the wrapped template header as an indented declaration
 // inside the anonymous namespace; the parameter list cannot fit on one line.
-template <typename Source, typename OpRef, typename S0, typename S1,
-          typename S2, typename S3, typename S4>  // NOLINT(whitespace/indent_namespace)
-void wire_cfar(holoscan::Graph& graph, const Source& source, OpRef& op,
-               const S0& sink0, const S1& sink1, const S2& sink2,
-               const S3& sink3, const S4& sink4) {
+template <typename Source, typename OpRef, typename S0, typename S1, typename S2, typename S3,
+          typename S4>  // NOLINT(whitespace/indent_namespace)
+void wire_cfar(holoscan::Graph& graph, const Source& source, OpRef& op, const S0& sink0,
+               const S1& sink1, const S2& sink2, const S3& sink3, const S4& sink4) {
   const holoscan::ConnectionOptions q{.queue_depth = 4U};
   graph.add_flow(source->out, op->rd_maps, q);
   graph.add_flow(op->detection_mask, sink0->in, q);
@@ -103,8 +102,7 @@ void wire_cfar(holoscan::Graph& graph, const Source& source, OpRef& op,
   graph.add_flow(op->cfar_power, sink4->in, q);
 }
 
-std::vector<double> exponential_power_map(int64_t num_doppler,
-                                          int64_t num_range, double mean,
+std::vector<double> exponential_power_map(int64_t num_doppler, int64_t num_range, double mean,
                                           std::mt19937_64& rng) {
   std::exponential_distribution<double> dist(1.0 / mean);
   std::vector<double> map(static_cast<size_t>(num_doppler * num_range));
@@ -114,8 +112,8 @@ std::vector<double> exponential_power_map(int64_t num_doppler,
   return map;
 }
 
-std::vector<double> exponential_power_cube(
-    const std::vector<int64_t>& shape, double mean, std::mt19937_64& rng) {
+std::vector<double> exponential_power_cube(const std::vector<int64_t>& shape, double mean,
+                                           std::mt19937_64& rng) {
   int64_t count = 1;
   for (int64_t dim : shape) {
     count *= dim;
@@ -128,9 +126,8 @@ std::vector<double> exponential_power_cube(
   return data;
 }
 
-std::vector<double> preintegrated_power_map(
-    int64_t num_doppler, int64_t num_range, int64_t looks,
-    std::mt19937_64& rng) {
+std::vector<double> preintegrated_power_map(int64_t num_doppler, int64_t num_range, int64_t looks,
+                                            std::mt19937_64& rng) {
   std::exponential_distribution<double> dist(1.0);
   std::vector<double> map(static_cast<size_t>(num_doppler * num_range), 0.0);
   for (double& cell : map) {
@@ -141,9 +138,9 @@ std::vector<double> preintegrated_power_map(
   return map;
 }
 
-std::vector<double> correlated_preintegrated_power_map(
-    int64_t num_doppler, int64_t num_range, int64_t looks, double rho,
-    std::mt19937_64& rng) {
+std::vector<double> correlated_preintegrated_power_map(int64_t num_doppler, int64_t num_range,
+                                                       int64_t looks, double rho,
+                                                       std::mt19937_64& rng) {
   std::normal_distribution<double> normal(0.0, std::sqrt(0.5));
   const double common_scale = std::sqrt(rho);
   const double independent_scale = std::sqrt(1.0 - rho);
@@ -152,8 +149,7 @@ std::vector<double> correlated_preintegrated_power_map(
     const std::complex<double> common{normal(rng), normal(rng)};
     for (int64_t k = 0; k < looks; ++k) {
       const std::complex<double> independent{normal(rng), normal(rng)};
-      const std::complex<double> sample =
-          common_scale * common + independent_scale * independent;
+      const std::complex<double> sample = common_scale * common + independent_scale * independent;
       cell += std::norm(sample);
     }
   }
@@ -161,8 +157,7 @@ std::vector<double> correlated_preintegrated_power_map(
 }
 
 template <typename T>
-PfaTrialResult count_interior_false_alarms(const HostTensor& score,
-                                           int64_t num_doppler,
+PfaTrialResult count_interior_false_alarms(const HostTensor& score, int64_t num_doppler,
                                            int64_t num_range) {
   PfaTrialResult result;
   const auto* scores = score.as<T>();
@@ -177,42 +172,35 @@ PfaTrialResult count_interior_false_alarms(const HostTensor& score,
   return result;
 }
 
-void expect_realized_pfa_near_configured(double realized, double configured,
-                                         int64_t total_cells,
+void expect_realized_pfa_near_configured(double realized, double configured, int64_t total_cells,
                                          double min_ratio_tol = 0.15) {
   ASSERT_GT(total_cells, 0);
   const double expected = configured * static_cast<double>(total_cells);
-  ASSERT_GE(expected, 50.0)
-      << "Monte Carlo design too weak: expected false alarms " << expected
-      << " < 50";
+  ASSERT_GE(expected, 50.0) << "Monte Carlo design too weak: expected false alarms " << expected
+                            << " < 50";
 
   const double ratio = realized / configured;
   // ~4-sigma envelope on a binomial proportion (conservative for correlated
   // neighboring CUTs sharing training cells).
   const double sigma =
-      std::sqrt(configured * (1.0 - configured) /
-                static_cast<double>(total_cells));
+      std::sqrt(configured * (1.0 - configured) / static_cast<double>(total_cells));
   const double tol = std::max(4.0 * sigma / configured, min_ratio_tol);
-  EXPECT_NEAR(ratio, 1.0, tol)
-      << "realized_pfa=" << realized << " configured_pfa=" << configured
-      << " total_interior_cells=" << total_cells;
+  EXPECT_NEAR(ratio, 1.0, tol) << "realized_pfa=" << realized << " configured_pfa=" << configured
+                               << " total_interior_cells=" << total_cells;
 }
 
-std::vector<HostTensor> run_cfar_scores(
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
-    CFARParams params) {
+std::vector<HostTensor> run_cfar_scores(std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
+                                        CFARParams params) {
   FiveOutGraphRunResult result =
       run_single_in_five_out_operator_graph_result<CFARDetectorOp<double>>(
-          std::move(inputs), std::move(params), "detection_mask",
-          "detection_score", "noise_estimate", "detection_idx", "cfar_power",
-          [](holoscan::Graph& graph, const auto& source, auto& op,
-             const auto& sink0, const auto& sink1, const auto& sink2,
-             const auto& sink3, const auto& sink4) {
+          std::move(inputs), std::move(params), "detection_mask", "detection_score",
+          "noise_estimate", "detection_idx", "cfar_power",
+          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
+             const auto& sink1, const auto& sink2, const auto& sink3, const auto& sink4) {
             wire_cfar(graph, source, op, sink0, sink1, sink2, sink3, sink4);
           });
   if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") +
-                             result.plan_json);
+    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
   }
   if (!result.diagnostics.empty()) {
     std::string msg = "run diagnostics:";
@@ -225,21 +213,17 @@ std::vector<HostTensor> run_cfar_scores(
   return std::move(result.frames1);
 }
 
-PfaTrialResult run_monte_carlo_pfa_k1(int num_trials, int64_t num_doppler,
-                                      int64_t num_range, double configured_pfa,
-                                      uint64_t seed, CFARParams params) {
+PfaTrialResult run_monte_carlo_pfa_k1(int num_trials, int64_t num_doppler, int64_t num_range,
+                                      double configured_pfa, uint64_t seed, CFARParams params) {
   PfaTrialResult aggregate;
   std::mt19937_64 rng(seed);
   std::vector<std::shared_ptr<holoscan::Tensor>> inputs;
   inputs.reserve(static_cast<size_t>(num_trials));
   for (int trial = 0; trial < num_trials; ++trial) {
-    const auto map =
-        exponential_power_map(num_doppler, num_range, 1.0, rng);
-    inputs.push_back(to_device_tensor<double>(map, {num_doppler, num_range},
-                                              real_dtype<double>()));
+    const auto map = exponential_power_map(num_doppler, num_range, 1.0, rng);
+    inputs.push_back(to_device_tensor<double>(map, {num_doppler, num_range}, real_dtype<double>()));
   }
-  const std::vector<HostTensor> scores =
-      run_cfar_scores(std::move(inputs), std::move(params));
+  const std::vector<HostTensor> scores = run_cfar_scores(std::move(inputs), std::move(params));
   for (const HostTensor& score : scores) {
     const PfaTrialResult trial_result =
         count_interior_false_alarms<double>(score, num_doppler, num_range);
@@ -249,9 +233,8 @@ PfaTrialResult run_monte_carlo_pfa_k1(int num_trials, int64_t num_doppler,
   return aggregate;
 }
 
-PfaTrialResult run_monte_carlo_pfa_nci(int num_trials, int64_t num_channels,
-                                       int64_t num_doppler, int64_t num_range,
-                                       double configured_pfa, uint64_t seed,
+PfaTrialResult run_monte_carlo_pfa_nci(int num_trials, int64_t num_channels, int64_t num_doppler,
+                                       int64_t num_range, double configured_pfa, uint64_t seed,
                                        CFARParams params) {
   PfaTrialResult aggregate;
   std::mt19937_64 rng(seed);
@@ -259,13 +242,11 @@ PfaTrialResult run_monte_carlo_pfa_nci(int num_trials, int64_t num_channels,
   std::vector<std::shared_ptr<holoscan::Tensor>> inputs;
   inputs.reserve(static_cast<size_t>(num_trials));
   for (int trial = 0; trial < num_trials; ++trial) {
-    const auto cube = exponential_power_cube(
-        {num_channels, num_doppler, num_range}, 1.0, rng);
-    inputs.push_back(to_device_tensor<double>(
-        cube, {num_channels, num_doppler, num_range}, real_dtype<double>()));
+    const auto cube = exponential_power_cube({num_channels, num_doppler, num_range}, 1.0, rng);
+    inputs.push_back(to_device_tensor<double>(cube, {num_channels, num_doppler, num_range},
+                                              real_dtype<double>()));
   }
-  const std::vector<HostTensor> scores =
-      run_cfar_scores(std::move(inputs), std::move(params));
+  const std::vector<HostTensor> scores = run_cfar_scores(std::move(inputs), std::move(params));
   for (const HostTensor& score : scores) {
     const PfaTrialResult trial_result =
         count_interior_false_alarms<double>(score, num_doppler, num_range);
@@ -275,10 +256,10 @@ PfaTrialResult run_monte_carlo_pfa_nci(int num_trials, int64_t num_channels,
   return aggregate;
 }
 
-PfaTrialResult run_monte_carlo_pfa_preintegrated(
-    int num_trials, int64_t looks, int64_t num_doppler, int64_t num_range,
-    double configured_pfa, uint64_t seed, CFARParams params,
-    double correlation = 0.0) {
+PfaTrialResult run_monte_carlo_pfa_preintegrated(int num_trials, int64_t looks, int64_t num_doppler,
+                                                 int64_t num_range, double configured_pfa,
+                                                 uint64_t seed, CFARParams params,
+                                                 double correlation = 0.0) {
   PfaTrialResult aggregate;
   std::mt19937_64 rng(seed);
   std::vector<std::shared_ptr<holoscan::Tensor>> inputs;
@@ -287,13 +268,10 @@ PfaTrialResult run_monte_carlo_pfa_preintegrated(
     const auto map =
         correlation == 0.0
             ? preintegrated_power_map(num_doppler, num_range, looks, rng)
-            : correlated_preintegrated_power_map(
-                  num_doppler, num_range, looks, correlation, rng);
-    inputs.push_back(to_device_tensor<double>(
-        map, {num_doppler, num_range}, real_dtype<double>()));
+            : correlated_preintegrated_power_map(num_doppler, num_range, looks, correlation, rng);
+    inputs.push_back(to_device_tensor<double>(map, {num_doppler, num_range}, real_dtype<double>()));
   }
-  const std::vector<HostTensor> scores =
-      run_cfar_scores(std::move(inputs), std::move(params));
+  const std::vector<HostTensor> scores = run_cfar_scores(std::move(inputs), std::move(params));
   for (const HostTensor& score : scores) {
     const PfaTrialResult trial_result =
         count_interior_false_alarms<double>(score, num_doppler, num_range);
@@ -311,13 +289,11 @@ TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaK1) {
   constexpr int64_t kMapRange = 64;
   constexpr double kPfa = 1e-2;
 
-  const PfaTrialResult result = run_monte_carlo_pfa_k1(
-      kTrials, kMapDoppler, kMapRange, kPfa, 0xCAFEBABE0001ULL,
-      ca_params(kPfa));
+  const PfaTrialResult result = run_monte_carlo_pfa_k1(kTrials, kMapDoppler, kMapRange, kPfa,
+                                                       0xCAFEBABE0001ULL, ca_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
-      static_cast<double>(result.false_alarms) /
-      static_cast<double>(result.interior_cells);
+      static_cast<double>(result.false_alarms) / static_cast<double>(result.interior_cells);
   expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
 }
 
@@ -327,13 +303,11 @@ TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaK1) {
   constexpr int64_t kMapRange = 64;
   constexpr double kPfa = 1e-2;
 
-  const PfaTrialResult result = run_monte_carlo_pfa_k1(
-      kTrials, kMapDoppler, kMapRange, kPfa, 0x474F434641520001ULL,
-      go_params(kPfa));
+  const PfaTrialResult result = run_monte_carlo_pfa_k1(kTrials, kMapDoppler, kMapRange, kPfa,
+                                                       0x474F434641520001ULL, go_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
-      static_cast<double>(result.false_alarms) /
-      static_cast<double>(result.interior_cells);
+      static_cast<double>(result.false_alarms) / static_cast<double>(result.interior_cells);
   expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
 }
 
@@ -344,13 +318,11 @@ TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaNciK8) {
   constexpr int64_t kMapRange = 64;
   constexpr double kPfa = 1e-2;
 
-  const PfaTrialResult result = run_monte_carlo_pfa_nci(
-      kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0xCAFEBABE0002ULL,
-      ca_params(kPfa));
+  const PfaTrialResult result = run_monte_carlo_pfa_nci(kTrials, kChannels, kMapDoppler, kMapRange,
+                                                        kPfa, 0xCAFEBABE0002ULL, ca_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
-      static_cast<double>(result.false_alarms) /
-      static_cast<double>(result.interior_cells);
+      static_cast<double>(result.false_alarms) / static_cast<double>(result.interior_cells);
   expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
 }
 
@@ -364,11 +336,9 @@ TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaPreintegratedK8) {
   CFARParams params = ca_params(kPfa);
   params.preintegrated_looks = kLooks;
   const PfaTrialResult result = run_monte_carlo_pfa_preintegrated(
-      kTrials, kLooks, kMapDoppler, kMapRange, kPfa,
-      0xCAFEBABE0003ULL, params);
+      kTrials, kLooks, kMapDoppler, kMapRange, kPfa, 0xCAFEBABE0003ULL, params);
   const double realized =
-      static_cast<double>(result.false_alarms) /
-      static_cast<double>(result.interior_cells);
+      static_cast<double>(result.false_alarms) / static_cast<double>(result.interior_cells);
   expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
 }
 
@@ -383,23 +353,20 @@ TEST(CFARDetectorOpStatisticalTest, CorrelatedLooksNeedEffectiveCalibration) {
 
   CFARParams nominal_params = ca_params(kPfa);
   nominal_params.preintegrated_looks = kNominalLooks;
-  const PfaTrialResult nominal = run_monte_carlo_pfa_preintegrated(
-      kTrials, kNominalLooks, kMapDoppler, kMapRange, kPfa,
-      0xCAFEBABE0004ULL, nominal_params, kCorrelation);
+  const PfaTrialResult nominal =
+      run_monte_carlo_pfa_preintegrated(kTrials, kNominalLooks, kMapDoppler, kMapRange, kPfa,
+                                        0xCAFEBABE0004ULL, nominal_params, kCorrelation);
   CFARParams calibrated_params = ca_params(kPfa);
   calibrated_params.preintegrated_looks = kEffectiveLooks;
-  const PfaTrialResult calibrated = run_monte_carlo_pfa_preintegrated(
-      kTrials, kNominalLooks, kMapDoppler, kMapRange, kPfa,
-      0xCAFEBABE0004ULL, calibrated_params, kCorrelation);
+  const PfaTrialResult calibrated =
+      run_monte_carlo_pfa_preintegrated(kTrials, kNominalLooks, kMapDoppler, kMapRange, kPfa,
+                                        0xCAFEBABE0004ULL, calibrated_params, kCorrelation);
   const double nominal_pfa =
-      static_cast<double>(nominal.false_alarms) /
-      static_cast<double>(nominal.interior_cells);
+      static_cast<double>(nominal.false_alarms) / static_cast<double>(nominal.interior_cells);
   const double calibrated_pfa =
-      static_cast<double>(calibrated.false_alarms) /
-      static_cast<double>(calibrated.interior_cells);
+      static_cast<double>(calibrated.false_alarms) / static_cast<double>(calibrated.interior_cells);
   EXPECT_GT(nominal_pfa, 1.5 * kPfa);
-  EXPECT_LT(std::abs(calibrated_pfa - kPfa),
-            std::abs(nominal_pfa - kPfa));
+  EXPECT_LT(std::abs(calibrated_pfa - kPfa), std::abs(nominal_pfa - kPfa));
 }
 
 TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaNciK8) {
@@ -410,12 +377,10 @@ TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaNciK8) {
   constexpr double kPfa = 1e-2;
 
   const PfaTrialResult result = run_monte_carlo_pfa_nci(
-      kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x474F434641520002ULL,
-      go_params(kPfa));
+      kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x474F434641520002ULL, go_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
-      static_cast<double>(result.false_alarms) /
-      static_cast<double>(result.interior_cells);
+      static_cast<double>(result.false_alarms) / static_cast<double>(result.interior_cells);
   expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
 }
 
@@ -425,17 +390,14 @@ TEST(CFARDetectorOpStatisticalTest, SoMonteCarloPfaK1) {
   constexpr int64_t kMapRange = 64;
   constexpr double kPfa = 1e-2;
 
-  const PfaTrialResult result = run_monte_carlo_pfa_k1(
-      kTrials, kMapDoppler, kMapRange, kPfa, 0x534F434641520001ULL,
-      so_params(kPfa));
+  const PfaTrialResult result = run_monte_carlo_pfa_k1(kTrials, kMapDoppler, kMapRange, kPfa,
+                                                       0x534F434641520001ULL, so_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
-      static_cast<double>(result.false_alarms) /
-      static_cast<double>(result.interior_cells);
+      static_cast<double>(result.false_alarms) / static_cast<double>(result.interior_cells);
   // SO min-of-side noise is more sensitive to shared training-cell correlation
   // across neighboring CUTs than GO/CA; relax the ratio envelope accordingly.
-  expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells,
-                                      0.25);
+  expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells, 0.25);
 }
 
 TEST(CFARDetectorOpStatisticalTest, SoMonteCarloPfaNciK8) {
@@ -446,14 +408,11 @@ TEST(CFARDetectorOpStatisticalTest, SoMonteCarloPfaNciK8) {
   constexpr double kPfa = 1e-2;
 
   const PfaTrialResult result = run_monte_carlo_pfa_nci(
-      kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x534F434641520002ULL,
-      so_params(kPfa));
+      kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x534F434641520002ULL, so_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
-      static_cast<double>(result.false_alarms) /
-      static_cast<double>(result.interior_cells);
-  expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells,
-                                      0.25);
+      static_cast<double>(result.false_alarms) / static_cast<double>(result.interior_cells);
+  expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells, 0.25);
 }
 
 TEST(CFARDetectorOpStatisticalTest, OsMonteCarloPfaK1) {
@@ -462,13 +421,11 @@ TEST(CFARDetectorOpStatisticalTest, OsMonteCarloPfaK1) {
   constexpr int64_t kMapRange = 64;
   constexpr double kPfa = 1e-2;
 
-  const PfaTrialResult result = run_monte_carlo_pfa_k1(
-      kTrials, kMapDoppler, kMapRange, kPfa, 0x4F53434641520001ULL,
-      os_params(kPfa));
+  const PfaTrialResult result = run_monte_carlo_pfa_k1(kTrials, kMapDoppler, kMapRange, kPfa,
+                                                       0x4F53434641520001ULL, os_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
-      static_cast<double>(result.false_alarms) /
-      static_cast<double>(result.interior_cells);
+      static_cast<double>(result.false_alarms) / static_cast<double>(result.interior_cells);
   expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
 }
 
@@ -480,11 +437,9 @@ TEST(CFARDetectorOpStatisticalTest, OsMonteCarloPfaNciK8) {
   constexpr double kPfa = 1e-2;
 
   const PfaTrialResult result = run_monte_carlo_pfa_nci(
-      kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x4F53434641520002ULL,
-      os_params(kPfa));
+      kTrials, kChannels, kMapDoppler, kMapRange, kPfa, 0x4F53434641520002ULL, os_params(kPfa));
   ASSERT_GT(result.interior_cells, 0);
   const double realized =
-      static_cast<double>(result.false_alarms) /
-      static_cast<double>(result.interior_cells);
+      static_cast<double>(result.false_alarms) / static_cast<double>(result.interior_cells);
   expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
 }

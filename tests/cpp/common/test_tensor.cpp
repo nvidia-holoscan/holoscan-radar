@@ -25,10 +25,8 @@ TEST(MakeDeviceTensor, RejectsInvalidAndOverflowingShapes) {
   // must throw before any allocation (a wrapped count would produce an
   // undersized buffer that full-extent views write past).
   EXPECT_NO_THROW(holoscan::radar::make_device_tensor({0, 4}, dtype));
-  EXPECT_THROW(holoscan::radar::make_device_tensor({-1, 4}, dtype),
-               std::invalid_argument);
-  EXPECT_THROW(holoscan::radar::make_device_tensor(
-                   {int64_t{1} << 32, int64_t{1} << 32}, dtype),
+  EXPECT_THROW(holoscan::radar::make_device_tensor({-1, 4}, dtype), std::invalid_argument);
+  EXPECT_THROW(holoscan::radar::make_device_tensor({int64_t{1} << 32, int64_t{1} << 32}, dtype),
                std::invalid_argument);
 }
 

@@ -75,14 +75,12 @@ using holoscan::radar::testing::to_device_tensor;
 
 // Graph wiring lambda for 1-in / 1-out DDMDenseDemultiplexOp.
 auto compensation_wire() {
-  return [](holoscan::Graph& graph, const auto& source, auto& op,
-            const auto& sink) {
+  return [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(source->out, op->rd_maps, q);
     graph.add_flow(op->rd_maps_out, sink->in, q);
   };
 }
-
 
 DDMDenseDemultiplexParams ddm_params(const DDMCodeDescriptor& code) {
   return DDMDenseDemultiplexParams{.ddm_code = code};
@@ -95,13 +93,14 @@ constexpr int64_t kDdmRx = 2;
 constexpr int64_t kDdmDoppler = 16;
 constexpr int64_t kDdmRange = 3;
 
-int64_t fft_center(int64_t n) { return (n + 1) / 2; }
+int64_t fft_center(int64_t n) {
+  return (n + 1) / 2;
+}
 
 std::vector<double> uniform_offsets(int64_t num_tx) {
   std::vector<double> offsets(static_cast<size_t>(num_tx));
   for (int64_t m = 0; m < num_tx; ++m) {
-    offsets[static_cast<size_t>(m)] =
-        static_cast<double>(m) / static_cast<double>(num_tx);
+    offsets[static_cast<size_t>(m)] = static_cast<double>(m) / static_cast<double>(num_tx);
   }
   return offsets;
 }
@@ -114,8 +113,7 @@ DDMCodeDescriptor make_offset_code(int64_t num_tx, int64_t guard = 0) {
   return code;
 }
 
-DDMCodeDescriptor make_offset_code_from(const std::vector<double>& offsets,
-                                        int64_t guard = 0) {
+DDMCodeDescriptor make_offset_code_from(const std::vector<double>& offsets, int64_t guard = 0) {
   DDMCodeDescriptor code;
   code.num_tx = static_cast<int64_t>(offsets.size());
   code.doppler_offsets = offsets;
@@ -136,36 +134,28 @@ FMCWWaveformDescriptor test_waveform() {
 template <typename T>
 std::complex<T> ddm_cell_value(int64_t tx, int64_t rx, int64_t r) {
   return std::complex<T>(
-      static_cast<T>(1.0 + 0.1 * static_cast<double>(tx) +
-                     0.01 * static_cast<double>(rx)),
-      static_cast<T>(0.05 * static_cast<double>(r) -
-                     0.02 * static_cast<double>(tx)));
+      static_cast<T>(1.0 + 0.1 * static_cast<double>(tx) + 0.01 * static_cast<double>(rx)),
+      static_cast<T>(0.05 * static_cast<double>(r) - 0.02 * static_cast<double>(tx)));
 }
 
 template <typename T>
-std::vector<std::complex<T>> build_ddm_input_host(
-    const std::vector<double>& offsets, int64_t num_tx, int64_t num_rx,
-    int64_t num_doppler, int64_t num_range, int64_t p0_reduced,
-    int64_t batch = 1) {
+std::vector<std::complex<T>> build_ddm_input_host(const std::vector<double>& offsets,
+                                                  int64_t num_tx, int64_t num_rx,
+                                                  int64_t num_doppler, int64_t num_range,
+                                                  int64_t p0_reduced, int64_t batch = 1) {
   const int64_t D = num_doppler;
   const int64_t c = fft_center(D);
   const int64_t slice = num_rx * D * num_range;
-  std::vector<std::complex<T>> host(
-      static_cast<size_t>(batch * slice), std::complex<T>(0, 0));
+  std::vector<std::complex<T>> host(static_cast<size_t>(batch * slice), std::complex<T>(0, 0));
   for (int64_t b = 0; b < batch; ++b) {
     for (int64_t m = 0; m < num_tx; ++m) {
       const int64_t start =
-          ((std::llround(offsets[static_cast<size_t>(m)] *
-                         static_cast<double>(D)) %
-            D) +
-           D) %
-          D;
+          ((std::llround(offsets[static_cast<size_t>(m)] * static_cast<double>(D)) % D) + D) % D;
       const int64_t j = (start + p0_reduced) % D;
       const int64_t in_cz = ((j - c) % D + D) % D;
       for (int64_t rx = 0; rx < num_rx; ++rx) {
         for (int64_t r = 0; r < num_range; ++r) {
-          const size_t idx = static_cast<size_t>(
-              b * slice + (rx * D + in_cz) * num_range + r);
+          const size_t idx = static_cast<size_t>(b * slice + (rx * D + in_cz) * num_range + r);
           host[idx] = ddm_cell_value<T>(m, rx, r);
         }
       }
@@ -175,26 +165,20 @@ std::vector<std::complex<T>> build_ddm_input_host(
 }
 
 template <typename T>
-GraphRunResult run_ddm_result(
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
-    DDMDenseDemultiplexParams params,
-    const holoscan::radar::MaxTensorExtents& extents =
-        holoscan::radar::testing::default_test_extents()) {
-  return run_single_io_operator_graph_result<
-      DDMDenseDemultiplexOp<T>>(
-      std::move(inputs), std::move(params), "rd_maps_out",
-      compensation_wire(), {"velocity_bins_out"}, extents);
+GraphRunResult run_ddm_result(std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
+                              DDMDenseDemultiplexParams params,
+                              const holoscan::radar::MaxTensorExtents& extents =
+                                  holoscan::radar::testing::default_test_extents()) {
+  return run_single_io_operator_graph_result<DDMDenseDemultiplexOp<T>>(
+      std::move(inputs), std::move(params), "rd_maps_out", compensation_wire(),
+      {"velocity_bins_out"}, extents);
 }
 
 template <typename T>
-HostTensor run_ddm_once(
-    std::shared_ptr<holoscan::Tensor> input,
-    DDMDenseDemultiplexParams params) {
-  GraphRunResult result =
-      run_ddm_result<T>({std::move(input)}, std::move(params));
+HostTensor run_ddm_once(std::shared_ptr<holoscan::Tensor> input, DDMDenseDemultiplexParams params) {
+  GraphRunResult result = run_ddm_result<T>({std::move(input)}, std::move(params));
   if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") +
-                             result.plan_json);
+    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
   }
   if (!result.diagnostics.empty()) {
     std::string msg = "run diagnostics:";
@@ -205,32 +189,26 @@ HostTensor run_ddm_once(
     throw std::runtime_error(msg);
   }
   if (result.frames.size() != 1U) {
-    throw std::runtime_error(
-        "expected 1 DDM frame, got " +
-        std::to_string(result.frames.size()));
+    throw std::runtime_error("expected 1 DDM frame, got " + std::to_string(result.frames.size()));
   }
   return std::move(result.frames.front());
 }
 
 template <typename T>
 HostTensor run_ddm_from_host(const std::vector<std::complex<T>>& host,
-                             const std::vector<int64_t>& shape,
-                             const DDMCodeDescriptor& code) {
-  return run_ddm_once<T>(
-      to_device_tensor(host, shape, complex_dtype<T>()),
-      ddm_params(code));
+                             const std::vector<int64_t>& shape, const DDMCodeDescriptor& code) {
+  return run_ddm_once<T>(to_device_tensor(host, shape, complex_dtype<T>()), ddm_params(code));
 }
 
 template <typename T>
-DualIOGraphRunResult run_ddm_with_axis(
-    std::shared_ptr<holoscan::Tensor> input,
-    std::shared_ptr<holoscan::Tensor> velocity_axis,
-    const DDMCodeDescriptor& code) {
+DualIOGraphRunResult run_ddm_with_axis(std::shared_ptr<holoscan::Tensor> input,
+                                       std::shared_ptr<holoscan::Tensor> velocity_axis,
+                                       const DDMCodeDescriptor& code) {
   return run_dual_io_operator_graph_result<DDMDenseDemultiplexOp<T>>(
-      {std::move(velocity_axis)}, {std::move(input)}, ddm_params(code),
-      "rd_maps_out", "velocity_bins_out",
-      [](holoscan::Graph& graph, const auto& source, auto& op,
-         const auto& map_sink, const auto& axis_sink) {
+      {std::move(velocity_axis)}, {std::move(input)}, ddm_params(code), "rd_maps_out",
+      "velocity_bins_out",
+      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& map_sink,
+         const auto& axis_sink) {
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
         // Exact sideband first, then the map trigger.
         graph.add_flow(source->out0, op->velocity_bins, q);
@@ -241,10 +219,8 @@ DualIOGraphRunResult run_ddm_with_axis(
 }
 
 template <typename T>
-void expect_ddm_recovered(const HostTensor& out, int64_t num_tx,
-                          int64_t num_rx, int64_t band_width,
-                          int64_t num_range, int64_t p0_reduced,
-                          int64_t batch = 1,
+void expect_ddm_recovered(const HostTensor& out, int64_t num_tx, int64_t num_rx, int64_t band_width,
+                          int64_t num_range, int64_t p0_reduced, int64_t batch = 1,
                           T tol = static_cast<T>(1e-4)) {
   const int64_t W = band_width;
   const int64_t cW = fft_center(W);
@@ -256,17 +232,14 @@ void expect_ddm_recovered(const HostTensor& out, int64_t num_tx,
       for (int64_t rx = 0; rx < num_rx; ++rx) {
         for (int64_t o = 0; o < W; ++o) {
           for (int64_t r = 0; r < num_range; ++r) {
-            const size_t idx = static_cast<size_t>(
-                b * slice + ((m * num_rx + rx) * W + o) * num_range + r);
+            const size_t idx =
+                static_cast<size_t>(b * slice + ((m * num_rx + rx) * W + o) * num_range + r);
             const std::complex<T> expected =
-                (o == o0) ? ddm_cell_value<T>(m, rx, r)
-                          : std::complex<T>(0, 0);
+                (o == o0) ? ddm_cell_value<T>(m, rx, r) : std::complex<T>(0, 0);
             EXPECT_NEAR(data[idx].real(), expected.real(), tol)
-                << "batch=" << b << " tx=" << m << " rx=" << rx
-                << " o=" << o << " r=" << r;
+                << "batch=" << b << " tx=" << m << " rx=" << rx << " o=" << o << " r=" << r;
             EXPECT_NEAR(data[idx].imag(), expected.imag(), tol)
-                << "batch=" << b << " tx=" << m << " rx=" << rx
-                << " o=" << o << " r=" << r;
+                << "batch=" << b << " tx=" << m << " rx=" << rx << " o=" << o << " r=" << r;
           }
         }
       }
@@ -278,8 +251,8 @@ TEST(DDMDenseDemultiplexOp, DdmDemuxRecoversEachTxIntoBand) {
   const int64_t band = kDdmDoppler / kDdmTx;
   const int64_t p0 = 1;
   const auto offsets = uniform_offsets(kDdmTx);
-  const auto host = build_ddm_input_host<float>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
+  const auto host =
+      build_ddm_input_host<float>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   const auto out = run_ddm_from_host<float>(host, shape, code);
   ASSERT_EQ(out.shape.size(), 4U);
@@ -294,8 +267,7 @@ TEST(DDMDenseDemultiplexOp, DdmSingleTxIsIdentity) {
   const auto code = make_offset_code(1);
   const int64_t p0 = 2;
   const auto offsets = uniform_offsets(1);
-  const auto host = build_ddm_input_host<float>(offsets, 1, kDdmRx,
-                                                kDdmDoppler, kDdmRange, p0);
+  const auto host = build_ddm_input_host<float>(offsets, 1, kDdmRx, kDdmDoppler, kDdmRange, p0);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   const auto out = run_ddm_from_host<float>(host, shape, code);
   ASSERT_EQ(out.shape.size(), 4U);
@@ -314,12 +286,11 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsOpaqueLeadingBatch) {
   const int64_t p0 = 0;
   const int64_t batch = 2;
   const auto offsets = uniform_offsets(kDdmTx);
-  const auto host = build_ddm_input_host<float>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0, batch);
+  const auto host =
+      build_ddm_input_host<float>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0, batch);
   const std::vector<int64_t> shape{batch, kDdmRx, kDdmDoppler, kDdmRange};
   const GraphRunResult result = run_ddm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())},
-      ddm_params(code));
+      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -328,14 +299,12 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsOpaqueLeadingBatch) {
 TEST(DDMDenseDemultiplexOp, RejectsInputBeyondCapturedExtents) {
   const auto code = make_offset_code(kDdmTx);
   const auto offsets = uniform_offsets(kDdmTx);
-  const auto host = build_ddm_input_host<float>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, 0);
+  const auto host = build_ddm_input_host<float>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, 0);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   auto extents = holoscan::radar::testing::default_test_extents();
   extents.max_rx = kDdmRx - 1;
   const GraphRunResult result = run_ddm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())},
-      ddm_params(code), extents);
+      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code), extents);
   EXPECT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -344,8 +313,8 @@ TEST(DDMDenseDemultiplexOp, RejectsInputBeyondCapturedExtents) {
 TEST(DDMDenseDemultiplexOp, DdmLinearPhaseCodesMatchOffsets) {
   const int64_t p0 = 1;
   const auto offsets = uniform_offsets(kDdmTx);
-  const auto host = build_ddm_input_host<float>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
+  const auto host =
+      build_ddm_input_host<float>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
 
   DDMCodeDescriptor code;
@@ -355,20 +324,16 @@ TEST(DDMDenseDemultiplexOp, DdmLinearPhaseCodesMatchOffsets) {
   code.phase_codes.resize(static_cast<size_t>(kDdmTx * num_chirps));
   for (int64_t m = 0; m < kDdmTx; ++m) {
     for (int64_t k = 0; k < num_chirps; ++k) {
-      const double phase = kTwoPi *
-                           (static_cast<double>(m) /
-                            static_cast<double>(kDdmTx)) *
-                           static_cast<double>(k);
+      const double phase =
+          kTwoPi * (static_cast<double>(m) / static_cast<double>(kDdmTx)) * static_cast<double>(k);
       code.phase_codes[static_cast<size_t>(m * num_chirps + k)] =
           std::complex<double>(std::cos(phase), std::sin(phase));
     }
   }
 
   const int64_t band = kDdmDoppler / kDdmTx;
-  const auto out_codes =
-      run_ddm_from_host<float>(host, shape, code);
-  const auto out_offsets = run_ddm_from_host<float>(
-      host, shape, make_offset_code(kDdmTx));
+  const auto out_codes = run_ddm_from_host<float>(host, shape, code);
+  const auto out_offsets = run_ddm_from_host<float>(host, shape, make_offset_code(kDdmTx));
   ASSERT_EQ(out_codes.shape.size(), out_offsets.shape.size());
   const auto* a = out_codes.as<std::complex<float>>();
   const auto* b = out_offsets.as<std::complex<float>>();
@@ -382,46 +347,38 @@ TEST(DDMDenseDemultiplexOp, DdmLinearPhaseCodesMatchOffsets) {
 TEST(DDMDenseDemultiplexOp, DdmLinearCodesRemoveNonzeroInitialPhase) {
   const int64_t p0 = 1;
   const auto offsets = uniform_offsets(kDdmTx);
-  auto host = build_ddm_input_host<double>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
+  auto host = build_ddm_input_host<double>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   DDMCodeDescriptor code;
   code.num_tx = kDdmTx;
   const std::array<std::complex<double>, kDdmTx> initial{
-      std::complex<double>{0.0, 1.0}, {-1.0, 0.0},
-      {0.0, -1.0}, {std::sqrt(0.5), std::sqrt(0.5)}};
+      std::complex<double>{0.0, 1.0}, {-1.0, 0.0}, {0.0, -1.0}, {std::sqrt(0.5), std::sqrt(0.5)}};
   for (int64_t tx = 0; tx < kDdmTx; ++tx) {
     for (int64_t chirp = 0; chirp < kDdmDoppler; ++chirp) {
-      const double phase = kTwoPi * offsets[static_cast<size_t>(tx)] *
-                           static_cast<double>(chirp);
-      code.phase_codes.push_back(
-          initial[static_cast<size_t>(tx)] *
-          std::complex<double>(std::cos(phase), std::sin(phase)));
+      const double phase = kTwoPi * offsets[static_cast<size_t>(tx)] * static_cast<double>(chirp);
+      code.phase_codes.push_back(initial[static_cast<size_t>(tx)] *
+                                 std::complex<double>(std::cos(phase), std::sin(phase)));
     }
   }
   const int64_t width = kDdmDoppler / kDdmTx;
-  const auto table = holoscan::radar::detail::build_ddm_demux_table(
-      offsets, kDdmTx, kDdmDoppler, width);
+  const auto table =
+      holoscan::radar::detail::build_ddm_demux_table(offsets, kDdmTx, kDdmDoppler, width);
   for (int64_t tx = 0; tx < kDdmTx; ++tx) {
     for (int64_t out_d = 0; out_d < width; ++out_d) {
-      const int64_t source_d =
-          table[static_cast<size_t>(tx * width + out_d)];
+      const int64_t source_d = table[static_cast<size_t>(tx * width + out_d)];
       for (int64_t rx = 0; rx < kDdmRx; ++rx) {
         for (int64_t range = 0; range < kDdmRange; ++range) {
-          host[static_cast<size_t>(
-              (rx * kDdmDoppler + source_d) * kDdmRange + range)] *=
+          host[static_cast<size_t>((rx * kDdmDoppler + source_d) * kDdmRange + range)] *=
               initial[static_cast<size_t>(tx)];
         }
       }
     }
   }
   const auto output = run_ddm_from_host<double>(host, shape, code);
-  expect_ddm_recovered<double>(
-      output, kDdmTx, kDdmRx, width, kDdmRange, p0, 1, 1e-12);
+  expect_ddm_recovered<double>(output, kDdmTx, kDdmRx, width, kDdmRange, p0, 1, 1e-12);
 }
 
-TEST(DDMDenseDemultiplexOp,
-     DdmNonLinearPhaseCodesCorrelateRecovers) {
+TEST(DDMDenseDemultiplexOp, DdmNonLinearPhaseCodesCorrelateRecovers) {
   constexpr int64_t kNlTx = 1;
   constexpr int64_t kNlRx = 2;
   constexpr int64_t kNlDoppler = 16;
@@ -448,16 +405,14 @@ TEST(DDMDenseDemultiplexOp,
   for (int64_t k = 0; k < D; ++k) {
     std::complex<double> sum(0.0, 0.0);
     for (int64_t n = 0; n < num_chirps; ++n) {
-      const double angle = -kTwoPi * static_cast<double>(n) *
-                           static_cast<double>(k) / static_cast<double>(D);
-      sum += c_m[n] * std::complex<double>(std::cos(angle),
-                                           std::sin(angle));
+      const double angle =
+          -kTwoPi * static_cast<double>(n) * static_cast<double>(k) / static_cast<double>(D);
+      sum += c_m[n] * std::complex<double>(std::cos(angle), std::sin(angle));
     }
     spectrum[static_cast<size_t>(k)] = sum;
   }
 
-  std::vector<std::complex<float>> host(
-      static_cast<size_t>(kNlRx * D * kNlRange), {0.0f, 0.0f});
+  std::vector<std::complex<float>> host(static_cast<size_t>(kNlRx * D * kNlRange), {0.0f, 0.0f});
   for (int64_t rx = 0; rx < kNlRx; ++rx) {
     for (int64_t r = 0; r < kNlRange; ++r) {
       for (int64_t k = 0; k < D; ++k) {
@@ -465,15 +420,13 @@ TEST(DDMDenseDemultiplexOp,
         const auto y = val * spectrum[static_cast<size_t>(idx)];
         const int64_t d_cz = ((k - c) % D + D) % D;
         host[static_cast<size_t>((rx * D + d_cz) * kNlRange + r)] =
-            std::complex<float>(static_cast<float>(y.real()),
-                                static_cast<float>(y.imag()));
+            std::complex<float>(static_cast<float>(y.real()), static_cast<float>(y.imag()));
       }
     }
   }
 
   const std::vector<int64_t> shape{kNlRx, kNlDoppler, kNlRange};
-  const auto out =
-      run_ddm_from_host<float>(host, shape, code);
+  const auto out = run_ddm_from_host<float>(host, shape, code);
   ASSERT_EQ(out.shape.size(), 4U);
   EXPECT_EQ(out.shape[0], kNlTx);
   EXPECT_EQ(out.shape[1], kNlRx);
@@ -481,9 +434,8 @@ TEST(DDMDenseDemultiplexOp,
   EXPECT_EQ(out.shape[3], kNlRange);
 
   const auto* data = out.as<std::complex<float>>();
-  const std::complex<float> expected(
-      static_cast<float>(val.real() * static_cast<double>(D)),
-      static_cast<float>(val.imag() * static_cast<double>(D)));
+  const std::complex<float> expected(static_cast<float>(val.real() * static_cast<double>(D)),
+                                     static_cast<float>(val.imag() * static_cast<double>(D)));
   const float tol = 0.05f * std::abs(expected);
   for (int64_t rx = 0; rx < kNlRx; ++rx) {
     for (int64_t r = 0; r < kNlRange; ++r) {
@@ -491,8 +443,7 @@ TEST(DDMDenseDemultiplexOp,
       float other = 0.0f;
       std::complex<float> at_d0{0.0f, 0.0f};
       for (int64_t d = 0; d < D; ++d) {
-        const size_t idx_out = static_cast<size_t>(
-            ((0 * kNlRx + rx) * D + d) * kNlRange + r);
+        const size_t idx_out = static_cast<size_t>(((0 * kNlRx + rx) * D + d) * kNlRange + r);
         const auto z = data[idx_out];
         const float mag = std::abs(z);
         if (d == d0_cz) {
@@ -517,13 +468,12 @@ TEST(DDMDenseDemultiplexOp, NonLinearVelocityAxisIsIdentity) {
     const double phase = std::sin(0.7 * static_cast<double>(chirp)) * 2.0;
     code.phase_codes.emplace_back(std::cos(phase), std::sin(phase));
   }
-  const std::vector<std::complex<float>> maps(
-      static_cast<size_t>(kDdmRx * kDoppler * kDdmRange), {1.0f, 0.0f});
+  const std::vector<std::complex<float>> maps(static_cast<size_t>(kDdmRx * kDoppler * kDdmRange),
+                                              {1.0f, 0.0f});
   std::vector<float> axis(static_cast<size_t>(kDoppler));
   std::iota(axis.begin(), axis.end(), -7.0f);
   DualIOGraphRunResult result = run_ddm_with_axis<float>(
-      to_device_tensor(
-          maps, {kDdmRx, kDoppler, kDdmRange}, complex_dtype<float>()),
+      to_device_tensor(maps, {kDdmRx, kDoppler, kDdmRange}, complex_dtype<float>()),
       to_device_tensor(axis, {kDoppler}, real_dtype<float>()), code);
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -552,8 +502,7 @@ TEST(DDMDenseDemultiplexOp, DdmNonLinearMultiTxSeparatesPeaks) {
   const std::complex<double> val1(-0.8, 0.4);
 
   std::vector<int64_t> roots;
-  for (int64_t u = 1;
-       u < D && static_cast<int64_t>(roots.size()) < kNlTx; ++u) {
+  for (int64_t u = 1; u < D && static_cast<int64_t>(roots.size()) < kNlTx; ++u) {
     if (std::gcd(u, D) == 1) {
       roots.push_back(u);
     }
@@ -569,12 +518,8 @@ TEST(DDMDenseDemultiplexOp, DdmNonLinearMultiTxSeparatesPeaks) {
     const double u = static_cast<double>(roots[static_cast<size_t>(m)]);
     for (int64_t k = 0; k < num_chirps; ++k) {
       const double kd = static_cast<double>(k);
-      const double arg =
-          odd_n
-              ? (-kPi * u * kd * (kd + 1.0) /
-                 static_cast<double>(num_chirps))
-              : (-kPi * u * kd * kd /
-                 static_cast<double>(num_chirps));
+      const double arg = odd_n ? (-kPi * u * kd * (kd + 1.0) / static_cast<double>(num_chirps))
+                               : (-kPi * u * kd * kd / static_cast<double>(num_chirps));
       code.phase_codes[static_cast<size_t>(m * num_chirps + k)] =
           std::complex<double>(std::cos(arg), std::sin(arg));
     }
@@ -582,17 +527,13 @@ TEST(DDMDenseDemultiplexOp, DdmNonLinearMultiTxSeparatesPeaks) {
 
   auto code_spectrum = [&](int64_t m) {
     std::vector<std::complex<double>> spectrum(static_cast<size_t>(D));
-    const auto* c_m =
-        &code.phase_codes[static_cast<size_t>(m * num_chirps)];
+    const auto* c_m = &code.phase_codes[static_cast<size_t>(m * num_chirps)];
     for (int64_t k = 0; k < D; ++k) {
       std::complex<double> sum(0.0, 0.0);
       for (int64_t n = 0; n < num_chirps; ++n) {
-        const double angle = -kTwoPi * static_cast<double>(n) *
-                             static_cast<double>(k) /
-                             static_cast<double>(D);
-        sum +=
-            c_m[n] *
-            std::complex<double>(std::cos(angle), std::sin(angle));
+        const double angle =
+            -kTwoPi * static_cast<double>(n) * static_cast<double>(k) / static_cast<double>(D);
+        sum += c_m[n] * std::complex<double>(std::cos(angle), std::sin(angle));
       }
       spectrum[static_cast<size_t>(k)] = sum;
     }
@@ -601,26 +542,23 @@ TEST(DDMDenseDemultiplexOp, DdmNonLinearMultiTxSeparatesPeaks) {
   const auto spec0 = code_spectrum(0);
   const auto spec1 = code_spectrum(1);
 
-  std::vector<std::complex<float>> host(
-      static_cast<size_t>(kNlRx * D * kNlRange), {0.0f, 0.0f});
+  std::vector<std::complex<float>> host(static_cast<size_t>(kNlRx * D * kNlRange), {0.0f, 0.0f});
   for (int64_t rx = 0; rx < kNlRx; ++rx) {
     for (int64_t r = 0; r < kNlRange; ++r) {
       for (int64_t k = 0; k < D; ++k) {
         const int64_t idx0 = ((k - d0) % D + D) % D;
         const int64_t idx1 = ((k - d1) % D + D) % D;
-        const auto y = val0 * spec0[static_cast<size_t>(idx0)] +
-                       val1 * spec1[static_cast<size_t>(idx1)];
+        const auto y =
+            val0 * spec0[static_cast<size_t>(idx0)] + val1 * spec1[static_cast<size_t>(idx1)];
         const int64_t d_cz = ((k - c) % D + D) % D;
         host[static_cast<size_t>((rx * D + d_cz) * kNlRange + r)] =
-            std::complex<float>(static_cast<float>(y.real()),
-                                static_cast<float>(y.imag()));
+            std::complex<float>(static_cast<float>(y.real()), static_cast<float>(y.imag()));
       }
     }
   }
 
   const std::vector<int64_t> shape{kNlRx, kNlDoppler, kNlRange};
-  const auto out =
-      run_ddm_from_host<float>(host, shape, code);
+  const auto out = run_ddm_from_host<float>(host, shape, code);
   ASSERT_EQ(out.shape.size(), 4U);
   EXPECT_EQ(out.shape[0], kNlTx);
   EXPECT_EQ(out.shape[1], kNlRx);
@@ -636,8 +574,7 @@ TEST(DDMDenseDemultiplexOp, DdmNonLinearMultiTxSeparatesPeaks) {
         float other_max = 0.0f;
         int64_t peak_bin = -1;
         for (int64_t d = 0; d < D; ++d) {
-          const auto z = data[static_cast<size_t>(
-              ((m * kNlRx + rx) * D + d) * kNlRange + r)];
+          const auto z = data[static_cast<size_t>(((m * kNlRx + rx) * D + d) * kNlRange + r)];
           const float mag = std::abs(z);
           if (mag > peak) {
             peak = mag;
@@ -654,8 +591,7 @@ TEST(DDMDenseDemultiplexOp, DdmNonLinearMultiTxSeparatesPeaks) {
   }
 }
 
-TEST(DDMDenseDemultiplexOp,
-     DdmNonLinearRejectsNonZeroGuardBands) {
+TEST(DDMDenseDemultiplexOp, DdmNonLinearRejectsNonZeroGuardBands) {
   constexpr int64_t kNlTx = 2;
   constexpr int64_t kNlDoppler = 16;
   constexpr int64_t kNlRx = 2;
@@ -668,27 +604,23 @@ TEST(DDMDenseDemultiplexOp,
   code.phase_codes.resize(static_cast<size_t>(kNlTx * num_chirps));
   for (int64_t m = 0; m < kNlTx; ++m) {
     for (int64_t k = 0; k < num_chirps; ++k) {
-      const double phase =
-          std::sin(0.7 * static_cast<double>(k) + m) * 2.0;
+      const double phase = std::sin(0.7 * static_cast<double>(k) + m) * 2.0;
       code.phase_codes[static_cast<size_t>(m * num_chirps + k)] =
           std::complex<double>(std::cos(phase), std::sin(phase));
     }
   }
 
   const std::vector<int64_t> shape{kNlRx, kNlDoppler, kNlRange};
-  const std::vector<std::complex<float>> host(
-      static_cast<size_t>(kNlRx * kNlDoppler * kNlRange), {1.0f, 0.0f});
-  const GraphRunResult result =
-      run_ddm_result<float>(
-          {to_device_tensor(host, shape, complex_dtype<float>())},
-          ddm_params(code));
+  const std::vector<std::complex<float>> host(static_cast<size_t>(kNlRx * kNlDoppler * kNlRange),
+                                              {1.0f, 0.0f});
+  const GraphRunResult result = run_ddm_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(DDMDenseDemultiplexOp,
-     DdmNonLinearRejectsChirpDopplerMismatch) {
+TEST(DDMDenseDemultiplexOp, DdmNonLinearRejectsChirpDopplerMismatch) {
   constexpr int64_t kNlTx = 2;
   constexpr int64_t kNlDoppler = 16;
   constexpr int64_t kNlRx = 2;
@@ -701,20 +633,17 @@ TEST(DDMDenseDemultiplexOp,
   code.phase_codes.resize(static_cast<size_t>(kNlTx * num_chirps));
   for (int64_t m = 0; m < kNlTx; ++m) {
     for (int64_t k = 0; k < num_chirps; ++k) {
-      const double phase =
-          std::sin(0.7 * static_cast<double>(k) + m) * 2.0;
+      const double phase = std::sin(0.7 * static_cast<double>(k) + m) * 2.0;
       code.phase_codes[static_cast<size_t>(m * num_chirps + k)] =
           std::complex<double>(std::cos(phase), std::sin(phase));
     }
   }
 
   const std::vector<int64_t> shape{kNlRx, kNlDoppler, kNlRange};
-  const std::vector<std::complex<float>> host(
-      static_cast<size_t>(kNlRx * kNlDoppler * kNlRange), {1.0f, 0.0f});
-  const GraphRunResult result =
-      run_ddm_result<float>(
-          {to_device_tensor(host, shape, complex_dtype<float>())},
-          ddm_params(code));
+  const std::vector<std::complex<float>> host(static_cast<size_t>(kNlRx * kNlDoppler * kNlRange),
+                                              {1.0f, 0.0f});
+  const GraphRunResult result = run_ddm_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -725,8 +654,8 @@ TEST(DDMDenseDemultiplexOp, DdmGuardBandsReduceWidth) {
   const int64_t band = kDdmDoppler / kDdmTx - 1;
   const int64_t p0 = 0;
   const auto offsets = uniform_offsets(kDdmTx);
-  const auto host = build_ddm_input_host<float>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
+  const auto host =
+      build_ddm_input_host<float>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   const auto out = run_ddm_from_host<float>(host, shape, code);
   ASSERT_EQ(out.shape.size(), 4U);
@@ -737,16 +666,13 @@ TEST(DDMDenseDemultiplexOp, DdmGuardBandsReduceWidth) {
 TEST(DDMDenseDemultiplexOp, LinearVelocityAxisUsesCenteredPhysicalSlice) {
   const auto code = make_offset_code(kDdmTx);
   const auto offsets = uniform_offsets(kDdmTx);
-  const auto host = build_ddm_input_host<float>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, 0);
+  const auto host = build_ddm_input_host<float>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, 0);
   std::vector<float> axis(static_cast<size_t>(kDdmDoppler));
   for (int64_t index = 0; index < kDdmDoppler; ++index) {
-    axis[static_cast<size_t>(index)] =
-        static_cast<float>(index - kDdmDoppler / 2) * 0.25f;
+    axis[static_cast<size_t>(index)] = static_cast<float>(index - kDdmDoppler / 2) * 0.25f;
   }
   DualIOGraphRunResult result = run_ddm_with_axis<float>(
-      to_device_tensor(
-          host, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>()),
+      to_device_tensor(host, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>()),
       to_device_tensor(axis, {kDdmDoppler}, real_dtype<float>()), code);
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -767,19 +693,17 @@ TEST(DDMDenseDemultiplexOp, DopplerProducerPublishesAxisBeforeMapTrigger) {
   harness::FrameBankB::reset();
   const std::vector<std::complex<float>> profiles(
       static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange), {1.0f, 0.0f});
-  harness::FrameBank::input_frames = {to_device_tensor(
-      profiles, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>())};
+  harness::FrameBank::input_frames = {
+      to_device_tensor(profiles, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>())};
 
   holoscan::Graph graph{"doppler-ddm-axis-order"};
   const auto source = graph.op<harness::TensorSourceOp>("source");
   const auto extents = holoscan::radar::testing::default_test_extents();
-  auto doppler =
-      graph.op<FMCWDopplerProcessorOp<float>>("doppler", extents);
+  auto doppler = graph.op<FMCWDopplerProcessorOp<float>>("doppler", extents);
   FMCWDopplerProcessorParams doppler_params;
   doppler_params.waveform = test_waveform();
   doppler.set_params(std::move(doppler_params));
-  auto demultiplex =
-      graph.op<DDMDenseDemultiplexOp<float>>("demultiplex", extents);
+  auto demultiplex = graph.op<DDMDenseDemultiplexOp<float>>("demultiplex", extents);
   demultiplex.set_params(ddm_params(make_offset_code(kDdmTx)));
   const auto map_sink = graph.op<harness::TensorCaptureOp>("map_sink");
   const auto axis_sink = graph.op<harness::TensorCaptureBOp>("axis_sink");
@@ -799,11 +723,8 @@ TEST(DDMDenseDemultiplexOp, DopplerProducerPublishesAxisBeforeMapTrigger) {
 
   holoscan::CompileOptions options;
   const auto bind = [&options](const char* op, const char* port) {
-    options.deployment.bind_tensor_output_device(
-        holoscan::TensorOutputDevicePlacement{
-            .operator_path = op,
-            .output_port = port,
-            .device = holoscan::DeviceId{0}});
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = op, .output_port = port, .device = holoscan::DeviceId{0}});
   };
   bind("source", "out");
   bind("doppler", "velocity_bins");
@@ -811,14 +732,11 @@ TEST(DDMDenseDemultiplexOp, DopplerProducerPublishesAxisBeforeMapTrigger) {
   bind("demultiplex", "velocity_bins_out");
   bind("demultiplex", "rd_maps_out");
 
-  const holoscan::ExecutionPlan plan =
-      holoscan::compile(graph, std::move(options));
+  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
   ASSERT_TRUE(plan.ok()) << plan.json();
   holoscan::RunSession session = holoscan::run_async(plan);
-  const auto deadline =
-      std::chrono::steady_clock::now() + harness::kHarnessDeadline;
-  while (session.diagnostics().empty() &&
-         std::chrono::steady_clock::now() < deadline) {
+  const auto deadline = std::chrono::steady_clock::now() + harness::kHarnessDeadline;
+  while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
     std::size_t maps = 0;
     std::size_t axes = 0;
     {
@@ -848,16 +766,14 @@ TEST(DDMDenseDemultiplexOp, DopplerProducerPublishesAxisBeforeMapTrigger) {
 TEST(DDMDenseDemultiplexOp, GuardBandsKeepCenteredVelocityInterval) {
   const auto code = make_offset_code(kDdmTx, /*guard=*/1);
   const auto offsets = uniform_offsets(kDdmTx);
-  const auto host = build_ddm_input_host<double>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, 0);
+  const auto host =
+      build_ddm_input_host<double>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, 0);
   std::vector<double> axis(static_cast<size_t>(kDdmDoppler));
   for (int64_t index = 0; index < kDdmDoppler; ++index) {
-    axis[static_cast<size_t>(index)] =
-        static_cast<double>(index - kDdmDoppler / 2);
+    axis[static_cast<size_t>(index)] = static_cast<double>(index - kDdmDoppler / 2);
   }
   DualIOGraphRunResult result = run_ddm_with_axis<double>(
-      to_device_tensor(
-          host, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<double>()),
+      to_device_tensor(host, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<double>()),
       to_device_tensor(axis, {kDdmDoppler}, real_dtype<double>()), code);
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -875,8 +791,8 @@ TEST(DDMDenseDemultiplexOp, DdmGuardBandDiscardsEdgeBin) {
   const int64_t band = kDdmDoppler / kDdmTx - 1;
   const int64_t edge = kDdmDoppler / kDdmTx - 1;
   const auto offsets = uniform_offsets(kDdmTx);
-  const auto host = build_ddm_input_host<float>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, edge);
+  const auto host =
+      build_ddm_input_host<float>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, edge);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   const auto out = run_ddm_from_host<float>(host, shape, code);
   const auto* data = out.as<std::complex<float>>();
@@ -892,13 +808,12 @@ TEST(DDMDenseDemultiplexOp, DdmComplexDoublePreserved) {
   const int64_t band = kDdmDoppler / kDdmTx;
   const int64_t p0 = 2;
   const auto offsets = uniform_offsets(kDdmTx);
-  const auto host = build_ddm_input_host<double>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
+  const auto host =
+      build_ddm_input_host<double>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   const auto out = run_ddm_from_host<double>(host, shape, code);
   EXPECT_TRUE(dldatatype_equals(out.dtype, complex_dtype<double>()));
-  expect_ddm_recovered<double>(
-      out, kDdmTx, kDdmRx, band, kDdmRange, p0, 1, 1e-9);
+  expect_ddm_recovered<double>(out, kDdmTx, kDdmRx, band, kDdmRange, p0, 1, 1e-9);
 }
 
 TEST(DDMDenseDemultiplexOp, DdmComplexFloatDtypePreserved) {
@@ -906,8 +821,8 @@ TEST(DDMDenseDemultiplexOp, DdmComplexFloatDtypePreserved) {
   const int64_t band = kDdmDoppler / kDdmTx;
   const int64_t p0 = 1;
   const auto offsets = uniform_offsets(kDdmTx);
-  const auto host = build_ddm_input_host<float>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
+  const auto host =
+      build_ddm_input_host<float>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   const auto out = run_ddm_from_host<float>(host, shape, code);
   EXPECT_TRUE(dldatatype_equals(out.dtype, complex_dtype<float>()));
@@ -920,22 +835,18 @@ TEST(DDMDenseDemultiplexOp, DdmFloatDoubleAgreement) {
   const int64_t p0 = 1;
   const auto offsets = uniform_offsets(kDdmTx);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
-  const auto host_f = build_ddm_input_host<float>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
-  const auto host_d = build_ddm_input_host<double>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
-  const auto out_f =
-      run_ddm_from_host<float>(host_f, shape, code);
-  const auto out_d =
-      run_ddm_from_host<double>(host_d, shape, code);
+  const auto host_f =
+      build_ddm_input_host<float>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
+  const auto host_d =
+      build_ddm_input_host<double>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
+  const auto out_f = run_ddm_from_host<float>(host_f, shape, code);
+  const auto out_d = run_ddm_from_host<double>(host_d, shape, code);
   const auto* f = out_f.as<std::complex<float>>();
   const auto* d = out_d.as<std::complex<double>>();
   const int64_t total = kDdmTx * kDdmRx * band * kDdmRange;
   for (int64_t i = 0; i < total; ++i) {
-    EXPECT_NEAR(static_cast<double>(f[i].real()), d[i].real(), 1e-4)
-        << "i=" << i;
-    EXPECT_NEAR(static_cast<double>(f[i].imag()), d[i].imag(), 1e-4)
-        << "i=" << i;
+    EXPECT_NEAR(static_cast<double>(f[i].real()), d[i].real(), 1e-4) << "i=" << i;
+    EXPECT_NEAR(static_cast<double>(f[i].imag()), d[i].imag(), 1e-4) << "i=" << i;
   }
 }
 
@@ -944,8 +855,8 @@ TEST(DDMDenseDemultiplexOp, DdmNonUniformOffsetPermutation) {
   const auto code = make_offset_code_from(permuted);
   const int64_t band = kDdmDoppler / kDdmTx;
   const int64_t p0 = 0;
-  const auto host = build_ddm_input_host<float>(
-      permuted, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
+  const auto host =
+      build_ddm_input_host<float>(permuted, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   const auto out = run_ddm_from_host<float>(host, shape, code);
   expect_ddm_recovered<float>(out, kDdmTx, kDdmRx, band, kDdmRange, p0);
@@ -955,12 +866,11 @@ TEST(DDMDenseDemultiplexOp, DdmDeterministicAcrossRuns) {
   const auto code = make_offset_code(kDdmTx);
   const int64_t p0 = 1;
   const auto offsets = uniform_offsets(kDdmTx);
-  const auto host = build_ddm_input_host<float>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
+  const auto host =
+      build_ddm_input_host<float>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   const auto first = run_ddm_from_host<float>(host, shape, code);
-  const auto second =
-      run_ddm_from_host<float>(host, shape, code);
+  const auto second = run_ddm_from_host<float>(host, shape, code);
   ASSERT_EQ(first.shape, second.shape);
   const auto* a = first.as<std::complex<float>>();
   const auto* b = second.as<std::complex<float>>();
@@ -974,12 +884,10 @@ TEST(DDMDenseDemultiplexOp, DdmDeterministicAcrossRuns) {
 
 TEST(DDMDenseDemultiplexOp, RejectsEmptyDdmCode) {
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
-  const std::vector<std::complex<float>> host(
-      static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange), {1.0f, 0.0f});
-  const GraphRunResult result =
-      run_ddm_result<float>(
-          {to_device_tensor(host, shape, complex_dtype<float>())},
-          ddm_params(DDMCodeDescriptor{}));
+  const std::vector<std::complex<float>> host(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
+                                              {1.0f, 0.0f});
+  const GraphRunResult result = run_ddm_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(DDMCodeDescriptor{}));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -988,12 +896,10 @@ TEST(DDMDenseDemultiplexOp, RejectsEmptyDdmCode) {
 TEST(DDMDenseDemultiplexOp, DdmRejectsNonDivisibleDoppler) {
   const auto code = make_offset_code(3);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
-  const std::vector<std::complex<float>> host(
-      static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange), {1.0f, 0.0f});
-  const GraphRunResult result =
-      run_ddm_result<float>(
-          {to_device_tensor(host, shape, complex_dtype<float>())},
-          ddm_params(code));
+  const std::vector<std::complex<float>> host(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
+                                              {1.0f, 0.0f});
+  const GraphRunResult result = run_ddm_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1002,12 +908,10 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsNonDivisibleDoppler) {
 TEST(DDMDenseDemultiplexOp, DdmRejectsGuardTooLarge) {
   const auto code = make_offset_code(kDdmTx, /*guard=*/4);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
-  const std::vector<std::complex<float>> host(
-      static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange), {1.0f, 0.0f});
-  const GraphRunResult result =
-      run_ddm_result<float>(
-          {to_device_tensor(host, shape, complex_dtype<float>())},
-          ddm_params(code));
+  const std::vector<std::complex<float>> host(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
+                                              {1.0f, 0.0f});
+  const GraphRunResult result = run_ddm_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1015,13 +919,10 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsGuardTooLarge) {
 
 TEST(DDMDenseDemultiplexOp, DdmRejectsRankTooSmall) {
   const auto code = make_offset_code(2);
-  const std::vector<std::complex<float>> host(
-      static_cast<size_t>(kDdmDoppler * kDdmRange), {1.0f, 0.0f});
-  const GraphRunResult result =
-      run_ddm_result<float>(
-          {to_device_tensor(host, {kDdmDoppler, kDdmRange},
-                            complex_dtype<float>())},
-          ddm_params(code));
+  const std::vector<std::complex<float>> host(static_cast<size_t>(kDdmDoppler * kDdmRange),
+                                              {1.0f, 0.0f});
+  const GraphRunResult result = run_ddm_result<float>(
+      {to_device_tensor(host, {kDdmDoppler, kDdmRange}, complex_dtype<float>())}, ddm_params(code));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1029,16 +930,14 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsRankTooSmall) {
 
 TEST(DDMDenseDemultiplexOp, DdmRejectsBothOffsetForms) {
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
-  const std::vector<std::complex<float>> host(
-      static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange), {1.0f, 0.0f});
+  const std::vector<std::complex<float>> host(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
+                                              {1.0f, 0.0f});
   DDMCodeDescriptor code;
   code.num_tx = 2;
   code.doppler_offsets = {0.0, 0.5};
   code.phase_codes = {{1.0, 0.0}, {0.0, 1.0}};
-  const GraphRunResult result =
-      run_ddm_result<float>(
-          {to_device_tensor(host, shape, complex_dtype<float>())},
-          ddm_params(code));
+  const GraphRunResult result = run_ddm_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1048,12 +947,10 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsMismatchedPrecision) {
   const auto code = make_offset_code(kDdmTx);
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   const auto offsets = uniform_offsets(kDdmTx);
-  const auto host = build_ddm_input_host<double>(
-      offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, 0);
-  const GraphRunResult result =
-      run_ddm_result<float>(
-          {to_device_tensor(host, shape, complex_dtype<double>())},
-          ddm_params(code));
+  const auto host =
+      build_ddm_input_host<double>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, 0);
+  const GraphRunResult result = run_ddm_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<double>())}, ddm_params(code));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1061,14 +958,12 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsMismatchedPrecision) {
 
 TEST(DDMDenseDemultiplexOp, RejectsVelocityAxisLengthMismatch) {
   const auto code = make_offset_code(kDdmTx);
-  const std::vector<std::complex<float>> maps(
-      static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange), {1.0f, 0.0f});
+  const std::vector<std::complex<float>> maps(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
+                                              {1.0f, 0.0f});
   const std::vector<float> axis(static_cast<size_t>(kDdmDoppler - 1), 0.0f);
   const DualIOGraphRunResult result = run_ddm_with_axis<float>(
-      to_device_tensor(
-          maps, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>()),
-      to_device_tensor(
-          axis, {kDdmDoppler - 1}, real_dtype<float>()), code);
+      to_device_tensor(maps, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>()),
+      to_device_tensor(axis, {kDdmDoppler - 1}, real_dtype<float>()), code);
   EXPECT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1076,12 +971,11 @@ TEST(DDMDenseDemultiplexOp, RejectsVelocityAxisLengthMismatch) {
 
 TEST(DDMDenseDemultiplexOp, RejectsVelocityAxisPrecisionMismatch) {
   const auto code = make_offset_code(kDdmTx);
-  const std::vector<std::complex<float>> maps(
-      static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange), {1.0f, 0.0f});
+  const std::vector<std::complex<float>> maps(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
+                                              {1.0f, 0.0f});
   const std::vector<double> axis(static_cast<size_t>(kDdmDoppler), 0.0);
   const DualIOGraphRunResult result = run_ddm_with_axis<float>(
-      to_device_tensor(
-          maps, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>()),
+      to_device_tensor(maps, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>()),
       to_device_tensor(axis, {kDdmDoppler}, real_dtype<double>()), code);
   EXPECT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.frames0.empty());
@@ -1090,31 +984,26 @@ TEST(DDMDenseDemultiplexOp, RejectsVelocityAxisPrecisionMismatch) {
 
 TEST(DDMDenseDemultiplexOp, UnwiredVelocityAxisDoesNotSuppressMaps) {
   const auto code = make_offset_code(kDdmTx);
-  const std::vector<std::complex<float>> maps(
-      static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange), {1.0f, 0.0f});
+  const std::vector<std::complex<float>> maps(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
+                                              {1.0f, 0.0f});
   const std::vector<float> axis(static_cast<size_t>(kDdmDoppler), 0.0f);
   std::vector<std::shared_ptr<holoscan::Tensor>> axes;
   std::vector<std::shared_ptr<holoscan::Tensor>> map_frames;
   for (int frame = 0; frame < 4; ++frame) {
-    axes.push_back(to_device_tensor(
-        axis, {kDdmDoppler}, real_dtype<float>()));
-    map_frames.push_back(to_device_tensor(
-        maps, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>()));
+    axes.push_back(to_device_tensor(axis, {kDdmDoppler}, real_dtype<float>()));
+    map_frames.push_back(
+        to_device_tensor(maps, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>()));
   }
   const GraphRunResult result =
-      run_dual_in_single_out_operator_graph_result<
-          DDMDenseDemultiplexOp<float>>(
-          std::move(axes), std::move(map_frames), ddm_params(code),
-          "rd_maps_out",
-          [](holoscan::Graph& graph, const auto& source, auto& op,
-             const auto& sink) {
+      run_dual_in_single_out_operator_graph_result<DDMDenseDemultiplexOp<float>>(
+          std::move(axes), std::move(map_frames), ddm_params(code), "rd_maps_out",
+          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
             const holoscan::ConnectionOptions q{.queue_depth = 4U};
             graph.add_flow(source->out0, op->velocity_bins, q);
             graph.add_flow(source->out1, op->rd_maps, q);
             graph.add_flow(op->rd_maps_out, sink->in, q);
           },
-          holoscan::radar::testing::default_test_extents(),
-          {"velocity_bins_out"});
+          holoscan::radar::testing::default_test_extents(), {"velocity_bins_out"});
   EXPECT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.diagnostics.empty());
   EXPECT_EQ(result.frames.size(), 4U);

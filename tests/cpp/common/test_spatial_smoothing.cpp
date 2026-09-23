@@ -37,8 +37,7 @@ ArrayGeometry make_ula(int64_t n, double spacing = 0.5, double wl = 1.0) {
 
 // URA in the y-z plane, element order (iz outer, iy inner) — the ordering the
 // example builders and MVDR tests use; the planner must be robust to it.
-ArrayGeometry make_ura(int64_t ny, int64_t nz, double spacing = 0.5,
-                       double wl = 1.0) {
+ArrayGeometry make_ura(int64_t ny, int64_t nz, double spacing = 0.5, double wl = 1.0) {
   ArrayGeometry g;
   g.wavelength = wl;
   g.geometry_type = ArrayGeometryType::kUra;
@@ -63,8 +62,7 @@ TEST(SpatialSmoothingPlan, UlaForwardEnumeration) {
   EXPECT_EQ(plan.looks_per_snapshot(), 3);
 
   // Three maximally-overlapping windows: [0..5], [1..6], [2..7].
-  const std::vector<int32_t> expect = {0, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5,
-                                       6, 2, 3, 4, 5, 6, 7};
+  const std::vector<int32_t> expect = {0, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 6, 2, 3, 4, 5, 6, 7};
   EXPECT_EQ(plan.subarray_index, expect);
 
   // Reduced geometry is the reference sub-array (elements 0..5).
@@ -152,8 +150,7 @@ TEST(SpatialSmoothingPlan, RejectsNonUniformSpacing) {
   for (double y : ys) {
     g.element_positions.insert(g.element_positions.end(), {0.0, y, 0.0});
   }
-  EXPECT_THROW(build_spatial_smoothing_plan(g, {2}, false),
-               std::invalid_argument);
+  EXPECT_THROW(build_spatial_smoothing_plan(g, {2}, false), std::invalid_argument);
 }
 
 TEST(SpatialSmoothingPlan, RejectsHoleyLattice) {
@@ -165,35 +162,28 @@ TEST(SpatialSmoothingPlan, RejectsHoleyLattice) {
       if (iz == 2 && iy == 2) {
         continue;
       }
-      g.element_positions.insert(g.element_positions.end(),
-                                 {0.0, iy * 0.5, iz * 0.5});
+      g.element_positions.insert(g.element_positions.end(), {0.0, iy * 0.5, iz * 0.5});
     }
   }
-  EXPECT_THROW(build_spatial_smoothing_plan(g, {2, 2}, false),
-               std::invalid_argument);
+  EXPECT_THROW(build_spatial_smoothing_plan(g, {2, 2}, false), std::invalid_argument);
 }
 
 TEST(SpatialSmoothingPlan, RejectsCountLengthMismatch) {
   const auto g = make_ula(8);
-  EXPECT_THROW(build_spatial_smoothing_plan(g, {2, 2}, false),
-               std::invalid_argument);
+  EXPECT_THROW(build_spatial_smoothing_plan(g, {2, 2}, false), std::invalid_argument);
   const auto u = make_ura(4, 4);
-  EXPECT_THROW(build_spatial_smoothing_plan(u, {2}, false),
-               std::invalid_argument);
+  EXPECT_THROW(build_spatial_smoothing_plan(u, {2}, false), std::invalid_argument);
 }
 
 TEST(SpatialSmoothingPlan, RejectsCountOutOfRange) {
   const auto g = make_ula(8);
-  EXPECT_THROW(build_spatial_smoothing_plan(g, {9}, false),
-               std::invalid_argument);
-  EXPECT_THROW(build_spatial_smoothing_plan(g, {0}, false),
-               std::invalid_argument);
+  EXPECT_THROW(build_spatial_smoothing_plan(g, {9}, false), std::invalid_argument);
+  EXPECT_THROW(build_spatial_smoothing_plan(g, {0}, false), std::invalid_argument);
 }
 
 TEST(SpatialSmoothingPlan, RejectsEmptyCounts) {
   const auto g = make_ula(8);
-  EXPECT_THROW(build_spatial_smoothing_plan(g, {}, false),
-               std::invalid_argument);
+  EXPECT_THROW(build_spatial_smoothing_plan(g, {}, false), std::invalid_argument);
 }
 
 }  // namespace
