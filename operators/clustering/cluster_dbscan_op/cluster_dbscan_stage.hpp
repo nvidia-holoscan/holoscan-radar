@@ -47,10 +47,8 @@ inline int grid_for(int64_t n, int block = 256) {
 // eps_inv2 entry excludes that feature entirely; skip it before reading the
 // point values so ignored non-finite pass-through features cannot poison d2.
 template <typename T>
-__device__ inline bool dbscan_neighbor(const T* __restrict__ pi,
-                                       const T* __restrict__ pj,
-                                       const T* __restrict__ eps_inv2,
-                                       int64_t f) {
+__device__ inline bool dbscan_neighbor(const T* __restrict__ pi, const T* __restrict__ pj,
+                                       const T* __restrict__ eps_inv2, int64_t f) {
   T d2 = static_cast<T>(0);
   for (int64_t a = 0; a < f; ++a) {
     if (eps_inv2[a] == static_cast<T>(0)) {
@@ -69,11 +67,9 @@ __device__ inline bool dbscan_neighbor(const T* __restrict__ pi,
 // the count reaches min_points. Seed cc: core → its own row index (a candidate
 // component root), non-core → the noise sentinel.
 template <typename T>
-__global__ void mark_core_kernel(const T* __restrict__ points,
-                                 const T* __restrict__ eps_inv2, int64_t n,
-                                 int64_t f, int64_t min_points,
-                                 uint8_t* __restrict__ is_core,
-                                 int64_t* __restrict__ cc) {
+__global__ void mark_core_kernel(const T* __restrict__ points, const T* __restrict__ eps_inv2,
+                                 int64_t n, int64_t f, int64_t min_points,
+                                 uint8_t* __restrict__ is_core, int64_t* __restrict__ cc) {
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
@@ -96,12 +92,10 @@ __global__ void mark_core_kernel(const T* __restrict__ points,
 // (cc_in[cc_in[i]]) for logarithmic convergence. Sets *changed when any label
 // drops. Non-core rows are copied through unchanged.
 template <typename T>
-__global__ void cc_step_kernel(const T* __restrict__ points,
-                               const T* __restrict__ eps_inv2,
+__global__ void cc_step_kernel(const T* __restrict__ points, const T* __restrict__ eps_inv2,
                                const uint8_t* __restrict__ is_core,
-                               const int64_t* __restrict__ cc_in,
-                               int64_t* __restrict__ cc_out, int64_t n,
-                               int64_t f, int* __restrict__ changed) {
+                               const int64_t* __restrict__ cc_in, int64_t* __restrict__ cc_out,
+                               int64_t n, int64_t f, int* __restrict__ changed) {
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
@@ -138,11 +132,9 @@ __global__ void cc_step_kernel(const T* __restrict__ points,
 // any); points with no core neighbor stay noise. Operates in place: thread i
 // writes only its own (non-core) row and reads finalized core roots.
 template <typename T>
-__global__ void assign_border_kernel(const T* __restrict__ points,
-                                     const T* __restrict__ eps_inv2,
-                                     const uint8_t* __restrict__ is_core,
-                                     int64_t* __restrict__ cc, int64_t n,
-                                     int64_t f) {
+__global__ void assign_border_kernel(const T* __restrict__ points, const T* __restrict__ eps_inv2,
+                                     const uint8_t* __restrict__ is_core, int64_t* __restrict__ cc,
+                                     int64_t n, int64_t f) {
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n || is_core[i] != 0) {
     return;
@@ -166,8 +158,7 @@ __global__ void assign_border_kernel(const T* __restrict__ points,
 // Flag component roots: a core row whose label points to itself. 1 → root.
 __global__ inline void root_flag_kernel(const uint8_t* __restrict__ is_core,
                                         const int64_t* __restrict__ cc,
-                                        uint32_t* __restrict__ root_flag,
-                                        int64_t n) {
+                                        uint32_t* __restrict__ root_flag, int64_t n) {
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
@@ -177,23 +168,21 @@ __global__ inline void root_flag_kernel(const uint8_t* __restrict__ is_core,
 
 // Map each point's root to its dense cluster id (exclusive scan of root_flag at
 // the root row); noise rows → -1.
-__global__ inline void finalize_labels_kernel(
-    const int64_t* __restrict__ cc, const uint32_t* __restrict__ dense_of_root,
-    int64_t* __restrict__ labels, int64_t n) {
+__global__ inline void finalize_labels_kernel(const int64_t* __restrict__ cc,
+                                              const uint32_t* __restrict__ dense_of_root,
+                                              int64_t* __restrict__ labels, int64_t n) {
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
   }
   const int64_t root = cc[i];
-  labels[i] = (root < 0) ? kNoiseRoot
-                         : static_cast<int64_t>(dense_of_root[root]);
+  labels[i] = (root < 0) ? kNoiseRoot : static_cast<int64_t>(dense_of_root[root]);
 }
 
 // Renumber cluster ids through a permutation (remap[old id] = new id); noise
 // rows (-1) pass through unchanged. Used to reorder ids by descending size.
 __global__ inline void remap_labels_kernel(int64_t* __restrict__ labels,
-                                           const int64_t* __restrict__ remap,
-                                           int64_t n) {
+                                           const int64_t* __restrict__ remap, int64_t n) {
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
@@ -205,8 +194,7 @@ __global__ inline void remap_labels_kernel(int64_t* __restrict__ labels,
 }
 
 // Drop clusters whose dense id is at or beyond the cap → relabel to noise.
-__global__ inline void cap_labels_kernel(int64_t* __restrict__ labels,
-                                         int64_t cap, int64_t n) {
+__global__ inline void cap_labels_kernel(int64_t* __restrict__ labels, int64_t cap, int64_t n) {
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
@@ -218,8 +206,7 @@ __global__ inline void cap_labels_kernel(int64_t* __restrict__ labels,
 
 // Per-cluster point counts (sizes[label] += 1) over the non-noise rows.
 __global__ inline void histogram_kernel(const int64_t* __restrict__ labels,
-                                        int64_t* __restrict__ sizes,
-                                        int64_t n) {
+                                        int64_t* __restrict__ sizes, int64_t n) {
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
@@ -234,50 +221,42 @@ __global__ inline void histogram_kernel(const int64_t* __restrict__ labels,
 // ---- Host launch wrappers ------------------------------------------------
 
 template <typename T>
-void launch_mark_core(const T* points, const T* eps_inv2, int64_t n, int64_t f,
-                      int64_t min_points, uint8_t* is_core, int64_t* cc,
-                      cudaStream_t stream) {
-  mark_core_kernel<T><<<grid_for(n), 256, 0, stream>>>(
-      points, eps_inv2, n, f, min_points, is_core, cc);
+void launch_mark_core(const T* points, const T* eps_inv2, int64_t n, int64_t f, int64_t min_points,
+                      uint8_t* is_core, int64_t* cc, cudaStream_t stream) {
+  mark_core_kernel<T>
+      <<<grid_for(n), 256, 0, stream>>>(points, eps_inv2, n, f, min_points, is_core, cc);
 }
 
 template <typename T>
 void launch_cc_step(const T* points, const T* eps_inv2, const uint8_t* is_core,
-                    const int64_t* cc_in, int64_t* cc_out, int64_t n, int64_t f,
-                    int* changed, cudaStream_t stream) {
-  cc_step_kernel<T><<<grid_for(n), 256, 0, stream>>>(
-      points, eps_inv2, is_core, cc_in, cc_out, n, f, changed);
+                    const int64_t* cc_in, int64_t* cc_out, int64_t n, int64_t f, int* changed,
+                    cudaStream_t stream) {
+  cc_step_kernel<T>
+      <<<grid_for(n), 256, 0, stream>>>(points, eps_inv2, is_core, cc_in, cc_out, n, f, changed);
 }
 
 template <typename T>
-void launch_assign_border(const T* points, const T* eps_inv2,
-                          const uint8_t* is_core, int64_t* cc, int64_t n,
-                          int64_t f, cudaStream_t stream) {
-  assign_border_kernel<T><<<grid_for(n), 256, 0, stream>>>(
-      points, eps_inv2, is_core, cc, n, f);
+void launch_assign_border(const T* points, const T* eps_inv2, const uint8_t* is_core, int64_t* cc,
+                          int64_t n, int64_t f, cudaStream_t stream) {
+  assign_border_kernel<T><<<grid_for(n), 256, 0, stream>>>(points, eps_inv2, is_core, cc, n, f);
 }
 
-inline void launch_root_flag(const uint8_t* is_core, const int64_t* cc,
-                             uint32_t* root_flag, int64_t n,
-                             cudaStream_t stream) {
+inline void launch_root_flag(const uint8_t* is_core, const int64_t* cc, uint32_t* root_flag,
+                             int64_t n, cudaStream_t stream) {
   root_flag_kernel<<<grid_for(n), 256, 0, stream>>>(is_core, cc, root_flag, n);
 }
 
-inline void launch_finalize_labels(const int64_t* cc,
-                                   const uint32_t* dense_of_root,
-                                   int64_t* labels, int64_t n,
-                                   cudaStream_t stream) {
-  finalize_labels_kernel<<<grid_for(n), 256, 0, stream>>>(cc, dense_of_root,
-                                                          labels, n);
+inline void launch_finalize_labels(const int64_t* cc, const uint32_t* dense_of_root,
+                                   int64_t* labels, int64_t n, cudaStream_t stream) {
+  finalize_labels_kernel<<<grid_for(n), 256, 0, stream>>>(cc, dense_of_root, labels, n);
 }
 
-inline void launch_remap_labels(int64_t* labels, const int64_t* remap,
-                                int64_t n, cudaStream_t stream) {
+inline void launch_remap_labels(int64_t* labels, const int64_t* remap, int64_t n,
+                                cudaStream_t stream) {
   remap_labels_kernel<<<grid_for(n), 256, 0, stream>>>(labels, remap, n);
 }
 
-inline void launch_cap_labels(int64_t* labels, int64_t cap, int64_t n,
-                              cudaStream_t stream) {
+inline void launch_cap_labels(int64_t* labels, int64_t cap, int64_t n, cudaStream_t stream) {
   cap_labels_kernel<<<grid_for(n), 256, 0, stream>>>(labels, cap, n);
 }
 
@@ -290,18 +269,14 @@ inline void launch_histogram(const int64_t* labels, int64_t* sizes, int64_t n,
 // provides temp storage sized by a prior nullptr query (cub_scan_temp_bytes).
 inline size_t cub_scan_temp_bytes(int64_t n) {
   size_t bytes = 0;
-  cub::DeviceScan::ExclusiveSum(nullptr, bytes,
-                                static_cast<const uint32_t*>(nullptr),
-                                static_cast<uint32_t*>(nullptr),
-                                static_cast<int>(n));
+  cub::DeviceScan::ExclusiveSum(nullptr, bytes, static_cast<const uint32_t*>(nullptr),
+                                static_cast<uint32_t*>(nullptr), static_cast<int>(n));
   return bytes;
 }
 
-inline void launch_scan_root_ids(void* temp, size_t temp_bytes,
-                                 const uint32_t* root_flag, uint32_t* dense,
-                                 int64_t n, cudaStream_t stream) {
-  cub::DeviceScan::ExclusiveSum(temp, temp_bytes, root_flag, dense,
-                                static_cast<int>(n), stream);
+inline void launch_scan_root_ids(void* temp, size_t temp_bytes, const uint32_t* root_flag,
+                                 uint32_t* dense, int64_t n, cudaStream_t stream) {
+  cub::DeviceScan::ExclusiveSum(temp, temp_bytes, root_flag, dense, static_cast<int>(n), stream);
 }
 
 }  // namespace holoscan::radar::cluster_dbscan

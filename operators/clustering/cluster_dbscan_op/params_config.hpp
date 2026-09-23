@@ -10,11 +10,9 @@
 
 namespace holoscan::config {
 
-using ClusterParamsCodec =
-    params::DefaultedParamSchemaCodec<radar::ClusterDBSCANParams>;  // NOLINT
+using ClusterParamsCodec = params::DefaultedParamSchemaCodec<radar::ClusterDBSCANParams>;  // NOLINT
 
 template <>
-struct ConfigCodec<radar::ClusterDBSCANParams>
-    : ClusterParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::ClusterDBSCANParams> : ClusterParamsCodec {};  // NOLINT
 
 }  // namespace holoscan::config
