@@ -27,20 +27,28 @@ struct NoCustomScore {};
 
 constexpr std::string_view to_string(RepresentativePolicy policy) {
   switch (policy) {
-    case RepresentativePolicy::kPeak: return "peak";
-    case RepresentativePolicy::kMedoid: return "medoid";
-    case RepresentativePolicy::kFirst: return "first";
-    case RepresentativePolicy::kWeightedMean: return "weighted_mean";
+    case RepresentativePolicy::kPeak:
+      return "peak";
+    case RepresentativePolicy::kMedoid:
+      return "medoid";
+    case RepresentativePolicy::kFirst:
+      return "first";
+    case RepresentativePolicy::kWeightedMean:
+      return "weighted_mean";
   }
   return "unknown";
 }
 
 constexpr std::string_view to_string(ScoreMethod method) {
   switch (method) {
-    case ScoreMethod::kWeightedSum: return "weighted_sum";
-    case ScoreMethod::kWeightedL2: return "weighted_l2";
-    case ScoreMethod::kWeightedMax: return "weighted_max";
-    case ScoreMethod::kCustom: return "custom";
+    case ScoreMethod::kWeightedSum:
+      return "weighted_sum";
+    case ScoreMethod::kWeightedL2:
+      return "weighted_l2";
+    case ScoreMethod::kWeightedMax:
+      return "weighted_max";
+    case ScoreMethod::kCustom:
+      return "custom";
   }
   return "unknown";
 }

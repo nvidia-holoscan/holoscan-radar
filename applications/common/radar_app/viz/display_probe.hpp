@@ -9,6 +9,8 @@
 #include "radar_app/viz/x11_display.hpp"
 #else
 namespace holoscan::radar::app {
-inline bool gui_available() { return false; }
+inline bool gui_available() {
+  return false;
+}
 }  // namespace holoscan::radar::app
 #endif

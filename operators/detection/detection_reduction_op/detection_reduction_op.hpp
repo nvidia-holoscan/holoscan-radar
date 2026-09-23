@@ -75,31 +75,23 @@ struct DetectionReductionParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     DetectionReductionParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.DetectionReductionParams", 1),
-    holoscan::field<&DetectionReductionParams::representative>(
-        "representative")
-        .description(
-            "Reduction {peak, medoid, first, weighted_mean}; rep_idx always "
-            "selects a real member; default peak"),
+    holoscan::param_schema("com.nvidia.holoscan.radar.DetectionReductionParams", 1),
+    holoscan::field<&DetectionReductionParams::representative>("representative")
+        .description("Reduction {peak, medoid, first, weighted_mean}; rep_idx always "
+                     "selects a real member; default peak"),
     holoscan::field<&DetectionReductionParams::score_method>("score_method")
-        .description(
-            "Peak score or weighted-mean row-weight collapse {weighted_sum, "
-            "weighted_l2, weighted_max, custom}; default weighted_sum"),
-    holoscan::field<&DetectionReductionParams::feature_weights>(
-        "feature_weights")
-        .description(
-            "Per-feature weights for peak/medoid/weighted_mean (length "
-            "num_features); empty requests uniform weighted_mean"));
+        .description("Peak score or weighted-mean row-weight collapse {weighted_sum, "
+                     "weighted_l2, weighted_max, custom}; default weighted_sum"),
+    holoscan::field<&DetectionReductionParams::feature_weights>("feature_weights")
+        .description("Per-feature weights for peak/medoid/weighted_mean (length "
+                     "num_features); empty requests uniform weighted_mean"));
 
-static_assert(
-    holoscan::param_schema_availability<DetectionReductionParams>() ==
-        holoscan::ParamSchemaAvailability::kDeclared,
-    "HOLOSCAN_PARAM_SCHEMA must be in DetectionReductionParams's namespace");
+static_assert(holoscan::param_schema_availability<DetectionReductionParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in DetectionReductionParams's namespace");
 
 template <typename T, typename ScoreFn = NoCustomScore>
-class DetectionReductionOp
-    : public holoscan::Operator<DetectionReductionParams> {
+class DetectionReductionOp : public holoscan::Operator<DetectionReductionParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "DetectionReductionOp supports float and double precision");
 
@@ -108,8 +100,7 @@ class DetectionReductionOp
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> labels{"labels"};
   Input<Tensor> detection_idx{"detection_idx"};

@@ -69,8 +69,7 @@ using holoscan::radar::testing::run_single_in_five_out_operator_graph_result;
 using holoscan::radar::testing::run_single_io_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 
-ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
-                                double wavelength) {
+ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing, double wavelength) {
   ArrayGeometry geom;
   geom.wavelength = wavelength;
   geom.geometry_type = holoscan::radar::ArrayGeometryType::kUla;
@@ -83,8 +82,7 @@ ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
   return geom;
 }
 
-ArrayGeometry make_planar_ura_geometry(int64_t ny, int64_t nz, double spacing,
-                                       double wavelength) {
+ArrayGeometry make_planar_ura_geometry(int64_t ny, int64_t nz, double spacing, double wavelength) {
   ArrayGeometry geom;
   geom.wavelength = wavelength;
   geom.geometry_type = holoscan::radar::ArrayGeometryType::kUra;
@@ -100,34 +98,31 @@ ArrayGeometry make_planar_ura_geometry(int64_t ny, int64_t nz, double spacing,
 }
 
 std::vector<std::complex<double>> steering_vector(const ArrayGeometry& geom,
-                                                  const AngleConvention& conv,
-                                                  double az, double el) {
+                                                  const AngleConvention& conv, double az,
+                                                  double el) {
   const auto dir = holoscan::radar::boundary_to_canonical(conv, az, el);
   const double k = 2.0 * kPi / geom.wavelength;
-  std::vector<std::complex<double>> a(
-      static_cast<size_t>(geom.num_elements()));
+  std::vector<std::complex<double>> a(static_cast<size_t>(geom.num_elements()));
   for (int64_t m = 0; m < geom.num_elements(); ++m) {
     const size_t base = static_cast<size_t>(m * 3);
-    const double phase = k * (geom.element_positions[base] * dir.x +
-                              geom.element_positions[base + 1] * dir.y +
-                              geom.element_positions[base + 2] * dir.z);
+    const double phase =
+        k * (geom.element_positions[base] * dir.x + geom.element_positions[base + 1] * dir.y +
+             geom.element_positions[base + 2] * dir.z);
     a[static_cast<size_t>(m)] = {std::cos(phase), std::sin(phase)};
   }
   return a;
 }
 
-std::vector<std::complex<double>> make_block(const ArrayGeometry& geom,
-                                             const AngleConvention& conv,
-                                             double az, double el, int64_t S,
-                                             double noise, unsigned seed) {
+std::vector<std::complex<double>> make_block(const ArrayGeometry& geom, const AngleConvention& conv,
+                                             double az, double el, int64_t S, double noise,
+                                             unsigned seed) {
   const auto a = steering_vector(geom, conv, az, el);
   const int64_t C = geom.num_elements();
   std::vector<std::complex<double>> x(static_cast<size_t>(C * S));
   std::mt19937 rng(seed);
   std::normal_distribution<double> n(0.0, noise);
   for (int64_t s = 0; s < S; ++s) {
-    const double gp =
-        2.0 * kPi * static_cast<double>(s) / static_cast<double>(S);
+    const double gp = 2.0 * kPi * static_cast<double>(s) / static_cast<double>(S);
     const std::complex<double> g{std::cos(gp), std::sin(gp)};
     for (int64_t c = 0; c < C; ++c) {
       std::complex<double> v = a[static_cast<size_t>(c)] * g;
@@ -138,10 +133,10 @@ std::vector<std::complex<double>> make_block(const ArrayGeometry& geom,
   return x;
 }
 
-std::vector<std::complex<double>> make_block_two(
-    const ArrayGeometry& geom, const AngleConvention& conv, double az0,
-    double el0, double az1, double el1, int64_t S, double noise,
-    unsigned seed) {
+std::vector<std::complex<double>> make_block_two(const ArrayGeometry& geom,
+                                                 const AngleConvention& conv, double az0,
+                                                 double el0, double az1, double el1, int64_t S,
+                                                 double noise, unsigned seed) {
   const auto a0 = steering_vector(geom, conv, az0, el0);
   const auto a1 = steering_vector(geom, conv, az1, el1);
   const int64_t C = geom.num_elements();
@@ -155,8 +150,7 @@ std::vector<std::complex<double>> make_block_two(
     const std::complex<double> g0{std::cos(p0), std::sin(p0)};
     const std::complex<double> g1{std::cos(p1), std::sin(p1)};
     for (int64_t c = 0; c < C; ++c) {
-      std::complex<double> v =
-          a0[static_cast<size_t>(c)] * g0 + a1[static_cast<size_t>(c)] * g1;
+      std::complex<double> v = a0[static_cast<size_t>(c)] * g0 + a1[static_cast<size_t>(c)] * g1;
       v += std::complex<double>(n(rng), n(rng));
       x[static_cast<size_t>(c * S + s)] = v;
     }
@@ -173,22 +167,17 @@ std::vector<std::complex<double>> make_block_two(
 // instead of a noise draw.
 std::vector<std::complex<double>> make_orthogonal_source_block(
     const ArrayGeometry& geom, const AngleConvention& conv,
-    const std::vector<double>& direction_cosines,
-    const std::vector<double>& eigenvalues) {
+    const std::vector<double>& direction_cosines, const std::vector<double>& eigenvalues) {
   const int64_t channels = geom.num_elements();
   const int64_t snapshots = static_cast<int64_t>(eigenvalues.size());
-  std::vector<std::complex<double>> block(
-      static_cast<size_t>(channels * snapshots));
+  std::vector<std::complex<double>> block(static_cast<size_t>(channels * snapshots));
   for (int64_t s = 0; s < snapshots; ++s) {
-    const auto a = steering_vector(
-        geom, conv, direction_cosines[static_cast<size_t>(s)], 0.0);
+    const auto a = steering_vector(geom, conv, direction_cosines[static_cast<size_t>(s)], 0.0);
     const double amplitude =
-        std::sqrt(static_cast<double>(snapshots) *
-                  eigenvalues[static_cast<size_t>(s)] /
+        std::sqrt(static_cast<double>(snapshots) * eigenvalues[static_cast<size_t>(s)] /
                   static_cast<double>(channels));
     for (int64_t c = 0; c < channels; ++c) {
-      block[static_cast<size_t>(c * snapshots + s)] =
-          a[static_cast<size_t>(c)] * amplitude;
+      block[static_cast<size_t>(c * snapshots + s)] = a[static_cast<size_t>(c)] * amplitude;
     }
   }
   return block;
@@ -218,9 +207,8 @@ double spectrum_max(const HostTensor& spec) {
 }
 
 template <typename T>
-std::shared_ptr<holoscan::Tensor> block_to_device(
-    const std::vector<std::complex<double>>& host,
-    const std::vector<int64_t>& shape) {
+std::shared_ptr<holoscan::Tensor> block_to_device(const std::vector<std::complex<double>>& host,
+                                                  const std::vector<int64_t>& shape) {
   std::vector<std::complex<T>> cast(host.size());
   for (size_t i = 0; i < host.size(); ++i) {
     cast[i] = {static_cast<T>(host[i].real()), static_cast<T>(host[i].imag())};
@@ -238,11 +226,10 @@ struct MusicOutputs {
 
 // cpplint misreads the wrapped template header as an indented declaration
 // inside the anonymous namespace; the parameter list cannot fit on one line.
-template <typename Source, typename OpRef, typename S0, typename S1,
-          typename S2, typename S3, typename S4>  // NOLINT(whitespace/indent_namespace)
-void wire_music(holoscan::Graph& graph, const Source& source, OpRef& op,
-                const S0& sink0, const S1& sink1, const S2& sink2,
-                const S3& sink3, const S4& sink4) {
+template <typename Source, typename OpRef, typename S0, typename S1, typename S2, typename S3,
+          typename S4>  // NOLINT(whitespace/indent_namespace)
+void wire_music(holoscan::Graph& graph, const Source& source, OpRef& op, const S0& sink0,
+                const S1& sink1, const S2& sink2, const S3& sink3, const S4& sink4) {
   const holoscan::ConnectionOptions q{.queue_depth = 4U};
   graph.add_flow(source->out, op->snapshot, q);
   graph.add_flow(op->aoa_estimates, sink0->in, q);
@@ -252,13 +239,10 @@ void wire_music(holoscan::Graph& graph, const Source& source, OpRef& op,
   graph.add_flow(op->eigenvalues, sink4->in, q);
 }
 
-MUSICParams make_params(ArrayGeometry geom, AngleConvention conv,
-                        std::vector<double> az, std::vector<double> el,
-                        int64_t num_sources = -1,
-                        double source_count_pfa = 1e-2,
-                        int64_t max_sources = 4,
-                        std::vector<int64_t> smoothing = {},
-                        bool forward_backward = true) {
+MUSICParams make_params(ArrayGeometry geom, AngleConvention conv, std::vector<double> az,
+                        std::vector<double> el, int64_t num_sources = -1,
+                        double source_count_pfa = 1e-2, int64_t max_sources = 4,
+                        std::vector<int64_t> smoothing = {}, bool forward_backward = true) {
   MUSICParams params{};
   params.array_geometry = std::move(geom);
   params.angle_convention = std::move(conv);
@@ -275,28 +259,23 @@ MUSICParams make_params(ArrayGeometry geom, AngleConvention conv,
 template <typename T>
 FiveOutGraphRunResult run_music_result(std::shared_ptr<holoscan::Tensor> snapshot,
                                        MUSICParams params) {
-  const holoscan::radar::MaxTensorExtents sized =
-      holoscan::radar::testing::extents_for_scan_grid(
-          params.az_coordinates.size(), params.el_coordinates.size());
+  const holoscan::radar::MaxTensorExtents sized = holoscan::radar::testing::extents_for_scan_grid(
+      params.az_coordinates.size(), params.el_coordinates.size());
   return run_single_in_five_out_operator_graph_result<MUSICEstimatorOp<T>>(
-      {std::move(snapshot)}, std::move(params), "aoa_estimates",
-      "angle_spectrum", "doa_multi", "source_count", "eigenvalues",
-      [](holoscan::Graph& graph, const auto& source, auto& op,
-         const auto& sink0, const auto& sink1, const auto& sink2,
-         const auto& sink3, const auto& sink4) {
+      {std::move(snapshot)}, std::move(params), "aoa_estimates", "angle_spectrum", "doa_multi",
+      "source_count", "eigenvalues",
+      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0, const auto& sink1,
+         const auto& sink2, const auto& sink3, const auto& sink4) {
         wire_music(graph, source, op, sink0, sink1, sink2, sink3, sink4);
       },
       sized);
 }
 
 template <typename T>
-MusicOutputs run_music(std::shared_ptr<holoscan::Tensor> snapshot,
-                       MUSICParams params) {
-  FiveOutGraphRunResult result =
-      run_music_result<T>(std::move(snapshot), std::move(params));
+MusicOutputs run_music(std::shared_ptr<holoscan::Tensor> snapshot, MUSICParams params) {
+  FiveOutGraphRunResult result = run_music_result<T>(std::move(snapshot), std::move(params));
   if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") +
-                             result.plan_json);
+    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
   }
   if (!result.diagnostics.empty()) {
     std::string msg = "run diagnostics:";
@@ -306,11 +285,9 @@ MusicOutputs run_music(std::shared_ptr<holoscan::Tensor> snapshot,
     }
     throw std::runtime_error(msg);
   }
-  if (result.frames0.size() != 1U || result.frames1.size() != 1U ||
-      result.frames2.size() != 1U || result.frames3.size() != 1U ||
-      result.frames4.size() != 1U) {
-    throw std::runtime_error(
-        "MUSICEstimatorOp test: expected one output frame set");
+  if (result.frames0.size() != 1U || result.frames1.size() != 1U || result.frames2.size() != 1U ||
+      result.frames3.size() != 1U || result.frames4.size() != 1U) {
+    throw std::runtime_error("MUSICEstimatorOp test: expected one output frame set");
   }
   return {std::move(result.frames0.front()), std::move(result.frames1.front()),
           std::move(result.frames2.front()), std::move(result.frames3.front()),
@@ -360,21 +337,14 @@ class LiveMusicSourceOp final : public holoscan::Operator<> {
         .dtype = DLDataType{kDLFloat, 64U, 1U},
         .rank = 2U,
     };
-    spec.output(snapshot)
-        .produces_tensor(holoscan::radar::pooled_tensor_output(
-            kDevice, 3U, 1024U * 1024U));
-    spec.output(geometry)
-        .max_emits_per_compute(1U)
-        .produces_tensor(holoscan::radar::pooled_tensor_output(
-            kHostGeometry, 2U, 65U * 3U * sizeof(double)));
-    spec.output(az)
-        .max_emits_per_compute(1U)
-        .produces_tensor(holoscan::radar::pooled_tensor_output(
-            kHostVector, 1U, 65U * sizeof(double)));
-    spec.output(el)
-        .max_emits_per_compute(1U)
-        .produces_tensor(holoscan::radar::pooled_tensor_output(
-            kHostVector, 1U, 33U * sizeof(double)));
+    spec.output(snapshot).produces_tensor(
+        holoscan::radar::pooled_tensor_output(kDevice, 3U, 1024U * 1024U));
+    spec.output(geometry).max_emits_per_compute(1U).produces_tensor(
+        holoscan::radar::pooled_tensor_output(kHostGeometry, 2U, 65U * 3U * sizeof(double)));
+    spec.output(az).max_emits_per_compute(1U).produces_tensor(
+        holoscan::radar::pooled_tensor_output(kHostVector, 1U, 65U * sizeof(double)));
+    spec.output(el).max_emits_per_compute(1U).produces_tensor(
+        holoscan::radar::pooled_tensor_output(kHostVector, 1U, 33U * sizeof(double)));
     spec.output(smoothing);
     spec.output(num_sources);
     spec.output(source_count_pfa);
@@ -383,46 +353,41 @@ class LiveMusicSourceOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
-    result.trigger(holoscan::OnClock{
-        .period = holoscan::radar::testing::detail::kHarnessTick});
+    result.trigger(holoscan::OnClock{.period = holoscan::radar::testing::detail::kHarnessTick});
     return result;
   }
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_vector(
-      holoscan::Output<holoscan::Tensor>& output,
-      const std::vector<double>& values, holoscan::TimePoint capture_time) {
-    const std::array<int64_t, 1> shape{
-        static_cast<int64_t>(values.size())};
-    auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{
-        .shape = shape, .dtype = DLDataType{kDLFloat, 64U, 1U}});
+      holoscan::Output<holoscan::Tensor>& output, const std::vector<double>& values,
+      holoscan::TimePoint capture_time) {
+    const std::array<int64_t, 1> shape{static_cast<int64_t>(values.size())};
+    auto loan = output.allocate_tensor(
+        holoscan::TensorLoanRequest{.shape = shape, .dtype = DLDataType{kDLFloat, 64U, 1U}});
     if (!loan) {
       return holoscan::make_unexpected(std::move(loan).error());
     }
-    HOLOSCAN_RETURN_IF_ERROR(loan->write_host_and_commit(
-        [&values](const holoscan::TensorOutputWriteGuard& writer) {
+    HOLOSCAN_RETURN_IF_ERROR(
+        loan->write_host_and_commit([&values](const holoscan::TensorOutputWriteGuard& writer) {
           std::copy(values.begin(), values.end(), writer.data_as<double>());
         }));
-    return output.emit(
-        std::move(*loan), holoscan::EmitOptions{.capture_time = capture_time});
+    return output.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = capture_time});
   }
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_geometry(
       const ArrayGeometry& value, holoscan::TimePoint capture_time) {
-    const std::vector<double> packed =
-        holoscan::radar::pack_array_geometry(value);
+    const std::vector<double> packed = holoscan::radar::pack_array_geometry(value);
     const std::array<int64_t, 2> shape{value.num_elements() + 1, 3};
-    auto loan = geometry.allocate_tensor(holoscan::TensorLoanRequest{
-        .shape = shape, .dtype = DLDataType{kDLFloat, 64U, 1U}});
+    auto loan = geometry.allocate_tensor(
+        holoscan::TensorLoanRequest{.shape = shape, .dtype = DLDataType{kDLFloat, 64U, 1U}});
     if (!loan) {
       return holoscan::make_unexpected(std::move(loan).error());
     }
-    HOLOSCAN_RETURN_IF_ERROR(loan->write_host_and_commit(
-        [&packed](const holoscan::TensorOutputWriteGuard& writer) {
+    HOLOSCAN_RETURN_IF_ERROR(
+        loan->write_host_and_commit([&packed](const holoscan::TensorOutputWriteGuard& writer) {
           std::copy(packed.begin(), packed.end(), writer.data_as<double>());
         }));
-    return geometry.emit_tensor(
-        std::move(*loan), holoscan::radar::to_wire(value),
-        holoscan::EmitOptions{.capture_time = capture_time});
+    return geometry.emit_tensor(std::move(*loan), holoscan::radar::to_wire(value),
+                                holoscan::EmitOptions{.capture_time = capture_time});
   }
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
@@ -447,27 +412,23 @@ class LiveMusicSourceOp final : public holoscan::Operator<> {
       HOLOSCAN_RETURN_IF_ERROR(emit_vector(el, *tick.el, override_time));
     }
     if (tick.smoothing.has_value()) {
-      HOLOSCAN_RETURN_IF_ERROR(smoothing.emit(
-          *tick.smoothing,
-          holoscan::EmitOptions{.capture_time = override_time}));
+      HOLOSCAN_RETURN_IF_ERROR(
+          smoothing.emit(*tick.smoothing, holoscan::EmitOptions{.capture_time = override_time}));
     }
     if (tick.num_sources.has_value()) {
       HOLOSCAN_RETURN_IF_ERROR(num_sources.emit(
-          *tick.num_sources,
-          holoscan::EmitOptions{.capture_time = override_time}));
+          *tick.num_sources, holoscan::EmitOptions{.capture_time = override_time}));
     }
     if (tick.source_count_pfa.has_value()) {
       HOLOSCAN_RETURN_IF_ERROR(source_count_pfa.emit(
-          *tick.source_count_pfa,
-          holoscan::EmitOptions{.capture_time = override_time}));
+          *tick.source_count_pfa, holoscan::EmitOptions{.capture_time = override_time}));
     }
     if (tick.max_sources.has_value()) {
       HOLOSCAN_RETURN_IF_ERROR(max_sources.emit(
-          *tick.max_sources,
-          holoscan::EmitOptions{.capture_time = override_time}));
+          *tick.max_sources, holoscan::EmitOptions{.capture_time = override_time}));
     }
-    return holoscan::radar::testing::detail::emit_bank_frame(
-        snapshot, context, tick.snapshot, "LiveMusicSourceOp");
+    return holoscan::radar::testing::detail::emit_bank_frame(snapshot, context, tick.snapshot,
+                                                             "LiveMusicSourceOp");
   }
 
   holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
@@ -492,8 +453,7 @@ struct LiveMusicWiring {
   bool max_sources{false};
 };
 
-FiveOutGraphRunResult run_live_music(std::vector<LiveMusicTick> ticks,
-                                     MUSICParams params,
+FiveOutGraphRunResult run_live_music(std::vector<LiveMusicTick> ticks, MUSICParams params,
                                      LiveMusicWiring wiring) {
   FiveOutGraphRunResult result;
   holoscan::radar::testing::detail::FrameBank::reset();
@@ -506,20 +466,14 @@ FiveOutGraphRunResult run_live_music(std::vector<LiveMusicTick> ticks,
 
   holoscan::Graph graph{"music-live-container-overrides"};
   const auto source = graph.op<LiveMusicSourceOp>("source");
-  auto op = holoscan::radar::testing::emplace_harness_op<
-      MUSICEstimatorOp<double>>(
+  auto op = holoscan::radar::testing::emplace_harness_op<MUSICEstimatorOp<double>>(
       graph, holoscan::radar::testing::default_test_extents());
   op.set_params(std::move(params));
-  const auto sink0 =
-      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink0");
-  const auto sink1 =
-      graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sink1");
-  const auto sink2 =
-      graph.op<holoscan::radar::testing::detail::TensorCaptureCOp>("sink2");
-  const auto sink3 =
-      graph.op<holoscan::radar::testing::detail::TensorCaptureDOp>("sink3");
-  const auto sink4 =
-      graph.op<holoscan::radar::testing::detail::TensorCaptureEOp>("sink4");
+  const auto sink0 = graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink0");
+  const auto sink1 = graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sink1");
+  const auto sink2 = graph.op<holoscan::radar::testing::detail::TensorCaptureCOp>("sink2");
+  const auto sink3 = graph.op<holoscan::radar::testing::detail::TensorCaptureDOp>("sink3");
+  const auto sink4 = graph.op<holoscan::radar::testing::detail::TensorCaptureEOp>("sink4");
   const holoscan::ConnectionOptions q{.queue_depth = 8U};
   graph.add_flow(source->snapshot, op->snapshot, q);
   if (wiring.geometry) {
@@ -551,46 +505,37 @@ FiveOutGraphRunResult run_live_music(std::vector<LiveMusicTick> ticks,
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
   holoscan::CompileOptions options;
-  for (const char* port : {"aoa_estimates", "angle_spectrum", "doa_multi",
-                           "source_count", "eigenvalues"}) {
+  for (const char* port :
+       {"aoa_estimates", "angle_spectrum", "doa_multi", "source_count", "eigenvalues"}) {
     holoscan::radar::testing::detail::bind_op_device_output(options, port);
   }
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "source", .output_port = "snapshot",
-          .device = holoscan::DeviceId{0}});
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "source", .output_port = "snapshot", .device = holoscan::DeviceId{0}});
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
       return result;
     }
     holoscan::RunSession session = holoscan::run_async(plan);
-    const auto deadline = std::chrono::steady_clock::now() +
-                          holoscan::radar::testing::detail::kHarnessDeadline;
-    while (session.diagnostics().empty() &&
-           std::chrono::steady_clock::now() < deadline) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + holoscan::radar::testing::detail::kHarnessDeadline;
+    while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
       std::size_t spectrum_count = 0U;
       std::size_t eigenvalue_count = 0U;
       {
-        const std::lock_guard lock(
-            holoscan::radar::testing::detail::FrameBankB::mutex);
-        spectrum_count =
-            holoscan::radar::testing::detail::FrameBankB::captured.size();
+        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankB::mutex);
+        spectrum_count = holoscan::radar::testing::detail::FrameBankB::captured.size();
       }
       {
-        const std::lock_guard lock(
-            holoscan::radar::testing::detail::FrameBankE::mutex);
-        eigenvalue_count =
-            holoscan::radar::testing::detail::FrameBankE::captured.size();
+        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankE::mutex);
+        eigenvalue_count = holoscan::radar::testing::detail::FrameBankE::captured.size();
       }
       if (spectrum_count >= expected && eigenvalue_count >= expected) {
         break;
       }
-      std::this_thread::sleep_for(
-          holoscan::radar::testing::detail::kHarnessPoll);
+      std::this_thread::sleep_for(holoscan::radar::testing::detail::kHarnessPoll);
     }
     session.request_stop();
     session.wait();
@@ -603,35 +548,27 @@ FiveOutGraphRunResult run_live_music(std::vector<LiveMusicTick> ticks,
     result.plan_json = std::string("RuntimeError: ") + error.what();
   }
   {
-    const std::lock_guard lock(
-        holoscan::radar::testing::detail::FrameBankB::mutex);
-    result.frames1 = std::move(
-        holoscan::radar::testing::detail::FrameBankB::captured);
+    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankB::mutex);
+    result.frames1 = std::move(holoscan::radar::testing::detail::FrameBankB::captured);
   }
   {
-    const std::lock_guard lock(
-        holoscan::radar::testing::detail::FrameBankC::mutex);
-    result.frames2 = std::move(
-        holoscan::radar::testing::detail::FrameBankC::captured);
+    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankC::mutex);
+    result.frames2 = std::move(holoscan::radar::testing::detail::FrameBankC::captured);
   }
   {
-    const std::lock_guard lock(
-        holoscan::radar::testing::detail::FrameBankD::mutex);
-    result.frames3 = std::move(
-        holoscan::radar::testing::detail::FrameBankD::captured);
+    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankD::mutex);
+    result.frames3 = std::move(holoscan::radar::testing::detail::FrameBankD::captured);
   }
   {
-    const std::lock_guard lock(
-        holoscan::radar::testing::detail::FrameBankE::mutex);
-    result.frames4 = std::move(
-        holoscan::radar::testing::detail::FrameBankE::captured);
+    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankE::mutex);
+    result.frames4 = std::move(holoscan::radar::testing::detail::FrameBankE::captured);
   }
   return result;
 }
 
 template <typename Source, typename OpRef, typename Sink0, typename Sink1>
-void wire_beamscan(holoscan::Graph& graph, const Source& source, OpRef& op,
-                   const Sink0& sink0, const Sink1& sink1) {
+void wire_beamscan(holoscan::Graph& graph, const Source& source, OpRef& op, const Sink0& sink0,
+                   const Sink1& sink1) {
   const holoscan::ConnectionOptions q{.queue_depth = 4U};
   graph.add_flow(source->out, op->snapshot, q);
   graph.add_flow(op->aoa_estimates, sink0->in, q);
@@ -639,8 +576,7 @@ void wire_beamscan(holoscan::Graph& graph, const Source& source, OpRef& op,
 }
 
 BeamscanParams make_beamscan_params(ArrayGeometry geom, AngleConvention conv,
-                                    std::vector<double> az,
-                                    std::vector<double> el) {
+                                    std::vector<double> az, std::vector<double> el) {
   BeamscanParams params{};
   params.array_geometry = std::move(geom);
   params.angle_convention = std::move(conv);
@@ -650,29 +586,25 @@ BeamscanParams make_beamscan_params(ArrayGeometry geom, AngleConvention conv,
 }
 
 template <typename T>
-DualIOGraphRunResult run_beamscan_result(
-    std::shared_ptr<holoscan::Tensor> snapshot, BeamscanParams params) {
-  const holoscan::radar::MaxTensorExtents sized =
-      holoscan::radar::testing::extents_for_scan_grid(
-          params.az_coordinates.size(), params.el_coordinates.size());
+DualIOGraphRunResult run_beamscan_result(std::shared_ptr<holoscan::Tensor> snapshot,
+                                         BeamscanParams params) {
+  const holoscan::radar::MaxTensorExtents sized = holoscan::radar::testing::extents_for_scan_grid(
+      params.az_coordinates.size(), params.el_coordinates.size());
   return run_single_in_dual_out_operator_graph_result<BeamscanEstimatorOp<T>>(
-      {std::move(snapshot)}, std::move(params), "aoa_estimates",
-      "angle_spectrum",
-      [](holoscan::Graph& graph, const auto& source, auto& op,
-         const auto& sink0, const auto& sink1) {
+      {std::move(snapshot)}, std::move(params), "aoa_estimates", "angle_spectrum",
+      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
+         const auto& sink1) {
         wire_beamscan(graph, source, op, sink0, sink1);
       },
       {}, sized);
 }
 
 template <typename T>
-std::pair<HostTensor, HostTensor> run_beamscan(
-    std::shared_ptr<holoscan::Tensor> snapshot, BeamscanParams params) {
-  DualIOGraphRunResult result =
-      run_beamscan_result<T>(std::move(snapshot), std::move(params));
+std::pair<HostTensor, HostTensor> run_beamscan(std::shared_ptr<holoscan::Tensor> snapshot,
+                                               BeamscanParams params) {
+  DualIOGraphRunResult result = run_beamscan_result<T>(std::move(snapshot), std::move(params));
   if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") +
-                             result.plan_json);
+    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
   }
   if (!result.diagnostics.empty()) {
     std::string msg = "run diagnostics:";
@@ -683,11 +615,9 @@ std::pair<HostTensor, HostTensor> run_beamscan(
     throw std::runtime_error(msg);
   }
   if (result.frames0.size() != 1U || result.frames1.size() != 1U) {
-    throw std::runtime_error(
-        "BeamscanEstimatorOp test: expected one output frame pair");
+    throw std::runtime_error("BeamscanEstimatorOp test: expected one output frame pair");
   }
-  return {std::move(result.frames0.front()),
-          std::move(result.frames1.front())};
+  return {std::move(result.frames0.front()), std::move(result.frames1.front())};
 }
 
 int64_t count_prominent_local_maxima_1d(const double* spec, int64_t num_az,
@@ -716,8 +646,7 @@ int64_t count_prominent_local_maxima_1d(const double* spec, int64_t num_az,
 }
 
 TEST(MUSICEstimatorOpTest, DefaultsToRadarBoresightConvention) {
-  EXPECT_EQ(MUSICParams{}.angle_convention.preset,
-            AngleConventionPreset::kRadarBoresight);
+  EXPECT_EQ(MUSICParams{}.angle_convention.preset, AngleConventionPreset::kRadarBoresight);
 }
 
 TEST(MUSICEstimatorOpTest, UnwiredOptionalOutputsDoNotSuppressAoa) {
@@ -732,22 +661,17 @@ TEST(MUSICEstimatorOpTest, UnwiredOptionalOutputsDoNotSuppressAoa) {
   for (std::size_t frame = 0; frame < kFrames; ++frame) {
     snapshots.push_back(block_to_device<double>(block, {1, kN, kS}));
   }
-  auto params =
-      make_params(geom, conv, linspace(-0.5, 0.5, 101), {0.0}, 1);
-  const holoscan::radar::MaxTensorExtents extents =
-      holoscan::radar::testing::extents_for_scan_grid(
-          params.az_coordinates.size(), params.el_coordinates.size());
-  const GraphRunResult result =
-      run_single_io_operator_graph_result<MUSICEstimatorOp<double>>(
-          std::move(snapshots), std::move(params), "aoa_estimates",
-          [](holoscan::Graph& graph, const auto& source, auto& op,
-             const auto& sink) {
-            const holoscan::ConnectionOptions q{.queue_depth = 4U};
-            graph.add_flow(source->out, op->snapshot, q);
-            graph.add_flow(op->aoa_estimates, sink->in, q);
-          },
-          {"angle_spectrum", "doa_multi", "source_count", "eigenvalues"},
-          extents);
+  auto params = make_params(geom, conv, linspace(-0.5, 0.5, 101), {0.0}, 1);
+  const holoscan::radar::MaxTensorExtents extents = holoscan::radar::testing::extents_for_scan_grid(
+      params.az_coordinates.size(), params.el_coordinates.size());
+  const GraphRunResult result = run_single_io_operator_graph_result<MUSICEstimatorOp<double>>(
+      std::move(snapshots), std::move(params), "aoa_estimates",
+      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
+        const holoscan::ConnectionOptions q{.queue_depth = 4U};
+        graph.add_flow(source->out, op->snapshot, q);
+        graph.add_flow(op->aoa_estimates, sink->in, q);
+      },
+      {"angle_spectrum", "doa_multi", "source_count", "eigenvalues"}, extents);
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.diagnostics.empty());
   ASSERT_EQ(result.frames.size(), kFrames);
@@ -767,8 +691,8 @@ TEST(MUSICEstimatorOpTest, RecoversKnownDoaUlaAzOnlyFixedOneSource) {
   const auto block = make_block(geom, conv, kTruthAz, 0.0, kS, 0.02, 3u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1));
+  const auto out =
+      run_music<double>(snap, make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1));
 
   ASSERT_EQ(out.spectrum.shape, (std::vector<int64_t>{1, 61, 1}));
   const double* aoa = out.aoa.as<double>();
@@ -785,12 +709,10 @@ TEST(MUSICEstimatorOpTest, SharedSparseSlotInterchangesWithBeamscan) {
   const auto look = steering_vector(geom, conv, kTruthAz, 0.0);
   const auto az_grid = linspace(-0.3, 0.3, 61);
 
-  const auto beamscan = run_beamscan<double>(
-      block_to_device<double>(look, {1, kN, 1}),
-      make_beamscan_params(geom, conv, az_grid, {0.0}));
-  const auto music = run_music<double>(
-      block_to_device<double>(look, {1, kN, 1}),
-      make_params(geom, conv, az_grid, {0.0}, 1));
+  const auto beamscan = run_beamscan<double>(block_to_device<double>(look, {1, kN, 1}),
+                                             make_beamscan_params(geom, conv, az_grid, {0.0}));
+  const auto music = run_music<double>(block_to_device<double>(look, {1, kN, 1}),
+                                       make_params(geom, conv, az_grid, {0.0}, 1));
 
   EXPECT_NEAR(beamscan.first.as<double>()[0], kTruthAz, 0.02);
   EXPECT_NEAR(music.aoa.as<double>()[0], kTruthAz, 0.02);
@@ -810,8 +732,7 @@ TEST(MUSICEstimatorOpTest, RecoversKnownDoaUraFixedOneSource) {
   auto snap = block_to_device<double>(block, {1, geom.num_elements(), kS});
 
   const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-0.5, 0.5, 101),
-                        linspace(-0.3, 0.3, 61), 1));
+      snap, make_params(geom, conv, linspace(-0.5, 0.5, 101), linspace(-0.3, 0.3, 61), 1));
 
   ASSERT_EQ(out.aoa.shape, (std::vector<int64_t>{1, 2}));
   const double* aoa = out.aoa.as<double>();
@@ -830,9 +751,8 @@ TEST(MUSICEstimatorOpTest, AutoNumSourcesRecoversOneSource) {
   const auto block = make_block(geom, conv, kTruthAz, 0.0, kS, 0.02, 9u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, -1, 1e-2,
-                        4));
+  const auto out =
+      run_music<double>(snap, make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, -1, 1e-2, 4));
 
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 1);
   const double* aoa = out.aoa.as<double>();
@@ -848,13 +768,11 @@ TEST(MUSICEstimatorOpTest, MultiSourceRecoversTwoDoa) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.02, 71u);
+  const auto block = make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.02, 71u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-0.5, 0.5, 201), {0.0}, 2, 1e-2,
-                        2));
+  const auto out =
+      run_music<double>(snap, make_params(geom, conv, linspace(-0.5, 0.5, 201), {0.0}, 2, 1e-2, 2));
 
   ASSERT_EQ(out.doa_multi.shape, (std::vector<int64_t>{1, 2, 2}));
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 2);
@@ -862,9 +780,8 @@ TEST(MUSICEstimatorOpTest, MultiSourceRecoversTwoDoa) {
   const double* dm = out.doa_multi.as<double>();
   const double az_a = dm[0];
   const double az_b = dm[2];
-  const bool matched =
-      (std::abs(az_a - kAz0) < 0.03 && std::abs(az_b - kAz1) < 0.03) ||
-      (std::abs(az_a - kAz1) < 0.03 && std::abs(az_b - kAz0) < 0.03);
+  const bool matched = (std::abs(az_a - kAz0) < 0.03 && std::abs(az_b - kAz1) < 0.03) ||
+                       (std::abs(az_a - kAz1) < 0.03 && std::abs(az_b - kAz0) < 0.03);
   EXPECT_TRUE(matched) << "az_a=" << az_a << " az_b=" << az_b;
 
   const double* aoa = out.aoa.as<double>();
@@ -881,13 +798,11 @@ TEST(MUSICEstimatorOpTest, MaxSourcesCapsBelowNumSourcesNanFillsRest) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.02, 72u);
+  const auto block = make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.02, 72u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-0.5, 0.5, 201), {0.0}, 2, 1e-2,
-                        1));
+  const auto out =
+      run_music<double>(snap, make_params(geom, conv, linspace(-0.5, 0.5, 201), {0.0}, 2, 1e-2, 1));
 
   ASSERT_EQ(out.doa_multi.shape, (std::vector<int64_t>{1, 1, 2}));
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 1);
@@ -912,8 +827,7 @@ TEST(MUSICEstimatorOpTest, SpatialSmoothingResolvesCoherentSourcesUla) {
     const double ps = phase(rng);
     const std::complex<double> g{std::cos(ps), std::sin(ps)};
     for (int64_t c = 0; c < kN; ++c) {
-      std::complex<double> v =
-          (a0[static_cast<size_t>(c)] + a1[static_cast<size_t>(c)]) * g;
+      std::complex<double> v = (a0[static_cast<size_t>(c)] + a1[static_cast<size_t>(c)]) * g;
       v += std::complex<double>(n(rng), n(rng));
       block[static_cast<size_t>(c * kS + s)] = v;
     }
@@ -921,8 +835,7 @@ TEST(MUSICEstimatorOpTest, SpatialSmoothingResolvesCoherentSourcesUla) {
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
   const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-0.6, 0.6, 241), {0.0}, 2, 1e-2, 2,
-                        {4}, true));
+      snap, make_params(geom, conv, linspace(-0.6, 0.6, 241), {0.0}, 2, 1e-2, 2, {4}, true));
 
   ASSERT_EQ(out.eigenvalues.shape, (std::vector<int64_t>{1, 7}));
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 2);
@@ -930,9 +843,8 @@ TEST(MUSICEstimatorOpTest, SpatialSmoothingResolvesCoherentSourcesUla) {
   const double* dm = out.doa_multi.as<double>();
   const double a = dm[0];
   const double b = dm[2];
-  const bool matched =
-      (std::abs(a - kAz0) < 0.04 && std::abs(b - kAz1) < 0.04) ||
-      (std::abs(a - kAz1) < 0.04 && std::abs(b - kAz0) < 0.04);
+  const bool matched = (std::abs(a - kAz0) < 0.04 && std::abs(b - kAz1) < 0.04) ||
+                       (std::abs(a - kAz1) < 0.04 && std::abs(b - kAz0) < 0.04);
   EXPECT_TRUE(matched) << "a=" << a << " b=" << b;
 }
 
@@ -948,8 +860,8 @@ TEST(MUSICEstimatorOpTest, SpatialSmoothingRejectsNonUniformGeometry) {
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap = block_to_device<double>(a, {1, geom.num_elements(), 1});
 
-  const FiveOutGraphRunResult result = run_music_result<double>(
-      snap, make_params(geom, conv, {0.0}, {0.0}, 1, 1e-2, 4, {2}));
+  const FiveOutGraphRunResult result =
+      run_music_result<double>(snap, make_params(geom, conv, {0.0}, {0.0}, 1, 1e-2, 4, {2}));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -965,8 +877,8 @@ TEST(MUSICEstimatorOpTest, EigenvaluesAscendingAndNonNegative) {
   const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.02, 91u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0}, 1));
+  const auto out =
+      run_music<double>(snap, make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0}, 1));
 
   ASSERT_EQ(out.eigenvalues.shape, (std::vector<int64_t>{1, kN}));
   const double* ev = out.eigenvalues.as<double>();
@@ -989,9 +901,8 @@ TEST(MUSICEstimatorOpTest, RankDeficientAutoFallsBackToOneSource) {
   const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.02, 12u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0}, -1, 1e-2,
-                        4));
+  const auto out =
+      run_music<double>(snap, make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0}, -1, 1e-2, 4));
 
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 1);
 }
@@ -1003,8 +914,8 @@ TEST(MUSICEstimatorOpTest, RejectsNumSourcesTooLarge) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap = block_to_device<double>(a, {1, kN, 1});
-  const FiveOutGraphRunResult result = run_music_result<double>(
-      snap, make_params(geom, conv, {0.0}, {0.0}, kN));
+  const FiveOutGraphRunResult result =
+      run_music_result<double>(snap, make_params(geom, conv, {0.0}, {0.0}, kN));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1017,8 +928,8 @@ TEST(MUSICEstimatorOpTest, RejectsInvalidMaxSources) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap = block_to_device<double>(a, {1, kN, 1});
-  const FiveOutGraphRunResult result = run_music_result<double>(
-      snap, make_params(geom, conv, {0.0}, {0.0}, 1, 1e-2, 0));
+  const FiveOutGraphRunResult result =
+      run_music_result<double>(snap, make_params(geom, conv, {0.0}, {0.0}, 1, 1e-2, 0));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1031,8 +942,8 @@ TEST(MUSICEstimatorOpTest, RejectsInvalidSourceCountPfa) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap = block_to_device<double>(a, {1, kN, 1});
-  const FiveOutGraphRunResult result = run_music_result<double>(
-      snap, make_params(geom, conv, {0.0}, {0.0}, -1, 0.0));
+  const FiveOutGraphRunResult result =
+      run_music_result<double>(snap, make_params(geom, conv, {0.0}, {0.0}, -1, 0.0));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1046,8 +957,7 @@ TEST(MUSICEstimatorOpTest, EmptyItemsProducesEmptyOutputs) {
   std::vector<std::complex<double>> host;
   auto snap = to_device_tensor(host, {0, kN, 4}, complex_dtype<double>());
 
-  const auto out = run_music<double>(
-      snap, make_params(geom, conv, {-0.1, 0.0, 0.1}, {0.0}, 1));
+  const auto out = run_music<double>(snap, make_params(geom, conv, {-0.1, 0.0, 0.1}, {0.0}, 1));
 
   EXPECT_EQ(out.aoa.shape, (std::vector<int64_t>{0, 2}));
   EXPECT_EQ(out.spectrum.shape, (std::vector<int64_t>{0, 3, 1}));
@@ -1059,13 +969,12 @@ TEST(MUSICEstimatorOpTest, EmptyItemsProducesEmptyOutputs) {
 TEST(MUSICEstimatorOpTest, RejectsChannelMismatch) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  std::vector<std::complex<double>> host(static_cast<size_t>((kN - 1) * 4),
-                                         {1.0, 0.0});
+  std::vector<std::complex<double>> host(static_cast<size_t>((kN - 1) * 4), {1.0, 0.0});
   auto snap = to_device_tensor(host, {1, kN - 1, 4}, complex_dtype<double>());
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const FiveOutGraphRunResult result = run_music_result<double>(
-      snap, make_params(geom, conv, {0.0}, {0.0}, 1));
+  const FiveOutGraphRunResult result =
+      run_music_result<double>(snap, make_params(geom, conv, {0.0}, {0.0}, 1));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1074,13 +983,12 @@ TEST(MUSICEstimatorOpTest, RejectsChannelMismatch) {
 TEST(MUSICEstimatorOpTest, RejectsEmptyScanGrid) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  std::vector<std::complex<double>> host(static_cast<size_t>(kN * 4),
-                                         {1.0, 0.0});
+  std::vector<std::complex<double>> host(static_cast<size_t>(kN * 4), {1.0, 0.0});
   auto snap = to_device_tensor(host, {1, kN, 4}, complex_dtype<double>());
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const FiveOutGraphRunResult result = run_music_result<double>(
-      snap, make_params(geom, conv, {}, {0.0}, 1));
+  const FiveOutGraphRunResult result =
+      run_music_result<double>(snap, make_params(geom, conv, {}, {0.0}, 1));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1093,8 +1001,8 @@ TEST(MUSICEstimatorOpTest, RejectsInvalidSnapshotRank) {
   auto snap = to_device_tensor(host, {kN}, complex_dtype<double>());
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const FiveOutGraphRunResult result = run_music_result<double>(
-      snap, make_params(geom, conv, {0.0}, {0.0}, 1));
+  const FiveOutGraphRunResult result =
+      run_music_result<double>(snap, make_params(geom, conv, {0.0}, {0.0}, 1));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1107,8 +1015,8 @@ TEST(MUSICEstimatorOpTest, RejectsSnapshotDtypeMismatch) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap_f = block_to_device<float>(a, {1, kN, 1});
-  const FiveOutGraphRunResult result = run_music_result<double>(
-      snap_f, make_params(geom, conv, {0.0}, {0.0}, 1));
+  const FiveOutGraphRunResult result =
+      run_music_result<double>(snap_f, make_params(geom, conv, {0.0}, {0.0}, 1));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1123,8 +1031,8 @@ TEST(MUSICEstimatorOpTest, FloatInstantiationSmoke) {
   const auto block = make_block(geom, conv, 0.06, 0.0, kS, 0.02, 11u);
   auto snap = block_to_device<float>(block, {1, kN, kS});
 
-  const auto out = run_music<float>(
-      snap, make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1));
+  const auto out =
+      run_music<float>(snap, make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1));
   ASSERT_EQ(out.aoa.shape, (std::vector<int64_t>{1, 2}));
   const float* aoa = out.aoa.as<float>();
   EXPECT_NEAR(aoa[0], 0.06f, 0.03f);
@@ -1142,8 +1050,7 @@ TEST(MUSICEstimatorOpTest, FloatDoubleAgreeOnDoa) {
   auto snap_f = block_to_device<float>(block, {1, kN, kS});
   auto snap_d = block_to_device<double>(block, {1, kN, kS});
 
-  MUSICParams params =
-      make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1);
+  MUSICParams params = make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1);
 
   const auto out_f = run_music<float>(snap_f, params);
   const auto out_d = run_music<double>(snap_d, params);
@@ -1160,13 +1067,10 @@ TEST(MUSICEstimatorOpTest, DeterministicAcrossRuns) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto block = make_block(geom, conv, 0.09, 0.0, kS, 0.02, 171u);
-  MUSICParams params =
-      make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1, 1e-2, 2);
+  MUSICParams params = make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1, 1e-2, 2);
 
-  const auto first =
-      run_music<double>(block_to_device<double>(block, {1, kN, kS}), params);
-  const auto second =
-      run_music<double>(block_to_device<double>(block, {1, kN, kS}), params);
+  const auto first = run_music<double>(block_to_device<double>(block, {1, kN, kS}), params);
+  const auto second = run_music<double>(block_to_device<double>(block, {1, kN, kS}), params);
 
   EXPECT_EQ(first.aoa.data, second.aoa.data);
   EXPECT_EQ(first.spectrum.data, second.spectrum.data);
@@ -1185,8 +1089,7 @@ TEST(MUSICEstimatorOpTest, DirectionCosineMasksInvisibleRegion) {
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
   const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-1.0, 1.0, 5),
-                        linspace(-1.0, 1.0, 5), 1));
+      snap, make_params(geom, conv, linspace(-1.0, 1.0, 5), linspace(-1.0, 1.0, 5), 1));
 
   const double* spec = out.spectrum.as<double>();
   EXPECT_NEAR(spec[0], 0.0, 1e-3);
@@ -1196,19 +1099,17 @@ TEST(MUSICEstimatorOpTest, RejectsInvalidScanCoordinates) {
   constexpr int64_t kN = 4;
   constexpr int64_t kS = 16;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block(geom, AngleConvention{}, 0.0, 0.0, kS, 0.02, 2u);
+  const auto block = make_block(geom, AngleConvention{}, 0.0, 0.0, kS, 0.02, 2u);
   AngleConvention direction_cosine;
   direction_cosine.preset = AngleConventionPreset::kDirectionCosine;
-  auto out_of_range = run_music_result<double>(
-      block_to_device<double>(block, {1, kN, kS}),
-      make_params(geom, direction_cosine, {0.0}, {1.01}, 1));
+  auto out_of_range =
+      run_music_result<double>(block_to_device<double>(block, {1, kN, kS}),
+                               make_params(geom, direction_cosine, {0.0}, {1.01}, 1));
   EXPECT_FALSE(out_of_range.diagnostics.empty());
 
   auto non_finite = run_music_result<double>(
       block_to_device<double>(block, {1, kN, kS}),
-      make_params(geom, AngleConvention{},
-                  {std::numeric_limits<double>::infinity()}, {0.0}, 1));
+      make_params(geom, AngleConvention{}, {std::numeric_limits<double>::infinity()}, {0.0}, 1));
   EXPECT_FALSE(non_finite.diagnostics.empty());
 }
 
@@ -1218,17 +1119,14 @@ TEST(MUSICEstimatorOpTest, NumSourcesConfigurableFromParams) {
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto block =
-      make_block_two(geom, conv, 0.2, 0.0, -0.15, 0.0, kS, 0.02, 111u);
+  const auto block = make_block_two(geom, conv, 0.2, 0.0, -0.15, 0.0, kS, 0.02, 111u);
   auto snap1 = block_to_device<double>(block, {1, kN, kS});
   auto snap2 = block_to_device<double>(block, {1, kN, kS});
 
   const auto out1 = run_music<double>(
-      snap1, make_params(geom, conv, linspace(-0.5, 0.5, 101), {0.0}, 1, 1e-2,
-                         4));
+      snap1, make_params(geom, conv, linspace(-0.5, 0.5, 101), {0.0}, 1, 1e-2, 4));
   const auto out2 = run_music<double>(
-      snap2, make_params(geom, conv, linspace(-0.5, 0.5, 101), {0.0}, 2, 1e-2,
-                         4));
+      snap2, make_params(geom, conv, linspace(-0.5, 0.5, 101), {0.0}, 2, 1e-2, 4));
 
   EXPECT_EQ(out1.source_count.as<int32_t>()[0], 1);
   EXPECT_EQ(out2.source_count.as<int32_t>()[0], 2);
@@ -1237,15 +1135,12 @@ TEST(MUSICEstimatorOpTest, NumSourcesConfigurableFromParams) {
 TEST(MUSICEstimatorOpTest, SourceCountPfaConfigurableFromParams) {
   constexpr int64_t kN = 6;
   constexpr int64_t kS = 6;
-  const std::vector<double> eigenvalues = {
-      0.8930540251, 0.9468277841, 1.3517214181,
-      1.6732266229, 9.0798471606, 14.3477610683};
+  const std::vector<double> eigenvalues = {0.8930540251, 0.9468277841, 1.3517214181,
+                                           1.6732266229, 9.0798471606, 14.3477610683};
   std::vector<std::complex<double>> block(static_cast<size_t>(kN * kS));
   for (int64_t c = 0; c < kN; ++c) {
     block[static_cast<size_t>(c * kS + c)] = {
-        std::sqrt(static_cast<double>(kS) *
-                  eigenvalues[static_cast<size_t>(c)]),
-        0.0};
+        std::sqrt(static_cast<double>(kS) * eigenvalues[static_cast<size_t>(c)]), 0.0};
   }
   auto geom = make_ula_geometry(kN, 0.5, 1.0);
   AngleConvention conv;
@@ -1254,11 +1149,9 @@ TEST(MUSICEstimatorOpTest, SourceCountPfaConfigurableFromParams) {
   auto snap_b = block_to_device<double>(block, {1, kN, kS});
 
   const auto out_a = run_music<double>(
-      snap_a, make_params(geom, conv, linspace(-0.5, 0.5, 51), {0.0}, -1, 1e-4,
-                          4));
+      snap_a, make_params(geom, conv, linspace(-0.5, 0.5, 51), {0.0}, -1, 1e-4, 4));
   const auto out_b = run_music<double>(
-      snap_b, make_params(geom, conv, linspace(-0.5, 0.5, 51), {0.0}, -1, 0.5,
-                          4));
+      snap_b, make_params(geom, conv, linspace(-0.5, 0.5, 51), {0.0}, -1, 0.5, 4));
 
   EXPECT_NE(spectrum_max(out_a.spectrum), spectrum_max(out_b.spectrum));
 }
@@ -1273,12 +1166,10 @@ TEST(MUSICEstimatorOpTest, MaxSourcesConfigurableFromParams) {
   auto snap1 = block_to_device<double>(block, {1, kN, kS});
   auto snap3 = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out1 = run_music<double>(
-      snap1, make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1, 1e-2,
-                         1));
-  const auto out3 = run_music<double>(
-      snap3, make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1, 1e-2,
-                         3));
+  const auto out1 =
+      run_music<double>(snap1, make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1, 1e-2, 1));
+  const auto out3 =
+      run_music<double>(snap3, make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1, 1e-2, 3));
 
   EXPECT_EQ(out1.doa_multi.shape, (std::vector<int64_t>{1, 1, 2}));
   EXPECT_EQ(out3.doa_multi.shape, (std::vector<int64_t>{1, 3, 2}));
@@ -1293,37 +1184,31 @@ TEST(MUSICEstimatorOpTest, ResolvesCloselySpacedSourcesBeamscanCannot) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.01, 200u);
+  const auto block = make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.01, 200u);
   const auto az_grid = linspace(-0.3, 0.3, 241);
 
   const auto a0 = steering_vector(geom, conv, kAz0, 0.0);
   const auto a1 = steering_vector(geom, conv, kAz1, 0.0);
   std::vector<std::complex<double>> single_look(static_cast<size_t>(kN));
   for (int64_t c = 0; c < kN; ++c) {
-    single_look[static_cast<size_t>(c)] =
-        a0[static_cast<size_t>(c)] + a1[static_cast<size_t>(c)];
+    single_look[static_cast<size_t>(c)] = a0[static_cast<size_t>(c)] + a1[static_cast<size_t>(c)];
   }
-  const auto beamscan = run_beamscan<double>(
-      block_to_device<double>(single_look, {1, kN}),
-      make_beamscan_params(geom, conv, az_grid, {0.0}));
+  const auto beamscan = run_beamscan<double>(block_to_device<double>(single_look, {1, kN}),
+                                             make_beamscan_params(geom, conv, az_grid, {0.0}));
   const int64_t beamscan_peaks = count_prominent_local_maxima_1d(
       beamscan.second.as<double>(), static_cast<int64_t>(az_grid.size()));
   EXPECT_EQ(beamscan_peaks, 1)
       << "Beamscan should show a single blended lobe for sources this close";
 
-  const auto out = run_music<double>(
-      block_to_device<double>(block, {1, kN, kS}),
-      make_params(geom, conv, az_grid, {0.0}, 2, 1e-2, 2));
-  const int64_t music_peaks = count_prominent_local_maxima_1d(
-      out.spectrum.as<double>(), static_cast<int64_t>(az_grid.size()));
-  EXPECT_GE(music_peaks, 2)
-      << "MUSIC should resolve two distinct lobes where Beamscan cannot";
+  const auto out = run_music<double>(block_to_device<double>(block, {1, kN, kS}),
+                                     make_params(geom, conv, az_grid, {0.0}, 2, 1e-2, 2));
+  const int64_t music_peaks = count_prominent_local_maxima_1d(out.spectrum.as<double>(),
+                                                              static_cast<int64_t>(az_grid.size()));
+  EXPECT_GE(music_peaks, 2) << "MUSIC should resolve two distinct lobes where Beamscan cannot";
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 2);
   const double* dm = out.doa_multi.as<double>();
-  const bool matched =
-      (std::abs(dm[0] - kAz0) < 0.015 && std::abs(dm[2] - kAz1) < 0.015) ||
-      (std::abs(dm[0] - kAz1) < 0.015 && std::abs(dm[2] - kAz0) < 0.015);
+  const bool matched = (std::abs(dm[0] - kAz0) < 0.015 && std::abs(dm[2] - kAz1) < 0.015) ||
+                       (std::abs(dm[0] - kAz1) < 0.015 && std::abs(dm[2] - kAz0) < 0.015);
   EXPECT_TRUE(matched) << "dm[0]=" << dm[0] << " dm[2]=" << dm[2];
 }
 
@@ -1336,22 +1221,19 @@ TEST(MUSICEstimatorOpTest, AutoNumSourcesResolvesTwoCloselySpacedSources) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.01, 201u);
+  const auto block = make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.01, 201u);
   const auto az_grid = linspace(-0.3, 0.3, 241);
 
-  const auto out = run_music<double>(
-      block_to_device<double>(block, {1, kN, kS}),
-      make_params(geom, conv, az_grid, {0.0}, -1, 1e-2, 2));
+  const auto out = run_music<double>(block_to_device<double>(block, {1, kN, kS}),
+                                     make_params(geom, conv, az_grid, {0.0}, -1, 1e-2, 2));
 
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 2);
-  const int64_t music_peaks = count_prominent_local_maxima_1d(
-      out.spectrum.as<double>(), static_cast<int64_t>(az_grid.size()));
+  const int64_t music_peaks = count_prominent_local_maxima_1d(out.spectrum.as<double>(),
+                                                              static_cast<int64_t>(az_grid.size()));
   EXPECT_GE(music_peaks, 2);
   const double* dm = out.doa_multi.as<double>();
-  const bool matched =
-      (std::abs(dm[0] - kAz0) < 0.015 && std::abs(dm[2] - kAz1) < 0.015) ||
-      (std::abs(dm[0] - kAz1) < 0.015 && std::abs(dm[2] - kAz0) < 0.015);
+  const bool matched = (std::abs(dm[0] - kAz0) < 0.015 && std::abs(dm[2] - kAz1) < 0.015) ||
+                       (std::abs(dm[0] - kAz1) < 0.015 && std::abs(dm[2] - kAz0) < 0.015);
   EXPECT_TRUE(matched) << "dm[0]=" << dm[0] << " dm[2]=" << dm[2];
 }
 
@@ -1375,8 +1257,7 @@ TEST(MUSICEstimatorOpTest, MultipleItemsRecoverIndependentDoa) {
   auto snap = block_to_device<double>(batch, {2, geom.num_elements(), kS});
 
   const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-0.4, 0.4, 81),
-                        linspace(-0.2, 0.2, 41), 1));
+      snap, make_params(geom, conv, linspace(-0.4, 0.4, 81), linspace(-0.2, 0.2, 41), 1));
 
   ASSERT_EQ(out.aoa.shape, (std::vector<int64_t>{2, 2}));
   const double* aoa = out.aoa.as<double>();
@@ -1394,8 +1275,8 @@ TEST(MUSICEstimatorOpTest, Rejects2DSingleSnapshot) {
   const auto a = steering_vector(geom, conv, 0.05, 0.0);
   auto snap = block_to_device<double>(a, {1, kN});
 
-  const auto result = run_music_result<double>(
-      snap, make_params(geom, conv, linspace(-0.2, 0.2, 21), {0.0}, 1));
+  const auto result =
+      run_music_result<double>(snap, make_params(geom, conv, linspace(-0.2, 0.2, 21), {0.0}, 1));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -1414,17 +1295,16 @@ TEST(MUSICEstimatorOpTest, SpatialSmoothing2DUraRecoversDoa) {
   const auto block = make_block(geom, conv, kTruthAz, kTruthEl, kS, 0.05, 44u);
   auto snap = block_to_device<double>(block, {1, geom.num_elements(), kS});
 
-  const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-0.4, 0.4, 81),
-                        linspace(-0.3, 0.3, 61), 1, 1e-2, 4, {2, 2}, true));
+  const auto out =
+      run_music<double>(snap, make_params(geom, conv, linspace(-0.4, 0.4, 81),
+                                          linspace(-0.3, 0.3, 61), 1, 1e-2, 4, {2, 2}, true));
 
   const double* aoa = out.aoa.as<double>();
   EXPECT_NEAR(aoa[0], kTruthAz, 0.03);
   EXPECT_NEAR(aoa[1], kTruthEl, 0.03);
 }
 
-TEST(MUSICEstimatorOpTest,
-     SpatialSmoothingForwardOnlyReducesEigenvalueChannels) {
+TEST(MUSICEstimatorOpTest, SpatialSmoothingForwardOnlyReducesEigenvalueChannels) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
@@ -1434,8 +1314,7 @@ TEST(MUSICEstimatorOpTest,
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
   const auto out = run_music<double>(
-      snap, make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1, 1e-2, 4,
-                        {3}, false));
+      snap, make_params(geom, conv, linspace(-0.3, 0.3, 61), {0.0}, 1, 1e-2, 4, {3}, false));
 
   ASSERT_EQ(out.eigenvalues.shape, (std::vector<int64_t>{1, 6}));
   const double* aoa = out.aoa.as<double>();
@@ -1451,8 +1330,7 @@ TEST(MUSICEstimatorOpTest, IsValidMaskExcludesWrongDoaSnapshots) {
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto truth = make_block(geom, conv, kTruthAz, 0.0, kS, 0.01, 701u);
   const auto wrong = make_block(geom, conv, -0.24, 0.0, kS, 0.01, 702u);
-  std::vector<std::complex<double>> mixed(
-      static_cast<size_t>(kN * 2 * kS));
+  std::vector<std::complex<double>> mixed(static_cast<size_t>(kN * 2 * kS));
   for (int64_t channel = 0; channel < kN; ++channel) {
     for (int64_t look = 0; look < kS; ++look) {
       mixed[static_cast<size_t>(channel * 2 * kS + look)] =
@@ -1464,27 +1342,22 @@ TEST(MUSICEstimatorOpTest, IsValidMaskExcludesWrongDoaSnapshots) {
   auto snap = block_to_device<double>(mixed, {1, kN, 2 * kS});
   std::vector<uint8_t> mask_host(static_cast<size_t>(2 * kS), uint8_t{0});
   std::fill_n(mask_host.begin(), static_cast<size_t>(kS), uint8_t{1});
-  auto mask = to_device_tensor(mask_host, {1, 2 * kS},
-                               DLDataType{kDLUInt, 8, 1});
-  auto params =
-      make_params(geom, conv, linspace(-0.4, 0.4, 81), {0.0}, 1);
+  auto mask = to_device_tensor(mask_host, {1, 2 * kS}, DLDataType{kDLUInt, 8, 1});
+  auto params = make_params(geom, conv, linspace(-0.4, 0.4, 81), {0.0}, 1);
   const auto extents = holoscan::radar::testing::extents_for_scan_grid(
       params.az_coordinates.size(), params.el_coordinates.size());
 
-  const auto result =
-      run_dual_io_operator_graph_result<MUSICEstimatorOp<double>>(
-          {mask}, {snap}, std::move(params),
-          "aoa_estimates", "angle_spectrum",
-          [](holoscan::Graph& graph, const auto& source, auto& op,
-             const auto& sink0, const auto& sink1) {
-            const holoscan::ConnectionOptions q{.queue_depth = 4U};
-            graph.add_flow(source->out0, op->is_valid, q);
-            graph.add_flow(source->out1, op->snapshot, q);
-            graph.add_flow(op->aoa_estimates, sink0->in, q);
-            graph.add_flow(op->angle_spectrum, sink1->in, q);
-          },
-          extents,
-          {"doa_multi", "source_count", "eigenvalues"});
+  const auto result = run_dual_io_operator_graph_result<MUSICEstimatorOp<double>>(
+      {mask}, {snap}, std::move(params), "aoa_estimates", "angle_spectrum",
+      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
+         const auto& sink1) {
+        const holoscan::ConnectionOptions q{.queue_depth = 4U};
+        graph.add_flow(source->out0, op->is_valid, q);
+        graph.add_flow(source->out1, op->snapshot, q);
+        graph.add_flow(op->aoa_estimates, sink0->in, q);
+        graph.add_flow(op->angle_spectrum, sink1->in, q);
+      },
+      extents, {"doa_multi", "source_count", "eigenvalues"});
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
   ASSERT_EQ(result.frames0.size(), 1U);
@@ -1499,32 +1372,29 @@ TEST(MUSICEstimatorOpTest, AllInvalidMaskBlanksDoaAndSpectrum) {
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.01, 703u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
-  auto mask = to_device_tensor(std::vector<uint8_t>(kS, uint8_t{0}), {1, kS},
-                               DLDataType{kDLUInt, 8, 1});
+  auto mask =
+      to_device_tensor(std::vector<uint8_t>(kS, uint8_t{0}), {1, kS}, DLDataType{kDLUInt, 8, 1});
 
-  const auto result =
-      run_dual_io_operator_graph_result<MUSICEstimatorOp<double>>(
-          {mask}, {snap},
-          make_params(geom, conv, {-0.1, 0.0, 0.1}, {0.0}, 1),
-          "aoa_estimates", "angle_spectrum",
-          [](holoscan::Graph& graph, const auto& source, auto& op,
-             const auto& sink0, const auto& sink1) {
-            const holoscan::ConnectionOptions q{.queue_depth = 4U};
-            graph.add_flow(source->out0, op->is_valid, q);
-            graph.add_flow(source->out1, op->snapshot, q);
-            graph.add_flow(op->aoa_estimates, sink0->in, q);
-            graph.add_flow(op->angle_spectrum, sink1->in, q);
-          },
-          holoscan::radar::testing::default_test_extents(),
-          {"doa_multi", "source_count", "eigenvalues"});
+  const auto result = run_dual_io_operator_graph_result<MUSICEstimatorOp<double>>(
+      {mask}, {snap}, make_params(geom, conv, {-0.1, 0.0, 0.1}, {0.0}, 1), "aoa_estimates",
+      "angle_spectrum",
+      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
+         const auto& sink1) {
+        const holoscan::ConnectionOptions q{.queue_depth = 4U};
+        graph.add_flow(source->out0, op->is_valid, q);
+        graph.add_flow(source->out1, op->snapshot, q);
+        graph.add_flow(op->aoa_estimates, sink0->in, q);
+        graph.add_flow(op->angle_spectrum, sink1->in, q);
+      },
+      holoscan::radar::testing::default_test_extents(),
+      {"doa_multi", "source_count", "eigenvalues"});
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
   ASSERT_EQ(result.frames0.size(), 1U);
   ASSERT_EQ(result.frames1.size(), 1U);
   EXPECT_TRUE(std::isnan(result.frames0[0].as<double>()[0]));
   const double* spectrum = result.frames1[0].as<double>();
-  for (size_t index = 0;
-       index < result.frames1[0].data.size() / sizeof(double); ++index) {
+  for (size_t index = 0; index < result.frames1[0].data.size() / sizeof(double); ++index) {
     EXPECT_EQ(spectrum[index], 0.0);
   }
 }
@@ -1539,21 +1409,18 @@ TEST(MUSICEstimatorOpTest, LiveAzCoordinatesAppliesForOneTick) {
   MUSICParams params = make_params(geom, conv, {-0.2, 0.2}, {0.0}, 1);
 
   const FiveOutGraphRunResult result = run_live_music(
-      {{snap, std::nullopt, std::vector<double>{-0.1, 0.0, 0.1},
-         std::nullopt, std::nullopt, 0},
-       {snap, std::nullopt, std::vector<double>{-0.2, -0.1, 0.0, 0.1, 0.2},
-         std::nullopt, std::nullopt, 1}},
+      {{snap, std::nullopt, std::vector<double>{-0.1, 0.0, 0.1}, std::nullopt, std::nullopt, 0},
+       {snap, std::nullopt, std::vector<double>{-0.2, -0.1, 0.0, 0.1, 0.2}, std::nullopt,
+        std::nullopt, 1}},
       std::move(params), {.az = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
   ASSERT_EQ(result.frames1.size(), 2U);
-  EXPECT_EQ(result.frames1[0].shape,
-            (std::vector<int64_t>{1, 3, 1}));
+  EXPECT_EQ(result.frames1[0].shape, (std::vector<int64_t>{1, 3, 1}));
   // Tick 1's override is skewed, so it misses Exact and the grid is the
   // two-angle Params az again -- the tick-0 match is not carried over.
-  EXPECT_EQ(result.frames1[1].shape,
-            (std::vector<int64_t>{1, 2, 1}));
+  EXPECT_EQ(result.frames1[1].shape, (std::vector<int64_t>{1, 2, 1}));
 }
 
 TEST(MUSICEstimatorOpTest, LiveElCoordinatesAppliesForOneTick) {
@@ -1566,21 +1433,18 @@ TEST(MUSICEstimatorOpTest, LiveElCoordinatesAppliesForOneTick) {
   MUSICParams params = make_params(geom, conv, {0.0}, {-0.2, 0.2}, 1);
 
   const FiveOutGraphRunResult result = run_live_music(
-      {{snap, std::nullopt, std::nullopt,
-         std::vector<double>{-0.1, 0.0, 0.1}, std::nullopt, 0},
-       {snap, std::nullopt, std::nullopt,
-         std::vector<double>{-0.2, -0.1, 0.0, 0.1, 0.2}, std::nullopt, 1}},
+      {{snap, std::nullopt, std::nullopt, std::vector<double>{-0.1, 0.0, 0.1}, std::nullopt, 0},
+       {snap, std::nullopt, std::nullopt, std::vector<double>{-0.2, -0.1, 0.0, 0.1, 0.2},
+        std::nullopt, 1}},
       std::move(params), {.el = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
   ASSERT_EQ(result.frames1.size(), 2U);
-  EXPECT_EQ(result.frames1[0].shape,
-            (std::vector<int64_t>{1, 1, 3}));
+  EXPECT_EQ(result.frames1[0].shape, (std::vector<int64_t>{1, 1, 3}));
   // Tick 1's override is skewed, so it misses Exact and the grid is the
   // two-angle Params el again.
-  EXPECT_EQ(result.frames1[1].shape,
-            (std::vector<int64_t>{1, 1, 2}));
+  EXPECT_EQ(result.frames1[1].shape, (std::vector<int64_t>{1, 1, 2}));
 }
 
 TEST(MUSICEstimatorOpTest, LiveArrayGeometryAppliesForOneTick) {
@@ -1592,13 +1456,12 @@ TEST(MUSICEstimatorOpTest, LiveArrayGeometryAppliesForOneTick) {
   seed_geom.wavelength = 2.0;
   const auto block = make_block(live_geom, conv, 0.1, 0.0, 16, 0.02, 403u);
   auto snap = block_to_device<double>(block, {1, kN, 16});
-  MUSICParams params =
-      make_params(seed_geom, conv, linspace(-0.3, 0.3, 31), {0.0}, 1);
+  MUSICParams params = make_params(seed_geom, conv, linspace(-0.3, 0.3, 31), {0.0}, 1);
 
-  const FiveOutGraphRunResult result = run_live_music(
-      {{snap, live_geom, std::nullopt, std::nullopt, std::nullopt, 0},
-       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0}},
-      std::move(params), {.geometry = true});
+  const FiveOutGraphRunResult result =
+      run_live_music({{snap, live_geom, std::nullopt, std::nullopt, std::nullopt, 0},
+                      {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0}},
+                     std::move(params), {.geometry = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -1615,15 +1478,14 @@ TEST(MUSICEstimatorOpTest, LiveSpatialSmoothingAppliesForOneTick) {
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto block = make_block(geom, conv, 0.1, 0.0, 16, 0.02, 404u);
   auto snap = block_to_device<double>(block, {1, kN, 16});
-  MUSICParams params =
-      make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0}, 1);
+  MUSICParams params = make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0}, 1);
 
-  const FiveOutGraphRunResult result = run_live_music(
-      {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0},
-       {snap, std::nullopt, std::nullopt, std::nullopt,
-         SpatialSmoothingOverride{.count = 1, .first = 3}, 0},
-       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0}},
-      std::move(params), {.smoothing = true});
+  const FiveOutGraphRunResult result =
+      run_live_music({{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0},
+                      {snap, std::nullopt, std::nullopt, std::nullopt,
+                       SpatialSmoothingOverride{.count = 1, .first = 3}, 0},
+                      {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0}},
+                     std::move(params), {.smoothing = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -1644,21 +1506,19 @@ TEST(MUSICEstimatorOpTest, LiveNumSourcesAppliesForOneTick) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block_two(geom, conv, 0.20, 0.0, -0.15, 0.0, kS, 0.02, 405u);
+  const auto block = make_block_two(geom, conv, 0.20, 0.0, -0.15, 0.0, kS, 0.02, 405u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
-  MUSICParams params =
-      make_params(geom, conv, linspace(-0.4, 0.4, 41), {0.0},
-                  /*num_sources=*/1, 1e-2, /*max_sources=*/4);
+  MUSICParams params = make_params(geom, conv, linspace(-0.4, 0.4, 41), {0.0},
+                                   /*num_sources=*/1, 1e-2, /*max_sources=*/4);
 
-  const FiveOutGraphRunResult result = run_live_music(
-      {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
-        std::nullopt, std::nullopt, std::nullopt},
-       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
-        int64_t{2}, std::nullopt, std::nullopt},
-       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
-        std::nullopt, std::nullopt, std::nullopt}},
-      std::move(params), {.num_sources = true});
+  const FiveOutGraphRunResult result =
+      run_live_music({{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+                       std::nullopt, std::nullopt, std::nullopt},
+                      {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0, int64_t{2},
+                       std::nullopt, std::nullopt},
+                      {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+                       std::nullopt, std::nullopt, std::nullopt}},
+                     std::move(params), {.num_sources = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -1673,33 +1533,29 @@ TEST(MUSICEstimatorOpTest, LiveNumSourcesAppliesForOneTick) {
 // exactly, which makes the 1 -> 2 transition between the Params Pfa and the
 // override Pfa deterministic instead of a noise draw.
 TEST(MUSICEstimatorOpTest, LiveSourceCountPfaAppliesForOneTick) {
-  const std::vector<double> spectrum = {0.8930540251, 0.9468277841,
-                                        1.3517214181, 1.6732266229,
-                                        9.0798471606, 14.3477610683};
-  const std::vector<double> cosines = {-5.0 / 6.0, -0.5, -1.0 / 6.0,
-                                       1.0 / 6.0, 0.5, 5.0 / 6.0};
+  const std::vector<double> spectrum = {0.8930540251, 0.9468277841, 1.3517214181,
+                                        1.6732266229, 9.0798471606, 14.3477610683};
+  const std::vector<double> cosines = {-5.0 / 6.0, -0.5, -1.0 / 6.0, 1.0 / 6.0, 0.5, 5.0 / 6.0};
   const int64_t kN = static_cast<int64_t>(spectrum.size());
   const int64_t kS = kN;
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kDirectionCosine;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_orthogonal_source_block(geom, conv, cosines, spectrum);
+  const auto block = make_orthogonal_source_block(geom, conv, cosines, spectrum);
   auto snap = block_to_device<double>(block, {1, kN, kS});
-  MUSICParams params =
-      make_params(geom, conv, linspace(-0.9, 0.9, 37), {0.0},
-                  /*num_sources=*/-1, /*source_count_pfa=*/1e-4,
-                  /*max_sources=*/4, /*smoothing=*/{},
-                  /*forward_backward=*/false);
+  MUSICParams params = make_params(geom, conv, linspace(-0.9, 0.9, 37), {0.0},
+                                   /*num_sources=*/-1, /*source_count_pfa=*/1e-4,
+                                   /*max_sources=*/4, /*smoothing=*/{},
+                                   /*forward_backward=*/false);
 
-  const FiveOutGraphRunResult result = run_live_music(
-      {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
-        std::nullopt, std::nullopt, std::nullopt},
-       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
-        std::nullopt, 0.5, std::nullopt},
-       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
-        std::nullopt, std::nullopt, std::nullopt}},
-      std::move(params), {.source_count_pfa = true});
+  const FiveOutGraphRunResult result =
+      run_live_music({{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+                       std::nullopt, std::nullopt, std::nullopt},
+                      {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+                       std::nullopt, 0.5, std::nullopt},
+                      {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+                       std::nullopt, std::nullopt, std::nullopt}},
+                     std::move(params), {.source_count_pfa = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -1720,25 +1576,23 @@ TEST(MUSICEstimatorOpTest, LiveMaxSourcesAppliesForOneTickAndReallocates) {
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.02, 406u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
-  MUSICParams params =
-      make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0},
-                  /*num_sources=*/1, 1e-2, /*max_sources=*/1);
+  MUSICParams params = make_params(geom, conv, linspace(-0.3, 0.3, 31), {0.0},
+                                   /*num_sources=*/1, 1e-2, /*max_sources=*/1);
 
-  const FiveOutGraphRunResult result = run_live_music(
-      {{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
-        std::nullopt, std::nullopt, std::nullopt},
-       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
-        std::nullopt, std::nullopt, kLiveMaxSources},
-       {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
-        std::nullopt, std::nullopt, std::nullopt}},
-      std::move(params), {.max_sources = true});
+  const FiveOutGraphRunResult result =
+      run_live_music({{snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+                       std::nullopt, std::nullopt, std::nullopt},
+                      {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+                       std::nullopt, std::nullopt, kLiveMaxSources},
+                      {snap, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0,
+                       std::nullopt, std::nullopt, std::nullopt}},
+                     std::move(params), {.max_sources = true});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
   ASSERT_EQ(result.frames2.size(), 3U);
   EXPECT_EQ(result.frames2[0].shape, (std::vector<int64_t>{1, 1, 2}));
-  EXPECT_EQ(result.frames2[1].shape,
-            (std::vector<int64_t>{1, kLiveMaxSources, 2}));
+  EXPECT_EQ(result.frames2[1].shape, (std::vector<int64_t>{1, kLiveMaxSources, 2}));
   // Tick 2 reverts to the Params max_sources, narrowing doa_multi back.
   EXPECT_EQ(result.frames2[2].shape, (std::vector<int64_t>{1, 1, 2}));
 }

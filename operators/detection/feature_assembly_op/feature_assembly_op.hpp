@@ -75,22 +75,13 @@ constexpr std::string_view to_string(AssemblyFeature feature) {
 namespace config_detail {
 
 inline constexpr AssemblyFeature kAssemblyFeatures[] = {
-    AssemblyFeature::kRange,
-    AssemblyFeature::kVelocity,
-    AssemblyFeature::kScore,
-    AssemblyFeature::kAz,
-    AssemblyFeature::kEl,
-    AssemblyFeature::kAzEstimate,
-    AssemblyFeature::kElEstimate,
-    AssemblyFeature::kDopplerBin,
-    AssemblyFeature::kRangeBin,
-    AssemblyFeature::kAzBin,
-    AssemblyFeature::kElBin,
+    AssemblyFeature::kRange,      AssemblyFeature::kVelocity,   AssemblyFeature::kScore,
+    AssemblyFeature::kAz,         AssemblyFeature::kEl,         AssemblyFeature::kAzEstimate,
+    AssemblyFeature::kElEstimate, AssemblyFeature::kDopplerBin, AssemblyFeature::kRangeBin,
+    AssemblyFeature::kAzBin,      AssemblyFeature::kElBin,
 };
-using AssemblyFeatureCodec =
-    CanonicalEnumCodec<AssemblyFeature, kAssemblyFeatures>;  // NOLINT
-using AssemblyFeatureStorage =
-    PortableParamStorageTraits<AssemblyFeature>;  // NOLINT
+using AssemblyFeatureCodec = CanonicalEnumCodec<AssemblyFeature, kAssemblyFeatures>;  // NOLINT
+using AssemblyFeatureStorage = PortableParamStorageTraits<AssemblyFeature>;           // NOLINT
 
 }  // namespace config_detail
 }  // namespace holoscan::radar
@@ -98,16 +89,16 @@ using AssemblyFeatureStorage =
 namespace holoscan::config {
 
 template <>
-struct ConfigCodec<radar::AssemblyFeature>
-    : radar::config_detail::AssemblyFeatureCodec {};  // NOLINT
+struct ConfigCodec<radar::AssemblyFeature> : radar::config_detail::AssemblyFeatureCodec {
+};  // NOLINT
 
 }  // namespace holoscan::config
 
 namespace holoscan {
 
 template <>
-struct ParamStorageTraits<radar::AssemblyFeature>
-    : radar::config_detail::AssemblyFeatureStorage {};  // NOLINT
+struct ParamStorageTraits<radar::AssemblyFeature> : radar::config_detail::AssemblyFeatureStorage {
+};  // NOLINT
 
 }  // namespace holoscan
 
@@ -149,13 +140,11 @@ class FeatureAssemblyOp : public holoscan::Operator<> {
  public:
   // Features is constructor-only because it fixes both the points layout and
   // the compiled input join before setup().
-  FeatureAssemblyOp(const MaxTensorExtents& extents,
-                    std::vector<AssemblyFeature> features);
+  FeatureAssemblyOp(const MaxTensorExtents& extents, std::vector<AssemblyFeature> features);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> detection_idx{"detection_idx"};
   // Gather sources. Static features determines which are required aligned
@@ -170,10 +159,10 @@ class FeatureAssemblyOp : public holoscan::Operator<> {
   Output<Tensor> points{"points"};
 
  private:
-  expected<void, Error> ensure_device_feature_ids(
-      const std::vector<int>& feature_ids, cudaStream_t stream);
-  expected<void, Error> ensure_score_leading(
-      const std::vector<int64_t>& score_leading, cudaStream_t stream);
+  expected<void, Error> ensure_device_feature_ids(const std::vector<int>& feature_ids,
+                                                  cudaStream_t stream);
+  expected<void, Error> ensure_score_leading(const std::vector<int64_t>& score_leading,
+                                             cudaStream_t stream);
 
   // Keep the previous activation's inputs alive across ticks so async
   // device reads cannot outlive the buffers.

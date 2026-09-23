@@ -29,22 +29,19 @@ class PyMIMODeinterleaveOp : public MIMODeinterleaveOp<T> {
  public:
   using MIMODeinterleaveOp<T>::MIMODeinterleaveOp;
 
-  PyMIMODeinterleaveOp(
-      Fragment* fragment, const py::args& args,
-      std::int64_t max_tx = 8,
-      std::int64_t max_rx = 16,
-      std::int64_t max_chirps = 512,
-      std::int64_t max_samples = 4096,
-      const TXSchedule& tx_schedule = TXSchedule{},
-      const std::string& name = "mimo_deinterleave")
-      : MIMODeinterleaveOp<T>([&] {
-          MaxTensorExtents extents;
-          extents.max_tx = max_tx;
-          extents.max_rx = max_rx;
-          extents.max_chirps = max_chirps;
-          extents.max_samples_per_chirp = max_samples;
-          return extents;
-        }()) {
+  PyMIMODeinterleaveOp(Fragment* fragment, const py::args& args, std::int64_t max_tx = 8,
+                       std::int64_t max_rx = 16, std::int64_t max_chirps = 512,
+                       std::int64_t max_samples = 4096,
+                       const TXSchedule& tx_schedule = TXSchedule{},
+                       const std::string& name = "mimo_deinterleave")
+  : MIMODeinterleaveOp<T>([&] {
+      MaxTensorExtents extents;
+      extents.max_tx = max_tx;
+      extents.max_rx = max_rx;
+      extents.max_chirps = max_chirps;
+      extents.max_samples_per_chirp = max_samples;
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -70,18 +67,11 @@ void bind_mimo_deinterleave(py::module_& m, const char* class_name) {
       "max_samples : int, optional\n"
       "tx_schedule : TXSchedule, optional\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&,
-                    std::int64_t, std::int64_t,
-                    std::int64_t, std::int64_t,
-                    const TXSchedule&,
-                    const std::string&>(),
-           py::arg("fragment"),
-           py::arg("max_tx") = 8,
-           py::arg("max_rx") = 16,
-           py::arg("max_chirps") = 512,
-           py::arg("max_samples") = 4096,
-           py::arg("tx_schedule") = TXSchedule{},
-           py::arg("name") = "mimo_deinterleave")
+      .def(py::init<Fragment*, const py::args&, std::int64_t, std::int64_t, std::int64_t,
+                    std::int64_t, const TXSchedule&, const std::string&>(),
+           py::arg("fragment"), py::arg("max_tx") = 8, py::arg("max_rx") = 16,
+           py::arg("max_chirps") = 512, py::arg("max_samples") = 4096,
+           py::arg("tx_schedule") = TXSchedule{}, py::arg("name") = "mimo_deinterleave")
       .def("setup", &Op::setup, py::arg("spec"));
 }
 

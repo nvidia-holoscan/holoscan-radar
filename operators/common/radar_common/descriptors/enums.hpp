@@ -107,116 +107,166 @@ enum class MultiplexingScheme {
 // configs).
 constexpr std::string_view to_string(WindowType type) {
   switch (type) {
-    case WindowType::kNone: return "none";
-    case WindowType::kHann: return "hann";
-    case WindowType::kHamming: return "hamming";
-    case WindowType::kBlackman: return "blackman";
-    case WindowType::kBlackmanHarris: return "blackman_harris";
-    case WindowType::kKaiser: return "kaiser";
-    case WindowType::kChebyshev: return "chebyshev";
-    case WindowType::kTaylor: return "taylor";
-    case WindowType::kFlatTop: return "flat_top";
-    case WindowType::kTukey: return "tukey";
-    case WindowType::kCustom: return "custom";
+    case WindowType::kNone:
+      return "none";
+    case WindowType::kHann:
+      return "hann";
+    case WindowType::kHamming:
+      return "hamming";
+    case WindowType::kBlackman:
+      return "blackman";
+    case WindowType::kBlackmanHarris:
+      return "blackman_harris";
+    case WindowType::kKaiser:
+      return "kaiser";
+    case WindowType::kChebyshev:
+      return "chebyshev";
+    case WindowType::kTaylor:
+      return "taylor";
+    case WindowType::kFlatTop:
+      return "flat_top";
+    case WindowType::kTukey:
+      return "tukey";
+    case WindowType::kCustom:
+      return "custom";
   }
   return "unknown";
 }
 
 constexpr std::string_view to_string(FftNorm norm) {
   switch (norm) {
-    case FftNorm::kBackward: return "backward";
-    case FftNorm::kOrtho: return "ortho";
-    case FftNorm::kForward: return "forward";
+    case FftNorm::kBackward:
+      return "backward";
+    case FftNorm::kOrtho:
+      return "ortho";
+    case FftNorm::kForward:
+      return "forward";
   }
   return "unknown";
 }
 
 constexpr std::string_view to_string(ClutterFilterMethod method) {
   switch (method) {
-    case ClutterFilterMethod::kNone: return "none";
-    case ClutterFilterMethod::kMeanSubtraction: return "mean_subtraction";
-    case ClutterFilterMethod::kSingleDelay: return "single_delay";
-    case ClutterFilterMethod::kDoubleDelay: return "double_delay";
+    case ClutterFilterMethod::kNone:
+      return "none";
+    case ClutterFilterMethod::kMeanSubtraction:
+      return "mean_subtraction";
+    case ClutterFilterMethod::kSingleDelay:
+      return "single_delay";
+    case ClutterFilterMethod::kDoubleDelay:
+      return "double_delay";
   }
   return "unknown";
 }
 
 constexpr std::string_view to_string(SnapshotEdgeMode mode) {
   switch (mode) {
-    case SnapshotEdgeMode::kWrap: return "wrap";
-    case SnapshotEdgeMode::kClamp: return "clamp";
-    case SnapshotEdgeMode::kShift: return "shift";
+    case SnapshotEdgeMode::kWrap:
+      return "wrap";
+    case SnapshotEdgeMode::kClamp:
+      return "clamp";
+    case SnapshotEdgeMode::kShift:
+      return "shift";
   }
   return "unknown";
 }
 
 constexpr std::string_view to_string(ArrayGeometryType type) {
   switch (type) {
-    case ArrayGeometryType::kUla: return "ula";
-    case ArrayGeometryType::kUra: return "ura";
-    case ArrayGeometryType::kUca: return "uca";
-    case ArrayGeometryType::kConformal: return "conformal";
+    case ArrayGeometryType::kUla:
+      return "ula";
+    case ArrayGeometryType::kUra:
+      return "ura";
+    case ArrayGeometryType::kUca:
+      return "uca";
+    case ArrayGeometryType::kConformal:
+      return "conformal";
   }
   return "unknown";
 }
 
 constexpr std::string_view to_string(AngleConventionPreset preset) {
   switch (preset) {
-    case AngleConventionPreset::kRadarBoresight: return "radar_boresight";
-    case AngleConventionPreset::kRosRep103: return "ros_rep103";
-    case AngleConventionPreset::kIso8855Flu: return "iso8855_flu";
-    case AngleConventionPreset::kAerospaceNed: return "aerospace_ned";
-    case AngleConventionPreset::kPhysicsSpherical: return "physics_spherical";
-    case AngleConventionPreset::kGeodeticEnu: return "geodetic_enu";
-    case AngleConventionPreset::kGeodeticNed: return "geodetic_ned";
-    case AngleConventionPreset::kDirectionCosine: return "direction_cosine";
-    case AngleConventionPreset::kCustom: return "custom";
+    case AngleConventionPreset::kRadarBoresight:
+      return "radar_boresight";
+    case AngleConventionPreset::kRosRep103:
+      return "ros_rep103";
+    case AngleConventionPreset::kIso8855Flu:
+      return "iso8855_flu";
+    case AngleConventionPreset::kAerospaceNed:
+      return "aerospace_ned";
+    case AngleConventionPreset::kPhysicsSpherical:
+      return "physics_spherical";
+    case AngleConventionPreset::kGeodeticEnu:
+      return "geodetic_enu";
+    case AngleConventionPreset::kGeodeticNed:
+      return "geodetic_ned";
+    case AngleConventionPreset::kDirectionCosine:
+      return "direction_cosine";
+    case AngleConventionPreset::kCustom:
+      return "custom";
   }
   return "unknown";
 }
 
 constexpr std::string_view to_string(SignedAxis axis) {
   switch (axis) {
-    case SignedAxis::kPlusX: return "+x";
-    case SignedAxis::kMinusX: return "-x";
-    case SignedAxis::kPlusY: return "+y";
-    case SignedAxis::kMinusY: return "-y";
-    case SignedAxis::kPlusZ: return "+z";
-    case SignedAxis::kMinusZ: return "-z";
+    case SignedAxis::kPlusX:
+      return "+x";
+    case SignedAxis::kMinusX:
+      return "-x";
+    case SignedAxis::kPlusY:
+      return "+y";
+    case SignedAxis::kMinusY:
+      return "-y";
+    case SignedAxis::kPlusZ:
+      return "+z";
+    case SignedAxis::kMinusZ:
+      return "-z";
   }
   return "unknown";
 }
 
 constexpr std::string_view to_string(ElevationReference ref) {
   switch (ref) {
-    case ElevationReference::kHorizon: return "horizon";
-    case ElevationReference::kZenith: return "zenith";
+    case ElevationReference::kHorizon:
+      return "horizon";
+    case ElevationReference::kZenith:
+      return "zenith";
   }
   return "unknown";
 }
 
 constexpr std::string_view to_string(PeakInterpolation mode) {
   switch (mode) {
-    case PeakInterpolation::kNone: return "none";
-    case PeakInterpolation::kParabolic: return "parabolic";
+    case PeakInterpolation::kNone:
+      return "none";
+    case PeakInterpolation::kParabolic:
+      return "parabolic";
   }
   return "unknown";
 }
 
 constexpr std::string_view to_string(OverlapPolicy policy) {
   switch (policy) {
-    case OverlapPolicy::kDedup: return "dedup";
-    case OverlapPolicy::kAverage: return "average";
-    case OverlapPolicy::kKeepAll: return "keep_all";
+    case OverlapPolicy::kDedup:
+      return "dedup";
+    case OverlapPolicy::kAverage:
+      return "average";
+    case OverlapPolicy::kKeepAll:
+      return "keep_all";
   }
   return "unknown";
 }
 
 constexpr std::string_view to_string(MultiplexingScheme scheme) {
   switch (scheme) {
-    case MultiplexingScheme::kUnspecified: return "unspecified";
-    case MultiplexingScheme::kTdm: return "tdm";
-    case MultiplexingScheme::kDdm: return "ddm";
+    case MultiplexingScheme::kUnspecified:
+      return "unspecified";
+    case MultiplexingScheme::kTdm:
+      return "tdm";
+    case MultiplexingScheme::kDdm:
+      return "ddm";
   }
   return "unknown";
 }

@@ -24,8 +24,7 @@
 
 namespace holoscan::radar {
 
-inline double array_geometry_type_to_code(
-    std::optional<ArrayGeometryType> type) {
+inline double array_geometry_type_to_code(std::optional<ArrayGeometryType> type) {
   if (!type.has_value()) {
     return std::numeric_limits<double>::quiet_NaN();
   }
@@ -42,8 +41,7 @@ inline double array_geometry_type_to_code(
   return std::numeric_limits<double>::quiet_NaN();
 }
 
-inline std::optional<ArrayGeometryType> array_geometry_type_from_code(
-    double code) {
+inline std::optional<ArrayGeometryType> array_geometry_type_from_code(double code) {
   if (!std::isfinite(code)) {
     return std::nullopt;
   }
@@ -58,8 +56,7 @@ inline std::optional<ArrayGeometryType> array_geometry_type_from_code(
     case 3:
       return ArrayGeometryType::kConformal;
     default:
-      throw std::invalid_argument(
-          "ArrayGeometry tensor: unknown geometry_type code");
+      throw std::invalid_argument("ArrayGeometry tensor: unknown geometry_type code");
   }
 }
 
@@ -78,14 +75,12 @@ inline std::vector<double> pack_array_geometry(const ArrayGeometry& geom) {
   return out;
 }
 
-inline std::vector<int64_t> array_geometry_tensor_shape(
-    const ArrayGeometry& geom) {
+inline std::vector<int64_t> array_geometry_tensor_shape(const ArrayGeometry& geom) {
   return {geom.num_elements() + 1, 3};
 }
 
 // Unpack from a contiguous host buffer with shape (num_elements + 1, 3).
-inline ArrayGeometry unpack_array_geometry(
-    const double* data, int64_t rows, int64_t cols) {
+inline ArrayGeometry unpack_array_geometry(const double* data, int64_t rows, int64_t cols) {
   if (data == nullptr) {
     throw std::invalid_argument("ArrayGeometry tensor: null data");
   }

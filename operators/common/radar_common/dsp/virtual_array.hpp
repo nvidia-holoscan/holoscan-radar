@@ -28,12 +28,11 @@ struct VirtualAssemblyPlan {
 // Build p_virtual = p_tx + p_rx in deterministic TX-major/RX-minor order,
 // applying the requested coincidence policy. `caller_name` prefixes
 // validation errors so a shared implementation preserves operator identity.
-VirtualAssemblyPlan build_virtual_plan(
-    const std::vector<double>& tx_positions,
-    const std::vector<double>& rx_positions, int64_t num_tx, int64_t num_rx,
-    OverlapPolicy policy, const char* caller_name);
+VirtualAssemblyPlan build_virtual_plan(const std::vector<double>& tx_positions,
+                                       const std::vector<double>& rx_positions, int64_t num_tx,
+                                       int64_t num_rx, OverlapPolicy policy,
+                                       const char* caller_name);
 
-ArrayGeometry make_array_geometry(const VirtualAssemblyPlan& plan,
-                                  double wavelength);
+ArrayGeometry make_array_geometry(const VirtualAssemblyPlan& plan, double wavelength);
 
 }  // namespace holoscan::radar::detail

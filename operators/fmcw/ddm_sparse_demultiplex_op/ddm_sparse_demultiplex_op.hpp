@@ -44,18 +44,17 @@ namespace holoscan {
 
 template <>
 struct ChannelTypeIdentity<radar::DDMSparseWindowOverride> {
-  static constexpr std::string_view name =
-      "com.nvidia.holoscan.radar.DDMSparseWindowOverride";
+  static constexpr std::string_view name = "com.nvidia.holoscan.radar.DDMSparseWindowOverride";
   static constexpr std::uint32_t version = 1U;
 };
 
 template <>
 struct ChannelPodLayout<radar::DDMSparseWindowOverride> {
-  static constexpr auto fields = pod_fields(
-      pod_field("doppler", &radar::DDMSparseWindowOverride::doppler,
-                offsetof(radar::DDMSparseWindowOverride, doppler)),
-      pod_field("range", &radar::DDMSparseWindowOverride::range,
-                offsetof(radar::DDMSparseWindowOverride, range)));
+  static constexpr auto fields =
+      pod_fields(pod_field("doppler", &radar::DDMSparseWindowOverride::doppler,
+                           offsetof(radar::DDMSparseWindowOverride, doppler)),
+                 pod_field("range", &radar::DDMSparseWindowOverride::range,
+                           offsetof(radar::DDMSparseWindowOverride, range)));
 };
 
 }  // namespace holoscan
@@ -75,24 +74,20 @@ struct DDMSparseDemultiplexParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     DDMSparseDemultiplexParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.DDMSparseDemultiplexParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.DDMSparseDemultiplexParams", 1),
     holoscan::field<&DDMSparseDemultiplexParams::ddm_code>("ddm_code"),
     holoscan::field<&DDMSparseDemultiplexParams::tx_positions>("tx_positions"),
     holoscan::field<&DDMSparseDemultiplexParams::rx_positions>("rx_positions"),
-    holoscan::field<&DDMSparseDemultiplexParams::overlap_policy>(
-        "overlap_policy"),
+    holoscan::field<&DDMSparseDemultiplexParams::overlap_policy>("overlap_policy"),
     holoscan::field<&DDMSparseDemultiplexParams::wavelength>("wavelength")
         .description("Operating wavelength in meters. [live]."),
-    holoscan::field<&DDMSparseDemultiplexParams::snapshot_window>(
-        "snapshot_window")
+    holoscan::field<&DDMSparseDemultiplexParams::snapshot_window>("snapshot_window")
         .description("Folded-RD neighborhood half-size. [live]."),
     holoscan::field<&DDMSparseDemultiplexParams::doppler_edge>("doppler_edge"),
     holoscan::field<&DDMSparseDemultiplexParams::range_edge>("range_edge"));
 
 template <typename T>
-class DDMSparseDemultiplexOp
-    : public holoscan::Operator<DDMSparseDemultiplexParams> {
+class DDMSparseDemultiplexOp : public holoscan::Operator<DDMSparseDemultiplexParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
 
  public:
@@ -100,8 +95,7 @@ class DDMSparseDemultiplexOp
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> rd_maps{"rd_maps"};
   Input<Tensor> detection_idx{"detection_idx"};
@@ -119,10 +113,10 @@ class DDMSparseDemultiplexOp
     std::shared_ptr<Tensor> initial_phase;
   };
 
-  expected<void, Error> ensure_virtual_tables(
-      const detail::VirtualAssemblyPlan& plan,
-      const std::vector<double>& tx_positions,
-      const std::vector<double>& rx_positions, cudaStream_t stream);
+  expected<void, Error> ensure_virtual_tables(const detail::VirtualAssemblyPlan& plan,
+                                              const std::vector<double>& tx_positions,
+                                              const std::vector<double>& rx_positions,
+                                              cudaStream_t stream);
 
   ConfigCache<CachedDdmTables> ddm_cache_{};
   Tensor retained_rd_maps_;

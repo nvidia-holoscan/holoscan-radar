@@ -72,36 +72,29 @@ class FMCWWaveformDescriptor {
     // NaN compares false against every bound, so each check must require
     // finiteness explicitly — otherwise non-finite values would flow into
     // the derived fields of a descriptor reporting is_valid().
-    if (!std::isfinite(spec.carrier_frequency) ||
-        spec.carrier_frequency <= 0.0) {
+    if (!std::isfinite(spec.carrier_frequency) || spec.carrier_frequency <= 0.0) {
       throw std::invalid_argument(
           "FMCWWaveformDescriptor: carrier_frequency must be finite and > 0");
     }
     if (!std::isfinite(spec.chirp_duration) || spec.chirp_duration <= 0.0) {
-      throw std::invalid_argument(
-          "FMCWWaveformDescriptor: chirp_duration must be finite and > 0");
+      throw std::invalid_argument("FMCWWaveformDescriptor: chirp_duration must be finite and > 0");
     }
     if (!std::isfinite(spec.sample_rate) || spec.sample_rate <= 0.0) {
-      throw std::invalid_argument(
-          "FMCWWaveformDescriptor: sample_rate must be finite and > 0");
+      throw std::invalid_argument("FMCWWaveformDescriptor: sample_rate must be finite and > 0");
     }
-    if (!std::isfinite(spec.chirp_repetition_interval) ||
-        spec.chirp_repetition_interval <= 0.0) {
+    if (!std::isfinite(spec.chirp_repetition_interval) || spec.chirp_repetition_interval <= 0.0) {
       throw std::invalid_argument(
           "FMCWWaveformDescriptor: chirp_repetition_interval must be finite "
           "and > 0");
     }
     if (spec.bandwidth.has_value() && !std::isfinite(*spec.bandwidth)) {
-      throw std::invalid_argument(
-          "FMCWWaveformDescriptor: bandwidth must be finite");
+      throw std::invalid_argument("FMCWWaveformDescriptor: bandwidth must be finite");
     }
     if (spec.chirp_slope.has_value() && !std::isfinite(*spec.chirp_slope)) {
-      throw std::invalid_argument(
-          "FMCWWaveformDescriptor: chirp_slope must be finite");
+      throw std::invalid_argument("FMCWWaveformDescriptor: chirp_slope must be finite");
     }
     if (!spec.bandwidth.has_value() && !spec.chirp_slope.has_value()) {
-      throw std::invalid_argument(
-          "FMCWWaveformDescriptor: define bandwidth or chirp_slope");
+      throw std::invalid_argument("FMCWWaveformDescriptor: define bandwidth or chirp_slope");
     }
     if (spec.bandwidth.has_value() && spec.chirp_slope.has_value()) {
       const double derived = *spec.bandwidth / spec.chirp_duration;
@@ -112,17 +105,14 @@ class FMCWWaveformDescriptor {
             "chirp_slope are both set but inconsistent");
       }
     }
-    chirp_slope_ = spec.chirp_slope.has_value()
-                       ? *spec.chirp_slope
-                       : *spec.bandwidth / spec.chirp_duration;
+    chirp_slope_ =
+        spec.chirp_slope.has_value() ? *spec.chirp_slope : *spec.bandwidth / spec.chirp_duration;
     if (chirp_slope_ == 0.0) {
       throw std::invalid_argument(
           "FMCWWaveformDescriptor: sweep slope must be non-zero (bandwidth "
           "or chirp_slope is 0)");
     }
-    bandwidth_ = spec.bandwidth.has_value()
-                     ? *spec.bandwidth
-                     : chirp_slope_ * spec.chirp_duration;
+    bandwidth_ = spec.bandwidth.has_value() ? *spec.bandwidth : chirp_slope_ * spec.chirp_duration;
     // Finite inputs can still overflow the derivation (bandwidth / tiny
     // duration, slope * huge duration).
     if (!std::isfinite(chirp_slope_) || !std::isfinite(bandwidth_)) {
@@ -161,9 +151,7 @@ class FMCWWaveformDescriptor {
   double sample_rate() const { return sample_rate_; }
 
   // Chirp repetition interval (PRI) in seconds.
-  double chirp_repetition_interval() const {
-    return chirp_repetition_interval_;
-  }
+  double chirp_repetition_interval() const { return chirp_repetition_interval_; }
 
   // Carrier wavelength in meters at the default propagation speed
   // (precomputed at construction).
@@ -176,22 +164,16 @@ class FMCWWaveformDescriptor {
   }
 
   // Optional measured dechirp reference; empty when synthesized.
-  const std::vector<std::complex<double>>& reference_samples() const {
-    return reference_samples_;
-  }
+  const std::vector<std::complex<double>>& reference_samples() const { return reference_samples_; }
 
-  friend bool operator==(const FMCWWaveformDescriptor& a,
-                         const FMCWWaveformDescriptor& b) {
-    return a.valid_ == b.valid_ &&
-           a.carrier_frequency_ == b.carrier_frequency_ &&
-           a.chirp_slope_ == b.chirp_slope_ &&
-           a.chirp_duration_ == b.chirp_duration_ &&
+  friend bool operator==(const FMCWWaveformDescriptor& a, const FMCWWaveformDescriptor& b) {
+    return a.valid_ == b.valid_ && a.carrier_frequency_ == b.carrier_frequency_ &&
+           a.chirp_slope_ == b.chirp_slope_ && a.chirp_duration_ == b.chirp_duration_ &&
            a.sample_rate_ == b.sample_rate_ &&
            a.chirp_repetition_interval_ == b.chirp_repetition_interval_ &&
            a.reference_samples_ == b.reference_samples_;
   }
-  friend bool operator!=(const FMCWWaveformDescriptor& a,
-                         const FMCWWaveformDescriptor& b) {
+  friend bool operator!=(const FMCWWaveformDescriptor& a, const FMCWWaveformDescriptor& b) {
     return !(a == b);
   }
 

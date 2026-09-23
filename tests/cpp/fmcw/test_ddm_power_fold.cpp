@@ -32,8 +32,7 @@ hr::DDMCodeDescriptor code(int64_t guard = 0) {
 }
 
 auto wire() {
-  return [](holoscan::Graph& graph, const auto& source, auto& op,
-            const auto& sink) {
+  return [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
     const holoscan::ConnectionOptions queue{.queue_depth = 4U};
     graph.add_flow(source->out, op->rd_maps, queue);
     graph.add_flow(op->power_map, sink->in, queue);
@@ -45,13 +44,12 @@ hr::testing::HostTensor run(const hr::DDMCodeDescriptor& ddm_code) {
   constexpr int64_t kRx = 2;
   constexpr int64_t kD = 8;
   constexpr int64_t kR = 3;
-  std::vector<std::complex<T>> host(
-      static_cast<size_t>(kRx * kD * kR));
+  std::vector<std::complex<T>> host(static_cast<size_t>(kRx * kD * kR));
   for (int64_t rx = 0; rx < kRx; ++rx) {
     for (int64_t d = 0; d < kD; ++d) {
       for (int64_t r = 0; r < kR; ++r) {
-        host[static_cast<size_t>((rx * kD + d) * kR + r)] = {
-            static_cast<T>(1 + rx + d), static_cast<T>(r)};
+        host[static_cast<size_t>((rx * kD + d) * kR + r)] = {static_cast<T>(1 + rx + d),
+                                                             static_cast<T>(r)};
       }
     }
   }
@@ -59,14 +57,11 @@ hr::testing::HostTensor run(const hr::DDMCodeDescriptor& ddm_code) {
   extents.max_rx = kRx;
   extents.max_doppler_bins = kD;
   extents.max_range_bins = kR;
-  auto input = hr::testing::to_device_tensor(
-      host, {kRx, kD, kR}, hr::complex_dtype<T>());
-  auto result =
-      hr::testing::run_single_io_operator_graph_result<hr::DDMPowerFoldOp<T>>(
-          {std::move(input)}, hr::DDMPowerFoldParams{.ddm_code = ddm_code},
-          "power_map", wire(), {}, extents);
-  if (!result.plan_ok || !result.diagnostics.empty() ||
-      result.frames.size() != 1U) {
+  auto input = hr::testing::to_device_tensor(host, {kRx, kD, kR}, hr::complex_dtype<T>());
+  auto result = hr::testing::run_single_io_operator_graph_result<hr::DDMPowerFoldOp<T>>(
+      {std::move(input)}, hr::DDMPowerFoldParams{.ddm_code = ddm_code}, "power_map", wire(), {},
+      extents);
+  if (!result.plan_ok || !result.diagnostics.empty() || result.frames.size() != 1U) {
     throw std::runtime_error("DDMPowerFoldOp graph failed");
   }
   return std::move(result.frames.front());
@@ -75,8 +70,8 @@ hr::testing::HostTensor run(const hr::DDMCodeDescriptor& ddm_code) {
 template <typename T>
 void check_fold() {
   const auto ddm_code = code(1);
-  const auto table = hr::detail::build_ddm_demux_table(
-      hr::detail::ddm_resolve_offsets(ddm_code), 2, 8, 3);
+  const auto table =
+      hr::detail::build_ddm_demux_table(hr::detail::ddm_resolve_offsets(ddm_code), 2, 8, 3);
   const auto output = run<T>(ddm_code);
   ASSERT_EQ(output.shape, (std::vector<int64_t>{3, 3}));
   const auto* actual = output.template as<T>();
@@ -106,22 +101,14 @@ TEST(DDMPowerFoldOp, DoubleHostOracleAndGuardExclusion) {
 }
 
 TEST(DDMPowerFoldMath, RejectsInvalidLinearLayouts) {
-  EXPECT_THROW(
-      hr::detail::ddm_exact_band_indices(
-          hr::DDMCodeDescriptor{
-              .num_tx = 2, .doppler_offsets = {0.0, 0.3}},
-          8),
-      std::invalid_argument);
-  EXPECT_THROW(
-      hr::detail::ddm_num_doppler_per_tx(7, 2, 0),
-      std::invalid_argument);
+  EXPECT_THROW(hr::detail::ddm_exact_band_indices(
+                   hr::DDMCodeDescriptor{.num_tx = 2, .doppler_offsets = {0.0, 0.3}}, 8),
+               std::invalid_argument);
+  EXPECT_THROW(hr::detail::ddm_num_doppler_per_tx(7, 2, 0), std::invalid_argument);
   auto nonlinear = hr::DDMCodeDescriptor{
       .num_tx = 2,
-      .phase_codes = {{1, 0}, {1, 0}, {1, 0}, {1, 0},
-                      {1, 0}, {0, 1}, {1, 0}, {0, -1}}};
-  EXPECT_THROW(
-      hr::detail::ddm_exact_band_indices(nonlinear, 4),
-      std::invalid_argument);
+      .phase_codes = {{1, 0}, {1, 0}, {1, 0}, {1, 0}, {1, 0}, {0, 1}, {1, 0}, {0, -1}}};
+  EXPECT_THROW(hr::detail::ddm_exact_band_indices(nonlinear, 4), std::invalid_argument);
 }
 
 }  // namespace

@@ -107,21 +107,19 @@ expected<void, Error> fail_runtime(const std::string& message) {
   return make_unexpected(Error{ErrorCode::kFailure, message});
 }
 
-expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
-                                    const char* what) {
+expected<void*, Error> writable_ptr(holoscan::Tensor& tensor, const char* what) {
   auto mut = tensor.mutable_data();
   if (!mut) {
-    return make_unexpected(Error{
-        ErrorCode::kFailure,
-        std::string(kOpName) + ": " + what + " is not writable: " +
-            mut.error().message});
+    return make_unexpected(
+        Error{ErrorCode::kFailure,
+              std::string(kOpName) + ": " + what + " is not writable: " + mut.error().message});
   }
   return *mut;
 }
 
-expected<void*, Error> prepare_runtime_buffer(
-    RootMUSICDeviceBuffer& buffer, std::initializer_list<int64_t> shape,
-    DLDataType dtype, const char* what) {
+expected<void*, Error> prepare_runtime_buffer(RootMUSICDeviceBuffer& buffer,
+                                              std::initializer_list<int64_t> shape,
+                                              DLDataType dtype, const char* what) {
   const std::size_t elements = product_extents(shape, kOpName);
   if (!buffer.tensor || elements > buffer.capacity) {
     buffer.tensor = make_device_tensor(shape, dtype);
@@ -151,47 +149,35 @@ struct RootMUSICStagePlan {
 };
 
 expected<RootMUSICStageConfig, Error> resolve_params(
-    Input<WireArrayGeometry>& geometry_port,
-    Input<SpatialSmoothingOverride>& smoothing_port,
-    Input<int64_t>& num_sources_port, Input<double>& pfa_port,
-    Input<int64_t>& max_sources_port, const RootMUSICParams& pinned,
-    const MaxTensorExtents& extents) {
-  HOLOSCAN_TRY(
-      auto geometry,
-      resolve_live_override_via(
-          geometry_port, pinned.array_geometry,
-          [&extents](const WireArrayGeometry& wire)
-              -> expected<ArrayGeometry, Error> {
-            auto converted = from_wire(wire);
-            if (!converted) {
-              return make_unexpected(std::move(converted).error());
-            }
-            if (extents.max_channels.has_value() &&
-                converted->num_elements() > *extents.max_channels) {
-              return make_unexpected(
-                  Error{ErrorCode::kInvalidArgument,
-                        "RootMUSICEstimatorOp: "
-                        "array_geometry.num_elements exceeds "
-                        "MaxTensorExtents.max_channels"});
-            }
-            return std::move(*converted);
-          }));
-  HOLOSCAN_TRY(
-      auto smoothing,
-      resolve_live_override_via(
-          smoothing_port, pinned.spatial_smoothing,
-          [](const SpatialSmoothingOverride& wire) {
-            return from_wire(wire);
-          }));
-  HOLOSCAN_TRY(
-      auto resolved_num_sources,
-      resolve_live_override(num_sources_port, pinned.num_sources));
-  HOLOSCAN_TRY(
-      auto pfa,
-      resolve_live_override(pfa_port, pinned.source_count_pfa));
-  HOLOSCAN_TRY(
-      auto resolved_max_sources,
-      resolve_live_override(max_sources_port, pinned.max_sources));
+    Input<WireArrayGeometry>& geometry_port, Input<SpatialSmoothingOverride>& smoothing_port,
+    Input<int64_t>& num_sources_port, Input<double>& pfa_port, Input<int64_t>& max_sources_port,
+    const RootMUSICParams& pinned, const MaxTensorExtents& extents) {
+  HOLOSCAN_TRY(auto geometry,
+               resolve_live_override_via(
+                   geometry_port, pinned.array_geometry,
+                   [&extents](const WireArrayGeometry& wire) -> expected<ArrayGeometry, Error> {
+                     auto converted = from_wire(wire);
+                     if (!converted) {
+                       return make_unexpected(std::move(converted).error());
+                     }
+                     if (extents.max_channels.has_value() &&
+                         converted->num_elements() > *extents.max_channels) {
+                       return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                                    "RootMUSICEstimatorOp: "
+                                                    "array_geometry.num_elements exceeds "
+                                                    "MaxTensorExtents.max_channels"});
+                     }
+                     return std::move(*converted);
+                   }));
+  HOLOSCAN_TRY(auto smoothing, resolve_live_override_via(smoothing_port, pinned.spatial_smoothing,
+                                                         [](const SpatialSmoothingOverride& wire) {
+                                                           return from_wire(wire);
+                                                         }));
+  HOLOSCAN_TRY(auto resolved_num_sources,
+               resolve_live_override(num_sources_port, pinned.num_sources));
+  HOLOSCAN_TRY(auto pfa, resolve_live_override(pfa_port, pinned.source_count_pfa));
+  HOLOSCAN_TRY(auto resolved_max_sources,
+               resolve_live_override(max_sources_port, pinned.max_sources));
   return RootMUSICStageConfig{
       .geometry = std::move(geometry),
       .convention = pinned.angle_convention,
@@ -203,62 +189,51 @@ expected<RootMUSICStageConfig, Error> resolve_params(
   };
 }
 
-expected<RootMUSICStagePlan, Error> build_root_music_stage_plan(
-    const Tensor& snapshot, RootMUSICStageConfig stage,
-    const MaxTensorExtents& extents) {
+expected<RootMUSICStagePlan, Error> build_root_music_stage_plan(const Tensor& snapshot,
+                                                                RootMUSICStageConfig stage,
+                                                                const MaxTensorExtents& extents) {
   try {
     stage.geometry.validate();
   } catch (const std::invalid_argument& error) {
-    return make_unexpected(
-        Error{ErrorCode::kInvalidArgument, error.what()});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument, error.what()});
   }
-  if (extents.max_channels.has_value() &&
-      stage.geometry.num_elements() > *extents.max_channels) {
-    return make_unexpected(
-        Error{ErrorCode::kInvalidArgument,
-              "RootMUSICEstimatorOp: array_geometry.num_elements exceeds "
-              "MaxTensorExtents.max_channels"});
+  if (extents.max_channels.has_value() && stage.geometry.num_elements() > *extents.max_channels) {
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 "RootMUSICEstimatorOp: array_geometry.num_elements exceeds "
+                                 "MaxTensorExtents.max_channels"});
   }
-  if (!(stage.source_count_pfa > 0.0) ||
-      !(stage.source_count_pfa < 1.0)) {
-    return make_unexpected(
-        Error{ErrorCode::kInvalidArgument,
-              "RootMUSICEstimatorOp: source_count_pfa must be in (0, 1)"});
+  if (!(stage.source_count_pfa > 0.0) || !(stage.source_count_pfa < 1.0)) {
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 "RootMUSICEstimatorOp: source_count_pfa must be in (0, 1)"});
   }
   if (stage.max_sources < 1 || stage.max_sources > kMaxSourcesCap) {
     return make_unexpected(
-        Error{ErrorCode::kInvalidArgument,
-              "RootMUSICEstimatorOp: max_sources must be in [1, 64]"});
+        Error{ErrorCode::kInvalidArgument, "RootMUSICEstimatorOp: max_sources must be in [1, 64]"});
   }
-  if (extents.max_sources.has_value() &&
-      stage.max_sources > *extents.max_sources) {
-    return make_unexpected(
-        Error{ErrorCode::kInvalidArgument,
-              "RootMUSICEstimatorOp: max_sources exceeds "
-              "MaxTensorExtents.max_sources"});
+  if (extents.max_sources.has_value() && stage.max_sources > *extents.max_sources) {
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 "RootMUSICEstimatorOp: max_sources exceeds "
+                                 "MaxTensorExtents.max_sources"});
   }
 
   const auto& shape = snapshot.shape();
   if (shape.size() != 3U) {
-    return make_unexpected(
-        Error{ErrorCode::kInvalidArgument,
-              "RootMUSICEstimatorOp: snapshot must have shape "
-              "(num_items, num_channels, num_snapshots)"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 "RootMUSICEstimatorOp: snapshot must have shape "
+                                 "(num_items, num_channels, num_snapshots)"});
   }
   const int64_t num_items = shape[0];
   const int64_t num_channels = shape[1];
   const int64_t num_snapshots = shape[2];
   if (extents.max_items.has_value() && num_items > *extents.max_items) {
-    return make_unexpected(
-        Error{ErrorCode::kInvalidArgument,
-              "RootMUSICEstimatorOp: num_items exceeds "
-              "MaxTensorExtents.max_items"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 "RootMUSICEstimatorOp: num_items exceeds "
+                                 "MaxTensorExtents.max_items"});
   }
   if (num_channels != stage.geometry.num_elements()) {
-    return make_unexpected(
-        Error{ErrorCode::kInvalidArgument,
-              "RootMUSICEstimatorOp: snapshot num_channels must match "
-              "array_geometry.num_elements"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 "RootMUSICEstimatorOp: snapshot num_channels must match "
+                                 "array_geometry.num_elements"});
   }
 
   const int64_t max_sources = stage.max_sources;
@@ -294,9 +269,7 @@ std::string geometry_key(const ArrayGeometry& geometry) {
   std::ostringstream key;
   key << std::setprecision(std::numeric_limits<double>::max_digits10);
   key << geometry.wavelength << '|'
-      << (geometry.geometry_type.has_value()
-              ? static_cast<int>(*geometry.geometry_type)
-              : -1)
+      << (geometry.geometry_type.has_value() ? static_cast<int>(*geometry.geometry_type) : -1)
       << '|';
   for (double value : geometry.element_positions) {
     key << value << ',';
@@ -305,16 +278,16 @@ std::string geometry_key(const ArrayGeometry& geometry) {
 }
 
 template <typename T>
-expected<RootMUSICEstimationInput<T>, Error> prepare_smoothed_input(
-    RootMUSICRuntimeState<T>& state, const Tensor& snapshot,
-    const unsigned char* mask, const RootMUSICStagePlan& plan,
-    cudaStream_t stream) {
+expected<RootMUSICEstimationInput<T>, Error> prepare_smoothed_input(RootMUSICRuntimeState<T>& state,
+                                                                    const Tensor& snapshot,
+                                                                    const unsigned char* mask,
+                                                                    const RootMUSICStagePlan& plan,
+                                                                    cudaStream_t stream) {
   RootMUSICEstimationInput<T> result{
       .geometry = &plan.stage.geometry,
       .num_channels = plan.num_channels,
       .num_snapshots = plan.num_snapshots,
-      .data =
-          static_cast<const cuda::std::complex<T>*>(snapshot.data()),
+      .data = static_cast<const cuda::std::complex<T>*>(snapshot.data()),
       .mask = mask,
   };
   if (plan.stage.spatial_smoothing.empty()) {
@@ -336,46 +309,33 @@ expected<RootMUSICEstimationInput<T>, Error> prepare_smoothed_input(
     }
     try {
       state.smoothing_plan = build_spatial_smoothing_plan(
-          plan.stage.geometry, plan.stage.spatial_smoothing,
-          plan.stage.forward_backward);
+          plan.stage.geometry, plan.stage.spatial_smoothing, plan.stage.forward_backward);
     } catch (const std::invalid_argument& error) {
-      return make_unexpected(
-          Error{ErrorCode::kInvalidArgument, error.what()});
+      return make_unexpected(Error{ErrorCode::kInvalidArgument, error.what()});
     } catch (const std::runtime_error& error) {
-      return make_unexpected(
-          Error{ErrorCode::kFailure, error.what()});
+      return make_unexpected(Error{ErrorCode::kFailure, error.what()});
     }
     state.smoothing_key = candidate_key;
     if (state.smoothing_plan.enabled) {
       const int64_t subarrays = state.smoothing_plan.num_subarrays;
       const int64_t subarray_size = state.smoothing_plan.subarray_size;
       state.d_subarray_index =
-          make_device_tensor({subarrays * subarray_size},
-                             DLDataType{kDLInt, 32, 1});
-      HOLOSCAN_TRY(
-          auto index_ptr,
-          writable_ptr(*state.d_subarray_index, "subarray_index"));
-      if (cudaMemcpyAsync(
-              index_ptr, state.smoothing_plan.subarray_index.data(),
-              state.smoothing_plan.subarray_index.size() * sizeof(int32_t),
-              cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+          make_device_tensor({subarrays * subarray_size}, DLDataType{kDLInt, 32, 1});
+      HOLOSCAN_TRY(auto index_ptr, writable_ptr(*state.d_subarray_index, "subarray_index"));
+      if (cudaMemcpyAsync(index_ptr, state.smoothing_plan.subarray_index.data(),
+                          state.smoothing_plan.subarray_index.size() * sizeof(int32_t),
+                          cudaMemcpyHostToDevice, stream) != cudaSuccess) {
         return make_unexpected(
-            Error{ErrorCode::kFailure,
-                  "RootMUSICEstimatorOp: smoothing index upload failed"});
+            Error{ErrorCode::kFailure, "RootMUSICEstimatorOp: smoothing index upload failed"});
       }
       if (state.smoothing_plan.forward_backward) {
-        state.d_fb_flip = make_device_tensor(
-            {subarray_size}, DLDataType{kDLInt, 32, 1});
-        HOLOSCAN_TRY(
-            auto flip_ptr,
-            writable_ptr(*state.d_fb_flip, "fb_flip"));
-        if (cudaMemcpyAsync(
-                flip_ptr, state.smoothing_plan.fb_flip.data(),
-                state.smoothing_plan.fb_flip.size() * sizeof(int32_t),
-                cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+        state.d_fb_flip = make_device_tensor({subarray_size}, DLDataType{kDLInt, 32, 1});
+        HOLOSCAN_TRY(auto flip_ptr, writable_ptr(*state.d_fb_flip, "fb_flip"));
+        if (cudaMemcpyAsync(flip_ptr, state.smoothing_plan.fb_flip.data(),
+                            state.smoothing_plan.fb_flip.size() * sizeof(int32_t),
+                            cudaMemcpyHostToDevice, stream) != cudaSuccess) {
           return make_unexpected(
-              Error{ErrorCode::kFailure,
-                    "RootMUSICEstimatorOp: smoothing flip upload failed"});
+              Error{ErrorCode::kFailure, "RootMUSICEstimatorOp: smoothing flip upload failed"});
         }
       } else {
         state.d_fb_flip.reset();
@@ -387,47 +347,34 @@ expected<RootMUSICEstimationInput<T>, Error> prepare_smoothed_input(
     return result;
   }
   const int64_t subarray_size = state.smoothing_plan.subarray_size;
-  const int64_t looks =
-      state.smoothing_plan.looks_per_snapshot() * plan.num_snapshots;
-  HOLOSCAN_TRY(
-      auto smoothed_ptr,
-      prepare_runtime_buffer(
-          state.smoothed_snapshot,
-          {plan.num_items, subarray_size, looks}, complex_dtype<T>(),
-          "smoothed_snapshot"));
+  const int64_t looks = state.smoothing_plan.looks_per_snapshot() * plan.num_snapshots;
+  HOLOSCAN_TRY(auto smoothed_ptr, prepare_runtime_buffer(state.smoothed_snapshot,
+                                                         {plan.num_items, subarray_size, looks},
+                                                         complex_dtype<T>(), "smoothed_snapshot"));
   result.snapshot_keepalive = state.smoothed_snapshot.tensor;
   unsigned char* smoothed_mask_ptr = nullptr;
   if (mask != nullptr) {
-    HOLOSCAN_TRY(
-        auto mask_out,
-        prepare_runtime_buffer(
-            state.smoothed_mask, {plan.num_items, looks},
-            DLDataType{kDLUInt, 8, 1}, "smoothed_mask"));
+    HOLOSCAN_TRY(auto mask_out, prepare_runtime_buffer(state.smoothed_mask, {plan.num_items, looks},
+                                                       DLDataType{kDLUInt, 8, 1}, "smoothed_mask"));
     result.mask_keepalive = state.smoothed_mask.tensor;
     smoothed_mask_ptr = static_cast<unsigned char*>(mask_out);
   }
   try {
     run_spatial_smoothing_gather<T>(
-        static_cast<const cuda::std::complex<T>*>(snapshot.data()), mask,
-        plan.num_items, plan.num_channels, plan.num_snapshots,
+        static_cast<const cuda::std::complex<T>*>(snapshot.data()), mask, plan.num_items,
+        plan.num_channels, plan.num_snapshots,
         static_cast<const int32_t*>(state.d_subarray_index->data()),
-        state.d_fb_flip
-            ? static_cast<const int32_t*>(state.d_fb_flip->data())
-            : nullptr,
-        state.smoothing_plan.num_subarrays, subarray_size,
-        state.smoothing_plan.forward_backward,
-        static_cast<cuda::std::complex<T>*>(smoothed_ptr),
-        smoothed_mask_ptr, stream);
+        state.d_fb_flip ? static_cast<const int32_t*>(state.d_fb_flip->data()) : nullptr,
+        state.smoothing_plan.num_subarrays, subarray_size, state.smoothing_plan.forward_backward,
+        static_cast<cuda::std::complex<T>*>(smoothed_ptr), smoothed_mask_ptr, stream);
     check_cuda("spatial smoothing gather", kOpName);
   } catch (const std::runtime_error& error) {
-    return make_unexpected(
-        Error{ErrorCode::kFailure, error.what()});
+    return make_unexpected(Error{ErrorCode::kFailure, error.what()});
   }
   result.geometry = &state.smoothing_plan.reduced_geometry;
   result.num_channels = subarray_size;
   result.num_snapshots = looks;
-  result.data =
-      static_cast<const cuda::std::complex<T>*>(smoothed_ptr);
+  result.data = static_cast<const cuda::std::complex<T>*>(smoothed_ptr);
   result.mask = smoothed_mask_ptr;
   return result;
 }
@@ -445,10 +392,8 @@ ULAParameters analyze_ula(const ArrayGeometry& geometry) {
         "RootMUSICEstimatorOp: array_geometry must contain at least two "
         "elements");
   }
-  if (geometry.geometry_type &&
-      *geometry.geometry_type != ArrayGeometryType::kUla) {
-    throw std::invalid_argument(
-        "RootMUSICEstimatorOp: array_geometry must be a ULA");
+  if (geometry.geometry_type && *geometry.geometry_type != ArrayGeometryType::kUla) {
+    throw std::invalid_argument("RootMUSICEstimatorOp: array_geometry must be a ULA");
   }
 
   const auto& p = geometry.element_positions;
@@ -457,23 +402,17 @@ ULAParameters analyze_ula(const ArrayGeometry& geometry) {
       p[4] - p[1],
       p[5] - p[2],
   };
-  const double spacing =
-      std::sqrt(delta[0] * delta[0] + delta[1] * delta[1] +
-                delta[2] * delta[2]);
+  const double spacing = std::sqrt(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]);
   if (!(spacing > 0.0) || !std::isfinite(spacing)) {
-    throw std::invalid_argument(
-        "RootMUSICEstimatorOp: ULA spacing must be positive and finite");
+    throw std::invalid_argument("RootMUSICEstimatorOp: ULA spacing must be positive and finite");
   }
-  const double scale =
-      std::max(geometry.wavelength, spacing * static_cast<double>(channels));
+  const double scale = std::max(geometry.wavelength, spacing * static_cast<double>(channels));
   const double tolerance = 1e-6 * scale;
   for (int64_t channel = 0; channel < channels; ++channel) {
     for (int coordinate = 0; coordinate < 3; ++coordinate) {
-      const double expected =
-          p[static_cast<size_t>(coordinate)] +
-          static_cast<double>(channel) * delta[static_cast<size_t>(coordinate)];
-      const double actual =
-          p[static_cast<size_t>(channel * 3 + coordinate)];
+      const double expected = p[static_cast<size_t>(coordinate)] +
+                              static_cast<double>(channel) * delta[static_cast<size_t>(coordinate)];
+      const double actual = p[static_cast<size_t>(channel * 3 + coordinate)];
       if (std::abs(actual - expected) > tolerance) {
         throw std::invalid_argument(
             "RootMUSICEstimatorOp: array_geometry must be a uniformly spaced "
@@ -486,8 +425,7 @@ ULAParameters analyze_ula(const ArrayGeometry& geometry) {
   ULAParameters result;
   result.spacing = spacing;
   for (int coordinate = 0; coordinate < 3; ++coordinate) {
-    result.axis[static_cast<size_t>(coordinate)] =
-        delta[static_cast<size_t>(coordinate)] / spacing;
+    result.axis[static_cast<size_t>(coordinate)] = delta[static_cast<size_t>(coordinate)] / spacing;
   }
 
   // Normalize the component of canonical boresight orthogonal to the ULA.
@@ -499,10 +437,9 @@ ULAParameters analyze_ula(const ArrayGeometry& geometry) {
       -projection * result.axis[1],
       -projection * result.axis[2],
   };
-  const double broadside_norm =
-      std::sqrt(result.broadside[0] * result.broadside[0] +
-                result.broadside[1] * result.broadside[1] +
-                result.broadside[2] * result.broadside[2]);
+  const double broadside_norm = std::sqrt(result.broadside[0] * result.broadside[0] +
+                                          result.broadside[1] * result.broadside[1] +
+                                          result.broadside[2] * result.broadside[2]);
   if (!(broadside_norm > 1e-8)) {
     throw std::invalid_argument(
         "RootMUSICEstimatorOp: a ULA parallel to canonical boresight has no "
@@ -514,9 +451,8 @@ ULAParameters analyze_ula(const ArrayGeometry& geometry) {
   return result;
 }
 
-using TensorLoanWriter = std::remove_cvref_t<decltype(
-    *std::declval<TensorOutputLoan&>().write(
-        std::declval<ExecutionContext&>().cuda_stream()))>;
+using TensorLoanWriter = std::remove_cvref_t<decltype(*std::declval<TensorOutputLoan&>().write(
+    std::declval<ExecutionContext&>().cuda_stream()))>;
 
 struct RootMUSICPreparedOutputs {
   TensorOutputLoan aoa_loan;
@@ -544,47 +480,33 @@ struct RootMUSICPreparedWorkspace {
   int32_t* model_order_ptr{nullptr};
 };
 
-expected<void, Error> emit_empty_outputs(
-    Output<Tensor>& aoa_port, Output<Tensor>& doa_port,
-    Output<Tensor>& count_port, Output<Tensor>& eigenvalue_port,
-    ExecutionContext& context, const RootMUSICStagePlan& plan,
-    DLDataType output_dtype) {
-  const std::vector<int64_t> eig_shape = {
-      plan.num_items, plan.num_channels};
+expected<void, Error> emit_empty_outputs(Output<Tensor>& aoa_port, Output<Tensor>& doa_port,
+                                         Output<Tensor>& count_port,
+                                         Output<Tensor>& eigenvalue_port, ExecutionContext& context,
+                                         const RootMUSICStagePlan& plan, DLDataType output_dtype) {
+  const std::vector<int64_t> eig_shape = {plan.num_items, plan.num_channels};
   const DLDataType i32_dtype{kDLInt, 32, 1};
   auto noop = [](void*, std::size_t) -> expected<void, Error> {
     return {};
   };
-  HOLOSCAN_TRY(
-      auto aoa_loan,
-      prepare_device_tensor(aoa_port, context, plan.aoa_shape,
-                            output_dtype, noop));
-  HOLOSCAN_TRY(
-      auto doa_loan,
-      prepare_device_tensor(doa_port, context, plan.doa_shape,
-                            output_dtype, noop));
-  HOLOSCAN_TRY(
-      auto count_loan,
-      prepare_device_tensor(count_port, context, plan.count_shape,
-                            i32_dtype, noop));
-  HOLOSCAN_TRY(
-      auto eigenvalue_loan,
-      prepare_device_tensor(eigenvalue_port, context, eig_shape,
-                            output_dtype, noop));
-  HOLOSCAN_TRY(
-      emit_prepared_tensor(aoa_port, context, std::move(aoa_loan)));
+  HOLOSCAN_TRY(auto aoa_loan,
+               prepare_device_tensor(aoa_port, context, plan.aoa_shape, output_dtype, noop));
+  HOLOSCAN_TRY(auto doa_loan,
+               prepare_device_tensor(doa_port, context, plan.doa_shape, output_dtype, noop));
+  HOLOSCAN_TRY(auto count_loan,
+               prepare_device_tensor(count_port, context, plan.count_shape, i32_dtype, noop));
+  HOLOSCAN_TRY(auto eigenvalue_loan,
+               prepare_device_tensor(eigenvalue_port, context, eig_shape, output_dtype, noop));
+  HOLOSCAN_TRY(emit_prepared_tensor(aoa_port, context, std::move(aoa_loan)));
   (void)emit_prepared_tensor(doa_port, context, std::move(doa_loan));
   (void)emit_prepared_tensor(count_port, context, std::move(count_loan));
-  (void)emit_prepared_tensor(
-      eigenvalue_port, context, std::move(eigenvalue_loan));
+  (void)emit_prepared_tensor(eigenvalue_port, context, std::move(eigenvalue_loan));
   return {};
 }
 
 template <typename T>
-expected<RootMUSICPreparedWorkspace<T>, Error>
-prepare_root_music_workspace(RootMUSICRuntimeState<T>& state,
-                             int64_t num_items,
-                             int64_t estimation_channels) {
+expected<RootMUSICPreparedWorkspace<T>, Error> prepare_root_music_workspace(
+    RootMUSICRuntimeState<T>& state, int64_t num_items, int64_t estimation_channels) {
   const DLDataType cplx_dtype = complex_dtype<T>();
   const DLDataType i32_dtype{kDLInt, 32, 1};
   const DLDataType i64_dtype{kDLInt, 64, 1};
@@ -592,158 +514,87 @@ prepare_root_music_workspace(RootMUSICRuntimeState<T>& state,
   result.covariance =
       state.covariance
           ? state.covariance
-          : make_device_tensor(
-                {num_items, estimation_channels, estimation_channels},
-                cplx_dtype);
+          : make_device_tensor({num_items, estimation_channels, estimation_channels}, cplx_dtype);
   result.eigenvectors =
       state.eigenvectors
           ? state.eigenvectors
-          : make_device_tensor(
-                {num_items, estimation_channels, estimation_channels},
-                cplx_dtype);
+          : make_device_tensor({num_items, estimation_channels, estimation_channels}, cplx_dtype);
   result.projector =
       state.projector
           ? state.projector
-          : make_device_tensor(
-                {num_items, estimation_channels, estimation_channels},
-                cplx_dtype);
+          : make_device_tensor({num_items, estimation_channels, estimation_channels}, cplx_dtype);
   result.valid_counts =
-      state.valid_counts
-          ? state.valid_counts
-          : make_device_tensor({num_items}, i64_dtype);
+      state.valid_counts ? state.valid_counts : make_device_tensor({num_items}, i64_dtype);
   result.model_order =
-      state.model_order
-          ? state.model_order
-          : make_device_tensor({num_items}, i32_dtype);
-  HOLOSCAN_TRY(
-      auto covariance,
-      writable_ptr(*result.covariance, "covariance"));
-  HOLOSCAN_TRY(
-      auto eigenvectors,
-      writable_ptr(*result.eigenvectors, "eigenvectors"));
-  HOLOSCAN_TRY(
-      auto projector,
-      writable_ptr(*result.projector, "projector"));
-  HOLOSCAN_TRY(
-      auto valid_counts,
-      writable_ptr(*result.valid_counts, "valid_counts"));
-  HOLOSCAN_TRY(
-      auto model_order,
-      writable_ptr(*result.model_order, "model_order"));
-  result.covariance_ptr =
-      static_cast<cuda::std::complex<T>*>(covariance);
-  result.eigenvectors_ptr =
-      static_cast<cuda::std::complex<T>*>(eigenvectors);
-  result.projector_ptr =
-      static_cast<cuda::std::complex<T>*>(projector);
+      state.model_order ? state.model_order : make_device_tensor({num_items}, i32_dtype);
+  HOLOSCAN_TRY(auto covariance, writable_ptr(*result.covariance, "covariance"));
+  HOLOSCAN_TRY(auto eigenvectors, writable_ptr(*result.eigenvectors, "eigenvectors"));
+  HOLOSCAN_TRY(auto projector, writable_ptr(*result.projector, "projector"));
+  HOLOSCAN_TRY(auto valid_counts, writable_ptr(*result.valid_counts, "valid_counts"));
+  HOLOSCAN_TRY(auto model_order, writable_ptr(*result.model_order, "model_order"));
+  result.covariance_ptr = static_cast<cuda::std::complex<T>*>(covariance);
+  result.eigenvectors_ptr = static_cast<cuda::std::complex<T>*>(eigenvectors);
+  result.projector_ptr = static_cast<cuda::std::complex<T>*>(projector);
   result.valid_counts_ptr = static_cast<int64_t*>(valid_counts);
   result.model_order_ptr = static_cast<int32_t*>(model_order);
   return result;
 }
 
 template <typename T>
-expected<detail::RootMUSICAxisWorkspace<T>, Error>
-prepare_root_music_axis_workspace(
-    RootMUSICAxisRuntimeBuffers<T>& buffers, int64_t num_items,
-    int64_t axis_channels) {
+expected<detail::RootMUSICAxisWorkspace<T>, Error> prepare_root_music_axis_workspace(
+    RootMUSICAxisRuntimeBuffers<T>& buffers, int64_t num_items, int64_t axis_channels) {
   const int64_t degree = 2 * (axis_channels - 1);
-  HOLOSCAN_TRY(
-      auto eigenvectors,
-      prepare_runtime_buffer(
-          buffers.eigenvectors,
-          {num_items, axis_channels, axis_channels}, complex_dtype<T>(),
-          "axis eigenvectors"));
-  HOLOSCAN_TRY(
-      auto eigenvalues,
-      prepare_runtime_buffer(
-          buffers.eigenvalues, {num_items, axis_channels}, real_dtype<T>(),
-          "axis eigenvalues"));
-  HOLOSCAN_TRY(
-      auto projector,
-      prepare_runtime_buffer(
-          buffers.projector,
-          {num_items, axis_channels, axis_channels}, complex_dtype<T>(),
-          "axis projector"));
-  HOLOSCAN_TRY(
-      auto model_order,
-      prepare_runtime_buffer(
-          buffers.model_order, {num_items}, DLDataType{kDLInt, 32, 1},
-          "axis model order"));
-  HOLOSCAN_TRY(
-      auto coefficients,
-      prepare_runtime_buffer(
-          buffers.coefficients, {num_items, degree + 1}, complex_dtype<T>(),
-          "axis coefficients"));
-  HOLOSCAN_TRY(
-      auto companion,
-      prepare_runtime_buffer(
-          buffers.companion, {num_items, degree, degree}, complex_dtype<T>(),
-          "axis companion"));
-  HOLOSCAN_TRY(
-      auto roots,
-      prepare_runtime_buffer(
-          buffers.roots, {num_items, degree}, complex_dtype<T>(),
-          "axis roots"));
+  HOLOSCAN_TRY(auto eigenvectors, prepare_runtime_buffer(buffers.eigenvectors,
+                                                         {num_items, axis_channels, axis_channels},
+                                                         complex_dtype<T>(), "axis eigenvectors"));
+  HOLOSCAN_TRY(auto eigenvalues,
+               prepare_runtime_buffer(buffers.eigenvalues, {num_items, axis_channels},
+                                      real_dtype<T>(), "axis eigenvalues"));
+  HOLOSCAN_TRY(auto projector,
+               prepare_runtime_buffer(buffers.projector, {num_items, axis_channels, axis_channels},
+                                      complex_dtype<T>(), "axis projector"));
+  HOLOSCAN_TRY(auto model_order,
+               prepare_runtime_buffer(buffers.model_order, {num_items}, DLDataType{kDLInt, 32, 1},
+                                      "axis model order"));
+  HOLOSCAN_TRY(auto coefficients,
+               prepare_runtime_buffer(buffers.coefficients, {num_items, degree + 1},
+                                      complex_dtype<T>(), "axis coefficients"));
+  HOLOSCAN_TRY(auto companion,
+               prepare_runtime_buffer(buffers.companion, {num_items, degree, degree},
+                                      complex_dtype<T>(), "axis companion"));
+  HOLOSCAN_TRY(auto roots, prepare_runtime_buffer(buffers.roots, {num_items, degree},
+                                                  complex_dtype<T>(), "axis roots"));
   return detail::RootMUSICAxisWorkspace<T>{
-      .eigenvectors =
-          static_cast<cuda::std::complex<T>*>(eigenvectors),
+      .eigenvectors = static_cast<cuda::std::complex<T>*>(eigenvectors),
       .eigenvalues = static_cast<T*>(eigenvalues),
       .projector = static_cast<cuda::std::complex<T>*>(projector),
       .model_order = static_cast<int32_t*>(model_order),
-      .coefficients =
-          static_cast<cuda::std::complex<T>*>(coefficients),
+      .coefficients = static_cast<cuda::std::complex<T>*>(coefficients),
       .companion = static_cast<cuda::std::complex<T>*>(companion),
       .roots = static_cast<cuda::std::complex<T>*>(roots),
   };
 }
 
 template <typename T>
-expected<detail::RootMUSICURAScratch<T>, Error>
-prepare_root_music_ura_scratch(RootMUSICRuntimeState<T>& state,
-                               int64_t num_items, int64_t ny, int64_t nz) {
-  HOLOSCAN_TRY(
-      auto cov_y,
-      prepare_runtime_buffer(
-          state.ura.cov_y, {num_items, ny, ny}, complex_dtype<T>(),
-          "ura cov_y"));
-  HOLOSCAN_TRY(
-      auto cov_z,
-      prepare_runtime_buffer(
-          state.ura.cov_z, {num_items, nz, nz}, complex_dtype<T>(),
-          "ura cov_z"));
-  HOLOSCAN_TRY(
-      auto axis_y,
-      prepare_root_music_axis_workspace<T>(
-          state.ura.axis_y, num_items, ny));
-  HOLOSCAN_TRY(
-      auto axis_z,
-      prepare_root_music_axis_workspace<T>(
-          state.ura.axis_z, num_items, nz));
+expected<detail::RootMUSICURAScratch<T>, Error> prepare_root_music_ura_scratch(
+    RootMUSICRuntimeState<T>& state, int64_t num_items, int64_t ny, int64_t nz) {
+  HOLOSCAN_TRY(auto cov_y, prepare_runtime_buffer(state.ura.cov_y, {num_items, ny, ny},
+                                                  complex_dtype<T>(), "ura cov_y"));
+  HOLOSCAN_TRY(auto cov_z, prepare_runtime_buffer(state.ura.cov_z, {num_items, nz, nz},
+                                                  complex_dtype<T>(), "ura cov_z"));
+  HOLOSCAN_TRY(auto axis_y, prepare_root_music_axis_workspace<T>(state.ura.axis_y, num_items, ny));
+  HOLOSCAN_TRY(auto axis_z, prepare_root_music_axis_workspace<T>(state.ura.axis_z, num_items, nz));
 
-  const int64_t u_cap =
-      std::min<int64_t>(ny - 1, detail::kRootMusicPairCandCap);
-  const int64_t v_cap =
-      std::min<int64_t>(nz - 1, detail::kRootMusicPairCandCap);
-  HOLOSCAN_TRY(
-      auto u_candidates,
-      prepare_runtime_buffer(
-          state.ura.u_candidates, {num_items, u_cap}, real_dtype<T>(),
-          "ura u candidates"));
-  HOLOSCAN_TRY(
-      auto v_candidates,
-      prepare_runtime_buffer(
-          state.ura.v_candidates, {num_items, v_cap}, real_dtype<T>(),
-          "ura v candidates"));
-  HOLOSCAN_TRY(
-      auto u_counts,
-      prepare_runtime_buffer(
-          state.ura.u_counts, {num_items}, DLDataType{kDLInt, 32, 1},
-          "ura u counts"));
-  HOLOSCAN_TRY(
-      auto v_counts,
-      prepare_runtime_buffer(
-          state.ura.v_counts, {num_items}, DLDataType{kDLInt, 32, 1},
-          "ura v counts"));
+  const int64_t u_cap = std::min<int64_t>(ny - 1, detail::kRootMusicPairCandCap);
+  const int64_t v_cap = std::min<int64_t>(nz - 1, detail::kRootMusicPairCandCap);
+  HOLOSCAN_TRY(auto u_candidates, prepare_runtime_buffer(state.ura.u_candidates, {num_items, u_cap},
+                                                         real_dtype<T>(), "ura u candidates"));
+  HOLOSCAN_TRY(auto v_candidates, prepare_runtime_buffer(state.ura.v_candidates, {num_items, v_cap},
+                                                         real_dtype<T>(), "ura v candidates"));
+  HOLOSCAN_TRY(auto u_counts, prepare_runtime_buffer(state.ura.u_counts, {num_items},
+                                                     DLDataType{kDLInt, 32, 1}, "ura u counts"));
+  HOLOSCAN_TRY(auto v_counts, prepare_runtime_buffer(state.ura.v_counts, {num_items},
+                                                     DLDataType{kDLInt, 32, 1}, "ura v counts"));
   return detail::RootMUSICURAScratch<T>{
       .cov_y = static_cast<cuda::std::complex<T>*>(cov_y),
       .cov_z = static_cast<cuda::std::complex<T>*>(cov_z),
@@ -757,40 +608,22 @@ prepare_root_music_ura_scratch(RootMUSICRuntimeState<T>& state,
 }
 
 expected<RootMUSICPreparedOutputs, Error> prepare_root_music_outputs(
-    Output<Tensor>& aoa_port, Output<Tensor>& doa_port,
-    Output<Tensor>& count_port, Output<Tensor>& eigenvalue_port,
-    ExecutionContext& context, const RootMUSICStagePlan& plan,
-    const std::vector<int64_t>& eigenvalue_shape,
-    DLDataType output_dtype) {
+    Output<Tensor>& aoa_port, Output<Tensor>& doa_port, Output<Tensor>& count_port,
+    Output<Tensor>& eigenvalue_port, ExecutionContext& context, const RootMUSICStagePlan& plan,
+    const std::vector<int64_t>& eigenvalue_shape, DLDataType output_dtype) {
   const DLDataType i32_dtype{kDLInt, 32, 1};
-  HOLOSCAN_TRY(
-      auto aoa_loan,
-      aoa_port.allocate_tensor(
-          TensorLoanRequest{.shape = plan.aoa_shape,
-                            .dtype = output_dtype}));
-  HOLOSCAN_TRY(
-      auto doa_loan,
-      doa_port.allocate_tensor(
-          TensorLoanRequest{.shape = plan.doa_shape,
-                            .dtype = output_dtype}));
-  HOLOSCAN_TRY(
-      auto count_loan,
-      count_port.allocate_tensor(
-          TensorLoanRequest{.shape = plan.count_shape,
-                            .dtype = i32_dtype}));
-  HOLOSCAN_TRY(
-      auto eigenvalue_loan,
-      eigenvalue_port.allocate_tensor(
-          TensorLoanRequest{.shape = eigenvalue_shape,
-                            .dtype = output_dtype}));
-  HOLOSCAN_TRY(auto aoa_writer,
-               aoa_loan.write(context.cuda_stream()));
-  HOLOSCAN_TRY(auto doa_writer,
-               doa_loan.write(context.cuda_stream()));
-  HOLOSCAN_TRY(auto count_writer,
-               count_loan.write(context.cuda_stream()));
-  HOLOSCAN_TRY(auto eigenvalue_writer,
-               eigenvalue_loan.write(context.cuda_stream()));
+  HOLOSCAN_TRY(auto aoa_loan, aoa_port.allocate_tensor(TensorLoanRequest{.shape = plan.aoa_shape,
+                                                                         .dtype = output_dtype}));
+  HOLOSCAN_TRY(auto doa_loan, doa_port.allocate_tensor(TensorLoanRequest{.shape = plan.doa_shape,
+                                                                         .dtype = output_dtype}));
+  HOLOSCAN_TRY(auto count_loan, count_port.allocate_tensor(TensorLoanRequest{
+                                    .shape = plan.count_shape, .dtype = i32_dtype}));
+  HOLOSCAN_TRY(auto eigenvalue_loan, eigenvalue_port.allocate_tensor(TensorLoanRequest{
+                                         .shape = eigenvalue_shape, .dtype = output_dtype}));
+  HOLOSCAN_TRY(auto aoa_writer, aoa_loan.write(context.cuda_stream()));
+  HOLOSCAN_TRY(auto doa_writer, doa_loan.write(context.cuda_stream()));
+  HOLOSCAN_TRY(auto count_writer, count_loan.write(context.cuda_stream()));
+  HOLOSCAN_TRY(auto eigenvalue_writer, eigenvalue_loan.write(context.cuda_stream()));
   return RootMUSICPreparedOutputs{
       .aoa_loan = std::move(aoa_loan),
       .doa_loan = std::move(doa_loan),
@@ -805,22 +638,17 @@ expected<RootMUSICPreparedOutputs, Error> prepare_root_music_outputs(
 
 template <typename T>
 expected<void, Error> execute_root_music_ura(
-    RootMUSICRuntimeState<T>& state,
-    const RootMUSICStagePlan& plan,
-    const RootMUSICEstimationInput<T>& estimation,
-    const PlanarAperturePlan& planar,
-    const detail::DeviceAngleConvention<T>& convention,
-    RootMUSICPreparedWorkspace<T>& workspace,
-    RootMUSICPreparedOutputs& outputs, bool warn_new_geometry,
-    cudaStream_t stream) {
+    RootMUSICRuntimeState<T>& state, const RootMUSICStagePlan& plan,
+    const RootMUSICEstimationInput<T>& estimation, const PlanarAperturePlan& planar,
+    const detail::DeviceAngleConvention<T>& convention, RootMUSICPreparedWorkspace<T>& workspace,
+    RootMUSICPreparedOutputs& outputs, bool warn_new_geometry, cudaStream_t stream) {
   if (estimation.num_channels > detail::kRootMusicPairChannelCap) {
     return fail_invalid(
         "RootMUSICEstimatorOp: 2-D URA pairing supports at most 64 channels "
         "(Ny*Nz); reduce the aperture upstream");
   }
   const int64_t axis_min = std::min(planar.ny, planar.nz);
-  if (plan.stage.num_sources >= 0 &&
-      plan.stage.num_sources > axis_min - 1) {
+  if (plan.stage.num_sources >= 0 && plan.stage.num_sources > axis_min - 1) {
     return fail_invalid(
         "RootMUSICEstimatorOp: num_sources must leave at least one "
         "noise-subspace dimension on each URA aperture axis");
@@ -830,34 +658,24 @@ expected<void, Error> execute_root_music_ura(
         "RootMUSICEstimatorOp: unseen array_geometry override; "
         "revalidating URA aperture and solver dimensions");
   }
-  HOLOSCAN_TRY(
-      auto scratch,
-      prepare_root_music_ura_scratch<T>(
-          state, plan.num_items, planar.ny, planar.nz));
+  HOLOSCAN_TRY(auto scratch,
+               prepare_root_music_ura_scratch<T>(state, plan.num_items, planar.ny, planar.nz));
   const double k = kTwoPi / estimation.geometry->wavelength;
   try {
     detail::run_root_music_2d_stage<T>(
-        estimation.data, estimation.mask, plan.num_items, planar.ny,
-        planar.nz, estimation.num_snapshots, plan.stage.num_sources,
-        plan.stage.source_count_pfa, plan.stage.max_sources,
-        static_cast<T>(k * planar.dy), static_cast<T>(k * planar.dz),
-        static_cast<T>(planar.y_axis[0]),
-        static_cast<T>(planar.y_axis[1]),
-        static_cast<T>(planar.y_axis[2]),
-        static_cast<T>(planar.z_axis[0]),
-        static_cast<T>(planar.z_axis[1]),
-        static_cast<T>(planar.z_axis[2]),
-        static_cast<T>(planar.normal[0]),
-        static_cast<T>(planar.normal[1]),
-        static_cast<T>(planar.normal[2]), convention,
-        workspace.covariance_ptr, workspace.eigenvectors_ptr,
-        workspace.projector_ptr, workspace.valid_counts_ptr,
-        workspace.model_order_ptr,
-        static_cast<T*>(outputs.eigenvalue_writer.data()),
-        static_cast<T*>(outputs.aoa_writer.data()),
-        static_cast<T*>(outputs.doa_writer.data()),
-        static_cast<int32_t*>(outputs.count_writer.data()),
-        scratch, state.solver.get(), state.solver_z.get(), stream);
+        estimation.data, estimation.mask, plan.num_items, planar.ny, planar.nz,
+        estimation.num_snapshots, plan.stage.num_sources, plan.stage.source_count_pfa,
+        plan.stage.max_sources, static_cast<T>(k * planar.dy), static_cast<T>(k * planar.dz),
+        static_cast<T>(planar.y_axis[0]), static_cast<T>(planar.y_axis[1]),
+        static_cast<T>(planar.y_axis[2]), static_cast<T>(planar.z_axis[0]),
+        static_cast<T>(planar.z_axis[1]), static_cast<T>(planar.z_axis[2]),
+        static_cast<T>(planar.normal[0]), static_cast<T>(planar.normal[1]),
+        static_cast<T>(planar.normal[2]), convention, workspace.covariance_ptr,
+        workspace.eigenvectors_ptr, workspace.projector_ptr, workspace.valid_counts_ptr,
+        workspace.model_order_ptr, static_cast<T*>(outputs.eigenvalue_writer.data()),
+        static_cast<T*>(outputs.aoa_writer.data()), static_cast<T*>(outputs.doa_writer.data()),
+        static_cast<int32_t*>(outputs.count_writer.data()), scratch, state.solver.get(),
+        state.solver_z.get(), stream);
     check_cuda("root music stage", kOpName);
   } catch (const std::invalid_argument& error) {
     return fail_invalid(error.what());
@@ -868,22 +686,20 @@ expected<void, Error> execute_root_music_ura(
 }
 
 template <typename T>
-expected<void, Error> execute_root_music_ula(
-    RootMUSICRuntimeState<T>& state,
-    const RootMUSICStagePlan& plan,
-    const RootMUSICEstimationInput<T>& estimation,
-    const detail::DeviceAngleConvention<T>& convention,
-    RootMUSICPreparedWorkspace<T>& workspace,
-    RootMUSICPreparedOutputs& outputs, bool warn_new_geometry,
-    cudaStream_t stream) {
+expected<void, Error> execute_root_music_ula(RootMUSICRuntimeState<T>& state,
+                                             const RootMUSICStagePlan& plan,
+                                             const RootMUSICEstimationInput<T>& estimation,
+                                             const detail::DeviceAngleConvention<T>& convention,
+                                             RootMUSICPreparedWorkspace<T>& workspace,
+                                             RootMUSICPreparedOutputs& outputs,
+                                             bool warn_new_geometry, cudaStream_t stream) {
   ULAParameters ula;
   try {
     ula = analyze_ula(*estimation.geometry);
   } catch (const std::invalid_argument& error) {
     return fail_invalid(error.what());
   }
-  if (plan.stage.num_sources >= 0 &&
-      plan.stage.num_sources > estimation.num_channels - 1) {
+  if (plan.stage.num_sources >= 0 && plan.stage.num_sources > estimation.num_channels - 1) {
     return fail_invalid(
         "RootMUSICEstimatorOp: num_sources must leave at least one "
         "noise-subspace dimension");
@@ -896,128 +712,90 @@ expected<void, Error> execute_root_music_ula(
 
   const DLDataType cplx_dtype = complex_dtype<T>();
   const int64_t degree = 2 * (estimation.num_channels - 1);
-  auto coefficients =
-      state.coefficients
-          ? state.coefficients
-          : make_device_tensor(
-                {plan.num_items, degree + 1}, cplx_dtype);
-  auto companion =
-      state.companion
-          ? state.companion
-          : make_device_tensor(
-                {plan.num_items, degree, degree}, cplx_dtype);
-  auto roots =
-      state.roots
-          ? state.roots
-          : make_device_tensor({plan.num_items, degree}, cplx_dtype);
-  HOLOSCAN_TRY(
-      auto coefficients_ptr,
-      writable_ptr(*coefficients, "coefficients"));
-  HOLOSCAN_TRY(
-      auto companion_ptr,
-      writable_ptr(*companion, "companion"));
+  auto coefficients = state.coefficients
+                          ? state.coefficients
+                          : make_device_tensor({plan.num_items, degree + 1}, cplx_dtype);
+  auto companion = state.companion
+                       ? state.companion
+                       : make_device_tensor({plan.num_items, degree, degree}, cplx_dtype);
+  auto roots = state.roots ? state.roots : make_device_tensor({plan.num_items, degree}, cplx_dtype);
+  HOLOSCAN_TRY(auto coefficients_ptr, writable_ptr(*coefficients, "coefficients"));
+  HOLOSCAN_TRY(auto companion_ptr, writable_ptr(*companion, "companion"));
   HOLOSCAN_TRY(auto roots_ptr, writable_ptr(*roots, "roots"));
 
   try {
     detail::run_root_music_stage<T>(
-        estimation.data, estimation.mask, plan.num_items,
-        estimation.num_channels, estimation.num_snapshots,
-        plan.stage.num_sources, plan.stage.source_count_pfa,
+        estimation.data, estimation.mask, plan.num_items, estimation.num_channels,
+        estimation.num_snapshots, plan.stage.num_sources, plan.stage.source_count_pfa,
         plan.stage.max_sources,
-        static_cast<T>(kTwoPi * ula.spacing /
-                       estimation.geometry->wavelength),
-        static_cast<T>(ula.axis[0]), static_cast<T>(ula.axis[1]),
-        static_cast<T>(ula.axis[2]),
-        static_cast<T>(ula.broadside[0]),
-        static_cast<T>(ula.broadside[1]),
-        static_cast<T>(ula.broadside[2]), convention,
-        workspace.covariance_ptr, workspace.eigenvectors_ptr,
-        workspace.projector_ptr, workspace.valid_counts_ptr,
-        workspace.model_order_ptr,
-        static_cast<T*>(outputs.eigenvalue_writer.data()),
+        static_cast<T>(kTwoPi * ula.spacing / estimation.geometry->wavelength),
+        static_cast<T>(ula.axis[0]), static_cast<T>(ula.axis[1]), static_cast<T>(ula.axis[2]),
+        static_cast<T>(ula.broadside[0]), static_cast<T>(ula.broadside[1]),
+        static_cast<T>(ula.broadside[2]), convention, workspace.covariance_ptr,
+        workspace.eigenvectors_ptr, workspace.projector_ptr, workspace.valid_counts_ptr,
+        workspace.model_order_ptr, static_cast<T*>(outputs.eigenvalue_writer.data()),
         static_cast<cuda::std::complex<T>*>(coefficients_ptr),
         static_cast<cuda::std::complex<T>*>(companion_ptr),
-        static_cast<cuda::std::complex<T>*>(roots_ptr),
-        static_cast<T*>(outputs.aoa_writer.data()),
+        static_cast<cuda::std::complex<T>*>(roots_ptr), static_cast<T*>(outputs.aoa_writer.data()),
         static_cast<T*>(outputs.doa_writer.data()),
-        static_cast<int32_t*>(outputs.count_writer.data()),
-        state.solver.get(), stream);
+        static_cast<int32_t*>(outputs.count_writer.data()), state.solver.get(), stream);
     check_cuda("root music stage", kOpName);
   } catch (const std::invalid_argument& error) {
     return fail_invalid(error.what());
   } catch (const std::runtime_error& error) {
     return fail_runtime(error.what());
   }
-  outputs.workspace_keepalive = {
-      std::move(coefficients), std::move(companion), std::move(roots)};
+  outputs.workspace_keepalive = {std::move(coefficients), std::move(companion), std::move(roots)};
   return {};
 }
 
 expected<void, Error> commit_and_publish_root_music_outputs(
-    Output<Tensor>& aoa_port, Output<Tensor>& doa_port,
-    Output<Tensor>& count_port, Output<Tensor>& eigenvalue_port,
-    ExecutionContext& context, RootMUSICPreparedOutputs outputs) {
+    Output<Tensor>& aoa_port, Output<Tensor>& doa_port, Output<Tensor>& count_port,
+    Output<Tensor>& eigenvalue_port, ExecutionContext& context, RootMUSICPreparedOutputs outputs) {
   HOLOSCAN_TRY(std::move(outputs.aoa_writer).commit());
   HOLOSCAN_TRY(std::move(outputs.doa_writer).commit());
   HOLOSCAN_TRY(std::move(outputs.count_writer).commit());
   HOLOSCAN_TRY(std::move(outputs.eigenvalue_writer).commit());
 
-  const EmitOptions emit_options{
-      .capture_time = context.activation_time()};
-  HOLOSCAN_TRY(
-      aoa_port.emit(std::move(outputs.aoa_loan), emit_options));
+  const EmitOptions emit_options{.capture_time = context.activation_time()};
+  HOLOSCAN_TRY(aoa_port.emit(std::move(outputs.aoa_loan), emit_options));
   (void)doa_port.emit(std::move(outputs.doa_loan), emit_options);
   (void)count_port.emit(std::move(outputs.count_loan), emit_options);
-  (void)eigenvalue_port.emit(
-      std::move(outputs.eigenvalue_loan), emit_options);
+  (void)eigenvalue_port.emit(std::move(outputs.eigenvalue_loan), emit_options);
   return {};
 }
 
 }  // namespace
 
 template <typename T>
-RootMUSICEstimatorOp<T>::RootMUSICEstimatorOp(
-    const MaxTensorExtents& extents) {
+RootMUSICEstimatorOp<T>::RootMUSICEstimatorOp(const MaxTensorExtents& extents) {
   state_ = std::make_shared<RootMUSICRuntimeState<T>>();
   state_->solver = std::make_shared<detail::RootMUSICSolverState>();
   state_->solver_z = std::make_shared<detail::RootMUSICSolverState>();
   extents_ = extents;
-  if (!extents.max_items.has_value() &&
-      !extents.max_sources.has_value()) {
+  if (!extents.max_items.has_value() && !extents.max_sources.has_value()) {
     return;
   }
   const char* who = "RootMUSICEstimatorOp";
-  const auto max_items =
-      require_extent(extents.max_items, "max_items", who);
-  const auto max_sources =
-      require_extent(extents.max_sources, "max_sources", who);
-  const auto max_channels =
-      require_extent(extents.max_channels, "max_channels", who);
-  aoa_max_byte_span_ =
-      byte_span_real_cube<T>({max_items, 2}, who);
-  doa_max_byte_span_ =
-      byte_span_real_cube<T>({max_items, max_sources, 2}, who);
-  count_max_byte_span_ = byte_span_elems(
-      static_cast<std::size_t>(max_items), 4U, who);
-  eig_max_byte_span_ =
-      byte_span_real_cube<T>({max_items, max_channels}, who);
-  state_->covariance = make_device_tensor(
-      {max_items, max_channels, max_channels}, complex_dtype<T>());
-  state_->eigenvectors = make_device_tensor(
-      {max_items, max_channels, max_channels}, complex_dtype<T>());
-  state_->projector = make_device_tensor(
-      {max_items, max_channels, max_channels}, complex_dtype<T>());
-  state_->valid_counts =
-      make_device_tensor({max_items}, DLDataType{kDLInt, 64, 1});
-  state_->model_order =
-      make_device_tensor({max_items}, DLDataType{kDLInt, 32, 1});
+  const auto max_items = require_extent(extents.max_items, "max_items", who);
+  const auto max_sources = require_extent(extents.max_sources, "max_sources", who);
+  const auto max_channels = require_extent(extents.max_channels, "max_channels", who);
+  aoa_max_byte_span_ = byte_span_real_cube<T>({max_items, 2}, who);
+  doa_max_byte_span_ = byte_span_real_cube<T>({max_items, max_sources, 2}, who);
+  count_max_byte_span_ = byte_span_elems(static_cast<std::size_t>(max_items), 4U, who);
+  eig_max_byte_span_ = byte_span_real_cube<T>({max_items, max_channels}, who);
+  state_->covariance =
+      make_device_tensor({max_items, max_channels, max_channels}, complex_dtype<T>());
+  state_->eigenvectors =
+      make_device_tensor({max_items, max_channels, max_channels}, complex_dtype<T>());
+  state_->projector =
+      make_device_tensor({max_items, max_channels, max_channels}, complex_dtype<T>());
+  state_->valid_counts = make_device_tensor({max_items}, DLDataType{kDLInt, 64, 1});
+  state_->model_order = make_device_tensor({max_items}, DLDataType{kDLInt, 32, 1});
   const int64_t degree = 2 * (max_channels - 1);
-  state_->coefficients =
-      make_device_tensor({max_items, degree + 1}, complex_dtype<T>());
-  state_->companion =
-      make_device_tensor({max_items, degree, degree}, complex_dtype<T>());
-  state_->roots =
-      make_device_tensor({max_items, degree}, complex_dtype<T>());
+  state_->coefficients = make_device_tensor({max_items, degree + 1}, complex_dtype<T>());
+  state_->companion = make_device_tensor({max_items, degree, degree}, complex_dtype<T>());
+  state_->roots = make_device_tensor({max_items, degree}, complex_dtype<T>());
 }
 
 template <typename T>
@@ -1036,24 +814,17 @@ void RootMUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
   };
   constexpr std::uint32_t kMaxRank = 3U;
   spec.input(snapshot).queue_depth(2U).expects_tensor(tensor_input(kDevice));
-  spec.input(is_valid)
-      .optional()
-      .queue_depth(2U)
-      .expects_tensor(tensor_input(kDevice));
+  spec.input(is_valid).optional().queue_depth(2U).expects_tensor(tensor_input(kDevice));
   spec.output(aoa_estimates)
-      .produces_tensor(pooled_tensor_output(
-          kDevice, kMaxRank, aoa_max_byte_span_));
+      .produces_tensor(pooled_tensor_output(kDevice, kMaxRank, aoa_max_byte_span_));
   // Optional in OPERATOR_API.md — always emitted so unwired consumers do not
   // need Connectivity gating; no angle_spectrum (gridless).
-  spec.output(doa_multi)
-      .produces_tensor(pooled_tensor_output(
-          kDevice, kMaxRank, doa_max_byte_span_));
+  spec.output(doa_multi).produces_tensor(
+      pooled_tensor_output(kDevice, kMaxRank, doa_max_byte_span_));
   spec.output(source_count)
-      .produces_tensor(pooled_tensor_output(
-          kDevice, kMaxRank, count_max_byte_span_));
+      .produces_tensor(pooled_tensor_output(kDevice, kMaxRank, count_max_byte_span_));
   spec.output(eigenvalues)
-      .produces_tensor(pooled_tensor_output(
-          kDevice, kMaxRank, eig_max_byte_span_));
+      .produces_tensor(pooled_tensor_output(kDevice, kMaxRank, eig_max_byte_span_));
   // [live] Exact overrides, Params order.
   spec.input(array_geometry).optional().queue_depth(2U);
   spec.input(spatial_smoothing).optional().queue_depth(2U);
@@ -1065,9 +836,7 @@ void RootMUSICEstimatorOp<T>::setup(OperatorSpec& spec) {
 template <typename T>
 Contract RootMUSICEstimatorOp<T>::contract() const {
   Contract result;
-  result.trigger(OnEach{snapshot})
-      .input(is_valid, Exact{})
-      .on_missing(is_valid, SafeDefault{});
+  result.trigger(OnEach{snapshot}).input(is_valid, Exact{}).on_missing(is_valid, SafeDefault{});
   add_live_override_to_contract(result, array_geometry);
   add_live_override_to_contract(result, spatial_smoothing);
   add_live_override_to_contract(result, num_sources);
@@ -1077,8 +846,7 @@ Contract RootMUSICEstimatorOp<T>::contract() const {
 }
 
 template <typename T>
-expected<void, Error> RootMUSICEstimatorOp<T>::compute(
-    ExecutionContext& context) {
+expected<void, Error> RootMUSICEstimatorOp<T>::compute(ExecutionContext& context) {
   // Receive and validate inputs before deriving any tick-local state.
   // 1. Receive the snapshot cube and resolve this tick's live configuration
   // into one validated plan with all output shapes.
@@ -1093,14 +861,10 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
 
   // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const RootMUSICParams& pinned = context.params<RootMUSICParams>();
-  HOLOSCAN_TRY(
-      auto stage,
-      resolve_params(array_geometry, spatial_smoothing, num_sources,
-                     source_count_pfa, max_sources, pinned, extents_));
+  HOLOSCAN_TRY(auto stage, resolve_params(array_geometry, spatial_smoothing, num_sources,
+                                          source_count_pfa, max_sources, pinned, extents_));
   // Build and validate the bounded execution plan for this input shape.
-  HOLOSCAN_TRY(
-      auto plan,
-      build_root_music_stage_plan(snap, std::move(stage), extents_));
+  HOLOSCAN_TRY(auto plan, build_root_music_stage_plan(snap, std::move(stage), extents_));
 
   if (state_->seeded_angle_convention.has_value() &&
       *state_->seeded_angle_convention != plan.stage.convention) {
@@ -1116,13 +880,11 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
   const unsigned char* mask = nullptr;
   if (maybe_valid.has_value()) {
     const DLDataType dtype = maybe_valid->dtype();
-    if (!((dtype.code == kDLBool || dtype.code == kDLUInt) &&
-          dtype.bits == 8 && dtype.lanes == 1)) {
-      return fail_invalid(
-          "RootMUSICEstimatorOp: is_valid must have dtype bool or uint8");
+    if (!((dtype.code == kDLBool || dtype.code == kDLUInt) && dtype.bits == 8 &&
+          dtype.lanes == 1)) {
+      return fail_invalid("RootMUSICEstimatorOp: is_valid must have dtype bool or uint8");
     }
-    if (maybe_valid->shape().size() != 2 ||
-        maybe_valid->shape()[0] != plan.num_items ||
+    if (maybe_valid->shape().size() != 2 || maybe_valid->shape()[0] != plan.num_items ||
         maybe_valid->shape()[1] != plan.num_snapshots) {
       return fail_invalid(
           "RootMUSICEstimatorOp: is_valid must have shape "
@@ -1140,16 +902,13 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
     return make_unexpected(
-        Error{ErrorCode::kNotSupported,
-              "RootMUSICEstimatorOp: no CUDA compute stream"});
+        Error{ErrorCode::kNotSupported, "RootMUSICEstimatorOp: no CUDA compute stream"});
   }
 
   detail::DeviceAngleConvention<T> tick_convention{};
-  const detail::DeviceAngleConvention<T>* convention =
-      &state_->device_angle_convention;
+  const detail::DeviceAngleConvention<T>* convention = &state_->device_angle_convention;
   if (!state_->seeded_angle_convention.has_value()) {
-    tick_convention =
-        detail::make_device_angle_convention<T>(plan.stage.convention);
+    tick_convention = detail::make_device_angle_convention<T>(plan.stage.convention);
     convention = &tick_convention;
   }
   auto seed_angle_convention_after_emit = [&]() {
@@ -1163,10 +922,8 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
   // covariance, eigendecomposition, or polynomial-root work.
   // Publish coherent outputs in dependency order and retain borrowed inputs.
   if (plan.num_items == 0) {
-    HOLOSCAN_TRY(
-        emit_empty_outputs(
-            aoa_estimates, doa_multi, source_count, eigenvalues,
-            context, plan, real_dtype<T>()));
+    HOLOSCAN_TRY(emit_empty_outputs(aoa_estimates, doa_multi, source_count, eigenvalues, context,
+                                    plan, real_dtype<T>()));
     seed_angle_convention_after_emit();
     retained_snapshot_ = std::move(snap);
     if (maybe_valid.has_value()) {
@@ -1178,9 +935,7 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
   // 4. Form the effective covariance input and classify its reduced or
   // original aperture as ULA or filled URA.
   // Allocate exact-sized outputs before launching device work.
-  HOLOSCAN_TRY(
-      auto estimation,
-      prepare_smoothed_input(*state_, snap, mask, plan, stream));
+  HOLOSCAN_TRY(auto estimation, prepare_smoothed_input(*state_, snap, mask, plan, stream));
 
   PlanarAperturePlan planar;
   try {
@@ -1190,43 +945,31 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
   }
 
   const std::string gkey = geometry_key(plan.stage.geometry);
-  const bool geometry_is_new =
-      state_->seen_geometry_keys.insert(gkey).second;
-  const bool warn_new_geometry =
-      geometry_is_new && state_->seen_geometry_keys.size() > 1;
+  const bool geometry_is_new = state_->seen_geometry_keys.insert(gkey).second;
+  const bool warn_new_geometry = geometry_is_new && state_->seen_geometry_keys.size() > 1;
 
   // 5. Prepare covariance/eigenspace workspace and the complete output set
   // shared by both Root-MUSIC variants.
-  HOLOSCAN_TRY(
-      auto workspace,
-      prepare_root_music_workspace<T>(
-          *state_, plan.num_items, estimation.num_channels));
-  const std::vector<int64_t> eigenvalue_shape = {
-      plan.num_items, estimation.num_channels};
-  HOLOSCAN_TRY(
-      auto outputs,
-      prepare_root_music_outputs(
-          aoa_estimates, doa_multi, source_count, eigenvalues,
-          context, plan, eigenvalue_shape, real_dtype<T>()));
+  HOLOSCAN_TRY(auto workspace,
+               prepare_root_music_workspace<T>(*state_, plan.num_items, estimation.num_channels));
+  const std::vector<int64_t> eigenvalue_shape = {plan.num_items, estimation.num_channels};
+  HOLOSCAN_TRY(auto outputs,
+               prepare_root_music_outputs(aoa_estimates, doa_multi, source_count, eigenvalues,
+                                          context, plan, eigenvalue_shape, real_dtype<T>()));
 
   // 6. Dispatch the geometry-specific algorithm: one companion polynomial for
   // a ULA, or reduced-dimension per-axis rooting plus 2-D pairing for a URA.
   // Execute the device stage on the input runtime stream.
   if (planar.is_ura) {
-    HOLOSCAN_TRY(
-        execute_root_music_ura(
-            *state_, plan, estimation, planar, *convention, workspace,
-            outputs, warn_new_geometry, stream));
+    HOLOSCAN_TRY(execute_root_music_ura(*state_, plan, estimation, planar, *convention, workspace,
+                                        outputs, warn_new_geometry, stream));
   } else {
-    HOLOSCAN_TRY(
-        execute_root_music_ula(
-            *state_, plan, estimation, *convention, workspace, outputs,
-            warn_new_geometry, stream));
+    HOLOSCAN_TRY(execute_root_music_ula(*state_, plan, estimation, *convention, workspace, outputs,
+                                        warn_new_geometry, stream));
   }
 
   if (plan.stage.num_sources < 0 && mask == nullptr &&
-      estimation.num_snapshots < estimation.num_channels &&
-      !state_->warned_rank_deficient) {
+      estimation.num_snapshots < estimation.num_channels && !state_->warned_rank_deficient) {
     HOLOSCAN_LOG_WARN(
         "RootMUSICEstimatorOp: num_sources=auto with fewer snapshots than "
         "channels; falling back to one source");
@@ -1235,10 +978,8 @@ expected<void, Error> RootMUSICEstimatorOp<T>::compute(
 
   // 7. Commit every sibling before required-first publication, lock the
   // convention after success, and retain asynchronous inputs.
-  HOLOSCAN_TRY(
-      commit_and_publish_root_music_outputs(
-          aoa_estimates, doa_multi, source_count, eigenvalues,
-          context, std::move(outputs)));
+  HOLOSCAN_TRY(commit_and_publish_root_music_outputs(aoa_estimates, doa_multi, source_count,
+                                                     eigenvalues, context, std::move(outputs)));
   seed_angle_convention_after_emit();
   retained_snapshot_ = std::move(snap);
   if (maybe_valid.has_value()) {

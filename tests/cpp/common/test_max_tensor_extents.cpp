@@ -35,15 +35,12 @@ max_rx: 8
 }
 
 TEST(MaxTensorExtents, FromYamlRejectsNonPositive) {
-  EXPECT_THROW(MaxTensorExtentsFromYaml(YAML::Load("max_chirps: 0")),
-               std::invalid_argument);
-  EXPECT_THROW(MaxTensorExtentsFromYaml(YAML::Load("max_chirps: -1")),
-               std::invalid_argument);
+  EXPECT_THROW(MaxTensorExtentsFromYaml(YAML::Load("max_chirps: 0")), std::invalid_argument);
+  EXPECT_THROW(MaxTensorExtentsFromYaml(YAML::Load("max_chirps: -1")), std::invalid_argument);
 }
 
 TEST(MaxTensorExtents, FromYamlRejectsNonMap) {
-  EXPECT_THROW(MaxTensorExtentsFromYaml(YAML::Load("[1, 2]")),
-               std::invalid_argument);
+  EXPECT_THROW(MaxTensorExtentsFromYaml(YAML::Load("[1, 2]")), std::invalid_argument);
 }
 
 TEST(MaxTensorExtents, YamlConvertRoundTrip) {
@@ -66,8 +63,7 @@ TEST(MaxTensorExtents, RequireExtent) {
 TEST(MaxByteSpan, ComplexCubeProduct) {
   EXPECT_EQ(byte_span_complex_cube<float>({2, 8, 16}, "test"),
             static_cast<std::size_t>(2 * 8 * 16 * 8));
-  EXPECT_THROW(byte_span_complex_cube<float>({2, 0, 16}, "test"),
-               std::invalid_argument);
+  EXPECT_THROW(byte_span_complex_cube<float>({2, 0, 16}, "test"), std::invalid_argument);
 }
 
 }  // namespace

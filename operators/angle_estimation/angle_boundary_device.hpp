@@ -26,8 +26,7 @@ struct DeviceAngleConvention {
   ElevationReference elevation_reference{ElevationReference::kHorizon};
 };
 
-inline void signed_axis_vector(SignedAxis axis, double* x, double* y,
-                               double* z) {
+inline void signed_axis_vector(SignedAxis axis, double* x, double* y, double* z) {
   *x = 0.0;
   *y = 0.0;
   *z = 0.0;
@@ -55,8 +54,7 @@ inline void signed_axis_vector(SignedAxis axis, double* x, double* y,
 }
 
 template <typename T>
-DeviceAngleConvention<T> make_device_angle_convention(
-    const AngleConvention& convention) {
+DeviceAngleConvention<T> make_device_angle_convention(const AngleConvention& convention) {
   DeviceAngleConvention<T> result;
   result.preset = convention.preset;
   result.elevation_reference = convention.elevation_reference;
@@ -79,8 +77,7 @@ DeviceAngleConvention<T> make_device_angle_convention(
   const double ba = bx * ax + by * ay + bz * az;
   const double be = bx * ex + by * ey + bz * ez;
   const double ae = ax * ex + ay * ey + az * ez;
-  if (std::abs(ba) > 1e-9 || std::abs(be) > 1e-9 ||
-      std::abs(ae) > 1e-9) {
+  if (std::abs(ba) > 1e-9 || std::abs(be) > 1e-9 || std::abs(ae) > 1e-9) {
     throw std::invalid_argument(
         "AngleConvention: preset=custom requires boresight, azimuth, and "
         "elevation on three distinct principal axes");
@@ -99,9 +96,8 @@ DeviceAngleConvention<T> make_device_angle_convention(
 
 #ifdef __CUDACC__
 template <typename T>
-__device__ inline void angle_canonical_to_boundary(
-    const DeviceAngleConvention<T>& convention, T x, T y, T z_coord, T* out0,
-    T* out1) {
+__device__ inline void angle_canonical_to_boundary(const DeviceAngleConvention<T>& convention, T x,
+                                                   T y, T z_coord, T* out0, T* out1) {
   if (convention.preset == AngleConventionPreset::kDirectionCosine) {
     *out0 = y;
     *out1 = z_coord;
@@ -116,18 +112,15 @@ __device__ inline void angle_canonical_to_boundary(
     el = -el;
   } else if (convention.preset == AngleConventionPreset::kGeodeticEnu) {
     az = atan2(x, -y);
-  } else if (convention.preset ==
-             AngleConventionPreset::kPhysicsSpherical) {
+  } else if (convention.preset == AngleConventionPreset::kPhysicsSpherical) {
     el = static_cast<T>(kHalfPi) - el;
   } else if (convention.preset == AngleConventionPreset::kCustom) {
-    const T boresight = x * convention.boresight_x +
-                        y * convention.boresight_y +
-                        z_coord * convention.boresight_z;
-    const T azimuth = x * convention.azimuth_x + y * convention.azimuth_y +
-                      z_coord * convention.azimuth_z;
-    T elevation = x * convention.elevation_x +
-                  y * convention.elevation_y +
-                  z_coord * convention.elevation_z;
+    const T boresight =
+        x * convention.boresight_x + y * convention.boresight_y + z_coord * convention.boresight_z;
+    const T azimuth =
+        x * convention.azimuth_x + y * convention.azimuth_y + z_coord * convention.azimuth_z;
+    T elevation =
+        x * convention.elevation_x + y * convention.elevation_y + z_coord * convention.elevation_z;
     elevation = elevation < T{-1} ? T{-1} : elevation;
     elevation = elevation > T{1} ? T{1} : elevation;
     az = atan2(azimuth, boresight);

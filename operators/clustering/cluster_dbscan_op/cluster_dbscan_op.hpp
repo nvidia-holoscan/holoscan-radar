@@ -77,21 +77,17 @@ struct ClusterDBSCANParams {
 };
 
 HOLOSCAN_PARAM_SCHEMA(
-    ClusterDBSCANParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.ClusterDBSCANParams", 1),
-    holoscan::field<&ClusterDBSCANParams::epsilon>("epsilon")
-        .description(
-            "Neighborhood radius: length 1 (isotropic) or num_features "
-            "(per-axis); zero ignores an axis; values finite and >= 0 with at "
-            "least one positive entry; required"),
+    ClusterDBSCANParams, holoscan::param_schema("com.nvidia.holoscan.radar.ClusterDBSCANParams", 1),
+    holoscan::field<&ClusterDBSCANParams::epsilon>("epsilon").description(
+        "Neighborhood radius: length 1 (isotropic) or num_features "
+        "(per-axis); zero ignores an axis; values finite and >= 0 with at "
+        "least one positive entry; required"),
     holoscan::field<&ClusterDBSCANParams::min_points>("min_points")
-        .description(
-            "Minimum neighbors (incl. self) for a core point; <= 0 selects "
-            "the 2*active_features default"),
+        .description("Minimum neighbors (incl. self) for a core point; <= 0 selects "
+                     "the 2*active_features default"),
     holoscan::field<&ClusterDBSCANParams::max_clusters>("max_clusters")
-        .description(
-            "Upper cap on reported clusters (surplus dropped to noise with a "
-            "warning); <= 0 is uncapped"));
+        .description("Upper cap on reported clusters (surplus dropped to noise with a "
+                     "warning); <= 0 is uncapped"));
 
 static_assert(holoscan::param_schema_availability<ClusterDBSCANParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -110,8 +106,7 @@ class ClusterDBSCANOp : public holoscan::Operator<ClusterDBSCANParams> {
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> points{"points"};
   Output<Tensor> labels{"labels"};

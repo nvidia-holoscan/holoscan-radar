@@ -52,12 +52,11 @@ struct Scenario {
 };
 
 const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> result{
-      {"xs", 2, 4, 64, 256, 16, "smoke"},
-      {"sm", 3, 4, 128, 512, 64, "sparse automotive"},
-      {"md", 4, 8, 256, 512, 256, "common MIMO"},
-      {"lg", 4, 16, 512, 1024, 1024, "large array"},
-      {"xl", 8, 16, 512, 2048, 4096, "upper bound"}};
+  static const std::vector<SizeSpec> result{{"xs", 2, 4, 64, 256, 16, "smoke"},
+                                            {"sm", 3, 4, 128, 512, 64, "sparse automotive"},
+                                            {"md", 4, 8, 256, 512, 256, "common MIMO"},
+                                            {"lg", 4, 16, 512, 1024, 1024, "large array"},
+                                            {"xl", 8, 16, 512, 2048, 4096, "upper bound"}};
   return result;
 }
 
@@ -83,14 +82,12 @@ hr::FMCWWaveformDescriptor waveform() {
 std::vector<double> ula_positions(int64_t count, double spacing) {
   std::vector<double> result(static_cast<std::size_t>(count * 3), 0.0);
   for (int64_t index = 0; index < count; ++index) {
-    result[static_cast<std::size_t>(index * 3)] =
-        spacing * static_cast<double>(index);
+    result[static_cast<std::size_t>(index * 3)] = spacing * static_cast<double>(index);
   }
   return result;
 }
 
-std::shared_ptr<holoscan::Tensor> make_detections(
-    int64_t count, int64_t doppler, int64_t range) {
+std::shared_ptr<holoscan::Tensor> make_detections(int64_t count, int64_t doppler, int64_t range) {
   std::vector<int64_t> host(static_cast<std::size_t>(count * 2));
   for (int64_t index = 0; index < count; ++index) {
     const int64_t cell = (index * 997) % (doppler * range);
@@ -100,27 +97,21 @@ std::shared_ptr<holoscan::Tensor> make_detections(
   auto result = hr::make_device_tensor({count, 2}, kInt64Dtype);
   if (!host.empty()) {
     auto pointer = result->mutable_data();
-    if (!pointer ||
-        cudaMemcpy(*pointer, host.data(), host.size() * sizeof(int64_t),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
+    if (!pointer || cudaMemcpy(*pointer, host.data(), host.size() * sizeof(int64_t),
+                               cudaMemcpyHostToDevice) != cudaSuccess) {
       throw std::runtime_error("detection-index H2D failed");
     }
   }
   return result;
 }
 
-perf::TimingCollector run_graph(
-    const Scenario& scenario, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const Scenario& scenario, const perf::RunPlan& plan) {
   const auto& size = scenario.size;
-  auto rd_maps = perf::make_iq_cube_device<Precision>(
-      {size.tx, size.rx, size.doppler, size.range});
-  auto index = make_detections(
-      size.detections, size.doppler, size.range);
+  auto rd_maps = perf::make_iq_cube_device<Precision>({size.tx, size.rx, size.doppler, size.range});
+  auto index = make_detections(size.detections, size.doppler, size.range);
   return perf::run_perf_graph_dual(
-      std::move(rd_maps), std::move(index), plan.total_frames,
-      "tdm-sparse-compensation-perf",
-      [&](holoscan::Graph& graph, const auto& source,
-          holoscan::CompileOptions& options) {
+      std::move(rd_maps), std::move(index), plan.total_frames, "tdm-sparse-compensation-perf",
+      [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_tx = size.tx;
         extents.max_rx = size.rx;
@@ -129,8 +120,7 @@ perf::TimingCollector run_graph(
         extents.max_range_bins = size.range;
         extents.max_detections = size.detections;
         extents.max_snapshots = 1;
-        auto op = graph.op<hr::TDMSparseCompensationOp<Precision>>(
-            "sparse", extents);
+        auto op = graph.op<hr::TDMSparseCompensationOp<Precision>>("sparse", extents);
         hr::TDMSparseCompensationParams params;
         params.waveform = waveform();
         params.tx_positions = ula_positions(size.tx, 0.02);
@@ -138,25 +128,17 @@ perf::TimingCollector run_graph(
         params.overlap_policy = hr::OverlapPolicy::kKeepAll;
         op.set_params(std::move(params));
 
-        const auto terminal =
-            graph.op<perf::PerfTerminalSinkOp>("terminal");
-        const auto mask_sink =
-            graph.op<perf::PerfNullSinkOp>("mask_sink");
+        const auto terminal = graph.op<perf::PerfTerminalSinkOp>("terminal");
+        const auto mask_sink = graph.op<perf::PerfNullSinkOp>("mask_sink");
         const auto geometry_sink =
-            graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>(
-                "geometry_sink");
+            graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>("geometry_sink");
         const holoscan::ConnectionOptions queue{.queue_depth = 4U};
         graph.add_flow(source->out_a, op->rd_maps, queue);
         graph.add_flow(source->out_b, op->detection_idx, queue);
         graph.add_flow(op->snapshot, terminal->in, queue);
         graph.add_flow(op->is_valid, mask_sink->in, queue);
         graph.add_flow(op->array_geometry, geometry_sink->in, queue);
-        graph.partition("perf")
-            .add(source)
-            .add(op)
-            .add(terminal)
-            .add(mask_sink)
-            .add(geometry_sink);
+        graph.partition("perf").add(source).add(op).add(terminal).add(mask_sink).add(geometry_sink);
         perf::bind_tensor_out(options, "sparse", "snapshot");
         perf::bind_tensor_out(options, "sparse", "is_valid");
       });
@@ -182,18 +164,12 @@ perf::ResultRow base_row(const Scenario& scenario) {
 struct Traits : perf::PerfDriverDefaults {
   using Scenario = ::Scenario;
 
-  static const char* tool_name() {
-    return "perf_tdm_sparse_compensation";
-  }
+  static const char* tool_name() { return "perf_tdm_sparse_compensation"; }
   static const char* tool_description() {
     return "Sparse TDM compensation detection-count characterization";
   }
-  static const char* sizes_all_help() {
-    return "Run the full sparse TDM size ladder";
-  }
-  static const char* sizes_subset_help() {
-    return "Run selected sparse TDM sizes";
-  }
+  static const char* sizes_all_help() { return "Run the full sparse TDM size ladder"; }
+  static const char* sizes_subset_help() { return "Run selected sparse TDM sizes"; }
   static const char* full_help() {
     return "Run all sizes; compare dense operator reports separately";
   }
@@ -201,11 +177,10 @@ struct Traits : perf::PerfDriverDefaults {
   static std::vector<perf::SizeDef> size_ladder_defs() {
     std::vector<perf::SizeDef> result;
     for (const auto& size : size_ladder()) {
-      result.push_back(perf::SizeDef{
-          .id = size.id,
-          .shape = {size.doppler, size.range},
-          .cells = size.doppler * size.range,
-          .role = size.role});
+      result.push_back(perf::SizeDef{.id = size.id,
+                                     .shape = {size.doppler, size.range},
+                                     .cells = size.doppler * size.range,
+                                     .role = size.role});
     }
     return result;
   }
@@ -214,17 +189,12 @@ struct Traits : perf::PerfDriverDefaults {
     return build_size_sweep({"xs", "sm", "md"});
   }
 
-  static std::vector<Scenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<Scenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<Scenario> result;
     for (const auto& id : sizes) {
       const SizeSpec* size = find_size(id);
       if (size != nullptr) {
-        result.push_back(
-            Scenario{
-                .id = "tdm_sparse_" + id,
-                .size_id = id,
-                .size = *size});
+        result.push_back(Scenario{.id = "tdm_sparse_" + id, .size_id = id, .size = *size});
       }
     }
     return result;
@@ -234,13 +204,11 @@ struct Traits : perf::PerfDriverDefaults {
     return build_size_sweep({"xs", "sm", "md", "lg", "xl"});
   }
 
-  static void run_scenario(
-      const Scenario& scenario, const perf::RunSettings& settings,
-      perf::PerfReport* report) {
-    const perf::RunPlan plan =
-        perf::make_run_plan(settings, false);
-    const auto samples = perf::collect_scenario_samples(
-        settings, plan, [&](int, const perf::RunPlan& current) {
+  static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
+                           perf::PerfReport* report) {
+    const perf::RunPlan plan = perf::make_run_plan(settings, false);
+    const auto samples =
+        perf::collect_scenario_samples(settings, plan, [&](int, const perf::RunPlan& current) {
           return run_graph(scenario, current);
         });
     perf::append_setup_row(base_row(scenario), samples, report);
@@ -248,8 +216,7 @@ struct Traits : perf::PerfDriverDefaults {
     perf::fill_compute_row(&row, samples);
     if (row.latency.median_ms > 0.0) {
       row.cells_per_second =
-          static_cast<double>(scenario.size.detections) /
-          (row.latency.median_ms / 1000.0);
+          static_cast<double>(scenario.size.detections) / (row.latency.median_ms / 1000.0);
     }
     report->results.push_back(std::move(row));
   }
@@ -261,8 +228,7 @@ struct Traits : perf::PerfDriverDefaults {
       settings.warmup_frames = 0;
       settings.measured_frames = 2;
       settings.repeats = 1;
-      run_scenario(
-          build_size_sweep({"xs"}).front(), settings, &report);
+      run_scenario(build_size_sweep({"xs"}).front(), settings, &report);
     });
   }
 };

@@ -98,12 +98,13 @@ int64_t tensor_count(const std::vector<int64_t>& shape) {
 }
 
 template <typename T>
-std::vector<std::complex<T>> build_misaligned_rd_host(
-    const FMCWWaveformDescriptor& waveform, int64_t num_tx, int64_t num_rx,
-    int64_t num_doppler, int64_t num_range, int64_t batch = 1,
-    const std::vector<int64_t>& slot_by_tx = {}) {
-  const auto table = holoscan::radar::detail::build_tdm_correction_table(
-      waveform, num_tx, num_doppler, slot_by_tx);
+std::vector<std::complex<T>> build_misaligned_rd_host(const FMCWWaveformDescriptor& waveform,
+                                                      int64_t num_tx, int64_t num_rx,
+                                                      int64_t num_doppler, int64_t num_range,
+                                                      int64_t batch = 1,
+                                                      const std::vector<int64_t>& slot_by_tx = {}) {
+  const auto table = holoscan::radar::detail::build_tdm_correction_table(waveform, num_tx,
+                                                                         num_doppler, slot_by_tx);
   const int64_t slice = num_tx * num_rx * num_doppler * num_range;
   std::vector<std::complex<T>> host(static_cast<size_t>(batch * slice));
   for (int64_t b = 0; b < batch; ++b) {
@@ -112,18 +113,13 @@ std::vector<std::complex<T>> build_misaligned_rd_host(
         for (int64_t d = 0; d < num_doppler; ++d) {
           for (int64_t r = 0; r < num_range; ++r) {
             const size_t idx = static_cast<size_t>(
-                b * slice +
-                (((tx * num_rx + rx) * num_doppler + d) * num_range) + r);
-            const auto corr =
-                table[static_cast<size_t>(tx * num_doppler + d)];
+                b * slice + (((tx * num_rx + rx) * num_doppler + d) * num_range) + r);
+            const auto corr = table[static_cast<size_t>(tx * num_doppler + d)];
             const double mag =
-                1.0 + 0.01 * static_cast<double>(rx) +
-                0.001 * static_cast<double>(r);
-            const std::complex<double> misaligned =
-                std::conj(corr) * mag;
-            host[idx] = std::complex<T>(
-                static_cast<T>(misaligned.real()),
-                static_cast<T>(misaligned.imag()));
+                1.0 + 0.01 * static_cast<double>(rx) + 0.001 * static_cast<double>(r);
+            const std::complex<double> misaligned = std::conj(corr) * mag;
+            host[idx] = std::complex<T>(static_cast<T>(misaligned.real()),
+                                        static_cast<T>(misaligned.imag()));
           }
         }
       }
@@ -133,9 +129,8 @@ std::vector<std::complex<T>> build_misaligned_rd_host(
 }
 
 template <typename T>
-void expect_tx_lanes_aligned(const HostTensor& out, int64_t num_tx,
-                             int64_t num_rx, int64_t num_doppler,
-                             int64_t num_range, int64_t batch = 1,
+void expect_tx_lanes_aligned(const HostTensor& out, int64_t num_tx, int64_t num_rx,
+                             int64_t num_doppler, int64_t num_range, int64_t batch = 1,
                              T tol = static_cast<T>(1e-4)) {
   const auto* data = out.as<std::complex<T>>();
   const int64_t slice = num_tx * num_rx * num_doppler * num_range;
@@ -144,18 +139,14 @@ void expect_tx_lanes_aligned(const HostTensor& out, int64_t num_tx,
       for (int64_t d = 0; d < num_doppler; ++d) {
         for (int64_t r = 0; r < num_range; ++r) {
           const size_t ref = static_cast<size_t>(
-              b * slice + ((0 * num_rx + rx) * num_doppler + d) * num_range +
-              r);
+              b * slice + ((0 * num_rx + rx) * num_doppler + d) * num_range + r);
           for (int64_t tx = 1; tx < num_tx; ++tx) {
             const size_t other = static_cast<size_t>(
-                b * slice +
-                ((tx * num_rx + rx) * num_doppler + d) * num_range + r);
+                b * slice + ((tx * num_rx + rx) * num_doppler + d) * num_range + r);
             EXPECT_NEAR(data[other].real(), data[ref].real(), tol)
-                << "batch=" << b << " tx=" << tx << " rx=" << rx
-                << " d=" << d << " r=" << r;
+                << "batch=" << b << " tx=" << tx << " rx=" << rx << " d=" << d << " r=" << r;
             EXPECT_NEAR(data[other].imag(), data[ref].imag(), tol)
-                << "batch=" << b << " tx=" << tx << " rx=" << rx
-                << " d=" << d << " r=" << r;
+                << "batch=" << b << " tx=" << tx << " rx=" << rx << " d=" << d << " r=" << r;
           }
         }
       }
@@ -165,42 +156,34 @@ void expect_tx_lanes_aligned(const HostTensor& out, int64_t num_tx,
 
 // Graph wiring lambda for 1-in / 1-out TDMDenseCompensationOp.
 auto compensation_wire() {
-  return [](holoscan::Graph& graph, const auto& source, auto& op,
-            const auto& sink) {
+  return [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(source->out, op->rd_maps, q);
     graph.add_flow(op->rd_maps_out, sink->in, q);
   };
 }
 
-TDMDenseCompensationParams tdm_params(
-    const FMCWWaveformDescriptor& waveform) {
+TDMDenseCompensationParams tdm_params(const FMCWWaveformDescriptor& waveform) {
   return TDMDenseCompensationParams{
       .waveform = waveform,
   };
 }
 
 template <typename T>
-GraphRunResult run_tdm_result(
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
-    TDMDenseCompensationParams params,
-    const holoscan::radar::MaxTensorExtents& extents =
-        holoscan::radar::testing::default_test_extents()) {
-  return run_single_io_operator_graph_result<
-      TDMDenseCompensationOp<T>>(
-      std::move(inputs), std::move(params), "rd_maps_out",
-      compensation_wire(), {}, extents);
+GraphRunResult run_tdm_result(std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
+                              TDMDenseCompensationParams params,
+                              const holoscan::radar::MaxTensorExtents& extents =
+                                  holoscan::radar::testing::default_test_extents()) {
+  return run_single_io_operator_graph_result<TDMDenseCompensationOp<T>>(
+      std::move(inputs), std::move(params), "rd_maps_out", compensation_wire(), {}, extents);
 }
 
 template <typename T>
-HostTensor run_tdm_once(
-    std::shared_ptr<holoscan::Tensor> input,
-    TDMDenseCompensationParams params) {
-  GraphRunResult result =
-      run_tdm_result<T>({std::move(input)}, std::move(params));
+HostTensor run_tdm_once(std::shared_ptr<holoscan::Tensor> input,
+                        TDMDenseCompensationParams params) {
+  GraphRunResult result = run_tdm_result<T>({std::move(input)}, std::move(params));
   if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") +
-                             result.plan_json);
+    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
   }
   if (!result.diagnostics.empty()) {
     std::string msg = "run diagnostics:";
@@ -211,9 +194,7 @@ HostTensor run_tdm_once(
     throw std::runtime_error(msg);
   }
   if (result.frames.size() != 1U) {
-    throw std::runtime_error(
-        "expected 1 frame, got " +
-        std::to_string(result.frames.size()));
+    throw std::runtime_error("expected 1 frame, got " + std::to_string(result.frames.size()));
   }
   return std::move(result.frames.front());
 }
@@ -222,9 +203,7 @@ template <typename T>
 HostTensor run_compensation(const std::vector<std::complex<T>>& host,
                             const std::vector<int64_t>& shape,
                             const FMCWWaveformDescriptor& waveform) {
-  return run_tdm_once<T>(
-      to_device_tensor(host, shape, complex_dtype<T>()),
-      tdm_params(waveform));
+  return run_tdm_once<T>(to_device_tensor(host, shape, complex_dtype<T>()), tdm_params(waveform));
 }
 
 struct LiveWaveformTick {
@@ -245,28 +224,23 @@ struct LiveWaveformBank {
 
 holoscan::expected<void, holoscan::Error> emit_wire_waveform(
     holoscan::Output<holoscan::radar::wire::FMCWWaveformT>& output,
-    holoscan::radar::wire::FMCWWaveformT wire,
-    std::span<const std::complex<double>> samples,
+    holoscan::radar::wire::FMCWWaveformT wire, std::span<const std::complex<double>> samples,
     holoscan::TimePoint capture_time) {
-  const std::array<int64_t, 1> shape{
-      static_cast<int64_t>(samples.size())};
+  const std::array<int64_t, 1> shape{static_cast<int64_t>(samples.size())};
   constexpr DLDataType kDtype{kDLComplex, 128U, 1U};
-  auto loan = output.allocate_tensor(
-      holoscan::TensorLoanRequest{.shape = shape, .dtype = kDtype});
+  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = kDtype});
   if (!loan) {
     return holoscan::make_unexpected(std::move(loan).error());
   }
-  auto written = loan->write_host_and_commit(
-      [samples](const holoscan::TensorOutputWriteGuard& writer) {
-        std::copy(samples.begin(), samples.end(),
-                  writer.data_as<std::complex<double>>());
+  auto written =
+      loan->write_host_and_commit([samples](const holoscan::TensorOutputWriteGuard& writer) {
+        std::copy(samples.begin(), samples.end(), writer.data_as<std::complex<double>>());
       });
   if (!written) {
     return holoscan::make_unexpected(std::move(written).error());
   }
-  return output.emit_tensor(
-      std::move(*loan), wire,
-      holoscan::EmitOptions{.capture_time = capture_time});
+  return output.emit_tensor(std::move(*loan), wire,
+                            holoscan::EmitOptions{.capture_time = capture_time});
 }
 
 class LiveWaveformSourceOp final : public holoscan::Operator<> {
@@ -283,8 +257,8 @@ class LiveWaveformSourceOp final : public holoscan::Operator<> {
         .rank = 1U,
     };
     spec.output(rd_maps, "out")
-        .produces_tensor(holoscan::radar::pooled_tensor_output(
-            kDevice, 4U, 256ULL * 1024ULL * 1024ULL));
+        .produces_tensor(
+            holoscan::radar::pooled_tensor_output(kDevice, 4U, 256ULL * 1024ULL * 1024ULL));
     spec.output(waveform, "waveform")
         .max_emits_per_compute(1U)
         .produces_tensor(holoscan::radar::pooled_tensor_output(
@@ -293,8 +267,7 @@ class LiveWaveformSourceOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
-    result.trigger(holoscan::OnClock{
-        .period = holoscan::radar::testing::detail::kHarnessTick});
+    result.trigger(holoscan::OnClock{.period = holoscan::radar::testing::detail::kHarnessTick});
     return result;
   }
 
@@ -303,8 +276,7 @@ class LiveWaveformSourceOp final : public holoscan::Operator<> {
     if (LiveWaveformBank::index >= LiveWaveformBank::ticks.size()) {
       return {};
     }
-    const LiveWaveformTick& tick =
-        LiveWaveformBank::ticks[LiveWaveformBank::index++];
+    const LiveWaveformTick& tick = LiveWaveformBank::ticks[LiveWaveformBank::index++];
     const holoscan::TimePoint rd_time = context.activation_time();
     if (tick.waveform.has_value()) {
       auto wire = holoscan::radar::to_wire(*tick.waveform);
@@ -315,25 +287,21 @@ class LiveWaveformSourceOp final : public holoscan::Operator<> {
       waveform_time.timestamp_ns += tick.waveform_skew_ns;
       auto emitted = emit_wire_waveform(
           waveform, std::move(wire),
-          std::span<const std::complex<double>>{
-              tick.waveform->reference_samples()},
-          waveform_time);
+          std::span<const std::complex<double>>{tick.waveform->reference_samples()}, waveform_time);
       if (!emitted) {
         return emitted;
       }
     }
-    return holoscan::radar::testing::detail::emit_bank_frame(
-        rd_maps, context, tick.rd_maps, "LiveWaveformSourceOp");
+    return holoscan::radar::testing::detail::emit_bank_frame(rd_maps, context, tick.rd_maps,
+                                                             "LiveWaveformSourceOp");
   }
 
   holoscan::Output<holoscan::Tensor> rd_maps{"out"};
-  holoscan::Output<holoscan::radar::wire::FMCWWaveformT>
-      waveform{"waveform"};
+  holoscan::Output<holoscan::radar::wire::FMCWWaveformT> waveform{"waveform"};
 };
 
-GraphRunResult run_live_waveform_graph(
-    std::vector<LiveWaveformTick> ticks,
-    TDMDenseCompensationParams params) {
+GraphRunResult run_live_waveform_graph(std::vector<LiveWaveformTick> ticks,
+                                       TDMDenseCompensationParams params) {
   GraphRunResult result;
   holoscan::radar::testing::detail::FrameBank::reset();
   LiveWaveformBank::reset();
@@ -342,12 +310,10 @@ GraphRunResult run_live_waveform_graph(
 
   holoscan::Graph graph{"mimo-live-waveform"};
   const auto source = graph.op<LiveWaveformSourceOp>("source");
-  auto op = holoscan::radar::testing::emplace_harness_op<
-      TDMDenseCompensationOp<float>>(
+  auto op = holoscan::radar::testing::emplace_harness_op<TDMDenseCompensationOp<float>>(
       graph, holoscan::radar::testing::default_test_extents());
   op.set_params(std::move(params));
-  const auto sink =
-      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink");
+  const auto sink = graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink");
   const holoscan::ConnectionOptions q{.queue_depth = 8U};
   graph.add_flow(source->waveform, op->waveform_in, q);
   graph.add_flow(source->rd_maps, op->rd_maps, q);
@@ -355,33 +321,27 @@ GraphRunResult run_live_waveform_graph(
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
   holoscan::CompileOptions options;
-  holoscan::radar::testing::detail::bind_single_io_device_pools(
-      options, "rd_maps_out");
+  holoscan::radar::testing::detail::bind_single_io_device_pools(options, "rd_maps_out");
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
       return result;
     }
     holoscan::RunSession session = holoscan::run_async(plan);
-    const auto deadline = std::chrono::steady_clock::now() +
-                          holoscan::radar::testing::detail::kHarnessDeadline;
-    while (session.diagnostics().empty() &&
-           std::chrono::steady_clock::now() < deadline) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + holoscan::radar::testing::detail::kHarnessDeadline;
+    while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
       std::size_t count = 0;
       {
-        const std::lock_guard lock(
-            holoscan::radar::testing::detail::FrameBank::mutex);
-        count =
-            holoscan::radar::testing::detail::FrameBank::captured.size();
+        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBank::mutex);
+        count = holoscan::radar::testing::detail::FrameBank::captured.size();
       }
       if (count >= expected) {
         break;
       }
-      std::this_thread::sleep_for(
-          holoscan::radar::testing::detail::kHarnessPoll);
+      std::this_thread::sleep_for(holoscan::radar::testing::detail::kHarnessPoll);
     }
     session.request_stop();
     session.wait();
@@ -394,10 +354,8 @@ GraphRunResult run_live_waveform_graph(
     result.plan_json = std::string("RuntimeError: ") + error.what();
   }
   {
-    const std::lock_guard lock(
-        holoscan::radar::testing::detail::FrameBank::mutex);
-    result.frames = std::move(
-        holoscan::radar::testing::detail::FrameBank::captured);
+    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBank::mutex);
+    result.frames = std::move(holoscan::radar::testing::detail::FrameBank::captured);
   }
   return result;
 }
@@ -408,9 +366,7 @@ TEST(TDMDenseCompensationOp, TdmRemovesInterTxPhaseAcrossDopplerBins) {
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
   const auto out = run_compensation<float>(
-      build_misaligned_rd_host<float>(waveform, kNumTx, kNumRx, kDoppler,
-                                      kRange),
-      shape, waveform);
+      build_misaligned_rd_host<float>(waveform, kNumTx, kNumRx, kDoppler, kRange), shape, waveform);
   expect_tx_lanes_aligned<float>(out, kNumTx, kNumRx, kDoppler, kRange);
 }
 
@@ -419,23 +375,21 @@ TEST(TDMDenseCompensationOp, FourTxLanesAlignAfterCompensation) {
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{kTx, kNumRx, kDoppler, kRange};
   const auto out = run_compensation<float>(
-      build_misaligned_rd_host<float>(waveform, kTx, kNumRx, kDoppler,
-                                      kRange),
-      shape, waveform);
+      build_misaligned_rd_host<float>(waveform, kTx, kNumRx, kDoppler, kRange), shape, waveform);
   expect_tx_lanes_aligned<float>(out, kTx, kNumRx, kDoppler, kRange);
 }
 
 TEST(TDMDenseCompensationOp, TdmCorrectionTableIsUnitMagnitude) {
-  const auto table = holoscan::radar::detail::build_tdm_correction_table(
-      make_test_waveform(), kNumTx, kDoppler);
+  const auto table =
+      holoscan::radar::detail::build_tdm_correction_table(make_test_waveform(), kNumTx, kDoppler);
   for (const auto& factor : table) {
     EXPECT_NEAR(std::abs(factor), 1.0, 1e-12);
   }
 }
 
 TEST(TDMDenseCompensationOp, TdmCorrectionTableTxZeroIsIdentity) {
-  const auto table = holoscan::radar::detail::build_tdm_correction_table(
-      make_test_waveform(), kNumTx, kDoppler);
+  const auto table =
+      holoscan::radar::detail::build_tdm_correction_table(make_test_waveform(), kNumTx, kDoppler);
   for (int64_t d = 0; d < kDoppler; ++d) {
     const auto& factor = table[static_cast<size_t>(d)];
     EXPECT_NEAR(factor.real(), 1.0, 1e-12) << "doppler bin " << d;
@@ -447,10 +401,10 @@ TEST(TDMDenseCompensationOp, TdmCorrectionTableUsesFiringSlot) {
   // tx_order [1, 0]: TX 1 fires first (identity), TX 0 is slot 1.
   const std::vector<int64_t> slot_by_tx{1, 0};
   const auto waveform = make_test_waveform();
-  const auto table = holoscan::radar::detail::build_tdm_correction_table(
-      waveform, kNumTx, kDoppler, slot_by_tx);
-  const auto identity = holoscan::radar::detail::build_tdm_correction_table(
-      waveform, kNumTx, kDoppler);
+  const auto table =
+      holoscan::radar::detail::build_tdm_correction_table(waveform, kNumTx, kDoppler, slot_by_tx);
+  const auto identity =
+      holoscan::radar::detail::build_tdm_correction_table(waveform, kNumTx, kDoppler);
   for (int64_t d = 0; d < kDoppler; ++d) {
     const auto& first = table[static_cast<size_t>(1 * kDoppler + d)];
     EXPECT_NEAR(first.real(), 1.0, 1e-12) << "first-firing TX at d=" << d;
@@ -467,16 +421,14 @@ TEST(TDMDenseCompensationOp, PermutedTxOrderAlignsAfterCompensation) {
   TXSchedule schedule;
   schedule.num_tx = kNumTx;
   schedule.tx_order = {1, 0};
-  const auto slots = holoscan::radar::detail::tdm_firing_slots(
-      schedule, kNumTx);
+  const auto slots = holoscan::radar::detail::tdm_firing_slots(schedule, kNumTx);
   ASSERT_EQ(slots, (std::vector<int64_t>{1, 0}));
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
   TDMDenseCompensationParams params = tdm_params(waveform);
   params.tx_schedule = schedule;
   const auto out = run_tdm_once<float>(
       to_device_tensor(
-          build_misaligned_rd_host<float>(waveform, kNumTx, kNumRx,
-                                          kDoppler, kRange, 1, slots),
+          build_misaligned_rd_host<float>(waveform, kNumTx, kNumRx, kDoppler, kRange, 1, slots),
           shape, complex_dtype<float>()),
       params);
   expect_tx_lanes_aligned<float>(out, kNumTx, kNumRx, kDoppler, kRange);
@@ -490,10 +442,9 @@ TEST(TDMDenseCompensationOp, RejectsTxScheduleNumTxMismatch) {
   TDMDenseCompensationParams params = tdm_params(waveform);
   params.tx_schedule = schedule;
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
-  const auto host = build_misaligned_rd_host<float>(
-      waveform, kNumTx, kNumRx, kDoppler, kRange);
-  const GraphRunResult result = run_tdm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())}, params);
+  const auto host = build_misaligned_rd_host<float>(waveform, kNumTx, kNumRx, kDoppler, kRange);
+  const GraphRunResult result =
+      run_tdm_result<float>({to_device_tensor(host, shape, complex_dtype<float>())}, params);
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -502,8 +453,7 @@ TEST(TDMDenseCompensationOp, RejectsTxScheduleNumTxMismatch) {
 TEST(TDMDenseCompensationOp, ComplexFloatDtypePreserved) {
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
-  const auto host = build_misaligned_rd_host<float>(
-      waveform, kNumTx, kNumRx, kDoppler, kRange);
+  const auto host = build_misaligned_rd_host<float>(waveform, kNumTx, kNumRx, kDoppler, kRange);
   const auto out = run_compensation<float>(host, shape, waveform);
   EXPECT_TRUE(dldatatype_equals(out.dtype, complex_dtype<float>()));
   expect_tx_lanes_aligned<float>(out, kNumTx, kNumRx, kDoppler, kRange);
@@ -512,8 +462,7 @@ TEST(TDMDenseCompensationOp, ComplexFloatDtypePreserved) {
 TEST(TDMDenseCompensationOp, ComplexDoublePreservesValues) {
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
-  const auto host = build_misaligned_rd_host<double>(
-      waveform, kNumTx, kNumRx, kDoppler, kRange);
+  const auto host = build_misaligned_rd_host<double>(waveform, kNumTx, kNumRx, kDoppler, kRange);
   const auto out = run_compensation<double>(host, shape, waveform);
   EXPECT_TRUE(dldatatype_equals(out.dtype, complex_dtype<double>()));
   expect_tx_lanes_aligned<double>(out, kNumTx, kNumRx, kDoppler, kRange);
@@ -522,8 +471,7 @@ TEST(TDMDenseCompensationOp, ComplexDoublePreservesValues) {
 TEST(TDMDenseCompensationOp, DeterministicAcrossRuns) {
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
-  const auto host = build_misaligned_rd_host<float>(
-      waveform, kNumTx, kNumRx, kDoppler, kRange);
+  const auto host = build_misaligned_rd_host<float>(waveform, kNumTx, kNumRx, kDoppler, kRange);
   const auto first = run_compensation<float>(host, shape, waveform);
   const auto second = run_compensation<float>(host, shape, waveform);
   ASSERT_EQ(first.shape, second.shape);
@@ -538,8 +486,7 @@ TEST(TDMDenseCompensationOp, DeterministicAcrossRuns) {
 TEST(TDMDenseCompensationOp, SingleTxIsIdentity) {
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{1, kNumRx, kDoppler, kRange};
-  const auto host =
-      build_misaligned_rd_host<float>(waveform, 1, kNumRx, kDoppler, kRange);
+  const auto host = build_misaligned_rd_host<float>(waveform, 1, kNumRx, kDoppler, kRange);
   const auto out = run_compensation<float>(host, shape, waveform);
   const auto* got = out.as<std::complex<float>>();
   for (size_t i = 0; i < host.size(); ++i) {
@@ -552,11 +499,9 @@ TEST(TDMDenseCompensationOp, RejectsOpaqueLeadingBatch) {
   // TDM contract is (M_tx, N_rx, D, R); an extra leading dim is opaque batch.
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{2, kNumTx, kNumRx, kDoppler, kRange};
-  const auto host = build_misaligned_rd_host<float>(
-      waveform, kNumTx, kNumRx, kDoppler, kRange, 2);
+  const auto host = build_misaligned_rd_host<float>(waveform, kNumTx, kNumRx, kDoppler, kRange, 2);
   const GraphRunResult result = run_tdm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())},
-      tdm_params(waveform));
+      {to_device_tensor(host, shape, complex_dtype<float>())}, tdm_params(waveform));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -565,13 +510,11 @@ TEST(TDMDenseCompensationOp, RejectsOpaqueLeadingBatch) {
 TEST(TDMDenseCompensationOp, RejectsInputBeyondCapturedExtents) {
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
-  const auto host = build_misaligned_rd_host<float>(
-      waveform, kNumTx, kNumRx, kDoppler, kRange);
+  const auto host = build_misaligned_rd_host<float>(waveform, kNumTx, kNumRx, kDoppler, kRange);
   auto extents = holoscan::radar::testing::default_test_extents();
   extents.max_doppler_bins = kDoppler - 1;
   const GraphRunResult result = run_tdm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())},
-      tdm_params(waveform), extents);
+      {to_device_tensor(host, shape, complex_dtype<float>())}, tdm_params(waveform), extents);
   EXPECT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -581,8 +524,7 @@ TEST(TDMDenseCompensationOp, WaveformConfigurableFromParams) {
   const auto waveform_a = make_test_waveform(kPri);
   const auto waveform_b = make_test_waveform(kPri * 1.1);
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
-  const auto host = build_misaligned_rd_host<float>(
-      waveform_a, kNumTx, kNumRx, kDoppler, kRange);
+  const auto host = build_misaligned_rd_host<float>(waveform_a, kNumTx, kNumRx, kDoppler, kRange);
   const auto out_a = run_compensation<float>(host, shape, waveform_a);
   const auto out_b = run_compensation<float>(host, shape, waveform_b);
   expect_tx_lanes_aligned<float>(out_a, kNumTx, kNumRx, kDoppler, kRange);
@@ -594,13 +536,11 @@ TEST(TDMDenseCompensationOp, LiveWaveformOverrideAppliesPerTick) {
   const auto waveform_b = make_test_waveform(kPri * 1.3);
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
   const auto frame_a = to_device_tensor(
-      build_misaligned_rd_host<float>(
-          waveform_a, kNumTx, kNumRx, kDoppler, kRange),
-      shape, complex_dtype<float>());
+      build_misaligned_rd_host<float>(waveform_a, kNumTx, kNumRx, kDoppler, kRange), shape,
+      complex_dtype<float>());
   const auto frame_b = to_device_tensor(
-      build_misaligned_rd_host<float>(
-          waveform_b, kNumTx, kNumRx, kDoppler, kRange),
-      shape, complex_dtype<float>());
+      build_misaligned_rd_host<float>(waveform_b, kNumTx, kNumRx, kDoppler, kRange), shape,
+      complex_dtype<float>());
   TDMDenseCompensationParams params = tdm_params(waveform_a);
 
   // Tick 0 and tick 2 publish nothing, so both compensate with the Params
@@ -608,16 +548,13 @@ TEST(TDMDenseCompensationOp, LiveWaveformOverrideAppliesPerTick) {
   // Exact on waveform_b. An override that lasted longer would misalign
   // tick 2's lanes.
   const GraphRunResult out = run_live_waveform_graph(
-      {{frame_a, std::nullopt}, {frame_b, waveform_b},
-       {frame_a, std::nullopt}},
-      std::move(params));
+      {{frame_a, std::nullopt}, {frame_b, waveform_b}, {frame_a, std::nullopt}}, std::move(params));
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
   ASSERT_EQ(out.frames.size(), 3U);
   for (const HostTensor& frame : out.frames) {
-    expect_tx_lanes_aligned<float>(
-        frame, kNumTx, kNumRx, kDoppler, kRange);
+    expect_tx_lanes_aligned<float>(frame, kNumTx, kNumRx, kDoppler, kRange);
   }
 }
 
@@ -626,32 +563,29 @@ TEST(TDMDenseCompensationOp, LiveWaveformUsesExactCaptureTime) {
   const auto waveform_b = make_test_waveform(kPri * 1.3);
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
   const auto frame = to_device_tensor(
-      build_misaligned_rd_host<float>(
-          waveform_a, kNumTx, kNumRx, kDoppler, kRange),
-      shape, complex_dtype<float>());
+      build_misaligned_rd_host<float>(waveform_a, kNumTx, kNumRx, kDoppler, kRange), shape,
+      complex_dtype<float>());
   TDMDenseCompensationParams params = tdm_params(waveform_a);
 
-  const GraphRunResult out = run_live_waveform_graph(
-      {{frame, waveform_b, 1'000'000}}, std::move(params));
+  const GraphRunResult out =
+      run_live_waveform_graph({{frame, waveform_b, 1'000'000}}, std::move(params));
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
   ASSERT_EQ(out.frames.size(), 1U);
-  expect_tx_lanes_aligned<float>(
-      out.frames.front(), kNumTx, kNumRx, kDoppler, kRange);
+  expect_tx_lanes_aligned<float>(out.frames.front(), kNumTx, kNumRx, kDoppler, kRange);
 }
 
 TEST(TDMDenseCompensationOp, RejectsInvalidLiveWaveform) {
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
-  const auto frame = to_device_tensor(
-      build_misaligned_rd_host<float>(
-          waveform, kNumTx, kNumRx, kDoppler, kRange),
-      shape, complex_dtype<float>());
+  const auto frame =
+      to_device_tensor(build_misaligned_rd_host<float>(waveform, kNumTx, kNumRx, kDoppler, kRange),
+                       shape, complex_dtype<float>());
   TDMDenseCompensationParams params = tdm_params(waveform);
 
-  const GraphRunResult out = run_live_waveform_graph(
-      {{frame, waveform, 0, true}}, std::move(params));
+  const GraphRunResult out =
+      run_live_waveform_graph({{frame, waveform, 0, true}}, std::move(params));
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   EXPECT_TRUE(out.frames.empty());
@@ -661,10 +595,8 @@ TEST(TDMDenseCompensationOp, RejectsInvalidLiveWaveform) {
 TEST(TDMDenseCompensationOp, FloatDoubleAgreement) {
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
-  const auto host_f = build_misaligned_rd_host<float>(
-      waveform, kNumTx, kNumRx, kDoppler, kRange);
-  const auto host_d = build_misaligned_rd_host<double>(
-      waveform, kNumTx, kNumRx, kDoppler, kRange);
+  const auto host_f = build_misaligned_rd_host<float>(waveform, kNumTx, kNumRx, kDoppler, kRange);
+  const auto host_d = build_misaligned_rd_host<double>(waveform, kNumTx, kNumRx, kDoppler, kRange);
   const auto out_f = run_compensation<float>(host_f, shape, waveform);
   const auto out_d = run_compensation<double>(host_d, shape, waveform);
   const auto* f = out_f.as<std::complex<float>>();
@@ -677,12 +609,11 @@ TEST(TDMDenseCompensationOp, FloatDoubleAgreement) {
 
 TEST(TDMDenseCompensationOp, RejectsInvalidWaveform) {
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
-  const std::vector<std::complex<float>> host(
-      static_cast<size_t>(tensor_count(shape)), {1.0f, 0.0f});
+  const std::vector<std::complex<float>> host(static_cast<size_t>(tensor_count(shape)),
+                                              {1.0f, 0.0f});
   const GraphRunResult result =
-      run_tdm_result<float>(
-          {to_device_tensor(host, shape, complex_dtype<float>())},
-          tdm_params(FMCWWaveformDescriptor{}));
+      run_tdm_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
+                            tdm_params(FMCWWaveformDescriptor{}));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -691,10 +622,8 @@ TEST(TDMDenseCompensationOp, RejectsInvalidWaveform) {
 TEST(TDMDenseCompensationOp, RejectsRankTooSmall) {
   const auto waveform = make_test_waveform();
   const std::vector<std::complex<float>> host(8, {1.0f, 0.0f});
-  const GraphRunResult result =
-      run_tdm_result<float>(
-          {to_device_tensor(host, {2, 2, 2}, complex_dtype<float>())},
-          tdm_params(waveform));
+  const GraphRunResult result = run_tdm_result<float>(
+      {to_device_tensor(host, {2, 2, 2}, complex_dtype<float>())}, tdm_params(waveform));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -705,12 +634,9 @@ TEST(TDMDenseCompensationOp, RejectsRankTooSmall) {
 TEST(TDMDenseCompensationOp, RejectsMismatchedPrecision) {
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
-  const auto host = build_misaligned_rd_host<double>(
-      waveform, kNumTx, kNumRx, kDoppler, kRange);
-  const GraphRunResult result =
-      run_tdm_result<float>(
-          {to_device_tensor(host, shape, complex_dtype<double>())},
-          tdm_params(waveform));
+  const auto host = build_misaligned_rd_host<double>(waveform, kNumTx, kNumRx, kDoppler, kRange);
+  const GraphRunResult result = run_tdm_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<double>())}, tdm_params(waveform));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -719,12 +645,9 @@ TEST(TDMDenseCompensationOp, RejectsMismatchedPrecision) {
 TEST(TDMDenseCompensationOp, RejectsRealInput) {
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{kNumTx, kNumRx, kDoppler, kRange};
-  const std::vector<float> host(
-      static_cast<size_t>(tensor_count(shape)), 1.0f);
-  const GraphRunResult result =
-      run_tdm_result<float>(
-          {to_device_tensor(host, shape, DLDataType{kDLFloat, 32, 1})},
-          tdm_params(waveform));
+  const std::vector<float> host(static_cast<size_t>(tensor_count(shape)), 1.0f);
+  const GraphRunResult result = run_tdm_result<float>(
+      {to_device_tensor(host, shape, DLDataType{kDLFloat, 32, 1})}, tdm_params(waveform));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -734,10 +657,8 @@ TEST(TDMDenseCompensationOp, RejectsZeroTrailingAxis) {
   const auto waveform = make_test_waveform();
   const std::vector<int64_t> shape{0, kNumRx, kDoppler, kRange};
   const std::vector<std::complex<float>> host;
-  const GraphRunResult result =
-      run_tdm_result<float>(
-          {to_device_tensor(host, shape, complex_dtype<float>())},
-          tdm_params(waveform));
+  const GraphRunResult result = run_tdm_result<float>(
+      {to_device_tensor(host, shape, complex_dtype<float>())}, tdm_params(waveform));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());

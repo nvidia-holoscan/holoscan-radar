@@ -90,13 +90,10 @@ inline constexpr CfarPeakMode kCfarPeakModes[] = {
     CfarPeakMode::kRangeDoppler,
     CfarPeakMode::kAll,
 };
-using CfarVariantCodec =
-    CanonicalEnumCodec<CfarVariant, kCfarVariants>;  // NOLINT
-using CfarPeakModeCodec =
-    CanonicalEnumCodec<CfarPeakMode, kCfarPeakModes>;  // NOLINT
+using CfarVariantCodec = CanonicalEnumCodec<CfarVariant, kCfarVariants>;     // NOLINT
+using CfarPeakModeCodec = CanonicalEnumCodec<CfarPeakMode, kCfarPeakModes>;  // NOLINT
 using CfarVariantStorage = PortableParamStorageTraits<CfarVariant>;
-using CfarPeakModeStorage =
-    PortableParamStorageTraits<CfarPeakMode>;  // NOLINT
+using CfarPeakModeStorage = PortableParamStorageTraits<CfarPeakMode>;  // NOLINT
 
 }  // namespace config_detail
 }  // namespace holoscan::radar
@@ -104,23 +101,21 @@ using CfarPeakModeStorage =
 namespace holoscan::config {
 
 template <>
-struct ConfigCodec<radar::CfarVariant>
-    : radar::config_detail::CfarVariantCodec {};  // NOLINT
+struct ConfigCodec<radar::CfarVariant> : radar::config_detail::CfarVariantCodec {};  // NOLINT
 
 template <>
-struct ConfigCodec<radar::CfarPeakMode>
-    : radar::config_detail::CfarPeakModeCodec {};  // NOLINT
+struct ConfigCodec<radar::CfarPeakMode> : radar::config_detail::CfarPeakModeCodec {};  // NOLINT
 
 }  // namespace holoscan::config
 
 namespace holoscan {
 
 template <>
-struct ParamStorageTraits<radar::CfarVariant>
-    : radar::config_detail::CfarVariantStorage {};  // NOLINT
+struct ParamStorageTraits<radar::CfarVariant> : radar::config_detail::CfarVariantStorage {
+};  // NOLINT
 template <>
-struct ParamStorageTraits<radar::CfarPeakMode>
-    : radar::config_detail::CfarPeakModeStorage {};  // NOLINT
+struct ParamStorageTraits<radar::CfarPeakMode> : radar::config_detail::CfarPeakModeStorage {
+};  // NOLINT
 
 }  // namespace holoscan
 
@@ -141,15 +136,12 @@ struct CfarAlphaLutKey {
   int num_range{0};
 
   bool operator==(const CfarAlphaLutKey& other) const {
-    return variant == other.variant && pfa == other.pfa &&
-           fold == other.fold && os_rank == other.os_rank &&
-           guard_d == other.guard_d && guard_r == other.guard_r &&
+    return variant == other.variant && pfa == other.pfa && fold == other.fold &&
+           os_rank == other.os_rank && guard_d == other.guard_d && guard_r == other.guard_r &&
            train_d == other.train_d && train_r == other.train_r &&
            num_doppler == other.num_doppler && num_range == other.num_range;
   }
-  bool operator!=(const CfarAlphaLutKey& other) const {
-    return !(*this == other);
-  }
+  bool operator!=(const CfarAlphaLutKey& other) const { return !(*this == other); }
 };
 
 // 2-D CFAR detector on the (Doppler, range) plane. This header is the
@@ -201,60 +193,46 @@ struct CFARParams {
 };
 
 HOLOSCAN_PARAM_SCHEMA(
-    CFARParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.CFARParams", 1),
+    CFARParams, holoscan::param_schema("com.nvidia.holoscan.radar.CFARParams", 1),
     holoscan::field<&CFARParams::cfar_variant>("cfar_variant")
-        .description(
-            "Noise-estimation rule {CA, GO, SO, OS}. Static: selects the "
-            "kernel; instantiate separate detectors to vary it"),
-    holoscan::field<&CFARParams::os_rank>("os_rank")
-        .description(
-            "0-based rank into ascending-sorted training cells; required for "
-            "OS; -1 is the unset sentinel"),
+        .description("Noise-estimation rule {CA, GO, SO, OS}. Static: selects the "
+                     "kernel; instantiate separate detectors to vary it"),
+    holoscan::field<&CFARParams::os_rank>("os_rank").description(
+        "0-based rank into ascending-sorted training cells; required for "
+        "OS; -1 is the unset sentinel"),
     holoscan::field<&CFARParams::guard_cells>("guard_cells")
-        .description(
-            "Guard extent each side of the CUT (doppler, range)"),
+        .description("Guard extent each side of the CUT (doppler, range)"),
     holoscan::field<&CFARParams::training_cells>("training_cells")
-        .description(
-            "Training/reference extent each side (doppler, range)"),
+        .description("Training/reference extent each side (doppler, range)"),
     holoscan::field<&CFARParams::pfa>("pfa").description(
         "Probability of false alarm; sets alpha when alpha_lut is unset"),
     holoscan::field<&CFARParams::alpha_lut>("alpha_lut")
-        .description(
-            "Optional threshold multiplier table; when non-empty, used "
-            "directly and pfa is ignored for alpha calibration"),
+        .description("Optional threshold multiplier table; when non-empty, used "
+                     "directly and pfa is ignored for alpha calibration"),
     holoscan::field<&CFARParams::threshold_scale>("threshold_scale")
-        .description(
-            "Empirical multiplier on top of the Pfa-derived threshold; "
-            "1.0 = pure CFAR"),
+        .description("Empirical multiplier on top of the Pfa-derived threshold; "
+                     "1.0 = pure CFAR"),
     holoscan::field<&CFARParams::nci_axes>("nci_axes")
-        .description(
-            "Leading-axis indices to non-coherently integrate before "
-            "thresholding"),
+        .description("Leading-axis indices to non-coherently integrate before "
+                     "thresholding"),
     holoscan::field<&CFARParams::preintegrated_looks>("preintegrated_looks")
-        .description(
-            "Independent power looks already summed in each real input "
-            "sample; static; default 1"),
+        .description("Independent power looks already summed in each real input "
+                     "sample; static; default 1"),
     holoscan::field<&CFARParams::nci_fold>("nci_fold")
-        .description(
-            "Optional leading-axis integration fold for start-time alpha LUT "
-            "pre-warm when nci_axes is set; <= 0 → unset; static"),
+        .description("Optional leading-axis integration fold for start-time alpha LUT "
+                     "pre-warm when nci_axes is set; <= 0 → unset; static"),
     holoscan::field<&CFARParams::max_detections>("max_detections")
         .description("Cap on emitted detections (<= 0 → uncapped)"),
-    holoscan::field<&CFARParams::blocking_alpha_lut_rebuild>(
-        "blocking_alpha_lut_rebuild")
-        .description(
-            "When false, serve the previous LUT while a new one calibrates "
-            "after a config change; when true, block until ready; static"),
+    holoscan::field<&CFARParams::blocking_alpha_lut_rebuild>("blocking_alpha_lut_rebuild")
+        .description("When false, serve the previous LUT while a new one calibrates "
+                     "after a config change; when true, block until ready; static"),
     holoscan::field<&CFARParams::peak_mode>("peak_mode")
-        .description(
-            "Peak selection {none, range_doppler, all}; all uses full N-D "
-            "local-maximum suppression; static"),
+        .description("Peak selection {none, range_doppler, all}; all uses full N-D "
+                     "local-maximum suppression; static"),
     holoscan::field<&CFARParams::peak_radius>("peak_radius")
-        .description(
-            "Per-axis NMS radius in bins; range_doppler accepts one value or "
-            "(doppler, range), all accepts one value or one per post-NCI "
-            "output axis; zero excludes an axis; static"));
+        .description("Per-axis NMS radius in bins; range_doppler accepts one value or "
+                     "(doppler, range), all accepts one value or one per post-NCI "
+                     "output axis; zero excludes an axis; static"));
 
 static_assert(holoscan::param_schema_availability<CFARParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -286,8 +264,7 @@ class CFARDetectorOp : public holoscan::Operator<CFARParams> {
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> rd_maps{"rd_maps"};
   Output<Tensor> detection_mask{"detection_mask"};

@@ -106,14 +106,19 @@ const SizeSpec& must_find_size(const std::string& id) {
   return *s;
 }
 
-Footprint footprint_small() { return {"small", {1, 1}, {2, 2}}; }
-Footprint footprint_mid() { return {"mid", {2, 2}, {4, 4}}; }
-Footprint footprint_large() { return {"large", {2, 2}, {8, 8}}; }
+Footprint footprint_small() {
+  return {"small", {1, 1}, {2, 2}};
+}
+Footprint footprint_mid() {
+  return {"mid", {2, 2}, {4, 4}};
+}
+Footprint footprint_large() {
+  return {"large", {2, 2}, {8, 8}};
+}
 
 const std::vector<hr::CfarVariant>& all_cfar_variants() {
-  static const std::vector<hr::CfarVariant> variants = {
-      hr::CfarVariant::kCA, hr::CfarVariant::kGO,
-      hr::CfarVariant::kSO, hr::CfarVariant::kOS};
+  static const std::vector<hr::CfarVariant> variants = {hr::CfarVariant::kCA, hr::CfarVariant::kGO,
+                                                        hr::CfarVariant::kSO, hr::CfarVariant::kOS};
   return variants;
 }
 
@@ -121,8 +126,7 @@ int64_t interior_training(const Footprint& fp) {
   const int64_t hd = fp.guard[0] + fp.training[0];
   const int64_t hr_val = fp.guard[1] + fp.training[1];
   const int64_t window = (2 * hd + 1) * (2 * hr_val + 1);
-  const int64_t guard_box =
-      (2 * fp.guard[0] + 1) * (2 * fp.guard[1] + 1);
+  const int64_t guard_box = (2 * fp.guard[0] + 1) * (2 * fp.guard[1] + 1);
   return window - guard_box;
 }
 
@@ -130,16 +134,13 @@ std::string variant_tag(hr::CfarVariant v) {
   return std::string(hr::to_string(v));
 }
 
-void batch_and_k(const std::vector<int64_t>& shape,
-                 const std::vector<int64_t>& nci_axes,
+void batch_and_k(const std::vector<int64_t>& shape, const std::vector<int64_t>& nci_axes,
                  int64_t* out_batch, int64_t* k) {
   *out_batch = 1;
   *k = 1;
   const int64_t lead = static_cast<int64_t>(shape.size()) - 2;
   for (int64_t axis = 0; axis < lead; ++axis) {
-    const bool integrated =
-        std::find(nci_axes.begin(), nci_axes.end(), axis) !=
-        nci_axes.end();
+    const bool integrated = std::find(nci_axes.begin(), nci_axes.end(), axis) != nci_axes.end();
     if (integrated) {
       *k *= shape[static_cast<size_t>(axis)];
     } else {
@@ -162,43 +163,33 @@ std::vector<double> precompute_alpha_lut(const CfarScenario& scen) {
   (void)out_batch;
   switch (scen.variant) {
     case hr::CfarVariant::kCA:
-      return hr::detail::build_ca_alpha_lut(
-          scen.pfa, k, nd, nr, gd, gr, td, tr);
+      return hr::detail::build_ca_alpha_lut(scen.pfa, k, nd, nr, gd, gr, td, tr);
     case hr::CfarVariant::kGO:
-      return hr::detail::build_go_alpha_lut(
-          scen.pfa, k, nd, nr, gd, gr, td, tr);
+      return hr::detail::build_go_alpha_lut(scen.pfa, k, nd, nr, gd, gr, td, tr);
     case hr::CfarVariant::kSO:
-      return hr::detail::build_so_alpha_lut(
-          scen.pfa, k, nd, nr, gd, gr, td, tr);
+      return hr::detail::build_so_alpha_lut(scen.pfa, k, nd, nr, gd, gr, td, tr);
     case hr::CfarVariant::kOS:
-      return hr::detail::build_os_alpha_lut(
-          scen.pfa, k, scen.os_rank, nd, nr, gd, gr, td, tr);
+      return hr::detail::build_os_alpha_lut(scen.pfa, k, scen.os_rank, nd, nr, gd, gr, td, tr);
   }
   return {};
 }
 
-perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
-                                     const perf::RunPlan& plan) {
-  auto input =
-      perf::make_power_map_device<PerfPrecision>(scen.input_shape);
+perf::TimingCollector run_cfar_graph(const CfarScenario& scen, const perf::RunPlan& plan) {
+  auto input = perf::make_power_map_device<PerfPrecision>(scen.input_shape);
   using BaseOp = hr::CFARDetectorOp<PerfPrecision>;
   // Production Exact{} + per-tick co-emit. Restacking LatestWithin through
   // PerfLiveContractOp would make the temporal contract invalid.
   constexpr double kInitialThresholdScale = 1.0;
   constexpr double kOverrideThresholdScale = 1.1;
   return perf::run_perf_graph_with_override(
-      std::move(input), plan.total_frames, plan.override_at,
-      kInitialThresholdScale, kOverrideThresholdScale, "cfar-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
+      std::move(input), plan.total_frames, plan.override_at, kInitialThresholdScale,
+      kOverrideThresholdScale, "cfar-perf",
+      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
-        extents.max_doppler_bins = scen.input_shape[
-            scen.input_shape.size() - 2];
-        extents.max_range_bins = scen.input_shape[
-            scen.input_shape.size() - 1];
+        extents.max_doppler_bins = scen.input_shape[scen.input_shape.size() - 2];
+        extents.max_range_bins = scen.input_shape[scen.input_shape.size() - 1];
         int64_t out_batch = 1, k = 1;
-        batch_and_k(scen.input_shape, scen.nci_axes,
-                    &out_batch, &k);
+        batch_and_k(scen.input_shape, scen.nci_axes, &out_batch, &k);
         // Input leading rank (before NCI) must be admitted even when NCI
         // collapses it to a single plane (out_batch == 1).
         if (scen.input_shape.size() == 3U) {
@@ -207,9 +198,8 @@ perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
           extents.max_tx = scen.input_shape[0];
           extents.max_rx = scen.input_shape[1];
         }
-        extents.max_detections = out_batch *
-            extents.max_doppler_bins.value() *
-            extents.max_range_bins.value();
+        extents.max_detections =
+            out_batch * extents.max_doppler_bins.value() * extents.max_range_bins.value();
         auto op = graph.op<BaseOp>("cfar", extents);
         hr::CFARParams params;
         params.cfar_variant = scen.variant;
@@ -225,21 +215,15 @@ perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
         params.peak_radius = scen.peak_radius;
         op.set_params(std::move(params));
 
-        const auto idx_sink =
-            graph.op<perf::PerfTerminalSinkOp>("idx_sink");
-        const auto mask_drain =
-            graph.op<perf::PerfNullSinkOp>("mask_drain");
-        const auto score_drain =
-            graph.op<perf::PerfNullSinkOp>("score_drain");
-        const auto noise_drain =
-            graph.op<perf::PerfNullSinkOp>("noise_drain");
-        const auto power_drain =
-            graph.op<perf::PerfNullSinkOp>("power_drain");
+        const auto idx_sink = graph.op<perf::PerfTerminalSinkOp>("idx_sink");
+        const auto mask_drain = graph.op<perf::PerfNullSinkOp>("mask_drain");
+        const auto score_drain = graph.op<perf::PerfNullSinkOp>("score_drain");
+        const auto noise_drain = graph.op<perf::PerfNullSinkOp>("noise_drain");
+        const auto power_drain = graph.op<perf::PerfNullSinkOp>("power_drain");
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
 
         graph.add_flow(src->out, op->rd_maps, q);
-        graph.add_flow(
-            src->override_out, op->threshold_scale, q);
+        graph.add_flow(src->override_out, op->threshold_scale, q);
         graph.add_flow(op->detection_idx, idx_sink->in, q);
         graph.add_flow(op->detection_mask, mask_drain->in, q);
         graph.add_flow(op->detection_score, score_drain->in, q);
@@ -269,19 +253,15 @@ void fill_throughput(perf::ResultRow* row, double median_ms) {
   const double sec = median_ms / 1000.0;
   const int64_t D = row->map_shape[0];
   const int64_t R = row->map_shape[1];
-  const double cells = static_cast<double>(row->out_batch) *
-                       static_cast<double>(D) *
-                       static_cast<double>(R);
+  const double cells =
+      static_cast<double>(row->out_batch) * static_cast<double>(D) * static_cast<double>(R);
   row->cells_per_second = cells / sec;
-  row->slices_per_second =
-      static_cast<double>(row->out_batch) / sec;
+  row->slices_per_second = static_cast<double>(row->out_batch) / sec;
 
   const double tsz = sizeof(PerfPrecision);
-  const double in_bytes =
-      cells * static_cast<double>(row->k) * tsz;
+  const double in_bytes = cells * static_cast<double>(row->k) * tsz;
   const double out_bytes = cells * (2.0 * tsz + 1.0);
-  row->estimated_effective_gbps =
-      (in_bytes + out_bytes) / sec / 1e9;
+  row->estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9;
 }
 
 perf::ResultRow base_row(const CfarScenario& scen) {
@@ -290,8 +270,7 @@ perf::ResultRow base_row(const CfarScenario& scen) {
   row.variant = variant_tag(scen.variant);
   row.size_id = scen.size_id;
   const size_t n = scen.input_shape.size();
-  row.map_shape = {scen.input_shape[n - 2],
-                   scen.input_shape[n - 1]};
+  row.map_shape = {scen.input_shape[n - 2], scen.input_shape[n - 1]};
   row.input_shape = scen.input_shape;
   row.guard = scen.footprint.guard;
   row.training = scen.footprint.training;
@@ -311,9 +290,7 @@ std::vector<int64_t> plane_shape(const SizeSpec& s) {
   return {s.doppler, s.range};
 }
 
-CfarScenario make_compute_scenario(hr::CfarVariant v,
-                                   const SizeSpec& s,
-                                   const Footprint& fp,
+CfarScenario make_compute_scenario(hr::CfarVariant v, const SizeSpec& s, const Footprint& fp,
                                    int64_t out_batch) {
   CfarScenario sc;
   sc.variant = v;
@@ -337,9 +314,7 @@ CfarScenario make_compute_scenario(hr::CfarVariant v,
   return sc;
 }
 
-CfarScenario make_nci_scenario(hr::CfarVariant v,
-                               const SizeSpec& s,
-                               int64_t channels) {
+CfarScenario make_nci_scenario(hr::CfarVariant v, const SizeSpec& s, int64_t channels) {
   CfarScenario sc;
   sc.variant = v;
   sc.size_id = s.id;
@@ -350,14 +325,12 @@ CfarScenario make_nci_scenario(hr::CfarVariant v,
     sc.os_rank = (interior_training(sc.footprint) * 3) / 4;
   }
   std::ostringstream id;
-  id << "cfar_" << variant_tag(v) << "_" << s.id << "_small_k"
-     << channels << "_compute";
+  id << "cfar_" << variant_tag(v) << "_" << s.id << "_small_k" << channels << "_compute";
   sc.id = id.str();
   return sc;
 }
 
-CfarScenario make_peak_scenario(hr::CfarVariant v, const SizeSpec& s,
-                                const Footprint& fp,
+CfarScenario make_peak_scenario(hr::CfarVariant v, const SizeSpec& s, const Footprint& fp,
                                 int64_t radius) {
   CfarScenario sc = make_compute_scenario(v, s, fp, 1);
   sc.peak_mode = hr::CfarPeakMode::kRangeDoppler;
@@ -365,8 +338,7 @@ CfarScenario make_peak_scenario(hr::CfarVariant v, const SizeSpec& s,
   const std::string suffix = "_compute";
   const std::string insert = "_peak_radius" + std::to_string(radius);
   if (sc.id.size() > suffix.size() &&
-      sc.id.compare(sc.id.size() - suffix.size(), suffix.size(),
-                    suffix) == 0) {
+      sc.id.compare(sc.id.size() - suffix.size(), suffix.size(), suffix) == 0) {
     sc.id.insert(sc.id.size() - suffix.size(), insert);
   } else {
     sc.id += insert;
@@ -374,25 +346,21 @@ CfarScenario make_peak_scenario(hr::CfarVariant v, const SizeSpec& s,
   return sc;
 }
 
-void append_peak_scenarios(std::vector<CfarScenario>* out,
-                           const std::vector<std::string>& sizes,
+void append_peak_scenarios(std::vector<CfarScenario>* out, const std::vector<std::string>& sizes,
                            bool all_variants_at_md) {
   const Footprint fp = footprint_small();
   for (const auto& sid : sizes) {
     const SizeSpec& s = must_find_size(sid);
     for (const int64_t radius : {int64_t{1}, int64_t{2}}) {
-      out->push_back(
-          make_peak_scenario(hr::CfarVariant::kCA, s, fp, radius));
+      out->push_back(make_peak_scenario(hr::CfarVariant::kCA, s, fp, radius));
     }
     if (sid == "xs") {
-      CfarScenario rank3 =
-          make_compute_scenario(hr::CfarVariant::kCA, s, fp, 8);
+      CfarScenario rank3 = make_compute_scenario(hr::CfarVariant::kCA, s, fp, 8);
       rank3.peak_mode = hr::CfarPeakMode::kAll;
       rank3.id = "cfar_CA_xs_small_peak_all_rank3_compute";
       out->push_back(std::move(rank3));
 
-      CfarScenario rank4 =
-          make_compute_scenario(hr::CfarVariant::kCA, s, fp, 1);
+      CfarScenario rank4 = make_compute_scenario(hr::CfarVariant::kCA, s, fp, 1);
       rank4.input_shape = {4, 4, s.doppler, s.range};
       rank4.peak_mode = hr::CfarPeakMode::kAll;
       rank4.id = "cfar_CA_xs_small_peak_all_rank4_compute";
@@ -420,18 +388,14 @@ struct CalibrationPairSpec {
 
 const std::vector<CalibrationPairSpec>& calibration_pair_specs() {
   static const std::vector<CalibrationPairSpec> specs = {
-      {"cfar_GO_xlw_small_k1_compute", "GO_xlw_k1"},
-      {"cfar_SO_xlw_small_k1_compute", "SO_xlw_k1"},
-      {"cfar_GO_md_small_k8_compute", "GO_md_k8"},
-      {"cfar_SO_md_small_k8_compute", "SO_md_k8"},
-      {"cfar_OS_md_small_k8_compute", "OS_md_k8"},
-      {"cfar_OS_lg_small_k8_compute", "OS_lg_k8"},
+      {"cfar_GO_xlw_small_k1_compute", "GO_xlw_k1"}, {"cfar_SO_xlw_small_k1_compute", "SO_xlw_k1"},
+      {"cfar_GO_md_small_k8_compute", "GO_md_k8"},   {"cfar_SO_md_small_k8_compute", "SO_md_k8"},
+      {"cfar_OS_md_small_k8_compute", "OS_md_k8"},   {"cfar_OS_lg_small_k8_compute", "OS_lg_k8"},
   };
   return specs;
 }
 
-void tag_and_append_alpha_lut_pairs(
-    std::vector<CfarScenario>* scenarios) {
+void tag_and_append_alpha_lut_pairs(std::vector<CfarScenario>* scenarios) {
   std::unordered_map<std::string, CfarScenario> by_id;
   for (const auto& sc : *scenarios) {
     by_id.emplace(sc.id, sc);
@@ -452,10 +416,8 @@ void tag_and_append_alpha_lut_pairs(
     fast.alpha_lut.clear();
     const std::string suffix = "_compute";
     if (fast.id.size() > suffix.size() &&
-        fast.id.compare(fast.id.size() - suffix.size(),
-                        suffix.size(), suffix) == 0) {
-      fast.id.replace(fast.id.size() - suffix.size(), suffix.size(),
-                      "_alphalut_compute");
+        fast.id.compare(fast.id.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      fast.id.replace(fast.id.size() - suffix.size(), suffix.size(), "_alphalut_compute");
     } else {
       fast.id += "_alphalut";
     }
@@ -489,20 +451,16 @@ void build_alpha_calibration_summary(perf::PerfReport* report) {
     }
   }
   for (auto& [_, row] : rows) {
-    if (perf::detail::is_num(row.slow_cold_ms) &&
-        perf::detail::is_num(row.fast_cold_ms) &&
+    if (perf::detail::is_num(row.slow_cold_ms) && perf::detail::is_num(row.fast_cold_ms) &&
         row.fast_cold_ms > 0.0) {
       row.cold_speedup = row.slow_cold_ms / row.fast_cold_ms;
     }
-    if (perf::detail::is_num(row.slow_cold_ms) ||
-        perf::detail::is_num(row.fast_cold_ms)) {
+    if (perf::detail::is_num(row.slow_cold_ms) || perf::detail::is_num(row.fast_cold_ms)) {
       report->alpha_calibration.push_back(row);
     }
   }
-  std::sort(report->alpha_calibration.begin(),
-            report->alpha_calibration.end(),
-            [](const perf::AlphaCalibrationRow& a,
-               const perf::AlphaCalibrationRow& b) {
+  std::sort(report->alpha_calibration.begin(), report->alpha_calibration.end(),
+            [](const perf::AlphaCalibrationRow& a, const perf::AlphaCalibrationRow& b) {
               return a.pair_id < b.pair_id;
             });
 }
@@ -515,12 +473,8 @@ struct CfarTraits : perf::PerfDriverDefaults {
     return "CFARDetectorOp performance characterization "
            "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() {
-    return "CA size sweep across the full ladder";
-  }
-  static const char* sizes_subset_help() {
-    return "CA size sweep across an explicit subset";
-  }
+  static const char* sizes_all_help() { return "CA size sweep across the full ladder"; }
+  static const char* sizes_subset_help() { return "CA size sweep across an explicit subset"; }
   static const char* full_help() {
     return "Full matrix (all variants/footprints/batch/NCI) plus the "
            "default alpha_lut calibration pairs and peak-mode NMS "
@@ -566,20 +520,17 @@ struct CfarTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<CfarScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<CfarScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<CfarScenario> out;
     const Footprint fp = footprint_small();
     std::vector<std::string> known;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid
-                  << "', skipping\n";
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
         continue;
       }
-      out.push_back(
-          make_compute_scenario(hr::CfarVariant::kCA, *s, fp, 1));
+      out.push_back(make_compute_scenario(hr::CfarVariant::kCA, *s, fp, 1));
       known.push_back(sid);
     }
     append_peak_scenarios(&out, known,
@@ -590,8 +541,7 @@ struct CfarTraits : perf::PerfDriverDefaults {
   static std::vector<CfarScenario> build_full_matrix() {
     std::vector<CfarScenario> out;
     const auto& variants = all_cfar_variants();
-    const std::vector<Footprint> fps = {
-        footprint_small(), footprint_mid(), footprint_large()};
+    const std::vector<Footprint> fps = {footprint_small(), footprint_mid(), footprint_large()};
     for (const auto& s : size_ladder()) {
       for (auto v : variants) {
         for (const auto& fp : fps) {
@@ -602,10 +552,8 @@ struct CfarTraits : perf::PerfDriverDefaults {
     for (const char* sid : {"md", "lg"}) {
       const SizeSpec& s = must_find_size(sid);
       for (auto v : variants) {
-        out.push_back(
-            make_compute_scenario(v, s, footprint_small(), 4));
-        out.push_back(
-            make_compute_scenario(v, s, footprint_small(), 16));
+        out.push_back(make_compute_scenario(v, s, footprint_small(), 4));
+        out.push_back(make_compute_scenario(v, s, footprint_small(), 16));
       }
     }
     for (const char* sid : {"md", "lg"}) {
@@ -624,13 +572,11 @@ struct CfarTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static void run_scenario(const CfarScenario& scen,
-                           const perf::RunSettings& rs,
+  static void run_scenario(const CfarScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/true);
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           CfarScenario run_scen = scen;
           if (run_scen.use_alpha_lut && run_scen.alpha_lut.empty()) {
             run_scen.alpha_lut = precompute_alpha_lut(run_scen);
@@ -655,11 +601,9 @@ struct CfarTraits : perf::PerfDriverDefaults {
           "threshold_scale change; other lives are not timed";
     }
     if (scen.peak_mode != hr::CfarPeakMode::kNone) {
-      row.notes += "; peak_mode=" +
-                   std::string(hr::to_string(scen.peak_mode));
+      row.notes += "; peak_mode=" + std::string(hr::to_string(scen.peak_mode));
       if (scen.peak_mode == hr::CfarPeakMode::kRangeDoppler) {
-        row.notes += " (radius=" +
-                     std::to_string(scen.peak_radius.front()) + ")";
+        row.notes += " (radius=" + std::to_string(scen.peak_radius.front()) + ")";
       }
     }
     report->results.push_back(row);

@@ -86,9 +86,8 @@ template <typename U>
 inline U* require_mutable(holoscan::Tensor& tensor, const char* what) {
   auto mut = tensor.mutable_data();
   if (!mut) {
-    throw std::runtime_error(
-        std::string("RootMUSICEstimatorOp: ") + what +
-        " is not writable: " + mut.error().message);
+    throw std::runtime_error(std::string("RootMUSICEstimatorOp: ") + what +
+                             " is not writable: " + mut.error().message);
   }
   return static_cast<U*>(*mut);
 }
@@ -96,17 +95,16 @@ inline U* require_mutable(holoscan::Tensor& tensor, const char* what) {
 inline void* require_mutable_void(holoscan::Tensor& tensor, const char* what) {
   auto mut = tensor.mutable_data();
   if (!mut) {
-    throw std::runtime_error(
-        std::string("RootMUSICEstimatorOp: ") + what +
-        " is not writable: " + mut.error().message);
+    throw std::runtime_error(std::string("RootMUSICEstimatorOp: ") + what +
+                             " is not writable: " + mut.error().message);
   }
   return *mut;
 }
 
 template <typename T>
-__global__ void root_music_coefficients_kernel(
-    const cuda::std::complex<T>* __restrict__ projector, int64_t num_items,
-    int64_t channels, cuda::std::complex<T>* __restrict__ coefficients) {
+__global__ void root_music_coefficients_kernel(const cuda::std::complex<T>* __restrict__ projector,
+                                               int64_t num_items, int64_t channels,
+                                               cuda::std::complex<T>* __restrict__ coefficients) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items) {
     return;
@@ -128,19 +126,17 @@ __global__ void root_music_coefficients_kernel(
 }
 
 template <typename T>
-__global__ void root_music_companion_kernel(
-    const cuda::std::complex<T>* __restrict__ coefficients,
-    const int64_t* __restrict__ valid_counts, int64_t num_items, int64_t degree,
-    cuda::std::complex<T>* __restrict__ companion) {
+__global__ void root_music_companion_kernel(const cuda::std::complex<T>* __restrict__ coefficients,
+                                            const int64_t* __restrict__ valid_counts,
+                                            int64_t num_items, int64_t degree,
+                                            cuda::std::complex<T>* __restrict__ companion) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   const int64_t entries = degree * degree;
   auto* matrix = companion + item * entries;
   const auto* coeff = coefficients + item * (degree + 1);
   const cuda::std::complex<T> leading = coeff[degree];
-  const T leading_norm =
-      leading.real() * leading.real() + leading.imag() * leading.imag();
-  const T floor = std::is_same_v<T, float> ? static_cast<T>(1e-20)
-                                           : static_cast<T>(1e-40);
+  const T leading_norm = leading.real() * leading.real() + leading.imag() * leading.imag();
+  const T floor = std::is_same_v<T, float> ? static_cast<T>(1e-20) : static_cast<T>(1e-40);
 
   for (int64_t index = threadIdx.x; index < entries; index += blockDim.x) {
     matrix[index] = cuda::std::complex<T>{T{0}, T{0}};
@@ -180,12 +176,10 @@ __device__ inline T wrapped_phase_distance(T a, T b) {
 
 template <typename T>
 __global__ void root_music_select_kernel(
-    const cuda::std::complex<T>* __restrict__ roots,
-    const int32_t* __restrict__ model_order,
-    const int64_t* __restrict__ valid_counts, int64_t num_items,
-    int64_t degree, int64_t max_sources, T wave_number_spacing,
-    T axis_x, T axis_y, T axis_z, T broadside_x, T broadside_y,
-    T broadside_z, DeviceAngleConvention<T> convention, T* __restrict__ aoa,
+    const cuda::std::complex<T>* __restrict__ roots, const int32_t* __restrict__ model_order,
+    const int64_t* __restrict__ valid_counts, int64_t num_items, int64_t degree,
+    int64_t max_sources, T wave_number_spacing, T axis_x, T axis_y, T axis_z, T broadside_x,
+    T broadside_y, T broadside_z, DeviceAngleConvention<T> convention, T* __restrict__ aoa,
     T* __restrict__ doa_multi, int32_t* __restrict__ source_count) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (threadIdx.x != 0 || item >= num_items) {
@@ -226,8 +220,7 @@ __global__ void root_music_select_kernel(
       bool duplicate = false;
       for (int64_t prior = 0; prior < found; ++prior) {
         const auto selected = item_roots[selected_indices[prior]];
-        if (wrapped_phase_distance(phase,
-                                   atan2(selected.imag(), selected.real())) <
+        if (wrapped_phase_distance(phase, atan2(selected.imag(), selected.real())) <
             static_cast<T>(1e-4)) {
           duplicate = true;
           break;
@@ -249,12 +242,9 @@ __global__ void root_music_select_kernel(
 
     selected_indices[found] = best;
     T spatial_projection = best_phase / wave_number_spacing;
-    spatial_projection =
-        spatial_projection < T{-1} ? T{-1} : spatial_projection;
-    spatial_projection =
-        spatial_projection > T{1} ? T{1} : spatial_projection;
-    const T transverse =
-        sqrt(fmax(T{0}, T{1} - spatial_projection * spatial_projection));
+    spatial_projection = spatial_projection < T{-1} ? T{-1} : spatial_projection;
+    spatial_projection = spatial_projection > T{1} ? T{1} : spatial_projection;
+    const T transverse = sqrt(fmax(T{0}, T{1} - spatial_projection * spatial_projection));
     const T x = spatial_projection * axis_x + transverse * broadside_x;
     const T y = spatial_projection * axis_y + transverse * broadside_y;
     const T z = spatial_projection * axis_z + transverse * broadside_z;
@@ -274,10 +264,9 @@ __global__ void root_music_select_kernel(
 }
 
 template <typename T>
-inline void configure_root_solver(
-    RootMUSICSolverState* state, int64_t degree,
-    cuda::std::complex<T>* companion, cuda::std::complex<T>* roots,
-    int64_t num_items) {
+inline void configure_root_solver(RootMUSICSolverState* state, int64_t degree,
+                                  cuda::std::complex<T>* companion, cuda::std::complex<T>* roots,
+                                  int64_t num_items) {
   const cudaDataType type = root_complex_cuda_type<T>();
   if (state->degree == degree && state->data_type == type && state->info &&
       state->info->shape()[0] >= num_items) {
@@ -286,18 +275,14 @@ inline void configure_root_solver(
 
   size_t device_bytes = 0;
   size_t host_bytes = 0;
-  check_cusolver(
-      cusolverDnXgeev_bufferSize(
-          state->handle, state->params, CUSOLVER_EIG_MODE_NOVECTOR,
-          CUSOLVER_EIG_MODE_NOVECTOR, degree, type, companion, degree, type,
-          roots, type, nullptr, 1, type, nullptr, 1, type, &device_bytes,
-          &host_bytes),
-      "cusolverDnXgeev_bufferSize");
+  check_cusolver(cusolverDnXgeev_bufferSize(
+                     state->handle, state->params, CUSOLVER_EIG_MODE_NOVECTOR,
+                     CUSOLVER_EIG_MODE_NOVECTOR, degree, type, companion, degree, type, roots, type,
+                     nullptr, 1, type, nullptr, 1, type, &device_bytes, &host_bytes),
+                 "cusolverDnXgeev_bufferSize");
   state->device_workspace = make_device_tensor(
-      {static_cast<int64_t>(std::max<size_t>(device_bytes, size_t{1}))},
-      DLDataType{kDLUInt, 8, 1});
-  state->info = make_device_tensor({std::max<int64_t>(num_items, 1)},
-                                   DLDataType{kDLInt, 32, 1});
+      {static_cast<int64_t>(std::max<size_t>(device_bytes, size_t{1}))}, DLDataType{kDLUInt, 8, 1});
+  state->info = make_device_tensor({std::max<int64_t>(num_items, 1)}, DLDataType{kDLInt, 32, 1});
   state->host_workspace.resize(std::max<size_t>(host_bytes, size_t{1}));
   state->degree = degree;
   state->data_type = type;
@@ -313,52 +298,41 @@ inline void configure_root_solver(
 // so the selection kernels skip it; only an illegal argument (info < 0) throws.
 template <typename T>
 inline void solve_companion_roots(RootMUSICSolverState* solver, int64_t degree,
-                                  cuda::std::complex<T>* companion,
-                                  cuda::std::complex<T>* roots,
+                                  cuda::std::complex<T>* companion, cuda::std::complex<T>* roots,
                                   int64_t num_items, cudaStream_t stream) {
   if (num_items <= 0 || degree <= 0) {
     return;
   }
   configure_root_solver<T>(solver, degree, companion, roots, num_items);
-  check_cusolver(cusolverDnSetStream(solver->handle, stream),
-                 "cusolverDnSetStream");
+  check_cusolver(cusolverDnSetStream(solver->handle, stream), "cusolverDnSetStream");
   for (int64_t item = 0; item < num_items; ++item) {
     check_cusolver(
         cusolverDnXgeev(
-            solver->handle, solver->params, CUSOLVER_EIG_MODE_NOVECTOR,
-            CUSOLVER_EIG_MODE_NOVECTOR, degree, root_complex_cuda_type<T>(),
-            companion + item * degree * degree, degree,
-            root_complex_cuda_type<T>(), roots + item * degree,
-            root_complex_cuda_type<T>(), nullptr, 1,
-            root_complex_cuda_type<T>(), nullptr, 1,
-            root_complex_cuda_type<T>(),
-            require_mutable_void(*solver->device_workspace,
-                                 "geev device workspace"),
+            solver->handle, solver->params, CUSOLVER_EIG_MODE_NOVECTOR, CUSOLVER_EIG_MODE_NOVECTOR,
+            degree, root_complex_cuda_type<T>(), companion + item * degree * degree, degree,
+            root_complex_cuda_type<T>(), roots + item * degree, root_complex_cuda_type<T>(),
+            nullptr, 1, root_complex_cuda_type<T>(), nullptr, 1, root_complex_cuda_type<T>(),
+            require_mutable_void(*solver->device_workspace, "geev device workspace"),
             solver->device_workspace_bytes, solver->host_workspace.data(),
-            solver->host_workspace_bytes,
-            require_mutable<int>(*solver->info, "geev info") + item),
+            solver->host_workspace_bytes, require_mutable<int>(*solver->info, "geev info") + item),
         "cusolverDnXgeev");
   }
-  std::vector<int> info_host(
-      static_cast<size_t>(std::max(num_items, int64_t{1})));
+  std::vector<int> info_host(static_cast<size_t>(std::max(num_items, int64_t{1})));
   if (cudaMemcpyAsync(info_host.data(), solver->info->data(),
-                      static_cast<size_t>(num_items) * sizeof(int),
-                      cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
-    throw std::runtime_error(
-        "RootMUSICEstimatorOp: cusolverDnXgeev info download failed");
+                      static_cast<size_t>(num_items) * sizeof(int), cudaMemcpyDeviceToHost,
+                      stream) != cudaSuccess) {
+    throw std::runtime_error("RootMUSICEstimatorOp: cusolverDnXgeev info download failed");
   }
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
-    throw std::runtime_error(
-        "RootMUSICEstimatorOp: cusolverDnXgeev info sync failed");
+    throw std::runtime_error("RootMUSICEstimatorOp: cusolverDnXgeev info sync failed");
   }
   for (int64_t item = 0; item < num_items; ++item) {
     const int info = info_host[static_cast<size_t>(item)];
     if (info < 0) {
       // info < 0: the |info|-th argument to geev was illegal -- a programming
       // error in how we drive the solver, not data-dependent. Fail loudly.
-      throw std::runtime_error(
-          "RootMUSICEstimatorOp: cusolverDnXgeev illegal argument for item " +
-          std::to_string(item) + " (info " + std::to_string(info) + ")");
+      throw std::runtime_error("RootMUSICEstimatorOp: cusolverDnXgeev illegal argument for item " +
+                               std::to_string(item) + " (info " + std::to_string(info) + ")");
     }
     if (info > 0) {
       // info > 0: QR failed to converge for this item -- the expected outcome
@@ -369,8 +343,7 @@ inline void solve_companion_roots(RootMUSICSolverState* solver, int64_t degree,
       // kernels skip non-finite roots and emit zero sources for it, so one bad
       // item no longer aborts the whole tick.
       if (cudaMemsetAsync(roots + item * degree, 0xFF,
-                          static_cast<size_t>(degree) *
-                              sizeof(cuda::std::complex<T>),
+                          static_cast<size_t>(degree) * sizeof(cuda::std::complex<T>),
                           stream) != cudaSuccess) {
         throw std::runtime_error(
             "RootMUSICEstimatorOp: failed to blank degenerate roots for item " +
@@ -426,10 +399,10 @@ struct RootMUSICURAScratch {
 // nz x nz elevation covariance (forward spatial averaging over the orthogonal
 // aperture axis).
 template <typename T>
-__global__ void ura_axis_covariance_kernel(
-    const cuda::std::complex<T>* __restrict__ cov, int64_t num_items,
-    int64_t ny, int64_t nz, cuda::std::complex<T>* __restrict__ cov_y,
-    cuda::std::complex<T>* __restrict__ cov_z) {
+__global__ void ura_axis_covariance_kernel(const cuda::std::complex<T>* __restrict__ cov,
+                                           int64_t num_items, int64_t ny, int64_t nz,
+                                           cuda::std::complex<T>* __restrict__ cov_y,
+                                           cuda::std::complex<T>* __restrict__ cov_z) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items) {
     return;
@@ -445,8 +418,7 @@ __global__ void ura_axis_covariance_kernel(
     for (int64_t iz = 0; iz < nz; ++iz) {
       acc += R[(iz * ny + a) * channels + (iz * ny + b)];
     }
-    cov_y[item * ny * ny + e] =
-        cuda::std::complex<T>{acc.real() * inv_nz, acc.imag() * inv_nz};
+    cov_y[item * ny * ny + e] = cuda::std::complex<T>{acc.real() * inv_nz, acc.imag() * inv_nz};
   }
   for (int64_t e = threadIdx.x; e < nz * nz; e += blockDim.x) {
     const int64_t a = e / nz;
@@ -455,19 +427,16 @@ __global__ void ura_axis_covariance_kernel(
     for (int64_t iy = 0; iy < ny; ++iy) {
       acc += R[(a * ny + iy) * channels + (b * ny + iy)];
     }
-    cov_z[item * nz * nz + e] =
-        cuda::std::complex<T>{acc.real() * inv_ny, acc.imag() * inv_ny};
+    cov_z[item * nz * nz + e] = cuda::std::complex<T>{acc.real() * inv_ny, acc.imag() * inv_ny};
   }
 }
 
 // Clamp a per-item model order into [1, cap] (a URA source count cannot exceed
 // a single aperture axis's noise-subspace budget when rooting that axis).
 __global__ inline void clamp_model_order_kernel(const int32_t* __restrict__ in,
-                                                int32_t* __restrict__ out,
-                                                int64_t num_items,
+                                                int32_t* __restrict__ out, int64_t num_items,
                                                 int32_t cap) {
-  const int64_t i =
-      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= num_items) {
     return;
   }
@@ -483,11 +452,9 @@ __global__ inline void clamp_model_order_kernel(const int32_t* __restrict__ in,
 // the unit circle first, with the same phase de-duplication.
 template <typename T>
 __global__ void root_music_axis_candidates_kernel(
-    const cuda::std::complex<T>* __restrict__ roots,
-    const int32_t* __restrict__ axis_model_order,
-    const int64_t* __restrict__ valid_counts, int64_t num_items,
-    int64_t degree, int64_t cand_cap, T wave_number_spacing,
-    T* __restrict__ cand, int32_t* __restrict__ cand_count) {
+    const cuda::std::complex<T>* __restrict__ roots, const int32_t* __restrict__ axis_model_order,
+    const int64_t* __restrict__ valid_counts, int64_t num_items, int64_t degree, int64_t cand_cap,
+    T wave_number_spacing, T* __restrict__ cand, int32_t* __restrict__ cand_count) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (threadIdx.x != 0 || item >= num_items) {
     return;
@@ -522,8 +489,7 @@ __global__ void root_music_axis_candidates_kernel(
       bool duplicate = false;
       for (int64_t prior = 0; prior < found; ++prior) {
         const auto selected = item_roots[selected_indices[prior]];
-        if (wrapped_phase_distance(
-                phase, atan2(selected.imag(), selected.real())) <
+        if (wrapped_phase_distance(phase, atan2(selected.imag(), selected.real())) <
             static_cast<T>(1e-4)) {
           duplicate = true;
           break;
@@ -562,16 +528,13 @@ __global__ void root_music_axis_candidates_kernel(
 // boundary angles.
 template <typename T>
 __global__ void root_music_pair_kernel(
-    const T* __restrict__ u_cand, const int32_t* __restrict__ u_count,
-    const T* __restrict__ v_cand, const int32_t* __restrict__ v_count,
-    const cuda::std::complex<T>* __restrict__ projector,
-    const int32_t* __restrict__ model_order,
-    const int64_t* __restrict__ valid_counts, int64_t num_items, int64_t ny,
-    int64_t nz, int64_t u_cap, int64_t v_cap, T ky_spacing, T kz_spacing,
-    T yax_x, T yax_y, T yax_z, T zax_x, T zax_y, T zax_z, T nrm_x, T nrm_y,
-    T nrm_z, DeviceAngleConvention<T> convention, int64_t max_sources,
-    T* __restrict__ aoa, T* __restrict__ doa_multi,
-    int32_t* __restrict__ source_count) {
+    const T* __restrict__ u_cand, const int32_t* __restrict__ u_count, const T* __restrict__ v_cand,
+    const int32_t* __restrict__ v_count, const cuda::std::complex<T>* __restrict__ projector,
+    const int32_t* __restrict__ model_order, const int64_t* __restrict__ valid_counts,
+    int64_t num_items, int64_t ny, int64_t nz, int64_t u_cap, int64_t v_cap, T ky_spacing,
+    T kz_spacing, T yax_x, T yax_y, T yax_z, T zax_x, T zax_y, T zax_z, T nrm_x, T nrm_y, T nrm_z,
+    DeviceAngleConvention<T> convention, int64_t max_sources, T* __restrict__ aoa,
+    T* __restrict__ doa_multi, int32_t* __restrict__ source_count) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (threadIdx.x != 0 || item >= num_items) {
     return;
@@ -612,8 +575,7 @@ __global__ void root_music_pair_kernel(
       for (int64_t c = 0; c < channels; ++c) {
         const int64_t iy = c % ny;
         const int64_t iz = c / ny;
-        const T phase = static_cast<T>(iy) * ky_spacing * u +
-                        static_cast<T>(iz) * kz_spacing * v;
+        const T phase = static_cast<T>(iy) * ky_spacing * u + static_cast<T>(iz) * kz_spacing * v;
         a[c] = cuda::std::complex<T>{cos(phase), sin(phase)};
       }
       T denom = T{0};
@@ -681,14 +643,12 @@ __global__ void root_music_pair_kernel(
 // noise-subspace projector at the per-axis-clamped model order, form the
 // Root-MUSIC polynomial, solve for its roots, and emit candidate cosines.
 template <typename T>
-inline void root_music_axis_roots(cuda::std::complex<T>* cov_axis,
-                                  int64_t num_items, int64_t axis_channels,
-                                  const int64_t* valid_counts,
-                                  const int32_t* model_order_full,
-                                  int64_t cand_cap, T wave_number_spacing,
-                                  const RootMUSICAxisWorkspace<T>& workspace,
-                                  RootMUSICSolverState* solver, T* cand,
-                                  int32_t* cand_count, cudaStream_t stream) {
+inline void root_music_axis_roots(cuda::std::complex<T>* cov_axis, int64_t num_items,
+                                  int64_t axis_channels, const int64_t* valid_counts,
+                                  const int32_t* model_order_full, int64_t cand_cap,
+                                  T wave_number_spacing, const RootMUSICAxisWorkspace<T>& workspace,
+                                  RootMUSICSolverState* solver, T* cand, int32_t* cand_count,
+                                  cudaStream_t stream) {
   if (num_items <= 0 || axis_channels < 2) {
     return;
   }
@@ -700,32 +660,24 @@ inline void root_music_axis_roots(cuda::std::complex<T>* cov_axis,
       cov_axis, {num_items, axis_channels, axis_channels});
   auto evec_view = matx::make_tensor<cuda::std::complex<T>, 3>(
       workspace.eigenvectors, {num_items, axis_channels, axis_channels});
-  auto eval_view = matx::make_tensor<T, 2>(
-      workspace.eigenvalues, {num_items, axis_channels});
+  auto eval_view = matx::make_tensor<T, 2>(workspace.eigenvalues, {num_items, axis_channels});
   matx::cudaExecutor eig_exec{stream};
-  (matx::mtie(evec_view, eval_view) =
-       matx::eig(cov_view, matx::EigenMode::VECTOR))
-      .run(eig_exec);
+  (matx::mtie(evec_view, eval_view) = matx::eig(cov_view, matx::EigenMode::VECTOR)).run(eig_exec);
 
   constexpr int clamp_block = 128;
-  const int clamp_grid =
-      static_cast<int>((num_items + clamp_block - 1) / clamp_block);
+  const int clamp_grid = static_cast<int>((num_items + clamp_block - 1) / clamp_block);
   clamp_model_order_kernel<<<clamp_grid, clamp_block, 0, stream>>>(
-      model_order_full, workspace.model_order, num_items,
-      static_cast<int32_t>(axis_channels - 1));
-  projector_kernel<T><<<grid, block, 0, stream>>>(
-      workspace.eigenvectors, workspace.model_order, num_items,
-      axis_channels, workspace.projector);
+      model_order_full, workspace.model_order, num_items, static_cast<int32_t>(axis_channels - 1));
+  projector_kernel<T><<<grid, block, 0, stream>>>(workspace.eigenvectors, workspace.model_order,
+                                                  num_items, axis_channels, workspace.projector);
   root_music_coefficients_kernel<T><<<grid, block, 0, stream>>>(
       workspace.projector, num_items, axis_channels, workspace.coefficients);
   root_music_companion_kernel<T><<<grid, block, 0, stream>>>(
-      workspace.coefficients, valid_counts, num_items, degree,
-      workspace.companion);
-  solve_companion_roots<T>(solver, degree, workspace.companion,
-                           workspace.roots, num_items, stream);
-  root_music_axis_candidates_kernel<T><<<grid, 1, 0, stream>>>(
-      workspace.roots, workspace.model_order, valid_counts, num_items, degree,
-      cand_cap, wave_number_spacing, cand, cand_count);
+      workspace.coefficients, valid_counts, num_items, degree, workspace.companion);
+  solve_companion_roots<T>(solver, degree, workspace.companion, workspace.roots, num_items, stream);
+  root_music_axis_candidates_kernel<T>
+      <<<grid, 1, 0, stream>>>(workspace.roots, workspace.model_order, valid_counts, num_items,
+                               degree, cand_cap, wave_number_spacing, cand, cand_count);
 }
 
 // Full 2-D URA Root-MUSIC for one tick. `covariance`, `eigenvectors`,
@@ -735,71 +687,62 @@ inline void root_music_axis_roots(cuda::std::complex<T>* cov_axis,
 // per-axis and pairing scratch is operator-owned and passed explicitly.
 template <typename T>
 inline void run_root_music_2d_stage(
-    const cuda::std::complex<T>* snapshots, const unsigned char* mask,
-    int64_t num_items, int64_t ny, int64_t nz, int64_t num_snapshots,
-    int64_t fixed_num_sources, double pfa, int64_t max_sources, T ky_spacing,
-    T kz_spacing, T yax_x, T yax_y, T yax_z, T zax_x, T zax_y, T zax_z,
-    T nrm_x, T nrm_y, T nrm_z, DeviceAngleConvention<T> convention,
+    const cuda::std::complex<T>* snapshots, const unsigned char* mask, int64_t num_items,
+    int64_t ny, int64_t nz, int64_t num_snapshots, int64_t fixed_num_sources, double pfa,
+    int64_t max_sources, T ky_spacing, T kz_spacing, T yax_x, T yax_y, T yax_z, T zax_x, T zax_y,
+    T zax_z, T nrm_x, T nrm_y, T nrm_z, DeviceAngleConvention<T> convention,
     cuda::std::complex<T>* covariance, cuda::std::complex<T>* eigenvectors,
-    cuda::std::complex<T>* projector, int64_t* valid_counts,
-    int32_t* model_order, T* eigenvalues, T* aoa, T* doa_multi,
-    int32_t* source_count, const RootMUSICURAScratch<T>& scratch,
-    RootMUSICSolverState* solver_y,
-    RootMUSICSolverState* solver_z, cudaStream_t stream) {
+    cuda::std::complex<T>* projector, int64_t* valid_counts, int32_t* model_order, T* eigenvalues,
+    T* aoa, T* doa_multi, int32_t* source_count, const RootMUSICURAScratch<T>& scratch,
+    RootMUSICSolverState* solver_y, RootMUSICSolverState* solver_z, cudaStream_t stream) {
   const int64_t channels = ny * nz;
   if (num_items <= 0 || channels < 4) {
     return;
   }
   constexpr int block = 256;
   const int grid = static_cast<int>(num_items);
-  music_covariance_kernel<T><<<grid, block, 0, stream>>>(
-      snapshots, mask, num_items, channels, num_snapshots, covariance,
-      valid_counts);
+  music_covariance_kernel<T><<<grid, block, 0, stream>>>(snapshots, mask, num_items, channels,
+                                                         num_snapshots, covariance, valid_counts);
 
-  auto covariance_view = matx::make_tensor<cuda::std::complex<T>, 3>(
-      covariance, {num_items, channels, channels});
-  auto eigenvector_view = matx::make_tensor<cuda::std::complex<T>, 3>(
-      eigenvectors, {num_items, channels, channels});
-  auto eigenvalue_view =
-      matx::make_tensor<T, 2>(eigenvalues, {num_items, channels});
+  auto covariance_view =
+      matx::make_tensor<cuda::std::complex<T>, 3>(covariance, {num_items, channels, channels});
+  auto eigenvector_view =
+      matx::make_tensor<cuda::std::complex<T>, 3>(eigenvectors, {num_items, channels, channels});
+  auto eigenvalue_view = matx::make_tensor<T, 2>(eigenvalues, {num_items, channels});
   matx::cudaExecutor eig_exec{stream};
   (matx::mtie(eigenvector_view, eigenvalue_view) =
        matx::eig(covariance_view, matx::EigenMode::VECTOR))
       .run(eig_exec);
 
   if (fixed_num_sources < 0) {
-    run_source_count_device<T>(eigenvalues, valid_counts, num_items, channels,
-                               pfa, max_sources, model_order, stream);
+    run_source_count_device<T>(eigenvalues, valid_counts, num_items, channels, pfa, max_sources,
+                               model_order, stream);
   } else {
     constexpr int fill_block = 128;
-    const int fill_grid =
-        static_cast<int>((num_items + fill_block - 1) / fill_block);
+    const int fill_grid = static_cast<int>((num_items + fill_block - 1) / fill_block);
     fill_model_order_kernel<<<fill_grid, fill_block, 0, stream>>>(
         model_order, num_items, static_cast<int32_t>(fixed_num_sources));
   }
-  projector_kernel<T><<<grid, block, 0, stream>>>(
-      eigenvectors, model_order, num_items, channels, projector);
+  projector_kernel<T>
+      <<<grid, block, 0, stream>>>(eigenvectors, model_order, num_items, channels, projector);
 
-  ura_axis_covariance_kernel<T><<<grid, block, 0, stream>>>(
-      covariance, num_items, ny, nz, scratch.cov_y, scratch.cov_z);
+  ura_axis_covariance_kernel<T>
+      <<<grid, block, 0, stream>>>(covariance, num_items, ny, nz, scratch.cov_y, scratch.cov_z);
 
   const int64_t u_cap = std::min<int64_t>(ny - 1, kRootMusicPairCandCap);
   const int64_t v_cap = std::min<int64_t>(nz - 1, kRootMusicPairCandCap);
 
-  root_music_axis_roots<T>(
-      scratch.cov_y, num_items, ny, valid_counts, model_order, u_cap,
-      ky_spacing, scratch.axis_y, solver_y, scratch.u_candidates,
-      scratch.u_counts, stream);
-  root_music_axis_roots<T>(
-      scratch.cov_z, num_items, nz, valid_counts, model_order, v_cap,
-      kz_spacing, scratch.axis_z, solver_z, scratch.v_candidates,
-      scratch.v_counts, stream);
+  root_music_axis_roots<T>(scratch.cov_y, num_items, ny, valid_counts, model_order, u_cap,
+                           ky_spacing, scratch.axis_y, solver_y, scratch.u_candidates,
+                           scratch.u_counts, stream);
+  root_music_axis_roots<T>(scratch.cov_z, num_items, nz, valid_counts, model_order, v_cap,
+                           kz_spacing, scratch.axis_z, solver_z, scratch.v_candidates,
+                           scratch.v_counts, stream);
 
   root_music_pair_kernel<T><<<grid, 1, 0, stream>>>(
-      scratch.u_candidates, scratch.u_counts, scratch.v_candidates,
-      scratch.v_counts, projector, model_order, valid_counts, num_items, ny,
-      nz, u_cap, v_cap, ky_spacing, kz_spacing, yax_x, yax_y, yax_z, zax_x,
-      zax_y, zax_z, nrm_x, nrm_y, nrm_z, convention, max_sources, aoa,
+      scratch.u_candidates, scratch.u_counts, scratch.v_candidates, scratch.v_counts, projector,
+      model_order, valid_counts, num_items, ny, nz, u_cap, v_cap, ky_spacing, kz_spacing, yax_x,
+      yax_y, yax_z, zax_x, zax_y, zax_z, nrm_x, nrm_y, nrm_z, convention, max_sources, aoa,
       doa_multi, source_count);
 
   mark_music_eig_cache_live();
@@ -808,65 +751,57 @@ inline void run_root_music_2d_stage(
 
 template <typename T>
 inline void run_root_music_stage(
-    const cuda::std::complex<T>* snapshots, const unsigned char* mask,
-    int64_t num_items, int64_t num_channels, int64_t num_snapshots,
-    int64_t fixed_num_sources, double pfa, int64_t max_sources,
-    T wave_number_spacing, T axis_x, T axis_y, T axis_z, T broadside_x,
+    const cuda::std::complex<T>* snapshots, const unsigned char* mask, int64_t num_items,
+    int64_t num_channels, int64_t num_snapshots, int64_t fixed_num_sources, double pfa,
+    int64_t max_sources, T wave_number_spacing, T axis_x, T axis_y, T axis_z, T broadside_x,
     T broadside_y, T broadside_z, DeviceAngleConvention<T> convention,
     cuda::std::complex<T>* covariance, cuda::std::complex<T>* eigenvectors,
-    cuda::std::complex<T>* projector, int64_t* valid_counts,
-    int32_t* model_order, T* eigenvalues,
-    cuda::std::complex<T>* coefficients,
-    cuda::std::complex<T>* companion, cuda::std::complex<T>* roots, T* aoa,
-    T* doa_multi, int32_t* source_count, RootMUSICSolverState* solver,
-    cudaStream_t stream) {
+    cuda::std::complex<T>* projector, int64_t* valid_counts, int32_t* model_order, T* eigenvalues,
+    cuda::std::complex<T>* coefficients, cuda::std::complex<T>* companion,
+    cuda::std::complex<T>* roots, T* aoa, T* doa_multi, int32_t* source_count,
+    RootMUSICSolverState* solver, cudaStream_t stream) {
   if (num_items <= 0 || num_channels < 2) {
     return;
   }
   constexpr int block = 256;
   const int grid = static_cast<int>(num_items);
-  music_covariance_kernel<T><<<grid, block, 0, stream>>>(
-      snapshots, mask, num_items, num_channels, num_snapshots, covariance,
-      valid_counts);
+  music_covariance_kernel<T><<<grid, block, 0, stream>>>(snapshots, mask, num_items, num_channels,
+                                                         num_snapshots, covariance, valid_counts);
 
   auto covariance_view = matx::make_tensor<cuda::std::complex<T>, 3>(
       covariance, {num_items, num_channels, num_channels});
   auto eigenvector_view = matx::make_tensor<cuda::std::complex<T>, 3>(
       eigenvectors, {num_items, num_channels, num_channels});
-  auto eigenvalue_view =
-      matx::make_tensor<T, 2>(eigenvalues, {num_items, num_channels});
+  auto eigenvalue_view = matx::make_tensor<T, 2>(eigenvalues, {num_items, num_channels});
   matx::cudaExecutor eig_exec{stream};
   (matx::mtie(eigenvector_view, eigenvalue_view) =
        matx::eig(covariance_view, matx::EigenMode::VECTOR))
       .run(eig_exec);
 
   if (fixed_num_sources < 0) {
-    run_source_count_device<T>(eigenvalues, valid_counts, num_items,
-                               num_channels, pfa, max_sources, model_order,
-                               stream);
+    run_source_count_device<T>(eigenvalues, valid_counts, num_items, num_channels, pfa, max_sources,
+                               model_order, stream);
   } else {
     constexpr int fill_block = 128;
-    const int fill_grid =
-        static_cast<int>((num_items + fill_block - 1) / fill_block);
+    const int fill_grid = static_cast<int>((num_items + fill_block - 1) / fill_block);
     fill_model_order_kernel<<<fill_grid, fill_block, 0, stream>>>(
         model_order, num_items, static_cast<int32_t>(fixed_num_sources));
   }
-  projector_kernel<T><<<grid, block, 0, stream>>>(
-      eigenvectors, model_order, num_items, num_channels, projector);
+  projector_kernel<T>
+      <<<grid, block, 0, stream>>>(eigenvectors, model_order, num_items, num_channels, projector);
 
   const int64_t degree = 2 * (num_channels - 1);
-  root_music_coefficients_kernel<T><<<grid, block, 0, stream>>>(
-      projector, num_items, num_channels, coefficients);
-  root_music_companion_kernel<T><<<grid, block, 0, stream>>>(
-      coefficients, valid_counts, num_items, degree, companion);
+  root_music_coefficients_kernel<T>
+      <<<grid, block, 0, stream>>>(projector, num_items, num_channels, coefficients);
+  root_music_companion_kernel<T>
+      <<<grid, block, 0, stream>>>(coefficients, valid_counts, num_items, degree, companion);
 
-  solve_companion_roots<T>(solver, degree, companion, roots, num_items,
-                           stream);
+  solve_companion_roots<T>(solver, degree, companion, roots, num_items, stream);
 
-  root_music_select_kernel<T><<<grid, 1, 0, stream>>>(
-      roots, model_order, valid_counts, num_items, degree, max_sources,
-      wave_number_spacing, axis_x, axis_y, axis_z, broadside_x, broadside_y,
-      broadside_z, convention, aoa, doa_multi, source_count);
+  root_music_select_kernel<T>
+      <<<grid, 1, 0, stream>>>(roots, model_order, valid_counts, num_items, degree, max_sources,
+                               wave_number_spacing, axis_x, axis_y, axis_z, broadside_x,
+                               broadside_y, broadside_z, convention, aoa, doa_multi, source_count);
 
   mark_music_eig_cache_live();
   clear_music_matx_caches();

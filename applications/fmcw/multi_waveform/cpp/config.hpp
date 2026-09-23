@@ -37,8 +37,8 @@ struct Config : mimo::TdmConfig {
 };
 
 // Number of source activations Holoviz must retain the selected profile.
-inline std::size_t maximum_cyclic_profile_gap(
-    const std::vector<std::size_t>& sequence, std::size_t profile_index) {
+inline std::size_t maximum_cyclic_profile_gap(const std::vector<std::size_t>& sequence,
+                                              std::size_t profile_index) {
   std::vector<std::size_t> positions;
   for (std::size_t i = 0; i < sequence.size(); ++i) {
     if (sequence[i] == profile_index) {
@@ -46,11 +46,9 @@ inline std::size_t maximum_cyclic_profile_gap(
     }
   }
   if (positions.empty()) {
-    throw std::runtime_error(
-        "app.visualization.profile must appear in app.profile_sequence");
+    throw std::runtime_error("app.visualization.profile must appear in app.profile_sequence");
   }
-  std::size_t max_gap =
-      positions.front() + sequence.size() - positions.back();
+  std::size_t max_gap = positions.front() + sequence.size() - positions.back();
   for (std::size_t i = 1; i < positions.size(); ++i) {
     max_gap = std::max(max_gap, positions[i] - positions[i - 1U]);
   }
@@ -63,8 +61,7 @@ inline double require_scalar(const YAML::Node& node, const char* field) {
   }
   const double value = node[field].as<double>();
   if (!std::isfinite(value) || value <= 0.0) {
-    throw std::runtime_error(std::string("app.profiles[].") + field +
-                             " must be finite and > 0");
+    throw std::runtime_error(std::string("app.profiles[].") + field + " must be finite and > 0");
   }
   return value;
 }
@@ -93,26 +90,20 @@ inline Config load_config(const std::filesystem::path& path) {
     throw std::runtime_error("app.profile_sequence must be a non-empty sequence");
   }
   if (app["waveform"] || app["cube"] ||
-      (app["tdm"] &&
-       app["tdm"]["physical_chirp_repetition_interval"])) {
+      (app["tdm"] && app["tdm"]["physical_chirp_repetition_interval"])) {
     throw std::runtime_error(
         "multi-profile waveform, cube, and physical PRI belong only in app.profiles");
   }
   // Decode source coordination bounds independently of DSP parameters.
   const std::size_t max_frames_in_flight =
-      app["max_frames_in_flight"]
-          ? app["max_frames_in_flight"].as<std::size_t>()
-          : 4U;
+      app["max_frames_in_flight"] ? app["max_frames_in_flight"].as<std::size_t>() : 4U;
   if (max_frames_in_flight == 0U) {
     throw std::runtime_error("app.max_frames_in_flight must be > 0");
   }
-  const double rx_poll_period =
-      app["rx_poll_period"] ? app["rx_poll_period"].as<double>() : 0.001;
+  const double rx_poll_period = app["rx_poll_period"] ? app["rx_poll_period"].as<double>() : 0.001;
   mimo::require_finite_positive("app.rx_poll_period", rx_poll_period);
   const int simulated_receive_polls =
-      app["simulated_receive_polls"]
-          ? app["simulated_receive_polls"].as<int>()
-          : 2;
+      app["simulated_receive_polls"] ? app["simulated_receive_polls"].as<int>() : 2;
   if (simulated_receive_polls < 0) {
     throw std::runtime_error("app.simulated_receive_polls must be >= 0");
   }
@@ -137,8 +128,7 @@ inline Config load_config(const std::filesystem::path& path) {
     const double bandwidth = require_scalar(authored, "bandwidth");
     const double duration = require_scalar(authored, "chirp_duration");
     const double sample_rate = require_scalar(authored, "sample_rate");
-    const double physical_pri =
-        require_scalar(authored, "physical_chirp_repetition_interval");
+    const double physical_pri = require_scalar(authored, "physical_chirp_repetition_interval");
     const int64_t chirps = require_integer(authored, "chirps_per_tx");
     const int64_t samples = require_integer(authored, "samples_per_chirp");
     if (physical_pri < duration) {
@@ -146,8 +136,7 @@ inline Config load_config(const std::filesystem::path& path) {
     }
     const double expected_samples = sample_rate * duration;
     if (std::abs(expected_samples - static_cast<double>(samples)) > 1e-9) {
-      throw std::runtime_error(
-          "profile samples_per_chirp must equal sample_rate * chirp_duration");
+      throw std::runtime_error("profile samples_per_chirp must equal sample_rate * chirp_duration");
     }
     if (carrier == 0.0) {
       carrier = fc;
@@ -177,8 +166,7 @@ inline Config load_config(const std::filesystem::path& path) {
     decoded_profiles.push_back(std::move(profile));
     max_chirps = std::max(max_chirps, chirps);
     max_samples = std::max(max_samples, samples);
-    longest_cpi = std::max(
-        longest_cpi, physical_pri * static_cast<double>(num_tx * chirps));
+    longest_cpi = std::max(longest_cpi, physical_pri * static_cast<double>(num_tx * chirps));
   }
   // Convert the authored name schedule to stable profile indices.
   for (const YAML::Node& entry : sequence) {
@@ -194,29 +182,25 @@ inline Config load_config(const std::filesystem::path& path) {
   // structural baseline; per-frame waveform inputs replace it below.
   mimo::AppParams baseline;
   baseline.waveform = decoded_profiles.front().waveform;
-  baseline.cube = mimo::CubeConfig{
-      .num_chirps = decoded_profiles.front().chirps_per_tx,
-      .samples_per_chirp = decoded_profiles.front().samples_per_chirp};
+  baseline.cube = mimo::CubeConfig{.num_chirps = decoded_profiles.front().chirps_per_tx,
+                                   .samples_per_chirp = decoded_profiles.front().samples_per_chirp};
   baseline.tdm = mimo::TdmSimulationConfig{
       .physical_chirp_repetition_interval =
-          decoded_profiles.front().physical_waveform
-              .chirp_repetition_interval,
+          decoded_profiles.front().physical_waveform.chirp_repetition_interval,
       .tx_order = {}};
   Config result{mimo::load_tdm_config(path, std::move(baseline))};
   // Resolve fixed dashboard selection and retention from the full cycle.
   if (result.visualization.profile.empty()) {
-    result.visualization.profile =
-        decoded_profiles[decoded_sequence.front()].name;
+    result.visualization.profile = decoded_profiles[decoded_sequence.front()].name;
   }
   const auto selected = by_name.find(result.visualization.profile);
   if (selected == by_name.end()) {
-    throw std::runtime_error(
-        "app.visualization.profile references unknown profile: " +
-        result.visualization.profile);
+    throw std::runtime_error("app.visualization.profile references unknown profile: " +
+                             result.visualization.profile);
   }
   result.visualization_profile_index = selected->second;
-  result.visualization_profile_max_gap_frames = maximum_cyclic_profile_gap(
-      decoded_sequence, result.visualization_profile_index);
+  result.visualization_profile_max_gap_frames =
+      maximum_cyclic_profile_gap(decoded_sequence, result.visualization_profile_index);
 
   result.profiles = std::move(decoded_profiles);
   result.profile_sequence = std::move(decoded_sequence);
@@ -224,8 +208,7 @@ inline Config load_config(const std::filesystem::path& path) {
   result.rx_poll_period = rx_poll_period;
   result.simulated_receive_polls = simulated_receive_polls;
   if (result.frame_period <= longest_cpi) {
-    throw std::runtime_error(
-        "app.run.frame_period must exceed the longest complete TDM CPI");
+    throw std::runtime_error("app.run.frame_period must exceed the longest complete TDM CPI");
   }
 
   // Clear static waveform defaults so the Exact TX-applied descriptor is
@@ -244,8 +227,7 @@ inline Config load_config(const std::filesystem::path& path) {
   compensation_params.waveform = FMCWWaveformDescriptor{};
   result.compensation_params = holoscan::detail::PreparedParamsAccess::make(
       std::move(compensation_params),
-      holoscan::detail::PreparedParamsAccess::evidence(
-          result.compensation_params));
+      holoscan::detail::PreparedParamsAccess::evidence(result.compensation_params));
 
   // Tensor pools must admit the largest shape from any scheduled profile.
   result.extents.max_chirps = max_chirps;

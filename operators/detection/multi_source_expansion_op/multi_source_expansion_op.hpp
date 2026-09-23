@@ -29,8 +29,7 @@ class MultiSourceExpansionOp : public holoscan::Operator<> {
   explicit MultiSourceExpansionOp(const MaxTensorExtents& extents);
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> detection_idx{"detection_idx"};
   Input<Tensor> baseline_aoa{"baseline_aoa"};

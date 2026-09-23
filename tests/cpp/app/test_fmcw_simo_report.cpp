@@ -43,7 +43,7 @@ struct ReportFrames {
 class ReportSourceOp final : public holoscan::Operator<> {
  public:
   ReportSourceOp(ReportFrames frames, bool clustered)
-      : frames_(std::move(frames)), clustered_(clustered) {}
+  : frames_(std::move(frames)), clustered_(clustered) {}
 
   void setup(holoscan::OperatorSpec& spec) override {
     constexpr holoscan::TensorRepresentation kDevice{
@@ -51,8 +51,7 @@ class ReportSourceOp final : public holoscan::Operator<> {
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
-    const auto output = holoscan::radar::pooled_tensor_output(
-        kDevice, 2U, 4096U);
+    const auto output = holoscan::radar::pooled_tensor_output(kDevice, 2U, 4096U);
     spec.output(points).produces_tensor(output);
     spec.output(detection_idx).produces_tensor(output);
     if (clustered_) {
@@ -65,8 +64,7 @@ class ReportSourceOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
-    result.trigger(holoscan::OnClock{
-        .period = std::chrono::milliseconds{5}});
+    result.trigger(holoscan::OnClock{.period = std::chrono::milliseconds{5}});
     return result;
   }
 
@@ -77,34 +75,32 @@ class ReportSourceOp final : public holoscan::Operator<> {
     }
     emitted_ = true;
     if (clustered_) {
-      auto result = testing::detail::emit_bank_frame(
-          labels, context, frames_.labels, "ReportSourceOp");
+      auto result =
+          testing::detail::emit_bank_frame(labels, context, frames_.labels, "ReportSourceOp");
       if (!result) {
         return result;
       }
-      result = testing::detail::emit_bank_frame(
-          sizes, context, frames_.sizes, "ReportSourceOp");
+      result = testing::detail::emit_bank_frame(sizes, context, frames_.sizes, "ReportSourceOp");
       if (!result) {
         return result;
       }
     }
-    auto result = testing::detail::emit_bank_frame(
-        range_bins, context, frames_.range_bins, "ReportSourceOp");
+    auto result =
+        testing::detail::emit_bank_frame(range_bins, context, frames_.range_bins, "ReportSourceOp");
     if (!result) {
       return result;
     }
-    result = testing::detail::emit_bank_frame(
-        velocity_bins, context, frames_.velocity_bins, "ReportSourceOp");
+    result = testing::detail::emit_bank_frame(velocity_bins, context, frames_.velocity_bins,
+                                              "ReportSourceOp");
     if (!result) {
       return result;
     }
-    result = testing::detail::emit_bank_frame(
-        detection_idx, context, frames_.detection_idx, "ReportSourceOp");
+    result = testing::detail::emit_bank_frame(detection_idx, context, frames_.detection_idx,
+                                              "ReportSourceOp");
     if (!result) {
       return result;
     }
-    return testing::detail::emit_bank_frame(
-        points, context, frames_.points, "ReportSourceOp");
+    return testing::detail::emit_bank_frame(points, context, frames_.points, "ReportSourceOp");
   }
 
   holoscan::Output<holoscan::Tensor> points{"points"};
@@ -128,16 +124,12 @@ std::vector<float> sequence(int64_t count) {
   return result;
 }
 
-std::vector<std::string> run_report(
-    ReportFrames frames, app::DetectionReportOp::Config config) {
-  const bool clustered =
-      config.mode == app::DetectionReportMode::kClusters;
+std::vector<std::string> run_report(ReportFrames frames, app::DetectionReportOp::Config config) {
+  const bool clustered = config.mode == app::DetectionReportMode::kClusters;
   app::AppFrameBank::reset(1);
   holoscan::Graph graph{"detection-report-test"};
-  auto source =
-      graph.op<ReportSourceOp>("source", std::move(frames), clustered);
-  auto report = graph.op<app::DetectionReportOp>(
-      "report", std::move(config));
+  auto source = graph.op<ReportSourceOp>("source", std::move(frames), clustered);
+  auto report = graph.op<app::DetectionReportOp>("report", std::move(config));
   const holoscan::ConnectionOptions queue{.queue_depth = 2U};
   graph.add_flow(source->points, report->points, queue);
   graph.add_flow(source->detection_idx, report->detection_idx, queue);
@@ -151,36 +143,30 @@ std::vector<std::string> run_report(
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
   holoscan::CompileOptions options;
-  for (const char* port :
-       {"points", "detection_idx", "range_bins", "velocity_bins"}) {
-    options.deployment.bind_tensor_output_device(
-        holoscan::TensorOutputDevicePlacement{
-            .operator_path = "source",
-            .output_port = port,
-            .device = holoscan::DeviceId{0},
-        });
+  for (const char* port : {"points", "detection_idx", "range_bins", "velocity_bins"}) {
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = "source",
+        .output_port = port,
+        .device = holoscan::DeviceId{0},
+    });
   }
   if (clustered) {
     for (const char* port : {"labels", "sizes"}) {
-      options.deployment.bind_tensor_output_device(
-          holoscan::TensorOutputDevicePlacement{
-              .operator_path = "source",
-              .output_port = port,
-              .device = holoscan::DeviceId{0},
-          });
+      options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+          .operator_path = "source",
+          .output_port = port,
+          .device = holoscan::DeviceId{0},
+      });
     }
   }
-  const holoscan::ExecutionPlan plan =
-      holoscan::compile(graph, std::move(options));
+  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
   if (!plan.ok()) {
     return {std::string(plan.json())};
   }
 
   holoscan::RunSession session = holoscan::run_async(plan);
-  const auto deadline =
-      std::chrono::steady_clock::now() + testing::detail::kHarnessDeadline;
-  while (session.diagnostics().empty() &&
-         std::chrono::steady_clock::now() < deadline) {
+  const auto deadline = std::chrono::steady_clock::now() + testing::detail::kHarnessDeadline;
+  while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
     {
       const std::lock_guard lock(app::AppFrameBank::mutex);
       if (app::AppFrameBank::captured >= 1) {
@@ -198,29 +184,24 @@ std::vector<std::string> run_report(
   return diagnostics;
 }
 
-ReportFrames raw_frames(const std::vector<int64_t>& indices,
-                        int64_t rows, int64_t idx_cols) {
+ReportFrames raw_frames(const std::vector<int64_t>& indices, int64_t rows, int64_t idx_cols) {
   std::vector<float> points;
   points.reserve(static_cast<size_t>(rows * 5));
   for (int64_t row = 0; row < rows; ++row) {
-    points.insert(points.end(),
-                  {5.0F + static_cast<float>(row), 1.0F, 0.1F, 0.2F, 3.0F});
+    points.insert(points.end(), {5.0F + static_cast<float>(row), 1.0F, 0.1F, 0.2F, 3.0F});
   }
-  return ReportFrames{
-      testing::to_device_tensor(points, {rows, 5}, kFloat32),
-      testing::to_device_tensor(indices, {rows, idx_cols}, kInt64),
-      nullptr,
-      nullptr,
-      testing::to_device_tensor(sequence(64), {64}, kFloat32),
-      testing::to_device_tensor(sequence(64), {64}, kFloat32)};
+  return ReportFrames{testing::to_device_tensor(points, {rows, 5}, kFloat32),
+                      testing::to_device_tensor(indices, {rows, idx_cols}, kInt64),
+                      nullptr,
+                      nullptr,
+                      testing::to_device_tensor(sequence(64), {64}, kFloat32),
+                      testing::to_device_tensor(sequence(64), {64}, kFloat32)};
 }
 
 ReportFrames single_cluster_frames(std::vector<int64_t> representative) {
   return ReportFrames{
-      testing::to_device_tensor(
-          std::vector<float>{
-              5.0F, 1.0F, 0.10F, 0.00F, 3.0F, 20.0F, 10.0F},
-          {1, 7}, kFloat32),
+      testing::to_device_tensor(std::vector<float>{5.0F, 1.0F, 0.10F, 0.00F, 3.0F, 20.0F, 10.0F},
+                                {1, 7}, kFloat32),
       testing::to_device_tensor(representative, {1, 2}, kInt64),
       testing::to_device_tensor(std::vector<int64_t>{0}, {1}, kInt64),
       testing::to_device_tensor(std::vector<int64_t>{1}, {1}, kInt64),
@@ -228,100 +209,82 @@ ReportFrames single_cluster_frames(std::vector<int64_t> representative) {
       testing::to_device_tensor(sequence(64), {64}, kFloat32)};
 }
 
-void expect_report_ok(ReportFrames frames,
-                      app::DetectionReportOp::Config config) {
+void expect_report_ok(ReportFrames frames, app::DetectionReportOp::Config config) {
   const auto diagnostics = run_report(std::move(frames), std::move(config));
-  EXPECT_TRUE(diagnostics.empty())
-      << (diagnostics.empty() ? "" : diagnostics.front());
+  EXPECT_TRUE(diagnostics.empty()) << (diagnostics.empty() ? "" : diagnostics.front());
 }
 
 TEST(DetectionReportOpTest, ReportsRawTwoColumnDetections) {
-  expect_report_ok(raw_frames({1, 2, 3, 4}, 2, 2),
-                   app::DetectionReportOp::Config{});
+  expect_report_ok(raw_frames({1, 2, 3, 4}, 2, 2), app::DetectionReportOp::Config{});
 }
 
 TEST(DetectionReportOpTest, ReportsRawFourColumnDetections) {
-  expect_report_ok(raw_frames({0, 1, 2, 3, 1, 0, 4, 5}, 2, 4),
-                   app::DetectionReportOp::Config{});
+  expect_report_ok(raw_frames({0, 1, 2, 3, 1, 0, 4, 5}, 2, 4), app::DetectionReportOp::Config{});
 }
 
 TEST(DetectionReportOpTest, ReportsEmptyRawDetectionSet) {
-  expect_report_ok(raw_frames({}, 0, 4),
-                   app::DetectionReportOp::Config{});
+  expect_report_ok(raw_frames({}, 0, 4), app::DetectionReportOp::Config{});
 }
 
 TEST(DetectionReportOpTest, ReportsClustersWithRepresentativeLookup) {
-  const std::vector<float> points{
-      5.0F, 1.0F, 0.10F, 0.00F, 3.0F, 20.0F, 10.0F,
-      5.2F, 1.2F, 0.15F, 0.01F, 4.0F, 20.0F, 11.0F,
-      9.0F, 3.0F, 0.40F, 0.02F, 5.0F, 40.0F, 30.0F};
+  const std::vector<float> points{5.0F, 1.0F, 0.10F, 0.00F, 3.0F, 20.0F, 10.0F,
+                                  5.2F, 1.2F, 0.15F, 0.01F, 4.0F, 20.0F, 11.0F,
+                                  9.0F, 3.0F, 0.40F, 0.02F, 5.0F, 40.0F, 30.0F};
   ReportFrames frames{
       testing::to_device_tensor(points, {3, 7}, kFloat32),
-      testing::to_device_tensor(
-          std::vector<int64_t>{11, 20, 30, 40}, {2, 2}, kInt64),
-      testing::to_device_tensor(
-          std::vector<int64_t>{0, 0, 1}, {3}, kInt64),
+      testing::to_device_tensor(std::vector<int64_t>{11, 20, 30, 40}, {2, 2}, kInt64),
+      testing::to_device_tensor(std::vector<int64_t>{0, 0, 1}, {3}, kInt64),
       testing::to_device_tensor(std::vector<int64_t>{2, 1}, {2}, kInt64),
       testing::to_device_tensor(sequence(64), {64}, kFloat32),
       testing::to_device_tensor(sequence(64), {64}, kFloat32)};
-  expect_report_ok(
-      std::move(frames),
-      app::DetectionReportOp::Config{
-          .mode = app::DetectionReportMode::kClusters,
-          .point_index_columns = {6, 5}});
+  expect_report_ok(std::move(frames),
+                   app::DetectionReportOp::Config{.mode = app::DetectionReportMode::kClusters,
+                                                  .point_index_columns = {6, 5}});
 }
 
 TEST(DetectionReportOpTest, ReportsAllNoiseAsNoClusters) {
   ReportFrames frames{
-      testing::to_device_tensor(
-          std::vector<float>{
-              5.0F, 1.0F, 0.10F, 0.00F, 3.0F, 20.0F, 10.0F},
-          {1, 7}, kFloat32),
+      testing::to_device_tensor(std::vector<float>{5.0F, 1.0F, 0.10F, 0.00F, 3.0F, 20.0F, 10.0F},
+                                {1, 7}, kFloat32),
       testing::to_device_tensor(std::vector<int64_t>{}, {0, 2}, kInt64),
       testing::to_device_tensor(std::vector<int64_t>{-1}, {1}, kInt64),
       testing::to_device_tensor(std::vector<int64_t>{}, {0}, kInt64),
       testing::to_device_tensor(sequence(64), {64}, kFloat32),
       testing::to_device_tensor(sequence(64), {64}, kFloat32)};
-  expect_report_ok(
-      std::move(frames),
-      app::DetectionReportOp::Config{
-          .mode = app::DetectionReportMode::kClusters,
-          .point_index_columns = {6, 5}});
+  expect_report_ok(std::move(frames),
+                   app::DetectionReportOp::Config{.mode = app::DetectionReportMode::kClusters,
+                                                  .point_index_columns = {6, 5}});
 }
 
 TEST(DetectionReportOpTest, RejectsIncompletePointIndexMapping) {
-  const auto diagnostics = run_report(
-      single_cluster_frames({10, 20}),
-      app::DetectionReportOp::Config{
-          .mode = app::DetectionReportMode::kClusters,
-          .point_index_columns = {6}});
+  const auto diagnostics =
+      run_report(single_cluster_frames({10, 20}),
+                 app::DetectionReportOp::Config{.mode = app::DetectionReportMode::kClusters,
+                                                .point_index_columns = {6}});
   EXPECT_FALSE(diagnostics.empty());
 }
 
 TEST(DetectionReportOpTest, RejectsDuplicatePointIndexMapping) {
-  const auto diagnostics = run_report(
-      single_cluster_frames({10, 20}),
-      app::DetectionReportOp::Config{
-          .mode = app::DetectionReportMode::kClusters,
-          .point_index_columns = {6, 6}});
+  const auto diagnostics =
+      run_report(single_cluster_frames({10, 20}),
+                 app::DetectionReportOp::Config{.mode = app::DetectionReportMode::kClusters,
+                                                .point_index_columns = {6, 6}});
   EXPECT_FALSE(diagnostics.empty());
 }
 
 TEST(DetectionReportOpTest, RejectsOutOfRangePointIndexMapping) {
-  const auto diagnostics = run_report(
-      single_cluster_frames({10, 20}),
-      app::DetectionReportOp::Config{
-          .mode = app::DetectionReportMode::kClusters,
-          .point_index_columns = {6, 7}});
+  const auto diagnostics =
+      run_report(single_cluster_frames({10, 20}),
+                 app::DetectionReportOp::Config{.mode = app::DetectionReportMode::kClusters,
+                                                .point_index_columns = {6, 7}});
   EXPECT_FALSE(diagnostics.empty());
 }
 
 TEST(DetectionReportOpTest, RejectsUnmatchedRepresentativeIndex) {
-  const auto diagnostics = run_report(
-      single_cluster_frames({11, 20}),
-      app::DetectionReportOp::Config{
-          .mode = app::DetectionReportMode::kClusters,
-          .point_index_columns = {6, 5}});
+  const auto diagnostics =
+      run_report(single_cluster_frames({11, 20}),
+                 app::DetectionReportOp::Config{.mode = app::DetectionReportMode::kClusters,
+                                                .point_index_columns = {6, 5}});
   EXPECT_FALSE(diagnostics.empty());
 }
 

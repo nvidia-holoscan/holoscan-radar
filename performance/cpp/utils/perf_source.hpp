@@ -28,9 +28,7 @@ class PerfDataSourceOp : public holoscan::Operator {
   HOLOSCAN_OPERATOR_FORWARD_ARGS(PerfDataSourceOp)
   PerfDataSourceOp() = default;
 
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.output<holoscan::TensorMap>("rd_maps");
-  }
+  void setup(holoscan::OperatorSpec& spec) override { spec.output<holoscan::TensorMap>("rd_maps"); }
 
   void compute(holoscan::InputContext&, holoscan::OutputContext& op_output,
                holoscan::ExecutionContext&) override {
@@ -117,9 +115,7 @@ class PerfOverrideSourceOp : public holoscan::Operator {
   HOLOSCAN_OPERATOR_FORWARD_ARGS(PerfOverrideSourceOp)
   PerfOverrideSourceOp() = default;
 
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.output<V>("output");
-  }
+  void setup(holoscan::OperatorSpec& spec) override { spec.output<V>("output"); }
 
   void compute(holoscan::InputContext&, holoscan::OutputContext& op_output,
                holoscan::ExecutionContext&) override {

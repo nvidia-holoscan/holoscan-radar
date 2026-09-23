@@ -60,18 +60,16 @@ struct ClutterFilterParams {
 };
 
 HOLOSCAN_PARAM_SCHEMA(
-    ClutterFilterParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.ClutterFilterParams", 2),
+    ClutterFilterParams, holoscan::param_schema("com.nvidia.holoscan.radar.ClutterFilterParams", 2),
     holoscan::field<&ClutterFilterParams::method>("method").description(
         "Slow-time clutter suppression {none, mean_subtraction, single_delay, "
         "double_delay}: none is pass-through; mean_subtraction nulls "
         "zero-Doppler with no chirp loss; the delay cancellers are 1st/2nd-"
         "order MTI high-pass filters and drop 1-2 chirps."),
     holoscan::field<&ClutterFilterParams::doppler_window>("doppler_window")
-        .description(
-            "WindowSpec weighting the slow-time mean for mean_subtraction. "
-            "Default none uses a uniform mean. Ignored by none and the delay "
-            "cancellers."));
+        .description("WindowSpec weighting the slow-time mean for mean_subtraction. "
+                     "Default none uses a uniform mean. Ignored by none and the delay "
+                     "cancellers."));
 
 static_assert(holoscan::param_schema_availability<ClutterFilterParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -90,8 +88,7 @@ class ClutterFilterOp : public holoscan::Operator<ClutterFilterParams> {
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> range_profiles{"range_profiles"};
   // HSDK 5 requires unique port names within an operator (inputs and

@@ -55,8 +55,7 @@ expected<T, Error> resolve_live_override(Input<T>& port, const T& seed) {
 // wire schema rather than the logical type. The converter runs only on a
 // matched sample, so generated wire storage never reaches operator state.
 template <typename Wire, typename Converted, typename Converter>
-expected<Converted, Error> resolve_live_override_via(Input<Wire>& port,
-                                                     const Converted& seed,
+expected<Converted, Error> resolve_live_override_via(Input<Wire>& port, const Converted& seed,
                                                      Converter&& converter) {
   HOLOSCAN_TRY(auto maybe, receive_optional_value(port));
   if (!maybe.has_value()) {

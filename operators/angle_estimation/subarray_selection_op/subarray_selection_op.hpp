@@ -65,29 +65,22 @@ struct SubarraySelectionParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     SubarraySelectionParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.SubarraySelectionParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.SubarraySelectionParams", 1),
     holoscan::field<&SubarraySelectionParams::array_geometry>("array_geometry")
-        .description(
-            "Holey virtual-array element positions and wavelength; "
-            "num_elements must match snapshot channels"),
+        .description("Holey virtual-array element positions and wavelength; "
+                     "num_elements must match snapshot channels"),
     holoscan::field<&SubarraySelectionParams::subarray>("subarray")
-        .description(
-            "Explicit channel indices (empty = auto largest filled "
-            "ULA/URA)"),
-    holoscan::field<&SubarraySelectionParams::min_subarray_size>(
-        "min_subarray_size")
-        .description(
-            "Auto-selection errors below this many channels"));
+        .description("Explicit channel indices (empty = auto largest filled "
+                     "ULA/URA)"),
+    holoscan::field<&SubarraySelectionParams::min_subarray_size>("min_subarray_size")
+        .description("Auto-selection errors below this many channels"));
 
-static_assert(
-    holoscan::param_schema_availability<SubarraySelectionParams>() ==
-        holoscan::ParamSchemaAvailability::kDeclared,
-    "HOLOSCAN_PARAM_SCHEMA must be in SubarraySelectionParams's namespace");
+static_assert(holoscan::param_schema_availability<SubarraySelectionParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in SubarraySelectionParams's namespace");
 
 template <typename T>
-class SubarraySelectionOp
-    : public holoscan::Operator<SubarraySelectionParams> {
+class SubarraySelectionOp : public holoscan::Operator<SubarraySelectionParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "SubarraySelectionOp supports float and double precision");
 
@@ -96,8 +89,7 @@ class SubarraySelectionOp
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> snapshot{"snapshot"};
   // Optional; unconnected graphs omit it from the temporal contract.

@@ -37,21 +37,20 @@ struct DetectionIdxLayout {
   int64_t n_preserved{0};
 };
 
-inline DetectionIdxLayout parse_detection_idx_layout(
-    const holoscan::Tensor& tensor, const char* port_name) {
+inline DetectionIdxLayout parse_detection_idx_layout(const holoscan::Tensor& tensor,
+                                                     const char* port_name) {
   const auto& shape = tensor.shape();
   if (shape.size() != 2 || shape[1] < 2) {
-    throw std::invalid_argument(
-        std::string("FeatureAssemblyOp: ") + port_name +
-        " must have shape (num_points, 2 [+ n_batch])");
+    throw std::invalid_argument(std::string("FeatureAssemblyOp: ") + port_name +
+                                " must have shape (num_points, 2 [+ n_batch])");
   }
   DetectionIdxLayout layout;
   layout.num_points = shape[0];
   layout.idx_cols = shape[1];
   layout.n_preserved = layout.idx_cols - 2;
   if (layout.num_points < 0) {
-    throw std::invalid_argument(std::string("FeatureAssemblyOp: ") +
-                                port_name + " row count must be >= 0");
+    throw std::invalid_argument(std::string("FeatureAssemblyOp: ") + port_name +
+                                " row count must be >= 0");
   }
   return layout;
 }
@@ -72,12 +71,10 @@ constexpr int kErrVelocitySource = 8;
 // static: header is included from the op .cu and (optionally) stage tests;
 // each TU gets a private kernel copy to avoid ODR link errors.
 static __global__ void score_plane_offsets_kernel(
-    const int64_t* __restrict__ detection_idx, int64_t num_points,
-    int64_t idx_cols, int64_t n_preserved,
-    const int64_t* __restrict__ leading_dims, int64_t plane_elems,
+    const int64_t* __restrict__ detection_idx, int64_t num_points, int64_t idx_cols,
+    int64_t n_preserved, const int64_t* __restrict__ leading_dims, int64_t plane_elems,
     int64_t* __restrict__ offsets, int* __restrict__ error_flag) {
-  const int64_t row = static_cast<int64_t>(blockIdx.x) * blockDim.x +
-                      threadIdx.x;
+  const int64_t row = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (row >= num_points) {
     return;
   }
@@ -95,21 +92,18 @@ static __global__ void score_plane_offsets_kernel(
   offsets[row] = linear * plane_elems;
 }
 
-inline void launch_score_plane_offsets(const int64_t* detection_idx,
-                                       int64_t num_points, int64_t idx_cols,
-                                       int64_t n_preserved,
-                                       const int64_t* leading_dims,
-                                       int64_t plane_elems, int64_t* offsets,
-                                       int* error_flag, cudaStream_t stream) {
+inline void launch_score_plane_offsets(const int64_t* detection_idx, int64_t num_points,
+                                       int64_t idx_cols, int64_t n_preserved,
+                                       const int64_t* leading_dims, int64_t plane_elems,
+                                       int64_t* offsets, int* error_flag, cudaStream_t stream) {
   if (num_points <= 0 || n_preserved <= 0) {
     return;
   }
   const int block = 256;
-  const int grid =
-      static_cast<int>((num_points + block - 1) / static_cast<int64_t>(block));
-  score_plane_offsets_kernel<<<grid, block, 0, stream>>>(
-      detection_idx, num_points, idx_cols, n_preserved, leading_dims,
-      plane_elems, offsets, error_flag);
+  const int grid = static_cast<int>((num_points + block - 1) / static_cast<int64_t>(block));
+  score_plane_offsets_kernel<<<grid, block, 0, stream>>>(detection_idx, num_points, idx_cols,
+                                                         n_preserved, leading_dims, plane_elems,
+                                                         offsets, error_flag);
 }
 
 // Assemble `points[row, f]` from detection_idx and optional sources.
@@ -120,20 +114,15 @@ inline void launch_score_plane_offsets(const int64_t* detection_idx,
 // features emit their detection_idx coordinates directly.
 template <typename T>
 static __global__ void assemble_features_kernel(
-    const int64_t* __restrict__ detection_idx, int64_t num_points,
-    int64_t idx_cols, int64_t n_preserved, const T* __restrict__ range_bins,
-    int64_t num_range, bool have_range_bins,
-    const T* __restrict__ velocity_bins, int64_t num_doppler,
-    bool have_velocity_bins, const T* __restrict__ score_map,
-    int64_t num_score_doppler, int64_t num_score_range,
-    const int64_t* __restrict__ score_plane_offsets, bool have_score,
-    const T* __restrict__ aoa, bool have_aoa,
-    const T* __restrict__ az_grid, int64_t num_az,
-    const T* __restrict__ el_grid, int64_t num_el,
-    const int* __restrict__ feature_ids, int64_t num_features,
+    const int64_t* __restrict__ detection_idx, int64_t num_points, int64_t idx_cols,
+    int64_t n_preserved, const T* __restrict__ range_bins, int64_t num_range, bool have_range_bins,
+    const T* __restrict__ velocity_bins, int64_t num_doppler, bool have_velocity_bins,
+    const T* __restrict__ score_map, int64_t num_score_doppler, int64_t num_score_range,
+    const int64_t* __restrict__ score_plane_offsets, bool have_score, const T* __restrict__ aoa,
+    bool have_aoa, const T* __restrict__ az_grid, int64_t num_az, const T* __restrict__ el_grid,
+    int64_t num_el, const int* __restrict__ feature_ids, int64_t num_features,
     T* __restrict__ points, int* __restrict__ error_flag) {
-  const int64_t row = static_cast<int64_t>(blockIdx.x) * blockDim.x +
-                      threadIdx.x;
+  const int64_t row = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (row >= num_points) {
     return;
   }
@@ -185,9 +174,8 @@ static __global__ void assemble_features_kernel(
             atomicExch(error_flag, kErrScoreCoord);
             return;
           }
-          const int64_t plane = score_plane_offsets != nullptr
-                                    ? score_plane_offsets[row]
-                                    : int64_t{0};
+          const int64_t plane =
+              score_plane_offsets != nullptr ? score_plane_offsets[row] : int64_t{0};
           value = score_map[plane + doppler * num_score_range + range];
         }
         break;
@@ -237,28 +225,25 @@ static __global__ void assemble_features_kernel(
 }
 
 template <typename T>
-void launch_assemble_features(
-    const int64_t* detection_idx, int64_t num_points, int64_t idx_cols,
-    int64_t n_preserved, const T* range_bins, int64_t num_range,
-    bool have_range_bins, const T* velocity_bins, int64_t num_doppler,
-    bool have_velocity_bins, const T* score_map, int64_t num_score_doppler,
-    int64_t num_score_range,
-    const int64_t* score_plane_offsets, bool have_score, const T* aoa,
-    bool have_aoa, const T* az_grid, int64_t num_az, const T* el_grid,
-    int64_t num_el, const int* feature_ids, int64_t num_features, T* points,
-    int* error_flag, cudaStream_t stream) {
+void launch_assemble_features(const int64_t* detection_idx, int64_t num_points, int64_t idx_cols,
+                              int64_t n_preserved, const T* range_bins, int64_t num_range,
+                              bool have_range_bins, const T* velocity_bins, int64_t num_doppler,
+                              bool have_velocity_bins, const T* score_map,
+                              int64_t num_score_doppler, int64_t num_score_range,
+                              const int64_t* score_plane_offsets, bool have_score, const T* aoa,
+                              bool have_aoa, const T* az_grid, int64_t num_az, const T* el_grid,
+                              int64_t num_el, const int* feature_ids, int64_t num_features,
+                              T* points, int* error_flag, cudaStream_t stream) {
   if (num_points <= 0 || num_features <= 0) {
     return;
   }
   const int block = 256;
-  const int grid =
-      static_cast<int>((num_points + block - 1) / static_cast<int64_t>(block));
+  const int grid = static_cast<int>((num_points + block - 1) / static_cast<int64_t>(block));
   assemble_features_kernel<T><<<grid, block, 0, stream>>>(
-      detection_idx, num_points, idx_cols, n_preserved, range_bins, num_range,
-      have_range_bins, velocity_bins, num_doppler, have_velocity_bins,
-      score_map, num_score_doppler, num_score_range, score_plane_offsets,
-      have_score, aoa, have_aoa, az_grid, num_az, el_grid, num_el,
-      feature_ids, num_features, points, error_flag);
+      detection_idx, num_points, idx_cols, n_preserved, range_bins, num_range, have_range_bins,
+      velocity_bins, num_doppler, have_velocity_bins, score_map, num_score_doppler, num_score_range,
+      score_plane_offsets, have_score, aoa, have_aoa, az_grid, num_az, el_grid, num_el, feature_ids,
+      num_features, points, error_flag);
 }
 
 }  // namespace holoscan::radar::detail

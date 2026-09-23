@@ -93,12 +93,13 @@ constexpr int64_t kSamples = 128;
 
 double range_bin_width(int64_t nfft) {
   const sim::SimWaveform waveform{};
-  return holoscan::radar::testing::range_of_bin(
-      1, waveform.slope(), waveform.sample_rate, nfft,
-      sim::kSimSpeedOfLight);
+  return holoscan::radar::testing::range_of_bin(1, waveform.slope(), waveform.sample_rate, nfft,
+                                                sim::kSimSpeedOfLight);
 }
 
-double range_at_bin(double bin) { return bin * range_bin_width(kSamples); }
+double range_at_bin(double bin) {
+  return bin * range_bin_width(kSamples);
+}
 
 FMCWWaveformDescriptor to_descriptor(const sim::SimWaveform& waveform) {
   FMCWWaveformSpec spec;
@@ -140,8 +141,7 @@ const sim::SimResult& parity_sim_real() {
 }
 
 const sim::SimResult& parity_sim_pre_mixer() {
-  static const sim::SimResult result =
-      sim::simulate(parity_scene(/*dechirped=*/false));
+  static const sim::SimResult result = sim::simulate(parity_scene(/*dechirped=*/false));
   return result;
 }
 
@@ -164,8 +164,8 @@ struct ChainOutputs {
 // ---- Wiring lambdas for Graph harness ----
 
 auto wire_range_dual() {
-  return [](holoscan::Graph& graph, const auto& source, auto& op,
-            const auto& sink0, const auto& sink1) {
+  return [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
+            const auto& sink1) {
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(source->out, op->adc_cube, q);
     graph.add_flow(op->range_profiles, sink0->in, q);
@@ -174,8 +174,7 @@ auto wire_range_dual() {
 }
 
 auto wire_clutter_single() {
-  return [](holoscan::Graph& graph, const auto& source, auto& op,
-            const auto& sink) {
+  return [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(source->out, op->range_profiles, q);
     graph.add_flow(op->range_profiles_out, sink->in, q);
@@ -183,8 +182,8 @@ auto wire_clutter_single() {
 }
 
 auto wire_doppler_dual() {
-  return [](holoscan::Graph& graph, const auto& source, auto& op,
-            const auto& sink0, const auto& sink1) {
+  return [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
+            const auto& sink1) {
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(source->out, op->range_profiles, q);
     graph.add_flow(op->rd_maps, sink0->in, q);
@@ -193,8 +192,8 @@ auto wire_doppler_dual() {
 }
 
 auto wire_fused_triple() {
-  return [](holoscan::Graph& graph, const auto& source, auto& op,
-            const auto& sink0, const auto& sink1, const auto& sink2) {
+  return [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
+            const auto& sink1, const auto& sink2) {
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(source->out, op->adc_cube, q);
     graph.add_flow(op->rd_maps, sink0->in, q);
@@ -204,8 +203,7 @@ auto wire_fused_triple() {
 }
 
 auto wire_fused_rd_only() {
-  return [](holoscan::Graph& graph, const auto& source, auto& op,
-            const auto& sink) {
+  return [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(source->out, op->adc_cube, q);
     graph.add_flow(op->rd_maps, sink->in, q);
@@ -222,10 +220,8 @@ std::shared_ptr<holoscan::Tensor> reupload(const HostTensor& host) {
 }
 
 template <typename T>
-ChainOutputs run_split(
-    const std::shared_ptr<holoscan::Tensor>& input_tensor,
-    const ParityConfig& cfg,
-    const FMCWWaveformDescriptor& waveform) {
+ChainOutputs run_split(const std::shared_ptr<holoscan::Tensor>& input_tensor,
+                       const ParityConfig& cfg, const FMCWWaveformDescriptor& waveform) {
   ChainOutputs out;
 
   // 1. Range stage (dual-out: profiles + range_bins).
@@ -239,10 +235,8 @@ ChainOutputs run_split(
       rp.nfft = *cfg.nfft_range;
     }
     DualIOGraphRunResult result =
-        run_single_in_dual_out_operator_graph_result<
-            FMCWRangeProcessorOp<T>>(
-            {input_tensor}, std::move(rp),
-            "range_profiles", "range_bins", wire_range_dual());
+        run_single_in_dual_out_operator_graph_result<FMCWRangeProcessorOp<T>>(
+            {input_tensor}, std::move(rp), "range_profiles", "range_bins", wire_range_dual());
     EXPECT_TRUE(result.plan_ok) << result.plan_json;
     EXPECT_TRUE(result.diagnostics.empty());
     EXPECT_EQ(result.frames0.size(), 1u);
@@ -255,12 +249,11 @@ ChainOutputs run_split(
   if (cfg.clutter != ClutterFilterMethod::kNone) {
     ClutterFilterParams cp;
     cp.method = cfg.clutter;
-    if (cfg.clutter == ClutterFilterMethod::kMeanSubtraction &&
-        cfg.match_clutter_window) {
+    if (cfg.clutter == ClutterFilterMethod::kMeanSubtraction && cfg.match_clutter_window) {
       cp.doppler_window = cfg.doppler_window;
     }
-    auto frames = run_operator_graph<ClutterFilterOp<T>>(
-        {reupload<T>(profiles_host)}, std::move(cp));
+    auto frames =
+        run_operator_graph<ClutterFilterOp<T>>({reupload<T>(profiles_host)}, std::move(cp));
     EXPECT_EQ(frames.size(), 1u);
     profiles_host = std::move(frames[0]);
   }
@@ -274,10 +267,9 @@ ChainOutputs run_split(
       dp.nfft = *cfg.nfft_doppler;
     }
     DualIOGraphRunResult result =
-        run_single_in_dual_out_operator_graph_result<
-            FMCWDopplerProcessorOp<T>>(
-            {reupload<T>(profiles_host)}, std::move(dp),
-            "rd_maps", "velocity_bins", wire_doppler_dual());
+        run_single_in_dual_out_operator_graph_result<FMCWDopplerProcessorOp<T>>(
+            {reupload<T>(profiles_host)}, std::move(dp), "rd_maps", "velocity_bins",
+            wire_doppler_dual());
     EXPECT_TRUE(result.plan_ok) << result.plan_json;
     EXPECT_TRUE(result.diagnostics.empty());
     EXPECT_EQ(result.frames0.size(), 1u);
@@ -291,10 +283,8 @@ ChainOutputs run_split(
 // ---- Fused op via Graph harness ----
 
 template <typename T>
-ChainOutputs run_fused(
-    const std::shared_ptr<holoscan::Tensor>& input_tensor,
-    const ParityConfig& cfg,
-    const FMCWWaveformDescriptor& waveform) {
+ChainOutputs run_fused(const std::shared_ptr<holoscan::Tensor>& input_tensor,
+                       const ParityConfig& cfg, const FMCWWaveformDescriptor& waveform) {
   FMCWRangeDopplerProcessorParams params;
   params.range_window = cfg.range_window;
   params.doppler_window = cfg.doppler_window;
@@ -309,10 +299,8 @@ ChainOutputs run_fused(
   }
 
   ThreeOutGraphRunResult result =
-      run_single_in_three_out_operator_graph_result<
-          FMCWRangeDopplerProcessorOp<T>>(
-          {input_tensor}, std::move(params),
-          "rd_maps", "range_bins", "velocity_bins",
+      run_single_in_three_out_operator_graph_result<FMCWRangeDopplerProcessorOp<T>>(
+          {input_tensor}, std::move(params), "rd_maps", "range_bins", "velocity_bins",
           wire_fused_triple());
 
   EXPECT_TRUE(result.plan_ok) << result.plan_json;
@@ -346,16 +334,14 @@ double max_abs_diff(const HostTensor& a, const HostTensor& b) {
   const auto* pb = b.as<std::complex<T>>();
   double worst = 0.0;
   for (int64_t i = 0; i < a.size(); ++i) {
-    worst = std::max(worst, std::abs(std::complex<double>(pa[i]) -
-                                     std::complex<double>(pb[i])));
+    worst = std::max(worst, std::abs(std::complex<double>(pa[i]) - std::complex<double>(pb[i])));
   }
   return worst;
 }
 
 template <typename T>
 void expect_axis_exact(const std::optional<HostTensor>& fused,
-                       const std::optional<HostTensor>& split,
-                       const std::string& label) {
+                       const std::optional<HostTensor>& split, const std::string& label) {
   ASSERT_TRUE(fused.has_value()) << label;
   ASSERT_TRUE(split.has_value()) << label;
   ASSERT_EQ(fused->shape, split->shape) << label;
@@ -367,18 +353,16 @@ void expect_axis_exact(const std::optional<HostTensor>& fused,
 }
 
 template <typename T>
-void expect_parity(const ChainOutputs& fused, const ChainOutputs& split,
-                   double rel_tol, const std::string& label) {
+void expect_parity(const ChainOutputs& fused, const ChainOutputs& split, double rel_tol,
+                   const std::string& label) {
   ASSERT_EQ(fused.rd.shape, split.rd.shape) << label;
   const double reference = max_abs<T>(split.rd);
   ASSERT_GT(reference, 0.0) << label;
   const double delta = max_abs_diff<T>(fused.rd, split.rd) / reference;
   EXPECT_LT(delta, rel_tol) << label;
   std::printf("[ parity ] %-40s rel delta = %.3e\n", label.c_str(), delta);
-  expect_axis_exact<T>(fused.range_bins, split.range_bins,
-                       label + " range_bins");
-  expect_axis_exact<T>(fused.velocity_bins, split.velocity_bins,
-                       label + " velocity_bins");
+  expect_axis_exact<T>(fused.range_bins, split.range_bins, label + " range_bins");
+  expect_axis_exact<T>(fused.velocity_bins, split.velocity_bins, label + " velocity_bins");
 }
 
 constexpr double kParityUlps = 8.0;
@@ -391,12 +375,9 @@ void expect_parity_ulp(const ChainOutputs& fused, const ChainOutputs& split,
   ASSERT_GT(reference, 0.0) << label;
   const double delta = max_abs_diff<T>(fused.rd, split.rd) / reference;
   const double tol = kParityUlps * std::numeric_limits<T>::epsilon();
-  EXPECT_LT(delta, tol)
-      << label << ": rel delta = " << delta << ", tolerance = " << tol;
-  expect_axis_exact<T>(fused.range_bins, split.range_bins,
-                       label + " range_bins");
-  expect_axis_exact<T>(fused.velocity_bins, split.velocity_bins,
-                       label + " velocity_bins");
+  EXPECT_LT(delta, tol) << label << ": rel delta = " << delta << ", tolerance = " << tol;
+  expect_axis_exact<T>(fused.range_bins, split.range_bins, label + " range_bins");
+  expect_axis_exact<T>(fused.velocity_bins, split.velocity_bins, label + " velocity_bins");
 }
 
 // ---- Parametrized test helpers ----
@@ -404,8 +385,7 @@ void expect_parity_ulp(const ChainOutputs& fused, const ChainOutputs& split,
 template <typename T>
 void ulp_parity_all_clutter_filters() {
   const auto waveform = to_descriptor(sim::SimWaveform{});
-  auto input = complex_cube_to_device<T>(parity_sim().cube,
-                                          parity_sim().shape);
+  auto input = complex_cube_to_device<T>(parity_sim().cube, parity_sim().shape);
   const ClutterFilterMethod methods[] = {
       ClutterFilterMethod::kNone, ClutterFilterMethod::kMeanSubtraction,
       ClutterFilterMethod::kSingleDelay, ClutterFilterMethod::kDoubleDelay};
@@ -417,15 +397,13 @@ void ulp_parity_all_clutter_filters() {
         cfg.doppler_window.type = WindowType::kHamming;
       }
       auto make = [&] {
-        return complex_cube_to_device<T>(parity_sim().cube,
-                                          parity_sim().shape);
+        return complex_cube_to_device<T>(parity_sim().cube, parity_sim().shape);
       };
       const auto fused = run_fused<T>(make(), cfg, waveform);
       const auto split = run_split<T>(make(), cfg, waveform);
-      expect_parity_ulp<T>(
-          fused, split,
-          std::string("clutter=") + std::string(to_string(method)) +
-              ",dopwin=" + (windowed ? "hamming" : "none"));
+      expect_parity_ulp<T>(fused, split,
+                           std::string("clutter=") + std::string(to_string(method)) +
+                               ",dopwin=" + (windowed ? "hamming" : "none"));
     }
   }
 }
@@ -440,14 +418,12 @@ void parity_all_clutter_filters(double rel_tol) {
     ParityConfig cfg;
     cfg.clutter = method;
     auto make = [&] {
-      return complex_cube_to_device<T>(parity_sim().cube,
-                                        parity_sim().shape);
+      return complex_cube_to_device<T>(parity_sim().cube, parity_sim().shape);
     };
     const auto fused = run_fused<T>(make(), cfg, waveform);
     const auto split = run_split<T>(make(), cfg, waveform);
     expect_parity<T>(fused, split, rel_tol,
-                     std::string("clutter=") +
-                         std::string(to_string(method)));
+                     std::string("clutter=") + std::string(to_string(method)));
   }
 }
 
@@ -471,8 +447,7 @@ TEST(FMCWRangeDopplerProcessorOpTest, UlpParityNfftDoppler) {
   cfg.clutter = ClutterFilterMethod::kMeanSubtraction;
   cfg.nfft_doppler = 2 * kChirps;
   auto make = [] {
-    return complex_cube_to_device<float>(parity_sim().cube,
-                                          parity_sim().shape);
+    return complex_cube_to_device<float>(parity_sim().cube, parity_sim().shape);
   };
   const auto fused = run_fused<float>(make(), cfg, waveform);
   const auto split = run_split<float>(make(), cfg, waveform);
@@ -504,14 +479,12 @@ TEST(FMCWRangeDopplerProcessorOpTest, ParityNfftOverrides) {
   cfg.nfft_range = 2 * kSamples;
   cfg.nfft_doppler = 2 * kChirps;
   auto make = [] {
-    return complex_cube_to_device<float>(parity_sim().cube,
-                                          parity_sim().shape);
+    return complex_cube_to_device<float>(parity_sim().cube, parity_sim().shape);
   };
   const auto fused = run_fused<float>(make(), cfg, waveform);
   const auto split = run_split<float>(make(), cfg, waveform);
   expect_parity<float>(fused, split, 1e-5, "nfft_range/doppler=2x");
-  EXPECT_EQ(fused.rd.shape,
-            (std::vector<int64_t>{2 * kChirps, 2 * kSamples}));
+  EXPECT_EQ(fused.rd.shape, (std::vector<int64_t>{2 * kChirps, 2 * kSamples}));
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ParityWindows) {
@@ -520,26 +493,21 @@ TEST(FMCWRangeDopplerProcessorOpTest, ParityWindows) {
   cfg.range_window.type = WindowType::kHann;
   cfg.doppler_window.type = WindowType::kHamming;
   auto make = [] {
-    return complex_cube_to_device<float>(parity_sim().cube,
-                                          parity_sim().shape);
+    return complex_cube_to_device<float>(parity_sim().cube, parity_sim().shape);
   };
   const auto fused = run_fused<float>(make(), cfg, waveform);
   const auto split = run_split<float>(make(), cfg, waveform);
   expect_parity<float>(fused, split, 1e-5, "hann range + hamming doppler");
 }
 
-TEST(FMCWRangeDopplerProcessorOpTest,
-     MatchingWindowRemovesCenterBinForOffBinTone) {
-  std::vector<std::complex<float>> cube(
-      static_cast<size_t>(kChirps * kSamples));
+TEST(FMCWRangeDopplerProcessorOpTest, MatchingWindowRemovesCenterBinForOffBinTone) {
+  std::vector<std::complex<float>> cube(static_cast<size_t>(kChirps * kSamples));
   constexpr double kCyclesPerChirp = 0.137;
   for (int64_t chirp = 0; chirp < kChirps; ++chirp) {
-    const auto tone = std::polar(
-        1.0, 2.0 * holoscan::radar::kPi * kCyclesPerChirp *
-                 static_cast<double>(chirp));
+    const auto tone =
+        std::polar(1.0, 2.0 * holoscan::radar::kPi * kCyclesPerChirp * static_cast<double>(chirp));
     for (int64_t sample = 0; sample < kSamples; ++sample) {
-      cube[static_cast<size_t>(chirp * kSamples + sample)] =
-          std::complex<float>(tone);
+      cube[static_cast<size_t>(chirp * kSamples + sample)] = std::complex<float>(tone);
     }
   }
   const auto waveform = to_descriptor(sim::SimWaveform{});
@@ -547,19 +515,15 @@ TEST(FMCWRangeDopplerProcessorOpTest,
   matched.clutter = ClutterFilterMethod::kMeanSubtraction;
   matched.doppler_window.type = WindowType::kHann;
   const ChainOutputs weighted = run_fused<float>(
-      to_device_tensor(cube, {kChirps, kSamples}, complex_dtype<float>()),
-      matched, waveform);
+      to_device_tensor(cube, {kChirps, kSamples}, complex_dtype<float>()), matched, waveform);
 
   ParityConfig uniform = matched;
   uniform.match_clutter_window = false;
   const ChainOutputs legacy = run_split<float>(
-      to_device_tensor(cube, {kChirps, kSamples}, complex_dtype<float>()),
-      uniform, waveform);
+      to_device_tensor(cube, {kChirps, kSamples}, complex_dtype<float>()), uniform, waveform);
   const int64_t center = kChirps / 2;
-  const double weighted_center =
-      std::abs(weighted.rd.as<std::complex<float>>()[center * kSamples]);
-  const double uniform_center =
-      std::abs(legacy.rd.as<std::complex<float>>()[center * kSamples]);
+  const double weighted_center = std::abs(weighted.rd.as<std::complex<float>>()[center * kSamples]);
+  const double uniform_center = std::abs(legacy.rd.as<std::complex<float>>()[center * kSamples]);
   EXPECT_LT(weighted_center, 1e-3);
   EXPECT_GT(uniform_center, 1e-2);
 }
@@ -576,15 +540,13 @@ TEST(FMCWRangeDopplerProcessorOpTest, ParityRealIfInput) {
   const auto fused = run_fused<float>(make(), cfg, waveform);
   const auto split = run_split<float>(make(), cfg, waveform);
   expect_parity<float>(fused, split, 1e-5, "real-IF input");
-  EXPECT_EQ(fused.rd.shape,
-            (std::vector<int64_t>{kChirps, kSamples / 2 + 1}));
+  EXPECT_EQ(fused.rd.shape, (std::vector<int64_t>{kChirps, kSamples / 2 + 1}));
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, ParityApplyDechirp) {
   const auto waveform = to_descriptor(sim::SimWaveform{});
   auto make = [] {
-    return complex_cube_to_device<float>(parity_sim_pre_mixer().cube,
-                                          parity_sim_pre_mixer().shape);
+    return complex_cube_to_device<float>(parity_sim_pre_mixer().cube, parity_sim_pre_mixer().shape);
   };
   ParityConfig cfg;
   cfg.apply_dechirp = true;
@@ -607,16 +569,13 @@ TEST(FMCWRangeDopplerProcessorOpTest, InlineClutterReducesDopplerLength) {
     ParityConfig cfg;
     cfg.clutter = c.method;
     auto make = [] {
-      return complex_cube_to_device<float>(parity_sim().cube,
-                                            parity_sim().shape);
+      return complex_cube_to_device<float>(parity_sim().cube, parity_sim().shape);
     };
     const auto fused = run_fused<float>(make(), cfg, waveform);
-    EXPECT_EQ(fused.rd.shape,
-              (std::vector<int64_t>{c.expected_doppler, kSamples}))
+    EXPECT_EQ(fused.rd.shape, (std::vector<int64_t>{c.expected_doppler, kSamples}))
         << to_string(c.method);
     ASSERT_TRUE(fused.velocity_bins.has_value());
-    EXPECT_EQ(fused.velocity_bins->shape,
-              (std::vector<int64_t>{c.expected_doppler}))
+    EXPECT_EQ(fused.velocity_bins->shape, (std::vector<int64_t>{c.expected_doppler}))
         << to_string(c.method);
   }
 }
@@ -633,8 +592,7 @@ TEST(FMCWRangeDopplerProcessorOpTest, PeakMapsToTruthRangeAndVelocity) {
   ASSERT_EQ(sim_result.truth.size(), 1u);
 
   const auto waveform = to_descriptor(scene.waveform);
-  auto input =
-      complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
+  auto input = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
   const auto fused = run_fused<float>(input, ParityConfig{}, waveform);
   ASSERT_EQ(fused.rd.shape, (std::vector<int64_t>{kChirps, kSamples}));
 
@@ -644,8 +602,7 @@ TEST(FMCWRangeDopplerProcessorOpTest, PeakMapsToTruthRangeAndVelocity) {
   double peak_mag = -1.0;
   for (int64_t d = 0; d < kChirps; ++d) {
     for (int64_t r = 0; r < kSamples; ++r) {
-      const double mag =
-          std::abs(std::complex<double>(rd[d * kSamples + r]));
+      const double mag = std::abs(std::complex<double>(rd[d * kSamples + r]));
       if (mag > peak_mag) {
         peak_mag = mag;
         peak_doppler = d;
@@ -658,105 +615,84 @@ TEST(FMCWRangeDopplerProcessorOpTest, PeakMapsToTruthRangeAndVelocity) {
   using holoscan::radar::testing::expected_range_bin;
 
   EXPECT_EQ(peak_range,
-            expected_range_bin(sim_result.truth[0].range,
-                               scene.waveform.slope(),
-                               scene.waveform.sample_rate, kSamples,
-                               sim::kSimSpeedOfLight));
+            expected_range_bin(sim_result.truth[0].range, scene.waveform.slope(),
+                               scene.waveform.sample_rate, kSamples, sim::kSimSpeedOfLight));
   EXPECT_EQ(peak_doppler,
-            expected_doppler_bin(sim_result.truth[0].radial_velocity,
-                                 scene.waveform.wavelength(),
-                                 scene.waveform.chirp_repetition_interval,
-                                 kChirps, /*center_zero_doppler=*/true));
+            expected_doppler_bin(sim_result.truth[0].radial_velocity, scene.waveform.wavelength(),
+                                 scene.waveform.chirp_repetition_interval, kChirps,
+                                 /*center_zero_doppler=*/true));
 
   ASSERT_TRUE(fused.range_bins.has_value());
   ASSERT_TRUE(fused.velocity_bins.has_value());
   const float* range_axis = fused.range_bins->as<float>();
   const float* velocity_axis = fused.velocity_bins->as<float>();
-  EXPECT_NEAR(range_axis[peak_range], sim_result.truth[0].range,
-              range_bin_width(kSamples) + 1e-9);
+  EXPECT_NEAR(range_axis[peak_range], sim_result.truth[0].range, range_bin_width(kSamples) + 1e-9);
   const double velocity_bin_width = scene.waveform.wavelength() / 2.0 /
                                     scene.waveform.chirp_repetition_interval /
                                     static_cast<double>(kChirps);
-  EXPECT_NEAR(velocity_axis[peak_doppler],
-              sim_result.truth[0].radial_velocity,
+  EXPECT_NEAR(velocity_axis[peak_doppler], sim_result.truth[0].radial_velocity,
               velocity_bin_width + 1e-9);
 }
 
-TEST(FMCWRangeDopplerProcessorOpTest,
-     CriFoldedPeakPowerRetainsPhysicalRangeLoss) {
+TEST(FMCWRangeDopplerProcessorOpTest, CriFoldedPeakPowerRetainsPhysicalRangeLoss) {
   auto make_scene = [](double range) {
     sim::SimScene scene;
     scene.num_chirps = kChirps;
     scene.samples_per_chirp = kSamples;
-    scene.range_loss = {
-        sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
-    scene.targets = {
-        {sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}}};
+    scene.range_loss = {sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+    scene.targets = {{sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}}};
     return scene;
   };
 
   const auto near_scene = make_scene(40.0);
   const double ambiguity_range =
-      0.5 * near_scene.propagation_speed *
-      near_scene.waveform.chirp_repetition_interval;
+      0.5 * near_scene.propagation_speed * near_scene.waveform.chirp_repetition_interval;
   const auto far_scene = make_scene(ambiguity_range + 40.0);
   const auto near_sim = sim::simulate(near_scene);
   const auto far_sim = sim::simulate(far_scene);
   const auto waveform = to_descriptor(near_scene.waveform);
 
-  const auto near = run_fused<float>(
-      complex_cube_to_device<float>(near_sim.cube, near_sim.shape),
-      ParityConfig{}, waveform);
-  const auto far = run_fused<float>(
-      complex_cube_to_device<float>(far_sim.cube, far_sim.shape),
-      ParityConfig{}, waveform);
+  const auto near = run_fused<float>(complex_cube_to_device<float>(near_sim.cube, near_sim.shape),
+                                     ParityConfig{}, waveform);
+  const auto far = run_fused<float>(complex_cube_to_device<float>(far_sim.cube, far_sim.shape),
+                                    ParityConfig{}, waveform);
   const double near_peak = max_abs<float>(near.rd);
   const double far_peak = max_abs<float>(far.rd);
-  const double expected_voltage =
-      40.0 / (ambiguity_range + 40.0) *
-      40.0 / (ambiguity_range + 40.0);
+  const double expected_voltage = 40.0 / (ambiguity_range + 40.0) * 40.0 / (ambiguity_range + 40.0);
   const double expected_power = expected_voltage * expected_voltage;
 
   ASSERT_GT(near_peak, 0.0);
-  EXPECT_NEAR((far_peak * far_peak) / (near_peak * near_peak),
-              expected_power, 1e-4 * expected_power);
+  EXPECT_NEAR((far_peak * far_peak) / (near_peak * near_peak), expected_power,
+              1e-4 * expected_power);
 }
 
-TEST(FMCWRangeDopplerProcessorOpTest,
-     RangeLossMakesCriFoldedTargetFallBelowCfar) {
+TEST(FMCWRangeDopplerProcessorOpTest, RangeLossMakesCriFoldedTargetFallBelowCfar) {
   auto make_scene = [](double range) {
     sim::SimScene scene;
     scene.num_chirps = kChirps;
     scene.samples_per_chirp = kSamples;
-    scene.range_loss = {
-        sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
+    scene.range_loss = {sim::RangeLossModel::kMonostaticFreeSpace, 40.0};
     scene.snr_db = 20.0;
-    scene.targets = {
-        {sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}}};
+    scene.targets = {{sim::Vec3{range, 0.0, 0.0}, sim::Vec3{}, {1.0, 0.0}}};
     return scene;
   };
   auto near_scene = make_scene(40.0);
   const double ambiguity_range =
-      0.5 * near_scene.propagation_speed *
-      near_scene.waveform.chirp_repetition_interval;
+      0.5 * near_scene.propagation_speed * near_scene.waveform.chirp_repetition_interval;
   auto far_scene = make_scene(ambiguity_range + 40.0);
   auto near_sim = sim::simulate(near_scene);
   auto far_sim = sim::simulate(far_scene);
-  sim::add_thermal_noise(
-      near_sim.cube, near_scene.snr_db, near_scene.seed);
-  sim::add_thermal_noise(
-      far_sim.cube, far_scene.snr_db, far_scene.seed);
+  sim::add_thermal_noise(near_sim.cube, near_scene.snr_db, near_scene.seed);
+  sim::add_thermal_noise(far_sim.cube, far_scene.snr_db, far_scene.seed);
 
   ParityConfig processing;
   processing.range_window.type = WindowType::kHann;
   processing.doppler_window.type = WindowType::kHann;
   const auto waveform = to_descriptor(near_scene.waveform);
-  const auto near = run_fused<float>(
-      complex_cube_to_device<float>(near_sim.cube, near_sim.shape),
-      processing, waveform);
-  const auto far = run_fused<float>(
-      complex_cube_to_device<float>(far_sim.cube, far_sim.shape),
-      processing, waveform);
+  const auto near = run_fused<float>(complex_cube_to_device<float>(near_sim.cube, near_sim.shape),
+                                     processing, waveform);
+  const auto far = run_fused<float>(complex_cube_to_device<float>(far_sim.cube, far_sim.shape),
+                                    processing, waveform);
 
   const auto detection_count = [](const HostTensor& rd) {
     CFARParams params;
@@ -765,21 +701,17 @@ TEST(FMCWRangeDopplerProcessorOpTest,
     params.training_cells = {3, 3};
     params.pfa = 1e-9;
     const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-    const GraphRunResult result =
-        run_single_io_operator_graph_result<CFARDetectorOp<float>>(
-            {reupload<float>(rd)}, std::move(params), "detection_idx",
-            [queue](holoscan::Graph& graph, const auto& source, auto& op,
-                    const auto& sink) {
-              graph.add_flow(source->out, op->rd_maps, queue);
-              graph.add_flow(op->detection_idx, sink->in, queue);
-            },
-            {"detection_mask", "detection_score", "noise_estimate",
-             "cfar_power"});
+    const GraphRunResult result = run_single_io_operator_graph_result<CFARDetectorOp<float>>(
+        {reupload<float>(rd)}, std::move(params), "detection_idx",
+        [queue](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
+          graph.add_flow(source->out, op->rd_maps, queue);
+          graph.add_flow(op->detection_idx, sink->in, queue);
+        },
+        {"detection_mask", "detection_score", "noise_estimate", "cfar_power"});
     EXPECT_TRUE(result.plan_ok) << result.plan_json;
     EXPECT_TRUE(result.diagnostics.empty());
     EXPECT_EQ(result.frames.size(), 1U);
-    return result.frames.empty() ? int64_t{-1} :
-                                   result.frames.front().shape.front();
+    return result.frames.empty() ? int64_t{-1} : result.frames.front().shape.front();
   };
 
   EXPECT_GT(detection_count(near.rd), 0);
@@ -788,16 +720,12 @@ TEST(FMCWRangeDopplerProcessorOpTest,
 
 TEST(FMCWRangeDopplerProcessorOpTest, OptionalOutputsOnlyWithWaveform) {
   const sim::SimResult& sim_result = parity_sim();
-  auto input =
-      complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
+  auto input = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
 
   FMCWRangeDopplerProcessorParams params;
-  GraphRunResult result =
-      run_single_io_operator_graph_result<
-          FMCWRangeDopplerProcessorOp<float>>(
-          {std::move(input)}, std::move(params), "rd_maps",
-          wire_fused_rd_only(),
-          {"range_bins", "velocity_bins"});
+  GraphRunResult result = run_single_io_operator_graph_result<FMCWRangeDopplerProcessorOp<float>>(
+      {std::move(input)}, std::move(params), "rd_maps", wire_fused_rd_only(),
+      {"range_bins", "velocity_bins"});
 
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   ASSERT_TRUE(result.diagnostics.empty());
@@ -806,17 +734,13 @@ TEST(FMCWRangeDopplerProcessorOpTest, OptionalOutputsOnlyWithWaveform) {
 
 TEST(FMCWRangeDopplerProcessorOpTest, ApplyDechirpWithoutWaveformErrors) {
   const sim::SimResult& sim_result = parity_sim_pre_mixer();
-  auto input =
-      complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
+  auto input = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
 
   FMCWRangeDopplerProcessorParams params;
   params.apply_dechirp = true;
-  GraphRunResult result =
-      run_single_io_operator_graph_result<
-          FMCWRangeDopplerProcessorOp<float>>(
-          {std::move(input)}, std::move(params), "rd_maps",
-          wire_fused_rd_only(),
-          {"range_bins", "velocity_bins"});
+  GraphRunResult result = run_single_io_operator_graph_result<FMCWRangeDopplerProcessorOp<float>>(
+      {std::move(input)}, std::move(params), "rd_maps", wire_fused_rd_only(),
+      {"range_bins", "velocity_bins"});
 
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
@@ -831,12 +755,9 @@ TEST(FMCWRangeDopplerProcessorOpTest, ApplyDechirpWithRealInputErrors) {
   FMCWRangeDopplerProcessorParams params;
   params.apply_dechirp = true;
   params.waveform = to_descriptor(sim::SimWaveform{});
-  GraphRunResult result =
-      run_single_io_operator_graph_result<
-          FMCWRangeDopplerProcessorOp<float>>(
-          {std::move(input)}, std::move(params), "rd_maps",
-          wire_fused_rd_only(),
-          {"range_bins", "velocity_bins"});
+  GraphRunResult result = run_single_io_operator_graph_result<FMCWRangeDopplerProcessorOp<float>>(
+      {std::move(input)}, std::move(params), "rd_maps", wire_fused_rd_only(),
+      {"range_bins", "velocity_bins"});
 
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
@@ -845,17 +766,13 @@ TEST(FMCWRangeDopplerProcessorOpTest, ApplyDechirpWithRealInputErrors) {
 
 TEST(FMCWRangeDopplerProcessorOpTest, NfftRangeTooSmallErrors) {
   const sim::SimResult& sim_result = parity_sim();
-  auto input =
-      complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
+  auto input = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
 
   FMCWRangeDopplerProcessorParams params;
   params.nfft_range = kSamples / 2;
-  GraphRunResult result =
-      run_single_io_operator_graph_result<
-          FMCWRangeDopplerProcessorOp<float>>(
-          {std::move(input)}, std::move(params), "rd_maps",
-          wire_fused_rd_only(),
-          {"range_bins", "velocity_bins"});
+  GraphRunResult result = run_single_io_operator_graph_result<FMCWRangeDopplerProcessorOp<float>>(
+      {std::move(input)}, std::move(params), "rd_maps", wire_fused_rd_only(),
+      {"range_bins", "velocity_bins"});
 
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
@@ -867,16 +784,12 @@ TEST(FMCWRangeDopplerProcessorOpTest, NfftDopplerTooSmallErrors) {
 
   // nfft_doppler below the raw chirp count.
   {
-    auto input =
-        complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
+    auto input = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
     FMCWRangeDopplerProcessorParams params;
     params.nfft_doppler = kChirps / 2;
-    GraphRunResult result =
-        run_single_io_operator_graph_result<
-            FMCWRangeDopplerProcessorOp<float>>(
-            {std::move(input)}, std::move(params), "rd_maps",
-            wire_fused_rd_only(),
-            {"range_bins", "velocity_bins"});
+    GraphRunResult result = run_single_io_operator_graph_result<FMCWRangeDopplerProcessorOp<float>>(
+        {std::move(input)}, std::move(params), "rd_maps", wire_fused_rd_only(),
+        {"range_bins", "velocity_bins"});
 
     EXPECT_TRUE(result.plan_ok);
     EXPECT_TRUE(result.frames.empty());
@@ -885,17 +798,13 @@ TEST(FMCWRangeDopplerProcessorOpTest, NfftDopplerTooSmallErrors) {
 
   // nfft_doppler below the post-clutter chirp count.
   {
-    auto input =
-        complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
+    auto input = complex_cube_to_device<float>(sim_result.cube, sim_result.shape);
     FMCWRangeDopplerProcessorParams params;
     params.clutter_filter = ClutterFilterMethod::kSingleDelay;
     params.nfft_doppler = kChirps - 2;
-    GraphRunResult result =
-        run_single_io_operator_graph_result<
-            FMCWRangeDopplerProcessorOp<float>>(
-            {std::move(input)}, std::move(params), "rd_maps",
-            wire_fused_rd_only(),
-            {"range_bins", "velocity_bins"});
+    GraphRunResult result = run_single_io_operator_graph_result<FMCWRangeDopplerProcessorOp<float>>(
+        {std::move(input)}, std::move(params), "rd_maps", wire_fused_rd_only(),
+        {"range_bins", "velocity_bins"});
 
     EXPECT_TRUE(result.plan_ok);
     EXPECT_TRUE(result.frames.empty());
@@ -921,51 +830,43 @@ struct LiveFusedDescriptorBank {
 
 template <typename Wire, typename Element>
 holoscan::expected<void, holoscan::Error> emit_fused_descriptor_tensor(
-    holoscan::Output<Wire>& output, Wire wire,
-    std::span<const Element> values, holoscan::TimePoint capture_time) {
-  const std::array<int64_t, 1> shape{
-      static_cast<int64_t>(values.size())};
-  constexpr DLDataType dtype{
-      std::is_same_v<Element, double> ? kDLFloat : kDLComplex,
-      static_cast<uint8_t>(sizeof(Element) * 8), 1U};
-  auto loan = output.allocate_tensor(
-      holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+    holoscan::Output<Wire>& output, Wire wire, std::span<const Element> values,
+    holoscan::TimePoint capture_time) {
+  const std::array<int64_t, 1> shape{static_cast<int64_t>(values.size())};
+  constexpr DLDataType dtype{std::is_same_v<Element, double> ? kDLFloat : kDLComplex,
+                             static_cast<uint8_t>(sizeof(Element) * 8), 1U};
+  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
   if (!loan) {
     return holoscan::make_unexpected(std::move(loan).error());
   }
-  auto written = loan->write_host_and_commit(
-      [values](const holoscan::TensorOutputWriteGuard& writer) {
-        std::copy(values.begin(), values.end(),
-                  writer.template data_as<Element>());
+  auto written =
+      loan->write_host_and_commit([values](const holoscan::TensorOutputWriteGuard& writer) {
+        std::copy(values.begin(), values.end(), writer.template data_as<Element>());
       });
   if (!written) {
     return holoscan::make_unexpected(std::move(written).error());
   }
-  return output.emit_tensor(
-      std::move(*loan), wire,
-      holoscan::EmitOptions{.capture_time = capture_time});
+  return output.emit_tensor(std::move(*loan), wire,
+                            holoscan::EmitOptions{.capture_time = capture_time});
 }
 
 class LiveFusedDescriptorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorRepresentation kDevice{
-        .memory_kind = holoscan::MemoryKind::kCudaDevice};
-    constexpr holoscan::TensorRepresentation kWindow{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = DLDataType{kDLFloat, 64U, 1U},
-        .rank = 1U};
-    constexpr holoscan::TensorRepresentation kWaveform{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = DLDataType{kDLComplex, 128U, 1U},
-        .rank = 1U};
+    constexpr holoscan::TensorRepresentation kDevice{.memory_kind =
+                                                         holoscan::MemoryKind::kCudaDevice};
+    constexpr holoscan::TensorRepresentation kWindow{.memory_kind = holoscan::MemoryKind::kHost,
+                                                     .dtype = DLDataType{kDLFloat, 64U, 1U},
+                                                     .rank = 1U};
+    constexpr holoscan::TensorRepresentation kWaveform{.memory_kind = holoscan::MemoryKind::kHost,
+                                                       .dtype = DLDataType{kDLComplex, 128U, 1U},
+                                                       .rank = 1U};
     spec.output(cube, "cube")
-        .produces_tensor(holoscan::radar::pooled_tensor_output(
-            kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
+        .produces_tensor(
+            holoscan::radar::pooled_tensor_output(kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
     for (auto* output : {&range_window, &doppler_window}) {
-      spec.output(*output)
-          .produces_tensor(holoscan::radar::pooled_tensor_output(
-              kWindow, 1U, 4096U * sizeof(double)));
+      spec.output(*output).produces_tensor(
+          holoscan::radar::pooled_tensor_output(kWindow, 1U, 4096U * sizeof(double)));
     }
     spec.output(waveform, "waveform")
         .produces_tensor(holoscan::radar::pooled_tensor_output(
@@ -974,30 +875,26 @@ class LiveFusedDescriptorSourceOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
-    result.trigger(holoscan::OnClock{
-        .period = holoscan::radar::testing::detail::kHarnessTick});
+    result.trigger(holoscan::OnClock{.period = holoscan::radar::testing::detail::kHarnessTick});
     return result;
   }
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
       holoscan::ExecutionContext& context) override {
-    if (LiveFusedDescriptorBank::index >=
-        LiveFusedDescriptorBank::ticks.size()) {
+    if (LiveFusedDescriptorBank::index >= LiveFusedDescriptorBank::ticks.size()) {
       return {};
     }
-    const auto& tick = LiveFusedDescriptorBank::ticks[
-        LiveFusedDescriptorBank::index++];
+    const auto& tick = LiveFusedDescriptorBank::ticks[LiveFusedDescriptorBank::index++];
     const holoscan::TimePoint capture_time = context.activation_time();
     auto publish_window =
         [&](holoscan::Output<holoscan::radar::wire::WindowSpecT>& output,
-            const std::optional<WindowSpec>& window)
-        -> holoscan::expected<void, holoscan::Error> {
+            const std::optional<WindowSpec>& window) -> holoscan::expected<void, holoscan::Error> {
       if (!window.has_value()) {
         return {};
       }
-      return emit_fused_descriptor_tensor(
-          output, holoscan::radar::to_wire(*window),
-          std::span<const double>{window->coefficients}, capture_time);
+      return emit_fused_descriptor_tensor(output, holoscan::radar::to_wire(*window),
+                                          std::span<const double>{window->coefficients},
+                                          capture_time);
     };
     auto emitted = publish_window(range_window, tick.range_window);
     if (!emitted) {
@@ -1010,29 +907,23 @@ class LiveFusedDescriptorSourceOp final : public holoscan::Operator<> {
     if (tick.waveform.has_value()) {
       auto waveform_emitted = emit_fused_descriptor_tensor(
           waveform, holoscan::radar::to_wire(*tick.waveform),
-          std::span<const std::complex<double>>{
-              tick.waveform->reference_samples()},
-          capture_time);
+          std::span<const std::complex<double>>{tick.waveform->reference_samples()}, capture_time);
       if (!waveform_emitted) {
         return waveform_emitted;
       }
     }
-    return holoscan::radar::testing::detail::emit_bank_frame(
-        cube, context, tick.cube, "LiveFusedDescriptorSourceOp");
+    return holoscan::radar::testing::detail::emit_bank_frame(cube, context, tick.cube,
+                                                             "LiveFusedDescriptorSourceOp");
   }
 
   holoscan::Output<holoscan::Tensor> cube{"cube"};
-  holoscan::Output<holoscan::radar::wire::WindowSpecT>
-      range_window{"range_window"};
-  holoscan::Output<holoscan::radar::wire::WindowSpecT>
-      doppler_window{"doppler_window"};
-  holoscan::Output<holoscan::radar::wire::FMCWWaveformT>
-      waveform{"waveform"};
+  holoscan::Output<holoscan::radar::wire::WindowSpecT> range_window{"range_window"};
+  holoscan::Output<holoscan::radar::wire::WindowSpecT> doppler_window{"doppler_window"};
+  holoscan::Output<holoscan::radar::wire::FMCWWaveformT> waveform{"waveform"};
 };
 
 ThreeOutGraphRunResult run_fused_descriptor_override_graph(
-    std::vector<LiveFusedDescriptorTick> ticks,
-    FMCWRangeDopplerProcessorParams params) {
+    std::vector<LiveFusedDescriptorTick> ticks, FMCWRangeDopplerProcessorParams params) {
   ThreeOutGraphRunResult result;
   holoscan::radar::testing::detail::FrameBank::reset();
   holoscan::radar::testing::detail::FrameBankB::reset();
@@ -1042,16 +933,12 @@ ThreeOutGraphRunResult run_fused_descriptor_override_graph(
   const std::size_t expected = LiveFusedDescriptorBank::ticks.size();
   holoscan::Graph graph{"fused-descriptor-overrides"};
   const auto source = graph.op<LiveFusedDescriptorSourceOp>("source");
-  auto op = holoscan::radar::testing::emplace_harness_op<
-      FMCWRangeDopplerProcessorOp<float>>(
+  auto op = holoscan::radar::testing::emplace_harness_op<FMCWRangeDopplerProcessorOp<float>>(
       graph, holoscan::radar::testing::default_test_extents());
   op.set_params(std::move(params));
-  const auto sink0 =
-      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink0");
-  const auto sink1 =
-      graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sink1");
-  const auto sink2 =
-      graph.op<holoscan::radar::testing::detail::TensorCaptureCOp>("sink2");
+  const auto sink0 = graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink0");
+  const auto sink1 = graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sink1");
+  const auto sink2 = graph.op<holoscan::radar::testing::detail::TensorCaptureCOp>("sink2");
   const holoscan::ConnectionOptions q{.queue_depth = 8U};
   graph.add_flow(source->range_window, op->range_window_in, q);
   graph.add_flow(source->doppler_window, op->doppler_window_in, q);
@@ -1062,53 +949,41 @@ ThreeOutGraphRunResult run_fused_descriptor_override_graph(
   graph.add_flow(op->velocity_bins, sink2->in, q);
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
   holoscan::CompileOptions options;
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = "source",
-          .output_port = "cube",
-          .device = holoscan::DeviceId{0}});
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "source", .output_port = "cube", .device = holoscan::DeviceId{0}});
   for (const char* port : {"rd_maps", "range_bins", "velocity_bins"}) {
     holoscan::radar::testing::detail::bind_op_device_output(options, port);
   }
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
       return result;
     }
     holoscan::RunSession session = holoscan::run_async(plan);
-    const auto deadline = std::chrono::steady_clock::now() +
-        holoscan::radar::testing::detail::kHarnessDeadline;
-    while (session.diagnostics().empty() &&
-           std::chrono::steady_clock::now() < deadline) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + holoscan::radar::testing::detail::kHarnessDeadline;
+    while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
       std::size_t count0 = 0;
       std::size_t count1 = 0;
       std::size_t count2 = 0;
       {
-        const std::lock_guard lock(
-            holoscan::radar::testing::detail::FrameBank::mutex);
-        count0 =
-            holoscan::radar::testing::detail::FrameBank::captured.size();
+        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBank::mutex);
+        count0 = holoscan::radar::testing::detail::FrameBank::captured.size();
       }
       {
-        const std::lock_guard lock(
-            holoscan::radar::testing::detail::FrameBankB::mutex);
-        count1 =
-            holoscan::radar::testing::detail::FrameBankB::captured.size();
+        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankB::mutex);
+        count1 = holoscan::radar::testing::detail::FrameBankB::captured.size();
       }
       {
-        const std::lock_guard lock(
-            holoscan::radar::testing::detail::FrameBankC::mutex);
-        count2 =
-            holoscan::radar::testing::detail::FrameBankC::captured.size();
+        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankC::mutex);
+        count2 = holoscan::radar::testing::detail::FrameBankC::captured.size();
       }
       if (count0 >= expected && count1 >= expected && count2 >= expected) {
         break;
       }
-      std::this_thread::sleep_for(
-          holoscan::radar::testing::detail::kHarnessPoll);
+      std::this_thread::sleep_for(holoscan::radar::testing::detail::kHarnessPoll);
     }
     session.request_stop();
     session.wait();
@@ -1121,28 +996,21 @@ ThreeOutGraphRunResult run_fused_descriptor_override_graph(
     result.plan_json = std::string("RuntimeError: ") + error.what();
   }
   {
-    const std::lock_guard lock(
-        holoscan::radar::testing::detail::FrameBank::mutex);
-    result.frames0 = std::move(
-        holoscan::radar::testing::detail::FrameBank::captured);
+    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBank::mutex);
+    result.frames0 = std::move(holoscan::radar::testing::detail::FrameBank::captured);
   }
   {
-    const std::lock_guard lock(
-        holoscan::radar::testing::detail::FrameBankB::mutex);
-    result.frames1 = std::move(
-        holoscan::radar::testing::detail::FrameBankB::captured);
+    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankB::mutex);
+    result.frames1 = std::move(holoscan::radar::testing::detail::FrameBankB::captured);
   }
   {
-    const std::lock_guard lock(
-        holoscan::radar::testing::detail::FrameBankC::mutex);
-    result.frames2 = std::move(
-        holoscan::radar::testing::detail::FrameBankC::captured);
+    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankC::mutex);
+    result.frames2 = std::move(holoscan::radar::testing::detail::FrameBankC::captured);
   }
   return result;
 }
 
-TEST(FMCWRangeDopplerProcessorOpTest,
-     LiveWindowAndWaveformOverride) {
+TEST(FMCWRangeDopplerProcessorOpTest, LiveWindowAndWaveformOverride) {
   const auto base_waveform = to_descriptor(sim::SimWaveform{});
   sim::SimWaveform changed_sim_waveform{};
   changed_sim_waveform.bandwidth *= 0.5;
@@ -1151,17 +1019,13 @@ TEST(FMCWRangeDopplerProcessorOpTest,
   range_window.type = WindowType::kHann;
   WindowSpec doppler_window;
   doppler_window.type = WindowType::kHamming;
-  auto cube = complex_cube_to_device<float>(
-      parity_sim().cube, parity_sim().shape);
-  LiveFusedDescriptorTick base{
-      cube, std::nullopt, std::nullopt, std::nullopt};
-  LiveFusedDescriptorTick changed{
-      cube, range_window, doppler_window, changed_waveform};
+  auto cube = complex_cube_to_device<float>(parity_sim().cube, parity_sim().shape);
+  LiveFusedDescriptorTick base{cube, std::nullopt, std::nullopt, std::nullopt};
+  LiveFusedDescriptorTick changed{cube, range_window, doppler_window, changed_waveform};
   FMCWRangeDopplerProcessorParams params;
   params.waveform = base_waveform;
   const ThreeOutGraphRunResult out =
-      run_fused_descriptor_override_graph(
-          {base, changed, base}, std::move(params));
+      run_fused_descriptor_override_graph({base, changed, base}, std::move(params));
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
   ASSERT_EQ(out.frames0.size(), 3u);
@@ -1171,68 +1035,53 @@ TEST(FMCWRangeDopplerProcessorOpTest,
   ParityConfig expected_cfg;
   expected_cfg.range_window = range_window;
   expected_cfg.doppler_window = doppler_window;
-  const ChainOutputs expected = run_fused<float>(
-      complex_cube_to_device<float>(parity_sim().cube, parity_sim().shape),
-      expected_cfg, changed_waveform);
+  const ChainOutputs expected =
+      run_fused<float>(complex_cube_to_device<float>(parity_sim().cube, parity_sim().shape),
+                       expected_cfg, changed_waveform);
   const double reference = max_abs<float>(expected.rd);
-  EXPECT_LT(max_abs_diff<float>(out.frames0[1], expected.rd),
-            1e-5 * reference);
-  EXPECT_GT(max_abs_diff<float>(out.frames0[0], out.frames0[1]),
-            1e-2 * reference);
+  EXPECT_LT(max_abs_diff<float>(out.frames0[1], expected.rd), 1e-5 * reference);
+  EXPECT_GT(max_abs_diff<float>(out.frames0[0], out.frames0[1]), 1e-2 * reference);
   // Tick 2 publishes no override, so it reproduces tick 0's Params result.
-  EXPECT_LT(max_abs_diff<float>(out.frames0[2], out.frames0[0]),
-            1e-6 * reference);
-  EXPECT_NEAR(out.frames1[1].as<float>()[1],
-              2.0F * out.frames1[0].as<float>()[1],
+  EXPECT_LT(max_abs_diff<float>(out.frames0[2], out.frames0[0]), 1e-6 * reference);
+  EXPECT_NEAR(out.frames1[1].as<float>()[1], 2.0F * out.frames1[0].as<float>()[1],
               1e-4F * out.frames1[1].as<float>()[1]);
-  EXPECT_EQ(out.frames1[2].as<float>()[1],
-            out.frames1[0].as<float>()[1]);
-  EXPECT_EQ(out.frames2[2].as<float>()[1],
-            out.frames2[0].as<float>()[1]);
+  EXPECT_EQ(out.frames1[2].as<float>()[1], out.frames1[0].as<float>()[1]);
+  EXPECT_EQ(out.frames2[2].as<float>()[1], out.frames2[0].as<float>()[1]);
 }
 
-TEST(FMCWRangeDopplerProcessorOpTest,
-     LiveClutterFilterAppliesOneTickThenReverts) {
+TEST(FMCWRangeDopplerProcessorOpTest, LiveClutterFilterAppliesOneTickThenReverts) {
   const auto input = [] {
-    return complex_cube_to_device<float>(parity_sim().cube,
-                                          parity_sim().shape);
+    return complex_cube_to_device<float>(parity_sim().cube, parity_sim().shape);
   };
   FMCWRangeDopplerProcessorParams params;
   params.clutter_filter = ClutterFilterMethod::kNone;
-  const GraphRunResult out = holoscan::radar::testing::
-      run_exact_override_single_io_operator_graph_result<
+  const GraphRunResult out =
+      holoscan::radar::testing::run_exact_override_single_io_operator_graph_result<
           FMCWRangeDopplerProcessorOp<float>, ClutterFilterMethod>(
           {input(), input(), input()},
-          {std::nullopt, ClutterFilterMethod::kDoubleDelay, std::nullopt},
-          std::move(params), "rd_maps",
-          [](holoscan::Graph& graph, const auto& source, auto& op,
-             const auto& sink) {
+          {std::nullopt, ClutterFilterMethod::kDoubleDelay, std::nullopt}, std::move(params),
+          "rd_maps",
+          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
             const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-            graph.add_flow(source->override_out, op->clutter_filter_in,
-                           queue);
+            graph.add_flow(source->override_out, op->clutter_filter_in, queue);
             graph.add_flow(source->out, op->adc_cube, queue);
             graph.add_flow(op->rd_maps, sink->in, queue);
           },
-          holoscan::radar::testing::default_test_extents(),
-          {"range_bins", "velocity_bins"});
+          holoscan::radar::testing::default_test_extents(), {"range_bins", "velocity_bins"});
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
   ASSERT_EQ(out.frames.size(), 3U);
-  EXPECT_EQ(out.frames[0].shape,
-            (std::vector<int64_t>{kChirps, kSamples}));
-  EXPECT_EQ(out.frames[1].shape,
-            (std::vector<int64_t>{kChirps - 2, kSamples}));
+  EXPECT_EQ(out.frames[0].shape, (std::vector<int64_t>{kChirps, kSamples}));
+  EXPECT_EQ(out.frames[1].shape, (std::vector<int64_t>{kChirps - 2, kSamples}));
   EXPECT_EQ(out.frames[2].shape, out.frames[0].shape);
 
   ParityConfig expected_cfg;
   expected_cfg.clutter = ClutterFilterMethod::kDoubleDelay;
-  const ChainOutputs expected = run_fused<float>(input(), expected_cfg,
-                                              to_descriptor(sim::SimWaveform{}));
+  const ChainOutputs expected =
+      run_fused<float>(input(), expected_cfg, to_descriptor(sim::SimWaveform{}));
   const double reference = std::max(max_abs<float>(expected.rd), 1.0);
-  EXPECT_LT(max_abs_diff<float>(out.frames[1], expected.rd),
-            1e-5 * reference);
-  EXPECT_LT(max_abs_diff<float>(out.frames[2], out.frames[0]),
-            1e-6 * reference);
+  EXPECT_LT(max_abs_diff<float>(out.frames[1], expected.rd), 1e-5 * reference);
+  EXPECT_LT(max_abs_diff<float>(out.frames[2], out.frames[0]), 1e-6 * reference);
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, FloatAndDoubleAgree) {
@@ -1240,12 +1089,10 @@ TEST(FMCWRangeDopplerProcessorOpTest, FloatAndDoubleAgree) {
   ParityConfig cfg;
   cfg.clutter = ClutterFilterMethod::kMeanSubtraction;
   auto make_f = [] {
-    return complex_cube_to_device<float>(parity_sim().cube,
-                                          parity_sim().shape);
+    return complex_cube_to_device<float>(parity_sim().cube, parity_sim().shape);
   };
   auto make_d = [] {
-    return complex_cube_to_device<double>(parity_sim().cube,
-                                           parity_sim().shape);
+    return complex_cube_to_device<double>(parity_sim().cube, parity_sim().shape);
   };
   const auto fused_f = run_fused<float>(make_f(), cfg, waveform);
   const auto fused_d = run_fused<double>(make_d(), cfg, waveform);

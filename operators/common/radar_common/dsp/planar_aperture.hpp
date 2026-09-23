@@ -21,10 +21,10 @@ namespace holoscan::radar {
 // `u * y_axis + v * z_axis + sqrt(1 - u^2 - v^2) * normal`.
 struct PlanarAperturePlan {
   bool is_ura{false};
-  int64_t ny{0};              // elements along the y (azimuth) aperture axis
-  int64_t nz{0};              // elements along the z (elevation) aperture axis
-  double dy{0.0};             // y element pitch (meters)
-  double dz{0.0};             // z element pitch (meters)
+  int64_t ny{0};   // elements along the y (azimuth) aperture axis
+  int64_t nz{0};   // elements along the z (elevation) aperture axis
+  double dy{0.0};  // y element pitch (meters)
+  double dz{0.0};  // z element pitch (meters)
   std::array<double, 3> y_axis{};
   std::array<double, 3> z_axis{};
   std::array<double, 3> normal{};  // forward-hemisphere planar normal

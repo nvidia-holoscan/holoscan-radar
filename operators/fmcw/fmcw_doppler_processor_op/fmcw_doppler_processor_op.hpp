@@ -65,54 +65,42 @@ struct FMCWDopplerProcessorParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     FMCWDopplerProcessorParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.FMCWDopplerProcessorParams", 1),
-    holoscan::field<&FMCWDopplerProcessorParams::doppler_window>(
-        "doppler_window")
-        .description(
-            "WindowSpec applied along the chirp (slow-time) axis before "
-            "the Doppler FFT (coherent-gain normalized). Default: none "
-            "(rectangular)."),
-    holoscan::field<&FMCWDopplerProcessorParams::center_zero_doppler>(
-        "center_zero_doppler")
-        .description(
-            "fftshift the Doppler axis so zero-Doppler is centered "
-            "(conventional RD layout); else DC at bin 0."),
+    holoscan::param_schema("com.nvidia.holoscan.radar.FMCWDopplerProcessorParams", 1),
+    holoscan::field<&FMCWDopplerProcessorParams::doppler_window>("doppler_window")
+        .description("WindowSpec applied along the chirp (slow-time) axis before "
+                     "the Doppler FFT (coherent-gain normalized). Default: none "
+                     "(rectangular)."),
+    holoscan::field<&FMCWDopplerProcessorParams::center_zero_doppler>("center_zero_doppler")
+        .description("fftshift the Doppler axis so zero-Doppler is centered "
+                     "(conventional RD layout); else DC at bin 0."),
     holoscan::field<&FMCWDopplerProcessorParams::waveform>("waveform")
-        .description(
-            "Source for the velocity_bins axis (carrier -> wavelength, "
-            "chirp repetition interval -> PRF). Required only when "
-            "velocity_bins is used. Default: empty (no velocity axis)."),
+        .description("Source for the velocity_bins axis (carrier -> wavelength, "
+                     "chirp repetition interval -> PRF). Required only when "
+                     "velocity_bins is used. Default: empty (no velocity axis)."),
     holoscan::field<&FMCWDopplerProcessorParams::fft_norm>("fft_norm")
-        .description(
-            "FFT normalization convention {backward, ortho, forward}; "
-            "backward keeps coherent-integration gain visible."),
-    holoscan::field<&FMCWDopplerProcessorParams::nfft>("nfft")
-        .description(
-            "Slow-time FFT length >= num_chirps; larger interpolates "
-            "the velocity grid over the same span. 0 = num_chirps."));
+        .description("FFT normalization convention {backward, ortho, forward}; "
+                     "backward keeps coherent-integration gain visible."),
+    holoscan::field<&FMCWDopplerProcessorParams::nfft>("nfft").description(
+        "Slow-time FFT length >= num_chirps; larger interpolates "
+        "the velocity grid over the same span. 0 = num_chirps."));
 
-static_assert(
-    holoscan::param_schema_availability<FMCWDopplerProcessorParams>() ==
-        holoscan::ParamSchemaAvailability::kDeclared,
-    "HOLOSCAN_PARAM_SCHEMA must be in "
-    "FMCWDopplerProcessorParams's namespace");
+static_assert(holoscan::param_schema_availability<FMCWDopplerProcessorParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in "
+              "FMCWDopplerProcessorParams's namespace");
 
 template <typename T>
-class FMCWDopplerProcessorOp
-    : public holoscan::Operator<FMCWDopplerProcessorParams> {
+class FMCWDopplerProcessorOp : public holoscan::Operator<FMCWDopplerProcessorParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "FMCWDopplerProcessorOp supports float and double precision");
 
  public:
-  explicit FMCWDopplerProcessorOp(
-      const MaxTensorExtents& extents);
+  explicit FMCWDopplerProcessorOp(const MaxTensorExtents& extents);
   ~FMCWDopplerProcessorOp() override;
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> range_profiles{"range_profiles"};
   Output<Tensor> rd_maps{"rd_maps"};

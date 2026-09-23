@@ -22,18 +22,17 @@ namespace {
 template <typename T>
 class PyDDMPowerFoldOp : public DDMPowerFoldOp<T> {
  public:
-  PyDDMPowerFoldOp(
-      Fragment* fragment, const py::args& args, int64_t max_rx = 16,
-      int64_t max_doppler_bins = 512, int64_t max_range_bins = 4096,
-      const DDMCodeDescriptor& ddm_code = {},
-      const std::string& name = "ddm_power_fold")
-      : DDMPowerFoldOp<T>([&] {
-          MaxTensorExtents extents;
-          extents.max_rx = max_rx;
-          extents.max_doppler_bins = max_doppler_bins;
-          extents.max_range_bins = max_range_bins;
-          return extents;
-        }()) {
+  PyDDMPowerFoldOp(Fragment* fragment, const py::args& args, int64_t max_rx = 16,
+                   int64_t max_doppler_bins = 512, int64_t max_range_bins = 4096,
+                   const DDMCodeDescriptor& ddm_code = {},
+                   const std::string& name = "ddm_power_fold")
+  : DDMPowerFoldOp<T>([&] {
+      MaxTensorExtents extents;
+      extents.max_rx = max_rx;
+      extents.max_doppler_bins = max_doppler_bins;
+      extents.max_range_bins = max_range_bins;
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -48,12 +47,10 @@ void bind(py::module_& module, const char* name) {
   using Op = DDMPowerFoldOp<T>;
   using PyOp = PyDDMPowerFoldOp<T>;
   py::class_<Op, PyOp, Operator, std::shared_ptr<Op>>(module, name)
-      .def(py::init<Fragment*, const py::args&, int64_t, int64_t, int64_t,
-                    const DDMCodeDescriptor&, const std::string&>(),
-           py::arg("fragment"), py::arg("max_rx") = 16,
-           py::arg("max_doppler_bins") = 512,
-           py::arg("max_range_bins") = 4096,
-           py::arg("ddm_code") = DDMCodeDescriptor{},
+      .def(py::init<Fragment*, const py::args&, int64_t, int64_t, int64_t, const DDMCodeDescriptor&,
+                    const std::string&>(),
+           py::arg("fragment"), py::arg("max_rx") = 16, py::arg("max_doppler_bins") = 512,
+           py::arg("max_range_bins") = 4096, py::arg("ddm_code") = DDMCodeDescriptor{},
            py::arg("name") = "ddm_power_fold")
       .def("setup", &Op::setup, py::arg("spec"));
 }

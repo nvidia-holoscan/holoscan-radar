@@ -14,7 +14,6 @@ using BeamformerParamsCodec =
     params::DefaultedParamSchemaCodec<radar::PhaseShiftBeamformerParams>;  // NOLINT
 
 template <>
-struct ConfigCodec<radar::PhaseShiftBeamformerParams>
-    : BeamformerParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::PhaseShiftBeamformerParams> : BeamformerParamsCodec {};  // NOLINT
 
 }  // namespace holoscan::config

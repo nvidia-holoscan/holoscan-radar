@@ -129,10 +129,8 @@ const std::vector<SizeSpec>& size_ladder() {
       {"xs", 4, 64, 16, "small array; fast smoke"},
       {"sm", 8, 128, 32, "compact SIMO array"},
       {"md", 16, 256, 48, "common dev size"},
-      {"lg", 32, 512, 64,
-       "wide aperture, many looks"},
-      {"xl", 32, 1024, 96,
-       "upper characterization bound"}};
+      {"lg", 32, 512, 64, "wide aperture, many looks"},
+      {"xl", 32, 1024, 96, "upper characterization bound"}};
   return ladder;
 }
 
@@ -148,86 +146,71 @@ const SizeSpec* find_size(const std::string& id) {
 const SizeSpec& must_find_size(const std::string& id) {
   const SizeSpec* s = find_size(id);
   if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '"
-              << id << "'\n";
+    std::cerr << "internal error: unknown size id '" << id << "'\n";
     std::abort();
   }
   return *s;
 }
 
-hr::ArrayGeometry make_ula_geometry(int64_t num_elements,
-                                    double spacing,
-                                    double wavelength) {
+hr::ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing, double wavelength) {
   hr::ArrayGeometry geom;
   geom.wavelength = wavelength;
   geom.geometry_type = hr::ArrayGeometryType::kUla;
-  geom.element_positions.reserve(
-      static_cast<size_t>(num_elements * 3));
+  geom.element_positions.reserve(static_cast<size_t>(num_elements * 3));
   for (int64_t m = 0; m < num_elements; ++m) {
     geom.element_positions.push_back(0.0);
-    geom.element_positions.push_back(
-        static_cast<double>(m) * spacing);
+    geom.element_positions.push_back(static_cast<double>(m) * spacing);
     geom.element_positions.push_back(0.0);
   }
   return geom;
 }
 
-hr::ArrayGeometry make_ura_geometry(int64_t ny, int64_t nz,
-                                    double spacing,
-                                    double wavelength) {
+hr::ArrayGeometry make_ura_geometry(int64_t ny, int64_t nz, double spacing, double wavelength) {
   hr::ArrayGeometry geom;
   geom.wavelength = wavelength;
   geom.geometry_type = hr::ArrayGeometryType::kUra;
-  geom.element_positions.reserve(
-      static_cast<size_t>(ny * nz * 3));
+  geom.element_positions.reserve(static_cast<size_t>(ny * nz * 3));
   for (int64_t iz = 0; iz < nz; ++iz) {
     for (int64_t iy = 0; iy < ny; ++iy) {
       geom.element_positions.push_back(0.0);
-      geom.element_positions.push_back(
-          static_cast<double>(iy) * spacing);
-      geom.element_positions.push_back(
-          static_cast<double>(iz) * spacing);
+      geom.element_positions.push_back(static_cast<double>(iy) * spacing);
+      geom.element_positions.push_back(static_cast<double>(iz) * spacing);
     }
   }
   return geom;
 }
 
-hr::ArrayGeometry scenario_geometry(
-    const RootMusicScenario& scen, double spacing,
-    double wavelength) {
+hr::ArrayGeometry scenario_geometry(const RootMusicScenario& scen, double spacing,
+                                    double wavelength) {
   if (scen.is_ura) {
-    return make_ura_geometry(scen.ny, scen.nz, spacing,
-                             wavelength);
+    return make_ura_geometry(scen.ny, scen.nz, spacing, wavelength);
   }
-  return make_ula_geometry(scen.channels, spacing,
-                           wavelength);
+  return make_ula_geometry(scen.channels, spacing, wavelength);
 }
 
 template <typename Wire>
-holoscan::expected<void, holoscan::Error> emit_wire_doubles(
-    holoscan::Output<Wire>& output, Wire wire,
-    std::span<const double> values, std::span<const int64_t> shape,
-    holoscan::TimePoint capture_time) {
+holoscan::expected<void, holoscan::Error> emit_wire_doubles(holoscan::Output<Wire>& output,
+                                                            Wire wire,
+                                                            std::span<const double> values,
+                                                            std::span<const int64_t> shape,
+                                                            holoscan::TimePoint capture_time) {
   constexpr DLDataType dtype{kDLFloat, 64U, 1U};
-  auto loan = output.allocate_tensor(
-      holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
   if (!loan) {
     return holoscan::make_unexpected(std::move(loan).error());
   }
-  auto written = loan->write_host_and_commit(
-      [values](const holoscan::TensorOutputWriteGuard& writer) {
+  auto written =
+      loan->write_host_and_commit([values](const holoscan::TensorOutputWriteGuard& writer) {
         std::copy(values.begin(), values.end(), writer.data_as<double>());
       });
   if (!written) {
     return holoscan::make_unexpected(std::move(written).error());
   }
-  return output.emit_tensor(
-      std::move(*loan), std::move(wire),
-      holoscan::EmitOptions{.capture_time = capture_time});
+  return output.emit_tensor(std::move(*loan), std::move(wire),
+                            holoscan::EmitOptions{.capture_time = capture_time});
 }
 
-hr::SpatialSmoothingOverride smoothing_wire(
-    const std::vector<int64_t>& smoothing) {
+hr::SpatialSmoothingOverride smoothing_wire(const std::vector<int64_t>& smoothing) {
   hr::SpatialSmoothingOverride wire;
   wire.count = static_cast<int64_t>(smoothing.size());
   if (!smoothing.empty()) {
@@ -241,12 +224,9 @@ hr::SpatialSmoothingOverride smoothing_wire(
 
 class PerfRootMUSICOverrideSourceOp final : public holoscan::Operator<> {
  public:
-  PerfRootMUSICOverrideSourceOp(
-      int64_t override_at, hr::RootMUSICParams initial,
-      hr::RootMUSICParams override)
-      : override_at_(override_at),
-        initial_(std::move(initial)),
-        override_(std::move(override)) {}
+  PerfRootMUSICOverrideSourceOp(int64_t override_at, hr::RootMUSICParams initial,
+                                hr::RootMUSICParams override)
+  : override_at_(override_at), initial_(std::move(initial)), override_(std::move(override)) {}
 
   void setup(holoscan::OperatorSpec& spec) override {
     constexpr holoscan::TensorRepresentation kDevice{
@@ -260,13 +240,11 @@ class PerfRootMUSICOverrideSourceOp final : public holoscan::Operator<> {
         .rank = 2U,
     };
     constexpr std::size_t kHostPayloadSpan = 4096U * sizeof(double);
-    spec.output(snapshot)
-        .produces_tensor(hr::pooled_tensor_output(
-            kDevice, 8U, perf::PerfFrameBank::span_a()));
+    spec.output(snapshot).produces_tensor(
+        hr::pooled_tensor_output(kDevice, 8U, perf::PerfFrameBank::span_a()));
     spec.output(array_geometry)
         .max_emits_per_compute(1U)
-        .produces_tensor(
-            hr::pooled_tensor_output(kHostMatrix, 2U, kHostPayloadSpan));
+        .produces_tensor(hr::pooled_tensor_output(kHostMatrix, 2U, kHostPayloadSpan));
     spec.output(spatial_smoothing).max_emits_per_compute(1U);
     spec.output(num_sources).max_emits_per_compute(1U);
     spec.output(source_count_pfa).max_emits_per_compute(1U);
@@ -294,40 +272,31 @@ class PerfRootMUSICOverrideSourceOp final : public holoscan::Operator<> {
       mode = perf::PerfFrameBank::publish_mode;
     }
 
-    const auto& values =
-        frame_index_ < override_at_ ? initial_ : override_;
+    const auto& values = frame_index_ < override_at_ ? initial_ : override_;
     const holoscan::TimePoint time = context.activation_time();
     const auto packed = hr::pack_array_geometry(values.array_geometry);
     auto geometry_wire = hr::to_wire(values.array_geometry);
-    const std::array<int64_t, 2> geometry_shape{
-        values.array_geometry.num_elements() + 1, 3};
-    auto emitted = emit_wire_doubles(
-        array_geometry, std::move(geometry_wire), packed, geometry_shape,
-        time);
+    const std::array<int64_t, 2> geometry_shape{values.array_geometry.num_elements() + 1, 3};
+    auto emitted =
+        emit_wire_doubles(array_geometry, std::move(geometry_wire), packed, geometry_shape, time);
     if (!emitted) {
       return emitted;
     }
-    emitted = spatial_smoothing.emit(
-        smoothing_wire(values.spatial_smoothing),
-        holoscan::EmitOptions{.capture_time = time});
+    emitted = spatial_smoothing.emit(smoothing_wire(values.spatial_smoothing),
+                                     holoscan::EmitOptions{.capture_time = time});
     if (!emitted) {
       return emitted;
     }
-    emitted = num_sources.emit(
-        values.num_sources,
-        holoscan::EmitOptions{.capture_time = time});
+    emitted = num_sources.emit(values.num_sources, holoscan::EmitOptions{.capture_time = time});
     if (!emitted) {
       return emitted;
     }
-    emitted = source_count_pfa.emit(
-        values.source_count_pfa,
-        holoscan::EmitOptions{.capture_time = time});
+    emitted =
+        source_count_pfa.emit(values.source_count_pfa, holoscan::EmitOptions{.capture_time = time});
     if (!emitted) {
       return emitted;
     }
-    emitted = max_sources.emit(
-        values.max_sources,
-        holoscan::EmitOptions{.capture_time = time});
+    emitted = max_sources.emit(values.max_sources, holoscan::EmitOptions{.capture_time = time});
     if (!emitted) {
       return emitted;
     }
@@ -340,10 +309,8 @@ class PerfRootMUSICOverrideSourceOp final : public holoscan::Operator<> {
   }
 
   holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
-  holoscan::Output<hr::WireArrayGeometry>
-      array_geometry{"array_geometry"};
-  holoscan::Output<hr::SpatialSmoothingOverride>
-      spatial_smoothing{"spatial_smoothing"};
+  holoscan::Output<hr::WireArrayGeometry> array_geometry{"array_geometry"};
+  holoscan::Output<hr::SpatialSmoothingOverride> spatial_smoothing{"spatial_smoothing"};
   holoscan::Output<int64_t> num_sources{"num_sources"};
   holoscan::Output<double> source_count_pfa{"source_count_pfa"};
   holoscan::Output<int64_t> max_sources{"max_sources"};
@@ -355,21 +322,17 @@ class PerfRootMUSICOverrideSourceOp final : public holoscan::Operator<> {
   int64_t frame_index_{0};
 };
 
-perf::TimingCollector run_root_music_graph(
-    const RootMusicScenario& scen, const perf::RunPlan& plan) {
-  auto snap = perf::make_iq_cube_device<PerfPrecision>(
-      {scen.detections, scen.channels, scen.snapshots});
+perf::TimingCollector run_root_music_graph(const RootMusicScenario& scen,
+                                           const perf::RunPlan& plan) {
+  auto snap =
+      perf::make_iq_cube_device<PerfPrecision>({scen.detections, scen.channels, scen.snapshots});
   constexpr int64_t kInitialMaxSources = 4;
   constexpr int64_t kOverrideMaxSources = 3;
   hr::RootMUSICParams initial;
   initial.array_geometry = scenario_geometry(scen, 0.5, 1.0);
-  initial.angle_convention.preset =
-      hr::AngleConventionPreset::kRadarBoresight;
+  initial.angle_convention.preset = hr::AngleConventionPreset::kRadarBoresight;
   initial.num_sources = scen.fixed_model_order.value_or(
-      scen.override_kind ==
-              RootMusicScenario::OverrideKind::kSourceCountPfa
-          ? -1
-          : 1);
+      scen.override_kind == RootMusicScenario::OverrideKind::kSourceCountPfa ? -1 : 1);
   initial.source_count_pfa = 1e-4;
   initial.max_sources = kInitialMaxSources;
   hr::RootMUSICParams override = initial;
@@ -379,8 +342,7 @@ perf::TimingCollector run_root_music_graph(
       break;
     case RootMusicScenario::OverrideKind::kSpatialSmoothing:
       override.spatial_smoothing =
-          scen.is_ura ? std::vector<int64_t>{2, 2}
-                      : std::vector<int64_t>{2};
+          scen.is_ura ? std::vector<int64_t>{2, 2} : std::vector<int64_t>{2};
       break;
     case RootMusicScenario::OverrideKind::kNumSources:
       override.num_sources = -1;
@@ -402,17 +364,14 @@ perf::TimingCollector run_root_music_graph(
   extents.max_channels = scen.channels;
   perf::TimingCollector collector;
   collector.t_construct = perf::Clock::now();
-  perf::PerfFrameBank::reset(
-      std::move(snap), plan.total_frames, &collector);
+  perf::PerfFrameBank::reset(std::move(snap), plan.total_frames, &collector);
 
   holoscan::Graph graph{"root-music-perf"};
-  const auto source = graph.op<PerfRootMUSICOverrideSourceOp>(
-      "src", plan.override_at, initial, override);
-  auto op = graph.op<hr::RootMUSICEstimatorOp<PerfPrecision>>(
-      "root_music", extents);
+  const auto source =
+      graph.op<PerfRootMUSICOverrideSourceOp>("src", plan.override_at, initial, override);
+  auto op = graph.op<hr::RootMUSICEstimatorOp<PerfPrecision>>("root_music", extents);
   op.set_params(std::move(initial));
-  const auto sink =
-      graph.op<perf::PerfTerminalSinkOp>("aoa_sink");
+  const auto sink = graph.op<perf::PerfTerminalSinkOp>("aoa_sink");
   const auto doa = graph.op<perf::PerfNullSinkOp>("doa_drain");
   const auto count = graph.op<perf::PerfNullSinkOp>("count_drain");
   const auto eigen = graph.op<perf::PerfNullSinkOp>("eig_drain");
@@ -435,14 +394,10 @@ perf::TimingCollector run_root_music_graph(
   perf::bind_tensor_out(options, "root_music", "doa_multi");
   perf::bind_tensor_out(options, "root_music", "source_count");
   perf::bind_tensor_out(options, "root_music", "eigenvalues");
-  graph.set_default_clock(
-      graph.add_clock<holoscan::RealtimeClock>("clock"));
-  const holoscan::ExecutionPlan compiled =
-      holoscan::compile(graph, std::move(options));
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+  const holoscan::ExecutionPlan compiled = holoscan::compile(graph, std::move(options));
   if (!compiled.ok()) {
-    throw std::runtime_error(
-        "root-music-perf compile failed: " +
-        std::string(compiled.json()));
+    throw std::runtime_error("root-music-perf compile failed: " + std::string(compiled.json()));
   }
   holoscan::RunSession session = holoscan::run_async(compiled);
   perf::detail::wait_for_frames(session, plan.total_frames);
@@ -456,23 +411,19 @@ perf::TimingCollector run_root_music_graph(
     }
     throw std::runtime_error(message);
   }
-  if (collector.ends.size() <
-      static_cast<std::size_t>(plan.total_frames)) {
-    throw std::runtime_error(perf::detail::stall_message(
-        "root-music-perf", collector.ends.size(), plan.total_frames));
+  if (collector.ends.size() < static_cast<std::size_t>(plan.total_frames)) {
+    throw std::runtime_error(
+        perf::detail::stall_message("root-music-perf", collector.ends.size(), plan.total_frames));
   }
   return collector;
 }
 
-void fill_throughput(perf::ResultRow* row,
-                     const RootMusicScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const RootMusicScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
   const double sec = median_ms / 1000.0;
-  row->cells_per_second =
-      static_cast<double>(scen.detections) / sec;
+  row->cells_per_second = static_cast<double>(scen.detections) / sec;
 }
 
 perf::ResultRow base_row(const RootMusicScenario& scen) {
@@ -480,25 +431,19 @@ perf::ResultRow base_row(const RootMusicScenario& scen) {
   row.scenario_id = scen.id;
   row.op_name = "RootMUSICEstimatorOp";
   row.variant = scen.fixed_model_order.has_value()
-                    ? "root_music_model_order_" +
-                          std::to_string(*scen.fixed_model_order)
-                    : std::string("root_music_live_") +
-                          override_name(scen.override_kind);
+                    ? "root_music_model_order_" + std::to_string(*scen.fixed_model_order)
+                    : std::string("root_music_live_") + override_name(scen.override_kind);
   row.size_id = scen.size_id;
-  row.input_shape = {scen.detections, scen.channels,
-                     scen.snapshots};
+  row.input_shape = {scen.detections, scen.channels, scen.snapshots};
   row.out_batch = scen.detections;
   row.k = scen.channels;
   row.notes = scen.fixed_model_order.has_value()
-                  ? "fixed_model_order=" +
-                        std::to_string(*scen.fixed_model_order)
-                  : std::string("live_override=") +
-                        override_name(scen.override_kind);
+                  ? "fixed_model_order=" + std::to_string(*scen.fixed_model_order)
+                  : std::string("live_override=") + override_name(scen.override_kind);
   return row;
 }
 
-RootMusicScenario make_scenario(
-    const SizeSpec& s, RootMusicScenario::OverrideKind kind) {
+RootMusicScenario make_scenario(const SizeSpec& s, RootMusicScenario::OverrideKind kind) {
   RootMusicScenario sc;
   sc.size_id = s.id;
   sc.channels = s.channels;
@@ -506,19 +451,14 @@ RootMusicScenario make_scenario(
   sc.snapshots = s.snapshots;
   sc.override_kind = kind;
   std::ostringstream id;
-  id << "root_music_" << s.id << "_c" << s.channels
-     << "_n" << s.detections << "_s" << s.snapshots
+  id << "root_music_" << s.id << "_c" << s.channels << "_n" << s.detections << "_s" << s.snapshots
      << "_live_" << override_name(kind);
   sc.id = id.str();
   return sc;
 }
 
-RootMusicScenario make_ura_scenario(const char* size_id,
-                                    int64_t ny,
-                                    int64_t nz,
-                                    int64_t detections,
-                                    int64_t snapshots,
-                                    RootMusicScenario::OverrideKind kind) {
+RootMusicScenario make_ura_scenario(const char* size_id, int64_t ny, int64_t nz, int64_t detections,
+                                    int64_t snapshots, RootMusicScenario::OverrideKind kind) {
   RootMusicScenario sc;
   sc.size_id = size_id;
   sc.is_ura = true;
@@ -529,125 +469,100 @@ RootMusicScenario make_ura_scenario(const char* size_id,
   sc.snapshots = snapshots;
   sc.override_kind = kind;
   std::ostringstream id;
-  id << "root_music_ura_" << ny << "x" << nz
-     << "_n" << detections << "_s" << snapshots
-     << "_live_" << override_name(kind);
+  id << "root_music_ura_" << ny << "x" << nz << "_n" << detections << "_s" << snapshots << "_live_"
+     << override_name(kind);
   sc.id = id.str();
   return sc;
 }
 
-RootMusicScenario make_model_order_scenario(
-    const SizeSpec& size, int64_t model_order) {
-  RootMusicScenario scenario = make_scenario(
-      size, RootMusicScenario::OverrideKind::kMaxSources);
+RootMusicScenario make_model_order_scenario(const SizeSpec& size, int64_t model_order) {
+  RootMusicScenario scenario = make_scenario(size, RootMusicScenario::OverrideKind::kMaxSources);
   scenario.fixed_model_order = model_order;
   std::ostringstream id;
-  id << "root_music_" << size.id << "_c" << size.channels
-     << "_n" << size.detections << "_s" << size.snapshots
+  id << "root_music_" << size.id << "_c" << size.channels << "_n" << size.detections << "_s"
+     << size.snapshots << "_model_order_" << model_order;
+  scenario.id = id.str();
+  return scenario;
+}
+
+RootMusicScenario make_ura_model_order_scenario(const char* size_id, int64_t ny, int64_t nz,
+                                                int64_t detections, int64_t snapshots,
+                                                int64_t model_order) {
+  RootMusicScenario scenario = make_ura_scenario(size_id, ny, nz, detections, snapshots,
+                                                 RootMusicScenario::OverrideKind::kMaxSources);
+  scenario.fixed_model_order = model_order;
+  std::ostringstream id;
+  id << "root_music_ura_" << ny << "x" << nz << "_n" << detections << "_s" << snapshots
      << "_model_order_" << model_order;
   scenario.id = id.str();
   return scenario;
 }
 
-RootMusicScenario make_ura_model_order_scenario(
-    const char* size_id, int64_t ny, int64_t nz,
-    int64_t detections, int64_t snapshots, int64_t model_order) {
-  RootMusicScenario scenario = make_ura_scenario(
-      size_id, ny, nz, detections, snapshots,
-      RootMusicScenario::OverrideKind::kMaxSources);
-  scenario.fixed_model_order = model_order;
-  std::ostringstream id;
-  id << "root_music_ura_" << ny << "x" << nz
-     << "_n" << detections << "_s" << snapshots
-     << "_model_order_" << model_order;
-  scenario.id = id.str();
-  return scenario;
-}
-
-void append_override_scenarios(std::vector<RootMusicScenario>* result,
-                               const SizeSpec& size) {
-  for (const auto kind : {
-           RootMusicScenario::OverrideKind::kArrayGeometry,
-           RootMusicScenario::OverrideKind::kSpatialSmoothing,
-           RootMusicScenario::OverrideKind::kNumSources,
-           RootMusicScenario::OverrideKind::kSourceCountPfa,
-           RootMusicScenario::OverrideKind::kMaxSources}) {
+void append_override_scenarios(std::vector<RootMusicScenario>* result, const SizeSpec& size) {
+  for (const auto kind : {RootMusicScenario::OverrideKind::kArrayGeometry,
+                          RootMusicScenario::OverrideKind::kSpatialSmoothing,
+                          RootMusicScenario::OverrideKind::kNumSources,
+                          RootMusicScenario::OverrideKind::kSourceCountPfa,
+                          RootMusicScenario::OverrideKind::kMaxSources}) {
     result->push_back(make_scenario(size, kind));
   }
 }
 
-void append_ura_override_scenarios(
-    std::vector<RootMusicScenario>* result, const char* size_id,
-    int64_t ny, int64_t nz, int64_t detections, int64_t snapshots) {
-  for (const auto kind : {
-           RootMusicScenario::OverrideKind::kArrayGeometry,
-           RootMusicScenario::OverrideKind::kSpatialSmoothing,
-           RootMusicScenario::OverrideKind::kNumSources,
-           RootMusicScenario::OverrideKind::kSourceCountPfa,
-           RootMusicScenario::OverrideKind::kMaxSources}) {
-    result->push_back(make_ura_scenario(
-        size_id, ny, nz, detections, snapshots, kind));
+void append_ura_override_scenarios(std::vector<RootMusicScenario>* result, const char* size_id,
+                                   int64_t ny, int64_t nz, int64_t detections, int64_t snapshots) {
+  for (const auto kind : {RootMusicScenario::OverrideKind::kArrayGeometry,
+                          RootMusicScenario::OverrideKind::kSpatialSmoothing,
+                          RootMusicScenario::OverrideKind::kNumSources,
+                          RootMusicScenario::OverrideKind::kSourceCountPfa,
+                          RootMusicScenario::OverrideKind::kMaxSources}) {
+    result->push_back(make_ura_scenario(size_id, ny, nz, detections, snapshots, kind));
   }
 }
 
-void append_model_order_scenarios(
-    std::vector<RootMusicScenario>* result, const SizeSpec& size) {
+void append_model_order_scenarios(std::vector<RootMusicScenario>* result, const SizeSpec& size) {
   const int64_t upper = std::min<int64_t>(4, size.channels - 1);
   for (const int64_t order : {int64_t{1}, int64_t{2}, upper}) {
     if (order <= 0 ||
-        std::any_of(
-            result->begin(), result->end(),
-            [&](const RootMusicScenario& scenario) {
-              return scenario.size_id == size.id &&
-                     scenario.fixed_model_order == order;
-            })) {
+        std::any_of(result->begin(), result->end(), [&](const RootMusicScenario& scenario) {
+          return scenario.size_id == size.id && scenario.fixed_model_order == order;
+        })) {
       continue;
     }
     result->push_back(make_model_order_scenario(size, order));
   }
 }
 
-void append_ura_model_order_scenarios(
-    std::vector<RootMusicScenario>* result, const char* size_id,
-    int64_t ny, int64_t nz, int64_t detections, int64_t snapshots) {
+void append_ura_model_order_scenarios(std::vector<RootMusicScenario>* result, const char* size_id,
+                                      int64_t ny, int64_t nz, int64_t detections,
+                                      int64_t snapshots) {
   const int64_t channels = ny * nz;
   const int64_t upper = std::min<int64_t>(4, channels - 1);
   for (const int64_t order : {int64_t{1}, int64_t{2}, upper}) {
     if (order <= 0 ||
-        std::any_of(
-            result->begin(), result->end(),
-            [&](const RootMusicScenario& scenario) {
-              return scenario.size_id == size_id &&
-                     scenario.fixed_model_order == order;
-            })) {
+        std::any_of(result->begin(), result->end(), [&](const RootMusicScenario& scenario) {
+          return scenario.size_id == size_id && scenario.fixed_model_order == order;
+        })) {
       continue;
     }
-    result->push_back(make_ura_model_order_scenario(
-        size_id, ny, nz, detections, snapshots, order));
+    result->push_back(make_ura_model_order_scenario(size_id, ny, nz, detections, snapshots, order));
   }
 }
 
-void append_scenarios(std::vector<RootMusicScenario>* result,
-                      const SizeSpec& size) {
+void append_scenarios(std::vector<RootMusicScenario>* result, const SizeSpec& size) {
   append_override_scenarios(result, size);
   append_model_order_scenarios(result, size);
 }
 
-void append_ura_scenarios(
-    std::vector<RootMusicScenario>* result, const char* size_id,
-    int64_t ny, int64_t nz, int64_t detections, int64_t snapshots) {
-  append_ura_override_scenarios(
-      result, size_id, ny, nz, detections, snapshots);
-  append_ura_model_order_scenarios(
-      result, size_id, ny, nz, detections, snapshots);
+void append_ura_scenarios(std::vector<RootMusicScenario>* result, const char* size_id, int64_t ny,
+                          int64_t nz, int64_t detections, int64_t snapshots) {
+  append_ura_override_scenarios(result, size_id, ny, nz, detections, snapshots);
+  append_ura_model_order_scenarios(result, size_id, ny, nz, detections, snapshots);
 }
 
 struct RootMusicTraits : perf::PerfDriverDefaults {
   using Scenario = RootMusicScenario;
 
-  static const char* tool_name() {
-    return "perf_root_music_estimator";
-  }
+  static const char* tool_name() { return "perf_root_music_estimator"; }
   static const char* tool_description() {
     return "RootMUSICEstimatorOp performance "
            "characterization (HSDK 5 Graph)";
@@ -655,9 +570,7 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
   static const char* sizes_all_help() {
     return "Default sizes with five live overrides and model-order sweep";
   }
-  static const char* sizes_subset_help() {
-    return "Size sweep across an explicit subset";
-  }
+  static const char* sizes_subset_help() { return "Size sweep across an explicit subset"; }
   static const char* full_help() {
     return "Full sizes with five live overrides and model-order sweep";
   }
@@ -667,8 +580,7 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
     for (const auto& s : size_ladder()) {
       perf::SizeDef def;
       def.id = s.id;
-      def.shape = {s.channels, s.detections,
-                   s.snapshots};
+      def.shape = {s.channels, s.detections, s.snapshots};
       def.cells = s.detections;
       def.role = s.role;
       out.push_back(def);
@@ -676,25 +588,21 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<RootMusicScenario>
-  build_default_matrix() {
+  static std::vector<RootMusicScenario> build_default_matrix() {
     std::vector<RootMusicScenario> out;
     for (const char* sid : {"xs", "sm", "md"}) {
       append_scenarios(&out, must_find_size(sid));
     }
-    append_ura_scenarios(
-        &out, "ura_sm", 6, 6, 128, 96);
+    append_ura_scenarios(&out, "ura_sm", 6, 6, 128, 96);
     return out;
   }
 
-  static std::vector<RootMusicScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<RootMusicScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<RootMusicScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* s = find_size(sid);
       if (s == nullptr) {
-        std::cerr << "warning: unknown size id '"
-                  << sid << "', skipping\n";
+        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
         continue;
       }
       append_scenarios(&out, *s);
@@ -702,51 +610,39 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<RootMusicScenario>
-  build_full_matrix() {
+  static std::vector<RootMusicScenario> build_full_matrix() {
     std::vector<RootMusicScenario> out;
     for (const auto& s : size_ladder()) {
       append_scenarios(&out, s);
     }
-    append_ura_scenarios(
-        &out, "ura_sm", 6, 6, 128, 96);
-    append_ura_scenarios(
-        &out, "ura_lg", 8, 8, 256, 128);
+    append_ura_scenarios(&out, "ura_sm", 6, 6, 128, 96);
+    append_ura_scenarios(&out, "ura_lg", 8, 8, 256, 128);
     return out;
   }
 
-  static void run_scenario(
-      const RootMusicScenario& scen,
-      const perf::RunSettings& rs,
-      perf::PerfReport* report) {
+  static void run_scenario(const RootMusicScenario& scen, const perf::RunSettings& rs,
+                           perf::PerfReport* report) {
     const perf::RunPlan plan =
-        perf::make_run_plan(
-            rs, /*has_override=*/!scen.fixed_model_order.has_value());
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan,
-        [&](int /*rep*/, const perf::RunPlan& p) {
+        perf::make_run_plan(rs, /*has_override=*/!scen.fixed_model_order.has_value());
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_root_music_graph(scen, p);
         });
 
-    perf::append_setup_row(
-        base_row(scen), samples, report);
+    perf::append_setup_row(base_row(scen), samples, report);
 
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
     if (scen.fixed_model_order.has_value()) {
-      row.notes =
-          "fixed num_sources=" +
-          std::to_string(*scen.fixed_model_order) +
-          " model-order characterization; no inline override; "
-          "cells/s is detections/s";
+      row.notes = "fixed num_sources=" + std::to_string(*scen.fixed_model_order) +
+                  " model-order characterization; no inline override; "
+                  "cells/s is detections/s";
     } else {
-      row.notes =
-          "override_ms isolates inline " +
-          std::string(override_name(scen.override_kind)) +
-          "; steady num_sources is fixed at one except the "
-          "source_count_pfa scenario, which uses auto; "
-          "cells/s is detections/s";
+      row.notes = "override_ms isolates inline " + std::string(override_name(scen.override_kind)) +
+                  "; steady num_sources is fixed at one except the "
+                  "source_count_pfa scenario, which uses auto; "
+                  "cells/s is detections/s";
     }
     report->results.push_back(row);
   }
@@ -759,10 +655,8 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
       warm.measured_frames = 2;
       warm.repeats = 1;
       run_scenario(
-          make_scenario(
-              must_find_size("xs"),
-              RootMusicScenario::OverrideKind::kMaxSources),
-          warm, &discarded);
+          make_scenario(must_find_size("xs"), RootMusicScenario::OverrideKind::kMaxSources), warm,
+          &discarded);
     });
   }
 };
@@ -770,6 +664,5 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<RootMusicTraits>(
-      argc, argv);
+  return holoscan::radar::perf::perf_main<RootMusicTraits>(argc, argv);
 }

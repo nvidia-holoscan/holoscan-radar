@@ -45,20 +45,17 @@ inline std::string run_capture(const char* cmd) {
   if (pipe == nullptr) {
     return "";
   }
-  while (std::fgets(buf.data(), static_cast<int>(buf.size()), pipe) !=
-         nullptr) {
+  while (std::fgets(buf.data(), static_cast<int>(buf.size()), pipe) != nullptr) {
     out += buf.data();
   }
   pclose(pipe);
-  while (!out.empty() && (out.back() == '\n' || out.back() == '\r' ||
-                          out.back() == ' ')) {
+  while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' ')) {
     out.pop_back();
   }
   return out;
 }
 
-inline std::string first_matching_line(const std::string& path,
-                                       const std::string& key) {
+inline std::string first_matching_line(const std::string& path, const std::string& key) {
   std::ifstream f(path);
   std::string line;
   while (std::getline(f, line)) {
@@ -78,15 +75,12 @@ inline std::string first_matching_line(const std::string& path,
 
 inline Provenance capture_provenance() {
   Provenance p;
-  const std::string commit = detail::run_capture(
-      "git rev-parse --short HEAD 2>/dev/null");
+  const std::string commit = detail::run_capture("git rev-parse --short HEAD 2>/dev/null");
   if (!commit.empty()) {
     p.git_commit = commit;
   }
   // Non-empty porcelain output means the working tree has local changes.
-  p.git_dirty = !detail::run_capture(
-                     "git status --porcelain 2>/dev/null")
-                     .empty();
+  p.git_dirty = !detail::run_capture("git status --porcelain 2>/dev/null").empty();
 
   const auto now = std::chrono::system_clock::now();
   const std::time_t t = std::chrono::system_clock::to_time_t(now);
@@ -111,27 +105,23 @@ inline Platform capture_platform() {
 
   int driver = 0;
   if (cudaDriverGetVersion(&driver) == cudaSuccess && driver > 0) {
-    p.gpu_driver = std::to_string(driver / 1000) + "." +
-                   std::to_string((driver % 1000) / 10);
+    p.gpu_driver = std::to_string(driver / 1000) + "." + std::to_string((driver % 1000) / 10);
   }
   int runtime = 0;
   if (cudaRuntimeGetVersion(&runtime) == cudaSuccess && runtime > 0) {
-    p.cuda_runtime = std::to_string(runtime / 1000) + "." +
-                     std::to_string((runtime % 1000) / 10);
+    p.cuda_runtime = std::to_string(runtime / 1000) + "." + std::to_string((runtime % 1000) / 10);
   }
 
   p.holoscan_version = std::to_string(HOLOSCAN_VERSION_MAJOR) + "." +
                        std::to_string(HOLOSCAN_VERSION_MINOR) + "." +
                        std::to_string(HOLOSCAN_VERSION_PATCH);
 
-  const std::string cpu = detail::first_matching_line("/proc/cpuinfo",
-                                                      "model name");
+  const std::string cpu = detail::first_matching_line("/proc/cpuinfo", "model name");
   if (!cpu.empty()) {
     p.cpu_model = cpu;
   }
 
-  const std::string os = detail::run_capture(
-      "uname -sr 2>/dev/null");
+  const std::string os = detail::run_capture("uname -sr 2>/dev/null");
   if (!os.empty()) {
     p.os_name = os;
   }

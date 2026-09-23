@@ -91,46 +91,36 @@ struct MUSICParams {
   bool forward_backward{true};
 };
 
-HOLOSCAN_PARAM_SCHEMA(
-    MUSICParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.MUSICParams", 2),
-    holoscan::field<&MUSICParams::array_geometry>("array_geometry")
-        .description(
-            "Element positions and wavelength; num_elements must match "
-            "snapshot channels"),
-    holoscan::field<&MUSICParams::angle_convention>("angle_convention")
-        .description(
-            "Static AER labeling for the scan grid and DOA output "
-            "(default radar_boresight; no live port)"),
-    holoscan::field<&MUSICParams::az_coordinates>("az_coordinates")
-        .description(
-            "First scan-coordinate grid: azimuth radians for angular "
-            "conventions, or dimensionless u under direction_cosine; "
-            "required non-empty"),
-    holoscan::field<&MUSICParams::el_coordinates>("el_coordinates")
-        .description(
-            "Second scan-coordinate grid: elevation radians for angular "
-            "conventions, or dimensionless v under direction_cosine; "
-            "required non-empty"),
-    holoscan::field<&MUSICParams::num_sources>("num_sources")
-        .description(
-            "Signal-subspace dimension; negative selects auto (per-item "
-            "EFT on the covariance eigenvalues)"),
-    holoscan::field<&MUSICParams::source_count_pfa>("source_count_pfa")
-        .description(
-            "EFT over-estimation probability for num_sources: auto"),
-    holoscan::field<&MUSICParams::max_sources>("max_sources")
-        .description(
-            "Capacity of doa_multi/source_count, and the K_max cap on "
-            "num_sources: auto"),
-    holoscan::field<&MUSICParams::spatial_smoothing>("spatial_smoothing")
-        .description(
-            "Per-aperture-axis sub-array counts on a filled ULA/URA "
-            "(empty = off)"),
-    holoscan::field<&MUSICParams::forward_backward>("forward_backward")
-        .description(
-            "Include conjugate-reversed looks when spatial_smoothing is "
-            "set"));
+HOLOSCAN_PARAM_SCHEMA(MUSICParams,
+                      holoscan::param_schema("com.nvidia.holoscan.radar.MUSICParams", 2),
+                      holoscan::field<&MUSICParams::array_geometry>("array_geometry")
+                          .description("Element positions and wavelength; num_elements must match "
+                                       "snapshot channels"),
+                      holoscan::field<&MUSICParams::angle_convention>("angle_convention")
+                          .description("Static AER labeling for the scan grid and DOA output "
+                                       "(default radar_boresight; no live port)"),
+                      holoscan::field<&MUSICParams::az_coordinates>("az_coordinates")
+                          .description("First scan-coordinate grid: azimuth radians for angular "
+                                       "conventions, or dimensionless u under direction_cosine; "
+                                       "required non-empty"),
+                      holoscan::field<&MUSICParams::el_coordinates>("el_coordinates")
+                          .description("Second scan-coordinate grid: elevation radians for angular "
+                                       "conventions, or dimensionless v under direction_cosine; "
+                                       "required non-empty"),
+                      holoscan::field<&MUSICParams::num_sources>("num_sources")
+                          .description("Signal-subspace dimension; negative selects auto (per-item "
+                                       "EFT on the covariance eigenvalues)"),
+                      holoscan::field<&MUSICParams::source_count_pfa>("source_count_pfa")
+                          .description("EFT over-estimation probability for num_sources: auto"),
+                      holoscan::field<&MUSICParams::max_sources>("max_sources")
+                          .description("Capacity of doa_multi/source_count, and the K_max cap on "
+                                       "num_sources: auto"),
+                      holoscan::field<&MUSICParams::spatial_smoothing>("spatial_smoothing")
+                          .description("Per-aperture-axis sub-array counts on a filled ULA/URA "
+                                       "(empty = off)"),
+                      holoscan::field<&MUSICParams::forward_backward>("forward_backward")
+                          .description("Include conjugate-reversed looks when spatial_smoothing is "
+                                       "set"));
 
 static_assert(holoscan::param_schema_availability<MUSICParams>() ==
                   holoscan::ParamSchemaAvailability::kDeclared,
@@ -146,8 +136,7 @@ class MUSICEstimatorOp : public holoscan::Operator<MUSICParams> {
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
   // Drain MatX eig plan caches + the global MemTracker once at graph stop,
   // while CUDA is still valid (per-tick only clears plan caches; see
   // music_stage.hpp). HSDK 5 still exposes OperatorBase::stop().

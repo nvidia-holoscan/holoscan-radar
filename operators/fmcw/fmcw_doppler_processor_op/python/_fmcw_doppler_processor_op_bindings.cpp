@@ -32,28 +32,23 @@ class PyFMCWDopplerProcessorOp : public FMCWDopplerProcessorOp<T> {
  public:
   using FMCWDopplerProcessorOp<T>::FMCWDopplerProcessorOp;
 
-  PyFMCWDopplerProcessorOp(
-      Fragment* fragment, const py::args& args,
-      std::int64_t max_chirps = 512,
-      std::int64_t max_range_bins = 4096,
-      std::int64_t max_rx = 1,
-      const WindowSpec& doppler_window = WindowSpec{},
-      bool center_zero_doppler = true,
-      std::optional<FMCWWaveformDescriptor> waveform =
-          std::nullopt,
-      FftNorm fft_norm = FftNorm::kBackward,
-      std::optional<int64_t> nfft = std::nullopt,
-      const std::string& name =
-          "fmcw_doppler_processor")
-      : FMCWDopplerProcessorOp<T>([&] {
-          MaxTensorExtents extents;
-          extents.max_chirps = max_chirps;
-          extents.max_range_bins = max_range_bins;
-          if (max_rx > 1) {
-            extents.max_rx = max_rx;
-          }
-          return extents;
-        }()) {
+  PyFMCWDopplerProcessorOp(Fragment* fragment, const py::args& args, std::int64_t max_chirps = 512,
+                           std::int64_t max_range_bins = 4096, std::int64_t max_rx = 1,
+                           const WindowSpec& doppler_window = WindowSpec{},
+                           bool center_zero_doppler = true,
+                           std::optional<FMCWWaveformDescriptor> waveform = std::nullopt,
+                           FftNorm fft_norm = FftNorm::kBackward,
+                           std::optional<int64_t> nfft = std::nullopt,
+                           const std::string& name = "fmcw_doppler_processor")
+  : FMCWDopplerProcessorOp<T>([&] {
+      MaxTensorExtents extents;
+      extents.max_chirps = max_chirps;
+      extents.max_range_bins = max_range_bins;
+      if (max_rx > 1) {
+        extents.max_rx = max_rx;
+      }
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -91,24 +86,14 @@ void bind_fmcw_doppler_processor(py::module_& m, const char* class_name) {
       "fft_norm : FftNorm, optional\n"
       "nfft : int, optional\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&,
-                    std::int64_t, std::int64_t,
-                    std::int64_t, const WindowSpec&,
-                    bool,
-                    std::optional<FMCWWaveformDescriptor>,
-                    FftNorm, std::optional<int64_t>,
-                    const std::string&>(),
-           py::arg("fragment"),
-           py::arg("max_chirps") = 512,
-           py::arg("max_range_bins") = 4096,
-           py::arg("max_rx") = 1,
-           py::arg("doppler_window") = WindowSpec{},
-           py::arg("center_zero_doppler") = true,
-           py::arg("waveform") = py::none(),
-           py::arg("fft_norm") = FftNorm::kBackward,
-           py::arg("nfft") = py::none(),
-           py::arg("name") =
-               "fmcw_doppler_processor")
+      .def(py::init<Fragment*, const py::args&, std::int64_t, std::int64_t, std::int64_t,
+                    const WindowSpec&, bool, std::optional<FMCWWaveformDescriptor>, FftNorm,
+                    std::optional<int64_t>, const std::string&>(),
+           py::arg("fragment"), py::arg("max_chirps") = 512, py::arg("max_range_bins") = 4096,
+           py::arg("max_rx") = 1, py::arg("doppler_window") = WindowSpec{},
+           py::arg("center_zero_doppler") = true, py::arg("waveform") = py::none(),
+           py::arg("fft_norm") = FftNorm::kBackward, py::arg("nfft") = py::none(),
+           py::arg("name") = "fmcw_doppler_processor")
       .def("setup", &Op::setup, py::arg("spec"));
 }
 
@@ -119,8 +104,6 @@ void bind_fmcw_doppler_processor(py::module_& m, const char* class_name) {
 PYBIND11_MODULE(_fmcw_doppler_processor_op, m) {
   holoscan::radar::ensure_radar_arg_setters();
   m.doc() = "FMCWDopplerProcessorOp Python bindings";
-  holoscan::radar::bind_fmcw_doppler_processor<float>(
-      m, "FMCWDopplerProcessorOpF32");
-  holoscan::radar::bind_fmcw_doppler_processor<double>(
-      m, "FMCWDopplerProcessorOpF64");
+  holoscan::radar::bind_fmcw_doppler_processor<float>(m, "FMCWDopplerProcessorOpF32");
+  holoscan::radar::bind_fmcw_doppler_processor<double>(m, "FMCWDopplerProcessorOpF64");
 }

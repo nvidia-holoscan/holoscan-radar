@@ -49,8 +49,7 @@ AngleConvention custom(SignedAxis b, SignedAxis a, SignedAxis e,
 }
 
 TEST(AngleConventionTest, DefaultsToRadarBoresight) {
-  EXPECT_EQ(AngleConvention{}.preset,
-            AngleConventionPreset::kRadarBoresight);
+  EXPECT_EQ(AngleConvention{}.preset, AngleConventionPreset::kRadarBoresight);
 }
 
 TEST(AngleConventionTest, ScanGridRejectsNonFiniteCoordinates) {
@@ -58,18 +57,15 @@ TEST(AngleConventionTest, ScanGridRejectsNonFiniteCoordinates) {
   const double inf = std::numeric_limits<double>::infinity();
   EXPECT_THROW(validate_scan_grid_axes(AngleConvention{}, {0.0, nan}, {0.0}),
                std::invalid_argument);
-  EXPECT_THROW(validate_scan_grid_axes(AngleConvention{}, {0.0}, {-inf}),
-               std::invalid_argument);
+  EXPECT_THROW(validate_scan_grid_axes(AngleConvention{}, {0.0}, {-inf}), std::invalid_argument);
 }
 
 TEST(AngleConventionTest, DirectionCosineAxesStayWithinUnitInterval) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kDirectionCosine;
   EXPECT_NO_THROW(validate_scan_grid_axes(conv, {-1.0, 0.0, 1.0}, {-1.0, 1.0}));
-  EXPECT_THROW(validate_scan_grid_axes(conv, {-1.01}, {0.0}),
-               std::invalid_argument);
-  EXPECT_THROW(validate_scan_grid_axes(conv, {0.0}, {1.01}),
-               std::invalid_argument);
+  EXPECT_THROW(validate_scan_grid_axes(conv, {-1.01}, {0.0}), std::invalid_argument);
+  EXPECT_THROW(validate_scan_grid_axes(conv, {0.0}, {1.01}), std::invalid_argument);
 }
 
 TEST(AngleConventionTest, DirectionCosineAllowsMaskedCartesianCorners) {
@@ -80,8 +76,7 @@ TEST(AngleConventionTest, DirectionCosineAllowsMaskedCartesianCorners) {
 }
 
 TEST(AngleConventionTest, AngularConventionsAllowFiniteValuesOutsideUnitInterval) {
-  EXPECT_NO_THROW(
-      validate_scan_grid_axes(AngleConvention{}, {-4.0, 4.0}, {-2.0, 2.0}));
+  EXPECT_NO_THROW(validate_scan_grid_axes(AngleConvention{}, {-4.0, 4.0}, {-2.0, 2.0}));
 }
 
 // az/el sample grid; el kept away from the ±π/2 poles where az is undefined.
@@ -113,8 +108,7 @@ void expect_inverse_matches(const AngleConvention& a, const AngleConvention& b,
     for (double el : el_grid()) {
       const double ce = std::cos(el);
       // A canonical unit direction to invert (built independently of a/b).
-      const CanonicalDirection dir{ce * std::cos(az), ce * std::sin(az),
-                                   std::sin(el)};
+      const CanonicalDirection dir{ce * std::cos(az), ce * std::sin(az), std::sin(el)};
       double az_a = 0.0, el_a = 0.0, az_b = 0.0, el_b = 0.0;
       canonical_to_boundary(a, dir, &az_a, &el_a);
       canonical_to_boundary(b, dir, &az_b, &el_b);
@@ -132,23 +126,17 @@ TEST(AngleConventionCustomTest, ReproducesEachPreset) {
   };
   const std::vector<Case> cases{
       {AngleConventionPreset::kRadarBoresight,
-       custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ),
-       "radar_boresight"},
+       custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ), "radar_boresight"},
       {AngleConventionPreset::kRosRep103,
-       custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ),
-       "ros_rep103"},
+       custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ), "ros_rep103"},
       {AngleConventionPreset::kIso8855Flu,
-       custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ),
-       "iso8855_flu"},
+       custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ), "iso8855_flu"},
       {AngleConventionPreset::kAerospaceNed,
-       custom(SignedAxis::kPlusX, SignedAxis::kMinusY, SignedAxis::kMinusZ),
-       "aerospace_ned"},
+       custom(SignedAxis::kPlusX, SignedAxis::kMinusY, SignedAxis::kMinusZ), "aerospace_ned"},
       {AngleConventionPreset::kGeodeticNed,
-       custom(SignedAxis::kPlusX, SignedAxis::kMinusY, SignedAxis::kMinusZ),
-       "geodetic_ned"},
+       custom(SignedAxis::kPlusX, SignedAxis::kMinusY, SignedAxis::kMinusZ), "geodetic_ned"},
       {AngleConventionPreset::kGeodeticEnu,
-       custom(SignedAxis::kMinusY, SignedAxis::kPlusX, SignedAxis::kPlusZ),
-       "geodetic_enu"},
+       custom(SignedAxis::kMinusY, SignedAxis::kPlusX, SignedAxis::kPlusZ), "geodetic_enu"},
       {AngleConventionPreset::kPhysicsSpherical,
        custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ,
               ElevationReference::kZenith),
@@ -161,8 +149,7 @@ TEST(AngleConventionCustomTest, ReproducesEachPreset) {
   }
 }
 
-void expect_round_trips(const AngleConvention& conv,
-                        const std::vector<double>& els) {
+void expect_round_trips(const AngleConvention& conv, const std::vector<double>& els) {
   for (double az : az_grid()) {
     for (double el : els) {
       const CanonicalDirection dir = boundary_to_canonical(conv, az, el);
@@ -176,18 +163,14 @@ void expect_round_trips(const AngleConvention& conv,
 
 TEST(AngleConventionCustomTest, RoundTripsBoundaryCanonicalBoundary) {
   // Horizon frames (non-trivial valid axis permutations): el ∈ (−π/2, π/2).
-  expect_round_trips(
-      custom(SignedAxis::kPlusY, SignedAxis::kPlusZ, SignedAxis::kPlusX),
-      el_grid());
-  expect_round_trips(
-      custom(SignedAxis::kMinusZ, SignedAxis::kPlusX, SignedAxis::kMinusY),
-      el_grid());
+  expect_round_trips(custom(SignedAxis::kPlusY, SignedAxis::kPlusZ, SignedAxis::kPlusX), el_grid());
+  expect_round_trips(custom(SignedAxis::kMinusZ, SignedAxis::kPlusX, SignedAxis::kMinusY),
+                     el_grid());
   // Zenith frame: el is the polar angle in (0, π), so round-trip over a polar
   // grid (negative/horizon el is out of domain for a zenith reference).
-  expect_round_trips(
-      custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ,
-             ElevationReference::kZenith),
-      {0.3, 0.8, 1.4, 2.0, 2.6});
+  expect_round_trips(custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ,
+                            ElevationReference::kZenith),
+                     {0.3, 0.8, 1.4, 2.0, 2.6});
 }
 
 // Principal azimuth in (−π, π] for the value `a` (period 2π).
@@ -204,15 +187,12 @@ double wrap_to_pi(double a) {
 TEST(AngleConventionCustomTest, ForwardPeriodicInAzimuth) {
   // boundary_to_canonical is built from cos/sin, so az and az ± 2π yield the
   // identical unit vector — any real azimuth is valid input.
-  const AngleConvention conv =
-      custom(SignedAxis::kMinusY, SignedAxis::kPlusX, SignedAxis::kPlusZ);
+  const AngleConvention conv = custom(SignedAxis::kMinusY, SignedAxis::kPlusX, SignedAxis::kPlusZ);
   for (double az : az_grid()) {
     for (double el : el_grid()) {
       const CanonicalDirection d0 = boundary_to_canonical(conv, az, el);
-      const CanonicalDirection d1 =
-          boundary_to_canonical(conv, az + kTwoPi, el);
-      const CanonicalDirection d2 =
-          boundary_to_canonical(conv, az - kTwoPi, el);
+      const CanonicalDirection d1 = boundary_to_canonical(conv, az + kTwoPi, el);
+      const CanonicalDirection d2 = boundary_to_canonical(conv, az - kTwoPi, el);
       for (auto* d : {&d1, &d2}) {
         EXPECT_NEAR(d0.x, d->x, 1e-12) << "az=" << az << " el=" << el;
         EXPECT_NEAR(d0.y, d->y, 1e-12) << "az=" << az << " el=" << el;
@@ -227,8 +207,7 @@ TEST(AngleConventionCustomTest, InverseAzimuthWrapsToPrincipalRange) {
   // azimuth in (−π, π]. An out-of-range input azimuth round-trips to its
   // wrapped principal value (not the original), and an in-range elevation is
   // preserved.
-  const AngleConvention conv =
-      custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ);
+  const AngleConvention conv = custom(SignedAxis::kPlusX, SignedAxis::kPlusY, SignedAxis::kPlusZ);
   const std::vector<double> wrapped_az{-6.0, -4.0, 3.0, 4.0, 5.5};
   for (double az : wrapped_az) {
     for (double el : el_grid()) {
@@ -249,13 +228,10 @@ TEST(AngleConventionCustomTest, RejectsDegenerateAxes) {
       custom(SignedAxis::kPlusX, SignedAxis::kPlusX, SignedAxis::kPlusZ);
   const AngleConvention same_axis =
       custom(SignedAxis::kPlusX, SignedAxis::kMinusX, SignedAxis::kPlusZ);
-  EXPECT_THROW(boundary_to_canonical(repeated, 0.1, 0.2),
-               std::invalid_argument);
-  EXPECT_THROW(boundary_to_canonical(same_axis, 0.1, 0.2),
-               std::invalid_argument);
+  EXPECT_THROW(boundary_to_canonical(repeated, 0.1, 0.2), std::invalid_argument);
+  EXPECT_THROW(boundary_to_canonical(same_axis, 0.1, 0.2), std::invalid_argument);
   double a = 0.0, b = 0.0;
-  EXPECT_THROW(canonical_to_boundary(repeated, {1.0, 0.0, 0.0}, &a, &b),
-               std::invalid_argument);
+  EXPECT_THROW(canonical_to_boundary(repeated, {1.0, 0.0, 0.0}, &a, &b), std::invalid_argument);
 }
 
 }  // namespace

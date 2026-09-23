@@ -34,8 +34,7 @@ template <typename T>
 constexpr DLDataType complex_dtype() {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "radar operators support float and double precision only");
-  return DLDataType{kDLComplex, sizeof(T) == 4 ? uint8_t{64} : uint8_t{128},
-                    1};
+  return DLDataType{kDLComplex, sizeof(T) == 4 ? uint8_t{64} : uint8_t{128}, 1};
 }
 
 constexpr bool dldatatype_equals(DLDataType a, DLDataType b) {
@@ -58,45 +57,41 @@ struct BatchedShape {
 // Validate and collapse a tensor of rank >= 2 into a BatchedShape. Throws
 // std::invalid_argument when the rank is < 2 or the layout is not compact
 // row-major (strided inputs are rejected in this wave).
-BatchedShape collapse_batch(const holoscan::Tensor& tensor,
-                            const char* port_name);
+BatchedShape collapse_batch(const holoscan::Tensor& tensor, const char* port_name);
 
 // collapse_batch plus MaxTensorExtents named TX/RX bounds, for compute()
 // shells (opaque leading batch and batch > max_tx*max_rx are errors).
-inline expected<BatchedShape, Error> collapse_named_tx_rx_batch(
-    const Tensor& input, const MaxTensorExtents& extents,
-    const char* port_name, const char* who) {
+inline expected<BatchedShape, Error> collapse_named_tx_rx_batch(const Tensor& input,
+                                                                const MaxTensorExtents& extents,
+                                                                const char* port_name,
+                                                                const char* who) {
   BatchedShape batched;
   try {
     batched = collapse_batch(input, port_name);
   } catch (const std::invalid_argument& e) {
-    return make_unexpected(
-        Error{ErrorCode::kInvalidArgument, std::string(e.what())});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument, std::string(e.what())});
   }
 
   const std::size_t max_leading = named_tx_rx_leading_rank(extents);
   if (batched.leading.size() > max_leading) {
-    return make_unexpected(Error{ErrorCode::kInvalidArgument,
-                                 unexpected_leading_message(
-                                     who, batched.leading.size(),
-                                     max_leading)});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              unexpected_leading_message(who, batched.leading.size(), max_leading)});
   }
   const std::int64_t max_rx = extent_rx_or_channels(extents);
   const std::int64_t max_tx = extent_or_one(extents.max_tx);
   if (batched.batch > max_tx * max_rx) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(who) + ": leading product " +
-            std::to_string(batched.batch) +
-            " exceeds max_tx*max_rx from MaxTensorExtents"});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, std::string(who) + ": leading product " +
+                                               std::to_string(batched.batch) +
+                                               " exceeds max_tx*max_rx from MaxTensorExtents"});
   }
   return batched;
 }
 
 // The full-rank output shape for a batched result: `leading` axes followed
 // by (rows, cols).
-std::vector<int64_t> full_rank_shape(const BatchedShape& shape, int64_t rows,
-                                     int64_t cols);
+std::vector<int64_t> full_rank_shape(const BatchedShape& shape, int64_t rows, int64_t cols);
 
 // Whether the tensor's memory is directly accessible from CUDA kernels
 // (device, managed, or pinned-host memory).
@@ -106,8 +101,8 @@ bool is_cuda_accessible(const holoscan::Tensor& tensor);
 // tensor is CUDA-accessible. Module-wide input requirement: pageable-host
 // input is rejected; ingest operators upload before the processing chain
 // (STATUS.md decision 2026-07-10).
-void require_cuda_accessible(const holoscan::Tensor& tensor,
-                             const char* port_name, const std::string& who);
+void require_cuda_accessible(const holoscan::Tensor& tensor, const char* port_name,
+                             const std::string& who);
 
 // Throw std::invalid_argument (naming the operator and the port) unless the
 // tensor is contiguous (compact row-major). Strided inputs are rejected by the
@@ -117,8 +112,8 @@ void require_contiguous(const holoscan::Tensor& tensor, const char* port_name,
 
 // Throw std::invalid_argument (naming the operator, the port, the received
 // dtype, and the expected dtype) unless the tensor's dtype matches `expected`.
-void require_dtype(const holoscan::Tensor& tensor, DLDataType expected,
-                   const char* port_name, const std::string& who);
+void require_dtype(const holoscan::Tensor& tensor, DLDataType expected, const char* port_name,
+                   const std::string& who);
 
 // Classification of an operator input against its instantiation precision.
 enum class InputPrecision {
@@ -131,20 +126,19 @@ enum class InputPrecision {
 // instantiation) on any other dtype, or when `allow_real` is false and the
 // dtype is real.
 template <typename T>
-InputPrecision classify_input_dtype(const holoscan::Tensor& tensor,
-                                    const char* port_name, bool allow_real);
+InputPrecision classify_input_dtype(const holoscan::Tensor& tensor, const char* port_name,
+                                    bool allow_real);
 
-extern template InputPrecision classify_input_dtype<float>(
-    const holoscan::Tensor&, const char*, bool);
-extern template InputPrecision classify_input_dtype<double>(
-    const holoscan::Tensor&, const char*, bool);
+extern template InputPrecision classify_input_dtype<float>(const holoscan::Tensor&, const char*,
+                                                           bool);
+extern template InputPrecision classify_input_dtype<double>(const holoscan::Tensor&, const char*,
+                                                            bool);
 
 // Complex-only input: classify_input_dtype with allow_real=false, discarding
 // the enum. Same error strings. Use this when the operator has no real-IF
 // path; keep classify_input_dtype when the caller needs kReal vs kComplex.
 template <typename T>
-inline void require_complex(const holoscan::Tensor& tensor,
-                            const char* port_name) {
+inline void require_complex(const holoscan::Tensor& tensor, const char* port_name) {
   (void)classify_input_dtype<T>(tensor, port_name, /*allow_real=*/false);
 }
 

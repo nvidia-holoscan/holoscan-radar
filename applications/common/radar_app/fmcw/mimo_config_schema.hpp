@@ -98,59 +98,46 @@ namespace holoscan {
 
 template <>
 struct ParamStorageTraits<radar::app::mimo::CubeConfig>
-    : radar::app::mimo::AppStorage<
-          radar::app::mimo::CubeConfig> {};  // NOLINT
+: radar::app::mimo::AppStorage<radar::app::mimo::CubeConfig> {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::app::mimo::RunConfig>
-    : radar::app::mimo::AppStorage<
-          radar::app::mimo::RunConfig> {};  // NOLINT
+: radar::app::mimo::AppStorage<radar::app::mimo::RunConfig> {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::app::mimo::TxArrayConfig>
-    : radar::app::mimo::AppStorage<
-          radar::app::mimo::TxArrayConfig> {};  // NOLINT
+: radar::app::mimo::AppStorage<radar::app::mimo::TxArrayConfig> {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::app::mimo::RxArrayConfig>
-    : radar::app::mimo::AppStorage<
-          radar::app::mimo::RxArrayConfig> {};  // NOLINT
+: radar::app::mimo::AppStorage<radar::app::mimo::RxArrayConfig> {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::app::mimo::TargetConfig>
-    : radar::app::mimo::AppStorage<
-          radar::app::mimo::TargetConfig> {};  // NOLINT
+: radar::app::mimo::AppStorage<radar::app::mimo::TargetConfig> {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::app::mimo::TdmSimulationConfig>
-    : radar::app::mimo::AppStorage<
-          radar::app::mimo::TdmSimulationConfig> {};  // NOLINT
+: radar::app::mimo::AppStorage<radar::app::mimo::TdmSimulationConfig> {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::app::mimo::TdmProfileConfig>
-    : radar::app::mimo::AppStorage<
-          radar::app::mimo::TdmProfileConfig> {};  // NOLINT
+: radar::app::mimo::AppStorage<radar::app::mimo::TdmProfileConfig> {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::app::mimo::DdmSimulationConfig>
-    : radar::app::mimo::AppStorage<
-          radar::app::mimo::DdmSimulationConfig> {};  // NOLINT
+: radar::app::mimo::AppStorage<radar::app::mimo::DdmSimulationConfig> {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::app::mimo::FeatureAssemblyParams>
-    : radar::app::mimo::AppStorage<
-          radar::app::mimo::FeatureAssemblyParams> {};  // NOLINT
+: radar::app::mimo::AppStorage<radar::app::mimo::FeatureAssemblyParams> {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::TXSchedule>
-    : radar::config_detail::PortableParamStorageTraits<
-          radar::TXSchedule> {};  // NOLINT
+: radar::config_detail::PortableParamStorageTraits<radar::TXSchedule> {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::DDMCodeDescriptor>
-    : radar::config_detail::PortableParamStorageTraits<
-          radar::DDMCodeDescriptor> {};  // NOLINT
+: radar::config_detail::PortableParamStorageTraits<radar::DDMCodeDescriptor> {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::OverlapPolicy>
-    : radar::config_detail::PortableParamStorageTraits<
-          radar::OverlapPolicy> {};  // NOLINT
+: radar::config_detail::PortableParamStorageTraits<radar::OverlapPolicy> {};  // NOLINT
 
 }  // namespace holoscan
 
 namespace holoscan::radar::app::mimo {
 
-inline ::holoscan::radar::app::VisualizationConfig
-default_visualization_config() {
+inline ::holoscan::radar::app::VisualizationConfig default_visualization_config() {
   ::holoscan::radar::app::VisualizationConfig config;
   config.window_title = "FMCW MIMO";
   return config;
@@ -163,8 +150,7 @@ struct AppParams {
   FMCWWaveformDescriptor waveform;
   CubeConfig cube;
   RunConfig run;
-  ::holoscan::radar::app::VisualizationConfig visualization{
-      default_visualization_config()};
+  ::holoscan::radar::app::VisualizationConfig visualization{default_visualization_config()};
   std::optional<::holoscan::radar::app::RangeLossConfig> range_loss{};
   ::holoscan::radar::app::SceneVisibilityConfig scene_visibility{};
   TxArrayConfig tx_array;
@@ -180,12 +166,9 @@ struct AppParams {
 };
 
 HOLOSCAN_PARAM_SCHEMA(
-    AppParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.app.mimo.AppParams", 1),
+    AppParams, holoscan::param_schema("com.nvidia.holoscan.radar.app.mimo.AppParams", 1),
     holoscan::field<&AppParams::aoa_algorithm>("aoa_algorithm"),
-    holoscan::field<&AppParams::waveform>("waveform"),
-    holoscan::field<&AppParams::cube>("cube"),
+    holoscan::field<&AppParams::waveform>("waveform"), holoscan::field<&AppParams::cube>("cube"),
     holoscan::field<&AppParams::run>("run"),
     holoscan::field<&AppParams::visualization>("visualization"),
     holoscan::field<&AppParams::range_loss>("range_loss"),
@@ -194,128 +177,111 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&AppParams::rx_array>("rx_array"),
     holoscan::field<&AppParams::targets>("targets"),
     holoscan::field<&AppParams::noise_snr_db>("noise_snr_db"),
-    holoscan::field<&AppParams::tdm>("tdm"),
-    holoscan::field<&AppParams::profiles>("profiles"),
+    holoscan::field<&AppParams::tdm>("tdm"), holoscan::field<&AppParams::profiles>("profiles"),
     holoscan::field<&AppParams::profile_sequence>("profile_sequence"),
-    holoscan::field<&AppParams::max_frames_in_flight>(
-        "max_frames_in_flight"),
+    holoscan::field<&AppParams::max_frames_in_flight>("max_frames_in_flight"),
     holoscan::field<&AppParams::rx_poll_period>("rx_poll_period"),
-    holoscan::field<&AppParams::simulated_receive_polls>(
-        "simulated_receive_polls"));
+    holoscan::field<&AppParams::simulated_receive_polls>("simulated_receive_polls"));
 
 static_assert(holoscan::param_schema_availability<AppParams>() ==
-                  holoscan::ParamSchemaAvailability::kDeclared);
+              holoscan::ParamSchemaAvailability::kDeclared);
 
 HOLOSCAN_PARAM_SCHEMA(
     FeatureAssemblyParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.app.mimo.FeatureAssemblyParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.app.mimo.FeatureAssemblyParams", 1),
     holoscan::field<&FeatureAssemblyParams::features>("features")
-        .description(
-            "Ordered FeatureAssemblyOp column tokens; constructor-capture "
-            "only"));
+        .description("Ordered FeatureAssemblyOp column tokens; constructor-capture "
+                     "only"));
 
-static_assert(
-    holoscan::param_schema_availability<FeatureAssemblyParams>() ==
-        holoscan::ParamSchemaAvailability::kDeclared);
+static_assert(holoscan::param_schema_availability<FeatureAssemblyParams>() ==
+              holoscan::ParamSchemaAvailability::kDeclared);
 
 }  // namespace holoscan::radar::app::mimo
 
 namespace holoscan::config {
 
 template <>
-struct ConfigCodec<radar::app::mimo::CubeConfig>
-    : ObjectCodec<radar::app::mimo::CubeConfig> {
+struct ConfigCodec<radar::app::mimo::CubeConfig> : ObjectCodec<radar::app::mimo::CubeConfig> {
   using Config = radar::app::mimo::CubeConfig;
-  static constexpr auto fields = std::make_tuple(
-      object_field("num_chirps", &Config::num_chirps),
-      object_field("samples_per_chirp", &Config::samples_per_chirp));
+  static constexpr auto fields =
+      std::make_tuple(object_field("num_chirps", &Config::num_chirps),
+                      object_field("samples_per_chirp", &Config::samples_per_chirp));
 };
 
 template <>
-struct ConfigCodec<radar::app::mimo::RunConfig>
-    : ObjectCodec<radar::app::mimo::RunConfig> {
+struct ConfigCodec<radar::app::mimo::RunConfig> : ObjectCodec<radar::app::mimo::RunConfig> {
   using Config = radar::app::mimo::RunConfig;
-  static constexpr auto fields = std::make_tuple(
-      object_field("num_frames", &Config::num_frames),
-      object_field("frame_period", &Config::frame_period),
-      defaulted_object_field("meter_cadence", &Config::meter_cadence),
-      defaulted_object_field("meter_log_every", &Config::meter_log_every));
+  static constexpr auto fields =
+      std::make_tuple(object_field("num_frames", &Config::num_frames),
+                      object_field("frame_period", &Config::frame_period),
+                      defaulted_object_field("meter_cadence", &Config::meter_cadence),
+                      defaulted_object_field("meter_log_every", &Config::meter_log_every));
 };
 
 template <>
-struct ConfigCodec<radar::app::mimo::TxArrayConfig>
-    : ObjectCodec<radar::app::mimo::TxArrayConfig> {
+struct ConfigCodec<radar::app::mimo::TxArrayConfig> : ObjectCodec<radar::app::mimo::TxArrayConfig> {
   using Config = radar::app::mimo::TxArrayConfig;
-  static constexpr auto fields = std::make_tuple(
-      object_field("num_tx", &Config::num_tx),
-      object_field("spacing", &Config::spacing));
+  static constexpr auto fields = std::make_tuple(object_field("num_tx", &Config::num_tx),
+                                                 object_field("spacing", &Config::spacing));
 };
 
 template <>
-struct ConfigCodec<radar::app::mimo::RxArrayConfig>
-    : ObjectCodec<radar::app::mimo::RxArrayConfig> {
+struct ConfigCodec<radar::app::mimo::RxArrayConfig> : ObjectCodec<radar::app::mimo::RxArrayConfig> {
   using Config = radar::app::mimo::RxArrayConfig;
-  static constexpr auto fields = std::make_tuple(
-      object_field("az_elements", &Config::az_elements),
-      object_field("el_elements", &Config::el_elements),
-      object_field("spacing", &Config::spacing));
+  static constexpr auto fields = std::make_tuple(object_field("az_elements", &Config::az_elements),
+                                                 object_field("el_elements", &Config::el_elements),
+                                                 object_field("spacing", &Config::spacing));
 };
 
 template <>
-struct ConfigCodec<radar::app::mimo::TargetConfig>
-    : ObjectCodec<radar::app::mimo::TargetConfig> {
+struct ConfigCodec<radar::app::mimo::TargetConfig> : ObjectCodec<radar::app::mimo::TargetConfig> {
   using Config = radar::app::mimo::TargetConfig;
   static constexpr auto fields = std::make_tuple(
-      object_field("range", &Config::range),
-      object_field("azimuth", &Config::azimuth),
-      object_field("elevation", &Config::elevation),
-      object_field("velocity", &Config::velocity),
+      object_field("range", &Config::range), object_field("azimuth", &Config::azimuth),
+      object_field("elevation", &Config::elevation), object_field("velocity", &Config::velocity),
       object_field("amplitude", &Config::amplitude));
 };
 
 template <>
 struct ConfigCodec<radar::app::mimo::TdmSimulationConfig>
-    : ObjectCodec<radar::app::mimo::TdmSimulationConfig> {
+: ObjectCodec<radar::app::mimo::TdmSimulationConfig> {
   using Config = radar::app::mimo::TdmSimulationConfig;
-  static constexpr auto fields = std::make_tuple(defaulted_object_field(
-      "physical_chirp_repetition_interval",
-      &Config::physical_chirp_repetition_interval),
-      defaulted_object_field("tx_order", &Config::tx_order));
+  static constexpr auto fields =
+      std::make_tuple(defaulted_object_field("physical_chirp_repetition_interval",
+                                             &Config::physical_chirp_repetition_interval),
+                      defaulted_object_field("tx_order", &Config::tx_order));
 };
 
 template <>
 struct ConfigCodec<radar::app::mimo::TdmProfileConfig>
-    : ObjectCodec<radar::app::mimo::TdmProfileConfig> {
+: ObjectCodec<radar::app::mimo::TdmProfileConfig> {
   using Config = radar::app::mimo::TdmProfileConfig;
-  static constexpr auto fields = std::make_tuple(
-      object_field("name", &Config::name),
-      object_field("carrier_frequency", &Config::carrier_frequency),
-      object_field("bandwidth", &Config::bandwidth),
-      object_field("chirp_duration", &Config::chirp_duration),
-      object_field("sample_rate", &Config::sample_rate),
-      object_field("physical_chirp_repetition_interval",
-                   &Config::physical_chirp_repetition_interval),
-      object_field("chirps_per_tx", &Config::chirps_per_tx),
-      object_field("samples_per_chirp", &Config::samples_per_chirp));
+  static constexpr auto fields =
+      std::make_tuple(object_field("name", &Config::name),
+                      object_field("carrier_frequency", &Config::carrier_frequency),
+                      object_field("bandwidth", &Config::bandwidth),
+                      object_field("chirp_duration", &Config::chirp_duration),
+                      object_field("sample_rate", &Config::sample_rate),
+                      object_field("physical_chirp_repetition_interval",
+                                   &Config::physical_chirp_repetition_interval),
+                      object_field("chirps_per_tx", &Config::chirps_per_tx),
+                      object_field("samples_per_chirp", &Config::samples_per_chirp));
 };
 
 template <>
 struct ConfigCodec<radar::app::mimo::DdmSimulationConfig>
-    : ObjectCodec<radar::app::mimo::DdmSimulationConfig> {
+: ObjectCodec<radar::app::mimo::DdmSimulationConfig> {
   using Config = radar::app::mimo::DdmSimulationConfig;
-  static constexpr auto fields = std::make_tuple(defaulted_object_field(
-      "generate_phase_codes", &Config::generate_phase_codes));
+  static constexpr auto fields = std::make_tuple(
+      defaulted_object_field("generate_phase_codes", &Config::generate_phase_codes));
 };
 
 template <>
-struct ConfigCodec<radar::TXSchedule>
-    : ObjectCodec<radar::TXSchedule> {
-  static constexpr auto fields = std::make_tuple(
-      defaulted_object_field("num_tx", &radar::TXSchedule::num_tx),
-      defaulted_object_field("tx_order", &radar::TXSchedule::tx_order),
-      defaulted_object_field("chirp_tx_index",
-                             &radar::TXSchedule::chirp_tx_index));
+struct ConfigCodec<radar::TXSchedule> : ObjectCodec<radar::TXSchedule> {
+  static constexpr auto fields =
+      std::make_tuple(defaulted_object_field("num_tx", &radar::TXSchedule::num_tx),
+                      defaulted_object_field("tx_order", &radar::TXSchedule::tx_order),
+                      defaulted_object_field("chirp_tx_index", &radar::TXSchedule::chirp_tx_index));
 };
 
 struct DdmCodeFields {
@@ -327,29 +293,26 @@ struct DdmCodeFields {
 
 template <>
 struct ConfigCodec<DdmCodeFields> : ObjectCodec<DdmCodeFields> {
-  static constexpr auto fields = std::make_tuple(
-      defaulted_object_field("num_tx", &DdmCodeFields::num_tx),
-      defaulted_object_field("phase_codes", &DdmCodeFields::phase_codes),
-      defaulted_object_field("doppler_offsets",
-                             &DdmCodeFields::doppler_offsets),
-      defaulted_object_field("guard_bands", &DdmCodeFields::guard_bands));
+  static constexpr auto fields =
+      std::make_tuple(defaulted_object_field("num_tx", &DdmCodeFields::num_tx),
+                      defaulted_object_field("phase_codes", &DdmCodeFields::phase_codes),
+                      defaulted_object_field("doppler_offsets", &DdmCodeFields::doppler_offsets),
+                      defaulted_object_field("guard_bands", &DdmCodeFields::guard_bands));
 };
 
 template <>
 struct ConfigCodec<radar::DDMCodeDescriptor> {
-  static ConfigResult<radar::DDMCodeDescriptor> decode(
-      ConfigView view, const DecodeOptions& options,
-      DecodeContext& context) {
-    auto fields = ConfigCodec<DdmCodeFields>::decode(
-        std::move(view), options, context);
+  static ConfigResult<radar::DDMCodeDescriptor> decode(ConfigView view,
+                                                       const DecodeOptions& options,
+                                                       DecodeContext& context) {
+    auto fields = ConfigCodec<DdmCodeFields>::decode(std::move(view), options, context);
     if (!fields) {
       return tl::make_unexpected(fields.error());
     }
     if (fields->phase_codes.size() % 2U != 0U) {
       return tl::make_unexpected(ConfigError::make(
           ConfigErrorCode::kUnsupportedValue,
-          "phase_codes must contain interleaved real/imaginary pairs",
-          context.path()));
+          "phase_codes must contain interleaved real/imaginary pairs", context.path()));
     }
     radar::DDMCodeDescriptor result;
     result.num_tx = fields->num_tx;
@@ -357,21 +320,19 @@ struct ConfigCodec<radar::DDMCodeDescriptor> {
     result.guard_bands = fields->guard_bands;
     result.phase_codes.reserve(fields->phase_codes.size() / 2U);
     for (std::size_t i = 0; i < fields->phase_codes.size(); i += 2U) {
-      result.phase_codes.emplace_back(
-          fields->phase_codes[i], fields->phase_codes[i + 1U]);
+      result.phase_codes.emplace_back(fields->phase_codes[i], fields->phase_codes[i + 1U]);
     }
     try {
       result.validate();
     } catch (const std::invalid_argument& error) {
-      return tl::make_unexpected(ConfigError::make(
-          ConfigErrorCode::kUnsupportedValue, error.what(), context.path()));
+      return tl::make_unexpected(
+          ConfigError::make(ConfigErrorCode::kUnsupportedValue, error.what(), context.path()));
     }
     return result;
   }
 
-  static ConfigResult<ConfigValue> encode(
-      const radar::DDMCodeDescriptor& value,
-      const EncodeOptions& options, EncodeContext& context) {
+  static ConfigResult<ConfigValue> encode(const radar::DDMCodeDescriptor& value,
+                                          const EncodeOptions& options, EncodeContext& context) {
     DdmCodeFields fields;
     fields.num_tx = value.num_tx;
     fields.doppler_offsets = value.doppler_offsets;
@@ -381,8 +342,7 @@ struct ConfigCodec<radar::DDMCodeDescriptor> {
       fields.phase_codes.push_back(sample.real());
       fields.phase_codes.push_back(sample.imag());
     }
-    return ConfigCodec<DdmCodeFields>::encode(
-        fields, options, context);
+    return ConfigCodec<DdmCodeFields>::encode(fields, options, context);
   }
 };
 
@@ -394,43 +354,38 @@ inline constexpr radar::OverlapPolicy kOverlapPolicies[] = {
 
 template <>
 struct ConfigCodec<radar::OverlapPolicy>
-    : radar::config_detail::CanonicalEnumCodec<
-          radar::OverlapPolicy, kOverlapPolicies> {};  // NOLINT
+: radar::config_detail::CanonicalEnumCodec<radar::OverlapPolicy, kOverlapPolicies> {};  // NOLINT
 
-using AppParamsCodec = params::DefaultedParamSchemaCodec<
-    radar::app::mimo::AppParams>;  // NOLINT
+using AppParamsCodec = params::DefaultedParamSchemaCodec<radar::app::mimo::AppParams>;  // NOLINT
 template <>
-struct ConfigCodec<radar::app::mimo::AppParams>
-    : AppParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::app::mimo::AppParams> : AppParamsCodec {};  // NOLINT
 
-using FeatureAssemblyParamsCodec = params::DefaultedParamSchemaCodec<
-    radar::app::mimo::FeatureAssemblyParams>;  // NOLINT
+using FeatureAssemblyParamsCodec =
+    params::DefaultedParamSchemaCodec<radar::app::mimo::FeatureAssemblyParams>;  // NOLINT
 template <>
-struct ConfigCodec<radar::app::mimo::FeatureAssemblyParams>
-    : FeatureAssemblyParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::app::mimo::FeatureAssemblyParams> : FeatureAssemblyParamsCodec {
+};  // NOLINT
 
-using MimoDeinterleaveParamsCodec = params::DefaultedParamSchemaCodec<
-    radar::MIMODeinterleaveParams>;  // NOLINT
+using MimoDeinterleaveParamsCodec =
+    params::DefaultedParamSchemaCodec<radar::MIMODeinterleaveParams>;  // NOLINT
 template <>
-struct ConfigCodec<radar::MIMODeinterleaveParams>
-    : MimoDeinterleaveParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::MIMODeinterleaveParams> : MimoDeinterleaveParamsCodec {};  // NOLINT
 
-using TdmSparseCompensationParamsCodec = params::DefaultedParamSchemaCodec<
-    radar::TDMSparseCompensationParams>;  // NOLINT
+using TdmSparseCompensationParamsCodec =
+    params::DefaultedParamSchemaCodec<radar::TDMSparseCompensationParams>;  // NOLINT
 template <>
-struct ConfigCodec<radar::TDMSparseCompensationParams>
-    : TdmSparseCompensationParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::TDMSparseCompensationParams> : TdmSparseCompensationParamsCodec {
+};  // NOLINT
 
-using DdmDemultiplexParamsCodec = params::DefaultedParamSchemaCodec<
-    radar::DDMDenseDemultiplexParams>;  // NOLINT
+using DdmDemultiplexParamsCodec =
+    params::DefaultedParamSchemaCodec<radar::DDMDenseDemultiplexParams>;  // NOLINT
 template <>
-struct ConfigCodec<radar::DDMDenseDemultiplexParams>
-    : DdmDemultiplexParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::DDMDenseDemultiplexParams> : DdmDemultiplexParamsCodec {};  // NOLINT
 
-using VirtualArrayAssemblyParamsCodec = params::DefaultedParamSchemaCodec<
-    radar::VirtualArrayAssemblyParams>;  // NOLINT
+using VirtualArrayAssemblyParamsCodec =
+    params::DefaultedParamSchemaCodec<radar::VirtualArrayAssemblyParams>;  // NOLINT
 template <>
-struct ConfigCodec<radar::VirtualArrayAssemblyParams>
-    : VirtualArrayAssemblyParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::VirtualArrayAssemblyParams> : VirtualArrayAssemblyParamsCodec {
+};  // NOLINT
 
 }  // namespace holoscan::config

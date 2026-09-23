@@ -117,8 +117,7 @@ hr::DDMCodeDescriptor make_ddm_nl_code(int64_t num_tx, int64_t num_doppler) {
   code.phase_codes.resize(static_cast<size_t>(num_tx * num_doppler));
   for (int64_t m = 0; m < num_tx; ++m) {
     for (int64_t k = 0; k < num_doppler; ++k) {
-      const double phase =
-          std::sin(0.7 * static_cast<double>(k) + static_cast<double>(m)) * 2.0;
+      const double phase = std::sin(0.7 * static_cast<double>(k) + static_cast<double>(m)) * 2.0;
       code.phase_codes[static_cast<size_t>(m * num_doppler + k)] =
           std::complex<double>(std::cos(phase), std::sin(phase));
     }
@@ -130,22 +129,18 @@ std::vector<int64_t> input_shape(const CompensationScenario& scen) {
   return {scen.num_rx, scen.num_doppler, scen.num_range_bins};
 }
 
-perf::TimingCollector run_compensation_graph(const CompensationScenario& scen,
-                                             int total_frames) {
+perf::TimingCollector run_compensation_graph(const CompensationScenario& scen, int total_frames) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(input_shape(scen));
-  const auto configure = [&](holoscan::Graph& graph,
-                             holoscan::CompileOptions& options) {
+  const auto configure = [&](holoscan::Graph& graph, holoscan::CompileOptions& options) {
     hr::MaxTensorExtents extents;
     extents.max_tx = scen.num_tx;
     extents.max_rx = scen.num_rx;
     extents.max_doppler_bins = scen.num_doppler;
     extents.max_range_bins = scen.num_range_bins;
-    auto op = graph.op<hr::DDMDenseDemultiplexOp<PerfPrecision>>(
-        "compensation", extents);
+    auto op = graph.op<hr::DDMDenseDemultiplexOp<PerfPrecision>>("compensation", extents);
     hr::DDMDenseDemultiplexParams params;
-    params.ddm_code = scen.non_linear_ddm
-                          ? make_ddm_nl_code(scen.num_tx, scen.num_doppler)
-                          : make_ddm_code(scen.num_tx);
+    params.ddm_code = scen.non_linear_ddm ? make_ddm_nl_code(scen.num_tx, scen.num_doppler)
+                                          : make_ddm_code(scen.num_tx);
     op.set_params(std::move(params));
     const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
@@ -155,33 +150,28 @@ perf::TimingCollector run_compensation_graph(const CompensationScenario& scen,
     return op;
   };
   if (scen.velocity_axis) {
-    auto axis =
-        perf::make_power_map_device<PerfPrecision>({scen.num_doppler});
+    auto axis = perf::make_power_map_device<PerfPrecision>({scen.num_doppler});
     return perf::run_perf_graph_dual(
         std::move(axis), std::move(cube), total_frames, "compensation-perf",
-        [&](holoscan::Graph& graph, const auto& src,
-            holoscan::CompileOptions& options) {
+        [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
           auto op = configure(graph, options);
           const holoscan::ConnectionOptions q{.queue_depth = 4U};
           graph.add_flow(src->out_a, op->velocity_bins, q);
           graph.add_flow(src->out_b, op->rd_maps, q);
-          const auto axis_sink =
-              graph.op<perf::PerfNullSinkOp>("velocity_axis_sink");
+          const auto axis_sink = graph.op<perf::PerfNullSinkOp>("velocity_axis_sink");
           graph.add_flow(op->velocity_bins_out, axis_sink->in, q);
         });
   }
   return perf::run_perf_graph(
       std::move(cube), total_frames, "compensation-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
+      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         auto op = configure(graph, options);
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
         graph.add_flow(src->out, op->rd_maps, q);
       });
 }
 
-void fill_throughput(perf::ResultRow* row, const CompensationScenario& scen,
-                     double median_ms) {
+void fill_throughput(perf::ResultRow* row, const CompensationScenario& scen, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
@@ -209,8 +199,7 @@ perf::ResultRow base_row(const CompensationScenario& scen) {
   return row;
 }
 
-CompensationScenario make_scenario(const SizeSpec& size,
-                                   bool non_linear = false,
+CompensationScenario make_scenario(const SizeSpec& size, bool non_linear = false,
                                    bool velocity_axis = false) {
   CompensationScenario scenario;
   scenario.size_id = size.id;
@@ -221,8 +210,8 @@ CompensationScenario make_scenario(const SizeSpec& size,
   scenario.num_range_bins = size.num_range_bins;
   scenario.non_linear_ddm = non_linear;
   scenario.velocity_axis = velocity_axis;
-  scenario.id = "ddm_dense_demultiplex_" + scenario.variant + "_" + size.id +
-                (velocity_axis ? "_axis" : "");
+  scenario.id =
+      "ddm_dense_demultiplex_" + scenario.variant + "_" + size.id + (velocity_axis ? "_axis" : "");
   return scenario;
 }
 
@@ -240,9 +229,7 @@ struct CompensationTraits : perf::PerfDriverDefaults {
   static const char* sizes_subset_help() {
     return "Linear and nonlinear DDM sweep across an explicit subset";
   }
-  static const char* full_help() {
-    return "Full linear and nonlinear DDM size matrix";
-  }
+  static const char* full_help() { return "Full linear and nonlinear DDM size matrix"; }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
     std::vector<perf::SizeDef> out;
@@ -270,12 +257,12 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<CompensationScenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<CompensationScenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<CompensationScenario> out;
     for (const auto& sid : sizes) {
       const SizeSpec* size = find_size(sid);
-      if (size == nullptr) continue;
+      if (size == nullptr)
+        continue;
       out.push_back(make_scenario(*size));
       out.push_back(make_scenario(*size, true));
       out.push_back(make_scenario(*size, false, true));
@@ -295,12 +282,11 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static void run_scenario(const CompensationScenario& scen,
-                           const perf::RunSettings& rs,
+  static void run_scenario(const CompensationScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
-    const auto samples = perf::collect_scenario_samples(
-        rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    const auto samples =
+        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_compensation_graph(scen, p.total_frames);
         });
 
@@ -318,8 +304,7 @@ struct CompensationTraits : perf::PerfDriverDefaults {
           "DDM linear per-band gather; cold_ms includes the initial "
           "demultiplex table build";
     }
-    row.notes += scen.velocity_axis ? "; velocity_axis=wired" :
-                                      "; velocity_axis=absent";
+    row.notes += scen.velocity_axis ? "; velocity_axis=wired" : "; velocity_axis=absent";
     report->results.push_back(row);
   }
 

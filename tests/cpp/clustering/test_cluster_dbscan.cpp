@@ -59,14 +59,14 @@ struct DbscanResult {
 };
 
 template <typename T>
-std::shared_ptr<holoscan::Tensor> points_tensor(const std::vector<double>& host,
-                                                int64_t rows, int64_t cols) {
+std::shared_ptr<holoscan::Tensor> points_tensor(const std::vector<double>& host, int64_t rows,
+                                                int64_t cols) {
   return real_cube_to_device<T>(host, {rows, cols});
 }
 
 template <typename Source, typename OpRef, typename Sink0, typename Sink1>
-void wire_dbscan(holoscan::Graph& graph, const Source& source, OpRef& op,
-                 const Sink0& sink0, const Sink1& sink1) {
+void wire_dbscan(holoscan::Graph& graph, const Source& source, OpRef& op, const Sink0& sink0,
+                 const Sink1& sink1) {
   const holoscan::ConnectionOptions q{.queue_depth = 4U};
   graph.add_flow(source->out, op->points, q);
   graph.add_flow(op->labels, sink0->in, q);
@@ -78,20 +78,17 @@ DualIOGraphRunResult run_dbscan_result(std::shared_ptr<holoscan::Tensor> points,
                                        ClusterDBSCANParams params) {
   return run_single_in_dual_out_operator_graph_result<ClusterDBSCANOp<T>>(
       {std::move(points)}, std::move(params), "labels", "sizes",
-      [](holoscan::Graph& graph, const auto& source, auto& op,
-         const auto& sink0, const auto& sink1) {
+      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
+         const auto& sink1) {
         wire_dbscan(graph, source, op, sink0, sink1);
       });
 }
 
 template <typename T>
-DbscanResult run_dbscan(std::shared_ptr<holoscan::Tensor> points,
-                        ClusterDBSCANParams params) {
-  DualIOGraphRunResult result =
-      run_dbscan_result<T>(std::move(points), std::move(params));
+DbscanResult run_dbscan(std::shared_ptr<holoscan::Tensor> points, ClusterDBSCANParams params) {
+  DualIOGraphRunResult result = run_dbscan_result<T>(std::move(points), std::move(params));
   if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") +
-                             result.plan_json);
+    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
   }
   if (!result.diagnostics.empty()) {
     std::string msg = "run diagnostics:";
@@ -102,17 +99,14 @@ DbscanResult run_dbscan(std::shared_ptr<holoscan::Tensor> points,
     throw std::runtime_error(msg);
   }
   if (result.frames0.size() != 1U || result.frames1.size() != 1U) {
-    throw std::runtime_error(
-        "ClusterDBSCANOp test: expected one output frame pair, got " +
-        std::to_string(result.frames0.size()) + "/" +
-        std::to_string(result.frames1.size()));
+    throw std::runtime_error("ClusterDBSCANOp test: expected one output frame pair, got " +
+                             std::to_string(result.frames0.size()) + "/" +
+                             std::to_string(result.frames1.size()));
   }
-  return {std::move(result.frames0.front()),
-          std::move(result.frames1.front())};
+  return {std::move(result.frames0.front()), std::move(result.frames1.front())};
 }
 
-ClusterDBSCANParams make_params(std::vector<double> epsilon,
-                                int64_t min_points = 0,
+ClusterDBSCANParams make_params(std::vector<double> epsilon, int64_t min_points = 0,
                                 int64_t max_clusters = 0) {
   ClusterDBSCANParams params{};
   params.epsilon = std::move(epsilon);
@@ -133,9 +127,9 @@ ClusterDBSCANParams make_params(std::vector<double> epsilon,
 TEST(ClusterDBSCANOpTest, UnwiredSizesDoesNotFailTheRunOrDisturbLabels) {
   constexpr std::size_t kFrames = 8;
   const std::vector<double> pts = {
-      0.0, 0.0,  0.1, 0.0,  0.0, 0.1,  0.1, 0.1,   // blob A (4)
-      5.0, 5.0,                                    // outlier
-      10.0, 10.0, 10.1, 10.0, 10.0, 10.1,          // blob B (3)
+      0.0,  0.0,  0.1,  0.0,  0.0,  0.1,  0.1, 0.1,  // blob A (4)
+      5.0,  5.0,                                     // outlier
+      10.0, 10.0, 10.1, 10.0, 10.0, 10.1,            // blob B (3)
   };
   std::vector<std::shared_ptr<holoscan::Tensor>> frames;
   frames.reserve(kFrames);
@@ -144,11 +138,9 @@ TEST(ClusterDBSCANOpTest, UnwiredSizesDoesNotFailTheRunOrDisturbLabels) {
   }
 
   const holoscan::radar::testing::GraphRunResult out =
-      holoscan::radar::testing::run_single_io_operator_graph_result<
-          ClusterDBSCANOp<double>>(
+      holoscan::radar::testing::run_single_io_operator_graph_result<ClusterDBSCANOp<double>>(
           std::move(frames), make_params({0.5}, 3), "labels",
-          [](holoscan::Graph& graph, const auto& source, auto& op,
-             const auto& sink) {
+          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
             const holoscan::ConnectionOptions q{.queue_depth = 4U};
             graph.add_flow(source->out, op->points, q);
             graph.add_flow(op->labels, sink->in, q);
@@ -171,9 +163,9 @@ TEST(ClusterDBSCANOpTest, TwoBlobsAndNoise) {
   // Rows 0-3: blob A near (0,0). Row 4: isolated outlier. Rows 5-7: blob B
   // near (10,10). epsilon=0.5 isotropic, min_points=3.
   std::vector<double> pts = {
-      0.0, 0.0,  0.1, 0.0,  0.0, 0.1,  0.1, 0.1,   // blob A (4)
-      5.0, 5.0,                                    // outlier
-      10.0, 10.0, 10.1, 10.0, 10.0, 10.1,          // blob B (3)
+      0.0,  0.0,  0.1,  0.0,  0.0,  0.1,  0.1, 0.1,  // blob A (4)
+      5.0,  5.0,                                     // outlier
+      10.0, 10.0, 10.1, 10.0, 10.0, 10.1,            // blob B (3)
   };
   auto p = points_tensor<double>(pts, 8, 2);
   const auto out = run_dbscan<double>(p, make_params({0.5}, 3));
@@ -203,8 +195,8 @@ TEST(ClusterDBSCANOpTest, AnisotropicPerAxisEpsilon) {
   // links the chain but rejects the y-separated point; an isotropic radius of
   // 1 would not link the chain at all.
   std::vector<double> pts = {
-      0.0, 0.0,  2.0, 0.0,  4.0, 0.0,  // x-chain
-      0.0, 5.0,                        // far in y → noise
+      0.0, 0.0, 2.0, 0.0, 4.0, 0.0,  // x-chain
+      0.0, 5.0,                      // far in y → noise
   };
   auto p = points_tensor<double>(pts, 4, 2);
   const auto out = run_dbscan<double>(p, make_params({3.0, 1.0}, 2));
@@ -222,28 +214,25 @@ TEST(ClusterDBSCANOpTest, IgnoredFeatureDoesNotAffectLabelsOrReadValues) {
   const double nan = std::numeric_limits<double>::quiet_NaN();
   const double inf = std::numeric_limits<double>::infinity();
   std::vector<double> pts = {
-      0.0, 0.0, 0.0, 0.0, nan,   0.1, 0.0, 0.0, 0.0, inf,
+      0.0,  0.0, 0.0, 0.0, nan,  0.1,  0.0, 0.0, 0.0, inf,
       10.0, 0.0, 0.0, 0.0, -inf, 10.1, 0.0, 0.0, 0.0, nan,
   };
   auto p = points_tensor<double>(pts, 4, 5);
-  const auto out =
-      run_dbscan<double>(p, make_params({0.5, 0.5, 0.5, 0.5, 0.0}, 2));
+  const auto out = run_dbscan<double>(p, make_params({0.5, 0.5, 0.5, 0.5, 0.0}, 2));
 
+  EXPECT_EQ(std::vector<int64_t>(out.labels.as<int64_t>(),
+                                 out.labels.as<int64_t>() + out.labels.shape[0]),
+            (std::vector<int64_t>{0, 0, 1, 1}));
   EXPECT_EQ(
-      std::vector<int64_t>(out.labels.as<int64_t>(),
-                           out.labels.as<int64_t>() + out.labels.shape[0]),
-      (std::vector<int64_t>{0, 0, 1, 1}));
-  EXPECT_EQ(
-      std::vector<int64_t>(out.sizes.as<int64_t>(),
-                           out.sizes.as<int64_t>() + out.sizes.shape[0]),
+      std::vector<int64_t>(out.sizes.as<int64_t>(), out.sizes.as<int64_t>() + out.sizes.shape[0]),
       (std::vector<int64_t>{2, 2}));
 }
 
 TEST(ClusterDBSCANOpTest, MinPointsSeparatesCoreFromNoise) {
   // Group 1: a triple; group 2: a pair. epsilon=0.5.
   std::vector<double> pts = {
-      0.0, 0.0,  0.1, 0.0,  0.2, 0.0,   // triple
-      10.0, 0.0, 10.1, 0.0,             // pair
+      0.0,  0.0, 0.1,  0.0, 0.2, 0.0,  // triple
+      10.0, 0.0, 10.1, 0.0,            // pair
   };
 
   // min_points=2 → both groups are clusters (no noise).
@@ -290,13 +279,11 @@ TEST(ClusterDBSCANOpTest, DefaultMinPointsIsTwiceNumFeatures) {
 
 TEST(ClusterDBSCANOpTest, DefaultMinPointsCountsOnlyActiveFeatures) {
   std::vector<double> pts = {
-      0.0, 100.0, 200.0, 300.0, 400.0,
-      0.1, 101.0, 201.0, 301.0, 401.0,
-      0.2, 102.0, 202.0, 302.0, 402.0,
+      0.0,   100.0, 200.0, 300.0, 400.0, 0.1,   101.0, 201.0,
+      301.0, 401.0, 0.2,   102.0, 202.0, 302.0, 402.0,
   };
   auto p = points_tensor<double>(pts, 3, 5);
-  const auto out =
-      run_dbscan<double>(p, make_params({0.5, 0.0, 0.0, 0.0, 0.0}));
+  const auto out = run_dbscan<double>(p, make_params({0.5, 0.0, 0.0, 0.0, 0.0}));
 
   ASSERT_EQ(out.sizes.shape[0], 1);
   EXPECT_EQ(out.sizes.as<int64_t>()[0], 3);
@@ -305,9 +292,9 @@ TEST(ClusterDBSCANOpTest, DefaultMinPointsCountsOnlyActiveFeatures) {
 TEST(ClusterDBSCANOpTest, MaxClustersCapsAndDropsSurplus) {
   // Three separated pairs → three clusters; cap to 2 drops the third to noise.
   std::vector<double> pts = {
-      0.0, 0.0,  0.1, 0.0,    // cluster 0
-      10.0, 0.0, 10.1, 0.0,   // cluster 1
-      20.0, 0.0, 20.1, 0.0,   // cluster 2 (dropped)
+      0.0,  0.0, 0.1,  0.0,  // cluster 0
+      10.0, 0.0, 10.1, 0.0,  // cluster 1
+      20.0, 0.0, 20.1, 0.0,  // cluster 2 (dropped)
   };
   auto p = points_tensor<double>(pts, 6, 2);
   const auto out = run_dbscan<double>(p, make_params({0.5}, 2, 2));
@@ -328,8 +315,8 @@ TEST(ClusterDBSCANOpTest, NumbersClustersByDescendingSize) {
   // numbering would label the pair 0 (it owns the lowest row); descending-size
   // numbering labels the larger triple 0. `sizes` is therefore descending.
   std::vector<double> pts = {
-      0.0, 0.0,  0.1, 0.0,               // pair (rows 0-1) — smaller, root 0
-      10.0, 0.0, 10.1, 0.0, 10.2, 0.0,   // triple (rows 2-4) — larger, root 2
+      0.0,  0.0, 0.1,  0.0,             // pair (rows 0-1) — smaller, root 0
+      10.0, 0.0, 10.1, 0.0, 10.2, 0.0,  // triple (rows 2-4) — larger, root 2
   };
   auto p = points_tensor<double>(pts, 5, 2);
   const auto out = run_dbscan<double>(p, make_params({0.5}, 2));
@@ -349,15 +336,15 @@ TEST(ClusterDBSCANOpTest, MaxClustersKeepsLargest) {
   // cluster (the triple) and drop the pair to noise — a spatially-arbitrary
   // ascending-root cap would instead have kept the pair.
   std::vector<double> pts = {
-      0.0, 0.0,  0.1, 0.0,               // pair (rows 0-1)
-      10.0, 0.0, 10.1, 0.0, 10.2, 0.0,   // triple (rows 2-4)
+      0.0,  0.0, 0.1,  0.0,             // pair (rows 0-1)
+      10.0, 0.0, 10.1, 0.0, 10.2, 0.0,  // triple (rows 2-4)
   };
   auto p = points_tensor<double>(pts, 5, 2);
   const auto out = run_dbscan<double>(p, make_params({0.5}, 2, 1));
   const int64_t* lab = out.labels.as<int64_t>();
   EXPECT_EQ(lab[0], -1);  // pair dropped to noise
   EXPECT_EQ(lab[1], -1);
-  EXPECT_EQ(lab[2], 0);   // triple kept
+  EXPECT_EQ(lab[2], 0);  // triple kept
   EXPECT_EQ(lab[3], 0);
   EXPECT_EQ(lab[4], 0);
   ASSERT_EQ(out.sizes.shape[0], 1);
@@ -371,7 +358,7 @@ TEST(ClusterDBSCANOpTest, BorderPointJoinsMinRootCluster) {
   const std::vector<double> pts = {
       -0.9, -1.4, -1.4, -1.4,  // left core component, root row 0
       0.9,  1.4,  1.4,  1.4,   // right core component, root row 4
-      0.0,                      // border point, row 8
+      0.0,                     // border point, row 8
   };
   auto p = points_tensor<double>(pts, 9, 1);
   const auto out = run_dbscan<double>(p, make_params({1.0}, 4));
@@ -395,9 +382,7 @@ TEST(ClusterDBSCANOpTest, EmptyPointsEmitsEmptyOutputs) {
 
 TEST(ClusterDBSCANOpTest, FloatAndDoubleAgree) {
   std::vector<double> pts = {
-      0.0, 0.0,  0.1, 0.0,  0.0, 0.1,
-      10.0, 10.0, 10.1, 10.0, 10.0, 10.1,
-      5.0, 5.0,
+      0.0, 0.0, 0.1, 0.0, 0.0, 0.1, 10.0, 10.0, 10.1, 10.0, 10.0, 10.1, 5.0, 5.0,
   };
   auto pf = points_tensor<float>(pts, 7, 2);
   auto pd = points_tensor<double>(pts, 7, 2);
@@ -405,8 +390,7 @@ TEST(ClusterDBSCANOpTest, FloatAndDoubleAgree) {
   const auto od = run_dbscan<double>(pd, make_params({0.5}, 3));
   ASSERT_EQ(of.labels.shape[0], od.labels.shape[0]);
   for (int64_t i = 0; i < of.labels.shape[0]; ++i) {
-    EXPECT_EQ(of.labels.as<int64_t>()[i], od.labels.as<int64_t>()[i]) << "row "
-                                                                      << i;
+    EXPECT_EQ(of.labels.as<int64_t>()[i], od.labels.as<int64_t>()[i]) << "row " << i;
   }
   ASSERT_EQ(of.sizes.shape[0], od.sizes.shape[0]);
 }
@@ -414,7 +398,7 @@ TEST(ClusterDBSCANOpTest, FloatAndDoubleAgree) {
 TEST(ClusterDBSCANOpTest, EpsilonConfigurableFromParams) {
   // Params remain the seed when no live epsilon Tensor is expected.
   std::vector<double> pts = {
-      0.0, 0.0,  2.0, 0.0,  4.0, 0.0,  0.0, 5.0,
+      0.0, 0.0, 2.0, 0.0, 4.0, 0.0, 0.0, 5.0,
   };
   auto p_iso = points_tensor<double>(pts, 4, 2);
   auto p_ani = points_tensor<double>(pts, 4, 2);
@@ -430,7 +414,7 @@ TEST(ClusterDBSCANOpTest, EpsilonConfigurableFromParams) {
 TEST(ClusterDBSCANOpTest, MinPointsConfigurableFromParams) {
   // Authoring Params select min_points when no Exact override matches.
   std::vector<double> pts = {
-      0.0, 0.0,  0.1, 0.0,  0.2, 0.0,  10.0, 0.0, 10.1, 0.0,
+      0.0, 0.0, 0.1, 0.0, 0.2, 0.0, 10.0, 0.0, 10.1, 0.0,
   };
   auto p2 = points_tensor<double>(pts, 5, 2);
   auto p3 = points_tensor<double>(pts, 5, 2);
@@ -443,7 +427,7 @@ TEST(ClusterDBSCANOpTest, MinPointsConfigurableFromParams) {
 TEST(ClusterDBSCANOpTest, MaxClustersConfigurableFromParams) {
   // Authoring Params select max_clusters when no Exact override matches.
   std::vector<double> pts = {
-      0.0, 0.0,  0.1, 0.0,  10.0, 0.0, 10.1, 0.0,  20.0, 0.0, 20.1, 0.0,
+      0.0, 0.0, 0.1, 0.0, 10.0, 0.0, 10.1, 0.0, 20.0, 0.0, 20.1, 0.0,
   };
   auto p = points_tensor<double>(pts, 6, 2);
   const auto out = run_dbscan<double>(p, make_params({0.5}, 2, 2));
@@ -455,8 +439,7 @@ TEST(ClusterDBSCANOpTest, MaxClustersConfigurableFromParams) {
 TEST(ClusterDBSCANOpTest, RejectsEmptyEpsilon) {
   std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
   auto p = points_tensor<double>(pts, 2, 2);
-  DualIOGraphRunResult result =
-      run_dbscan_result<double>(p, make_params({}));
+  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({}));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_FALSE(result.diagnostics.empty());
 }
@@ -464,8 +447,7 @@ TEST(ClusterDBSCANOpTest, RejectsEmptyEpsilon) {
 TEST(ClusterDBSCANOpTest, RejectsEpsilonLengthMismatch) {
   std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
   auto p = points_tensor<double>(pts, 2, 2);
-  DualIOGraphRunResult result =
-      run_dbscan_result<double>(p, make_params({1.0, 2.0, 3.0}));
+  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({1.0, 2.0, 3.0}));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_FALSE(result.diagnostics.empty());
 }
@@ -473,8 +455,7 @@ TEST(ClusterDBSCANOpTest, RejectsEpsilonLengthMismatch) {
 TEST(ClusterDBSCANOpTest, RejectsScalarZeroEpsilon) {
   std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
   auto p = points_tensor<double>(pts, 2, 2);
-  DualIOGraphRunResult result =
-      run_dbscan_result<double>(p, make_params({0.0}));
+  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({0.0}));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_FALSE(result.diagnostics.empty());
 }
@@ -482,8 +463,7 @@ TEST(ClusterDBSCANOpTest, RejectsScalarZeroEpsilon) {
 TEST(ClusterDBSCANOpTest, RejectsAllIgnoredEpsilon) {
   std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
   auto p = points_tensor<double>(pts, 2, 2);
-  DualIOGraphRunResult result =
-      run_dbscan_result<double>(p, make_params({0.0, 0.0}));
+  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({0.0, 0.0}));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_FALSE(result.diagnostics.empty());
 }
@@ -491,8 +471,7 @@ TEST(ClusterDBSCANOpTest, RejectsAllIgnoredEpsilon) {
 TEST(ClusterDBSCANOpTest, RejectsNegativeEpsilon) {
   std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
   auto p = points_tensor<double>(pts, 2, 2);
-  DualIOGraphRunResult result =
-      run_dbscan_result<double>(p, make_params({1.0, -1.0}));
+  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({1.0, -1.0}));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_FALSE(result.diagnostics.empty());
 }
@@ -500,8 +479,7 @@ TEST(ClusterDBSCANOpTest, RejectsNegativeEpsilon) {
 TEST(ClusterDBSCANOpTest, RejectsBadPointsRank) {
   std::vector<double> pts = {0.0, 1.0, 2.0};
   auto p = real_cube_to_device<double>(pts, {3});  // rank 1
-  DualIOGraphRunResult result =
-      run_dbscan_result<double>(p, make_params({0.5}));
+  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({0.5}));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_FALSE(result.diagnostics.empty());
 }
@@ -509,8 +487,7 @@ TEST(ClusterDBSCANOpTest, RejectsBadPointsRank) {
 TEST(ClusterDBSCANOpTest, RejectsOpaqueLeadingBatch) {
   const std::vector<double> pts = {0.0, 0.0, 0.1, 0.0};
   auto p = real_cube_to_device<double>(pts, {1, 2, 2});
-  DualIOGraphRunResult result =
-      run_dbscan_result<double>(p, make_params({0.5}, 2));
+  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({0.5}, 2));
   EXPECT_TRUE(result.plan_ok);
   EXPECT_FALSE(result.diagnostics.empty());
 }
@@ -551,20 +528,18 @@ class LiveEpsilonSourceOp final : public holoscan::Operator<> {
         .rank = 1U,
     };
     spec.output(points, "out")
-        .produces_tensor(holoscan::radar::pooled_tensor_output(
-            kDevice, 2U, 4096U));
+        .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, 2U, 4096U));
     spec.output(epsilon, "epsilon")
         .max_emits_per_compute(1U)
-        .produces_tensor(holoscan::radar::pooled_tensor_output(
-            kHostVector, 1U, 128U * sizeof(double)));
+        .produces_tensor(
+            holoscan::radar::pooled_tensor_output(kHostVector, 1U, 128U * sizeof(double)));
     spec.output(min_points, "min_points");
     spec.output(max_clusters, "max_clusters");
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
-    result.trigger(holoscan::OnClock{
-        .period = holoscan::radar::testing::detail::kHarnessTick});
+    result.trigger(holoscan::OnClock{.period = holoscan::radar::testing::detail::kHarnessTick});
     return result;
   }
 
@@ -573,31 +548,27 @@ class LiveEpsilonSourceOp final : public holoscan::Operator<> {
     if (LiveEpsilonBank::index >= LiveEpsilonBank::ticks.size()) {
       return {};
     }
-    const LiveEpsilonTick tick =
-        LiveEpsilonBank::ticks[LiveEpsilonBank::index++];
+    const LiveEpsilonTick tick = LiveEpsilonBank::ticks[LiveEpsilonBank::index++];
     const holoscan::TimePoint points_time = context.activation_time();
     if (tick.epsilon.has_value()) {
       const std::vector<double>& values = *tick.epsilon;
-      const std::vector<int64_t> shape{
-          static_cast<int64_t>(values.size())};
-      auto loan = epsilon.allocate_tensor(holoscan::TensorLoanRequest{
-          .shape = shape, .dtype = kFloat64Dtype});
+      const std::vector<int64_t> shape{static_cast<int64_t>(values.size())};
+      auto loan = epsilon.allocate_tensor(
+          holoscan::TensorLoanRequest{.shape = shape, .dtype = kFloat64Dtype});
       if (!loan) {
         return holoscan::make_unexpected(std::move(loan).error());
       }
-      auto written = loan->write_host_and_commit(
-          [&values](const holoscan::TensorOutputWriteGuard& writer) {
-            std::copy(values.begin(), values.end(),
-                      writer.data_as<double>());
+      auto written =
+          loan->write_host_and_commit([&values](const holoscan::TensorOutputWriteGuard& writer) {
+            std::copy(values.begin(), values.end(), writer.data_as<double>());
           });
       if (!written) {
         return holoscan::make_unexpected(std::move(written).error());
       }
       holoscan::TimePoint epsilon_time = points_time;
       epsilon_time.timestamp_ns += tick.skew_ns;
-      auto emitted = epsilon.emit(
-          std::move(*loan),
-          holoscan::EmitOptions{.capture_time = epsilon_time});
+      auto emitted =
+          epsilon.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = epsilon_time});
       if (!emitted) {
         return holoscan::make_unexpected(std::move(emitted).error());
       }
@@ -605,23 +576,21 @@ class LiveEpsilonSourceOp final : public holoscan::Operator<> {
     holoscan::TimePoint scalar_time = points_time;
     scalar_time.timestamp_ns += tick.skew_ns;
     if (tick.min_points.has_value()) {
-      auto emitted = min_points.emit(
-          *tick.min_points,
-          holoscan::EmitOptions{.capture_time = scalar_time});
+      auto emitted =
+          min_points.emit(*tick.min_points, holoscan::EmitOptions{.capture_time = scalar_time});
       if (!emitted) {
         return holoscan::make_unexpected(std::move(emitted).error());
       }
     }
     if (tick.max_clusters.has_value()) {
-      auto emitted = max_clusters.emit(
-          *tick.max_clusters,
-          holoscan::EmitOptions{.capture_time = scalar_time});
+      auto emitted =
+          max_clusters.emit(*tick.max_clusters, holoscan::EmitOptions{.capture_time = scalar_time});
       if (!emitted) {
         return holoscan::make_unexpected(std::move(emitted).error());
       }
     }
-    return holoscan::radar::testing::detail::emit_bank_frame(
-        points, context, tick.points, "LiveEpsilonSourceOp");
+    return holoscan::radar::testing::detail::emit_bank_frame(points, context, tick.points,
+                                                             "LiveEpsilonSourceOp");
   }
 
   holoscan::Output<holoscan::Tensor> points{"out"};
@@ -630,9 +599,9 @@ class LiveEpsilonSourceOp final : public holoscan::Operator<> {
   holoscan::Output<int64_t> max_clusters{"max_clusters"};
 };
 
-DualIOGraphRunResult run_epsilon_override_graph(
-    std::vector<LiveEpsilonTick> ticks, ClusterDBSCANParams params,
-    int64_t max_features = 2) {
+DualIOGraphRunResult run_epsilon_override_graph(std::vector<LiveEpsilonTick> ticks,
+                                                ClusterDBSCANParams params,
+                                                int64_t max_features = 2) {
   DualIOGraphRunResult result;
   holoscan::radar::testing::detail::FrameBank::reset();
   holoscan::radar::testing::detail::FrameBankB::reset();
@@ -645,10 +614,8 @@ DualIOGraphRunResult run_epsilon_override_graph(
   extents.max_features = max_features;
   auto op = graph.op<ClusterDBSCANOp<double>>("op", extents);
   op.set_params(std::move(params));
-  const auto labels =
-      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("labels");
-  const auto sizes =
-      graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sizes");
+  const auto labels = graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("labels");
+  const auto sizes = graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sizes");
   const holoscan::ConnectionOptions q{.queue_depth = 8U};
   graph.add_flow(source->points, op->points, q);
   graph.add_flow(source->epsilon, op->epsilon, q);
@@ -659,31 +626,26 @@ DualIOGraphRunResult run_epsilon_override_graph(
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
   holoscan::CompileOptions options;
-  holoscan::radar::testing::detail::bind_single_in_dual_out_device_pools(
-      options, "labels", "sizes");
+  holoscan::radar::testing::detail::bind_single_in_dual_out_device_pools(options, "labels",
+                                                                         "sizes");
   try {
-    const holoscan::ExecutionPlan plan =
-        holoscan::compile(graph, std::move(options));
+    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
     result.plan_ok = plan.ok();
     result.plan_json = plan.json();
     if (!plan.ok()) {
       return result;
     }
     holoscan::RunSession session = holoscan::run_async(plan);
-    const auto deadline = std::chrono::steady_clock::now() +
-                          holoscan::radar::testing::detail::kHarnessDeadline;
-    while (session.diagnostics().empty() &&
-           std::chrono::steady_clock::now() < deadline) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + holoscan::radar::testing::detail::kHarnessDeadline;
+    while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
       {
-        const std::lock_guard lock(
-            holoscan::radar::testing::detail::FrameBankB::mutex);
-        if (holoscan::radar::testing::detail::FrameBankB::captured.size() >=
-            expected) {
+        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankB::mutex);
+        if (holoscan::radar::testing::detail::FrameBankB::captured.size() >= expected) {
           break;
         }
       }
-      std::this_thread::sleep_for(
-          holoscan::radar::testing::detail::kHarnessPoll);
+      std::this_thread::sleep_for(holoscan::radar::testing::detail::kHarnessPoll);
     }
     session.request_stop();
     session.wait();
@@ -696,30 +658,24 @@ DualIOGraphRunResult run_epsilon_override_graph(
     result.plan_json = std::string("RuntimeError: ") + error.what();
   }
   {
-    const std::lock_guard lock(
-        holoscan::radar::testing::detail::FrameBank::mutex);
-    result.frames0 = std::move(
-        holoscan::radar::testing::detail::FrameBank::captured);
+    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBank::mutex);
+    result.frames0 = std::move(holoscan::radar::testing::detail::FrameBank::captured);
   }
   {
-    const std::lock_guard lock(
-        holoscan::radar::testing::detail::FrameBankB::mutex);
-    result.frames1 = std::move(
-        holoscan::radar::testing::detail::FrameBankB::captured);
+    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankB::mutex);
+    result.frames1 = std::move(holoscan::radar::testing::detail::FrameBankB::captured);
   }
   return result;
 }
 
 std::shared_ptr<holoscan::Tensor> live_epsilon_points() {
-  return points_tensor<double>(
-      {0.0, 0.0, 2.0, 0.0, 4.0, 0.0, 0.0, 5.0}, 4, 2);
+  return points_tensor<double>({0.0, 0.0, 2.0, 0.0, 4.0, 0.0, 0.0, 5.0}, 4, 2);
 }
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonExactMatchChangesClustering) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
   const auto out = run_epsilon_override_graph(
-      {{live_epsilon_points(), std::vector<double>{3.0, 1.0}}},
-      std::move(params));
+      {{live_epsilon_points(), std::vector<double>{3.0, 1.0}}}, std::move(params));
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
@@ -730,8 +686,7 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonExactMatchChangesClustering) {
 TEST(ClusterDBSCANOpTest, LiveEpsilonSkewedCaptureMissesExact) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
   const auto out = run_epsilon_override_graph(
-      {{live_epsilon_points(), std::vector<double>{3.0, 1.0}, 1}},
-      std::move(params));
+      {{live_epsilon_points(), std::vector<double>{3.0, 1.0}, 1}}, std::move(params));
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
@@ -741,10 +696,10 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonSkewedCaptureMissesExact) {
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonRevertsToParamsAfterMiss) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
-  const auto out = run_epsilon_override_graph(
-      {{live_epsilon_points(), std::vector<double>{3.0, 1.0}},
-       {live_epsilon_points(), std::nullopt}},
-      std::move(params));
+  const auto out =
+      run_epsilon_override_graph({{live_epsilon_points(), std::vector<double>{3.0, 1.0}},
+                                  {live_epsilon_points(), std::nullopt}},
+                                 std::move(params));
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
@@ -755,13 +710,11 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonRevertsToParamsAfterMiss) {
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonCanToggleIgnoredAxis) {
   const auto make_points = [] {
-    return points_tensor<double>(
-        {0.0, 0.0, 0.1, 0.0, 0.0, 10.0, 0.1, 10.0}, 4, 2);
+    return points_tensor<double>({0.0, 0.0, 0.1, 0.0, 0.0, 10.0, 0.1, 10.0}, 4, 2);
   };
-  const auto out = run_epsilon_override_graph(
-      {{make_points(), std::vector<double>{0.5, 0.0}},
-       {make_points(), std::vector<double>{0.5, 1.0}}},
-      make_params({0.5, 1.0}, 2));
+  const auto out = run_epsilon_override_graph({{make_points(), std::vector<double>{0.5, 0.0}},
+                                               {make_points(), std::vector<double>{0.5, 1.0}}},
+                                              make_params({0.5, 1.0}, 2));
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
@@ -772,9 +725,8 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonCanToggleIgnoredAxis) {
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsMalformedVector) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
-  const auto out = run_epsilon_override_graph(
-      {{live_epsilon_points(), std::vector<double>{}}},
-      std::move(params));
+  const auto out = run_epsilon_override_graph({{live_epsilon_points(), std::vector<double>{}}},
+                                              std::move(params));
 
   EXPECT_TRUE(out.plan_ok) << out.plan_json;
   EXPECT_FALSE(out.diagnostics.empty());
@@ -783,8 +735,7 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsMalformedVector) {
 TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsConfiguredBoundOverflow) {
   ClusterDBSCANParams params = make_params({1.0}, 2);
   const auto out = run_epsilon_override_graph(
-      {{live_epsilon_points(), std::vector<double>{1.0, 1.0, 1.0}}},
-      std::move(params), 2);
+      {{live_epsilon_points(), std::vector<double>{1.0, 1.0, 1.0}}}, std::move(params), 2);
 
   EXPECT_TRUE(out.plan_ok) << out.plan_json;
   EXPECT_FALSE(out.diagnostics.empty());
@@ -796,22 +747,20 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsConfiguredBoundOverflow) {
 // groups, min_points 3 leaves the pair short of a core point. The cluster
 // count is therefore the shape of `sizes` — no float payload is compared.
 std::shared_ptr<holoscan::Tensor> live_min_points_points() {
-  return points_tensor<double>(
-      {0.0, 0.0, 0.1, 0.0, 0.2, 0.0, 10.0, 0.0, 10.1, 0.0}, 5, 2);
+  return points_tensor<double>({0.0, 0.0, 0.1, 0.0, 0.2, 0.0, 10.0, 0.0, 10.1, 0.0}, 5, 2);
 }
 
 // Three well-separated pairs → three clusters when uncapped.
 std::shared_ptr<holoscan::Tensor> live_max_clusters_points() {
-  return points_tensor<double>(
-      {0.0, 0.0, 0.1, 0.0, 10.0, 0.0, 10.1, 0.0, 20.0, 0.0, 20.1, 0.0}, 6,
-      2);
+  return points_tensor<double>({0.0, 0.0, 0.1, 0.0, 10.0, 0.0, 10.1, 0.0, 20.0, 0.0, 20.1, 0.0}, 6,
+                               2);
 }
 
 TEST(ClusterDBSCANOpTest, LiveMinPointsRevertsToParamsAfterMiss) {
-  const auto out = run_epsilon_override_graph(
-      {{live_min_points_points(), std::nullopt, 0, int64_t{3}},
-       {live_min_points_points(), std::nullopt, 0, std::nullopt}},
-      make_params({0.5}, 2));
+  const auto out =
+      run_epsilon_override_graph({{live_min_points_points(), std::nullopt, 0, int64_t{3}},
+                                  {live_min_points_points(), std::nullopt, 0, std::nullopt}},
+                                 make_params({0.5}, 2));
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
@@ -825,8 +774,7 @@ TEST(ClusterDBSCANOpTest, LiveMinPointsRevertsToParamsAfterMiss) {
 TEST(ClusterDBSCANOpTest, LiveMinPointsSkewedCaptureMissesExact) {
   ClusterDBSCANParams params = make_params({0.5}, 2);
   const auto out = run_epsilon_override_graph(
-      {{live_min_points_points(), std::nullopt, 1, int64_t{3}}},
-      std::move(params));
+      {{live_min_points_points(), std::nullopt, 1, int64_t{3}}}, std::move(params));
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;
   ASSERT_TRUE(out.diagnostics.empty());
@@ -836,10 +784,8 @@ TEST(ClusterDBSCANOpTest, LiveMinPointsSkewedCaptureMissesExact) {
 
 TEST(ClusterDBSCANOpTest, LiveMaxClustersRevertsToParamsAfterMiss) {
   const auto out = run_epsilon_override_graph(
-      {{live_max_clusters_points(), std::nullopt, 0, std::nullopt,
-        int64_t{2}},
-       {live_max_clusters_points(), std::nullopt, 0, std::nullopt,
-        std::nullopt}},
+      {{live_max_clusters_points(), std::nullopt, 0, std::nullopt, int64_t{2}},
+       {live_max_clusters_points(), std::nullopt, 0, std::nullopt, std::nullopt}},
       make_params({0.5}, 2));
 
   ASSERT_TRUE(out.plan_ok) << out.plan_json;

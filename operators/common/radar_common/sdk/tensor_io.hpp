@@ -34,34 +34,29 @@ namespace holoscan::radar {
 // (memory kind / dtype / rank); a consumer constrains only those, while a
 // producer that wants Runtime-owned loans also sizes its pool.
 
-inline TensorInputSpec tensor_input(
-    const TensorRepresentation& representation) {
+inline TensorInputSpec tensor_input(const TensorRepresentation& representation) {
   return TensorInputSpec{.representation = representation};
 }
 
 // A producer that hands on storage it does not own (no loans allocated).
-inline TensorOutputSpec tensor_output(
-    const TensorRepresentation& representation) {
+inline TensorOutputSpec tensor_output(const TensorRepresentation& representation) {
   return TensorOutputSpec{.representation = representation};
 }
 
-inline TensorOutputSpec pooled_tensor_output(
-    const TensorRepresentation& representation, const TensorBounds& bounds) {
+inline TensorOutputSpec pooled_tensor_output(const TensorRepresentation& representation,
+                                             const TensorBounds& bounds) {
   return TensorOutputSpec{.representation = representation,
                           .bounds = bounds,
                           .storage = TensorOutputStorage::kRuntimePool};
 }
 
-inline TensorOutputSpec pooled_tensor_output(
-    const TensorRepresentation& representation, std::uint32_t max_rank,
-    std::uint64_t max_byte_span) {
-  return pooled_tensor_output(
-      representation,
-      TensorBounds{.max_rank = max_rank, .max_byte_span = max_byte_span});
+inline TensorOutputSpec pooled_tensor_output(const TensorRepresentation& representation,
+                                             std::uint32_t max_rank, std::uint64_t max_byte_span) {
+  return pooled_tensor_output(representation,
+                              TensorBounds{.max_rank = max_rank, .max_byte_span = max_byte_span});
 }
 
-inline expected<Tensor, Error> receive_tensor(Input<Tensor>& port,
-                                              const std::string& who) {
+inline expected<Tensor, Error> receive_tensor(Input<Tensor>& port, const std::string& who) {
   auto sample = port.receive_data();
   if (!sample) {
     return make_unexpected(std::move(sample).error());
@@ -69,10 +64,9 @@ inline expected<Tensor, Error> receive_tensor(Input<Tensor>& port,
   // An empty tensor legitimately carries no allocation; only a sized tensor
   // without storage is malformed.
   if (sample->nbytes() > 0 && sample->data() == nullptr) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        who + ": received a null tensor on input port '" +
-            std::string(port.name()) + "'"});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              who + ": received a null tensor on input port '" + std::string(port.name()) + "'"});
   }
   return std::move(*sample);
 }
@@ -82,8 +76,7 @@ inline expected<Tensor, Error> receive_tensor(Input<Tensor>& port,
 // other code is a real transport or materialization failure and must surface —
 // silently substituting a default would hide miswired graphs.
 inline bool is_absent_input_error(ErrorCode code) {
-  return code == ErrorCode::kInputUndeclared ||
-         code == ErrorCode::kInputEmpty ||
+  return code == ErrorCode::kInputUndeclared || code == ErrorCode::kInputEmpty ||
          code == ErrorCode::kInputNotSelected || code == ErrorCode::kNotReady;
 }
 
@@ -110,11 +103,11 @@ expected<std::optional<T>, Error> receive_optional_value(Input<T>& port) {
 // sibling port already published, then emit the prepared loans together.
 // `fill` must enqueue only stream-ordered device work (no host sync).
 template <typename FillFn>
-expected<TensorOutputLoan, Error> prepare_device_tensor(
-    Output<Tensor>& port, ExecutionContext& context,
-    std::span<const int64_t> shape, DLDataType dtype, FillFn&& fill) {
-  auto loan = port.allocate_tensor(
-      TensorLoanRequest{.shape = shape, .dtype = dtype});
+expected<TensorOutputLoan, Error> prepare_device_tensor(Output<Tensor>& port,
+                                                        ExecutionContext& context,
+                                                        std::span<const int64_t> shape,
+                                                        DLDataType dtype, FillFn&& fill) {
+  auto loan = port.allocate_tensor(TensorLoanRequest{.shape = shape, .dtype = dtype});
   if (!loan) {
     return make_unexpected(std::move(loan).error());
   }
@@ -150,21 +143,21 @@ expected<TensorOutputLoan, Error> prepare_device_tensor(
 // outputs as collateral. Per OPERATOR_API.md, "Optional output convention",
 // such a port takes one of two dispositions: `always` discards the result here
 // with an explicit (void), and `latched` goes through LatchedOutput below.
-[[nodiscard]] inline expected<void, Error> emit_prepared_tensor(
-    Output<Tensor>& port, ExecutionContext& context, TensorOutputLoan loan) {
-  return port.emit(std::move(loan),
-                   EmitOptions{.capture_time = context.activation_time()});
+[[nodiscard]] inline expected<void, Error> emit_prepared_tensor(Output<Tensor>& port,
+                                                                ExecutionContext& context,
+                                                                TensorOutputLoan loan) {
+  return port.emit(std::move(loan), EmitOptions{.capture_time = context.activation_time()});
 }
 
 // Emit a schema payload whose DescriptorTensor storage is a prepared Tensor
 // loan. This is the schema-valued counterpart of emit_prepared_tensor above.
 template <typename Payload>
-[[nodiscard]] expected<void, Error> emit_prepared_schema_tensor(
-    Output<Payload>& port, ExecutionContext& context, TensorOutputLoan loan,
-    Payload payload) {
-  return port.emit_tensor(
-      std::move(loan), std::move(payload),
-      EmitOptions{.capture_time = context.activation_time()});
+[[nodiscard]] expected<void, Error> emit_prepared_schema_tensor(Output<Payload>& port,
+                                                                ExecutionContext& context,
+                                                                TensorOutputLoan loan,
+                                                                Payload payload) {
+  return port.emit_tensor(std::move(loan), std::move(payload),
+                          EmitOptions{.capture_time = context.activation_time()});
 }
 
 // A `latched` optional output (OPERATOR_API.md, "Optional output
@@ -191,24 +184,22 @@ class LatchedOutput {
 
   // Emit and absorb. Never fails the activation: a declined optional output
   // must not take the tick's other outputs down with it.
-  void emit(Output<Tensor>& port, ExecutionContext& context,
-            TensorOutputLoan loan, std::string_view op_and_port) {
+  void emit(Output<Tensor>& port, ExecutionContext& context, TensorOutputLoan loan,
+            std::string_view op_and_port) {
     const auto emitted = emit_prepared_tensor(port, context, std::move(loan));
     absorb_emit_result(emitted, op_and_port);
   }
 
   template <typename Payload>
-  void emit_schema_tensor(Output<Payload>& port, ExecutionContext& context,
-                          TensorOutputLoan loan, Payload payload,
-                          std::string_view op_and_port) {
-    const auto emitted = emit_prepared_schema_tensor(
-        port, context, std::move(loan), std::move(payload));
+  void emit_schema_tensor(Output<Payload>& port, ExecutionContext& context, TensorOutputLoan loan,
+                          Payload payload, std::string_view op_and_port) {
+    const auto emitted =
+        emit_prepared_schema_tensor(port, context, std::move(loan), std::move(payload));
     absorb_emit_result(emitted, op_and_port);
   }
 
  private:
-  void absorb_emit_result(const expected<void, Error>& emitted,
-                          std::string_view op_and_port) {
+  void absorb_emit_result(const expected<void, Error>& emitted, std::string_view op_and_port) {
     if (emitted) {
       return;
     }
@@ -231,37 +222,31 @@ class LatchedOutput {
 // stream-ordered device work (no host sync). Prefer prepare_device_tensor +
 // emit_prepared_tensor when a tick publishes more than one output.
 template <typename FillFn>
-[[nodiscard]] expected<void, Error> emit_device_tensor(
-    Output<Tensor>& port, ExecutionContext& context,
-    std::span<const int64_t> shape, DLDataType dtype, FillFn&& fill) {
+[[nodiscard]] expected<void, Error> emit_device_tensor(Output<Tensor>& port,
+                                                       ExecutionContext& context,
+                                                       std::span<const int64_t> shape,
+                                                       DLDataType dtype, FillFn&& fill) {
   HOLOSCAN_TRY(auto loan,
-               prepare_device_tensor(port, context, shape, dtype,
-                                    std::forward<FillFn>(fill)));
+               prepare_device_tensor(port, context, shape, dtype, std::forward<FillFn>(fill)));
   return emit_prepared_tensor(port, context, std::move(loan));
 }
 
 // Byte span for a compact row-major tensor of the given shape. Matches
 // make_device_tensor: reject negative dims and int64 / size_t overflow
 // rather than wrapping to an undersized allocation size.
-inline std::size_t tensor_byte_span(std::span<const int64_t> shape,
-                                    DLDataType dtype) {
+inline std::size_t tensor_byte_span(std::span<const int64_t> shape, DLDataType dtype) {
   int64_t count = 1;
   for (const int64_t dim : shape) {
-    if (dim < 0 ||
-        (dim != 0 && count > std::numeric_limits<int64_t>::max() / dim)) {
-      throw std::invalid_argument(
-          "tensor_byte_span: invalid or overflowing shape");
+    if (dim < 0 || (dim != 0 && count > std::numeric_limits<int64_t>::max() / dim)) {
+      throw std::invalid_argument("tensor_byte_span: invalid or overflowing shape");
     }
     count *= dim;
   }
   const std::size_t bytes_per_element =
-      ((static_cast<std::size_t>(dtype.bits) + 7) / 8) *
-      static_cast<std::size_t>(dtype.lanes);
-  if (bytes_per_element == 0 ||
-      static_cast<std::size_t>(count) >
-          std::numeric_limits<std::size_t>::max() / bytes_per_element) {
-    throw std::invalid_argument(
-        "tensor_byte_span: invalid or overflowing shape");
+      ((static_cast<std::size_t>(dtype.bits) + 7) / 8) * static_cast<std::size_t>(dtype.lanes);
+  if (bytes_per_element == 0 || static_cast<std::size_t>(count) >
+                                    std::numeric_limits<std::size_t>::max() / bytes_per_element) {
+    throw std::invalid_argument("tensor_byte_span: invalid or overflowing shape");
   }
   return static_cast<std::size_t>(count) * bytes_per_element;
 }

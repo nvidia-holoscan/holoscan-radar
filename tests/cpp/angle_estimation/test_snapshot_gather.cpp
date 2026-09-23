@@ -37,7 +37,7 @@ using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::run_dual_in_single_out_operator_graph_result;
 using holoscan::radar::testing::run_dual_io_operator_graph_result;
 using holoscan::radar::testing::
-run_exact_override_dual_in_single_out_operator_graph_result;  // NOLINT
+    run_exact_override_dual_in_single_out_operator_graph_result;  // NOLINT
 using holoscan::radar::testing::to_device_tensor;
 
 constexpr int64_t kC = 3;
@@ -45,8 +45,7 @@ constexpr int64_t kD = 8;
 constexpr int64_t kR = 16;
 
 std::complex<double> cell_value(int64_t c, int64_t d, int64_t r) {
-  return {static_cast<double>(c * 100 + d * 10 + r),
-          static_cast<double>(c + d + r)};
+  return {static_cast<double>(c * 100 + d * 10 + r), static_cast<double>(c + d + r)};
 }
 
 template <typename T>
@@ -57,8 +56,7 @@ std::shared_ptr<holoscan::Tensor> make_rd_maps() {
       for (int64_t r = 0; r < kR; ++r) {
         const auto v = cell_value(c, d, r);
         host[static_cast<size_t>((c * kD + d) * kR + r)] =
-            std::complex<T>(static_cast<T>(v.real()),
-                            static_cast<T>(v.imag()));
+            std::complex<T>(static_cast<T>(v.real()), static_cast<T>(v.imag()));
       }
     }
   }
@@ -71,19 +69,16 @@ std::shared_ptr<holoscan::Tensor> make_rd_maps() {
 
 template <typename T>
 std::shared_ptr<holoscan::Tensor> make_batched_rd_maps(int64_t batch) {
-  std::vector<std::complex<T>> host(
-      static_cast<size_t>(batch * kC * kD * kR));
+  std::vector<std::complex<T>> host(static_cast<size_t>(batch * kC * kD * kR));
   for (int64_t b = 0; b < batch; ++b) {
     for (int64_t c = 0; c < kC; ++c) {
       for (int64_t d = 0; d < kD; ++d) {
         for (int64_t r = 0; r < kR; ++r) {
-          const size_t off = static_cast<size_t>(
-              ((b * kC + c) * kD + d) * kR + r);
+          const size_t off = static_cast<size_t>(((b * kC + c) * kD + d) * kR + r);
           const auto v = cell_value(c, d, r);
           // Offset batch slice so batch selection is observable.
-          host[off] = std::complex<T>(
-              static_cast<T>(v.real() + static_cast<double>(b) * 1000.0),
-              static_cast<T>(v.imag()));
+          host[off] = std::complex<T>(static_cast<T>(v.real() + static_cast<double>(b) * 1000.0),
+                                      static_cast<T>(v.imag()));
         }
       }
     }
@@ -97,8 +92,8 @@ struct GatherOutputs {
 };
 
 template <typename Source, typename OpRef, typename Sink0, typename Sink1>
-void wire_snapshot_gather(holoscan::Graph& graph, const Source& source,
-                          OpRef& op, const Sink0& sink0, const Sink1& sink1) {
+void wire_snapshot_gather(holoscan::Graph& graph, const Source& source, OpRef& op,
+                          const Sink0& sink0, const Sink1& sink1) {
   const holoscan::ConnectionOptions q{.queue_depth = 4U};
   graph.add_flow(source->out0, op->rd_maps, q);
   graph.add_flow(source->out1, op->detection_idx, q);
@@ -107,15 +102,13 @@ void wire_snapshot_gather(holoscan::Graph& graph, const Source& source,
 }
 
 template <typename T>
-DualIOGraphRunResult run_gather_result(
-    std::shared_ptr<holoscan::Tensor> rd_maps,
-    std::shared_ptr<holoscan::Tensor> detection_idx,
-    SnapshotGatherParams params = {}) {
+DualIOGraphRunResult run_gather_result(std::shared_ptr<holoscan::Tensor> rd_maps,
+                                       std::shared_ptr<holoscan::Tensor> detection_idx,
+                                       SnapshotGatherParams params = {}) {
   return run_dual_io_operator_graph_result<SnapshotGatherOp<T>>(
-      {std::move(rd_maps)}, {std::move(detection_idx)}, std::move(params),
-      "snapshot", "is_valid",
-      [](holoscan::Graph& graph, const auto& source, auto& op,
-         const auto& sink0, const auto& sink1) {
+      {std::move(rd_maps)}, {std::move(detection_idx)}, std::move(params), "snapshot", "is_valid",
+      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
+         const auto& sink1) {
         wire_snapshot_gather(graph, source, op, sink0, sink1);
       });
 }
@@ -124,11 +117,10 @@ template <typename T>
 GatherOutputs run_gather(std::shared_ptr<holoscan::Tensor> rd_maps,
                          std::shared_ptr<holoscan::Tensor> detection_idx,
                          SnapshotGatherParams params = {}) {
-  DualIOGraphRunResult result = run_gather_result<T>(
-      std::move(rd_maps), std::move(detection_idx), std::move(params));
+  DualIOGraphRunResult result =
+      run_gather_result<T>(std::move(rd_maps), std::move(detection_idx), std::move(params));
   if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") +
-                             result.plan_json);
+    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
   }
   if (!result.diagnostics.empty()) {
     std::string msg = "run diagnostics:";
@@ -139,13 +131,11 @@ GatherOutputs run_gather(std::shared_ptr<holoscan::Tensor> rd_maps,
     throw std::runtime_error(msg);
   }
   if (result.frames0.size() != 1U || result.frames1.size() != 1U) {
-    throw std::runtime_error(
-        "SnapshotGatherOp test: expected one output frame pair, got " +
-        std::to_string(result.frames0.size()) + "/" +
-        std::to_string(result.frames1.size()));
+    throw std::runtime_error("SnapshotGatherOp test: expected one output frame pair, got " +
+                             std::to_string(result.frames0.size()) + "/" +
+                             std::to_string(result.frames1.size()));
   }
-  return {std::move(result.frames0.front()),
-          std::move(result.frames1.front())};
+  return {std::move(result.frames0.front()), std::move(result.frames1.front())};
 }
 
 TEST(SnapshotGatherOpTest, SingleCellGather) {
@@ -179,8 +169,7 @@ TEST(SnapshotGatherOpTest, WindowGatherPreservesChannelAxis) {
       // (num_detections, num_channels, num_snapshots) row-major.
       const auto& got = snap[static_cast<size_t>(c * kK + slot)];
       const auto exp = cell_value(c, d, 5);
-      EXPECT_NEAR(got.real(), exp.real(), 1e-6)
-          << "slot " << slot << " ch " << c;
+      EXPECT_NEAR(got.real(), exp.real(), 1e-6) << "slot " << slot << " ch " << c;
       EXPECT_NEAR(got.imag(), exp.imag(), 1e-6);
     }
   }
@@ -232,8 +221,7 @@ TEST(SnapshotGatherOpTest, ShiftKeepsSnapshotCount) {
   // (num_detections, num_channels, num_snapshots): channel 0's slot 0 and last
   // slot (8) are at c*K + slot = 0 and 8 for K == 9.
   EXPECT_NEAR(snap[0].real(), cell_value(0, 0, 0).real(), 1e-6);
-  EXPECT_NEAR(snap[static_cast<size_t>(8)].real(),
-              cell_value(0, 2, 2).real(), 1e-6);
+  EXPECT_NEAR(snap[static_cast<size_t>(8)].real(), cell_value(0, 2, 2).real(), 1e-6);
 }
 
 TEST(SnapshotGatherOpTest, EmptyDetections) {
@@ -246,19 +234,16 @@ TEST(SnapshotGatherOpTest, EmptyDetections) {
 
 TEST(SnapshotGatherOpTest, OptionalValidityMayBeLeftUnwired) {
   std::vector<int64_t> idx = {3, 5};
-  GraphRunResult result =
-      run_dual_in_single_out_operator_graph_result<SnapshotGatherOp<double>>(
-          {make_rd_maps()},
-          {to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1})},
-          SnapshotGatherParams{}, "snapshot",
-          [](holoscan::Graph& graph, const auto& source, auto& op,
-             const auto& sink) {
-            const holoscan::ConnectionOptions q{.queue_depth = 4U};
-            graph.add_flow(source->out0, op->rd_maps, q);
-            graph.add_flow(source->out1, op->detection_idx, q);
-            graph.add_flow(op->snapshot, sink->in, q);
-          },
-          holoscan::radar::testing::default_test_extents(), {"is_valid"});
+  GraphRunResult result = run_dual_in_single_out_operator_graph_result<SnapshotGatherOp<double>>(
+      {make_rd_maps()}, {to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1})},
+      SnapshotGatherParams{}, "snapshot",
+      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
+        const holoscan::ConnectionOptions q{.queue_depth = 4U};
+        graph.add_flow(source->out0, op->rd_maps, q);
+        graph.add_flow(source->out1, op->detection_idx, q);
+        graph.add_flow(op->snapshot, sink->in, q);
+      },
+      holoscan::radar::testing::default_test_extents(), {"is_valid"});
   ASSERT_TRUE(result.plan_ok) << result.plan_json;
   EXPECT_TRUE(result.diagnostics.empty());
   ASSERT_EQ(result.frames.size(), 1U);
@@ -271,17 +256,15 @@ TEST(SnapshotGatherOpTest, LiveSnapshotWindowAppliesForOneTick) {
   for (int tick = 0; tick < 3; ++tick) {
     rd_maps.push_back(make_rd_maps());
     std::vector<int64_t> idx = {3, 5};
-    indices.push_back(
-        to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1}));
+    indices.push_back(to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1}));
   }
   GraphRunResult result =
-      run_exact_override_dual_in_single_out_operator_graph_result<
-          SnapshotGatherOp<double>, SnapshotWindowOverride>(
+      run_exact_override_dual_in_single_out_operator_graph_result<SnapshotGatherOp<double>,
+                                                                  SnapshotWindowOverride>(
           std::move(rd_maps), std::move(indices),
-          {std::nullopt, SnapshotWindowOverride{1, 0}, std::nullopt},
-          SnapshotGatherParams{}, "snapshot",
-          [](holoscan::Graph& graph, const auto& source, auto& op,
-             const auto& sink) {
+          {std::nullopt, SnapshotWindowOverride{1, 0}, std::nullopt}, SnapshotGatherParams{},
+          "snapshot",
+          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
             const holoscan::ConnectionOptions q{.queue_depth = 4U};
             graph.add_flow(source->out0, op->rd_maps, q);
             graph.add_flow(source->out1, op->detection_idx, q);
@@ -303,8 +286,7 @@ TEST(SnapshotGatherOpTest, FloatInstantiationSmoke) {
   const auto out = run_gather<float>(make_rd_maps<float>(), idx_t);
   ASSERT_EQ(out.snapshot.shape, (std::vector<int64_t>{1, kC, 1}));
   const auto* snap = out.snapshot.as<std::complex<float>>();
-  EXPECT_NEAR(snap[0].real(), static_cast<float>(cell_value(0, 3, 5).real()),
-              1e-5f);
+  EXPECT_NEAR(snap[0].real(), static_cast<float>(cell_value(0, 3, 5).real()), 1e-5f);
 }
 
 TEST(SnapshotGatherOpTest, FloatAndDoubleAgree) {
@@ -312,19 +294,15 @@ TEST(SnapshotGatherOpTest, FloatAndDoubleAgree) {
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
   SnapshotGatherParams params{};
   params.snapshot_window = {1, 0};
-  const auto out_f =
-      run_gather<float>(make_rd_maps<float>(), idx_t, params);
+  const auto out_f = run_gather<float>(make_rd_maps<float>(), idx_t, params);
   // Fresh idx tensor — previous run_gather consumed the shared_ptr.
   auto idx_t2 = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
-  const auto out_d =
-      run_gather<double>(make_rd_maps<double>(), idx_t2, params);
+  const auto out_d = run_gather<double>(make_rd_maps<double>(), idx_t2, params);
   ASSERT_EQ(out_f.snapshot.shape, out_d.snapshot.shape);
   const auto* f_data = out_f.snapshot.as<std::complex<float>>();
   const auto* d_data = out_d.snapshot.as<std::complex<double>>();
   for (int64_t i = 0; i < out_d.snapshot.size(); ++i) {
-    ASSERT_NEAR(std::abs(std::complex<double>(f_data[i]) - d_data[i]), 0.0,
-                1e-5)
-        << "index " << i;
+    ASSERT_NEAR(std::abs(std::complex<double>(f_data[i]) - d_data[i]), 0.0, 1e-5) << "index " << i;
   }
 }
 
@@ -346,8 +324,7 @@ TEST(SnapshotGatherOpTest, DopplerWrapAtBoundary) {
       // (num_detections, num_channels, num_snapshots) row-major.
       const auto& got = snap[static_cast<size_t>(c * kK + slot)];
       const auto exp = cell_value(c, d_bins[slot], 5);
-      EXPECT_NEAR(got.real(), exp.real(), 1e-6)
-          << "slot " << slot << " ch " << c;
+      EXPECT_NEAR(got.real(), exp.real(), 1e-6) << "slot " << slot << " ch " << c;
     }
   }
 }
@@ -359,23 +336,21 @@ TEST(SnapshotGatherOpTest, PreservedBatchSelectsCorrectSlice) {
       1, 3, 5,  // batch 1
   };
   auto idx_t = to_device_tensor(idx, {2, 3}, DLDataType{kDLInt, 64, 1});
-  const auto out =
-      run_gather<double>(make_batched_rd_maps<double>(kB), idx_t);
+  const auto out = run_gather<double>(make_batched_rd_maps<double>(kB), idx_t);
 
   ASSERT_EQ(out.snapshot.shape, (std::vector<int64_t>{2, kC, 1}));
   const auto* snap = out.snapshot.as<std::complex<double>>();
   for (int64_t c = 0; c < kC; ++c) {
     EXPECT_NEAR(snap[c].real(), cell_value(c, 3, 5).real() + 0.0, 1e-6);
-    EXPECT_NEAR(snap[static_cast<size_t>(kC + c)].real(),
-                cell_value(c, 3, 5).real() + 1000.0, 1e-6);
+    EXPECT_NEAR(snap[static_cast<size_t>(kC + c)].real(), cell_value(c, 3, 5).real() + 1000.0,
+                1e-6);
   }
 }
 
 TEST(SnapshotGatherOpTest, RejectsRdMapsDtypeMismatch) {
   std::vector<int64_t> idx = {3, 5};
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
-  const DualIOGraphRunResult result =
-      run_gather_result<double>(make_rd_maps<float>(), idx_t);
+  const DualIOGraphRunResult result = run_gather_result<double>(make_rd_maps<float>(), idx_t);
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -384,8 +359,7 @@ TEST(SnapshotGatherOpTest, RejectsRdMapsDtypeMismatch) {
 TEST(SnapshotGatherOpTest, RejectsNarrowDetectionIdx) {
   std::vector<int64_t> idx = {3};
   auto idx_t = to_device_tensor(idx, {1, 1}, DLDataType{kDLInt, 64, 1});
-  const DualIOGraphRunResult result =
-      run_gather_result<double>(make_rd_maps(), idx_t);
+  const DualIOGraphRunResult result = run_gather_result<double>(make_rd_maps(), idx_t);
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -396,8 +370,7 @@ TEST(SnapshotGatherOpTest, RejectsNegativeSnapshotWindow) {
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
   SnapshotGatherParams params{};
   params.snapshot_window = {-1, 0};
-  const DualIOGraphRunResult result =
-      run_gather_result<double>(make_rd_maps(), idx_t, params);
+  const DualIOGraphRunResult result = run_gather_result<double>(make_rd_maps(), idx_t, params);
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -408,8 +381,7 @@ TEST(SnapshotGatherOpTest, RejectsNegativeIsotropicSnapshotWindow) {
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
   SnapshotGatherParams params{};
   params.snapshot_window = {-1};
-  const DualIOGraphRunResult result =
-      run_gather_result<double>(make_rd_maps(), idx_t, params);
+  const DualIOGraphRunResult result = run_gather_result<double>(make_rd_maps(), idx_t, params);
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -421,8 +393,7 @@ TEST(SnapshotGatherOpTest, RejectsOversizedShiftWindow) {
   SnapshotGatherParams params{};
   params.snapshot_window = {0, kR};
   params.range_edge = SnapshotEdgeMode::kShift;
-  const DualIOGraphRunResult result =
-      run_gather_result<double>(make_rd_maps(), idx_t, params);
+  const DualIOGraphRunResult result = run_gather_result<double>(make_rd_maps(), idx_t, params);
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());
@@ -441,8 +412,7 @@ TEST(SnapshotGatherOpTest, RejectsBatchCoordOutOfRange) {
 TEST(SnapshotGatherOpTest, RejectsCellCoordOutOfRange) {
   std::vector<int64_t> idx = {kD, 5};
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
-  const DualIOGraphRunResult result =
-      run_gather_result<double>(make_rd_maps(), idx_t);
+  const DualIOGraphRunResult result = run_gather_result<double>(make_rd_maps(), idx_t);
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames0.empty());
   EXPECT_FALSE(result.diagnostics.empty());

@@ -70,6 +70,14 @@ repos:
           - --exclude-file=codespell.txt
           - --skip=*.onnx,*.min.js,*.min.js.map,*/Contrastive_learning_Notebook.ipynb,./data/
 
+  # C++/CUDA: clang-format
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.8
+    hooks:
+      - id: clang-format
+        types: [text]
+        files: '\.(cpp|hpp|cu|cuh)$'
+
   # C++: cpplint
   - repo: https://github.com/cpplint/cpplint
     rev: 2.0.2

@@ -23,8 +23,7 @@ struct ShiftInvariantSubarrayPlan {
 // Resolve auto or validate an explicit corresponding subarray pair. Every
 // corresponding position must differ by one common nonzero displacement.
 ShiftInvariantSubarrayPlan build_shift_invariant_subarray_plan(
-    const ArrayGeometry& geometry,
-    const ShiftInvariantSubarrayPair& requested);
+    const ArrayGeometry& geometry, const ShiftInvariantSubarrayPair& requested);
 
 // The two orthogonal maximum-overlap shift invariances of a filled URA laid
 // out in `(iz` outer, `iy` inner) channel order: the y-shift (azimuth) pairs

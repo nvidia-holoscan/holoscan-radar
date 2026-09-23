@@ -69,12 +69,11 @@ struct ExpansionScenario {
 };
 
 const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 32, "small; performance smoke"},
-      {"sm", 256, "compact detection set"},
-      {"md", 2048, "common sparse-angle workload"},
-      {"lg", 16384, "dense detection workload"},
-      {"xl", 65536, "upper characterization bound"}};
+  static const std::vector<SizeSpec> ladder = {{"xs", 32, "small; performance smoke"},
+                                               {"sm", 256, "compact detection set"},
+                                               {"md", 2048, "common sparse-angle workload"},
+                                               {"lg", 16384, "dense detection workload"},
+                                               {"xl", 65536, "upper characterization bound"}};
   return ladder;
 }
 
@@ -97,18 +96,14 @@ const SizeSpec& must_find_size(const std::string& id) {
 }
 
 template <typename Element>
-std::shared_ptr<holoscan::Tensor> upload(
-    const std::vector<Element>& host, const std::vector<int64_t>& shape,
-    DLDataType dtype) {
+std::shared_ptr<holoscan::Tensor> upload(const std::vector<Element>& host,
+                                         const std::vector<int64_t>& shape, DLDataType dtype) {
   auto tensor = hr::make_device_tensor(shape, dtype);
   if (!host.empty()) {
     auto writable = tensor->mutable_data();
-    if (!writable ||
-        cudaMemcpy(writable.value(), host.data(),
-                   host.size() * sizeof(Element),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error(
-          "perf_multi_source_expansion: input upload failed");
+    if (!writable || cudaMemcpy(writable.value(), host.data(), host.size() * sizeof(Element),
+                                cudaMemcpyHostToDevice) != cudaSuccess) {
+      throw std::runtime_error("perf_multi_source_expansion: input upload failed");
     }
   }
   return tensor;
@@ -116,9 +111,8 @@ std::shared_ptr<holoscan::Tensor> upload(
 
 int64_t selected_rows(const ExpansionScenario& scenario) {
   return std::max<int64_t>(
-      1, static_cast<int64_t>(std::llround(
-             scenario.selected_fraction *
-             static_cast<double>(scenario.rows))));
+      1, static_cast<int64_t>(
+             std::llround(scenario.selected_fraction * static_cast<double>(scenario.rows))));
 }
 
 struct ExpansionInputs {
@@ -132,51 +126,36 @@ struct ExpansionInputs {
 
 ExpansionInputs make_inputs(const ExpansionScenario& scenario) {
   const int64_t selected_count = selected_rows(scenario);
-  std::vector<int64_t> idx(
-      static_cast<size_t>(scenario.rows * scenario.index_columns));
-  std::vector<PerfPrecision> baseline(
-      static_cast<size_t>(scenario.rows * 2));
+  std::vector<int64_t> idx(static_cast<size_t>(scenario.rows * scenario.index_columns));
+  std::vector<PerfPrecision> baseline(static_cast<size_t>(scenario.rows * 2));
   for (int64_t row = 0; row < scenario.rows; ++row) {
     for (int64_t column = 0; column < scenario.index_columns; ++column) {
-      idx[static_cast<size_t>(row * scenario.index_columns + column)] =
-          row * 11 + column;
+      idx[static_cast<size_t>(row * scenario.index_columns + column)] = row * 11 + column;
     }
-    baseline[static_cast<size_t>(row * 2)] =
-        static_cast<PerfPrecision>((row % 101) * 0.001);
+    baseline[static_cast<size_t>(row * 2)] = static_cast<PerfPrecision>((row % 101) * 0.001);
   }
 
   std::vector<int64_t> selected(static_cast<size_t>(selected_count));
-  std::vector<PerfPrecision> resolved(
-      static_cast<size_t>(selected_count * 2));
-  std::vector<PerfPrecision> multi(
-      static_cast<size_t>(selected_count * scenario.sources * 2));
-  std::vector<int32_t> count(
-      static_cast<size_t>(selected_count),
-      static_cast<int32_t>(scenario.sources));
+  std::vector<PerfPrecision> resolved(static_cast<size_t>(selected_count * 2));
+  std::vector<PerfPrecision> multi(static_cast<size_t>(selected_count * scenario.sources * 2));
+  std::vector<int32_t> count(static_cast<size_t>(selected_count),
+                             static_cast<int32_t>(scenario.sources));
   for (int64_t row = 0; row < selected_count; ++row) {
     selected[static_cast<size_t>(row)] = row;
     resolved[static_cast<size_t>(row * 2)] = -0.1F;
     for (int64_t source = 0; source < scenario.sources; ++source) {
-      multi[static_cast<size_t>(
-          (row * scenario.sources + source) * 2)] =
+      multi[static_cast<size_t>((row * scenario.sources + source) * 2)] =
           -0.1F + 0.05F * static_cast<PerfPrecision>(source);
     }
   }
 
   return ExpansionInputs{
-      .detection_idx =
-          upload(idx, {scenario.rows, scenario.index_columns}, kInt64Dtype),
-      .baseline =
-          upload(baseline, {scenario.rows, 2},
-                 hr::real_dtype<PerfPrecision>()),
-      .selected =
-          upload(selected, {selected_count}, kInt64Dtype),
-      .resolved =
-          upload(resolved, {selected_count, 2},
-                 hr::real_dtype<PerfPrecision>()),
+      .detection_idx = upload(idx, {scenario.rows, scenario.index_columns}, kInt64Dtype),
+      .baseline = upload(baseline, {scenario.rows, 2}, hr::real_dtype<PerfPrecision>()),
+      .selected = upload(selected, {selected_count}, kInt64Dtype),
+      .resolved = upload(resolved, {selected_count, 2}, hr::real_dtype<PerfPrecision>()),
       .multi =
-          upload(multi, {selected_count, scenario.sources, 2},
-                 hr::real_dtype<PerfPrecision>()),
+          upload(multi, {selected_count, scenario.sources, 2}, hr::real_dtype<PerfPrecision>()),
       .count = upload(count, {selected_count}, kInt32Dtype)};
 }
 
@@ -185,8 +164,7 @@ struct ExtraInputBank {
   static inline std::shared_ptr<holoscan::Tensor> e;
   static inline std::shared_ptr<holoscan::Tensor> f;
 
-  static std::size_t span(
-      const std::shared_ptr<holoscan::Tensor>& tensor) {
+  static std::size_t span(const std::shared_ptr<holoscan::Tensor>& tensor) {
     if (!tensor || tensor->nbytes() <= 0) {
       throw std::runtime_error("six-input perf source has empty frame");
     }
@@ -201,18 +179,18 @@ class SixTensorSourceOp final : public holoscan::Operator<> {
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt};
-    spec.output(a, "a").produces_tensor(hr::pooled_tensor_output(
-        device, 8U, perf::PerfFrameBank::span_a()));
-    spec.output(b, "b").produces_tensor(hr::pooled_tensor_output(
-        device, 8U, perf::PerfFrameBank::span_b()));
-    spec.output(c, "c").produces_tensor(hr::pooled_tensor_output(
-        device, 8U, perf::PerfFrameBank::span_c()));
-    spec.output(d, "d").produces_tensor(hr::pooled_tensor_output(
-        device, 8U, ExtraInputBank::span(ExtraInputBank::d)));
-    spec.output(e, "e").produces_tensor(hr::pooled_tensor_output(
-        device, 8U, ExtraInputBank::span(ExtraInputBank::e)));
-    spec.output(f, "f").produces_tensor(hr::pooled_tensor_output(
-        device, 8U, ExtraInputBank::span(ExtraInputBank::f)));
+    spec.output(a, "a").produces_tensor(
+        hr::pooled_tensor_output(device, 8U, perf::PerfFrameBank::span_a()));
+    spec.output(b, "b").produces_tensor(
+        hr::pooled_tensor_output(device, 8U, perf::PerfFrameBank::span_b()));
+    spec.output(c, "c").produces_tensor(
+        hr::pooled_tensor_output(device, 8U, perf::PerfFrameBank::span_c()));
+    spec.output(d, "d").produces_tensor(
+        hr::pooled_tensor_output(device, 8U, ExtraInputBank::span(ExtraInputBank::d)));
+    spec.output(e, "e").produces_tensor(
+        hr::pooled_tensor_output(device, 8U, ExtraInputBank::span(ExtraInputBank::e)));
+    spec.output(f, "f").produces_tensor(
+        hr::pooled_tensor_output(device, 8U, ExtraInputBank::span(ExtraInputBank::f)));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -240,16 +218,11 @@ class SixTensorSourceOp final : public holoscan::Operator<> {
       mode = perf::PerfFrameBank::publish_mode;
       perf::detail::record_start_locked();
     }
-    HOLOSCAN_RETURN_IF_ERROR(
-        perf::detail::emit_device_frame(a, context, frames[0], mode));
-    HOLOSCAN_RETURN_IF_ERROR(
-        perf::detail::emit_device_frame(b, context, frames[1], mode));
-    HOLOSCAN_RETURN_IF_ERROR(
-        perf::detail::emit_device_frame(c, context, frames[2], mode));
-    HOLOSCAN_RETURN_IF_ERROR(
-        perf::detail::emit_device_frame(d, context, frames[3], mode));
-    HOLOSCAN_RETURN_IF_ERROR(
-        perf::detail::emit_device_frame(e, context, frames[4], mode));
+    HOLOSCAN_RETURN_IF_ERROR(perf::detail::emit_device_frame(a, context, frames[0], mode));
+    HOLOSCAN_RETURN_IF_ERROR(perf::detail::emit_device_frame(b, context, frames[1], mode));
+    HOLOSCAN_RETURN_IF_ERROR(perf::detail::emit_device_frame(c, context, frames[2], mode));
+    HOLOSCAN_RETURN_IF_ERROR(perf::detail::emit_device_frame(d, context, frames[3], mode));
+    HOLOSCAN_RETURN_IF_ERROR(perf::detail::emit_device_frame(e, context, frames[4], mode));
     return perf::detail::emit_device_frame(f, context, frames[5], mode);
   }
 
@@ -261,14 +234,12 @@ class SixTensorSourceOp final : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> f{"f"};
 };
 
-perf::TimingCollector run_expansion_graph(
-    const ExpansionScenario& scenario, int total_frames) {
+perf::TimingCollector run_expansion_graph(const ExpansionScenario& scenario, int total_frames) {
   auto inputs = make_inputs(scenario);
   perf::TimingCollector collector;
   collector.t_construct = perf::Clock::now();
-  perf::PerfFrameBank::reset_triple(
-      std::move(inputs.detection_idx), std::move(inputs.baseline),
-      std::move(inputs.selected), total_frames, &collector);
+  perf::PerfFrameBank::reset_triple(std::move(inputs.detection_idx), std::move(inputs.baseline),
+                                    std::move(inputs.selected), total_frames, &collector);
   ExtraInputBank::d = std::move(inputs.resolved);
   ExtraInputBank::e = std::move(inputs.multi);
   ExtraInputBank::f = std::move(inputs.count);
@@ -279,16 +250,10 @@ perf::TimingCollector run_expansion_graph(
   hr::MaxTensorExtents extents;
   extents.max_items = scenario.rows;
   extents.max_sources = scenario.sources;
-  extents.max_points =
-      scenario.rows +
-      selected_rows(scenario) * (scenario.sources - 1);
-  const auto expansion =
-      graph.op<hr::MultiSourceExpansionOp<PerfPrecision>>(
-          "expansion", extents);
-  const auto timed =
-      graph.op<perf::PerfTerminalSinkOp>("idx_sink");
-  const auto aoa_drain =
-      graph.op<perf::PerfNullSinkOp>("aoa_drain");
+  extents.max_points = scenario.rows + selected_rows(scenario) * (scenario.sources - 1);
+  const auto expansion = graph.op<hr::MultiSourceExpansionOp<PerfPrecision>>("expansion", extents);
+  const auto timed = graph.op<perf::PerfTerminalSinkOp>("idx_sink");
+  const auto aoa_drain = graph.op<perf::PerfNullSinkOp>("aoa_drain");
   const holoscan::ConnectionOptions queue{.queue_depth = 4U};
   graph.add_flow(source->a, expansion->detection_idx, queue);
   graph.add_flow(source->b, expansion->baseline_aoa, queue);
@@ -308,9 +273,8 @@ perf::TimingCollector run_expansion_graph(
   perf::bind_tensor_out(options, "expansion", "aoa_estimates_out");
   const auto plan = holoscan::compile(graph, std::move(options));
   if (!plan.ok()) {
-    throw std::runtime_error(
-        "multi-source-expansion perf compile failed: " +
-        std::string(plan.json()));
+    throw std::runtime_error("multi-source-expansion perf compile failed: " +
+                             std::string(plan.json()));
   }
 
   auto session = holoscan::run_async(plan);
@@ -318,18 +282,17 @@ perf::TimingCollector run_expansion_graph(
   session.request_stop();
   session.wait();
   if (!session.diagnostics().empty()) {
-    throw std::runtime_error(
-        "multi-source-expansion perf run produced diagnostics");
+    throw std::runtime_error("multi-source-expansion perf run produced diagnostics");
   }
   if (collector.ends.size() < static_cast<size_t>(total_frames)) {
-    throw std::runtime_error(perf::detail::stall_message(
-        "multi-source-expansion", collector.ends.size(), total_frames));
+    throw std::runtime_error(
+        perf::detail::stall_message("multi-source-expansion", collector.ends.size(), total_frames));
   }
   return collector;
 }
 
-ExpansionScenario make_scenario(const SizeSpec& size, double fraction,
-                                int64_t sources, int64_t columns) {
+ExpansionScenario make_scenario(const SizeSpec& size, double fraction, int64_t sources,
+                                int64_t columns) {
   ExpansionScenario scenario;
   scenario.size_id = size.id;
   scenario.rows = size.rows;
@@ -337,9 +300,8 @@ ExpansionScenario make_scenario(const SizeSpec& size, double fraction,
   scenario.sources = sources;
   scenario.index_columns = columns;
   std::ostringstream id;
-  id << "expand_" << size.id << "_n" << size.rows << "_sel"
-     << static_cast<int>(fraction * 100.0) << "_s" << sources
-     << "_w" << columns;
+  id << "expand_" << size.id << "_n" << size.rows << "_sel" << static_cast<int>(fraction * 100.0)
+     << "_s" << sources << "_w" << columns;
   scenario.id = id.str();
   return scenario;
 }
@@ -351,41 +313,32 @@ perf::ResultRow base_row(const ExpansionScenario& scenario) {
   row.variant = "confirmed_sources";
   row.size_id = scenario.size_id;
   row.input_shape = {scenario.rows, scenario.index_columns};
-  row.out_batch =
-      scenario.rows +
-      selected_rows(scenario) * (scenario.sources - 1);
+  row.out_batch = scenario.rows + selected_rows(scenario) * (scenario.sources - 1);
   row.k = scenario.sources;
   row.notes = "both outputs drained";
   return row;
 }
 
-void fill_throughput(perf::ResultRow* row,
-                     const ExpansionScenario& scenario, double median_ms) {
+void fill_throughput(perf::ResultRow* row, const ExpansionScenario& scenario, double median_ms) {
   if (median_ms <= 0.0) {
     return;
   }
   const double seconds = median_ms / 1000.0;
-  row->cells_per_second =
-      static_cast<double>(scenario.rows) / seconds;
-  row->slices_per_second =
-      static_cast<double>(row->out_batch) / seconds;
+  row->cells_per_second = static_cast<double>(scenario.rows) / seconds;
+  row->slices_per_second = static_cast<double>(row->out_batch) / seconds;
 }
 
 struct ExpansionTraits : perf::PerfDriverDefaults {
   using Scenario = ExpansionScenario;
 
-  static const char* tool_name() {
-    return "perf_multi_source_expansion";
-  }
+  static const char* tool_name() { return "perf_multi_source_expansion"; }
   static const char* tool_description() {
     return "MultiSourceExpansionOp HSDK 5 Graph characterization";
   }
   static const char* sizes_all_help() {
     return "Original-row sweep at 25 percent selected and two sources";
   }
-  static const char* sizes_subset_help() {
-    return "Selected row-count subset";
-  }
+  static const char* sizes_subset_help() { return "Selected row-count subset"; }
   static const char* full_help() {
     return "Rows x selected fraction x sources x index-column width";
   }
@@ -394,10 +347,7 @@ struct ExpansionTraits : perf::PerfDriverDefaults {
     std::vector<perf::SizeDef> result;
     for (const auto& size : size_ladder()) {
       result.push_back(perf::SizeDef{
-          .id = size.id,
-          .shape = {size.rows, 2},
-          .cells = size.rows,
-          .role = size.role});
+          .id = size.id, .shape = {size.rows, 2}, .cells = size.rows, .role = size.role});
     }
     return result;
   }
@@ -412,8 +362,7 @@ struct ExpansionTraits : perf::PerfDriverDefaults {
             make_scenario(must_find_size("lg"), 0.25, 2, 2)};
   }
 
-  static std::vector<Scenario> build_size_sweep(
-      const std::vector<std::string>& sizes) {
+  static std::vector<Scenario> build_size_sweep(const std::vector<std::string>& sizes) {
     std::vector<Scenario> result;
     for (const auto& id : sizes) {
       if (const auto* size = find_size(id)) {
@@ -429,8 +378,7 @@ struct ExpansionTraits : perf::PerfDriverDefaults {
       for (double fraction : {0.10, 0.50, 1.0}) {
         for (int64_t sources : {2, 3, 4}) {
           for (int64_t columns : {2, 4, 10}) {
-            result.push_back(
-                make_scenario(size, fraction, sources, columns));
+            result.push_back(make_scenario(size, fraction, sources, columns));
           }
         }
       }
@@ -438,13 +386,11 @@ struct ExpansionTraits : perf::PerfDriverDefaults {
     return result;
   }
 
-  static void run_scenario(const Scenario& scenario,
-                           const perf::RunSettings& settings,
+  static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const auto plan =
-        perf::make_run_plan(settings, /*has_override=*/false);
-    const auto samples = perf::collect_scenario_samples(
-        settings, plan, [&](int, const perf::RunPlan& run_plan) {
+    const auto plan = perf::make_run_plan(settings, /*has_override=*/false);
+    const auto samples =
+        perf::collect_scenario_samples(settings, plan, [&](int, const perf::RunPlan& run_plan) {
           return run_expansion_graph(scenario, run_plan.total_frames);
         });
     perf::append_setup_row(base_row(scenario), samples, report);
@@ -464,8 +410,7 @@ struct ExpansionTraits : perf::PerfDriverDefaults {
       settings.warmup_frames = 0;
       settings.measured_frames = 2;
       settings.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs"), 0.25, 2, 2),
-                   settings, &discarded);
+      run_scenario(make_scenario(must_find_size("xs"), 0.25, 2, 2), settings, &discarded);
     });
   }
 };

@@ -43,28 +43,25 @@ namespace holoscan::radar::detail {
 //                cuda::std::complex<T> output buffer (aliases the
 //                (num_az, num_el, D, R) cube).
 template <typename T>
-inline void run_phase_shift_beamform_stage(
-    const cuda::std::complex<T>* rd_maps, cuda::std::complex<T>* rda_cube,
-    int64_t batch, int64_t num_channels, int64_t num_cells,
-    const cuda::std::complex<T>* weights_c, int64_t num_beams,
-    cudaStream_t stream) {
+inline void run_phase_shift_beamform_stage(const cuda::std::complex<T>* rd_maps,
+                                           cuda::std::complex<T>* rda_cube, int64_t batch,
+                                           int64_t num_channels, int64_t num_cells,
+                                           const cuda::std::complex<T>* weights_c,
+                                           int64_t num_beams, cudaStream_t stream) {
   if (batch <= 0 || num_cells <= 0 || num_beams <= 0 || num_channels <= 0) {
     return;
   }
 
   auto w_view = matx::make_tensor<cuda::std::complex<T>, 2>(
-      const_cast<cuda::std::complex<T>*>(weights_c),
-      {num_beams, num_channels});
+      const_cast<cuda::std::complex<T>*>(weights_c), {num_beams, num_channels});
   auto x_view = matx::make_tensor<cuda::std::complex<T>, 3>(
-      const_cast<cuda::std::complex<T>*>(rd_maps),
-      {batch, num_channels, num_cells});
-  auto y_view = matx::make_tensor<cuda::std::complex<T>, 3>(
-      rda_cube, {batch, num_beams, num_cells});
+      const_cast<cuda::std::complex<T>*>(rd_maps), {batch, num_channels, num_cells});
+  auto y_view =
+      matx::make_tensor<cuda::std::complex<T>, 3>(rda_cube, {batch, num_beams, num_cells});
 
   // Broadcast the (constant-across-batch) steering table into the batched
   // GEMM: clone adds a leading batch dim with stride 0 (no copy).
-  auto w_bcast = matx::clone<3>(
-      w_view, {batch, matx::matxKeepDim, matx::matxKeepDim});
+  auto w_bcast = matx::clone<3>(w_view, {batch, matx::matxKeepDim, matx::matxKeepDim});
 
   matx::cudaExecutor exec{stream};
   (y_view = matx::matmul(w_bcast, x_view)).run(exec);

@@ -14,7 +14,6 @@ using RangeParamsCodec =
     params::DefaultedParamSchemaCodec<radar::FMCWRangeProcessorParams>;  // NOLINT
 
 template <>
-struct ConfigCodec<radar::FMCWRangeProcessorParams>
-    : RangeParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::FMCWRangeProcessorParams> : RangeParamsCodec {};  // NOLINT
 
 }  // namespace holoscan::config

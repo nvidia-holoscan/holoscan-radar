@@ -29,8 +29,7 @@ ArrayGeometry make_linear(const std::vector<int>& iy) {
   ArrayGeometry g;
   g.wavelength = 1.0;
   for (int i : iy) {
-    g.element_positions.insert(g.element_positions.end(),
-                               {0.0, i * kD, 0.0});
+    g.element_positions.insert(g.element_positions.end(), {0.0, i * kD, 0.0});
   }
   return g;
 }
@@ -40,8 +39,7 @@ ArrayGeometry make_planar(const std::vector<std::pair<int, int>>& cells) {
   ArrayGeometry g;
   g.wavelength = 1.0;
   for (auto [iy, iz] : cells) {
-    g.element_positions.insert(g.element_positions.end(),
-                               {0.0, iy * kD, iz * kD});
+    g.element_positions.insert(g.element_positions.end(), {0.0, iy * kD, iz * kD});
   }
   return g;
 }
@@ -71,8 +69,7 @@ TEST(SubarraySelection, FilledUnorderedUlaRequiresReorder) {
   EXPECT_EQ(sel.subarray_size, 4);
   const std::vector<int32_t> expected = {1, 2, 0, 3};
   EXPECT_EQ(sel.channel_index, expected);
-  EXPECT_EQ(sel.reduced_geometry.element_positions,
-            make_linear({0, 1, 2, 3}).element_positions);
+  EXPECT_EQ(sel.reduced_geometry.element_positions, make_linear({0, 1, 2, 3}).element_positions);
 }
 
 TEST(SubarraySelection, HoleyUlaLongestRun) {
@@ -136,8 +133,7 @@ TEST(SubarraySelection, ExplicitSelectionReordersToLattice) {
 TEST(SubarraySelection, ExplicitRejectsHoleySet) {
   const auto g = make_linear({0, 1, 2, 3, 4, 5, 6, 7});
   // {0,1,3} is holey (gap at lattice 2) → not a filled ULA.
-  EXPECT_THROW(build_subarray_selection(g, {0, 1, 3}, 2),
-               std::invalid_argument);
+  EXPECT_THROW(build_subarray_selection(g, {0, 1, 3}, 2), std::invalid_argument);
 }
 
 TEST(SubarraySelection, ExplicitRejectsOutOfRangeAndDuplicate) {

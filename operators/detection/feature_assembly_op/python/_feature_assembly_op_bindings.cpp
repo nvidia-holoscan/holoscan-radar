@@ -28,13 +28,11 @@ class PyFeatureAssemblyOp : public FeatureAssemblyOp<T> {
  public:
   using FeatureAssemblyOp<T>::FeatureAssemblyOp;
 
-  PyFeatureAssemblyOp(
-      Fragment* fragment, const py::args& args,
-      const std::vector<AssemblyFeature>& features,
-      int64_t max_points = 8192,
-      int64_t max_features = 16,
-      const std::string& name = "feature_assembly")
-      : FeatureAssemblyOp<T>([&] {
+  PyFeatureAssemblyOp(Fragment* fragment, const py::args& args,
+                      const std::vector<AssemblyFeature>& features, int64_t max_points = 8192,
+                      int64_t max_features = 16, const std::string& name = "feature_assembly")
+  : FeatureAssemblyOp<T>(
+        [&] {
           MaxTensorExtents extents;
           extents.max_points = max_points;
           extents.max_features = max_features;
@@ -61,14 +59,10 @@ void bind_feature_assembly(py::module_& m, const char* class_name) {
       "fragment : holoscan.core.Fragment\n"
       "features : list[AssemblyFeature]\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&,
-                    const std::vector<AssemblyFeature>&, int64_t,
+      .def(py::init<Fragment*, const py::args&, const std::vector<AssemblyFeature>&, int64_t,
                     int64_t, const std::string&>(),
-           py::arg("fragment"),
-           py::arg("features"),
-           py::arg("max_points") = int64_t{8192},
-           py::arg("max_features") = int64_t{16},
-           py::arg("name") = "feature_assembly")
+           py::arg("fragment"), py::arg("features"), py::arg("max_points") = int64_t{8192},
+           py::arg("max_features") = int64_t{16}, py::arg("name") = "feature_assembly")
       .def("setup", &Op::setup, py::arg("spec"));
 }
 

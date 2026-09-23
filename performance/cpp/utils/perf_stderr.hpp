@@ -20,8 +20,7 @@
 namespace holoscan::radar::perf {
 
 inline bool is_hsdk_bool_dlpack_noise(const std::string& line) {
-  return line.find(
-             "Unsupported DLPack data type (code: 6, bits: 8, lanes: 1)") !=
+  return line.find("Unsupported DLPack data type (code: 6, bits: 8, lanes: 1)") !=
          std::string::npos;
 }
 

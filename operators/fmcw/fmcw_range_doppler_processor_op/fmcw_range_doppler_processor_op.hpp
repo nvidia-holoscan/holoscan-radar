@@ -33,7 +33,7 @@ namespace holoscan::radar {
 
 namespace detail {
 template <typename T>
-struct RangeStageState;    // defined in range_stage.hpp
+struct RangeStageState;  // defined in range_stage.hpp
 template <typename T>
 struct DopplerStageState;  // defined in doppler_stage.hpp
 }  // namespace detail
@@ -78,81 +78,58 @@ struct FMCWRangeDopplerProcessorParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     FMCWRangeDopplerProcessorParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.FMCWRangeDopplerProcessorParams", 1),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::range_window>(
-        "range_window")
-        .description(
-            "WindowSpec applied along fast-time before the range FFT "
-            "(coherent-gain normalized). Default: none (rectangular)."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::doppler_window>(
-        "doppler_window")
-        .description(
-            "WindowSpec applied along the chirp (slow-time) axis before "
-            "the Doppler FFT (coherent-gain normalized), and also used for "
-            "the clutter projection when clutter_filter is mean_subtraction. "
-            "Default: none."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::apply_dechirp>(
-        "apply_dechirp")
-        .description(
-            "Software dechirp before the range FFT. Requires a waveform "
-            "and complex-IF input when true."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::clutter_filter>(
-        "clutter_filter")
-        .description(
-            "Optional inline clutter stage between the range and Doppler "
-            "stages {none, mean_subtraction, single_delay, double_delay}; "
-            "same semantics as ClutterFilterOp's method. Mean subtraction "
-            "uses doppler_window; the delay cancellers reduce num_doppler."),
+    holoscan::param_schema("com.nvidia.holoscan.radar.FMCWRangeDopplerProcessorParams", 1),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::range_window>("range_window")
+        .description("WindowSpec applied along fast-time before the range FFT "
+                     "(coherent-gain normalized). Default: none (rectangular)."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::doppler_window>("doppler_window")
+        .description("WindowSpec applied along the chirp (slow-time) axis before "
+                     "the Doppler FFT (coherent-gain normalized), and also used for "
+                     "the clutter projection when clutter_filter is mean_subtraction. "
+                     "Default: none."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::apply_dechirp>("apply_dechirp")
+        .description("Software dechirp before the range FFT. Requires a waveform "
+                     "and complex-IF input when true."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::clutter_filter>("clutter_filter")
+        .description("Optional inline clutter stage between the range and Doppler "
+                     "stages {none, mean_subtraction, single_delay, double_delay}; "
+                     "same semantics as ClutterFilterOp's method. Mean subtraction "
+                     "uses doppler_window; the delay cancellers reduce num_doppler."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::waveform>("waveform")
-        .description(
-            "Dechirp reference and the range_bins / velocity_bins axes. "
-            "Required for software dechirp and/or those outputs."),
+        .description("Dechirp reference and the range_bins / velocity_bins axes. "
+                     "Required for software dechirp and/or those outputs."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::fft_norm>("fft_norm")
-        .description(
-            "One normalization convention {backward, ortho, forward} for "
-            "both transforms."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::center_zero_doppler>(
-        "center_zero_doppler")
-        .description(
-            "Center zero-Doppler on the Doppler axis; else DC at bin 0."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::propagation_speed>(
-        "propagation_speed")
-        .description(
-            "Wave speed (m/s) for the range_bins output."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::nfft_range>(
-        "nfft_range")
-        .description(
-            "Fast-time FFT length >= samples_per_chirp; larger zero-pads "
-            "for a finer interpolated range grid. 0 = samples_per_chirp."),
-    holoscan::field<&FMCWRangeDopplerProcessorParams::nfft_doppler>(
-        "nfft_doppler")
-        .description(
-            "Slow-time FFT length >= the post-clutter chirp count for the "
-            "Doppler stage. 0 = the post-clutter chirp count."));
+        .description("One normalization convention {backward, ortho, forward} for "
+                     "both transforms."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::center_zero_doppler>("center_zero_doppler")
+        .description("Center zero-Doppler on the Doppler axis; else DC at bin 0."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::propagation_speed>("propagation_speed")
+        .description("Wave speed (m/s) for the range_bins output."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::nfft_range>("nfft_range")
+        .description("Fast-time FFT length >= samples_per_chirp; larger zero-pads "
+                     "for a finer interpolated range grid. 0 = samples_per_chirp."),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::nfft_doppler>("nfft_doppler")
+        .description("Slow-time FFT length >= the post-clutter chirp count for the "
+                     "Doppler stage. 0 = the post-clutter chirp count."));
 
-static_assert(
-    holoscan::param_schema_availability<FMCWRangeDopplerProcessorParams>() ==
-        holoscan::ParamSchemaAvailability::kDeclared,
-    "HOLOSCAN_PARAM_SCHEMA must be in "
-    "FMCWRangeDopplerProcessorParams's namespace");
+static_assert(holoscan::param_schema_availability<FMCWRangeDopplerProcessorParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in "
+              "FMCWRangeDopplerProcessorParams's namespace");
 
 template <typename T>
-class FMCWRangeDopplerProcessorOp
-    : public holoscan::Operator<FMCWRangeDopplerProcessorParams> {
+class FMCWRangeDopplerProcessorOp : public holoscan::Operator<FMCWRangeDopplerProcessorParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "FMCWRangeDopplerProcessorOp supports float and double "
                 "precision");
 
  public:
-  explicit FMCWRangeDopplerProcessorOp(
-      const MaxTensorExtents& extents);
+  explicit FMCWRangeDopplerProcessorOp(const MaxTensorExtents& extents);
   ~FMCWRangeDopplerProcessorOp() override;
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> adc_cube{"adc_cube"};
   Output<Tensor> rd_maps{"rd_maps"};

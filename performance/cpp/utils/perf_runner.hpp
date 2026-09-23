@@ -43,8 +43,7 @@ struct RunPlan {
 // Build the plan. With an override the spike lands mid-window (after warmup +
 // half the measured frames) and total is stretched to fit the spike; without
 // one it is simply warmup + measured frames.
-inline RunPlan make_run_plan(const RunSettings& rs, bool has_override,
-                             int spike_frames = 3) {
+inline RunPlan make_run_plan(const RunSettings& rs, bool has_override, int spike_frames = 3) {
   RunPlan p;
   if (has_override) {
     p.override_at = rs.warmup_frames + std::max(2, rs.measured_frames / 2);
@@ -74,8 +73,7 @@ struct ScenarioSamples {
 // contribute the peak override latency; later frames are ignored (the plan
 // sizes total so there are few or none).
 template <typename RunRepFn>
-ScenarioSamples collect_scenario_samples(const RunSettings& rs,
-                                         const RunPlan& plan,
+ScenarioSamples collect_scenario_samples(const RunSettings& rs, const RunPlan& plan,
                                          RunRepFn run_rep) {
   ScenarioSamples s;
   for (int rep = 0; rep < rs.repeats; ++rep) {
@@ -85,8 +83,7 @@ ScenarioSamples collect_scenario_samples(const RunSettings& rs,
     if (!lat.empty()) {
       s.cold.push_back(lat.front());
     }
-    for (size_t i = static_cast<size_t>(rs.warmup_frames); i < lat.size();
-         ++i) {
+    for (size_t i = static_cast<size_t>(rs.warmup_frames); i < lat.size(); ++i) {
       const int64_t frame = static_cast<int64_t>(i);
       if (!plan.has_override() || frame < plan.override_at) {
         s.steady.push_back(lat[i]);
@@ -103,8 +100,7 @@ ScenarioSamples collect_scenario_samples(const RunSettings& rs,
 
 // Append the standard "setup" row (median ready-to-tick time across repeats).
 // The caller supplies a base row (scenario metadata already filled).
-inline void append_setup_row(ResultRow row, const ScenarioSamples& s,
-                             PerfReport* report) {
+inline void append_setup_row(ResultRow row, const ScenarioSamples& s, PerfReport* report) {
   row.bucket = "setup";
   row.setup_ms = summarize(s.setup).median_ms;
   report->results.push_back(std::move(row));

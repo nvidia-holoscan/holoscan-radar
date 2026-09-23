@@ -128,12 +128,12 @@ class FixtureSourceOp final : public holoscan::Operator<> {
       base = FixtureBank::baseline;
       idx = FixtureBank::detection_idx;
     }
-    HOLOSCAN_RETURN_IF_ERROR(test::detail::emit_bank_frame(
-        snapshot, context, snap, "FixtureSourceOp.snapshot"));
-    HOLOSCAN_RETURN_IF_ERROR(test::detail::emit_bank_frame(
-        baseline, context, base, "FixtureSourceOp.baseline"));
-    return test::detail::emit_bank_frame(
-        detection_idx, context, idx, "FixtureSourceOp.detection_idx");
+    HOLOSCAN_RETURN_IF_ERROR(
+        test::detail::emit_bank_frame(snapshot, context, snap, "FixtureSourceOp.snapshot"));
+    HOLOSCAN_RETURN_IF_ERROR(
+        test::detail::emit_bank_frame(baseline, context, base, "FixtureSourceOp.baseline"));
+    return test::detail::emit_bank_frame(detection_idx, context, idx,
+                                         "FixtureSourceOp.detection_idx");
   }
 
   holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
@@ -142,28 +142,25 @@ class FixtureSourceOp final : public holoscan::Operator<> {
 };
 
 template <typename Element>
-holoscan::expected<void, holoscan::Error> emit_values(
-    holoscan::Output<holoscan::Tensor>& output,
-    holoscan::ExecutionContext& context, const std::vector<Element>& values,
-    const std::vector<int64_t>& shape, DLDataType dtype) {
-  auto loan = output.allocate_tensor(
-      holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+holoscan::expected<void, holoscan::Error> emit_values(holoscan::Output<holoscan::Tensor>& output,
+                                                      holoscan::ExecutionContext& context,
+                                                      const std::vector<Element>& values,
+                                                      const std::vector<int64_t>& shape,
+                                                      DLDataType dtype) {
+  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
   if (!loan) {
     return holoscan::make_unexpected(std::move(loan).error());
   }
   HOLOSCAN_TRY(auto writer, loan->write(context.cuda_stream()));
   if (!values.empty() &&
-      cudaMemcpyAsync(writer.data(), values.data(),
-                      values.size() * sizeof(Element), cudaMemcpyHostToDevice,
-                      context.cuda_stream().get()) != cudaSuccess) {
+      cudaMemcpyAsync(writer.data(), values.data(), values.size() * sizeof(Element),
+                      cudaMemcpyHostToDevice, context.cuda_stream().get()) != cudaSuccess) {
     return holoscan::make_unexpected(
-        holoscan::Error{holoscan::ErrorCode::kFailure,
-                        "SyntheticEstimatorOp: H2D failed"});
+        holoscan::Error{holoscan::ErrorCode::kFailure, "SyntheticEstimatorOp: H2D failed"});
   }
   HOLOSCAN_TRY(std::move(writer).commit());
-  return output.emit(
-      std::move(*loan),
-      holoscan::EmitOptions{.capture_time = context.activation_time()});
+  return output.emit(std::move(*loan),
+                     holoscan::EmitOptions{.capture_time = context.activation_time()});
 }
 
 class SyntheticEstimatorOp final : public holoscan::Operator<> {
@@ -173,10 +170,8 @@ class SyntheticEstimatorOp final : public holoscan::Operator<> {
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt};
-    spec.input(snapshot, "snapshot")
-        .expects_tensor(hr::tensor_input(device));
-    spec.input(selected_idx, "selected_idx")
-        .expects_tensor(hr::tensor_input(device));
+    spec.input(snapshot, "snapshot").expects_tensor(hr::tensor_input(device));
+    spec.input(selected_idx, "selected_idx").expects_tensor(hr::tensor_input(device));
     spec.output(aoa_estimates, "aoa_estimates")
         .produces_tensor(hr::pooled_tensor_output(device, 2U, 4096U));
     spec.output(doa_multi, "doa_multi")
@@ -188,9 +183,8 @@ class SyntheticEstimatorOp final : public holoscan::Operator<> {
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
     result
-        .trigger(holoscan::OnAligned{
-            .ports = holoscan::ports(snapshot, selected_idx),
-            .window = std::chrono::nanoseconds{0}})
+        .trigger(holoscan::OnAligned{.ports = holoscan::ports(snapshot, selected_idx),
+                                     .window = std::chrono::nanoseconds{0}})
         .input(snapshot, holoscan::Exact{})
         .input(selected_idx, holoscan::Exact{});
     return result;
@@ -198,15 +192,12 @@ class SyntheticEstimatorOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
       holoscan::ExecutionContext& context) override {
-    HOLOSCAN_TRY(auto snapshots,
-                 hr::receive_tensor(snapshot, "SyntheticEstimatorOp"));
-    HOLOSCAN_TRY(auto selected,
-                 hr::receive_tensor(selected_idx, "SyntheticEstimatorOp"));
+    HOLOSCAN_TRY(auto snapshots, hr::receive_tensor(snapshot, "SyntheticEstimatorOp"));
+    HOLOSCAN_TRY(auto selected, hr::receive_tensor(selected_idx, "SyntheticEstimatorOp"));
     const int64_t rows = selected.shape().empty() ? 0 : selected.shape()[0];
     if (snapshots.shape().size() != 3U || snapshots.shape()[0] != rows) {
-      return holoscan::make_unexpected(
-          holoscan::Error{holoscan::ErrorCode::kInvalidArgument,
-                          "SyntheticEstimatorOp: row mismatch"});
+      return holoscan::make_unexpected(holoscan::Error{holoscan::ErrorCode::kInvalidArgument,
+                                                       "SyntheticEstimatorOp: row mismatch"});
     }
 
     std::vector<float> dominant(static_cast<size_t>(rows * 2), 0.0F);
@@ -220,10 +211,10 @@ class SyntheticEstimatorOp final : public holoscan::Operator<> {
       multi[static_cast<size_t>(row * 4)] = -0.10F;
       multi[static_cast<size_t>(row * 4 + 2)] = 0.10F;
     }
-    HOLOSCAN_RETURN_IF_ERROR(emit_values(
-        aoa_estimates, context, dominant, {rows, 2}, hr::real_dtype<float>()));
-    HOLOSCAN_RETURN_IF_ERROR(emit_values(
-        doa_multi, context, multi, {rows, 2, 2}, hr::real_dtype<float>()));
+    HOLOSCAN_RETURN_IF_ERROR(
+        emit_values(aoa_estimates, context, dominant, {rows, 2}, hr::real_dtype<float>()));
+    HOLOSCAN_RETURN_IF_ERROR(
+        emit_values(doa_multi, context, multi, {rows, 2, 2}, hr::real_dtype<float>()));
     return emit_values(source_count, context, count, {rows}, kInt32Dtype);
   }
 
@@ -244,9 +235,8 @@ class ResultSinkOp final : public holoscan::Operator<> {
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
     result
-        .trigger(holoscan::OnAligned{
-            .ports = holoscan::ports(idx, aoa),
-            .window = std::chrono::nanoseconds{0}})
+        .trigger(holoscan::OnAligned{.ports = holoscan::ports(idx, aoa),
+                                     .window = std::chrono::nanoseconds{0}})
         .input(idx, holoscan::Exact{})
         .input(aoa, holoscan::Exact{});
     return result;
@@ -282,9 +272,8 @@ class DiagnosticsSinkOp final : public holoscan::Operator<> {
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result;
     result
-        .trigger(holoscan::OnAligned{
-            .ports = holoscan::ports(valid, score, mask),
-            .window = std::chrono::nanoseconds{0}})
+        .trigger(holoscan::OnAligned{.ports = holoscan::ports(valid, score, mask),
+                                     .window = std::chrono::nanoseconds{0}})
         .input(valid, holoscan::Exact{})
         .input(score, holoscan::Exact{})
         .input(mask, holoscan::Exact{});
@@ -318,39 +307,29 @@ hr::ArrayGeometry make_geometry(int64_t channels) {
   geometry.wavelength = 1.0;
   geometry.geometry_type = hr::ArrayGeometryType::kUla;
   for (int64_t channel = 0; channel < channels; ++channel) {
-    geometry.element_positions.insert(
-        geometry.element_positions.end(),
-        {0.0, 0.5 * static_cast<double>(channel), 0.0});
+    geometry.element_positions.insert(geometry.element_positions.end(),
+                                      {0.0, 0.5 * static_cast<double>(channel), 0.0});
   }
   return geometry;
 }
 
-std::vector<cuda::std::complex<float>> steering(
-    const hr::ArrayGeometry& geometry, float azimuth) {
-  std::vector<cuda::std::complex<float>> result(
-      static_cast<size_t>(geometry.num_elements()));
+std::vector<cuda::std::complex<float>> steering(const hr::ArrayGeometry& geometry, float azimuth) {
+  std::vector<cuda::std::complex<float>> result(static_cast<size_t>(geometry.num_elements()));
   for (int64_t channel = 0; channel < geometry.num_elements(); ++channel) {
-    const double y =
-        geometry.element_positions[static_cast<size_t>(channel * 3 + 1)];
+    const double y = geometry.element_positions[static_cast<size_t>(channel * 3 + 1)];
     const double phase = 2.0 * M_PI * y * std::sin(azimuth);
-    result[static_cast<size_t>(channel)] = {
-        static_cast<float>(std::cos(phase)),
-        static_cast<float>(std::sin(phase))};
+    result[static_cast<size_t>(channel)] = {static_cast<float>(std::cos(phase)),
+                                            static_cast<float>(std::sin(phase))};
   }
   return result;
 }
 
-void bind_output(holoscan::CompileOptions* options, const char* op,
-                 const char* port) {
-  options->deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{
-          .operator_path = op,
-          .output_port = port,
-          .device = holoscan::DeviceId{0}});
+void bind_output(holoscan::CompileOptions* options, const char* op, const char* port) {
+  options->deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = op, .output_port = port, .device = holoscan::DeviceId{0}});
 }
 
-TEST(SelectiveAoaOperatorsIntegration,
-     ScreensAndExpandsSyntheticModalityIndependentSnapshots) {
+TEST(SelectiveAoaOperatorsIntegration, ScreensAndExpandsSyntheticModalityIndependentSnapshots) {
   constexpr int64_t kItems = 4;
   constexpr int64_t kChannels = 8;
   constexpr int64_t kLooks = 2;
@@ -366,28 +345,21 @@ TEST(SelectiveAoaOperatorsIntegration,
     for (int64_t look = 0; look < kLooks; ++look) {
       snapshots[static_cast<size_t>(channel * kLooks + look)] =
           boresight[static_cast<size_t>(channel)];
-      snapshots[static_cast<size_t>(
-          (kChannels + channel) * kLooks + look)] =
-          boresight[static_cast<size_t>(channel)] +
-          secondary[static_cast<size_t>(channel)];
-      snapshots[static_cast<size_t>(
-          (2 * kChannels + channel) * kLooks + look)] =
-          boresight[static_cast<size_t>(channel)] +
-          secondary[static_cast<size_t>(channel)];
-      snapshots[static_cast<size_t>(
-          (3 * kChannels + channel) * kLooks + look)] =
+      snapshots[static_cast<size_t>((kChannels + channel) * kLooks + look)] =
+          boresight[static_cast<size_t>(channel)] + secondary[static_cast<size_t>(channel)];
+      snapshots[static_cast<size_t>((2 * kChannels + channel) * kLooks + look)] =
+          boresight[static_cast<size_t>(channel)] + secondary[static_cast<size_t>(channel)];
+      snapshots[static_cast<size_t>((3 * kChannels + channel) * kLooks + look)] =
           isolated[static_cast<size_t>(channel)];
     }
   }
-  FixtureBank::snapshot = test::to_device_tensor(
-      snapshots, {kItems, kChannels, kLooks}, hr::complex_dtype<float>());
-  FixtureBank::baseline = test::to_device_tensor(
-      std::vector<float>{0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F,
-                         -0.15F, 0.0F},
-      {kItems, 2}, hr::real_dtype<float>());
+  FixtureBank::snapshot =
+      test::to_device_tensor(snapshots, {kItems, kChannels, kLooks}, hr::complex_dtype<float>());
+  FixtureBank::baseline =
+      test::to_device_tensor(std::vector<float>{0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, -0.15F, 0.0F},
+                             {kItems, 2}, hr::real_dtype<float>());
   FixtureBank::detection_idx = test::to_device_tensor(
-      std::vector<int64_t>{1, 10, 100, 1000, 2, 20, 200, 2000,
-                           3, 30, 300, 3000, 4, 40, 400, 4000},
+      std::vector<int64_t>{1, 10, 100, 1000, 2, 20, 200, 2000, 3, 30, 300, 3000, 4, 40, 400, 4000},
       {kItems, 4}, kInt64Dtype);
 
   holoscan::Graph graph{"selective-aoa-integration"};
@@ -397,26 +369,22 @@ TEST(SelectiveAoaOperatorsIntegration,
   screen_extents.max_items = kItems;
   screen_extents.max_channels = kChannels;
   screen_extents.max_snapshots = kLooks;
-  auto screen =
-      graph.op<hr::RankOneResidualScreenOp<float>>("screen", screen_extents);
+  auto screen = graph.op<hr::RankOneResidualScreenOp<float>>("screen", screen_extents);
   hr::RankOneResidualScreenParams screen_params;
   screen_params.array_geometry = geometry;
   screen_params.residual_threshold = 0.03;
   screen.set_params(screen_params);
 
-  const auto estimator =
-      graph.op<SyntheticEstimatorOp>("synthetic_estimator");
+  const auto estimator = graph.op<SyntheticEstimatorOp>("synthetic_estimator");
 
   hr::MaxTensorExtents expansion_extents;
   expansion_extents.max_items = kItems;
   expansion_extents.max_points = 8;
   expansion_extents.max_sources = 2;
   const auto expansion =
-      graph.op<hr::MultiSourceExpansionOp<float>>(
-          "expansion", expansion_extents);
+      graph.op<hr::MultiSourceExpansionOp<float>>("expansion", expansion_extents);
   const auto result_sink = graph.op<ResultSinkOp>("result_sink");
-  const auto diagnostic_sink =
-      graph.op<DiagnosticsSinkOp>("diagnostic_sink");
+  const auto diagnostic_sink = graph.op<DiagnosticsSinkOp>("diagnostic_sink");
 
   const holoscan::ConnectionOptions queue{.queue_depth = 4U};
   graph.add_flow(source->snapshot, screen->snapshot, queue);
@@ -440,8 +408,8 @@ TEST(SelectiveAoaOperatorsIntegration,
   for (const char* port : {"snapshot", "baseline", "detection_idx"}) {
     bind_output(&options, "source", port);
   }
-  for (const char* port : {"snapshot_out", "selected_idx", "is_valid_out",
-                           "residual_score", "selection_mask"}) {
+  for (const char* port :
+       {"snapshot_out", "selected_idx", "is_valid_out", "residual_score", "selection_mask"}) {
     bind_output(&options, "screen", port);
   }
   for (const char* port : {"aoa_estimates", "doa_multi", "source_count"}) {
@@ -450,26 +418,22 @@ TEST(SelectiveAoaOperatorsIntegration,
   bind_output(&options, "expansion", "detection_idx_out");
   bind_output(&options, "expansion", "aoa_estimates_out");
 
-  const holoscan::ExecutionPlan plan =
-      holoscan::compile(graph, std::move(options));
+  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
   ASSERT_TRUE(plan.ok()) << plan.json();
 
   holoscan::RunSession session = holoscan::run_async(plan);
   {
     std::unique_lock lock(FixtureBank::mutex);
-    ASSERT_TRUE(FixtureBank::ready.wait_for(
-        lock, std::chrono::seconds{15}, [] {
-          return FixtureBank::result_ready &&
-                 FixtureBank::diagnostics_ready;
-        }));
+    ASSERT_TRUE(FixtureBank::ready.wait_for(lock, std::chrono::seconds{15}, [] {
+      return FixtureBank::result_ready && FixtureBank::diagnostics_ready;
+    }));
   }
   session.request_stop();
   session.wait();
   ASSERT_TRUE(session.diagnostics().empty());
 
   EXPECT_EQ(FixtureBank::mask.shape, (std::vector<int64_t>{kItems}));
-  EXPECT_EQ(FixtureBank::valid.shape,
-            (std::vector<int64_t>{2, kLooks}));
+  EXPECT_EQ(FixtureBank::valid.shape, (std::vector<int64_t>{2, kLooks}));
   EXPECT_EQ(FixtureBank::mask.as<uint8_t>()[0], 0);
   EXPECT_EQ(FixtureBank::mask.as<uint8_t>()[1], 1);
   EXPECT_EQ(FixtureBank::mask.as<uint8_t>()[2], 1);
@@ -479,32 +443,24 @@ TEST(SelectiveAoaOperatorsIntegration,
   EXPECT_GT(FixtureBank::score.as<float>()[2], 0.03F);
   EXPECT_NEAR(FixtureBank::score.as<float>()[3], 0.0F, 1e-5F);
 
-  ASSERT_EQ(FixtureBank::result_idx.shape,
-            (std::vector<int64_t>{5, 4}));
-  const std::vector<int64_t> expected_idx{
-      1, 10, 100, 1000, 2, 20, 200, 2000, 2, 20, 200, 2000,
-      3, 30, 300, 3000, 4, 40, 400, 4000};
+  ASSERT_EQ(FixtureBank::result_idx.shape, (std::vector<int64_t>{5, 4}));
+  const std::vector<int64_t> expected_idx{1,   10,   100, 1000, 2,   20,   200, 2000, 2,   20,
+                                          200, 2000, 3,   30,   300, 3000, 4,   40,   400, 4000};
   for (size_t i = 0; i < expected_idx.size(); ++i) {
-    EXPECT_EQ(FixtureBank::result_idx.as<int64_t>()[i],
-              expected_idx[i]);
+    EXPECT_EQ(FixtureBank::result_idx.as<int64_t>()[i], expected_idx[i]);
   }
-  ASSERT_EQ(FixtureBank::result_aoa.shape,
-            (std::vector<int64_t>{5, 2}));
-  const std::vector<float> expected_aoa{
-      0.0F, 0.0F, -0.10F, 0.0F, 0.10F, 0.0F, 0.0F, 0.0F,
-      -0.15F, 0.0F};
+  ASSERT_EQ(FixtureBank::result_aoa.shape, (std::vector<int64_t>{5, 2}));
+  const std::vector<float> expected_aoa{0.0F, 0.0F, -0.10F, 0.0F,   0.10F,
+                                        0.0F, 0.0F, 0.0F,   -0.15F, 0.0F};
   for (size_t i = 0; i < expected_aoa.size(); ++i) {
-    EXPECT_NEAR(FixtureBank::result_aoa.as<float>()[i],
-                expected_aoa[i], 1e-6F);
+    EXPECT_NEAR(FixtureBank::result_aoa.as<float>()[i], expected_aoa[i], 1e-6F);
   }
 
   ASSERT_TRUE(FixtureBank::source_time.has_value());
   ASSERT_TRUE(FixtureBank::result_time.has_value());
   ASSERT_TRUE(FixtureBank::diagnostics_time.has_value());
-  EXPECT_EQ(FixtureBank::result_time->timestamp_ns,
-            FixtureBank::source_time->timestamp_ns);
-  EXPECT_EQ(FixtureBank::diagnostics_time->timestamp_ns,
-            FixtureBank::source_time->timestamp_ns);
+  EXPECT_EQ(FixtureBank::result_time->timestamp_ns, FixtureBank::source_time->timestamp_ns);
+  EXPECT_EQ(FixtureBank::diagnostics_time->timestamp_ns, FixtureBank::source_time->timestamp_ns);
 }
 
 }  // namespace

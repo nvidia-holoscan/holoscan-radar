@@ -42,16 +42,14 @@ inline std::int64_t extent_rx_or_channels(const MaxTensorExtents& extents) {
 // Pool product for named (M_tx, N_rx) leading axes. Setting max_tx admits a
 // rank-2 leading layout, so max_rx/max_channels must also be explicit —
 // defaulting the missing axis to 1 silently undersizes the pool.
-inline void require_tx_rx_pool_extents(const MaxTensorExtents& extents,
-                                       const char* who, std::int64_t* max_tx,
-                                       std::int64_t* max_rx) {
+inline void require_tx_rx_pool_extents(const MaxTensorExtents& extents, const char* who,
+                                       std::int64_t* max_tx, std::int64_t* max_rx) {
   if (extents.max_tx.has_value()) {
     *max_tx = require_extent(extents.max_tx, "max_tx", who);
     if (!extents.max_rx.has_value() && !extents.max_channels.has_value()) {
-      throw std::invalid_argument(
-          std::string(who) +
-          ": max_tx requires max_rx or max_channels so the output pool "
-          "matches the admitted (M_tx, N_rx) leading rank");
+      throw std::invalid_argument(std::string(who) +
+                                  ": max_tx requires max_rx or max_channels so the output pool "
+                                  "matches the admitted (M_tx, N_rx) leading rank");
     }
     *max_rx = extent_rx_or_channels(extents);
   } else {
@@ -59,20 +57,17 @@ inline void require_tx_rx_pool_extents(const MaxTensorExtents& extents,
     *max_rx = extent_rx_or_channels(extents);
   }
   if (*max_rx <= 0 || *max_tx <= 0) {
-    throw std::invalid_argument(
-        std::string(who) +
-        ": max_rx/max_tx extents must be positive when set");
+    throw std::invalid_argument(std::string(who) +
+                                ": max_rx/max_tx extents must be positive when set");
   }
 }
 
-inline std::string unexpected_leading_message(const char* who,
-                                              std::size_t got,
+inline std::string unexpected_leading_message(const char* who, std::size_t got,
                                               std::size_t max_leading) {
   return std::string(who) +
          ": unexpected leading axes (opaque batch is not supported); got "
          "leading rank " +
-         std::to_string(got) + ", max named leading " +
-         std::to_string(max_leading);
+         std::to_string(got) + ", max named leading " + std::to_string(max_leading);
 }
 
 }  // namespace holoscan::radar

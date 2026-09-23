@@ -49,7 +49,9 @@ holoscan::radar::FMCWWaveformSpec test_waveform_spec() {
 TEST(ConfigCacheTest, BuildsOncePerKeyAndCaches) {
   ConfigCache<int> cache;
   int builds = 0;
-  auto builder = [&builds]() { return ++builds; };
+  auto builder = [&builds]() {
+    return ++builds;
+  };
   EXPECT_EQ(cache.get_or_build("a", "test artifact", builder), 1);
   EXPECT_EQ(cache.get_or_build("a", "test artifact", builder), 1);
   EXPECT_EQ(cache.get_or_build("b", "test artifact", builder), 2);
@@ -124,15 +126,16 @@ class ScopedLogCapture {
 
 TEST(ConfigCacheTest, FirstBuildIsSilentThenReconfigurationWarnsOnce) {
   ConfigCache<int> cache;
-  auto builder = []() { return 7; };
+  auto builder = []() {
+    return 7;
+  };
   ScopedLogCapture log;
 
   // Whether the artifact warning appears in the output this call adds.
   const auto warned_building = [&](const char* key) {
     const std::string::size_type before = log.text().size();
     cache.get_or_build(key, "test artifact", builder);
-    return log.text().find("unseen test artifact configuration", before) !=
-           std::string::npos;
+    return log.text().find("unseen test artifact configuration", before) != std::string::npos;
   };
 
   EXPECT_FALSE(warned_building("a"));  // initial, parameter-driven build
@@ -151,12 +154,9 @@ TEST(YamlConverters, EnumsRoundTripAndRejectUnknownSpellings) {
     const YAML::Node node = YAML::convert<FftNorm>::encode(norm);
     EXPECT_EQ(node.as<FftNorm>(), norm);
   }
-  for (auto method : {ClutterFilterMethod::kNone,
-                      ClutterFilterMethod::kMeanSubtraction,
-                      ClutterFilterMethod::kSingleDelay,
-                      ClutterFilterMethod::kDoubleDelay}) {
-    const YAML::Node node =
-        YAML::convert<ClutterFilterMethod>::encode(method);
+  for (auto method : {ClutterFilterMethod::kNone, ClutterFilterMethod::kMeanSubtraction,
+                      ClutterFilterMethod::kSingleDelay, ClutterFilterMethod::kDoubleDelay}) {
+    const YAML::Node node = YAML::convert<ClutterFilterMethod>::encode(method);
     EXPECT_EQ(node.as<ClutterFilterMethod>(), method);
   }
   for (auto type : holoscan::radar::detail::kAllWindowTypes) {
@@ -164,15 +164,13 @@ TEST(YamlConverters, EnumsRoundTripAndRejectUnknownSpellings) {
     EXPECT_EQ(node.as<WindowType>(), type);
   }
 
-  EXPECT_THROW(YAML::Load("hanning").as<WindowType>(),
-               std::invalid_argument);
-  EXPECT_THROW(YAML::Load("mean-subtraction").as<ClutterFilterMethod>(),
-               std::invalid_argument);
+  EXPECT_THROW(YAML::Load("hanning").as<WindowType>(), std::invalid_argument);
+  EXPECT_THROW(YAML::Load("mean-subtraction").as<ClutterFilterMethod>(), std::invalid_argument);
 }
 
 TEST(YamlConverters, WindowSpecMapScalarAndRoundTrip) {
-  const YAML::Node map = YAML::Load(
-      "{type: kaiser, kaiser_beta: 8.5, coherent_gain_normalization: false}");
+  const YAML::Node map =
+      YAML::Load("{type: kaiser, kaiser_beta: 8.5, coherent_gain_normalization: false}");
   const auto spec = map.as<WindowSpec>();
   EXPECT_EQ(spec.type, WindowType::kKaiser);
   ASSERT_TRUE(spec.kaiser_beta.has_value());
@@ -197,11 +195,9 @@ TEST(YamlConverters, WaveformDecodesBothSpellingsAndValidates) {
       "sample_rate: 12.8e6\n"
       "chirp_repetition_interval: 25.0e-6\n";
   const auto by_bandwidth =
-      YAML::Load(std::string(common) + "bandwidth: 150.0e6")
-          .as<FMCWWaveformDescriptor>();
+      YAML::Load(std::string(common) + "bandwidth: 150.0e6").as<FMCWWaveformDescriptor>();
   const auto by_slope =
-      YAML::Load(std::string(common) + "chirp_slope: 7.5e12")
-          .as<FMCWWaveformDescriptor>();
+      YAML::Load(std::string(common) + "chirp_slope: 7.5e12").as<FMCWWaveformDescriptor>();
   EXPECT_TRUE(by_bandwidth.is_valid());
   // Same waveform through either spelling (field-level: the derived slope
   // 150e6/20e-6 rounds one ulp away from the literal 7.5e12), and the
@@ -213,37 +209,31 @@ TEST(YamlConverters, WaveformDecodesBothSpellingsAndValidates) {
 
   // Construction validation applies to YAML decode: neither spelling, and
   // inconsistent double spelling, both throw.
-  EXPECT_THROW(YAML::Load(common).as<FMCWWaveformDescriptor>(),
-               std::invalid_argument);
-  EXPECT_THROW(YAML::Load(std::string(common) +
-                          "bandwidth: 150.0e6\nchirp_slope: 1.0e12")
+  EXPECT_THROW(YAML::Load(common).as<FMCWWaveformDescriptor>(), std::invalid_argument);
+  EXPECT_THROW(YAML::Load(std::string(common) + "bandwidth: 150.0e6\nchirp_slope: 1.0e12")
                    .as<FMCWWaveformDescriptor>(),
                std::invalid_argument);
 
   // encode -> decode is identity for analytic (non-reference) waveforms.
-  EXPECT_EQ(YAML::convert<FMCWWaveformDescriptor>::encode(by_bandwidth)
-                .as<FMCWWaveformDescriptor>(),
-            by_bandwidth);
+  EXPECT_EQ(
+      YAML::convert<FMCWWaveformDescriptor>::encode(by_bandwidth).as<FMCWWaveformDescriptor>(),
+      by_bandwidth);
 }
 
 TEST(ConfigCodecs, EnumsAndWindowShorthandMatchYaml) {
-  auto window_doc = holoscan::config_io::try_parse(
-      "hann", holoscan::config_io::Format::kYaml);
-  ASSERT_TRUE(window_doc) << holoscan::config::format_error(
-      window_doc.error());
+  auto window_doc = holoscan::config_io::try_parse("hann", holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(window_doc) << holoscan::config::format_error(window_doc.error());
   const auto window = window_doc->try_get<WindowSpec>("");
   ASSERT_TRUE(window) << holoscan::config::format_error(window.error());
   EXPECT_EQ(window->type, WindowType::kHann);
 
-  auto norm_doc = holoscan::config_io::try_parse(
-      "ortho", holoscan::config_io::Format::kYaml);
+  auto norm_doc = holoscan::config_io::try_parse("ortho", holoscan::config_io::Format::kYaml);
   ASSERT_TRUE(norm_doc);
   const auto norm = norm_doc->try_get<holoscan::radar::FftNorm>("");
   ASSERT_TRUE(norm);
   EXPECT_EQ(*norm, holoscan::radar::FftNorm::kOrtho);
 
-  auto invalid_doc = holoscan::config_io::try_parse(
-      "hanning", holoscan::config_io::Format::kYaml);
+  auto invalid_doc = holoscan::config_io::try_parse("hanning", holoscan::config_io::Format::kYaml);
   ASSERT_TRUE(invalid_doc);
   EXPECT_FALSE(invalid_doc->try_get<WindowType>(""));
 }
@@ -276,28 +266,24 @@ TEST(ConfigCodecs, WindowMapAndWaveformValidate) {
       "sample_rate: 12.8e6, chirp_repetition_interval: 25.0e-6}",
       holoscan::config_io::Format::kYaml);
   ASSERT_TRUE(invalid_waveform_doc);
-  EXPECT_FALSE(
-      invalid_waveform_doc->try_get<FMCWWaveformDescriptor>(""));
+  EXPECT_FALSE(invalid_waveform_doc->try_get<FMCWWaveformDescriptor>(""));
 
-  auto unknown_field_doc = holoscan::config_io::try_parse(
-      "{type: hann, unexpected: true}",
-      holoscan::config_io::Format::kYaml);
+  auto unknown_field_doc = holoscan::config_io::try_parse("{type: hann, unexpected: true}",
+                                                          holoscan::config_io::Format::kYaml);
   ASSERT_TRUE(unknown_field_doc);
   EXPECT_FALSE(unknown_field_doc->try_get<WindowSpec>(""));
 }
 
 TEST(YamlConverters, ShiftInvariantSubarrayPairRoundTrips) {
-  const auto pair =
-      YAML::Load("{reference_indices: [0, 1, 2], shifted_indices: [1, 2, 3]}")
-          .as<ShiftInvariantSubarrayPair>();
+  const auto pair = YAML::Load("{reference_indices: [0, 1, 2], shifted_indices: [1, 2, 3]}")
+                        .as<ShiftInvariantSubarrayPair>();
   EXPECT_EQ(pair.reference_indices, (std::vector<int64_t>{0, 1, 2}));
   EXPECT_EQ(pair.shifted_indices, (std::vector<int64_t>{1, 2, 3}));
-  EXPECT_EQ(YAML::convert<ShiftInvariantSubarrayPair>::encode(pair)
-                .as<ShiftInvariantSubarrayPair>(),
-            pair);
+  EXPECT_EQ(
+      YAML::convert<ShiftInvariantSubarrayPair>::encode(pair).as<ShiftInvariantSubarrayPair>(),
+      pair);
 
-  EXPECT_THROW(YAML::Load("{reference_indices: [0, 1]}").
-                   as<ShiftInvariantSubarrayPair>(),
+  EXPECT_THROW(YAML::Load("{reference_indices: [0, 1]}").as<ShiftInvariantSubarrayPair>(),
                std::invalid_argument);
 }
 

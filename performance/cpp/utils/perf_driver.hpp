@@ -89,8 +89,7 @@ inline std::vector<std::string> split_csv(const std::string& s) {
 
 template <typename Traits>
 void print_help() {
-  std::cout << Traits::tool_name() << " — " << Traits::tool_description()
-            << "\n\n"
+  std::cout << Traits::tool_name() << " — " << Traits::tool_description() << "\n\n"
             << "Usage: " << Traits::tool_name() << " [options]\n\n"
             << "  --output <path>   Write machine-readable JSON report\n"
                "  --text <path>     Also write the text summary to a file\n"
@@ -160,8 +159,7 @@ bool parse_args(int argc, char** argv, Options* opt) {
 inline bool ensure_cuda_device(const char* tool_name) {
   int device_count = 0;
   if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-    std::cerr << "error: no CUDA device available; " << tool_name
-              << " requires a GPU\n";
+    std::cerr << "error: no CUDA device available; " << tool_name << " requires a GPU\n";
     return false;
   }
   return true;
@@ -196,9 +194,8 @@ std::vector<typename Traits::Scenario> select_scenarios(const Options& opt) {
 // Record ladder definitions for the sizes this run actually exercises, in
 // ladder order, so the report is self-describing.
 template <typename Traits>
-void record_exercised_sizes(
-    const std::vector<typename Traits::Scenario>& scenarios,
-    PerfReport* report) {
+void record_exercised_sizes(const std::vector<typename Traits::Scenario>& scenarios,
+                            PerfReport* report) {
   std::vector<std::string> used;
   for (const auto& sc : scenarios) {
     if (std::find(used.begin(), used.end(), sc.size_id) == used.end()) {
@@ -213,14 +210,12 @@ void record_exercised_sizes(
 }
 
 template <typename Traits>
-void run_all_scenarios(
-    const std::vector<typename Traits::Scenario>& scenarios, const Options& opt,
-    PerfReport* report) {
+void run_all_scenarios(const std::vector<typename Traits::Scenario>& scenarios, const Options& opt,
+                       PerfReport* report) {
   const size_t n = scenarios.size();
   bool stopped_early = false;
   for (size_t i = 0; i < n; ++i) {
-    std::cerr << "[" << (i + 1) << "/" << n << "] " << scenarios[i].id
-              << std::flush;
+    std::cerr << "[" << (i + 1) << "/" << n << "] " << scenarios[i].id << std::flush;
     const auto t0 = Clock::now();
     // Optional failure isolation: a thrown graph error (e.g. an operator
     // rejecting an invalid parameter) would otherwise propagate out of main
@@ -239,8 +234,8 @@ void run_all_scenarios(
     std::cerr << "  (" << elapsed_s << " s)\n";
     report->run_settings.scenarios_completed = static_cast<int>(i + 1);
     if (opt.stop_after_s > 0.0 && elapsed_s > opt.stop_after_s) {
-      std::cerr << "stopping early: scenario exceeded --stop-after-s "
-                << opt.stop_after_s << " s\n";
+      std::cerr << "stopping early: scenario exceeded --stop-after-s " << opt.stop_after_s
+                << " s\n";
       stopped_early = true;
       break;
     }
@@ -288,8 +283,7 @@ int perf_main(int argc, char** argv) {
   }
   detail::default_log_level();
 
-  std::vector<typename Traits::Scenario> scenarios =
-      detail::select_scenarios<Traits>(opt);
+  std::vector<typename Traits::Scenario> scenarios = detail::select_scenarios<Traits>(opt);
 
   PerfReport report;
   report.provenance = capture_provenance();

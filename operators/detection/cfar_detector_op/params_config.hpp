@@ -10,11 +10,9 @@
 
 namespace holoscan::config {
 
-using CfarParamsCodec =
-    params::DefaultedParamSchemaCodec<radar::CFARParams>;  // NOLINT
+using CfarParamsCodec = params::DefaultedParamSchemaCodec<radar::CFARParams>;  // NOLINT
 
 template <>
-struct ConfigCodec<radar::CFARParams>
-    : CfarParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::CFARParams> : CfarParamsCodec {};  // NOLINT
 
 }  // namespace holoscan::config

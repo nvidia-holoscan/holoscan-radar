@@ -33,22 +33,18 @@ struct ArrayGeometry {
   void validate() const {
     const int64_t n = num_elements();
     if (n <= 0) {
-      throw std::invalid_argument(
-          "ArrayGeometry: num_elements must be positive");
+      throw std::invalid_argument("ArrayGeometry: num_elements must be positive");
     }
     if (!(wavelength > 0.0) || !std::isfinite(wavelength)) {
-      throw std::invalid_argument(
-          "ArrayGeometry: wavelength must be a positive finite scalar");
+      throw std::invalid_argument("ArrayGeometry: wavelength must be a positive finite scalar");
     }
   }
 
   friend bool operator==(const ArrayGeometry& a, const ArrayGeometry& b) {
-    return a.element_positions == b.element_positions &&
-           a.wavelength == b.wavelength && a.geometry_type == b.geometry_type;
+    return a.element_positions == b.element_positions && a.wavelength == b.wavelength &&
+           a.geometry_type == b.geometry_type;
   }
-  friend bool operator!=(const ArrayGeometry& a, const ArrayGeometry& b) {
-    return !(a == b);
-  }
+  friend bool operator!=(const ArrayGeometry& a, const ArrayGeometry& b) { return !(a == b); }
 };
 
 }  // namespace holoscan::radar

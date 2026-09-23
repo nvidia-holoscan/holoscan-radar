@@ -66,44 +66,34 @@ struct FMCWRangeProcessorParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     FMCWRangeProcessorParams,
-    holoscan::param_schema(
-        "com.nvidia.holoscan.radar.FMCWRangeProcessorParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.FMCWRangeProcessorParams", 1),
     holoscan::field<&FMCWRangeProcessorParams::range_window>("range_window")
-        .description(
-            "WindowSpec applied along fast-time before the range FFT "
-            "(coherent-gain normalized). Default: none (rectangular)."),
+        .description("WindowSpec applied along fast-time before the range FFT "
+                     "(coherent-gain normalized). Default: none (rectangular)."),
     holoscan::field<&FMCWRangeProcessorParams::apply_dechirp>("apply_dechirp")
-        .description(
-            "Conjugate-multiply the input against the reference chirp "
-            "along fast-time before windowing/FFT. Requires a waveform "
-            "and complex-IF input when true."),
+        .description("Conjugate-multiply the input against the reference chirp "
+                     "along fast-time before windowing/FFT. Requires a waveform "
+                     "and complex-IF input when true."),
     holoscan::field<&FMCWRangeProcessorParams::waveform>("waveform")
-        .description(
-            "FMCW chirp descriptor; source for the dechirp reference "
-            "and the range_bins axis. Default-constructed = none."),
+        .description("FMCW chirp descriptor; source for the dechirp reference "
+                     "and the range_bins axis. Default-constructed = none."),
     holoscan::field<&FMCWRangeProcessorParams::fft_norm>("fft_norm")
-        .description(
-            "FFT normalization convention {backward, ortho, forward}; "
-            "backward keeps coherent-integration gain visible."),
-    holoscan::field<&FMCWRangeProcessorParams::propagation_speed>(
-        "propagation_speed")
-        .description(
-            "Wave speed (m/s) for beat-frequency to range conversion "
-            "(range_bins only)."),
-    holoscan::field<&FMCWRangeProcessorParams::nfft>("nfft")
-        .description(
-            "Fast-time FFT length >= samples_per_chirp; larger zero-pads "
-            "for a finer interpolated range grid. 0 = samples_per_chirp."));
+        .description("FFT normalization convention {backward, ortho, forward}; "
+                     "backward keeps coherent-integration gain visible."),
+    holoscan::field<&FMCWRangeProcessorParams::propagation_speed>("propagation_speed")
+        .description("Wave speed (m/s) for beat-frequency to range conversion "
+                     "(range_bins only)."),
+    holoscan::field<&FMCWRangeProcessorParams::nfft>("nfft").description(
+        "Fast-time FFT length >= samples_per_chirp; larger zero-pads "
+        "for a finer interpolated range grid. 0 = samples_per_chirp."));
 
-static_assert(
-    holoscan::param_schema_availability<FMCWRangeProcessorParams>() ==
-        holoscan::ParamSchemaAvailability::kDeclared,
-    "HOLOSCAN_PARAM_SCHEMA must be in "
-    "FMCWRangeProcessorParams's namespace");
+static_assert(holoscan::param_schema_availability<FMCWRangeProcessorParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in "
+              "FMCWRangeProcessorParams's namespace");
 
 template <typename T>
-class FMCWRangeProcessorOp
-    : public holoscan::Operator<FMCWRangeProcessorParams> {
+class FMCWRangeProcessorOp : public holoscan::Operator<FMCWRangeProcessorParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "FMCWRangeProcessorOp supports float and double precision");
 
@@ -113,8 +103,7 @@ class FMCWRangeProcessorOp
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
-  [[nodiscard]] expected<void, Error> compute(
-      ExecutionContext& context) override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Input<Tensor> adc_cube{"adc_cube"};
   Output<Tensor> range_profiles{"range_profiles"};

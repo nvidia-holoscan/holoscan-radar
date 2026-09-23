@@ -22,7 +22,7 @@ TEST(SourceCountTest, PureNoiseFloorsAtOneSource) {
   const std::vector<double> eig = {0.90, 0.95, 1.00, 1.05, 1.10};
   EXPECT_EQ(eft_source_count(eig, /*num_snapshots=*/20, /*pfa=*/0.1,
                              /*max_sources=*/4),
-           1);
+            1);
 }
 
 TEST(SourceCountTest, TwoDominantEigenvaluesDetectedAsTwoSources) {
@@ -31,24 +31,22 @@ TEST(SourceCountTest, TwoDominantEigenvaluesDetectedAsTwoSources) {
   const std::vector<double> eig = {0.90, 0.95, 1.00, 1.05, 50.0, 100.0};
   EXPECT_EQ(eft_source_count(eig, /*num_snapshots=*/20, /*pfa=*/0.1,
                              /*max_sources=*/4),
-           2);
+            2);
 }
 
 TEST(SourceCountTest, MaxSourcesClamps) {
   const std::vector<double> eig = {0.90, 0.95, 1.00, 1.05, 50.0, 100.0};
   EXPECT_EQ(eft_source_count(eig, /*num_snapshots=*/20, /*pfa=*/0.1,
                              /*max_sources=*/1),
-           1);
+            1);
 }
 
 TEST(SourceCountTest, LowerPfaIsAtLeastAsConservative) {
   // A tighter (smaller) Pfa budget raises every eta_P, so the test should
   // never report MORE sources than a looser Pfa on the same data.
   const std::vector<double> eig = {0.90, 0.95, 1.00, 1.05, 3.0, 100.0};
-  const int64_t loose =
-      eft_source_count(eig, /*num_snapshots=*/20, /*pfa=*/0.5, 4);
-  const int64_t tight =
-      eft_source_count(eig, /*num_snapshots=*/20, /*pfa=*/1e-4, 4);
+  const int64_t loose = eft_source_count(eig, /*num_snapshots=*/20, /*pfa=*/0.5, 4);
+  const int64_t tight = eft_source_count(eig, /*num_snapshots=*/20, /*pfa=*/1e-4, 4);
   EXPECT_LE(tight, loose);
 }
 

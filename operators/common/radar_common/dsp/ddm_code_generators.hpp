@@ -12,10 +12,8 @@ namespace holoscan::radar {
 // Build deterministic nonlinear DDM descriptors on the host. These helpers
 // define code math only; applications retain ownership of preset naming and
 // must provide the same descriptor to the transmitter/source and demultiplexer.
-DDMCodeDescriptor make_zadoff_chu_ddm_code(int64_t num_tx,
-                                           int64_t num_chirps);
+DDMCodeDescriptor make_zadoff_chu_ddm_code(int64_t num_tx, int64_t num_chirps);
 
-DDMCodeDescriptor make_sinusoidal_ddm_stress_code(int64_t num_tx,
-                                                  int64_t num_chirps);
+DDMCodeDescriptor make_sinusoidal_ddm_stress_code(int64_t num_tx, int64_t num_chirps);
 
 }  // namespace holoscan::radar
