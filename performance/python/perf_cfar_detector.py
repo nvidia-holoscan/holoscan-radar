@@ -7,8 +7,7 @@ Measurement tool only: no timing assertions.
 
 Scenario matrices intentionally mirror
 ``performance/cpp/perf_cfar_detector.cpp`` (default / --full / --sizes).
-C++/Python matrix sync is an open question — see
-``OPEN_ITEMS.md``.
+C++/Python matrix synchronization is tracked by CLARAHOLOS-3419.
 
 Default CLI matches C++ (default matrix, not ``--full``): mid/large GO/SO/OS
 footprints are Monte Carlo–heavy (~tens of seconds cold) and are only in

@@ -32,5 +32,4 @@ All estimators accept complex64 or complex128 according to their C++ template
 precision. Geometry, angle conventions, live-override behavior, and tensor
 conventions are described in [`operators/common/README.md`](../common/README.md).
 Each operator README is the user-level port, parameter, shape, and algorithm
-reference. Deferred research and optimization work is tracked in the repository
-[`OPEN_ITEMS.md`](../../OPEN_ITEMS.md).
+reference. Deferred research and optimization work is tracked on [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309).

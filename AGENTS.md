@@ -21,16 +21,16 @@ Read before starting non-trivial work, in this precedence order:
 5. [`docs/planning/NEW_OPERATOR_CHECKLIST.md`](docs/planning/NEW_OPERATOR_CHECKLIST.md) — landing gate; verify before claiming an operator (or variant slice) done.
 6. [`docs/planning/OPERATOR_DEVELOPMENT.md`](docs/planning/OPERATOR_DEVELOPMENT.md) — how to implement well: hot-path discipline, diagnosis, `[live]`/calibration pitfalls, tests, and performance characterization (lessons from landed operators).
 7. [`docs/planning/TEMPORAL_CONTRACTS.md`](docs/planning/TEMPORAL_CONTRACTS.md) — how the data plane joins the config plane: the measured selector/trigger behavior, the coherence design (shared transmit-time stamp + `Exact{}`), and what was rejected. Read before changing any `contract()`.
-8. [`OPEN_ITEMS.md`](OPEN_ITEMS.md) — the single repository backlog for deferred product, algorithm, performance, and tooling work.
+8. [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309) — the single backlog for deferred product, algorithm, performance, and tooling work.
 9. [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md) — the temporary local SDK-image workflow and current SDK packaging limitation.
 
 Rules that follow from "lockdown":
 
 - **Docs first.** Code must match `OPERATOR_API.md` exactly — port names, shapes, dtype pairs, parameter names/defaults, `[live]` tags. To change an interface, change the doc (in the same PR at minimum), call it out as a contract change in the PR description, and get it reviewed as such. Never deviate silently in code.
 - **Do not silently resolve documented open items.** Deferred work and unresolved
-  design questions are consolidated in [`OPEN_ITEMS.md`](OPEN_ITEMS.md).
+  design questions are tracked on [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309).
   Surface contract questions for team review instead of picking an answer in
-  code, and update the root backlog when an item is added or resolved.
+  code, and update Jira when an item is added or resolved.
 - **Checklist + development guidance.** Follow `NEW_OPERATOR_CHECKLIST.md` as the done gate; use `OPERATOR_DEVELOPMENT.md` when designing `compute()`, live overrides, tests, or chasing performance.
 
 ## Design invariants (do not violate)
@@ -153,4 +153,4 @@ The lint stack (`.pre-commit-config.yaml`): ruff + isort + black (Python), cppli
 
 ## Team workflow
 
-There is no external issue tracker: **`docs/planning/` is the work queue** and [`docs/planning/STATUS.md`](docs/planning/STATUS.md) is the coordination point. Before starting non-trivial work: read the relevant planning doc sections, then check `STATUS.md` for what is claimed/in flight and record what you pick up. When work lands (or a team decision is made), update `STATUS.md` in the same PR.
+[Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309) is the work queue, and [`docs/planning/STATUS.md`](docs/planning/STATUS.md) is the in-repository coordination and decision record. Before starting non-trivial work: read the relevant planning doc sections, then check `STATUS.md` for what is claimed/in flight and record what you pick up. When work lands (or a team decision is made), update `STATUS.md` in the same PR.

@@ -92,7 +92,7 @@ objects, or Tensor members. Keep ordinary numeric bulk data on Tensor ports.
 - [ ] Install generated public headers with one include spelling that works
       in both build and install trees, and link every consumer to the one
       schema target.
-- [ ] Update `OPERATOR_API.md`, the root `OPEN_ITEMS.md`, and this
+- [ ] Update `OPERATOR_API.md`, the Jira backlog, and this
       document's synchronization surface.
 
 ## Evolution rules

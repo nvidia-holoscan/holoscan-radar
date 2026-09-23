@@ -12,8 +12,7 @@ Measurement tool only — no timing assertions and no keep/kill verdict.
 Summing the three per-operator perf tools overstates split cost (extra
 Holoscan nodes / intermediate tensors are missing from a naive sum); this
 tool times both graphs with identical I/O so the team can fill the
-decision table in
-OPEN_ITEMS.md §1.
+decision in CLARAHOLOS-3417.
 
 Scenario matrices mirror ``performance/cpp/perf_fmcw_split_vs_fused.cpp``
 (default / --full / --sizes). No [live] overrides.
@@ -398,7 +397,7 @@ def print_comparison_table(report: PerfReport) -> None:
             p.have_fused = True
 
     print("\n=== split vs fused comparison (median_ms, team decision aid) ===")
-    print("No keep/kill verdict is encoded. Fill OPEN_ITEMS §1 from this table.")
+    print("No keep/kill verdict is encoded. Attach results to CLARAHOLOS-3417.")
     header = (
         f"{'pair_id':<28}{'size':<8}{'clutter':<8}"
         f"{'split_ms':>12}{'fused_ms':>12}{'delta_ms':>12}"

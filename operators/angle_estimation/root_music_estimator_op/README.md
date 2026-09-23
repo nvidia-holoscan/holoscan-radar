@@ -49,7 +49,7 @@ Use after `SnapshotGatherOp` for gridless multi-source estimation on a uniform l
 | `array_geometry` | `ArrayGeometry` | none (required) | `[live]` Exact wire-schema override | ULA or filled URA + `λ`; `num_elements` must match channels Cost: Revalidates ULA/URA; rebuilds smoothing plan; may resize cuSOLVER workspace. |
 | `angle_convention` | `AngleConvention` | `radar_boresight` | static (rejected if changed after first emit) | Boundary meaning of `(az, el)` / `(u, v)` Cost: Seeds device relabeling once. |
 | `num_sources` | int64 | `-1` (`auto`) | `[live]` Exact | Signal-subspace dimension / root count Cost: Free (EFT or fill). |
-| `source_count_pfa` | double | `1e-2` | `[live]` Exact | Target EFT Pfa; `auto` only. See the [shared fidelity item](../../../OPEN_ITEMS.md) Cost: Free. |
+| `source_count_pfa` | double | `1e-2` | `[live]` Exact | Target EFT Pfa; `auto` only. See [CLARAHOLOS-3394](https://jirasw.nvidia.com/browse/CLARAHOLOS-3394). Cost: Free. |
 | `max_sources` | int64 | `4` | `[live]` Exact | Capacity and EFT `K_max` Cost: Reallocates `doa_multi`; cap `64`. |
 | `spatial_smoothing` | `vector<int64_t>` | empty (off) | `[live]` Exact `{count, first, second}` POD | Per-axis counts on a filled ULA/URA Cost: Rebuilds plan + H2D; changes polynomial degree. |
 | `forward_backward` | bool | `true` | static | FB looks; ignored unless smoothing is on Cost: Part of the smoothing-plan key. |

@@ -14,7 +14,7 @@ repeating expensive mistakes.
 | [`TESTING.md`](TESTING.md) | What properties tests must assert. |
 | [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md) | Landing gate — verify before claiming done. |
 | [`STATUS.md`](STATUS.md) | Claim work; record decisions. |
-| [`../../OPEN_ITEMS.md`](../../OPEN_ITEMS.md) | Consolidated deferred work and unresolved design questions. |
+| [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309) | Deferred work and unresolved design questions. |
 | [`operators/common/README.md`](../../operators/common/README.md) | Shared conventions and helpers. |
 | This doc | *How* to implement well: hot-path discipline, diagnosis, perf, open items. |
 
@@ -65,9 +65,9 @@ irrelevant labels, or extract helpers only to manufacture stages.
    over inventing an interface in code; treat contract edits as a *hesitant*
    option after diagnosing whether the problem is implementation, wording, or
    a real gap.
-2. **Do not silently resolve open items.** Record ambiguities in the root
-   [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md), including their source operator or
-   directory. If code must land ahead of the contract (rare), record the
+2. **Do not silently resolve open items.** Record ambiguities on
+   [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309),
+   including their source operator or directory. If code must land ahead of the contract (rare), record the
    conflict and the question for the team there.
 3. **Diagnose before guessing.** When something is wrong or slow, run the
    cheapest experiment that distinguishes plausible causes *before* proposing a
@@ -91,7 +91,7 @@ irrelevant labels, or extract helpers only to manufacture stages.
 
 ```text
 STATUS.md claim
-    → read OPERATOR_API + WORKFLOWS + any OPEN_ITEMS
+    → read OPERATOR_API + WORKFLOWS + the Jira backlog
     → scaffold (group CMake, metadata, three-file split, README row)
     → implement vertical slices toward the full contract (PRs OK mid-way)
     → unit (+ statistical) tests; wire every output port
@@ -476,7 +476,7 @@ artifact built from that key. Do not cache only the expensive centerpiece
 while rebuilding sibling grids or tables on every steady tick.
 
 If a contract parameter implies caching but the implementation has nothing to
-cache, do not pretend eviction works: record the no-op in `OPEN_ITEMS.md` as a
+cache, do not pretend eviction works: record the no-op in Jira as a
 team question (keep-as-placeholder vs drop). Default to dropping a hollow knob
 from both the contract and the code once the team confirms — an inert parameter
 that implies behavior is worse than its absence (as demonstrated by the removed `max_cached_kernels` placeholder). Re-introduce it as a real, wired
@@ -592,7 +592,7 @@ seconds of Monte Carlo (or similar):
 2. Warn once on the slow path.
 3. Propose a **fast path** that matches deployed practice (e.g. optional
    precomputed `alpha_lut` with precedence over online derivation).
-4. Put the contract tension in `OPEN_ITEMS.md`; do not silently change
+4. Put the contract tension in Jira; do not silently change
    `OPERATOR_API.md` without an explicit decision.
 
 Precedence pattern that worked: external table if provided → else derive from
@@ -646,7 +646,7 @@ inverter in isolation.
 ### Tolerances are evidence, not decoration
 
 If one variant needs a looser envelope (spatial correlation, etc.), document it
-inline *and* in `OPEN_ITEMS.md`. Do not silently widen tolerances to green the
+inline *and* in Jira. Do not silently widen tolerances to green the
 CI.
 
 ### Tautology guard
@@ -659,7 +659,7 @@ itself."
 
 `bool` (`kDLBool`) on HSDK 4.3 logs `Unsupported DLPack data type` and can
 break Python consumers while C++ raw `cudaMemcpy` capture still works. If you
-hit framework dtype gaps: record in `OPEN_ITEMS.md`, keep C++ tests honest
+hit framework dtype gaps: record in Jira, keep C++ tests honest
 (raw device capture if needed), and do not paper over by changing the contract
 dtype without a team decision.
 
@@ -735,12 +735,13 @@ Where a slow convenience path and a fast production path both exist (e.g.
 
 ## Open items and contract hygiene
 
-### Repository `OPEN_ITEMS.md`
+### Jira backlog
 
-Keep all deferred work and unresolved questions in the repository root
-[`OPEN_ITEMS.md`](../../OPEN_ITEMS.md). Each entry names its source directory,
-context, user impact, and the decision or acceptance criteria still needed.
-Remove completed or superseded items rather than preserving a resolution diary.
+Keep all deferred work and unresolved questions on
+[Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309).
+Each issue names its source directory, context, user impact, and the decision or
+acceptance criteria still needed. Close completed or superseded issues with the
+resolution recorded in Jira.
 
 SDK source-build and packaging limitations belong in
 [`SDK_DEVELOPMENT.md`](../../SDK_DEVELOPMENT.md). Operator READMEs should state
@@ -750,7 +751,7 @@ notes.
 ### Code ahead of contract
 
 If implementation must proceed with a correct formula the contract has not
-pinned yet, say so explicitly in the root `OPEN_ITEMS.md` ("code is ahead of the
+pinned yet, record that explicitly in the Jira issue ("code is ahead of the
 contract") and either update the contract in a dedicated change or revert.
 Never leave reviewers to discover divergence from diffs alone.
 
@@ -800,7 +801,7 @@ matching, not as CFAR-only lore.
 | Steady ~0.8 ms after GPU compact | Still ~0.6 ms alloc of ~20 MB maps every tick | Ping-pong workspace on geometry key |
 | OS `fast_cold` looks like LUT cost | LUT was precomputed; first-touch + Holoscan overhead | Break down cold into alloc / H2D / kernel / graph |
 | Contract "cheap live `pfa`" vs multi-second GO/SO/OS | MC calibration is an implementation choice | Warn + fast-path table param; record contract tension |
-| `detection_mask` errors in logs, tests still pass | `kDLBool` transport gap; tests only checked idx | Assert all related ports; OPEN_ITEMS for SDK gaps |
+| `detection_mask` errors in logs, tests still pass | `kDLBool` transport gap; tests only checked idx | Assert all related ports; Jira for SDK gaps |
 | MatX `conv2d` CFAR prototype | Extra passes + scratch; OS has no expression | Benchmark; fuse when MatX is a poor fit |
 
 Exemplar code to read (patterns, not copy-paste requirements):
@@ -810,7 +811,7 @@ Exemplar code to read (patterns, not copy-paste requirements):
 - Device compaction — `cfar_compact.cuh`
 - Slow vs fast calibration — `alpha_lut` live override + warn-once on `pfa` MC
 - Perf harness consumer — `performance/cpp/perf_cfar_detector.cpp`
-- Open-item style — [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md)
+- Open-item style — [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309)
 
 ---
 

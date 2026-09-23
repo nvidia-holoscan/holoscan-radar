@@ -98,7 +98,7 @@ v_i = clamp(arg(μ_z,i) / (k·dz), −1, 1)
 dir = u · y_axis + v · z_axis + sqrt(max(0, 1−u²−v²)) · normal
 ```
 
-Pairing is automatic (no assignment step). Failed LU / Schur leaves that item blank. Explicit two-pair `subarray_spec`s are not supported; see the [consolidated backlog](../../../OPEN_ITEMS.md).
+Pairing is automatic (no assignment step). Failed LU / Schur leaves that item blank. Explicit two-pair `subarray_spec`s are not supported; the current contract does not expose them.
 
 **Spatial smoothing** is the same S1 front-end as MUSIC. When enabled, leave `subarray_spec=auto` so pairs are re-derived on the reduced aperture. Warnings:
 

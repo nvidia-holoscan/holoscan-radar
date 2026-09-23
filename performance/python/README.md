@@ -9,7 +9,7 @@ sync at the terminal sink, and print a unified text report (optional JSON via
 Most C++ performance tools have a Python counterpart. The current exceptions
 are multi-source expansion, rank-one residual screening, and subarray
 selection. Shared scenario matrices are still hand-mirrored where both forms
-exist (see [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md)).
+exist ([CLARAHOLOS-3419](https://jirasw.nvidia.com/browse/CLARAHOLOS-3419)).
 
 The current `main-5x` source image does not export the SDK Python binding
 target, so these scripts are retained but are not built by the default

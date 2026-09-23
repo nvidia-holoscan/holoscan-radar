@@ -81,7 +81,7 @@ R_i = (1/K_i) Σ_{s valid} x_{i,s} x_{i,s}^H
 MUSICEstimatorOp: num_sources=auto with num_snapshots ({}) < num_channels ({}) - covariance is rank-deficient; falling back to num_sources=1 for all items
 ```
 
-EFT uses Quinlan et al. 2007’s closed-form noise-eigenvalue profile for prediction and a first-order Gaussian threshold rather than the paper’s Monte-Carlo `η_P`. `source_count_pfa` is therefore a **target**, not a guaranteed false-alarm rate (see `radar_common/dsp/source_count.hpp` and the [consolidated backlog](../../../OPEN_ITEMS.md)). Seeding from the CFAR/cluster detection count is rejected.
+EFT uses Quinlan et al. 2007’s closed-form noise-eigenvalue profile for prediction and a first-order Gaussian threshold rather than the paper’s Monte-Carlo `η_P`. `source_count_pfa` is therefore a **target**, not a guaranteed false-alarm rate (see `radar_common/dsp/source_count.hpp` and [CLARAHOLOS-3394](https://jirasw.nvidia.com/browse/CLARAHOLOS-3394)). Seeding from the CFAR/cluster detection count is rejected.
 
 **4. Noise-subspace projector** (`projector_kernel`):
 

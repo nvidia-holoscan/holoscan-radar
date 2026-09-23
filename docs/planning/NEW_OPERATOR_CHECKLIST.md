@@ -19,7 +19,7 @@ that is expected. A slice is **never** enough to mark the checklist done or
 call the operator ready. Clear this checklist only when the **full**
 `OPERATOR_API.md` contract for the operator is implemented (every port,
 parameter, and documented mode), not when a useful subset works and the rest
-throws or remains deferred in the root `OPEN_ITEMS.md`.
+throws or remains deferred in the Jira backlog.
 
 ---
 
@@ -54,8 +54,8 @@ throws or remains deferred in the root `OPEN_ITEMS.md`.
       operator is GPU/hot-path; **includes inline `[live]` override
       measurement** whenever the contract has live params (see
       `OPERATOR_DEVELOPMENT.md` → Performance characterization).
-- [ ] **Open items** — unresolved team questions are recorded in the root
-      [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md) with their source directory.
+- [ ] **Open items** — unresolved team questions are recorded on the
+      [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309) with their source directory.
       Missing contract features are unfinished work, not backlog items, and
       block checklist completion.
 
@@ -69,7 +69,7 @@ throws or remains deferred in the root `OPEN_ITEMS.md`.
       duplicate an active branch.
 - [ ] Read **`WORKFLOWS.md`** if the operator sits on a modality chain —
       confirm port wiring and upstream/downstream dtypes.
-- [ ] Check the root [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md) for entries from
+- [ ] Check the [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309) for entries from
       this operator or group; do not silently pick answers to documented
       ambiguities.
 
@@ -200,7 +200,7 @@ throws or remains deferred in the root `OPEN_ITEMS.md`.
 Measurement harness (not pass/fail thresholds). See
 [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md) → Performance
 characterization. Skip only if the operator has no GPU/hot path yet; say so
-in `OPEN_ITEMS.md`.
+in Jira.
 
 - [ ] **`performance/cpp/perf_<operator>.cpp`** — second (or Nth) consumer of
       `radar_perf_utils`; scenario matrix covering representative sizes and
@@ -235,8 +235,8 @@ Exemplar: `performance/cpp/perf_cfar_detector.cpp`.
 ## Land the PR
 
 - [ ] Update **`STATUS.md`** — move claim to done or refresh state.
-- [ ] Add new deferred work or unresolved team questions to the root
-      [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md), naming the source directory.
+- [ ] Add new deferred work or unresolved team questions to
+      [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309), naming the source directory.
 - [ ] PR description notes **contract changes** explicitly if `OPERATOR_API.md`
       changed.
 - [ ] Python bindings — add/update them when the SDK binding component is

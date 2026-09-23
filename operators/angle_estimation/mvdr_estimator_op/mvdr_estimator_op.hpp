@@ -60,7 +60,7 @@ void retire_matx_solver_caches();
 //                       an unwired port; publish a mask before its snapshot.
 // Out: aoa_estimates   — float32/float64, (num_items, 2).
 // Out: angle_spectrum  — float32/float64, (num_items, num_az, num_el). Always
-//                       emitted (optional in OPERATOR_API.md; see OPEN_ITEMS).
+//                       emitted (optional in OPERATOR_API.md).
 // Out: doa_multi       — float32/float64, (num_items, max_sources, 2). Always
 //                       emitted.
 // Out: source_count    — int32, (num_items,). Always emitted.

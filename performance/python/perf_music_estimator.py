@@ -36,8 +36,7 @@ bootstrap_radar_package()
 # at interpreter exit), then register MatX cache retirement after CuPy so it
 # runs first on exit (atexit is LIFO) while CUDA is still alive. Mirrors
 # tests/python/conftest.py. isort would otherwise alphabetize cupy back
-# ahead of holoscan.radar - see mvdr_estimator_op/OPEN_ITEMS.md "Regression:
-# isort silently re-broke the import order" - keep this block isort-off.
+# ahead of holoscan.radar - keep this block isort-off.
 # isort: off
 import holoscan.radar  # noqa: E402,F401
 

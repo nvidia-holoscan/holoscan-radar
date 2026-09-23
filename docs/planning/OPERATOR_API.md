@@ -766,7 +766,7 @@ cosines `u_i` and elevation cosines `v_k`; candidates are paired by evaluating
 the full 2-D MUSIC subspace metric at each `(u_i, v_k)` and greedily selecting
 the `d` best. There is no canonical single-polynomial 2-D Root-MUSIC; this
 reduced-dimension + pairing method is a deliberate design decision (documented
-in the operator's `OPEN_ITEMS.md`), trading some joint optimality for robustness
+here), trading some joint optimality for robustness
 and reuse of the 1-D machinery. A ULA keeps the unchanged single-axis cone path.
 Deferred: a true joint 2-D polynomial formulation and explicit
 non-ULA-per-axis subarray specs.

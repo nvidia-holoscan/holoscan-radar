@@ -94,8 +94,8 @@ inline void retire_music_matx_caches() {
 // num_channels, row-major) over the valid snapshots. Identical to MVDR's
 // covariance_kernel (mvdr_stage.hpp) - duplicated rather than shared because
 // radar_common stays CUDA-free and per-operator kernels are not (yet) a
-// shared target; see OPEN_ITEMS.md if a third consumer wants to factor this
-// out. `mask` (num_items x num_snapshots, uint8/bool) selects valid slots;
+// shared target; factor this out if a third consumer appears. `mask`
+// (num_items x num_snapshots, uint8/bool) selects valid slots;
 // nullptr -> all valid. Empty items (K_i == 0) yield a zero matrix;
 // `k_counts[item]` records K_i.
 template <typename T>
@@ -227,7 +227,8 @@ __device__ inline T& music_spectrum_at(T* spec, int64_t ia, int64_t ie,
 // thousands of beams; staging it into shared moves that traffic off the L1TEX
 // load path. (MVDR's capon_reduce_kernel carries an older "shared was slower,
 // kernel is latency-bound" note from a different GPU - it does not hold here;
-// see OPEN_ITEMS.md.) The launch falls back to Staged=false when P_n does not
+// CLARAHOLOS-3398 tracks reevaluating the Capon path.) The launch falls back to
+// Staged=false when P_n does not
 // fit the shared-memory budget. The inner reduction over c2 is carried in
 // four independent accumulators so the FMAs pipeline.
 template <typename T, bool Staged>

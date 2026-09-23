@@ -12,8 +12,7 @@
 // verdict.  Summing the three per-operator perf tools overstates split
 // cost (extra Holoscan nodes / intermediate tensors are missing from a
 // naive sum); this tool times both graphs with identical I/O so the
-// team can fill the decision table in
-// OPEN_ITEMS.md §1.
+// team can fill the decision in CLARAHOLOS-3417.
 //
 // See docs/planning/OPERATOR_DEVELOPMENT.md.
 
@@ -445,8 +444,8 @@ void print_comparison_table(
       << "\n=== split vs fused comparison "
          "(median_ms, team decision aid) ===\n";
   std::cout
-      << "No keep/kill verdict is encoded. Fill "
-         "OPEN_ITEMS §1 from this table.\n";
+      << "No keep/kill verdict is encoded. Attach results to "
+         "CLARAHOLOS-3417.\n";
   std::cout << std::left << std::setw(28) << "pair_id"
             << std::setw(8) << "size" << std::setw(8)
             << "clutter" << std::right

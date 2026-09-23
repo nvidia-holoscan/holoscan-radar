@@ -63,8 +63,7 @@ void retire_music_matx_caches();
 //                       before its snapshot.
 // Out: aoa_estimates   — float32/float64, (num_items, 2).
 // Out: angle_spectrum  — float32/float64, (num_items, num_az, num_el).
-//                       Always emitted (optional in OPERATOR_API.md; see
-//                       OPEN_ITEMS).
+//                       Always emitted.
 // Out: doa_multi       — float32/float64, (num_items, max_sources, 2).
 //                       Always emitted.
 // Out: source_count    — int32, (num_items,). Always emitted.

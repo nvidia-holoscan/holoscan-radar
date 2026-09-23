@@ -81,6 +81,4 @@ physical units through them.
   when downstream operators must translate bin indices to physical units.
 
 Shared precision, tensor, and live-override behavior is documented in
-[`operators/common/README.md`](../common/README.md). Deferred waveform and
-algorithm extensions are tracked in the repository
-[`OPEN_ITEMS.md`](../../OPEN_ITEMS.md).
+[`operators/common/README.md`](../common/README.md). Deferred waveform and algorithm extensions are tracked on [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309).

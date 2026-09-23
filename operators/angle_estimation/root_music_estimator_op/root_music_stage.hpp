@@ -4,7 +4,7 @@
 // Root-MUSIC GPU stage. Includes MatX/cuSolver and must only be included by a
 // CUDA translation unit. Polynomial roots come from the companion matrix via
 // cuSolverDnXgeev (one matrix per item on the operator stream). A fully
-// device-resident custom root solver is tracked in OPEN_ITEMS.md.
+// device-resident custom root solver is tracked by CLARAHOLOS-3399.
 
 #pragma once
 
@@ -305,8 +305,8 @@ inline void configure_root_solver(
   state->host_workspace_bytes = host_bytes;
 }
 
-// One companion-matrix eigen-solve per item on the operator stream (see the
-// serial-hybrid note in OPEN_ITEMS.md). Configures/reuses the cuSolver
+// One companion-matrix eigen-solve per item on the operator stream (see
+// CLARAHOLOS-3399). Configures/reuses the cuSolver
 // workspace, runs cusolverDnXgeev per item, then downloads and checks the
 // per-item info codes (synchronizes `stream`). A per-item non-convergence
 // (info > 0, e.g. a degenerate NaN companion matrix) blanks that item's roots
@@ -389,7 +389,7 @@ inline void solve_companion_roots(RootMUSICSolverState* solver, int64_t degree,
 // yields an Ny x Ny azimuth covariance and an Nz x Nz elevation covariance;
 // the existing 1-D rooting machinery on each yields candidate direction
 // cosines, paired by the full 2-D MUSIC subspace metric. See OPERATOR_API.md
-// and OPEN_ITEMS.md for the method rationale (no canonical 2-D Root-MUSIC).
+// for the method rationale (no canonical 2-D Root-MUSIC).
 // ---------------------------------------------------------------------------
 
 // The in-kernel pairing stages the full URA steering vector and the candidate

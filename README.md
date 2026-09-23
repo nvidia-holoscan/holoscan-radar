@@ -106,7 +106,7 @@ captured.
 ## Project references
 
 - [`DEVELOPER.md`](DEVELOPER.md): build, test, lint, and contribution workflow
-- [`OPEN_ITEMS.md`](OPEN_ITEMS.md): consolidated deferred work
+- [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309): deferred product, algorithm, performance, and tooling work
 - [`docs/planning/WORKFLOWS.md`](docs/planning/WORKFLOWS.md): supported radar chains and port wiring
 - [`docs/planning/TESTING.md`](docs/planning/TESTING.md): test strategy and analytic ground truth
 

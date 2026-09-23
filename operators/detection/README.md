@@ -31,5 +31,4 @@ only the products the graph needs. See the operator README for threshold
 calibration, edge behavior, peak suppression, and output timing.
 
 Shared precision, tensor, and live-override conventions are in
-[`operators/common/README.md`](../common/README.md). Deferred feature work is
-tracked in the repository [`OPEN_ITEMS.md`](../../OPEN_ITEMS.md).
+[`operators/common/README.md`](../common/README.md). Deferred feature work is tracked on [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309).
