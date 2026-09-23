@@ -14,7 +14,6 @@ using ReductionParamsCodec =
     params::DefaultedParamSchemaCodec<radar::DetectionReductionParams>;  // NOLINT
 
 template <>
-struct ConfigCodec<radar::DetectionReductionParams>
-    : ReductionParamsCodec {};  // NOLINT
+struct ConfigCodec<radar::DetectionReductionParams> : ReductionParamsCodec {};  // NOLINT
 
 }  // namespace holoscan::config

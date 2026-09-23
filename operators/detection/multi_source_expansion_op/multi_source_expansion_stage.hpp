@@ -16,12 +16,14 @@ enum class ExpansionError : int32_t {
 };
 
 template <typename T>
-__global__ void build_expansion_plan_kernel(
-    const int64_t* selected, int64_t num_selected,
-    const T* resolved, const T* multi, const int32_t* counts,
-    int64_t num_items, int64_t max_sources, uint32_t* row_counts,
-    int64_t* selected_ordinal, int64_t* total, int32_t* error) {
-  if (blockIdx.x != 0 || threadIdx.x != 0) return;
+__global__ void build_expansion_plan_kernel(const int64_t* selected, int64_t num_selected,
+                                            const T* resolved, const T* multi,
+                                            const int32_t* counts, int64_t num_items,
+                                            int64_t max_sources, uint32_t* row_counts,
+                                            int64_t* selected_ordinal, int64_t* total,
+                                            int32_t* error) {
+  if (blockIdx.x != 0 || threadIdx.x != 0)
+    return;
   *error = static_cast<int32_t>(ExpansionError::kNone);
   for (int64_t i = 0; i < num_items; ++i) {
     row_counts[i] = 1;
@@ -64,20 +66,21 @@ __global__ void build_expansion_plan_kernel(
 }
 
 template <typename T>
-__global__ void scatter_expanded_rows_kernel(
-    const int64_t* detection_idx, const T* baseline,
-    const int64_t* selected_ordinal, const T* resolved, const T* multi,
-    const int32_t* counts, const uint32_t* offsets, int64_t num_items,
-    int64_t idx_cols, int64_t max_sources, int64_t* idx_out, T* aoa_out) {
+__global__ void scatter_expanded_rows_kernel(const int64_t* detection_idx, const T* baseline,
+                                             const int64_t* selected_ordinal, const T* resolved,
+                                             const T* multi, const int32_t* counts,
+                                             const uint32_t* offsets, int64_t num_items,
+                                             int64_t idx_cols, int64_t max_sources,
+                                             int64_t* idx_out, T* aoa_out) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
-  if (item >= num_items) return;
+  if (item >= num_items)
+    return;
   const int64_t selected = selected_ordinal[item];
   const int32_t count = selected >= 0 ? counts[selected] : 0;
   const int64_t copies = count >= 2 ? count : 1;
   const int64_t output = static_cast<int64_t>(offsets[item]);
   for (int64_t k = threadIdx.x; k < copies * idx_cols; k += blockDim.x) {
-    idx_out[output * idx_cols + k] =
-        detection_idx[item * idx_cols + (k % idx_cols)];
+    idx_out[output * idx_cols + k] = detection_idx[item * idx_cols + (k % idx_cols)];
   }
   if (threadIdx.x == 0) {
     if (count >= 2) {

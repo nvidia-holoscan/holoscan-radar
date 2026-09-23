@@ -40,57 +40,49 @@ expected<void, Error> fail_runtime(const std::string& message) {
   return make_unexpected(Error{ErrorCode::kFailure, message});
 }
 
-expected<void*, Error> writable_ptr(holoscan::Tensor& tensor,
-                                    const char* what) {
+expected<void*, Error> writable_ptr(holoscan::Tensor& tensor, const char* what) {
   auto mut = tensor.mutable_data();
   if (!mut) {
-    return make_unexpected(Error{
-        ErrorCode::kFailure,
-        std::string(kOpName) + ": " + what + " is not writable: " +
-            mut.error().message});
+    return make_unexpected(
+        Error{ErrorCode::kFailure,
+              std::string(kOpName) + ": " + what + " is not writable: " + mut.error().message});
   }
   return *mut;
 }
 
-expected<void, Error> require_device_dtype(const Tensor& tensor,
-                                           const char* port,
+expected<void, Error> require_device_dtype(const Tensor& tensor, const char* port,
                                            DLDataType dtype) {
   try {
     require_cuda_accessible(tensor, port, kOpName);
     require_contiguous(tensor, port, kOpName);
     require_dtype(tensor, dtype, port, kOpName);
   } catch (const std::invalid_argument& e) {
-    return make_unexpected(
-        Error{ErrorCode::kInvalidArgument, e.what()});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument, e.what()});
   }
   return {};
 }
 
 template <typename U>
-expected<void, Error> copy_table(const std::shared_ptr<Tensor>& dst,
-                                 std::size_t capacity,
-                                 const std::vector<U>& host,
-                                 const char* what, cudaStream_t stream) {
+expected<void, Error> copy_table(const std::shared_ptr<Tensor>& dst, std::size_t capacity,
+                                 const std::vector<U>& host, const char* what,
+                                 cudaStream_t stream) {
   if (host.size() > capacity) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": " + what +
-            " length exceeds ctor-sized table"});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              std::string(kOpName) + ": " + what + " length exceeds ctor-sized table"});
   }
   if (host.empty()) {
     return {};
   }
   auto mut = dst->mutable_data();
   if (!mut) {
-    return make_unexpected(Error{
-        ErrorCode::kFailure,
-        std::string(kOpName) + ": " + what + " not writable"});
+    return make_unexpected(
+        Error{ErrorCode::kFailure, std::string(kOpName) + ": " + what + " not writable"});
   }
-  if (cudaMemcpyAsync(*mut, host.data(), host.size() * sizeof(U),
-                      cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-    return make_unexpected(Error{
-        ErrorCode::kFailure,
-        std::string(kOpName) + ": " + what + " H2D failed"});
+  if (cudaMemcpyAsync(*mut, host.data(), host.size() * sizeof(U), cudaMemcpyHostToDevice, stream) !=
+      cudaSuccess) {
+    return make_unexpected(
+        Error{ErrorCode::kFailure, std::string(kOpName) + ": " + what + " H2D failed"});
   }
   return {};
 }
@@ -120,10 +112,9 @@ expected<int, Error> feature_to_id(AssemblyFeature feature) {
     case AssemblyFeature::kRangeBin:
       return detail::kFeatRangeBin;
   }
-  return make_unexpected(Error{
-      ErrorCode::kInvalidArgument,
-      std::string(kOpName) + ": unknown AssemblyFeature '" +
-          std::string(to_string(feature)) + "'"});
+  return make_unexpected(
+      Error{ErrorCode::kInvalidArgument, std::string(kOpName) + ": unknown AssemblyFeature '" +
+                                             std::string(to_string(feature)) + "'"});
 }
 
 const char* kernel_error_message(int code) {
@@ -171,13 +162,11 @@ struct RequiredSources {
   bool el_grid{false};
 };
 
-RequiredSources required_sources(
-    const std::vector<AssemblyFeature>& features) {
+RequiredSources required_sources(const std::vector<AssemblyFeature>& features) {
   RequiredSources result;
   for (const AssemblyFeature feature : features) {
     result.range = result.range || feature == AssemblyFeature::kRange;
-    result.velocity =
-        result.velocity || feature == AssemblyFeature::kVelocity;
+    result.velocity = result.velocity || feature == AssemblyFeature::kVelocity;
     result.score = result.score || feature == AssemblyFeature::kScore;
     result.aoa = result.aoa || feature == AssemblyFeature::kAzEstimate ||
                  feature == AssemblyFeature::kElEstimate;
@@ -213,14 +202,12 @@ struct AssemblyStagePlan {
 };
 
 template <typename T>
-expected<int64_t, Error> parse_rank1_real(const Tensor& tensor,
-                                         const char* port,
-                                         const char* rank_msg) {
+expected<int64_t, Error> parse_rank1_real(const Tensor& tensor, const char* port,
+                                          const char* rank_msg) {
   HOLOSCAN_TRY(require_device_dtype(tensor, port, real_dtype<T>()));
   if (tensor.shape().size() != 1) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": " + rank_msg});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, std::string(kOpName) + ": " + rank_msg});
   }
   return tensor.shape()[0];
 }
@@ -231,9 +218,8 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
     const OptionalGathers& gathers, const MaxTensorExtents& extents) {
   AssemblyStagePlan plan;
   if (features.empty()) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": features must be a non-empty list"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 std::string(kOpName) + ": features must be a non-empty list"});
   }
   plan.num_features = static_cast<int64_t>(features.size());
   plan.feature_ids.resize(static_cast<size_t>(plan.num_features));
@@ -241,18 +227,14 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
   bool needs_dense_coordinates = false;
   for (int64_t i = 0; i < plan.num_features; ++i) {
     const AssemblyFeature token = features[static_cast<size_t>(i)];
-    HOLOSCAN_TRY(plan.feature_ids[static_cast<size_t>(i)],
-                 feature_to_id(token));
-    needs_dense_coordinates =
-        needs_dense_coordinates || token == AssemblyFeature::kAz ||
-        token == AssemblyFeature::kEl ||
-        token == AssemblyFeature::kAzBin ||
-        token == AssemblyFeature::kElBin;
+    HOLOSCAN_TRY(plan.feature_ids[static_cast<size_t>(i)], feature_to_id(token));
+    needs_dense_coordinates = needs_dense_coordinates || token == AssemblyFeature::kAz ||
+                              token == AssemblyFeature::kEl || token == AssemblyFeature::kAzBin ||
+                              token == AssemblyFeature::kElBin;
   }
 
   try {
-    plan.layout =
-        detail::parse_detection_idx_layout(detection_idx, "detection_idx");
+    plan.layout = detail::parse_detection_idx_layout(detection_idx, "detection_idx");
   } catch (const std::invalid_argument& e) {
     return make_unexpected(Error{ErrorCode::kInvalidArgument, e.what()});
   }
@@ -260,18 +242,15 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
   if (plan.layout.num_points > *extents.max_points) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": detection_idx rows (" +
-            std::to_string(plan.layout.num_points) +
-            ") exceed MaxTensorExtents max_points (" +
-            std::to_string(*extents.max_points) + ")"});
+        std::string(kOpName) + ": detection_idx rows (" + std::to_string(plan.layout.num_points) +
+            ") exceed MaxTensorExtents max_points (" + std::to_string(*extents.max_points) + ")"});
   }
   if (plan.num_features > *extents.max_features) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": features size (" +
-            std::to_string(plan.num_features) +
-            ") exceeds MaxTensorExtents max_features (" +
-            std::to_string(*extents.max_features) + ")"});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, std::string(kOpName) + ": features size (" +
+                                               std::to_string(plan.num_features) +
+                                               ") exceeds MaxTensorExtents max_features (" +
+                                               std::to_string(*extents.max_features) + ")"});
   }
 
   plan.have_range = gathers.range_bins != nullptr;
@@ -283,76 +262,65 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
   plan.gather_score = plan.have_score && required.score;
 
   if (required.range && !plan.have_range) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": features includes 'range' but range_bins input is absent"});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              std::string(kOpName) + ": features includes 'range' but range_bins input is absent"});
   }
   if (required.velocity && !plan.have_velocity) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": features includes 'velocity' but velocity_bins input is "
-            "absent"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 std::string(kOpName) +
+                                     ": features includes 'velocity' but velocity_bins input is "
+                                     "absent"});
   }
   if (required.score && !plan.have_score) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": features includes '" +
-            std::string(to_string(AssemblyFeature::kScore)) +
-            "' but detection_score input is absent"});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, std::string(kOpName) + ": features includes '" +
+                                               std::string(to_string(AssemblyFeature::kScore)) +
+                                               "' but detection_score input is absent"});
   }
   if (required.aoa && !plan.have_aoa) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) + ": features includes '" +
-            std::string(to_string(AssemblyFeature::kAzEstimate)) + "'/'" +
-            std::string(to_string(AssemblyFeature::kElEstimate)) +
-            "' but aoa_estimates input is absent"});
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 std::string(kOpName) + ": features includes '" +
+                                     std::string(to_string(AssemblyFeature::kAzEstimate)) + "'/'" +
+                                     std::string(to_string(AssemblyFeature::kElEstimate)) +
+                                     "' but aoa_estimates input is absent"});
   }
   if (required.az_grid && !plan.have_az) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": features includes 'az' but az_grid input is absent"});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              std::string(kOpName) + ": features includes 'az' but az_grid input is absent"});
   }
   if (required.el_grid && !plan.have_el) {
-    return make_unexpected(Error{
-        ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": features includes 'el' but el_grid input is absent"});
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              std::string(kOpName) + ": features includes 'el' but el_grid input is absent"});
   }
   if (needs_dense_coordinates && plan.layout.n_preserved < 2) {
     return make_unexpected(Error{
         ErrorCode::kInvalidArgument,
-        std::string(kOpName) +
-            ": dense angle features require detection_idx with at least two "
-            "preserved-batch columns (…, az_bin, el_bin, doppler_bin, "
-            "range_bin)"});
+        std::string(kOpName) + ": dense angle features require detection_idx with at least two "
+                               "preserved-batch columns (…, az_bin, el_bin, doppler_bin, "
+                               "range_bin)"});
   }
 
   if (plan.have_range) {
-    HOLOSCAN_TRY(plan.num_range,
-                 parse_rank1_real<T>(*gathers.range_bins, "range_bins",
-                                     "range_bins must be rank-1 "
-                                     "(num_range,)"));
+    HOLOSCAN_TRY(plan.num_range, parse_rank1_real<T>(*gathers.range_bins, "range_bins",
+                                                     "range_bins must be rank-1 "
+                                                     "(num_range,)"));
   }
   if (plan.have_velocity) {
-    HOLOSCAN_TRY(plan.num_doppler,
-                 parse_rank1_real<T>(*gathers.velocity_bins,
-                                     "velocity_bins",
-                                     "velocity_bins must be rank-1 "
-                                     "(num_doppler,)"));
+    HOLOSCAN_TRY(plan.num_doppler, parse_rank1_real<T>(*gathers.velocity_bins, "velocity_bins",
+                                                       "velocity_bins must be rank-1 "
+                                                       "(num_doppler,)"));
   }
   if (plan.have_score) {
-    HOLOSCAN_TRY(require_device_dtype(
-        *gathers.detection_score, "detection_score", real_dtype<T>()));
+    HOLOSCAN_TRY(
+        require_device_dtype(*gathers.detection_score, "detection_score", real_dtype<T>()));
     const auto& sshape = gathers.detection_score->shape();
     if (sshape.size() < 2) {
-      return make_unexpected(Error{
-          ErrorCode::kInvalidArgument,
-          std::string(kOpName) +
-              ": detection_score must end with (num_doppler, num_range)"});
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument,
+                std::string(kOpName) + ": detection_score must end with (num_doppler, num_range)"});
     }
     plan.num_score_doppler = sshape[sshape.size() - 2];
     plan.num_score_range = sshape[sshape.size() - 1];
@@ -366,47 +334,39 @@ expected<AssemblyStagePlan, Error> build_assembly_stage_plan(
     }
   }
   if (plan.gather_score) {
-    if (static_cast<int64_t>(plan.score_leading.size()) !=
-        plan.layout.n_preserved) {
-      return make_unexpected(Error{
-          ErrorCode::kInvalidArgument,
-          std::string(kOpName) +
-              ": detection_score leading rank must match "
-              "detection_idx preserved batch columns"});
+    if (static_cast<int64_t>(plan.score_leading.size()) != plan.layout.n_preserved) {
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument, std::string(kOpName) +
+                                                 ": detection_score leading rank must match "
+                                                 "detection_idx preserved batch columns"});
     }
     if (plan.layout.n_preserved > detail::kMaxPreservedBatchDims) {
-      return make_unexpected(Error{
-          ErrorCode::kInvalidArgument,
-          std::string(kOpName) +
-              ": too many preserved batch dims in detection_idx"});
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument,
+                std::string(kOpName) + ": too many preserved batch dims in detection_idx"});
     }
   }
   if (plan.have_aoa) {
-    HOLOSCAN_TRY(require_device_dtype(
-        *gathers.aoa_estimates, "aoa_estimates", real_dtype<T>()));
+    HOLOSCAN_TRY(require_device_dtype(*gathers.aoa_estimates, "aoa_estimates", real_dtype<T>()));
     const auto& ashape = gathers.aoa_estimates->shape();
     if (ashape.size() != 2 || ashape[1] != 2) {
-      return make_unexpected(Error{
-          ErrorCode::kInvalidArgument,
-          std::string(kOpName) +
-              ": aoa_estimates must have shape (num_points, 2)"});
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument,
+                std::string(kOpName) + ": aoa_estimates must have shape (num_points, 2)"});
     }
     if (ashape[0] != plan.layout.num_points) {
-      return make_unexpected(Error{
-          ErrorCode::kInvalidArgument,
-          std::string(kOpName) +
-              ": aoa_estimates row count must match detection_idx"});
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument,
+                std::string(kOpName) + ": aoa_estimates row count must match detection_idx"});
     }
   }
   if (plan.have_az) {
-    HOLOSCAN_TRY(plan.num_az,
-                 parse_rank1_real<T>(*gathers.az_grid, "az_grid",
-                                     "az_grid must be rank-1 (num_az,)"));
+    HOLOSCAN_TRY(plan.num_az, parse_rank1_real<T>(*gathers.az_grid, "az_grid",
+                                                  "az_grid must be rank-1 (num_az,)"));
   }
   if (plan.have_el) {
-    HOLOSCAN_TRY(plan.num_el,
-                 parse_rank1_real<T>(*gathers.el_grid, "el_grid",
-                                     "el_grid must be rank-1 (num_el,)"));
+    HOLOSCAN_TRY(plan.num_el, parse_rank1_real<T>(*gathers.el_grid, "el_grid",
+                                                  "el_grid must be rank-1 (num_el,)"));
   }
 
   plan.out_shape = {plan.layout.num_points, plan.num_features};
@@ -420,21 +380,17 @@ FeatureAssemblyOp<T>::FeatureAssemblyOp(const MaxTensorExtents& extents,
                                         std::vector<AssemblyFeature> features)
 : features_(std::move(features)) {
   const char* who = kOpName;
-  const std::int64_t max_points =
-      require_extent(extents.max_points, "max_points", who);
-  const std::int64_t max_features =
-      require_extent(extents.max_features, "max_features", who);
+  const std::int64_t max_points = require_extent(extents.max_points, "max_points", who);
+  const std::int64_t max_features = require_extent(extents.max_features, "max_features", who);
   extents_ = extents;
   max_byte_span_ = byte_span_real_cube<T>({max_points, max_features}, who);
 
   feature_ids_capacity_ = static_cast<std::size_t>(max_features);
   score_offsets_capacity_ = static_cast<std::size_t>(max_points);
-  score_leading_capacity_ =
-      static_cast<std::size_t>(detail::kMaxPreservedBatchDims);
+  score_leading_capacity_ = static_cast<std::size_t>(detail::kMaxPreservedBatchDims);
   feature_ids_ = make_device_tensor({max_features}, kInt32Dtype);
   score_offsets_ = make_device_tensor({max_points}, kInt64Dtype);
-  score_leading_ = make_device_tensor(
-      {detail::kMaxPreservedBatchDims}, kInt64Dtype);
+  score_leading_ = make_device_tensor({detail::kMaxPreservedBatchDims}, kInt64Dtype);
   error_flag_ = make_device_tensor({1}, kInt32Dtype);
 }
 
@@ -447,15 +403,11 @@ void FeatureAssemblyOp<T>::setup(OperatorSpec& spec) {
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  const TensorBounds bounds{
-      .max_rank = 2U,
-      .max_byte_span = max_byte_span_};
+  const TensorBounds bounds{.max_rank = 2U, .max_byte_span = max_byte_span_};
   const RequiredSources required = required_sources(features_);
 
   // Data plane: trigger tensor, optional gathers, required output.
-  spec.input(detection_idx)
-      .queue_depth(2U)
-      .expects_tensor(tensor_input(kDevice));
+  spec.input(detection_idx).queue_depth(2U).expects_tensor(tensor_input(kDevice));
   auto& range_bins_spec = spec.input(range_bins).queue_depth(2U);
   if (!required.range) {
     range_bins_spec.optional();
@@ -520,13 +472,11 @@ Contract FeatureAssemblyOp<T>::contract() const {
     result.trigger(OnEach{detection_idx});
   } else {
     result.trigger(
-        OnAligned{.ports = PortList{std::move(aligned)},
-                  .window = std::chrono::nanoseconds{0}});
+        OnAligned{.ports = PortList{std::move(aligned)}, .window = std::chrono::nanoseconds{0}});
     result.input(detection_idx, Exact{});
   }
 
-  const auto add_source = [&result](const Input<Tensor>& port,
-                                    bool is_required) {
+  const auto add_source = [&result](const Input<Tensor>& port, bool is_required) {
     result.input(port, Exact{});
     if (!is_required) {
       result.on_missing(port, SafeDefault{});
@@ -546,17 +496,15 @@ expected<void, Error> FeatureAssemblyOp<T>::ensure_device_feature_ids(
     const std::vector<int>& feature_ids, cudaStream_t stream) {
   if (seeded_feature_ids_.has_value()) {
     if (*seeded_feature_ids_ != feature_ids) {
-      return make_unexpected(Error{
-          ErrorCode::kInvalidArgument,
-          std::string(kOpName) +
-              ": features is static and cannot change after the "
-              "first successful activation; instantiate a separate "
-              "operator per column layout"});
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   std::string(kOpName) +
+                                       ": features is static and cannot change after the "
+                                       "first successful activation; instantiate a separate "
+                                       "operator per column layout"});
     }
     return {};
   }
-  return copy_table(feature_ids_, feature_ids_capacity_, feature_ids,
-                    "feature_ids", stream);
+  return copy_table(feature_ids_, feature_ids_capacity_, feature_ids, "feature_ids", stream);
 }
 
 template <typename T>
@@ -565,15 +513,14 @@ expected<void, Error> FeatureAssemblyOp<T>::ensure_score_leading(
   if (cached_score_leading_ == score_leading) {
     return {};
   }
-  HOLOSCAN_TRY(copy_table(score_leading_, score_leading_capacity_,
-                          score_leading, "score_leading", stream));
+  HOLOSCAN_TRY(
+      copy_table(score_leading_, score_leading_capacity_, score_leading, "score_leading", stream));
   cached_score_leading_ = score_leading;
   return {};
 }
 
 template <typename T>
-expected<void, Error> FeatureAssemblyOp<T>::compute(
-    ExecutionContext& context) {
+expected<void, Error> FeatureAssemblyOp<T>::compute(ExecutionContext& context) {
   // Receive and validate inputs before deriving any tick-local state.
   // Receive detection_idx; require a device-contiguous int64 table.
   HOLOSCAN_TRY(auto detection_idx_in, receive_tensor(detection_idx, kOpName));
@@ -592,27 +539,24 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
   HOLOSCAN_TRY(auto maybe_aoa, receive_optional_value(aoa_estimates));
   HOLOSCAN_TRY(auto maybe_az, receive_optional_value(az_grid));
   HOLOSCAN_TRY(auto maybe_el, receive_optional_value(el_grid));
-  const OptionalGathers gathers{
-      .range_bins = maybe_range ? &*maybe_range : nullptr,
-      .velocity_bins = maybe_velocity ? &*maybe_velocity : nullptr,
-      .detection_score = maybe_score ? &*maybe_score : nullptr,
-      .aoa_estimates = maybe_aoa ? &*maybe_aoa : nullptr,
-      .az_grid = maybe_az ? &*maybe_az : nullptr,
-      .el_grid = maybe_el ? &*maybe_el : nullptr};
+  const OptionalGathers gathers{.range_bins = maybe_range ? &*maybe_range : nullptr,
+                                .velocity_bins = maybe_velocity ? &*maybe_velocity : nullptr,
+                                .detection_score = maybe_score ? &*maybe_score : nullptr,
+                                .aoa_estimates = maybe_aoa ? &*maybe_aoa : nullptr,
+                                .az_grid = maybe_az ? &*maybe_az : nullptr,
+                                .el_grid = maybe_el ? &*maybe_el : nullptr};
 
   // Trailing rank is (num_points, 2 [+ n_preserved]), not a
   // (chirps, samples) ADC cube — layout parse lives in the plan builder.
   // No [live] merge.
   // Build and validate the bounded execution plan for this input shape.
   HOLOSCAN_TRY(auto plan,
-               build_assembly_stage_plan<T>(
-                   features_, detection_idx_in, gathers, extents_));
+               build_assembly_stage_plan<T>(features_, detection_idx_in, gathers, extents_));
 
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
     return make_unexpected(
-        Error{ErrorCode::kNotSupported,
-              std::string(kOpName) + ": no CUDA compute stream"});
+        Error{ErrorCode::kNotSupported, std::string(kOpName) + ": no CUDA compute stream"});
   }
 
   const bool nonempty = plan.layout.num_points > 0;
@@ -623,86 +567,69 @@ expected<void, Error> FeatureAssemblyOp<T>::compute(
     }
   }
 
-  const T* range_ptr =
-      plan.have_range ? static_cast<const T*>(maybe_range->data()) : nullptr;
-  const T* velocity_ptr = plan.have_velocity
-                              ? static_cast<const T*>(maybe_velocity->data())
-                              : nullptr;
-  const T* score_ptr =
-      plan.have_score ? static_cast<const T*>(maybe_score->data()) : nullptr;
-  const T* aoa_ptr =
-      plan.have_aoa ? static_cast<const T*>(maybe_aoa->data()) : nullptr;
-  const T* az_ptr =
-      plan.have_az ? static_cast<const T*>(maybe_az->data()) : nullptr;
-  const T* el_ptr =
-      plan.have_el ? static_cast<const T*>(maybe_el->data()) : nullptr;
+  const T* range_ptr = plan.have_range ? static_cast<const T*>(maybe_range->data()) : nullptr;
+  const T* velocity_ptr =
+      plan.have_velocity ? static_cast<const T*>(maybe_velocity->data()) : nullptr;
+  const T* score_ptr = plan.have_score ? static_cast<const T*>(maybe_score->data()) : nullptr;
+  const T* aoa_ptr = plan.have_aoa ? static_cast<const T*>(maybe_aoa->data()) : nullptr;
+  const T* az_ptr = plan.have_az ? static_cast<const T*>(maybe_az->data()) : nullptr;
+  const T* el_ptr = plan.have_el ? static_cast<const T*>(maybe_el->data()) : nullptr;
 
   // Required points: assemble, then publish. prepare + emit_prepared_tensor
   // (not emit_device_tensor) so the error-flag D2H can reject the tick
   // before the loan is published. fill stays stream-ordered.
   // Allocate exact-sized outputs before launching device work.
-  HOLOSCAN_TRY(
-      auto points_loan,
-      prepare_device_tensor(
-          points, context, plan.out_shape, real_dtype<T>(),
-          [&](void* out_ptr, std::size_t) -> expected<void, Error> {
-            if (!nonempty) {
-              return {};
-            }
-            HOLOSCAN_TRY(auto error_flag_ptr,
-                         writable_ptr(*error_flag_, "error_flag"));
-            if (cudaMemsetAsync(error_flag_ptr, 0, sizeof(int), stream) !=
-                cudaSuccess) {
-              return fail_runtime(
-                  std::string(kOpName) + ": error-flag clear failed");
-            }
-            int* error_flag = static_cast<int*>(error_flag_ptr);
+  HOLOSCAN_TRY(auto points_loan,
+               prepare_device_tensor(
+                   points, context, plan.out_shape, real_dtype<T>(),
+                   [&](void* out_ptr, std::size_t) -> expected<void, Error> {
+                     if (!nonempty) {
+                       return {};
+                     }
+                     HOLOSCAN_TRY(auto error_flag_ptr, writable_ptr(*error_flag_, "error_flag"));
+                     if (cudaMemsetAsync(error_flag_ptr, 0, sizeof(int), stream) != cudaSuccess) {
+                       return fail_runtime(std::string(kOpName) + ": error-flag clear failed");
+                     }
+                     int* error_flag = static_cast<int*>(error_flag_ptr);
 
-            const int64_t* score_offsets_ptr = nullptr;
-            if (plan.gather_score && plan.layout.n_preserved > 0) {
-              HOLOSCAN_TRY(auto off_mut,
-                           writable_ptr(*score_offsets_, "score_offsets"));
-              try {
-                // Execute the device stage on the input runtime stream.
-                detail::launch_score_plane_offsets(
-                    static_cast<const int64_t*>(detection_idx_in.data()),
-                    plan.layout.num_points, plan.layout.idx_cols,
-                    plan.layout.n_preserved,
-                    static_cast<const int64_t*>(score_leading_->data()),
-                    plan.plane_elems, static_cast<int64_t*>(off_mut),
-                    error_flag, stream);
-                check_cuda("score plane offset kernel", kOpName);
-              } catch (const std::runtime_error& e) {
-                return fail_runtime(e.what());
-              }
-              score_offsets_ptr =
-                  static_cast<const int64_t*>(score_offsets_->data());
-            }
+                     const int64_t* score_offsets_ptr = nullptr;
+                     if (plan.gather_score && plan.layout.n_preserved > 0) {
+                       HOLOSCAN_TRY(auto off_mut, writable_ptr(*score_offsets_, "score_offsets"));
+                       try {
+                         // Execute the device stage on the input runtime stream.
+                         detail::launch_score_plane_offsets(
+                             static_cast<const int64_t*>(detection_idx_in.data()),
+                             plan.layout.num_points, plan.layout.idx_cols, plan.layout.n_preserved,
+                             static_cast<const int64_t*>(score_leading_->data()), plan.plane_elems,
+                             static_cast<int64_t*>(off_mut), error_flag, stream);
+                         check_cuda("score plane offset kernel", kOpName);
+                       } catch (const std::runtime_error& e) {
+                         return fail_runtime(e.what());
+                       }
+                       score_offsets_ptr = static_cast<const int64_t*>(score_offsets_->data());
+                     }
 
-            try {
-              detail::launch_assemble_features<T>(
-                  static_cast<const int64_t*>(detection_idx_in.data()),
-                  plan.layout.num_points, plan.layout.idx_cols,
-                  plan.layout.n_preserved, range_ptr, plan.num_range,
-                  plan.have_range, velocity_ptr, plan.num_doppler,
-                  plan.have_velocity, score_ptr, plan.num_score_doppler,
-                  plan.num_score_range, score_offsets_ptr, plan.gather_score,
-                  aoa_ptr, plan.have_aoa, az_ptr, plan.num_az, el_ptr,
-                  plan.num_el,
-                  static_cast<const int*>(feature_ids_->data()),
-                  plan.num_features, static_cast<T*>(out_ptr), error_flag,
-                  stream);
-              check_cuda("assemble kernel", kOpName);
-            } catch (const std::runtime_error& e) {
-              return fail_runtime(e.what());
-            }
-            return {};
-          }));
+                     try {
+                       detail::launch_assemble_features<T>(
+                           static_cast<const int64_t*>(detection_idx_in.data()),
+                           plan.layout.num_points, plan.layout.idx_cols, plan.layout.n_preserved,
+                           range_ptr, plan.num_range, plan.have_range, velocity_ptr,
+                           plan.num_doppler, plan.have_velocity, score_ptr, plan.num_score_doppler,
+                           plan.num_score_range, score_offsets_ptr, plan.gather_score, aoa_ptr,
+                           plan.have_aoa, az_ptr, plan.num_az, el_ptr, plan.num_el,
+                           static_cast<const int*>(feature_ids_->data()), plan.num_features,
+                           static_cast<T*>(out_ptr), error_flag, stream);
+                       check_cuda("assemble kernel", kOpName);
+                     } catch (const std::runtime_error& e) {
+                       return fail_runtime(e.what());
+                     }
+                     return {};
+                   }));
 
   if (nonempty) {
     int host_error = 0;
-    if (cudaMemcpyAsync(&host_error, error_flag_->data(), sizeof(int),
-                        cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
+    if (cudaMemcpyAsync(&host_error, error_flag_->data(), sizeof(int), cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
       return fail_runtime(std::string(kOpName) + ": error-flag D2H failed");
     }
     if (cudaStreamSynchronize(stream) != cudaSuccess) {

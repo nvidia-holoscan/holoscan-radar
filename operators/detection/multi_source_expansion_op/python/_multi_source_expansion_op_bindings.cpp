@@ -24,18 +24,16 @@ namespace {
 template <typename T>
 class PyMultiSourceExpansionOp : public MultiSourceExpansionOp<T> {
  public:
-  PyMultiSourceExpansionOp(Fragment* fragment, const py::args& args,
-                           int64_t max_items = 8192,
-                           int64_t max_points = 16384,
-                           int64_t max_sources = 2,
+  PyMultiSourceExpansionOp(Fragment* fragment, const py::args& args, int64_t max_items = 8192,
+                           int64_t max_points = 16384, int64_t max_sources = 2,
                            const std::string& name = "multi_source_expansion")
-      : MultiSourceExpansionOp<T>([&] {
-          MaxTensorExtents extents;
-          extents.max_items = max_items;
-          extents.max_points = max_points;
-          extents.max_sources = max_sources;
-          return extents;
-        }()) {
+  : MultiSourceExpansionOp<T>([&] {
+      MaxTensorExtents extents;
+      extents.max_items = max_items;
+      extents.max_points = max_points;
+      extents.max_sources = max_sources;
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -49,13 +47,10 @@ void bind_expansion(py::module_& module, const char* class_name) {
   using Op = MultiSourceExpansionOp<T>;
   using PyOp = PyMultiSourceExpansionOp<T>;
   py::class_<Op, PyOp, Operator, std::shared_ptr<Op>>(
-      module, class_name,
-      "Expands selected sparse detections into resolved angular sources.")
-      .def(py::init<Fragment*, const py::args&, int64_t, int64_t, int64_t,
-                    const std::string&>(),
+      module, class_name, "Expands selected sparse detections into resolved angular sources.")
+      .def(py::init<Fragment*, const py::args&, int64_t, int64_t, int64_t, const std::string&>(),
            py::arg("fragment"), py::arg("max_items") = int64_t{8192},
-           py::arg("max_points") = int64_t{16384},
-           py::arg("max_sources") = int64_t{2},
+           py::arg("max_points") = int64_t{16384}, py::arg("max_sources") = int64_t{2},
            py::arg("name") = "multi_source_expansion")
       .def("setup", &Op::setup, py::arg("spec"));
 }
