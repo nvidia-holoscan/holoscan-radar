@@ -9,7 +9,6 @@ import re
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OPERATORS_ROOT = REPO_ROOT / "operators"
 REQUIRED_HEADINGS = (
@@ -22,8 +21,7 @@ REQUIRED_HEADINGS = (
 )
 REQUIRED_TABLE_HEADERS = {
     "Ports": (
-        "| Kind | Port | Payload type / dtype | Shape | Timing / optionality | "
-        "Responsibility |"
+        "| Kind | Port | Payload type / dtype | Shape | Timing / optionality | " "Responsibility |"
     ),
     "Construction": "| Item | Type | Requirement | Responsibility |",
     "Parameters": "| Parameter | Type | Default | Mutability | Responsibility |",
@@ -56,16 +54,13 @@ def check_readme(directory: Path) -> list[str]:
     headings = [match.group(1) for match in matches]
     if tuple(headings[: len(REQUIRED_HEADINGS)]) != REQUIRED_HEADINGS:
         errors.append(
-            f"{relative}: first six H2 headings must be "
-            + " -> ".join(REQUIRED_HEADINGS)
+            f"{relative}: first six H2 headings must be " + " -> ".join(REQUIRED_HEADINGS)
         )
 
     for heading in REQUIRED_HEADINGS:
         count = headings.count(heading)
         if count != 1:
-            errors.append(
-                f"{relative}: expected exactly one ## {heading}, found {count}"
-            )
+            errors.append(f"{relative}: expected exactly one ## {heading}, found {count}")
 
     for heading, table_header in REQUIRED_TABLE_HEADERS.items():
         if heading not in headings:
@@ -74,9 +69,7 @@ def check_readme(directory: Path) -> list[str]:
         start = matches[index].end()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         if table_header not in text[start:end]:
-            errors.append(
-                f"{relative}: ## {heading} must contain table header {table_header}"
-            )
+            errors.append(f"{relative}: ## {heading} must contain table header {table_header}")
 
     if "When to use" in headings:
         index = headings.index("When to use")
