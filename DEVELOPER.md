@@ -139,6 +139,24 @@ disabled.
 
 ---
 
+## Formatting and lint
+
+C++ and CUDA formatting is defined by `.clang-format` and pinned to clang-format 18.1.8
+through pre-commit. The policy uses a 100-column limit. Run the authoritative formatter and
+then the complete CI-equivalent lint suite with:
+
+```bash
+pre-commit run clang-format --all-files
+pre-commit run --all-files
+```
+
+The formatting hook rewrites tracked `.cpp`, `.hpp`, `.cu`, and `.cuh` files. Commit any
+resulting changes before pushing; CI runs the complete command and fails when formatting would
+change a file. Use the pinned hook instead of a system-installed formatter because releases can
+produce different layouts.
+
+---
+
 ## `pyproject.toml`
 
 `pyproject.toml` configures [scikit-build-core](https://scikit-build-core.readthedocs.io/) for
