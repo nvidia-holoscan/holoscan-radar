@@ -46,8 +46,8 @@ struct CudaDeviceMemory final : holoscan::TensorMemoryReference {
 // (radar_common/tensor/matx_utils.hpp) while the emitted Tensor keeps the
 // caller's full-rank shape — this is how rank-agnostic batching round-trips
 // leading axes through the operators.
-inline std::shared_ptr<holoscan::Tensor> make_device_tensor(
-    const std::vector<int64_t>& shape, DLDataType dtype) {
+inline std::shared_ptr<holoscan::Tensor> make_device_tensor(const std::vector<int64_t>& shape,
+                                                            DLDataType dtype) {
   // Reject negative dims and int64 overflow before the size_t cast: a wrapped
   // count would allocate an undersized buffer that downstream full-extent
   // views write past. Zero-sized dims are allowed — an empty tensor is a valid
@@ -57,23 +57,18 @@ inline std::shared_ptr<holoscan::Tensor> make_device_tensor(
   // zero here).
   int64_t count = 1;
   for (const int64_t dim : shape) {
-    if (dim < 0 ||
-        (dim != 0 && count > std::numeric_limits<int64_t>::max() / dim)) {
-      throw std::invalid_argument(
-          "make_device_tensor: invalid or overflowing shape");
+    if (dim < 0 || (dim != 0 && count > std::numeric_limits<int64_t>::max() / dim)) {
+      throw std::invalid_argument("make_device_tensor: invalid or overflowing shape");
     }
     count *= dim;
   }
   // Guard the byte computation against size_t overflow: even a count that
   // fits in int64 can overflow when scaled by the per-element byte size, and
   // a wrapped result would under-allocate the device buffer.
-  const size_t bytes_per_element =
-      ((static_cast<size_t>(dtype.bits) + 7) / 8) * dtype.lanes;
+  const size_t bytes_per_element = ((static_cast<size_t>(dtype.bits) + 7) / 8) * dtype.lanes;
   if (bytes_per_element == 0 ||
-      static_cast<size_t>(count) >
-          std::numeric_limits<size_t>::max() / bytes_per_element) {
-    throw std::invalid_argument(
-        "make_device_tensor: invalid or overflowing shape");
+      static_cast<size_t>(count) > std::numeric_limits<size_t>::max() / bytes_per_element) {
+    throw std::invalid_argument("make_device_tensor: invalid or overflowing shape");
   }
   const size_t bytes = static_cast<size_t>(count) * bytes_per_element;
 
@@ -92,8 +87,7 @@ inline std::shared_ptr<holoscan::Tensor> make_device_tensor(
   context->dl_shape = shape;
   context->tensor.dl_tensor.data = memory->data;
   context->tensor.dl_tensor.device = DLDevice{kDLCUDA, current_device_id};
-  context->tensor.dl_tensor.ndim =
-      static_cast<int32_t>(context->dl_shape.size());
+  context->tensor.dl_tensor.ndim = static_cast<int32_t>(context->dl_shape.size());
   context->tensor.dl_tensor.dtype = dtype;
   context->tensor.dl_tensor.shape = context->dl_shape.data();
   context->tensor.dl_tensor.strides = nullptr;  // compact row-major

@@ -22,16 +22,14 @@
 namespace holoscan::radar {
 namespace detail {
 
-inline std::optional<std::int64_t> optional_positive_i64(
-    const YAML::Node& node, const char* key) {
+inline std::optional<std::int64_t> optional_positive_i64(const YAML::Node& node, const char* key) {
   if (!node[key]) {
     return std::nullopt;
   }
   const auto value = node[key].as<std::int64_t>();
   if (value <= 0) {
-    throw std::invalid_argument(
-        std::string("MaxTensorExtents: '") + key +
-        "' must be positive, got " + std::to_string(value));
+    throw std::invalid_argument(std::string("MaxTensorExtents: '") + key +
+                                "' must be positive, got " + std::to_string(value));
   }
   return value;
 }
@@ -40,36 +38,28 @@ inline std::optional<std::int64_t> optional_positive_i64(
 
 inline MaxTensorExtents MaxTensorExtentsFromYaml(const YAML::Node& node) {
   if (!node || !node.IsMap()) {
-    throw std::invalid_argument(
-        "MaxTensorExtents: from_yaml expects a YAML map of max_* fields");
+    throw std::invalid_argument("MaxTensorExtents: from_yaml expects a YAML map of max_* fields");
   }
   MaxTensorExtents extents;
-  extents.max_samples_per_chirp =
-      detail::optional_positive_i64(node, "max_samples_per_chirp");
+  extents.max_samples_per_chirp = detail::optional_positive_i64(node, "max_samples_per_chirp");
   extents.max_chirps = detail::optional_positive_i64(node, "max_chirps");
-  extents.max_range_bins =
-      detail::optional_positive_i64(node, "max_range_bins");
-  extents.max_doppler_bins =
-      detail::optional_positive_i64(node, "max_doppler_bins");
+  extents.max_range_bins = detail::optional_positive_i64(node, "max_range_bins");
+  extents.max_doppler_bins = detail::optional_positive_i64(node, "max_doppler_bins");
   extents.max_rx = detail::optional_positive_i64(node, "max_rx");
   extents.max_tx = detail::optional_positive_i64(node, "max_tx");
-  extents.max_interleaved_chirps =
-      detail::optional_positive_i64(node, "max_interleaved_chirps");
-  extents.max_virtual_channels =
-      detail::optional_positive_i64(node, "max_virtual_channels");
+  extents.max_interleaved_chirps = detail::optional_positive_i64(node, "max_interleaved_chirps");
+  extents.max_virtual_channels = detail::optional_positive_i64(node, "max_virtual_channels");
   extents.max_channels = detail::optional_positive_i64(node, "max_channels");
   extents.max_az = detail::optional_positive_i64(node, "max_az");
   extents.max_el = detail::optional_positive_i64(node, "max_el");
-  extents.max_detections =
-      detail::optional_positive_i64(node, "max_detections");
+  extents.max_detections = detail::optional_positive_i64(node, "max_detections");
   extents.max_points = detail::optional_positive_i64(node, "max_points");
   extents.max_items = detail::optional_positive_i64(node, "max_items");
   extents.max_snapshots = detail::optional_positive_i64(node, "max_snapshots");
   extents.max_features = detail::optional_positive_i64(node, "max_features");
   extents.max_sources = detail::optional_positive_i64(node, "max_sources");
   extents.max_clusters = detail::optional_positive_i64(node, "max_clusters");
-  extents.max_subarray_channels =
-      detail::optional_positive_i64(node, "max_subarray_channels");
+  extents.max_subarray_channels = detail::optional_positive_i64(node, "max_subarray_channels");
   return extents;
 }
 
@@ -108,8 +98,7 @@ struct convert<holoscan::radar::MaxTensorExtents> {
     return node;
   }
 
-  static bool decode(const Node& node,
-                     holoscan::radar::MaxTensorExtents& rhs) {
+  static bool decode(const Node& node, holoscan::radar::MaxTensorExtents& rhs) {
     rhs = holoscan::radar::MaxTensorExtentsFromYaml(node);
     return true;
   }

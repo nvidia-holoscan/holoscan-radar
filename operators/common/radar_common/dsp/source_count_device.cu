@@ -19,8 +19,7 @@ __device__ inline double eft_profile_a_device(int64_t m_prime, int64_t n) {
   const double nn = static_cast<double>(n);
   const double m2 = m * m;
   const double term1 = 15.0 / (m2 + 2.0);
-  const double inner =
-      term1 * term1 - (180.0 * m / nn) * ((m2 - 1.0) / (m2 + 2.0));
+  const double inner = term1 * term1 - (180.0 * m / nn) * ((m2 - 1.0) / (m2 + 2.0));
   const double safe_inner = inner > 0.0 ? inner : 0.0;
   return 0.5 * (term1 - sqrt(safe_inner));
 }
@@ -56,7 +55,7 @@ __device__ inline double norm_inv_device(double p) {
   if (p < kPLow) {
     const double q = sqrt(-2.0 * log(p));
     return (((((c0 * q + c1) * q + c2) * q + c3) * q + c4) * q + c5) /
-          ((((d0 * q + d1) * q + d2) * q + d3) * q + 1.0);
+           ((((d0 * q + d1) * q + d2) * q + d3) * q + 1.0);
   }
   if (p > 1.0 - kPLow) {
     const double q = sqrt(-2.0 * log(1.0 - p));
@@ -66,7 +65,7 @@ __device__ inline double norm_inv_device(double p) {
   const double q = p - 0.5;
   const double rr = q * q;
   return (((((a0 * rr + a1) * rr + a2) * rr + a3) * rr + a4) * rr + a5) * q /
-        (((((b0 * rr + b1) * rr + b2) * rr + b3) * rr + b4) * rr + 1.0);
+         (((((b0 * rr + b1) * rr + b2) * rr + b3) * rr + b4) * rr + 1.0);
 }
 
 // One thread per item: sequential EFT recursion over its own (small,
@@ -75,12 +74,10 @@ __device__ inline double norm_inv_device(double p) {
 // are cheap relative to the eig / covariance kernels upstream.
 template <typename T>
 __global__ void source_count_kernel(const T* __restrict__ eigenvalues,
-                                    const int64_t* __restrict__ k_counts,
-                                    int64_t num_items, int64_t num_channels,
-                                    double pfa, int64_t max_sources,
+                                    const int64_t* __restrict__ k_counts, int64_t num_items,
+                                    int64_t num_channels, double pfa, int64_t max_sources,
                                     int32_t* __restrict__ source_count) {
-  const int64_t item =
-      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t item = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (item >= num_items) {
     return;
   }
@@ -112,8 +109,7 @@ __global__ void source_count_kernel(const T* __restrict__ eigenvalues,
     }
     sigma2 /= static_cast<double>(candidate_size);
 
-    const double a =
-        detail::eft_profile_a_device(candidate_size, num_snapshots);
+    const double a = detail::eft_profile_a_device(candidate_size, num_snapshots);
     const double r = exp(-2.0 * a);
     const double j = detail::eft_profile_j_device(candidate_size, r);
     const double predicted = static_cast<double>(candidate_size) * j * sigma2;
@@ -124,8 +120,7 @@ __global__ void source_count_kernel(const T* __restrict__ eigenvalues,
     }
     const double relative_excess = (observed - predicted) / predicted;
     const double relative_std =
-        sqrt(1.0 / (static_cast<double>(num_snapshots) *
-                    static_cast<double>(candidate_size)));
+        sqrt(1.0 / (static_cast<double>(num_snapshots) * static_cast<double>(candidate_size)));
     const double eta = z * relative_std;
 
     if (relative_excess > eta) {
@@ -143,9 +138,8 @@ __global__ void source_count_kernel(const T* __restrict__ eigenvalues,
 }  // namespace detail
 
 template <typename T>
-void run_source_count_device(const T* eigenvalues, const int64_t* k_counts,
-                             int64_t num_items, int64_t num_channels,
-                             double pfa, int64_t max_sources,
+void run_source_count_device(const T* eigenvalues, const int64_t* k_counts, int64_t num_items,
+                             int64_t num_channels, double pfa, int64_t max_sources,
                              int32_t* source_count, cudaStream_t stream) {
   if (num_items <= 0 || num_channels <= 0) {
     return;
@@ -153,15 +147,12 @@ void run_source_count_device(const T* eigenvalues, const int64_t* k_counts,
   constexpr int kBlock = 128;
   const int grid = static_cast<int>((num_items + kBlock - 1) / kBlock);
   detail::source_count_kernel<T><<<grid, kBlock, 0, stream>>>(
-      eigenvalues, k_counts, num_items, num_channels, pfa, max_sources,
-      source_count);
+      eigenvalues, k_counts, num_items, num_channels, pfa, max_sources, source_count);
 }
 
-template void run_source_count_device<float>(const float*, const int64_t*,
-                                             int64_t, int64_t, double,
+template void run_source_count_device<float>(const float*, const int64_t*, int64_t, int64_t, double,
                                              int64_t, int32_t*, cudaStream_t);
-template void run_source_count_device<double>(const double*, const int64_t*,
-                                              int64_t, int64_t, double,
-                                              int64_t, int32_t*, cudaStream_t);
+template void run_source_count_device<double>(const double*, const int64_t*, int64_t, int64_t,
+                                              double, int64_t, int32_t*, cudaStream_t);
 
 }  // namespace holoscan::radar

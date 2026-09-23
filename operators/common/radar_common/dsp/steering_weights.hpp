@@ -25,17 +25,15 @@ struct SteeringTable {
 // Build one amplitude coefficient per geometry element. Non-custom windows
 // are separable across recognized filled URA axes; custom coefficients remain
 // explicit per-element values in geometry/channel order.
-std::vector<double> generate_steering_taper(
-    const ArrayGeometry& geometry, const WindowSpec& array_taper);
+std::vector<double> generate_steering_taper(const ArrayGeometry& geometry,
+                                            const WindowSpec& array_taper);
 
-SteeringTable build_steering_table(const ArrayGeometry& geometry,
-                                   const AngleConvention& convention,
+SteeringTable build_steering_table(const ArrayGeometry& geometry, const AngleConvention& convention,
                                    const std::vector<double>& az_coordinates,
                                    const std::vector<double>& el_coordinates,
                                    const WindowSpec& array_taper);
 
-std::string steering_cache_key(const ArrayGeometry& geometry,
-                               const AngleConvention& convention,
+std::string steering_cache_key(const ArrayGeometry& geometry, const AngleConvention& convention,
                                const std::vector<double>& az_coordinates,
                                const std::vector<double>& el_coordinates,
                                const WindowSpec& array_taper);

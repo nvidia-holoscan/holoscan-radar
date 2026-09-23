@@ -24,40 +24,32 @@ using WireWindowSpecBinarySchema = wire::WindowSpecBinarySchema;
 
 // Keep the source descriptor, FlatBuffers schema, bridge, and mutator tests in
 // sync when fields are added or removed.
-static_assert(
-    wire_bridge_detail::aggregate_field_count<WindowSpec>() == 7,
-    "WindowSpec field count changed; update its wire synchronization surfaces");
+static_assert(wire_bridge_detail::aggregate_field_count<WindowSpec>() == 7,
+              "WindowSpec field count changed; update its wire synchronization surfaces");
 
 inline WireWindowSpec to_wire(const WindowSpec& source) {
   WireWindowSpec result;
-  result.type = static_cast<wire::WindowType>(
-      static_cast<std::uint8_t>(source.type));
+  result.type = static_cast<wire::WindowType>(static_cast<std::uint8_t>(source.type));
   result.sidelobe_attenuation_db = source.sidelobe_attenuation_db;
   result.has_kaiser_beta = source.kaiser_beta.has_value();
   result.kaiser_beta = source.kaiser_beta.value_or(0.0);
   result.taylor_nbar = source.taylor_nbar;
   result.tukey_alpha = source.tukey_alpha;
   result.coefficients = wire_bridge_detail::make_host_tensor<double>(
-      std::span<const double>{source.coefficients},
-      DLDataType{kDLFloat, 64U, 1U});
-  result.coherent_gain_normalization =
-      source.coherent_gain_normalization;
+      std::span<const double>{source.coefficients}, DLDataType{kDLFloat, 64U, 1U});
+  result.coherent_gain_normalization = source.coherent_gain_normalization;
   return result;
 }
 
-inline expected<WindowSpec, Error> from_wire(
-    const WireWindowSpec& source) {
+inline expected<WindowSpec, Error> from_wire(const WireWindowSpec& source) {
   const auto type_value = static_cast<std::uint8_t>(source.type);
-  if (type_value >
-      static_cast<std::uint8_t>(WindowType::kCustom)) {
+  if (type_value > static_cast<std::uint8_t>(WindowType::kCustom)) {
     return make_unexpected(
-        Error{ErrorCode::kInvalidArgument,
-              "WindowSpec wire field 'type' is out of range"});
+        Error{ErrorCode::kInvalidArgument, "WindowSpec wire field 'type' is out of range"});
   }
 
   auto coefficients = wire_bridge_detail::read_host_vector<double>(
-      source.coefficients, DLDataType{kDLFloat, 64U, 1U},
-      "coefficients");
+      source.coefficients, DLDataType{kDLFloat, 64U, 1U}, "coefficients");
   if (!coefficients) {
     return make_unexpected(std::move(coefficients).error());
   }
@@ -71,8 +63,7 @@ inline expected<WindowSpec, Error> from_wire(
   result.taylor_nbar = source.taylor_nbar;
   result.tukey_alpha = source.tukey_alpha;
   result.coefficients = std::move(*coefficients);
-  result.coherent_gain_normalization =
-      source.coherent_gain_normalization;
+  result.coherent_gain_normalization = source.coherent_gain_normalization;
   return result;
 }
 

@@ -20,8 +20,7 @@ namespace holoscan::radar {
 namespace {
 
 // Generalized cosine window: sum_i (-1)^i a[i] cos(2*pi*i*n / (N-1)).
-std::vector<double> cosine_sum_window(int64_t n,
-                                      const std::vector<double>& a) {
+std::vector<double> cosine_sum_window(int64_t n, const std::vector<double>& a) {
   std::vector<double> w(n, a[0]);
   if (n == 1) {
     // Single-sample window: the center/peak value, sum_i a[i]. The endpoint
@@ -38,8 +37,8 @@ std::vector<double> cosine_sum_window(int64_t n,
     double sign = 1.0;
     for (size_t i = 0; i < a.size(); ++i) {
       v += sign * a[i] *
-           std::cos(2.0 * kPi * static_cast<double>(i) *
-                    static_cast<double>(k) / static_cast<double>(n - 1));
+           std::cos(2.0 * kPi * static_cast<double>(i) * static_cast<double>(k) /
+                    static_cast<double>(n - 1));
       sign = -sign;
     }
     w[k] = v;
@@ -74,8 +73,7 @@ double bessel_i0(double x) {
   double term = 1.0;
   double sum = 1.0;
   for (int k = 1; k < 200; ++k) {
-    term *= (half_x / static_cast<double>(k)) *
-            (half_x / static_cast<double>(k));
+    term *= (half_x / static_cast<double>(k)) * (half_x / static_cast<double>(k));
     sum += term;
     if (term < 1e-18 * sum) {
       break;
@@ -97,8 +95,7 @@ double kaiser_beta_from_attenuation(double atten_db) {
     return 0.1102 * (atten_db - 8.7);
   }
   if (atten_db > 21.0) {
-    return 0.5842 * std::pow(atten_db - 21.0, 0.4) +
-           0.07886 * (atten_db - 21.0);
+    return 0.5842 * std::pow(atten_db - 21.0, 0.4) + 0.07886 * (atten_db - 21.0);
   }
   return 0.0;
 }
@@ -136,8 +133,7 @@ std::vector<double> chebyshev_window(int64_t n, double atten_db) {
   // Chebyshev polynomial T_order evaluated at beta*cos(pi*k/n).
   std::vector<double> p(n);
   for (int64_t k = 0; k < n; ++k) {
-    const double x = beta * std::cos(kPi * static_cast<double>(k) /
-                                     static_cast<double>(n));
+    const double x = beta * std::cos(kPi * static_cast<double>(k) / static_cast<double>(n));
     if (x > 1.0) {
       p[k] = std::cosh(order * std::acosh(x));
     } else if (x < -1.0) {
@@ -157,8 +153,7 @@ std::vector<double> chebyshev_window(int64_t n, double atten_db) {
   for (int64_t k = 0; k < n; ++k) {
     double v = 0.0;
     for (int64_t j = 0; j < n; ++j) {
-      v += p[j] * std::cos(2.0 * kPi * static_cast<double>(j) *
-                           (static_cast<double>(k) - center) /
+      v += p[j] * std::cos(2.0 * kPi * static_cast<double>(j) * (static_cast<double>(k) - center) /
                            static_cast<double>(n));
     }
     w[k] = v;
@@ -189,8 +184,7 @@ std::vector<double> taylor_window(int64_t n, double atten_db, int nbar) {
   const double b = std::pow(10.0, atten_db / 20.0);
   const double a = std::acosh(b) / kPi;
   const double s2 = static_cast<double>(nbar) * static_cast<double>(nbar) /
-                    (a * a + (static_cast<double>(nbar) - 0.5) *
-                                 (static_cast<double>(nbar) - 0.5));
+                    (a * a + (static_cast<double>(nbar) - 0.5) * (static_cast<double>(nbar) - 0.5));
 
   std::vector<double> fm(static_cast<size_t>(nbar) - 1, 0.0);
   for (int mi = 1; mi <= nbar - 1; ++mi) {
@@ -212,8 +206,7 @@ std::vector<double> taylor_window(int64_t n, double atten_db, int nbar) {
   std::vector<double> w(n, 1.0);
   for (int64_t k = 0; k < n; ++k) {
     const double xi =
-        (static_cast<double>(k) - static_cast<double>(n) / 2.0 + 0.5) /
-        static_cast<double>(n);
+        (static_cast<double>(k) - static_cast<double>(n) / 2.0 + 0.5) / static_cast<double>(n);
     double v = 1.0;
     for (int mi = 1; mi <= nbar - 1; ++mi) {
       v += 2.0 * fm[static_cast<size_t>(mi) - 1] *
@@ -258,17 +251,16 @@ std::vector<double> generate_window(const WindowSpec& spec, int64_t length) {
       w = cosine_sum_window(length, {0.35875, 0.48829, 0.14128, 0.01168});
       break;
     case WindowType::kFlatTop:
-      w = cosine_sum_window(length, {0.21557895, 0.41663158, 0.277263158,
-                                     0.083578947, 0.006947368});
+      w = cosine_sum_window(length,
+                            {0.21557895, 0.41663158, 0.277263158, 0.083578947, 0.006947368});
       break;
     case WindowType::kTukey:
       w = tukey_window(length, spec.tukey_alpha);
       break;
     case WindowType::kKaiser: {
-      const double beta =
-          spec.kaiser_beta.has_value()
-              ? *spec.kaiser_beta
-              : kaiser_beta_from_attenuation(spec.sidelobe_attenuation_db);
+      const double beta = spec.kaiser_beta.has_value()
+                              ? *spec.kaiser_beta
+                              : kaiser_beta_from_attenuation(spec.sidelobe_attenuation_db);
       w = kaiser_window(length, beta);
       break;
     }
@@ -276,8 +268,7 @@ std::vector<double> generate_window(const WindowSpec& spec, int64_t length) {
       w = chebyshev_window(length, spec.sidelobe_attenuation_db);
       break;
     case WindowType::kTaylor:
-      w = taylor_window(length, spec.sidelobe_attenuation_db,
-                        spec.taylor_nbar);
+      w = taylor_window(length, spec.sidelobe_attenuation_db, spec.taylor_nbar);
       break;
     case WindowType::kCustom:
       if (static_cast<int64_t>(spec.coefficients.size()) != length) {
@@ -290,8 +281,7 @@ std::vector<double> generate_window(const WindowSpec& spec, int64_t length) {
   }
 
   if (spec.coherent_gain_normalization) {
-    const double mean =
-        std::accumulate(w.begin(), w.end(), 0.0) / static_cast<double>(length);
+    const double mean = std::accumulate(w.begin(), w.end(), 0.0) / static_cast<double>(length);
     if (mean == 0.0) {
       throw std::invalid_argument(
           "WindowSpec: window mean is zero; cannot apply coherent-gain "
@@ -307,8 +297,7 @@ std::vector<double> generate_window(const WindowSpec& spec, int64_t length) {
 std::string window_cache_key(const WindowSpec& spec, int64_t length) {
   std::ostringstream key;
   key.precision(17);
-  key << to_string(spec.type) << ':' << length << ':'
-      << (spec.coherent_gain_normalization ? 1 : 0);
+  key << to_string(spec.type) << ':' << length << ':' << (spec.coherent_gain_normalization ? 1 : 0);
   switch (spec.type) {
     case WindowType::kKaiser:
       key << ":beta=";
@@ -322,8 +311,7 @@ std::string window_cache_key(const WindowSpec& spec, int64_t length) {
       key << ":sll=" << spec.sidelobe_attenuation_db;
       break;
     case WindowType::kTaylor:
-      key << ":sll=" << spec.sidelobe_attenuation_db
-          << ":nbar=" << spec.taylor_nbar;
+      key << ":sll=" << spec.sidelobe_attenuation_db << ":nbar=" << spec.taylor_nbar;
       break;
     case WindowType::kTukey:
       key << ":alpha=" << spec.tukey_alpha;

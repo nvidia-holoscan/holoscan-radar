@@ -18,9 +18,7 @@ struct AngleConvention {
   SignedAxis elevation_positive_axis{SignedAxis::kPlusZ};
   ElevationReference elevation_reference{ElevationReference::kHorizon};
 
-  bool uses_direction_cosine() const {
-    return preset == AngleConventionPreset::kDirectionCosine;
-  }
+  bool uses_direction_cosine() const { return preset == AngleConventionPreset::kDirectionCosine; }
 
   friend bool operator==(const AngleConvention& a, const AngleConvention& b) {
     return a.preset == b.preset && a.boresight_axis == b.boresight_axis &&
@@ -28,9 +26,7 @@ struct AngleConvention {
            a.elevation_positive_axis == b.elevation_positive_axis &&
            a.elevation_reference == b.elevation_reference;
   }
-  friend bool operator!=(const AngleConvention& a, const AngleConvention& b) {
-    return !(a == b);
-  }
+  friend bool operator!=(const AngleConvention& a, const AngleConvention& b) { return !(a == b); }
 };
 
 }  // namespace holoscan::radar

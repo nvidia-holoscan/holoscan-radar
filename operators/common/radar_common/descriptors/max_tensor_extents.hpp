@@ -39,18 +39,15 @@ struct MaxTensorExtents {
   std::optional<std::int64_t> max_clusters;
   std::optional<std::int64_t> max_subarray_channels;
 
-  friend bool operator==(const MaxTensorExtents& a,
-                         const MaxTensorExtents& b) = default;
+  friend bool operator==(const MaxTensorExtents& a, const MaxTensorExtents& b) = default;
 };
 
 // Return *field or throw naming the operator and field (fail-closed sizing).
-inline std::int64_t require_extent(const std::optional<std::int64_t>& field,
-                                   const char* field_name,
+inline std::int64_t require_extent(const std::optional<std::int64_t>& field, const char* field_name,
                                    const char* who) {
   if (!field.has_value() || *field <= 0) {
-    throw std::invalid_argument(
-        std::string(who) + ": MaxTensorExtents." + field_name +
-        " must be a positive value (required for Tensor pool sizing)");
+    throw std::invalid_argument(std::string(who) + ": MaxTensorExtents." + field_name +
+                                " must be a positive value (required for Tensor pool sizing)");
   }
   return *field;
 }

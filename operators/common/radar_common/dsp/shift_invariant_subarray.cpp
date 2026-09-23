@@ -24,8 +24,7 @@ std::array<double, 3> position(const ArrayGeometry& geometry, int64_t index) {
 }
 
 double norm(const std::array<double, 3>& value) {
-  return std::sqrt(value[0] * value[0] + value[1] * value[1] +
-                   value[2] * value[2]);
+  return std::sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
 }
 
 double geometry_tolerance(const ArrayGeometry& geometry) {
@@ -43,10 +42,8 @@ ShiftInvariantSubarrayPair derive_ula_pair(const ArrayGeometry& geometry) {
         "ShiftInvariantSubarrayPair auto: array must have at least two "
         "elements");
   }
-  if (geometry.geometry_type &&
-      *geometry.geometry_type != ArrayGeometryType::kUla) {
-    throw std::invalid_argument(
-        "ShiftInvariantSubarrayPair auto: array_geometry must be a ULA");
+  if (geometry.geometry_type && *geometry.geometry_type != ArrayGeometryType::kUla) {
+    throw std::invalid_argument("ShiftInvariantSubarrayPair auto: array_geometry must be a ULA");
   }
 
   const auto first = position(geometry, 0);
@@ -60,8 +57,7 @@ ShiftInvariantSubarrayPair derive_ula_pair(const ArrayGeometry& geometry) {
   for (int64_t channel = 0; channel < channels; ++channel) {
     const auto actual = position(geometry, channel);
     for (size_t coordinate = 0; coordinate < 3; ++coordinate) {
-      const double expected =
-          first[coordinate] + static_cast<double>(channel) * delta[coordinate];
+      const double expected = first[coordinate] + static_cast<double>(channel) * delta[coordinate];
       if (std::abs(actual[coordinate] - expected) > tolerance) {
         throw std::invalid_argument(
             "ShiftInvariantSubarrayPair auto: array_geometry must be a "
@@ -83,8 +79,7 @@ ShiftInvariantSubarrayPair derive_ula_pair(const ArrayGeometry& geometry) {
 }  // namespace
 
 ShiftInvariantSubarrayPlan build_shift_invariant_subarray_plan(
-    const ArrayGeometry& geometry,
-    const ShiftInvariantSubarrayPair& requested) {
+    const ArrayGeometry& geometry, const ShiftInvariantSubarrayPair& requested) {
   geometry.validate();
   ShiftInvariantSubarrayPlan plan;
   plan.pair = requested.is_auto() ? derive_ula_pair(geometry) : requested;
@@ -109,8 +104,7 @@ ShiftInvariantSubarrayPlan build_shift_invariant_subarray_plan(
     const auto a = position(geometry, plan.pair.reference_indices[index]);
     const auto b = position(geometry, plan.pair.shifted_indices[index]);
     for (size_t coordinate = 0; coordinate < 3; ++coordinate) {
-      if (std::abs((b[coordinate] - a[coordinate]) -
-                   plan.displacement[coordinate]) > tolerance) {
+      if (std::abs((b[coordinate] - a[coordinate]) - plan.displacement[coordinate]) > tolerance) {
         throw std::invalid_argument(
             "ShiftInvariantSubarrayPair: corresponding elements must share "
             "one common displacement");
@@ -141,8 +135,7 @@ ShiftInvariantSubarrayPlan build_shift_invariant_subarray_plan(
 
 UraInvariancePairs build_ura_dual_invariance(int64_t ny, int64_t nz) {
   if (ny < 2 || nz < 2) {
-    throw std::invalid_argument(
-        "build_ura_dual_invariance: a URA needs at least 2x2 elements");
+    throw std::invalid_argument("build_ura_dual_invariance: a URA needs at least 2x2 elements");
   }
   UraInvariancePairs pairs;
   const size_t y_count = static_cast<size_t>(nz * (ny - 1));

@@ -47,12 +47,9 @@ struct TXSchedule {
   std::vector<int64_t> firing_slot_by_tx() const;
 
   friend bool operator==(const TXSchedule& a, const TXSchedule& b) {
-    return a.num_tx == b.num_tx && a.tx_order == b.tx_order &&
-           a.chirp_tx_index == b.chirp_tx_index;
+    return a.num_tx == b.num_tx && a.tx_order == b.tx_order && a.chirp_tx_index == b.chirp_tx_index;
   }
-  friend bool operator!=(const TXSchedule& a, const TXSchedule& b) {
-    return !(a == b);
-  }
+  friend bool operator!=(const TXSchedule& a, const TXSchedule& b) { return !(a == b); }
 };
 
 }  // namespace holoscan::radar

@@ -63,31 +63,29 @@ inline double dot(const Vec3& a, const Vec3& b) {
 }
 
 inline Vec3 cross(const Vec3& a, const Vec3& b) {
-  return Vec3{a[1] * b[2] - a[2] * b[1],
-              a[2] * b[0] - a[0] * b[2],
-              a[0] * b[1] - a[1] * b[0]};
+  return Vec3{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
 }
 
-inline double norm(const Vec3& a) { return std::sqrt(dot(a, a)); }
+inline double norm(const Vec3& a) {
+  return std::sqrt(dot(a, a));
+}
 
 struct PointTarget {
-  Vec3 position{};                        // m, array-local Cartesian frame
-  Vec3 velocity{};                        // m/s, relative (ego motion folded)
+  Vec3 position{};  // m, array-local Cartesian frame
+  Vec3 velocity{};  // m/s, relative (ego motion folded)
   std::complex<double> amplitude{1.0, 0.0};
 };
 
 // Analytic waveform fields (mirrors FMCWWaveformDescriptor).
 struct SimWaveform {
-  double carrier_frequency{77e9};          // Hz
-  double bandwidth{150e6};                 // Hz (slope = bandwidth/duration)
-  double chirp_duration{20e-6};            // s
-  double sample_rate{12.8e6};              // Hz
+  double carrier_frequency{77e9};           // Hz
+  double bandwidth{150e6};                  // Hz (slope = bandwidth/duration)
+  double chirp_duration{20e-6};             // s
+  double sample_rate{12.8e6};               // Hz
   double chirp_repetition_interval{25e-6};  // s (PRI)
 
   double slope() const { return bandwidth / chirp_duration; }
-  double wavelength(double c = kSimSpeedOfLight) const {
-    return c / carrier_frequency;
-  }
+  double wavelength(double c = kSimSpeedOfLight) const { return c / carrier_frequency; }
 };
 
 enum class IfSamplingMode {
@@ -172,19 +170,15 @@ inline Vec3 normalize_direction(const Vec3& direction, const char* field) {
     throw std::invalid_argument(std::string("scene visibility ") + field +
                                 " must be finite and nonzero");
   }
-  return Vec3{direction[0] / length, direction[1] / length,
-              direction[2] / length};
+  return Vec3{direction[0] / length, direction[1] / length, direction[2] / length};
 }
 
-inline SceneVisibilityBasis visibility_basis(
-    const SceneVisibility& visibility) {
-  const Vec3 forward = normalize_direction(
-      visibility.boresight_direction, "boresight_direction");
+inline SceneVisibilityBasis visibility_basis(const SceneVisibility& visibility) {
+  const Vec3 forward = normalize_direction(visibility.boresight_direction, "boresight_direction");
   const double up_projection = dot(visibility.up_direction, forward);
-  const Vec3 orthogonal_up{
-      visibility.up_direction[0] - up_projection * forward[0],
-      visibility.up_direction[1] - up_projection * forward[1],
-      visibility.up_direction[2] - up_projection * forward[2]};
+  const Vec3 orthogonal_up{visibility.up_direction[0] - up_projection * forward[0],
+                           visibility.up_direction[1] - up_projection * forward[1],
+                           visibility.up_direction[2] - up_projection * forward[2]};
   const Vec3 vertical = normalize_direction(orthogonal_up, "up_direction");
   return SceneVisibilityBasis{
       .forward = forward,
@@ -197,31 +191,27 @@ inline void validate_scene_visibility(const SceneVisibility& visibility) {
   if (visibility.model == SceneVisibilityModel::kAll) {
     return;
   }
-  (void)normalize_direction(
-      visibility.boresight_direction, "boresight_direction");
+  (void)normalize_direction(visibility.boresight_direction, "boresight_direction");
   if (visibility.model != SceneVisibilityModel::kFrustum) {
     return;
   }
   (void)visibility_basis(visibility);
   const auto valid_fov = [](const std::optional<double>& value) {
-    return value.has_value() && std::isfinite(*value) && *value > 0.0 &&
-           *value < kPi;
+    return value.has_value() && std::isfinite(*value) && *value > 0.0 && *value < kPi;
   };
-  if (!valid_fov(visibility.horizontal_fov) ||
-      !valid_fov(visibility.vertical_fov)) {
+  if (!valid_fov(visibility.horizontal_fov) || !valid_fov(visibility.vertical_fov)) {
     throw std::invalid_argument(
         "frustum visibility requires horizontal_fov and vertical_fov in "
         "the open interval (0, pi)");
   }
 }
 
-inline bool target_is_visible(const Vec3& position,
-                              const SceneVisibility& visibility) {
+inline bool target_is_visible(const Vec3& position, const SceneVisibility& visibility) {
   if (visibility.model == SceneVisibilityModel::kAll) {
     return true;
   }
-  const Vec3 forward_direction = normalize_direction(
-      visibility.boresight_direction, "boresight_direction");
+  const Vec3 forward_direction =
+      normalize_direction(visibility.boresight_direction, "boresight_direction");
   const double forward = dot(position, forward_direction);
   if (!(forward > 0.0)) {
     return false;
@@ -231,36 +221,30 @@ inline bool target_is_visible(const Vec3& position,
   }
   validate_scene_visibility(visibility);
   const SceneVisibilityBasis basis = visibility_basis(visibility);
-  const double horizontal_limit =
-      forward * std::tan(*visibility.horizontal_fov * 0.5);
-  const double vertical_limit =
-      forward * std::tan(*visibility.vertical_fov * 0.5);
+  const double horizontal_limit = forward * std::tan(*visibility.horizontal_fov * 0.5);
+  const double vertical_limit = forward * std::tan(*visibility.vertical_fov * 0.5);
   const double tolerance = 1.0e-12 * std::max(1.0, forward);
-  return std::abs(dot(position, basis.horizontal)) <=
-             horizontal_limit + tolerance &&
-         std::abs(dot(position, basis.vertical)) <=
-             vertical_limit + tolerance;
+  return std::abs(dot(position, basis.horizontal)) <= horizontal_limit + tolerance &&
+         std::abs(dot(position, basis.vertical)) <= vertical_limit + tolerance;
 }
 
-inline SimScene visible_scene(const SimScene& scene,
-                              const SceneVisibility& visibility) {
+inline SimScene visible_scene(const SimScene& scene, const SceneVisibility& visibility) {
   validate_scene_visibility(visibility);
   SimScene result = scene;
-  result.targets.erase(
-      std::remove_if(result.targets.begin(), result.targets.end(),
-                     [&](const PointTarget& target) {
-                       return !target_is_visible(target.position, visibility);
-                     }),
-      result.targets.end());
+  result.targets.erase(std::remove_if(result.targets.begin(), result.targets.end(),
+                                      [&](const PointTarget& target) {
+                                        return !target_is_visible(target.position, visibility);
+                                      }),
+                       result.targets.end());
   return result;
 }
 
 // Per-target derived physical ground truth (tests assert in the
 // physical domain, not on bin indices).
 struct TargetTruth {
-  double range{};             // m
-  double radial_velocity{};   // m/s, positive = receding
-  Vec3 look_direction{};      // unit vector, position / |position|
+  double range{};            // m
+  double radial_velocity{};  // m/s, positive = receding
+  Vec3 look_direction{};     // unit vector, position / |position|
 };
 
 struct SimResult {
@@ -281,8 +265,7 @@ inline TargetTruth derive_truth(const PointTarget& target) {
         "derive_truth: target at the origin has no defined look "
         "direction");
   }
-  truth.look_direction = {target.position[0] / truth.range,
-                          target.position[1] / truth.range,
+  truth.look_direction = {target.position[0] / truth.range, target.position[1] / truth.range,
                           target.position[2] / truth.range};
   truth.radial_velocity = dot(target.velocity, truth.look_direction);
   return truth;
@@ -315,7 +298,9 @@ using SceneMover = std::function<void(SimScene&, double dt)>;
 
 // The default constant-velocity mover, as a SceneMover.
 inline SceneMover linear_mover() {
-  return [](SimScene& scene, double dt) { advance_scene(&scene, dt); };
+  return [](SimScene& scene, double dt) {
+    advance_scene(&scene, dt);
+  };
 }
 
 }  // namespace holoscan::radar::sim

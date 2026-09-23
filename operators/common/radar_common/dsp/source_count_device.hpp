@@ -32,9 +32,8 @@ namespace holoscan::radar {
 // clamps to [1, max_sources]. Callers still own the "and warns" half (a
 // per-tick device kernel has no clean way to surface a one-shot host log).
 template <typename T>
-void run_source_count_device(const T* eigenvalues, const int64_t* k_counts,
-                             int64_t num_items, int64_t num_channels,
-                             double pfa, int64_t max_sources,
+void run_source_count_device(const T* eigenvalues, const int64_t* k_counts, int64_t num_items,
+                             int64_t num_channels, double pfa, int64_t max_sources,
                              int32_t* source_count, cudaStream_t stream);
 
 }  // namespace holoscan::radar

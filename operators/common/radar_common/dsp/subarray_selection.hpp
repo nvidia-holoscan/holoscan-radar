@@ -56,8 +56,8 @@ struct SubarraySelection {
 // on a consistent lattice; auto-selection finds no filled sub-block of at least
 // `min_subarray_size`; or explicit indices are out of range, duplicated, or do
 // not form a filled uniform ULA/URA.
-SubarraySelection build_subarray_selection(
-    const ArrayGeometry& geometry,
-    const std::vector<int64_t>& explicit_indices, int64_t min_subarray_size);
+SubarraySelection build_subarray_selection(const ArrayGeometry& geometry,
+                                           const std::vector<int64_t>& explicit_indices,
+                                           int64_t min_subarray_size);
 
 }  // namespace holoscan::radar

@@ -31,8 +31,7 @@ class ConfigCache {
   // Returns the cached value for `key`, building it with `builder()` on a
   // miss. `what` names the artifact in the warning message.
   template <typename Builder>
-  const Value& get_or_build(const std::string& key, const char* what,
-                            Builder&& builder) {
+  const Value& get_or_build(const std::string& key, const char* what, Builder&& builder) {
     auto it = cache_.find(key);
     if (it != cache_.end()) {
       return it->second;
@@ -40,15 +39,14 @@ class ConfigCache {
     if (!cache_.empty()) {
       HOLOSCAN_LOG_WARN(
           "reconfigured to an unseen {} configuration; building it "
-          "now and caching for reuse (key: {})", what, key);
+          "now and caching for reuse (key: {})",
+          what, key);
     }
     auto [entry, inserted] = cache_.emplace(key, builder());
     return entry->second;
   }
 
-  bool contains(const std::string& key) const {
-    return cache_.find(key) != cache_.end();
-  }
+  bool contains(const std::string& key) const { return cache_.find(key) != cache_.end(); }
 
   size_t size() const { return cache_.size(); }
 
