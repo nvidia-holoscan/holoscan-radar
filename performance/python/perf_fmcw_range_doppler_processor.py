@@ -53,6 +53,8 @@ from holoscan.radar import (
     FMCWRangeDopplerProcessorOpF32,
     FMCWWaveformDescriptor,
     FMCWWaveformSpec,
+    WindowSpec,
+    WindowType,
 )
 
 # ---------------------------------------------------------------------------
@@ -85,6 +87,7 @@ class FusedScenario:
     samples_per_chirp: int
     channels: int = 1
     clutter: ClutterFilterMethod = ClutterFilterMethod.NONE
+    doppler_window: WindowType = WindowType.NONE
 
 
 def _clutter_tag(method: ClutterFilterMethod) -> str:
@@ -123,9 +126,14 @@ def _cube_shape(scen: FusedScenario) -> tuple[int, ...]:
     return (scen.num_chirps, scen.samples_per_chirp)
 
 
-def make_scenario(clutter: ClutterFilterMethod, size: SizeDef, channels: int = 1) -> FusedScenario:
+def make_scenario(
+    clutter: ClutterFilterMethod,
+    size: SizeDef,
+    channels: int = 1,
+    doppler_window: WindowType = WindowType.NONE,
+) -> FusedScenario:
     num_chirps, samples_per_chirp = size.shape
-    sid = f"rdproc_{_clutter_tag(clutter)}_{size.id}"
+    sid = f"rdproc_{_clutter_tag(clutter)}_{doppler_window.name.lower()}_{size.id}"
     if channels > 1:
         sid += f"_ch{channels}"
     sid += "_compute"
@@ -136,6 +144,7 @@ def make_scenario(clutter: ClutterFilterMethod, size: SizeDef, channels: int = 1
         samples_per_chirp=samples_per_chirp,
         channels=channels,
         clutter=clutter,
+        doppler_window=doppler_window,
     )
 
 
@@ -145,6 +154,13 @@ def build_default_matrix() -> list[FusedScenario]:
         out.append(make_scenario(ClutterFilterMethod.NONE, _must_find_size(sid)))
     md = _must_find_size("md")
     out.append(make_scenario(ClutterFilterMethod.MEAN_SUBTRACTION, md))
+    out.append(
+        make_scenario(
+            ClutterFilterMethod.MEAN_SUBTRACTION,
+            md,
+            doppler_window=WindowType.HANN,
+        )
+    )
     out.append(make_scenario(ClutterFilterMethod.NONE, md, 4))
     return out
 
@@ -166,6 +182,13 @@ def build_full_matrix() -> list[FusedScenario]:
     for size in SIZE_LADDER:
         for clutter in clutters:
             out.append(make_scenario(clutter, size))
+        out.append(
+            make_scenario(
+                ClutterFilterMethod.MEAN_SUBTRACTION,
+                size,
+                doppler_window=WindowType.HANN,
+            )
+        )
     for sid in ("md", "lg"):
         size = _must_find_size(sid)
         for channels in (4, 16):
@@ -177,7 +200,7 @@ def _base_row(scen: FusedScenario) -> ResultRow:
     return ResultRow(
         scenario_id=scen.id,
         op_name="FMCWRangeDopplerProcessorOp",
-        variant=_clutter_tag(scen.clutter),
+        variant=f"{_clutter_tag(scen.clutter)}_{scen.doppler_window.name.lower()}",
         size_id=scen.size_id,
         map_shape=[scen.num_chirps, scen.samples_per_chirp],
         input_shape=list(_cube_shape(scen)),
@@ -214,10 +237,13 @@ def _run_graph(
 ) -> None:
     class FusedPerfApp(Application):
         def compose(self) -> None:
+            doppler_window = WindowSpec()
+            doppler_window.type = scen.doppler_window
             op = FMCWRangeDopplerProcessorOpF32(
                 self,
                 waveform=waveform,
                 clutter_filter=scen.clutter,
+                doppler_window=doppler_window,
                 name="fused",
             )
             src = PerfTensorSourceOp(

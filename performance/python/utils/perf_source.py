@@ -60,11 +60,45 @@ class PerfTensorSourceOp(Operator):
 
     def compute(self, op_input, op_output, context) -> None:
         # Start the frame clock *after* emit so CuPy→Holoscan wrap cost is not
-        # attributed to the operator under test (see performance/OPEN_ITEMS.md).
+        # attributed to the operator under test.
         if not self._collector.first_tick_set:
             self._collector.t_first_tick = now()
             self._collector.first_tick_set = True
         op_output.emit(dict(self._frame), self._output_port)
+        self._collector.starts.append(now())
+
+
+class PerfDualTensorSourceOp(Operator):
+    """Publish a causal sideband before its Tensor trigger each tick."""
+
+    def __init__(
+        self,
+        fragment,
+        *args,
+        sideband_port: str,
+        sideband_frame: dict[str, Any],
+        trigger_port: str,
+        trigger_frame: dict[str, Any],
+        collector: TimingCollector,
+        **kwargs,
+    ):
+        self._sideband_port = sideband_port
+        self._sideband_frame = sideband_frame
+        self._trigger_port = trigger_port
+        self._trigger_frame = trigger_frame
+        self._collector = collector
+        super().__init__(fragment, *args, **kwargs)
+
+    def setup(self, spec: OperatorSpec) -> None:
+        spec.output(self._sideband_port)
+        spec.output(self._trigger_port)
+
+    def compute(self, op_input, op_output, context) -> None:
+        if not self._collector.first_tick_set:
+            self._collector.t_first_tick = now()
+            self._collector.first_tick_set = True
+        op_output.emit(dict(self._sideband_frame), self._sideband_port)
+        op_output.emit(dict(self._trigger_frame), self._trigger_port)
         self._collector.starts.append(now())
 
 

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Tests for CFARDetectorOp (OS variant) on the HSDK 5 Graph harness.
-// Live mid-stream sticky Graph coverage deferred (HSDK5_PORT.md §1 / §9).
 
 #include <gtest/gtest.h>
 
@@ -29,7 +28,7 @@ namespace {
 
 using holoscan::radar::CFARDetectorOp;
 using holoscan::radar::CFARParams;
-using holoscan::radar::CfarPeakNeighborhood;
+using holoscan::radar::CfarPeakMode;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
@@ -500,29 +499,6 @@ TEST(CFARDetectorOpOsTest, NoiseEstimateMatchesOrderStatistic) {
   EXPECT_LT(noise, 50.0);
 }
 
-TEST(CFARDetectorOpOsTest,
-     LiveThresholdScaleOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live "
-                  "harness deferred (HSDK5_PORT.md §1)";
-}
-
-TEST(CFARDetectorOpOsTest, LivePfaOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live "
-                  "harness deferred (HSDK5_PORT.md §1)";
-}
-
-TEST(CFARDetectorOpOsTest,
-     LiveMaxDetectionsOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live "
-                  "harness deferred (HSDK5_PORT.md §1)";
-}
-
-TEST(CFARDetectorOpOsTest,
-     LiveOsRankOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] Graph mid-stream sticky live "
-                  "harness deferred (HSDK5_PORT.md §1)";
-}
-
 TEST(CFARDetectorOpOsTest, OsRankConfigurableFromParams) {
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
@@ -587,24 +563,6 @@ TEST(CFARDetectorOpOsTest, TrainingCellsConfigurableFromParams) {
   // OS: more training cells → higher α / noise → lower CUT score.
   EXPECT_LT(score_at(w.score, dt, rt),
             score_at(n.score, dt, rt));
-}
-
-TEST(CFARDetectorOpOsTest,
-     LiveGuardCellsOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] vector live Params-only "
-                  "(HSDK5_PORT.md §9)";
-}
-
-TEST(CFARDetectorOpOsTest,
-     LiveTrainingCellsOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] vector live Params-only "
-                  "(HSDK5_PORT.md §9)";
-}
-
-TEST(CFARDetectorOpOsTest,
-     LiveNciAxesOverrideMidStreamAndSticky) {
-  GTEST_SKIP() << "[EA HSDK5 ONLY] vector live Params-only "
-                  "(HSDK5_PORT.md §9)";
 }
 
 TEST(CFARDetectorOpOsTest, NciIntegratesChannelsForDetection) {
@@ -736,6 +694,22 @@ TEST(CFARDetectorOpOsTest, RejectsInvalidNciAxis) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
+TEST(CFARDetectorOpOsTest, RejectsUnsetOsRank) {
+  const auto map = power_map(1.0, {{8, 16}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
+                                        real_dtype<double>());
+  CFARParams params{};
+  params.cfar_variant = CfarVariant::kOS;
+  params.guard_cells = {1, 1};
+  params.training_cells = {2, 2};
+  params.pfa = 1e-3;
+  const FiveOutGraphRunResult result =
+      run_cfar_result<double>(input, params);
+  EXPECT_TRUE(result.plan_ok);
+  EXPECT_TRUE(result.frames0.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
 TEST(CFARDetectorOpOsTest, RejectsOsRankOutOfRange) {
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
@@ -779,7 +753,7 @@ TEST(CFARDetectorOpOsTest,
       << " alpha_large=" << alpha_large;
 }
 
-TEST(CFARDetectorOpOsTest, PeakOnlyOffMatchesRawMask) {
+TEST(CFARDetectorOpOsTest, PeakModeNoneMatchesRawMask) {
   const auto map =
       power_map(1.0, {{8, 15}, {8, 16}, {8, 17}}, 100.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
@@ -787,7 +761,7 @@ TEST(CFARDetectorOpOsTest, PeakOnlyOffMatchesRawMask) {
 
   const auto raw = run_cfar<double>(input, os_params(1e-2));
   CFARParams off = os_params(1e-2);
-  off.peak_only = false;
+  off.peak_mode = CfarPeakMode::kNone;
   const auto out = run_cfar<double>(input, off);
 
   EXPECT_EQ(num_detections(raw.idx), 3);
@@ -797,7 +771,7 @@ TEST(CFARDetectorOpOsTest, PeakOnlyOffMatchesRawMask) {
   }
 }
 
-TEST(CFARDetectorOpOsTest, PeakOnlyKeepsSingleMax) {
+TEST(CFARDetectorOpOsTest, PeakModeRangeDopplerKeepsSingleMax) {
   auto data = power_map(1.0, {}, 1.0);
   data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
   data[static_cast<size_t>(8 * kRange + 17)] = 50.0;
@@ -805,7 +779,7 @@ TEST(CFARDetectorOpOsTest, PeakOnlyKeepsSingleMax) {
                                         real_dtype<double>());
 
   CFARParams params = os_params(1e-2);
-  params.peak_only = true;
+  params.peak_mode = CfarPeakMode::kRangeDoppler;
   const auto out = run_cfar<double>(input, params);
 
   ASSERT_EQ(num_detections(out.idx), 1);
@@ -817,14 +791,14 @@ TEST(CFARDetectorOpOsTest, PeakOnlyKeepsSingleMax) {
 }
 
 TEST(CFARDetectorOpOsTest,
-     PeakOnlyCollapsesStripRasterTiebreak) {
+     PeakModeRangeDopplerUsesRasterTiebreak) {
   const auto map =
       power_map(1.0, {{8, 15}, {8, 16}, {8, 17}}, 100.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange},
                                         real_dtype<double>());
 
   CFARParams params = os_params(1e-2);
-  params.peak_only = true;
+  params.peak_mode = CfarPeakMode::kRangeDoppler;
   const auto out = run_cfar<double>(input, params);
 
   ASSERT_EQ(num_detections(out.idx), 1);
@@ -832,23 +806,23 @@ TEST(CFARDetectorOpOsTest,
 }
 
 TEST(CFARDetectorOpOsTest,
-     PeakOnlyNeighborhoodCross4VsSquare8) {
+     PeakModeRangeDopplerUsesConfiguredRadius) {
   auto data = power_map(1.0, {}, 1.0);
   data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
   data[static_cast<size_t>(9 * kRange + 17)] = 90.0;
   auto input = to_device_tensor<double>(data, {kDoppler, kRange},
                                         real_dtype<double>());
 
-  CFARParams cross = os_params(1e-2);
-  cross.peak_only = true;
-  cross.peak_neighborhood = CfarPeakNeighborhood::kCross4;
-  CFARParams square = cross;
-  square.peak_neighborhood = CfarPeakNeighborhood::kSquare8;
+  CFARParams doppler_only = os_params(1e-2);
+  doppler_only.peak_mode = CfarPeakMode::kRangeDoppler;
+  doppler_only.peak_radius = {1, 0};
+  CFARParams square = doppler_only;
+  square.peak_radius = {1, 1};
 
-  const auto out_cross = run_cfar<double>(input, cross);
+  const auto out_doppler_only = run_cfar<double>(input, doppler_only);
   const auto out_square = run_cfar<double>(input, square);
 
-  EXPECT_EQ(num_detections(out_cross.idx), 2);
+  EXPECT_EQ(num_detections(out_doppler_only.idx), 2);
   EXPECT_EQ(num_detections(out_square.idx), 1);
   EXPECT_TRUE(idx_contains(out_square.idx, 8, 16));
 }

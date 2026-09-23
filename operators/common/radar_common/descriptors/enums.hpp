@@ -96,7 +96,7 @@ enum class OverlapPolicy {
   kKeepAll,
 };
 
-// MIMO TX multiplexing scheme for MIMOCoherentCompensationOp.
+// MIMO TX multiplexing scheme for TDMDenseCompensationOp / DDMDenseDemultiplexOp.
 enum class MultiplexingScheme {
   kUnspecified,  // Holoscan Parameter default only; reject at compute().
   kTdm,

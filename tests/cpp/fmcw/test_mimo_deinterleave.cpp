@@ -256,6 +256,22 @@ TEST(MIMODeinterleaveOp, RoundRobinComplexFloat) {
   expect_deinterleaved<std::complex<float>>(out, out.shape);
 }
 
+TEST(MIMODeinterleaveOp, FiringSlotByTxIdentityAndPermutation) {
+  TXSchedule identity = round_robin_schedule();
+  const auto id_slots = identity.firing_slot_by_tx();
+  ASSERT_EQ(id_slots.size(), static_cast<size_t>(kNumTx));
+  for (int64_t m = 0; m < kNumTx; ++m) {
+    EXPECT_EQ(id_slots[static_cast<size_t>(m)], m);
+  }
+
+  TXSchedule empty;
+  EXPECT_TRUE(empty.firing_slot_by_tx().empty());
+
+  TXSchedule permuted = custom_order_schedule();
+  const auto slots = permuted.firing_slot_by_tx();
+  ASSERT_EQ(slots, (std::vector<int64_t>{1, 0}));
+}
+
 TEST(MIMODeinterleaveOp, CustomTxOrderComplexFloat) {
   const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
   const TXSchedule schedule = custom_order_schedule();
@@ -316,8 +332,8 @@ TEST(MIMODeinterleaveOp, RealDoublePreserved) {
 }
 
 TEST(MIMODeinterleaveOp, RejectsOpaqueLeadingBatch) {
-  // Contract is (N_rx, slow_time, samples); an extra leading dim is opaque
-  // batch (Part B), not a named axis.
+  // Contract is rank 3 (N_rx, slow_time, samples); an extra leading dim is
+  // opaque batch (Part B), not a named axis. parse_adc_cube_layout fail-closes.
   const std::vector<int64_t> shape = {2, kNumRx, kSlowTime, kSamples};
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
@@ -361,16 +377,6 @@ TEST(MIMODeinterleaveOp, RejectsIndivisibleSlowTime) {
   EXPECT_TRUE(result.plan_ok);
   EXPECT_TRUE(result.frames.empty());
   EXPECT_FALSE(result.diagnostics.empty());
-}
-
-TEST(MIMODeinterleaveOp, RejectsPageableHostInput) {
-  // [EA HSDK5 ONLY] The Graph harness materializes all inputs through
-  // device-bound tensor loans, so pageable host data never reaches the
-  // operator's compute(). The require_cuda_accessible guard remains for
-  // safety, but is untestable through the Graph model. Restore if a
-  // direct-call harness is added later.
-  GTEST_SKIP() << "HSDK 5 Graph: pageable host input cannot reach "
-                  "the operator through device-bound tensor loans";
 }
 
 TEST(MIMODeinterleaveOp, FloatDoubleAgreement) {

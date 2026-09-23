@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <memory>
 #include <random>
@@ -125,6 +126,38 @@ std::vector<double> exponential_power_cube(
     cell = dist(rng);
   }
   return data;
+}
+
+std::vector<double> preintegrated_power_map(
+    int64_t num_doppler, int64_t num_range, int64_t looks,
+    std::mt19937_64& rng) {
+  std::exponential_distribution<double> dist(1.0);
+  std::vector<double> map(static_cast<size_t>(num_doppler * num_range), 0.0);
+  for (double& cell : map) {
+    for (int64_t k = 0; k < looks; ++k) {
+      cell += dist(rng);
+    }
+  }
+  return map;
+}
+
+std::vector<double> correlated_preintegrated_power_map(
+    int64_t num_doppler, int64_t num_range, int64_t looks, double rho,
+    std::mt19937_64& rng) {
+  std::normal_distribution<double> normal(0.0, std::sqrt(0.5));
+  const double common_scale = std::sqrt(rho);
+  const double independent_scale = std::sqrt(1.0 - rho);
+  std::vector<double> map(static_cast<size_t>(num_doppler * num_range), 0.0);
+  for (double& cell : map) {
+    const std::complex<double> common{normal(rng), normal(rng)};
+    for (int64_t k = 0; k < looks; ++k) {
+      const std::complex<double> independent{normal(rng), normal(rng)};
+      const std::complex<double> sample =
+          common_scale * common + independent_scale * independent;
+      cell += std::norm(sample);
+    }
+  }
+  return map;
 }
 
 template <typename T>
@@ -242,6 +275,34 @@ PfaTrialResult run_monte_carlo_pfa_nci(int num_trials, int64_t num_channels,
   return aggregate;
 }
 
+PfaTrialResult run_monte_carlo_pfa_preintegrated(
+    int num_trials, int64_t looks, int64_t num_doppler, int64_t num_range,
+    double configured_pfa, uint64_t seed, CFARParams params,
+    double correlation = 0.0) {
+  PfaTrialResult aggregate;
+  std::mt19937_64 rng(seed);
+  std::vector<std::shared_ptr<holoscan::Tensor>> inputs;
+  inputs.reserve(static_cast<size_t>(num_trials));
+  for (int trial = 0; trial < num_trials; ++trial) {
+    const auto map =
+        correlation == 0.0
+            ? preintegrated_power_map(num_doppler, num_range, looks, rng)
+            : correlated_preintegrated_power_map(
+                  num_doppler, num_range, looks, correlation, rng);
+    inputs.push_back(to_device_tensor<double>(
+        map, {num_doppler, num_range}, real_dtype<double>()));
+  }
+  const std::vector<HostTensor> scores =
+      run_cfar_scores(std::move(inputs), std::move(params));
+  for (const HostTensor& score : scores) {
+    const PfaTrialResult trial_result =
+        count_interior_false_alarms<double>(score, num_doppler, num_range);
+    aggregate.interior_cells += trial_result.interior_cells;
+    aggregate.false_alarms += trial_result.false_alarms;
+  }
+  return aggregate;
+}
+
 }  // namespace
 
 TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaK1) {
@@ -291,6 +352,54 @@ TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaNciK8) {
       static_cast<double>(result.false_alarms) /
       static_cast<double>(result.interior_cells);
   expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
+}
+
+TEST(CFARDetectorOpStatisticalTest, CaMonteCarloPfaPreintegratedK8) {
+  constexpr int kTrials = 30;
+  constexpr int64_t kLooks = 8;
+  constexpr int64_t kMapDoppler = 64;
+  constexpr int64_t kMapRange = 64;
+  constexpr double kPfa = 1e-2;
+
+  CFARParams params = ca_params(kPfa);
+  params.preintegrated_looks = kLooks;
+  const PfaTrialResult result = run_monte_carlo_pfa_preintegrated(
+      kTrials, kLooks, kMapDoppler, kMapRange, kPfa,
+      0xCAFEBABE0003ULL, params);
+  const double realized =
+      static_cast<double>(result.false_alarms) /
+      static_cast<double>(result.interior_cells);
+  expect_realized_pfa_near_configured(realized, kPfa, result.interior_cells);
+}
+
+TEST(CFARDetectorOpStatisticalTest, CorrelatedLooksNeedEffectiveCalibration) {
+  constexpr int kTrials = 40;
+  constexpr int64_t kNominalLooks = 8;
+  constexpr int64_t kEffectiveLooks = 2;
+  constexpr int64_t kMapDoppler = 64;
+  constexpr int64_t kMapRange = 64;
+  constexpr double kPfa = 1e-2;
+  constexpr double kCorrelation = 0.7;
+
+  CFARParams nominal_params = ca_params(kPfa);
+  nominal_params.preintegrated_looks = kNominalLooks;
+  const PfaTrialResult nominal = run_monte_carlo_pfa_preintegrated(
+      kTrials, kNominalLooks, kMapDoppler, kMapRange, kPfa,
+      0xCAFEBABE0004ULL, nominal_params, kCorrelation);
+  CFARParams calibrated_params = ca_params(kPfa);
+  calibrated_params.preintegrated_looks = kEffectiveLooks;
+  const PfaTrialResult calibrated = run_monte_carlo_pfa_preintegrated(
+      kTrials, kNominalLooks, kMapDoppler, kMapRange, kPfa,
+      0xCAFEBABE0004ULL, calibrated_params, kCorrelation);
+  const double nominal_pfa =
+      static_cast<double>(nominal.false_alarms) /
+      static_cast<double>(nominal.interior_cells);
+  const double calibrated_pfa =
+      static_cast<double>(calibrated.false_alarms) /
+      static_cast<double>(calibrated.interior_cells);
+  EXPECT_GT(nominal_pfa, 1.5 * kPfa);
+  EXPECT_LT(std::abs(calibrated_pfa - kPfa),
+            std::abs(nominal_pfa - kPfa));
 }
 
 TEST(CFARDetectorOpStatisticalTest, GoMonteCarloPfaNciK8) {

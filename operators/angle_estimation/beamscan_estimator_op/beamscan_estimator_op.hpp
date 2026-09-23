@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <type_traits>
 #include <vector>
 
@@ -28,16 +27,21 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
-#include "radar_common/sdk/config_cache.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 
 namespace holoscan::radar {
+
+struct BeamscanRuntimeState;
 
 // Conventional (Bartlett) sparse-path DOA estimator. This header is the
 // contract reference for the operator's ports, shapes, dtypes, and
 // parameters; module-wide conventions live in operators/common/README.md.
 //
 // In:  snapshot        — complex64/complex128, (num_items, num_channels) or
-//                       (num_items, num_channels, 1).
+//                       (num_items, num_channels, num_snapshots). Multiple
+//                       looks average valid per-look Bartlett power.
 // In:  is_valid        — optional bool/uint8, (num_items, num_snapshots);
 //                       validated when present (num_snapshots is 1 for the
 //                       2-D snapshot form).
@@ -49,15 +53,15 @@ namespace holoscan::radar {
 struct BeamscanParams {
   ArrayGeometry array_geometry{};
   AngleConvention angle_convention{};
-  std::vector<double> az_angles{};
-  std::vector<double> el_angles{};
+  std::vector<double> az_coordinates{};
+  std::vector<double> el_coordinates{};
   WindowSpec array_taper{};
   PeakInterpolation peak_interpolation{PeakInterpolation::kNone};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
     BeamscanParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.BeamscanParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.BeamscanParams", 2),
     holoscan::field<&BeamscanParams::array_geometry>("array_geometry")
         .description(
             "Element positions and wavelength; num_elements must match "
@@ -65,15 +69,17 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&BeamscanParams::angle_convention>("angle_convention")
         .description(
             "Static AER labeling for the scan grid and DOA output "
-            "(no live port)"),
-    holoscan::field<&BeamscanParams::az_angles>("az_angles")
+            "(default radar_boresight; no live port)"),
+    holoscan::field<&BeamscanParams::az_coordinates>("az_coordinates")
         .description(
-            "Azimuth scan grid (or u under direction_cosine); required "
-            "non-empty"),
-    holoscan::field<&BeamscanParams::el_angles>("el_angles")
+            "First scan-coordinate grid: azimuth radians for angular "
+            "conventions, or dimensionless u under direction_cosine; "
+            "required non-empty"),
+    holoscan::field<&BeamscanParams::el_coordinates>("el_coordinates")
         .description(
-            "Elevation scan grid (or v under direction_cosine); required "
-            "non-empty"),
+            "Second scan-coordinate grid: elevation radians for angular "
+            "conventions, or dimensionless v under direction_cosine; "
+            "required non-empty"),
     holoscan::field<&BeamscanParams::array_taper>("array_taper")
         .description("Amplitude taper across array elements"),
     holoscan::field<&BeamscanParams::peak_interpolation>("peak_interpolation")
@@ -99,32 +105,30 @@ class BeamscanEstimatorOp : public holoscan::Operator<BeamscanParams> {
       ExecutionContext& context) override;
 
   Input<Tensor> snapshot{"snapshot"};
-  // Optional; unconnected graphs omit it from the temporal contract.
+  // Optional same-tick mask; Exact + SafeDefault admits an unwired port.
   Input<Tensor> is_valid{"is_valid"};
   Output<Tensor> aoa_estimates{"aoa_estimates"};
   Output<Tensor> angle_spectrum{"angle_spectrum"};
-  // [live] sticky override of params().peak_interpolation (OPERATOR_API.md).
-  // Vector / descriptor live params (az_angles, el_angles, array_geometry,
-  // array_taper) are Params-only on HSDK 5 EA — see OPEN_ITEMS.md /
-  // HSDK5_PORT.md §9. angle_convention is static (Params only).
+  Input<WireArrayGeometry> array_geometry{"array_geometry"};
+  Input<Tensor> az_coordinates{"az_coordinates"};
+  Input<Tensor> el_coordinates{"el_coordinates"};
+  Input<WireWindowSpec> array_taper{"array_taper"};
   Input<PeakInterpolation> peak_interpolation{"peak_interpolation"};
 
  private:
-  MaxTensorExtents extents_;
-  std::uint32_t max_rank_{3U};
-  std::size_t spectrum_max_byte_span_{0U};
-  std::size_t aoa_max_byte_span_{0U};
-
   // Keep the previous activation's inputs alive across ticks so async
   // device reads cannot outlive the buffers.
   Tensor retained_snapshot_;
   Tensor retained_is_valid_;
-  // Sticky [live] peak_interpolation: last override wins until the next.
-  std::optional<PeakInterpolation> sticky_peak_interpolation_;
-  // Conjugate-transposed steering weights Wᶜ, built on device, laid
-  // out (num_channels, num_beams) with beams el-major. Cached;
-  // warn-once on rebuild.
-  ConfigCache<std::shared_ptr<holoscan::Tensor>> steering_cache_;
+
+  // Constructor-created steering cache and bounded GEMM workspace.
+  std::shared_ptr<BeamscanRuntimeState> state_;
+
+  std::int64_t max_items_{0};
+  std::int64_t max_az_{0};
+  std::int64_t max_el_{0};
+  std::size_t spectrum_max_byte_span_{0U};
+  std::size_t aoa_max_byte_span_{0U};
 };
 
 extern template class BeamscanEstimatorOp<float>;

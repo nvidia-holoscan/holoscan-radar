@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -21,13 +20,17 @@
 #include <holoscan/core/parameter_schema.hpp>
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
-#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
-#include "radar_common/dsp/subarray_selection.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 
 namespace holoscan::radar {
+
+namespace detail {
+struct SubarraySelectionState;
+}  // namespace detail
 
 // Selects a uniform ULA/URA sub-array from a (possibly holey) MIMO virtual
 // array and re-emits a reduced (snapshot, geometry) pair — S3. Sits between
@@ -43,22 +46,15 @@ namespace holoscan::radar {
 // In:  is_valid       — optional bool/uint8, (num_items, num_snapshots).
 //                       Passed through unchanged when present.
 // Out: snapshot_out   — complex64/complex128, (num_items, L[, num_snapshots]).
-//                       [EA HSDK5 ONLY] unique in/out port names (was
+//                        unique in/out port names (was
 //                       "snapshot").
-// Out: array_geometry — float64 Tensor, shape (L + 1, 3): packed reduced
-//                       ArrayGeometry (see array_geometry_tensor.hpp).
-//                       [EA HSDK5 ONLY] Output<ArrayGeometry> is not a
-//                       PublishedPayload (owns vector/optional); serialized
-//                       Tensor interim — HSDK5_PORT.md §10.
+// Out: array_geometry — optional/latched WireArrayGeometry carrying the
+//                       reduced positions, wavelength, and geometry type.
 // Out: is_valid_out   — optional; the input mask, forwarded.
-//                       [EA HSDK5 ONLY] renamed from "is_valid".
+//                        renamed from "is_valid".
 //
 // Precision is fixed at compile time (T = float | double).
 //
-// [EA HSDK5 ONLY] array_geometry / subarray are [live] in OPERATOR_API.md but
-// stay Params-only here: ArrayGeometry embeds vectors; subarray is an
-// unbounded index vector (HSDK5_PORT.md §9).
-
 struct SubarraySelectionParams {
   ArrayGeometry array_geometry{};
   // Explicit sub-array channel indices; empty → auto (largest filled ULA/URA).
@@ -106,27 +102,30 @@ class SubarraySelectionOp
   Input<Tensor> snapshot{"snapshot"};
   // Optional; unconnected graphs omit it from the temporal contract.
   Input<Tensor> is_valid{"is_valid"};
-  // [EA HSDK5 ONLY] unique in/out names — see OPERATOR_API.md / HSDK5_PORT §2.
+  // [live] Exact overrides. The geometry input uses a distinct physical name
+  // because HSDK 5 requires unique input/output port names.
+  Input<WireArrayGeometry> array_geometry_in{"array_geometry_in"};
+  Input<Tensor> subarray{"subarray"};
+  // Distinct input/output names make graph wiring unambiguous.
   Output<Tensor> snapshot_out{"snapshot_out"};
-  // Packed ArrayGeometry (float64 Tensor) — HSDK5_PORT §10.
-  Output<Tensor> array_geometry{"array_geometry"};
+  Output<WireArrayGeometry> array_geometry{"array_geometry"};
   Output<Tensor> is_valid_out{"is_valid_out"};
 
  private:
-  MaxTensorExtents extents_;
-  std::uint32_t max_rank_{3U};
+  // Keep prior activation inputs alive while asynchronous copies/gathers read.
+  Tensor retained_snapshot_;
+  Tensor retained_is_valid_;
+  // Independent optional/latched outputs (OPERATOR_API.md).
+  LatchedOutput array_geometry_out_;
+  LatchedOutput is_valid_out_;
+  std::shared_ptr<detail::SubarraySelectionState> state_;
+
   std::size_t snapshot_max_byte_span_{0U};
   std::size_t geom_max_byte_span_{0U};
   std::size_t is_valid_max_byte_span_{0U};
-
-  Tensor retained_snapshot_;
-  Tensor retained_is_valid_;
-
-  // Selection plan + uploaded channel-index table, rebuilt only when the
-  // geometry / selection config changes (keyed by sel_key_).
-  SubarraySelection selection_{};
-  std::string sel_key_{};
-  std::shared_ptr<holoscan::Tensor> d_channel_index_{};
+  std::int64_t subarray_max_extent_{0};
+  std::int64_t max_items_{0};
+  std::int64_t max_snapshots_{0};
 };
 
 extern template class SubarraySelectionOp<float>;

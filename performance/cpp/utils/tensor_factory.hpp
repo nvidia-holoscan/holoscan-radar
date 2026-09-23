@@ -31,7 +31,7 @@
 
 namespace holoscan::radar::perf {
 
-// [EA HSDK5 ONLY] TensorMap is gone; ports carry a plain Tensor. Keep a
+//  TensorMap is gone; ports carry a plain Tensor. Keep a
 // shared_ptr alias helper so unported consumers can migrate incrementally.
 inline std::shared_ptr<holoscan::Tensor> as_tensor(
     std::shared_ptr<holoscan::Tensor> tensor) {

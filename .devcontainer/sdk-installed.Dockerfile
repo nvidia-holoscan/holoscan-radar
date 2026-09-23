@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# [EA HSDK5 ONLY] Add the locally built SDK install tree to its build image.
+# Add the locally built SDK install tree to its build image.
 # Delete this entire file before the HSDK 5 public release.
 
 ARG BASE_IMAGE

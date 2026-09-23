@@ -26,9 +26,34 @@
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/math/constants.hpp"
-#include "radar_common/sim/scene.hpp"
+#include "utils/sim_reference.hpp"
 
 namespace holoscan::radar::sim {
+
+inline int64_t reference_wrap_slot(int64_t slot, int64_t period) {
+  const int64_t wrapped = slot % period;
+  return wrapped < 0 ? wrapped + period : wrapped;
+}
+
+inline void apply_mimo_reference_chirp(SimResult* result,
+                                       const SimScene& scene,
+                                       int64_t slow_time) {
+  if (scene.dechirped) {
+    return;
+  }
+  const int64_t num_rx = static_cast<int64_t>(scene.rx_positions.size());
+  const int64_t samples = scene.samples_per_chirp;
+  const auto reference = reference_chirp(scene.waveform, samples);
+  for (int64_t rx = 0; rx < num_rx; ++rx) {
+    for (int64_t k = 0; k < slow_time; ++k) {
+      for (int64_t s = 0; s < samples; ++s) {
+        const size_t idx =
+            static_cast<size_t>((rx * slow_time + k) * samples + s);
+        result->cube[idx] *= reference[static_cast<size_t>(s)];
+      }
+    }
+  }
+}
 
 // Uniform DDM per-TX Doppler offsets: TX m rides at m/num_tx of the PRF.
 inline std::vector<double> uniform_ddm_offsets(int64_t num_tx) {
@@ -56,6 +81,7 @@ inline std::vector<double> resolve_ddm_offsets(const DDMCodeDescriptor& code) {
 // real chirp-to-chirp spacing) is scene.waveform.chirp_repetition_interval.
 inline SimResult simulate_mimo_tdm_interleaved(const SimScene& scene,
                                                const TXSchedule& schedule) {
+  reference_detail::validate_scene(scene, "simulate_mimo_tdm_interleaved");
   if (scene.tx_positions.empty()) {
     throw std::invalid_argument(
         "simulate_mimo_tdm_interleaved: need >= 1 TX element");
@@ -79,6 +105,7 @@ inline SimResult simulate_mimo_tdm_interleaved(const SimScene& scene,
   const std::vector<int64_t> pattern = sched.expand_chirp_tx_index(slow_time);
 
   SimResult result;
+  result.sampling_mode = scene.analog_if.sampling_mode;
   result.shape = {num_rx, slow_time, samples};
   result.cube.assign(static_cast<size_t>(num_rx * slow_time * samples),
                      {0.0, 0.0});
@@ -88,34 +115,44 @@ inline SimResult simulate_mimo_tdm_interleaved(const SimScene& scene,
     result.truth.push_back(truth);
 
     for (int64_t k = 0; k < slow_time; ++k) {
-      const int64_t tx = pattern[static_cast<size_t>(k)];
-      if (tx < 0 || tx >= num_tx) {
-        throw std::runtime_error("simulate_mimo_tdm_interleaved: bad TX index");
-      }
-      const Vec3& tx_pos = scene.tx_positions[static_cast<size_t>(tx)];
       const double range_k =
           truth.range +
           truth.radial_velocity * static_cast<double>(k) * physical_pri;
       for (int64_t rx = 0; rx < num_rx; ++rx) {
-        const double aperture =
-            dot(tx_pos, truth.look_direction) +
-            dot(scene.rx_positions[static_cast<size_t>(rx)],
-                truth.look_direction);
-        const double tau = (2.0 * range_k - aperture) / c;
-        const double beat = slope * tau;
-        for (int64_t s = 0; s < samples; ++s) {
-          const double t = static_cast<double>(s) / fs;
-          const double phase = 2.0 * kPi * (beat * t) - 2.0 * kPi * f_c * tau;
-          const std::complex<double> sample =
-              target.amplitude *
-              std::complex<double>(std::cos(phase), std::sin(phase));
-          const size_t idx =
-              static_cast<size_t>((rx * slow_time + k) * samples + s);
-          result.cube[idx] += sample;
+        for (int64_t tx = 0; tx < num_tx; ++tx) {
+          const Vec3& tx_pos = scene.tx_positions[static_cast<size_t>(tx)];
+          const double aperture =
+              dot(tx_pos, truth.look_direction) +
+              dot(scene.rx_positions[static_cast<size_t>(rx)],
+                  truth.look_direction);
+          const double tau = (2.0 * range_k - aperture) / c;
+          const auto folded = reference_detail::fold_delay(tau, physical_pri);
+          const int64_t excitation_slot = reference_wrap_slot(
+              k - folded.ambiguity_order, slow_time);
+          if (pattern[static_cast<size_t>(excitation_slot)] != tx) {
+            continue;
+          }
+          const double beat = slope * folded.residual;
+          const double gain =
+              reference_detail::range_loss_gain(scene, range_k) *
+              reference_detail::analog_if_gain(scene, beat);
+          for (int64_t s = 0; s < samples; ++s) {
+            const double t = static_cast<double>(s) / fs;
+            const double phase =
+                2.0 * kPi * (beat * t) - 2.0 * kPi * f_c * tau;
+            const std::complex<double> sample =
+                gain * target.amplitude *
+                std::complex<double>(std::cos(phase), std::sin(phase));
+            const size_t idx =
+                static_cast<size_t>((rx * slow_time + k) * samples + s);
+            result.cube[idx] += sample;
+          }
         }
       }
     }
   }
+
+  apply_mimo_reference_chirp(&result, scene, slow_time);
 
   // Clean scatterer response; the caller
   // applies sim::add_thermal_noise (and any
@@ -130,6 +167,7 @@ inline SimResult simulate_mimo_tdm_interleaved(const SimScene& scene,
 // scene.tx_positions.size().
 inline SimResult simulate_mimo_ddm_coded(const SimScene& scene,
                                          const std::vector<double>& offsets) {
+  reference_detail::validate_scene(scene, "simulate_mimo_ddm_coded");
   if (scene.tx_positions.empty() || scene.rx_positions.empty()) {
     throw std::invalid_argument("simulate_mimo_ddm_coded: need TX and RX");
   }
@@ -149,6 +187,7 @@ inline SimResult simulate_mimo_ddm_coded(const SimScene& scene,
   }
 
   SimResult result;
+  result.sampling_mode = scene.analog_if.sampling_mode;
   result.shape = {num_rx, num_chirps, samples};
   result.cube.assign(static_cast<size_t>(num_rx * num_chirps * samples),
                      {0.0, 0.0});
@@ -171,13 +210,19 @@ inline SimResult simulate_mimo_ddm_coded(const SimScene& scene,
                 dot(scene.rx_positions[static_cast<size_t>(rx)],
                     truth.look_direction);
             const double tau = (2.0 * range_k - aperture) / c;
-            const double beat = slope * tau;
+            const auto folded = reference_detail::fold_delay(tau, pri);
+            const double beat = slope * folded.residual;
+            const double gain =
+              reference_detail::range_loss_gain(scene, range_k) *
+              reference_detail::analog_if_gain(scene, beat);
+            const int64_t excitation_slot = reference_wrap_slot(
+                k - folded.ambiguity_order, num_chirps);
             const double code_phase = 2.0 * kPi *
                                       offsets[static_cast<size_t>(tx)] *
-                                      static_cast<double>(k);
+                                      static_cast<double>(excitation_slot);
             const double phase = 2.0 * kPi * (beat * t) -
                                  2.0 * kPi * f_c * tau + code_phase;
-            acc += target.amplitude *
+            acc += gain * target.amplitude *
                    std::complex<double>(std::cos(phase), std::sin(phase));
           }
           const size_t idx =
@@ -187,6 +232,8 @@ inline SimResult simulate_mimo_ddm_coded(const SimScene& scene,
       }
     }
   }
+
+  apply_mimo_reference_chirp(&result, scene, num_chirps);
 
   // Clean scatterer response; the caller
   // applies sim::add_thermal_noise (and any
@@ -199,6 +246,7 @@ inline SimResult simulate_mimo_ddm_coded(const SimScene& scene,
 inline SimResult simulate_mimo_ddm_phase_coded(
     const SimScene& scene,
     const std::vector<std::complex<double>>& phase_codes) {
+  reference_detail::validate_scene(scene, "simulate_mimo_ddm_phase_coded");
   if (scene.tx_positions.empty() || scene.rx_positions.empty()) {
     throw std::invalid_argument(
         "simulate_mimo_ddm_phase_coded: need TX and RX");
@@ -220,6 +268,7 @@ inline SimResult simulate_mimo_ddm_phase_coded(
   }
 
   SimResult result;
+  result.sampling_mode = scene.analog_if.sampling_mode;
   result.shape = {num_rx, num_chirps, samples};
   result.cube.assign(static_cast<size_t>(num_rx * num_chirps * samples),
                      {0.0, 0.0});
@@ -242,12 +291,19 @@ inline SimResult simulate_mimo_ddm_phase_coded(
                 dot(scene.rx_positions[static_cast<size_t>(rx)],
                     truth.look_direction);
             const double tau = (2.0 * range_k - aperture) / c;
-            const double beat = slope * tau;
+            const auto folded = reference_detail::fold_delay(tau, pri);
+            const double beat = slope * folded.residual;
+            const double gain =
+              reference_detail::range_loss_gain(scene, range_k) *
+              reference_detail::analog_if_gain(scene, beat);
+            const int64_t excitation_slot = reference_wrap_slot(
+                k - folded.ambiguity_order, num_chirps);
             const double phase =
                 2.0 * kPi * (beat * t) - 2.0 * kPi * f_c * tau;
             const auto code =
-                phase_codes[static_cast<size_t>(tx * num_chirps + k)];
-            acc += target.amplitude * code *
+                phase_codes[static_cast<size_t>(tx * num_chirps +
+                                                excitation_slot)];
+            acc += gain * target.amplitude * code *
                    std::complex<double>(std::cos(phase), std::sin(phase));
           }
           const size_t idx =
@@ -257,6 +313,8 @@ inline SimResult simulate_mimo_ddm_phase_coded(
       }
     }
   }
+
+  apply_mimo_reference_chirp(&result, scene, num_chirps);
 
   // Clean scatterer response; the caller
   // applies sim::add_thermal_noise (and any

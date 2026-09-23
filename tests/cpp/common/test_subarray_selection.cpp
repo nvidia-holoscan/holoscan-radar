@@ -61,6 +61,18 @@ TEST(SubarraySelection, FilledUlaNoReduction) {
   EXPECT_EQ(sel.subarray_size, 8);
   const std::vector<int32_t> id = {0, 1, 2, 3, 4, 5, 6, 7};
   EXPECT_EQ(sel.channel_index, id);
+  EXPECT_EQ(sel.reduced_geometry, g);
+}
+
+TEST(SubarraySelection, FilledUnorderedUlaRequiresReorder) {
+  const auto g = make_linear({2, 0, 1, 3});
+  const auto sel = build_subarray_selection(g, {}, 2);
+  EXPECT_TRUE(sel.reduced);
+  EXPECT_EQ(sel.subarray_size, 4);
+  const std::vector<int32_t> expected = {1, 2, 0, 3};
+  EXPECT_EQ(sel.channel_index, expected);
+  EXPECT_EQ(sel.reduced_geometry.element_positions,
+            make_linear({0, 1, 2, 3}).element_positions);
 }
 
 TEST(SubarraySelection, HoleyUlaLongestRun) {

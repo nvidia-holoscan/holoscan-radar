@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <type_traits>
 #include <vector>
 
@@ -25,6 +24,8 @@
 
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
 
 namespace holoscan::radar {
 
@@ -39,22 +40,25 @@ namespace holoscan::radar {
 //                       when compacting to num_clusters.
 // In:  detection_idx  — int64, (num_points, 2 [+ n_batch]). CFAR cells;
 //                       row-aligned with labels.
-// In:  points         — float32/float64, (num_points, num_features). Optional;
-//                       required unless effective representative == first.
+// In:  points         — float32/float64, (num_points, num_features). Required;
+//                       first ignores its values.
 // Out: rep_idx        — int64, (num_clusters, 2 [+ n_batch]). One real
 //                       detection_idx row per non-noise cluster; sized to the
 //                       cluster count and reallocated per tick.
+// Out: reduced_points — optional/latched T, (num_clusters, num_features).
+//                       Selected input rows for member policies; synthetic
+//                       weighted feature means for weighted_mean.
 //
 // Parameters (OPERATOR_API.md [live] tags):
-//   representative  — enum {peak, medoid, first}. Sticky [live] Input when
-//                     wired.
+//   representative  — enum {peak, medoid, first, weighted_mean}. [live] Exact
+//                     Input.
 //   score_method    — enum {weighted_sum, weighted_l2, weighted_max, custom}.
-//                     Used by peak. Sticky [live] Input when wired.
+//                     Used by peak and weighted_mean. [live] Exact Input.
 //   feature_weights — std::vector<double>, length num_features. Required for
-//                     peak (non-custom) / medoid.
-//                     [EA HSDK5 ONLY] Params-only — Input<std::vector> is not
-//                     a valid PublishedPayload (HSDK5_PORT.md §9); see
-//                     OPEN_ITEMS.
+//                     peak (non-custom) / medoid; empty selects uniform mean
+//                     for weighted_mean.
+//                     [live] Exact rank-1 pageable-host float64 Tensor Input,
+//                     bounded by MaxTensorExtents.max_features.
 //
 // Precision T = float | double. Optional ScoreFn is a compile-time device
 // functor used when score_method=custom: callable as
@@ -76,17 +80,17 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&DetectionReductionParams::representative>(
         "representative")
         .description(
-            "Which cluster member to keep {peak, medoid, first}; default "
-            "peak"),
+            "Reduction {peak, medoid, first, weighted_mean}; rep_idx always "
+            "selects a real member; default peak"),
     holoscan::field<&DetectionReductionParams::score_method>("score_method")
         .description(
-            "Peak score collapse {weighted_sum, weighted_l2, weighted_max, "
-            "custom}; used only by peak; default weighted_sum"),
+            "Peak score or weighted-mean row-weight collapse {weighted_sum, "
+            "weighted_l2, weighted_max, custom}; default weighted_sum"),
     holoscan::field<&DetectionReductionParams::feature_weights>(
         "feature_weights")
         .description(
-            "Per-feature weights for peak/medoid (length num_features); "
-            "required for those policies unless peak+custom"));
+            "Per-feature weights for peak/medoid/weighted_mean (length "
+            "num_features); empty requests uniform weighted_mean"));
 
 static_assert(
     holoscan::param_schema_availability<DetectionReductionParams>() ==
@@ -100,9 +104,7 @@ class DetectionReductionOp
                 "DetectionReductionOp supports float and double precision");
 
  public:
-  // Required: sizes the rep_idx Tensor pool at setup().
-  explicit DetectionReductionOp(
-      const MaxTensorExtents& extents);
+  explicit DetectionReductionOp(const MaxTensorExtents& extents);
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -111,29 +113,27 @@ class DetectionReductionOp
 
   Input<Tensor> labels{"labels"};
   Input<Tensor> detection_idx{"detection_idx"};
-  // Optional per OPERATOR_API (required unless representative == first).
-  // [EA HSDK5 ONLY] Exact in contract() — Graph tests always wire it; see
-  // OPEN_ITEMS.
   Input<Tensor> points{"points"};
   Output<Tensor> rep_idx{"rep_idx"};
-  // [live] sticky overrides (OPERATOR_API.md). feature_weights stays
-  // Params-only (unbounded vector — HSDK5_PORT.md §9 / OPEN_ITEMS).
+  Output<Tensor> reduced_points{"reduced_points"};
+  // [live] Exact overrides; the entries are unconditional and wiring the port
+  // enables it (OPERATOR_API.md).
   Input<RepresentativePolicy> representative{"representative"};
   Input<ScoreMethod> score_method{"score_method"};
+  Input<Tensor> feature_weights{"feature_weights"};
 
  private:
-  MaxTensorExtents extents_;
-  std::size_t max_byte_span_{0U};
-
   // Keep the previous activation's inputs alive across ticks so async device
   // reads cannot outlive the buffers.
   Tensor retained_labels_;
   Tensor retained_idx_;
   Tensor retained_points_;
   std::shared_ptr<holoscan::Tensor> retained_weights_;
-  // Sticky [live] POD enums: last override wins until the next.
-  std::optional<RepresentativePolicy> sticky_representative_;
-  std::optional<ScoreMethod> sticky_score_method_;
+
+  std::int64_t max_features_{0};
+  std::size_t max_rep_idx_byte_span_{0U};
+  std::size_t max_reduced_points_byte_span_{0U};
+  LatchedOutput reduced_points_output_;
 };
 
 extern template class DetectionReductionOp<float>;

@@ -22,7 +22,13 @@ from utils.harness import run_operator, single_map, to_device_array  # noqa: E40
 from holoscan.radar import K_PI  # noqa: E402
 from holoscan.radar import ClutterFilterOp  # noqa: E402
 from holoscan.radar import K_SPEED_OF_LIGHT as K_C  # noqa: E402
-from holoscan.radar import ClutterFilterMethod, ClutterFilterOpF32, ClutterFilterOpF64
+from holoscan.radar import (
+    ClutterFilterMethod,
+    ClutterFilterOpF32,
+    ClutterFilterOpF64,
+    WindowSpec,
+    WindowType,
+)
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -168,14 +174,18 @@ def _run_single(
     *,
     key: str = "range_profiles",
     op_cls=ClutterFilterOpF32,
+    doppler_window: WindowSpec | None = None,
 ) -> np.ndarray:
     arr = np.asarray(host).reshape(shape)
     frame = single_map(to_device_array(arr), key)
 
     def make_op(app):
-        if method is None:
-            return op_cls(app, name="op_under_test")
-        return op_cls(app, method=method, name="op_under_test")
+        kwargs = {"name": "op_under_test"}
+        if method is not None:
+            kwargs["method"] = method
+        if doppler_window is not None:
+            kwargs["doppler_window"] = doppler_window
+        return op_cls(app, **kwargs)
 
     outs = run_operator(make_op, frame)
     assert len(outs) == 1
@@ -228,6 +238,86 @@ def test_MeanSubtractionPreservesMovingTarget():
     assert e_out / e_moving == pytest.approx(1.0, abs=0.05)
 
 
+def _window(kind: WindowType, length: int) -> tuple[WindowSpec, np.ndarray]:
+    spec = WindowSpec()
+    spec.type = kind
+    k = np.arange(length, dtype=np.float64)
+    phase = 2.0 * np.pi * k / (length - 1)
+    if kind == WindowType.HANN:
+        taps = 0.5 - 0.5 * np.cos(phase)
+    elif kind == WindowType.HAMMING:
+        taps = 0.54 - 0.46 * np.cos(phase)
+    else:
+        raise AssertionError(kind)
+    return spec, taps
+
+
+@pytest.mark.parametrize(
+    "dtype,op_cls", [(np.complex64, ClutterFilterOpF32), (np.complex128, ClutterFilterOpF64)]
+)
+@pytest.mark.parametrize("kind", [WindowType.HANN, WindowType.HAMMING])
+def test_WeightedMeanMatchesIndependentReference(dtype, op_cls, kind):
+    spec, taps = _window(kind, K_CHIRPS)
+    host = doppler_tone(K_CHIRPS, 5, 0.173, dtype=dtype)
+    host += np.asarray(2.0 - 0.5j, dtype=dtype)
+    expected = host - np.sum(taps[:, None] * host, axis=0) / np.sum(taps)
+    output = _run_single(
+        host,
+        host.shape,
+        ClutterFilterMethod.MEAN_SUBTRACTION,
+        op_cls=op_cls,
+        doppler_window=spec,
+    )
+    tolerance = 2e-5 if dtype == np.complex64 else 2e-12
+    np.testing.assert_allclose(output, expected, rtol=0, atol=tolerance)
+
+
+def test_CustomUnnormalizedWeightedMeanAndZeroSumRejection():
+    taps = np.linspace(0.2, 1.7, K_CHIRPS)
+    spec = WindowSpec()
+    spec.type = WindowType.CUSTOM
+    spec.coefficients = taps.tolist()
+    spec.coherent_gain_normalization = False
+    host = doppler_tone(K_CHIRPS, 3, 0.173)
+    expected = host - np.sum(taps[:, None] * host, axis=0) / np.sum(taps)
+    output = _run_single(
+        host,
+        host.shape,
+        ClutterFilterMethod.MEAN_SUBTRACTION,
+        doppler_window=spec,
+    )
+    np.testing.assert_allclose(output, expected, rtol=0, atol=2e-5)
+
+    spec.coefficients = ([1.0] * (K_CHIRPS - 1)) + [-(K_CHIRPS - 1)]
+    with pytest.raises(ValueError):
+        _run_single(
+            host,
+            host.shape,
+            ClutterFilterMethod.MEAN_SUBTRACTION,
+            doppler_window=spec,
+        )
+
+
+def test_MatchingWindowMakesDcZeroWhereUniformProjectionLeavesResidual():
+    spec, taps = _window(WindowType.HANN, K_CHIRPS)
+    host = doppler_tone(K_CHIRPS, 1, 0.137, dtype=np.complex128)
+    weighted = _run_single(
+        host,
+        host.shape,
+        ClutterFilterMethod.MEAN_SUBTRACTION,
+        op_cls=ClutterFilterOpF64,
+        doppler_window=spec,
+    )
+    uniform = _run_single(
+        host,
+        host.shape,
+        ClutterFilterMethod.MEAN_SUBTRACTION,
+        op_cls=ClutterFilterOpF64,
+    )
+    assert abs(np.sum(taps[:, None] * weighted)) < 2e-12
+    assert abs(np.sum(taps[:, None] * uniform)) > 1e-2
+
+
 # ---------------------------------------------------------------------------
 # delay cancellers
 # ---------------------------------------------------------------------------
@@ -271,6 +361,24 @@ def test_MethodConfigurableFromYamlNode(tmp_path):
     # single_delay drops one chirp — proof the YAML value took effect (the
     # default, mean_subtraction, preserves the chirp count).
     assert outs[0].shape == (K_CHIRPS - 1, K_BINS)
+
+
+def test_DopplerWindowConfigurableFromYamlNode(tmp_path):
+    cfg = tmp_path / "clutter_filter_window.yaml"
+    cfg.write_text(
+        "%YAML 1.2\n---\nclutter_filter:\n" "  method: mean_subtraction\n  doppler_window: hann\n"
+    )
+    tone = doppler_tone(K_CHIRPS, 3, 0.173)
+    frame = single_map(to_device_array(tone), "range_profiles")
+
+    def make_op(app):
+        app.config(str(cfg))
+        return ClutterFilterOpF32(app, app.from_config("clutter_filter"), name="op_under_test")
+
+    output = run_operator(make_op, frame)[0]
+    _, taps = _window(WindowType.HANN, K_CHIRPS)
+    expected = tone - np.sum(taps[:, None] * tone, axis=0) / np.sum(taps)
+    np.testing.assert_allclose(output, expected, rtol=0, atol=2e-5)
 
 
 def test_DoubleDelayShapeAndResponse():
@@ -330,8 +438,8 @@ def test_LeadingBatchAxesPreservedAndIndependent():
 # ---------------------------------------------------------------------------
 
 
-def test_LiveMethodOverrideMidStreamAndSticky():
-    """Sticky [live] method override via typed Python→C++ emit."""
+def test_LiveMethodOverrideAppliesPerTick():
+    """Single-tick [live] method override via typed Python→C++ emit."""
     tone = doppler_tone(K_CHIRPS, K_BINS, 0.19)
     frame = single_map(to_device_array(tone), "range_profiles")
     frames = [frame, frame, frame]
@@ -352,7 +460,26 @@ def test_LiveMethodOverrideMidStreamAndSticky():
     assert len(outs) == 3
     assert outs[0].shape == (K_CHIRPS - 1, K_BINS)
     assert outs[1].shape == (K_CHIRPS, K_BINS)
+    # Tick 2 has no override, so the Params default (mean_subtraction) applies.
     assert outs[2].shape == (K_CHIRPS, K_BINS)
+
+
+def test_LiveDopplerWindowOverrideAppliesOneTickThenReverts():
+    tone = doppler_tone(K_CHIRPS, 3, 0.173)
+    frame = single_map(to_device_array(tone), "range_profiles")
+    hann, _ = _window(WindowType.HANN, K_CHIRPS)
+
+    def make_op(app):
+        return ClutterFilterOpF32(app, name="op_under_test")
+
+    outputs = run_operator(
+        make_op,
+        [frame, frame, frame],
+        overrides={"doppler_window": [None, hann, None]},
+    )
+    assert len(outputs) == 3
+    np.testing.assert_array_equal(outputs[2], outputs[0])
+    assert _max_abs(outputs[1] - outputs[0]) > 1e-3
 
 
 # ---------------------------------------------------------------------------
@@ -360,10 +487,19 @@ def test_LiveMethodOverrideMidStreamAndSticky():
 # ---------------------------------------------------------------------------
 
 
-def test_RejectsMethodNone():
-    tone = doppler_tone(K_CHIRPS, K_BINS, 0.19)
-    with pytest.raises(ValueError, match="none"):
-        _run_single(tone, (K_CHIRPS, K_BINS), ClutterFilterMethod.NONE)
+@pytest.mark.parametrize(
+    ("dtype", "op_cls"),
+    [(np.complex64, ClutterFilterOpF32), (np.complex128, ClutterFilterOpF64)],
+)
+def test_MethodNonePassesThrough(dtype, op_cls):
+    tone = doppler_tone(K_CHIRPS, K_BINS, 0.19, dtype=dtype)
+    output = _run_single(
+        tone,
+        (K_CHIRPS, K_BINS),
+        ClutterFilterMethod.NONE,
+        op_cls=op_cls,
+    )
+    np.testing.assert_array_equal(output, tone)
 
 
 def test_RejectsRealInput():

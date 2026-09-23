@@ -100,6 +100,8 @@ void bind_fmcw_range_doppler_processor(py::module_& m, const char* class_name) {
       "max_rx : int, optional\n"
       "range_window : WindowSpec, optional\n"
       "doppler_window : WindowSpec, optional\n"
+      "    Doppler analysis taper and, with mean_subtraction, clutter-"
+      "projection weights.\n"
       "apply_dechirp : bool, optional\n"
       "clutter_filter : ClutterFilterMethod, optional\n"
       "waveform : FMCWWaveformDescriptor, optional\n"

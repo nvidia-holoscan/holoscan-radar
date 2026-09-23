@@ -12,6 +12,7 @@ target_link_libraries(clutter_filter_op
     PUBLIC
         holoscan::core
         holoscan::radar_common
+        holoscan::radar_schemas
     PRIVATE
         matx::matx)
 

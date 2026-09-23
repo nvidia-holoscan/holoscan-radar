@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <type_traits>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -25,6 +24,10 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -38,23 +41,25 @@ struct DopplerStageState;  // kernel-side caches; defined in doppler_stage.hpp
 // parameters; module-wide conventions live in operators/common/README.md.
 //
 // In:  range_profiles — complex64/complex128,
-//                       (..., num_chirps, num_range_bins).
+//                       (num_chirps, num_range_bins) or with named leading
+//                       N_rx / (M_tx, N_rx).
 // Out: rd_maps        — complex64/complex128,
-//                       (..., num_doppler, num_range_bins);
+//                       same leading + (num_doppler, num_range_bins);
 //                       zero-Doppler centered by default.
 // Out: velocity_bins  — optional, float32/float64, (num_doppler,);
 //                       emitted only when a waveform descriptor is set.
 //
-// Precision is fixed at compile time by the template instantiation.
+// Precision is fixed at compile time by the template instantiation
+// (T = float → complex64/float32, T = double → complex128/float64).
+// Fat outs require MaxTensorExtents at graph.op() (ctor).
 
-// [EA HSDK5 ONLY] doppler_window and waveform are [live] in OPERATOR_API.md
-// but stay Params-only here: WindowSpec/FMCWWaveformDescriptor own vectors
-// (HSDK5_PORT.md §9).
 struct FMCWDopplerProcessorParams {
   WindowSpec doppler_window{};
   bool center_zero_doppler{true};
+  // Default-constructed = none/absent; is_valid() → false.
   FMCWWaveformDescriptor waveform{};
   FftNorm fft_norm{FftNorm::kBackward};
+  // 0 = exact (no zero-padding); ≥ num_chirps when non-zero.
   int64_t nfft{0};
 };
 
@@ -67,8 +72,7 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "WindowSpec applied along the chirp (slow-time) axis before "
             "the Doppler FFT (coherent-gain normalized). Default: none "
-            "(rectangular). [live] in API but Params-only on EA "
-            "(HSDK5_PORT §9)."),
+            "(rectangular)."),
     holoscan::field<&FMCWDopplerProcessorParams::center_zero_doppler>(
         "center_zero_doppler")
         .description(
@@ -78,8 +82,7 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Source for the velocity_bins axis (carrier -> wavelength, "
             "chirp repetition interval -> PRF). Required only when "
-            "velocity_bins is used. Default: empty (no velocity axis). "
-            "[live] in API but Params-only on EA (HSDK5_PORT §9)."),
+            "velocity_bins is used. Default: empty (no velocity axis)."),
     holoscan::field<&FMCWDopplerProcessorParams::fft_norm>("fft_norm")
         .description(
             "FFT normalization convention {backward, ortho, forward}; "
@@ -94,7 +97,6 @@ static_assert(
         holoscan::ParamSchemaAvailability::kDeclared,
     "HOLOSCAN_PARAM_SCHEMA must be in "
     "FMCWDopplerProcessorParams's namespace");
-
 
 template <typename T>
 class FMCWDopplerProcessorOp
@@ -116,24 +118,22 @@ class FMCWDopplerProcessorOp
   Output<Tensor> rd_maps{"rd_maps"};
   Output<Tensor> velocity_bins{"velocity_bins"};
 
-  // Sticky [live] overrides (OPERATOR_API.md). doppler_window / waveform
-  // are Params-only on EA (HSDK5_PORT §9).
+  // [live] Exact overrides (OPERATOR_API.md).
+  Input<wire::WindowSpecT> doppler_window_in{"doppler_window"};
   Input<bool> center_zero_doppler_in{"center_zero_doppler"};
+  Input<wire::FMCWWaveformT> waveform_in{"waveform"};
   Input<FftNorm> fft_norm_in{"fft_norm"};
   Input<int64_t> nfft_in{"nfft"};
 
  private:
-  // Kernel-side caches (window coefficients, seen FFT lengths); allocated
-  // on first compute().
-  std::shared_ptr<detail::DopplerStageState<T>> state_;
-
-  // Stream-ordered lifetime guard for the previous tick's input.
   Tensor retained_input_;
 
-  // Sticky override state.
-  std::optional<bool> sticky_center_zero_doppler_;
-  std::optional<FftNorm> sticky_fft_norm_;
-  std::optional<int64_t> sticky_nfft_;
+  // velocity_bins is optional/latched (OPERATOR_API.md).
+  LatchedOutput velocity_bins_out_;
+
+  // Kernel-side caches (window coefficients, seen FFT lengths); allocated
+  // in the ctor.
+  std::shared_ptr<detail::DopplerStageState<T>> state_;
 
   MaxTensorExtents extents_;
   std::uint32_t max_rank_{2U};

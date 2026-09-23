@@ -19,14 +19,30 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
+#include "fmcw/window_stage.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/tensor/matx_utils.hpp"
 
 namespace holoscan::radar::detail {
 
+// Kernel-facing knobs for one tick. method is always a concrete enum (no
+// Params sentinel). kNone is a pass-through for both standalone and fused
+// execution.
+struct ClutterStageConfig {
+  ClutterFilterMethod method{ClutterFilterMethod::kMeanSubtraction};
+  WindowSpec window{};
+};
+
+template <typename T>
+struct ClutterStageState {
+  ConfigCache<CachedWindow<T>> windows;
+};
+
 // Output chirp count for a method, per the locked contract. kNone passes
-// through unchanged (fused operator's inline stage only).
+// through unchanged.
 inline int64_t clutter_num_chirps_out(ClutterFilterMethod method,
                                       int64_t num_chirps) {
   switch (method) {
@@ -45,7 +61,7 @@ inline int64_t clutter_num_chirps_out(ClutterFilterMethod method,
 // rank-3 MatX operator, (batch, num_chirps, num_range_bins),
 // cuda::std::complex — and invoke fn(expr). The expression's chirp axis has
 // clutter_num_chirps_out(method, num_chirps) elements. kNone invokes fn(in)
-// directly (zero added kernels). Single source of the clutter math for both
+// directly. Single source of the clutter math for both
 // the split ClutterFilterOp (materialized below) and the fused operator's
 // Doppler pre-FFT expression.
 //
@@ -53,13 +69,14 @@ inline int64_t clutter_num_chirps_out(ClutterFilterMethod method,
 //   kMeanSubtraction — subtract the per-(batch, range-bin) slow-time mean.
 //   kSingleDelay     — first difference  x[k+1] - x[k]        (1st-order MTI)
 //   kDoubleDelay     — x[k] - 2 x[k+1] + x[k+2]               (2nd-order MTI)
-//   kNone            — pass through (fused inline stage only).
+//   kNone            — pass through.
 //
 // Throws std::invalid_argument when num_chirps is too small for the
 // selected method (single_delay needs >= 2, double_delay needs >= 3).
-template <typename InOp, typename Fn>
+template <typename T, typename InOp, typename Fn>
 void with_clutter_expr(ClutterFilterMethod method, const InOp& in,
-                       int64_t num_chirps, Fn&& fn) {
+                       int64_t num_chirps,
+                       const CachedWindow<T>* window, Fn&& fn) {
   if (method == ClutterFilterMethod::kSingleDelay && num_chirps < 2) {
     throw std::invalid_argument(
         "clutter stage: method 'single_delay' needs num_chirps >= 2, got " +
@@ -80,11 +97,27 @@ void with_clutter_expr(ClutterFilterMethod method, const InOp& in,
       // over the chirp axis. Shape preserved. matx::mean is a transform op:
       // the reduction materializes into a small stream-ordered temp during
       // the consuming expression's PreRun.
-      auto slow_time_mean = matx::mean(in, {1});  // (batch, bins)
-      auto mean_bcast = matx::clone<3>(
-          slow_time_mean,
-          {matx::matxKeepDim, num_chirps, matx::matxKeepDim});
-      fn(in - mean_bcast);
+      if (window == nullptr) {
+        auto slow_time_mean = matx::mean(in, {1});  // (batch, bins)
+        auto mean_bcast = matx::clone<3>(
+            slow_time_mean,
+            {matx::matxKeepDim, num_chirps, matx::matxKeepDim});
+        fn(in - mean_bcast);
+      } else {
+        auto window_bcast = matx::clone<3>(
+            window->taps,
+            {in.Size(0), matx::matxKeepDim, in.Size(2)});
+        // mean(w*x) * N/sum(w) is sum(w*x)/sum(w). The cached sum is
+        // computed from the exact host taps before their device upload.
+        const T mean_scale =
+            static_cast<T>(static_cast<double>(num_chirps) / window->sum);
+        auto weighted_mean =
+            matx::mean(in * window_bcast, {1}) * mean_scale;
+        auto mean_bcast = matx::clone<3>(
+            weighted_mean,
+            {matx::matxKeepDim, num_chirps, matx::matxKeepDim});
+        fn(in - mean_bcast);
+      }
       break;
     }
     case ClutterFilterMethod::kSingleDelay: {
@@ -116,6 +149,15 @@ void with_clutter_expr(ClutterFilterMethod method, const InOp& in,
   }
 }
 
+template <typename InOp, typename Fn>
+void with_clutter_expr(ClutterFilterMethod method, const InOp& in,
+                       int64_t num_chirps, Fn&& fn) {
+  using complex_type = typename InOp::value_type;
+  using scalar_type = typename complex_type::value_type;
+  with_clutter_expr<scalar_type>(method, in, num_chirps, nullptr,
+                                 std::forward<Fn>(fn));
+}
+
 // Run slow-time clutter suppression over a collapsed batch view.
 //
 //   in  — device pointer, (batch, num_chirps, num_range_bins),
@@ -124,21 +166,33 @@ void with_clutter_expr(ClutterFilterMethod method, const InOp& in,
 //         cuda::std::complex<T>, preallocated by the caller;
 //         num_chirps_out must equal clutter_num_chirps_out(method, ...).
 //
-// Stateless (no setup cost). All work is enqueued on `stream`; no
-// synchronization. Validation and method semantics: see with_clutter_expr.
+// Window coefficients are cached in `state`; all work is enqueued on `stream`
+// with no synchronization. Validation and method semantics: see
+// with_clutter_expr.
 template <typename T>
-void run_clutter_stage(ClutterFilterMethod method, const void* in,
+void run_clutter_stage(const ClutterStageConfig& cfg,
+                       ClutterStageState<T>& state, const void* in,
                        int64_t batch, int64_t num_chirps,
                        int64_t num_range_bins, void* out,
                        cudaStream_t stream) {
   auto in_view =
       make_const_complex_view3<T>(in, batch, num_chirps, num_range_bins);
-  const int64_t num_chirps_out = clutter_num_chirps_out(method, num_chirps);
+  const int64_t num_chirps_out =
+      clutter_num_chirps_out(cfg.method, num_chirps);
   auto out_view =
       make_complex_view3<T>(out, batch, num_chirps_out, num_range_bins);
   matx::cudaExecutor exec{stream};
-  with_clutter_expr(method, in_view, num_chirps,
-                    [&](const auto& expr) { (out_view = expr).run(exec); });
+  const CachedWindow<T>* window = nullptr;
+  if (cfg.method == ClutterFilterMethod::kMeanSubtraction &&
+      cfg.window.type != WindowType::kNone) {
+    window = &get_cached_window<T>(
+        cfg.window, num_chirps, state.windows, "clutter projection window",
+        stream);
+    require_nonzero_window_sum(cfg.window, *window);
+  }
+  with_clutter_expr<T>(
+      cfg.method, in_view, num_chirps, window,
+      [&](const auto& expr) { (out_view = expr).run(exec); });
 }
 
 }  // namespace holoscan::radar::detail

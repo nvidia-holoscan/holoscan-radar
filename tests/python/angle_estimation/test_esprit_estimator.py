@@ -658,7 +658,7 @@ def test_FixedSourceCountWorksWithFewSnapshots():
     assert output["aoa"][0, 0] == pytest.approx(0.12, abs=0.02)
 
 
-def test_LiveArrayGeometryStickyOverride():
+def test_LiveArrayGeometryOverrideAppliesPerTick():
     geom = make_ula_geometry(4, 0.5, 1.0)
     changed = make_ula_geometry(4, 0.5, 0.8)
     conv = radar_boresight_convention()
@@ -687,7 +687,7 @@ def test_LiveArrayGeometryStickyOverride():
     np.testing.assert_array_equal(outputs[0], outputs[2])
 
 
-def test_LiveSourceCountPfaStickyOverride():
+def test_LiveSourceCountPfaOverrideAppliesPerTick():
     geom = make_ula_geometry(8, 0.5, 1.0)
     conv = radar_boresight_convention()
     block = make_block(geom, conv, 0.08, 0.0, 40, 0.45, 191)
@@ -716,7 +716,8 @@ def test_LiveSourceCountPfaStickyOverride():
     tight = int(outputs[0][0])
     loose = int(outputs[1][0])
     assert tight <= loose
-    assert loose == int(outputs[2][0])
+    # Tick 2 reverts to the Params Pfa of 1e-4, as on tick 0.
+    assert int(outputs[2][0]) == tight
 
 
 @pytest.mark.parametrize(
@@ -727,7 +728,7 @@ def test_LiveSourceCountPfaStickyOverride():
         ("spatial_smoothing", [[], [2]], "eigenvalues"),
     ],
 )
-def test_LiveOverridesAreSticky(port, overrides, output_port):
+def test_LiveOverridesApplyPerTick(port, overrides, output_port):
     geom = make_ula_geometry(12, 0.5, 1.0)
     conv = radar_boresight_convention()
     block = make_block_two(geom, conv, -0.15, 0.20, 128, 0.02, 101)
@@ -757,14 +758,16 @@ def test_LiveOverridesAreSticky(port, overrides, output_port):
         ],
     )[output_port]
     assert len(outputs) == 3
-    assert outputs[1].shape == outputs[2].shape
+    # Tick 2 publishes no override, so it matches tick 0's Params behaviour.
     if port == "num_sources":
         assert int(outputs[0][0]) == 1
         assert int(outputs[1][0]) == 2
-        assert int(outputs[2][0]) == 2
+        assert int(outputs[2][0]) == 1
     elif port == "max_sources":
         assert outputs[0].shape == (1, 1, 2)
         assert outputs[1].shape == (1, 3, 2)
+        assert outputs[2].shape == (1, 1, 2)
     else:
         assert outputs[0].shape == (1, 12)
         assert outputs[1].shape == (1, 11)
+        assert outputs[2].shape == (1, 12)

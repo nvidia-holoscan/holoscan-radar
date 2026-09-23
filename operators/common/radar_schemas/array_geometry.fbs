@@ -1,0 +1,25 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+include "tensor.fbs";
+
+namespace holoscan.radar.wire;
+
+enum ArrayGeometryType : ubyte {
+  Ula = 0,
+  Ura,
+  Uca,
+  Conformal,
+}
+
+// Uses the module's existing float64 (num_elements + 1, 3) packed geometry
+// representation so descriptor inputs and Tensor geometry outputs share one
+// physical layout.
+table ArrayGeometry {
+  packed_geometry: holoscan.schema.Tensor (id: 0);
+  has_geometry_type: bool = false (id: 1);
+  geometry_type: ArrayGeometryType = Ula (id: 2);
+}
+
+root_type ArrayGeometry;
+file_identifier "RAGY";

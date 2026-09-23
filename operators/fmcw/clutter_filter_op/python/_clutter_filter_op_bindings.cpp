@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include <holoscan/core/fragment.hpp>
 #include <holoscan/core/operator.hpp>
@@ -15,6 +16,7 @@
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 
@@ -32,6 +34,7 @@ class PyClutterFilterOp : public ClutterFilterOp<T> {
   PyClutterFilterOp(
       Fragment* fragment, const py::args& args,
       ClutterFilterMethod method = ClutterFilterMethod::kMeanSubtraction,
+      WindowSpec doppler_window = {},
       std::int64_t max_chirps = 512,
       std::int64_t max_range_bins = 4096,
       std::int64_t max_rx = 1,
@@ -54,6 +57,7 @@ class PyClutterFilterOp : public ClutterFilterOp<T> {
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
     this->add_arg(Arg("method") = method);
+    this->add_arg(Arg("doppler_window") = std::move(doppler_window));
     this->setup(*this->spec_);
     python::add_conditions_and_resources(this, args);
   }
@@ -70,12 +74,16 @@ void bind_clutter_filter(py::module_& m, const char* class_name) {
       "Parameters\n----------\n"
       "fragment : holoscan.core.Fragment\n"
       "method : ClutterFilterMethod, optional\n"
+      "doppler_window : WindowSpec, optional\n"
+      "    Slow-time weighting for mean_subtraction; default none uses a "
+      "uniform mean.\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&, ClutterFilterMethod,
+      .def(py::init<Fragment*, const py::args&, ClutterFilterMethod, WindowSpec,
                     std::int64_t, std::int64_t, std::int64_t, std::int64_t,
                     const std::string&>(),
            py::arg("fragment"),
            py::arg("method") = ClutterFilterMethod::kMeanSubtraction,
+           py::arg("doppler_window") = WindowSpec{},
            py::arg("max_chirps") = 512,
            py::arg("max_range_bins") = 4096,
            py::arg("max_rx") = 1,

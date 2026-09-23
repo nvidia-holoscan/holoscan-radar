@@ -6,14 +6,13 @@
 // vs fused
 //   FMCWRangeDopplerProcessorOp
 //
-// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application
+//  Graph-based rewrite of the HSDK 4.x Application
 // harness.  No [live] overrides — steady e2e comparison only.
 // Measurement tool only — no timing assertions and no keep/kill
 // verdict.  Summing the three per-operator perf tools overstates split
 // cost (extra Holoscan nodes / intermediate tensors are missing from a
 // naive sum); this tool times both graphs with identical I/O so the
-// team can fill the decision table in
-// operators/fmcw/fmcw_range_doppler_processor_op/OPEN_ITEMS.md §1.
+// team can fill the decision in CLARAHOLOS-3417.
 //
 // See docs/planning/OPERATOR_DEVELOPMENT.md.
 
@@ -38,6 +37,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/descriptors/window_spec.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
@@ -70,6 +70,7 @@ struct CompareScenario {
   int64_t samples_per_chirp{0};
   int64_t channels{1};
   hr::ClutterFilterMethod clutter{hr::ClutterFilterMethod::kNone};
+  hr::WindowType doppler_window{hr::WindowType::kNone};
   GraphKind graph{GraphKind::kFused};
 };
 
@@ -172,6 +173,7 @@ perf::TimingCollector run_fused_compare_graph(
         hr::FMCWRangeDopplerProcessorParams params;
         params.waveform = make_waveform();
         params.clutter_filter = scen.clutter;
+        params.doppler_window.type = scen.doppler_window;
         op.set_params(std::move(params));
         const auto sink =
             graph.op<perf::PerfTerminalSinkOp>(
@@ -252,6 +254,7 @@ perf::TimingCollector run_split_compare_graph(
                 "doppler", doppler_extents);
         hr::FMCWDopplerProcessorParams dp;
         dp.waveform = make_waveform();
+        dp.doppler_window.type = scen.doppler_window;
         doppler.set_params(std::move(dp));
 
         const holoscan::ConnectionOptions q{
@@ -270,6 +273,10 @@ perf::TimingCollector run_split_compare_graph(
               PerfPrecision>>("clutter", extents);
           hr::ClutterFilterParams cp;
           cp.method = scen.clutter;
+          if (scen.clutter ==
+              hr::ClutterFilterMethod::kMeanSubtraction) {
+            cp.doppler_window.type = scen.doppler_window;
+          }
           clt.set_params(std::move(cp));
           graph.add_flow(
               range->range_profiles,
@@ -335,6 +342,7 @@ perf::ResultRow base_row(const CompareScenario& scen) {
   row.op_name = "FMCWRangeDoppler_split_vs_fused";
   row.variant =
       clutter_tag(scen.clutter) + "_" +
+      std::string(hr::to_string(scen.doppler_window)) + "_" +
       graph_tag(scen.graph);
   row.size_id = scen.size_id;
   row.map_shape = {scen.num_chirps,
@@ -352,16 +360,19 @@ perf::ResultRow base_row(const CompareScenario& scen) {
 
 CompareScenario make_scenario(
     hr::ClutterFilterMethod clutter, const SizeSpec& s,
-    GraphKind graph, int64_t channels = 1) {
+    GraphKind graph, int64_t channels = 1,
+    hr::WindowType doppler_window = hr::WindowType::kNone) {
   CompareScenario sc;
   sc.size_id = s.id;
   sc.num_chirps = s.num_chirps;
   sc.samples_per_chirp = s.samples_per_chirp;
   sc.channels = channels;
   sc.clutter = clutter;
+  sc.doppler_window = doppler_window;
   sc.graph = graph;
   std::ostringstream pair;
   pair << "svf_" << clutter_tag(clutter) << "_"
+       << hr::to_string(doppler_window) << "_"
        << s.id;
   if (channels > 1) {
     pair << "_ch" << channels;
@@ -374,11 +385,13 @@ CompareScenario make_scenario(
 void append_pair(std::vector<CompareScenario>* out,
                  hr::ClutterFilterMethod clutter,
                  const SizeSpec& s,
-                 int64_t channels = 1) {
+                 int64_t channels = 1,
+                 hr::WindowType doppler_window =
+                     hr::WindowType::kNone) {
   out->push_back(make_scenario(
-      clutter, s, GraphKind::kSplit, channels));
+      clutter, s, GraphKind::kSplit, channels, doppler_window));
   out->push_back(make_scenario(
-      clutter, s, GraphKind::kFused, channels));
+      clutter, s, GraphKind::kFused, channels, doppler_window));
 }
 
 void print_comparison_table(
@@ -431,8 +444,8 @@ void print_comparison_table(
       << "\n=== split vs fused comparison "
          "(median_ms, team decision aid) ===\n";
   std::cout
-      << "No keep/kill verdict is encoded. Fill "
-         "OPEN_ITEMS §1 from this table.\n";
+      << "No keep/kill verdict is encoded. Attach results to "
+         "CLARAHOLOS-3417.\n";
   std::cout << std::left << std::setw(28) << "pair_id"
             << std::setw(8) << "size" << std::setw(8)
             << "clutter" << std::right
@@ -528,6 +541,9 @@ struct CompareTraits : perf::PerfDriverDefaults {
     append_pair(
         &out, hr::ClutterFilterMethod::kNone,
         must_find_size("md"), 4);
+    append_pair(
+        &out, hr::ClutterFilterMethod::kMeanSubtraction,
+        must_find_size("md"), 1, hr::WindowType::kHann);
     return out;
   }
 
@@ -561,6 +577,9 @@ struct CompareTraits : perf::PerfDriverDefaults {
             hr::ClutterFilterMethod::kSingleDelay}) {
         append_pair(&out, c, s);
       }
+      append_pair(
+          &out, hr::ClutterFilterMethod::kMeanSubtraction, s, 1,
+          hr::WindowType::kHann);
     }
     for (const char* sid : {"md", "lg"}) {
       for (int64_t ch : {4, 16}) {

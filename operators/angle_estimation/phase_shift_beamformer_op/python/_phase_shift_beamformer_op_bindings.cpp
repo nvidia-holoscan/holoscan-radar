@@ -37,8 +37,8 @@ class PyPhaseShiftBeamformerOp : public PhaseShiftBeamformerOp<T> {
       const ArrayGeometry& array_geometry = ArrayGeometry{},
       const AngleConvention& angle_convention =
           AngleConvention{},
-      const std::vector<double>& az_angles = {},
-      const std::vector<double>& el_angles = {},
+      const std::vector<double>& az_coordinates = {},
+      const std::vector<double>& el_coordinates = {},
       const WindowSpec& array_taper = WindowSpec{},
       std::int64_t max_az = 101,
       std::int64_t max_el = 51,
@@ -58,8 +58,8 @@ class PyPhaseShiftBeamformerOp : public PhaseShiftBeamformerOp<T> {
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
     this->add_arg(Arg("array_geometry") = array_geometry);
     this->add_arg(Arg("angle_convention") = angle_convention);
-    this->add_arg(Arg("az_angles") = az_angles);
-    this->add_arg(Arg("el_angles") = el_angles);
+    this->add_arg(Arg("az_coordinates") = az_coordinates);
+    this->add_arg(Arg("el_coordinates") = el_coordinates);
     this->add_arg(Arg("array_taper") = array_taper);
     this->setup(*this->spec_);
     python::add_conditions_and_resources(this, args);
@@ -78,8 +78,8 @@ void bind_phase_shift_beamformer(py::module_& m, const char* class_name) {
       "fragment : holoscan.core.Fragment\n"
       "array_geometry : ArrayGeometry, optional\n"
       "angle_convention : AngleConvention, optional\n"
-      "az_angles : list[float], optional\n"
-      "el_angles : list[float], optional\n"
+      "az_coordinates : list[float], optional\n"
+      "el_coordinates : list[float], optional\n"
       "array_taper : WindowSpec, optional\n"
       "name : str, optional\n")
       .def(py::init<Fragment*, const py::args&,
@@ -94,8 +94,8 @@ void bind_phase_shift_beamformer(py::module_& m, const char* class_name) {
            py::arg("fragment"),
            py::arg("array_geometry") = ArrayGeometry{},
            py::arg("angle_convention") = AngleConvention{},
-           py::arg("az_angles") = std::vector<double>{},
-           py::arg("el_angles") = std::vector<double>{},
+           py::arg("az_coordinates") = std::vector<double>{},
+           py::arg("el_coordinates") = std::vector<double>{},
            py::arg("array_taper") = WindowSpec{},
            py::arg("max_az") = 101,
            py::arg("max_el") = 51,

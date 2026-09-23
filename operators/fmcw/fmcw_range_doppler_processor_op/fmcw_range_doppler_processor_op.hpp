@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <type_traits>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -26,6 +25,9 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/math/constants.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -41,23 +43,23 @@ struct DopplerStageState;  // defined in doppler_stage.hpp
 // dtypes, and parameters. Drop-in replacement for the split
 // FMCWRangeProcessorOp -> [ClutterFilterOp] -> FMCWDopplerProcessorOp chain
 // where the intermediate range profiles are not needed; produces identical
-// rd_maps (within tolerance) by calling the same stage functions.
+// rd_maps (within tolerance) by calling the same stage functions. For
+// mean_subtraction, doppler_window supplies both the weighted clutter
+// projection and the Doppler analysis taper. Split chains must configure the
+// same window on ClutterFilterOp and FMCWDopplerProcessorOp.
 //
 // In:  adc_cube      — complex64/complex128 (IQ IF) or float32/float64
-//                      (real IF), (..., num_chirps, samples_per_chirp).
+//                      (real IF), (num_chirps, samples_per_chirp) or with
+//                      named leading N_rx / (M_tx, N_rx).
 // Out: rd_maps       — complex64/complex128,
-//                      (..., num_doppler, num_range_bins).
+//                      same leading + (num_doppler, num_range_bins).
 // Out: range_bins    — optional, float32/float64, (num_range_bins,).
 // Out: velocity_bins — optional, float32/float64, (num_doppler,).
 //
-// Precision is fixed at compile time by the template instantiation.
+// Precision is fixed at compile time by the template instantiation
+// (T = float → complex64/float32, T = double → complex128/float64).
+// Fat outs require MaxTensorExtents at graph.op() (ctor).
 //
-// [EA HSDK5 ONLY] range_window, doppler_window, and waveform are [live] in
-// OPERATOR_API.md but stay Params-only here: WindowSpec and
-// FMCWWaveformDescriptor own vectors / optionals (HSDK5_PORT.md §9). POD
-// scalars (apply_dechirp, clutter_filter, fft_norm, center_zero_doppler,
-// propagation_speed, nfft_range, nfft_doppler) have sticky Input overrides.
-
 struct FMCWRangeDopplerProcessorParams {
   WindowSpec range_window{};
   WindowSpec doppler_window{};
@@ -87,7 +89,9 @@ HOLOSCAN_PARAM_SCHEMA(
         "doppler_window")
         .description(
             "WindowSpec applied along the chirp (slow-time) axis before "
-            "the Doppler FFT (coherent-gain normalized). Default: none."),
+            "the Doppler FFT (coherent-gain normalized), and also used for "
+            "the clutter projection when clutter_filter is mean_subtraction. "
+            "Default: none."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::apply_dechirp>(
         "apply_dechirp")
         .description(
@@ -98,13 +102,12 @@ HOLOSCAN_PARAM_SCHEMA(
         .description(
             "Optional inline clutter stage between the range and Doppler "
             "stages {none, mean_subtraction, single_delay, double_delay}; "
-            "same semantics as ClutterFilterOp's method. The delay "
-            "cancellers reduce num_doppler."),
+            "same semantics as ClutterFilterOp's method. Mean subtraction "
+            "uses doppler_window; the delay cancellers reduce num_doppler."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::waveform>("waveform")
         .description(
             "Dechirp reference and the range_bins / velocity_bins axes. "
-            "Required for software dechirp and/or those outputs. "
-            "[live] in API but Params-only on EA (HSDK5_PORT §9)."),
+            "Required for software dechirp and/or those outputs."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::fft_norm>("fft_norm")
         .description(
             "One normalization convention {backward, ortho, forward} for "
@@ -156,28 +159,23 @@ class FMCWRangeDopplerProcessorOp
   Output<Tensor> range_bins{"range_bins"};
   Output<Tensor> velocity_bins{"velocity_bins"};
 
-  // Sticky [live] override ports for POD scalars (OPERATOR_API.md).
-  // [EA HSDK5 ONLY] range_window, doppler_window, waveform are
-  // Params-only (§9).
+  // [live] Exact override ports (OPERATOR_API.md).
+  Input<wire::WindowSpecT> range_window_in{"range_window"};
+  Input<wire::WindowSpecT> doppler_window_in{"doppler_window"};
   Input<bool> apply_dechirp_in{"apply_dechirp"};
   Input<ClutterFilterMethod> clutter_filter_in{"clutter_filter"};
+  Input<wire::FMCWWaveformT> waveform_in{"waveform"};
   Input<FftNorm> fft_norm_in{"fft_norm"};
   Input<bool> center_zero_doppler_in{"center_zero_doppler"};
-  Input<double> propagation_speed_in{"propagation_speed"};
   Input<int64_t> nfft_range_in{"nfft_range"};
   Input<int64_t> nfft_doppler_in{"nfft_doppler"};
 
  private:
   Tensor retained_input_;
 
-  // Sticky [live] state for POD scalars.
-  std::optional<bool> sticky_apply_dechirp_;
-  std::optional<ClutterFilterMethod> sticky_clutter_filter_;
-  std::optional<FftNorm> sticky_fft_norm_;
-  std::optional<bool> sticky_center_zero_doppler_;
-  std::optional<double> sticky_propagation_speed_;
-  std::optional<int64_t> sticky_nfft_range_;
-  std::optional<int64_t> sticky_nfft_doppler_;
+  // Both axis outputs are optional/latched (OPERATOR_API.md).
+  LatchedOutput range_bins_out_;
+  LatchedOutput velocity_bins_out_;
 
   // Kernel-side caches for the two FFT stages.
   std::shared_ptr<detail::RangeStageState<T>> range_state_;

@@ -7,7 +7,7 @@
 //   P[i, b] = | Σ_c conj(w[b, c]) · x[i, c] |²
 // i.e. the elementwise magnitude² of the matrix product X · Wᶜ, where
 //   X  = snapshots           [num_items,    num_channels]
-//   Wᶜ = conj(w)ᵀ            [num_channels, num_beams]   (built host-side)
+//   Wᶜ = conj(w)ᵀ            [num_channels, num_beams]   (built on device)
 //   Y  = X · Wᶜ              [num_items,    num_beams]
 // Casting the beamformer as one complex GEMM (cuBLAS, via MatX) is what makes
 // this fast: the steering table is streamed once and reused across every
@@ -133,21 +133,23 @@ __global__ void beamscan_reduce_kernel(
     T az = az_grid[ia];
     T el = el_grid[ie];
     if (peak_interp == peak_interp_id(PeakInterpolation::kParabolic) &&
-        num_az >= 3 && num_el >= 3 && ia > 0 && ia + 1 < num_az && ie > 0 &&
-        ie + 1 < num_el) {
+        num_az >= 3 && ia > 0 && ia + 1 < num_az) {
       const T az_step_left = az_grid[ia] - az_grid[ia - 1];
       const T az_step_right = az_grid[ia + 1] - az_grid[ia];
-      const T el_step_left = el_grid[ie] - el_grid[ie - 1];
-      const T el_step_right = el_grid[ie + 1] - el_grid[ie];
       const T off_az =
           parabolic_offset(spectrum_at(spec, ia - 1, ie, num_el),
                            spectrum_at(spec, ia, ie, num_el),
                            spectrum_at(spec, ia + 1, ie, num_el));
+      az += off_az * (az_step_left + az_step_right) * T{0.5};
+    }
+    if (peak_interp == peak_interp_id(PeakInterpolation::kParabolic) &&
+        num_el >= 3 && ie > 0 && ie + 1 < num_el) {
+      const T el_step_left = el_grid[ie] - el_grid[ie - 1];
+      const T el_step_right = el_grid[ie + 1] - el_grid[ie];
       const T off_el =
           parabolic_offset(spectrum_at(spec, ia, ie - 1, num_el),
                            spectrum_at(spec, ia, ie, num_el),
                            spectrum_at(spec, ia, ie + 1, num_el));
-      az += off_az * (az_step_left + az_step_right) * T{0.5};
       el += off_el * (el_step_left + el_step_right) * T{0.5};
     }
     out0 = az;
@@ -202,6 +204,130 @@ inline void run_beamscan_stage(const cuda::std::complex<T>* snapshots,
       static_cast<size_t>(block) * (sizeof(T) + sizeof(int64_t));
   beamscan_reduce_kernel<T><<<grid, block, smem, stream>>>(
       beamformed, num_items, num_beams, num_az, num_el, az_grid, el_grid,
+      peak_interp_id(peak_interp), spectrum, aoa);
+}
+
+// Multi-look Bartlett path. One block owns an item and each thread owns a
+// subset of beams. For every valid look it forms the conventional beam output,
+// accumulates power, and writes the mean power before the same deterministic
+// block argmax and optional interpolation used by the one-look path.
+template <typename T>
+__global__ void beamscan_multilook_kernel(
+    const cuda::std::complex<T>* __restrict__ snapshots,
+    const unsigned char* __restrict__ mask, int64_t num_items,
+    int64_t num_channels, int64_t num_snapshots,
+    const cuda::std::complex<T>* __restrict__ weights_ct,
+    int64_t num_beams, int64_t num_az, int64_t num_el,
+    const T* __restrict__ az_grid, const T* __restrict__ el_grid,
+    int peak_interp, T* __restrict__ spectrum, T* __restrict__ aoa) {
+  const int64_t item = static_cast<int64_t>(blockIdx.x);
+  if (item >= num_items) {
+    return;
+  }
+  extern __shared__ __align__(16) unsigned char smem[];
+  auto* red_pow = reinterpret_cast<T*>(smem);
+  auto* red_idx =
+      reinterpret_cast<int64_t*>(red_pow + static_cast<int64_t>(blockDim.x));
+  const int tid = static_cast<int>(threadIdx.x);
+  const int nthreads = static_cast<int>(blockDim.x);
+  T* spec = spectrum + item * num_beams;
+
+  int64_t valid_count = 0;
+  for (int64_t s = 0; s < num_snapshots; ++s) {
+    valid_count += mask == nullptr || mask[item * num_snapshots + s] != 0;
+  }
+
+  T best_power = T{0};
+  int64_t best_beam = -1;
+  for (int64_t beam = tid; beam < num_beams; beam += nthreads) {
+    T power = T{0};
+    for (int64_t s = 0; s < num_snapshots; ++s) {
+      if (mask != nullptr && mask[item * num_snapshots + s] == 0) {
+        continue;
+      }
+      cuda::std::complex<T> sum{T{0}, T{0}};
+      for (int64_t c = 0; c < num_channels; ++c) {
+        const auto x = snapshots[(item * num_channels + c) * num_snapshots + s];
+        const auto w = weights_ct[c * num_beams + beam];
+        sum += x * w;
+      }
+      power += sum.real() * sum.real() + sum.imag() * sum.imag();
+    }
+    power = valid_count > 0 ? power / static_cast<T>(valid_count) : T{0};
+    const int64_t ia = beam % num_az;
+    const int64_t ie = beam / num_az;
+    spectrum_at(spec, ia, ie, num_el) = power;
+    if (power > best_power) {
+      best_power = power;
+      best_beam = beam;
+    }
+  }
+
+  red_pow[tid] = best_power;
+  red_idx[tid] = best_beam;
+  __syncthreads();
+  for (int stride = nthreads / 2; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      const T other_pow = red_pow[tid + stride];
+      const int64_t other_idx = red_idx[tid + stride];
+      const bool take = other_pow > red_pow[tid] ||
+                        (other_pow == red_pow[tid] && other_idx >= 0 &&
+                         (red_idx[tid] < 0 || other_idx < red_idx[tid]));
+      if (take) {
+        red_pow[tid] = other_pow;
+        red_idx[tid] = other_idx;
+      }
+    }
+    __syncthreads();
+  }
+  if (tid != 0) {
+    return;
+  }
+  if (valid_count == 0 || red_idx[0] < 0 || red_pow[0] <= T{0}) {
+    const T nan = T{0} / T{0};
+    aoa[item * 2] = nan;
+    aoa[item * 2 + 1] = nan;
+    return;
+  }
+  const int64_t ia = red_idx[0] % num_az;
+  const int64_t ie = red_idx[0] / num_az;
+  T az = az_grid[ia];
+  T el = el_grid[ie];
+  if (peak_interp == peak_interp_id(PeakInterpolation::kParabolic) &&
+      num_az >= 3 && ia > 0 && ia + 1 < num_az) {
+    const T off = parabolic_offset(spectrum_at(spec, ia - 1, ie, num_el),
+                                   spectrum_at(spec, ia, ie, num_el),
+                                   spectrum_at(spec, ia + 1, ie, num_el));
+    az += off * (az_grid[ia + 1] - az_grid[ia - 1]) * T{0.5};
+  }
+  if (peak_interp == peak_interp_id(PeakInterpolation::kParabolic) &&
+      num_el >= 3 && ie > 0 && ie + 1 < num_el) {
+    const T off = parabolic_offset(spectrum_at(spec, ia, ie - 1, num_el),
+                                   spectrum_at(spec, ia, ie, num_el),
+                                   spectrum_at(spec, ia, ie + 1, num_el));
+    el += off * (el_grid[ie + 1] - el_grid[ie - 1]) * T{0.5};
+  }
+  aoa[item * 2] = az;
+  aoa[item * 2 + 1] = el;
+}
+
+template <typename T>
+inline void run_beamscan_multilook_stage(
+    const cuda::std::complex<T>* snapshots, const unsigned char* mask,
+    int64_t num_items, int64_t num_channels, int64_t num_snapshots,
+    const cuda::std::complex<T>* weights_ct, int64_t num_az, int64_t num_el,
+    const T* az_grid, const T* el_grid, PeakInterpolation peak_interp,
+    T* spectrum, T* aoa, cudaStream_t stream) {
+  if (num_items <= 0) {
+    return;
+  }
+  constexpr int block = 256;
+  const size_t smem =
+      static_cast<size_t>(block) * (sizeof(T) + sizeof(int64_t));
+  beamscan_multilook_kernel<T><<<static_cast<int>(num_items), block, smem,
+                                stream>>>(
+      snapshots, mask, num_items, num_channels, num_snapshots, weights_ct,
+      num_az * num_el, num_az, num_el, az_grid, el_grid,
       peak_interp_id(peak_interp), spectrum, aoa);
 }
 

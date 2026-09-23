@@ -44,6 +44,7 @@ namespace holoscan::radar::app {
 
 struct SimAdcSourceConfig {
   sim::SimScene scene;
+  sim::SceneVisibility scene_visibility{};
   double frame_period{0.1};
   int64_t num_frames{1};
   sim::SceneMover mover;
@@ -69,15 +70,14 @@ class SimAdcSourceOp : public holoscan::Operator<> {
   }
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(adc_cube)
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = max_rank_, .max_byte_span = max_byte_span_});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, max_rank_, max_byte_span_));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -97,7 +97,8 @@ class SimAdcSourceOp : public holoscan::Operator<> {
     cudaStream_t stream = context.cuda_stream().get();
     std::shared_ptr<holoscan::Tensor> staged;
     try {
-      staged = sim::simulate_gpu(config_.scene, stream);
+      staged = sim::simulate_gpu(
+          sim::visible_scene(config_.scene, config_.scene_visibility), stream);
       sim::add_thermal_noise_gpu(*staged, config_.scene.snr_db,
                                  config_.scene.seed + frames_emitted_, stream);
       if (cudaStreamSynchronize(stream) != cudaSuccess) {

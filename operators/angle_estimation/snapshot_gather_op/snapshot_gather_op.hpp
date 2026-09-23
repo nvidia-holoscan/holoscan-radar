@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -23,17 +22,15 @@
 #include <holoscan/core/parameter_schema.hpp>
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
-#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
 
 namespace holoscan::radar {
 
-// [EA HSDK5 ONLY] Live override payload for snapshot_window. HSDK 5
-// PublishedPayload rejects std::vector (not a scalar / Tensor / POD
-// contract type). Params keep std::vector<int64_t> per OPERATOR_API.md;
-// the live Input uses this fixed two-int64 POD. See HSDK5_PORT.md §9.
+// Fixed-layout live payload for snapshot_window. Params retain the public
+// std::vector<int64_t> representation; the graph port uses this bounded POD.
 struct SnapshotWindowOverride {
   int64_t doppler{0};
   int64_t range{0};
@@ -68,6 +65,10 @@ struct ChannelPodLayout<radar::SnapshotWindowOverride> {
 
 namespace holoscan::radar {
 
+namespace detail {
+struct SnapshotGatherState;
+}  // namespace detail
+
 // Gathers per-detection channel snapshots from per-channel RD maps for the
 // sparse angle path. This header is the contract reference for the
 // operator's ports, shapes, dtypes, and parameters; module-wide
@@ -80,10 +81,11 @@ namespace holoscan::radar {
 //                       (…preserved_batch, doppler_bin, range_bin).
 // Out: snapshot       — complex64/complex128,
 //                       (num_detections, num_channels, num_snapshots).
-// Out: is_valid       — uint8 (0/1), (num_detections, num_snapshots). Per-
-//                       detection mask of usable snapshot slots (ragged under
-//                       clamp); 1 = valid. uint8 rather than bool so the mask
-//                       is NumPy-visible (kDLBool has no NumPy typestr on the
+// Out: is_valid       — optional/always uint8 (0/1),
+//                       (num_detections, num_snapshots). Per-detection mask
+//                       of usable snapshot slots (ragged under clamp); 1 =
+//                       valid. uint8 rather than bool so the mask is
+//                       NumPy-visible (kDLBool has no NumPy typestr on the
 //                       Holoscan message path). Consumers accept bool or
 //                       uint8.
 //
@@ -133,25 +135,24 @@ class SnapshotGatherOp : public holoscan::Operator<SnapshotGatherParams> {
   Input<Tensor> detection_idx{"detection_idx"};
   Output<Tensor> snapshot{"snapshot"};
   Output<Tensor> is_valid{"is_valid"};
-  // [live] sticky override of params().snapshot_window (OPERATOR_API.md).
-  // [EA HSDK5 ONLY] POD payload — see SnapshotWindowOverride / HSDK5_PORT §9.
+  // [live] Exact override of params().snapshot_window; the entry is
+  // unconditional and wiring the port enables it (OPERATOR_API.md).
+  // Fixed-layout port payload; see SnapshotWindowOverride.
   // Edge modes are static Params only (no live ports).
   Input<SnapshotWindowOverride> snapshot_window{"snapshot_window"};
 
  private:
-  MaxTensorExtents extents_;
-  std::uint32_t snapshot_max_rank_{3U};
-  std::size_t snapshot_max_byte_span_{0U};
-  std::size_t is_valid_max_byte_span_{0U};
-
   // Keep the previous activation's inputs alive across ticks so async device
   // reads cannot outlive the buffers.
   Tensor retained_rd_maps_;
   Tensor retained_detection_idx_;
-  // Cached device copy of rd_maps leading dims for the batch-linear kernel.
-  std::shared_ptr<holoscan::Tensor> retained_leading_dims_;
-  // Sticky [live] snapshot_window: last override wins until the next.
-  std::optional<SnapshotWindowOverride> sticky_snapshot_window_;
+  std::shared_ptr<detail::SnapshotGatherState> state_;
+
+  std::int64_t max_detections_{0};
+  std::int64_t max_channels_{0};
+  std::int64_t max_snapshots_{0};
+  std::size_t snapshot_max_byte_span_{0U};
+  std::size_t is_valid_max_byte_span_{0U};
 };
 
 extern template class SnapshotGatherOp<float>;

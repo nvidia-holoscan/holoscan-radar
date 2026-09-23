@@ -6,10 +6,9 @@
 // RD maps. Sweeps channel count, RD-map size, detection count, and snapshot
 // window. Measurement tool only: no timing assertions.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite via run_perf_graph_dual (rd_maps +
-// detection_idx co-emitted on the same OnClock tick, consumed via OnAligned).
-// Mid-session [live] snapshot_window override measurement is deferred until
-// docs/planning/HSDK5_PORT.md §1. Params still select the window under test.
+//  Graph-based rewrite: rd_maps, detection_idx, and any
+// snapshot_window override are co-emitted with the same capture time and
+// consumed through the production OnAligned + Exact contract.
 
 #include <cuda_runtime_api.h>
 
@@ -167,8 +166,6 @@ perf::TimingCollector run_snapshot_graph(const SnapScenario& scen,
   const hr::SnapshotWindowOverride override{
       .doppler = override_window.wd, .range = override_window.wr};
   using BaseOp = hr::SnapshotGatherOp<PerfPrecision>;
-  using LiveOp =
-      perf::PerfLiveContractOp<BaseOp, &BaseOp::snapshot_window>;
   return perf::run_perf_graph_dual_with_override(
       std::move(rd), std::move(idx), plan.total_frames, plan.override_at,
       initial, override, "snapshot-perf",
@@ -179,7 +176,7 @@ perf::TimingCollector run_snapshot_graph(const SnapScenario& scen,
         extents.max_channels = scen.channels;
         extents.max_snapshots = std::max(
             snapshots_for(scen.window), snapshots_for(override_window));
-        auto op = graph.op<LiveOp>("gather", extents);
+        auto op = graph.op<BaseOp>("gather", extents);
         hr::SnapshotGatherParams params;
         params.snapshot_window = {scen.window.wd, scen.window.wr};
         params.doppler_edge = hr::SnapshotEdgeMode::kWrap;

@@ -71,8 +71,8 @@ def test_RecoversKnownDoa2D():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.5, 0.5, 101),
-        el_angles=linspace(-0.3, 0.3, 61),
+        az_coordinates=linspace(-0.5, 0.5, 101),
+        el_coordinates=linspace(-0.3, 0.3, 61),
         peak_interpolation=PeakInterpolation.PARABOLIC,
     )
     assert out["aoa"].shape == (1, 2)
@@ -90,8 +90,8 @@ def test_FloatInstantiationSmoke():
         op_cls=BeamscanEstimatorOpF32,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.2, 0.2, 21),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.2, 0.2, 21),
+        el_coordinates=[0.0],
     )
     assert out["aoa"].shape == (1, 2)
     assert out["aoa"][0, 0] == pytest.approx(0.05, abs=0.02)
@@ -107,8 +107,8 @@ def test_RejectsEmptyScanGrid():
             snap,
             array_geometry=geom,
             angle_convention=conv,
-            az_angles=[],
-            el_angles=[0.0],
+            az_coordinates=[],
+            el_coordinates=[0.0],
         )
 
 
@@ -122,8 +122,8 @@ def test_SpectrumShapeMatchesScanGrid():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.2, 0.2, 17),
-        el_angles=linspace(-0.1, 0.1, 9),
+        az_coordinates=linspace(-0.2, 0.2, 17),
+        el_coordinates=linspace(-0.1, 0.1, 9),
     )
     assert out["aoa"].shape == (2, 2)
     assert out["spectrum"].shape == (2, 17, 9)
@@ -139,8 +139,8 @@ def test_EmptyItemsProducesEmptyOutputs():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=[-0.1, 0.0, 0.1],
-        el_angles=[0.0],
+        az_coordinates=[-0.1, 0.0, 0.1],
+        el_coordinates=[0.0],
     )
     assert out["aoa"].shape == (0, 2)
     assert out["spectrum"].shape == (0, 3, 1)
@@ -158,8 +158,8 @@ def test_RecoversKnownDoaPhysicsSpherical():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.5, 0.5, 101),
-        el_angles=linspace(1.2, 1.7, 61),
+        az_coordinates=linspace(-0.5, 0.5, 101),
+        el_coordinates=linspace(1.2, 1.7, 61),
         peak_interpolation=PeakInterpolation.PARABOLIC,
     )
     assert out["aoa"][0, 0] == pytest.approx(truth_az, abs=0.01)
@@ -176,8 +176,8 @@ def test_RecoversKnownDoaAerospaceNed():
         snap,
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.5, 0.5, 101),
-        el_angles=linspace(-0.3, 0.3, 61),
+        az_coordinates=linspace(-0.5, 0.5, 101),
+        el_coordinates=linspace(-0.3, 0.3, 61),
         peak_interpolation=PeakInterpolation.PARABOLIC,
     )
     assert out["aoa"][0, 0] == pytest.approx(truth_az, abs=0.01)
@@ -193,8 +193,8 @@ def test_FloatDoubleAgreeOnDoa():
     kwargs = dict(
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.3, 0.3, 51),
-        el_angles=[0.0],
+        az_coordinates=linspace(-0.3, 0.3, 51),
+        el_coordinates=[0.0],
         peak_interpolation=PeakInterpolation.PARABOLIC,
     )
     out_f = run_beamscan(
@@ -216,8 +216,8 @@ def test_ParabolicRefinesOffGridDoa():
     kwargs = dict(
         array_geometry=geom,
         angle_convention=conv,
-        az_angles=linspace(-0.2, 0.2, 11),
-        el_angles=linspace(-0.1, 0.1, 3),
+        az_coordinates=linspace(-0.2, 0.2, 11),
+        el_coordinates=linspace(-0.1, 0.1, 3),
     )
     out_none = run_beamscan(snap, peak_interpolation=PeakInterpolation.NONE, **kwargs)
     out_para = run_beamscan(snap, peak_interpolation=PeakInterpolation.PARABOLIC, **kwargs)

@@ -9,9 +9,11 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "utils/tensor_fixtures.hpp"
 
 namespace {
 
@@ -28,6 +30,22 @@ TEST(MakeDeviceTensor, RejectsInvalidAndOverflowingShapes) {
   EXPECT_THROW(holoscan::radar::make_device_tensor(
                    {int64_t{1} << 32, int64_t{1} << 32}, dtype),
                std::invalid_argument);
+}
+
+TEST(CudaAccessibility, RejectsPageableHostTensorWithContext) {
+  const auto tensor = holoscan::radar::testing::to_pageable_host_tensor<float>(
+      {1.0F}, {1}, holoscan::radar::real_dtype<float>());
+
+  EXPECT_FALSE(holoscan::radar::is_cuda_accessible(*tensor));
+  try {
+    holoscan::radar::require_cuda_accessible(*tensor, "input", "TestOp");
+    FAIL() << "expected pageable-host Tensor rejection";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_EQ(std::string(error.what()),
+              "TestOp: tensor received on input port 'input' is not "
+              "CUDA-accessible (device, managed, or pinned-host memory "
+              "required)");
+  }
 }
 
 }  // namespace

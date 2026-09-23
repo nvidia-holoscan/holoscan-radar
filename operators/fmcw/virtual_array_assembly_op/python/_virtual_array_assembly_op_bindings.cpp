@@ -43,12 +43,11 @@ class PyVirtualArrayAssemblyOp : public VirtualArrayAssemblyOp<T> {
       const std::string& name = "virtual_array_assembly")
       : VirtualArrayAssemblyOp<T>([&] {
           MaxTensorExtents extents;
+          extents.max_tx = max_tx;
+          extents.max_rx = max_rx;
           if (max_virtual_channels > 0) {
             extents.max_virtual_channels =
                 max_virtual_channels;
-          } else {
-            extents.max_tx = max_tx;
-            extents.max_rx = max_rx;
           }
           extents.max_doppler_bins = max_doppler_bins;
           extents.max_range_bins = max_range_bins;

@@ -120,8 +120,8 @@ struct DetectionIdxCompactState {
 
 namespace compact_detail {
 
-__global__ void mask_to_u32_kernel(const uint8_t* mask, uint32_t* flags,
-                                   int64_t n) {
+static __global__ void mask_to_u32_kernel(const uint8_t* mask,
+                                          uint32_t* flags, int64_t n) {
   const int64_t i =
       static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i < n) {
@@ -156,7 +156,7 @@ inline void launch_count_u32(const uint32_t* flags, int64_t n, int64_t* d_count,
 }
 
 // After uint32 reduce into the first 4 bytes of d_count, zero-extend to int64.
-__global__ void u32_count_to_i64_kernel(int64_t* d_count) {
+static __global__ void u32_count_to_i64_kernel(int64_t* d_count) {
   const uint32_t lo = *reinterpret_cast<uint32_t*>(d_count);
   *d_count = static_cast<int64_t>(lo);
 }
@@ -178,7 +178,7 @@ inline void launch_exclusive_sum(uint32_t* flags_io, int64_t n,
 // raster order of the kept prefix. `offsets` is the exclusive-sum of flags;
 // a cell is a detection iff offsets[i+1]-style — we still need the original
 // mask because ExclusiveSum overwrites the flags buffer in place.
-__global__ void scatter_detection_idx_kernel(
+static __global__ void scatter_detection_idx_kernel(
     const uint8_t* mask, const uint32_t* offsets, int64_t out_elems,
     int64_t num_doppler, int64_t num_range, int64_t n_preserved,
     const int64_t* preserved_dims, int64_t max_emit, int64_t idx_cols,

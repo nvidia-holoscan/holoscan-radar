@@ -12,8 +12,7 @@ Measurement tool only — no timing assertions and no keep/kill verdict.
 Summing the three per-operator perf tools overstates split cost (extra
 Holoscan nodes / intermediate tensors are missing from a naive sum); this
 tool times both graphs with identical I/O so the team can fill the
-decision table in
-operators/fmcw/fmcw_range_doppler_processor_op/OPEN_ITEMS.md §1.
+decision in CLARAHOLOS-3417.
 
 Scenario matrices mirror ``performance/cpp/perf_fmcw_split_vs_fused.cpp``
 (default / --full / --sizes). No [live] overrides.
@@ -58,6 +57,8 @@ from holoscan.radar import (
     FMCWRangeProcessorOpF32,
     FMCWWaveformDescriptor,
     FMCWWaveformSpec,
+    WindowSpec,
+    WindowType,
 )
 
 # ---------------------------------------------------------------------------
@@ -96,6 +97,7 @@ class CompareScenario:
     samples_per_chirp: int
     channels: int = 1
     clutter: ClutterFilterMethod = ClutterFilterMethod.NONE
+    doppler_window: WindowType = WindowType.NONE
     graph: GraphKind = GraphKind.FUSED
 
 
@@ -132,9 +134,10 @@ def make_scenario(
     size: SizeDef,
     graph: GraphKind,
     channels: int = 1,
+    doppler_window: WindowType = WindowType.NONE,
 ) -> CompareScenario:
     num_chirps, samples_per_chirp = size.shape
-    pair_id = f"svf_{_clutter_tag(clutter)}_{size.id}"
+    pair_id = f"svf_{_clutter_tag(clutter)}_{doppler_window.name.lower()}_{size.id}"
     if channels > 1:
         pair_id += f"_ch{channels}"
     return CompareScenario(
@@ -145,6 +148,7 @@ def make_scenario(
         samples_per_chirp=samples_per_chirp,
         channels=channels,
         clutter=clutter,
+        doppler_window=doppler_window,
         graph=graph,
     )
 
@@ -154,9 +158,10 @@ def _append_pair(
     clutter: ClutterFilterMethod,
     size: SizeDef,
     channels: int = 1,
+    doppler_window: WindowType = WindowType.NONE,
 ) -> None:
-    out.append(make_scenario(clutter, size, GraphKind.SPLIT, channels))
-    out.append(make_scenario(clutter, size, GraphKind.FUSED, channels))
+    out.append(make_scenario(clutter, size, GraphKind.SPLIT, channels, doppler_window))
+    out.append(make_scenario(clutter, size, GraphKind.FUSED, channels, doppler_window))
 
 
 def build_default_matrix() -> list[CompareScenario]:
@@ -166,6 +171,12 @@ def build_default_matrix() -> list[CompareScenario]:
         _append_pair(out, ClutterFilterMethod.NONE, size)
         _append_pair(out, ClutterFilterMethod.MEAN_SUBTRACTION, size)
     _append_pair(out, ClutterFilterMethod.NONE, _must_find_size("md"), 4)
+    _append_pair(
+        out,
+        ClutterFilterMethod.MEAN_SUBTRACTION,
+        _must_find_size("md"),
+        doppler_window=WindowType.HANN,
+    )
     return out
 
 
@@ -188,6 +199,12 @@ def build_full_matrix() -> list[CompareScenario]:
     for size in SIZE_LADDER:
         for clutter in clutters:
             _append_pair(out, clutter, size)
+        _append_pair(
+            out,
+            ClutterFilterMethod.MEAN_SUBTRACTION,
+            size,
+            doppler_window=WindowType.HANN,
+        )
     for sid in ("md", "lg"):
         size = _must_find_size(sid)
         for channels in (4, 16):
@@ -199,7 +216,10 @@ def _base_row(scen: CompareScenario) -> ResultRow:
     return ResultRow(
         scenario_id=scen.id,
         op_name="FMCWRangeDoppler_split_vs_fused",
-        variant=f"{_clutter_tag(scen.clutter)}_{scen.graph.value}",
+        variant=(
+            f"{_clutter_tag(scen.clutter)}_"
+            f"{scen.doppler_window.name.lower()}_{scen.graph.value}"
+        ),
         size_id=scen.size_id,
         map_shape=[scen.num_chirps, scen.samples_per_chirp],
         input_shape=list(_cube_shape(scen)),
@@ -235,10 +255,13 @@ def _run_fused_graph(
 ) -> None:
     class FusedCompareApp(Application):
         def compose(self) -> None:
+            doppler_window = WindowSpec()
+            doppler_window.type = scen.doppler_window
             op = FMCWRangeDopplerProcessorOpF32(
                 self,
                 waveform=waveform,
                 clutter_filter=scen.clutter,
+                doppler_window=doppler_window,
                 name="fused",
             )
             src = PerfTensorSourceOp(
@@ -272,7 +295,14 @@ def _run_split_graph(
     class SplitCompareApp(Application):
         def compose(self) -> None:
             range_op = FMCWRangeProcessorOpF32(self, waveform=waveform, name="range")
-            doppler = FMCWDopplerProcessorOpF32(self, waveform=waveform, name="doppler")
+            doppler_window = WindowSpec()
+            doppler_window.type = scen.doppler_window
+            doppler = FMCWDopplerProcessorOpF32(
+                self,
+                waveform=waveform,
+                doppler_window=doppler_window,
+                name="doppler",
+            )
 
             src = PerfTensorSourceOp(
                 self,
@@ -287,7 +317,10 @@ def _run_split_graph(
             if scen.clutter == ClutterFilterMethod.NONE:
                 self.add_flow(range_op, doppler, {("range_profiles", "range_profiles")})
             else:
-                clutter = ClutterFilterOpF32(self, method=scen.clutter, name="clutter")
+                clutter_kwargs = {"method": scen.clutter, "name": "clutter"}
+                if scen.clutter == ClutterFilterMethod.MEAN_SUBTRACTION:
+                    clutter_kwargs["doppler_window"] = doppler_window
+                clutter = ClutterFilterOpF32(self, **clutter_kwargs)
                 self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
                 self.add_flow(clutter, doppler, {("range_profiles_out", "range_profiles")})
 
@@ -364,7 +397,7 @@ def print_comparison_table(report: PerfReport) -> None:
             p.have_fused = True
 
     print("\n=== split vs fused comparison (median_ms, team decision aid) ===")
-    print("No keep/kill verdict is encoded. Fill OPEN_ITEMS §1 from this table.")
+    print("No keep/kill verdict is encoded. Attach results to CLARAHOLOS-3417.")
     header = (
         f"{'pair_id':<28}{'size':<8}{'clutter':<8}"
         f"{'split_ms':>12}{'fused_ms':>12}{'delta_ms':>12}"

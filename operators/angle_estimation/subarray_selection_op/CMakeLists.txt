@@ -13,6 +13,7 @@ target_link_libraries(subarray_selection_op
     PUBLIC
         holoscan::core
         holoscan::radar_common
+        holoscan::radar_schemas
         holoscan::radar_common_spatial_smoothing)
 
 set_property(TARGET subarray_selection_op

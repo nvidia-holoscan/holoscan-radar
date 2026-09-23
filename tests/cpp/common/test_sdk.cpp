@@ -5,16 +5,25 @@
 // converters for enums, window specs, and waveform descriptors.
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <holoscan/config/io.hpp>
+#include <holoscan/logger/logger.hpp>
 
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/config_cache.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
 #include "radar_common/sdk/yaml_converters.hpp"
 
 namespace {
@@ -41,14 +50,95 @@ TEST(ConfigCacheTest, BuildsOncePerKeyAndCaches) {
   ConfigCache<int> cache;
   int builds = 0;
   auto builder = [&builds]() { return ++builds; };
-  EXPECT_EQ(cache.get_or_build("a", false, "test artifact", builder), 1);
-  EXPECT_EQ(cache.get_or_build("a", true, "test artifact", builder), 1);
-  EXPECT_EQ(cache.get_or_build("b", true, "test artifact", builder), 2);
-  EXPECT_EQ(cache.get_or_build("a", true, "test artifact", builder), 1);
+  EXPECT_EQ(cache.get_or_build("a", "test artifact", builder), 1);
+  EXPECT_EQ(cache.get_or_build("a", "test artifact", builder), 1);
+  EXPECT_EQ(cache.get_or_build("b", "test artifact", builder), 2);
+  // Alternating back to a seen configuration must not rebuild.
+  EXPECT_EQ(cache.get_or_build("a", "test artifact", builder), 1);
   EXPECT_EQ(builds, 2);
   EXPECT_TRUE(cache.contains("a"));
   EXPECT_FALSE(cache.contains("c"));
   EXPECT_EQ(cache.size(), 2u);
+}
+
+// Captures the Holoscan log for the enclosing scope so the warn-once
+// diagnostic can be asserted rather than assumed.
+//
+// Two things have to be neutralized. The level is forced to WARN, and
+// HOLOSCAN_LOG_LEVEL is cleared first because it otherwise overrides
+// set_log_level (so a developer running with a raised level would see this
+// test fail for the wrong reason). The sink writes to the stderr FILE*, so
+// the capture redirects the underlying descriptor rather than replacing a
+// sink: that works no matter when the logger was initialized. Both the level
+// and the environment are restored on scope exit.
+class ScopedLogCapture {
+ public:
+  ScopedLogCapture() {
+    if (const char* env = std::getenv("HOLOSCAN_LOG_LEVEL")) {
+      saved_env_ = env;
+      had_env_ = true;
+      ::unsetenv("HOLOSCAN_LOG_LEVEL");
+    }
+    saved_level_ = holoscan::log_level();
+    holoscan::set_log_level(holoscan::LogLevel::WARN);
+
+    capture_fd_ = ::mkstemp(path_);
+    std::fflush(stderr);
+    saved_stderr_fd_ = ::dup(STDERR_FILENO);
+    ::dup2(capture_fd_, STDERR_FILENO);
+  }
+
+  ~ScopedLogCapture() {
+    std::fflush(stderr);
+    ::dup2(saved_stderr_fd_, STDERR_FILENO);
+    ::close(saved_stderr_fd_);
+    ::close(capture_fd_);
+    ::unlink(path_);
+    holoscan::set_log_level(saved_level_);
+    if (had_env_) {
+      ::setenv("HOLOSCAN_LOG_LEVEL", saved_env_.c_str(), 1);
+    }
+  }
+
+  ScopedLogCapture(const ScopedLogCapture&) = delete;
+  ScopedLogCapture& operator=(const ScopedLogCapture&) = delete;
+
+  // Everything logged in this scope so far. Read through a fresh stream so
+  // the shared descriptor offset does not affect the result.
+  std::string text() const {
+    std::fflush(stderr);
+    std::ifstream in(path_);
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+  }
+
+ private:
+  char path_[32] = "/tmp/radar_log_captureXXXXXX";
+  int capture_fd_ = -1;
+  int saved_stderr_fd_ = -1;
+  holoscan::LogLevel saved_level_ = holoscan::LogLevel::INFO;
+  std::string saved_env_;
+  bool had_env_ = false;
+};
+
+TEST(ConfigCacheTest, FirstBuildIsSilentThenReconfigurationWarnsOnce) {
+  ConfigCache<int> cache;
+  auto builder = []() { return 7; };
+  ScopedLogCapture log;
+
+  // Whether the artifact warning appears in the output this call adds.
+  const auto warned_building = [&](const char* key) {
+    const std::string::size_type before = log.text().size();
+    cache.get_or_build(key, "test artifact", builder);
+    return log.text().find("unseen test artifact configuration", before) !=
+           std::string::npos;
+  };
+
+  EXPECT_FALSE(warned_building("a"));  // initial, parameter-driven build
+  EXPECT_TRUE(warned_building("b"));   // reconfigured to an unseen key
+  EXPECT_FALSE(warned_building("b"));  // cached: warns once per config
+  EXPECT_FALSE(warned_building("a"));  // prior config still cached
 }
 
 // ---- YAML converters -------------------------------------------------------
@@ -134,6 +224,66 @@ TEST(YamlConverters, WaveformDecodesBothSpellingsAndValidates) {
   EXPECT_EQ(YAML::convert<FMCWWaveformDescriptor>::encode(by_bandwidth)
                 .as<FMCWWaveformDescriptor>(),
             by_bandwidth);
+}
+
+TEST(ConfigCodecs, EnumsAndWindowShorthandMatchYaml) {
+  auto window_doc = holoscan::config_io::try_parse(
+      "hann", holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(window_doc) << holoscan::config::format_error(
+      window_doc.error());
+  const auto window = window_doc->try_get<WindowSpec>("");
+  ASSERT_TRUE(window) << holoscan::config::format_error(window.error());
+  EXPECT_EQ(window->type, WindowType::kHann);
+
+  auto norm_doc = holoscan::config_io::try_parse(
+      "ortho", holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(norm_doc);
+  const auto norm = norm_doc->try_get<holoscan::radar::FftNorm>("");
+  ASSERT_TRUE(norm);
+  EXPECT_EQ(*norm, holoscan::radar::FftNorm::kOrtho);
+
+  auto invalid_doc = holoscan::config_io::try_parse(
+      "hanning", holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(invalid_doc);
+  EXPECT_FALSE(invalid_doc->try_get<WindowType>(""));
+}
+
+TEST(ConfigCodecs, WindowMapAndWaveformValidate) {
+  auto window_doc = holoscan::config_io::try_parse(
+      "{type: kaiser, kaiser_beta: 8.5, "
+      "coherent_gain_normalization: false}",
+      holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(window_doc);
+  const auto window = window_doc->try_get<WindowSpec>("");
+  ASSERT_TRUE(window);
+  EXPECT_EQ(window->type, WindowType::kKaiser);
+  ASSERT_TRUE(window->kaiser_beta.has_value());
+  EXPECT_DOUBLE_EQ(*window->kaiser_beta, 8.5);
+  EXPECT_FALSE(window->coherent_gain_normalization);
+
+  auto waveform_doc = holoscan::config_io::try_parse(
+      "{carrier_frequency: 77.0e9, bandwidth: 150.0e6, "
+      "chirp_duration: 20.0e-6, sample_rate: 12.8e6, "
+      "chirp_repetition_interval: 25.0e-6}",
+      holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(waveform_doc);
+  const auto waveform = waveform_doc->try_get<FMCWWaveformDescriptor>("");
+  ASSERT_TRUE(waveform);
+  EXPECT_TRUE(waveform->is_valid());
+
+  auto invalid_waveform_doc = holoscan::config_io::try_parse(
+      "{carrier_frequency: 77.0e9, chirp_duration: 20.0e-6, "
+      "sample_rate: 12.8e6, chirp_repetition_interval: 25.0e-6}",
+      holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(invalid_waveform_doc);
+  EXPECT_FALSE(
+      invalid_waveform_doc->try_get<FMCWWaveformDescriptor>(""));
+
+  auto unknown_field_doc = holoscan::config_io::try_parse(
+      "{type: hann, unexpected: true}",
+      holoscan::config_io::Format::kYaml);
+  ASSERT_TRUE(unknown_field_doc);
+  EXPECT_FALSE(unknown_field_doc->try_get<WindowSpec>(""));
 }
 
 TEST(YamlConverters, ShiftInvariantSubarrayPairRoundTrips) {

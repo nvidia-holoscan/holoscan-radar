@@ -188,6 +188,14 @@ PlanarAperturePlan analyze_planar_aperture(const ArrayGeometry& geometry) {
   plan.y_axis = y_axis;
   plan.z_axis = z_axis;
   plan.normal = cross(y_axis, z_axis);
+  // A planar aperture measures two transverse direction cosines but cannot
+  // distinguish the two normal hemispheres. Match the ULA embedding and radar
+  // convention by selecting the representative nearest canonical +x. Virtual
+  // assembly/dedup may swap which physical aperture axis is contiguous, so
+  // channel ordering must not silently flip this choice to the rear.
+  if (plan.normal[0] < 0.0) {
+    for (double& value : plan.normal) value = -value;
+  }
   return plan;
 }
 

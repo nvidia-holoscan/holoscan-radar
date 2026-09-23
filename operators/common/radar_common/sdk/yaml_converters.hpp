@@ -84,6 +84,7 @@ inline constexpr RepresentativePolicy kAllRepresentativePolicies[] = {
     RepresentativePolicy::kPeak,
     RepresentativePolicy::kMedoid,
     RepresentativePolicy::kFirst,
+    RepresentativePolicy::kWeightedMean,
 };
 
 inline constexpr OverlapPolicy kAllOverlapPolicies[] = {

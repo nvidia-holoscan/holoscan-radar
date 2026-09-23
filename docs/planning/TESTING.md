@@ -25,7 +25,7 @@ The simulator is a **signal model, not a physics/EM solver**: it synthesizes the
 - **Waveform** — the fields of `FMCWWaveformDescriptor` (carrier frequency, bandwidth/slope, chirp duration, sample rate, PRI), plus `num_chirps` and `samples_per_chirp`.
 - **TX multiplexing** — SISO / SIMO / MIMO-TDM (a `TXSchedule`) / MIMO-DDM (a `DDMCodeDescriptor`).
 - **Noise** — additive complex Gaussian, configurable by SNR or noise power, with a seed.
-- **Output dtype** — complex IF (analytic) or real IF, to exercise both front-end paths.
+- **Output dtype** — complex IF (analytic) or real IF, selected before synthesis so the analog anti-alias boundary matches the intended front end.
 
 ### Outputs it must produce
 
@@ -40,11 +40,13 @@ The simulator is a **signal model, not a physics/EM solver**: it synthesizes the
 
 With `R`, `v_r`, and `û` derived from each target's Cartesian position and velocity, the contribution for each (tx `m`, rx `n`, chirp `k`, sample `s`) is the product of:
 
-- a **fast-time beat phase** ∝ `R` (→ beat frequency via the sweep slope and sample rate),
+- a **fast-time beat phase** from delay modulo the physical CRI (→ apparent range via sweep slope and sample rate),
 - a **slow-time Doppler phase** ∝ `v_r` (advances by `2π·f_d·PRI` per chirp, evaluated at that TX's firing time within the cycle),
 - a **spatial phase** `∝ (p_tx,m + p_rx,n)·û / λ` — the two-way array phase, with `û` the target's Cartesian look direction (no angle naming — it dots directly with element positions; this is what makes the virtual-array and angle operators testable),
 - the **TX modulation** — TDM: placed in its time slot; DDM: the per-chirp code phase,
 - the target's **complex amplitude** (× an optional range law).
+
+The optional relative monostatic free-space law applies voltage gain `(R_ref / R_k)^2` from the full physical center range before CRI folding, so received power scales as `R_k^-4`. Constant-amplitude mode remains available for analytic fixtures. Target amplitude contains the otherwise-fixed link-budget terms and is defined at `R_ref` when the law is enabled. The simulator default remains constant amplitude; application loading warns when that default is selected explicitly or by omission. Normal application presets select free-space loss at a 100 m reference, while smoke presets deliberately exercise the analytic default.
 
 Sum over targets, add noise.
 
@@ -52,22 +54,24 @@ Sum over targets, add noise.
 
 The scene is specified in the **array-local Cartesian frame**, so the simulator is **convention-free** — like the operator kernels, it only ever dots direction vectors with element positions and never names an angle. It therefore takes **no `AngleConvention`**. Supplying targets by `(az, el)` would reintroduce the naming ambiguity; converting `(az, el)` + an `AngleConvention` into a Cartesian direction is an **upstream helper's** job, and the resulting Cartesian direction is what feeds the simulator. This keeps the sim aligned with the module principle that the internal math is convention-free and `AngleConvention` is only a boundary relabeling — which also means the simulator can validate the angle operators' convention handling without itself depending on it.
 
+Application simulator sources apply a binary geometric visibility policy before invoking the isotropic solver. The default `front_half_space` accepts targets with positive projection on radar-local boresight (`+x` by default); `frustum` adds horizontal and vertical plane bounds, while `all` preserves arbitrary Cartesian oracle scenes. Filtering copies the complete scene, including IF and range-loss configuration, and removes only invisible targets. It is a coverage mask rather than an antenna pattern: visible amplitudes are unchanged apart from the existing range and IF laws.
+
 ### Modeling assumptions (state these explicitly)
 
 - **Stop-and-hop.** The target is frozen *within* a chirp (fast-time) and advances in phase *between* chirps (slow-time). This models motion-between-chirps at the Doppler-phase level and **omits intra-CPI range migration** (range-Doppler coupling) — matching the operators' scope (range-Doppler coupling is out of the first wave). Valid while range·velocity products are modest; breaks for very fast targets × long CPIs × wide bandwidth.
 - **Ego motion frozen over a CPI.** The platform sits at one position/orientation for the CPI (ranges and angles constant across chirps). Ego motion is **not** dropped from velocity — it folds into each target's *relative* velocity vector (target world velocity minus platform velocity), from which the radial component is derived; otherwise-static clutter then carries a nonzero ego-Doppler. Cross-frame ego motion and world-frame placement are the caller's responsibility (upstream frame transforms), consistent with the coordinate-conventions stance.
-- **Far-field plane wave**, **monostatic**, **single-slope sweeps**, **ideal hardware**.
+- **Far-field plane wave**, **monostatic**, **single-slope sweeps**, and a magnitude-only analog IF response before sampling. The configured chirp and TX excitation repeat cyclically across CPI boundaries.
 
 ### Explicitly out of scope (first wave)
 
-EM propagation / scattering; multipath; antenna element patterns and mutual coupling; hardware impairments (phase noise, IQ imbalance, ADC quantization); intra-CPI range migration; SAR aperture synthesis; near-field; bistatic geometry. These mirror the operator-lockdown exclusions and can be added later as optional layers.
+Absolute radar-equation calibration and electromagnetic scattering beyond the optional relative range law; multipath; antenna element patterns and mutual coupling; hardware impairments beyond the magnitude-only IF response (filter phase/group delay, phase noise, IQ imbalance, ADC quantization); intra-CPI range migration; SAR aperture synthesis; near-field; bistatic geometry. These mirror the operator-lockdown exclusions and can be added later as optional layers.
 
 ### Cross-cutting simulator requirements
 
-- **Aliasing modeled.** Targets beyond the unambiguous range / velocity must fold correctly, so wrap-around behavior (and the ÷M MIMO velocity reduction) can be tested.
+- **Aliasing modeled by mechanism.** The default analog IF response attenuates same-sweep beats before sampling; explicit unfiltered scenes exercise ADC aliasing. Delays beyond a physical CRI fold modulo `c·CRI/2`, using the delayed TDM slot or DDM code, while slow-time sampling retains velocity folding (including the ÷M MIMO reduction).
 - **Determinism.** A fixed seed reproduces the cube bit-for-bit.
 - **Guard against tautology.** Derive the signal model independently of the operator implementations, and cross-check a few canonical cases against an independent reference (a textbook closed form or an established external radar model). Tests assert against **analytic ground truth** (target at 12.3 m / 4.1 m/s / +7°), not merely that the generator round-trips through the pipeline.
-- **No kinematic driver (yet).** The simulator is **per-frame**: velocity is a frame parameter (it lives in the slow-time phase within one CPI), so a static generator exercises range, Doppler, angle, and all MIMO paths. A time-stepping driver (targets evolving across frames) is deferred until a frame-spanning consumer exists (a tracker, multi-frame integration, or clutter-map CFAR — all out of scope now). Inter-frame coverage is instead obtained by parameter-sweeping the static generator across many independent scenes. The generator's per-frame API should be shaped so a driver is a thin future add.
+- **Frame stepping.** The solver remains a pure per-frame/CPI function. Application sources advance the authoritative target scene between successful frames with a swappable `SceneMover`; visibility is evaluated on a temporary snapshot before each solve, so hidden targets continue moving and may re-enter.
 
 ---
 
@@ -88,7 +92,11 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 
 #### ClutterFilterOp
 
+- `none` preserves shape and values exactly through the operator-owned output.
 - Zero-Doppler (DC-across-chirps) input → `mean_subtraction` nulls it (≈ 0 at those cells); a moving target is preserved.
+- `mean_subtraction` with `doppler_window: none` exactly retains the uniform-mean behavior. Hann, Hamming, and custom taps match an independent host weighted projection `mu_w = sum(w[k] * x[k]) / sum(w[k])`, preserve the chirp count, and make the matching windowed Doppler DC bin zero. A custom window with numerically zero weight sum fails predictably.
+- A one-tick Exact `doppler_window` override changes only that tick's weighted projection; a following miss takes the Params window with no latch.
+- `none`, `single_delay`, and `double_delay` produce the same results for every `doppler_window` value because those methods ignore the projection window.
 - `single_delay` / `double_delay`: output chirp count drops by 1 / 2; response is the binomial high-pass (DC notch).
 - Leading axes preserved.
 
@@ -98,9 +106,19 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - `center_zero_doppler`: zero-Doppler centered (true) vs. DC at bin 0 (false).
 - Windowing / `nfft` behave as in the range operator.
 
+#### DopplerNotchOp
+
+- Hard mode (`transition_width = 0`) zeros the nearest bin to `center_velocity` plus every bin inside `stop_half_width`, preserving all bins outside.
+- Positive `transition_width` matches an independent cyclic-distance raised-cosine reference, reaches exactly zero/one at the stop/transition boundaries, and never changes relative channel phase.
+- Named rank-2 SISO, rank-3 SIMO, and rank-4 MIMO layouts agree; unexpected leading axes reject. Float/double agree within tolerance.
+- Live center/width overrides apply to one exactly paired activation; a following miss reverts to Params. Malformed axis shape/dtype, non-finite or non-increasing values, precision mismatch, and exceeded extents fail predictably.
+- Linear-offset and nonlinear-code dense DDM integrations suppress a stationary target at physical zero velocity, preserve targets outside the transition, and introduce no range-aligned pedestal. Folded sparse-DDM input is outside the contract.
+- `tests/cpp/fmcw/test_doppler_notch_pipeline.cpp` supplies simulator-backed ADC cubes to the real range → Doppler → dense-demux → notch GPU chain. The independent one-factor/Monte Carlo reference under `studies/ddm_doppler_notch/` cross-checks physical scaling, window leakage, near-static target loss, confidence intervals, and CA-CFAR training bias; its checked-in report is guidance, not a production-default change.
+
 #### FMCWRangeDopplerProcessorOp (fused)
 
-- **Parity:** identical `rd_maps` (within tolerance) to the split `FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp` chain for matching parameters.
+- **Parity:** identical `rd_maps` (within tolerance) to the split `FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp` chain for matching parameters. Under `mean_subtraction`, matching means the standalone clutter and Doppler operators both receive the fused operator's `doppler_window`.
+- Fused `mean_subtraction` intentionally uses its resolved `doppler_window` for both the weighted clutter projection and Doppler analysis. An off-bin target followed by a taper leaves a center-bin residual with the old uniform projection and removes it with the corrected matching weighted projection.
 - Inline `clutter_filter` reduces `num_doppler` consistently with the standalone op; `range_bins` / `velocity_bins` match the split.
 
 ### Detection & clustering
@@ -112,32 +130,81 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - `nci_axes` integration raises detectability and the realized Pfa still matches (Gamma(K) threshold with the correct `K`).
 - Real-power input (float dtype) thresholds directly and yields the same detections as the complex `|·|²` path.
 - `detection_idx` lists exactly the detected cells, sized to the count; a set `max_detections` caps and warns on overflow.
+- `peak_mode` covers `none`, per-plane `range_doppler`, and full rank-2/3/4
+  `all` NMS; detected-neighbor comparisons use raw CFAR power, do not wrap at
+  axis boundaries, and break equal-power ties by full row-major index.
+- Scalar and per-axis `peak_radius` values produce the expected wider
+  hyperrectangular suppression; negative, all-zero, and post-NCI rank-mismatched
+  vectors reject.
+- Peak selection changes only `detection_mask` / `detection_idx`; dense
+  `detection_score`, `noise_estimate`, and `cfar_power` remain unchanged.
+- Selecting OS with the `-1` unset `os_rank` sentinel rejects with a targeted
+  required-parameter error; explicit rank 0 remains valid.
+- Sparse external α LUTs for GO/SO and OS `K > 1` may contain zero only at
+  unreachable indices; zero at any reachable index rejects.
+- Every `[live]` family is exercised through Graph with an Exact mid-stream
+  match and a following miss that reverts to Params; malformed cell-window and
+  host-Tensor payloads reject.
+- Every output is optional/latched; leaving either the four non-index outputs
+  or `detection_idx` unwired does not fail active sibling outputs or later
+  ticks.
+- Extra leading rank beyond the ctor-admitted named axes is rejected (no
+  opaque module batch).
 
 #### ClusterDBSCANOp
 
 - Synthetic blobs in feature space → correct membership; noise points labeled `−1`.
 - Per-axis `epsilon` correctly handles mixed-unit (anisotropic) features; `min_points` separates core vs. noise.
+- A zero per-axis `epsilon` excludes that feature completely, including non-finite pass-through values; all-zero and negative encodings reject, and default `min_points` counts only active features.
+- A non-core point neighboring two disconnected core components joins the
+  component with the numerically smallest root.
 - `labels` row-aligned with `points`; `sizes` counts per cluster; `max_clusters` caps.
+- Every `[live]` family is exercised through Graph with an Exact match or
+  skewed miss and a following miss that reverts to Params.
+- `sizes` is optional/latched; leaving it unwired does not fail `labels` or
+  disturb descending-size cluster numbering on later ticks.
+- Rank-3 input is rejected; the contract admits no opaque leading batch.
 
 #### FeatureAssemblyOp (bridge)
 
-- `points` columns equal the looked-up physical values at each detection (`range = range_bins[range_bin]`, `velocity = velocity_bins[doppler_bin]`, `score` gathered from `detection_score`, az/el from `aoa_estimates`), in the configured `features` order.
+- `points` columns equal the configured physical lookups / sparse estimates /
+  raw indices at each detection, in `features` order.
 - Rows 1:1 with `detection_idx`.
 - Selecting a feature whose source input is absent → error.
+- `range` / `velocity` require their physical axes; raw coordinates are
+  selected explicitly with `range_bin` / `doppler_bin`.
+- Dense `az` / `el` perform angle-grid lookups; sparse
+  `az_estimate` / `el_estimate` read `aoa_estimates`; raw preserved angle
+  coordinates use `az_bin` / `el_bin` and require no grid inputs.
+- Static `features` determines the compiled join: raw-only layouts need only
+  `detection_idx`; selected source ports are required exact-aligned members;
+  unselected gather ports may remain unwired.
+- Extra leading axes on `detection_idx` are rejected (input rank is exactly 2; no module batch).
 
 #### DetectionReductionOp (bridge)
 
 - `peak` policy → `rep_idx` is the max-score member of each cluster; `first` / `medoid` select the expected member (`medoid` respects `feature_weights`).
+- `weighted_mean` with empty `feature_weights` emits the ordinary feature mean; one-hot score weighting emits the analytic score-weighted mean. Its `rep_idx` is the real member nearest the same weighted centroid over all detection-index columns.
+- `reduced_points` gathers the selected member for `first` / `peak` / `medoid`, is synthetic only for `weighted_mean`, and may be left unwired without suppressing `rep_idx`.
+- `weighted_mean` rejects a negative or non-finite row weight and a non-positive per-cluster weight sum.
 - Every `rep_idx` addresses a real detected cell (a subset of `detection_idx`); one per cluster; noise (`−1`) excluded.
+- `points` is always a required exact-aligned input, including for `representative=first`; an unwired graph is rejected for every policy.
+- A caller-instantiated compile-time `ScoreFn` is exercised through the Graph harness from a CUDA translation unit.
+- Exact peak/medoid ties choose the lowest input row; opaque leading batch rank is rejected.
 
 ### Angle estimation
 
 #### PhaseShiftBeamformerOp (dense)
 
 - RD maps synthesized as a steering vector for a known (az, el) → `rda_cube` peak at the expected beam bin.
-- `angle_convention`: the same physical direction is reported with the expected (az, el) labels under different presets; `direction_cosine` masks the invisible region (`u²+v² > 1`).
-- `array_taper` lowers spatial sidelobes.
-- `[live]` overrides (`array_geometry` / `az_angles` / `el_angles` / `array_taper`) change the output and reuse cached weights when unchanged.
+- `angle_convention`: default-constructed Params select `radar_boresight`; the same physical direction is reported with the expected (az, el) labels under different presets; all scan coordinates must be finite, `direction_cosine` axis values outside `[-1, 1]` reject, and valid-axis Cartesian corners in the invisible region (`u²+v² > 1`) remain masked.
+- `array_taper` lowers spatial sidelobes; recognized URAs use a separable
+  per-axis product and must suppress azimuth and elevation sidelobes
+  independently, while custom coefficients remain per-element.
+- `[live]` overrides (`array_geometry` / `az_coordinates` / `el_coordinates` / `array_taper`) change the output and reuse cached weights when unchanged.
+- Optional `az_grid` / `el_grid` outputs equal the effective scan grids in template precision; live grid overrides reshape both the corresponding cube axis and grid output for one tick, then a missing override reverts both to Params.
+- Input rank is exactly 3; an opaque leading batch axis is rejected, and Doppler/range or scan-grid extents above `MaxTensorExtents` fail before output allocation.
+- Distinct `custom` angle frames and distinct floating-point grids produce distinct steering-cache identities; degenerate custom frames reject.
 
 #### SnapshotGatherOp (bridge)
 
@@ -145,16 +212,42 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - A non-trivial window gathers the correct neighborhood; `num_snapshots = (2·d+1)(2·r+1)`.
 - Edge modes: `wrap` wraps the Doppler axis; `shift` slides inward keeping the count; `clamp` truncates and marks the missing slots in `is_valid`.
 - Channel axis preserved (gathers per-channel, not the NCI-integrated map).
+- Invalid preserved-batch and Doppler/range coordinates fail predictably; `shift` rejects a requested window longer than its axis.
+- Leaving optional/always `is_valid` unwired does not suppress required `snapshot`.
+- A matched `[live] snapshot_window` applies for one tick and a subsequent miss reverts to Params.
+
+#### SubarraySelectionOp
+
+- Auto-selection returns the longest filled ULA run or largest filled URA rectangle, including the larger-azimuth-aperture tie-break.
+- A filled but non-lattice-ordered input is still gathered into lattice order; equal input/output channel counts do not imply pass-through.
+- Explicit indices are range/uniqueness checked, reordered into lattice order, and rejected when they leave a hole.
+- A 3-D aperture or selected size below `min_subarray_size` fails predictably.
+- Leaving optional/latched `array_geometry` unwired does not suppress required `snapshot_out`; a wired geometry emits on the same tick.
+- `snapshot_out` and `WireArrayGeometry` directly drive an angle estimator; the Exact join preserves their shared capture time and the reduced geometry yields the expected steering result.
 
 #### Sparse angle estimators (shared slot)
 
-Common check (all five): `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_estimates ≈ θ` within grid/interpolation or the CRLB; an `is_valid` mask correctly excludes masked snapshots.
+Common check (all five): default-constructed Params select `radar_boresight`; `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_estimates ≈ θ` within grid/interpolation or the CRLB under both the default and at least one non-default convention; an `is_valid` mask correctly excludes masked snapshots.
 
-- **BeamscanEstimatorOp** — single-source recovery; accepts 2-D or 3-D-with-`num_snapshots=1`; errors on 3-D with `num_snapshots ≠ 1`.
+- **BeamscanEstimatorOp** — single-source recovery; accepts 2-D one-look or 3-D
+  multi-look input, averages valid per-look Bartlett power, rejects an item with
+  no valid looks, and preserves the established result for one look.
 - **MVDREstimatorOp** — multi-snapshot covariance nulls an interferer better than Beamscan; `diagonal_loading` stabilizes the low-snapshot / ill-conditioned case.
 - **MUSICEstimatorOp** — resolves two closely-spaced sources that Beamscan cannot, given the source count (fixed or EFT `auto`).
-- **RootMUSICEstimatorOp / ESPRITEstimatorOp** — gridless DOA ≈ truth, with **no** `angle_spectrum` output. On a **1-D ULA** / shift-invariant geometry they resolve azimuth; on a **filled URA** (`subarray_spec: auto`) they resolve native (az, el) — assert single- and two-source recovery with sources distinct in **both** azimuth and elevation so mispairing is detectable (Root-MUSIC per-axis rooting + pairing; ESPRIT dual-invariance + joint-diagonalization pairing). On a non-uniform virtual array they either use the subarray/smoothing step or fail predictably.
+- **RootMUSICEstimatorOp / ESPRITEstimatorOp** — gridless DOA ≈ truth, with **no** `angle_spectrum` output. On a **1-D ULA** / shift-invariant geometry they resolve azimuth; on a **filled URA** (`subarray_spec: auto`) they resolve native (az, el) — assert single- and two-source recovery with sources distinct in **both** azimuth and elevation so mispairing is detectable (Root-MUSIC per-axis rooting + pairing; ESPRIT dual-invariance + joint-diagonalization pairing), plus Root-MUSIC recovery when two sources share elevation. On a non-uniform virtual array they either use the subarray/smoothing step or fail predictably.
 - Multi-source estimators fill `doa_multi` / `source_count` up to `max_sources`.
+- Multi-look Beamscan averages valid per-look Bartlett power and is identical
+  to the established path for one look.
+- `RankOneResidualScreenOp` agrees with an independent rank-one projection
+  reference, compacts selected rows in ascending order, and covers masked,
+  empty, zero-selected, and all-selected inputs. Its Graph tests cover every
+  emitted output, Exact timestamp propagation, and live-geometry match followed
+  by Params fallback.
+- `MultiSourceExpansionOp` preserves input-row order, expands confirmed
+  multi-source rows, and falls back to the baseline angle for unconfirmed rows.
+  A modality-independent Graph fixture composes the screen, synthetic common-
+  contract estimator outputs, and expansion without a radar simulator, TDM, or
+  application dependency.
 
 ### MIMO marshaling
 
@@ -163,18 +256,55 @@ Common check (all five): `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_e
 - An interleaved cube with TX-tagged content → output correctly split into `(M_tx, N_rx, L, samples)` for a round-robin `tx_schedule` and for a custom order.
 - A non-uniform schedule is rejected with an error (first-wave TDM assumes uniform spacing).
 - Dtype preserved.
+- Extra leading axes are rejected (input rank is exactly 3; no module batch).
 
-#### MIMOCoherentCompensationOp
+#### TDMDenseCompensationOp
 
 - **TDM:** a moving target → after compensation the inter-TX motion phase is removed, so the assembled virtual array yields an **unbiased** DOA (whereas skipping compensation biases it) — this is the key regression.
-- **DDM:** a multi-TX coded cube → demux recovers each TX into the `M_tx` axis at its band with the code phase removed.
-- `num_tx` derived correctly (TDM from the input axis, DDM from `ddm_code`).
+- `num_tx` is derived from the input axis; round-robin and custom uniform schedules index phase by firing slot.
+
+#### DDMDenseDemultiplexOp
+
+- A multi-TX coded cube → demux recovers each TX into the `M_tx` axis at its band with linear-code initial phase removed.
+- Offset-only, linear phase-code, guard-band, nonuniform integer-offset permutation, and nonlinear full-axis correlation cases retain the existing dense behavior.
+- Fractional-bin linear offsets fail predictably; `num_tx` is derived from `ddm_code`.
+- An optional center-zero `velocity_bins` input is paired exactly with `rd_maps`; linear demux emits the centered reduced slice with unchanged spacing, while nonlinear correlation emits an identical full axis. Missing input emits no axis, malformed rank/length/dtype fail predictably, and an unwired latched output never suppresses `rd_maps_out`.
+- A direct `FMCWDopplerProcessorOp → DDMDenseDemultiplexOp` Graph test proves that `velocity_bins` is published before the `rd_maps` trigger and matches on every tick.
+- Dense and sparse DDM applications reject `ClutterFilterOp`. Dense DDM may instead wire `DopplerNotchOp` after demultiplexing; sparse folded DDM remains unsupported.
+
+#### TDMSparseCompensationOp
+
+- For identical detections and configuration, output snapshots and geometry match the corresponding cells from `TDMDenseCompensationOp → VirtualArrayAssemblyOp → SnapshotGatherOp` under every overlap policy.
+- A moving target's gathered virtual snapshot yields an unbiased DOA; omitting the sparse correction biases it by the same amount as omitting dense TDM compensation.
+- A principal-fold target recovers with missing `fold_idx` (`SafeDefault{0}`). A nonzero-fold target retains the expected firing-slot phase ramp with unresolved zero and recovers the reference snapshot when the row-aligned class is supplied; wrapped Doppler neighborhoods adjust the class across the reduced-axis boundary.
+- `fold_idx` values outside `[0,M_tx)` or with a row count different from `detection_idx` fail predictably. Supplying a fold changes snapshot phase only: detection coordinates, shapes, geometry, and reported velocity remain unchanged.
+- Each cell in a nonzero `snapshot_window` uses its own resolved Doppler bin for phase correction. Edge modes, `is_valid`, exact-sized zero/nonzero detection outputs, and `[live] snapshot_window` override/revert match `SnapshotGatherOp`.
+- Round-robin and custom uniform `tx_schedule` mappings produce the same firing-slot correction as `TDMDenseCompensationOp`; malformed shapes, indices, extents, schedules, and live waveforms fail predictably.
+- The emitted `WireArrayGeometry` matches the virtual snapshot ordering and overlap policy, derives wavelength from the same effective waveform used for correction, and directly drives an angle estimator under an `Exact{}` join.
+
+#### DDMPowerFoldOp
+
+- Folded power matches an independent host sum over the dense demux table for every TX/RX look, including nonuniform integer offsets and guard bands.
+- Output shape is exactly `(D/M-G, R)`; bins discarded by `G` are absent and the documented blind fraction is `G/(D/M)`.
+- Fractional-bin offsets, nonlinear codes, non-divisible Doppler extents, malformed shapes, and invalid guard widths fail predictably.
+- Float/double agree; output is device-resident real power.
+- White-noise Monte Carlo through `CFARDetectorOp(preintegrated_looks=M·N_rx)` reaches the requested Pfa. A correlated-noise characterization demonstrates that nominal `M·N_rx` is not exact and a lower empirically calibrated effective look count improves agreement.
+
+#### DDMSparseDemultiplexOp
+
+- For identical detections and linear codes, snapshots and geometry match `DDMDenseDemultiplexOp → VirtualArrayAssemblyOp → SnapshotGatherOp` under every overlap, window, and edge policy.
+- Offset-only and phase-code descriptors agree; nonzero initial code phase is removed consistently by dense and sparse demux.
+- A principal-fold target (`k=0`) recovers with the missing-input `SafeDefault{0}`. An aliased target with unresolved zero exhibits the documented cyclic TX permutation, while the same target with supplied nonzero `fold_idx` recovers the reference snapshot and unbiased DOA.
+- `fold_idx` values outside `[0,M)` or with a row count different from `detection_idx` fail predictably.
+- Nonlinear and fractional-bin codes reject. Exact-sized zero/nonzero outputs, `is_valid`, `[live]` snapshot-window/wavelength override/revert, and `WireArrayGeometry` coherence match `TDMSparseCompensationOp`.
 
 #### VirtualArrayAssemblyOp
 
 - `(tx, rx)` block → virtual channel axis with `p_virtual = p_tx + p_rx`; emitted `array_geometry.element_positions` match the analytic virtual layout.
 - `overlap_policy`: `dedup` collapses coincident positions (`num_virtual` = unique count); `keep_all` retains `M·N`; `average` combines coincident samples.
 - `num_virtual ≤ M·N`.
+- Extra leading axes are rejected (input rank is exactly 4; no module batch).
+- Emitted `WireArrayGeometry` directly drives an angle estimator's Exact live input and yields the expected steering result without an adapter.
 
 ---
 
@@ -182,9 +312,9 @@ Common check (all five): `snapshot = a(θ)` (+ noise) for a known DOA → `aoa_e
 
 - **End-to-end per modality.** SISO / SIMO / MIMO-TDM / MIMO-DDM: a scene with known targets → detections at the correct range / velocity (and angle for the angle-bearing modalities), within resolution. The MIMO end-to-end runs are the primary validation of the marshaling + angle chain together.
 - **Sparse-slot interchangeability.** With the wiring fixed, swapping the estimator in `⟨sparse angle estimator⟩` (Beamscan ↔ MVDR ↔ MUSIC ↔ …) requires no graph change and each recovers the DOA — validating the shared contract.
-- **`[live]` override behavior.** Overriding a `[live]` parameter mid-stream changes the output accordingly and warns only when a genuine rebuild is triggered (FFT plan, window coefficients, CFAR window kernel); previously-seen configurations are reused from cache.
+- **`[live]` override behavior.** An Exact-matched override mid-stream changes the output accordingly; a following tick with no match reverts to the Params value, since an override applies to one tick only. Warn only when a genuine rebuild is triggered (FFT plan, window coefficients, CFAR window kernel); previously-seen configurations are reused from cache.
 - **Precision.** Single- and double-precision instantiations agree within their respective tolerances.
-- **Memory spaces.** Operators accept tensors in each CUDA-accessible memory space (device, managed, pinned host) and reject pageable-host input with a clear error; outputs are always device memory.
+- **Memory spaces.** Operators accept tensors in each CUDA-accessible memory space (device, managed, pinned host) and reject pageable-host input with a clear error; outputs are always device memory. `test_tensor` directly covers the shared `require_cuda_accessible()` rejection and diagnostic. Graph sources materialize data through device-bound output loans, so do not duplicate an unreachable pageable-host case as a skipped test in every operator suite.
 - **Determinism.** A fixed seed reproduces identical outputs across runs.
 
 ---

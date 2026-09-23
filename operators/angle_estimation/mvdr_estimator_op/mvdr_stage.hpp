@@ -35,8 +35,8 @@ template <typename T>
 inline constexpr T kAutoLoadingFactor = static_cast<T>(1e-2);
 
 // MatX caches inv plans by (A, A_inv) device pointers (eig by shape/stream).
-// Retire after each stage so plans do not outlive Holoscan scratch tensors;
-// atexit Clear alone is too late once other ops have reused the GPU heap.
+// MVDR's covariance and inverse buffers have stable, operator-owned addresses,
+// so plans remain valid across ticks and are retired by the operator's stop().
 // Clear() asserts if that cache type was never created; gate with the flags.
 inline std::atomic<bool>& matx_eig_plans_live_flag() {
   static std::atomic<bool> live{false};
@@ -47,8 +47,10 @@ inline std::atomic<bool>& matx_inv_plans_live_flag() {
   return live;
 }
 
-inline void mark_matx_solver_caches_live() {
-  matx_eig_plans_live_flag().store(true, std::memory_order_relaxed);
+inline void mark_matx_solver_caches_live(bool eig_used) {
+  if (eig_used) {
+    matx_eig_plans_live_flag().store(true, std::memory_order_relaxed);
+  }
   matx_inv_plans_live_flag().store(true, std::memory_order_relaxed);
 }
 
@@ -62,33 +64,9 @@ inline void clear_matx_inv_cache() {
       matx::detail::GetCacheIdFromType<matx::detail::inv_cache_t>());
 }
 
-// Per-tick: destroy the cached eig/inv plans (whose keys are this tick's
-// scratch pointers, freed when compute() returns) to bound cache growth —
-// WITHOUT draining MatX's global MemTracker. The global drain frees *every*
-// MatX-tracked buffer in the process, including sibling operators' cached
-// cuFFT workspaces (e.g. FMCWRange/DopplerProcessorOp's windowed FFT), which
-// they reuse next tick → out-of-bounds reads and corrupted output. Leaves the
-// live flags set so the teardown retire below still drains. Safe no-op if
-// solvers were never used.
-inline void clear_matx_solver_plan_caches() {
-  const bool eig = matx_eig_plans_live_flag().load(std::memory_order_relaxed);
-  const bool inv = matx_inv_plans_live_flag().load(std::memory_order_relaxed);
-  if (!eig && !inv) {
-    return;
-  }
-  cudaDeviceSynchronize();
-  if (eig) {
-    clear_matx_eig_cache();
-  }
-  if (inv) {
-    clear_matx_inv_cache();
-  }
-}
-
 // Teardown: destroy cached eig/inv plans and drain MatX's MemTracker while CUDA
 // is still valid. Call once from the operator's stop() (and from Python atexit
-// as backup) — NOT per tick (see clear_matx_solver_plan_caches above). Safe
-// no-op if solvers were never used.
+// as backup) — never per tick. Safe no-op if solvers were never used.
 inline void retire_matx_solver_caches() {
   const bool eig =
       matx_eig_plans_live_flag().exchange(false, std::memory_order_relaxed);
@@ -479,19 +457,23 @@ __global__ void peak_extract_kernel(const T* __restrict__ spectrum,
     return;
   }
   const T nan = T{0} / T{0};
-  for (int64_t k = 0; k < max_sources; ++k) {
-    const int64_t base = (item * max_sources + k) * 2;
-    if (k < found && sel[k] >= 0) {
-      const int64_t ia = sel[k] % num_az;
-      const int64_t ie = sel[k] / num_az;
-      doa_multi[base] = az_grid[ia];
-      doa_multi[base + 1] = el_grid[ie];
-    } else {
-      doa_multi[base] = nan;
-      doa_multi[base + 1] = nan;
+  if (doa_multi != nullptr) {
+    for (int64_t k = 0; k < max_sources; ++k) {
+      const int64_t base = (item * max_sources + k) * 2;
+      if (k < found && sel[k] >= 0) {
+        const int64_t ia = sel[k] % num_az;
+        const int64_t ie = sel[k] / num_az;
+        doa_multi[base] = az_grid[ia];
+        doa_multi[base + 1] = el_grid[ie];
+      } else {
+        doa_multi[base] = nan;
+        doa_multi[base + 1] = nan;
+      }
     }
   }
-  source_count[item] = static_cast<int32_t>(found);
+  if (source_count != nullptr) {
+    source_count[item] = static_cast<int32_t>(found);
+  }
 }
 
 // One block per item. When K_i == 0 the covariance was empty: zero the Capon
@@ -520,23 +502,30 @@ __global__ void blank_empty_items_kernel(
   const T nan = T{0} / T{0};
   aoa[item * 2] = nan;
   aoa[item * 2 + 1] = nan;
-  for (int64_t k = 0; k < max_sources; ++k) {
-    const int64_t base = (item * max_sources + k) * 2;
-    doa_multi[base] = nan;
-    doa_multi[base + 1] = nan;
+  if (doa_multi != nullptr) {
+    for (int64_t k = 0; k < max_sources; ++k) {
+      const int64_t base = (item * max_sources + k) * 2;
+      doa_multi[base] = nan;
+      doa_multi[base + 1] = nan;
+    }
   }
-  source_count[item] = 0;
+  if (source_count != nullptr) {
+    source_count[item] = 0;
+  }
 }
 
 // Run the full MVDR estimate for one tick: eigenvalues (raw covariance) →
 // diagonal load → batched inverse → Capon scan → multi-peak extraction. All
 // work is enqueued on `stream`; no synchronization. `cov` and `rinv` are
-// caller-owned scratch of shape (num_items, num_channels, num_channels).
+// caller-owned scratch with room for
+// (max(num_items, 2), num_channels, num_channels). The extra matrix keeps a
+// single public item off MatX's non-repeatable cached single-batch inverse
+// backend; eig and every downstream kernel still operate on `num_items`.
 // `k_counts` is caller-owned scratch of shape (num_items,) for per-item valid
 // snapshot counts (empty items are blanked after Capon).
 //
 //   snapshots — device ptr, [num_items, num_channels, num_snapshots]
-//               cuda::std::complex<T> (a 2-D input aliases num_snapshots == 1).
+//               cuda::std::complex<T>; a single look uses a trailing extent 1.
 //   mask      — device ptr, [num_items, num_snapshots] uint8/bool, or nullptr.
 //   manifold  — device ptr, [num_beams, num_channels] cuda::std::complex<T>
 //               untapered steering vectors, beam el-major (invalid beams zero).
@@ -545,6 +534,11 @@ __global__ void blank_empty_items_kernel(
 //   doa_multi   — device ptr, [num_items, max_sources, 2] T. Top-`max_sources`
 //                 Capon peaks (strongest first); unused rows NaN.
 //   source_count — device ptr, [num_items] int32. Peaks found (≤ max_sources).
+//
+// Those last three back latched optional ports and may be null, which skips
+// the work that produces them: a null `eigenvalues` skips the batched eig, and
+// a null `doa_multi` *and* `source_count` skips peak extraction. `spectrum`
+// and `aoa` are required.
 template <typename T>
 inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
                            const unsigned char* mask, int64_t num_items,
@@ -566,12 +560,20 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
   covariance_kernel<T><<<grid, cov_block, 0, stream>>>(
       snapshots, mask, num_items, num_channels, num_snapshots, cov, k_counts);
 
+  // The solver plans reference stable operator-owned covariance/inverse
+  // buffers. Mark them before first use so stop() retires any plan that MatX
+  // creates, including when a later solve step throws.
+  mark_matx_solver_caches_live(eigenvalues != nullptr);
+
   // Eigenvalues of the RAW sample covariance (before diagonal loading) for
   // subspace / source-count diagnostics. matx::eig copies `cov` into the
   // eigenvector output (we hand it the `rinv` scratch, overwritten by the
   // inverse below) and solves in place, so `cov` survives for the load +
   // inverse. NO_VECTOR: eigenvalues only. Batched cuSOLVER heevd.
-  {
+  //
+  // Nothing downstream reads these, so a null `eigenvalues` skips the solve
+  // outright — the single largest saving available to a latched port here.
+  if (eigenvalues != nullptr) {
     auto cov_v = matx::make_tensor<cuda::std::complex<T>, 3>(
         cov, {num_items, num_channels, num_channels});
     auto evec_scratch = matx::make_tensor<cuda::std::complex<T>, 3>(
@@ -589,11 +591,26 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
   load_diagonal_kernel<T><<<grid, dl_block, dl_smem, stream>>>(
       cov, num_items, num_channels, loading);
 
+  // MatX 1.0's cached batch_size==1 inverse selects a cuSolver getrf/getrs
+  // path that is not repeatable across executions. Promote only that inverse
+  // to a two-matrix batch by duplicating the fully loaded covariance. MatX
+  // then selects its reusable cuBLAS batched path; downstream consumes only
+  // the first inverse and retains the public one-item shape.
+  const int64_t inverse_items = num_items == 1 ? 2 : num_items;
+  if (num_items == 1) {
+    const size_t matrix_bytes =
+        static_cast<size_t>(num_channels) *
+        static_cast<size_t>(num_channels) *
+        sizeof(cuda::std::complex<T>);
+    (void)cudaMemcpyAsync(cov + num_channels * num_channels, cov, matrix_bytes,
+                          cudaMemcpyDeviceToDevice, stream);
+  }
+
   // Batched Hermitian inverse (cuBLAS matinv for C <= 32, else getrf/getri).
   auto cov_view = matx::make_tensor<cuda::std::complex<T>, 3>(
-      cov, {num_items, num_channels, num_channels});
+      cov, {inverse_items, num_channels, num_channels});
   auto rinv_view = matx::make_tensor<cuda::std::complex<T>, 3>(
-      rinv, {num_items, num_channels, num_channels});
+      rinv, {inverse_items, num_channels, num_channels});
   matx::cudaExecutor exec{stream};
   (rinv_view = matx::inv(cov_view)).run(exec);
 
@@ -605,27 +622,21 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots,
       spectrum, aoa);
 
   // Multi-source: top-max_sources Capon peaks → doa_multi + source_count.
-  constexpr int peak_block = 256;
-  const size_t peak_smem =
-      static_cast<size_t>(peak_block) * (sizeof(T) + sizeof(int64_t)) +
-      static_cast<size_t>(max_sources) * sizeof(int64_t);
-  peak_extract_kernel<T><<<grid, peak_block, peak_smem, stream>>>(
-      spectrum, num_items, num_az, num_el, max_sources, az_grid, el_grid,
-      doa_multi, source_count);
+  // One pass writes both, so it runs unless both are null.
+  if (doa_multi != nullptr || source_count != nullptr) {
+    constexpr int peak_block = 256;
+    const size_t peak_smem =
+        static_cast<size_t>(peak_block) * (sizeof(T) + sizeof(int64_t)) +
+        static_cast<size_t>(max_sources) * sizeof(int64_t);
+    peak_extract_kernel<T><<<grid, peak_block, peak_smem, stream>>>(
+        spectrum, num_items, num_az, num_el, max_sources, az_grid, el_grid,
+        doa_multi, source_count);
+  }
 
   constexpr int blank_block = 256;
   blank_empty_items_kernel<T><<<grid, blank_block, 0, stream>>>(
       k_counts, num_items, num_az, num_el, max_sources, spectrum, aoa,
       doa_multi, source_count);
-
-  // MatX inv plans are cached by (A, A_inv) device pointers. Holoscan frees
-  // those scratch tensors when compute() returns, so the cache would retain
-  // plans whose keys outlive the buffers. Clear the eig/inv plan caches now,
-  // while CUDA is healthy and before scratch is released — but do NOT drain
-  // MatX's global tracker here (that frees sibling ops' cached FFT workspaces);
-  // the operator's stop() does the full drain at teardown.
-  mark_matx_solver_caches_live();
-  clear_matx_solver_plan_caches();
 }
 
 }  // namespace holoscan::radar::detail

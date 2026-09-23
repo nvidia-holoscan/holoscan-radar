@@ -19,7 +19,7 @@ that is expected. A slice is **never** enough to mark the checklist done or
 call the operator ready. Clear this checklist only when the **full**
 `OPERATOR_API.md` contract for the operator is implemented (every port,
 parameter, and documented mode), not when a useful subset works and the rest
-throws / sits in `OPEN_ITEMS.md`.
+throws or remains deferred in the Jira backlog.
 
 ---
 
@@ -33,10 +33,17 @@ throws / sits in `OPEN_ITEMS.md`.
       remains unfinished.
 - [ ] **Build wired** — group + operator `CMakeLists.txt`, `metadata.json`,
       group `README.md`, SPDX on all new files.
-- [ ] **`setup()` complete** — single-entry `TensorMap` ports, `initialize()`
-      arg setters, `[live]` override ports where required.
-- [ ] **`compute()` correct** — sticky overrides, rank-agnostic shapes,
-      stream-ordered CUDA, clear errors on unsupported paths.
+- [ ] **`contract()` complete** — typed Tensor/data ports, `Operator<Params>`
+      schema, output bounds, and `[live]` override entries where required.
+- [ ] **`compute()` correct** — Exact `[live]` resolution, named-axis shape
+      validation, stream-ordered CUDA, and clear errors on unsupported paths.
+- [ ] **`compute()` skimmable** — named comments expose the applicable receive,
+      configuration, planning/cache, allocation, device, and publication /
+      retention stages without restating individual statements.
+- [ ] **Operator README opening** — unique ordered `Purpose`,
+      `Responsibilities`, `When to use`, `Ports`, `Construction`, and
+      `Parameters` sections; exact shared table headers; contract/group links
+      close the opening; every row audited against contract and implementation.
 - [ ] **Tests** — `tests/cpp/<group>/test_<operator>.cpp` covers `TESTING.md`
       unit checks; all output ports wired in harness tests; float/double +
       error paths where applicable.
@@ -47,11 +54,10 @@ throws / sits in `OPEN_ITEMS.md`.
       operator is GPU/hot-path; **includes inline `[live]` override
       measurement** whenever the contract has live params (see
       `OPERATOR_DEVELOPMENT.md` → Performance characterization).
-- [ ] **Open items** — unresolved *team* questions (contract ambiguity, SDK
-      gaps, math decisions) recorded in
-      `operators/<group>/<operator>/OPEN_ITEMS.md`. Missing contract
-      features are not open items — they are unfinished work that blocks
-      checklist completion.
+- [ ] **Open items** — unresolved team questions are recorded on the
+      [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309) with their source directory.
+      Missing contract features are unfinished work, not backlog items, and
+      block checklist completion.
 
 ---
 
@@ -63,8 +69,9 @@ throws / sits in `OPEN_ITEMS.md`.
       duplicate an active branch.
 - [ ] Read **`WORKFLOWS.md`** if the operator sits on a modality chain —
       confirm port wiring and upstream/downstream dtypes.
-- [ ] Check for an operator-local **`OPEN_ITEMS.md`** if this operator already
-      has one; do not silently pick answers to documented ambiguities.
+- [ ] Check the [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309) for entries from
+      this operator or group; do not silently pick answers to documented
+      ambiguities.
 
 ---
 
@@ -92,8 +99,16 @@ throws / sits in `OPEN_ITEMS.md`.
 - [ ] **Precision:** `template <typename T>` with `T ∈ {float, double}` only;
       `static_assert` in the header.
 - [ ] **Parameters** match `OPERATOR_API.md` names, types, and defaults.
-- [ ] **`[live]` parameters:** declare with `spec.param(...)`, then
-      `add_override_port<T>(spec, "name")` from `override_param.hpp`.
+- [ ] **Schema payloads:** any `[live]` value that owns a container follows
+      [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md) — one committed canonical
+      `.fbs`, generated outputs untracked, bounded Tensor fields, validated
+      bridges, evolution discipline, install surface, and drift/Graph tests.
+- [ ] **`[live]` parameters:** declare with `spec.param(...)`, register the
+      `Input<>` in `setup()`, then add the `contract()` entry
+      unconditionally via `add_live_override_to_contract` — an unwired port
+      is legal and reads as "no override", under `OnAligned` as much as
+      under `OnEach`. No `expect_*` parameter: wiring is the app's only
+      statement.
 - [ ] **Static parameters** (kernel-selecting enums, structural modes): no
       override port; document that callers instantiate separate operators.
 - [ ] **`initialize()`:** call `ensure_radar_arg_setters()` and register any
@@ -105,14 +120,23 @@ throws / sits in `OPEN_ITEMS.md`.
 
 - [ ] **Receive / emit** via single-entry `TensorMap` helpers; reject
       multi-entry maps with a clear error.
-- [ ] **Sticky overrides:** seed `effective_*` from parameters on the first
-      tick; each tick call `resolve_override_param()` (pass `changed` when
-      costly rebuilds use `ConfigCache`).
+- [ ] **Optional outputs:** every port the application may leave unwired
+      declares a disposition in `OPERATOR_API.md` — `always` (discard with
+      `(void)`) or `latched` (a `LatchedOutput` member, dedicated work gated
+      on `active()`). Never `HOLOSCAN_TRY` an optional emit: publishing to an
+      unwired port fails and would take the tick's other outputs with it.
+- [ ] **`[live]` overrides:** each tick call `resolve_live_override()` (or
+      `resolve_live_override_via` when the payload needs conversion). The
+      matched sample applies to that tick only; a miss takes the Params
+      value. Keep no override state between ticks. Pass `changed` when
+      costly rebuilds use `ConfigCache`.
 - [ ] **Named axes / no opaque batch:** infer trailing (and any named
-      leading) axes from input tensors; use `collapse_batch` /
-      `full_rank_shape` only as a MatX layout helper over **named** axes;
-      reject unexpected extra leading dims. Fat outs take
-      `MaxTensorExtents` at `graph.op()` (see `MAX_TENSOR_EXTENTS.md`).
+      leading) axes from input tensors; use `collapse_named_tx_rx_batch`
+      for FMCW cubes (it wraps `collapse_batch` + MaxTensorExtents
+      leading-rank / `max_tx*max_rx` checks). Use `full_rank_shape` only
+      as a MatX layout helper over **named** axes; reject unexpected extra
+      leading dims. Fat outs take `MaxTensorExtents` at `graph.op()` (see
+      [`operators/common/README.md`](../../operators/common/README.md#maxtensorextents)).
 - [ ] **Output shapes** follow the contract when `[live]` params change
       leading dimensions (downstream re-infers).
 - [ ] **CUDA stream:** `receive_cuda_stream()` on the primary data input;
@@ -122,6 +146,10 @@ throws / sits in `OPEN_ITEMS.md`.
       CUDA where MatX is a poor match (document if benchmarked).
 - [ ] **Errors:** `std::invalid_argument` with operator name and port in the
       message; unimplemented paths throw rather than returning garbage.
+- [ ] **Stage comments:** `compute()` names its real orchestration boundaries
+      and explains tick coherence, cache reuse, synchronization, and output
+      ordering where relevant. Skip inapplicable stages; comments are not a
+      reason to split helpers or alter behavior.
 
 ---
 
@@ -145,14 +173,15 @@ throws / sits in `OPEN_ITEMS.md`.
 - [ ] **C++ unit tests** in `tests/cpp/<group>/test_<operator>.cpp`, mirroring
       the operator family tree (`fmcw/`, `detection/`, …), label `unit`.
 - [ ] Use **`create_operator_test`** + `tests/cpp/utils/sdk_harness.hpp`
-      (`single_map`, `TensorMapCapture`, `wire_leading_override` for sticky
+      (`single_map`, `TensorMapCapture`, `wire_leading_override` for
       `[live]` tests).
 - [ ] **Wire every output port** in harness/Application tests — operators
       with multiple outputs will not tick if a port is left unconnected.
 - [ ] Cover **`TESTING.md`** high-level checks for this operator (unit tier
       first; integration/statistical when dependencies exist).
-- [ ] **`[live]` overrides:** at least one mid-stream override + sticky tick
-      per functional override param (not just build-time `Arg`).
+- [ ] **`[live]` override tests:** at least one mid-stream Exact match plus a
+      following miss tick asserting the revert to Params, per functional
+      override param (not just build-time `Arg`).
 - [ ] **Float and double** instantiation agreement where applicable.
 - [ ] **Error paths:** invalid args, unsupported modes, bad TensorMap shape.
 - [ ] Register the test in **`tests/cpp/CMakeLists.txt`** with the
@@ -171,7 +200,7 @@ throws / sits in `OPEN_ITEMS.md`.
 Measurement harness (not pass/fail thresholds). See
 [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md) → Performance
 characterization. Skip only if the operator has no GPU/hot path yet; say so
-in `OPEN_ITEMS.md`.
+in Jira.
 
 - [ ] **`performance/cpp/perf_<operator>.cpp`** — second (or Nth) consumer of
       `radar_perf_utils`; scenario matrix covering representative sizes and
@@ -206,13 +235,13 @@ Exemplar: `performance/cpp/perf_cfar_detector.cpp`.
 ## Land the PR
 
 - [ ] Update **`STATUS.md`** — move claim to done or refresh state.
-- [ ] Add any new **team open items** to `operators/<group>/<operator>/OPEN_ITEMS.md`
-      (create it if needed) **and** index them in
-      [`docs/planning/TEAM_BLOCKED.md`](TEAM_BLOCKED.md).
+- [ ] Add new deferred work or unresolved team questions to
+      [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309), naming the source directory.
 - [ ] PR description notes **contract changes** explicitly if `OPERATOR_API.md`
       changed.
-- [ ] Python bindings — **deferred** module-wide unless this PR is explicitly
-      part of a bindings wave (`STATUS.md` settled decision).
+- [ ] Python bindings — add/update them when the SDK binding component is
+      available; until then, keep the limitation documented only in
+      [`SDK_DEVELOPMENT.md`](../../SDK_DEVELOPMENT.md).
 
 ---
 
@@ -220,7 +249,7 @@ Exemplar: `performance/cpp/perf_cfar_detector.cpp`.
 
 | Need | Header |
 | --- | --- |
-| Override ports / sticky resolve | `radar_common/sdk/override_param.hpp` |
+| Override ports / Exact resolve | `radar_common/sdk/override_param.hpp` |
 | Warn-once artifact cache | `radar_common/sdk/config_cache.hpp` |
 | Custom parameter Arg setters | `radar_common/sdk/arg_setters.hpp` |
 | Batching / dtype / device checks | `radar_common/tensor/tensor_utils.hpp` |

@@ -102,10 +102,10 @@ inline Provenance capture_provenance() {
 inline Platform capture_platform() {
   Platform p;
 
-  int device = 0;
+  int current_device_id = -1;
   cudaDeviceProp prop{};
-  if (cudaGetDevice(&device) == cudaSuccess &&
-      cudaGetDeviceProperties(&prop, device) == cudaSuccess) {
+  if (cudaGetDevice(&current_device_id) == cudaSuccess &&
+      cudaGetDeviceProperties(&prop, current_device_id) == cudaSuccess) {
     p.gpu_name = prop.name;
   }
 

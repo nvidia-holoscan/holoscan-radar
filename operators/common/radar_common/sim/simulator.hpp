@@ -53,7 +53,8 @@ std::shared_ptr<holoscan::Tensor> simulate_gpu(const SimScene& scene,
 // device counterpart of the CPU mimo solvers (the tests-only reference),
 // unified into one weight-driven core. The multiplexing scheme is captured
 // entirely by `weights` (row-major (num_tx, slow_time) complex), the
-// per-(tx, slot) excitation:
+// periodically repeated per-(tx, slot) excitation. A return with ambiguity
+// order q uses the weight at modulo(slot - q, slow_time):
 //   - TDM: slow_time = num_tx * num_chirps; weight 1 on the slot's active TX,
 //          0 elsewhere.
 //   - DDM (coded): slow_time = num_chirps; weight exp(i*2*pi*offset_tx*k).

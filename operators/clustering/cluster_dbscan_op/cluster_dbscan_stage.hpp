@@ -43,8 +43,9 @@ inline int grid_for(int64_t n, int block = 256) {
   return static_cast<int>((n + block - 1) / block);
 }
 
-// q is a neighbor of p when Σ_a ((p_a − q_a) · eps_inv2_a) ≤ 1, where
-// eps_inv2_a = 1 / epsilon_a². (Squared, axis-scaled Euclidean distance ≤ 1.)
+// q is a neighbor of p when Σ_a ((p_a − q_a) · eps_inv2_a) ≤ 1. A zero
+// eps_inv2 entry excludes that feature entirely; skip it before reading the
+// point values so ignored non-finite pass-through features cannot poison d2.
 template <typename T>
 __device__ inline bool dbscan_neighbor(const T* __restrict__ pi,
                                        const T* __restrict__ pj,
@@ -52,6 +53,9 @@ __device__ inline bool dbscan_neighbor(const T* __restrict__ pi,
                                        int64_t f) {
   T d2 = static_cast<T>(0);
   for (int64_t a = 0; a < f; ++a) {
+    if (eps_inv2[a] == static_cast<T>(0)) {
+      continue;
+    }
     const T diff = pi[a] - pj[a];
     d2 += diff * diff * eps_inv2[a];
     if (d2 > static_cast<T>(1)) {
@@ -126,7 +130,7 @@ __global__ void cc_step_kernel(const T* __restrict__ points,
   }
   cc_out[i] = m;
   if (m != self) {
-    *changed = 1;
+    atomicExch(changed, 1);
   }
 }
 

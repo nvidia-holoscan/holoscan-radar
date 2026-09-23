@@ -39,11 +39,11 @@ class PyFeatureAssemblyOp : public FeatureAssemblyOp<T> {
           extents.max_points = max_points;
           extents.max_features = max_features;
           return extents;
-        }()) {
+        }(),
+        features) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
-    this->add_arg(Arg("features") = features);
     this->setup(*this->spec_);
     python::add_conditions_and_resources(this, args);
   }
@@ -79,6 +79,10 @@ void bind_assembly_feature(py::module_& m) {
       .value("SCORE", AssemblyFeature::kScore)
       .value("AZ", AssemblyFeature::kAz)
       .value("EL", AssemblyFeature::kEl)
+      .value("AZ_ESTIMATE", AssemblyFeature::kAzEstimate)
+      .value("EL_ESTIMATE", AssemblyFeature::kElEstimate)
+      .value("AZ_BIN", AssemblyFeature::kAzBin)
+      .value("EL_BIN", AssemblyFeature::kElBin)
       .value("DOPPLER_BIN", AssemblyFeature::kDopplerBin)
       .value("RANGE_BIN", AssemblyFeature::kRangeBin);
 }

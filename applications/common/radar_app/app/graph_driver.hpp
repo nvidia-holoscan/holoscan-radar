@@ -94,8 +94,9 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix,
     if (!session.diagnostics().empty()) {
       std::string msg = std::string(log_prefix) + " run diagnostics:";
       for (const auto& d : session.diagnostics()) {
-        msg += " ";
-        msg += std::string(d.token);
+        msg += " [";
+        msg += holoscan::format_diagnostic(d, plan.graph());
+        msg += "]";
       }
       throw std::runtime_error(msg);
     }

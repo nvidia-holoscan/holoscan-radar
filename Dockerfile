@@ -58,7 +58,7 @@ RUN if ! python3 -m holoscan_cli --help 2>/dev/null | grep -qw build; then \
 #                 exported it from the SDK install; HSDK 5 keeps yaml-cpp
 #                 private to config_io, so the apps need the system package.
 #   openssh-client — git-over-SSH and host tooling (dotfiles clone, remotes);
-#                 the HSDK 5 EA base image does not ship ssh.
+#                 the runtime base image does not ship ssh.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         libgtest-dev \

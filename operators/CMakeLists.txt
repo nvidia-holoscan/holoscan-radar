@@ -30,18 +30,12 @@ add_subdirectory(clustering)
 # Angle-estimation operators (one add_holohub_operator() per operator inside).
 add_subdirectory(angle_estimation)
 
-# radar_app Python bindings — deferred here because applications/ is configured
-# before operators/, and pybind needs the radar_common CMake target. Report
-# sinks always build; Holoviz-backed symbols are compile-gated inside the
-# bindings ([EA HSDK5 ONLY]).
+# radar_app report Python bindings are deferred here because applications/
+# is configured before operators/, and pybind needs radar_common.
 if(HOLOSCAN_RADAR_BUILD_PYTHON)
     add_subdirectory(
         ${PROJECT_SOURCE_DIR}/applications/common/radar_app/python
         ${CMAKE_BINARY_DIR}/applications/common/radar_app/python)
-    if(HOLOSCAN_RADAR_HAS_HOLOVIZ)
-        target_compile_definitions(radar_app_python
-            PRIVATE HOLOSCAN_RADAR_HAS_HOLOVIZ=1)
-    endif()
 
     # Install the aggregate __init__.py alongside each operator's built module.
     configure_file(

@@ -7,17 +7,19 @@
 // and RD extent. Measurement tool only: no timing assertions.
 // See docs/planning/OPERATOR_DEVELOPMENT.md.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite of the HSDK 4.x Application harness.
-// Mid-session [live] az_angles override measurement is deferred until
-// docs/planning/HSDK5_PORT.md §1 / §9. Params still select the scan grid
-// under test.
+//  Graph-based rewrite of the HSDK 4.x Application harness.
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <span>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,8 +30,13 @@
 #include "angle_estimation/phase_shift_beamformer_op/phase_shift_beamformer_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/array_geometry_tensor.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/descriptors/window_spec.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
@@ -63,7 +70,27 @@ struct BeamScenario {
   int64_t num_el{0};
   int64_t num_doppler{0};
   int64_t num_range{0};
+  enum class OverrideKind {
+    kArrayGeometry,
+    kAzAngles,
+    kElAngles,
+    kArrayTaper,
+  } override_kind{OverrideKind::kAzAngles};
 };
+
+const char* override_name(BeamScenario::OverrideKind kind) {
+  switch (kind) {
+    case BeamScenario::OverrideKind::kArrayGeometry:
+      return "array_geometry";
+    case BeamScenario::OverrideKind::kAzAngles:
+      return "az_coordinates";
+    case BeamScenario::OverrideKind::kElAngles:
+      return "el_coordinates";
+    case BeamScenario::OverrideKind::kArrayTaper:
+      return "array_taper";
+  }
+  return "unknown";
+}
 
 const std::vector<SizeSpec>& size_ladder() {
   static const std::vector<SizeSpec> ladder = {
@@ -122,38 +149,261 @@ hr::ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
   return geom;
 }
 
+holoscan::expected<void, holoscan::Error> emit_host_vector(
+    holoscan::Output<holoscan::Tensor>& output,
+    std::span<const double> values, holoscan::TimePoint capture_time) {
+  const std::array<int64_t, 1> shape{
+      static_cast<int64_t>(values.size())};
+  constexpr DLDataType dtype{kDLFloat, 64U, 1U};
+  auto loan = output.allocate_tensor(
+      holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+  if (!loan) {
+    return holoscan::make_unexpected(std::move(loan).error());
+  }
+  auto written = loan->write_host_and_commit(
+      [values](const holoscan::TensorOutputWriteGuard& writer) {
+        std::copy(values.begin(), values.end(), writer.data_as<double>());
+      });
+  if (!written) {
+    return holoscan::make_unexpected(std::move(written).error());
+  }
+  return output.emit(
+      std::move(*loan),
+      holoscan::EmitOptions{.capture_time = capture_time});
+}
+
+template <typename Wire>
+holoscan::expected<void, holoscan::Error> emit_wire_doubles(
+    holoscan::Output<Wire>& output, Wire wire,
+    std::span<const double> values, std::span<const int64_t> shape,
+    holoscan::TimePoint capture_time) {
+  constexpr DLDataType dtype{kDLFloat, 64U, 1U};
+  auto loan = output.allocate_tensor(
+      holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+  if (!loan) {
+    return holoscan::make_unexpected(std::move(loan).error());
+  }
+  auto written = loan->write_host_and_commit(
+      [values](const holoscan::TensorOutputWriteGuard& writer) {
+        std::copy(values.begin(), values.end(), writer.data_as<double>());
+      });
+  if (!written) {
+    return holoscan::make_unexpected(std::move(written).error());
+  }
+  return output.emit_tensor(
+      std::move(*loan), std::move(wire),
+      holoscan::EmitOptions{.capture_time = capture_time});
+}
+
+class PerfBeamformerOverrideSourceOp final : public holoscan::Operator<> {
+ public:
+  PerfBeamformerOverrideSourceOp(
+      int64_t override_at, hr::PhaseShiftBeamformerParams initial,
+      hr::PhaseShiftBeamformerParams override)
+      : override_at_(override_at),
+        initial_(std::move(initial)),
+        override_(std::move(override)) {}
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorRepresentation kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice,
+        .dtype = std::nullopt,
+        .rank = std::nullopt,
+    };
+    constexpr holoscan::TensorRepresentation kHostVector{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLFloat, 64U, 1U},
+        .rank = 1U,
+    };
+    constexpr holoscan::TensorRepresentation kHostMatrix{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLFloat, 64U, 1U},
+        .rank = 2U,
+    };
+    spec.output(rd_maps)
+        .produces_tensor(hr::pooled_tensor_output(
+            kDevice, 8U, perf::PerfFrameBank::span_a()));
+    constexpr std::size_t kHostPayloadSpan = 4096U * sizeof(double);
+    spec.output(array_geometry)
+        .max_emits_per_compute(1U)
+        .produces_tensor(
+            hr::pooled_tensor_output(kHostMatrix, 2U, kHostPayloadSpan));
+    spec.output(az_coordinates)
+        .max_emits_per_compute(1U)
+        .produces_tensor(
+            hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
+    spec.output(el_coordinates)
+        .max_emits_per_compute(1U)
+        .produces_tensor(
+            hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
+    spec.output(array_taper)
+        .max_emits_per_compute(1U)
+        .produces_tensor(
+            hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = perf::kPerfTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    std::shared_ptr<holoscan::Tensor> frame;
+    perf::PerfPublishMode mode = perf::PerfPublishMode::kCopy;
+    {
+      const std::lock_guard lock(perf::PerfFrameBank::mutex);
+      if (perf::PerfFrameBank::frames_remaining <= 0 ||
+          perf::PerfFrameBank::input_frame == nullptr) {
+        return {};
+      }
+      --perf::PerfFrameBank::frames_remaining;
+      frame = perf::PerfFrameBank::input_frame;
+      mode = perf::PerfFrameBank::publish_mode;
+    }
+
+    const auto& values =
+        frame_index_ < override_at_ ? initial_ : override_;
+    const holoscan::TimePoint time = context.activation_time();
+    const auto packed = hr::pack_array_geometry(values.array_geometry);
+    auto geometry_wire = hr::to_wire(values.array_geometry);
+    const std::array<int64_t, 2> geometry_shape{
+        values.array_geometry.num_elements() + 1, 3};
+    auto emitted = emit_wire_doubles(
+        array_geometry, std::move(geometry_wire), packed, geometry_shape, time);
+    if (!emitted) {
+      return emitted;
+    }
+    emitted = emit_host_vector(az_coordinates, values.az_coordinates, time);
+    if (!emitted) {
+      return emitted;
+    }
+    emitted = emit_host_vector(el_coordinates, values.el_coordinates, time);
+    if (!emitted) {
+      return emitted;
+    }
+    auto taper_wire = hr::to_wire(values.array_taper);
+    const std::array<int64_t, 1> taper_shape{
+        static_cast<int64_t>(values.array_taper.coefficients.size())};
+    emitted = emit_wire_doubles(
+        array_taper, std::move(taper_wire),
+        values.array_taper.coefficients, taper_shape, time);
+    if (!emitted) {
+      return emitted;
+    }
+    {
+      const std::lock_guard lock(perf::PerfFrameBank::mutex);
+      perf::detail::record_start_locked();
+    }
+    ++frame_index_;
+    return perf::detail::emit_device_frame(rd_maps, context, frame, mode);
+  }
+
+  holoscan::Output<holoscan::Tensor> rd_maps{"rd_maps"};
+  holoscan::Output<hr::WireArrayGeometry>
+      array_geometry{"array_geometry"};
+  holoscan::Output<holoscan::Tensor> az_coordinates{"az_coordinates"};
+  holoscan::Output<holoscan::Tensor> el_coordinates{"el_coordinates"};
+  holoscan::Output<hr::WireWindowSpec> array_taper{"array_taper"};
+
+ private:
+  int64_t override_at_{-1};
+  hr::PhaseShiftBeamformerParams initial_;
+  hr::PhaseShiftBeamformerParams override_;
+  int64_t frame_index_{0};
+};
+
 perf::TimingCollector run_beamformer_graph(
-    const BeamScenario& scen, int total_frames) {
+    const BeamScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(
       {scen.channels, scen.num_doppler, scen.num_range});
+  hr::PhaseShiftBeamformerParams initial;
+  initial.array_geometry =
+      make_ula_geometry(scen.channels, 0.5, 1.0);
+  initial.az_coordinates = linspace(-0.5, 0.5, scen.num_az);
+  initial.el_coordinates = linspace(-0.3, 0.3, scen.num_el);
+  hr::PhaseShiftBeamformerParams override = initial;
+  switch (scen.override_kind) {
+    case BeamScenario::OverrideKind::kArrayGeometry:
+      override.array_geometry =
+          make_ula_geometry(scen.channels, 0.45, 1.0);
+      break;
+    case BeamScenario::OverrideKind::kAzAngles:
+      override.az_coordinates = linspace(-0.45, 0.55, scen.num_az);
+      break;
+    case BeamScenario::OverrideKind::kElAngles:
+      override.el_coordinates = linspace(-0.25, 0.35, scen.num_el);
+      break;
+    case BeamScenario::OverrideKind::kArrayTaper:
+      override.array_taper.type = hr::WindowType::kHann;
+      break;
+  }
+
   hr::MaxTensorExtents extents;
   extents.max_az = scen.num_az;
   extents.max_el = scen.num_el;
   extents.max_doppler_bins = scen.num_doppler;
   extents.max_range_bins = scen.num_range;
-  return perf::run_perf_graph(
-      std::move(cube), total_frames, "beamformer-perf",
-      [&](holoscan::Graph& graph, const auto& src,
-          holoscan::CompileOptions& options) {
-        auto op =
-            graph.op<hr::PhaseShiftBeamformerOp<PerfPrecision>>(
-                "beamformer", extents);
-        hr::PhaseShiftBeamformerParams params;
-        params.array_geometry =
-            make_ula_geometry(scen.channels, 0.5, 1.0);
-        params.angle_convention.preset =
-            hr::AngleConventionPreset::kRadarBoresight;
-        params.az_angles = linspace(-0.5, 0.5, scen.num_az);
-        params.el_angles = linspace(-0.3, 0.3, scen.num_el);
-        op.set_params(std::move(params));
-        const auto sink =
-            graph.op<perf::PerfTerminalSinkOp>("out_sink");
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(src->out, op->rd_maps, q);
-        graph.add_flow(op->rda_cube, sink->in, q);
-        perf::bind_tensor_out(
-            options, "beamformer", "rda_cube");
-      });
+  perf::TimingCollector collector;
+  collector.t_construct = perf::Clock::now();
+  perf::PerfFrameBank::reset(
+      std::move(cube), plan.total_frames, &collector);
+
+  holoscan::Graph graph{"beamformer-perf"};
+  const auto src = graph.op<PerfBeamformerOverrideSourceOp>(
+      "src", plan.override_at, initial, override);
+  auto op = graph.op<hr::PhaseShiftBeamformerOp<PerfPrecision>>(
+      "beamformer", extents);
+  op.set_params(std::move(initial));
+  const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
+  const holoscan::ConnectionOptions q{.queue_depth = 8U};
+  auto add_flow = [&](auto& output, auto& input, const char* edge) {
+    try {
+      graph.add_flow(output, input, q);
+    } catch (const holoscan::RuntimeError& error) {
+      throw std::runtime_error(
+          std::string("beamformer-perf edge ") + edge + ": " + error.what());
+    }
+  };
+  add_flow(src->rd_maps, op->rd_maps, "rd_maps");
+  add_flow(src->array_geometry, op->array_geometry, "array_geometry");
+  add_flow(src->az_coordinates, op->az_coordinates, "az_coordinates");
+  add_flow(src->el_coordinates, op->el_coordinates, "el_coordinates");
+  add_flow(src->array_taper, op->array_taper, "array_taper");
+  add_flow(op->rda_cube, sink->in, "rda_cube");
+
+  holoscan::CompileOptions options;
+  perf::bind_tensor_out(options, "src", "rd_maps");
+  perf::bind_tensor_out(options, "beamformer", "rda_cube");
+  perf::bind_tensor_out(options, "beamformer", "az_grid");
+  perf::bind_tensor_out(options, "beamformer", "el_grid");
+  graph.set_default_clock(
+      graph.add_clock<holoscan::RealtimeClock>("clock"));
+  const holoscan::ExecutionPlan compiled =
+      holoscan::compile(graph, std::move(options));
+  if (!compiled.ok()) {
+    throw std::runtime_error(
+        "beamformer-perf compile failed: " +
+        std::string(compiled.json()));
+  }
+  holoscan::RunSession session = holoscan::run_async(compiled);
+  perf::detail::wait_for_frames(session, plan.total_frames);
+  session.request_stop();
+  session.wait();
+  if (!session.diagnostics().empty()) {
+    std::string message = "beamformer-perf run diagnostics:";
+    for (const auto& diagnostic : session.diagnostics()) {
+      message += " ";
+      message += std::string(diagnostic.token);
+    }
+    throw std::runtime_error(message);
+  }
+  if (collector.ends.size() < static_cast<std::size_t>(plan.total_frames)) {
+    throw std::runtime_error(perf::detail::stall_message(
+        "beamformer-perf", collector.ends.size(), plan.total_frames));
+  }
+  return collector;
 }
 
 void fill_throughput(perf::ResultRow* row,
@@ -184,18 +434,20 @@ perf::ResultRow base_row(const BeamScenario& scen) {
   perf::ResultRow row;
   row.scenario_id = scen.id;
   row.op_name = "PhaseShiftBeamformerOp";
-  row.variant = "bartlett_dense";
+  row.variant =
+      std::string("bartlett_dense_live_") + override_name(scen.override_kind);
   row.size_id = scen.size_id;
   row.map_shape = {scen.num_az, scen.num_el};
   row.input_shape = {scen.channels, scen.num_doppler, scen.num_range};
   row.out_batch = scen.num_doppler * scen.num_range;
   row.k = scen.channels;
-  // [EA HSDK5 ONLY] live override timing deferred — HSDK5_PORT.md §1/§9.
-  row.notes = "live_override=deferred_ea";
+  row.notes =
+      std::string("live_override=") + override_name(scen.override_kind);
   return row;
 }
 
-BeamScenario make_scenario(const SizeSpec& s) {
+BeamScenario make_scenario(const SizeSpec& s,
+                           BeamScenario::OverrideKind kind) {
   BeamScenario sc;
   sc.size_id = s.id;
   sc.channels = s.channels;
@@ -203,12 +455,24 @@ BeamScenario make_scenario(const SizeSpec& s) {
   sc.num_el = s.num_el;
   sc.num_doppler = s.num_doppler;
   sc.num_range = s.num_range;
+  sc.override_kind = kind;
   std::ostringstream id;
   id << "beamform_" << s.id << "_c" << s.channels << "_g"
      << s.num_az << "x" << s.num_el << "_rd" << s.num_doppler
-     << "x" << s.num_range;
+     << "x" << s.num_range << "_live_" << override_name(kind);
   sc.id = id.str();
   return sc;
+}
+
+void append_override_scenarios(std::vector<BeamScenario>* out,
+                               const SizeSpec& size) {
+  for (const auto kind : {
+           BeamScenario::OverrideKind::kArrayGeometry,
+           BeamScenario::OverrideKind::kAzAngles,
+           BeamScenario::OverrideKind::kElAngles,
+           BeamScenario::OverrideKind::kArrayTaper}) {
+    out->push_back(make_scenario(size, kind));
+  }
 }
 
 struct BeamTraits : perf::PerfDriverDefaults {
@@ -222,14 +486,13 @@ struct BeamTraits : perf::PerfDriverDefaults {
            "(HSDK 5 Graph)";
   }
   static const char* sizes_all_help() {
-    return "Default size sweep (Params-only scan grid)";
+    return "Default size sweep with all four inline live overrides";
   }
   static const char* sizes_subset_help() {
     return "Size sweep across an explicit subset";
   }
   static const char* full_help() {
-    return "Full size ladder; live-override timing deferred on "
-           "HSDK 5 EA (HSDK5_PORT.md §1/§9)";
+    return "Full size ladder with all four inline live overrides";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -248,7 +511,7 @@ struct BeamTraits : perf::PerfDriverDefaults {
   static std::vector<BeamScenario> build_default_matrix() {
     std::vector<BeamScenario> out;
     for (const char* sid : {"xs", "sm", "md"}) {
-      out.push_back(make_scenario(must_find_size(sid)));
+      append_override_scenarios(&out, must_find_size(sid));
     }
     return out;
   }
@@ -263,7 +526,7 @@ struct BeamTraits : perf::PerfDriverDefaults {
                   << "', skipping\n";
         continue;
       }
-      out.push_back(make_scenario(*s));
+      append_override_scenarios(&out, *s);
     }
     return out;
   }
@@ -271,7 +534,7 @@ struct BeamTraits : perf::PerfDriverDefaults {
   static std::vector<BeamScenario> build_full_matrix() {
     std::vector<BeamScenario> out;
     for (const auto& s : size_ladder()) {
-      out.push_back(make_scenario(s));
+      append_override_scenarios(&out, s);
     }
     return out;
   }
@@ -280,10 +543,10 @@ struct BeamTraits : perf::PerfDriverDefaults {
                            const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/false);
+        perf::make_run_plan(rs, /*has_override=*/true);
     const auto samples = perf::collect_scenario_samples(
         rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_beamformer_graph(scen, p.total_frames);
+          return run_beamformer_graph(scen, p);
         });
 
     perf::append_setup_row(base_row(scen), samples, report);
@@ -293,8 +556,9 @@ struct BeamTraits : perf::PerfDriverDefaults {
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
         "cold_ms is first-frame latency; median/p90 are "
-        "post-warmup steady state; live az_angles override "
-        "timing deferred (HSDK5_PORT.md §1/§9); cells/s is "
+        "pre-override steady state; override_ms is the peak after inline " +
+        std::string(override_name(scen.override_kind)) +
+        " changes the steering configuration; cells/s is "
         "RD-cells/s (beams/s = slices/s)";
     report->results.push_back(row);
   }
@@ -306,7 +570,9 @@ struct BeamTraits : perf::PerfDriverDefaults {
       warm_rs.warmup_frames = 0;
       warm_rs.measured_frames = 2;
       warm_rs.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs")),
+      run_scenario(
+          make_scenario(must_find_size("xs"),
+                        BeamScenario::OverrideKind::kAzAngles),
                    warm_rs, &discarded);
     });
   }

@@ -31,6 +31,24 @@
 
 namespace holoscan::radar::detail {
 
+// Fully resolved kernel and output policy for one operator tick. Fields follow
+// CFARParams order; live values have already been merged over pinned Params.
+struct CfarStageConfig {
+  CfarVariant cfar_variant;
+  int64_t os_rank;
+  std::vector<int64_t> guard_cells;
+  std::vector<int64_t> training_cells;
+  double pfa;
+  std::vector<double> alpha_lut;
+  double threshold_scale;
+  std::vector<int64_t> nci_axes;
+  int64_t preintegrated_looks;
+  int64_t max_detections;
+  bool blocking_alpha_lut_rebuild;
+  CfarPeakMode peak_mode;
+  std::vector<int64_t> peak_radius;
+};
+
 // Sum power along integrated leading axes using a host-built lookup table.
 // in_power is (batch_in, doppler, range); out_power is (out_batch, doppler,
 // range).
@@ -368,7 +386,9 @@ template <typename T>
 __global__ void cfar_peak_suppress_kernel(const T* power, const bool* mask,
                                           bool* peak_mask, int64_t batch,
                                           int64_t num_doppler,
-                                          int64_t num_range, bool full8) {
+                                          int64_t num_range,
+                                          int64_t radius_doppler,
+                                          int64_t radius_range) {
   const int64_t r = blockIdx.x * blockDim.x + threadIdx.x;
   const int64_t d = blockIdx.y * blockDim.y + threadIdx.y;
   const int64_t b = blockIdx.z;
@@ -386,22 +406,21 @@ __global__ void cfar_peak_suppress_kernel(const T* power, const bool* mask,
 
   const T pc = power[idx];
   bool survive = true;
-  for (int dd = -1; dd <= 1 && survive; ++dd) {
+  const int64_t dd_min = -(radius_doppler < d ? radius_doppler : d);
+  const int64_t doppler_right = num_doppler - 1 - d;
+  const int64_t dd_max =
+      radius_doppler < doppler_right ? radius_doppler : doppler_right;
+  const int64_t rr_min = -(radius_range < r ? radius_range : r);
+  const int64_t range_right = num_range - 1 - r;
+  const int64_t rr_max =
+      radius_range < range_right ? radius_range : range_right;
+  for (int64_t dd = dd_min; dd <= dd_max && survive; ++dd) {
     const int64_t nd = d + dd;
-    if (nd < 0 || nd >= num_doppler) {
-      continue;
-    }
-    for (int rr = -1; rr <= 1; ++rr) {
+    for (int64_t rr = rr_min; rr <= rr_max; ++rr) {
       if (dd == 0 && rr == 0) {
         continue;
       }
-      if (!full8 && dd != 0 && rr != 0) {
-        continue;  // 4-connected: skip diagonals.
-      }
       const int64_t nr = r + rr;
-      if (nr < 0 || nr >= num_range) {
-        continue;
-      }
       const int64_t neighbor_lin = nd * num_range + nr;
       const int64_t neighbor_idx = b * plane + neighbor_lin;
       if (!mask[neighbor_idx]) {
@@ -418,6 +437,80 @@ __global__ void cfar_peak_suppress_kernel(const T* power, const bool* mask,
     }
   }
   peak_mask[idx] = survive;
+}
+
+// Configurable hyperrectangular N-D NMS for rank 2-4 output tensors.
+template <typename T, int Rank>
+__global__ void cfar_peak_suppress_all_kernel(
+    const T* power, const bool* mask, bool* peak_mask, int64_t total,
+    int64_t dim0, int64_t dim1, int64_t dim2, int64_t dim3,
+    int64_t radius0, int64_t radius1, int64_t radius2, int64_t radius3) {
+  const int64_t index =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (index >= total) {
+    return;
+  }
+  if (!mask[index]) {
+    peak_mask[index] = false;
+    return;
+  }
+
+  const int64_t dims[4] = {dim0, dim1, dim2, dim3};
+  const int64_t radii[4] = {radius0, radius1, radius2, radius3};
+  int64_t coordinates[4] = {};
+  int64_t remainder = index;
+#pragma unroll
+  for (int axis = Rank - 1; axis >= 0; --axis) {
+    coordinates[axis] = remainder % dims[axis];
+    remainder /= dims[axis];
+  }
+
+  int64_t offset_min[4] = {};
+  int64_t widths[4] = {};
+  int64_t neighbor_count = 1;
+#pragma unroll
+  for (int axis = 0; axis < Rank; ++axis) {
+    const int64_t left =
+        radii[axis] < coordinates[axis] ? radii[axis] : coordinates[axis];
+    const int64_t right_space = dims[axis] - 1 - coordinates[axis];
+    const int64_t right =
+        radii[axis] < right_space ? radii[axis] : right_space;
+    offset_min[axis] = -left;
+    widths[axis] = left + right + 1;
+    neighbor_count *= widths[axis];
+  }
+  const T center_power = power[index];
+  bool survive = true;
+  for (int64_t code = 0; code < neighbor_count && survive; ++code) {
+    int64_t remaining_code = code;
+    bool is_center = true;
+    int64_t neighbor_index = 0;
+    int64_t offsets[4] = {};
+#pragma unroll
+    for (int axis = Rank - 1; axis >= 0; --axis) {
+      offsets[axis] =
+          offset_min[axis] + remaining_code % widths[axis];
+      remaining_code /= widths[axis];
+      is_center = is_center && offsets[axis] == 0;
+    }
+    if (is_center) {
+      continue;
+    }
+#pragma unroll
+    for (int axis = 0; axis < Rank; ++axis) {
+      neighbor_index =
+          neighbor_index * dims[axis] + coordinates[axis] + offsets[axis];
+    }
+    if (!mask[neighbor_index]) {
+      continue;
+    }
+    const T neighbor_power = power[neighbor_index];
+    if (neighbor_power > center_power ||
+        (neighbor_power == center_power && neighbor_index < index)) {
+      survive = false;
+    }
+  }
+  peak_mask[index] = survive;
 }
 
 // Run the CFAR stage over a collapsed batch of (doppler, range) planes.
@@ -438,24 +531,26 @@ __global__ void cfar_peak_suppress_kernel(const T* power, const bool* mask,
 // All outputs are preallocated by the caller. Work is enqueued on `stream`;
 // no synchronization here.
 //
-// When peak_only is set, a peak-grouping (NMS) pass refines the raw mask into
-// peak_mask (a distinct caller-preallocated bool buffer of the same shape as
-// mask): one detection per contiguous above-threshold blob, keeping the
-// local-maximum cell of the CFAR statistic. peak_full8 selects the 8-connected
-// (true) vs 4-connected (false) neighborhood. The raw mask/score/noise outputs
-// are unaffected; only peak_mask reflects the grouping.
+// A non-none peak mode refines the raw mask into peak_mask (a distinct
+// caller-preallocated bool buffer). range_doppler compares within each trailing
+// plane; all compares the configured N-D hyperrectangle. Dense power, score,
+// and noise outputs are unaffected.
 //
 // v1 implements CfarVariant::kCA, kGO, kSO, and kOS.
 template <typename T>
-void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
-                    int64_t batch_in, int64_t out_batch, int64_t num_doppler,
-                    int64_t num_range, int guard_d, int guard_r, int train_d,
-                    int train_r, int64_t os_rank, double threshold_scale,
+void run_cfar_stage(const CfarStageConfig& config, const void* in,
+                    bool input_is_complex, int64_t batch_in,
+                    int64_t out_batch, int64_t num_doppler, int64_t num_range,
+                    const std::vector<int64_t>& output_shape,
                     int64_t nci_fold, const int64_t* batch_in_table_dev,
                     const void* alpha_lut, int64_t alpha_lut_size, void* power,
                     void* integrated_power, void* score, void* noise,
-                    void* mask, bool peak_only, bool peak_full8,
-                    void* peak_mask, cudaStream_t stream) {
+                    void* mask, void* peak_mask, cudaStream_t stream) {
+  const CfarVariant variant = config.cfar_variant;
+  const int guard_d = static_cast<int>(config.guard_cells[0]);
+  const int guard_r = static_cast<int>(config.guard_cells[1]);
+  const int train_d = static_cast<int>(config.training_cells[0]);
+  const int train_r = static_cast<int>(config.training_cells[1]);
   if (variant != CfarVariant::kCA && variant != CfarVariant::kGO &&
       variant != CfarVariant::kSO && variant != CfarVariant::kOS) {
     throw std::invalid_argument(
@@ -510,35 +605,36 @@ void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
     if (variant == CfarVariant::kCA) {
       cfar_ca_kernel<T><<<grid, block, 0, stream>>>(
           cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
-          train_d, train_r, static_cast<T>(threshold_scale), alpha_lut_t,
+          train_d, train_r, static_cast<T>(config.threshold_scale), alpha_lut_t,
           alpha_lut_size, static_cast<T*>(score) + b * plane,
           static_cast<T*>(noise) + b * plane,
           static_cast<bool*>(mask) + b * plane);
     } else if (variant == CfarVariant::kGO) {
       cfar_goso_kernel<T, true><<<grid, block, 0, stream>>>(
           cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
-          train_d, train_r, static_cast<T>(threshold_scale), alpha_lut_t,
+          train_d, train_r, static_cast<T>(config.threshold_scale), alpha_lut_t,
           alpha_lut_size, static_cast<T*>(score) + b * plane,
           static_cast<T*>(noise) + b * plane,
           static_cast<bool*>(mask) + b * plane);
     } else if (variant == CfarVariant::kSO) {
       cfar_goso_kernel<T, false><<<grid, block, 0, stream>>>(
           cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
-          train_d, train_r, static_cast<T>(threshold_scale), alpha_lut_t,
+          train_d, train_r, static_cast<T>(config.threshold_scale), alpha_lut_t,
           alpha_lut_size, static_cast<T*>(score) + b * plane,
           static_cast<T*>(noise) + b * plane,
           static_cast<bool*>(mask) + b * plane);
     } else {
       cfar_os_kernel<T><<<grid, block, 0, stream>>>(
           cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r,
-          train_d, train_r, os_rank, static_cast<T>(threshold_scale),
+          train_d, train_r, config.os_rank,
+          static_cast<T>(config.threshold_scale),
           alpha_lut_t, alpha_lut_size, static_cast<T*>(score) + b * plane,
           static_cast<T*>(noise) + b * plane,
           static_cast<bool*>(mask) + b * plane);
     }
   }
 
-  if (peak_only) {
+  if (config.peak_mode == CfarPeakMode::kRangeDoppler) {
     // Non-maximum suppression over cfar_power (the map that was thresholded),
     // reading the raw mask and writing the refined peak_mask. One launch over
     // all out_batch planes; peak_mask must be distinct from mask (neighbor
@@ -550,10 +646,53 @@ void run_cfar_stage(CfarVariant variant, const void* in, bool input_is_complex,
     cfar_peak_suppress_kernel<T><<<peak_grid, block, 0, stream>>>(
         cfar_power, static_cast<const bool*>(mask),
         static_cast<bool*>(peak_mask), out_batch, num_doppler, num_range,
-        peak_full8);
+        config.peak_radius[config.peak_radius.size() - 2],
+        config.peak_radius.back());
     if (cudaGetLastError() != cudaSuccess) {
       throw std::runtime_error("run_cfar_stage: peak-suppress kernel launch "
                                "failed");
+    }
+  } else if (config.peak_mode == CfarPeakMode::kAll) {
+    constexpr int kPeakBlock = 256;
+    const int64_t total = out_batch * num_doppler * num_range;
+    const int peak_grid = static_cast<int>(
+        (total + kPeakBlock - 1) / kPeakBlock);
+    if (output_shape.size() < 2U || output_shape.size() > 4U) {
+      throw std::invalid_argument(
+          "run_cfar_stage: all peak mode requires output rank 2-4");
+    }
+    const int64_t dim0 = output_shape[0];
+    const int64_t dim1 = output_shape[1];
+    const int64_t dim2 = output_shape.size() > 2U ? output_shape[2] : 1;
+    const int64_t dim3 = output_shape.size() > 3U ? output_shape[3] : 1;
+    const int64_t radius0 = config.peak_radius[0];
+    const int64_t radius1 = config.peak_radius[1];
+    const int64_t radius2 =
+        output_shape.size() > 2U ? config.peak_radius[2] : 0;
+    const int64_t radius3 =
+        output_shape.size() > 3U ? config.peak_radius[3] : 0;
+    if (output_shape.size() == 2U) {
+      cfar_peak_suppress_all_kernel<T, 2>
+          <<<peak_grid, kPeakBlock, 0, stream>>>(
+              cfar_power, static_cast<const bool*>(mask),
+              static_cast<bool*>(peak_mask), total, dim0, dim1, dim2, dim3,
+              radius0, radius1, radius2, radius3);
+    } else if (output_shape.size() == 3U) {
+      cfar_peak_suppress_all_kernel<T, 3>
+          <<<peak_grid, kPeakBlock, 0, stream>>>(
+              cfar_power, static_cast<const bool*>(mask),
+              static_cast<bool*>(peak_mask), total, dim0, dim1, dim2, dim3,
+              radius0, radius1, radius2, radius3);
+    } else if (output_shape.size() == 4U) {
+      cfar_peak_suppress_all_kernel<T, 4>
+          <<<peak_grid, kPeakBlock, 0, stream>>>(
+              cfar_power, static_cast<const bool*>(mask),
+              static_cast<bool*>(peak_mask), total, dim0, dim1, dim2, dim3,
+              radius0, radius1, radius2, radius3);
+    }
+    if (cudaGetLastError() != cudaSuccess) {
+      throw std::runtime_error(
+          "run_cfar_stage: all-axis peak-suppress kernel launch failed");
     }
   }
 }

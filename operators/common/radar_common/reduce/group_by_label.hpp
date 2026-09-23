@@ -13,6 +13,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 
@@ -69,6 +70,12 @@ void launch_compact_and_gather(const int64_t* best_rows,
                                const int64_t* detection_idx, int64_t n_slots,
                                int64_t idx_cols, int64_t* rep_idx,
                                cudaStream_t stream);
+
+template <typename T>
+void launch_compact_points(const int64_t* best_rows, const T* points,
+                           const T* slot_points, int64_t n_slots,
+                           int64_t num_features, bool use_slot_points,
+                           T* reduced_points, cudaStream_t stream);
 
 #if defined(__CUDACC__)
 // Template custom-peak path (ScoreFn is a compile-time device functor).
@@ -149,6 +156,180 @@ void launch_peak_select_custom(const int64_t* labels, const T* points,
   peak_min_row_custom_kernel<T, ScoreFn>
       <<<grid_for(n), 256, 0, stream>>>(labels, points, n, num_features, fn,
                                        best_score_bits, best_rows);
+}
+
+template <typename T>
+struct BuiltInRowScore {
+  const T* weights;
+  ScoreMethod method;
+  bool uniform;
+
+  __device__ T operator()(const T* row, int64_t num_features) const {
+    if (uniform) {
+      return T{1};
+    }
+    switch (method) {
+      case ScoreMethod::kWeightedSum: {
+        T score = T{0};
+        for (int64_t f = 0; f < num_features; ++f) {
+          score += weights[f] * row[f];
+        }
+        return score;
+      }
+      case ScoreMethod::kWeightedL2: {
+        T score = T{0};
+        for (int64_t f = 0; f < num_features; ++f) {
+          const T value = weights[f] * row[f];
+          score += value * value;
+        }
+        return sqrt(score);
+      }
+      case ScoreMethod::kWeightedMax: {
+        T score = weights[0] * row[0];
+        for (int64_t f = 1; f < num_features; ++f) {
+          const T value = weights[f] * row[f];
+          score = value > score ? value : score;
+        }
+        return score;
+      }
+      default:
+        return T{0};
+    }
+  }
+};
+
+template <typename T, typename WeightFn>
+__global__ void weighted_mean_accumulate_kernel(
+    const int64_t* labels, const int64_t* detection_idx, const T* points,
+    int64_t n, int64_t idx_cols, int64_t num_features, WeightFn weight_fn,
+    T* weight_sums, T* point_sums, T* index_sums, int64_t* counts,
+    int* invalid_weight) {
+  const int64_t i =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i >= n) {
+    return;
+  }
+  const int64_t lab = labels[i];
+  if (lab <= kNoiseLabel) {
+    return;
+  }
+  const T* point = points + i * num_features;
+  const T alpha = weight_fn(point, num_features);
+  if (!isfinite(alpha) || alpha < T{0}) {
+    atomicExch(invalid_weight, 1);
+    return;
+  }
+  atomicAdd(reinterpret_cast<cuda_u64*>(counts + lab), 1ull);
+  atomicAdd(weight_sums + lab, alpha);
+  T* point_dest = point_sums + lab * num_features;
+  for (int64_t f = 0; f < num_features; ++f) {
+    atomicAdd(point_dest + f, alpha * point[f]);
+  }
+  T* index_dest = index_sums + lab * idx_cols;
+  const int64_t* index = detection_idx + i * idx_cols;
+  for (int64_t c = 0; c < idx_cols; ++c) {
+    atomicAdd(index_dest + c, alpha * static_cast<T>(index[c]));
+  }
+}
+
+template <typename T>
+__global__ void weighted_mean_finalize_kernel(
+    T* weight_sums, T* point_sums, T* index_sums, const int64_t* counts,
+    int64_t n_slots, int64_t idx_cols, int64_t num_features,
+    int* invalid_weight) {
+  const int64_t lab =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (lab >= n_slots || counts[lab] <= 0) {
+    return;
+  }
+  const T total = weight_sums[lab];
+  if (!isfinite(total) || total <= T{0}) {
+    atomicExch(invalid_weight, 1);
+    return;
+  }
+  const T inv = T{1} / total;
+  for (int64_t f = 0; f < num_features; ++f) {
+    point_sums[lab * num_features + f] *= inv;
+  }
+  for (int64_t c = 0; c < idx_cols; ++c) {
+    index_sums[lab * idx_cols + c] *= inv;
+  }
+}
+
+template <typename T>
+__device__ T weighted_index_neg_dist2(const int64_t* index,
+                                      const T* centroid, int64_t idx_cols) {
+  T distance = T{0};
+  for (int64_t c = 0; c < idx_cols; ++c) {
+    const T delta = static_cast<T>(index[c]) - centroid[c];
+    distance += delta * delta;
+  }
+  return -distance;
+}
+
+template <typename T>
+__global__ void weighted_mean_max_negdist_kernel(
+    const int64_t* labels, const int64_t* detection_idx,
+    const T* index_centroids, int64_t n, int64_t idx_cols,
+    cuda_u64* best_score_bits) {
+  const int64_t i =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i >= n) {
+    return;
+  }
+  const int64_t lab = labels[i];
+  if (lab <= kNoiseLabel) {
+    return;
+  }
+  const T score = weighted_index_neg_dist2(
+      detection_idx + i * idx_cols, index_centroids + lab * idx_cols,
+      idx_cols);
+  atomicMax(best_score_bits + lab, ordered_bits_t(score));
+}
+
+template <typename T>
+__global__ void weighted_mean_min_row_kernel(
+    const int64_t* labels, const int64_t* detection_idx,
+    const T* index_centroids, int64_t n, int64_t idx_cols,
+    const cuda_u64* best_score_bits, int64_t* best_rows) {
+  const int64_t i =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i >= n) {
+    return;
+  }
+  const int64_t lab = labels[i];
+  if (lab <= kNoiseLabel) {
+    return;
+  }
+  const T score = weighted_index_neg_dist2(
+      detection_idx + i * idx_cols, index_centroids + lab * idx_cols,
+      idx_cols);
+  if (ordered_bits_t(score) != best_score_bits[lab]) {
+    return;
+  }
+  atomicMin(reinterpret_cast<cuda_u64*>(best_rows + lab),
+            static_cast<cuda_u64>(i));
+}
+
+template <typename T, typename WeightFn>
+void launch_weighted_mean_select(
+    const int64_t* labels, const int64_t* detection_idx, const T* points,
+    int64_t n, int64_t n_slots, int64_t idx_cols, int64_t num_features,
+    WeightFn weight_fn, T* weight_sums, T* point_means, T* index_means,
+    int64_t* counts, int* invalid_weight, cuda_u64* best_score_bits,
+    int64_t* best_rows, cudaStream_t stream) {
+  weighted_mean_accumulate_kernel<T, WeightFn>
+      <<<grid_for(n), 256, 0, stream>>>(
+          labels, detection_idx, points, n, idx_cols, num_features, weight_fn,
+          weight_sums, point_means, index_means, counts, invalid_weight);
+  weighted_mean_finalize_kernel<T><<<grid_for(n_slots), 256, 0, stream>>>(
+      weight_sums, point_means, index_means, counts, n_slots, idx_cols,
+      num_features, invalid_weight);
+  weighted_mean_max_negdist_kernel<T><<<grid_for(n), 256, 0, stream>>>(
+      labels, detection_idx, index_means, n, idx_cols, best_score_bits);
+  weighted_mean_min_row_kernel<T><<<grid_for(n), 256, 0, stream>>>(
+      labels, detection_idx, index_means, n, idx_cols, best_score_bits,
+      best_rows);
 }
 #endif  // __CUDACC__
 

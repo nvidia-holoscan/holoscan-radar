@@ -14,6 +14,7 @@ target_link_libraries(virtual_array_assembly_op
     PUBLIC
         holoscan::core
         holoscan::radar_common
+        holoscan::radar_schemas
     PRIVATE
         matx::matx)
 

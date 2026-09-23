@@ -5,7 +5,7 @@
 // into an explicit TX axis. Sweeps (M_tx, N_rx, L, samples) and a leading
 // batch axis. No [live] parameters. Measurement tool only.
 //
-// [EA HSDK5 ONLY] Graph rewrite; drains adc_cube_out (§2 unique out name).
+//  Graph rewrite; drains adc_cube_out (§2 unique out name).
 
 #include <complex>
 #include <cstdint>

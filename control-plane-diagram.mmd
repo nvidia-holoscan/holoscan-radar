@@ -1,0 +1,22 @@
+flowchart LR
+    subgraph TX["FMCWTransmitSourceOp — independent source"]
+        SELECT["select next CPI profile"] --> DRIVER["TX backend"]
+        DRIVER --> APPLIED["applied profile + token + t_tx"]
+        APPLIED --> WAVEFORM["publish waveform @ t_tx"]
+    end
+    COORD["TransmitFrameCoordinator<br/>bounded token to t_tx ledger"]
+    subgraph RX["CorrelatedMimoTdmAdcSourceOp — independent source"]
+        RXDRIVER["RX backend: ADC + token"] --> CLAIM["claim coordinator record"]
+        CLAIM --> ADC["publish ADC cube @ t_tx"]
+    end
+    APPLIED --> COORD
+    WAVEFORM -->|"mark ready after emit"| COORD
+    COORD --> CLAIM
+    DRIVER -. "transmission / simulation" .-> RXDRIVER
+    ADC --> DSP["existing MIMO TDM DSP"]
+    WAVEFORM -->|"Exact live waveform"| DSP
+
+    style TX fill:#2962FF, color:#FFFFFF
+    style RX fill:#AA00FF, color:#FFFFFF
+    style DSP fill:#AA00FF, color:#FFFFFF
+    style COORD fill:#FFFFFF, color:#333333, stroke-dasharray: 5 5

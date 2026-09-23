@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -28,6 +29,7 @@ using holoscan::radar::ElevationReference;
 using holoscan::radar::kPi;
 using holoscan::radar::kTwoPi;
 using holoscan::radar::SignedAxis;
+using holoscan::radar::validate_scan_grid_axes;
 
 AngleConvention preset(AngleConventionPreset p) {
   AngleConvention c;
@@ -44,6 +46,42 @@ AngleConvention custom(SignedAxis b, SignedAxis a, SignedAxis e,
   c.elevation_positive_axis = e;
   c.elevation_reference = ref;
   return c;
+}
+
+TEST(AngleConventionTest, DefaultsToRadarBoresight) {
+  EXPECT_EQ(AngleConvention{}.preset,
+            AngleConventionPreset::kRadarBoresight);
+}
+
+TEST(AngleConventionTest, ScanGridRejectsNonFiniteCoordinates) {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  EXPECT_THROW(validate_scan_grid_axes(AngleConvention{}, {0.0, nan}, {0.0}),
+               std::invalid_argument);
+  EXPECT_THROW(validate_scan_grid_axes(AngleConvention{}, {0.0}, {-inf}),
+               std::invalid_argument);
+}
+
+TEST(AngleConventionTest, DirectionCosineAxesStayWithinUnitInterval) {
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kDirectionCosine;
+  EXPECT_NO_THROW(validate_scan_grid_axes(conv, {-1.0, 0.0, 1.0}, {-1.0, 1.0}));
+  EXPECT_THROW(validate_scan_grid_axes(conv, {-1.01}, {0.0}),
+               std::invalid_argument);
+  EXPECT_THROW(validate_scan_grid_axes(conv, {0.0}, {1.01}),
+               std::invalid_argument);
+}
+
+TEST(AngleConventionTest, DirectionCosineAllowsMaskedCartesianCorners) {
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kDirectionCosine;
+  EXPECT_NO_THROW(validate_scan_grid_axes(conv, {-1.0, 1.0}, {-1.0, 1.0}));
+  EXPECT_FALSE(holoscan::radar::is_physical_direction_cosine(-1.0, -1.0));
+}
+
+TEST(AngleConventionTest, AngularConventionsAllowFiniteValuesOutsideUnitInterval) {
+  EXPECT_NO_THROW(
+      validate_scan_grid_axes(AngleConvention{}, {-4.0, 4.0}, {-2.0, 2.0}));
 }
 
 // az/el sample grid; el kept away from the ±π/2 poles where az is undefined.

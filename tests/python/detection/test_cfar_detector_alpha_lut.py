@@ -248,7 +248,7 @@ def test_PfaIgnoredWhileExternalAlphaLutActive():
     assert num_detections(with_loose) == 0
 
 
-def test_LiveAlphaLutOverrideStickyAndClearing():
+def test_LiveAlphaLutOverrideAndExplicitClear():
     mp = power_map(1.0, [(8, 16)], 100.0)
     pfa_lut = build_variant_lut(CfarVariant.CA, 1e-3, 1, 0)
     huge_lut = inflated_lut(pfa_lut, 1e6)

@@ -6,11 +6,10 @@
 // cluster counts, and representative policies. Measurement tool only: no
 // timing assertions.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite via run_perf_graph_triple (labels /
+//  Graph-based rewrite via run_perf_graph_triple (labels /
 // detection_idx / points co-emitted on the same OnClock tick). Mid-session
-// [live] representative / feature_weights / score_method override measurement
-// is deferred until docs/planning/HSDK5_PORT.md §1. Params still select the
-// policy under test.
+// [live] representative / feature_weights / score_method override timing is
+// not part of this harness. Params select the policy under test.
 
 #include <cuda_runtime_api.h>
 
@@ -175,27 +174,30 @@ perf::TimingCollector run_reduction_graph(const RedScenario& scen,
             scen.num_clusters, 1);
         extents.max_points = std::max<int64_t>(
             scen.num_points, 1);
-        auto op =
-            graph.op<hr::DetectionReductionOp<PerfPrecision>>(
-                "reduction", extents);
+        extents.max_features = scen.num_features;
         hr::DetectionReductionParams params;
         params.representative = scen.policy;
         params.score_method = scen.score_method;
         std::vector<double> weights(
             static_cast<size_t>(scen.num_features), 1.0);
         params.feature_weights = std::move(weights);
+        auto op =
+            graph.op<hr::DetectionReductionOp<PerfPrecision>>(
+                "reduction", extents);
         op.set_params(std::move(params));
 
-        const auto rep_sink =
-            graph.op<perf::PerfTerminalSinkOp>("rep_sink");
+        const auto sink =
+            graph.op<perf::PerfDualTerminalSinkOp>("sink");
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
 
         graph.add_flow(src->out_a, op->labels, q);
         graph.add_flow(src->out_b, op->detection_idx, q);
         graph.add_flow(src->out_c, op->points, q);
-        graph.add_flow(op->rep_idx, rep_sink->in, q);
+        graph.add_flow(op->rep_idx, sink->in0, q);
+        graph.add_flow(op->reduced_points, sink->in1, q);
 
         perf::bind_tensor_out(options, "reduction", "rep_idx");
+        perf::bind_tensor_out(options, "reduction", "reduced_points");
       });
 }
 
@@ -222,8 +224,11 @@ void fill_throughput(perf::ResultRow* row, const RedScenario& scen,
   const double rep_bytes =
       static_cast<double>(scen.num_clusters) * 2.0 *
       static_cast<double>(sizeof(int64_t));
+  const double reduced_bytes =
+      static_cast<double>(scen.num_clusters * scen.num_features) * tsz;
   row->estimated_effective_gbps =
-      (labels_bytes + idx_bytes + points_bytes + rep_bytes) / sec /
+      (labels_bytes + idx_bytes + points_bytes + rep_bytes + reduced_bytes) /
+      sec /
       1e9;
 }
 
@@ -237,7 +242,7 @@ perf::ResultRow base_row(const RedScenario& scen) {
   row.input_shape = {scen.num_points, 2};
   row.out_batch = scen.num_clusters;
   row.k = scen.num_features;
-  row.notes = "live_override=deferred_ea";
+  row.notes = "live_override=not_measured";
   return row;
 }
 
@@ -273,8 +278,7 @@ struct RedTraits : perf::PerfDriverDefaults {
     return "Peak-policy size sweep across an explicit subset";
   }
   static const char* full_help() {
-    return "Full matrix (policies x sizes); live-override timing "
-           "deferred on HSDK 5 EA (HSDK5_PORT.md §1)";
+    return "Full matrix (policies x sizes); live-override timing not measured";
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
@@ -295,7 +299,8 @@ struct RedTraits : perf::PerfDriverDefaults {
     const SizeSpec& md = must_find_size("md");
     for (auto p : {hr::RepresentativePolicy::kFirst,
                    hr::RepresentativePolicy::kPeak,
-                   hr::RepresentativePolicy::kMedoid}) {
+                   hr::RepresentativePolicy::kMedoid,
+                   hr::RepresentativePolicy::kWeightedMean}) {
       out.push_back(make_scenario(p, md));
     }
     for (const char* sid : {"xs", "sm", "md", "lg"}) {
@@ -326,7 +331,8 @@ struct RedTraits : perf::PerfDriverDefaults {
     for (const auto& s : size_ladder()) {
       for (auto p : {hr::RepresentativePolicy::kFirst,
                      hr::RepresentativePolicy::kPeak,
-                     hr::RepresentativePolicy::kMedoid}) {
+                     hr::RepresentativePolicy::kMedoid,
+                     hr::RepresentativePolicy::kWeightedMean}) {
         out.push_back(make_scenario(p, s));
       }
     }
@@ -350,7 +356,7 @@ struct RedTraits : perf::PerfDriverDefaults {
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes =
         "cold_ms is first-frame latency; median/p90 are steady "
-        "state; live override timing deferred (HSDK5_PORT.md §1); "
+        "state; live override timing not measured; "
         "cells/s is points/s";
     report->results.push_back(row);
   }
@@ -365,7 +371,8 @@ struct RedTraits : perf::PerfDriverDefaults {
       const SizeSpec& xs = must_find_size("xs");
       for (auto p : {hr::RepresentativePolicy::kFirst,
                      hr::RepresentativePolicy::kPeak,
-                     hr::RepresentativePolicy::kMedoid}) {
+                     hr::RepresentativePolicy::kMedoid,
+                     hr::RepresentativePolicy::kWeightedMean}) {
         run_scenario(make_scenario(p, xs), warm_rs, &discarded);
       }
     });

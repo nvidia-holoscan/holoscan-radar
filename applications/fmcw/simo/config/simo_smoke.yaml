@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+app:
+    waveform: &waveform
+        carrier_frequency: 77.0e9
+        bandwidth: 150.0e6
+        chirp_duration: 20.0e-6
+        sample_rate: 12.8e6
+        chirp_repetition_interval: 25.0e-6
+    cube:
+        num_chirps: 128
+        samples_per_chirp: 256
+    run:
+        num_frames: 2
+        frame_period: 0.1
+        meter_cadence: true
+        meter_log_every: 0
+    visualization:
+        enabled: false
+        window_width: 1280
+        window_height: 720
+        window_title: FMCW SIMO
+        display_rate_hz: 20.0
+        dynamic_range_db: 60.0
+        detection_radius: 0.010
+        history_frames: 120
+        detection_trail_frames: 50
+    rx_array:
+        az_elements: 8
+        el_elements: 8
+        spacing: 0.5
+    targets:
+        - range: 245.0
+          azimuth: 0.15
+          elevation: 0.09
+          velocity:
+              - -6.3375  # x
+              - -1.4129  # y
+              - -0.5494  # z
+          amplitude: 0.8
+    noise_snr_db: 5.0
+
+range_processor:
+    waveform: *waveform
+    # Common options: none, hann, hamming.
+    # See operators/fmcw/fmcw_range_processor_op/README.md.
+    range_window: hann
+clutter_filter:
+    # Options: none, mean_subtraction, single_delay, double_delay.
+    method: mean_subtraction
+    # Match the weighted clutter projection to Doppler analysis.
+    doppler_window: &doppler_window hann
+doppler_processor:
+    waveform: *waveform
+    # Common options: none, hann, hamming.
+    # See operators/fmcw/fmcw_doppler_processor_op/README.md.
+    doppler_window: *doppler_window
+
+detect_then_beamform:
+    cfar_detector:
+        # Options: CA, GO, SO, OS.
+        cfar_variant: CA
+        guard_cells:
+            - 3  # Doppler
+            - 3  # Range
+        training_cells:
+            - 3  # Doppler
+            - 3  # Range
+        pfa: 1.0e-9
+        nci_axes:
+            - 0  # RX channel
+    snapshot_gather:
+        snapshot_window:
+            - 0  # Doppler
+            - 0  # Range
+    beamscan_estimator:
+        angle_convention:
+            # Common options: radar_boresight, direction_cosine, custom.
+            # See operators/angle_estimation/beamscan_estimator_op/README.md.
+            preset: radar_boresight
+        # Scan coordinates accept an explicit array or inclusive {min, max, step}.
+        # Units follow angle_convention: radians here (radar_boresight).
+        az_coordinates: {min: -0.3, max: 0.3, step: 0.05}
+        el_coordinates: {min: -0.3, max: 0.3, step: 0.05}
+        # Options: none, parabolic.
+        peak_interpolation: parabolic
+    feature_assembly:
+        # Common options: range, velocity, score.
+        # See operators/detection/feature_assembly_op/README.md.
+        features:
+            - range        # Reporting
+            - velocity     # Reporting
+            - az_estimate  # Reporting
+            - el_estimate  # Reporting
+            - score        # Cluster reduction
+            - range_bin    # Clustering
+            - doppler_bin  # Clustering
+    cluster_dbscan:
+        epsilon:
+            - 0.0  # Range (ignored)
+            - 0.0  # Velocity (ignored)
+            - 0.0  # Azimuth estimate (ignored)
+            - 0.0  # Elevation estimate (ignored)
+            - 0.0  # Score (ignored)
+            - 1.5  # Range bin
+            - 1.5  # Doppler bin
+        min_points: 1
+        max_clusters: 32
+    reduction:
+        # Options: peak, medoid, first, weighted_mean.
+        representative: weighted_mean
+        # Options: weighted_sum, weighted_l2, weighted_max, custom.
+        score_method: weighted_sum
+        feature_weights:
+            - 0.0  # Range (ignored)
+            - 0.0  # Velocity (ignored)
+            - 0.0  # Azimuth estimate (ignored)
+            - 0.0  # Elevation estimate (ignored)
+            - 1.0  # Score
+            - 0.0  # Range bin (ignored)
+            - 0.0  # Doppler bin (ignored)

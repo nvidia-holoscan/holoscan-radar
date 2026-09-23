@@ -10,7 +10,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -34,9 +33,178 @@ expected<void, Error> fail_invalid(const std::string& message) {
   return make_unexpected(Error{ErrorCode::kInvalidArgument, message});
 }
 
+constexpr const char* kOpName = "FMCWRangeDopplerProcessorOp";
+
+// Kernel knobs for one fused tick: the two FFT stages plus the inline
+// clutter method. Waveform / fft_norm are copied onto both stage configs.
+struct FusedStageConfig {
+  detail::RangeStageConfig range;
+  detail::DopplerStageConfig doppler;
+  ClutterFilterMethod clutter_filter{ClutterFilterMethod::kNone};
+};
+
+// Stage knobs plus output-axis lengths derived from this tick's input.
+struct FusedStagePlan {
+  FusedStageConfig stage;
+  int64_t chirps_out;
+  int64_t num_range_bins;
+  int64_t num_doppler;
+};
+
+// Merge Exact [live] ports onto pinned Params and map sentinels to the
+// stage form (nfft_* == 0 and an empty waveform become nullopt).
+expected<FusedStageConfig, Error> resolve_params(
+    Input<wire::WindowSpecT>& range_window_in,
+    Input<wire::WindowSpecT>& doppler_window_in,
+    Input<bool>& apply_dechirp_in,
+    Input<ClutterFilterMethod>& clutter_filter_in,
+    Input<wire::FMCWWaveformT>& waveform_in, Input<FftNorm>& fft_norm_in,
+    Input<bool>& center_zero_doppler_in, Input<int64_t>& nfft_range_in,
+    Input<int64_t>& nfft_doppler_in,
+    const FMCWRangeDopplerProcessorParams& pinned) {
+  HOLOSCAN_TRY(
+      auto range_window,
+      resolve_live_override_via(
+          range_window_in, pinned.range_window,
+          [](const wire::WindowSpecT& value) { return from_wire(value); }));
+  HOLOSCAN_TRY(
+      auto doppler_window,
+      resolve_live_override_via(
+          doppler_window_in, pinned.doppler_window,
+          [](const wire::WindowSpecT& value) { return from_wire(value); }));
+  HOLOSCAN_TRY(
+      auto apply_dechirp,
+      resolve_live_override(apply_dechirp_in, pinned.apply_dechirp));
+  HOLOSCAN_TRY(auto clutter_filter,
+               resolve_live_override(
+                   clutter_filter_in, pinned.clutter_filter));
+  HOLOSCAN_TRY(
+      auto waveform,
+      resolve_live_override_via(
+          waveform_in, pinned.waveform,
+          [](const wire::FMCWWaveformT& value) { return from_wire(value); }));
+  HOLOSCAN_TRY(auto fft_norm,
+               resolve_live_override(fft_norm_in, pinned.fft_norm));
+  HOLOSCAN_TRY(auto center_zero_doppler,
+               resolve_live_override(
+                   center_zero_doppler_in, pinned.center_zero_doppler));
+  HOLOSCAN_TRY(auto nfft_range_raw,
+               resolve_live_override(nfft_range_in, pinned.nfft_range));
+  HOLOSCAN_TRY(auto nfft_doppler_raw,
+               resolve_live_override(nfft_doppler_in, pinned.nfft_doppler));
+
+  std::optional<int64_t> nfft_range;
+  if (nfft_range_raw != 0) {
+    nfft_range = nfft_range_raw;
+  }
+  std::optional<int64_t> nfft_doppler;
+  if (nfft_doppler_raw != 0) {
+    nfft_doppler = nfft_doppler_raw;
+  }
+  std::optional<FMCWWaveformDescriptor> opt_waveform;
+  if (waveform.is_valid()) {
+    opt_waveform = std::move(waveform);
+  }
+
+  return FusedStageConfig{
+      .range =
+          detail::RangeStageConfig{
+              .window = std::move(range_window),
+              .apply_dechirp = apply_dechirp,
+              .waveform = opt_waveform,
+              .fft_norm = fft_norm,
+              .propagation_speed = pinned.propagation_speed,
+              .nfft = std::move(nfft_range)},
+      .doppler =
+          detail::DopplerStageConfig{
+              .window = std::move(doppler_window),
+              .center_zero_doppler = center_zero_doppler,
+              .waveform = std::move(opt_waveform),
+              .fft_norm = fft_norm,
+              .nfft = std::move(nfft_doppler)},
+      .clutter_filter = clutter_filter};
+}
+
+// Classify the input precision and return whether the input is complex-IF.
 template <typename T>
-constexpr const char* precision_name() {
-  return std::is_same_v<T, float> ? "float" : "double";
+expected<bool, Error> classify_complex_input(const Tensor& input) {
+  try {
+    const InputPrecision precision =
+        classify_input_dtype<T>(input, "adc_cube", /*allow_real=*/true);
+    return precision == InputPrecision::kComplex;
+  } catch (const std::invalid_argument& e) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, std::string(e.what())});
+  }
+}
+
+// Check the fused config against this tick's input and size both axes.
+expected<FusedStagePlan, Error> build_fused_stage_plan(
+    FusedStageConfig stage, bool complex_input, const BatchedShape& batched) {
+  if (stage.range.nfft.has_value() && *stage.range.nfft < batched.cols) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) + ": nfft_range (" +
+            std::to_string(*stage.range.nfft) +
+            ") must be >= samples_per_chirp (" +
+            std::to_string(batched.cols) + ") on port adc_cube"});
+  }
+  if (stage.range.apply_dechirp) {
+    if (!stage.range.waveform.has_value()) {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          std::string(kOpName) +
+              ": apply_dechirp = true requires a waveform descriptor "
+              "(dechirp reference source)"});
+    }
+    if (!complex_input) {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          std::string(kOpName) +
+              ": apply_dechirp = true requires complex-IF input on port "
+              "adc_cube (received real-IF samples; software dechirp "
+              "produces complex samples, inconsistent with the real-IF "
+              "output size)"});
+    }
+  }
+  if (stage.clutter_filter == ClutterFilterMethod::kSingleDelay &&
+      batched.rows < 2) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) +
+            ": clutter_filter 'single_delay' needs num_chirps >= 2, "
+            "got " +
+            std::to_string(batched.rows) + " on port adc_cube"});
+  }
+  if (stage.clutter_filter == ClutterFilterMethod::kDoubleDelay &&
+      batched.rows < 3) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) +
+            ": clutter_filter 'double_delay' needs num_chirps >= 3, "
+            "got " +
+            std::to_string(batched.rows) + " on port adc_cube"});
+  }
+
+  const int64_t chirps_out =
+      detail::clutter_num_chirps_out(stage.clutter_filter, batched.rows);
+  if (stage.doppler.nfft.has_value() && *stage.doppler.nfft < chirps_out) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(kOpName) + ": nfft_doppler (" +
+            std::to_string(*stage.doppler.nfft) +
+            ") must be >= the post-clutter chirp count (" +
+            std::to_string(chirps_out) + ")"});
+  }
+
+  const int64_t num_range_bins =
+      detail::range_num_bins(complex_input, batched.cols, stage.range.nfft);
+  const int64_t num_doppler =
+      detail::doppler_num_bins(chirps_out, stage.doppler.nfft);
+  return FusedStagePlan{.stage = std::move(stage),
+                        .chirps_out = chirps_out,
+                        .num_range_bins = num_range_bins,
+                        .num_doppler = num_doppler};
 }
 
 }  // namespace
@@ -44,6 +212,8 @@ constexpr const char* precision_name() {
 template <typename T>
 FMCWRangeDopplerProcessorOp<T>::FMCWRangeDopplerProcessorOp(
     const MaxTensorExtents& extents) {
+  range_state_ = std::make_shared<detail::RangeStageState<T>>();
+  doppler_state_ = std::make_shared<detail::DopplerStageState<T>>();
   const char* who = "FMCWRangeDopplerProcessorOp";
   const std::int64_t max_chirps =
       require_extent(extents.max_chirps, "max_chirps", who);
@@ -75,332 +245,212 @@ FMCWRangeDopplerProcessorOp<T>::~FMCWRangeDopplerProcessorOp() = default;
 
 template <typename T>
 void FMCWRangeDopplerProcessorOp<T>::setup(OperatorSpec& spec) {
-  constexpr TensorPortLayout kDevice{
+  constexpr TensorRepresentation kDevice{
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = std::nullopt,
       .rank = std::nullopt,
   };
-  const TensorAllocationBounds fat_bounds{
+  const TensorBounds fat_bounds{
       .max_rank = max_rank_,
       .max_byte_span = max_byte_span_};
-  const TensorAllocationBounds rb_bounds{
+  const TensorBounds rb_bounds{
       .max_rank = 1U,
       .max_byte_span = range_bins_byte_span_};
-  const TensorAllocationBounds vb_bounds{
+  const TensorBounds vb_bounds{
       .max_rank = 1U,
       .max_byte_span = velocity_bins_byte_span_};
 
-  spec.input(adc_cube).queue_depth(2U).expects_tensor(kDevice);
+  spec.input(adc_cube)
+      .queue_depth(2U)
+      .expects_tensor(tensor_input(kDevice));
   spec.output(rd_maps)
-      .produces_tensor(kDevice)
-      .tensor_allocation(fat_bounds);
+      .produces_tensor(pooled_tensor_output(kDevice, fat_bounds));
   spec.output(range_bins)
-      .produces_tensor(kDevice)
-      .tensor_allocation(rb_bounds);
+      .produces_tensor(pooled_tensor_output(kDevice, rb_bounds));
   spec.output(velocity_bins)
-      .produces_tensor(kDevice)
-      .tensor_allocation(vb_bounds);
+      .produces_tensor(pooled_tensor_output(kDevice, vb_bounds));
 
-  // [live] sticky override ports for POD scalars.
-  spec.input(apply_dechirp_in).queue_depth(2U);
-  spec.input(clutter_filter_in).queue_depth(2U);
-  spec.input(fft_norm_in).queue_depth(2U);
-  spec.input(center_zero_doppler_in).queue_depth(2U);
-  spec.input(propagation_speed_in).queue_depth(2U);
-  spec.input(nfft_range_in).queue_depth(2U);
-  spec.input(nfft_doppler_in).queue_depth(2U);
+  // [live] Exact overrides, Params order (schema and POD alike).
+  spec.input(range_window_in).optional().queue_depth(2U);
+  spec.input(doppler_window_in).optional().queue_depth(2U);
+  spec.input(apply_dechirp_in).optional().queue_depth(2U);
+  spec.input(clutter_filter_in).optional().queue_depth(2U);
+  spec.input(waveform_in).optional().queue_depth(2U);
+  spec.input(fft_norm_in).optional().queue_depth(2U);
+  spec.input(center_zero_doppler_in).optional().queue_depth(2U);
+  spec.input(nfft_range_in).optional().queue_depth(2U);
+  spec.input(nfft_doppler_in).optional().queue_depth(2U);
 }
 
 template <typename T>
 Contract FMCWRangeDopplerProcessorOp<T>::contract() const {
+  // Trigger on the data tensor. Every Exact override is declared whether or
+  // not the application wires it: an unwired one compiles to a warning and
+  // reads as a miss. Optional axis outs stay omitted so an unwired sink does
+  // not gate scheduling.
   Contract result;
   result.trigger(OnEach{adc_cube});
+  add_live_override_to_contract(result, range_window_in);
+  add_live_override_to_contract(result, doppler_window_in);
+  add_live_override_to_contract(result, apply_dechirp_in);
+  add_live_override_to_contract(result, clutter_filter_in);
+  add_live_override_to_contract(result, waveform_in);
+  add_live_override_to_contract(result, fft_norm_in);
+  add_live_override_to_contract(result, center_zero_doppler_in);
+  add_live_override_to_contract(result, nfft_range_in);
+  add_live_override_to_contract(result, nfft_doppler_in);
   return result;
 }
 
 template <typename T>
 expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(
     ExecutionContext& context) {
-  const std::string op_name =
-      std::string("FMCWRangeDopplerProcessorOp<") + precision_name<T>() +
-      ">";
+  // Receive and validate inputs before deriving any tick-local state.
+  // Receive adc_cube; require a device-contiguous buffer.
+  HOLOSCAN_TRY(auto input, receive_tensor(adc_cube, kOpName));
+  try {
+    require_cuda_accessible(input, "adc_cube", kOpName);
+    require_contiguous(input, "adc_cube", kOpName);
+  } catch (const std::invalid_argument& e) {
+    return fail_invalid(e.what());
+  }
 
-  HOLOSCAN_TRY(auto input, receive_tensor(adc_cube, op_name));
+  // Complex vs real IF, and collapse named leading axes (N_rx / M_tx).
+  HOLOSCAN_TRY(auto complex_input, classify_complex_input<T>(input));
+  HOLOSCAN_TRY(auto batched,
+               collapse_named_tx_rx_batch(
+                   input, extents_, "adc_cube", kOpName));
 
+  // This tick's Params: pinned defaults with any matched [live] override.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
   const FMCWRangeDopplerProcessorParams& pinned =
       context.params<FMCWRangeDopplerProcessorParams>();
+  HOLOSCAN_TRY(auto stage,
+               resolve_params(range_window_in, doppler_window_in,
+                              apply_dechirp_in, clutter_filter_in, waveform_in,
+                              fft_norm_in, center_zero_doppler_in,
+                              nfft_range_in, nfft_doppler_in, pinned));
 
-  // Resolve sticky [live] overrides for POD scalars.
-  HOLOSCAN_TRY(auto eff_apply_dechirp,
-               resolve_sticky_override(apply_dechirp_in,
-                                       pinned.apply_dechirp,
-                                       sticky_apply_dechirp_));
-  HOLOSCAN_TRY(auto eff_clutter_filter,
-               resolve_sticky_override(clutter_filter_in,
-                                       pinned.clutter_filter,
-                                       sticky_clutter_filter_));
-  HOLOSCAN_TRY(auto eff_fft_norm,
-               resolve_sticky_override(fft_norm_in, pinned.fft_norm,
-                                       sticky_fft_norm_));
-  HOLOSCAN_TRY(auto eff_center_zero_doppler,
-               resolve_sticky_override(center_zero_doppler_in,
-                                       pinned.center_zero_doppler,
-                                       sticky_center_zero_doppler_));
-  HOLOSCAN_TRY(auto eff_propagation_speed,
-               resolve_sticky_override(propagation_speed_in,
-                                       pinned.propagation_speed,
-                                       sticky_propagation_speed_));
-  HOLOSCAN_TRY(auto eff_nfft_range_raw,
-               resolve_sticky_override(nfft_range_in, pinned.nfft_range,
-                                       sticky_nfft_range_));
-  HOLOSCAN_TRY(auto eff_nfft_doppler_raw,
-               resolve_sticky_override(nfft_doppler_in, pinned.nfft_doppler,
-                                       sticky_nfft_doppler_));
+  // Bind the fused config to this input's dtype/shape.
+  // Build and validate the bounded execution plan for this input shape.
+  HOLOSCAN_TRY(auto plan,
+               build_fused_stage_plan(std::move(stage), complex_input,
+                                      batched));
 
-  // nfft 0 = "use natural length" (Params "none" convention).
-  const std::optional<int64_t> eff_nfft_range =
-      eff_nfft_range_raw != 0 ? std::optional<int64_t>{eff_nfft_range_raw}
-                               : std::nullopt;
-  const std::optional<int64_t> eff_nfft_doppler =
-      eff_nfft_doppler_raw != 0
-          ? std::optional<int64_t>{eff_nfft_doppler_raw}
-          : std::nullopt;
-
-  // [EA HSDK5 ONLY] range_window, doppler_window, waveform are
-  // Params-only (§9).
-  const WindowSpec& eff_range_window = pinned.range_window;
-  const WindowSpec& eff_doppler_window = pinned.doppler_window;
-  const bool waveform_present = pinned.waveform.is_valid();
-  const std::optional<FMCWWaveformDescriptor> eff_waveform =
-      waveform_present ? std::optional{pinned.waveform} : std::nullopt;
-
-  // Classify and validate input against the locked contract.
-  InputPrecision precision;
-  try {
-    precision = classify_input_dtype<T>(input, "adc_cube",
-                                        /*allow_real=*/true);
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
-  const bool complex_input = precision == InputPrecision::kComplex;
-
-  try {
-    require_cuda_accessible(input, "adc_cube", op_name);
-    require_contiguous(input, "adc_cube", op_name);
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
-
-  BatchedShape batched;
-  try {
-    batched = collapse_batch(input, "adc_cube");
-  } catch (const std::invalid_argument& e) {
-    return fail_invalid(e.what());
-  }
-  const std::size_t max_leading =
-      named_tx_rx_leading_rank(extents_);
-  if (batched.leading.size() > max_leading) {
-    return fail_invalid(unexpected_leading_message(
-        op_name.c_str(), batched.leading.size(),
-        max_leading));
-  }
-  const std::int64_t max_rx_val =
-      extent_rx_or_channels(extents_);
-  const std::int64_t max_tx_val =
-      extent_or_one(extents_.max_tx);
-  if (batched.batch > max_tx_val * max_rx_val) {
-    return fail_invalid(
-        op_name + ": leading product " +
-        std::to_string(batched.batch) +
-        " exceeds max_tx*max_rx from "
-        "MaxTensorExtents");
-  }
-
-  const int64_t num_chirps = batched.rows;
-  const int64_t samples_per_chirp = batched.cols;
-
-  if (eff_nfft_range.has_value() && *eff_nfft_range < samples_per_chirp) {
-    return fail_invalid(
-        op_name + ": nfft_range (" + std::to_string(*eff_nfft_range) +
-        ") must be >= samples_per_chirp (" +
-        std::to_string(samples_per_chirp) + ") on port adc_cube");
-  }
-  if (eff_apply_dechirp) {
-    if (!waveform_present) {
-      return fail_invalid(
-          op_name +
-          ": apply_dechirp = true requires a waveform descriptor "
-          "(dechirp reference source)");
-    }
-    if (!complex_input) {
-      return fail_invalid(
-          op_name +
-          ": apply_dechirp = true requires complex-IF input on port "
-          "adc_cube (received real-IF samples; software dechirp "
-          "produces complex samples, inconsistent with the real-IF "
-          "output size)");
-    }
-  }
-  if (eff_clutter_filter == ClutterFilterMethod::kSingleDelay &&
-      num_chirps < 2) {
-    return fail_invalid(
-        op_name +
-        ": clutter_filter 'single_delay' needs num_chirps >= 2, "
-        "got " +
-        std::to_string(num_chirps) + " on port adc_cube");
-  }
-  if (eff_clutter_filter == ClutterFilterMethod::kDoubleDelay &&
-      num_chirps < 3) {
-    return fail_invalid(
-        op_name +
-        ": clutter_filter 'double_delay' needs num_chirps >= 3, "
-        "got " +
-        std::to_string(num_chirps) + " on port adc_cube");
-  }
-  const int64_t chirps_out =
-      detail::clutter_num_chirps_out(eff_clutter_filter, num_chirps);
-  if (eff_nfft_doppler.has_value() && *eff_nfft_doppler < chirps_out) {
-    return fail_invalid(
-        op_name + ": nfft_doppler (" +
-        std::to_string(*eff_nfft_doppler) +
-        ") must be >= the post-clutter chirp count (" +
-        std::to_string(chirps_out) + ")");
-  }
-
+  // MatX work runs on the runtime compute stream.
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
-    return make_unexpected(Error{ErrorCode::kNotSupported,
-                                 op_name + ": no CUDA compute stream"});
+    const std::string& msg = std::string(kOpName) + ": no CUDA compute stream";
+    return make_unexpected(Error{ErrorCode::kNotSupported, msg});
   }
 
-  if (!range_state_) {
-    range_state_ = std::make_shared<detail::RangeStageState<T>>();
-  }
-  if (!doppler_state_) {
-    doppler_state_ = std::make_shared<detail::DopplerStageState<T>>();
-  }
-
-  // Build the two stage configs from effective parameters.
-  detail::RangeStageConfig range_cfg;
-  range_cfg.window = eff_range_window;
-  range_cfg.apply_dechirp = eff_apply_dechirp;
-  range_cfg.waveform = eff_waveform;
-  range_cfg.fft_norm = eff_fft_norm;
-  range_cfg.propagation_speed = eff_propagation_speed;
-  range_cfg.nfft = eff_nfft_range;
-
-  detail::DopplerStageConfig doppler_cfg;
-  doppler_cfg.window = eff_doppler_window;
-  doppler_cfg.center_zero_doppler = eff_center_zero_doppler;
-  doppler_cfg.waveform = eff_waveform;
-  doppler_cfg.fft_norm = eff_fft_norm;
-  doppler_cfg.nfft = eff_nfft_doppler;
-
-  const int64_t num_range_bins =
-      detail::range_num_bins(complex_input, samples_per_chirp, eff_nfft_range);
-  const int64_t num_doppler =
-      detail::doppler_num_bins(chirps_out, eff_nfft_doppler);
-
-  // Optional axis outputs, only when an effective waveform is available.
-  // Enqueued before the FFT stages: their host-staged uploads wait on the
-  // stream, so this ordering keeps those waits off the FFT hot path.
-  std::optional<TensorOutputLoan> bins_loan;
-  std::optional<TensorOutputLoan> velocity_loan;
-  if (waveform_present) {
-    HOLOSCAN_TRY(auto rb_loan,
-                 prepare_device_tensor(
-                     range_bins, context,
-                     std::vector<int64_t>{num_range_bins},
-                     real_dtype<T>(),
-                     [&](void* dst, std::size_t) -> expected<void, Error> {
-                       try {
-                         detail::fill_range_bins<T>(
-                             range_cfg, samples_per_chirp, num_range_bins,
-                             static_cast<T*>(dst), stream);
-                       } catch (const std::invalid_argument& e) {
-                         return fail_invalid(e.what());
-                       }
-                       return {};
-                     }));
-    bins_loan.emplace(std::move(rb_loan));
-
-    HOLOSCAN_TRY(auto vb_loan,
-                 prepare_device_tensor(
-                     velocity_bins, context,
-                     std::vector<int64_t>{num_doppler},
-                     real_dtype<T>(),
-                     [&](void* dst, std::size_t) -> expected<void, Error> {
-                       try {
-                         detail::fill_velocity_bins<T>(
-                             doppler_cfg, num_doppler,
-                             static_cast<T*>(dst), stream);
-                       } catch (const std::invalid_argument& e) {
-                         return fail_invalid(e.what());
-                       }
-                       return {};
-                     }));
-    velocity_loan.emplace(std::move(vb_loan));
-  }
-
-  // Range stage into a stream-ordered intermediate (intermediates never
-  // leave the operator; MATX_ASYNC_DEVICE_MEMORY frees stream-ordered at
-  // scope exit, after the enqueued kernels).
+  // Range compression into a stream-ordered intermediate (never a port).
+  // MATX_ASYNC_DEVICE_MEMORY frees at scope exit after the enqueued kernels.
   auto profiles = matx::make_tensor<cuda::std::complex<T>>(
-      {batched.batch, num_chirps, num_range_bins},
+      {batched.batch, batched.rows, plan.num_range_bins},
       matx::MATX_ASYNC_DEVICE_MEMORY, stream);
-
-  // warn_on_rebuild: false — Params-only window/waveform never trigger
-  // mid-stream rebuilds; POD scalars do not cause ConfigCache invalidation
-  // in the range stage.
-  constexpr bool kWarnOnRebuild = false;
   const void* input_ptr = input.data();
   try {
-    detail::run_range_stage<T>(range_cfg, *range_state_, input_ptr,
-                               complex_input, batched.batch, num_chirps,
-                               samples_per_chirp, profiles.Data(),
-                               num_range_bins, kWarnOnRebuild, stream);
+    // Execute the device stage on the input runtime stream.
+    detail::run_range_stage<T>(
+        plan.stage.range, *range_state_, input_ptr, complex_input,
+        batched.batch, batched.rows, batched.cols, profiles.Data(),
+        plan.num_range_bins, stream);
   } catch (const std::invalid_argument& e) {
     return fail_invalid(e.what());
   }
 
-  // Clutter fused into the Doppler pre-FFT expression: the clutter math
-  // (single-sourced from clutter_stage.hpp's with_clutter_expr) feeds
-  // run_doppler_stage's expression entry point directly, so MatX evaluates
-  // it inside the one fused pass that materializes the FFT input.
+  // Clutter fused into the Doppler pre-FFT expression: with_clutter_expr
+  // feeds run_doppler_stage's expression entry point, so MatX evaluates it
+  // inside the one fused pass that materializes the FFT input.
   const std::vector<int64_t> out_shape =
-      full_rank_shape(batched, num_doppler, num_range_bins);
+      full_rank_shape(batched, plan.num_doppler, plan.num_range_bins);
   const DLDataType out_dtype = complex_dtype<T>();
 
+  // Allocate exact-sized outputs before launching device work.
   HOLOSCAN_TRY(auto rd_loan,
                prepare_device_tensor(
                    rd_maps, context, out_shape, out_dtype,
-                   [&](void* out_ptr, std::size_t) -> expected<void, Error> {
+                   [&](void* dst, std::size_t) -> expected<void, Error> {
                      try {
-                       detail::with_clutter_expr(
-                           eff_clutter_filter, profiles, num_chirps,
+                       const detail::CachedWindow<T>* clutter_window = nullptr;
+                       if (plan.stage.clutter_filter ==
+                               ClutterFilterMethod::kMeanSubtraction &&
+                           plan.stage.doppler.window.type !=
+                               WindowType::kNone) {
+                         clutter_window = &detail::get_cached_window<T>(
+                             plan.stage.doppler.window, batched.rows,
+                             doppler_state_->windows, "Doppler window",
+                             stream);
+                         detail::require_nonzero_window_sum(
+                             plan.stage.doppler.window, *clutter_window);
+                       }
+                       detail::with_clutter_expr<T>(
+                           plan.stage.clutter_filter, profiles,
+                           batched.rows, clutter_window,
                            [&](const auto& expr) {
                              detail::run_doppler_stage<T>(
-                                 doppler_cfg, *doppler_state_, expr,
-                                 out_ptr, num_doppler,
-                                 kWarnOnRebuild, stream);
+                                 plan.stage.doppler, *doppler_state_, expr,
+                                 dst, plan.num_doppler, stream);
                            });
                      } catch (const std::invalid_argument& e) {
                        return fail_invalid(e.what());
                      }
                      return {};
                    }));
-
-  // Emit all prepared loans together.
-  if (bins_loan.has_value()) {
-    HOLOSCAN_TRY(emit_prepared_tensor(range_bins, context,
-                                      std::move(*bins_loan)));
-  }
-  if (velocity_loan.has_value()) {
-    HOLOSCAN_TRY(emit_prepared_tensor(velocity_bins, context,
-                                      std::move(*velocity_loan)));
-  }
+  // Publish coherent outputs in dependency order and retain borrowed inputs.
   HOLOSCAN_TRY(emit_prepared_tensor(rd_maps, context, std::move(rd_loan)));
 
+  // Optional axes: waveform present and each latched sink still active.
+  // Independent of the FFTs and of each other; an unwired emit is absorbed.
+  if (plan.stage.range.waveform.has_value() && range_bins_out_.active()) {
+    HOLOSCAN_TRY(auto bins_loan,
+                 prepare_device_tensor(
+                     range_bins, context,
+                     std::vector<int64_t>{plan.num_range_bins},
+                     real_dtype<T>(),
+                     [&](void* dst, std::size_t) -> expected<void, Error> {
+                       try {
+                         detail::fill_range_bins<T>(
+                             plan.stage.range, batched.cols,
+                             plan.num_range_bins, static_cast<T*>(dst),
+                             stream);
+                       } catch (const std::invalid_argument& e) {
+                         return fail_invalid(e.what());
+                       } catch (const std::runtime_error& e) {
+                         return make_unexpected(
+                             Error{ErrorCode::kFailure, e.what()});
+                       }
+                       return {};
+                     }));
+    range_bins_out_.emit(range_bins, context, std::move(bins_loan),
+                         "FMCWRangeDopplerProcessorOp.range_bins");
+  }
+  if (plan.stage.doppler.waveform.has_value() &&
+      velocity_bins_out_.active()) {
+    HOLOSCAN_TRY(auto vel_loan,
+                 prepare_device_tensor(
+                     velocity_bins, context,
+                     std::vector<int64_t>{plan.num_doppler},
+                     real_dtype<T>(),
+                     [&](void* dst, std::size_t) -> expected<void, Error> {
+                       try {
+                         detail::fill_velocity_bins<T>(
+                             plan.stage.doppler, plan.num_doppler,
+                             static_cast<T*>(dst), stream);
+                       } catch (const std::invalid_argument& e) {
+                         return fail_invalid(e.what());
+                       } catch (const std::runtime_error& e) {
+                         return make_unexpected(
+                             Error{ErrorCode::kFailure, e.what()});
+                       }
+                       return {};
+                     }));
+    velocity_bins_out_.emit(velocity_bins, context, std::move(vel_loan),
+                            "FMCWRangeDopplerProcessorOp.velocity_bins");
+  }
+
+  // Keep adc_cube alive until stream-ordered reads complete.
   retained_input_ = std::move(input);
   return {};
 }

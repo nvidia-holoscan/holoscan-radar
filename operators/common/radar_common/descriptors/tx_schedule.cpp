@@ -138,4 +138,24 @@ std::vector<int64_t> TXSchedule::build_gather_map(int64_t slow_time) const {
   return gather;
 }
 
+std::vector<int64_t> TXSchedule::firing_slot_by_tx() const {
+  if (num_tx == 0 && tx_order.empty() && chirp_tx_index.empty()) {
+    return {};
+  }
+  const int64_t slow_time =
+      chirp_tx_index.empty() ? num_tx
+                             : static_cast<int64_t>(chirp_tx_index.size());
+  const std::vector<int64_t> pattern = expand_chirp_tx_index(slow_time);
+  std::vector<int64_t> slot(static_cast<size_t>(num_tx), -1);
+  for (int64_t s = 0; s < num_tx; ++s) {
+    const int64_t tx = pattern[static_cast<size_t>(s)];
+    if (slot[static_cast<size_t>(tx)] >= 0) {
+      throw std::invalid_argument(
+          "TXSchedule: first cycle is not a permutation of [0, num_tx)");
+    }
+    slot[static_cast<size_t>(tx)] = s;
+  }
+  return slot;
+}
+
 }  // namespace holoscan::radar

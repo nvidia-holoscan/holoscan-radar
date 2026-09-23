@@ -4,25 +4,38 @@
 // Tests for ClutterFilterOp (HSDK 5 Graph harness):
 // zero-Doppler nulling with moving-target preservation, the delay
 // cancellers' binomial high-pass response, named RX-axis handling,
-// sticky method overrides, error paths, and float/double agreement.
+// per-tick method overrides, error paths, and float/double agreement.
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <numeric>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/compile.hpp>
+#include <holoscan/core/run.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/time/realtime_clock.hpp>
+
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 #include "utils/sdk_harness.hpp"
 #include "utils/sim_reference.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -34,6 +47,8 @@ using holoscan::radar::ClutterFilterOp;
 using holoscan::radar::ClutterFilterParams;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
+using holoscan::radar::WindowSpec;
+using holoscan::radar::WindowType;
 using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::run_operator_graph;
@@ -69,13 +84,78 @@ std::vector<std::complex<T>> doppler_tone(int64_t num_chirps,
 template <typename T>
 HostTensor run_single(const std::vector<std::complex<T>>& host,
                       const std::vector<int64_t>& shape,
-                      std::optional<ClutterFilterMethod> method) {
+                      std::optional<ClutterFilterMethod> method,
+                      WindowSpec doppler_window = {}) {
   ClutterFilterParams params{};
   if (method.has_value()) {
     params.method = *method;
   }
+  params.doppler_window = std::move(doppler_window);
   return run_operator_once<ClutterFilterOp<T>>(
       to_device_tensor(host, shape, complex_dtype<T>()), params);
+}
+
+std::vector<double> reference_window(WindowType type, int64_t length) {
+  std::vector<double> taps(static_cast<size_t>(length), 1.0);
+  for (int64_t k = 0; k < length; ++k) {
+    const double phase =
+        2.0 * kPi * static_cast<double>(k) / static_cast<double>(length - 1);
+    if (type == WindowType::kHann) {
+      taps[static_cast<size_t>(k)] = 0.5 - 0.5 * std::cos(phase);
+    } else if (type == WindowType::kHamming) {
+      taps[static_cast<size_t>(k)] = 0.54 - 0.46 * std::cos(phase);
+    }
+  }
+  return taps;
+}
+
+template <typename T>
+void expect_weighted_reference(const std::vector<int64_t>& shape,
+                               const std::vector<double>& taps,
+                               WindowSpec window) {
+  const int64_t chirps = shape[shape.size() - 2];
+  const int64_t bins = shape.back();
+  int64_t batch = 1;
+  for (size_t axis = 0; axis + 2 < shape.size(); ++axis) {
+    batch *= shape[axis];
+  }
+  auto input = doppler_tone<T>(chirps, bins, 0.173);
+  const auto one_slice = input;
+  for (int64_t b = 1; b < batch; ++b) {
+    input.insert(input.end(), one_slice.begin(), one_slice.end());
+    for (int64_t k = 0; k < chirps; ++k) {
+      for (int64_t r = 0; r < bins; ++r) {
+        input[static_cast<size_t>((b * chirps + k) * bins + r)] +=
+            std::complex<T>(static_cast<T>(b), static_cast<T>(-0.25 * b));
+      }
+    }
+  }
+  const HostTensor output = run_single<T>(
+      input, shape, ClutterFilterMethod::kMeanSubtraction, std::move(window));
+  ASSERT_EQ(output.shape, shape);
+  const auto* actual = output.as<std::complex<T>>();
+  const double sum = std::accumulate(taps.begin(), taps.end(), 0.0);
+  ASSERT_NE(sum, 0.0);
+  const double tolerance = std::is_same_v<T, float> ? 2e-5 : 2e-12;
+  for (int64_t b = 0; b < batch; ++b) {
+    for (int64_t r = 0; r < bins; ++r) {
+      std::complex<double> weighted_sum{};
+      for (int64_t k = 0; k < chirps; ++k) {
+        weighted_sum += taps[static_cast<size_t>(k)] *
+            std::complex<double>(
+                input[static_cast<size_t>((b * chirps + k) * bins + r)]);
+      }
+      const std::complex<double> mean = weighted_sum / sum;
+      for (int64_t k = 0; k < chirps; ++k) {
+        const size_t index =
+            static_cast<size_t>((b * chirps + k) * bins + r);
+        const std::complex<double> expected =
+            std::complex<double>(input[index]) - mean;
+        EXPECT_LT(std::abs(std::complex<double>(actual[index]) - expected),
+                  tolerance);
+      }
+    }
+  }
 }
 
 template <typename T>
@@ -157,6 +237,103 @@ TEST(ClutterFilterOpTest, MeanSubtractionPreservesMovingTarget) {
   const double e_out = tensor_energy<float>(out);
   const double e_moving = cube_energy(moving_only.cube);
   EXPECT_NEAR(e_out / e_moving, 1.0, 0.05);
+}
+
+TEST(ClutterFilterOpTest, WeightedMeanMatchesIndependentHostReference) {
+  constexpr int64_t kNc = 15;
+  constexpr int64_t kNb = 7;
+  for (WindowType type : {WindowType::kHann, WindowType::kHamming}) {
+    WindowSpec window;
+    window.type = type;
+    const auto taps = reference_window(type, kNc);
+    expect_weighted_reference<float>({kNc, kNb}, taps, window);
+    expect_weighted_reference<double>({kNc, kNb}, taps, window);
+  }
+
+  const std::vector<double> custom = {
+      0.2, 0.3, 0.45, 0.7, 1.1, 1.5, 1.8, 2.0,
+      1.7, 1.3, 0.9, 0.6, 0.4, 0.25, 0.1};
+  WindowSpec window;
+  window.type = WindowType::kCustom;
+  window.coefficients = custom;
+  window.coherent_gain_normalization = false;
+  expect_weighted_reference<float>({kNc, kNb}, custom, window);
+  expect_weighted_reference<double>({kNc, kNb}, custom, window);
+}
+
+TEST(ClutterFilterOpTest, RectangularWindowMatchesLegacyUniformMean) {
+  const auto input = doppler_tone<double>(kChirps, 5, 0.173);
+  const HostTensor legacy = run_single<double>(
+      input, {kChirps, 5}, ClutterFilterMethod::kMeanSubtraction);
+  WindowSpec rectangular;
+  rectangular.type = WindowType::kNone;
+  const HostTensor explicit_none = run_single<double>(
+      input, {kChirps, 5}, ClutterFilterMethod::kMeanSubtraction,
+      rectangular);
+  ASSERT_EQ(legacy.shape, explicit_none.shape);
+  const auto* lhs = legacy.as<std::complex<double>>();
+  const auto* rhs = explicit_none.as<std::complex<double>>();
+  for (int64_t i = 0; i < legacy.size(); ++i) {
+    EXPECT_EQ(lhs[i], rhs[i]);
+  }
+}
+
+TEST(ClutterFilterOpTest, MatchingProjectionAndWindowNullFftDc) {
+  constexpr int64_t kNc = 31;
+  const auto taps = reference_window(WindowType::kHann, kNc);
+  const auto input = doppler_tone<double>(kNc, 1, 0.137);
+  WindowSpec hann;
+  hann.type = WindowType::kHann;
+  const HostTensor weighted = run_single<double>(
+      input, {kNc, 1}, ClutterFilterMethod::kMeanSubtraction, hann);
+  const HostTensor uniform = run_single<double>(
+      input, {kNc, 1}, ClutterFilterMethod::kMeanSubtraction);
+  std::complex<double> weighted_dc{};
+  std::complex<double> uniform_dc{};
+  for (int64_t k = 0; k < kNc; ++k) {
+    weighted_dc += taps[static_cast<size_t>(k)] *
+        weighted.as<std::complex<double>>()[k];
+    uniform_dc += taps[static_cast<size_t>(k)] *
+        uniform.as<std::complex<double>>()[k];
+  }
+  EXPECT_LT(std::abs(weighted_dc), 2e-12);
+  EXPECT_GT(std::abs(uniform_dc), 1e-2);
+}
+
+TEST(ClutterFilterOpTest, ParamsWindowConfiguresWeightedProjection) {
+  WindowSpec hamming;
+  hamming.type = WindowType::kHamming;
+  expect_weighted_reference<float>(
+      {kChirps, 3}, reference_window(WindowType::kHamming, kChirps),
+      hamming);
+}
+
+TEST(ClutterFilterOpTest, NamedTxRxAxesUseIndependentWeightedMeans) {
+  WindowSpec hann;
+  hann.type = WindowType::kHann;
+  expect_weighted_reference<float>(
+      {2, 3, kChirps, 4},
+      reference_window(WindowType::kHann, kChirps), hann);
+  expect_weighted_reference<double>(
+      {2, 3, kChirps, 4},
+      reference_window(WindowType::kHann, kChirps), hann);
+}
+
+TEST(ClutterFilterOpTest, RejectsUnnormalizedCustomZeroSumWindow) {
+  WindowSpec window;
+  window.type = WindowType::kCustom;
+  window.coefficients.resize(static_cast<size_t>(kChirps), 1.0);
+  window.coefficients.back() = -static_cast<double>(kChirps - 1);
+  window.coherent_gain_normalization = false;
+  const auto input = doppler_tone<float>(kChirps, 3, 0.173);
+  ClutterFilterParams params;
+  params.doppler_window = window;
+  const GraphRunResult result =
+      run_operator_graph_result<ClutterFilterOp<float>>(
+          {to_device_tensor(input, {kChirps, 3}, complex_dtype<float>())},
+          params);
+  EXPECT_TRUE(result.frames.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
 }
 
 TEST(ClutterFilterOpTest, SingleDelayShapeAndResponse) {
@@ -281,24 +458,256 @@ TEST(ClutterFilterOpTest, RejectsOpaqueLeadingBatchWhenExtentsAreSiso) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(ClutterFilterOpTest, LiveMethodOverrideMidStreamAndSticky) {
-  // [EA HSDK5 ONLY] See docs/planning/HSDK5_PORT.md §1 — Graph mid-stream
-  // sticky override harness fails on EA device/partition binding
-  // (RUNTIME_PORT_BINDING_UNAVAILABLE / RUNTIME_EXECUTION_LANE_PLAN_INVALID).
-  // Params authoring covers method selection; restore once §1 is closed.
-  GTEST_SKIP() << "HSDK 5 EA: live method override harness deferred "
-                  "(HSDK5_PORT.md §1)";
+// The method decides how many chirps survive, so the output's chirp extent is
+// the observable: mean_subtraction keeps all of them, single_delay drops one,
+// double_delay drops two.
+GraphRunResult run_method_override(
+    std::vector<std::optional<ClutterFilterMethod>> overrides) {
+  const auto tone = doppler_tone<float>(kChirps, kBins, 0.19);
+  std::vector<std::shared_ptr<holoscan::Tensor>> cubes;
+  cubes.reserve(overrides.size());
+  for (std::size_t tick = 0; tick < overrides.size(); ++tick) {
+    cubes.push_back(to_device_tensor(
+        tone, std::vector<int64_t>{kChirps, kBins}, complex_dtype<float>()));
+  }
+  ClutterFilterParams params{};
+  params.method = ClutterFilterMethod::kMeanSubtraction;
+  return holoscan::radar::testing::
+      run_exact_override_single_io_operator_graph_result<
+          ClutterFilterOp<float>, ClutterFilterMethod>(
+          std::move(cubes), std::move(overrides), params,
+          "range_profiles_out",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out, op->range_profiles, q);
+            graph.add_flow(source->override_out, op->method, q);
+            graph.add_flow(op->range_profiles_out, sink->in, q);
+          });
 }
 
-TEST(ClutterFilterOpTest, RejectsMethodNone) {
+TEST(ClutterFilterOpTest, LiveMethodOverrideAppliesForOneTick) {
+  const GraphRunResult out = run_method_override(
+      {std::nullopt, ClutterFilterMethod::kSingleDelay, std::nullopt});
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 3U);
+  // Params seed the first tick, the override takes effect on its own tick,
+  // and the third tick is back on Params once the control plane goes quiet.
+  EXPECT_EQ(out.frames[0].shape, (std::vector<int64_t>{kChirps, kBins}));
+  EXPECT_EQ(out.frames[1].shape, (std::vector<int64_t>{kChirps - 1, kBins}));
+  EXPECT_EQ(out.frames[2].shape, (std::vector<int64_t>{kChirps, kBins}));
+}
+
+TEST(ClutterFilterOpTest, LiveMethodRevertsToParamsAfterMiss) {
+  const GraphRunResult out = run_method_override(
+      {ClutterFilterMethod::kDoubleDelay, std::nullopt});
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 2U);
+  EXPECT_EQ(out.frames[0].shape, (std::vector<int64_t>{kChirps - 2, kBins}));
+  EXPECT_EQ(out.frames[1].shape, (std::vector<int64_t>{kChirps, kBins}));
+}
+
+TEST(ClutterFilterOpTest, LiveMethodNonePassesThroughForOneTick) {
   const auto tone = doppler_tone<float>(kChirps, kBins, 0.19);
-  const GraphRunResult result =
-      run_operator_graph_result<ClutterFilterOp<float>>(
-          {to_device_tensor(tone, {kChirps, kBins}, complex_dtype<float>())},
-          ClutterFilterParams{.method = ClutterFilterMethod::kNone});
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const GraphRunResult out =
+      run_method_override({ClutterFilterMethod::kNone});
+
+  ASSERT_TRUE(out.plan_ok) << out.plan_json;
+  ASSERT_TRUE(out.diagnostics.empty());
+  ASSERT_EQ(out.frames.size(), 1U);
+  const auto* actual = out.frames[0].as<std::complex<float>>();
+  for (std::size_t index = 0; index < tone.size(); ++index) {
+    EXPECT_EQ(actual[index], tone[index]);
+  }
+}
+
+struct WindowOverrideTick {
+  std::shared_ptr<holoscan::Tensor> cube;
+  std::optional<WindowSpec> window;
+};
+
+struct WindowOverrideBank {
+  static inline std::vector<WindowOverrideTick> ticks;
+  static inline size_t index{0};
+};
+
+class WindowOverrideSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorRepresentation kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice};
+    constexpr holoscan::TensorRepresentation kWindow{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLFloat, 64U, 1U},
+        .rank = 1U};
+    spec.output(cube)
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
+    spec.output(window)
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kWindow, 1U, 4096U * sizeof(double)));
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{
+        .period = holoscan::radar::testing::detail::kHarnessTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    if (WindowOverrideBank::index >= WindowOverrideBank::ticks.size()) {
+      return {};
+    }
+    const auto& tick =
+        WindowOverrideBank::ticks[WindowOverrideBank::index++];
+    const holoscan::TimePoint capture_time = context.activation_time();
+    if (tick.window.has_value()) {
+      const std::array<int64_t, 1> shape{
+          static_cast<int64_t>(tick.window->coefficients.size())};
+      auto loan = window.allocate_tensor(
+          holoscan::TensorLoanRequest{
+              .shape = shape,
+              .dtype = DLDataType{kDLFloat, 64U, 1U}});
+      if (!loan) {
+        return holoscan::make_unexpected(std::move(loan).error());
+      }
+      const std::span<const double> coefficients{
+          tick.window->coefficients};
+      auto written = loan->write_host_and_commit(
+          [coefficients](const holoscan::TensorOutputWriteGuard& writer) {
+            std::copy(coefficients.begin(), coefficients.end(),
+                      writer.data_as<double>());
+          });
+      if (!written) {
+        return holoscan::make_unexpected(std::move(written).error());
+      }
+      auto emitted = window.emit_tensor(
+          std::move(*loan), holoscan::radar::to_wire(*tick.window),
+          holoscan::EmitOptions{.capture_time = capture_time});
+      if (!emitted) {
+        return emitted;
+      }
+    }
+    return holoscan::radar::testing::detail::emit_bank_frame(
+        cube, context, tick.cube, "WindowOverrideSourceOp");
+  }
+
+  holoscan::Output<holoscan::Tensor> cube{"cube"};
+  holoscan::Output<holoscan::radar::wire::WindowSpecT>
+      window{"doppler_window"};
+};
+
+GraphRunResult run_window_override_graph(
+    std::vector<WindowOverrideTick> ticks) {
+  GraphRunResult result;
+  holoscan::radar::testing::detail::FrameBank::reset();
+  WindowOverrideBank::ticks = std::move(ticks);
+  WindowOverrideBank::index = 0;
+  const size_t expected = WindowOverrideBank::ticks.size();
+  holoscan::Graph graph{"clutter-window-override"};
+  const auto source = graph.op<WindowOverrideSourceOp>("source");
+  auto op = holoscan::radar::testing::emplace_harness_op<
+      ClutterFilterOp<float>>(
+      graph, holoscan::radar::testing::default_test_extents());
+  op.set_params(ClutterFilterParams{});
+  const auto sink =
+      graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink");
+  const holoscan::ConnectionOptions q{.queue_depth = 8U};
+  graph.add_flow(source->window, op->doppler_window_in, q);
+  graph.add_flow(source->cube, op->range_profiles, q);
+  graph.add_flow(op->range_profiles_out, sink->in, q);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+  holoscan::CompileOptions options;
+  options.deployment.bind_tensor_output_device(
+      holoscan::TensorOutputDevicePlacement{
+          .operator_path = "source",
+          .output_port = "cube",
+          .device = holoscan::DeviceId{0}});
+  holoscan::radar::testing::detail::bind_op_device_output(
+      options, "range_profiles_out");
+  const holoscan::ExecutionPlan plan =
+      holoscan::compile(graph, std::move(options));
+  result.plan_ok = plan.ok();
+  result.plan_json = plan.json();
+  if (!plan.ok()) {
+    return result;
+  }
+  holoscan::RunSession session = holoscan::run_async(plan);
+  const auto deadline = std::chrono::steady_clock::now() +
+      holoscan::radar::testing::detail::kHarnessDeadline;
+  while (session.diagnostics().empty() &&
+         std::chrono::steady_clock::now() < deadline) {
+    {
+      const std::lock_guard lock(
+          holoscan::radar::testing::detail::FrameBank::mutex);
+      if (holoscan::radar::testing::detail::FrameBank::captured.size() >=
+          expected) {
+        break;
+      }
+    }
+    std::this_thread::sleep_for(
+        holoscan::radar::testing::detail::kHarnessPoll);
+  }
+  session.request_stop();
+  session.wait();
+  for (const auto& diagnostic : session.diagnostics()) {
+    result.diagnostics.emplace_back(diagnostic.token);
+  }
+  {
+    const std::lock_guard lock(
+        holoscan::radar::testing::detail::FrameBank::mutex);
+    result.frames = std::move(
+        holoscan::radar::testing::detail::FrameBank::captured);
+  }
+  return result;
+}
+
+TEST(ClutterFilterOpTest, LiveDopplerWindowAppliesOneTickThenReverts) {
+  const auto tone = doppler_tone<float>(kChirps, 3, 0.173);
+  WindowSpec hann;
+  hann.type = WindowType::kHann;
+  auto cube = [&] {
+    return to_device_tensor(
+        tone, {kChirps, 3}, complex_dtype<float>());
+  };
+  const GraphRunResult output = run_window_override_graph({
+      {cube(), std::nullopt}, {cube(), hann}, {cube(), std::nullopt}});
+  ASSERT_TRUE(output.plan_ok) << output.plan_json;
+  ASSERT_TRUE(output.diagnostics.empty());
+  ASSERT_EQ(output.frames.size(), 3U);
+  const auto* base = output.frames[0].as<std::complex<float>>();
+  const auto* changed = output.frames[1].as<std::complex<float>>();
+  const auto* reverted = output.frames[2].as<std::complex<float>>();
+  double delta = 0.0;
+  for (int64_t i = 0; i < output.frames[0].size(); ++i) {
+    delta = std::max(
+        delta, std::abs(std::complex<double>(changed[i] - base[i])));
+    EXPECT_EQ(reverted[i], base[i]);
+  }
+  EXPECT_GT(delta, 1e-3);
+}
+
+template <typename T>
+void expect_none_passes_through() {
+  const auto tone = doppler_tone<T>(kChirps, kBins, 0.19);
+  const HostTensor output =
+      run_single<T>(tone, {kChirps, kBins}, ClutterFilterMethod::kNone);
+  EXPECT_EQ(output.shape, (std::vector<int64_t>{kChirps, kBins}));
+  const auto* actual = output.as<std::complex<T>>();
+  for (std::size_t index = 0; index < tone.size(); ++index) {
+    EXPECT_EQ(actual[index], tone[index]);
+  }
+}
+
+TEST(ClutterFilterOpTest, MethodNonePassesThroughFloatAndDouble) {
+  expect_none_passes_through<float>();
+  expect_none_passes_through<double>();
 }
 
 TEST(ClutterFilterOpTest, RejectsRealInput) {

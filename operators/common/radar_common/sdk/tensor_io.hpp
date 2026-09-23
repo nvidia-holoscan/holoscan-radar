@@ -10,6 +10,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -19,13 +20,45 @@
 #include <holoscan/core/expected_macros.hpp>
 #include <holoscan/core/payload_options.hpp>
 #include <holoscan/core/port.hpp>
+#include <holoscan/core/tensor_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/logger/logger.hpp>
 
 namespace holoscan::radar {
 
 // HSDK 5 Tensor port helpers. Ports carry a plain holoscan::Tensor (no
 // TensorMap). Receive/emit return expected<>; callers propagate with
 // HOLOSCAN_TRY. The runtime compute stream is context.cuda_stream().
+
+// Port specs. A TensorRepresentation states the facts a port constrains
+// (memory kind / dtype / rank); a consumer constrains only those, while a
+// producer that wants Runtime-owned loans also sizes its pool.
+
+inline TensorInputSpec tensor_input(
+    const TensorRepresentation& representation) {
+  return TensorInputSpec{.representation = representation};
+}
+
+// A producer that hands on storage it does not own (no loans allocated).
+inline TensorOutputSpec tensor_output(
+    const TensorRepresentation& representation) {
+  return TensorOutputSpec{.representation = representation};
+}
+
+inline TensorOutputSpec pooled_tensor_output(
+    const TensorRepresentation& representation, const TensorBounds& bounds) {
+  return TensorOutputSpec{.representation = representation,
+                          .bounds = bounds,
+                          .storage = TensorOutputStorage::kRuntimePool};
+}
+
+inline TensorOutputSpec pooled_tensor_output(
+    const TensorRepresentation& representation, std::uint32_t max_rank,
+    std::uint64_t max_byte_span) {
+  return pooled_tensor_output(
+      representation,
+      TensorBounds{.max_rank = max_rank, .max_byte_span = max_byte_span});
+}
 
 inline expected<Tensor, Error> receive_tensor(Input<Tensor>& port,
                                               const std::string& who) {
@@ -54,7 +87,7 @@ inline bool is_absent_input_error(ErrorCode code) {
          code == ErrorCode::kInputNotSelected || code == ErrorCode::kNotReady;
 }
 
-// Optional sticky-override receive: success with a value when the port has
+// Optional override receive: success with a value when the port has
 // a selected/reused sample; nullopt on SafeDefault / absent / never-seen.
 template <typename T>
 expected<std::optional<T>, Error> receive_optional_value(Input<T>& port) {
@@ -100,21 +133,107 @@ expected<TensorOutputLoan, Error> prepare_device_tensor(
   return std::move(*loan);
 }
 
-inline expected<void, Error> emit_prepared_tensor(
+// Stamping activation_time() propagates the frame's time rather than replacing
+// it: for a data-triggered operator HSDK 5 sets activation time to the
+// triggering sample's capture_time. Aligned fusion operators are the exception
+// (activation time is the newest aligned head) — see
+// docs/planning/OPERATOR_DEVELOPMENT.md, "Sample time propagation and aligned
+// joins".
+//
+// [[nodiscard]] mirrors Output::emit, which carries it: a dropped result is a
+// silently lost output. HOLOSCAN_TRY is right for a required output, where a
+// failed emit really is an error.
+//
+// An *optional* output — one the application may leave unwired — must never
+// use HOLOSCAN_TRY: publishing to an output with no consumer fails, and
+// propagating that would fail the whole activation and drop the tick's other
+// outputs as collateral. Per OPERATOR_API.md, "Optional output convention",
+// such a port takes one of two dispositions: `always` discards the result here
+// with an explicit (void), and `latched` goes through LatchedOutput below.
+[[nodiscard]] inline expected<void, Error> emit_prepared_tensor(
     Output<Tensor>& port, ExecutionContext& context, TensorOutputLoan loan) {
   return port.emit(std::move(loan),
                    EmitOptions{.capture_time = context.activation_time()});
 }
+
+// Emit a schema payload whose DescriptorTensor storage is a prepared Tensor
+// loan. This is the schema-valued counterpart of emit_prepared_tensor above.
+template <typename Payload>
+[[nodiscard]] expected<void, Error> emit_prepared_schema_tensor(
+    Output<Payload>& port, ExecutionContext& context, TensorOutputLoan loan,
+    Payload payload) {
+  return port.emit_tensor(
+      std::move(loan), std::move(payload),
+      EmitOptions{.capture_time = context.activation_time()});
+}
+
+// A `latched` optional output (OPERATOR_API.md, "Optional output
+// convention"). An application may leave an optional output unwired, but
+// nothing exposes an output's wiring to the operator, so it cannot ask —
+// it learns only by emitting and failing. This records that answer once and
+// gates every later tick on it.
+//
+// Only ErrorCode::kFailure latches. That is what an unconsumed output
+// reports; any other code (kResourceExhausted, kBackpressured, ...) is a
+// genuine fault that says nothing about wiring, and disabling the port for a
+// whole run over one transient fault would turn a lost frame into a lost run.
+// Those are ignored for the tick, leaving the port live.
+//
+// Latching is sound because wiring is fixed for a run: the plan is compiled
+// before the first activation and cannot be rewired while it runs, so an emit
+// that failed for want of a consumer will fail the same way forever.
+class LatchedOutput {
+ public:
+  // False once the port is known unconsumed. Guard the work performed *solely*
+  // to produce this output on it — allocation, fill kernels, commit — not just
+  // the emit; skipping that work is the point.
+  [[nodiscard]] bool active() const noexcept { return !disabled_; }
+
+  // Emit and absorb. Never fails the activation: a declined optional output
+  // must not take the tick's other outputs down with it.
+  void emit(Output<Tensor>& port, ExecutionContext& context,
+            TensorOutputLoan loan, std::string_view op_and_port) {
+    const auto emitted = emit_prepared_tensor(port, context, std::move(loan));
+    absorb_emit_result(emitted, op_and_port);
+  }
+
+  template <typename Payload>
+  void emit_schema_tensor(Output<Payload>& port, ExecutionContext& context,
+                          TensorOutputLoan loan, Payload payload,
+                          std::string_view op_and_port) {
+    const auto emitted = emit_prepared_schema_tensor(
+        port, context, std::move(loan), std::move(payload));
+    absorb_emit_result(emitted, op_and_port);
+  }
+
+ private:
+  void absorb_emit_result(const expected<void, Error>& emitted,
+                          std::string_view op_and_port) {
+    if (emitted) {
+      return;
+    }
+    if (emitted.error().code != ErrorCode::kFailure) {
+      return;
+    }
+    HOLOSCAN_LOG_WARN(
+        "{}: emit failed because no consumer is wired. Skipping the work that "
+        "produces this optional output for the rest of the run; wire the port "
+        "if you need it.",
+        op_and_port);
+    disabled_ = true;
+  }
+
+  bool disabled_{false};
+};
 
 // Allocate a device Tensor loan, run `fill` with a writable device pointer on
 // the runtime compute stream, commit, and emit. `fill` must enqueue only
 // stream-ordered device work (no host sync). Prefer prepare_device_tensor +
 // emit_prepared_tensor when a tick publishes more than one output.
 template <typename FillFn>
-expected<void, Error> emit_device_tensor(Output<Tensor>& port,
-                                         ExecutionContext& context,
-                                         std::span<const int64_t> shape,
-                                         DLDataType dtype, FillFn&& fill) {
+[[nodiscard]] expected<void, Error> emit_device_tensor(
+    Output<Tensor>& port, ExecutionContext& context,
+    std::span<const int64_t> shape, DLDataType dtype, FillFn&& fill) {
   HOLOSCAN_TRY(auto loan,
                prepare_device_tensor(port, context, shape, dtype,
                                     std::forward<FillFn>(fill)));

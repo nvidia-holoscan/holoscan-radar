@@ -15,7 +15,7 @@ namespace holoscan::radar {
 // is max_-prefixed. Optional/absent fields are allowed — each operator
 // documents which fields it requires. Not one of the seven shared descriptors
 // (those ride Params / [live] ports); this type is ctor-only and never a
-// Tensor port payload. See docs/planning/MAX_TENSOR_EXTENTS.md.
+// Tensor port payload. See operators/common/README.md.
 //
 // No opaque leading-batch field: multi-item throughput is an app concern.
 struct MaxTensorExtents {

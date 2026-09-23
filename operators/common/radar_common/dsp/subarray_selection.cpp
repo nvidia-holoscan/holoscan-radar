@@ -304,10 +304,17 @@ SubarraySelection build_subarray_selection(
         "minimum size exists in this geometry");
   }
 
+  bool identity = l == n;
+  for (int64_t channel = 0; identity && channel < n; ++channel) {
+    identity =
+        channels[static_cast<size_t>(channel)] == channel;
+  }
   sel.subarray_size = l;
   sel.channel_index = std::move(channels);
-  sel.reduced_geometry = reduced_from_channels(geometry, sel.channel_index, d);
-  sel.reduced = (l < n);
+  sel.reduced = !identity;
+  sel.reduced_geometry =
+      sel.reduced ? reduced_from_channels(geometry, sel.channel_index, d)
+                  : geometry;
   return sel;
 }
 

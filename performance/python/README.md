@@ -6,8 +6,14 @@ source → operator → sink graphs, time end-to-end frame latency with a device
 sync at the terminal sink, and print a unified text report (optional JSON via
 `--output`).
 
-Every C++ `perf_*.cpp` tool has a Python counterpart. Scenario matrices are
-hand-mirrored (see [OPEN_ITEMS.md](../OPEN_ITEMS.md)).
+Most C++ performance tools have a Python counterpart. The current exceptions
+are multi-source expansion, rank-one residual screening, and subarray
+selection. Shared scenario matrices are still hand-mirrored where both forms
+exist ([CLARAHOLOS-3419](https://jirasw.nvidia.com/browse/CLARAHOLOS-3419)).
+
+The current `main-5x` source image does not export the SDK Python binding
+target, so these scripts are retained but are not built by the default
+container. See [`SDK_DEVELOPMENT.md`](../../SDK_DEVELOPMENT.md).
 
 ## Prerequisites
 
@@ -31,14 +37,17 @@ If unset, scripts default to `../../build` relative to this directory.
 
 | Script | Operator | Default matrix notes |
 | --- | --- | --- |
-| `perf_cfar_detector.py` | `CFARDetectorOp` | Curated variants×sizes; mid/large MC only with `--full`; includes `peak_only` NMS rows (CA×sizes×`{square8,cross4}`) |
+| `perf_cfar_detector.py` | `CFARDetectorOp` | Curated variants×sizes; mid/large MC only with `--full`; includes RD and rank-3/4 full N-D peak-mode rows |
 | `perf_clutter_filter.py` | `ClutterFilterOp` | methods × sizes × channel batch |
 | `perf_fmcw_range_processor.py` | `FMCWRangeProcessorOp` | windows × sizes × channels |
 | `perf_fmcw_doppler_processor.py` | `FMCWDopplerProcessorOp` | windows × sizes × channels |
 | `perf_fmcw_range_doppler_processor.py` | `FMCWRangeDopplerProcessorOp` | clutter modes × sizes × channels |
 | `perf_fmcw_split_vs_fused.py` | split chain vs fused RD | noclt+msub pairs × sizes (e2e compare) |
 | `perf_mimo_deinterleave.py` | `MIMODeinterleaveOp` | sizes + batch (no live override) |
-| `perf_mimo_coherent_compensation.py` | `MIMOCoherentCompensationOp` | TDM/DDM × sizes × batch |
+| `perf_tdm_dense_compensation.py` | `TDMDenseCompensationOp` | TDM sizes × batch |
+| `perf_ddm_dense_demultiplex.py` | `DDMDenseDemultiplexOp` | Linear/nonlinear DDM × sizes |
+| `perf_ddm_power_fold.py` | `DDMPowerFoldOp` | Linear folded-power sizes |
+| `perf_ddm_sparse_demultiplex.py` | `DDMSparseDemultiplexOp` | Detection-count × sizes |
 | `perf_virtual_array_assembly.py` | `VirtualArrayAssemblyOp` | policies × sizes × batch |
 | `perf_phase_shift_beamformer.py` | `PhaseShiftBeamformerOp` | size ladder (az override) |
 | `perf_beamscan_estimator.py` | `BeamscanEstimatorOp` | size ladder (az override) |
@@ -66,11 +75,8 @@ Default CLI (no flags): `--warmup 5`, `--measured 20`, `--repeats 1`,
 - **`--size` / `--sizes`**: size-sweep subset (operator-specific default variant).
 - **`perf_cfar_detector`**: mid/large GO/SO/OS footprints are Monte Carlo–heavy;
   only in `--full`. Curated pfa↔lut calibration pairs are included. Default and
-  `--full` also include `peak_only` NMS characterization rows
-  (`_peak_square8` / `_peak_cross4` scenario ids).
-- Import order: load `holoscan.radar` **before** CuPy (the package
-  `utils/__init__.py` stays import-light so `utils.bootstrap` cannot pull CuPy
-  early — that footgun aborted MVDR MatX cache retirement).
+  `--full` also includes peak-mode NMS characterization rows
+  (`_peak_radius1` / `_peak_radius2` scenario ids).
 
 ## CLI
 
@@ -102,5 +108,4 @@ Default CLI (no flags): `--warmup 5`, `--measured 20`, `--repeats 1`,
 ## Notes
 
 - No timing assertions — use for characterization and regression tracking, not CI pass/fail gates (see C++ `performance/cpp/CMakeLists.txt` smoke tests for the binary harness).
-- Live `[live]` override ports are wired inline (same spirit as C++); Python→C++ typed override transport may not spike on all Holoscan SDK builds — override columns may read `-` when the reconfig path is not exercised.
 - Latencies are valid only on the machine/GPU they were captured on.

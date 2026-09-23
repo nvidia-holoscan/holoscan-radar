@@ -2,11 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // FeatureAssemblyOp contract tests (HSDK 5 Graph harness + stage kernels):
-// gather / bin lookup → points matrix. Optional gather Inputs are omitted
-// from the operator temporal contract so unconnected graphs compile
-// (HSDK5_PORT / Beamscan optional-is_valid pattern); Graph wiring of those
-// ports is deferred (RUNTIME_OPERATOR_REPLAY_MISMATCH on EA). Paths that
-// need optional tensors are covered by direct stage launches.
+// static features defines both output columns and the compiled temporal join.
+// Selected sources are exact-aligned; unselected gathers may remain unwired.
+// detection_idx is rank 2; extra leading axes fail closed.
 
 #include <gtest/gtest.h>
 
@@ -33,22 +31,22 @@ namespace {
 
 using holoscan::radar::AssemblyFeature;
 using holoscan::radar::FeatureAssemblyOp;
-using holoscan::radar::FeatureAssemblyParams;
 using holoscan::radar::make_device_tensor;
 using holoscan::radar::real_dtype;
 using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
+using holoscan::radar::testing::run_dual_in_single_out_operator_graph_result;
 using holoscan::radar::testing::run_single_io_operator_graph_result;
+using holoscan::radar::testing::run_triple_in_single_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 using holoscan::radar::testing::to_host;
 
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
 constexpr DLDataType kInt32Dtype{kDLInt, 32, 1};
 
-FeatureAssemblyParams make_params(std::vector<AssemblyFeature> features) {
-  FeatureAssemblyParams params{};
-  params.features = std::move(features);
-  return params;
+std::vector<AssemblyFeature> make_features(
+    std::vector<AssemblyFeature> features) {
+  return features;
 }
 
 template <typename Source, typename OpRef, typename Sink>
@@ -61,18 +59,18 @@ void wire_assembly(holoscan::Graph& graph, const Source& source, OpRef& op,
 
 template <typename T>
 GraphRunResult run_assembly_result(std::shared_ptr<holoscan::Tensor> idx,
-                                   FeatureAssemblyParams params) {
+                                   std::vector<AssemblyFeature> features) {
   return run_single_io_operator_graph_result<FeatureAssemblyOp<T>>(
-      {std::move(idx)}, std::move(params), "points",
+      {std::move(idx)}, std::move(features), "points",
       [](holoscan::Graph& graph, const auto& source, auto& op,
          const auto& sink) { wire_assembly(graph, source, op, sink); });
 }
 
 template <typename T>
 HostTensor run_assembly(std::shared_ptr<holoscan::Tensor> idx,
-                        FeatureAssemblyParams params) {
+                        std::vector<AssemblyFeature> features) {
   GraphRunResult result =
-      run_assembly_result<T>(std::move(idx), std::move(params));
+      run_assembly_result<T>(std::move(idx), std::move(features));
   if (!result.plan_ok) {
     throw std::runtime_error(std::string("compile failed: ") +
                              result.plan_json);
@@ -97,8 +95,24 @@ bool run_failed_with_diagnostic(const GraphRunResult& result) {
   return !result.diagnostics.empty() || !result.plan_ok;
 }
 
+HostTensor require_one_frame(GraphRunResult result) {
+  if (!result.plan_ok) {
+    throw std::runtime_error(std::string("compile failed: ") +
+                             result.plan_json);
+  }
+  if (!result.diagnostics.empty()) {
+    throw std::runtime_error(std::string("run diagnostic: ") +
+                             result.diagnostics.front());
+  }
+  if (result.frames.size() != 1U) {
+    throw std::runtime_error(
+        "FeatureAssemblyOp test: expected one points frame");
+  }
+  return std::move(result.frames.front());
+}
+
 // ---------------------------------------------------------------------------
-// Stage helpers — cover optional gather paths without Graph wiring (EA).
+// Stage helpers — focused kernel and error-path coverage.
 // ---------------------------------------------------------------------------
 
 template <typename T>
@@ -109,7 +123,7 @@ HostTensor stage_assemble(
     const T* velocity_bins, int64_t num_doppler, bool have_velocity,
     const T* score_map, int64_t num_score_doppler, int64_t num_score_range,
     const int64_t* score_plane_offsets, bool have_score, const T* aoa,
-    bool have_aoa, const T* az_angles, int64_t num_az, const T* el_angles,
+    bool have_aoa, const T* az_grid, int64_t num_az, const T* el_grid,
     int64_t num_el) {
   const int64_t num_features = static_cast<int64_t>(features.size());
   const int64_t n_preserved = idx_cols - 2;
@@ -133,6 +147,14 @@ HostTensor stage_assemble(
         break;
       case AssemblyFeature::kEl:
         feature_ids[static_cast<size_t>(i)] = holoscan::radar::detail::kFeatEl;
+        break;
+      case AssemblyFeature::kAzEstimate:
+        feature_ids[static_cast<size_t>(i)] =
+            holoscan::radar::detail::kFeatAzEstimate;
+        break;
+      case AssemblyFeature::kElEstimate:
+        feature_ids[static_cast<size_t>(i)] =
+            holoscan::radar::detail::kFeatElEstimate;
         break;
       case AssemblyFeature::kAzBin:
         feature_ids[static_cast<size_t>(i)] = holoscan::radar::detail::kFeatAzBin;
@@ -191,8 +213,8 @@ HostTensor stage_assemble(
       static_cast<const int64_t*>(idx_dev->data()), num_points, idx_cols,
       n_preserved, range_bins, num_range, have_range, velocity_bins,
       num_doppler, have_velocity, score_map, num_score_doppler, num_score_range,
-      score_plane_offsets, have_score, aoa, have_aoa, az_angles, num_az,
-      el_angles, num_el, static_cast<const int*>(feat_dev->data()),
+      score_plane_offsets, have_score, aoa, have_aoa, az_grid, num_az,
+      el_grid, num_el, static_cast<const int*>(feat_dev->data()),
       num_features, static_cast<T*>(points_mut.value()),
       static_cast<int*>(err_mut.value()), stream);
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
@@ -220,14 +242,14 @@ std::shared_ptr<holoscan::Tensor> upload_real(const std::vector<T>& host,
 }
 
 // ---------------------------------------------------------------------------
-// Graph: detection_idx-only paths (optional ports unconnected).
+// Graph: constructor-derived temporal joins.
 // ---------------------------------------------------------------------------
 
 TEST(FeatureAssemblyOpTest, AssemblesRawBinEscapeHatches) {
   std::vector<int64_t> idx = {3, 5, 7, 2};
   auto idx_t = to_device_tensor(idx, {2, 2}, kInt64Dtype);
   const auto points = run_assembly<double>(
-      idx_t, make_params({AssemblyFeature::kDopplerBin,
+      idx_t, make_features({AssemblyFeature::kDopplerBin,
                           AssemblyFeature::kRangeBin}));
   ASSERT_EQ(points.shape.size(), 2u);
   EXPECT_EQ(points.shape[0], 2);
@@ -239,21 +261,35 @@ TEST(FeatureAssemblyOpTest, AssemblesRawBinEscapeHatches) {
   EXPECT_DOUBLE_EQ(p[3], 2.0);
 }
 
-TEST(FeatureAssemblyOpTest, RangeFallsBackToRawBinWhenBinsAbsent) {
+TEST(FeatureAssemblyOpTest, AssemblesRawDenseAngleBinIndices) {
+  std::vector<int64_t> idx = {3, 2, 7, 5};
+  auto idx_t = to_device_tensor(idx, {1, 4}, kInt64Dtype);
+  const auto points = run_assembly<double>(
+      idx_t, make_features({AssemblyFeature::kAzBin,
+                          AssemblyFeature::kElBin,
+                          AssemblyFeature::kDopplerBin,
+                          AssemblyFeature::kRangeBin}));
+  ASSERT_EQ(points.shape, (std::vector<int64_t>{1, 4}));
+  const double* p = points.as<double>();
+  EXPECT_DOUBLE_EQ(p[0], 3.0);
+  EXPECT_DOUBLE_EQ(p[1], 2.0);
+  EXPECT_DOUBLE_EQ(p[2], 7.0);
+  EXPECT_DOUBLE_EQ(p[3], 5.0);
+}
+
+TEST(FeatureAssemblyOpTest, RejectsPhysicalFeaturesWithoutAxes) {
   std::vector<int64_t> idx = {1, 9};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
-  const auto points = run_assembly<float>(
-      idx_t, make_params({AssemblyFeature::kRange, AssemblyFeature::kVelocity}));
-  const float* p = points.as<float>();
-  EXPECT_FLOAT_EQ(p[0], 9.0f);
-  EXPECT_FLOAT_EQ(p[1], 1.0f);
+  const auto result = run_assembly_result<float>(
+      idx_t, make_features({AssemblyFeature::kRange, AssemblyFeature::kVelocity}));
+  EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
 TEST(FeatureAssemblyOpTest, RejectsScoreFeatureWithoutScoreInput) {
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
   const auto result = run_assembly_result<double>(
-      idx_t, make_params({AssemblyFeature::kScore}));
+      idx_t, make_features({AssemblyFeature::kScore}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
@@ -261,7 +297,7 @@ TEST(FeatureAssemblyOpTest, RejectsEmptyFeatures) {
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
   const auto result =
-      run_assembly_result<double>(idx_t, make_params({}));
+      run_assembly_result<double>(idx_t, make_features({}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
@@ -269,37 +305,37 @@ TEST(FeatureAssemblyOpTest, EmptyDetectionIdxEmitsEmptyPoints) {
   std::vector<int64_t> idx;
   auto idx_t = to_device_tensor(idx, {0, 2}, kInt64Dtype);
   const auto points = run_assembly<double>(
-      idx_t, make_params({AssemblyFeature::kDopplerBin,
+      idx_t, make_features({AssemblyFeature::kDopplerBin,
                           AssemblyFeature::kRangeBin}));
   ASSERT_EQ(points.shape.size(), 2u);
   EXPECT_EQ(points.shape[0], 0);
   EXPECT_EQ(points.shape[1], 2);
 }
 
-TEST(FeatureAssemblyOpTest, FeaturesConfigurableFromParams) {
+TEST(FeatureAssemblyOpTest, FeaturesConfiguredAtConstruction) {
   std::vector<int64_t> idx = {4, 8};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
   const auto points = run_assembly<double>(
-      idx_t, make_params({AssemblyFeature::kRangeBin,
+      idx_t, make_features({AssemblyFeature::kRangeBin,
                           AssemblyFeature::kDopplerBin}));
   ASSERT_EQ(points.shape[1], 2);
   EXPECT_DOUBLE_EQ(points.as<double>()[0], 8.0);
   EXPECT_DOUBLE_EQ(points.as<double>()[1], 4.0);
 }
 
-TEST(FeatureAssemblyOpTest, RejectsAzFeatureWithoutAoaInput) {
+TEST(FeatureAssemblyOpTest, RejectsAzEstimateWithoutAoaInput) {
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
   const auto result = run_assembly_result<double>(
-      idx_t, make_params({AssemblyFeature::kAz}));
+      idx_t, make_features({AssemblyFeature::kAzEstimate}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
-TEST(FeatureAssemblyOpTest, RejectsElFeatureWithoutAoaInput) {
+TEST(FeatureAssemblyOpTest, RejectsElEstimateWithoutAoaInput) {
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
   const auto result = run_assembly_result<double>(
-      idx_t, make_params({AssemblyFeature::kEl}));
+      idx_t, make_features({AssemblyFeature::kElEstimate}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
@@ -307,15 +343,25 @@ TEST(FeatureAssemblyOpTest, RejectsBadDetectionIdxRank) {
   std::vector<int64_t> idx = {0, 1, 2};
   auto idx_t = to_device_tensor(idx, {3}, kInt64Dtype);
   const auto result = run_assembly_result<double>(
-      idx_t, make_params({AssemblyFeature::kDopplerBin}));
+      idx_t, make_features({AssemblyFeature::kDopplerBin}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
-TEST(FeatureAssemblyOpTest, RejectsAzBinWithoutGrid) {
+TEST(FeatureAssemblyOpTest, RejectsOpaqueLeadingBatch) {
+  // Rank 3 is not a named axis; parse_detection_idx_layout enforces
+  // the module named-axis invariant.
+  std::vector<int64_t> idx = {0, 1, 2, 3};
+  auto idx_t = to_device_tensor(idx, {2, 1, 2}, kInt64Dtype);
+  const auto result = run_assembly_result<double>(
+      idx_t, make_features({AssemblyFeature::kDopplerBin}));
+  EXPECT_TRUE(run_failed_with_diagnostic(result));
+}
+
+TEST(FeatureAssemblyOpTest, RejectsAzWithoutGrid) {
   std::vector<int64_t> idx = {0, 0, 0, 0};
   auto idx_t = to_device_tensor(idx, {1, 4}, kInt64Dtype);
   const auto result = run_assembly_result<double>(
-      idx_t, make_params({AssemblyFeature::kAzBin}));
+      idx_t, make_features({AssemblyFeature::kAz}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
@@ -336,10 +382,12 @@ TEST(FeatureAssemblyOpTest, RejectsNonContiguousDetectionIdx) {
   std::vector<int64_t> host = {0, 0, 1, 0};
   cudaMemcpy(holder->data, host.data(), 4 * sizeof(int64_t),
              cudaMemcpyHostToDevice);
-  int device_id = 0;
-  cudaGetDevice(&device_id);
+  int current_device_id = -1;
+  if (cudaGetDevice(&current_device_id) != cudaSuccess) {
+    throw std::runtime_error("make_idx_with_strides: cudaGetDevice failed");
+  }
   holder->dl.dl_tensor.data = holder->data;
-  holder->dl.dl_tensor.device = DLDevice{kDLCUDA, device_id};
+  holder->dl.dl_tensor.device = DLDevice{kDLCUDA, current_device_id};
   holder->dl.dl_tensor.ndim = 2;
   holder->dl.dl_tensor.dtype = kInt64Dtype;
   holder->dl.dl_tensor.shape = holder->shape.data();
@@ -360,12 +408,116 @@ TEST(FeatureAssemblyOpTest, RejectsNonContiguousDetectionIdx) {
       std::invalid_argument);
 }
 
-TEST(FeatureAssemblyOpTest, OptionalGatherGraphWiringDeferred) {
-  // [EA HSDK5 ONLY] Wiring optional Tensor Inputs while they are omitted
-  // from contract() yields RUNTIME_OPERATOR_REPLAY_MISMATCH (same as
-  // BeamscanEstimatorOp.is_valid). Stage tests below cover those paths.
-  GTEST_SKIP() << "HSDK 5 EA: optional gather Graph wiring deferred "
-                  "(HSDK5_PORT / OPEN_ITEMS)";
+TEST(FeatureAssemblyOpTest, GathersAlignedRangeVelocity) {
+  auto idx = to_device_tensor(std::vector<int64_t>{2, 3}, {1, 2},
+                              kInt64Dtype);
+  auto ranges = upload_real(std::vector<double>{0, 10, 20, 30}, {4});
+  auto velocities =
+      upload_real(std::vector<double>{-3, -2, -1, 0}, {4});
+  auto result =
+      run_triple_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
+          {idx}, {ranges}, {velocities},
+          make_features(
+              {AssemblyFeature::kRange, AssemblyFeature::kVelocity}),
+          "points",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->detection_idx, q);
+            graph.add_flow(source->out1, op->range_bins, q);
+            graph.add_flow(source->out2, op->velocity_bins, q);
+            graph.add_flow(op->points, sink->in, q);
+          });
+  const HostTensor points = require_one_frame(std::move(result));
+  ASSERT_EQ(points.shape, (std::vector<int64_t>{1, 2}));
+  EXPECT_DOUBLE_EQ(points.as<double>()[0], 30.0);
+  EXPECT_DOUBLE_EQ(points.as<double>()[1], -1.0);
+}
+
+TEST(FeatureAssemblyOpTest, WiredUnselectedGatherDoesNotChangeTrigger) {
+  auto idx = to_device_tensor(std::vector<int64_t>{2, 3}, {1, 2},
+                              kInt64Dtype);
+  auto ranges = upload_real(std::vector<double>{0, 10, 20, 30}, {4});
+  auto result =
+      run_dual_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
+          {idx}, {ranges}, make_features({AssemblyFeature::kRangeBin}), "points",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->detection_idx, q);
+            graph.add_flow(source->out1, op->range_bins, q);
+            graph.add_flow(op->points, sink->in, q);
+          });
+  const HostTensor points = require_one_frame(std::move(result));
+  EXPECT_DOUBLE_EQ(points.as<double>()[0], 3.0);
+}
+
+TEST(FeatureAssemblyOpTest, GathersAlignedScore) {
+  auto idx = to_device_tensor(std::vector<int64_t>{1, 2}, {1, 2},
+                              kInt64Dtype);
+  std::vector<double> score(12, 0.0);
+  score[6] = 7.5;
+  auto scores = upload_real(score, {3, 4});
+  auto result =
+      run_dual_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
+          {idx}, {scores}, make_features({AssemblyFeature::kScore}), "points",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->detection_idx, q);
+            graph.add_flow(source->out1, op->detection_score, q);
+            graph.add_flow(op->points, sink->in, q);
+          });
+  const HostTensor points = require_one_frame(std::move(result));
+  EXPECT_DOUBLE_EQ(points.as<double>()[0], 7.5);
+}
+
+TEST(FeatureAssemblyOpTest, WaitsForLaterAoaFromSameFrame) {
+  // DualTensorSourceOp emits out0 before out1. The zero-window OnAligned
+  // trigger waits for the later companion carrying the same capture time.
+  auto idx = to_device_tensor(std::vector<int64_t>{0, 1}, {1, 2},
+                              kInt64Dtype);
+  auto aoa = upload_real(std::vector<double>{0.25, -0.5}, {1, 2});
+  auto result =
+      run_dual_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
+          {idx}, {aoa},
+          make_features({AssemblyFeature::kAzEstimate,
+                       AssemblyFeature::kElEstimate}),
+          "points",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->detection_idx, q);
+            graph.add_flow(source->out1, op->aoa_estimates, q);
+            graph.add_flow(op->points, sink->in, q);
+          });
+  const HostTensor points = require_one_frame(std::move(result));
+  EXPECT_DOUBLE_EQ(points.as<double>()[0], 0.25);
+  EXPECT_DOUBLE_EQ(points.as<double>()[1], -0.5);
+}
+
+TEST(FeatureAssemblyOpTest, GathersAlignedDenseAngleGrids) {
+  auto idx = to_device_tensor(std::vector<int64_t>{1, 2, 0, 0}, {1, 4},
+                              kInt64Dtype);
+  auto az = upload_real(std::vector<double>{-0.2, 0.0, 0.2}, {3});
+  auto el = upload_real(std::vector<double>{0.0, 0.1, 0.2}, {3});
+  auto result =
+      run_triple_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
+          {idx}, {az}, {el},
+          make_features(
+              {AssemblyFeature::kAz, AssemblyFeature::kEl}),
+          "points",
+          [](holoscan::Graph& graph, const auto& source, auto& op,
+             const auto& sink) {
+            const holoscan::ConnectionOptions q{.queue_depth = 4U};
+            graph.add_flow(source->out0, op->detection_idx, q);
+            graph.add_flow(source->out1, op->az_grid, q);
+            graph.add_flow(source->out2, op->el_grid, q);
+            graph.add_flow(op->points, sink->in, q);
+          });
+  const HostTensor points = require_one_frame(std::move(result));
+  EXPECT_DOUBLE_EQ(points.as<double>()[0], 0.0);
+  EXPECT_DOUBLE_EQ(points.as<double>()[1], 0.2);
 }
 
 // ---------------------------------------------------------------------------
@@ -414,8 +566,8 @@ TEST(FeatureAssemblyOpTest, AppendsAoaEstimates) {
   auto aoa_t = upload_real(aoa, {2, 2});
   const auto points = stage_assemble<double>(
       idx, 2, 2,
-      {AssemblyFeature::kDopplerBin, AssemblyFeature::kAz,
-       AssemblyFeature::kEl},
+      {AssemblyFeature::kDopplerBin, AssemblyFeature::kAzEstimate,
+       AssemblyFeature::kElEstimate},
       nullptr, 0, false, nullptr, 0, false, nullptr, 0, 0, nullptr, false,
       static_cast<const double*>(aoa_t->data()), true, nullptr, 0, nullptr, 0);
   ASSERT_EQ(points.shape[1], 3);
@@ -547,7 +699,7 @@ TEST(FeatureAssemblyOpTest, RejectsOobPreservedBatchCoord) {
   (void)sc;
 }
 
-TEST(FeatureAssemblyOpTest, DenseAzElBinLookup) {
+TEST(FeatureAssemblyOpTest, DenseAzElGridLookup) {
   std::vector<int64_t> idx = {1, 2, 0, 0, 3, 0, 0, 0};
   std::vector<double> az = {-0.3, -0.1, 0.1, 0.3};
   std::vector<double> el = {0.0, 0.05, 0.1};
@@ -555,7 +707,7 @@ TEST(FeatureAssemblyOpTest, DenseAzElBinLookup) {
   auto el_t = upload_real(el, {3});
 
   const auto points = stage_assemble<double>(
-      idx, 2, 4, {AssemblyFeature::kAzBin, AssemblyFeature::kElBin}, nullptr, 0,
+      idx, 2, 4, {AssemblyFeature::kAz, AssemblyFeature::kEl}, nullptr, 0,
       false, nullptr, 0, false, nullptr, 0, 0, nullptr, false, nullptr, false,
       static_cast<const double*>(az_t->data()), 4,
       static_cast<const double*>(el_t->data()), 3);
@@ -581,7 +733,7 @@ TEST(FeatureAssemblyOpTest, DenseAzElWithRangeVelocity) {
   const auto points = stage_assemble<double>(
       idx, 1, 4,
       {AssemblyFeature::kRange, AssemblyFeature::kVelocity,
-       AssemblyFeature::kAzBin, AssemblyFeature::kElBin},
+       AssemblyFeature::kAz, AssemblyFeature::kEl},
       static_cast<const double*>(rb->data()), 6, true,
       static_cast<const double*>(vb->data()), 4, true, nullptr, 0, 0, nullptr,
       false, nullptr, false, static_cast<const double*>(az_t->data()), 3,
@@ -594,15 +746,23 @@ TEST(FeatureAssemblyOpTest, DenseAzElWithRangeVelocity) {
   EXPECT_DOUBLE_EQ(p[3], 0.1);
 }
 
-TEST(FeatureAssemblyOpTest, RejectsAzBinWithTooFewPreservedColumns) {
-  // Graph path rejects az_bin when n_preserved < 2 (no optional grid needed).
+TEST(FeatureAssemblyOpTest, RejectsAzWithTooFewPreservedColumns) {
+  // Graph path rejects dense az when n_preserved < 2.
   std::vector<int64_t> idx = {0, 0};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
-  // Wire would need az_angles; without it Graph already fails for missing
+  // Wire would need az_grid; without it Graph already fails for missing
   // grid. Stage path with n_preserved=0 simply skips az lookup (value 0);
   // the operator-level guard is what matters for the contract.
   const auto result = run_assembly_result<double>(
-      idx_t, make_params({AssemblyFeature::kAzBin}));
+      idx_t, make_features({AssemblyFeature::kAz}));
+  EXPECT_TRUE(run_failed_with_diagnostic(result));
+}
+
+TEST(FeatureAssemblyOpTest, RejectsAzBinWithTooFewPreservedColumns) {
+  std::vector<int64_t> idx = {0, 0};
+  auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
+  const auto result = run_assembly_result<double>(
+      idx_t, make_features({AssemblyFeature::kAzBin}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
@@ -612,7 +772,7 @@ TEST(FeatureAssemblyOpTest, RejectsOutOfRangeAzBin) {
   auto az_t = upload_real(az, {3});
   EXPECT_THROW(
       stage_assemble<double>(
-          idx, 1, 4, {AssemblyFeature::kAzBin}, nullptr, 0, false, nullptr, 0,
+          idx, 1, 4, {AssemblyFeature::kAz}, nullptr, 0, false, nullptr, 0,
           false, nullptr, 0, 0, nullptr, false, nullptr, false,
           static_cast<const double*>(az_t->data()), 3, nullptr, 0),
       std::invalid_argument);
@@ -625,7 +785,7 @@ TEST(FeatureAssemblyOpTest, RejectsScoreLeadingRankMismatch) {
   std::vector<int64_t> idx = {0, 1};
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
   const auto result = run_assembly_result<double>(
-      idx_t, make_params({AssemblyFeature::kScore}));
+      idx_t, make_features({AssemblyFeature::kScore}));
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 

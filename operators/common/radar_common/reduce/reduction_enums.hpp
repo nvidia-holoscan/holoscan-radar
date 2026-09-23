@@ -11,6 +11,7 @@ enum class RepresentativePolicy {
   kPeak,
   kMedoid,
   kFirst,
+  kWeightedMean,
 };
 
 enum class ScoreMethod {
@@ -29,6 +30,7 @@ constexpr std::string_view to_string(RepresentativePolicy policy) {
     case RepresentativePolicy::kPeak: return "peak";
     case RepresentativePolicy::kMedoid: return "medoid";
     case RepresentativePolicy::kFirst: return "first";
+    case RepresentativePolicy::kWeightedMean: return "weighted_mean";
   }
   return "unknown";
 }

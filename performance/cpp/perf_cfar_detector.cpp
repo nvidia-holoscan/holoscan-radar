@@ -2,14 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Performance characterization for CFARDetectorOp — runs a matrix of scenarios
-// (size ladder, batch tiers, CFAR variants, footprints, NCI, peak_only NMS) in
+// (size ladder, batch tiers, CFAR variants, footprints, NCI, peak modes) in
 // one session and emits a single unified report. Measurement tool only: no
 // timing assertions.
 //
-// [EA HSDK5 ONLY] Graph-based rewrite. Measures a mid-session threshold_scale
-// override. alpha_lut / training_cells and the other vectors remain Params-only
-// (HSDK5_PORT.md §9). The post_run calibration summary is kept for alpha_lut
-// vs pfa cold-start comparison.
+//  Graph-based harness. Measures a mid-session threshold_scale
+// override. The post_run calibration summary is kept for alpha_lut vs pfa
+// cold-start comparison; other live ports are not timed here.
 
 #include <cuda_runtime_api.h>
 
@@ -72,9 +71,8 @@ struct CfarScenario {
   std::string calibration_pair;
   bool use_alpha_lut{false};
   std::vector<double> alpha_lut;
-  bool peak_only{false};
-  hr::CfarPeakNeighborhood peak_neighborhood{
-      hr::CfarPeakNeighborhood::kSquare8};
+  hr::CfarPeakMode peak_mode{hr::CfarPeakMode::kNone};
+  std::vector<int64_t> peak_radius{1};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -184,8 +182,8 @@ perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
   auto input =
       perf::make_power_map_device<PerfPrecision>(scen.input_shape);
   using BaseOp = hr::CFARDetectorOp<PerfPrecision>;
-  using LiveOp =
-      perf::PerfLiveContractOp<BaseOp, &BaseOp::threshold_scale>;
+  // Production Exact{} + per-tick co-emit. Restacking LatestWithin through
+  // PerfLiveContractOp would make the temporal contract invalid.
   constexpr double kInitialThresholdScale = 1.0;
   constexpr double kOverrideThresholdScale = 1.1;
   return perf::run_perf_graph_with_override(
@@ -203,13 +201,16 @@ perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
                     &out_batch, &k);
         // Input leading rank (before NCI) must be admitted even when NCI
         // collapses it to a single plane (out_batch == 1).
-        if (scen.input_shape.size() > 2) {
+        if (scen.input_shape.size() == 3U) {
           extents.max_rx = scen.input_shape[0];
+        } else if (scen.input_shape.size() == 4U) {
+          extents.max_tx = scen.input_shape[0];
+          extents.max_rx = scen.input_shape[1];
         }
         extents.max_detections = out_batch *
             extents.max_doppler_bins.value() *
             extents.max_range_bins.value();
-        auto op = graph.op<LiveOp>("cfar", extents);
+        auto op = graph.op<BaseOp>("cfar", extents);
         hr::CFARParams params;
         params.cfar_variant = scen.variant;
         params.guard_cells = scen.footprint.guard;
@@ -220,8 +221,8 @@ perf::TimingCollector run_cfar_graph(const CfarScenario& scen,
         params.os_rank = scen.os_rank;
         params.max_detections = 0;
         params.alpha_lut = scen.alpha_lut;
-        params.peak_only = scen.peak_only;
-        params.peak_neighborhood = scen.peak_neighborhood;
+        params.peak_mode = scen.peak_mode;
+        params.peak_radius = scen.peak_radius;
         op.set_params(std::move(params));
 
         const auto idx_sink =
@@ -300,8 +301,7 @@ perf::ResultRow base_row(const CfarScenario& scen) {
   row.k = k;
   row.calibration_pair = scen.calibration_pair;
   row.calibration_mode = scen.use_alpha_lut ? "alpha_lut" : "pfa";
-  row.notes =
-      "live_override=threshold_scale; vector overrides remain Params-only";
+  row.notes = "live_override=threshold_scale; other lives not timed";
   return row;
 }
 
@@ -358,13 +358,12 @@ CfarScenario make_nci_scenario(hr::CfarVariant v,
 
 CfarScenario make_peak_scenario(hr::CfarVariant v, const SizeSpec& s,
                                 const Footprint& fp,
-                                hr::CfarPeakNeighborhood nb) {
+                                int64_t radius) {
   CfarScenario sc = make_compute_scenario(v, s, fp, 1);
-  sc.peak_only = true;
-  sc.peak_neighborhood = nb;
+  sc.peak_mode = hr::CfarPeakMode::kRangeDoppler;
+  sc.peak_radius = {radius};
   const std::string suffix = "_compute";
-  const std::string insert =
-      std::string("_peak_") + std::string(hr::to_string(nb));
+  const std::string insert = "_peak_radius" + std::to_string(radius);
   if (sc.id.size() > suffix.size() &&
       sc.id.compare(sc.id.size() - suffix.size(), suffix.size(),
                     suffix) == 0) {
@@ -375,23 +374,29 @@ CfarScenario make_peak_scenario(hr::CfarVariant v, const SizeSpec& s,
   return sc;
 }
 
-const std::vector<hr::CfarPeakNeighborhood>&
-all_peak_neighborhoods() {
-  static const std::vector<hr::CfarPeakNeighborhood> nbs = {
-      hr::CfarPeakNeighborhood::kSquare8,
-      hr::CfarPeakNeighborhood::kCross4};
-  return nbs;
-}
-
-void append_peak_only_scenarios(std::vector<CfarScenario>* out,
-                                const std::vector<std::string>& sizes,
-                                bool all_variants_at_md) {
+void append_peak_scenarios(std::vector<CfarScenario>* out,
+                           const std::vector<std::string>& sizes,
+                           bool all_variants_at_md) {
   const Footprint fp = footprint_small();
   for (const auto& sid : sizes) {
     const SizeSpec& s = must_find_size(sid);
-    for (auto nb : all_peak_neighborhoods()) {
+    for (const int64_t radius : {int64_t{1}, int64_t{2}}) {
       out->push_back(
-          make_peak_scenario(hr::CfarVariant::kCA, s, fp, nb));
+          make_peak_scenario(hr::CfarVariant::kCA, s, fp, radius));
+    }
+    if (sid == "xs") {
+      CfarScenario rank3 =
+          make_compute_scenario(hr::CfarVariant::kCA, s, fp, 8);
+      rank3.peak_mode = hr::CfarPeakMode::kAll;
+      rank3.id = "cfar_CA_xs_small_peak_all_rank3_compute";
+      out->push_back(std::move(rank3));
+
+      CfarScenario rank4 =
+          make_compute_scenario(hr::CfarVariant::kCA, s, fp, 1);
+      rank4.input_shape = {4, 4, s.doppler, s.range};
+      rank4.peak_mode = hr::CfarPeakMode::kAll;
+      rank4.id = "cfar_CA_xs_small_peak_all_rank4_compute";
+      out->push_back(std::move(rank4));
     }
   }
   if (!all_variants_at_md) {
@@ -402,8 +407,8 @@ void append_peak_only_scenarios(std::vector<CfarScenario>* out,
     if (v == hr::CfarVariant::kCA) {
       continue;
     }
-    for (auto nb : all_peak_neighborhoods()) {
-      out->push_back(make_peak_scenario(v, md, fp, nb));
+    for (const int64_t radius : {int64_t{1}, int64_t{2}}) {
+      out->push_back(make_peak_scenario(v, md, fp, radius));
     }
   }
 }
@@ -518,7 +523,7 @@ struct CfarTraits : perf::PerfDriverDefaults {
   }
   static const char* full_help() {
     return "Full matrix (all variants/footprints/batch/NCI) plus the "
-           "default alpha_lut calibration pairs and peak_only NMS "
+           "default alpha_lut calibration pairs and peak-mode NMS "
            "rows; inline threshold_scale override timing";
   }
 
@@ -556,8 +561,8 @@ struct CfarTraits : perf::PerfDriverDefaults {
       }
     }
     tag_and_append_alpha_lut_pairs(&out);
-    append_peak_only_scenarios(&out, {"xs", "md", "lg", "xlw"},
-                               /*all_variants_at_md=*/false);
+    append_peak_scenarios(&out, {"xs", "md", "lg", "xlw"},
+                          /*all_variants_at_md=*/false);
     return out;
   }
 
@@ -577,8 +582,8 @@ struct CfarTraits : perf::PerfDriverDefaults {
           make_compute_scenario(hr::CfarVariant::kCA, *s, fp, 1));
       known.push_back(sid);
     }
-    append_peak_only_scenarios(&out, known,
-                               /*all_variants_at_md=*/false);
+    append_peak_scenarios(&out, known,
+                          /*all_variants_at_md=*/false);
     return out;
   }
 
@@ -614,8 +619,8 @@ struct CfarTraits : perf::PerfDriverDefaults {
     for (const auto& s : size_ladder()) {
       all_sizes.push_back(s.id);
     }
-    append_peak_only_scenarios(&out, all_sizes,
-                               /*all_variants_at_md=*/true);
+    append_peak_scenarios(&out, all_sizes,
+                          /*all_variants_at_md=*/true);
     return out;
   }
 
@@ -642,17 +647,20 @@ struct CfarTraits : perf::PerfDriverDefaults {
       row.notes =
           "cold_ms includes initial alpha_lut H2D; median/p90 are "
           "steady state; override_ms is the peak after an inline "
-          "threshold_scale change; vector overrides remain Params-only";
+          "threshold_scale change; other lives are not timed";
     } else {
       row.notes =
           "cold_ms includes initial LUT calibration; median/p90 are "
           "steady state; override_ms is the peak after an inline "
-          "threshold_scale change; vector overrides remain Params-only";
+          "threshold_scale change; other lives are not timed";
     }
-    if (scen.peak_only) {
-      row.notes +=
-          "; peak_only NMS enabled (neighborhood=" +
-          std::string(hr::to_string(scen.peak_neighborhood)) + ")";
+    if (scen.peak_mode != hr::CfarPeakMode::kNone) {
+      row.notes += "; peak_mode=" +
+                   std::string(hr::to_string(scen.peak_mode));
+      if (scen.peak_mode == hr::CfarPeakMode::kRangeDoppler) {
+        row.notes += " (radius=" +
+                     std::to_string(scen.peak_radius.front()) + ")";
+      }
     }
     report->results.push_back(row);
   }

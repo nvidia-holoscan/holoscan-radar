@@ -58,8 +58,9 @@ inline void clear_music_eig_cache() {
 // Per-tick: clear the eig plan cache (keys are freed-at-return scratch
 // pointers) to bound growth — WITHOUT draining MatX's global MemTracker. The
 // global drain frees every MatX-tracked buffer in the process, including
-// sibling operators' cached cuFFT workspaces (FMCWRange/DopplerProcessorOp),
-// which they reuse next tick → out-of-bounds reads and corrupted output.
+// sibling operators' cached cuFFT workspaces (range/Doppler FFT
+// processors), which they reuse next tick → out-of-bounds reads and
+// corrupted output.
 // Leaves the live flag set so the teardown retire still drains. See
 // mvdr_stage.hpp for the identical split.
 inline void clear_music_matx_caches() {
@@ -93,8 +94,8 @@ inline void retire_music_matx_caches() {
 // num_channels, row-major) over the valid snapshots. Identical to MVDR's
 // covariance_kernel (mvdr_stage.hpp) - duplicated rather than shared because
 // radar_common stays CUDA-free and per-operator kernels are not (yet) a
-// shared target; see OPEN_ITEMS.md if a third consumer wants to factor this
-// out. `mask` (num_items x num_snapshots, uint8/bool) selects valid slots;
+// shared target; factor this out if a third consumer appears. `mask`
+// (num_items x num_snapshots, uint8/bool) selects valid slots;
 // nullptr -> all valid. Empty items (K_i == 0) yield a zero matrix;
 // `k_counts[item]` records K_i.
 template <typename T>
@@ -226,7 +227,8 @@ __device__ inline T& music_spectrum_at(T* spec, int64_t ia, int64_t ie,
 // thousands of beams; staging it into shared moves that traffic off the L1TEX
 // load path. (MVDR's capon_reduce_kernel carries an older "shared was slower,
 // kernel is latency-bound" note from a different GPU - it does not hold here;
-// see OPEN_ITEMS.md.) The launch falls back to Staged=false when P_n does not
+// CLARAHOLOS-3398 tracks reevaluating the Capon path.) The launch falls back to
+// Staged=false when P_n does not
 // fit the shared-memory budget. The inner reduction over c2 is carried in
 // four independent accumulators so the FMAs pipeline.
 template <typename T, bool Staged>
@@ -491,19 +493,23 @@ __global__ void music_peak_extract_kernel(
     return;
   }
   const T nan = T{0} / T{0};
-  for (int64_t k = 0; k < max_sources; ++k) {
-    const int64_t base = (item * max_sources + k) * 2;
-    if (k < found && sel[k] >= 0) {
-      const int64_t ia = sel[k] % num_az;
-      const int64_t ie = sel[k] / num_az;
-      doa_multi[base] = az_grid[ia];
-      doa_multi[base + 1] = el_grid[ie];
-    } else {
-      doa_multi[base] = nan;
-      doa_multi[base + 1] = nan;
+  if (doa_multi != nullptr) {
+    for (int64_t k = 0; k < max_sources; ++k) {
+      const int64_t base = (item * max_sources + k) * 2;
+      if (k < found && sel[k] >= 0) {
+        const int64_t ia = sel[k] % num_az;
+        const int64_t ie = sel[k] / num_az;
+        doa_multi[base] = az_grid[ia];
+        doa_multi[base + 1] = el_grid[ie];
+      } else {
+        doa_multi[base] = nan;
+        doa_multi[base + 1] = nan;
+      }
     }
   }
-  source_count[item] = static_cast<int32_t>(found);
+  if (source_count != nullptr) {
+    source_count[item] = static_cast<int32_t>(found);
+  }
 }
 
 // One block per item. When K_i == 0 the covariance was empty: zero the MUSIC
@@ -532,12 +538,16 @@ __global__ void music_blank_empty_items_kernel(
   const T nan = T{0} / T{0};
   aoa[item * 2] = nan;
   aoa[item * 2 + 1] = nan;
-  for (int64_t k = 0; k < max_sources; ++k) {
-    const int64_t base = (item * max_sources + k) * 2;
-    doa_multi[base] = nan;
-    doa_multi[base + 1] = nan;
+  if (doa_multi != nullptr) {
+    for (int64_t k = 0; k < max_sources; ++k) {
+      const int64_t base = (item * max_sources + k) * 2;
+      doa_multi[base] = nan;
+      doa_multi[base + 1] = nan;
+    }
   }
-  source_count[item] = 0;
+  if (source_count != nullptr) {
+    source_count[item] = 0;
+  }
 }
 
 // Run the full MUSIC estimate for one tick: covariance -> eig (VECTOR) ->
@@ -655,13 +665,17 @@ inline void run_music_stage(const cuda::std::complex<T>* snapshots,
         el_grid, spectrum, aoa);
   }
 
-  constexpr int peak_block = 256;
-  const size_t peak_smem =
-      static_cast<size_t>(peak_block) * (sizeof(T) + sizeof(int64_t)) +
-      static_cast<size_t>(max_sources) * sizeof(int64_t);
-  music_peak_extract_kernel<T><<<grid, peak_block, peak_smem, stream>>>(
-      spectrum, model_order, num_items, num_az, num_el, max_sources, az_grid,
-      el_grid, doa_multi, source_count);
+  // doa_multi and source_count back latched optional ports and may be null;
+  // one pass writes both, so it runs unless both are null.
+  if (doa_multi != nullptr || source_count != nullptr) {
+    constexpr int peak_block = 256;
+    const size_t peak_smem =
+        static_cast<size_t>(peak_block) * (sizeof(T) + sizeof(int64_t)) +
+        static_cast<size_t>(max_sources) * sizeof(int64_t);
+    music_peak_extract_kernel<T><<<grid, peak_block, peak_smem, stream>>>(
+        spectrum, model_order, num_items, num_az, num_el, max_sources, az_grid,
+        el_grid, doa_multi, source_count);
+  }
 
   constexpr int blank_block = 256;
   music_blank_empty_items_kernel<T><<<grid, blank_block, 0, stream>>>(

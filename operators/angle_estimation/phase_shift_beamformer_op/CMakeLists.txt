@@ -14,6 +14,7 @@ target_link_libraries(phase_shift_beamformer_op
         holoscan::core
         holoscan::radar_common
         holoscan::radar_common_steering
+        holoscan::radar_schemas
     PRIVATE
         matx::matx)
 

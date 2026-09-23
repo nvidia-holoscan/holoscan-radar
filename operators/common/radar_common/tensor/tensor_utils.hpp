@@ -3,13 +3,20 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/expected.hpp>
+
+#include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/tensor/extents_layout.hpp"
 
 namespace holoscan::radar {
 
@@ -53,6 +60,38 @@ struct BatchedShape {
 // row-major (strided inputs are rejected in this wave).
 BatchedShape collapse_batch(const holoscan::Tensor& tensor,
                             const char* port_name);
+
+// collapse_batch plus MaxTensorExtents named TX/RX bounds, for compute()
+// shells (opaque leading batch and batch > max_tx*max_rx are errors).
+inline expected<BatchedShape, Error> collapse_named_tx_rx_batch(
+    const Tensor& input, const MaxTensorExtents& extents,
+    const char* port_name, const char* who) {
+  BatchedShape batched;
+  try {
+    batched = collapse_batch(input, port_name);
+  } catch (const std::invalid_argument& e) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, std::string(e.what())});
+  }
+
+  const std::size_t max_leading = named_tx_rx_leading_rank(extents);
+  if (batched.leading.size() > max_leading) {
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 unexpected_leading_message(
+                                     who, batched.leading.size(),
+                                     max_leading)});
+  }
+  const std::int64_t max_rx = extent_rx_or_channels(extents);
+  const std::int64_t max_tx = extent_or_one(extents.max_tx);
+  if (batched.batch > max_tx * max_rx) {
+    return make_unexpected(Error{
+        ErrorCode::kInvalidArgument,
+        std::string(who) + ": leading product " +
+            std::to_string(batched.batch) +
+            " exceeds max_tx*max_rx from MaxTensorExtents"});
+  }
+  return batched;
+}
 
 // The full-rank output shape for a batched result: `leading` axes followed
 // by (rows, cols).
@@ -99,5 +138,14 @@ extern template InputPrecision classify_input_dtype<float>(
     const holoscan::Tensor&, const char*, bool);
 extern template InputPrecision classify_input_dtype<double>(
     const holoscan::Tensor&, const char*, bool);
+
+// Complex-only input: classify_input_dtype with allow_real=false, discarding
+// the enum. Same error strings. Use this when the operator has no real-IF
+// path; keep classify_input_dtype when the caller needs kReal vs kComplex.
+template <typename T>
+inline void require_complex(const holoscan::Tensor& tensor,
+                            const char* port_name) {
+  (void)classify_input_dtype<T>(tensor, port_name, /*allow_real=*/false);
+}
 
 }  // namespace holoscan::radar

@@ -35,8 +35,8 @@ class PyMUSICEstimatorOp : public MUSICEstimatorOp<T> {
       Fragment* fragment, const py::args& args,
       const ArrayGeometry& array_geometry = ArrayGeometry{},
       const AngleConvention& angle_convention = AngleConvention{},
-      const std::vector<double>& az_angles = {},
-      const std::vector<double>& el_angles = {},
+      const std::vector<double>& az_coordinates = {},
+      const std::vector<double>& el_coordinates = {},
       int64_t num_sources = -1, double source_count_pfa = 1e-2,
       int64_t max_sources = 4,
       const std::vector<int64_t>& spatial_smoothing = {},
@@ -60,8 +60,8 @@ class PyMUSICEstimatorOp : public MUSICEstimatorOp<T> {
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
     this->add_arg(Arg("array_geometry") = array_geometry);
     this->add_arg(Arg("angle_convention") = angle_convention);
-    this->add_arg(Arg("az_angles") = az_angles);
-    this->add_arg(Arg("el_angles") = el_angles);
+    this->add_arg(Arg("az_coordinates") = az_coordinates);
+    this->add_arg(Arg("el_coordinates") = el_coordinates);
     this->add_arg(Arg("num_sources") = num_sources);
     this->add_arg(Arg("source_count_pfa") = source_count_pfa);
     this->add_arg(Arg("max_sources") = max_sources);
@@ -84,8 +84,8 @@ void bind_music_estimator(py::module_& m, const char* class_name) {
       "fragment : holoscan.core.Fragment\n"
       "array_geometry : ArrayGeometry, optional\n"
       "angle_convention : AngleConvention, optional\n"
-      "az_angles : list[float], optional\n"
-      "el_angles : list[float], optional\n"
+      "az_coordinates : list[float], optional\n"
+      "el_coordinates : list[float], optional\n"
       "num_sources : int, optional\n"
       "    Signal-subspace dimension; negative selects auto (per-item EFT).\n"
       "source_count_pfa : float, optional\n"
@@ -101,8 +101,8 @@ void bind_music_estimator(py::module_& m, const char* class_name) {
            py::arg("fragment"),
            py::arg("array_geometry") = ArrayGeometry{},
            py::arg("angle_convention") = AngleConvention{},
-           py::arg("az_angles") = std::vector<double>{},
-           py::arg("el_angles") = std::vector<double>{},
+           py::arg("az_coordinates") = std::vector<double>{},
+           py::arg("el_coordinates") = std::vector<double>{},
            py::arg("num_sources") = int64_t{-1},
            py::arg("source_count_pfa") = 1e-2,
            py::arg("max_sources") = int64_t{4},

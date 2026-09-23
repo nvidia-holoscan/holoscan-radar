@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Shared HSDK 5 Graph source / sink / runner for performance drivers.
-// [EA HSDK5 ONLY] Replaces HSDK 4.x Application helpers in perf_source.hpp /
+//  Replaces HSDK 4.x Application helpers in perf_source.hpp /
 // perf_sink.hpp. Mid-session POD [live] overrides use a source that co-emits
 // the override and Tensor on one clock so the graph stays plannable. EA
 // replay requires a sideband sample every tick, so the source emits the
@@ -22,11 +22,14 @@
 
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -49,6 +52,8 @@
 #include <holoscan/time/realtime_clock.hpp>
 
 #include "radar_common/sdk/override_param.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 #include "utils/perf_app.hpp"
 
 namespace holoscan::radar::perf {
@@ -65,17 +70,25 @@ inline constexpr auto kPerfPoll = std::chrono::milliseconds{25};
 // How PerfTensorSourceOp publishes each tick. Drivers pass this into
 // run_perf_graph* — default remains kCopy (stage once, D2D into the loan).
 // kFillInPlace / kZeroCopy are diagnostic: fill currently zero-fills the loan;
-// zero-copy republish is rejected on this EA (HSDK5_PORT.md §3).
+// zero-copy support depends on the active Graph output binding.
 enum class PerfPublishMode {
   kCopy,
   kFillInPlace,
   kZeroCopy,
 };
 
-// Perf-only operator adapter: the production operator omits optional live
-// inputs from contract() so an unwired graph compiles. A perf graph that wires
-// an override must list that input in the temporal contract. MemberPorts are
-// pointers to public Input<T> members on OperatorT.
+// Effectively unbounded: the perf override source publishes once and the
+// measurement frames that follow must all see that value.
+inline constexpr auto kPerfOverrideMaxAge = std::chrono::years{100};
+
+// Perf-only operator adapter. Production joins a `[live]` override with Exact{}
+// (OPERATOR_API.md). Do not wrap an operator whose production contract already
+// declares that selector on the same port — a second selector is
+// TEMPORAL_CONTRACT_INVALID. PerfTensorOverrideSourceOp publishes the
+// sideband every tick, so Exact matches (perf_clutter_filter). Historical POD
+// drivers still use this adapter to restack LatestWithin for a hold; prefer
+// Exact when the source already re-publishes. MemberPorts are pointers to
+// public Input<T> members on OperatorT.
 template <typename OperatorT, auto... MemberPorts>
 class PerfLiveContractOp final : public OperatorT {
  public:
@@ -83,7 +96,11 @@ class PerfLiveContractOp final : public OperatorT {
 
   [[nodiscard]] holoscan::Contract contract() const override {
     holoscan::Contract result = OperatorT::contract();
-    (add_sticky_override_to_contract(result, this->*MemberPorts), ...);
+    ((result
+          .input(this->*MemberPorts,
+                 holoscan::LatestWithin{.max_age = kPerfOverrideMaxAge})
+          .on_missing(this->*MemberPorts, holoscan::SafeDefault{})),
+     ...);
     return result;
   }
 };
@@ -184,9 +201,8 @@ inline void bind_tensor_out(holoscan::CompileOptions& options,
 namespace detail {
 
 // Zero-copy republish of a staged device Tensor (shared handle, no D2D) is
-// rejected under Graph + bind_tensor_output_device with
-// RUNTIME_PORT_BINDING_UNAVAILABLE (HSDK5_PORT.md §3). Default path is the
-// pool loan + D2D copy. Drivers select via PerfPublishMode on run_perf_graph*.
+// optional under Graph output binding. The default path uses a pool loan plus
+// D2D copy; drivers select the publication mode through PerfPublishMode.
 
 inline holoscan::expected<void, holoscan::Error> emit_device_zerocopy(
     holoscan::Output<holoscan::Tensor>& out,
@@ -330,15 +346,14 @@ inline void record_start_locked() {
 class PerfTensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_a()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_a()));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -372,8 +387,8 @@ class PerfTensorSourceOp final : public holoscan::Operator<> {
 // the configured initial value before `override_at`, then the override.
 // Publishing both outputs every activation satisfies replay. Callers must
 // put source, operator, and sinks in one explicit partition (independent
-// OnClock roots otherwise fail compile). That partition does not make
-// kLocalEnum bind: enum sidebands still fail at source emit on this EA.
+// OnClock roots otherwise fail compile). ClutterFilterOp.method uses this path
+// for override_ms; other enum-valued drivers can reuse the same source.
 template <typename Value>
 class PerfTensorOverrideSourceOp final : public holoscan::Operator<> {
  public:
@@ -384,15 +399,14 @@ class PerfTensorOverrideSourceOp final : public holoscan::Operator<> {
         override_value_(std::move(override_value)) {}
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out, "out")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_a()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_a()));
     spec.output(override_out, "override_out");
   }
 
@@ -439,24 +453,108 @@ class PerfTensorOverrideSourceOp final : public holoscan::Operator<> {
   int64_t frame_index_{0};
 };
 
+// Descriptor override counterpart to PerfTensorOverrideSourceOp. WindowSpec
+// rides a host Tensor-backed wire payload, so a plain local-value output is
+// insufficient for HSDK 5 port binding.
+class PerfTensorWindowOverrideSourceOp final : public holoscan::Operator<> {
+ public:
+  PerfTensorWindowOverrideSourceOp(
+      int64_t override_at, WindowSpec initial_value, WindowSpec override_value)
+      : override_at_(override_at),
+        initial_value_(std::move(initial_value)),
+        override_value_(std::move(override_value)) {}
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorRepresentation kDevice{
+        .memory_kind = holoscan::MemoryKind::kCudaDevice};
+    constexpr holoscan::TensorRepresentation kWindow{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLFloat, 64U, 1U},
+        .rank = 1U};
+    spec.output(out)
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_a()));
+    spec.output(override_out)
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kWindow, 1U, 4096U * sizeof(double)));
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = kPerfTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    std::shared_ptr<holoscan::Tensor> frame;
+    PerfPublishMode mode = PerfPublishMode::kCopy;
+    {
+      const std::lock_guard lock(PerfFrameBank::mutex);
+      if (PerfFrameBank::frames_remaining <= 0 ||
+          PerfFrameBank::input_frame == nullptr) {
+        return {};
+      }
+      --PerfFrameBank::frames_remaining;
+      frame = PerfFrameBank::input_frame;
+      mode = PerfFrameBank::publish_mode;
+    }
+    const WindowSpec& value =
+        frame_index_ < override_at_ ? initial_value_ : override_value_;
+    const std::array<int64_t, 1> shape{
+        static_cast<int64_t>(value.coefficients.size())};
+    auto loan = override_out.allocate_tensor(
+        holoscan::TensorLoanRequest{
+            .shape = shape, .dtype = DLDataType{kDLFloat, 64U, 1U}});
+    if (!loan) {
+      return holoscan::make_unexpected(std::move(loan).error());
+    }
+    const std::span<const double> coefficients{value.coefficients};
+    auto written = loan->write_host_and_commit(
+        [coefficients](const holoscan::TensorOutputWriteGuard& writer) {
+          std::copy(coefficients.begin(), coefficients.end(),
+                    writer.data_as<double>());
+        });
+    if (!written) {
+      return holoscan::make_unexpected(std::move(written).error());
+    }
+    HOLOSCAN_RETURN_IF_ERROR(override_out.emit_tensor(
+        std::move(*loan), holoscan::radar::to_wire(value),
+        holoscan::EmitOptions{.capture_time = context.activation_time()}));
+    {
+      const std::lock_guard lock(PerfFrameBank::mutex);
+      detail::record_start_locked();
+    }
+    ++frame_index_;
+    return detail::emit_device_frame(out, context, frame, mode);
+  }
+
+  holoscan::Output<holoscan::Tensor> out{"out"};
+  holoscan::Output<wire::WindowSpecT> override_out{"override_out"};
+
+ private:
+  int64_t override_at_{-1};
+  WindowSpec initial_value_;
+  WindowSpec override_value_;
+  int64_t frame_index_{0};
+};
+
 // Dual-output source: both tensors emit on the same OnClock tick (needed for
 // OnAligned Exact consumers such as SnapshotGatherOp).
 class PerfDualTensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out_a, "out_a")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_a()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_a()));
     spec.output(out_b, "out_b")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_b()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_b()));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -501,19 +599,17 @@ class PerfDualTensorOverrideSourceOp final : public holoscan::Operator<> {
         override_value_(std::move(override_value)) {}
 
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out_a, "out_a")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_a()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_a()));
     spec.output(out_b, "out_b")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_b()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_b()));
     spec.output(override_out, "override_out");
   }
 
@@ -569,23 +665,20 @@ class PerfDualTensorOverrideSourceOp final : public holoscan::Operator<> {
 class PerfTripleTensorSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorPortLayout kDevice{
+    constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
         .rank = std::nullopt,
     };
     spec.output(out_a, "out_a")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_a()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_a()));
     spec.output(out_b, "out_b")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_b()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_b()));
     spec.output(out_c, "out_c")
-        .produces_tensor(kDevice)
-        .tensor_allocation(holoscan::TensorAllocationBounds{
-            .max_rank = 8U, .max_byte_span = PerfFrameBank::span_c()});
+        .produces_tensor(holoscan::radar::pooled_tensor_output(
+            kDevice, 8U, PerfFrameBank::span_c()));
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -659,6 +752,50 @@ class PerfTerminalSinkOp final : public holoscan::Operator<> {
   holoscan::Input<holoscan::Tensor> in{"in"};
 };
 
+// Timed terminal sink for two exact-aligned outputs from one operator.
+class PerfDualTerminalSinkOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input(in0, "in0").queue_depth(8U);
+    spec.input(in1, "in1").queue_depth(8U);
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnAligned{
+        .ports = holoscan::ports(in0, in1),
+        .window = std::chrono::nanoseconds{0}});
+    result.input(in0, holoscan::Exact{})
+        .input(in1, holoscan::Exact{});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext&) override {
+    auto sample0 = in0.receive_data();
+    if (!sample0) {
+      return holoscan::make_unexpected(std::move(sample0).error());
+    }
+    auto sample1 = in1.receive_data();
+    if (!sample1) {
+      return holoscan::make_unexpected(std::move(sample1).error());
+    }
+    cudaDeviceSynchronize();
+    {
+      const std::lock_guard lock(PerfFrameBank::mutex);
+      if (PerfFrameBank::collector_ != nullptr) {
+        PerfFrameBank::collector_->ends.push_back(Clock::now());
+      }
+      ++PerfFrameBank::captured;
+    }
+    PerfFrameBank::ready.notify_all();
+    return {};
+  }
+
+  holoscan::Input<holoscan::Tensor> in0{"in0"};
+  holoscan::Input<holoscan::Tensor> in1{"in1"};
+};
+
 // Untimed drain for always-emitted optional outs (keeps the producer ticking).
 class PerfNullSinkOp final : public holoscan::Operator<> {
  public:
@@ -682,6 +819,32 @@ class PerfNullSinkOp final : public holoscan::Operator<> {
   }
 
   holoscan::Input<holoscan::Tensor> in{"in"};
+};
+
+// Untimed drain for a generated schema payload.
+template <typename Payload>
+class PerfPayloadSinkOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.input(in, "in").queue_depth(8U);
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnEach{in});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext&) override {
+    auto sample = in.receive_data();
+    if (!sample) {
+      return holoscan::make_unexpected(std::move(sample).error());
+    }
+    return {};
+  }
+
+  holoscan::Input<Payload> in{"in"};
 };
 
 // BuildFn signature:
@@ -751,6 +914,56 @@ TimingCollector run_perf_graph_with_override(
 
   holoscan::Graph graph{graph_name};
   const auto src = graph.op<PerfTensorOverrideSourceOp<Value>>(
+      "src", override_at, std::move(initial_value),
+      std::move(override_value));
+  holoscan::CompileOptions options;
+  bind_tensor_out(options, "src", "out");
+  build(graph, src, options);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  const holoscan::ExecutionPlan plan =
+      holoscan::compile(graph, std::move(options));
+  if (!plan.ok()) {
+    throw std::runtime_error(std::string(graph_name) +
+                             " perf compile failed: " +
+                             std::string(plan.json()));
+  }
+
+  holoscan::RunSession session = holoscan::run_async(plan);
+  detail::wait_for_frames(session, total_frames);
+  session.request_stop();
+  session.wait();
+  if (!session.diagnostics().empty()) {
+    std::string msg = std::string(graph_name) + " perf run diagnostics:";
+    for (const auto& d : session.diagnostics()) {
+      msg += " ";
+      msg += std::string(d.token);
+    }
+    throw std::runtime_error(msg);
+  }
+  if (collector.ends.size() < static_cast<size_t>(total_frames)) {
+    throw std::runtime_error(detail::stall_message(
+        graph_name, collector.ends.size(), total_frames));
+  }
+  return collector;
+}
+
+template <typename BuildFn>
+TimingCollector run_perf_graph_with_window_override(
+    std::shared_ptr<holoscan::Tensor> input, int total_frames,
+    int64_t override_at, WindowSpec initial_value, WindowSpec override_value,
+    const char* graph_name, BuildFn build,
+    PerfPublishMode publish = PerfPublishMode::kCopy) {
+  if (override_at < 0 || override_at >= total_frames) {
+    throw std::invalid_argument(
+        "run_perf_graph_with_window_override: override_at outside frame plan");
+  }
+  TimingCollector collector;
+  collector.t_construct = Clock::now();
+  PerfFrameBank::reset(std::move(input), total_frames, &collector, publish);
+
+  holoscan::Graph graph{graph_name};
+  const auto src = graph.op<PerfTensorWindowOverrideSourceOp>(
       "src", override_at, std::move(initial_value),
       std::move(override_value));
   holoscan::CompileOptions options;

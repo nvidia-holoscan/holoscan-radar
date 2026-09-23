@@ -136,19 +136,25 @@ def _doppler_frequency_hz(shifted_bin: int, num_doppler: int, prf: float) -> flo
 
 
 def build_tdm_correction_table(
-    waveform: FMCWWaveformDescriptor, num_tx: int, num_doppler: int
+    waveform: FMCWWaveformDescriptor,
+    num_tx: int,
+    num_doppler: int,
+    slot_by_tx: list[int] | None = None,
 ) -> list[complex]:
     if not waveform.is_valid():
         raise ValueError("waveform must be valid")
     pri = waveform.chirp_repetition_interval()
     prf = 1.0 / pri
     t_inter_chirp = pri / float(num_tx)
+    slots = list(range(num_tx)) if slot_by_tx is None else list(slot_by_tx)
+    if len(slots) != num_tx:
+        raise ValueError("slot_by_tx length must equal num_tx")
     # Layout matches C++ build_tdm_correction_table: index = tx * num_doppler + d.
     table = [0j] * (num_tx * num_doppler)
     for d in range(num_doppler):
         f_d = _doppler_frequency_hz(d, num_doppler, prf)
         for tx in range(num_tx):
-            phase = -2.0 * math.pi * f_d * float(tx) * t_inter_chirp
+            phase = -2.0 * math.pi * f_d * float(slots[tx]) * t_inter_chirp
             table[tx * num_doppler + d] = complex(math.cos(phase), math.sin(phase))
     return table
 

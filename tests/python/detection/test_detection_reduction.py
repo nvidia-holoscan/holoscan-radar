@@ -11,7 +11,12 @@ import pytest
 holoscan = pytest.importorskip("holoscan")
 cupy = pytest.importorskip("cupy")
 
-from utils.harness import run_operator, single_map, to_device_array  # noqa: E402
+from utils.harness import (  # noqa: E402
+    run_operator,
+    run_operator_multi,
+    single_map,
+    to_device_array,
+)
 
 from holoscan.radar import DetectionReductionOpF32  # noqa: E402
 from holoscan.radar import DetectionReductionOpF64, RepresentativePolicy, ScoreMethod
@@ -37,6 +42,8 @@ def run_reduction(
 ) -> np.ndarray:
     labels_t = to_device_array(np.asarray(labels, dtype=np.int64))
     idx_t = to_device_array(np.asarray(idx, dtype=np.int64))
+    if points is None and kwargs.get("representative") is RepresentativePolicy.FIRST:
+        points = np.zeros((len(labels), 1), dtype=np.float32)
     extra = {
         "detection_idx": [single_map(idx_t, "detection_idx")],
     }
@@ -57,6 +64,37 @@ def run_reduction(
     )
     assert len(outs) == 1
     return outs[0]
+
+
+def run_reduction_dual(
+    labels: np.ndarray,
+    idx: np.ndarray,
+    points: np.ndarray,
+    *,
+    op_cls=DetectionReductionOpF32,
+    **kwargs,
+) -> tuple[np.ndarray, np.ndarray]:
+    labels_t = to_device_array(np.asarray(labels, dtype=np.int64))
+    idx_t = to_device_array(np.asarray(idx, dtype=np.int64))
+    dtype = np.float32 if op_cls is DetectionReductionOpF32 else np.float64
+    points_t = to_device_array(np.asarray(points, dtype=dtype))
+
+    def make_op(app):
+        return op_cls(app, name="op_under_test", **kwargs)
+
+    outputs = run_operator_multi(
+        make_op,
+        single_map(labels_t, "labels"),
+        input_port="labels",
+        output_ports=["rep_idx", "reduced_points"],
+        extra_inputs={
+            "detection_idx": [single_map(idx_t, "detection_idx")],
+            "points": [single_map(points_t, "points")],
+        },
+    )
+    assert len(outputs["rep_idx"]) == 1
+    assert len(outputs["reduced_points"]) == 1
+    return outputs["rep_idx"][0], outputs["reduced_points"][0]
 
 
 def test_FirstSelectsLowestIndexPerCluster():
@@ -91,6 +129,37 @@ def test_PeakSelectsMaxWeightedSum():
     assert rep[0, 1] == 1
     assert rep[1, 0] == 2
     assert rep[1, 1] == 2
+
+
+def test_WeightedMeanUsesScoreAndNearestRealIndex():
+    labels = np.array([0, 0, 0], dtype=np.int64)
+    idx = np.array([[0, 0], [4, 0], [10, 0]], dtype=np.int64)
+    points = np.array([[10.0, 1.0], [20.0, 2.0], [40.0, 1.0]], dtype=np.float32)
+    rep, reduced = run_reduction_dual(
+        labels,
+        idx,
+        points,
+        representative=RepresentativePolicy.WEIGHTED_MEAN,
+        score_method=ScoreMethod.WEIGHTED_SUM,
+        feature_weights=[0.0, 1.0],
+    )
+    np.testing.assert_array_equal(rep, np.array([[4, 0]], dtype=np.int64))
+    np.testing.assert_allclose(reduced, np.array([[22.5, 1.5]], dtype=np.float32))
+
+
+def test_WeightedMeanEmptyWeightsMeansUniformMean():
+    labels = np.array([0, 0], dtype=np.int64)
+    idx = np.array([[0, 0], [2, 2]], dtype=np.int64)
+    points = np.array([[2.0, 4.0], [6.0, 8.0]], dtype=np.float64)
+    rep, reduced = run_reduction_dual(
+        labels,
+        idx,
+        points,
+        op_cls=DetectionReductionOpF64,
+        representative=RepresentativePolicy.WEIGHTED_MEAN,
+    )
+    np.testing.assert_array_equal(rep, np.array([[0, 0]], dtype=np.int64))
+    np.testing.assert_allclose(reduced, np.array([[4.0, 6.0]], dtype=np.float64))
 
 
 def test_PeakSelectsMaxWeightedL2():
@@ -157,7 +226,7 @@ def test_ExcludesNoiseAndEmitsOnePerCluster():
     assert rep[1, 1] == 3
 
 
-def test_RejectsPeakWithoutPoints():
+def test_RejectsMissingRequiredPoints():
     labels = np.array([0], dtype=np.int64)
     idx = np.array([[0, 0]], dtype=np.int64)
     with pytest.raises(ValueError):
@@ -274,7 +343,7 @@ def test_CustomScoreMethodIgnoredForFirst():
     assert rep[0, 1] == 1
 
 
-def test_LiveRepresentativeStickyOverride():
+def test_LiveRepresentativeOverrideAppliesPerTick():
     labels = np.array([0, 0], dtype=np.int64)
     idx = np.array([[0, 0], [1, 1]], dtype=np.int64)
     points = np.array([[1.0], [5.0]], dtype=np.float32)
@@ -311,10 +380,11 @@ def test_LiveRepresentativeStickyOverride():
     assert outs[0].shape == (1, 2)
     assert outs[0][0, 0] == 1 and outs[0][0, 1] == 1
     assert outs[1][0, 0] == 0 and outs[1][0, 1] == 0
-    assert outs[2][0, 0] == 0 and outs[2][0, 1] == 0
+    # Tick 2 reverts to the Params policy (PEAK), as on tick 0.
+    assert outs[2][0, 0] == 1 and outs[2][0, 1] == 1
 
 
-def test_LiveScoreMethodStickyOverride():
+def test_LiveScoreMethodOverrideAppliesPerTick():
     labels = np.array([0, 0], dtype=np.int64)
     idx = np.array([[10, 1], [20, 2]], dtype=np.int64)
     points = np.array([[4.0, 3.0], [6.0, 0.0]], dtype=np.float32)
@@ -345,10 +415,11 @@ def test_LiveScoreMethodStickyOverride():
     )
     assert outs[0][0, 0] == 10 and outs[0][0, 1] == 1
     assert outs[1][0, 0] == 20 and outs[1][0, 1] == 2
-    assert outs[2][0, 0] == 20 and outs[2][0, 1] == 2
+    # Tick 2 reverts to the Params method (WEIGHTED_SUM), as on tick 0.
+    assert outs[2][0, 0] == 10 and outs[2][0, 1] == 1
 
 
-def test_LiveFeatureWeightsStickyOverride():
+def test_LiveFeatureWeightsOverrideAppliesPerTick():
     labels = np.array([0, 0], dtype=np.int64)
     idx = np.array([[10, 1], [20, 2]], dtype=np.int64)
     points = np.array([[5.0, 0.0], [1.0, 10.0]], dtype=np.float32)
@@ -379,4 +450,5 @@ def test_LiveFeatureWeightsStickyOverride():
     )
     assert outs[0][0, 0] == 10 and outs[0][0, 1] == 1
     assert outs[1][0, 0] == 20 and outs[1][0, 1] == 2
-    assert outs[2][0, 0] == 20 and outs[2][0, 1] == 2
+    # Tick 2 reverts to the Params weights [1.0, 0.0], as on tick 0.
+    assert outs[2][0, 0] == 10 and outs[2][0, 1] == 1

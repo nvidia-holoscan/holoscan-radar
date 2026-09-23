@@ -8,7 +8,7 @@ eigendecomposes it (batched matx::eig, EigenMode::VECTOR - full eigenvector
 basis, unlike MVDR's NO_VECTOR), resolves a model order, builds the
 noise-subspace projector, then scans the (az, el) grid for the MUSIC
 pseudospectrum. Sweeps detection count, channel count, snapshot count, and
-scan-grid size. The size ladder inlines a mid-session ``az_angles`` override;
+scan-grid size. The size ladder inlines a mid-session ``az_coordinates`` override;
 the default/full matrices add an xs scenario covering every functionally
 distinct live path together. Measurement tool only: no timing assertions.
 
@@ -36,8 +36,7 @@ bootstrap_radar_package()
 # at interpreter exit), then register MatX cache retirement after CuPy so it
 # runs first on exit (atexit is LIFO) while CUDA is still alive. Mirrors
 # tests/python/conftest.py. isort would otherwise alphabetize cupy back
-# ahead of holoscan.radar - see mvdr_estimator_op/OPEN_ITEMS.md "Regression:
-# isort silently re-broke the import order" - keep this block isort-off.
+# ahead of holoscan.radar - keep this block isort-off.
 # isort: off
 import holoscan.radar  # noqa: E402,F401
 
@@ -230,8 +229,8 @@ def _run_graph(
                 self,
                 array_geometry=geometry,
                 angle_convention=convention,
-                az_angles=list(az_grid),
-                el_angles=list(el_grid),
+                az_coordinates=list(az_grid),
+                el_coordinates=list(el_grid),
                 num_sources=1,
                 source_count_pfa=1e-4,
                 max_sources=4,
@@ -266,11 +265,11 @@ def _run_graph(
                 value=linspace(-0.5, 0.5, scen.override_num_az),
                 name="ovr",
             )
-            self.add_flow(override, op, {("output", "az_angles")})
+            self.add_flow(override, op, {("output", "az_coordinates")})
 
             if scen.comprehensive_override:
                 override_values = {
-                    "el_angles": linspace(-0.25, 0.25, scen.num_el + 4),
+                    "el_coordinates": linspace(-0.25, 0.25, scen.num_el + 4),
                     "num_sources": -1,
                     "source_count_pfa": 0.5,
                     "max_sources": 3,
@@ -334,7 +333,7 @@ def run_scenario(scen: MusicScenario, rs: RunSettings, report: PerfReport) -> No
             "num_sources fixed=1 (deterministic model order, isolates the "
             "covariance/eig(VECTOR)/projector/scan path from EFT); cold_ms is "
             "first-frame latency; median/p90 are pre-override steady state; "
-            "override_ms is peak latency over the live-az_angles (finer grid) "
+            "override_ms is peak latency over the live-az_coordinates (finer grid) "
             "window; cells/s is detections/s"
         )
     report.results.append(compute)

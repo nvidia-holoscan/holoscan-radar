@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Antenna-array geometry builders shared by the FMCW example applications.
+// Antenna-array geometry builders shared by the example applications.
 // These bridge the config-plane ArrayGeometry descriptor with the simulator's
 // Vec3 element positions, so they live in sim/ (which may depend on
 // descriptors/, not the other way around). Pure host math — no Holoscan, CUDA,

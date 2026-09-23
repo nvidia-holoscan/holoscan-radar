@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <type_traits>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -25,7 +24,11 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
 #include "radar_common/math/constants.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 
 namespace holoscan::radar {
 
@@ -50,11 +53,6 @@ struct RangeStageState;  // kernel-side caches; defined in range_stage.hpp
 // (T = float → complex64/float32, T = double → complex128/float64).
 // Fat outs require MaxTensorExtents at graph.op() (ctor).
 //
-// [EA HSDK5 ONLY] range_window and waveform are [live] in OPERATOR_API.md
-// but stay Params-only here: WindowSpec and FMCWWaveformDescriptor own
-// vectors / optionals (HSDK5_PORT.md §9). POD scalars (apply_dechirp,
-// fft_norm, propagation_speed, nfft) have sticky Input overrides.
-
 struct FMCWRangeProcessorParams {
   WindowSpec range_window{};
   bool apply_dechirp{false};
@@ -82,8 +80,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&FMCWRangeProcessorParams::waveform>("waveform")
         .description(
             "FMCW chirp descriptor; source for the dechirp reference "
-            "and the range_bins axis. Default-constructed = none. "
-            "[live] in API but Params-only on EA (HSDK5_PORT §9)."),
+            "and the range_bins axis. Default-constructed = none."),
     holoscan::field<&FMCWRangeProcessorParams::fft_norm>("fft_norm")
         .description(
             "FFT normalization convention {backward, ortho, forward}; "
@@ -123,21 +120,18 @@ class FMCWRangeProcessorOp
   Output<Tensor> range_profiles{"range_profiles"};
   Output<Tensor> range_bins{"range_bins"};
 
-  // Sticky [live] override ports for POD scalars (OPERATOR_API.md).
-  // [EA HSDK5 ONLY] range_window and waveform are Params-only (§9).
+  // [live] Exact override ports (OPERATOR_API.md).
+  Input<wire::WindowSpecT> range_window_in{"range_window"};
   Input<bool> apply_dechirp_in{"apply_dechirp"};
+  Input<wire::FMCWWaveformT> waveform_in{"waveform"};
   Input<FftNorm> fft_norm_in{"fft_norm"};
-  Input<double> propagation_speed_in{"propagation_speed"};
   Input<int64_t> nfft_in{"nfft"};
 
  private:
   Tensor retained_input_;
 
-  // Sticky [live] state for POD scalars.
-  std::optional<bool> sticky_apply_dechirp_;
-  std::optional<FftNorm> sticky_fft_norm_;
-  std::optional<double> sticky_propagation_speed_;
-  std::optional<int64_t> sticky_nfft_;
+  // range_bins is optional/latched (OPERATOR_API.md).
+  LatchedOutput range_bins_out_;
 
   // Kernel-side caches (window coefficients, dechirp reference, seen FFT
   // lengths); allocated on first compute().

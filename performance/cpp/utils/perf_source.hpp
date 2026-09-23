@@ -6,8 +6,8 @@
 //  - PerfDataSourceOp<T> emits one preallocated power-map frame per tick and
 //    records a start timestamp into the shared TimingCollector.
 //  - PerfOverrideSourceOp<V> emits a single [live] override value on one
-//    chosen tick, then stays silent (sticky-override semantics), so a
-//    scenario can measure the reconfiguration cost on a known frame.
+//    chosen tick, then stays silent, so a scenario can measure the
+//    reconfiguration cost on a known frame.
 
 #pragma once
 
@@ -109,8 +109,8 @@ class PerfTensorSourceOp : public holoscan::Operator {
 };
 
 // Emits `value` exactly once on tick == target_tick, silent otherwise. The
-// override input ports on the operator under test are non-blocking, so the
-// silent ticks keep the previous (sticky) value.
+// silent ticks still see the value because PerfLiveContractOp joins these
+// ports with LatestWithin rather than production's Exact.
 template <typename V>
 class PerfOverrideSourceOp : public holoscan::Operator {
  public:

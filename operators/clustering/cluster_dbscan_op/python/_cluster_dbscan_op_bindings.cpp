@@ -36,11 +36,13 @@ class PyClusterDBSCANOp : public ClusterDBSCANOp<T> {
       int64_t max_clusters = 0,
       int64_t max_points_ext = 8192,
       int64_t max_clusters_ext = 256,
+      int64_t max_features_ext = 64,
       const std::string& name = "cluster_dbscan")
       : ClusterDBSCANOp<T>([&] {
           MaxTensorExtents extents;
           extents.max_points = max_points_ext;
           extents.max_clusters = max_clusters_ext;
+          extents.max_features = max_features_ext;
           return extents;
         }()) {
     this->name_ = name;
@@ -65,18 +67,22 @@ void bind_cluster_dbscan(py::module_& m, const char* class_name) {
       "Parameters\n----------\n"
       "fragment : holoscan.core.Fragment\n"
       "epsilon : list[float], optional\n"
+      "    Isotropic or per-axis radius; a per-axis zero ignores that feature.\n"
       "min_points : int, optional\n"
+      "    Non-positive selects twice the number of active features.\n"
       "max_clusters : int, optional\n"
+      "max_points_ext, max_clusters_ext, max_features_ext : int, optional\n"
       "name : str, optional\n")
       .def(py::init<Fragment*, const py::args&,
                     const std::vector<double>&, int64_t, int64_t,
-                    int64_t, int64_t, const std::string&>(),
+                    int64_t, int64_t, int64_t, const std::string&>(),
            py::arg("fragment"),
            py::arg("epsilon") = std::vector<double>{},
            py::arg("min_points") = int64_t{0},
            py::arg("max_clusters") = int64_t{0},
            py::arg("max_points_ext") = int64_t{8192},
            py::arg("max_clusters_ext") = int64_t{256},
+           py::arg("max_features_ext") = int64_t{64},
            py::arg("name") = "cluster_dbscan")
       .def("setup", &Op::setup, py::arg("spec"));
 }

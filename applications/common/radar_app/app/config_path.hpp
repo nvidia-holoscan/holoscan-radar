@@ -10,8 +10,8 @@
 namespace holoscan::radar::app {
 
 // Resolve the config path: the first CLI argument if given, otherwise
-// `default_yaml` staged next to the executable. Bare names like
-// `fmcw_mimo_ddm.yaml` also resolve beside the binary (CMake-staged YAMLs).
+// `default_yaml` staged next to the executable. A bare alternate filename also
+// resolves beside the binary when that YAML was staged by the application.
 inline std::filesystem::path resolve_config_path(int argc, char** argv,
                                                   const char* default_yaml) {
   const auto bin_dir = std::filesystem::path(argv[0]).parent_path();

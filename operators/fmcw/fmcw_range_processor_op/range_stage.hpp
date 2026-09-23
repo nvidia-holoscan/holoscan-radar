@@ -31,7 +31,8 @@
 
 namespace holoscan::radar::detail {
 
-// Effective (override-resolved) range-stage configuration for one tick.
+// Kernel-facing knobs for one tick. Optionals replace Params sentinels
+// (nfft == 0, empty waveform).
 struct RangeStageConfig {
   WindowSpec window{};
   bool apply_dechirp{false};
@@ -71,8 +72,10 @@ inline int64_t range_num_bins(bool complex_input, int64_t samples_per_chirp,
 //   out      — device pointer, (batch, num_chirps, num_bins),
 //              cuda::std::complex<T>, preallocated by the caller.
 //   num_bins — must equal range_num_bins(complex_input, samples, cfg.nfft).
-//   warn_on_rebuild — true when this tick's config came from an
-//              override that differs from the previous effective config.
+//
+// Cached artifacts (premultiplier, window taps, FFT keys) are rebuilt only
+// for unseen configurations; ConfigCache warns once when it sees a new one
+// after the first.
 //
 // Steps (per the locked contract): optional dechirp (complex input only;
 // conjugate-multiply against the cached reference chirp), window multiply
@@ -92,8 +95,7 @@ template <typename T>
 void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
                      const void* in, bool complex_input, int64_t batch,
                      int64_t num_chirps, int64_t samples_per_chirp, void* out,
-                     int64_t num_bins, bool warn_on_rebuild,
-                     cudaStream_t stream);
+                     int64_t num_bins, cudaStream_t stream);
 
 // Compute the range_bins axis (meters, relative to zero beat) for the
 // current configuration into a device buffer of length num_bins:
@@ -225,8 +227,7 @@ template <typename T>
 void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
                      const void* in, bool complex_input, int64_t batch,
                      int64_t num_chirps, int64_t samples_per_chirp, void* out,
-                     int64_t num_bins, bool warn_on_rebuild,
-                     cudaStream_t stream) {
+                     int64_t num_bins, cudaStream_t stream) {
   const int64_t nfft = cfg.nfft.value_or(samples_per_chirp);
   if (nfft < samples_per_chirp) {
     throw std::invalid_argument(
@@ -260,8 +261,8 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
   const matx::FFTNorm norm = to_matx_norm(cfg.fft_norm);
   auto out_view = make_complex_view3<T>(out, batch, num_chirps, num_bins);
 
-  // Warn-once bookkeeping for override-selected FFT lengths; the plan
-  // itself is cached inside MatX.
+  // Warn-once bookkeeping for reconfigured FFT lengths; the plan itself is
+  // cached inside MatX.
   {
     const std::string fft_key =
         std::string(complex_input ? "c2c" : "r2c") +
@@ -269,7 +270,7 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
         ":len=" + std::to_string(samples_per_chirp) +
         ":batch=" + std::to_string(batch * num_chirps) +
         ":dtype=" + (sizeof(T) == 4 ? "f32" : "f64");
-    state.seen_fft_keys.get_or_build(fft_key, warn_on_rebuild, "FFT length",
+    state.seen_fft_keys.get_or_build(fft_key, "FFT length",
                                      [] { return true; });
   }
 
@@ -291,7 +292,7 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
                                                samples_per_chirp);
     if (cfg.apply_dechirp || apply_window) {
       const auto& mult = state.premultipliers.get_or_build(
-          premultiplier_cache_key(cfg, samples_per_chirp), warn_on_rebuild,
+          premultiplier_cache_key(cfg, samples_per_chirp),
           "pre-FFT multiplier", [&] {
             return build_premultiplier<T>(cfg, samples_per_chirp, stream);
           });
@@ -304,7 +305,7 @@ void run_range_stage(const RangeStageConfig& cfg, RangeStageState<T>& state,
                                       samples_per_chirp);
     if (apply_window) {
       const auto& taps = state.windows.get_or_build(
-          window_cache_key(cfg.window, samples_per_chirp), warn_on_rebuild,
+          window_cache_key(cfg.window, samples_per_chirp),
           "window coefficient", [&] {
             return upload_coefficients<T>(
                 generate_window(cfg.window, samples_per_chirp), stream);
@@ -332,23 +333,11 @@ void fill_range_bins(const RangeStageConfig& cfg, int64_t samples_per_chirp,
   const double slope = cfg.waveform->slope();
   const int64_t nfft = cfg.nfft.value_or(samples_per_chirp);
 
-  std::vector<double> host(static_cast<size_t>(num_bins));
-  for (int64_t i = 0; i < num_bins; ++i) {
-    const double beat = static_cast<double>(i) * fs /
-                        static_cast<double>(nfft);
-    host[static_cast<size_t>(i)] =
-        cfg.propagation_speed * beat / (2.0 * slope);
-  }
-  // Cast to the instantiation precision and copy straight into the output
-  // buffer, stream-ordered; sync before the host staging vector goes out of
-  // scope (mirrors fill_velocity_bins in doppler_stage.hpp).
-  std::vector<T> cast(host.begin(), host.end());
-  if (cudaMemcpyAsync(out, cast.data(),
-                      sizeof(T) * static_cast<size_t>(num_bins),
-                      cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-    throw std::runtime_error("range stage: range_bins H2D copy failed");
-  }
-  cudaStreamSynchronize(stream);
+  matx::cudaExecutor exec{stream};
+  auto bins = matx::make_tensor<T, 1>(out, {num_bins});
+  const T step = static_cast<T>(
+      cfg.propagation_speed * fs / (2.0 * slope * static_cast<double>(nfft)));
+  (bins = matx::range<0>(bins.Shape(), T{0}, step)).run(exec);
 }
 
 }  // namespace holoscan::radar::detail

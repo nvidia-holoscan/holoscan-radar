@@ -1,0 +1,145 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+app:
+    # Structural startup choice: music, root_music, esprit, or mvdr.
+    aoa_algorithm: music
+    waveform: &waveform
+        carrier_frequency: 77.0e9
+        bandwidth: 150.0e6
+        chirp_duration: 20.0e-6
+        sample_rate: 12.8e6
+        # Effective per-TX PRI: num_tx * physical on-wire PRI.
+        chirp_repetition_interval: 50.0e-6
+    cube:
+        # TDM semantics: chirps per TX.
+        num_chirps: 64
+        samples_per_chirp: 256
+    run:
+        num_frames: 250
+        frame_period: 0.1
+        meter_cadence: true
+        meter_log_every: 0
+    visualization:
+        enabled: true
+        window_width: 1280
+        window_height: 720
+        window_title: FMCW Adaptive AoA
+        display_rate_hz: 20.0
+        dynamic_range_db: 60.0
+        detection_radius: 0.010
+        history_frames: 120
+        detection_trail_frames: 50
+    tx_array:
+        # Two-wavelength TX spacing extends the 4x4 RX array to a filled 8x4
+        # half-wavelength virtual URA after deduplication.
+        num_tx: 2
+        spacing: 2.0
+    rx_array:
+        az_elements: 4
+        el_elements: 4
+        spacing: 0.5
+    tdm:
+        physical_chirp_repetition_interval: 25.0e-6
+        tx_order: [0, 1]
+    # Binary geometric coverage; forward is +x in the radar-local frame.
+    scene_visibility:
+        model: front_half_space
+        boresight_direction: [1.0, 0.0, 0.0]
+    range_loss:
+        model: monostatic_free_space
+        reference_range: 100.0
+    # The first pair intentionally shares one range-Doppler cell. Its angular
+    # separation is below the conventional 8x4 array beamwidth.
+    targets:
+        - range: 80.0
+          azimuth: -0.10
+          elevation: 0.04
+          velocity: [-3.977, 0.399, -0.160]
+          amplitude: 0.8
+        - range: 80.0
+          azimuth: 0.10
+          elevation: 0.04
+          velocity: [-3.977, -0.399, -0.160]
+          amplitude: 0.8
+        - range: 125.0
+          azimuth: 0.24
+          elevation: -0.08
+          velocity: [2.414, 0.591, -0.200]
+          amplitude: 0.75
+    noise_snr_db: 24.0
+
+mimo_deinterleave: {}
+range_processor:
+    waveform: *waveform
+    # Common options: none, hann, hamming.
+    range_window: hann
+clutter_filter:
+    # Match the weighted clutter projection to Doppler analysis.
+    method: mean_subtraction
+    doppler_window: &doppler_window hann
+doppler_processor:
+    waveform: *waveform
+    doppler_window: *doppler_window
+tdm_sparse_compensation:
+    # This layout has no virtual-array collisions or holes after deduplication.
+    overlap_policy: dedup
+    # A one-cell half-window in Doppler and range produces nine looks.
+    snapshot_window: [1, 1]
+    doppler_edge: wrap
+    range_edge: shift
+cfar_detector:
+    # Detect local maxima on the TX/RX-folded range-Doppler plane.
+    cfar_variant: CA
+    guard_cells: [2, 2]
+    training_cells: [4, 4]
+    pfa: 1.0e-7
+    peak_mode: range_doppler
+    nci_axes: [0, 1]
+beamscan_estimator: &beamscan
+    angle_convention: &angle_convention
+        preset: radar_boresight
+    az_coordinates: {min: -0.5, max: 0.5, step: 0.02}
+    el_coordinates: {min: -0.3, max: 0.3, step: 0.02}
+    peak_interpolation: parabolic
+rank_one_residual_screen:
+    angle_convention: *angle_convention
+    # Demo-tuned routing threshold, not a calibrated multiplicity probability.
+    residual_threshold: 0.03
+music_estimator:
+    angle_convention: *angle_convention
+    # Fine fixed grid used only when MUSIC is selected at startup.
+    az_coordinates: {min: -0.5, max: 0.5, step: 0.005}
+    el_coordinates: {min: -0.3, max: 0.3, step: 0.01}
+    num_sources: -1
+    source_count_pfa: 0.01
+    max_sources: 2
+    # Two forward azimuth subarrays; no elevation aperture reduction.
+    spatial_smoothing: [2, 1]
+    forward_backward: true
+root_music_estimator:
+    angle_convention: *angle_convention
+    num_sources: -1
+    source_count_pfa: 0.01
+    max_sources: 2
+    spatial_smoothing: [2, 1]
+    forward_backward: true
+esprit_estimator:
+    angle_convention: *angle_convention
+    num_sources: -1
+    source_count_pfa: 0.01
+    max_sources: 2
+    spatial_smoothing: [2, 1]
+    forward_backward: true
+mvdr_estimator:
+    angle_convention: *angle_convention
+    # Fine fixed Capon grid used only when MVDR is selected at startup.
+    az_coordinates: {min: -0.5, max: 0.5, step: 0.005}
+    el_coordinates: {min: -0.3, max: 0.3, step: 0.01}
+    diagonal_loading: -1.0
+    max_sources: 2
+    spatial_smoothing: [2, 1]
+    forward_backward: true
+feature_assembly:
+    # Raw report/dashboard columns; repeated RD rows differ only in angle.
+    features: [range, velocity, az_estimate, el_estimate, score]
