@@ -4,14 +4,16 @@
 find_package(GTest REQUIRED)
 include(GoogleTest)
 
-# Shared test utilities: forward bin model, tensor fixtures, and the
-# single-operator harness (tests/cpp/utils). The analytic point-target
-# simulator now lives in radar_common/sim (reached via holoscan::radar_common).
+# Shared test utilities: forward bin model and radar-specific Tensor fixtures.
+# Single-operator tests use the SDK's native holoscan::testing fixture. The
+# analytic point-target simulator lives in radar_common/sim (reached via
+# holoscan::radar_common).
 add_library(radar_test_utils INTERFACE)
 target_include_directories(radar_test_utils INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(radar_test_utils INTERFACE
     holoscan::core
+    holoscan::testing
     holoscan::radar_common
     holoscan::radar_schemas
     CUDA::cudart
@@ -63,6 +65,8 @@ radar_add_test(common/test_sim)
 radar_add_test(common/test_sim_gpu holoscan::radar_common_simulator)
 radar_add_test(common/test_tensor)
 radar_add_test(common/test_virtual_array)
+radar_add_test(utils/test_native_operator_testing
+    holoscan::clutter_filter_op)
 radar_add_test(fmcw/test_clutter_filter
     holoscan::clutter_filter_op)
 radar_add_test(fmcw/test_mimo_deinterleave

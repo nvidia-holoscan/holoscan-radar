@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/testing/tensor_snapshot.hpp>
 
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -130,6 +131,12 @@ inline HostTensor to_host(const holoscan::Tensor& tensor) {
     throw std::runtime_error("to_host: cudaMemcpy failed");
   }
   return host;
+}
+
+inline HostTensor to_host(const holoscan::testing::TensorSnapshot& snapshot) {
+  return HostTensor{.shape = snapshot.shape(),
+                    .dtype = snapshot.dtype(),
+                    .data = snapshot.bytes()};
 }
 
 namespace detail {

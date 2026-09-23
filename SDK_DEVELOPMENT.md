@@ -21,6 +21,16 @@ builds HSDK, installs the separately generated visualization component, and
 creates a commit-addressed local image. It requires Docker and SSH access to
 the internal SDK repository.
 
+The operator-testing migration is qualified against immutable SDK commit
+`ee2af259821c0291dcc6a91f9e01a8312b0b4397` (`holoscan-sdk!5397`, stacked on
+`holoscan-sdk!5394`). Build that exact source and select its image with:
+
+```bash
+./.devcontainer/build-hsdk5-ea-image.sh \
+  --pin ee2af259821c0291dcc6a91f9e01a8312b0b4397
+./holohub run-container --base-img holoscan-radar-hsdk5-ea:ee2af25
+```
+
 Use `--print-pin` to resolve the current branch tip and image name without
 building:
 

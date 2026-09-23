@@ -38,7 +38,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # transitively — find it explicitly.
 
 find_package(CUDAToolkit REQUIRED)
-find_package(holoscan REQUIRED COMPONENTS core params_io)
+find_package(holoscan REQUIRED COMPONENTS core params_io testing)
 find_package(matx REQUIRED)
 
 

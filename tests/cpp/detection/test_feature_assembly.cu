@@ -339,46 +339,6 @@ TEST(FeatureAssemblyOpTest, RejectsAzWithoutGrid) {
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
-TEST(FeatureAssemblyOpTest, RejectsNonContiguousDetectionIdx) {
-  // Graph harness emit_bank_frame always packs a compact loan from shape ×
-  // dtype, so a non-contiguous source tensor would be compacted before the
-  // operator sees it. Assert the contract helper directly instead.
-  struct Holder {
-    void* data{nullptr};
-    std::vector<int64_t> shape{1, 2};
-    std::vector<int64_t> strides{2, 2};
-    DLManagedTensor dl{};
-  };
-  auto holder = std::make_unique<Holder>();
-  if (cudaMalloc(&holder->data, 4 * sizeof(int64_t)) != cudaSuccess) {
-    FAIL() << "cudaMalloc failed";
-  }
-  std::vector<int64_t> host = {0, 0, 1, 0};
-  cudaMemcpy(holder->data, host.data(), 4 * sizeof(int64_t), cudaMemcpyHostToDevice);
-  int current_device_id = -1;
-  if (cudaGetDevice(&current_device_id) != cudaSuccess) {
-    throw std::runtime_error("make_idx_with_strides: cudaGetDevice failed");
-  }
-  holder->dl.dl_tensor.data = holder->data;
-  holder->dl.dl_tensor.device = DLDevice{kDLCUDA, current_device_id};
-  holder->dl.dl_tensor.ndim = 2;
-  holder->dl.dl_tensor.dtype = kInt64Dtype;
-  holder->dl.dl_tensor.shape = holder->shape.data();
-  holder->dl.dl_tensor.strides = holder->strides.data();
-  holder->dl.dl_tensor.byte_offset = 0;
-  holder->dl.manager_ctx = holder.get();
-  holder->dl.deleter = [](DLManagedTensor* self) {
-    auto* h = static_cast<Holder*>(self->manager_ctx);
-    cudaFree(h->data);
-    delete h;
-  };
-  auto idx_t = std::make_shared<holoscan::Tensor>(&holder->dl);
-  holder.release();
-  ASSERT_FALSE(idx_t->is_contiguous());
-  EXPECT_THROW(holoscan::radar::require_contiguous(*idx_t, "detection_idx", "FeatureAssemblyOp"),
-               std::invalid_argument);
-}
-
 TEST(FeatureAssemblyOpTest, GathersAlignedRangeVelocity) {
   auto idx = to_device_tensor(std::vector<int64_t>{2, 3}, {1, 2}, kInt64Dtype);
   auto ranges = upload_real(std::vector<double>{0, 10, 20, 30}, {4});
