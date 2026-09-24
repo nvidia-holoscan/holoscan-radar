@@ -15,21 +15,14 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <random>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
-#include <holoscan/core/compile.hpp>
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
-#include <holoscan/core/payload_options.hpp>
-#include <holoscan/core/run.hpp>
-#include <holoscan/time/realtime_clock.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "angle_estimation/esprit_estimator_op/esprit_estimator_op.hpp"
 #include "angle_estimation/subarray_selection_op/subarray_selection_op.hpp"
@@ -41,7 +34,8 @@
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
 #include "utils/estimator_test_fixtures.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/integration_graph_utils.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -61,7 +55,6 @@ using holoscan::radar::SubarraySelectionParams;
 using holoscan::radar::WireArrayGeometry;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
-using holoscan::radar::testing::FourOutGraphRunResult;
 using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::block_to_device;
 using holoscan::radar::testing::kPi;
@@ -69,13 +62,10 @@ using holoscan::radar::testing::make_block;
 using holoscan::radar::testing::make_block_two;
 using holoscan::radar::testing::make_planar_ura_geometry;
 using holoscan::radar::testing::make_ula_geometry;
-namespace radar_testing = holoscan::radar::testing;
-using radar_testing::run_exact_override_four_out_operator_graph_result;
-using holoscan::radar::testing::run_dual_io_operator_graph_result;
-using holoscan::radar::testing::run_single_in_four_out_operator_graph_result;
 using holoscan::radar::testing::steering_vector;
 using holoscan::radar::testing::to_device_tensor;
 using holoscan::radar::testing::to_pageable_host_tensor;
+namespace radar_testing = holoscan::radar::testing;
 
 struct EspritOutputs {
   HostTensor aoa;
@@ -83,20 +73,6 @@ struct EspritOutputs {
   HostTensor source_count;
   HostTensor eigenvalues;
 };
-
-// cpplint misreads the wrapped template header as an indented declaration
-// inside the anonymous namespace; the parameter list cannot fit on one line.
-template <typename Source, typename OpRef, typename S0, typename S1, typename S2,
-          typename S3>  // NOLINT(whitespace/indent_namespace)
-void wire_esprit(holoscan::Graph& graph, const Source& source, OpRef& op, const S0& sink0,
-                 const S1& sink1, const S2& sink2, const S3& sink3) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out, op->snapshot, q);
-  graph.add_flow(op->aoa_estimates, sink0->in, q);
-  graph.add_flow(op->doa_multi, sink1->in, q);
-  graph.add_flow(op->source_count, sink2->in, q);
-  graph.add_flow(op->eigenvalues, sink3->in, q);
-}
 
 ESPRITParams make_params(ArrayGeometry geom, AngleConvention conv, int64_t num_sources = -1,
                          double pfa = 1e-2, int64_t max_sources = 4,
@@ -142,37 +118,109 @@ std::vector<std::complex<double>> make_orthogonal_source_block(
 }
 
 template <typename T>
-FourOutGraphRunResult run_esprit_result(std::shared_ptr<holoscan::Tensor> snapshot,
-                                        ESPRITParams params) {
-  return run_single_in_four_out_operator_graph_result<ESPRITEstimatorOp<T>>(
-      {std::move(snapshot)}, std::move(params), "aoa_estimates", "doa_multi", "source_count",
-      "eigenvalues",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0, const auto& sink1,
-         const auto& sink2, const auto& sink3) {
-        wire_esprit(graph, source, op, sink0, sink1, sink2, sink3);
-      });
+holoscan::testing::TestResult run_esprit_result(std::shared_ptr<holoscan::Tensor> snapshot,
+                                                ESPRITParams params) {
+  using Op = ESPRITEstimatorOp<T>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  fixture.push(&Op::snapshot, *snapshot);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"aoa_estimates", "doa_multi", "source_count", "eigenvalues"};
+  for (const char* output : kOutputs) {
+    fixture.template capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("snapshot", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* output : kOutputs) {
+    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+  }
+  running.request_stop();
+  return running.finish();
 }
 
 template <typename T>
 EspritOutputs run_esprit(std::shared_ptr<holoscan::Tensor> snapshot, ESPRITParams params) {
-  FourOutGraphRunResult result = run_esprit_result<T>(std::move(snapshot), std::move(params));
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  const auto result = run_esprit_result<T>(std::move(snapshot), std::move(params));
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
+  return {
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("aoa_estimates")),
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("doa_multi")),
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("source_count")),
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("eigenvalues"))};
+}
+
+template <typename Override>
+holoscan::testing::TestResult run_esprit_override(
+    std::vector<std::shared_ptr<holoscan::Tensor>> frames,
+    std::vector<std::optional<Override>> payloads, ESPRITParams params, const char* override_port) {
+  using Op = ESPRITEstimatorOp<double>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  for (std::size_t index = 0; index < frames.size(); ++index) {
+    const auto capture_time = std::chrono::milliseconds{static_cast<int64_t>((index + 1U) * 100U)};
+    if (payloads[index].has_value()) {
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input(override_port, *payloads[index]),
+          holoscan::testing::input("snapshot", *frames[index])));
+    } else {
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("snapshot", *frames[index])));
     }
-    throw std::runtime_error(msg);
   }
-  if (result.frames0.size() != 1U || result.frames1.size() != 1U || result.frames2.size() != 1U ||
-      result.frames3.size() != 1U) {
-    throw std::runtime_error("ESPRITEstimatorOp test: expected one output frame set");
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"aoa_estimates", "doa_multi", "source_count", "eigenvalues"};
+  for (const char* output : kOutputs) {
+    fixture.capture_snapshot<holoscan::Tensor>(output, frames.size(), kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
   }
-  return {std::move(result.frames0.front()), std::move(result.frames1.front()),
-          std::move(result.frames2.front()), std::move(result.frames3.front())};
+  fixture.input_source_device("snapshot", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* output : kOutputs) {
+    (void)running.wait_for_output(output, frames.size(), std::chrono::seconds{5});
+  }
+  running.request_stop();
+  return running.finish();
+}
+
+holoscan::testing::TestResult run_esprit_with_mask(std::shared_ptr<holoscan::Tensor> mask,
+                                                   std::shared_ptr<holoscan::Tensor> snapshot,
+                                                   ESPRITParams params) {
+  using Op = ESPRITEstimatorOp<double>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  fixture.push_frame(holoscan::testing::frame_at(std::chrono::milliseconds{100},
+                                                 holoscan::testing::input("is_valid", *mask),
+                                                 holoscan::testing::input("snapshot", *snapshot)));
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"aoa_estimates", "doa_multi", "source_count", "eigenvalues"};
+  for (const char* output : kOutputs) {
+    fixture.capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("snapshot", holoscan::DeviceId{0});
+  fixture.input_source_device("is_valid", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* output : kOutputs) {
+    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+  }
+  running.request_stop();
+  return running.finish();
+}
+
+std::vector<HostTensor> esprit_frames(const holoscan::testing::TestResult& result,
+                                      const char* port) {
+  std::vector<HostTensor> frames;
+  for (const auto& snapshot : result.template snapshots<holoscan::Tensor>(port)) {
+    frames.push_back(holoscan::radar::testing::to_host(snapshot));
+  }
+  return frames;
 }
 
 TEST(ESPRITEstimatorOpTest, DefaultsToRadarBoresightConvention) {
@@ -393,10 +441,10 @@ TEST(ESPRITEstimatorOpTest, RejectsNonUniformLinearGeometry) {
   const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.02, 75u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const FourOutGraphRunResult result = run_esprit_result<double>(snap, make_params(geom, conv));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_esprit_result<double>(snap, make_params(geom, conv));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, RejectsUlaParallelToBoresight) {
@@ -413,10 +461,10 @@ TEST(ESPRITEstimatorOpTest, RejectsUlaParallelToBoresight) {
   std::vector<std::complex<double>> block(static_cast<size_t>(kN * 4), {1.0, 0.0});
   auto snap = block_to_device<double>(block, {1, kN, 4});
 
-  const FourOutGraphRunResult result = run_esprit_result<double>(snap, make_params(geom, conv));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_esprit_result<double>(snap, make_params(geom, conv));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, EigenvaluesAscendingAndNonNegative) {
@@ -466,11 +514,10 @@ TEST(ESPRITEstimatorOpTest, RejectsNumSourcesTooLarge) {
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap = block_to_device<double>(a, {1, kN, 1});
 
-  const FourOutGraphRunResult result =
-      run_esprit_result<double>(snap, make_params(geom, conv, /*num_sources=*/kN));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_esprit_result<double>(snap, make_params(geom, conv, /*num_sources=*/kN));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, RejectsInvalidMaxSources) {
@@ -481,12 +528,12 @@ TEST(ESPRITEstimatorOpTest, RejectsInvalidMaxSources) {
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap = block_to_device<double>(a, {1, kN, 1});
 
-  const FourOutGraphRunResult result =
+  const auto result =
       run_esprit_result<double>(snap, make_params(geom, conv, /*num_sources=*/-1, 1e-2,
                                                   /*max_sources=*/0));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, RejectsInvalidSourceCountPfa) {
@@ -497,11 +544,11 @@ TEST(ESPRITEstimatorOpTest, RejectsInvalidSourceCountPfa) {
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap = block_to_device<double>(a, {1, kN, 1});
 
-  const FourOutGraphRunResult result =
+  const auto result =
       run_esprit_result<double>(snap, make_params(geom, conv, /*num_sources=*/-1, /*pfa=*/0.0));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, EmptyItemsProducesEmptyOutputs) {
@@ -529,10 +576,10 @@ TEST(ESPRITEstimatorOpTest, RejectsChannelMismatch) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
 
-  const FourOutGraphRunResult result = run_esprit_result<double>(snap, make_params(geom, conv));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_esprit_result<double>(snap, make_params(geom, conv));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, RejectsSnapshotDtypeMismatch) {
@@ -543,10 +590,10 @@ TEST(ESPRITEstimatorOpTest, RejectsSnapshotDtypeMismatch) {
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap_f = block_to_device<float>(a, {1, kN, 1});
 
-  const FourOutGraphRunResult result = run_esprit_result<double>(snap_f, make_params(geom, conv));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_esprit_result<double>(snap_f, make_params(geom, conv));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, RejectsSnapshotRank2) {
@@ -557,10 +604,10 @@ TEST(ESPRITEstimatorOpTest, RejectsSnapshotRank2) {
   const auto a = steering_vector(geom, conv, 0.05, 0.0);
   auto snap = block_to_device<double>(a, {1, kN});
 
-  const FourOutGraphRunResult result = run_esprit_result<double>(snap, make_params(geom, conv));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_esprit_result<double>(snap, make_params(geom, conv));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, AcceptsPinnedHostSnapshot) {
@@ -716,11 +763,11 @@ TEST(ESPRITEstimatorOpTest, RejectsDegenerateCustomConvention) {
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto block = make_block(geom, radar, 0.1, 0.0, 8, 0.01, 178u);
 
-  const FourOutGraphRunResult result = run_esprit_result<double>(
-      block_to_device<double>(block, {1, kN, 8}), make_params(geom, custom, /*num_sources=*/1));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_esprit_result<double>(block_to_device<double>(block, {1, kN, 8}),
+                                                make_params(geom, custom, /*num_sources=*/1));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, DirectionCosineNearEndfirePreservesSign) {
@@ -788,22 +835,11 @@ TEST(ESPRITEstimatorOpTest, IsValidMaskExcludesWrongSnapshots) {
   std::fill_n(mask_host.begin(), static_cast<size_t>(kS), uint8_t{1});
   auto mask = to_device_tensor(mask_host, {1, 2 * kS}, DLDataType{kDLUInt, 8, 1});
 
-  const auto result = run_dual_io_operator_graph_result<ESPRITEstimatorOp<double>>(
-      {mask}, {snapshot}, make_params(geometry, conv, /*num_sources=*/1), "aoa_estimates",
-      "source_count",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-         const auto& sink1) {
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->out0, op->is_valid, q);
-        graph.add_flow(source->out1, op->snapshot, q);
-        graph.add_flow(op->aoa_estimates, sink0->in, q);
-        graph.add_flow(op->source_count, sink1->in, q);
-      },
-      holoscan::radar::testing::default_test_extents(), {"doa_multi", "eigenvalues"});
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames0.size(), 1U);
-  EXPECT_NEAR(result.frames0[0].as<double>()[0], kTruthAz, 0.03);
+  const auto result = run_esprit_with_mask(std::move(mask), std::move(snapshot),
+                                           make_params(geometry, conv, /*num_sources=*/1));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "aoa_estimates").size(), 1U);
+  EXPECT_NEAR(esprit_frames(result, "aoa_estimates")[0].as<double>()[0], kTruthAz, 0.03);
 }
 
 TEST(ESPRITEstimatorOpTest, AllInvalidMaskBlanksDoa) {
@@ -817,24 +853,13 @@ TEST(ESPRITEstimatorOpTest, AllInvalidMaskBlanksDoa) {
   auto mask =
       to_device_tensor(std::vector<uint8_t>(kS, uint8_t{0}), {1, kS}, DLDataType{kDLUInt, 8, 1});
 
-  const auto result = run_dual_io_operator_graph_result<ESPRITEstimatorOp<double>>(
-      {mask}, {snapshot}, make_params(geometry, conv, /*num_sources=*/1), "aoa_estimates",
-      "source_count",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-         const auto& sink1) {
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->out0, op->is_valid, q);
-        graph.add_flow(source->out1, op->snapshot, q);
-        graph.add_flow(op->aoa_estimates, sink0->in, q);
-        graph.add_flow(op->source_count, sink1->in, q);
-      },
-      holoscan::radar::testing::default_test_extents(), {"doa_multi", "eigenvalues"});
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames0.size(), 1U);
-  ASSERT_EQ(result.frames1.size(), 1U);
-  EXPECT_TRUE(std::isnan(result.frames0[0].as<double>()[0]));
-  EXPECT_EQ(result.frames1[0].as<int32_t>()[0], 0);
+  const auto result = run_esprit_with_mask(std::move(mask), std::move(snapshot),
+                                           make_params(geometry, conv, /*num_sources=*/1));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "aoa_estimates").size(), 1U);
+  ASSERT_EQ(esprit_frames(result, "source_count").size(), 1U);
+  EXPECT_TRUE(std::isnan(esprit_frames(result, "aoa_estimates")[0].as<double>()[0]));
+  EXPECT_EQ(esprit_frames(result, "source_count")[0].as<int32_t>()[0], 0);
 }
 
 // num_sources is reported verbatim on source_count (clamped by max_sources),
@@ -856,21 +881,12 @@ TEST(ESPRITEstimatorOpTest, LiveNumSourcesAppliesForOneTick) {
   std::vector<std::optional<int64_t>> payloads{std::nullopt, int64_t{2}, std::nullopt};
 
   const auto result =
-      run_exact_override_four_out_operator_graph_result<ESPRITEstimatorOp<double>, int64_t>(
-          std::move(frames), std::move(payloads), std::move(params), "aoa_estimates", "doa_multi",
-          "source_count", "eigenvalues",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-             const auto& sink1, const auto& sink2, const auto& sink3) {
-            wire_esprit(graph, source, op, sink0, sink1, sink2, sink3);
-            const holoscan::ConnectionOptions q{.queue_depth = 4U};
-            graph.add_flow(source->override_out, op->num_sources, q);
-          });
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames2.size(), 3U);
-  EXPECT_EQ(result.frames2[0].as<int32_t>()[0], 1);
-  EXPECT_EQ(result.frames2[1].as<int32_t>()[0], 2);
-  EXPECT_EQ(result.frames2[2].as<int32_t>()[0], 1);
+      run_esprit_override(std::move(frames), std::move(payloads), std::move(params), "num_sources");
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "source_count").size(), 3U);
+  EXPECT_EQ(esprit_frames(result, "source_count")[0].as<int32_t>()[0], 1);
+  EXPECT_EQ(esprit_frames(result, "source_count")[1].as<int32_t>()[0], 2);
+  EXPECT_EQ(esprit_frames(result, "source_count")[2].as<int32_t>()[0], 1);
 }
 
 TEST(ESPRITEstimatorOpTest, LiveArrayGeometryAppliesForOneTick) {
@@ -894,20 +910,14 @@ TEST(ESPRITEstimatorOpTest, LiveArrayGeometryAppliesForOneTick) {
   payloads.emplace_back(holoscan::radar::to_wire(geometry));
   payloads.emplace_back(std::nullopt);
 
-  const auto result = run_exact_override_four_out_operator_graph_result<ESPRITEstimatorOp<double>>(
-      std::move(frames), std::move(payloads), std::move(params), "aoa_estimates", "doa_multi",
-      "source_count", "eigenvalues",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0, const auto& sink1,
-         const auto& sink2, const auto& sink3) {
-        wire_esprit(graph, source, op, sink0, sink1, sink2, sink3);
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->override_out, op->array_geometry, q);
-      });
-  EXPECT_TRUE(result.plan_ok) << result.plan_json;
-  EXPECT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames0.size(), 3U);
-  EXPECT_NE(result.frames0[1].data, result.frames0[0].data);
-  EXPECT_EQ(result.frames0[2].data, result.frames0[0].data);
+  const auto result = run_esprit_override(std::move(frames), std::move(payloads), std::move(params),
+                                          "array_geometry");
+  EXPECT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "aoa_estimates").size(), 3U);
+  EXPECT_NE(esprit_frames(result, "aoa_estimates")[1].data,
+            esprit_frames(result, "aoa_estimates")[0].data);
+  EXPECT_EQ(esprit_frames(result, "aoa_estimates")[2].data,
+            esprit_frames(result, "aoa_estimates")[0].data);
 
   ESPRITParams invalid_params = make_params(geometry, conv, /*num_sources=*/1);
   WireArrayGeometry malformed_geometry = holoscan::radar::to_wire(geometry);
@@ -915,19 +925,12 @@ TEST(ESPRITEstimatorOpTest, LiveArrayGeometryAppliesForOneTick) {
       to_pageable_host_tensor<double>({1.0}, {1}, real_dtype<double>());
   std::vector<std::optional<WireArrayGeometry>> malformed_payloads;
   malformed_payloads.emplace_back(std::move(malformed_geometry));
-  const auto invalid = run_exact_override_four_out_operator_graph_result<ESPRITEstimatorOp<double>,
-                                                                         WireArrayGeometry>(
-      {block_to_device<double>(block, {1, kN, kS})}, std::move(malformed_payloads),
-      std::move(invalid_params), "aoa_estimates", "doa_multi", "source_count", "eigenvalues",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0, const auto& sink1,
-         const auto& sink2, const auto& sink3) {
-        wire_esprit(graph, source, op, sink0, sink1, sink2, sink3);
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->override_out, op->array_geometry, q);
-      });
-  EXPECT_TRUE(invalid.plan_ok) << invalid.plan_json;
-  EXPECT_TRUE(invalid.frames0.empty());
-  EXPECT_FALSE(invalid.diagnostics.empty());
+  const auto invalid = run_esprit_override(
+      std::vector<std::shared_ptr<holoscan::Tensor>>{block_to_device<double>(block, {1, kN, kS})},
+      std::move(malformed_payloads), std::move(invalid_params), "array_geometry");
+  EXPECT_FALSE(invalid.ok());
+  EXPECT_TRUE(esprit_frames(invalid, "aoa_estimates").empty());
+  EXPECT_FALSE(invalid.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, LiveSpatialSmoothingAppliesForOneTick) {
@@ -948,38 +951,25 @@ TEST(ESPRITEstimatorOpTest, LiveSpatialSmoothingAppliesForOneTick) {
       std::nullopt,
   };
 
-  const auto result = run_exact_override_four_out_operator_graph_result<ESPRITEstimatorOp<double>>(
-      std::move(frames), std::move(payloads), std::move(params), "aoa_estimates", "doa_multi",
-      "source_count", "eigenvalues",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0, const auto& sink1,
-         const auto& sink2, const auto& sink3) {
-        wire_esprit(graph, source, op, sink0, sink1, sink2, sink3);
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->override_out, op->spatial_smoothing, q);
-      });
-  EXPECT_TRUE(result.plan_ok) << result.plan_json;
-  EXPECT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames3.size(), 3U);
+  const auto result = run_esprit_override(std::move(frames), std::move(payloads), std::move(params),
+                                          "spatial_smoothing");
+  EXPECT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "eigenvalues").size(), 3U);
   // Smoothing shortens the sub-array, so the eigenvalue count is the
   // observable. Ticks 0 and 2 publish nothing and share the Params order.
-  EXPECT_NE(result.frames3[1].shape, result.frames3[0].shape);
-  EXPECT_EQ(result.frames3[2].shape, result.frames3[0].shape);
+  EXPECT_NE(esprit_frames(result, "eigenvalues")[1].shape,
+            esprit_frames(result, "eigenvalues")[0].shape);
+  EXPECT_EQ(esprit_frames(result, "eigenvalues")[2].shape,
+            esprit_frames(result, "eigenvalues")[0].shape);
 
   ESPRITParams invalid_params = make_params(geometry, conv, /*num_sources=*/1);
-  const auto invalid = run_exact_override_four_out_operator_graph_result<ESPRITEstimatorOp<double>,
-                                                                         SpatialSmoothingOverride>(
-      {block_to_device<double>(block, {1, kN, kS})},
-      {std::optional<SpatialSmoothingOverride>{SpatialSmoothingOverride{.count = 3}}},
-      std::move(invalid_params), "aoa_estimates", "doa_multi", "source_count", "eigenvalues",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0, const auto& sink1,
-         const auto& sink2, const auto& sink3) {
-        wire_esprit(graph, source, op, sink0, sink1, sink2, sink3);
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->override_out, op->spatial_smoothing, q);
-      });
-  EXPECT_TRUE(invalid.plan_ok) << invalid.plan_json;
-  EXPECT_TRUE(invalid.frames0.empty());
-  EXPECT_FALSE(invalid.diagnostics.empty());
+  const auto invalid = run_esprit_override(
+      std::vector<std::shared_ptr<holoscan::Tensor>>{block_to_device<double>(block, {1, kN, kS})},
+      std::vector<std::optional<SpatialSmoothingOverride>>{SpatialSmoothingOverride{.count = 3}},
+      std::move(invalid_params), "spatial_smoothing");
+  EXPECT_FALSE(invalid.ok());
+  EXPECT_TRUE(esprit_frames(invalid, "aoa_estimates").empty());
+  EXPECT_FALSE(invalid.diagnostics().empty());
 }
 
 // source_count_pfa only steers the EFT model order, so the observable is the
@@ -1005,22 +995,13 @@ TEST(ESPRITEstimatorOpTest, LiveSourceCountPfaAppliesForOneTick) {
                                     /*fb=*/false);
   std::vector<std::optional<double>> payloads{std::nullopt, 0.5, std::nullopt};
 
-  const auto result =
-      run_exact_override_four_out_operator_graph_result<ESPRITEstimatorOp<double>, double>(
-          std::move(frames), std::move(payloads), std::move(params), "aoa_estimates", "doa_multi",
-          "source_count", "eigenvalues",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-             const auto& sink1, const auto& sink2, const auto& sink3) {
-            wire_esprit(graph, source, op, sink0, sink1, sink2, sink3);
-            const holoscan::ConnectionOptions q{.queue_depth = 4U};
-            graph.add_flow(source->override_out, op->source_count_pfa, q);
-          });
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames2.size(), 3U);
-  EXPECT_EQ(result.frames2[0].as<int32_t>()[0], 1);
-  EXPECT_EQ(result.frames2[1].as<int32_t>()[0], 2);
-  EXPECT_EQ(result.frames2[2].as<int32_t>()[0], 1);
+  const auto result = run_esprit_override(std::move(frames), std::move(payloads), std::move(params),
+                                          "source_count_pfa");
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "source_count").size(), 3U);
+  EXPECT_EQ(esprit_frames(result, "source_count")[0].as<int32_t>()[0], 1);
+  EXPECT_EQ(esprit_frames(result, "source_count")[1].as<int32_t>()[0], 2);
+  EXPECT_EQ(esprit_frames(result, "source_count")[2].as<int32_t>()[0], 1);
 }
 
 // max_sources widens doa_multi to {items, max_sources, 2}, so the override
@@ -1041,22 +1022,14 @@ TEST(ESPRITEstimatorOpTest, LiveMaxSourcesAppliesForOneTick) {
   std::vector<std::optional<int64_t>> payloads{std::nullopt, kLiveMaxSources, std::nullopt};
 
   const auto result =
-      run_exact_override_four_out_operator_graph_result<ESPRITEstimatorOp<double>, int64_t>(
-          std::move(frames), std::move(payloads), std::move(params), "aoa_estimates", "doa_multi",
-          "source_count", "eigenvalues",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-             const auto& sink1, const auto& sink2, const auto& sink3) {
-            wire_esprit(graph, source, op, sink0, sink1, sink2, sink3);
-            const holoscan::ConnectionOptions q{.queue_depth = 4U};
-            graph.add_flow(source->override_out, op->max_sources, q);
-          });
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames1.size(), 3U);
-  EXPECT_EQ(result.frames1[0].shape, (std::vector<int64_t>{1, 1, 2}));
-  EXPECT_EQ(result.frames1[1].shape, (std::vector<int64_t>{1, kLiveMaxSources, 2}));
+      run_esprit_override(std::move(frames), std::move(payloads), std::move(params), "max_sources");
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "doa_multi").size(), 3U);
+  EXPECT_EQ(esprit_frames(result, "doa_multi")[0].shape, (std::vector<int64_t>{1, 1, 2}));
+  EXPECT_EQ(esprit_frames(result, "doa_multi")[1].shape,
+            (std::vector<int64_t>{1, kLiveMaxSources, 2}));
   // Tick 2 reverts to the Params max_sources, narrowing doa_multi back.
-  EXPECT_EQ(result.frames1[2].shape, (std::vector<int64_t>{1, 1, 2}));
+  EXPECT_EQ(esprit_frames(result, "doa_multi")[2].shape, (std::vector<int64_t>{1, 1, 2}));
 }
 
 TEST(ESPRITEstimatorOpTest, NumSourcesConfigurableFromParams) {
@@ -1229,12 +1202,12 @@ TEST(ESPRITEstimatorOpTest, RejectsExplicitSubarrayWithSpatialSmoothing) {
   pair.reference_indices = {0, 1, 2, 3};
   pair.shifted_indices = {1, 2, 3, 4};
 
-  const FourOutGraphRunResult result = run_esprit_result<double>(
+  const auto result = run_esprit_result<double>(
       block_to_device<double>(block, {1, kN, kS}),
       make_params(geom, conv, /*num_sources=*/-1, 1e-2, 4, /*smoothing=*/{2}, true, pair));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, ExplicitSubarrayPairWorks) {
@@ -1300,12 +1273,12 @@ TEST(ESPRITEstimatorOpTest, RejectsMalformedExplicitSubarrayPairs) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.01, 207u);
   const auto expect_rejected = [&](ShiftInvariantSubarrayPair pair) {
-    const FourOutGraphRunResult result = run_esprit_result<double>(
+    const auto result = run_esprit_result<double>(
         block_to_device<double>(block, {1, kN, kS}),
         make_params(geom, conv, /*num_sources=*/-1, 1e-2, 4, {}, true, pair));
-    EXPECT_TRUE(result.plan_ok);
-    EXPECT_TRUE(result.frames0.empty());
-    EXPECT_FALSE(result.diagnostics.empty());
+    EXPECT_FALSE(result.ok());
+    EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+    EXPECT_FALSE(result.diagnostics().empty());
   };
 
   expect_rejected({{0, 1, 2}, {1, 2}});
@@ -1330,7 +1303,7 @@ TEST(ESPRITEstimatorOpTest, FixedSourceCountWorksWithFewSnapshots) {
 }
 
 TEST(ESPRITEstimatorOpTest, ReducedSubarrayDirectlyDrivesEstimator) {
-  namespace detail = holoscan::radar::testing::detail;
+  namespace detail = holoscan::radar::testing::integration;
   constexpr int64_t kChannels = 6;
   constexpr int64_t kSnapshots = 32;
   constexpr double kTruthAz = 0.12;

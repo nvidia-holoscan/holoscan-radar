@@ -26,11 +26,11 @@
 
 #include <holoscan/core/compile.hpp>
 #include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
 #include <holoscan/core/payload_options.hpp>
 #include <holoscan/core/run.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 #include <holoscan/time/realtime_clock.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "angle_estimation/beamscan_estimator_op/beamscan_estimator_op.hpp"
 #include "angle_estimation/is_valid_mask.hpp"
@@ -43,7 +43,7 @@
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
 #include "radar_schemas/window_spec_bridge.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -59,12 +59,7 @@ using holoscan::radar::WindowType;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::detail::check_is_valid_mask;
 using holoscan::radar::kPi;
-using holoscan::radar::testing::DualIOGraphRunResult;
-using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::run_dual_io_operator_graph_result;
-using holoscan::radar::testing::run_single_io_operator_graph_result;
-using holoscan::radar::testing::run_single_in_dual_out_operator_graph_result;
 using holoscan::radar::testing::to_device_bool_tensor;
 using holoscan::radar::testing::to_device_tensor;
 using holoscan::radar::testing::to_pageable_host_tensor;
@@ -151,28 +146,6 @@ struct BeamscanOutputs {
   HostTensor spectrum;
 };
 
-template <typename Source, typename OpRef, typename Sink0, typename Sink1>
-void wire_beamscan(holoscan::Graph& graph, const Source& source, OpRef& op, const Sink0& sink0,
-                   const Sink1& sink1) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out, op->snapshot, q);
-  graph.add_flow(op->aoa_estimates, sink0->in, q);
-  graph.add_flow(op->angle_spectrum, sink1->in, q);
-}
-
-// Dual-input wiring for optional is_valid (DualTensorSourceOp out0/out1).
-template <typename Source, typename OpRef, typename Sink0, typename Sink1>
-void wire_beamscan_with_is_valid(holoscan::Graph& graph, const Source& source, OpRef& op,
-                                 const Sink0& sink0, const Sink1& sink1) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  // Publish is_valid (out0) before snapshot (out1), matching production
-  // causal order for the Exact optional sideband.
-  graph.add_flow(source->out0, op->is_valid, q);
-  graph.add_flow(source->out1, op->snapshot, q);
-  graph.add_flow(op->aoa_estimates, sink0->in, q);
-  graph.add_flow(op->angle_spectrum, sink1->in, q);
-}
-
 BeamscanParams make_params(ArrayGeometry geom, AngleConvention conv, std::vector<double> az,
                            std::vector<double> el,
                            PeakInterpolation peak = PeakInterpolation::kNone,
@@ -188,54 +161,80 @@ BeamscanParams make_params(ArrayGeometry geom, AngleConvention conv, std::vector
 }
 
 template <typename T>
-DualIOGraphRunResult run_beamscan_result(std::shared_ptr<holoscan::Tensor> snapshot,
-                                         BeamscanParams params) {
-  const holoscan::radar::MaxTensorExtents sized = holoscan::radar::testing::extents_for_scan_grid(
-      params.az_coordinates.size(), params.el_coordinates.size());
-  return run_single_in_dual_out_operator_graph_result<BeamscanEstimatorOp<T>>(
-      {std::move(snapshot)}, std::move(params), "aoa_estimates", "angle_spectrum",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-         const auto& sink1) {
-        wire_beamscan(graph, source, op, sink0, sink1);
-      },
-      {}, sized);
+holoscan::testing::TestResult run_beamscan_result(
+    std::shared_ptr<holoscan::Tensor> snapshot, BeamscanParams params,
+    std::optional<holoscan::radar::MaxTensorExtents> extents = std::nullopt,
+    bool capture_spectrum = true) {
+  using Op = BeamscanEstimatorOp<T>;
+  const auto sized = extents.value_or(holoscan::radar::testing::extents_for_scan_grid(
+      params.az_coordinates.size(), params.el_coordinates.size()));
+  auto fixture = holoscan::testing::create_operator_test<Op>(sized);
+  fixture.set_params(std::move(params));
+  fixture.push(&Op::snapshot, *snapshot);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.template capture_snapshot<holoscan::Tensor>("aoa_estimates", 1U, kMaximumBytes);
+  if (capture_spectrum) {
+    fixture.template capture_snapshot<holoscan::Tensor>("angle_spectrum", 1U, kMaximumBytes);
+  }
+  fixture.output_device("aoa_estimates", holoscan::DeviceId{0});
+  fixture.output_device("angle_spectrum", holoscan::DeviceId{0});
+  fixture.input_source_device("snapshot", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  (void)running.wait_for_output("aoa_estimates", 1U, std::chrono::seconds{5});
+  if (capture_spectrum) {
+    (void)running.wait_for_output("angle_spectrum", 1U, std::chrono::seconds{5});
+  }
+  running.request_stop();
+  return running.finish();
+}
+
+std::vector<HostTensor> beamscan_frames(const holoscan::testing::TestResult& result,
+                                        const char* port) {
+  std::vector<HostTensor> frames;
+  for (const auto& snapshot : result.template snapshots<holoscan::Tensor>(port)) {
+    frames.push_back(holoscan::radar::testing::to_host(snapshot));
+  }
+  return frames;
 }
 
 template <typename T>
 BeamscanOutputs run_beamscan(std::shared_ptr<holoscan::Tensor> snapshot, BeamscanParams params) {
-  DualIOGraphRunResult result = run_beamscan_result<T>(std::move(snapshot), std::move(params));
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  const auto result = run_beamscan_result<T>(std::move(snapshot), std::move(params));
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
-    }
-    throw std::runtime_error(msg);
-  }
-  if (result.frames0.size() != 1U || result.frames1.size() != 1U) {
-    throw std::runtime_error("BeamscanEstimatorOp test: expected one output frame pair, got " +
-                             std::to_string(result.frames0.size()) + "/" +
-                             std::to_string(result.frames1.size()));
-  }
-  return {std::move(result.frames0.front()), std::move(result.frames1.front())};
+  return {holoscan::radar::testing::to_host(
+              result.template snapshot<holoscan::Tensor>("aoa_estimates")),
+          holoscan::radar::testing::to_host(
+              result.template snapshot<holoscan::Tensor>("angle_spectrum"))};
 }
 
 template <typename T>
-DualIOGraphRunResult run_beamscan_with_mask_result(std::shared_ptr<holoscan::Tensor> snapshot,
-                                                   std::shared_ptr<holoscan::Tensor> is_valid,
-                                                   BeamscanParams params) {
-  return run_dual_io_operator_graph_result<BeamscanEstimatorOp<T>>(
-      {std::move(is_valid)}, {std::move(snapshot)}, std::move(params), "aoa_estimates",
-      "angle_spectrum",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-         const auto& sink1) {
-        wire_beamscan_with_is_valid(graph, source, op, sink0, sink1);
-      });
+holoscan::testing::TestResult run_beamscan_with_mask_result(
+    std::shared_ptr<holoscan::Tensor> snapshot, std::shared_ptr<holoscan::Tensor> is_valid,
+    BeamscanParams params) {
+  using Op = BeamscanEstimatorOp<T>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  fixture.push_frame(holoscan::testing::frame_at(std::chrono::milliseconds{100},
+                                                 holoscan::testing::input("is_valid", *is_valid),
+                                                 holoscan::testing::input("snapshot", *snapshot)));
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"aoa_estimates", "angle_spectrum"};
+  for (const char* output : kOutputs) {
+    fixture.template capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("snapshot", holoscan::DeviceId{0});
+  fixture.input_source_device("is_valid", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* output : kOutputs) {
+    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+  }
+  running.request_stop();
+  return running.finish();
 }
-
 struct LiveBeamscanTick {
   std::shared_ptr<holoscan::Tensor> snapshot;
   std::optional<ArrayGeometry> geometry;
@@ -246,232 +245,62 @@ struct LiveBeamscanTick {
   std::optional<PeakInterpolation> peak_interpolation;
 };
 
-struct LiveBeamscanBank {
-  static void reset(std::vector<LiveBeamscanTick> new_ticks) {
-    ticks = std::move(new_ticks);
-    index = 0;
-  }
-  static inline std::vector<LiveBeamscanTick> ticks;
-  static inline std::size_t index{0};
-};
-
-holoscan::expected<void, holoscan::Error> emit_beamscan_host_vector(
-    holoscan::Output<holoscan::Tensor>& output, std::span<const double> values,
-    holoscan::TimePoint capture_time) {
-  const std::array<int64_t, 1> shape{static_cast<int64_t>(values.size())};
-  constexpr DLDataType dtype{kDLFloat, 64U, 1U};
-  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
-  if (!loan) {
-    return holoscan::make_unexpected(std::move(loan).error());
-  }
-  auto written =
-      loan->write_host_and_commit([values](const holoscan::TensorOutputWriteGuard& writer) {
-        std::copy(values.begin(), values.end(), writer.data_as<double>());
-      });
-  if (!written) {
-    return holoscan::make_unexpected(std::move(written).error());
-  }
-  return output.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = capture_time});
-}
-
-template <typename Wire>
-holoscan::expected<void, holoscan::Error> emit_beamscan_wire_doubles(
-    holoscan::Output<Wire>& output, Wire wire, std::span<const double> values,
-    std::span<const int64_t> shape, holoscan::TimePoint capture_time) {
-  constexpr DLDataType dtype{kDLFloat, 64U, 1U};
-  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
-  if (!loan) {
-    return holoscan::make_unexpected(std::move(loan).error());
-  }
-  auto written =
-      loan->write_host_and_commit([values](const holoscan::TensorOutputWriteGuard& writer) {
-        std::copy(values.begin(), values.end(), writer.data_as<double>());
-      });
-  if (!written) {
-    return holoscan::make_unexpected(std::move(written).error());
-  }
-  return output.emit_tensor(std::move(*loan), std::move(wire),
-                            holoscan::EmitOptions{.capture_time = capture_time});
-}
-
-class LiveBeamscanSourceOp final : public holoscan::Operator<> {
- public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorRepresentation kDevice{
-        .memory_kind = holoscan::MemoryKind::kCudaDevice,
-        .dtype = std::nullopt,
-        .rank = std::nullopt,
-    };
-    constexpr holoscan::TensorRepresentation kHostVector{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = DLDataType{kDLFloat, 64U, 1U},
-        .rank = 1U,
-    };
-    constexpr holoscan::TensorRepresentation kHostMatrix{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = DLDataType{kDLFloat, 64U, 1U},
-        .rank = 2U,
-    };
-    spec.output(snapshot).produces_tensor(
-        holoscan::radar::pooled_tensor_output(kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
-    spec.output(array_geometry)
-        .max_emits_per_compute(1U)
-        .produces_tensor(
-            holoscan::radar::pooled_tensor_output(kHostMatrix, 2U, 4096U * sizeof(double)));
-    for (auto* output : {&az_coordinates, &el_coordinates}) {
-      spec.output(*output).max_emits_per_compute(1U).produces_tensor(
-          holoscan::radar::pooled_tensor_output(kHostVector, 1U, 4096U * sizeof(double)));
-    }
-    spec.output(array_taper)
-        .max_emits_per_compute(1U)
-        .produces_tensor(
-            holoscan::radar::pooled_tensor_output(kHostVector, 1U, 4096U * sizeof(double)));
-    spec.output(peak_interpolation).max_emits_per_compute(1U);
-  }
-
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnClock{.period = holoscan::radar::testing::detail::kHarnessTick});
-    return result;
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    if (LiveBeamscanBank::index >= LiveBeamscanBank::ticks.size()) {
-      return {};
-    }
-    const LiveBeamscanTick& tick = LiveBeamscanBank::ticks[LiveBeamscanBank::index++];
-    const holoscan::TimePoint time = context.activation_time();
-    if (tick.geometry.has_value()) {
-      auto packed = holoscan::radar::pack_array_geometry(*tick.geometry);
-      if (tick.malformed_geometry) {
-        packed[packed.size() - 3U] = 0.0;
-      }
-      auto wire = holoscan::radar::to_wire(*tick.geometry);
-      const std::array<int64_t, 2> shape{tick.geometry->num_elements() + 1, 3};
-      auto emitted =
-          emit_beamscan_wire_doubles(array_geometry, std::move(wire), packed, shape, time);
-      if (!emitted) {
-        return emitted;
-      }
-    }
-    if (tick.az.has_value()) {
-      auto emitted = emit_beamscan_host_vector(az_coordinates, *tick.az, time);
-      if (!emitted) {
-        return emitted;
-      }
-    }
-    if (tick.el.has_value()) {
-      auto emitted = emit_beamscan_host_vector(el_coordinates, *tick.el, time);
-      if (!emitted) {
-        return emitted;
-      }
-    }
-    if (tick.taper.has_value()) {
-      auto wire = holoscan::radar::to_wire(*tick.taper);
-      const std::array<int64_t, 1> shape{static_cast<int64_t>(tick.taper->coefficients.size())};
-      auto emitted = emit_beamscan_wire_doubles(array_taper, std::move(wire),
-                                                tick.taper->coefficients, shape, time);
-      if (!emitted) {
-        return emitted;
-      }
-    }
-    if (tick.peak_interpolation.has_value()) {
-      auto emitted = peak_interpolation.emit(*tick.peak_interpolation,
-                                             holoscan::EmitOptions{.capture_time = time});
-      if (!emitted) {
-        return emitted;
-      }
-    }
-    return holoscan::radar::testing::detail::emit_bank_frame(snapshot, context, tick.snapshot,
-                                                             "LiveBeamscanSourceOp");
-  }
-
-  holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
-  holoscan::Output<holoscan::radar::WireArrayGeometry> array_geometry{"array_geometry"};
-  holoscan::Output<holoscan::Tensor> az_coordinates{"az_coordinates"};
-  holoscan::Output<holoscan::Tensor> el_coordinates{"el_coordinates"};
-  holoscan::Output<holoscan::radar::WireWindowSpec> array_taper{"array_taper"};
-  holoscan::Output<PeakInterpolation> peak_interpolation{"peak_interpolation"};
-};
-
-DualIOGraphRunResult run_live_beamscan_graph(
+holoscan::testing::TestResult run_live_beamscan_graph(
     std::vector<LiveBeamscanTick> ticks, BeamscanParams params,
-    holoscan::radar::MaxTensorExtents extents = holoscan::radar::testing::default_test_extents()) {
-  DualIOGraphRunResult result;
-  holoscan::radar::testing::detail::FrameBank::reset();
-  holoscan::radar::testing::detail::FrameBankB::reset();
-  LiveBeamscanBank::reset(std::move(ticks));
-  const std::size_t expected = LiveBeamscanBank::ticks.size();
-  holoscan::Graph graph{"live-beamscan-overrides"};
-  const auto source = graph.op<LiveBeamscanSourceOp>("source");
-  auto op =
-      holoscan::radar::testing::emplace_harness_op<BeamscanEstimatorOp<double>>(graph, extents);
-  op.set_params(std::move(params));
-  const auto sink0 = graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink0");
-  const auto sink1 = graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sink1");
-  const holoscan::ConnectionOptions q{.queue_depth = 8U};
-  graph.add_flow(source->snapshot, op->snapshot, q);
-  graph.add_flow(source->array_geometry, op->array_geometry, q);
-  graph.add_flow(source->az_coordinates, op->az_coordinates, q);
-  graph.add_flow(source->el_coordinates, op->el_coordinates, q);
-  graph.add_flow(source->array_taper, op->array_taper, q);
-  graph.add_flow(source->peak_interpolation, op->peak_interpolation, q);
-  graph.add_flow(op->aoa_estimates, sink0->in, q);
-  graph.add_flow(op->angle_spectrum, sink1->in, q);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-  holoscan::CompileOptions options;
-  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
-      .operator_path = "source", .output_port = "snapshot", .device = holoscan::DeviceId{0}});
-  holoscan::radar::testing::detail::bind_op_device_output(options, "aoa_estimates");
-  holoscan::radar::testing::detail::bind_op_device_output(options, "angle_spectrum");
-  try {
-    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-    result.plan_ok = plan.ok();
-    result.plan_json = plan.json();
-    if (!plan.ok()) {
-      return result;
-    }
-    holoscan::RunSession session = holoscan::run_async(plan);
-    const auto deadline =
-        std::chrono::steady_clock::now() + holoscan::radar::testing::detail::kHarnessDeadline;
-    while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
-      std::size_t count0 = 0;
-      std::size_t count1 = 0;
-      {
-        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBank::mutex);
-        count0 = holoscan::radar::testing::detail::FrameBank::captured.size();
+    std::optional<holoscan::radar::MaxTensorExtents> extents = std::nullopt) {
+  using Op = BeamscanEstimatorOp<double>;
+  auto fixture = holoscan::testing::create_operator_test<Op>(
+      extents.value_or(holoscan::radar::testing::default_test_extents()));
+  fixture.set_params(std::move(params));
+  for (std::size_t index = 0; index < ticks.size(); ++index) {
+    const auto capture_time = std::chrono::milliseconds{static_cast<int64_t>((index + 1U) * 100U)};
+    auto& tick = ticks[index];
+    const auto snapshot = holoscan::testing::input("snapshot", *tick.snapshot);
+    if (tick.geometry.has_value()) {
+      auto wire = holoscan::radar::to_wire(*tick.geometry);
+      if (tick.malformed_geometry) {
+        wire.packed_geometry = holoscan::radar::testing::to_pageable_host_tensor<double>(
+            {1.0}, {1}, holoscan::radar::real_dtype<double>());
       }
-      {
-        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankB::mutex);
-        count1 = holoscan::radar::testing::detail::FrameBankB::captured.size();
-      }
-      if (count0 >= expected && count1 >= expected) {
-        break;
-      }
-      std::this_thread::sleep_for(holoscan::radar::testing::detail::kHarnessPoll);
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("array_geometry", std::move(wire)), snapshot));
+    } else if (tick.az.has_value()) {
+      auto coordinates = holoscan::radar::testing::to_pageable_host_tensor<double>(
+          *tick.az, {static_cast<int64_t>(tick.az->size())}, holoscan::radar::real_dtype<double>());
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("az_coordinates", *coordinates), snapshot));
+    } else if (tick.el.has_value()) {
+      auto coordinates = holoscan::radar::testing::to_pageable_host_tensor<double>(
+          *tick.el, {static_cast<int64_t>(tick.el->size())}, holoscan::radar::real_dtype<double>());
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("el_coordinates", *coordinates), snapshot));
+    } else if (tick.taper.has_value()) {
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time,
+          holoscan::testing::input("array_taper", holoscan::radar::to_wire(*tick.taper)),
+          snapshot));
+    } else if (tick.peak_interpolation.has_value()) {
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("peak_interpolation", *tick.peak_interpolation),
+          snapshot));
+    } else {
+      fixture.push_frame(holoscan::testing::frame_at(capture_time, snapshot));
     }
-    session.request_stop();
-    session.wait();
-    result.termination = session.termination();
-    for (const auto& diagnostic : session.diagnostics()) {
-      result.diagnostics.emplace_back(diagnostic.token);
-    }
-  } catch (const holoscan::RuntimeError& error) {
-    result.plan_ok = false;
-    result.plan_json = std::string("RuntimeError: ") + error.what();
   }
-  {
-    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBank::mutex);
-    result.frames0 = std::move(holoscan::radar::testing::detail::FrameBank::captured);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"aoa_estimates", "angle_spectrum"};
+  for (const char* output : kOutputs) {
+    fixture.capture_snapshot<holoscan::Tensor>(output, ticks.size(), kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
   }
-  {
-    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankB::mutex);
-    result.frames1 = std::move(holoscan::radar::testing::detail::FrameBankB::captured);
+  fixture.input_source_device("snapshot", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* output : kOutputs) {
+    (void)running.wait_for_output(output, ticks.size(), std::chrono::seconds{5});
   }
-  return result;
+  running.request_stop();
+  return running.finish();
 }
-
 TEST(BeamscanEstimatorOpTest, DefaultsToRadarBoresightConvention) {
   EXPECT_EQ(BeamscanParams{}.angle_convention.preset, AngleConventionPreset::kRadarBoresight);
 }
@@ -549,14 +378,14 @@ TEST(BeamscanEstimatorOpTest, MultiLookValidityMaskExcludesInvalidLook) {
   const auto grid = linspace(-0.3, 0.3, 31);
   const auto single = run_beamscan<double>(snapshot_to_device<double>(first, {1, kN}),
                                            make_params(geom, AngleConvention{}, grid, {0.0}));
-  const DualIOGraphRunResult masked = run_beamscan_with_mask_result<double>(
+  const auto masked = run_beamscan_with_mask_result<double>(
       snapshot_to_device<double>(looks, {1, kN, 2}), to_device_bool_tensor({1, 0}, {1, 2}),
       make_params(geom, AngleConvention{}, grid, {0.0}));
-  ASSERT_TRUE(masked.plan_ok) << masked.plan_json;
-  ASSERT_TRUE(masked.diagnostics.empty());
-  ASSERT_EQ(masked.frames1.size(), 1U);
-  for (int64_t i = 0; i < masked.frames1[0].size(); ++i) {
-    EXPECT_NEAR(masked.frames1[0].as<double>()[i], single.spectrum.as<double>()[i], 1e-10);
+  ASSERT_TRUE(masked.ok()) << masked.describe_failure();
+  ASSERT_EQ(beamscan_frames(masked, "angle_spectrum").size(), 1U);
+  for (int64_t i = 0; i < beamscan_frames(masked, "angle_spectrum")[0].size(); ++i) {
+    EXPECT_NEAR(beamscan_frames(masked, "angle_spectrum")[0].as<double>()[i],
+                single.spectrum.as<double>()[i], 1e-10);
   }
 }
 
@@ -584,12 +413,12 @@ TEST(BeamscanEstimatorOpTest, RejectsInvalidScanCoordinates) {
   auto out_of_range =
       run_beamscan_result<double>(to_device_tensor(host, {1, kN}, complex_dtype<double>()),
                                   make_params(geom, direction_cosine, {0.0}, {-1.01}));
-  EXPECT_FALSE(out_of_range.diagnostics.empty());
+  EXPECT_FALSE(out_of_range.diagnostics().empty());
 
   auto non_finite = run_beamscan_result<double>(
       to_device_tensor(host, {1, kN}, complex_dtype<double>()),
       make_params(geom, AngleConvention{}, {std::numeric_limits<double>::quiet_NaN()}, {0.0}));
-  EXPECT_FALSE(non_finite.diagnostics.empty());
+  EXPECT_FALSE(non_finite.diagnostics().empty());
 }
 
 TEST(BeamscanEstimatorOpTest, FloatInstantiationSmoke) {
@@ -614,11 +443,10 @@ TEST(BeamscanEstimatorOpTest, RejectsChannelMismatch) {
   auto snap_t = to_device_tensor(host, {1, kN - 1}, complex_dtype<double>());
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const DualIOGraphRunResult result =
-      run_beamscan_result<double>(snap_t, make_params(geom, conv, {0.0}, {0.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_beamscan_result<double>(snap_t, make_params(geom, conv, {0.0}, {0.0}));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(beamscan_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(BeamscanEstimatorOpTest, RejectsEmptyScanGrid) {
@@ -628,11 +456,10 @@ TEST(BeamscanEstimatorOpTest, RejectsEmptyScanGrid) {
   auto snap_t = to_device_tensor(host, {1, kN}, complex_dtype<double>());
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const DualIOGraphRunResult result =
-      run_beamscan_result<double>(snap_t, make_params(geom, conv, {}, {0.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_beamscan_result<double>(snap_t, make_params(geom, conv, {}, {0.0}));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(beamscan_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(BeamscanEstimatorOpTest, PeakInterpolationConfigurableFromParams) {
@@ -683,18 +510,17 @@ TEST(BeamscanEstimatorOpTest, LivePeakInterpolationAppliesForOneTick) {
   auto params = make_params(geom, conv, linspace(-0.2, 0.2, 11), linspace(-0.1, 0.1, 3),
                             PeakInterpolation::kNone);
 
-  const DualIOGraphRunResult out =
+  const auto out =
       run_live_beamscan_graph({make_interp_tick(snapshot, std::nullopt),
                                make_interp_tick(snapshot, PeakInterpolation::kParabolic),
                                make_interp_tick(snapshot, std::nullopt)},
                               std::move(params));
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames0.size(), 3U);
-  const double params_az = out.frames0[0].as<double>()[0];
-  const double override_az = out.frames0[1].as<double>()[0];
-  const double reverted_az = out.frames0[2].as<double>()[0];
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  ASSERT_EQ(beamscan_frames(out, "aoa_estimates").size(), 3U);
+  const double params_az = beamscan_frames(out, "aoa_estimates")[0].as<double>()[0];
+  const double override_az = beamscan_frames(out, "aoa_estimates")[1].as<double>()[0];
+  const double reverted_az = beamscan_frames(out, "aoa_estimates")[2].as<double>()[0];
   EXPECT_NEAR(params_az, 0.16, 1e-6);
   EXPECT_NEAR(override_az, kTruthAz, 0.02);
   EXPECT_GT(std::abs(override_az - params_az), 5e-3);
@@ -708,15 +534,14 @@ TEST(BeamscanEstimatorOpTest, LiveAzCoordinatesAppliesForOneTick) {
   auto snapshot = snapshot_to_device<double>(
       make_steering_snapshot(geom, AngleConvention{}, 0.0, 0.0), {1, kN});
   auto params = make_params(geom, AngleConvention{}, {-0.1, 0.0, 0.1}, {0.0});
-  const DualIOGraphRunResult out = run_live_beamscan_graph(
+  const auto out = run_live_beamscan_graph(
       {{snapshot}, {snapshot, std::nullopt, linspace(-0.2, 0.2, 5)}, {snapshot}},
       std::move(params));
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames1.size(), 3U);
-  EXPECT_EQ(out.frames1[0].shape[1], 3);
-  EXPECT_EQ(out.frames1[1].shape[1], 5);
-  EXPECT_EQ(out.frames1[2].shape[1], 3);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  ASSERT_EQ(beamscan_frames(out, "angle_spectrum").size(), 3U);
+  EXPECT_EQ(beamscan_frames(out, "angle_spectrum")[0].shape[1], 3);
+  EXPECT_EQ(beamscan_frames(out, "angle_spectrum")[1].shape[1], 5);
+  EXPECT_EQ(beamscan_frames(out, "angle_spectrum")[2].shape[1], 3);
 }
 
 TEST(BeamscanEstimatorOpTest, LiveElCoordinatesAppliesForOneTick) {
@@ -725,17 +550,16 @@ TEST(BeamscanEstimatorOpTest, LiveElCoordinatesAppliesForOneTick) {
   auto snapshot = snapshot_to_device<double>(
       make_steering_snapshot(geom, AngleConvention{}, 0.0, 0.0), {1, kN});
   auto params = make_params(geom, AngleConvention{}, {0.0}, {0.0});
-  const DualIOGraphRunResult out = run_live_beamscan_graph(
+  const auto out = run_live_beamscan_graph(
       {{snapshot},
        {snapshot, std::nullopt, std::nullopt, std::vector<double>{-0.1, 0.0, 0.1}},
        {snapshot}},
       std::move(params));
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames1.size(), 3U);
-  EXPECT_EQ(out.frames1[0].shape[2], 1);
-  EXPECT_EQ(out.frames1[1].shape[2], 3);
-  EXPECT_EQ(out.frames1[2].shape[2], 1);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  ASSERT_EQ(beamscan_frames(out, "angle_spectrum").size(), 3U);
+  EXPECT_EQ(beamscan_frames(out, "angle_spectrum")[0].shape[2], 1);
+  EXPECT_EQ(beamscan_frames(out, "angle_spectrum")[1].shape[2], 3);
+  EXPECT_EQ(beamscan_frames(out, "angle_spectrum")[2].shape[2], 1);
 }
 
 TEST(BeamscanEstimatorOpTest, LiveArrayGeometryAppliesForOneTick) {
@@ -745,13 +569,14 @@ TEST(BeamscanEstimatorOpTest, LiveArrayGeometryAppliesForOneTick) {
   auto snapshot = snapshot_to_device<double>(
       make_steering_snapshot(geom, AngleConvention{}, 0.2, 0.0), {1, kN});
   auto params = make_params(geom, AngleConvention{}, linspace(-0.4, 0.4, 9), {0.0});
-  const DualIOGraphRunResult out =
+  const auto out =
       run_live_beamscan_graph({{snapshot}, {snapshot, changed}, {snapshot}}, std::move(params));
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames1.size(), 3U);
-  EXPECT_NE(out.frames1[0].data, out.frames1[1].data);
-  EXPECT_EQ(out.frames1[0].data, out.frames1[2].data);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  ASSERT_EQ(beamscan_frames(out, "angle_spectrum").size(), 3U);
+  EXPECT_NE(beamscan_frames(out, "angle_spectrum")[0].data,
+            beamscan_frames(out, "angle_spectrum")[1].data);
+  EXPECT_EQ(beamscan_frames(out, "angle_spectrum")[0].data,
+            beamscan_frames(out, "angle_spectrum")[2].data);
 }
 
 TEST(BeamscanEstimatorOpTest, LiveArrayTaperAppliesForOneTick) {
@@ -762,14 +587,15 @@ TEST(BeamscanEstimatorOpTest, LiveArrayTaperAppliesForOneTick) {
   WindowSpec hann;
   hann.type = WindowType::kHann;
   auto params = make_params(geom, AngleConvention{}, linspace(-0.4, 0.4, 17), {0.0});
-  const DualIOGraphRunResult out = run_live_beamscan_graph(
+  const auto out = run_live_beamscan_graph(
       {{snapshot}, {snapshot, std::nullopt, std::nullopt, std::nullopt, hann}, {snapshot}},
       std::move(params));
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames1.size(), 3U);
-  EXPECT_NE(out.frames1[0].data, out.frames1[1].data);
-  EXPECT_EQ(out.frames1[0].data, out.frames1[2].data);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  ASSERT_EQ(beamscan_frames(out, "angle_spectrum").size(), 3U);
+  EXPECT_NE(beamscan_frames(out, "angle_spectrum")[0].data,
+            beamscan_frames(out, "angle_spectrum")[1].data);
+  EXPECT_EQ(beamscan_frames(out, "angle_spectrum")[0].data,
+            beamscan_frames(out, "angle_spectrum")[2].data);
 }
 
 TEST(BeamscanEstimatorOpTest, LiveOverridesRejectMalformedAndBounds) {
@@ -778,20 +604,20 @@ TEST(BeamscanEstimatorOpTest, LiveOverridesRejectMalformedAndBounds) {
   auto snapshot = snapshot_to_device<double>(
       make_steering_snapshot(geom, AngleConvention{}, 0.0, 0.0), {1, kN});
   auto params = make_params(geom, AngleConvention{}, {0.0}, {0.0});
-  const DualIOGraphRunResult malformed = run_live_beamscan_graph(
+  const auto malformed = run_live_beamscan_graph(
       {{snapshot, geom, std::nullopt, std::nullopt, std::nullopt, true}}, params);
-  ASSERT_TRUE(malformed.plan_ok) << malformed.plan_json;
-  EXPECT_TRUE(malformed.frames0.empty());
-  EXPECT_FALSE(malformed.diagnostics.empty());
+  ASSERT_FALSE(malformed.ok());
+  EXPECT_TRUE(beamscan_frames(malformed, "aoa_estimates").empty());
+  EXPECT_FALSE(malformed.diagnostics().empty());
 
   auto extents = holoscan::radar::testing::default_test_extents();
   extents.max_el = 2;
-  const DualIOGraphRunResult bounded = run_live_beamscan_graph(
+  const auto bounded = run_live_beamscan_graph(
       {{snapshot, std::nullopt, std::nullopt, std::vector<double>{-0.1, 0.0, 0.1}}},
       std::move(params), extents);
-  ASSERT_TRUE(bounded.plan_ok) << bounded.plan_json;
-  EXPECT_TRUE(bounded.frames0.empty());
-  EXPECT_FALSE(bounded.diagnostics.empty());
+  ASSERT_FALSE(bounded.ok());
+  EXPECT_TRUE(beamscan_frames(bounded, "aoa_estimates").empty());
+  EXPECT_FALSE(bounded.diagnostics().empty());
 }
 
 TEST(BeamscanEstimatorOpTest, ArrayTaperConfigurableFromParams) {
@@ -989,18 +815,11 @@ TEST(BeamscanEstimatorOpTest, OptionalSpectrumMayBeLeftUnwired) {
       make_steering_snapshot(geom, AngleConvention{}, 0.0, 0.0), {1, kN});
   auto params = make_params(geom, AngleConvention{}, {-0.1, 0.0, 0.1}, {0.0});
   const auto extents = holoscan::radar::testing::extents_for_scan_grid(3, 1);
-  const GraphRunResult result = run_single_io_operator_graph_result<BeamscanEstimatorOp<double>>(
-      {std::move(snapshot)}, std::move(params), "aoa_estimates",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->out, op->snapshot, q);
-        graph.add_flow(op->aoa_estimates, sink->in, q);
-      },
-      {"angle_spectrum"}, extents);
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 1U);
-  EXPECT_EQ(result.frames[0].shape, (std::vector<int64_t>{1, 2}));
+  const auto result = run_beamscan_result<double>(std::move(snapshot), std::move(params), extents,
+                                                  /*capture_spectrum=*/false);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(beamscan_frames(result, "aoa_estimates").size(), 1U);
+  EXPECT_EQ(beamscan_frames(result, "aoa_estimates")[0].shape, (std::vector<int64_t>{1, 2}));
 }
 
 TEST(BeamscanEstimatorOpTest, RejectsInvalidSnapshotRank) {
@@ -1010,11 +829,10 @@ TEST(BeamscanEstimatorOpTest, RejectsInvalidSnapshotRank) {
   auto snap_t = to_device_tensor(host, {kN}, complex_dtype<double>());
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const DualIOGraphRunResult result =
-      run_beamscan_result<double>(snap_t, make_params(geom, conv, {0.0}, {0.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_beamscan_result<double>(snap_t, make_params(geom, conv, {0.0}, {0.0}));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(beamscan_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(BeamscanEstimatorOpTest, RejectsSnapshotDtypeMismatch) {
@@ -1025,11 +843,10 @@ TEST(BeamscanEstimatorOpTest, RejectsSnapshotDtypeMismatch) {
   auto snap_f = snapshot_to_device<float>(snap_host, {1, kN});
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const DualIOGraphRunResult result =
-      run_beamscan_result<double>(snap_f, make_params(geom, conv, {0.0}, {0.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_beamscan_result<double>(snap_f, make_params(geom, conv, {0.0}, {0.0}));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(beamscan_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(BeamscanEstimatorOpTest, RejectsItemsBeyondCapturedExtent) {
@@ -1039,18 +856,11 @@ TEST(BeamscanEstimatorOpTest, RejectsItemsBeyondCapturedExtent) {
   auto snapshot = to_device_tensor(host, {2, kN}, complex_dtype<double>());
   auto extents = holoscan::radar::testing::extents_for_scan_grid(1, 1);
   extents.max_items = 1;
-  const DualIOGraphRunResult result =
-      run_single_in_dual_out_operator_graph_result<BeamscanEstimatorOp<double>>(
-          {std::move(snapshot)}, make_params(geom, AngleConvention{}, {0.0}, {0.0}),
-          "aoa_estimates", "angle_spectrum",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-             const auto& sink1) {
-            wire_beamscan(graph, source, op, sink0, sink1);
-          },
-          {}, extents);
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_beamscan_result<double>(
+      std::move(snapshot), make_params(geom, AngleConvention{}, {0.0}, {0.0}), extents);
+  ASSERT_FALSE(result.ok());
+  EXPECT_TRUE(beamscan_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(BeamscanEstimatorOpTest, SpectrumShapeMatchesScanGrid) {
@@ -1107,17 +917,16 @@ TEST(BeamscanEstimatorOpTest, AcceptsValidIsValidMaskOn3DSnapshot) {
   auto snapshot = snapshot_to_device<double>(
       make_steering_snapshot(geom, AngleConvention{}, 0.0, 0.0), {1, kN, 1});
   auto mask = to_device_bool_tensor({0}, {1, 1});
-  const DualIOGraphRunResult result = run_beamscan_with_mask_result<double>(
+  const auto result = run_beamscan_with_mask_result<double>(
       std::move(snapshot), std::move(mask),
       make_params(geom, AngleConvention{}, {-0.1, 0.0, 0.1}, {0.0}));
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames0.size(), 1U);
-  ASSERT_EQ(result.frames1.size(), 1U);
-  EXPECT_TRUE(std::isnan(result.frames0[0].as<double>()[0]));
-  EXPECT_TRUE(std::isnan(result.frames0[0].as<double>()[1]));
-  for (int64_t i = 0; i < result.frames1[0].size(); ++i) {
-    EXPECT_EQ(result.frames1[0].as<double>()[i], 0.0);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(beamscan_frames(result, "aoa_estimates").size(), 1U);
+  ASSERT_EQ(beamscan_frames(result, "angle_spectrum").size(), 1U);
+  EXPECT_TRUE(std::isnan(beamscan_frames(result, "aoa_estimates")[0].as<double>()[0]));
+  EXPECT_TRUE(std::isnan(beamscan_frames(result, "aoa_estimates")[0].as<double>()[1]));
+  for (int64_t i = 0; i < beamscan_frames(result, "angle_spectrum")[0].size(); ++i) {
+    EXPECT_EQ(beamscan_frames(result, "angle_spectrum")[0].as<double>()[i], 0.0);
   }
 }
 
@@ -1127,11 +936,11 @@ TEST(BeamscanEstimatorOpTest, RejectsInvalidIsValidMaskOn3DSnapshot) {
   auto snapshot = snapshot_to_device<double>(
       make_steering_snapshot(geom, AngleConvention{}, 0.0, 0.0), {1, kN, 1});
   auto mask = to_device_bool_tensor({1, 1}, {1, 2});
-  const DualIOGraphRunResult result = run_beamscan_with_mask_result<double>(
+  const auto result = run_beamscan_with_mask_result<double>(
       std::move(snapshot), std::move(mask), make_params(geom, AngleConvention{}, {0.0}, {0.0}));
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  ASSERT_FALSE(result.ok());
+  EXPECT_TRUE(beamscan_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(BeamscanEstimatorOpTest, CheckIsValidMaskAcceptsTrueBoolDevice) {

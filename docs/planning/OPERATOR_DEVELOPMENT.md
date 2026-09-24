@@ -629,8 +629,17 @@ separate runs on one fixture must prove a fresh operator instance.
 Do not add a direct `Graph`, source/sink operator, `RunSession`, condition
 variable, frame bank, or port-arity runner to a single-operator test. Whole
 pipeline and application tests remain ordinary production Graphs; any finite
-source/capture utility they require is integration-only and must not become a
-second single-operator harness.
+source/capture utility they require lives in
+`tests/cpp/utils/integration_graph_utils.hpp`, is integration-only, and must
+not become a second single-operator harness.
+
+For an intentionally missing optional CUDA Tensor, the current fixture cannot
+run an explicit empty producer: `push_many<Tensor>(port, {})` leaves runtime
+binding unavailable, while assigning device placement to it is rejected as an
+unused binding. Stage a valid sample at a deliberately non-matching capture
+coordinate and bind that source to exercise `Exact{} + SafeDefault{}`. Keep the
+required inputs together in a timestamped `push_frame`; do not replace this
+with a radar-owned source operator.
 
 **Accepted coverage deferral:** the SDK fixture supports zero-element Tensor
 staging and snapshots, but `push()` rejects nonempty bounded-strided Tensors

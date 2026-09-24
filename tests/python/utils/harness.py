@@ -3,7 +3,7 @@
 
 """Radar-flavored Holoscan Application helpers for operator unit tests.
 
-Mirrors ``tests/cpp/utils/sdk_harness.hpp`` and ``tensor_fixtures.hpp``.
+Provides the Python-only Graph fixture and mirrors ``tensor_fixtures.hpp``.
 Holoscan SDK 4.3 ships ``OperatorTestHarness`` for C++ only, so Python tests
 compose tiny ``Application`` graphs with source / capture operators instead.
 
@@ -105,7 +105,7 @@ def single_map(tensor: Any, key: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Capture store (sdk_harness.hpp TensorMapCapture)
+# Capture store
 # ---------------------------------------------------------------------------
 
 
@@ -242,7 +242,7 @@ class _TensorMapCaptureOp(Operator):
 
 
 # ---------------------------------------------------------------------------
-# Wiring helpers (sdk_harness.hpp)
+# Wiring helpers
 # ---------------------------------------------------------------------------
 
 

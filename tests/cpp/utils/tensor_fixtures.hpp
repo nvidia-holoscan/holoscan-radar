@@ -12,12 +12,15 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/memory/tensor_storage.hpp>
+#include <holoscan/memory/unbounded_allocator.hpp>
 #include <holoscan/testing/tensor_snapshot.hpp>
 
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -38,7 +41,13 @@ std::shared_ptr<holoscan::Tensor> to_device_tensor(const std::vector<ElementT>& 
   if (static_cast<size_t>(count) != host.size()) {
     throw std::invalid_argument("to_device_tensor: shape/size mismatch");
   }
-  auto tensor = holoscan::radar::make_device_tensor(shape, dtype);
+  auto created =
+      holoscan::make_tensor(shape, dtype, std::nullopt, holoscan::MemoryStorageType::kDevice,
+                            std::make_shared<holoscan::UnboundedAllocator>());
+  if (!created) {
+    throw holoscan::RuntimeError{std::move(created).error()};
+  }
+  auto tensor = std::make_shared<holoscan::Tensor>(std::move(*created));
   if (host.empty()) {
     // Zero-element tensors leave data == nullptr (no cudaMalloc); that is a
     // valid pipeline state (e.g. zero detections) and needs no upload.
@@ -134,9 +143,7 @@ inline HostTensor to_host(const holoscan::Tensor& tensor) {
 }
 
 inline HostTensor to_host(const holoscan::testing::TensorSnapshot& snapshot) {
-  return HostTensor{.shape = snapshot.shape(),
-                    .dtype = snapshot.dtype(),
-                    .data = snapshot.bytes()};
+  return HostTensor{.shape = snapshot.shape(), .dtype = snapshot.dtype(), .data = snapshot.bytes()};
 }
 
 namespace detail {

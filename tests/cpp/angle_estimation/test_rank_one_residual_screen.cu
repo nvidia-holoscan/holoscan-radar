@@ -15,8 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "angle_estimation/rank_one_residual_screen_op/rank_one_residual_screen_op.hpp"
 #include "angle_estimation/rank_one_residual_screen_op/rank_one_residual_screen_stage.hpp"
@@ -24,7 +23,6 @@
 #include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
-#include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -244,32 +242,40 @@ std::shared_ptr<holoscan::Tensor> make_graph_baseline(int64_t items, T azimuth) 
 }
 
 template <typename T>
-auto run_screen_graph(std::vector<std::shared_ptr<holoscan::Tensor>> snapshots,
-                      std::vector<std::shared_ptr<holoscan::Tensor>> baselines,
-                      holoscan::radar::RankOneResidualScreenParams params,
-                      const holoscan::radar::MaxTensorExtents& extents) {
+holoscan::testing::TestResult run_screen_graph(
+    std::vector<std::shared_ptr<holoscan::Tensor>> snapshots,
+    std::vector<std::shared_ptr<holoscan::Tensor>> baselines,
+    holoscan::radar::RankOneResidualScreenParams params,
+    const holoscan::radar::MaxTensorExtents& extents) {
   using Op = holoscan::radar::RankOneResidualScreenOp<T>;
-  return holoscan::radar::testing::run_dual_in_single_out_operator_graph_result<Op>(
-      std::move(snapshots), std::move(baselines), std::move(params), "residual_score",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-        graph.add_flow(source->out0, op->snapshot, queue);
-        graph.add_flow(source->out1, op->baseline_aoa, queue);
-        graph.add_flow(op->residual_score, sink->in, queue);
-        const auto snapshot_sink =
-            graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("snapshot_sink");
-        const auto idx_sink =
-            graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("idx_sink");
-        const auto valid_sink =
-            graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("valid_sink");
-        const auto mask_sink =
-            graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("mask_sink");
-        graph.add_flow(op->snapshot_out, snapshot_sink->in, queue);
-        graph.add_flow(op->selected_idx, idx_sink->in, queue);
-        graph.add_flow(op->is_valid_out, valid_sink->in, queue);
-        graph.add_flow(op->selection_mask, mask_sink->in, queue);
-      },
-      extents, {"snapshot_out", "selected_idx", "is_valid_out", "selection_mask"});
+  auto fixture = holoscan::testing::create_operator_test<Op>(extents);
+  fixture.set_params(std::move(params));
+  const std::size_t count = snapshots.size();
+  for (std::size_t index = 0; index < count; ++index) {
+    const auto capture_time = std::chrono::milliseconds{static_cast<int64_t>((index + 1U) * 100U)};
+    auto unmatched_valid = holoscan::radar::testing::to_device_tensor(
+        std::vector<uint8_t>{1}, {1, 1}, DLDataType{kDLUInt, 8U, 1U});
+    fixture.push_at("is_valid", *unmatched_valid, capture_time + std::chrono::nanoseconds{1});
+    fixture.push_frame(holoscan::testing::frame_at(
+        capture_time, holoscan::testing::input("snapshot", *snapshots[index]),
+        holoscan::testing::input("baseline_aoa", *baselines[index])));
+  }
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  for (const char* port :
+       {"residual_score", "snapshot_out", "selected_idx", "is_valid_out", "selection_mask"}) {
+    fixture.template capture_snapshot<holoscan::Tensor>(port, count, kMaximumBytes);
+    fixture.output_device(port, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("snapshot", holoscan::DeviceId{0});
+  fixture.input_source_device("baseline_aoa", holoscan::DeviceId{0});
+  fixture.input_source_device("is_valid", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* port :
+       {"residual_score", "snapshot_out", "selected_idx", "is_valid_out", "selection_mask"}) {
+    (void)running.wait_for_output(port, count, std::chrono::seconds{5});
+  }
+  running.request_stop();
+  return running.finish();
 }
 
 TEST(RankOneResidualScreenOpTest, LiveGeometryMatchThenParamsFallback) {
@@ -291,38 +297,45 @@ TEST(RankOneResidualScreenOpTest, LiveGeometryMatchThenParamsFallback) {
   extents.max_snapshots = 1;
 
   using Op = holoscan::radar::RankOneResidualScreenOp<float>;
-  const auto result =
-      holoscan::radar::testing::run_exact_override_dual_in_single_out_operator_graph_result<
-          Op, holoscan::radar::WireArrayGeometry>(
-          {std::move(snapshot0), std::move(snapshot1)},
-          {std::move(baseline0), std::move(baseline1)},
-          {holoscan::radar::to_wire(override_geometry), std::nullopt}, std::move(params),
-          "residual_score",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-            const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-            graph.add_flow(source->out0, op->snapshot, queue);
-            graph.add_flow(source->out1, op->baseline_aoa, queue);
-            graph.add_flow(source->override_out, op->array_geometry, queue);
-            graph.add_flow(op->residual_score, sink->in, queue);
-            const auto snapshot_sink = graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>(
-                "override_snapshot_sink");
-            const auto idx_sink =
-                graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("override_idx_sink");
-            const auto valid_sink =
-                graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("override_valid_sink");
-            const auto mask_sink =
-                graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("override_mask_sink");
-            graph.add_flow(op->snapshot_out, snapshot_sink->in, queue);
-            graph.add_flow(op->selected_idx, idx_sink->in, queue);
-            graph.add_flow(op->is_valid_out, valid_sink->in, queue);
-            graph.add_flow(op->selection_mask, mask_sink->in, queue);
-          },
-          extents, {"snapshot_out", "selected_idx", "is_valid_out", "selection_mask"});
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 2U);
-  EXPECT_NEAR(result.frames[0].as<float>()[0], 0.0F, 1e-5F);
-  EXPECT_GT(result.frames[1].as<float>()[0], 0.03F);
+  auto fixture = holoscan::testing::create_operator_test<Op>(extents);
+  fixture.set_params(std::move(params));
+  auto valid0 = holoscan::radar::testing::to_device_tensor(std::vector<uint8_t>{1}, {1, 1},
+                                                           DLDataType{kDLUInt, 8U, 1U});
+  auto valid1 = holoscan::radar::testing::to_device_tensor(std::vector<uint8_t>{1}, {1, 1},
+                                                           DLDataType{kDLUInt, 8U, 1U});
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::milliseconds{100},
+      holoscan::testing::input("array_geometry", holoscan::radar::to_wire(override_geometry)),
+      holoscan::testing::input("is_valid", *valid0),
+      holoscan::testing::input("snapshot", *snapshot0),
+      holoscan::testing::input("baseline_aoa", *baseline0)));
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::milliseconds{200}, holoscan::testing::input("is_valid", *valid1),
+      holoscan::testing::input("snapshot", *snapshot1),
+      holoscan::testing::input("baseline_aoa", *baseline1)));
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  for (const char* port :
+       {"residual_score", "snapshot_out", "selected_idx", "is_valid_out", "selection_mask"}) {
+    fixture.capture_snapshot<holoscan::Tensor>(port, 2U, kMaximumBytes);
+    fixture.output_device(port, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("snapshot", holoscan::DeviceId{0});
+  fixture.input_source_device("baseline_aoa", holoscan::DeviceId{0});
+  fixture.input_source_device("is_valid", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* port :
+       {"residual_score", "snapshot_out", "selected_idx", "is_valid_out", "selection_mask"}) {
+    (void)running.wait_for_output(port, 2U, std::chrono::seconds{5});
+  }
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frames = result.snapshots<holoscan::Tensor>("residual_score");
+  ASSERT_EQ(frames.size(), 2U);
+  const auto first = holoscan::radar::testing::to_host(frames[0]);
+  const auto second = holoscan::radar::testing::to_host(frames[1]);
+  EXPECT_NEAR(first.as<float>()[0], 0.0F, 1e-5F);
+  EXPECT_GT(second.as<float>()[0], 0.03F);
 }
 
 TEST(RankOneResidualScreenOpTest, EmptyInputEmitsEmptyDiagnostics) {
@@ -336,10 +349,11 @@ TEST(RankOneResidualScreenOpTest, EmptyInputEmitsEmptyDiagnostics) {
   const auto result =
       run_screen_graph<float>({make_graph_snapshot<float>(0, geometry, 0.0)},
                               {make_graph_baseline<float>(0, 0.0F)}, std::move(params), extents);
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 1U);
-  EXPECT_EQ(result.frames[0].shape, (std::vector<int64_t>{0}));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frames = result.snapshots<holoscan::Tensor>("residual_score");
+  ASSERT_EQ(frames.size(), 1U);
+  const auto output = holoscan::radar::testing::to_host(frames[0]);
+  EXPECT_EQ(output.shape, (std::vector<int64_t>{0}));
 }
 
 TEST(RankOneResidualScreenOpTest, RejectsThresholdOutsideUnitInterval) {
@@ -355,7 +369,8 @@ TEST(RankOneResidualScreenOpTest, RejectsThresholdOutsideUnitInterval) {
     const auto result =
         run_screen_graph<float>({make_graph_snapshot<float>(1, geometry, 0.0)},
                                 {make_graph_baseline<float>(1, 0.0F)}, std::move(params), extents);
-    EXPECT_TRUE(!result.plan_ok || !result.diagnostics.empty());
+    EXPECT_FALSE(result.ok());
+    EXPECT_FALSE(result.diagnostics().empty());
   }
 }
 
@@ -370,7 +385,8 @@ TEST(RankOneResidualScreenOpTest, RejectsCapturedExtentOverflow) {
   const auto result =
       run_screen_graph<double>({make_graph_snapshot<double>(2, geometry, 0.0)},
                                {make_graph_baseline<double>(2, 0.0)}, std::move(params), extents);
-  EXPECT_TRUE(!result.plan_ok || !result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 }  // namespace

@@ -172,7 +172,7 @@ throws or remains deferred in the Jira backlog.
 
 - [ ] **C++ unit tests** in `tests/cpp/<group>/test_<operator>.cpp`, mirroring
       the operator family tree (`fmcw/`, `detection/`, …), label `unit`.
-- [ ] Use **`create_operator_test`** + `tests/cpp/utils/sdk_harness.hpp`
+- [ ] Use **`create_operator_test`** from `holoscan::testing`
       (`single_map`, `TensorMapCapture`, `wire_leading_override` for
       `[live]` tests).
 - [ ] **Wire every output port** in harness/Application tests — operators
@@ -255,5 +255,5 @@ Exemplar: `performance/cpp/perf_cfar_detector.cpp`.
 | Batching / dtype / device checks | `radar_common/tensor/tensor_utils.hpp` |
 | Device tensor allocation | `radar_common/tensor/dlpack_buffer.hpp` |
 | MatX views (`.cu` / stage only) | `radar_common/tensor/matx_utils.hpp` |
-| Test TensorMap / overrides | `tests/cpp/utils/sdk_harness.hpp` |
+| Test TensorMap / overrides | `holoscan::testing` plus `tests/cpp/utils/tensor_fixtures.hpp` |
 | Host ↔ device test tensors | `tests/cpp/utils/tensor_fixtures.hpp` |

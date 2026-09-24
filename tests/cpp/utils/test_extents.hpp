@@ -36,10 +36,9 @@ inline MaxTensorExtents default_test_extents() {
   return extents;
 }
 
-inline MaxTensorExtents extents_for_scan_grid(
-    std::size_t num_az, std::size_t num_el,
-    std::optional<std::size_t> num_doppler = std::nullopt,
-    std::optional<std::size_t> num_range = std::nullopt) {
+inline MaxTensorExtents extents_for_scan_grid(std::size_t num_az, std::size_t num_el,
+                                              std::optional<std::size_t> num_doppler = std::nullopt,
+                                              std::optional<std::size_t> num_range = std::nullopt) {
   const auto at_least_one = [](std::size_t value) {
     return std::max<std::int64_t>(1, static_cast<std::int64_t>(value));
   };

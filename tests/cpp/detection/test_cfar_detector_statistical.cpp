@@ -6,12 +6,13 @@
 // CI (`ctest -L unit`); run nightly via `ctest -L statistical`.
 //
 // Uses the HSDK 5 Graph harness: builds a vector of noise-map tensors, passes
-// them to run_single_in_five_out_operator_graph_result (one graph run
+// them through one native operator-fixture run
 // processes all frames), and collects detection_score tensors from frames1.
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -22,12 +23,11 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -36,9 +36,7 @@ using holoscan::radar::CFARDetectorOp;
 using holoscan::radar::CFARParams;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::real_dtype;
-using holoscan::radar::testing::FiveOutGraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::run_single_in_five_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 
 constexpr int64_t kGuard = 1;
@@ -85,21 +83,6 @@ CFARParams os_params(double pfa) {
   p.training_cells = {kTrain, kTrain};
   p.pfa = pfa;
   return p;
-}
-
-// cpplint misreads the wrapped template header as an indented declaration
-// inside the anonymous namespace; the parameter list cannot fit on one line.
-template <typename Source, typename OpRef, typename S0, typename S1, typename S2, typename S3,
-          typename S4>  // NOLINT(whitespace/indent_namespace)
-void wire_cfar(holoscan::Graph& graph, const Source& source, OpRef& op, const S0& sink0,
-               const S1& sink1, const S2& sink2, const S3& sink3, const S4& sink4) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out, op->rd_maps, q);
-  graph.add_flow(op->detection_mask, sink0->in, q);
-  graph.add_flow(op->detection_score, sink1->in, q);
-  graph.add_flow(op->noise_estimate, sink2->in, q);
-  graph.add_flow(op->detection_idx, sink3->in, q);
-  graph.add_flow(op->cfar_power, sink4->in, q);
 }
 
 std::vector<double> exponential_power_map(int64_t num_doppler, int64_t num_range, double mean,
@@ -191,26 +174,38 @@ void expect_realized_pfa_near_configured(double realized, double configured, int
 
 std::vector<HostTensor> run_cfar_scores(std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
                                         CFARParams params) {
-  FiveOutGraphRunResult result =
-      run_single_in_five_out_operator_graph_result<CFARDetectorOp<double>>(
-          std::move(inputs), std::move(params), "detection_mask", "detection_score",
-          "noise_estimate", "detection_idx", "cfar_power",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-             const auto& sink1, const auto& sink2, const auto& sink3, const auto& sink4) {
-            wire_cfar(graph, source, op, sink0, sink1, sink2, sink3, sink4);
-          });
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  using Op = CFARDetectorOp<double>;
+  const std::size_t expected = inputs.size();
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  for (const auto& input : inputs) {
+    fixture.push(&Op::rd_maps, *input);
   }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
-    }
-    throw std::runtime_error(msg);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"detection_mask", "detection_score", "noise_estimate",
+                                      "detection_idx", "cfar_power"};
+  for (const char* output : kOutputs) {
+    fixture.capture_snapshot<holoscan::Tensor>(output, expected, kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
   }
-  return std::move(result.frames1);
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  bool observed = true;
+  for (const char* output : kOutputs) {
+    observed = running.wait_for_output(output, expected, std::chrono::seconds{30}) && observed;
+  }
+  running.request_stop();
+  const auto result = running.finish();
+  if (!observed || !result.ok()) {
+    throw std::runtime_error(result.describe_failure());
+  }
+  std::vector<HostTensor> scores;
+  scores.reserve(expected);
+  for (const auto& snapshot : result.snapshots<holoscan::Tensor>("detection_score")) {
+    scores.push_back(holoscan::radar::testing::to_host(snapshot));
+  }
+  return scores;
 }
 
 PfaTrialResult run_monte_carlo_pfa_k1(int num_trials, int64_t num_doppler, int64_t num_range,

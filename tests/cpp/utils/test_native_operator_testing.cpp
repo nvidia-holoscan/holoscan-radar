@@ -80,21 +80,18 @@ class EmptyTensorProducer final : public holoscan::Operator<> {
 holoscan::Tensor device_frame(float offset = 0.0F) {
   std::vector<std::complex<float>> values(8U);
   for (std::size_t index = 0; index < values.size(); ++index) {
-    values[index] = {offset + static_cast<float>(index),
-                     -static_cast<float>(index)};
+    values[index] = {offset + static_cast<float>(index), -static_cast<float>(index)};
   }
   const std::array<std::int64_t, 2> shape{4, 2};
-  auto tensor = holoscan::make_tensor(
-      shape, complex_dtype<float>(), std::nullopt,
-      holoscan::MemoryStorageType::kDevice,
-      std::make_shared<holoscan::UnboundedAllocator>());
+  auto tensor = holoscan::make_tensor(shape, complex_dtype<float>(), std::nullopt,
+                                      holoscan::MemoryStorageType::kDevice,
+                                      std::make_shared<holoscan::UnboundedAllocator>());
   if (!tensor) {
     throw holoscan::RuntimeError{std::move(tensor).error()};
   }
   auto destination = tensor->mutable_data();
-  if (!destination ||
-      cudaMemcpy(*destination, values.data(), values.size() * sizeof(values[0]),
-                 cudaMemcpyHostToDevice) != cudaSuccess) {
+  if (!destination || cudaMemcpy(*destination, values.data(), values.size() * sizeof(values[0]),
+                                 cudaMemcpyHostToDevice) != cudaSuccess) {
     throw std::runtime_error{"device_frame: upload failed"};
   }
   return std::move(*tensor);
@@ -126,21 +123,18 @@ TEST(NativeOperatorTesting, RunsWithConstructorParamsAndOwningSnapshot) {
   harness.set_params(ClutterFilterParams{.method = ClutterFilterMethod::kNone});
   const holoscan::Tensor input = device_frame();
   harness.push(&Op::range_profiles, input);
-  harness.capture_snapshot<holoscan::Tensor>(
-      "range_profiles_out", 1U, kMaximumSnapshotBytes);
+  harness.capture_snapshot<holoscan::Tensor>("range_profiles_out", 1U, kMaximumSnapshotBytes);
   place_device_ports(harness);
 
   auto running = harness.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output(
-      "range_profiles_out", 1U, kObservationTimeout);
+  const bool observed = running.wait_for_output("range_profiles_out", 1U, kObservationTimeout);
   running.request_stop();
   const auto result = running.finish();
 
   ASSERT_TRUE(observed) << result.describe_failure();
   EXPECT_EQ(result.termination(), holoscan::RunTermination::kStopped);
   ASSERT_TRUE(result.ok()) << result.describe_failure();
-  const HostTensor output = to_host(result.snapshot<holoscan::Tensor>(
-      "range_profiles_out"));
+  const HostTensor output = to_host(result.snapshot<holoscan::Tensor>("range_profiles_out"));
   EXPECT_EQ(output.shape, (std::vector<std::int64_t>{4, 2}));
   EXPECT_EQ(output.data.size(), input.nbytes());
 }
@@ -148,14 +142,13 @@ TEST(NativeOperatorTesting, RunsWithConstructorParamsAndOwningSnapshot) {
 TEST(NativeOperatorTesting, RepeatedRunsUseFreshOperatorsAndExplicitStaging) {
   auto harness = holoscan::testing::create_operator_test<Op>(default_test_extents());
   harness.set_params(ClutterFilterParams{.method = ClutterFilterMethod::kNone});
-  harness.capture_snapshot<holoscan::Tensor>(
-      "range_profiles_out", 1U, kMaximumSnapshotBytes);
+  harness.capture_snapshot<holoscan::Tensor>("range_profiles_out", 1U, kMaximumSnapshotBytes);
   place_device_ports(harness);
 
   harness.push(&Op::range_profiles, device_frame(0.0F));
   auto first_running = harness.run_async({.expect_stop = true});
-  const bool first_observed = first_running.wait_for_output(
-      "range_profiles_out", 1U, kObservationTimeout);
+  const bool first_observed =
+      first_running.wait_for_output("range_profiles_out", 1U, kObservationTimeout);
   first_running.request_stop();
   const auto first = first_running.finish();
   ASSERT_TRUE(first_observed) << first.describe_failure();
@@ -163,8 +156,8 @@ TEST(NativeOperatorTesting, RepeatedRunsUseFreshOperatorsAndExplicitStaging) {
 
   harness.push(&Op::range_profiles, device_frame(100.0F));
   auto second_running = harness.run_async({.expect_stop = true});
-  const bool second_observed = second_running.wait_for_output(
-      "range_profiles_out", 1U, kObservationTimeout);
+  const bool second_observed =
+      second_running.wait_for_output("range_profiles_out", 1U, kObservationTimeout);
   second_running.request_stop();
   const auto second = second_running.finish();
   ASSERT_TRUE(second_observed) << second.describe_failure();
@@ -180,27 +173,23 @@ TEST(NativeOperatorTesting, GroupedExactOverrideFallsBackOnTheNextFrame) {
 
   auto harness = holoscan::testing::create_operator_test<Op>(default_test_extents());
   harness.set_params(ClutterFilterParams{.method = ClutterFilterMethod::kNone});
-  harness.push_frame(frame_at(
-      std::chrono::milliseconds{1},
-      input("method", ClutterFilterMethod::kMeanSubtraction),
-      input("range_profiles", device_frame(0.0F))));
-  harness.push_frame(frame_at(
-      std::chrono::milliseconds{2},
-      input("range_profiles", device_frame(100.0F))));
-  harness.capture_snapshot<holoscan::Tensor>(
-      "range_profiles_out", 2U, kMaximumSnapshotBytes);
+  harness.push_frame(frame_at(std::chrono::milliseconds{1},
+                              input("method", ClutterFilterMethod::kMeanSubtraction),
+                              input("range_profiles", device_frame(0.0F))));
+  harness.push_frame(
+      frame_at(std::chrono::milliseconds{2}, input("range_profiles", device_frame(100.0F))));
+  harness.capture_snapshot<holoscan::Tensor>("range_profiles_out", 2U, kMaximumSnapshotBytes);
   place_device_ports(harness);
 
-  auto running = harness.run_async(
-      {.timeout = kObservationTimeout,
-       .expect_stop = true,
-       .frames = holoscan::testing::FrameRelease::kManual});
+  auto running = harness.run_async({.timeout = kObservationTimeout,
+                                    .expect_stop = true,
+                                    .frames = holoscan::testing::FrameRelease::kManual});
   const bool first_released = release_frame(running);
-  const bool first_observed = running.wait_for_output(
-      "range_profiles_out", 1U, kObservationTimeout);
+  const bool first_observed =
+      running.wait_for_output("range_profiles_out", 1U, kObservationTimeout);
   const bool second_released = release_frame(running);
-  const bool second_observed = running.wait_for_output(
-      "range_profiles_out", 2U, kObservationTimeout);
+  const bool second_observed =
+      running.wait_for_output("range_profiles_out", 2U, kObservationTimeout);
   running.request_stop();
   const auto result = running.finish();
 
@@ -217,8 +206,7 @@ TEST(NativeOperatorTesting, GroupedExactOverrideFallsBackOnTheNextFrame) {
 TEST(NativeOperatorTesting, ZeroElementDeviceTensorStages) {
   auto harness = holoscan::testing::create_operator_test<Op>(default_test_extents());
   harness.set_params(ClutterFilterParams{.method = ClutterFilterMethod::kNone});
-  auto empty = to_device_tensor(
-      std::vector<std::complex<float>>{}, {0, 2}, complex_dtype<float>());
+  auto empty = to_device_tensor(std::vector<std::complex<float>>{}, {0, 2}, complex_dtype<float>());
 
   EXPECT_NO_THROW(harness.push(&Op::range_profiles, *empty));
 }

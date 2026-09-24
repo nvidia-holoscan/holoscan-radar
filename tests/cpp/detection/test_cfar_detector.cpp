@@ -30,13 +30,15 @@
 #include <holoscan/core/graph.hpp>
 #include <holoscan/core/run.hpp>
 #include <holoscan/time/realtime_clock.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/integration_graph_utils.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -50,11 +52,7 @@ using holoscan::radar::AssemblyFeature;
 using holoscan::radar::FeatureAssemblyOp;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
-using holoscan::radar::testing::FiveOutGraphRunResult;
-using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::run_single_io_operator_graph_result;
-using holoscan::radar::testing::run_single_in_five_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 
 constexpr int64_t kDoppler = 16;
@@ -85,299 +83,6 @@ struct CfarLiveTick {
   std::optional<double> threshold_scale;
   std::optional<int64_t> os_rank;
   std::optional<int64_t> max_detections;
-};
-
-template <typename Tag>
-struct CfarLiveBank {
-  static void reset(const std::vector<CfarLiveTick>& new_ticks) {
-    const std::lock_guard lock(mutex);
-    ticks = new_ticks;
-    index = 0;
-  }
-
-  static inline std::mutex mutex;
-  static inline std::vector<CfarLiveTick> ticks;
-  static inline std::size_t index{0};
-};
-
-struct CfarLiveDataTag {};
-struct CfarLiveScalarControlsTag {};
-struct CfarLivePodControlsTag {};
-struct CfarLiveTensorControlsTag {};
-
-struct CfarLiveTimestampBank {
-  static void reset() {
-    const std::lock_guard lock(mutex);
-    base_timestamp_ns = 0;
-  }
-
-  static inline std::mutex mutex;
-  static inline int64_t base_timestamp_ns{0};
-};
-
-holoscan::TimePoint cfar_live_capture_time(std::size_t index,
-                                           const holoscan::ExecutionContext& context) {
-  holoscan::TimePoint capture_time = context.activation_time();
-  {
-    const std::lock_guard lock(CfarLiveTimestampBank::mutex);
-    if (CfarLiveTimestampBank::base_timestamp_ns == 0) {
-      CfarLiveTimestampBank::base_timestamp_ns = capture_time.timestamp_ns;
-    }
-    capture_time.timestamp_ns = CfarLiveTimestampBank::base_timestamp_ns +
-                                static_cast<int64_t>(index) *
-                                    holoscan::radar::testing::detail::kHarnessTick.count() *
-                                    1000000;
-  }
-  return capture_time;
-}
-
-holoscan::expected<void, holoscan::Error> emit_live_device_frame(
-    holoscan::Output<holoscan::Tensor>& out, holoscan::ExecutionContext& context,
-    const std::shared_ptr<holoscan::Tensor>& frame, holoscan::TimePoint capture_time) {
-  auto loan = out.allocate_tensor(
-      holoscan::TensorLoanRequest{.shape = frame->shape(), .dtype = frame->dtype()});
-  if (!loan) {
-    return holoscan::make_unexpected(std::move(loan).error());
-  }
-  auto writer = loan->write(context.cuda_stream());
-  if (!writer) {
-    return holoscan::make_unexpected(std::move(writer).error());
-  }
-  if (writer->byte_size() > 0 &&
-      cudaMemcpyAsync(writer->data(), frame->data(), writer->byte_size(), cudaMemcpyDeviceToDevice,
-                      context.cuda_stream().get()) != cudaSuccess) {
-    return holoscan::make_unexpected(holoscan::Error{
-        holoscan::ErrorCode::kFailure, "CfarLiveDataSourceOp: cudaMemcpyAsync failed"});
-  }
-  auto committed = std::move(*writer).commit();
-  if (!committed) {
-    return holoscan::make_unexpected(std::move(committed).error());
-  }
-  return out.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = capture_time});
-}
-
-class CfarLiveDataSourceOp final : public holoscan::Operator<> {
- public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorRepresentation kDevice{
-        .memory_kind = holoscan::MemoryKind::kCudaDevice,
-        .dtype = std::nullopt,
-        .rank = std::nullopt,
-    };
-    spec.output(rd_maps).produces_tensor(
-        holoscan::radar::pooled_tensor_output(kDevice, 3U, 8U * kDoppler * kRange * 8U));
-  }
-
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnClock{.period = holoscan::radar::testing::detail::kHarnessTick});
-    return result;
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    // Controls for frame k are published one activation before frame k. This
-    // gives Exact{} the causal ordering required for sibling OnClock sources.
-    if (warmup_) {
-      warmup_ = false;
-      return {};
-    }
-    std::shared_ptr<holoscan::Tensor> frame;
-    std::size_t index = 0;
-    {
-      const std::lock_guard lock(CfarLiveBank<CfarLiveDataTag>::mutex);
-      auto& bank = CfarLiveBank<CfarLiveDataTag>::ticks;
-      auto& bank_index = CfarLiveBank<CfarLiveDataTag>::index;
-      if (bank_index >= bank.size()) {
-        return {};
-      }
-      index = bank_index++;
-      frame = bank[index].rd_maps;
-    }
-    return emit_live_device_frame(rd_maps, context, frame, cfar_live_capture_time(index, context));
-  }
-
-  holoscan::Output<holoscan::Tensor> rd_maps{"rd_maps"};
-
- private:
-  bool warmup_{true};
-};
-
-struct CfarLiveControlConfig {
-  static inline bool wire_pfa{false};
-  static inline bool wire_threshold_scale{false};
-  static inline bool wire_os_rank{false};
-  static inline bool wire_max_detections{false};
-  static inline bool wire_guard_cells{false};
-  static inline bool wire_training_cells{false};
-  static inline bool wire_nci_axes{false};
-  static inline bool wire_alpha_lut{false};
-};
-
-class CfarLiveScalarControlsSourceOp final : public holoscan::Operator<> {
- public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.output(pfa);
-    spec.output(threshold_scale);
-    spec.output(os_rank);
-    spec.output(max_detections);
-  }
-
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnClock{.period = holoscan::radar::testing::detail::kHarnessTick});
-    return result;
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    CfarLiveTick tick;
-    std::size_t index = 0;
-    {
-      const std::lock_guard lock(CfarLiveBank<CfarLiveScalarControlsTag>::mutex);
-      auto& bank = CfarLiveBank<CfarLiveScalarControlsTag>::ticks;
-      auto& bank_index = CfarLiveBank<CfarLiveScalarControlsTag>::index;
-      if (bank_index >= bank.size()) {
-        return {};
-      }
-      index = bank_index++;
-      tick = bank[index];
-    }
-    const holoscan::EmitOptions options{.capture_time = cfar_live_capture_time(index, context)};
-    if (CfarLiveControlConfig::wire_pfa && tick.pfa.has_value()) {
-      HOLOSCAN_RETURN_IF_ERROR(pfa.emit(*tick.pfa, options));
-    }
-    if (CfarLiveControlConfig::wire_threshold_scale && tick.threshold_scale.has_value()) {
-      HOLOSCAN_RETURN_IF_ERROR(threshold_scale.emit(*tick.threshold_scale, options));
-    }
-    if (CfarLiveControlConfig::wire_os_rank && tick.os_rank.has_value()) {
-      HOLOSCAN_RETURN_IF_ERROR(os_rank.emit(*tick.os_rank, options));
-    }
-    if (CfarLiveControlConfig::wire_max_detections && tick.max_detections.has_value()) {
-      HOLOSCAN_RETURN_IF_ERROR(max_detections.emit(*tick.max_detections, options));
-    }
-    return {};
-  }
-
-  holoscan::Output<double> pfa{"pfa"};
-  holoscan::Output<double> threshold_scale{"threshold_scale"};
-  holoscan::Output<int64_t> os_rank{"os_rank"};
-  holoscan::Output<int64_t> max_detections{"max_detections"};
-};
-
-class CfarLivePodControlsSourceOp final : public holoscan::Operator<> {
- public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.output(guard_cells);
-    spec.output(training_cells);
-  }
-
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnClock{.period = holoscan::radar::testing::detail::kHarnessTick});
-    return result;
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    CfarLiveTick tick;
-    std::size_t index = 0;
-    {
-      const std::lock_guard lock(CfarLiveBank<CfarLivePodControlsTag>::mutex);
-      auto& bank = CfarLiveBank<CfarLivePodControlsTag>::ticks;
-      auto& bank_index = CfarLiveBank<CfarLivePodControlsTag>::index;
-      if (bank_index >= bank.size()) {
-        return {};
-      }
-      index = bank_index++;
-      tick = bank[index];
-    }
-    const holoscan::EmitOptions options{.capture_time = cfar_live_capture_time(index, context)};
-    if (CfarLiveControlConfig::wire_guard_cells && tick.guard_cells.has_value()) {
-      HOLOSCAN_RETURN_IF_ERROR(guard_cells.emit(*tick.guard_cells, options));
-    }
-    if (CfarLiveControlConfig::wire_training_cells && tick.training_cells.has_value()) {
-      HOLOSCAN_RETURN_IF_ERROR(training_cells.emit(*tick.training_cells, options));
-    }
-    return {};
-  }
-
-  holoscan::Output<CfarCellWindowOverride> guard_cells{"guard_cells"};
-  holoscan::Output<CfarCellWindowOverride> training_cells{"training_cells"};
-};
-
-template <typename Value>
-holoscan::expected<void, holoscan::Error> emit_live_host_tensor(
-    holoscan::Output<holoscan::Tensor>& output, const std::vector<Value>& values,
-    const std::vector<int64_t>& shape, DLDataType dtype, holoscan::TimePoint capture_time) {
-  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
-  if (!loan) {
-    return holoscan::make_unexpected(std::move(loan).error());
-  }
-  HOLOSCAN_RETURN_IF_ERROR(
-      loan->write_host_and_commit([&values](const holoscan::TensorOutputWriteGuard& writer) {
-        std::copy(values.begin(), values.end(), writer.data_as<Value>());
-      }));
-  return output.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = capture_time});
-}
-
-class CfarLiveTensorControlsSourceOp final : public holoscan::Operator<> {
- public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorRepresentation kHostInt64{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = kInt64ConfigDtype,
-        .rank = 1U,
-    };
-    constexpr holoscan::TensorRepresentation kHostFloat64{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = kFloat64ConfigDtype,
-        .rank = 1U,
-    };
-    spec.output(nci_axes).produces_tensor(
-        holoscan::radar::pooled_tensor_output(kHostInt64, 1U, 2U * sizeof(int64_t)));
-    spec.output(alpha_lut).produces_tensor(holoscan::radar::pooled_tensor_output(
-        kHostFloat64, 1U, kDoppler * kRange * sizeof(double)));
-  }
-
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnClock{.period = holoscan::radar::testing::detail::kHarnessTick});
-    return result;
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    CfarLiveTick tick;
-    std::size_t index = 0;
-    {
-      const std::lock_guard lock(CfarLiveBank<CfarLiveTensorControlsTag>::mutex);
-      auto& bank = CfarLiveBank<CfarLiveTensorControlsTag>::ticks;
-      auto& bank_index = CfarLiveBank<CfarLiveTensorControlsTag>::index;
-      if (bank_index >= bank.size()) {
-        return {};
-      }
-      index = bank_index++;
-      tick = bank[index];
-    }
-    const holoscan::TimePoint capture_time = cfar_live_capture_time(index, context);
-    if (CfarLiveControlConfig::wire_nci_axes && tick.nci_axes.has_value()) {
-      const std::vector<int64_t> shape =
-          tick.nci_shape.empty() ? std::vector<int64_t>{static_cast<int64_t>(tick.nci_axes->size())}
-                                 : tick.nci_shape;
-      HOLOSCAN_RETURN_IF_ERROR(
-          emit_live_host_tensor(nci_axes, *tick.nci_axes, shape, kInt64ConfigDtype, capture_time));
-    }
-    if (CfarLiveControlConfig::wire_alpha_lut && tick.alpha_lut.has_value()) {
-      HOLOSCAN_RETURN_IF_ERROR(emit_live_host_tensor(alpha_lut, *tick.alpha_lut,
-                                                     {static_cast<int64_t>(tick.alpha_lut->size())},
-                                                     kFloat64ConfigDtype, capture_time));
-    }
-    return {};
-  }
-
-  holoscan::Output<holoscan::Tensor> nci_axes{"nci_axes"};
-  holoscan::Output<holoscan::Tensor> alpha_lut{"alpha_lut"};
 };
 
 struct CfarOutputs {
@@ -412,58 +117,49 @@ CFARParams ca_params(double pfa) {
   return p;
 }
 
-// cpplint misreads the wrapped template header as an indented declaration
-// inside the anonymous namespace; the parameter list cannot fit on one line.
-template <typename Source, typename OpRef, typename S0, typename S1, typename S2, typename S3,
-          typename S4>  // NOLINT(whitespace/indent_namespace)
-void wire_cfar(holoscan::Graph& graph, const Source& source, OpRef& op, const S0& sink0,
-               const S1& sink1, const S2& sink2, const S3& sink3, const S4& sink4) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out, op->rd_maps, q);
-  graph.add_flow(op->detection_mask, sink0->in, q);
-  graph.add_flow(op->detection_score, sink1->in, q);
-  graph.add_flow(op->noise_estimate, sink2->in, q);
-  graph.add_flow(op->detection_idx, sink3->in, q);
-  graph.add_flow(op->cfar_power, sink4->in, q);
-}
-
 template <typename T>
-FiveOutGraphRunResult run_cfar_result(std::shared_ptr<holoscan::Tensor> input, CFARParams params,
-                                      const holoscan::radar::MaxTensorExtents& extents =
-                                          holoscan::radar::testing::default_test_extents()) {
-  return run_single_in_five_out_operator_graph_result<CFARDetectorOp<T>>(
-      {std::move(input)}, std::move(params), "detection_mask", "detection_score", "noise_estimate",
-      "detection_idx", "cfar_power",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0, const auto& sink1,
-         const auto& sink2, const auto& sink3, const auto& sink4) {
-        wire_cfar(graph, source, op, sink0, sink1, sink2, sink3, sink4);
-      },
-      extents);
+holoscan::testing::TestResult run_cfar_result(
+    std::shared_ptr<holoscan::Tensor> input, CFARParams params,
+    const holoscan::radar::MaxTensorExtents& extents =
+        holoscan::radar::testing::default_test_extents()) {
+  using Op = CFARDetectorOp<T>;
+  auto fixture = holoscan::testing::create_operator_test<Op>(extents);
+  fixture.set_params(std::move(params));
+  fixture.push(&Op::rd_maps, *input);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"detection_mask", "detection_score", "noise_estimate",
+                                      "detection_idx", "cfar_power"};
+  for (const char* output : kOutputs) {
+    fixture.template capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* output : kOutputs) {
+    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+  }
+  running.request_stop();
+  return running.finish();
 }
 
 template <typename T>
 CfarOutputs run_cfar(std::shared_ptr<holoscan::Tensor> input, CFARParams params,
                      const holoscan::radar::MaxTensorExtents& extents =
                          holoscan::radar::testing::default_test_extents()) {
-  FiveOutGraphRunResult result = run_cfar_result<T>(std::move(input), std::move(params), extents);
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  const auto result = run_cfar_result<T>(std::move(input), std::move(params), extents);
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
-    }
-    throw std::runtime_error(msg);
-  }
-  if (result.frames0.size() != 1U || result.frames1.size() != 1U || result.frames2.size() != 1U ||
-      result.frames3.size() != 1U || result.frames4.size() != 1U) {
-    throw std::runtime_error("CFARDetectorOp test: expected one output frame set");
-  }
-  return {std::move(result.frames0.front()), std::move(result.frames1.front()),
-          std::move(result.frames2.front()), std::move(result.frames3.front()),
-          std::move(result.frames4.front())};
+  return {
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("detection_mask")),
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("detection_score")),
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("noise_estimate")),
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("detection_idx")),
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("cfar_power"))};
 }
 
 // Which override ports the graph wires, and so which controls its sources
@@ -479,167 +175,86 @@ struct CfarLiveWiring {
   bool alpha_lut{false};
 };
 
-template <typename Bank>
-bool bank_caught_up(std::size_t expected) {
-  const std::lock_guard lock(Bank::mutex);
-  return Bank::captured.size() >= expected;
+holoscan::testing::TestResult run_cfar_live(std::vector<CfarLiveTick> ticks, CFARParams params,
+                                            CfarLiveWiring wiring) {
+  using Op = CFARDetectorOp<double>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  std::vector<std::shared_ptr<holoscan::Tensor>> host_tensors;
+  for (std::size_t index = 0; index < ticks.size(); ++index) {
+    const auto capture_time = std::chrono::milliseconds{static_cast<int64_t>((index + 1U) * 100U)};
+    holoscan::testing::TestFrame frame;
+    const auto append = [&frame](holoscan::testing::TestFrame part) {
+      for (auto& field : part.fields) {
+        frame.fields.push_back(std::move(field));
+      }
+    };
+    const auto& tick = ticks[index];
+    if (wiring.pfa && tick.pfa.has_value()) {
+      append(holoscan::testing::frame_at(capture_time, holoscan::testing::input("pfa", *tick.pfa)));
+    }
+    if (wiring.threshold_scale && tick.threshold_scale.has_value()) {
+      append(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("threshold_scale", *tick.threshold_scale)));
+    }
+    if (wiring.os_rank && tick.os_rank.has_value()) {
+      append(holoscan::testing::frame_at(capture_time,
+                                         holoscan::testing::input("os_rank", *tick.os_rank)));
+    }
+    if (wiring.max_detections && tick.max_detections.has_value()) {
+      append(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("max_detections", *tick.max_detections)));
+    }
+    if (wiring.guard_cells && tick.guard_cells.has_value()) {
+      append(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("guard_cells", *tick.guard_cells)));
+    }
+    if (wiring.training_cells && tick.training_cells.has_value()) {
+      append(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("training_cells", *tick.training_cells)));
+    }
+    if (wiring.nci_axes && tick.nci_axes.has_value()) {
+      const auto shape = tick.nci_shape.empty()
+                             ? std::vector<int64_t>{static_cast<int64_t>(tick.nci_axes->size())}
+                             : tick.nci_shape;
+      host_tensors.push_back(holoscan::radar::testing::to_pageable_host_tensor(
+          *tick.nci_axes, shape, kInt64ConfigDtype));
+      append(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("nci_axes", *host_tensors.back())));
+    }
+    if (wiring.alpha_lut && tick.alpha_lut.has_value()) {
+      host_tensors.push_back(holoscan::radar::testing::to_pageable_host_tensor(
+          *tick.alpha_lut, {static_cast<int64_t>(tick.alpha_lut->size())}, kFloat64ConfigDtype));
+      append(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("alpha_lut", *host_tensors.back())));
+    }
+    append(holoscan::testing::frame_at(capture_time,
+                                       holoscan::testing::input("rd_maps", *tick.rd_maps)));
+    fixture.push_frame(frame);
+  }
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"detection_mask", "detection_score", "noise_estimate",
+                                      "detection_idx", "cfar_power"};
+  for (const char* output : kOutputs) {
+    fixture.capture_snapshot<holoscan::Tensor>(output, ticks.size(), kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* output : kOutputs) {
+    (void)running.wait_for_output(output, ticks.size(), std::chrono::seconds{5});
+  }
+  running.request_stop();
+  return running.finish();
 }
 
-FiveOutGraphRunResult run_cfar_live(std::vector<CfarLiveTick> ticks, CFARParams params,
-                                    CfarLiveWiring wiring) {
-  namespace harness = holoscan::radar::testing::detail;
-  FiveOutGraphRunResult result;
-  harness::FrameBank::reset();
-  harness::FrameBankB::reset();
-  harness::FrameBankC::reset();
-  harness::FrameBankD::reset();
-  harness::FrameBankE::reset();
-  const std::size_t expected = ticks.size();
-  CfarLiveBank<CfarLiveDataTag>::reset(ticks);
-  CfarLiveBank<CfarLiveScalarControlsTag>::reset(ticks);
-  CfarLiveBank<CfarLivePodControlsTag>::reset(ticks);
-  CfarLiveBank<CfarLiveTensorControlsTag>::reset(ticks);
-  CfarLiveTimestampBank::reset();
-  const bool wire_pfa = wiring.pfa;
-  const bool wire_threshold_scale = wiring.threshold_scale;
-  const bool wire_os_rank = wiring.os_rank;
-  const bool wire_max_detections = wiring.max_detections;
-  const bool wire_guard_cells = wiring.guard_cells;
-  const bool wire_training_cells = wiring.training_cells;
-  const bool wire_nci_axes = wiring.nci_axes;
-  const bool wire_alpha_lut = wiring.alpha_lut;
-  CfarLiveControlConfig::wire_pfa = wire_pfa;
-  CfarLiveControlConfig::wire_threshold_scale = wire_threshold_scale;
-  CfarLiveControlConfig::wire_os_rank = wire_os_rank;
-  CfarLiveControlConfig::wire_max_detections = wire_max_detections;
-  CfarLiveControlConfig::wire_guard_cells = wire_guard_cells;
-  CfarLiveControlConfig::wire_training_cells = wire_training_cells;
-  CfarLiveControlConfig::wire_nci_axes = wire_nci_axes;
-  CfarLiveControlConfig::wire_alpha_lut = wire_alpha_lut;
-
-  holoscan::Graph graph{"cfar-live-config"};
-  const auto source = graph.op<CfarLiveDataSourceOp>("data_source");
-  auto op =
-      graph.op<CFARDetectorOp<double>>("op", holoscan::radar::testing::default_test_extents());
-  op.set_params(std::move(params));
-  const auto sink0 = graph.op<harness::TensorCaptureOp>("sink0");
-  const auto sink1 = graph.op<harness::TensorCaptureBOp>("sink1");
-  const auto sink2 = graph.op<harness::TensorCaptureCOp>("sink2");
-  const auto sink3 = graph.op<harness::TensorCaptureDOp>("sink3");
-  const auto sink4 = graph.op<harness::TensorCaptureEOp>("sink4");
-  graph.partition("data").add(source).add(op).add(sink0).add(sink1).add(sink2).add(sink3).add(
-      sink4);
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->rd_maps, op->rd_maps, q);
-  if (wire_pfa || wire_threshold_scale || wire_os_rank || wire_max_detections) {
-    const auto control = graph.op<CfarLiveScalarControlsSourceOp>("scalar_control_source");
-    if (wire_pfa) {
-      graph.add_flow(control->pfa, op->pfa, q);
-    }
-    if (wire_threshold_scale) {
-      graph.add_flow(control->threshold_scale, op->threshold_scale, q);
-    }
-    if (wire_os_rank) {
-      graph.add_flow(control->os_rank, op->os_rank, q);
-    }
-    if (wire_max_detections) {
-      graph.add_flow(control->max_detections, op->max_detections, q);
-    }
-    graph.partition("scalar_control").add(control);
+std::vector<HostTensor> cfar_frames(const holoscan::testing::TestResult& result, const char* port) {
+  std::vector<HostTensor> frames;
+  for (const auto& snapshot : result.snapshots<holoscan::Tensor>(port)) {
+    frames.push_back(holoscan::radar::testing::to_host(snapshot));
   }
-  if (wire_guard_cells || wire_training_cells) {
-    const auto control = graph.op<CfarLivePodControlsSourceOp>("pod_control_source");
-    if (wire_guard_cells) {
-      graph.add_flow(control->guard_cells, op->guard_cells, q);
-    }
-    if (wire_training_cells) {
-      graph.add_flow(control->training_cells, op->training_cells, q);
-    }
-    graph.partition("pod_control").add(control);
-  }
-  if (wire_nci_axes || wire_alpha_lut) {
-    const auto control = graph.op<CfarLiveTensorControlsSourceOp>("tensor_control_source");
-    if (wire_nci_axes) {
-      graph.add_flow(control->nci_axes, op->nci_axes, q);
-    }
-    if (wire_alpha_lut) {
-      graph.add_flow(control->alpha_lut, op->alpha_lut, q);
-    }
-    graph.partition("tensor_control").add(control);
-  }
-  graph.add_flow(op->detection_mask, sink0->in, q);
-  graph.add_flow(op->detection_score, sink1->in, q);
-  graph.add_flow(op->noise_estimate, sink2->in, q);
-  graph.add_flow(op->detection_idx, sink3->in, q);
-  graph.add_flow(op->cfar_power, sink4->in, q);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-
-  holoscan::CompileOptions options;
-  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
-      .operator_path = "data_source",
-      .output_port = "rd_maps",
-      .device = holoscan::DeviceId{0},
-  });
-  harness::bind_op_device_output(options, "detection_mask");
-  harness::bind_op_device_output(options, "detection_score");
-  harness::bind_op_device_output(options, "noise_estimate");
-  harness::bind_op_device_output(options, "detection_idx");
-  harness::bind_op_device_output(options, "cfar_power");
-
-  try {
-    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-    result.plan_ok = plan.ok();
-    result.plan_json = plan.json();
-    if (!plan.ok()) {
-      return result;
-    }
-    holoscan::RunSession session = holoscan::run_async(plan);
-    const auto deadline = std::chrono::steady_clock::now() + harness::kHarnessDeadline;
-    while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
-      // Every sink must be caught up before the stop request: the five outputs
-      // are captured independently, so waiting on one alone lets a slower sink
-      // lose its last frame to `request_stop()`.
-      if (bank_caught_up<harness::FrameBank>(expected) &&
-          bank_caught_up<harness::FrameBankB>(expected) &&
-          bank_caught_up<harness::FrameBankC>(expected) &&
-          bank_caught_up<harness::FrameBankD>(expected) &&
-          bank_caught_up<harness::FrameBankE>(expected)) {
-        break;
-      }
-      std::this_thread::sleep_for(harness::kHarnessPoll);
-    }
-    session.request_stop();
-    session.wait();
-    result.termination = session.termination();
-    for (const auto& diagnostic : session.diagnostics()) {
-      result.diagnostics.emplace_back(diagnostic.token);
-    }
-  } catch (const holoscan::RuntimeError& error) {
-    result.plan_ok = false;
-    result.plan_json = std::string("RuntimeError: ") + error.what();
-    return result;
-  }
-  {
-    const std::lock_guard lock(harness::FrameBank::mutex);
-    result.frames0 = std::move(harness::FrameBank::captured);
-  }
-  {
-    const std::lock_guard lock(harness::FrameBankB::mutex);
-    result.frames1 = std::move(harness::FrameBankB::captured);
-  }
-  {
-    const std::lock_guard lock(harness::FrameBankC::mutex);
-    result.frames2 = std::move(harness::FrameBankC::captured);
-  }
-  {
-    const std::lock_guard lock(harness::FrameBankD::mutex);
-    result.frames3 = std::move(harness::FrameBankD::captured);
-  }
-  {
-    const std::lock_guard lock(harness::FrameBankE::mutex);
-    result.frames4 = std::move(harness::FrameBankE::captured);
-  }
-  return result;
+  return frames;
 }
 
 int64_t num_detections(const HostTensor& idx) {
@@ -723,7 +338,7 @@ double score_at(const HostTensor& score, int64_t d, int64_t r) {
 }  // namespace
 
 TEST(CFARDetectorOpTest, FeatureAssemblyWaitsForCfarScoreAndIndex) {
-  namespace harness = holoscan::radar::testing::detail;
+  namespace harness = holoscan::radar::testing::integration;
   harness::FrameBank::reset();
   harness::FrameBank::input_frames = {to_device_tensor<double>(
       power_map(1.0, {{8, 16}}, 100.0), {kDoppler, kRange}, real_dtype<double>())};
@@ -1029,10 +644,9 @@ TEST(CFARDetectorOpTest, SingleLeadingAxisUsesMaxChannels) {
   extents.max_detections = kVirtual * kDoppler * kRange;
 
   const auto result = run_cfar_result<double>(input, ca_params(1e-3), extents);
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  EXPECT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames0.size(), 1U);
-  EXPECT_EQ(result.frames0.front().shape, shape);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(cfar_frames(result, "detection_mask").size(), 1U);
+  EXPECT_EQ(cfar_frames(result, "detection_mask").front().shape, shape);
 }
 
 TEST(CFARDetectorOpTest, RejectsOpaqueLeadingBatch) {
@@ -1048,7 +662,7 @@ TEST(CFARDetectorOpTest, RejectsOpaqueLeadingBatch) {
   extents.max_detections = kOpaque * kOpaque * kOpaque * kDoppler * kRange;
 
   const auto result = run_cfar_result<double>(input, ca_params(1e-3), extents);
-  EXPECT_TRUE(!result.plan_ok || !result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
 }
 
 TEST(CFARDetectorOpTest, OptionalOutputsMayBeLeftUnwired) {
@@ -1062,29 +676,35 @@ TEST(CFARDetectorOpTest, OptionalOutputsMayBeLeftUnwired) {
     }
     return inputs;
   };
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
+  const auto run_selected = [&](const char* captured_port) {
+    using Op = CFARDetectorOp<double>;
+    auto fixture = holoscan::testing::create_operator_test<Op>(
+        holoscan::radar::testing::default_test_extents());
+    fixture.set_params(ca_params(1e-3));
+    const auto inputs = make_inputs();
+    for (const auto& input : inputs) {
+      fixture.push(&Op::rd_maps, *input);
+    }
+    constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+    fixture.capture_snapshot<holoscan::Tensor>(captured_port, kFrames, kMaximumBytes);
+    for (const char* output :
+         {"detection_mask", "detection_score", "noise_estimate", "detection_idx", "cfar_power"}) {
+      fixture.output_device(output, holoscan::DeviceId{0});
+    }
+    fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+    auto running = fixture.run_async({.expect_stop = true});
+    (void)running.wait_for_output(captured_port, kFrames, std::chrono::seconds{5});
+    running.request_stop();
+    return running.finish();
+  };
 
-  const GraphRunResult idx_only = run_single_io_operator_graph_result<CFARDetectorOp<double>>(
-      make_inputs(), ca_params(1e-3), "detection_idx",
-      [q](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        graph.add_flow(source->out, op->rd_maps, q);
-        graph.add_flow(op->detection_idx, sink->in, q);
-      },
-      {"detection_mask", "detection_score", "noise_estimate", "cfar_power"});
-  ASSERT_TRUE(idx_only.plan_ok) << idx_only.plan_json;
-  EXPECT_TRUE(idx_only.diagnostics.empty());
-  EXPECT_EQ(idx_only.frames.size(), kFrames);
+  const auto idx_only = run_selected("detection_idx");
+  ASSERT_TRUE(idx_only.ok()) << idx_only.describe_failure();
+  EXPECT_EQ(idx_only.snapshots<holoscan::Tensor>("detection_idx").size(), kFrames);
 
-  const GraphRunResult power_only = run_single_io_operator_graph_result<CFARDetectorOp<double>>(
-      make_inputs(), ca_params(1e-3), "cfar_power",
-      [q](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        graph.add_flow(source->out, op->rd_maps, q);
-        graph.add_flow(op->cfar_power, sink->in, q);
-      },
-      {"detection_mask", "detection_score", "noise_estimate", "detection_idx"});
-  ASSERT_TRUE(power_only.plan_ok) << power_only.plan_json;
-  EXPECT_TRUE(power_only.diagnostics.empty());
-  EXPECT_EQ(power_only.frames.size(), kFrames);
+  const auto power_only = run_selected("cfar_power");
+  ASSERT_TRUE(power_only.ok()) << power_only.describe_failure();
+  EXPECT_EQ(power_only.snapshots<holoscan::Tensor>("cfar_power").size(), kFrames);
 }
 
 TEST(CFARDetectorOpTest, LiveThresholdScaleOverrideMidStream) {
@@ -1099,12 +719,12 @@ TEST(CFARDetectorOpTest, LiveThresholdScaleOverrideMidStream) {
   const auto result =
       run_cfar_live({missing, override, missing}, params, {.threshold_scale = true});
 
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames3.size(), 3U);
-  EXPECT_GE(num_detections(result.frames3[0]), 1);
-  EXPECT_EQ(num_detections(result.frames3[1]), 0);
-  EXPECT_EQ(num_detections(result.frames3[2]), num_detections(result.frames3[0]));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(cfar_frames(result, "detection_idx").size(), 3U);
+  EXPECT_GE(num_detections(cfar_frames(result, "detection_idx")[0]), 1);
+  EXPECT_EQ(num_detections(cfar_frames(result, "detection_idx")[1]), 0);
+  EXPECT_EQ(num_detections(cfar_frames(result, "detection_idx")[2]),
+            num_detections(cfar_frames(result, "detection_idx")[0]));
 }
 
 TEST(CFARDetectorOpTest, LivePfaOverrideMidStream) {
@@ -1119,13 +739,12 @@ TEST(CFARDetectorOpTest, LivePfaOverrideMidStream) {
   override.pfa = 1e-9;
   const auto result = run_cfar_live({missing, override, missing}, params, {.pfa = true});
 
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames1.size(), 3U);
-  const double params_score = result.frames1[0].as<double>()[kPeak];
-  const double override_score = result.frames1[1].as<double>()[kPeak];
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(cfar_frames(result, "detection_score").size(), 3U);
+  const double params_score = cfar_frames(result, "detection_score")[0].as<double>()[kPeak];
+  const double override_score = cfar_frames(result, "detection_score")[1].as<double>()[kPeak];
   EXPECT_LT(override_score, params_score);
-  EXPECT_DOUBLE_EQ(result.frames1[2].as<double>()[kPeak], params_score);
+  EXPECT_DOUBLE_EQ(cfar_frames(result, "detection_score")[2].as<double>()[kPeak], params_score);
 }
 
 TEST(CFARDetectorOpTest, NonBlockingPfaOverrideServesStaleLut) {
@@ -1140,12 +759,11 @@ TEST(CFARDetectorOpTest, NonBlockingPfaOverrideServesStaleLut) {
   override.pfa = 7.3e-8;
   const auto result = run_cfar_live({missing, override, missing}, params, {.pfa = true});
 
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames1.size(), 3U);
-  const double initial_score = result.frames1[0].as<double>()[kPeak];
-  EXPECT_DOUBLE_EQ(result.frames1[1].as<double>()[kPeak], initial_score);
-  EXPECT_DOUBLE_EQ(result.frames1[2].as<double>()[kPeak], initial_score);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(cfar_frames(result, "detection_score").size(), 3U);
+  const double initial_score = cfar_frames(result, "detection_score")[0].as<double>()[kPeak];
+  EXPECT_DOUBLE_EQ(cfar_frames(result, "detection_score")[1].as<double>()[kPeak], initial_score);
+  EXPECT_DOUBLE_EQ(cfar_frames(result, "detection_score")[2].as<double>()[kPeak], initial_score);
 }
 
 TEST(CFARDetectorOpTest, LiveMaxDetectionsOverrideMidStream) {
@@ -1159,12 +777,11 @@ TEST(CFARDetectorOpTest, LiveMaxDetectionsOverrideMidStream) {
   override.max_detections = 1;
   const auto result = run_cfar_live({missing, override, missing}, params, {.max_detections = true});
 
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames3.size(), 3U);
-  EXPECT_EQ(num_detections(result.frames3[0]), 2);
-  EXPECT_EQ(num_detections(result.frames3[1]), 1);
-  EXPECT_EQ(num_detections(result.frames3[2]), 2);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(cfar_frames(result, "detection_idx").size(), 3U);
+  EXPECT_EQ(num_detections(cfar_frames(result, "detection_idx")[0]), 2);
+  EXPECT_EQ(num_detections(cfar_frames(result, "detection_idx")[1]), 1);
+  EXPECT_EQ(num_detections(cfar_frames(result, "detection_idx")[2]), 2);
 }
 
 TEST(CFARDetectorOpTest, LiveOsRankOverrideMidStream) {
@@ -1185,13 +802,12 @@ TEST(CFARDetectorOpTest, LiveOsRankOverrideMidStream) {
   override.os_rank = 30;
   const auto result = run_cfar_live({missing, override, missing}, params, {.os_rank = true});
 
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames2.size(), 3U);
-  const double params_noise = result.frames2[0].as<double>()[kPeak];
-  const double override_noise = result.frames2[1].as<double>()[kPeak];
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(cfar_frames(result, "noise_estimate").size(), 3U);
+  const double params_noise = cfar_frames(result, "noise_estimate")[0].as<double>()[kPeak];
+  const double override_noise = cfar_frames(result, "noise_estimate")[1].as<double>()[kPeak];
   EXPECT_LT(params_noise, override_noise);
-  EXPECT_DOUBLE_EQ(result.frames2[2].as<double>()[kPeak], params_noise);
+  EXPECT_DOUBLE_EQ(cfar_frames(result, "noise_estimate")[2].as<double>()[kPeak], params_noise);
 }
 
 TEST(CFARDetectorOpTest, GuardCellsConfigurableFromParams) {
@@ -1246,16 +862,18 @@ TEST(CFARDetectorOpTest, LiveGuardCellsOverrideAppliesForOneTick) {
   const CfarLiveTick missing{input, std::nullopt, std::nullopt, std::nullopt, std::nullopt, {}};
   const auto result = run_cfar_live({missing, first, missing}, params, {.guard_cells = true});
 
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames1.size(), 3U);
-  EXPECT_EQ(result.frames1[0].shape, (std::vector<int64_t>{kDoppler, kRange}));
-  EXPECT_EQ(result.frames1[1].shape, result.frames1[0].shape);
-  EXPECT_EQ(result.frames1[2].shape, result.frames1[0].shape);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(cfar_frames(result, "detection_score").size(), 3U);
+  EXPECT_EQ(cfar_frames(result, "detection_score")[0].shape,
+            (std::vector<int64_t>{kDoppler, kRange}));
+  EXPECT_EQ(cfar_frames(result, "detection_score")[1].shape,
+            cfar_frames(result, "detection_score")[0].shape);
+  EXPECT_EQ(cfar_frames(result, "detection_score")[2].shape,
+            cfar_frames(result, "detection_score")[0].shape);
   constexpr int64_t kPeak = 8 * kRange + 16;
-  const double params_score = result.frames1[0].as<double>()[kPeak];
-  const double override_score = result.frames1[1].as<double>()[kPeak];
-  const double reverted_score = result.frames1[2].as<double>()[kPeak];
+  const double params_score = cfar_frames(result, "detection_score")[0].as<double>()[kPeak];
+  const double override_score = cfar_frames(result, "detection_score")[1].as<double>()[kPeak];
+  const double reverted_score = cfar_frames(result, "detection_score")[2].as<double>()[kPeak];
   // The wider guard window changes the noise estimate, so the middle tick is
   // distinguishable; the silent tick after it is back on the Params window.
   EXPECT_NE(override_score, params_score);
@@ -1269,9 +887,9 @@ TEST(CFARDetectorOpTest, RejectsMalformedLiveCellWindow) {
   const CfarLiveTick malformed{
       input, CfarCellWindowOverride{-1, 1}, std::nullopt, std::nullopt, std::nullopt, {}};
   const auto result = run_cfar_live({malformed}, params, {.guard_cells = true});
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(cfar_frames(result, "detection_mask").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 // A rank-2 nci_axes never reaches compute: the source's rank-1 pool refuses
@@ -1287,10 +905,8 @@ TEST(CFARDetectorOpTest, RejectsMalformedLiveNciAxesTensor) {
   CFARParams params = ca_params(1e-3);
   const CfarLiveTick malformed{input,        std::nullopt, std::nullopt, std::vector<int64_t>{0},
                                std::nullopt, {1, 1}};
-  const auto result = run_cfar_live({malformed}, params, {.nci_axes = true});
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_THROW((void)run_cfar_live({malformed}, params, {.nci_axes = true}),
+               holoscan::RuntimeError);
 }
 
 TEST(CFARDetectorOpTest, LiveNciAxesOverrideAppliesForOneTick) {
@@ -1306,12 +922,14 @@ TEST(CFARDetectorOpTest, LiveNciAxesOverrideAppliesForOneTick) {
   override.nci_axes = std::vector<int64_t>{0};
   const auto result = run_cfar_live({missing, override, missing}, params, {.nci_axes = true});
 
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames0.size(), 3U);
-  EXPECT_EQ(result.frames0[0].shape, (std::vector<int64_t>{kChannels, kDoppler, kRange}));
-  EXPECT_EQ(result.frames0[1].shape, (std::vector<int64_t>{kDoppler, kRange}));
-  EXPECT_EQ(result.frames0[2].shape, result.frames0[0].shape);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(cfar_frames(result, "detection_mask").size(), 3U);
+  EXPECT_EQ(cfar_frames(result, "detection_mask")[0].shape,
+            (std::vector<int64_t>{kChannels, kDoppler, kRange}));
+  EXPECT_EQ(cfar_frames(result, "detection_mask")[1].shape,
+            (std::vector<int64_t>{kDoppler, kRange}));
+  EXPECT_EQ(cfar_frames(result, "detection_mask")[2].shape,
+            cfar_frames(result, "detection_mask")[0].shape);
 }
 
 TEST(CFARDetectorOpTest, LiveAlphaLutOverrideAndClearing) {
@@ -1330,15 +948,15 @@ TEST(CFARDetectorOpTest, LiveAlphaLutOverrideAndClearing) {
   const CfarLiveTick missing{input, std::nullopt, std::nullopt, std::nullopt, std::nullopt, {}};
   const auto result = run_cfar_live({external, clear, missing}, params, {.alpha_lut = true});
 
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames3.size(), 3U);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(cfar_frames(result, "detection_idx").size(), 3U);
   // The huge external LUT suppresses everything; the explicit empty vector
   // clears back to the internally built LUT; the silent third tick reverts to
   // the Params alpha_lut, which is also empty, so it agrees with tick 1.
-  EXPECT_EQ(num_detections(result.frames3[0]), 0);
-  EXPECT_GE(num_detections(result.frames3[1]), 1);
-  EXPECT_EQ(num_detections(result.frames3[2]), num_detections(result.frames3[1]));
+  EXPECT_EQ(num_detections(cfar_frames(result, "detection_idx")[0]), 0);
+  EXPECT_GE(num_detections(cfar_frames(result, "detection_idx")[1]), 1);
+  EXPECT_EQ(num_detections(cfar_frames(result, "detection_idx")[2]),
+            num_detections(cfar_frames(result, "detection_idx")[1]));
 }
 
 TEST(CFARDetectorOpTest, RejectsMalformedLiveAlphaLut) {
@@ -1350,9 +968,9 @@ TEST(CFARDetectorOpTest, RejectsMalformedLiveAlphaLut) {
   CFARParams params = ca_params(1e-3);
   const CfarLiveTick malformed{input, std::nullopt, std::nullopt, std::nullopt, lut, {}};
   const auto result = run_cfar_live({malformed}, params, {.alpha_lut = true});
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(cfar_frames(result, "detection_mask").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(CFARDetectorOpTest, NciIntegratesChannelsForDetection) {
@@ -1448,10 +1066,10 @@ TEST(CFARDetectorOpTest, RejectsMissingGuardCells) {
   params.cfar_variant = CfarVariant::kCA;
   params.training_cells = {2, 2};
   params.pfa = 1e-3;
-  const FiveOutGraphRunResult result = run_cfar_result<double>(input, params);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_cfar_result<double>(input, params);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(cfar_frames(result, "detection_mask").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(CFARDetectorOpTest, RejectsInvalidNciAxis) {
@@ -1459,10 +1077,10 @@ TEST(CFARDetectorOpTest, RejectsInvalidNciAxis) {
   auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
   CFARParams params = ca_params(1e-3);
   params.nci_axes = {0};
-  const FiveOutGraphRunResult result = run_cfar_result<double>(input, params);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_cfar_result<double>(input, params);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(cfar_frames(result, "detection_mask").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(CFARDetectorOpTest, CaAlphaK1MatchesContractClosedForm) {
@@ -1571,9 +1189,9 @@ TEST(CFARDetectorOpTest, PeakRadiusRejectsInvalidEncodings) {
     params.peak_mode = CfarPeakMode::kRangeDoppler;
     params.peak_radius = radius;
     const auto result = run_cfar_result<double>(input, params);
-    EXPECT_TRUE(result.plan_ok);
-    EXPECT_TRUE(result.frames3.empty());
-    EXPECT_FALSE(result.diagnostics.empty());
+    EXPECT_FALSE(result.ok());
+    EXPECT_TRUE(cfar_frames(result, "detection_idx").empty());
+    EXPECT_FALSE(result.diagnostics().empty());
   }
 }
 
@@ -1591,9 +1209,9 @@ TEST(CFARDetectorOpTest, PeakRadiusMustMatchPostNciOutputRank) {
   params.peak_radius = {1, 1, 1};
 
   const auto result = run_cfar_result<double>(input, params, extents);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames3.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(cfar_frames(result, "detection_idx").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(CFARDetectorOpTest, PeakModeAllSuppressesAcrossEveryRank4Axis) {

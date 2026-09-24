@@ -5,16 +5,16 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <utility>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "detection/detection_reduction_op/detection_reduction_op_impl.cuh"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace detection_reduction_test {
@@ -44,8 +44,6 @@ using holoscan::radar::DetectionReductionParams;
 using holoscan::radar::RepresentativePolicy;
 using holoscan::radar::ScoreMethod;
 using holoscan::radar::real_dtype;
-using holoscan::radar::testing::GraphRunResult;
-using holoscan::radar::testing::run_triple_in_single_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
@@ -60,26 +58,37 @@ TEST(DetectionReductionOpCustomTest, CustomScoreFnSelectsPeak) {
   params.representative = RepresentativePolicy::kPeak;
   params.score_method = ScoreMethod::kCustom;
 
-  GraphRunResult result =
-      run_triple_in_single_out_operator_graph_result<DetectionReductionOp<double, Col0MinusCol1>>(
-          {to_device_tensor(labels, {2}, kInt64Dtype)},
-          {to_device_tensor(idx, {2, 2}, kInt64Dtype)},
-          {to_device_tensor(points, {2, 2}, real_dtype<double>())}, std::move(params), "rep_idx",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-            const holoscan::ConnectionOptions q{.queue_depth = 4U};
-            graph.add_flow(source->out0, op->labels, q);
-            graph.add_flow(source->out1, op->detection_idx, q);
-            graph.add_flow(source->out2, op->points, q);
-            graph.add_flow(op->rep_idx, sink->in, q);
-          },
-          holoscan::radar::testing::default_test_extents(), {"reduced_points"});
+  using Op = DetectionReductionOp<double, Col0MinusCol1>;
+  auto labels_tensor = to_device_tensor(labels, {2}, kInt64Dtype);
+  auto idx_tensor = to_device_tensor(idx, {2, 2}, kInt64Dtype);
+  auto points_tensor = to_device_tensor(points, {2, 2}, real_dtype<double>());
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::nanoseconds{0}, holoscan::testing::input("labels", *labels_tensor),
+      holoscan::testing::input("detection_idx", *idx_tensor),
+      holoscan::testing::input("points", *points_tensor)));
+  fixture.template capture_snapshot<holoscan::Tensor>("rep_idx", 1U, idx_tensor->nbytes());
+  fixture.template capture_snapshot<holoscan::Tensor>("reduced_points", 1U,
+                                                      points_tensor->nbytes());
+  fixture.input_source_device("labels", holoscan::DeviceId{0});
+  fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
+  fixture.input_source_device("points", holoscan::DeviceId{0});
+  fixture.output_device("reduced_points", holoscan::DeviceId{0});
+  fixture.output_device("rep_idx", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool observed = running.wait_for_output("rep_idx", 1U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
 
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 1U);
-  ASSERT_EQ(result.frames[0].shape[0], 1);
-  EXPECT_EQ(result.frames[0].as<int64_t>()[0], 10);
-  EXPECT_EQ(result.frames[0].as<int64_t>()[1], 1);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_TRUE(observed);
+  const auto output =
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("rep_idx"));
+  ASSERT_EQ(output.shape[0], 1);
+  EXPECT_EQ(output.as<int64_t>()[0], 10);
+  EXPECT_EQ(output.as<int64_t>()[1], 1);
 }
 
 }  // namespace

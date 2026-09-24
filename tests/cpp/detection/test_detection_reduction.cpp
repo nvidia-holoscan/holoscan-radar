@@ -12,33 +12,18 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
-#include <holoscan/core/compile.hpp>
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/errors.hpp>
-#include <holoscan/core/execution_context.hpp>
-#include <holoscan/core/expected.hpp>
-#include <holoscan/core/graph.hpp>
-#include <holoscan/core/operator.hpp>
-#include <holoscan/core/operator_spec.hpp>
-#include <holoscan/core/payload_options.hpp>
-#include <holoscan/core/run.hpp>
-#include <holoscan/core/temporal_contract.hpp>
-#include <holoscan/core/tensor_output_loan.hpp>
-#include <holoscan/time/realtime_clock.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
-#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -49,12 +34,7 @@ using holoscan::radar::MaxTensorExtents;
 using holoscan::radar::RepresentativePolicy;
 using holoscan::radar::ScoreMethod;
 using holoscan::radar::real_dtype;
-using holoscan::radar::testing::DualIOGraphRunResult;
-using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::run_dual_in_single_out_operator_graph_result;
-using holoscan::radar::testing::run_triple_in_dual_out_operator_graph_result;
-using holoscan::radar::testing::run_triple_in_single_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 
 constexpr DLDataType kInt64{kDLInt, 64, 1};
@@ -71,61 +51,53 @@ DetectionReductionParams make_params(
   return params;
 }
 
-template <typename Source, typename OpRef, typename Sink>
-void wire_reduction_with_points(holoscan::Graph& graph, const Source& source, OpRef& op,
-                                const Sink& sink) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out0, op->labels, q);
-  graph.add_flow(source->out1, op->detection_idx, q);
-  graph.add_flow(source->out2, op->points, q);
-  graph.add_flow(op->rep_idx, sink->in, q);
-}
-
-template <typename Source, typename OpRef, typename Sink>
-void wire_reduction_without_points(holoscan::Graph& graph, const Source& source, OpRef& op,
-                                   const Sink& sink) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out0, op->labels, q);
-  graph.add_flow(source->out1, op->detection_idx, q);
-  graph.add_flow(op->rep_idx, sink->in, q);
-}
-
-template <typename Source, typename OpRef, typename Sink>
-void wire_reduction_dual_output(holoscan::Graph& graph, const Source& source, OpRef& op,
-                                const Sink& sink) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out0, op->labels, q);
-  graph.add_flow(source->out1, op->detection_idx, q);
-  graph.add_flow(source->out2, op->points, q);
-  graph.add_flow(op->rep_idx, sink->in0, q);
-  graph.add_flow(op->reduced_points, sink->in1, q);
-}
-
 template <typename T>
-GraphRunResult run_reduction_result(std::shared_ptr<holoscan::Tensor> labels,
-                                    std::shared_ptr<holoscan::Tensor> detection_idx,
-                                    std::shared_ptr<holoscan::Tensor> points,
-                                    DetectionReductionParams params) {
+holoscan::testing::TestResult run_reduction_result(std::shared_ptr<holoscan::Tensor> labels,
+                                                   std::shared_ptr<holoscan::Tensor> detection_idx,
+                                                   std::shared_ptr<holoscan::Tensor> points,
+                                                   DetectionReductionParams params,
+                                                   bool capture_reduced = false) {
+  using Op = DetectionReductionOp<T>;
   if (!points && params.representative == RepresentativePolicy::kFirst) {
     const int64_t num_points = labels->shape()[0];
     points = to_device_tensor(std::vector<T>(static_cast<std::size_t>(num_points)), {num_points, 1},
                               real_dtype<T>());
   }
-  if (!points) {
-    return run_dual_in_single_out_operator_graph_result<DetectionReductionOp<T>>(
-        {std::move(labels)}, {std::move(detection_idx)}, std::move(params), "rep_idx",
-        [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-          wire_reduction_without_points(graph, source, op, sink);
-        },
-        holoscan::radar::testing::default_test_extents(), {"reduced_points"});
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  if (points) {
+    fixture.push_frame(holoscan::testing::frame_at(
+        std::chrono::nanoseconds{0}, holoscan::testing::input("points", *points),
+        holoscan::testing::input("labels", *labels),
+        holoscan::testing::input("detection_idx", *detection_idx)));
+  } else {
+    fixture.push_frame(holoscan::testing::frame_at(
+        std::chrono::nanoseconds{0}, holoscan::testing::input("labels", *labels),
+        holoscan::testing::input("detection_idx", *detection_idx)));
   }
-  return run_triple_in_single_out_operator_graph_result<DetectionReductionOp<T>>(
-      {std::move(labels)}, {std::move(detection_idx)}, {std::move(points)}, std::move(params),
-      "rep_idx",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        wire_reduction_with_points(graph, source, op, sink);
-      },
-      holoscan::radar::testing::default_test_extents(), {"reduced_points"});
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.template capture_snapshot<holoscan::Tensor>("rep_idx", 1U, kMaximumBytes);
+  if (capture_reduced) {
+    fixture.template capture_snapshot<holoscan::Tensor>("reduced_points", 1U, kMaximumBytes);
+  }
+  fixture.input_source_device("labels", holoscan::DeviceId{0});
+  fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
+  if (points) {
+    fixture.input_source_device("points", holoscan::DeviceId{0});
+  }
+  fixture.output_device("rep_idx", holoscan::DeviceId{0});
+  fixture.output_device("reduced_points", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool rep = running.wait_for_output("rep_idx", 1U, std::chrono::seconds{5});
+  bool reduced = true;
+  if (capture_reduced) {
+    reduced = running.wait_for_output("reduced_points", 1U, std::chrono::seconds{5});
+  }
+  (void)rep;
+  (void)reduced;
+  running.request_stop();
+  return running.finish();
 }
 
 template <typename T>
@@ -133,60 +105,34 @@ HostTensor run_reduction(std::shared_ptr<holoscan::Tensor> labels,
                          std::shared_ptr<holoscan::Tensor> detection_idx,
                          std::shared_ptr<holoscan::Tensor> points,
                          DetectionReductionParams params) {
-  GraphRunResult result = run_reduction_result<T>(std::move(labels), std::move(detection_idx),
-                                                  std::move(points), std::move(params));
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  const auto result = run_reduction_result<T>(std::move(labels), std::move(detection_idx),
+                                              std::move(points), std::move(params));
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
-    }
-    throw std::runtime_error(msg);
-  }
-  if (result.frames.size() != 1U) {
-    throw std::runtime_error("DetectionReductionOp test: expected one rep_idx frame, got " +
-                             std::to_string(result.frames.size()));
-  }
-  return std::move(result.frames.front());
+  return holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("rep_idx"));
 }
 
 template <typename T>
-DualIOGraphRunResult run_reduction_dual_result(std::shared_ptr<holoscan::Tensor> labels,
-                                               std::shared_ptr<holoscan::Tensor> detection_idx,
-                                               std::shared_ptr<holoscan::Tensor> points,
-                                               DetectionReductionParams params) {
-  return run_triple_in_dual_out_operator_graph_result<DetectionReductionOp<T>>(
-      {std::move(labels)}, {std::move(detection_idx)}, {std::move(points)}, std::move(params),
-      "rep_idx", "reduced_points",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        wire_reduction_dual_output(graph, source, op, sink);
-      });
+holoscan::testing::TestResult run_reduction_dual_result(
+    std::shared_ptr<holoscan::Tensor> labels, std::shared_ptr<holoscan::Tensor> detection_idx,
+    std::shared_ptr<holoscan::Tensor> points, DetectionReductionParams params) {
+  return run_reduction_result<T>(std::move(labels), std::move(detection_idx), std::move(points),
+                                 std::move(params), true);
 }
 
 template <typename T>
 std::pair<HostTensor, HostTensor> run_reduction_dual(
     std::shared_ptr<holoscan::Tensor> labels, std::shared_ptr<holoscan::Tensor> detection_idx,
     std::shared_ptr<holoscan::Tensor> points, DetectionReductionParams params) {
-  DualIOGraphRunResult result = run_reduction_dual_result<T>(
-      std::move(labels), std::move(detection_idx), std::move(points), std::move(params));
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  const auto result = run_reduction_dual_result<T>(std::move(labels), std::move(detection_idx),
+                                                   std::move(points), std::move(params));
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    std::string message = "run diagnostics:";
-    for (const auto& diagnostic : result.diagnostics) {
-      message += " ";
-      message += diagnostic;
-    }
-    throw std::runtime_error(message);
-  }
-  if (result.frames0.size() != 1U || result.frames1.size() != 1U) {
-    throw std::runtime_error("DetectionReductionOp test: expected one frame on each output");
-  }
-  return {std::move(result.frames0.front()), std::move(result.frames1.front())};
+  return {holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("rep_idx")),
+          holoscan::radar::testing::to_host(
+              result.template snapshot<holoscan::Tensor>("reduced_points"))};
 }
 
 // ---------------------------------------------------------------------------
@@ -207,18 +153,34 @@ TEST(DetectionReductionOpTest, UnwiredReducedPointsDoesNotSuppressRepIdxAcrossFr
     point_frames.push_back(
         to_device_tensor(std::vector<double>{1.0, 2.0}, {2, 1}, real_dtype<double>()));
   }
-  const GraphRunResult result =
-      run_triple_in_single_out_operator_graph_result<DetectionReductionOp<double>>(
-          std::move(label_frames), std::move(index_frames), std::move(point_frames),
-          make_params(RepresentativePolicy::kPeak, ScoreMethod::kWeightedSum, {1.0}), "rep_idx",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-            wire_reduction_with_points(graph, source, op, sink);
-          },
-          holoscan::radar::testing::default_test_extents(), {"reduced_points"});
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 4U);
-  for (const HostTensor& frame : result.frames) {
+  using Op = DetectionReductionOp<double>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(make_params(RepresentativePolicy::kPeak, ScoreMethod::kWeightedSum, {1.0}));
+  for (std::size_t index = 0; index < label_frames.size(); ++index) {
+    fixture.push_frame(holoscan::testing::frame_at(
+        std::chrono::milliseconds{static_cast<int64_t>(index + 1U)},
+        holoscan::testing::input("points", *point_frames[index]),
+        holoscan::testing::input("labels", *label_frames[index]),
+        holoscan::testing::input("detection_idx", *index_frames[index])));
+  }
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.capture_snapshot<holoscan::Tensor>("rep_idx", 4U, kMaximumBytes);
+  fixture.input_source_device("labels", holoscan::DeviceId{0});
+  fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
+  fixture.input_source_device("points", holoscan::DeviceId{0});
+  fixture.output_device("rep_idx", holoscan::DeviceId{0});
+  fixture.output_device("reduced_points", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool observed = running.wait_for_output("rep_idx", 4U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(observed) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frames = result.snapshots<holoscan::Tensor>("rep_idx");
+  ASSERT_EQ(frames.size(), 4U);
+  for (const auto& snapshot : frames) {
+    const HostTensor frame = holoscan::radar::testing::to_host(snapshot);
     ASSERT_EQ(frame.shape, (std::vector<int64_t>{1, 2}));
     EXPECT_EQ(frame.as<int64_t>()[0], 3);
     EXPECT_EQ(frame.as<int64_t>()[1], 4);
@@ -332,10 +294,10 @@ TEST(DetectionReductionOpTest, RejectsMissingRequiredPoints) {
   std::vector<int64_t> idx = {0, 0};
   auto lab_t = to_device_tensor(labels, {1}, kInt64);
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64);
-  GraphRunResult result = run_reduction_result<float>(
+  auto result = run_reduction_result<float>(
       lab_t, idx_t, nullptr,
       make_params(RepresentativePolicy::kPeak, ScoreMethod::kWeightedSum, {1.0}));
-  EXPECT_FALSE(result.plan_ok);
+  EXPECT_FALSE(result.ok());
 }
 
 TEST(DetectionReductionOpTest, RejectsMismatchedFeatureWeights) {
@@ -345,11 +307,11 @@ TEST(DetectionReductionOpTest, RejectsMismatchedFeatureWeights) {
   auto lab_t = to_device_tensor(labels, {1}, kInt64);
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64);
   auto pts = to_device_tensor(points, {1, 2}, real_dtype<double>());
-  GraphRunResult result = run_reduction_result<double>(
+  auto result = run_reduction_result<double>(
       lab_t, idx_t, pts,
       make_params(RepresentativePolicy::kPeak, ScoreMethod::kWeightedSum, {1.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DetectionReductionOpTest, RejectsCustomWithoutScoreFn) {
@@ -359,10 +321,10 @@ TEST(DetectionReductionOpTest, RejectsCustomWithoutScoreFn) {
   auto lab_t = to_device_tensor(labels, {1}, kInt64);
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64);
   auto pts = to_device_tensor(points, {1, 1}, real_dtype<float>());
-  GraphRunResult result = run_reduction_result<float>(
+  auto result = run_reduction_result<float>(
       lab_t, idx_t, pts, make_params(RepresentativePolicy::kPeak, ScoreMethod::kCustom));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DetectionReductionOpTest, FloatDoubleAgreeOnPeak) {
@@ -445,10 +407,10 @@ TEST(DetectionReductionOpTest, RejectsTooManyDetectionIdxCols) {
   std::vector<int64_t> idx(11, 0);
   auto lab_t = to_device_tensor(labels, {1}, kInt64);
   auto idx_t = to_device_tensor(idx, {1, 11}, kInt64);
-  GraphRunResult result =
+  auto result =
       run_reduction_result<float>(lab_t, idx_t, nullptr, make_params(RepresentativePolicy::kFirst));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DetectionReductionOpTest, RejectsOpaqueLeadingBatch) {
@@ -456,10 +418,10 @@ TEST(DetectionReductionOpTest, RejectsOpaqueLeadingBatch) {
   std::vector<int64_t> idx = {0, 0};
   auto lab_t = to_device_tensor(labels, {1, 1}, kInt64);
   auto idx_t = to_device_tensor(idx, {1, 2}, kInt64);
-  GraphRunResult result =
+  auto result =
       run_reduction_result<float>(lab_t, idx_t, nullptr, make_params(RepresentativePolicy::kFirst));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DetectionReductionOpTest, PeakEqualScorePicksLowestIndex) {
@@ -570,11 +532,11 @@ TEST(DetectionReductionOpTest, WeightedMeanRejectsInvalidRowWeights) {
     auto lab_t = to_device_tensor(labels, {1}, kInt64);
     auto idx_t = to_device_tensor(idx, {1, 2}, kInt64);
     auto pts_t = to_device_tensor(points, {1, 2}, real_dtype<float>());
-    const GraphRunResult result = run_reduction_result<float>(
+    const auto result = run_reduction_result<float>(
         lab_t, idx_t, pts_t,
         make_params(RepresentativePolicy::kWeightedMean, ScoreMethod::kWeightedSum, {0.0, 1.0}));
-    EXPECT_TRUE(result.plan_ok);
-    EXPECT_FALSE(result.diagnostics.empty());
+    EXPECT_FALSE(result.ok());
+    EXPECT_FALSE(result.diagnostics().empty());
   }
 }
 
@@ -727,184 +689,65 @@ struct LiveWeightsTick {
   std::optional<ScoreMethod> score_method;
 };
 
-struct LiveWeightsBank {
-  static void reset(std::vector<LiveWeightsTick> new_ticks) {
-    ticks = std::move(new_ticks);
-    index = 0U;
-  }
-  static inline std::vector<LiveWeightsTick> ticks;
-  static inline std::size_t index{0U};
-};
-
-class LiveWeightsSourceOp final : public holoscan::Operator<> {
- public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorRepresentation kDevice{
-        .memory_kind = holoscan::MemoryKind::kCudaDevice,
-        .dtype = std::nullopt,
-        .rank = std::nullopt,
-    };
-    constexpr holoscan::TensorRepresentation kHostVector{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = kFloat64Dtype,
-        .rank = 1U,
-    };
-    const holoscan::TensorBounds device_bounds{.max_rank = 2U, .max_byte_span = 4096U};
-    spec.output(labels, "out0")
-        .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, device_bounds));
-    spec.output(detection_idx, "out1")
-        .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, device_bounds));
-    spec.output(points, "out2")
-        .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, device_bounds));
-    spec.output(weights, "feature_weights")
-        .max_emits_per_compute(1U)
-        .produces_tensor(
-            holoscan::radar::pooled_tensor_output(kHostVector, 1U, 128U * sizeof(double)));
-    spec.output(representative, "representative").max_emits_per_compute(1U);
-    spec.output(score_method, "score_method").max_emits_per_compute(1U);
-  }
-
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnClock{.period = holoscan::radar::testing::detail::kHarnessTick});
-    return result;
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    if (LiveWeightsBank::index >= LiveWeightsBank::ticks.size()) {
-      return {};
-    }
-    const LiveWeightsTick tick = LiveWeightsBank::ticks[LiveWeightsBank::index++];
-    const holoscan::TimePoint capture_time = context.activation_time();
-    if (tick.weights.has_value()) {
-      const std::vector<double>& values = *tick.weights;
-      const std::vector<int64_t> shape{static_cast<int64_t>(values.size())};
-      auto loan = weights.allocate_tensor(
-          holoscan::TensorLoanRequest{.shape = shape, .dtype = kFloat64Dtype});
-      if (!loan) {
-        return holoscan::make_unexpected(std::move(loan).error());
-      }
-      auto written =
-          loan->write_host_and_commit([&values](const holoscan::TensorOutputWriteGuard& writer) {
-            std::copy(values.begin(), values.end(), writer.data_as<double>());
-          });
-      if (!written) {
-        return holoscan::make_unexpected(std::move(written).error());
-      }
-      holoscan::TimePoint weights_time = capture_time;
-      weights_time.timestamp_ns += tick.skew_ns;
-      auto emitted =
-          weights.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = weights_time});
-      if (!emitted) {
-        return holoscan::make_unexpected(std::move(emitted).error());
-      }
-    }
-    if (tick.representative.has_value()) {
-      auto emitted = representative.emit(*tick.representative,
-                                         holoscan::EmitOptions{.capture_time = capture_time});
-      if (!emitted) {
-        return holoscan::make_unexpected(std::move(emitted).error());
-      }
-    }
-    if (tick.score_method.has_value()) {
-      auto emitted = score_method.emit(*tick.score_method,
-                                       holoscan::EmitOptions{.capture_time = capture_time});
-      if (!emitted) {
-        return holoscan::make_unexpected(std::move(emitted).error());
-      }
-    }
-    // points is a non-member when static representative=first. Publish it
-    // before the aligned presence members so a same-tick live switch to peak
-    // can select it without making first-only graphs wire the port.
-    auto emitted = holoscan::radar::testing::detail::emit_bank_frame(points, context, tick.points,
-                                                                     "LiveWeightsSourceOp.points");
-    if (!emitted) {
-      return emitted;
-    }
-    emitted = holoscan::radar::testing::detail::emit_bank_frame(labels, context, tick.labels,
-                                                                "LiveWeightsSourceOp.labels");
-    if (!emitted) {
-      return emitted;
-    }
-    return holoscan::radar::testing::detail::emit_bank_frame(
-        detection_idx, context, tick.detection_idx, "LiveWeightsSourceOp.detection_idx");
-  }
-
-  holoscan::Output<holoscan::Tensor> labels{"out0"};
-  holoscan::Output<holoscan::Tensor> detection_idx{"out1"};
-  holoscan::Output<holoscan::Tensor> points{"out2"};
-  holoscan::Output<holoscan::Tensor> weights{"feature_weights"};
-  holoscan::Output<RepresentativePolicy> representative{"representative"};
-  holoscan::Output<ScoreMethod> score_method{"score_method"};
-};
-
-GraphRunResult run_weights_override_graph(std::vector<LiveWeightsTick> ticks,
-                                          DetectionReductionParams params,
-                                          int64_t max_features = 2) {
-  GraphRunResult result;
-  holoscan::radar::testing::detail::FrameBank::reset();
-  const std::size_t expected = ticks.size();
-  LiveWeightsBank::reset(std::move(ticks));
-
-  holoscan::Graph graph{"feature-weights-live-override"};
-  const auto source = graph.op<LiveWeightsSourceOp>("source");
+holoscan::testing::TestResult run_weights_override_graph(std::vector<LiveWeightsTick> ticks,
+                                                         DetectionReductionParams params,
+                                                         int64_t max_features = 2) {
+  using Op = DetectionReductionOp<double>;
   auto extents = holoscan::radar::testing::default_test_extents();
   extents.max_features = max_features;
-  auto op = graph.op<DetectionReductionOp<double>>("op", extents);
-  op.set_params(std::move(params));
-  const auto sink = graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("sink");
-  const holoscan::ConnectionOptions q{.queue_depth = 8U};
-  graph.add_flow(source->labels, op->labels, q);
-  graph.add_flow(source->detection_idx, op->detection_idx, q);
-  graph.add_flow(source->points, op->points, q);
-  // All three override ports stay wired for every case here: the source only
-  // emits the ones a tick carries, so a case that never exercises a port is
-  // also the check that a silent enabled port cannot stall the OnAligned
-  // trigger.
-  graph.add_flow(source->weights, op->feature_weights, q);
-  graph.add_flow(source->representative, op->representative, q);
-  graph.add_flow(source->score_method, op->score_method, q);
-  graph.add_flow(op->rep_idx, sink->in, q);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-
-  holoscan::CompileOptions options;
-  holoscan::radar::testing::detail::bind_triple_in_single_out_device_pools(options, "rep_idx");
-  holoscan::radar::testing::detail::bind_op_device_output(options, "reduced_points");
-  try {
-    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-    result.plan_ok = plan.ok();
-    result.plan_json = plan.json();
-    if (!plan.ok()) {
-      return result;
-    }
-    holoscan::RunSession session = holoscan::run_async(plan);
-    const auto deadline =
-        std::chrono::steady_clock::now() + holoscan::radar::testing::detail::kHarnessDeadline;
-    while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
-      {
-        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBank::mutex);
-        if (holoscan::radar::testing::detail::FrameBank::captured.size() >= expected) {
-          break;
-        }
+  auto fixture = holoscan::testing::create_operator_test<Op>(extents);
+  fixture.set_params(std::move(params));
+  for (std::size_t index = 0; index < ticks.size(); ++index) {
+    const auto base = std::chrono::milliseconds{static_cast<int64_t>((index + 1U) * 100U)};
+    const auto override_time = std::chrono::duration_cast<std::chrono::nanoseconds>(base) +
+                               std::chrono::nanoseconds{ticks[index].skew_ns};
+    holoscan::testing::TestFrame frame;
+    const auto append = [&frame](holoscan::testing::TestFrame part) {
+      for (auto& field : part.fields) {
+        frame.fields.push_back(std::move(field));
       }
-      std::this_thread::sleep_for(holoscan::radar::testing::detail::kHarnessPoll);
+    };
+    if (ticks[index].weights.has_value()) {
+      auto weights = holoscan::radar::testing::to_pageable_host_tensor(
+          *ticks[index].weights, {static_cast<int64_t>(ticks[index].weights->size())},
+          kFloat64Dtype);
+      append(holoscan::testing::frame_at(override_time,
+                                         holoscan::testing::input("feature_weights", *weights)));
     }
-    session.request_stop();
-    session.wait();
-    result.termination = session.termination();
-    for (const auto& diagnostic : session.diagnostics()) {
-      result.diagnostics.emplace_back(diagnostic.token);
+    if (ticks[index].representative.has_value()) {
+      append(holoscan::testing::frame_at(
+          base, holoscan::testing::input("representative", *ticks[index].representative)));
     }
-  } catch (const holoscan::RuntimeError& error) {
-    result.plan_ok = false;
-    result.plan_json = std::string("RuntimeError: ") + error.what();
+    if (ticks[index].score_method.has_value()) {
+      append(holoscan::testing::frame_at(
+          base, holoscan::testing::input("score_method", *ticks[index].score_method)));
+    }
+    append(holoscan::testing::frame_at(
+        base, holoscan::testing::input("points", *ticks[index].points),
+        holoscan::testing::input("labels", *ticks[index].labels),
+        holoscan::testing::input("detection_idx", *ticks[index].detection_idx)));
+    fixture.push_frame(frame);
   }
-  {
-    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBank::mutex);
-    result.frames = std::move(holoscan::radar::testing::detail::FrameBank::captured);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.capture_snapshot<holoscan::Tensor>("rep_idx", ticks.size(), kMaximumBytes);
+  fixture.input_source_device("points", holoscan::DeviceId{0});
+  fixture.input_source_device("labels", holoscan::DeviceId{0});
+  fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
+  fixture.output_device("rep_idx", holoscan::DeviceId{0});
+  fixture.output_device("reduced_points", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool observed = running.wait_for_output("rep_idx", ticks.size(), std::chrono::seconds{5});
+  (void)observed;
+  running.request_stop();
+  return running.finish();
+}
+
+std::vector<HostTensor> captured_rep_idx(const holoscan::testing::TestResult& result) {
+  std::vector<HostTensor> frames;
+  for (const auto& snapshot : result.snapshots<holoscan::Tensor>("rep_idx")) {
+    frames.push_back(holoscan::radar::testing::to_host(snapshot));
   }
-  return result;
+  return frames;
 }
 
 LiveWeightsTick make_weights_tick(std::optional<std::vector<double>> weights, int64_t skew_ns = 0) {
@@ -928,22 +771,22 @@ TEST(DetectionReductionOpTest, LiveFeatureWeightsExactMatchChangesSelection) {
   const auto out = run_weights_override_graph({make_weights_tick(std::vector<double>{0.0, 1.0})},
                                               live_weights_params());
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames.size(), 1U);
-  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 20);
-  EXPECT_EQ(out.frames[0].as<int64_t>()[1], 2);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto frames = captured_rep_idx(out);
+  ASSERT_EQ(frames.size(), 1U);
+  EXPECT_EQ(frames[0].as<int64_t>()[0], 20);
+  EXPECT_EQ(frames[0].as<int64_t>()[1], 2);
 }
 
 TEST(DetectionReductionOpTest, LiveFeatureWeightsSkewedCaptureMissesExact) {
   const auto out = run_weights_override_graph({make_weights_tick(std::vector<double>{0.0, 1.0}, 1)},
                                               live_weights_params());
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames.size(), 1U);
-  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 10);
-  EXPECT_EQ(out.frames[0].as<int64_t>()[1], 1);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto frames = captured_rep_idx(out);
+  ASSERT_EQ(frames.size(), 1U);
+  EXPECT_EQ(frames[0].as<int64_t>()[0], 10);
+  EXPECT_EQ(frames[0].as<int64_t>()[1], 1);
 }
 
 TEST(DetectionReductionOpTest, LiveFeatureWeightsRevertsToParamsAfterMiss) {
@@ -951,27 +794,27 @@ TEST(DetectionReductionOpTest, LiveFeatureWeightsRevertsToParamsAfterMiss) {
       {make_weights_tick(std::vector<double>{0.0, 1.0}), make_weights_tick(std::nullopt)},
       live_weights_params());
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames.size(), 2U);
-  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 20);
-  EXPECT_EQ(out.frames[1].as<int64_t>()[0], 10);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto frames = captured_rep_idx(out);
+  ASSERT_EQ(frames.size(), 2U);
+  EXPECT_EQ(frames[0].as<int64_t>()[0], 20);
+  EXPECT_EQ(frames[1].as<int64_t>()[0], 10);
 }
 
 TEST(DetectionReductionOpTest, LiveFeatureWeightsRejectsMalformedLength) {
   const auto out = run_weights_override_graph({make_weights_tick(std::vector<double>{1.0})},
                                               live_weights_params());
 
-  EXPECT_TRUE(out.plan_ok) << out.plan_json;
-  EXPECT_FALSE(out.diagnostics.empty());
+  EXPECT_FALSE(out.ok());
+  EXPECT_FALSE(out.diagnostics().empty());
 }
 
 TEST(DetectionReductionOpTest, LiveFeatureWeightsRejectsBoundOverflow) {
   const auto out = run_weights_override_graph(
       {make_weights_tick(std::vector<double>{1.0, 1.0, 1.0})}, live_weights_params(), 2);
 
-  EXPECT_TRUE(out.plan_ok) << out.plan_json;
-  EXPECT_FALSE(out.diagnostics.empty());
+  EXPECT_FALSE(out.ok());
+  EXPECT_FALSE(out.diagnostics().empty());
 }
 
 // ---- Enum [live] overrides -----------------------------------------------
@@ -1019,13 +862,13 @@ TEST(DetectionReductionOpTest, LiveRepresentativeAppliesForOneTick) {
                                   make_representative_tick(std::nullopt)},
                                  std::move(params));
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames.size(), 3U);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto frames = captured_rep_idx(out);
+  ASSERT_EQ(frames.size(), 3U);
   // Params `first` on the silent ticks either side of the `peak` override.
-  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 10);
-  EXPECT_EQ(out.frames[1].as<int64_t>()[0], 20);
-  EXPECT_EQ(out.frames[2].as<int64_t>()[0], 10);
+  EXPECT_EQ(frames[0].as<int64_t>()[0], 10);
+  EXPECT_EQ(frames[1].as<int64_t>()[0], 20);
+  EXPECT_EQ(frames[2].as<int64_t>()[0], 10);
 }
 
 TEST(DetectionReductionOpTest, LiveWeightedMeanAppliesForOneTick) {
@@ -1036,12 +879,12 @@ TEST(DetectionReductionOpTest, LiveWeightedMeanAppliesForOneTick) {
                                   make_representative_tick(std::nullopt)},
                                  std::move(params));
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames.size(), 3U);
-  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 10);
-  EXPECT_EQ(out.frames[1].as<int64_t>()[0], 20);
-  EXPECT_EQ(out.frames[2].as<int64_t>()[0], 10);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto frames = captured_rep_idx(out);
+  ASSERT_EQ(frames.size(), 3U);
+  EXPECT_EQ(frames[0].as<int64_t>()[0], 10);
+  EXPECT_EQ(frames[1].as<int64_t>()[0], 20);
+  EXPECT_EQ(frames[2].as<int64_t>()[0], 10);
 }
 
 TEST(DetectionReductionOpTest, LiveScoreMethodAppliesForOneTick) {
@@ -1051,12 +894,12 @@ TEST(DetectionReductionOpTest, LiveScoreMethodAppliesForOneTick) {
        make_score_method_tick(std::nullopt)},
       std::move(params));
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames.size(), 3U);
-  EXPECT_EQ(out.frames[0].as<int64_t>()[0], 10);
-  EXPECT_EQ(out.frames[1].as<int64_t>()[0], 20);
-  EXPECT_EQ(out.frames[2].as<int64_t>()[0], 10);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto frames = captured_rep_idx(out);
+  ASSERT_EQ(frames.size(), 3U);
+  EXPECT_EQ(frames[0].as<int64_t>()[0], 10);
+  EXPECT_EQ(frames[1].as<int64_t>()[0], 20);
+  EXPECT_EQ(frames[2].as<int64_t>()[0], 10);
 }
 
 }  // namespace

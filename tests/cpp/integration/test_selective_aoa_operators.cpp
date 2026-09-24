@@ -42,7 +42,7 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/integration_graph_utils.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -124,16 +124,16 @@ class FixtureSourceOp final : public holoscan::Operator<> {
       }
       FixtureBank::emitted = true;
       FixtureBank::source_time = context.activation_time();
-      snap = FixtureBank::snapshot;
-      base = FixtureBank::baseline;
-      idx = FixtureBank::detection_idx;
+      snap = std::move(FixtureBank::snapshot);
+      base = std::move(FixtureBank::baseline);
+      idx = std::move(FixtureBank::detection_idx);
     }
     HOLOSCAN_RETURN_IF_ERROR(
-        test::detail::emit_bank_frame(snapshot, context, snap, "FixtureSourceOp.snapshot"));
+        test::integration::emit_bank_frame(snapshot, context, snap, "FixtureSourceOp.snapshot"));
     HOLOSCAN_RETURN_IF_ERROR(
-        test::detail::emit_bank_frame(baseline, context, base, "FixtureSourceOp.baseline"));
-    return test::detail::emit_bank_frame(detection_idx, context, idx,
-                                         "FixtureSourceOp.detection_idx");
+        test::integration::emit_bank_frame(baseline, context, base, "FixtureSourceOp.baseline"));
+    return test::integration::emit_bank_frame(detection_idx, context, idx,
+                                              "FixtureSourceOp.detection_idx");
   }
 
   holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};

@@ -6,8 +6,10 @@
 #include <cuda_runtime_api.h>
 
 #include <cmath>
+#include <chrono>
 #include <complex>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -17,7 +19,7 @@
 #include <vector>
 
 #include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "fmcw/ddm_sparse_demultiplex_op/ddm_sparse_demultiplex_op.hpp"
 #include "fmcw/ddm_sparse_demultiplex_op/ddm_sparse_demultiplex_stage.hpp"
@@ -27,7 +29,7 @@
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/tensor_fixtures.hpp"
 
 namespace {
 namespace hr = holoscan::radar;
@@ -35,6 +37,12 @@ namespace hr = holoscan::radar;
 template <typename T>
 std::shared_ptr<holoscan::Tensor> device(const std::vector<T>& host,
                                          const std::vector<int64_t>& shape, DLDataType dtype) {
+  return hr::testing::to_device_tensor(host, shape, dtype);
+}
+
+template <typename T>
+std::shared_ptr<holoscan::Tensor> raw_device(const std::vector<T>& host,
+                                             const std::vector<int64_t>& shape, DLDataType dtype) {
   auto tensor = hr::make_device_tensor(shape, dtype);
   if (!host.empty()) {
     auto pointer = tensor->mutable_data();
@@ -142,42 +150,77 @@ IndependentFoldFixture independent_fold_fixture() {
   };
 }
 
-template <typename Source, typename Op, typename Sink>
-void wire_sparse_inputs(holoscan::Graph& graph, const Source& source, Op& op, const Sink& sink) {
-  const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-  graph.add_flow(source->out0, op->rd_maps, queue);
-  graph.add_flow(source->out1, op->detection_idx, queue);
-  graph.add_flow(op->snapshot, sink->in, queue);
-  const auto geometry_sink =
-      graph.op<hr::testing::WireCaptureOp<hr::WireArrayGeometry>>("geometry_sink");
-  graph.add_flow(op->array_geometry, geometry_sink->in, queue);
-}
-
-template <typename Source, typename Op, typename Sink>
-void wire_sparse_fold_inputs(holoscan::Graph& graph, const Source& source, Op& op,
-                             const Sink& sink) {
-  wire_sparse_inputs(graph, source, op, sink);
-  const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-  graph.add_flow(source->out2, op->fold_idx, queue);
-}
-
-std::vector<hr::ArrayGeometry> take_geometries() {
-  using Bank = hr::testing::WireCaptureBank<hr::WireArrayGeometry>;
-  std::vector<hr::WireArrayGeometry> captured;
-  {
-    const std::lock_guard lock(Bank::mutex);
-    captured = std::move(Bank::payloads);
+holoscan::testing::TestResult run_sparse_operator(
+    const std::vector<std::shared_ptr<holoscan::Tensor>>& rd_maps,
+    const std::vector<std::shared_ptr<holoscan::Tensor>>& detections,
+    const std::vector<std::shared_ptr<holoscan::Tensor>>& folds = {},
+    const std::vector<std::optional<double>>& wavelengths = {}) {
+  using Op = hr::DDMSparseDemultiplexOp<double>;
+  auto fixture = holoscan::testing::create_operator_test<Op>(sparse_extents());
+  fixture.set_params(sparse_params());
+  for (std::size_t index = 0; index < rd_maps.size(); ++index) {
+    const auto capture_time = std::chrono::milliseconds{static_cast<int64_t>((index + 1U) * 100U)};
+    const auto maps = holoscan::testing::input("rd_maps", *rd_maps[index]);
+    const auto detection = holoscan::testing::input("detection_idx", *detections[index]);
+    const bool has_fold = index < folds.size() && folds[index];
+    const bool has_wavelength = index < wavelengths.size() && wavelengths[index].has_value();
+    if (has_fold && has_wavelength) {
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("wavelength", *wavelengths[index]),
+          holoscan::testing::input("fold_idx", *folds[index]), maps, detection));
+    } else if (has_fold) {
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("fold_idx", *folds[index]), maps, detection));
+    } else if (has_wavelength) {
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("wavelength", *wavelengths[index]), maps,
+          detection));
+    } else {
+      fixture.push_frame(holoscan::testing::frame_at(capture_time, maps, detection));
+    }
   }
-  std::vector<hr::ArrayGeometry> result;
-  result.reserve(captured.size());
-  for (const auto& wire : captured) {
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.capture_snapshot<holoscan::Tensor>("snapshot", rd_maps.size(), kMaximumBytes);
+  fixture.capture_snapshot<hr::WireArrayGeometry>("array_geometry", rd_maps.size(), kMaximumBytes);
+  for (const char* input : {"rd_maps", "detection_idx"}) {
+    fixture.input_source_device(input, holoscan::DeviceId{0});
+  }
+  if (!folds.empty()) {
+    fixture.input_source_device("fold_idx", holoscan::DeviceId{0});
+  }
+  fixture.output_device("snapshot", holoscan::DeviceId{0});
+  fixture.output_device("is_valid", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  (void)running.wait_for_output("snapshot", rd_maps.size(), std::chrono::seconds{5});
+  (void)running.wait_for_output("array_geometry", rd_maps.size(), std::chrono::seconds{5});
+  running.request_stop();
+  return running.finish();
+}
+
+std::vector<hr::testing::HostTensor> sparse_snapshots(const holoscan::testing::TestResult& result) {
+  std::vector<hr::testing::HostTensor> frames;
+  for (const auto& snapshot : result.template snapshots<holoscan::Tensor>("snapshot")) {
+    frames.push_back(hr::testing::to_host(snapshot));
+  }
+  return frames;
+}
+
+std::vector<hr::ArrayGeometry> take_geometries(const holoscan::testing::TestResult& result) {
+  std::vector<hr::ArrayGeometry> geometries;
+  for (const auto& snapshot : result.template snapshots<hr::WireArrayGeometry>("array_geometry")) {
+    auto wire = snapshot.metadata();
+    const auto& packed = snapshot.tensor(hr::wire::ArrayGeometryTensorFields::packed_geometry);
+    std::vector<double> values(packed.bytes().size() / sizeof(double));
+    std::memcpy(values.data(), packed.bytes().data(), packed.bytes().size());
+    wire.packed_geometry =
+        hr::testing::to_pageable_host_tensor(values, packed.shape(), packed.dtype());
     auto geometry = hr::from_wire(wire);
     if (!geometry) {
       throw std::runtime_error("failed to decode emitted array geometry");
     }
-    result.push_back(std::move(*geometry));
+    geometries.push_back(std::move(*geometry));
   }
-  return result;
+  return geometries;
 }
 
 template <typename T>
@@ -217,18 +260,18 @@ std::vector<std::complex<T>> run_stage(const int64_t* fold_ptr, int64_t injected
   auto virtual_plan =
       hr::detail::build_virtual_plan({0, 0, 0, 10, 0, 0}, {0, 0, 0, 1, 0, 0}, kTx, kRx,
                                      hr::OverlapPolicy::kKeepAll, "DDMSparseDemultiplexOp");
-  auto d_input = device(input, {kRx, kD, kR}, hr::complex_dtype<T>());
-  auto d_detection = device(detection, {1, 2}, DLDataType{kDLInt, 64, 1});
-  auto d_table = device(table, {kTx, kW}, DLDataType{kDLInt, 64, 1});
-  auto d_bands = device(band_inverse, {2 * kTx}, DLDataType{kDLInt, 64, 1});
-  auto d_weights = device(weights, {kTx}, hr::complex_dtype<T>());
+  auto d_input = raw_device(input, {kRx, kD, kR}, hr::complex_dtype<T>());
+  auto d_detection = raw_device(detection, {1, 2}, DLDataType{kDLInt, 64, 1});
+  auto d_table = raw_device(table, {kTx, kW}, DLDataType{kDLInt, 64, 1});
+  auto d_bands = raw_device(band_inverse, {2 * kTx}, DLDataType{kDLInt, 64, 1});
+  auto d_weights = raw_device(weights, {kTx}, hr::complex_dtype<T>());
   auto d_src =
-      device(virtual_plan.src_channel, {virtual_plan.num_virtual}, DLDataType{kDLInt, 64, 1});
-  auto d_offsets = device(virtual_plan.member_offsets, {virtual_plan.num_virtual + 1},
-                          DLDataType{kDLInt, 64, 1});
-  auto d_members =
-      device(virtual_plan.member_indices,
-             {static_cast<int64_t>(virtual_plan.member_indices.size())}, DLDataType{kDLInt, 64, 1});
+      raw_device(virtual_plan.src_channel, {virtual_plan.num_virtual}, DLDataType{kDLInt, 64, 1});
+  auto d_offsets = raw_device(virtual_plan.member_offsets, {virtual_plan.num_virtual + 1},
+                              DLDataType{kDLInt, 64, 1});
+  auto d_members = raw_device(virtual_plan.member_indices,
+                              {static_cast<int64_t>(virtual_plan.member_indices.size())},
+                              DLDataType{kDLInt, 64, 1});
   auto d_output = hr::make_device_tensor({1, virtual_plan.num_virtual, 1}, hr::complex_dtype<T>());
   auto d_valid = hr::make_device_tensor({1, 1}, DLDataType{kDLUInt, 8, 1});
   auto d_error = hr::make_device_tensor({1}, DLDataType{kDLInt, 32, 1});
@@ -283,23 +326,15 @@ TEST(DDMSparseDemultiplexMath, GeometryAndInitialPhaseAreCoherent) {
 
 TEST(DDMSparseDemultiplexOp, UnwiredFoldDefaultsToZeroAndMaskMayBeUnwired) {
   auto fixture = independent_fold_fixture();
-  using Bank = hr::testing::WireCaptureBank<hr::WireArrayGeometry>;
-  Bank::reset();
-  const auto result =
-      hr::testing::run_dual_in_single_out_operator_graph_result<hr::DDMSparseDemultiplexOp<double>>(
-          {fixture.rd_maps}, {fixture.detection_idx}, sparse_params(), "snapshot",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-            wire_sparse_inputs(graph, source, op, sink);
-          },
-          sparse_extents(), {"is_valid"});
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 1U);
-  ASSERT_EQ(result.frames.front().shape, (std::vector<int64_t>{1, 2, 1}));
-  const auto* actual = result.frames.front().as<std::complex<double>>();
+  const auto result = run_sparse_operator({fixture.rd_maps}, {fixture.detection_idx});
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frames = sparse_snapshots(result);
+  ASSERT_EQ(frames.size(), 1U);
+  ASSERT_EQ(frames.front().shape, (std::vector<int64_t>{1, 2, 1}));
+  const auto* actual = frames.front().as<std::complex<double>>();
   EXPECT_NE(actual[0], fixture.expected_snapshot[0]);
   EXPECT_NE(actual[1], fixture.expected_snapshot[1]);
-  const auto geometries = take_geometries();
+  const auto geometries = take_geometries(result);
   ASSERT_EQ(geometries.size(), 1U);
   EXPECT_DOUBLE_EQ(geometries[0].wavelength, 0.004);
   EXPECT_EQ(geometries[0].element_positions, sparse_params().tx_positions);
@@ -307,19 +342,12 @@ TEST(DDMSparseDemultiplexOp, UnwiredFoldDefaultsToZeroAndMaskMayBeUnwired) {
 
 TEST(DDMSparseDemultiplexOp, ConnectedNonzeroFoldRecoversPhysicalChannels) {
   auto fixture = independent_fold_fixture();
-  using Bank = hr::testing::WireCaptureBank<hr::WireArrayGeometry>;
-  Bank::reset();
-  const auto result = hr::testing::run_triple_in_single_out_operator_graph_result<
-      hr::DDMSparseDemultiplexOp<double>, true>(
-      {fixture.rd_maps}, {fixture.detection_idx}, {fixture.fold_idx}, sparse_params(), "snapshot",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        wire_sparse_fold_inputs(graph, source, op, sink);
-      },
-      sparse_extents(), {"is_valid"});
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 1U);
-  const auto* actual = result.frames.front().as<std::complex<double>>();
+  const auto result =
+      run_sparse_operator({fixture.rd_maps}, {fixture.detection_idx}, {fixture.fold_idx});
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frames = sparse_snapshots(result);
+  ASSERT_EQ(frames.size(), 1U);
+  const auto* actual = frames.front().as<std::complex<double>>();
   for (size_t channel = 0; channel < fixture.expected_snapshot.size(); ++channel) {
     EXPECT_NEAR(actual[channel].real(), fixture.expected_snapshot[channel].real(), 1e-10);
     EXPECT_NEAR(actual[channel].imag(), fixture.expected_snapshot[channel].imag(), 1e-10);
@@ -329,73 +357,43 @@ TEST(DDMSparseDemultiplexOp, ConnectedNonzeroFoldRecoversPhysicalChannels) {
 TEST(DDMSparseDemultiplexOp, RejectsFoldRowCountMismatch) {
   auto fixture = independent_fold_fixture();
   auto wrong_rows = device(std::vector<int64_t>{0, 1}, {2}, DLDataType{kDLInt, 64, 1});
-  const auto result = hr::testing::run_triple_in_single_out_operator_graph_result<
-      hr::DDMSparseDemultiplexOp<double>, true>(
-      {fixture.rd_maps}, {fixture.detection_idx}, {wrong_rows}, sparse_params(), "snapshot",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        wire_sparse_fold_inputs(graph, source, op, sink);
-      },
-      sparse_extents(), {"is_valid"});
-  EXPECT_TRUE(result.plan_ok) << result.plan_json;
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_sparse_operator({fixture.rd_maps}, {fixture.detection_idx}, {wrong_rows});
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(sparse_snapshots(result).empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMSparseDemultiplexOp, RejectsFoldOutsideTxRange) {
   for (const int64_t invalid_fold : {-1, 2}) {
     auto fixture = independent_fold_fixture();
     auto fold = device(std::vector<int64_t>{invalid_fold}, {1}, DLDataType{kDLInt, 64, 1});
-    const auto result = hr::testing::run_triple_in_single_out_operator_graph_result<
-        hr::DDMSparseDemultiplexOp<double>, true>(
-        {fixture.rd_maps}, {fixture.detection_idx}, {fold}, sparse_params(), "snapshot",
-        [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-          wire_sparse_fold_inputs(graph, source, op, sink);
-        },
-        sparse_extents(), {"is_valid"});
-    EXPECT_TRUE(result.plan_ok) << result.plan_json;
-    EXPECT_TRUE(result.frames.empty());
-    EXPECT_FALSE(result.diagnostics.empty());
+    const auto result = run_sparse_operator({fixture.rd_maps}, {fixture.detection_idx}, {fold});
+    EXPECT_FALSE(result.ok());
+    EXPECT_TRUE(sparse_snapshots(result).empty());
+    EXPECT_FALSE(result.diagnostics().empty());
   }
 }
 
 TEST(DDMSparseDemultiplexOp, ZeroDetectionsEmitsExactEmptySnapshot) {
   auto fixture = independent_fold_fixture();
   auto empty = device(std::vector<int64_t>{}, {0, 2}, DLDataType{kDLInt, 64, 1});
-  using Bank = hr::testing::WireCaptureBank<hr::WireArrayGeometry>;
-  Bank::reset();
-  const auto result =
-      hr::testing::run_dual_in_single_out_operator_graph_result<hr::DDMSparseDemultiplexOp<double>>(
-          {fixture.rd_maps}, {empty}, sparse_params(), "snapshot",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-            wire_sparse_inputs(graph, source, op, sink);
-          },
-          sparse_extents(), {"is_valid"});
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 1U);
-  EXPECT_EQ(result.frames.front().shape, (std::vector<int64_t>{0, 2, 1}));
-  EXPECT_EQ(take_geometries().size(), 1U);
+  const auto result = run_sparse_operator({fixture.rd_maps}, {empty});
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frames = sparse_snapshots(result);
+  ASSERT_EQ(frames.size(), 1U);
+  EXPECT_EQ(frames.front().shape, (std::vector<int64_t>{0, 2, 1}));
+  EXPECT_EQ(take_geometries(result).size(), 1U);
 }
 
 TEST(DDMSparseDemultiplexOp, LiveWavelengthAppliesOneTickThenReverts) {
   auto fixture = independent_fold_fixture();
-  using Bank = hr::testing::WireCaptureBank<hr::WireArrayGeometry>;
-  Bank::reset();
-  const auto result = hr::testing::run_exact_override_dual_in_single_out_operator_graph_result<
-      hr::DDMSparseDemultiplexOp<double>, double>(
-      {fixture.rd_maps, fixture.rd_maps, fixture.rd_maps},
-      {fixture.detection_idx, fixture.detection_idx, fixture.detection_idx},
-      {std::nullopt, 0.008, std::nullopt}, sparse_params(), "snapshot",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        wire_sparse_inputs(graph, source, op, sink);
-        const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-        graph.add_flow(source->override_out, op->wavelength_in, queue);
-      },
-      sparse_extents(), {"is_valid"});
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 3U);
-  const auto geometries = take_geometries();
+  const auto result =
+      run_sparse_operator({fixture.rd_maps, fixture.rd_maps, fixture.rd_maps},
+                          {fixture.detection_idx, fixture.detection_idx, fixture.detection_idx}, {},
+                          {std::nullopt, 0.008, std::nullopt});
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(sparse_snapshots(result).size(), 3U);
+  const auto geometries = take_geometries(result);
   ASSERT_EQ(geometries.size(), 3U);
   EXPECT_DOUBLE_EQ(geometries[0].wavelength, 0.004);
   EXPECT_DOUBLE_EQ(geometries[1].wavelength, 0.008);

@@ -39,6 +39,7 @@
 #include <holoscan/core/run.hpp>
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 #include <holoscan/time/realtime_clock.hpp>
 
 #include "fmcw/ddm_dense_demultiplex_op/ddm_dense_demultiplex_op.hpp"
@@ -48,7 +49,8 @@
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/integration_graph_utils.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -65,22 +67,8 @@ using holoscan::radar::FMCWWaveformSpec;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::dldatatype_equals;
 using holoscan::radar::real_dtype;
-using holoscan::radar::testing::DualIOGraphRunResult;
-using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::run_dual_io_operator_graph_result;
-using holoscan::radar::testing::run_dual_in_single_out_operator_graph_result;
-using holoscan::radar::testing::run_single_io_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
-
-// Graph wiring lambda for 1-in / 1-out DDMDenseDemultiplexOp.
-auto compensation_wire() {
-  return [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-    const holoscan::ConnectionOptions q{.queue_depth = 4U};
-    graph.add_flow(source->out, op->rd_maps, q);
-    graph.add_flow(op->rd_maps_out, sink->in, q);
-  };
-}
 
 DDMDenseDemultiplexParams ddm_params(const DDMCodeDescriptor& code) {
   return DDMDenseDemultiplexParams{.ddm_code = code};
@@ -165,33 +153,37 @@ std::vector<std::complex<T>> build_ddm_input_host(const std::vector<double>& off
 }
 
 template <typename T>
-GraphRunResult run_ddm_result(std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
-                              DDMDenseDemultiplexParams params,
-                              const holoscan::radar::MaxTensorExtents& extents =
-                                  holoscan::radar::testing::default_test_extents()) {
-  return run_single_io_operator_graph_result<DDMDenseDemultiplexOp<T>>(
-      std::move(inputs), std::move(params), "rd_maps_out", compensation_wire(),
-      {"velocity_bins_out"}, extents);
+holoscan::testing::TestResult run_ddm_result(std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
+                                             DDMDenseDemultiplexParams params,
+                                             const holoscan::radar::MaxTensorExtents& extents =
+                                                 holoscan::radar::testing::default_test_extents()) {
+  using Op = DDMDenseDemultiplexOp<T>;
+  const std::size_t expected = inputs.size();
+  auto fixture = holoscan::testing::create_operator_test<Op>(extents);
+  fixture.set_params(std::move(params));
+  for (const auto& input : inputs) {
+    fixture.push(&Op::rd_maps, *input);
+  }
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.template capture_snapshot<holoscan::Tensor>("rd_maps_out", expected, kMaximumBytes);
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
+  fixture.output_device("velocity_bins_out", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool observed = running.wait_for_output("rd_maps_out", expected, std::chrono::seconds{5});
+  (void)observed;
+  running.request_stop();
+  return running.finish();
 }
 
 template <typename T>
 HostTensor run_ddm_once(std::shared_ptr<holoscan::Tensor> input, DDMDenseDemultiplexParams params) {
-  GraphRunResult result = run_ddm_result<T>({std::move(input)}, std::move(params));
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  const auto result = run_ddm_result<T>({std::move(input)}, std::move(params));
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
-    }
-    throw std::runtime_error(msg);
-  }
-  if (result.frames.size() != 1U) {
-    throw std::runtime_error("expected 1 DDM frame, got " + std::to_string(result.frames.size()));
-  }
-  return std::move(result.frames.front());
+  return holoscan::radar::testing::to_host(
+      result.template snapshot<holoscan::Tensor>("rd_maps_out"));
 }
 
 template <typename T>
@@ -201,21 +193,30 @@ HostTensor run_ddm_from_host(const std::vector<std::complex<T>>& host,
 }
 
 template <typename T>
-DualIOGraphRunResult run_ddm_with_axis(std::shared_ptr<holoscan::Tensor> input,
-                                       std::shared_ptr<holoscan::Tensor> velocity_axis,
-                                       const DDMCodeDescriptor& code) {
-  return run_dual_io_operator_graph_result<DDMDenseDemultiplexOp<T>>(
-      {std::move(velocity_axis)}, {std::move(input)}, ddm_params(code), "rd_maps_out",
-      "velocity_bins_out",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& map_sink,
-         const auto& axis_sink) {
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        // Exact sideband first, then the map trigger.
-        graph.add_flow(source->out0, op->velocity_bins, q);
-        graph.add_flow(source->out1, op->rd_maps, q);
-        graph.add_flow(op->rd_maps_out, map_sink->in, q);
-        graph.add_flow(op->velocity_bins_out, axis_sink->in, q);
-      });
+holoscan::testing::TestResult run_ddm_with_axis(std::shared_ptr<holoscan::Tensor> input,
+                                                std::shared_ptr<holoscan::Tensor> velocity_axis,
+                                                const DDMCodeDescriptor& code) {
+  using Op = DDMDenseDemultiplexOp<T>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(ddm_params(code));
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::nanoseconds{0}, holoscan::testing::input("velocity_bins", *velocity_axis),
+      holoscan::testing::input("rd_maps", *input)));
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.template capture_snapshot<holoscan::Tensor>("rd_maps_out", 1U, kMaximumBytes);
+  fixture.template capture_snapshot<holoscan::Tensor>("velocity_bins_out", 1U, kMaximumBytes);
+  fixture.input_source_device("velocity_bins", holoscan::DeviceId{0});
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
+  fixture.output_device("velocity_bins_out", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool maps = running.wait_for_output("rd_maps_out", 1U, std::chrono::seconds{5});
+  const bool axis = running.wait_for_output("velocity_bins_out", 1U, std::chrono::seconds{5});
+  (void)maps;
+  (void)axis;
+  running.request_stop();
+  return running.finish();
 }
 
 template <typename T>
@@ -289,11 +290,11 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsOpaqueLeadingBatch) {
   const auto host =
       build_ddm_input_host<float>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, p0, batch);
   const std::vector<int64_t> shape{batch, kDdmRx, kDdmDoppler, kDdmRange};
-  const GraphRunResult result = run_ddm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_ddm_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
+                                            ddm_params(code));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMDenseDemultiplexOp, RejectsInputBeyondCapturedExtents) {
@@ -303,11 +304,11 @@ TEST(DDMDenseDemultiplexOp, RejectsInputBeyondCapturedExtents) {
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   auto extents = holoscan::radar::testing::default_test_extents();
   extents.max_rx = kDdmRx - 1;
-  const GraphRunResult result = run_ddm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code), extents);
-  EXPECT_TRUE(result.plan_ok) << result.plan_json;
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_ddm_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
+                                            ddm_params(code), extents);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMDenseDemultiplexOp, DdmLinearPhaseCodesMatchOffsets) {
@@ -472,13 +473,12 @@ TEST(DDMDenseDemultiplexOp, NonLinearVelocityAxisIsIdentity) {
                                               {1.0f, 0.0f});
   std::vector<float> axis(static_cast<size_t>(kDoppler));
   std::iota(axis.begin(), axis.end(), -7.0f);
-  DualIOGraphRunResult result = run_ddm_with_axis<float>(
+  auto result = run_ddm_with_axis<float>(
       to_device_tensor(maps, {kDdmRx, kDoppler, kDdmRange}, complex_dtype<float>()),
       to_device_tensor(axis, {kDoppler}, real_dtype<float>()), code);
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames1.size(), 1U);
-  const HostTensor& output_axis = result.frames1.front();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const HostTensor output_axis =
+      holoscan::radar::testing::to_host(result.snapshot<holoscan::Tensor>("velocity_bins_out"));
   ASSERT_EQ(output_axis.shape, std::vector<int64_t>({kDoppler}));
   const auto* values = output_axis.as<float>();
   for (int64_t index = 0; index < kDoppler; ++index) {
@@ -613,11 +613,11 @@ TEST(DDMDenseDemultiplexOp, DdmNonLinearRejectsNonZeroGuardBands) {
   const std::vector<int64_t> shape{kNlRx, kNlDoppler, kNlRange};
   const std::vector<std::complex<float>> host(static_cast<size_t>(kNlRx * kNlDoppler * kNlRange),
                                               {1.0f, 0.0f});
-  const GraphRunResult result = run_ddm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_ddm_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
+                                            ddm_params(code));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMDenseDemultiplexOp, DdmNonLinearRejectsChirpDopplerMismatch) {
@@ -642,11 +642,11 @@ TEST(DDMDenseDemultiplexOp, DdmNonLinearRejectsChirpDopplerMismatch) {
   const std::vector<int64_t> shape{kNlRx, kNlDoppler, kNlRange};
   const std::vector<std::complex<float>> host(static_cast<size_t>(kNlRx * kNlDoppler * kNlRange),
                                               {1.0f, 0.0f});
-  const GraphRunResult result = run_ddm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_ddm_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
+                                            ddm_params(code));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMDenseDemultiplexOp, DdmGuardBandsReduceWidth) {
@@ -671,14 +671,12 @@ TEST(DDMDenseDemultiplexOp, LinearVelocityAxisUsesCenteredPhysicalSlice) {
   for (int64_t index = 0; index < kDdmDoppler; ++index) {
     axis[static_cast<size_t>(index)] = static_cast<float>(index - kDdmDoppler / 2) * 0.25f;
   }
-  DualIOGraphRunResult result = run_ddm_with_axis<float>(
+  auto result = run_ddm_with_axis<float>(
       to_device_tensor(host, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>()),
       to_device_tensor(axis, {kDdmDoppler}, real_dtype<float>()), code);
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames0.size(), 1U);
-  ASSERT_EQ(result.frames1.size(), 1U);
-  const HostTensor& output_axis = result.frames1.front();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const HostTensor output_axis =
+      holoscan::radar::testing::to_host(result.snapshot<holoscan::Tensor>("velocity_bins_out"));
   ASSERT_EQ(output_axis.shape, std::vector<int64_t>({4}));
   const auto* values = output_axis.as<float>();
   EXPECT_FLOAT_EQ(values[0], -0.5f);
@@ -688,7 +686,7 @@ TEST(DDMDenseDemultiplexOp, LinearVelocityAxisUsesCenteredPhysicalSlice) {
 }
 
 TEST(DDMDenseDemultiplexOp, DopplerProducerPublishesAxisBeforeMapTrigger) {
-  namespace harness = holoscan::radar::testing::detail;
+  namespace harness = holoscan::radar::testing::integration;
   harness::FrameBank::reset();
   harness::FrameBankB::reset();
   const std::vector<std::complex<float>> profiles(
@@ -772,13 +770,12 @@ TEST(DDMDenseDemultiplexOp, GuardBandsKeepCenteredVelocityInterval) {
   for (int64_t index = 0; index < kDdmDoppler; ++index) {
     axis[static_cast<size_t>(index)] = static_cast<double>(index - kDdmDoppler / 2);
   }
-  DualIOGraphRunResult result = run_ddm_with_axis<double>(
+  auto result = run_ddm_with_axis<double>(
       to_device_tensor(host, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<double>()),
       to_device_tensor(axis, {kDdmDoppler}, real_dtype<double>()), code);
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames1.size(), 1U);
-  const HostTensor& output_axis = result.frames1.front();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const HostTensor output_axis =
+      holoscan::radar::testing::to_host(result.snapshot<holoscan::Tensor>("velocity_bins_out"));
   ASSERT_EQ(output_axis.shape, std::vector<int64_t>({3}));
   const auto* values = output_axis.as<double>();
   EXPECT_DOUBLE_EQ(values[0], -1.0);
@@ -886,11 +883,11 @@ TEST(DDMDenseDemultiplexOp, RejectsEmptyDdmCode) {
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   const std::vector<std::complex<float>> host(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
                                               {1.0f, 0.0f});
-  const GraphRunResult result = run_ddm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(DDMCodeDescriptor{}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_ddm_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
+                                            ddm_params(DDMCodeDescriptor{}));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMDenseDemultiplexOp, DdmRejectsNonDivisibleDoppler) {
@@ -898,11 +895,11 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsNonDivisibleDoppler) {
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   const std::vector<std::complex<float>> host(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
                                               {1.0f, 0.0f});
-  const GraphRunResult result = run_ddm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_ddm_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
+                                            ddm_params(code));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMDenseDemultiplexOp, DdmRejectsGuardTooLarge) {
@@ -910,22 +907,22 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsGuardTooLarge) {
   const std::vector<int64_t> shape{kDdmRx, kDdmDoppler, kDdmRange};
   const std::vector<std::complex<float>> host(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
                                               {1.0f, 0.0f});
-  const GraphRunResult result = run_ddm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_ddm_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
+                                            ddm_params(code));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMDenseDemultiplexOp, DdmRejectsRankTooSmall) {
   const auto code = make_offset_code(2);
   const std::vector<std::complex<float>> host(static_cast<size_t>(kDdmDoppler * kDdmRange),
                                               {1.0f, 0.0f});
-  const GraphRunResult result = run_ddm_result<float>(
+  const auto result = run_ddm_result<float>(
       {to_device_tensor(host, {kDdmDoppler, kDdmRange}, complex_dtype<float>())}, ddm_params(code));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMDenseDemultiplexOp, DdmRejectsBothOffsetForms) {
@@ -936,11 +933,11 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsBothOffsetForms) {
   code.num_tx = 2;
   code.doppler_offsets = {0.0, 0.5};
   code.phase_codes = {{1.0, 0.0}, {0.0, 1.0}};
-  const GraphRunResult result = run_ddm_result<float>(
-      {to_device_tensor(host, shape, complex_dtype<float>())}, ddm_params(code));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_ddm_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
+                                            ddm_params(code));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMDenseDemultiplexOp, DdmRejectsMismatchedPrecision) {
@@ -949,11 +946,11 @@ TEST(DDMDenseDemultiplexOp, DdmRejectsMismatchedPrecision) {
   const auto offsets = uniform_offsets(kDdmTx);
   const auto host =
       build_ddm_input_host<double>(offsets, kDdmTx, kDdmRx, kDdmDoppler, kDdmRange, 0);
-  const GraphRunResult result = run_ddm_result<float>(
+  const auto result = run_ddm_result<float>(
       {to_device_tensor(host, shape, complex_dtype<double>())}, ddm_params(code));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMDenseDemultiplexOp, RejectsVelocityAxisLengthMismatch) {
@@ -961,12 +958,12 @@ TEST(DDMDenseDemultiplexOp, RejectsVelocityAxisLengthMismatch) {
   const std::vector<std::complex<float>> maps(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
                                               {1.0f, 0.0f});
   const std::vector<float> axis(static_cast<size_t>(kDdmDoppler - 1), 0.0f);
-  const DualIOGraphRunResult result = run_ddm_with_axis<float>(
+  const auto result = run_ddm_with_axis<float>(
       to_device_tensor(maps, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>()),
       to_device_tensor(axis, {kDdmDoppler - 1}, real_dtype<float>()), code);
-  EXPECT_TRUE(result.plan_ok) << result.plan_json;
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMDenseDemultiplexOp, RejectsVelocityAxisPrecisionMismatch) {
@@ -974,39 +971,45 @@ TEST(DDMDenseDemultiplexOp, RejectsVelocityAxisPrecisionMismatch) {
   const std::vector<std::complex<float>> maps(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
                                               {1.0f, 0.0f});
   const std::vector<double> axis(static_cast<size_t>(kDdmDoppler), 0.0);
-  const DualIOGraphRunResult result = run_ddm_with_axis<float>(
+  const auto result = run_ddm_with_axis<float>(
       to_device_tensor(maps, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>()),
       to_device_tensor(axis, {kDdmDoppler}, real_dtype<double>()), code);
-  EXPECT_TRUE(result.plan_ok) << result.plan_json;
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(DDMDenseDemultiplexOp, UnwiredVelocityAxisDoesNotSuppressMaps) {
+  using Op = DDMDenseDemultiplexOp<float>;
   const auto code = make_offset_code(kDdmTx);
   const std::vector<std::complex<float>> maps(static_cast<size_t>(kDdmRx * kDdmDoppler * kDdmRange),
                                               {1.0f, 0.0f});
   const std::vector<float> axis(static_cast<size_t>(kDdmDoppler), 0.0f);
-  std::vector<std::shared_ptr<holoscan::Tensor>> axes;
-  std::vector<std::shared_ptr<holoscan::Tensor>> map_frames;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(ddm_params(code));
   for (int frame = 0; frame < 4; ++frame) {
-    axes.push_back(to_device_tensor(axis, {kDdmDoppler}, real_dtype<float>()));
-    map_frames.push_back(
-        to_device_tensor(maps, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>()));
+    auto axis_tensor = to_device_tensor(axis, {kDdmDoppler}, real_dtype<float>());
+    auto map_tensor =
+        to_device_tensor(maps, {kDdmRx, kDdmDoppler, kDdmRange}, complex_dtype<float>());
+    fixture.push_frame(
+        holoscan::testing::frame_at(std::chrono::milliseconds{frame + 1},
+                                    holoscan::testing::input("velocity_bins", *axis_tensor),
+                                    holoscan::testing::input("rd_maps", *map_tensor)));
   }
-  const GraphRunResult result =
-      run_dual_in_single_out_operator_graph_result<DDMDenseDemultiplexOp<float>>(
-          std::move(axes), std::move(map_frames), ddm_params(code), "rd_maps_out",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-            const holoscan::ConnectionOptions q{.queue_depth = 4U};
-            graph.add_flow(source->out0, op->velocity_bins, q);
-            graph.add_flow(source->out1, op->rd_maps, q);
-            graph.add_flow(op->rd_maps_out, sink->in, q);
-          },
-          holoscan::radar::testing::default_test_extents(), {"velocity_bins_out"});
-  EXPECT_TRUE(result.plan_ok) << result.plan_json;
-  EXPECT_TRUE(result.diagnostics.empty());
-  EXPECT_EQ(result.frames.size(), 4U);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.capture_snapshot<holoscan::Tensor>("rd_maps_out", 4U, kMaximumBytes);
+  fixture.input_source_device("velocity_bins", holoscan::DeviceId{0});
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
+  fixture.output_device("velocity_bins_out", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool observed = running.wait_for_output("rd_maps_out", 4U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
+  EXPECT_TRUE(observed) << result.describe_failure();
+  EXPECT_TRUE(result.ok()) << result.describe_failure();
+  EXPECT_EQ(result.snapshots<holoscan::Tensor>("rd_maps_out").size(), 4U);
 }
 
 }  // namespace

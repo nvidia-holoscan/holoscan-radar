@@ -5,7 +5,7 @@
 // the analytic simulator, and
 // determinism of the chain under a fixed seed. The chain is fed and
 // captured with the SDK test-harness source/sink operators
-// (utils/sdk_harness.hpp).
+// (the SDK native operator-test fixture).
 
 #include <cuda_runtime_api.h>
 #include <gtest/gtest.h>
@@ -28,7 +28,6 @@
 #include "utils/bin_model.hpp"
 #include "utils/additives_reference.hpp"
 #include "utils/sim_reference.hpp"
-#include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {

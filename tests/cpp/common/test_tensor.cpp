@@ -60,8 +60,7 @@ TEST(Contiguity, RejectsNonContiguousTensorWithContext) {
   auto holder = std::make_unique<Holder>();
   ASSERT_EQ(cudaMalloc(&holder->data, 4 * sizeof(int64_t)), cudaSuccess);
   const std::vector<int64_t> host = {0, 0, 1, 0};
-  ASSERT_EQ(cudaMemcpy(holder->data, host.data(), 4 * sizeof(int64_t),
-                       cudaMemcpyHostToDevice),
+  ASSERT_EQ(cudaMemcpy(holder->data, host.data(), 4 * sizeof(int64_t), cudaMemcpyHostToDevice),
             cudaSuccess);
   int current_device_id = -1;
   ASSERT_EQ(cudaGetDevice(&current_device_id), cudaSuccess);
