@@ -13,6 +13,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -24,6 +25,7 @@
 
 #include <holoscan/core/connection_options.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "angle_estimation/beamscan_estimator_op/beamscan_estimator_op.hpp"
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
@@ -32,7 +34,8 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/integration_graph_utils.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -48,8 +51,6 @@ using holoscan::radar::complex_dtype;
 using holoscan::radar::from_wire;
 using holoscan::radar::real_dtype;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::TensorWireGraphRunResult;
-using holoscan::radar::testing::run_single_in_tensor_wire_out_operator_graph_result;  // NOLINT
 using holoscan::radar::testing::to_device_tensor;
 
 constexpr int64_t kNumTx = 2;
@@ -133,42 +134,57 @@ std::vector<std::complex<T>> build_rd_host(const std::vector<int64_t>& shape) {
   return host;
 }
 
-// Graph wiring lambda for 1-in / 2-out VirtualArrayAssemblyOp.
-template <typename Source, typename OpRef, typename Sink0, typename Sink1>
-void wire_assembly(holoscan::Graph& graph, const Source& source, OpRef& op, const Sink0& sink0,
-                   const Sink1& sink1) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out, op->rd_maps, q);
-  graph.add_flow(op->rd_maps_out, sink0->in, q);
-  graph.add_flow(op->array_geometry, sink1->in, q);
-}
-
 struct AssemblyResult {
   HostTensor rd_maps;
   ArrayGeometry geometry;
 };
 
-TensorWireGraphRunResult<WireArrayGeometry> run_assembly_result(
-    std::shared_ptr<holoscan::Tensor> input, VirtualArrayAssemblyParams params) {
-  return run_single_in_tensor_wire_out_operator_graph_result<WireArrayGeometry,
-                                                             VirtualArrayAssemblyOp<float>>(
-      {std::move(input)}, std::move(params), "rd_maps_out",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-         const auto& sink1) {
-        wire_assembly(graph, source, op, sink0, sink1);
-      });
+template <typename T>
+holoscan::testing::TestResult run_assembly_result_t(std::shared_ptr<holoscan::Tensor> input,
+                                                    VirtualArrayAssemblyParams params) {
+  using Op = VirtualArrayAssemblyOp<T>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  fixture.push(&Op::rd_maps, *input);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.template capture_snapshot<holoscan::Tensor>("rd_maps_out", 1U, kMaximumBytes);
+  fixture.template capture_snapshot<WireArrayGeometry>("array_geometry", 1U, kMaximumBytes);
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  (void)running.wait_for_output("rd_maps_out", 1U, std::chrono::seconds{5});
+  (void)running.wait_for_output("array_geometry", 1U, std::chrono::seconds{5});
+  running.request_stop();
+  return running.finish();
 }
 
-template <typename T>
-TensorWireGraphRunResult<WireArrayGeometry> run_assembly_result_t(
-    std::shared_ptr<holoscan::Tensor> input, VirtualArrayAssemblyParams params) {
-  return run_single_in_tensor_wire_out_operator_graph_result<WireArrayGeometry,
-                                                             VirtualArrayAssemblyOp<T>>(
-      {std::move(input)}, std::move(params), "rd_maps_out",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-         const auto& sink1) {
-        wire_assembly(graph, source, op, sink0, sink1);
-      });
+holoscan::testing::TestResult run_assembly_result(std::shared_ptr<holoscan::Tensor> input,
+                                                  VirtualArrayAssemblyParams params) {
+  return run_assembly_result_t<float>(std::move(input), std::move(params));
+}
+
+std::vector<HostTensor> assembly_maps(const holoscan::testing::TestResult& result) {
+  std::vector<HostTensor> frames;
+  for (const auto& snapshot : result.template snapshots<holoscan::Tensor>("rd_maps_out")) {
+    frames.push_back(holoscan::radar::testing::to_host(snapshot));
+  }
+  return frames;
+}
+
+std::vector<WireArrayGeometry> assembly_geometries(const holoscan::testing::TestResult& result) {
+  std::vector<WireArrayGeometry> geometries;
+  for (const auto& snapshot : result.template snapshots<WireArrayGeometry>("array_geometry")) {
+    auto wire = snapshot.metadata();
+    const auto& packed =
+        snapshot.tensor(holoscan::radar::wire::ArrayGeometryTensorFields::packed_geometry);
+    std::vector<double> values(packed.bytes().size() / sizeof(double));
+    std::memcpy(values.data(), packed.bytes().data(), packed.bytes().size());
+    wire.packed_geometry =
+        holoscan::radar::testing::to_pageable_host_tensor(values, packed.shape(), packed.dtype());
+    geometries.push_back(std::move(wire));
+  }
+  return geometries;
 }
 
 template <typename T>
@@ -182,31 +198,19 @@ AssemblyResult run_assembly(const std::vector<std::complex<T>>& host,
   params.rx_positions = rx_positions;
   params.wavelength = wavelength;
   params.overlap_policy = policy;
-  TensorWireGraphRunResult<WireArrayGeometry> result = run_assembly_result_t<T>(
-      to_device_tensor(host, shape, complex_dtype<T>()), std::move(params));
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  const auto result = run_assembly_result_t<T>(to_device_tensor(host, shape, complex_dtype<T>()),
+                                               std::move(params));
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
-    }
-    throw std::runtime_error(msg);
-  }
-  if (result.frames0.size() != 1U || result.frames1.size() != 1U) {
-    throw std::runtime_error("VirtualArrayAssemblyOp test: expected one output frame pair, got " +
-                             std::to_string(result.frames0.size()) + "/" +
-                             std::to_string(result.frames1.size()));
-  }
-  auto decoded = from_wire(result.frames1.front());
+  auto decoded = from_wire(assembly_geometries(result).front());
   if (!decoded) {
     throw std::runtime_error("VirtualArrayAssemblyOp test: invalid WireArrayGeometry");
   }
-  return {std::move(result.frames0.front()), std::move(*decoded)};
+  return {
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("rd_maps_out")),
+      std::move(*decoded)};
 }
-
 template <typename T>
 AssemblyResult run_assembly(const std::vector<std::complex<T>>& host,
                             const std::vector<double>& tx_positions,
@@ -266,7 +270,7 @@ TEST(VirtualArrayAssemblyOp, EmittedGeometryMatchesAnalyticLayout) {
 }
 
 TEST(VirtualArrayAssemblyOp, GeometryDirectlyDrivesBeamscan) {
-  namespace detail = holoscan::radar::testing::detail;
+  namespace detail = holoscan::radar::testing::integration;
 
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
@@ -395,13 +399,13 @@ TEST(VirtualArrayAssemblyOp, DedupIsDefaultPolicy) {
   params.rx_positions = default_rx_positions();
   params.wavelength = kWavelength;
   // overlap_policy defaults to kDedup in VirtualArrayAssemblyParams.
-  TensorWireGraphRunResult<WireArrayGeometry> result = run_assembly_result_t<float>(
+  const auto result = run_assembly_result_t<float>(
       to_device_tensor(host, shape, complex_dtype<float>()), std::move(params));
-  ASSERT_TRUE(result.plan_ok);
-  ASSERT_FALSE(result.frames0.empty());
-  ASSERT_FALSE(result.frames1.empty());
-  EXPECT_EQ(result.frames0.front().shape, explicit_dedup.rd_maps.shape);
-  auto geometry = from_wire(result.frames1.front());
+  ASSERT_TRUE(result.ok());
+  ASSERT_FALSE(assembly_maps(result).empty());
+  ASSERT_FALSE(assembly_geometries(result).empty());
+  EXPECT_EQ(assembly_maps(result).front().shape, explicit_dedup.rd_maps.shape);
+  auto geometry = from_wire(assembly_geometries(result).front());
   ASSERT_TRUE(geometry);
   EXPECT_EQ(geometry->num_elements(), explicit_dedup.geometry.num_elements());
 }
@@ -473,12 +477,12 @@ TEST(VirtualArrayAssemblyOp, RejectsOpaqueLeadingBatch) {
   params.rx_positions = default_rx_positions();
   params.wavelength = kWavelength;
   params.overlap_policy = OverlapPolicy::kKeepAll;
-  const TensorWireGraphRunResult<WireArrayGeometry> result = run_assembly_result_t<float>(
+  const auto result = run_assembly_result_t<float>(
       to_device_tensor(build_rd_host<float>(shape), shape, complex_dtype<float>()),
       std::move(params));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(assembly_maps(result).empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(VirtualArrayAssemblyOp, WavelengthConfigurableFromParams) {
@@ -491,8 +495,6 @@ TEST(VirtualArrayAssemblyOp, WavelengthConfigurableFromParams) {
 }
 
 TEST(VirtualArrayAssemblyOp, LiveWavelengthAppliesOneTickThenReverts) {
-  using Bank = holoscan::radar::testing::WireCaptureBank<WireArrayGeometry>;
-  Bank::reset();
   const std::vector<int64_t> shape = {kNumTx, kNumRx, kDoppler, kRange};
   const auto input = [&] {
     return to_device_tensor(build_rd_host<float>(shape), shape, complex_dtype<float>());
@@ -502,28 +504,36 @@ TEST(VirtualArrayAssemblyOp, LiveWavelengthAppliesOneTickThenReverts) {
   params.rx_positions = default_rx_positions();
   params.wavelength = kWavelength;
   params.overlap_policy = OverlapPolicy::kKeepAll;
-  const auto result = holoscan::radar::testing::run_exact_override_single_io_operator_graph_result<
-      VirtualArrayAssemblyOp<float>, double>(
-      {input(), input(), input()}, {std::nullopt, 2.0 * kWavelength, std::nullopt},
-      std::move(params), "rd_maps_out",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-        graph.add_flow(source->override_out, op->wavelength, queue);
-        graph.add_flow(source->out, op->rd_maps, queue);
-        graph.add_flow(op->rd_maps_out, sink->in, queue);
-        const auto geometry_sink =
-            graph.op<holoscan::radar::testing::WireCaptureOp<WireArrayGeometry>>("geometry_sink");
-        graph.add_flow(op->array_geometry, geometry_sink->in, queue);
-      });
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 3U);
-
-  std::vector<WireArrayGeometry> captured;
-  {
-    const std::lock_guard lock(Bank::mutex);
-    captured = std::move(Bank::payloads);
+  using Op = VirtualArrayAssemblyOp<float>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  for (std::size_t index = 0; index < 3U; ++index) {
+    const auto capture_time = std::chrono::milliseconds{static_cast<int64_t>((index + 1U) * 100U)};
+    auto frame = input();
+    if (index == 1U) {
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("wavelength", 2.0 * kWavelength),
+          holoscan::testing::input("rd_maps", *frame)));
+    } else {
+      fixture.push_frame(
+          holoscan::testing::frame_at(capture_time, holoscan::testing::input("rd_maps", *frame)));
+    }
   }
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.capture_snapshot<holoscan::Tensor>("rd_maps_out", 3U, kMaximumBytes);
+  fixture.capture_snapshot<WireArrayGeometry>("array_geometry", 3U, kMaximumBytes);
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  (void)running.wait_for_output("rd_maps_out", 3U, std::chrono::seconds{5});
+  (void)running.wait_for_output("array_geometry", 3U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(assembly_maps(result).size(), 3U);
+
+  const auto captured = assembly_geometries(result);
   ASSERT_EQ(captured.size(), 3U);
   std::vector<double> wavelengths;
   for (const auto& wire : captured) {
@@ -562,12 +572,12 @@ TEST(VirtualArrayAssemblyOp, RejectsMismatchedTxPositions) {
   params.rx_positions = default_rx_positions();
   params.wavelength = kWavelength;
   params.overlap_policy = OverlapPolicy::kKeepAll;
-  const TensorWireGraphRunResult<WireArrayGeometry> result = run_assembly_result_t<float>(
+  const auto result = run_assembly_result_t<float>(
       to_device_tensor(build_rd_host<float>(shape), shape, complex_dtype<float>()),
       std::move(params));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(assembly_maps(result).empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(VirtualArrayAssemblyOp, RejectsMismatchedRxPositions) {
@@ -577,12 +587,12 @@ TEST(VirtualArrayAssemblyOp, RejectsMismatchedRxPositions) {
   params.rx_positions = {0.0, 0.0, 0.0};
   params.wavelength = kWavelength;
   params.overlap_policy = OverlapPolicy::kKeepAll;
-  const TensorWireGraphRunResult<WireArrayGeometry> result = run_assembly_result_t<float>(
+  const auto result = run_assembly_result_t<float>(
       to_device_tensor(build_rd_host<float>(shape), shape, complex_dtype<float>()),
       std::move(params));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(assembly_maps(result).empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(VirtualArrayAssemblyOp, RejectsInvalidWavelength) {
@@ -592,12 +602,12 @@ TEST(VirtualArrayAssemblyOp, RejectsInvalidWavelength) {
   params.rx_positions = default_rx_positions();
   params.wavelength = 0.0;
   params.overlap_policy = OverlapPolicy::kKeepAll;
-  const TensorWireGraphRunResult<WireArrayGeometry> result = run_assembly_result_t<float>(
+  const auto result = run_assembly_result_t<float>(
       to_device_tensor(build_rd_host<float>(shape), shape, complex_dtype<float>()),
       std::move(params));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(assembly_maps(result).empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(VirtualArrayAssemblyOp, RejectsRankTooSmall) {
@@ -609,11 +619,11 @@ TEST(VirtualArrayAssemblyOp, RejectsRankTooSmall) {
   params.rx_positions = default_rx_positions();
   params.wavelength = kWavelength;
   params.overlap_policy = OverlapPolicy::kKeepAll;
-  const TensorWireGraphRunResult<WireArrayGeometry> result = run_assembly_result_t<float>(
+  const auto result = run_assembly_result_t<float>(
       to_device_tensor(host, shape, complex_dtype<float>()), std::move(params));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(assembly_maps(result).empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 }  // namespace

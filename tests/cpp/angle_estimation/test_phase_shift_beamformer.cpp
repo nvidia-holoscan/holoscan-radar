@@ -28,11 +28,11 @@
 
 #include <holoscan/core/compile.hpp>
 #include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
 #include <holoscan/core/payload_options.hpp>
 #include <holoscan/core/run.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 #include <holoscan/time/realtime_clock.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "angle_estimation/phase_shift_beamformer_op/phase_shift_beamformer_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
@@ -46,7 +46,7 @@
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
 #include "radar_schemas/window_spec_bridge.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -59,11 +59,7 @@ using holoscan::radar::PhaseShiftBeamformerParams;
 using holoscan::radar::WindowSpec;
 using holoscan::radar::WindowType;
 using holoscan::radar::complex_dtype;
-using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::ThreeOutGraphRunResult;
-using holoscan::radar::testing::run_single_in_three_out_operator_graph_result;
-using holoscan::radar::testing::run_single_io_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 
 using holoscan::radar::kPi;
@@ -178,78 +174,60 @@ PhaseShiftBeamformerParams make_params(ArrayGeometry geom, AngleConvention conv,
   return params;
 }
 
-template <typename Source, typename OpRef, typename Sink>
-void wire_beamformer(holoscan::Graph& graph, const Source& source, OpRef& op, const Sink& sink) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out, op->rd_maps, q);
-  graph.add_flow(op->rda_cube, sink->in, q);
-}
-
 template <typename T>
-GraphRunResult run_beamformer_result(
+holoscan::testing::TestResult run_beamformer_result(
     std::shared_ptr<holoscan::Tensor> rd_maps, PhaseShiftBeamformerParams params,
     std::optional<holoscan::radar::MaxTensorExtents> extents = std::nullopt) {
-  // rd_maps is (N_rx, D, R) and the output pool spans az*el*D*R, so take D and
-  // R from the fixture instead of the harness caps — these suites scan wide
-  // grids over cubes that are usually 1x1 in doppler/range.
+  using Op = PhaseShiftBeamformerOp<T>;
   const auto rd_shape = rd_maps->shape();
-  const holoscan::radar::MaxTensorExtents sized =
-      extents.value_or(holoscan::radar::testing::extents_for_scan_grid(
-          params.az_coordinates.size(), params.el_coordinates.size(),
-          rd_shape.size() > 1U ? std::optional<std::size_t>(static_cast<std::size_t>(rd_shape[1]))
-                               : std::nullopt,
-          rd_shape.size() > 2U ? std::optional<std::size_t>(static_cast<std::size_t>(rd_shape[2]))
-                               : std::nullopt));
-  return run_single_io_operator_graph_result<PhaseShiftBeamformerOp<T>>(
-      {std::move(rd_maps)}, std::move(params), "rda_cube",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        wire_beamformer(graph, source, op, sink);
-      },
-      {"az_grid", "el_grid"}, sized);
+  const auto sized = extents.value_or(holoscan::radar::testing::extents_for_scan_grid(
+      params.az_coordinates.size(), params.el_coordinates.size(),
+      rd_shape.size() > 1U ? std::optional<std::size_t>(static_cast<std::size_t>(rd_shape[1]))
+                           : std::nullopt,
+      rd_shape.size() > 2U ? std::optional<std::size_t>(static_cast<std::size_t>(rd_shape[2]))
+                           : std::nullopt));
+  auto fixture = holoscan::testing::create_operator_test<Op>(sized);
+  fixture.set_params(std::move(params));
+  fixture.push(&Op::rd_maps, *rd_maps);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"rda_cube", "az_grid", "el_grid"};
+  for (const char* output : kOutputs) {
+    fixture.template capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* output : kOutputs) {
+    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+  }
+  running.request_stop();
+  return running.finish();
 }
 
 template <typename T>
-ThreeOutGraphRunResult run_beamformer_with_grids(std::shared_ptr<holoscan::Tensor> rd_maps,
-                                                 PhaseShiftBeamformerParams params) {
-  const auto rd_shape = rd_maps->shape();
-  const holoscan::radar::MaxTensorExtents extents = holoscan::radar::testing::extents_for_scan_grid(
-      params.az_coordinates.size(), params.el_coordinates.size(),
-      static_cast<std::size_t>(rd_shape[1]), static_cast<std::size_t>(rd_shape[2]));
-  return run_single_in_three_out_operator_graph_result<PhaseShiftBeamformerOp<T>>(
-      {std::move(rd_maps)}, std::move(params), "rda_cube", "az_grid", "el_grid",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& cube_sink,
-         const auto& az_sink, const auto& el_sink) {
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->out, op->rd_maps, q);
-        graph.add_flow(op->rda_cube, cube_sink->in, q);
-        graph.add_flow(op->az_grid, az_sink->in, q);
-        graph.add_flow(op->el_grid, el_sink->in, q);
-      },
-      {}, extents);
+holoscan::testing::TestResult run_beamformer_with_grids(std::shared_ptr<holoscan::Tensor> rd_maps,
+                                                        PhaseShiftBeamformerParams params) {
+  return run_beamformer_result<T>(std::move(rd_maps), std::move(params));
+}
+
+std::vector<HostTensor> beamformer_frames(const holoscan::testing::TestResult& result,
+                                          const char* port) {
+  std::vector<HostTensor> frames;
+  for (const auto& snapshot : result.template snapshots<holoscan::Tensor>(port)) {
+    frames.push_back(holoscan::radar::testing::to_host(snapshot));
+  }
+  return frames;
 }
 
 template <typename T>
 HostTensor run_beamformer(std::shared_ptr<holoscan::Tensor> rd_maps,
                           PhaseShiftBeamformerParams params) {
-  GraphRunResult result = run_beamformer_result<T>(std::move(rd_maps), std::move(params));
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  const auto result = run_beamformer_result<T>(std::move(rd_maps), std::move(params));
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
-    }
-    throw std::runtime_error(msg);
-  }
-  if (result.frames.size() != 1U) {
-    throw std::runtime_error("PhaseShiftBeamformerOp test: expected one frame, got " +
-                             std::to_string(result.frames.size()));
-  }
-  return std::move(result.frames.front());
+  return holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("rda_cube"));
 }
-
 struct LiveBeamformerTick {
   std::shared_ptr<holoscan::Tensor> rd_maps;
   std::optional<ArrayGeometry> geometry;
@@ -259,253 +237,56 @@ struct LiveBeamformerTick {
   bool malformed_geometry{false};
 };
 
-struct LiveBeamformerBank {
-  static void reset(std::vector<LiveBeamformerTick> new_ticks) {
-    ticks = std::move(new_ticks);
-    index = 0;
-  }
-  static inline std::vector<LiveBeamformerTick> ticks;
-  static inline std::size_t index{0};
-};
-
-holoscan::expected<void, holoscan::Error> emit_host_vector(
-    holoscan::Output<holoscan::Tensor>& output, std::span<const double> values,
-    holoscan::TimePoint capture_time) {
-  const std::array<int64_t, 1> shape{static_cast<int64_t>(values.size())};
-  constexpr DLDataType dtype{kDLFloat, 64U, 1U};
-  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
-  if (!loan) {
-    return holoscan::make_unexpected(std::move(loan).error());
-  }
-  auto written =
-      loan->write_host_and_commit([values](const holoscan::TensorOutputWriteGuard& writer) {
-        std::copy(values.begin(), values.end(), writer.data_as<double>());
-      });
-  if (!written) {
-    return holoscan::make_unexpected(std::move(written).error());
-  }
-  return output.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = capture_time});
-}
-
-template <typename Wire>
-holoscan::expected<void, holoscan::Error> emit_wire_doubles(holoscan::Output<Wire>& output,
-                                                            Wire wire,
-                                                            std::span<const double> values,
-                                                            std::span<const int64_t> shape,
-                                                            holoscan::TimePoint capture_time) {
-  constexpr DLDataType dtype{kDLFloat, 64U, 1U};
-  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
-  if (!loan) {
-    return holoscan::make_unexpected(std::move(loan).error());
-  }
-  auto written =
-      loan->write_host_and_commit([values](const holoscan::TensorOutputWriteGuard& writer) {
-        std::copy(values.begin(), values.end(), writer.data_as<double>());
-      });
-  if (!written) {
-    return holoscan::make_unexpected(std::move(written).error());
-  }
-  return output.emit_tensor(std::move(*loan), std::move(wire),
-                            holoscan::EmitOptions{.capture_time = capture_time});
-}
-
-class LiveBeamformerSourceOp final : public holoscan::Operator<> {
- public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorRepresentation kDevice{
-        .memory_kind = holoscan::MemoryKind::kCudaDevice,
-        .dtype = std::nullopt,
-        .rank = std::nullopt,
-    };
-    constexpr holoscan::TensorRepresentation kHostVector{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = DLDataType{kDLFloat, 64U, 1U},
-        .rank = 1U,
-    };
-    constexpr holoscan::TensorRepresentation kHostMatrix{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = DLDataType{kDLFloat, 64U, 1U},
-        .rank = 2U,
-    };
-    spec.output(rd_maps).produces_tensor(
-        holoscan::radar::pooled_tensor_output(kDevice, 8U, 256ULL * 1024ULL * 1024ULL));
-    spec.output(array_geometry)
-        .max_emits_per_compute(1U)
-        .produces_tensor(
-            holoscan::radar::pooled_tensor_output(kHostMatrix, 2U, 4096U * sizeof(double)));
-    for (auto* output : {&az_coordinates, &el_coordinates}) {
-      spec.output(*output).max_emits_per_compute(1U).produces_tensor(
-          holoscan::radar::pooled_tensor_output(kHostVector, 1U, 4096U * sizeof(double)));
-    }
-    spec.output(array_taper)
-        .max_emits_per_compute(1U)
-        .produces_tensor(
-            holoscan::radar::pooled_tensor_output(kHostVector, 1U, 4096U * sizeof(double)));
-  }
-
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnClock{.period = holoscan::radar::testing::detail::kHarnessTick});
-    return result;
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    if (LiveBeamformerBank::index >= LiveBeamformerBank::ticks.size()) {
-      return {};
-    }
-    const LiveBeamformerTick& tick = LiveBeamformerBank::ticks[LiveBeamformerBank::index++];
-    const holoscan::TimePoint time = context.activation_time();
-    if (tick.geometry.has_value()) {
-      auto packed = holoscan::radar::pack_array_geometry(*tick.geometry);
-      if (tick.malformed_geometry) {
-        packed[packed.size() - 3U] = 0.0;
-      }
-      auto wire = holoscan::radar::to_wire(*tick.geometry);
-      const std::array<int64_t, 2> shape{tick.geometry->num_elements() + 1, 3};
-      auto emitted = emit_wire_doubles(array_geometry, std::move(wire), packed, shape, time);
-      if (!emitted) {
-        return emitted;
-      }
-    }
-    if (tick.az.has_value()) {
-      auto emitted = emit_host_vector(az_coordinates, *tick.az, time);
-      if (!emitted) {
-        return emitted;
-      }
-    }
-    if (tick.el.has_value()) {
-      auto emitted = emit_host_vector(el_coordinates, *tick.el, time);
-      if (!emitted) {
-        return emitted;
-      }
-    }
-    if (tick.taper.has_value()) {
-      auto wire = holoscan::radar::to_wire(*tick.taper);
-      const std::array<int64_t, 1> shape{static_cast<int64_t>(tick.taper->coefficients.size())};
-      auto emitted =
-          emit_wire_doubles(array_taper, std::move(wire), tick.taper->coefficients, shape, time);
-      if (!emitted) {
-        return emitted;
-      }
-    }
-    return holoscan::radar::testing::detail::emit_bank_frame(rd_maps, context, tick.rd_maps,
-                                                             "LiveBeamformerSourceOp");
-  }
-
-  holoscan::Output<holoscan::Tensor> rd_maps{"rd_maps"};
-  holoscan::Output<holoscan::radar::WireArrayGeometry> array_geometry{"array_geometry"};
-  holoscan::Output<holoscan::Tensor> az_coordinates{"az_coordinates"};
-  holoscan::Output<holoscan::Tensor> el_coordinates{"el_coordinates"};
-  holoscan::Output<holoscan::radar::WireWindowSpec> array_taper{"array_taper"};
-};
-
-// Live overrides can widen the scan grid mid-stream, so az/el keep the default
-// caps; doppler/range come from the fixture cube for the same pool-span reason
-// as `run_beamformer_result`.
-holoscan::radar::MaxTensorExtents live_extents_for(const std::vector<LiveBeamformerTick>& ticks) {
-  auto extents = holoscan::radar::testing::default_test_extents();
-  if (ticks.empty() || !ticks.front().rd_maps) {
-    return extents;
-  }
-  const auto shape = ticks.front().rd_maps->shape();
-  if (shape.size() > 1U) {
-    extents.max_doppler_bins = std::max<std::int64_t>(1, shape[1]);
-  }
-  if (shape.size() > 2U) {
-    extents.max_range_bins = std::max<std::int64_t>(1, shape[2]);
-  }
-  return extents;
-}
-
-ThreeOutGraphRunResult run_live_beamformer_graph(
+holoscan::testing::TestResult run_live_beamformer_graph(
     std::vector<LiveBeamformerTick> ticks, PhaseShiftBeamformerParams params,
     std::optional<holoscan::radar::MaxTensorExtents> extents = std::nullopt) {
-  ThreeOutGraphRunResult result;
-  holoscan::radar::testing::detail::FrameBank::reset();
-  holoscan::radar::testing::detail::FrameBankB::reset();
-  holoscan::radar::testing::detail::FrameBankC::reset();
-  const holoscan::radar::MaxTensorExtents sized = extents.value_or(live_extents_for(ticks));
-  LiveBeamformerBank::reset(std::move(ticks));
-  const std::size_t expected = LiveBeamformerBank::ticks.size();
-  holoscan::Graph graph{"live-beamformer-overrides"};
-  const auto source = graph.op<LiveBeamformerSourceOp>("source");
-  auto op =
-      holoscan::radar::testing::emplace_harness_op<PhaseShiftBeamformerOp<double>>(graph, sized);
-  op.set_params(std::move(params));
-  const auto cube_sink = graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("cube_sink");
-  const auto az_sink = graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("az_sink");
-  const auto el_sink = graph.op<holoscan::radar::testing::detail::TensorCaptureCOp>("el_sink");
-  const holoscan::ConnectionOptions q{.queue_depth = 8U};
-  graph.add_flow(source->rd_maps, op->rd_maps, q);
-  graph.add_flow(source->array_geometry, op->array_geometry, q);
-  graph.add_flow(source->az_coordinates, op->az_coordinates, q);
-  graph.add_flow(source->el_coordinates, op->el_coordinates, q);
-  graph.add_flow(source->array_taper, op->array_taper, q);
-  graph.add_flow(op->rda_cube, cube_sink->in, q);
-  graph.add_flow(op->az_grid, az_sink->in, q);
-  graph.add_flow(op->el_grid, el_sink->in, q);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-  holoscan::CompileOptions options;
-  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
-      .operator_path = "source", .output_port = "rd_maps", .device = holoscan::DeviceId{0}});
-  holoscan::radar::testing::detail::bind_op_device_output(options, "rda_cube");
-  holoscan::radar::testing::detail::bind_op_device_output(options, "az_grid");
-  holoscan::radar::testing::detail::bind_op_device_output(options, "el_grid");
-  try {
-    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-    result.plan_ok = plan.ok();
-    result.plan_json = plan.json();
-    if (!plan.ok()) {
-      return result;
-    }
-    holoscan::RunSession session = holoscan::run_async(plan);
-    const auto deadline =
-        std::chrono::steady_clock::now() + holoscan::radar::testing::detail::kHarnessDeadline;
-    while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
-      {
-        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBank::mutex);
-        if (holoscan::radar::testing::detail::FrameBank::captured.size() < expected) {
-          continue;
-        }
+  using Op = PhaseShiftBeamformerOp<double>;
+  const auto sized = extents.value_or(holoscan::radar::testing::default_test_extents());
+  auto fixture = holoscan::testing::create_operator_test<Op>(sized);
+  fixture.set_params(std::move(params));
+  for (std::size_t index = 0; index < ticks.size(); ++index) {
+    const auto capture_time = std::chrono::milliseconds{static_cast<int64_t>((index + 1U) * 100U)};
+    auto& tick = ticks[index];
+    const auto maps = holoscan::testing::input("rd_maps", *tick.rd_maps);
+    if (tick.geometry.has_value()) {
+      auto wire = holoscan::radar::to_wire(*tick.geometry);
+      if (tick.malformed_geometry) {
+        wire.packed_geometry = holoscan::radar::testing::to_pageable_host_tensor<double>(
+            {1.0}, {1}, holoscan::radar::real_dtype<double>());
       }
-      {
-        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankB::mutex);
-        if (holoscan::radar::testing::detail::FrameBankB::captured.size() < expected) {
-          continue;
-        }
-      }
-      {
-        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankC::mutex);
-        if (holoscan::radar::testing::detail::FrameBankC::captured.size() >= expected) {
-          break;
-        }
-      }
-      std::this_thread::sleep_for(holoscan::radar::testing::detail::kHarnessPoll);
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("array_geometry", std::move(wire)), maps));
+    } else if (tick.az.has_value()) {
+      auto coordinates = holoscan::radar::testing::to_pageable_host_tensor<double>(
+          *tick.az, {static_cast<int64_t>(tick.az->size())}, holoscan::radar::real_dtype<double>());
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("az_coordinates", *coordinates), maps));
+    } else if (tick.el.has_value()) {
+      auto coordinates = holoscan::radar::testing::to_pageable_host_tensor<double>(
+          *tick.el, {static_cast<int64_t>(tick.el->size())}, holoscan::radar::real_dtype<double>());
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("el_coordinates", *coordinates), maps));
+    } else if (tick.taper.has_value()) {
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time,
+          holoscan::testing::input("array_taper", holoscan::radar::to_wire(*tick.taper)), maps));
+    } else {
+      fixture.push_frame(holoscan::testing::frame_at(capture_time, maps));
     }
-    session.request_stop();
-    session.wait();
-    result.termination = session.termination();
-    for (const auto& diagnostic : session.diagnostics()) {
-      result.diagnostics.emplace_back(diagnostic.token);
-    }
-  } catch (const holoscan::RuntimeError& error) {
-    result.plan_ok = false;
-    result.plan_json = std::string("RuntimeError: ") + error.what();
   }
-  {
-    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBank::mutex);
-    result.frames0 = std::move(holoscan::radar::testing::detail::FrameBank::captured);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"rda_cube", "az_grid", "el_grid"};
+  for (const char* output : kOutputs) {
+    fixture.capture_snapshot<holoscan::Tensor>(output, ticks.size(), kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
   }
-  {
-    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankB::mutex);
-    result.frames1 = std::move(holoscan::radar::testing::detail::FrameBankB::captured);
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* output : kOutputs) {
+    (void)running.wait_for_output(output, ticks.size(), std::chrono::seconds{5});
   }
-  {
-    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankC::mutex);
-    result.frames2 = std::move(holoscan::radar::testing::detail::FrameBankC::captured);
-  }
-  return result;
+  running.request_stop();
+  return running.finish();
 }
 
 TEST(PhaseShiftBeamformerOpTest, DefaultsToRadarBoresightConvention) {
@@ -521,21 +302,20 @@ void expect_effective_grids() {
   const std::vector<double> el{-0.1, 0.2};
   auto rd =
       vector_to_rd_maps<T>(make_steering_vector(geom, AngleConvention{}, 0.0, 0.0), {kN, 1, 1});
-  const ThreeOutGraphRunResult out =
+  const auto out =
       run_beamformer_with_grids<T>(std::move(rd), make_params(geom, AngleConvention{}, az, el));
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames0.size(), 1U);
-  ASSERT_EQ(out.frames1.size(), 1U);
-  ASSERT_EQ(out.frames2.size(), 1U);
-  EXPECT_EQ(out.frames0[0].shape, (std::vector<int64_t>{3, 2, 1, 1}));
-  EXPECT_EQ(out.frames1[0].shape, (std::vector<int64_t>{3}));
-  EXPECT_EQ(out.frames2[0].shape, (std::vector<int64_t>{2}));
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  ASSERT_EQ(beamformer_frames(out, "rda_cube").size(), 1U);
+  ASSERT_EQ(beamformer_frames(out, "az_grid").size(), 1U);
+  ASSERT_EQ(beamformer_frames(out, "el_grid").size(), 1U);
+  EXPECT_EQ(beamformer_frames(out, "rda_cube")[0].shape, (std::vector<int64_t>{3, 2, 1, 1}));
+  EXPECT_EQ(beamformer_frames(out, "az_grid")[0].shape, (std::vector<int64_t>{3}));
+  EXPECT_EQ(beamformer_frames(out, "el_grid")[0].shape, (std::vector<int64_t>{2}));
   for (std::size_t i = 0; i < az.size(); ++i) {
-    EXPECT_NEAR(out.frames1[0].template as<T>()[i], az[i], 1e-6);
+    EXPECT_NEAR(beamformer_frames(out, "az_grid")[0].template as<T>()[i], az[i], 1e-6);
   }
   for (std::size_t i = 0; i < el.size(); ++i) {
-    EXPECT_NEAR(out.frames2[0].template as<T>()[i], el[i], 1e-6);
+    EXPECT_NEAR(beamformer_frames(out, "el_grid")[0].template as<T>()[i], el[i], 1e-6);
   }
 }
 
@@ -650,12 +430,12 @@ TEST(PhaseShiftBeamformerOpTest, RejectsInvalidScanCoordinates) {
   auto out_of_range =
       run_beamformer_result<double>(to_device_tensor(host, {kN, 1, 1}, complex_dtype<double>()),
                                     make_params(geom, direction_cosine, {1.01}, {0.0}));
-  EXPECT_FALSE(out_of_range.diagnostics.empty());
+  EXPECT_FALSE(out_of_range.diagnostics().empty());
 
   auto non_finite = run_beamformer_result<double>(
       to_device_tensor(host, {kN, 1, 1}, complex_dtype<double>()),
       make_params(geom, AngleConvention{}, {std::numeric_limits<double>::infinity()}, {0.0}));
-  EXPECT_FALSE(non_finite.diagnostics.empty());
+  EXPECT_FALSE(non_finite.diagnostics().empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, ArrayTaperLowersSidelobes) {
@@ -798,10 +578,10 @@ TEST(PhaseShiftBeamformerOpTest, RejectsOpaqueLeadingBatch) {
   auto rd = to_device_tensor(host, {kBatch, kN, 1, 1}, complex_dtype<double>());
 
   const auto az = linspace(-0.4, 0.4, 81);
-  const GraphRunResult result =
+  const auto result =
       run_beamformer_result<double>(rd, make_params(geom, conv, az, std::vector<double>{0.0}));
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_TRUE(!result.plan_ok || !result.diagnostics.empty());
+  EXPECT_TRUE(beamformer_frames(result, "rda_cube").empty());
+  EXPECT_TRUE(!result.ok() || !result.diagnostics().empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, FloatDoubleAgreeOnPeakBeam) {
@@ -877,10 +657,10 @@ TEST(PhaseShiftBeamformerOpTest, RejectsRankTooLow) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   std::vector<std::complex<double>> host(static_cast<size_t>(kN), {1.0, 0.0});
   auto rd = to_device_tensor(host, {kN, 1}, complex_dtype<double>());
-  const GraphRunResult result = run_beamformer_result<double>(
+  const auto result = run_beamformer_result<double>(
       rd, make_params(geom, conv, std::vector<double>{0.0}, std::vector<double>{0.0}));
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_TRUE(!result.plan_ok || !result.diagnostics.empty());
+  EXPECT_TRUE(beamformer_frames(result, "rda_cube").empty());
+  EXPECT_TRUE(!result.ok() || !result.diagnostics().empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, RejectsInputBeyondCapturedExtents) {
@@ -895,11 +675,11 @@ TEST(PhaseShiftBeamformerOpTest, RejectsInputBeyondCapturedExtents) {
   auto rd = to_device_tensor(host, {kN, 2, 3}, complex_dtype<double>());
   auto extents =
       holoscan::radar::testing::extents_for_scan_grid(1, 1, /*max_doppler=*/1, /*max_range=*/3);
-  const GraphRunResult result = run_beamformer_result<double>(
+  const auto result = run_beamformer_result<double>(
       rd, make_params(geom, AngleConvention{}, {0.0}, {0.0}), extents);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(beamformer_frames(result, "rda_cube").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, CacheKeyIncludesCustomConventionAxes) {
@@ -929,11 +709,10 @@ TEST(PhaseShiftBeamformerOpTest, RejectsDegenerateCustomConvention) {
   AngleConvention invalid;
   invalid.preset = AngleConventionPreset::kCustom;
   invalid.azimuth_positive_axis = invalid.boresight_axis;
-  const GraphRunResult result =
-      run_beamformer_result<double>(rd, make_params(geom, invalid, {0.0}, {0.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_beamformer_result<double>(rd, make_params(geom, invalid, {0.0}, {0.0}));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(beamformer_frames(result, "rda_cube").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, RejectsChannelMismatch) {
@@ -943,11 +722,11 @@ TEST(PhaseShiftBeamformerOpTest, RejectsChannelMismatch) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   std::vector<std::complex<double>> host(static_cast<size_t>(kN - 1), {1.0, 0.0});
   auto rd = to_device_tensor(host, {kN - 1, 1, 1}, complex_dtype<double>());
-  const GraphRunResult result = run_beamformer_result<double>(
+  const auto result = run_beamformer_result<double>(
       rd, make_params(geom, conv, std::vector<double>{0.0}, std::vector<double>{0.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(beamformer_frames(result, "rda_cube").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, RejectsEmptyScanGrid) {
@@ -957,11 +736,11 @@ TEST(PhaseShiftBeamformerOpTest, RejectsEmptyScanGrid) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   std::vector<std::complex<double>> host(static_cast<size_t>(kN), {1.0, 0.0});
   auto rd = to_device_tensor(host, {kN, 1, 1}, complex_dtype<double>());
-  const GraphRunResult result = run_beamformer_result<double>(
+  const auto result = run_beamformer_result<double>(
       rd, make_params(geom, conv, std::vector<double>{}, std::vector<double>{0.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(beamformer_frames(result, "rda_cube").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, RejectsDtypeMismatch) {
@@ -971,11 +750,11 @@ TEST(PhaseShiftBeamformerOpTest, RejectsDtypeMismatch) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto vec = make_steering_vector(geom, conv, 0.0, 0.0);
   auto rd_f = vector_to_rd_maps<float>(vec, {kN, 1, 1});
-  const GraphRunResult result = run_beamformer_result<double>(
+  const auto result = run_beamformer_result<double>(
       rd_f, make_params(geom, conv, std::vector<double>{0.0}, std::vector<double>{0.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(beamformer_frames(result, "rda_cube").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(PhaseShiftBeamformerOpTest, LiveAzCoordinatesAppliesForOneTick) {
@@ -984,21 +763,20 @@ TEST(PhaseShiftBeamformerOpTest, LiveAzCoordinatesAppliesForOneTick) {
   const auto vec = make_steering_vector(geom, AngleConvention{}, 0.0, 0.0);
   auto rd = vector_to_rd_maps<double>(vec, {kN, 1, 1});
   auto params = make_params(geom, AngleConvention{}, {-0.1, 0.0, 0.1}, {0.0});
-  const ThreeOutGraphRunResult out = run_live_beamformer_graph(
+  const auto out = run_live_beamformer_graph(
       {{rd}, {rd, std::nullopt, linspace(-0.2, 0.2, 5)}, {rd}}, std::move(params));
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames0.size(), 3U);
-  ASSERT_EQ(out.frames1.size(), 3U);
-  EXPECT_EQ(out.frames0[0].shape[0], 3);
-  EXPECT_EQ(out.frames0[1].shape[0], 5);
-  EXPECT_EQ(out.frames0[2].shape[0], 3);
-  EXPECT_EQ(out.frames1[0].shape[0], 3);
-  EXPECT_EQ(out.frames1[1].shape[0], 5);
-  EXPECT_EQ(out.frames1[2].shape[0], 3);
-  EXPECT_DOUBLE_EQ(out.frames1[0].as<double>()[0], -0.1);
-  EXPECT_DOUBLE_EQ(out.frames1[1].as<double>()[0], -0.2);
-  EXPECT_DOUBLE_EQ(out.frames1[2].as<double>()[0], -0.1);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  ASSERT_EQ(beamformer_frames(out, "rda_cube").size(), 3U);
+  ASSERT_EQ(beamformer_frames(out, "az_grid").size(), 3U);
+  EXPECT_EQ(beamformer_frames(out, "rda_cube")[0].shape[0], 3);
+  EXPECT_EQ(beamformer_frames(out, "rda_cube")[1].shape[0], 5);
+  EXPECT_EQ(beamformer_frames(out, "rda_cube")[2].shape[0], 3);
+  EXPECT_EQ(beamformer_frames(out, "az_grid")[0].shape[0], 3);
+  EXPECT_EQ(beamformer_frames(out, "az_grid")[1].shape[0], 5);
+  EXPECT_EQ(beamformer_frames(out, "az_grid")[2].shape[0], 3);
+  EXPECT_DOUBLE_EQ(beamformer_frames(out, "az_grid")[0].as<double>()[0], -0.1);
+  EXPECT_DOUBLE_EQ(beamformer_frames(out, "az_grid")[1].as<double>()[0], -0.2);
+  EXPECT_DOUBLE_EQ(beamformer_frames(out, "az_grid")[2].as<double>()[0], -0.1);
 }
 
 TEST(PhaseShiftBeamformerOpTest, LiveElCoordinatesAppliesForOneTick) {
@@ -1007,22 +785,21 @@ TEST(PhaseShiftBeamformerOpTest, LiveElCoordinatesAppliesForOneTick) {
   auto rd = vector_to_rd_maps<double>(make_steering_vector(geom, AngleConvention{}, 0.0, 0.0),
                                       {kN, 1, 1});
   auto params = make_params(geom, AngleConvention{}, {0.0}, {0.0});
-  const ThreeOutGraphRunResult out = run_live_beamformer_graph(
+  const auto out = run_live_beamformer_graph(
       {{rd}, {rd, std::nullopt, std::nullopt, std::vector<double>{-0.1, 0.0, 0.1}}, {rd}},
       std::move(params));
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames0.size(), 3U);
-  ASSERT_EQ(out.frames2.size(), 3U);
-  EXPECT_EQ(out.frames0[0].shape[1], 1);
-  EXPECT_EQ(out.frames0[1].shape[1], 3);
-  EXPECT_EQ(out.frames0[2].shape[1], 1);
-  EXPECT_EQ(out.frames2[0].shape[0], 1);
-  EXPECT_EQ(out.frames2[1].shape[0], 3);
-  EXPECT_EQ(out.frames2[2].shape[0], 1);
-  EXPECT_DOUBLE_EQ(out.frames2[0].as<double>()[0], 0.0);
-  EXPECT_DOUBLE_EQ(out.frames2[1].as<double>()[0], -0.1);
-  EXPECT_DOUBLE_EQ(out.frames2[2].as<double>()[0], 0.0);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  ASSERT_EQ(beamformer_frames(out, "rda_cube").size(), 3U);
+  ASSERT_EQ(beamformer_frames(out, "el_grid").size(), 3U);
+  EXPECT_EQ(beamformer_frames(out, "rda_cube")[0].shape[1], 1);
+  EXPECT_EQ(beamformer_frames(out, "rda_cube")[1].shape[1], 3);
+  EXPECT_EQ(beamformer_frames(out, "rda_cube")[2].shape[1], 1);
+  EXPECT_EQ(beamformer_frames(out, "el_grid")[0].shape[0], 1);
+  EXPECT_EQ(beamformer_frames(out, "el_grid")[1].shape[0], 3);
+  EXPECT_EQ(beamformer_frames(out, "el_grid")[2].shape[0], 1);
+  EXPECT_DOUBLE_EQ(beamformer_frames(out, "el_grid")[0].as<double>()[0], 0.0);
+  EXPECT_DOUBLE_EQ(beamformer_frames(out, "el_grid")[1].as<double>()[0], -0.1);
+  EXPECT_DOUBLE_EQ(beamformer_frames(out, "el_grid")[2].as<double>()[0], 0.0);
 }
 
 TEST(PhaseShiftBeamformerOpTest, LiveArrayGeometryAppliesForOneTick) {
@@ -1032,13 +809,11 @@ TEST(PhaseShiftBeamformerOpTest, LiveArrayGeometryAppliesForOneTick) {
   auto rd = vector_to_rd_maps<double>(make_steering_vector(geom, AngleConvention{}, 0.2, 0.0),
                                       {kN, 1, 1});
   auto params = make_params(geom, AngleConvention{}, linspace(-0.4, 0.4, 9), {0.0});
-  const ThreeOutGraphRunResult out =
-      run_live_beamformer_graph({{rd}, {rd, changed}, {rd}}, std::move(params));
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames0.size(), 3U);
-  EXPECT_NE(out.frames0[0].data, out.frames0[1].data);
-  EXPECT_EQ(out.frames0[0].data, out.frames0[2].data);
+  const auto out = run_live_beamformer_graph({{rd}, {rd, changed}, {rd}}, std::move(params));
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  ASSERT_EQ(beamformer_frames(out, "rda_cube").size(), 3U);
+  EXPECT_NE(beamformer_frames(out, "rda_cube")[0].data, beamformer_frames(out, "rda_cube")[1].data);
+  EXPECT_EQ(beamformer_frames(out, "rda_cube")[0].data, beamformer_frames(out, "rda_cube")[2].data);
 }
 
 TEST(PhaseShiftBeamformerOpTest, LiveArrayTaperAppliesForOneTick) {
@@ -1049,13 +824,12 @@ TEST(PhaseShiftBeamformerOpTest, LiveArrayTaperAppliesForOneTick) {
   WindowSpec hann;
   hann.type = WindowType::kHann;
   auto params = make_params(geom, AngleConvention{}, linspace(-0.4, 0.4, 17), {0.0});
-  const ThreeOutGraphRunResult out = run_live_beamformer_graph(
+  const auto out = run_live_beamformer_graph(
       {{rd}, {rd, std::nullopt, std::nullopt, std::nullopt, hann}, {rd}}, std::move(params));
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames0.size(), 3U);
-  EXPECT_NE(out.frames0[0].data, out.frames0[1].data);
-  EXPECT_EQ(out.frames0[0].data, out.frames0[2].data);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  ASSERT_EQ(beamformer_frames(out, "rda_cube").size(), 3U);
+  EXPECT_NE(beamformer_frames(out, "rda_cube")[0].data, beamformer_frames(out, "rda_cube")[1].data);
+  EXPECT_EQ(beamformer_frames(out, "rda_cube")[0].data, beamformer_frames(out, "rda_cube")[2].data);
 }
 
 TEST(PhaseShiftBeamformerOpTest, LiveOverridesRejectMalformedAndBounds) {
@@ -1064,19 +838,19 @@ TEST(PhaseShiftBeamformerOpTest, LiveOverridesRejectMalformedAndBounds) {
   auto rd = vector_to_rd_maps<double>(make_steering_vector(geom, AngleConvention{}, 0.0, 0.0),
                                       {kN, 1, 1});
   auto params = make_params(geom, AngleConvention{}, {0.0}, {0.0});
-  const ThreeOutGraphRunResult malformed = run_live_beamformer_graph(
+  const auto malformed = run_live_beamformer_graph(
       {{rd, geom, std::nullopt, std::nullopt, std::nullopt, true}}, params);
-  ASSERT_TRUE(malformed.plan_ok) << malformed.plan_json;
-  EXPECT_TRUE(malformed.frames0.empty());
-  EXPECT_FALSE(malformed.diagnostics.empty());
+  ASSERT_FALSE(malformed.ok());
+  EXPECT_TRUE(beamformer_frames(malformed, "rda_cube").empty());
+  EXPECT_FALSE(malformed.diagnostics().empty());
 
   auto extents = holoscan::radar::testing::default_test_extents();
   extents.max_az = 2;
-  const ThreeOutGraphRunResult bounded = run_live_beamformer_graph(
+  const auto bounded = run_live_beamformer_graph(
       {{rd, std::nullopt, std::vector<double>{-0.1, 0.0, 0.1}}}, std::move(params), extents);
-  ASSERT_TRUE(bounded.plan_ok) << bounded.plan_json;
-  EXPECT_TRUE(bounded.frames0.empty());
-  EXPECT_FALSE(bounded.diagnostics.empty());
+  ASSERT_FALSE(bounded.ok());
+  EXPECT_TRUE(beamformer_frames(bounded, "rda_cube").empty());
+  EXPECT_FALSE(bounded.diagnostics().empty());
 }
 
 }  // namespace

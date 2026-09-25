@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <complex>
 #include <cstdint>
 #include <memory>
@@ -15,13 +16,12 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "angle_estimation/snapshot_gather_op/snapshot_gather_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -31,13 +31,7 @@ using holoscan::radar::SnapshotGatherOp;
 using holoscan::radar::SnapshotGatherParams;
 using holoscan::radar::SnapshotWindowOverride;
 using holoscan::radar::complex_dtype;
-using holoscan::radar::testing::DualIOGraphRunResult;
-using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::run_dual_in_single_out_operator_graph_result;
-using holoscan::radar::testing::run_dual_io_operator_graph_result;
-using holoscan::radar::testing::
-    run_exact_override_dual_in_single_out_operator_graph_result;  // NOLINT
 using holoscan::radar::testing::to_device_tensor;
 
 constexpr int64_t kC = 3;
@@ -91,51 +85,46 @@ struct GatherOutputs {
   HostTensor is_valid;
 };
 
-template <typename Source, typename OpRef, typename Sink0, typename Sink1>
-void wire_snapshot_gather(holoscan::Graph& graph, const Source& source, OpRef& op,
-                          const Sink0& sink0, const Sink1& sink1) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out0, op->rd_maps, q);
-  graph.add_flow(source->out1, op->detection_idx, q);
-  graph.add_flow(op->snapshot, sink0->in, q);
-  graph.add_flow(op->is_valid, sink1->in, q);
-}
-
 template <typename T>
-DualIOGraphRunResult run_gather_result(std::shared_ptr<holoscan::Tensor> rd_maps,
-                                       std::shared_ptr<holoscan::Tensor> detection_idx,
-                                       SnapshotGatherParams params = {}) {
-  return run_dual_io_operator_graph_result<SnapshotGatherOp<T>>(
-      {std::move(rd_maps)}, {std::move(detection_idx)}, std::move(params), "snapshot", "is_valid",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-         const auto& sink1) {
-        wire_snapshot_gather(graph, source, op, sink0, sink1);
-      });
+holoscan::testing::TestResult run_gather_result(std::shared_ptr<holoscan::Tensor> rd_maps,
+                                                std::shared_ptr<holoscan::Tensor> detection_idx,
+                                                SnapshotGatherParams params = {},
+                                                bool capture_validity = true) {
+  using Op = SnapshotGatherOp<T>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::nanoseconds{0}, holoscan::testing::input("rd_maps", *rd_maps),
+      holoscan::testing::input("detection_idx", *detection_idx)));
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.template capture_snapshot<holoscan::Tensor>("snapshot", 1U, kMaximumBytes);
+  if (capture_validity) {
+    fixture.template capture_snapshot<holoscan::Tensor>("is_valid", 1U, kMaximumBytes);
+  }
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
+  fixture.output_device("snapshot", holoscan::DeviceId{0});
+  fixture.output_device("is_valid", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool observed = running.wait_for_output("snapshot", 1U, std::chrono::seconds{5});
+  (void)observed;
+  running.request_stop();
+  return running.finish();
 }
 
 template <typename T>
 GatherOutputs run_gather(std::shared_ptr<holoscan::Tensor> rd_maps,
                          std::shared_ptr<holoscan::Tensor> detection_idx,
                          SnapshotGatherParams params = {}) {
-  DualIOGraphRunResult result =
+  const auto result =
       run_gather_result<T>(std::move(rd_maps), std::move(detection_idx), std::move(params));
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
-    }
-    throw std::runtime_error(msg);
-  }
-  if (result.frames0.size() != 1U || result.frames1.size() != 1U) {
-    throw std::runtime_error("SnapshotGatherOp test: expected one output frame pair, got " +
-                             std::to_string(result.frames0.size()) + "/" +
-                             std::to_string(result.frames1.size()));
-  }
-  return {std::move(result.frames0.front()), std::move(result.frames1.front())};
+  return {
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("snapshot")),
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("is_valid"))};
 }
 
 TEST(SnapshotGatherOpTest, SingleCellGather) {
@@ -234,50 +223,59 @@ TEST(SnapshotGatherOpTest, EmptyDetections) {
 
 TEST(SnapshotGatherOpTest, OptionalValidityMayBeLeftUnwired) {
   std::vector<int64_t> idx = {3, 5};
-  GraphRunResult result = run_dual_in_single_out_operator_graph_result<SnapshotGatherOp<double>>(
-      {make_rd_maps()}, {to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1})},
-      SnapshotGatherParams{}, "snapshot",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->out0, op->rd_maps, q);
-        graph.add_flow(source->out1, op->detection_idx, q);
-        graph.add_flow(op->snapshot, sink->in, q);
-      },
-      holoscan::radar::testing::default_test_extents(), {"is_valid"});
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  EXPECT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 1U);
-  EXPECT_EQ(result.frames[0].shape, (std::vector<int64_t>{1, kC, 1}));
+  auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
+  const auto result =
+      run_gather_result<double>(make_rd_maps(), std::move(idx_t), SnapshotGatherParams{}, false);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto snapshot =
+      holoscan::radar::testing::to_host(result.snapshot<holoscan::Tensor>("snapshot"));
+  EXPECT_EQ(snapshot.shape, (std::vector<int64_t>{1, kC, 1}));
 }
 
 TEST(SnapshotGatherOpTest, LiveSnapshotWindowAppliesForOneTick) {
-  std::vector<std::shared_ptr<holoscan::Tensor>> rd_maps;
+  using Op = SnapshotGatherOp<double>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(SnapshotGatherParams{});
+  std::vector<std::shared_ptr<holoscan::Tensor>> maps;
   std::vector<std::shared_ptr<holoscan::Tensor>> indices;
   for (int tick = 0; tick < 3; ++tick) {
-    rd_maps.push_back(make_rd_maps());
-    std::vector<int64_t> idx = {3, 5};
-    indices.push_back(to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1}));
+    maps.push_back(make_rd_maps());
+    indices.push_back(
+        to_device_tensor(std::vector<int64_t>{3, 5}, {1, 2}, DLDataType{kDLInt, 64, 1}));
   }
-  GraphRunResult result =
-      run_exact_override_dual_in_single_out_operator_graph_result<SnapshotGatherOp<double>,
-                                                                  SnapshotWindowOverride>(
-          std::move(rd_maps), std::move(indices),
-          {std::nullopt, SnapshotWindowOverride{1, 0}, std::nullopt}, SnapshotGatherParams{},
-          "snapshot",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-            const holoscan::ConnectionOptions q{.queue_depth = 4U};
-            graph.add_flow(source->out0, op->rd_maps, q);
-            graph.add_flow(source->out1, op->detection_idx, q);
-            graph.add_flow(source->override_out, op->snapshot_window, q);
-            graph.add_flow(op->snapshot, sink->in, q);
-          },
-          holoscan::radar::testing::default_test_extents(), {"is_valid"});
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 3U);
-  EXPECT_EQ(result.frames[0].shape, (std::vector<int64_t>{1, kC, 1}));
-  EXPECT_EQ(result.frames[1].shape, (std::vector<int64_t>{1, kC, 3}));
-  EXPECT_EQ(result.frames[2].shape, (std::vector<int64_t>{1, kC, 1}));
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::milliseconds{100}, holoscan::testing::input("rd_maps", *maps[0]),
+      holoscan::testing::input("detection_idx", *indices[0])));
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::milliseconds{200},
+      holoscan::testing::input("snapshot_window", SnapshotWindowOverride{1, 0}),
+      holoscan::testing::input("rd_maps", *maps[1]),
+      holoscan::testing::input("detection_idx", *indices[1])));
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::milliseconds{300}, holoscan::testing::input("rd_maps", *maps[2]),
+      holoscan::testing::input("detection_idx", *indices[2])));
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.capture_snapshot<holoscan::Tensor>("snapshot", 3U, kMaximumBytes);
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
+  fixture.output_device("snapshot", holoscan::DeviceId{0});
+  fixture.output_device("is_valid", holoscan::DeviceId{0});
+  auto running =
+      fixture.run_async({.expect_stop = true, .frames = holoscan::testing::FrameRelease::kManual});
+  for (std::size_t count = 1; count <= 3; ++count) {
+    const auto released = running.release_frame(std::chrono::seconds{5});
+    ASSERT_TRUE(released) << released.error().message;
+    ASSERT_TRUE(running.wait_for_output("snapshot", count, std::chrono::seconds{5}));
+  }
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frames = result.snapshots<holoscan::Tensor>("snapshot");
+  ASSERT_EQ(frames.size(), 3U);
+  EXPECT_EQ(frames[0].shape(), (std::vector<int64_t>{1, kC, 1}));
+  EXPECT_EQ(frames[1].shape(), (std::vector<int64_t>{1, kC, 3}));
+  EXPECT_EQ(frames[2].shape(), (std::vector<int64_t>{1, kC, 1}));
 }
 
 TEST(SnapshotGatherOpTest, FloatInstantiationSmoke) {
@@ -350,19 +348,19 @@ TEST(SnapshotGatherOpTest, PreservedBatchSelectsCorrectSlice) {
 TEST(SnapshotGatherOpTest, RejectsRdMapsDtypeMismatch) {
   std::vector<int64_t> idx = {3, 5};
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
-  const DualIOGraphRunResult result = run_gather_result<double>(make_rd_maps<float>(), idx_t);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_gather_result<double>(make_rd_maps<float>(), idx_t);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("snapshot").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(SnapshotGatherOpTest, RejectsNarrowDetectionIdx) {
   std::vector<int64_t> idx = {3};
   auto idx_t = to_device_tensor(idx, {1, 1}, DLDataType{kDLInt, 64, 1});
-  const DualIOGraphRunResult result = run_gather_result<double>(make_rd_maps(), idx_t);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_gather_result<double>(make_rd_maps(), idx_t);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("snapshot").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(SnapshotGatherOpTest, RejectsNegativeSnapshotWindow) {
@@ -370,10 +368,10 @@ TEST(SnapshotGatherOpTest, RejectsNegativeSnapshotWindow) {
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
   SnapshotGatherParams params{};
   params.snapshot_window = {-1, 0};
-  const DualIOGraphRunResult result = run_gather_result<double>(make_rd_maps(), idx_t, params);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_gather_result<double>(make_rd_maps(), idx_t, params);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("snapshot").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(SnapshotGatherOpTest, RejectsNegativeIsotropicSnapshotWindow) {
@@ -381,10 +379,10 @@ TEST(SnapshotGatherOpTest, RejectsNegativeIsotropicSnapshotWindow) {
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
   SnapshotGatherParams params{};
   params.snapshot_window = {-1};
-  const DualIOGraphRunResult result = run_gather_result<double>(make_rd_maps(), idx_t, params);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_gather_result<double>(make_rd_maps(), idx_t, params);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("snapshot").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(SnapshotGatherOpTest, RejectsOversizedShiftWindow) {
@@ -393,29 +391,28 @@ TEST(SnapshotGatherOpTest, RejectsOversizedShiftWindow) {
   SnapshotGatherParams params{};
   params.snapshot_window = {0, kR};
   params.range_edge = SnapshotEdgeMode::kShift;
-  const DualIOGraphRunResult result = run_gather_result<double>(make_rd_maps(), idx_t, params);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_gather_result<double>(make_rd_maps(), idx_t, params);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("snapshot").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(SnapshotGatherOpTest, RejectsBatchCoordOutOfRange) {
   std::vector<int64_t> idx = {9, 3, 5};
   auto idx_t = to_device_tensor(idx, {1, 3}, DLDataType{kDLInt, 64, 1});
-  const DualIOGraphRunResult result =
-      run_gather_result<double>(make_batched_rd_maps<double>(2), idx_t);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_gather_result<double>(make_batched_rd_maps<double>(2), idx_t);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("snapshot").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(SnapshotGatherOpTest, RejectsCellCoordOutOfRange) {
   std::vector<int64_t> idx = {kD, 5};
   auto idx_t = to_device_tensor(idx, {1, 2}, DLDataType{kDLInt, 64, 1});
-  const DualIOGraphRunResult result = run_gather_result<double>(make_rd_maps(), idx_t);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_gather_result<double>(make_rd_maps(), idx_t);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("snapshot").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 }  // namespace

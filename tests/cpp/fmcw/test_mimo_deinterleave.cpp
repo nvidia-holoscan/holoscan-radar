@@ -12,6 +12,7 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -21,14 +22,13 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
+#include "utils/test_extents.hpp"
 
 namespace {
 
@@ -37,11 +37,11 @@ using holoscan::radar::MIMODeinterleaveParams;
 using holoscan::radar::TXSchedule;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
-using holoscan::radar::testing::GraphRunResult;
+using holoscan::testing::TestResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::run_single_io_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 using holoscan::radar::testing::to_pageable_host_tensor;
+using holoscan::radar::testing::to_host;
 
 constexpr int64_t kNumRx = 2;
 constexpr int64_t kNumTx = 2;
@@ -117,41 +117,34 @@ std::vector<ElementT> build_interleaved_cube(const std::vector<int64_t>& pattern
   return data;
 }
 
-// Graph wiring lambda for 1-in / 1-out MIMODeinterleaveOp.
-auto deinterleave_wire() {
-  return [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-    const holoscan::ConnectionOptions q{.queue_depth = 4U};
-    graph.add_flow(source->out, op->adc_cube, q);
-    graph.add_flow(op->adc_cube_out, sink->in, q);
-  };
-}
-
 template <typename T>
-GraphRunResult run_deinterleave_result(std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
-                                       MIMODeinterleaveParams params) {
-  return run_single_io_operator_graph_result<MIMODeinterleaveOp<T>>(
-      std::move(inputs), std::move(params), "adc_cube_out", deinterleave_wire());
+TestResult run_deinterleave_result(std::vector<std::shared_ptr<holoscan::Tensor>> inputs,
+                                   MIMODeinterleaveParams params) {
+  auto fixture = holoscan::testing::create_operator_test<MIMODeinterleaveOp<T>>(
+      holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  for (const auto& input : inputs) {
+    fixture.push(&MIMODeinterleaveOp<T>::adc_cube, *input);
+  }
+  fixture.template capture_snapshot<holoscan::Tensor>("adc_cube_out", inputs.size());
+  fixture.input_source_device("adc_cube", holoscan::DeviceId{0});
+  fixture.output_device("adc_cube_out", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool observed =
+      running.wait_for_output("adc_cube_out", inputs.size(), std::chrono::seconds{5});
+  (void)observed;
+  running.request_stop();
+  return running.finish();
 }
 
 template <typename T>
 HostTensor run_deinterleave_once(std::shared_ptr<holoscan::Tensor> input,
                                  MIMODeinterleaveParams params) {
-  GraphRunResult result = run_deinterleave_result<T>({std::move(input)}, std::move(params));
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  TestResult result = run_deinterleave_result<T>({std::move(input)}, std::move(params));
+  if (!result.ok()) {
+    throw std::runtime_error("MIMODeinterleaveOp failed: " + result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
-    }
-    throw std::runtime_error(msg);
-  }
-  if (result.frames.size() != 1U) {
-    throw std::runtime_error("expected 1 frame, got " + std::to_string(result.frames.size()));
-  }
-  return std::move(result.frames.front());
+  return to_host(result.template snapshot<holoscan::Tensor>("adc_cube_out"));
 }
 
 template <typename T, typename ElementT>
@@ -301,12 +294,12 @@ TEST(MIMODeinterleaveOp, RejectsOpaqueLeadingBatch) {
   const TXSchedule schedule = round_robin_schedule();
   const auto pattern = pattern_for(schedule);
   const auto host = build_interleaved_cube<std::complex<float>>(pattern, shape);
-  const GraphRunResult result =
+  const TestResult result =
       run_deinterleave_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
                                      MIMODeinterleaveParams{.tx_schedule = schedule});
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.template snapshots<holoscan::Tensor>("adc_cube_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(MIMODeinterleaveOp, RejectsNonUniformSchedule) {
@@ -316,12 +309,12 @@ TEST(MIMODeinterleaveOp, RejectsNonUniformSchedule) {
   const std::vector<int64_t> shape = {kNumRx, kSlowTime, kSamples};
   const auto host = std::vector<std::complex<float>>(
       static_cast<size_t>(kNumRx * kSlowTime * kSamples), {1.0f, 0.0f});
-  const GraphRunResult result =
+  const TestResult result =
       run_deinterleave_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
                                      MIMODeinterleaveParams{.tx_schedule = schedule});
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.template snapshots<holoscan::Tensor>("adc_cube_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(MIMODeinterleaveOp, RejectsIndivisibleSlowTime) {
@@ -329,12 +322,12 @@ TEST(MIMODeinterleaveOp, RejectsIndivisibleSlowTime) {
   const std::vector<int64_t> shape = {kNumRx, kSlowTime + 1, kSamples};
   const auto host = std::vector<std::complex<float>>(
       static_cast<size_t>(kNumRx * (kSlowTime + 1) * kSamples), {1.0f, 0.0f});
-  const GraphRunResult result =
+  const TestResult result =
       run_deinterleave_result<float>({to_device_tensor(host, shape, complex_dtype<float>())},
                                      MIMODeinterleaveParams{.tx_schedule = schedule});
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.template snapshots<holoscan::Tensor>("adc_cube_out").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(MIMODeinterleaveOp, FloatDoubleAgreement) {

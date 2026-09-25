@@ -156,7 +156,7 @@ the plan builder and validate there.
 | CUDA last-error guard | `radar_common/tensor/cuda_check.hpp` |
 | Device tensor alloc | `radar_common/tensor/dlpack_buffer.hpp` |
 | MatX views | `radar_common/tensor/matx_utils.hpp` (`.cu` / stage only) |
-| Tests | `tests/cpp/utils/sdk_harness.hpp`, `tensor_fixtures.hpp` |
+| Single-operator tests | `<holoscan/testing/operator_test_harness.hpp>`, `tests/cpp/utils/tensor_fixtures.hpp`, `test_extents.hpp` |
 
 **Do not re-derive per-operator I/O or validation boilerplate.** The single-entry
 `TensorMap` receive/emit (`receive_single` / `receive_optional` / `emit_single`),
@@ -609,6 +609,44 @@ Default to blocking correctness unless the contract says otherwise.
 ---
 
 ## Testing that catches real bugs
+
+### Use the SDK fixture for one operator
+
+Single-operator suites use `holoscan::testing::create_operator_test<Op>` with
+constructor arguments followed by `set_params`. Stage independent streams with
+`push`, `push_many`, or `push_samples`; use `push_frame` when required inputs
+and optional Exact overrides must share one capture coordinate. Bind every
+device source and device output explicitly, and use bounded
+`capture_snapshot` for Tensor or generated-schema payloads. Ordinary POD
+outputs use typed `capture`.
+
+Radar operators retain borrowed CUDA inputs until stop, so their tests use the
+managed fixture: wait for the required output prefix, request stop, then call
+`finish()` and assert termination, diagnostics, snapshots, shapes, dtypes,
+bytes, cardinalities, and timestamps. Multi-frame tests stay within one run;
+separate runs on one fixture must prove a fresh operator instance.
+
+Do not add a direct `Graph`, source/sink operator, `RunSession`, condition
+variable, frame bank, or port-arity runner to a single-operator test. Whole
+pipeline and application tests remain ordinary production Graphs; any finite
+source/capture utility they require lives in
+`tests/cpp/utils/integration_graph_utils.hpp`, is integration-only, and must
+not become a second single-operator harness.
+
+For an intentionally missing optional CUDA Tensor, the current fixture cannot
+run an explicit empty producer: `push_many<Tensor>(port, {})` leaves runtime
+binding unavailable, while assigning device placement to it is rejected as an
+unused binding. Stage a valid sample at a deliberately non-matching capture
+coordinate and bind that source to exercise `Exact{} + SafeDefault{}`. Keep the
+required inputs together in a timestamped `push_frame`; do not replace this
+with a radar-owned source operator.
+
+**Accepted coverage deferral:** the SDK fixture supports zero-element Tensor
+staging and snapshots, but `push()` rejects nonempty bounded-strided Tensors
+before the operator sees them. The shared `require_contiguous` guard remains
+unit-tested; operator-boundary strided-input cases are deferred on Jira until
+the fixture preserves supported Tensor layouts. Do not add a radar-side
+compatibility source/collector or hold native-harness retirement on this item.
 
 ### Wire every output port
 

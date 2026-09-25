@@ -15,14 +15,13 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_alpha_mc.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -33,9 +32,7 @@ using holoscan::radar::CfarPeakMode;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
-using holoscan::radar::testing::FiveOutGraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::run_single_in_five_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 
 constexpr int64_t kDoppler = 16;
@@ -73,53 +70,48 @@ CFARParams go_params(double pfa) {
   return p;
 }
 
-// cpplint misreads the wrapped template header as an indented declaration
-// inside the anonymous namespace; the parameter list cannot fit on one line.
-template <typename Source, typename OpRef, typename S0, typename S1, typename S2, typename S3,
-          typename S4>  // NOLINT(whitespace/indent_namespace)
-void wire_cfar(holoscan::Graph& graph, const Source& source, OpRef& op, const S0& sink0,
-               const S1& sink1, const S2& sink2, const S3& sink3, const S4& sink4) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out, op->rd_maps, q);
-  graph.add_flow(op->detection_mask, sink0->in, q);
-  graph.add_flow(op->detection_score, sink1->in, q);
-  graph.add_flow(op->noise_estimate, sink2->in, q);
-  graph.add_flow(op->detection_idx, sink3->in, q);
-  graph.add_flow(op->cfar_power, sink4->in, q);
-}
-
 template <typename T>
-FiveOutGraphRunResult run_cfar_result(std::shared_ptr<holoscan::Tensor> input, CFARParams params) {
-  return run_single_in_five_out_operator_graph_result<CFARDetectorOp<T>>(
-      {std::move(input)}, std::move(params), "detection_mask", "detection_score", "noise_estimate",
-      "detection_idx", "cfar_power",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0, const auto& sink1,
-         const auto& sink2, const auto& sink3, const auto& sink4) {
-        wire_cfar(graph, source, op, sink0, sink1, sink2, sink3, sink4);
-      });
+holoscan::testing::TestResult run_cfar_result(std::shared_ptr<holoscan::Tensor> input,
+                                              CFARParams params) {
+  using Op = CFARDetectorOp<T>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  fixture.push(&Op::rd_maps, *input);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"detection_mask", "detection_score", "noise_estimate",
+                                      "detection_idx", "cfar_power"};
+  for (const char* output : kOutputs) {
+    fixture.template capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  bool observed = true;
+  for (const char* output : kOutputs) {
+    observed = running.wait_for_output(output, 1U, std::chrono::seconds{5}) && observed;
+  }
+  (void)observed;
+  running.request_stop();
+  return running.finish();
 }
 
 template <typename T>
 CfarOutputs run_cfar(std::shared_ptr<holoscan::Tensor> input, CFARParams params) {
-  FiveOutGraphRunResult result = run_cfar_result<T>(std::move(input), std::move(params));
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  const auto result = run_cfar_result<T>(std::move(input), std::move(params));
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
-    }
-    throw std::runtime_error(msg);
-  }
-  if (result.frames0.size() != 1U || result.frames1.size() != 1U || result.frames2.size() != 1U ||
-      result.frames3.size() != 1U || result.frames4.size() != 1U) {
-    throw std::runtime_error("CFARDetectorOp GO test: expected one output frame set");
-  }
-  return {std::move(result.frames0.front()), std::move(result.frames1.front()),
-          std::move(result.frames2.front()), std::move(result.frames3.front()),
-          std::move(result.frames4.front())};
+  return {
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("detection_mask")),
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("detection_score")),
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("noise_estimate")),
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("detection_idx")),
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("cfar_power"))};
 }
 
 int64_t num_detections(const HostTensor& idx) {
@@ -687,10 +679,10 @@ TEST(CFARDetectorOpGoTest, RejectsMissingGuardCells) {
   params.cfar_variant = CfarVariant::kGO;
   params.training_cells = {2, 2};
   params.pfa = 1e-3;
-  const FiveOutGraphRunResult result = run_cfar_result<double>(input, params);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_cfar_result<double>(input, params);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("detection_mask").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(CFARDetectorOpGoTest, RejectsInvalidNciAxis) {
@@ -698,10 +690,10 @@ TEST(CFARDetectorOpGoTest, RejectsInvalidNciAxis) {
   auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
   CFARParams params = go_params(1e-3);
   params.nci_axes = {0};
-  const FiveOutGraphRunResult result = run_cfar_result<double>(input, params);
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_TRUE(result.frames0.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_cfar_result<double>(input, params);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("detection_mask").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(CFARDetectorOpGoTest, GoAlphaInvertsMonteCarloPfa) {

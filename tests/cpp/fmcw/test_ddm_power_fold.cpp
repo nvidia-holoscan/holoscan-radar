@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+
 #include <complex>
 #include <cstdint>
 #include <memory>
@@ -11,14 +13,13 @@
 #include <utility>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "fmcw/ddm_power_fold_op/ddm_power_fold_op.hpp"
 #include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
 #include "utils/tensor_fixtures.hpp"
+#include "utils/test_extents.hpp"
 
 namespace {
 namespace hr = holoscan::radar;
@@ -29,14 +30,6 @@ hr::DDMCodeDescriptor code(int64_t guard = 0) {
   result.doppler_offsets = {0.5, 0.0};
   result.guard_bands = guard;
   return result;
-}
-
-auto wire() {
-  return [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-    const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-    graph.add_flow(source->out, op->rd_maps, queue);
-    graph.add_flow(op->power_map, sink->in, queue);
-  };
 }
 
 template <typename T>
@@ -58,13 +51,20 @@ hr::testing::HostTensor run(const hr::DDMCodeDescriptor& ddm_code) {
   extents.max_doppler_bins = kD;
   extents.max_range_bins = kR;
   auto input = hr::testing::to_device_tensor(host, {kRx, kD, kR}, hr::complex_dtype<T>());
-  auto result = hr::testing::run_single_io_operator_graph_result<hr::DDMPowerFoldOp<T>>(
-      {std::move(input)}, hr::DDMPowerFoldParams{.ddm_code = ddm_code}, "power_map", wire(), {},
-      extents);
-  if (!result.plan_ok || !result.diagnostics.empty() || result.frames.size() != 1U) {
-    throw std::runtime_error("DDMPowerFoldOp graph failed");
+  auto fixture = holoscan::testing::create_operator_test<hr::DDMPowerFoldOp<T>>(extents);
+  fixture.set_params(hr::DDMPowerFoldParams{.ddm_code = ddm_code});
+  fixture.push(&hr::DDMPowerFoldOp<T>::rd_maps, *input);
+  fixture.template capture_snapshot<holoscan::Tensor>("power_map", 1U, input->nbytes());
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  fixture.output_device("power_map", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool observed = running.wait_for_output("power_map", 1U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
+  if (!observed || !result.ok()) {
+    throw std::runtime_error("DDMPowerFoldOp failed: " + result.describe_failure());
   }
-  return std::move(result.frames.front());
+  return hr::testing::to_host(result.template snapshot<holoscan::Tensor>("power_map"));
 }
 
 template <typename T>

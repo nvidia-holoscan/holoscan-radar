@@ -6,6 +6,7 @@
 #include <cuda_runtime_api.h>
 
 #include <cmath>
+#include <chrono>
 #include <complex>
 #include <cstdint>
 #include <memory>
@@ -14,7 +15,7 @@
 #include <vector>
 
 #include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_op.hpp"
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_stage.hpp"
@@ -25,7 +26,7 @@
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/tensor_fixtures.hpp"
 
 namespace {
 
@@ -50,14 +51,7 @@ template <typename T>
 std::shared_ptr<holoscan::Tensor> device_tensor(const std::vector<T>& host,
                                                 const std::vector<int64_t>& shape,
                                                 DLDataType dtype) {
-  auto result = hr::make_device_tensor(shape, dtype);
-  if (!host.empty()) {
-    auto pointer = result->mutable_data();
-    EXPECT_TRUE(pointer.has_value());
-    EXPECT_EQ(cudaMemcpy(*pointer, host.data(), host.size() * sizeof(T), cudaMemcpyHostToDevice),
-              cudaSuccess);
-  }
-  return result;
+  return hr::testing::to_device_tensor(host, shape, dtype);
 }
 
 template <typename T>
@@ -306,42 +300,59 @@ hr::MaxTensorExtents sparse_extents() {
   return extents;
 }
 
-template <typename Source, typename Op, typename Sink>
-void wire_sparse_inputs(holoscan::Graph& graph, const Source& source, Op& op, const Sink& sink) {
-  const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-  graph.add_flow(source->out0, op->rd_maps, queue);
-  graph.add_flow(source->out1, op->detection_idx, queue);
-  graph.add_flow(op->snapshot, sink->in, queue);
-  const auto geometry_sink =
-      graph.op<hr::testing::WireCaptureOp<hr::WireArrayGeometry>>("geometry_sink");
-  graph.add_flow(op->array_geometry, geometry_sink->in, queue);
+holoscan::testing::TestResult run_sparse_operator(
+    std::shared_ptr<holoscan::Tensor> rd_maps, std::shared_ptr<holoscan::Tensor> detection,
+    std::shared_ptr<holoscan::Tensor> fold = nullptr) {
+  using Op = hr::TDMSparseCompensationOp<double>;
+  auto fixture = holoscan::testing::create_operator_test<Op>(sparse_extents());
+  fixture.set_params(sparse_params());
+  if (fold) {
+    fixture.push_frame(holoscan::testing::frame(
+        holoscan::testing::input("fold_idx", *fold), holoscan::testing::input("rd_maps", *rd_maps),
+        holoscan::testing::input("detection_idx", *detection)));
+  } else {
+    auto unmatched_fold = device_tensor(std::vector<int64_t>{0}, {1}, DLDataType{kDLInt, 64, 1});
+    fixture.push_at("fold_idx", *unmatched_fold,
+                    std::chrono::milliseconds(100) + std::chrono::nanoseconds(1));
+    fixture.push_frame(holoscan::testing::frame_at(
+        std::chrono::milliseconds(100), holoscan::testing::input("rd_maps", *rd_maps),
+        holoscan::testing::input("detection_idx", *detection)));
+  }
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.capture_snapshot<holoscan::Tensor>("snapshot", 1U, kMaximumBytes);
+  fixture.capture_snapshot<holoscan::Tensor>("is_valid", 1U, kMaximumBytes);
+  fixture.capture_snapshot<hr::WireArrayGeometry>("array_geometry", 1U, kMaximumBytes);
+  for (const char* input : {"rd_maps", "detection_idx"}) {
+    fixture.input_source_device(input, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("fold_idx", holoscan::DeviceId{0});
+  fixture.output_device("snapshot", holoscan::DeviceId{0});
+  fixture.output_device("is_valid", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  (void)running.wait_for_output("snapshot", 1U, std::chrono::seconds{5});
+  (void)running.wait_for_output("is_valid", 1U, std::chrono::seconds{5});
+  (void)running.wait_for_output("array_geometry", 1U, std::chrono::seconds{5});
+  running.request_stop();
+  return running.finish();
 }
 
-template <typename Source, typename Op, typename Sink>
-void wire_sparse_fold_inputs(holoscan::Graph& graph, const Source& source, Op& op,
-                             const Sink& sink) {
-  wire_sparse_inputs(graph, source, op, sink);
-  const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-  graph.add_flow(source->out2, op->fold_idx, queue);
+std::vector<hr::testing::HostTensor> sparse_snapshots(const holoscan::testing::TestResult& result) {
+  std::vector<hr::testing::HostTensor> frames;
+  for (const auto& snapshot : result.template snapshots<holoscan::Tensor>("snapshot")) {
+    frames.push_back(hr::testing::to_host(snapshot));
+  }
+  return frames;
 }
 
 TEST(TDMSparseCompensationOp, UnwiredFoldDefaultsToZero) {
   const std::vector<std::complex<double>> host(static_cast<std::size_t>(kNumTx * kDoppler));
   auto rd = device_tensor(host, {kNumTx, 1, kDoppler, 1}, hr::complex_dtype<double>());
   auto detection = device_tensor(std::vector<int64_t>{3, 0}, {1, 2}, DLDataType{kDLInt, 64, 1});
-  using Bank = hr::testing::WireCaptureBank<hr::WireArrayGeometry>;
-  Bank::reset();
-  const auto result = hr::testing::run_dual_in_single_out_operator_graph_result<
-      hr::TDMSparseCompensationOp<double>>(
-      {rd}, {detection}, sparse_params(), "snapshot",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        wire_sparse_inputs(graph, source, op, sink);
-      },
-      sparse_extents(), {"is_valid"});
-  ASSERT_TRUE(result.plan_ok) << result.plan_json;
-  ASSERT_TRUE(result.diagnostics.empty());
-  ASSERT_EQ(result.frames.size(), 1U);
-  EXPECT_EQ(result.frames.front().shape, (std::vector<int64_t>{1, kNumTx, 1}));
+  const auto result = run_sparse_operator(rd, detection);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frames = sparse_snapshots(result);
+  ASSERT_EQ(frames.size(), 1U);
+  EXPECT_EQ(frames.front().shape, (std::vector<int64_t>{1, kNumTx, 1}));
 }
 
 TEST(TDMSparseCompensationOp, RejectsFoldRowCountMismatch) {
@@ -349,18 +360,10 @@ TEST(TDMSparseCompensationOp, RejectsFoldRowCountMismatch) {
   auto rd = device_tensor(host, {kNumTx, 1, kDoppler, 1}, hr::complex_dtype<double>());
   auto detection = device_tensor(std::vector<int64_t>{3, 0}, {1, 2}, DLDataType{kDLInt, 64, 1});
   auto fold = device_tensor(std::vector<int64_t>{0, 1}, {2}, DLDataType{kDLInt, 64, 1});
-  using Bank = hr::testing::WireCaptureBank<hr::WireArrayGeometry>;
-  Bank::reset();
-  const auto result = hr::testing::run_triple_in_single_out_operator_graph_result<
-      hr::TDMSparseCompensationOp<double>, true>(
-      {rd}, {detection}, {fold}, sparse_params(), "snapshot",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        wire_sparse_fold_inputs(graph, source, op, sink);
-      },
-      sparse_extents(), {"is_valid"});
-  EXPECT_TRUE(result.plan_ok) << result.plan_json;
-  EXPECT_TRUE(result.frames.empty());
-  EXPECT_FALSE(result.diagnostics.empty());
+  const auto result = run_sparse_operator(rd, detection, fold);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(sparse_snapshots(result).empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 }  // namespace

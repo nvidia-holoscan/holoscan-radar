@@ -14,42 +14,25 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
-#include <holoscan/core/compile.hpp>
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/errors.hpp>
-#include <holoscan/core/execution_context.hpp>
-#include <holoscan/core/expected.hpp>
-#include <holoscan/core/graph.hpp>
-#include <holoscan/core/operator.hpp>
-#include <holoscan/core/operator_spec.hpp>
-#include <holoscan/core/payload_options.hpp>
-#include <holoscan/core/run.hpp>
-#include <holoscan/core/temporal_contract.hpp>
-#include <holoscan/core/tensor_output_loan.hpp>
-#include <holoscan/time/realtime_clock.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
-#include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
 
 using holoscan::radar::ClusterDBSCANOp;
 using holoscan::radar::ClusterDBSCANParams;
-using holoscan::radar::testing::DualIOGraphRunResult;
 using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::real_cube_to_device;
-using holoscan::radar::testing::run_single_in_dual_out_operator_graph_result;
 
 constexpr DLDataType kFloat64Dtype{kDLFloat, 64, 1};
 
@@ -64,46 +47,37 @@ std::shared_ptr<holoscan::Tensor> points_tensor(const std::vector<double>& host,
   return real_cube_to_device<T>(host, {rows, cols});
 }
 
-template <typename Source, typename OpRef, typename Sink0, typename Sink1>
-void wire_dbscan(holoscan::Graph& graph, const Source& source, OpRef& op, const Sink0& sink0,
-                 const Sink1& sink1) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out, op->points, q);
-  graph.add_flow(op->labels, sink0->in, q);
-  graph.add_flow(op->sizes, sink1->in, q);
-}
-
 template <typename T>
-DualIOGraphRunResult run_dbscan_result(std::shared_ptr<holoscan::Tensor> points,
-                                       ClusterDBSCANParams params) {
-  return run_single_in_dual_out_operator_graph_result<ClusterDBSCANOp<T>>(
-      {std::move(points)}, std::move(params), "labels", "sizes",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink0,
-         const auto& sink1) {
-        wire_dbscan(graph, source, op, sink0, sink1);
-      });
+holoscan::testing::TestResult run_dbscan_result(std::shared_ptr<holoscan::Tensor> points,
+                                                ClusterDBSCANParams params) {
+  using Op = ClusterDBSCANOp<T>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  fixture.push(&Op::points, *points);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.template capture_snapshot<holoscan::Tensor>("labels", 1U, kMaximumBytes);
+  fixture.template capture_snapshot<holoscan::Tensor>("sizes", 1U, kMaximumBytes);
+  fixture.input_source_device("points", holoscan::DeviceId{0});
+  fixture.output_device("labels", holoscan::DeviceId{0});
+  fixture.output_device("sizes", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool labels = running.wait_for_output("labels", 1U, std::chrono::seconds{5});
+  const bool sizes = running.wait_for_output("sizes", 1U, std::chrono::seconds{5});
+  (void)labels;
+  (void)sizes;
+  running.request_stop();
+  return running.finish();
 }
 
 template <typename T>
 DbscanResult run_dbscan(std::shared_ptr<holoscan::Tensor> points, ClusterDBSCANParams params) {
-  DualIOGraphRunResult result = run_dbscan_result<T>(std::move(points), std::move(params));
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+  const auto result = run_dbscan_result<T>(std::move(points), std::move(params));
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
-    }
-    throw std::runtime_error(msg);
-  }
-  if (result.frames0.size() != 1U || result.frames1.size() != 1U) {
-    throw std::runtime_error("ClusterDBSCANOp test: expected one output frame pair, got " +
-                             std::to_string(result.frames0.size()) + "/" +
-                             std::to_string(result.frames1.size()));
-  }
-  return {std::move(result.frames0.front()), std::move(result.frames1.front())};
+  return {holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("labels")),
+          holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("sizes"))};
 }
 
 ClusterDBSCANParams make_params(std::vector<double> epsilon, int64_t min_points = 0,
@@ -137,20 +111,28 @@ TEST(ClusterDBSCANOpTest, UnwiredSizesDoesNotFailTheRunOrDisturbLabels) {
     frames.push_back(points_tensor<double>(pts, 8, 2));
   }
 
-  const holoscan::radar::testing::GraphRunResult out =
-      holoscan::radar::testing::run_single_io_operator_graph_result<ClusterDBSCANOp<double>>(
-          std::move(frames), make_params({0.5}, 3), "labels",
-          [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-            const holoscan::ConnectionOptions q{.queue_depth = 4U};
-            graph.add_flow(source->out, op->points, q);
-            graph.add_flow(op->labels, sink->in, q);
-          },
-          {"sizes"});
-
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  EXPECT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames.size(), kFrames);
-  for (const HostTensor& frame : out.frames) {
+  using Op = ClusterDBSCANOp<double>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(make_params({0.5}, 3));
+  for (const auto& frame : frames) {
+    fixture.push(&Op::points, *frame);
+  }
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.capture_snapshot<holoscan::Tensor>("labels", kFrames, kMaximumBytes);
+  fixture.input_source_device("points", holoscan::DeviceId{0});
+  fixture.output_device("labels", holoscan::DeviceId{0});
+  fixture.output_device("sizes", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool observed = running.wait_for_output("labels", kFrames, std::chrono::seconds{5});
+  running.request_stop();
+  const auto out = running.finish();
+  ASSERT_TRUE(observed) << out.describe_failure();
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto captured = out.snapshots<holoscan::Tensor>("labels");
+  ASSERT_EQ(captured.size(), kFrames);
+  for (const auto& snapshot : captured) {
+    const HostTensor frame = holoscan::radar::testing::to_host(snapshot);
     ASSERT_EQ(frame.shape, (std::vector<int64_t>{8}));
     const int64_t* lab = frame.as<int64_t>();
     EXPECT_EQ(lab[0], 0);
@@ -439,57 +421,57 @@ TEST(ClusterDBSCANOpTest, MaxClustersConfigurableFromParams) {
 TEST(ClusterDBSCANOpTest, RejectsEmptyEpsilon) {
   std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
   auto p = points_tensor<double>(pts, 2, 2);
-  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_FALSE(result.diagnostics.empty());
+  auto result = run_dbscan_result<double>(p, make_params({}));
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ClusterDBSCANOpTest, RejectsEpsilonLengthMismatch) {
   std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
   auto p = points_tensor<double>(pts, 2, 2);
-  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({1.0, 2.0, 3.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_FALSE(result.diagnostics.empty());
+  auto result = run_dbscan_result<double>(p, make_params({1.0, 2.0, 3.0}));
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ClusterDBSCANOpTest, RejectsScalarZeroEpsilon) {
   std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
   auto p = points_tensor<double>(pts, 2, 2);
-  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({0.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_FALSE(result.diagnostics.empty());
+  auto result = run_dbscan_result<double>(p, make_params({0.0}));
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ClusterDBSCANOpTest, RejectsAllIgnoredEpsilon) {
   std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
   auto p = points_tensor<double>(pts, 2, 2);
-  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({0.0, 0.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_FALSE(result.diagnostics.empty());
+  auto result = run_dbscan_result<double>(p, make_params({0.0, 0.0}));
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ClusterDBSCANOpTest, RejectsNegativeEpsilon) {
   std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
   auto p = points_tensor<double>(pts, 2, 2);
-  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({1.0, -1.0}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_FALSE(result.diagnostics.empty());
+  auto result = run_dbscan_result<double>(p, make_params({1.0, -1.0}));
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ClusterDBSCANOpTest, RejectsBadPointsRank) {
   std::vector<double> pts = {0.0, 1.0, 2.0};
   auto p = real_cube_to_device<double>(pts, {3});  // rank 1
-  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({0.5}));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_FALSE(result.diagnostics.empty());
+  auto result = run_dbscan_result<double>(p, make_params({0.5}));
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ClusterDBSCANOpTest, RejectsOpaqueLeadingBatch) {
   const std::vector<double> pts = {0.0, 0.0, 0.1, 0.0};
   auto p = real_cube_to_device<double>(pts, {1, 2, 2});
-  DualIOGraphRunResult result = run_dbscan_result<double>(p, make_params({0.5}, 2));
-  EXPECT_TRUE(result.plan_ok);
-  EXPECT_FALSE(result.diagnostics.empty());
+  auto result = run_dbscan_result<double>(p, make_params({0.5}, 2));
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 // ---- [live] overrides (pageable-host epsilon vector + scalars) ------------
@@ -505,167 +487,64 @@ struct LiveEpsilonTick {
   std::optional<int64_t> max_clusters;
 };
 
-struct LiveEpsilonBank {
-  static void reset(std::vector<LiveEpsilonTick> new_ticks) {
-    ticks = std::move(new_ticks);
-    index = 0U;
-  }
-  static inline std::vector<LiveEpsilonTick> ticks;
-  static inline std::size_t index{0U};
-};
-
-class LiveEpsilonSourceOp final : public holoscan::Operator<> {
- public:
-  void setup(holoscan::OperatorSpec& spec) override {
-    constexpr holoscan::TensorRepresentation kDevice{
-        .memory_kind = holoscan::MemoryKind::kCudaDevice,
-        .dtype = std::nullopt,
-        .rank = std::nullopt,
-    };
-    constexpr holoscan::TensorRepresentation kHostVector{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = kFloat64Dtype,
-        .rank = 1U,
-    };
-    spec.output(points, "out")
-        .produces_tensor(holoscan::radar::pooled_tensor_output(kDevice, 2U, 4096U));
-    spec.output(epsilon, "epsilon")
-        .max_emits_per_compute(1U)
-        .produces_tensor(
-            holoscan::radar::pooled_tensor_output(kHostVector, 1U, 128U * sizeof(double)));
-    spec.output(min_points, "min_points");
-    spec.output(max_clusters, "max_clusters");
-  }
-
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnClock{.period = holoscan::radar::testing::detail::kHarnessTick});
-    return result;
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    if (LiveEpsilonBank::index >= LiveEpsilonBank::ticks.size()) {
-      return {};
-    }
-    const LiveEpsilonTick tick = LiveEpsilonBank::ticks[LiveEpsilonBank::index++];
-    const holoscan::TimePoint points_time = context.activation_time();
-    if (tick.epsilon.has_value()) {
-      const std::vector<double>& values = *tick.epsilon;
-      const std::vector<int64_t> shape{static_cast<int64_t>(values.size())};
-      auto loan = epsilon.allocate_tensor(
-          holoscan::TensorLoanRequest{.shape = shape, .dtype = kFloat64Dtype});
-      if (!loan) {
-        return holoscan::make_unexpected(std::move(loan).error());
-      }
-      auto written =
-          loan->write_host_and_commit([&values](const holoscan::TensorOutputWriteGuard& writer) {
-            std::copy(values.begin(), values.end(), writer.data_as<double>());
-          });
-      if (!written) {
-        return holoscan::make_unexpected(std::move(written).error());
-      }
-      holoscan::TimePoint epsilon_time = points_time;
-      epsilon_time.timestamp_ns += tick.skew_ns;
-      auto emitted =
-          epsilon.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = epsilon_time});
-      if (!emitted) {
-        return holoscan::make_unexpected(std::move(emitted).error());
-      }
-    }
-    holoscan::TimePoint scalar_time = points_time;
-    scalar_time.timestamp_ns += tick.skew_ns;
-    if (tick.min_points.has_value()) {
-      auto emitted =
-          min_points.emit(*tick.min_points, holoscan::EmitOptions{.capture_time = scalar_time});
-      if (!emitted) {
-        return holoscan::make_unexpected(std::move(emitted).error());
-      }
-    }
-    if (tick.max_clusters.has_value()) {
-      auto emitted =
-          max_clusters.emit(*tick.max_clusters, holoscan::EmitOptions{.capture_time = scalar_time});
-      if (!emitted) {
-        return holoscan::make_unexpected(std::move(emitted).error());
-      }
-    }
-    return holoscan::radar::testing::detail::emit_bank_frame(points, context, tick.points,
-                                                             "LiveEpsilonSourceOp");
-  }
-
-  holoscan::Output<holoscan::Tensor> points{"out"};
-  holoscan::Output<holoscan::Tensor> epsilon{"epsilon"};
-  holoscan::Output<int64_t> min_points{"min_points"};
-  holoscan::Output<int64_t> max_clusters{"max_clusters"};
-};
-
-DualIOGraphRunResult run_epsilon_override_graph(std::vector<LiveEpsilonTick> ticks,
-                                                ClusterDBSCANParams params,
-                                                int64_t max_features = 2) {
-  DualIOGraphRunResult result;
-  holoscan::radar::testing::detail::FrameBank::reset();
-  holoscan::radar::testing::detail::FrameBankB::reset();
-  const std::size_t expected = ticks.size();
-  LiveEpsilonBank::reset(std::move(ticks));
-
-  holoscan::Graph graph{"epsilon-live-override"};
-  const auto source = graph.op<LiveEpsilonSourceOp>("source");
+holoscan::testing::TestResult run_epsilon_override_graph(std::vector<LiveEpsilonTick> ticks,
+                                                         ClusterDBSCANParams params,
+                                                         int64_t max_features = 2) {
+  using Op = ClusterDBSCANOp<double>;
   auto extents = holoscan::radar::testing::default_test_extents();
   extents.max_features = max_features;
-  auto op = graph.op<ClusterDBSCANOp<double>>("op", extents);
-  op.set_params(std::move(params));
-  const auto labels = graph.op<holoscan::radar::testing::detail::TensorCaptureOp>("labels");
-  const auto sizes = graph.op<holoscan::radar::testing::detail::TensorCaptureBOp>("sizes");
-  const holoscan::ConnectionOptions q{.queue_depth = 8U};
-  graph.add_flow(source->points, op->points, q);
-  graph.add_flow(source->epsilon, op->epsilon, q);
-  graph.add_flow(source->min_points, op->min_points, q);
-  graph.add_flow(source->max_clusters, op->max_clusters, q);
-  graph.add_flow(op->labels, labels->in, q);
-  graph.add_flow(op->sizes, sizes->in, q);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-
-  holoscan::CompileOptions options;
-  holoscan::radar::testing::detail::bind_single_in_dual_out_device_pools(options, "labels",
-                                                                         "sizes");
-  try {
-    const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-    result.plan_ok = plan.ok();
-    result.plan_json = plan.json();
-    if (!plan.ok()) {
-      return result;
-    }
-    holoscan::RunSession session = holoscan::run_async(plan);
-    const auto deadline =
-        std::chrono::steady_clock::now() + holoscan::radar::testing::detail::kHarnessDeadline;
-    while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
-      {
-        const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankB::mutex);
-        if (holoscan::radar::testing::detail::FrameBankB::captured.size() >= expected) {
-          break;
-        }
+  auto fixture = holoscan::testing::create_operator_test<Op>(extents);
+  fixture.set_params(std::move(params));
+  for (std::size_t index = 0; index < ticks.size(); ++index) {
+    const auto base = std::chrono::milliseconds{static_cast<int64_t>((index + 1U) * 100U)};
+    const auto override_time = std::chrono::duration_cast<std::chrono::nanoseconds>(base) +
+                               std::chrono::nanoseconds{ticks[index].skew_ns};
+    holoscan::testing::TestFrame frame;
+    const auto append = [&frame](holoscan::testing::TestFrame part) {
+      for (auto& field : part.fields) {
+        frame.fields.push_back(std::move(field));
       }
-      std::this_thread::sleep_for(holoscan::radar::testing::detail::kHarnessPoll);
+    };
+    if (ticks[index].epsilon.has_value()) {
+      auto epsilon = holoscan::radar::testing::to_pageable_host_tensor(
+          *ticks[index].epsilon, {static_cast<int64_t>(ticks[index].epsilon->size())},
+          kFloat64Dtype);
+      append(holoscan::testing::frame_at(override_time,
+                                         holoscan::testing::input("epsilon", *epsilon)));
     }
-    session.request_stop();
-    session.wait();
-    result.termination = session.termination();
-    for (const auto& diagnostic : session.diagnostics()) {
-      result.diagnostics.emplace_back(diagnostic.token);
+    if (ticks[index].min_points.has_value()) {
+      append(holoscan::testing::frame_at(
+          override_time, holoscan::testing::input("min_points", *ticks[index].min_points)));
     }
-  } catch (const holoscan::RuntimeError& error) {
-    result.plan_ok = false;
-    result.plan_json = std::string("RuntimeError: ") + error.what();
+    if (ticks[index].max_clusters.has_value()) {
+      append(holoscan::testing::frame_at(
+          override_time, holoscan::testing::input("max_clusters", *ticks[index].max_clusters)));
+    }
+    append(holoscan::testing::frame_at(base,
+                                       holoscan::testing::input("points", *ticks[index].points)));
+    fixture.push_frame(frame);
   }
-  {
-    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBank::mutex);
-    result.frames0 = std::move(holoscan::radar::testing::detail::FrameBank::captured);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.capture_snapshot<holoscan::Tensor>("labels", ticks.size(), kMaximumBytes);
+  fixture.capture_snapshot<holoscan::Tensor>("sizes", ticks.size(), kMaximumBytes);
+  fixture.input_source_device("points", holoscan::DeviceId{0});
+  fixture.output_device("labels", holoscan::DeviceId{0});
+  fixture.output_device("sizes", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool labels = running.wait_for_output("labels", ticks.size(), std::chrono::seconds{5});
+  const bool sizes = running.wait_for_output("sizes", ticks.size(), std::chrono::seconds{5});
+  (void)labels;
+  (void)sizes;
+  running.request_stop();
+  return running.finish();
+}
+
+std::vector<HostTensor> captured_sizes(const holoscan::testing::TestResult& result) {
+  std::vector<HostTensor> frames;
+  for (const auto& snapshot : result.snapshots<holoscan::Tensor>("sizes")) {
+    frames.push_back(holoscan::radar::testing::to_host(snapshot));
   }
-  {
-    const std::lock_guard lock(holoscan::radar::testing::detail::FrameBankB::mutex);
-    result.frames1 = std::move(holoscan::radar::testing::detail::FrameBankB::captured);
-  }
-  return result;
+  return frames;
 }
 
 std::shared_ptr<holoscan::Tensor> live_epsilon_points() {
@@ -677,10 +556,10 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonExactMatchChangesClustering) {
   const auto out = run_epsilon_override_graph(
       {{live_epsilon_points(), std::vector<double>{3.0, 1.0}}}, std::move(params));
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames1.size(), 1U);
-  EXPECT_EQ(out.frames1[0].shape[0], 1);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto sizes = captured_sizes(out);
+  ASSERT_EQ(sizes.size(), 1U);
+  EXPECT_EQ(sizes[0].shape[0], 1);
 }
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonSkewedCaptureMissesExact) {
@@ -688,10 +567,10 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonSkewedCaptureMissesExact) {
   const auto out = run_epsilon_override_graph(
       {{live_epsilon_points(), std::vector<double>{3.0, 1.0}, 1}}, std::move(params));
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames1.size(), 1U);
-  EXPECT_EQ(out.frames1[0].shape[0], 0);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto sizes = captured_sizes(out);
+  ASSERT_EQ(sizes.size(), 1U);
+  EXPECT_EQ(sizes[0].shape[0], 0);
 }
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonRevertsToParamsAfterMiss) {
@@ -701,11 +580,11 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonRevertsToParamsAfterMiss) {
                                   {live_epsilon_points(), std::nullopt}},
                                  std::move(params));
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames1.size(), 2U);
-  EXPECT_EQ(out.frames1[0].shape[0], 1);
-  EXPECT_EQ(out.frames1[1].shape[0], 0);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto sizes = captured_sizes(out);
+  ASSERT_EQ(sizes.size(), 2U);
+  EXPECT_EQ(sizes[0].shape[0], 1);
+  EXPECT_EQ(sizes[1].shape[0], 0);
 }
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonCanToggleIgnoredAxis) {
@@ -716,11 +595,11 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonCanToggleIgnoredAxis) {
                                                {make_points(), std::vector<double>{0.5, 1.0}}},
                                               make_params({0.5, 1.0}, 2));
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames1.size(), 2U);
-  EXPECT_EQ(out.frames1[0].shape[0], 1);
-  EXPECT_EQ(out.frames1[1].shape[0], 2);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto sizes = captured_sizes(out);
+  ASSERT_EQ(sizes.size(), 2U);
+  EXPECT_EQ(sizes[0].shape[0], 1);
+  EXPECT_EQ(sizes[1].shape[0], 2);
 }
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsMalformedVector) {
@@ -728,8 +607,8 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsMalformedVector) {
   const auto out = run_epsilon_override_graph({{live_epsilon_points(), std::vector<double>{}}},
                                               std::move(params));
 
-  EXPECT_TRUE(out.plan_ok) << out.plan_json;
-  EXPECT_FALSE(out.diagnostics.empty());
+  EXPECT_FALSE(out.ok());
+  EXPECT_FALSE(out.diagnostics().empty());
 }
 
 TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsConfiguredBoundOverflow) {
@@ -737,8 +616,8 @@ TEST(ClusterDBSCANOpTest, LiveEpsilonRejectsConfiguredBoundOverflow) {
   const auto out = run_epsilon_override_graph(
       {{live_epsilon_points(), std::vector<double>{1.0, 1.0, 1.0}}}, std::move(params), 2);
 
-  EXPECT_TRUE(out.plan_ok) << out.plan_json;
-  EXPECT_FALSE(out.diagnostics.empty());
+  EXPECT_FALSE(out.ok());
+  EXPECT_FALSE(out.diagnostics().empty());
 }
 
 // ---- Scalar [live] overrides ----------------------------------------------
@@ -762,13 +641,13 @@ TEST(ClusterDBSCANOpTest, LiveMinPointsRevertsToParamsAfterMiss) {
                                   {live_min_points_points(), std::nullopt, 0, std::nullopt}},
                                  make_params({0.5}, 2));
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames1.size(), 2U);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto sizes = captured_sizes(out);
+  ASSERT_EQ(sizes.size(), 2U);
   // Tick 0 matches Exact and the pair drops to noise; tick 1 publishes
   // nothing, so min_points is the Params value again and the pair returns.
-  EXPECT_EQ(out.frames1[0].shape[0], 1);
-  EXPECT_EQ(out.frames1[1].shape[0], 2);
+  EXPECT_EQ(sizes[0].shape[0], 1);
+  EXPECT_EQ(sizes[1].shape[0], 2);
 }
 
 TEST(ClusterDBSCANOpTest, LiveMinPointsSkewedCaptureMissesExact) {
@@ -776,10 +655,10 @@ TEST(ClusterDBSCANOpTest, LiveMinPointsSkewedCaptureMissesExact) {
   const auto out = run_epsilon_override_graph(
       {{live_min_points_points(), std::nullopt, 1, int64_t{3}}}, std::move(params));
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames1.size(), 1U);
-  EXPECT_EQ(out.frames1[0].shape[0], 2);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto sizes = captured_sizes(out);
+  ASSERT_EQ(sizes.size(), 1U);
+  EXPECT_EQ(sizes[0].shape[0], 2);
 }
 
 TEST(ClusterDBSCANOpTest, LiveMaxClustersRevertsToParamsAfterMiss) {
@@ -788,13 +667,13 @@ TEST(ClusterDBSCANOpTest, LiveMaxClustersRevertsToParamsAfterMiss) {
        {live_max_clusters_points(), std::nullopt, 0, std::nullopt, std::nullopt}},
       make_params({0.5}, 2));
 
-  ASSERT_TRUE(out.plan_ok) << out.plan_json;
-  ASSERT_TRUE(out.diagnostics.empty());
-  ASSERT_EQ(out.frames1.size(), 2U);
+  ASSERT_TRUE(out.ok()) << out.describe_failure();
+  const auto sizes = captured_sizes(out);
+  ASSERT_EQ(sizes.size(), 2U);
   // Params leave the cap open (3 clusters); the override caps tick 0 to 2,
   // and tick 1 publishes nothing so the open cap is back.
-  EXPECT_EQ(out.frames1[0].shape[0], 2);
-  EXPECT_EQ(out.frames1[1].shape[0], 3);
+  EXPECT_EQ(sizes[0].shape[0], 2);
+  EXPECT_EQ(sizes[1].shape[0], 3);
 }
 
 }  // namespace

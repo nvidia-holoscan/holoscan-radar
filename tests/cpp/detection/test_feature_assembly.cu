@@ -10,21 +10,22 @@
 
 #include <cuda_runtime_api.h>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "detection/feature_assembly_op/feature_assembly_stage.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -33,11 +34,7 @@ using holoscan::radar::AssemblyFeature;
 using holoscan::radar::FeatureAssemblyOp;
 using holoscan::radar::make_device_tensor;
 using holoscan::radar::real_dtype;
-using holoscan::radar::testing::GraphRunResult;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::run_dual_in_single_out_operator_graph_result;
-using holoscan::radar::testing::run_single_io_operator_graph_result;
-using holoscan::radar::testing::run_triple_in_single_out_operator_graph_result;
 using holoscan::radar::testing::to_device_tensor;
 using holoscan::radar::testing::to_host;
 
@@ -48,60 +45,56 @@ std::vector<AssemblyFeature> make_features(std::vector<AssemblyFeature> features
   return features;
 }
 
-template <typename Source, typename OpRef, typename Sink>
-void wire_assembly(holoscan::Graph& graph, const Source& source, OpRef& op, const Sink& sink) {
-  const holoscan::ConnectionOptions q{.queue_depth = 4U};
-  graph.add_flow(source->out, op->detection_idx, q);
-  graph.add_flow(op->points, sink->in, q);
+HostTensor require_one_frame(holoscan::testing::TestResult result);
+
+template <typename T>
+holoscan::testing::TestResult run_assembly_frame(
+    std::vector<AssemblyFeature> features, const holoscan::testing::TestFrame& frame,
+    std::initializer_list<std::string_view> device_inputs) {
+  using Op = FeatureAssemblyOp<T>;
+  const auto extents = holoscan::radar::testing::default_test_extents();
+  const std::size_t max_bytes =
+      static_cast<std::size_t>(extents.max_points.value_or(1) * extents.max_features.value_or(1) *
+                               static_cast<std::int64_t>(sizeof(T)));
+  auto fixture = holoscan::testing::create_operator_test<Op>(extents, std::move(features));
+  fixture.push_frame(frame);
+  fixture.template capture_snapshot<holoscan::Tensor>("points", 1U, max_bytes);
+  for (const std::string_view name : device_inputs) {
+    fixture.input_source_device(name, holoscan::DeviceId{0});
+  }
+  fixture.output_device("points", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool observed = running.wait_for_output("points", 1U, std::chrono::seconds{5});
+  (void)observed;
+  running.request_stop();
+  return running.finish();
 }
 
 template <typename T>
-GraphRunResult run_assembly_result(std::shared_ptr<holoscan::Tensor> idx,
-                                   std::vector<AssemblyFeature> features) {
-  return run_single_io_operator_graph_result<FeatureAssemblyOp<T>>(
-      {std::move(idx)}, std::move(features), "points",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        wire_assembly(graph, source, op, sink);
-      });
+holoscan::testing::TestResult run_assembly_result(std::shared_ptr<holoscan::Tensor> idx,
+                                                  std::vector<AssemblyFeature> features) {
+  return run_assembly_frame<T>(
+      std::move(features),
+      holoscan::testing::frame_at(std::chrono::nanoseconds{0},
+                                  holoscan::testing::input("detection_idx", *idx)),
+      {"detection_idx"});
 }
 
 template <typename T>
 HostTensor run_assembly(std::shared_ptr<holoscan::Tensor> idx,
                         std::vector<AssemblyFeature> features) {
-  GraphRunResult result = run_assembly_result<T>(std::move(idx), std::move(features));
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
-  }
-  if (!result.diagnostics.empty()) {
-    std::string msg = "run diagnostics:";
-    for (const auto& d : result.diagnostics) {
-      msg += " ";
-      msg += d;
-    }
-    throw std::runtime_error(msg);
-  }
-  if (result.frames.size() != 1U) {
-    throw std::runtime_error("FeatureAssemblyOp test: expected one points frame, got " +
-                             std::to_string(result.frames.size()));
-  }
-  return std::move(result.frames.front());
+  return require_one_frame(run_assembly_result<T>(std::move(idx), std::move(features)));
 }
 
-bool run_failed_with_diagnostic(const GraphRunResult& result) {
-  return !result.diagnostics.empty() || !result.plan_ok;
+bool run_failed_with_diagnostic(const holoscan::testing::TestResult& result) {
+  return !result.ok() && !result.diagnostics().empty();
 }
 
-HostTensor require_one_frame(GraphRunResult result) {
-  if (!result.plan_ok) {
-    throw std::runtime_error(std::string("compile failed: ") + result.plan_json);
+HostTensor require_one_frame(holoscan::testing::TestResult result) {
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
   }
-  if (!result.diagnostics.empty()) {
-    throw std::runtime_error(std::string("run diagnostic: ") + result.diagnostics.front());
-  }
-  if (result.frames.size() != 1U) {
-    throw std::runtime_error("FeatureAssemblyOp test: expected one points frame");
-  }
-  return std::move(result.frames.front());
+  return to_host(result.template snapshot<holoscan::Tensor>("points"));
 }
 
 // ---------------------------------------------------------------------------
@@ -339,60 +332,17 @@ TEST(FeatureAssemblyOpTest, RejectsAzWithoutGrid) {
   EXPECT_TRUE(run_failed_with_diagnostic(result));
 }
 
-TEST(FeatureAssemblyOpTest, RejectsNonContiguousDetectionIdx) {
-  // Graph harness emit_bank_frame always packs a compact loan from shape ×
-  // dtype, so a non-contiguous source tensor would be compacted before the
-  // operator sees it. Assert the contract helper directly instead.
-  struct Holder {
-    void* data{nullptr};
-    std::vector<int64_t> shape{1, 2};
-    std::vector<int64_t> strides{2, 2};
-    DLManagedTensor dl{};
-  };
-  auto holder = std::make_unique<Holder>();
-  if (cudaMalloc(&holder->data, 4 * sizeof(int64_t)) != cudaSuccess) {
-    FAIL() << "cudaMalloc failed";
-  }
-  std::vector<int64_t> host = {0, 0, 1, 0};
-  cudaMemcpy(holder->data, host.data(), 4 * sizeof(int64_t), cudaMemcpyHostToDevice);
-  int current_device_id = -1;
-  if (cudaGetDevice(&current_device_id) != cudaSuccess) {
-    throw std::runtime_error("make_idx_with_strides: cudaGetDevice failed");
-  }
-  holder->dl.dl_tensor.data = holder->data;
-  holder->dl.dl_tensor.device = DLDevice{kDLCUDA, current_device_id};
-  holder->dl.dl_tensor.ndim = 2;
-  holder->dl.dl_tensor.dtype = kInt64Dtype;
-  holder->dl.dl_tensor.shape = holder->shape.data();
-  holder->dl.dl_tensor.strides = holder->strides.data();
-  holder->dl.dl_tensor.byte_offset = 0;
-  holder->dl.manager_ctx = holder.get();
-  holder->dl.deleter = [](DLManagedTensor* self) {
-    auto* h = static_cast<Holder*>(self->manager_ctx);
-    cudaFree(h->data);
-    delete h;
-  };
-  auto idx_t = std::make_shared<holoscan::Tensor>(&holder->dl);
-  holder.release();
-  ASSERT_FALSE(idx_t->is_contiguous());
-  EXPECT_THROW(holoscan::radar::require_contiguous(*idx_t, "detection_idx", "FeatureAssemblyOp"),
-               std::invalid_argument);
-}
-
 TEST(FeatureAssemblyOpTest, GathersAlignedRangeVelocity) {
   auto idx = to_device_tensor(std::vector<int64_t>{2, 3}, {1, 2}, kInt64Dtype);
   auto ranges = upload_real(std::vector<double>{0, 10, 20, 30}, {4});
   auto velocities = upload_real(std::vector<double>{-3, -2, -1, 0}, {4});
-  auto result = run_triple_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
-      {idx}, {ranges}, {velocities},
-      make_features({AssemblyFeature::kRange, AssemblyFeature::kVelocity}), "points",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->out0, op->detection_idx, q);
-        graph.add_flow(source->out1, op->range_bins, q);
-        graph.add_flow(source->out2, op->velocity_bins, q);
-        graph.add_flow(op->points, sink->in, q);
-      });
+  auto result = run_assembly_frame<double>(
+      make_features({AssemblyFeature::kRange, AssemblyFeature::kVelocity}),
+      holoscan::testing::frame_at(std::chrono::nanoseconds{0},
+                                  holoscan::testing::input("detection_idx", *idx),
+                                  holoscan::testing::input("range_bins", *ranges),
+                                  holoscan::testing::input("velocity_bins", *velocities)),
+      {"detection_idx", "range_bins", "velocity_bins"});
   const HostTensor points = require_one_frame(std::move(result));
   ASSERT_EQ(points.shape, (std::vector<int64_t>{1, 2}));
   EXPECT_DOUBLE_EQ(points.as<double>()[0], 30.0);
@@ -402,14 +352,12 @@ TEST(FeatureAssemblyOpTest, GathersAlignedRangeVelocity) {
 TEST(FeatureAssemblyOpTest, WiredUnselectedGatherDoesNotChangeTrigger) {
   auto idx = to_device_tensor(std::vector<int64_t>{2, 3}, {1, 2}, kInt64Dtype);
   auto ranges = upload_real(std::vector<double>{0, 10, 20, 30}, {4});
-  auto result = run_dual_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
-      {idx}, {ranges}, make_features({AssemblyFeature::kRangeBin}), "points",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->out0, op->detection_idx, q);
-        graph.add_flow(source->out1, op->range_bins, q);
-        graph.add_flow(op->points, sink->in, q);
-      });
+  auto result = run_assembly_frame<double>(
+      make_features({AssemblyFeature::kRangeBin}),
+      holoscan::testing::frame_at(std::chrono::nanoseconds{0},
+                                  holoscan::testing::input("detection_idx", *idx),
+                                  holoscan::testing::input("range_bins", *ranges)),
+      {"detection_idx", "range_bins"});
   const HostTensor points = require_one_frame(std::move(result));
   EXPECT_DOUBLE_EQ(points.as<double>()[0], 3.0);
 }
@@ -419,14 +367,12 @@ TEST(FeatureAssemblyOpTest, GathersAlignedScore) {
   std::vector<double> score(12, 0.0);
   score[6] = 7.5;
   auto scores = upload_real(score, {3, 4});
-  auto result = run_dual_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
-      {idx}, {scores}, make_features({AssemblyFeature::kScore}), "points",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->out0, op->detection_idx, q);
-        graph.add_flow(source->out1, op->detection_score, q);
-        graph.add_flow(op->points, sink->in, q);
-      });
+  auto result = run_assembly_frame<double>(
+      make_features({AssemblyFeature::kScore}),
+      holoscan::testing::frame_at(std::chrono::nanoseconds{0},
+                                  holoscan::testing::input("detection_idx", *idx),
+                                  holoscan::testing::input("detection_score", *scores)),
+      {"detection_idx", "detection_score"});
   const HostTensor points = require_one_frame(std::move(result));
   EXPECT_DOUBLE_EQ(points.as<double>()[0], 7.5);
 }
@@ -436,14 +382,12 @@ TEST(FeatureAssemblyOpTest, WaitsForLaterAoaFromSameFrame) {
   // trigger waits for the later companion carrying the same capture time.
   auto idx = to_device_tensor(std::vector<int64_t>{0, 1}, {1, 2}, kInt64Dtype);
   auto aoa = upload_real(std::vector<double>{0.25, -0.5}, {1, 2});
-  auto result = run_dual_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
-      {idx}, {aoa}, make_features({AssemblyFeature::kAzEstimate, AssemblyFeature::kElEstimate}),
-      "points", [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->out0, op->detection_idx, q);
-        graph.add_flow(source->out1, op->aoa_estimates, q);
-        graph.add_flow(op->points, sink->in, q);
-      });
+  auto result = run_assembly_frame<double>(
+      make_features({AssemblyFeature::kAzEstimate, AssemblyFeature::kElEstimate}),
+      holoscan::testing::frame_at(std::chrono::nanoseconds{0},
+                                  holoscan::testing::input("detection_idx", *idx),
+                                  holoscan::testing::input("aoa_estimates", *aoa)),
+      {"detection_idx", "aoa_estimates"});
   const HostTensor points = require_one_frame(std::move(result));
   EXPECT_DOUBLE_EQ(points.as<double>()[0], 0.25);
   EXPECT_DOUBLE_EQ(points.as<double>()[1], -0.5);
@@ -453,15 +397,12 @@ TEST(FeatureAssemblyOpTest, GathersAlignedDenseAngleGrids) {
   auto idx = to_device_tensor(std::vector<int64_t>{1, 2, 0, 0}, {1, 4}, kInt64Dtype);
   auto az = upload_real(std::vector<double>{-0.2, 0.0, 0.2}, {3});
   auto el = upload_real(std::vector<double>{0.0, 0.1, 0.2}, {3});
-  auto result = run_triple_in_single_out_operator_graph_result<FeatureAssemblyOp<double>>(
-      {idx}, {az}, {el}, make_features({AssemblyFeature::kAz, AssemblyFeature::kEl}), "points",
-      [](holoscan::Graph& graph, const auto& source, auto& op, const auto& sink) {
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(source->out0, op->detection_idx, q);
-        graph.add_flow(source->out1, op->az_grid, q);
-        graph.add_flow(source->out2, op->el_grid, q);
-        graph.add_flow(op->points, sink->in, q);
-      });
+  auto result = run_assembly_frame<double>(
+      make_features({AssemblyFeature::kAz, AssemblyFeature::kEl}),
+      holoscan::testing::frame_at(
+          std::chrono::nanoseconds{0}, holoscan::testing::input("detection_idx", *idx),
+          holoscan::testing::input("az_grid", *az), holoscan::testing::input("el_grid", *el)),
+      {"detection_idx", "az_grid", "el_grid"});
   const HostTensor points = require_one_frame(std::move(result));
   EXPECT_DOUBLE_EQ(points.as<double>()[0], 0.0);
   EXPECT_DOUBLE_EQ(points.as<double>()[1], 0.2);

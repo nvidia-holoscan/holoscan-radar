@@ -4,6 +4,7 @@
 // Simulator-backed dense-DDM integration coverage for DopplerNotchOp.
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
@@ -34,7 +35,7 @@
 #include "radar_common/sim/scene.hpp"
 #include "utils/bin_model.hpp"
 #include "utils/mimo_reference.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/integration_graph_utils.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -98,16 +99,16 @@ std::vector<std::complex<double>> zadoff_chu_codes() {
   return codes;
 }
 
-void bind_output(holoscan::CompileOptions* options, const char* op, const char* port) {
+void bind_output(holoscan::CompileOptions* options, const std::string& op, const char* port) {
   options->deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = op, .output_port = port, .device = holoscan::DeviceId{0}});
 }
 
 PipelineResult run_pipeline(const sim::SimResult& simulated, const hr::DDMCodeDescriptor& code,
                             bool apply_notch) {
-  rt::detail::FrameBank::reset();
-  rt::detail::FrameBankB::reset();
-  rt::detail::FrameBank::input_frames = {
+  rt::integration::FrameBank::reset();
+  rt::integration::FrameBankB::reset();
+  rt::integration::FrameBank::input_frames = {
       rt::complex_cube_to_device<float>(simulated.cube, simulated.shape)};
 
   const hr::FMCWWaveformDescriptor waveform = waveform_descriptor();
@@ -121,26 +122,37 @@ PipelineResult run_pipeline(const sim::SimResult& simulated, const hr::DDMCodeDe
   hr::MaxTensorExtents demux_extents = doppler_extents;
   demux_extents.max_tx = kNumTx;
 
-  holoscan::Graph graph{"ddm-notch-pipeline"};
-  const auto source = graph.op<rt::detail::TensorSourceOp>("source");
-  auto range = graph.op<hr::FMCWRangeProcessorOp<float>>("range", range_extents);
+  static uint64_t graph_run = 0;
+  const std::string run_suffix =
+      "-" + std::to_string(static_cast<int64_t>(getpid())) + "-" + std::to_string(graph_run++);
+  const std::string graph_name = "ddm-notch-pipeline" + run_suffix;
+  const std::string source_name = "source" + run_suffix;
+  const std::string range_name = "range" + run_suffix;
+  const std::string doppler_name = "doppler" + run_suffix;
+  const std::string demux_name = "demux" + run_suffix;
+  const std::string notch_name = "notch" + run_suffix;
+  const std::string map_sink_name = "map_sink" + run_suffix;
+  const std::string axis_sink_name = "axis_sink" + run_suffix;
+  holoscan::Graph graph{graph_name};
+  const auto source = graph.op<rt::integration::TensorSourceOp>(source_name);
+  auto range = graph.op<hr::FMCWRangeProcessorOp<float>>(range_name, range_extents);
   hr::FMCWRangeProcessorParams range_params;
   range_params.waveform = waveform;
   range.set_params(std::move(range_params));
 
-  auto doppler = graph.op<hr::FMCWDopplerProcessorOp<float>>("doppler", doppler_extents);
+  auto doppler = graph.op<hr::FMCWDopplerProcessorOp<float>>(doppler_name, doppler_extents);
   hr::FMCWDopplerProcessorParams doppler_params;
   doppler_params.waveform = waveform;
   doppler_params.doppler_window.type = hr::WindowType::kHann;
   doppler.set_params(std::move(doppler_params));
 
-  auto demux = graph.op<hr::DDMDenseDemultiplexOp<float>>("demux", demux_extents);
+  auto demux = graph.op<hr::DDMDenseDemultiplexOp<float>>(demux_name, demux_extents);
   hr::DDMDenseDemultiplexParams demux_params;
   demux_params.ddm_code = code;
   demux.set_params(std::move(demux_params));
 
-  const auto map_sink = graph.op<rt::detail::TensorCaptureOp>("map_sink");
-  const auto axis_sink = graph.op<rt::detail::TensorCaptureBOp>("axis_sink");
+  const auto map_sink = graph.op<rt::integration::TensorCaptureOp>(map_sink_name);
+  const auto axis_sink = graph.op<rt::integration::TensorCaptureBOp>(axis_sink_name);
 
   const holoscan::ConnectionOptions queue{.queue_depth = 4U};
   graph.add_flow(source->out, range->adc_cube, queue);
@@ -148,7 +160,7 @@ PipelineResult run_pipeline(const sim::SimResult& simulated, const hr::DDMCodeDe
   graph.add_flow(doppler->velocity_bins, demux->velocity_bins, queue);
   graph.add_flow(doppler->rd_maps, demux->rd_maps, queue);
   if (apply_notch) {
-    auto notch = graph.op<hr::DopplerNotchOp<float>>("notch", demux_extents);
+    auto notch = graph.op<hr::DopplerNotchOp<float>>(notch_name, demux_extents);
     notch.set_params(hr::DopplerNotchParams{});
     graph.add_flow(demux->velocity_bins_out, notch->velocity_bins, queue);
     graph.add_flow(demux->rd_maps_out, notch->rd_maps, queue);
@@ -160,15 +172,15 @@ PipelineResult run_pipeline(const sim::SimResult& simulated, const hr::DDMCodeDe
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
   holoscan::CompileOptions options;
-  bind_output(&options, "source", "out");
-  bind_output(&options, "range", "range_profiles");
-  bind_output(&options, "range", "range_bins");
-  bind_output(&options, "doppler", "velocity_bins");
-  bind_output(&options, "doppler", "rd_maps");
-  bind_output(&options, "demux", "velocity_bins_out");
-  bind_output(&options, "demux", "rd_maps_out");
+  bind_output(&options, source_name, "out");
+  bind_output(&options, range_name, "range_profiles");
+  bind_output(&options, range_name, "range_bins");
+  bind_output(&options, doppler_name, "velocity_bins");
+  bind_output(&options, doppler_name, "rd_maps");
+  bind_output(&options, demux_name, "velocity_bins_out");
+  bind_output(&options, demux_name, "rd_maps_out");
   if (apply_notch)
-    bind_output(&options, "notch", "rd_maps_out");
+    bind_output(&options, notch_name, "rd_maps_out");
 
   PipelineResult result;
   const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
@@ -178,21 +190,21 @@ PipelineResult run_pipeline(const sim::SimResult& simulated, const hr::DDMCodeDe
     return result;
 
   holoscan::RunSession session = holoscan::run_async(plan);
-  const auto deadline = std::chrono::steady_clock::now() + rt::detail::kHarnessDeadline;
+  const auto deadline = std::chrono::steady_clock::now() + rt::integration::kHarnessDeadline;
   while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
     std::size_t maps = 0;
     std::size_t axes = 0;
     {
-      const std::lock_guard lock(rt::detail::FrameBank::mutex);
-      maps = rt::detail::FrameBank::captured.size();
+      const std::lock_guard lock(rt::integration::FrameBank::mutex);
+      maps = rt::integration::FrameBank::captured.size();
     }
     {
-      const std::lock_guard lock(rt::detail::FrameBankB::mutex);
-      axes = rt::detail::FrameBankB::captured.size();
+      const std::lock_guard lock(rt::integration::FrameBankB::mutex);
+      axes = rt::integration::FrameBankB::captured.size();
     }
     if (maps >= 1U && axes >= 1U)
       break;
-    std::this_thread::sleep_for(rt::detail::kHarnessPoll);
+    std::this_thread::sleep_for(rt::integration::kHarnessPoll);
   }
   session.request_stop();
   session.wait();
@@ -200,15 +212,15 @@ PipelineResult run_pipeline(const sim::SimResult& simulated, const hr::DDMCodeDe
     result.diagnostics.push_back(std::string(diagnostic.token));
   }
   {
-    const std::lock_guard lock(rt::detail::FrameBank::mutex);
-    if (!rt::detail::FrameBank::captured.empty()) {
-      result.maps = std::move(rt::detail::FrameBank::captured.front());
+    const std::lock_guard lock(rt::integration::FrameBank::mutex);
+    if (!rt::integration::FrameBank::captured.empty()) {
+      result.maps = std::move(rt::integration::FrameBank::captured.front());
     }
   }
   {
-    const std::lock_guard lock(rt::detail::FrameBankB::mutex);
-    if (!rt::detail::FrameBankB::captured.empty()) {
-      result.velocity = std::move(rt::detail::FrameBankB::captured.front());
+    const std::lock_guard lock(rt::integration::FrameBankB::mutex);
+    if (!rt::integration::FrameBankB::captured.empty()) {
+      result.velocity = std::move(rt::integration::FrameBankB::captured.front());
     }
   }
   return result;

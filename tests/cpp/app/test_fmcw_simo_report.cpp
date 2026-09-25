@@ -20,7 +20,7 @@
 
 #include "radar_app/report/report_ops.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/integration_graph_utils.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
@@ -76,31 +76,32 @@ class ReportSourceOp final : public holoscan::Operator<> {
     emitted_ = true;
     if (clustered_) {
       auto result =
-          testing::detail::emit_bank_frame(labels, context, frames_.labels, "ReportSourceOp");
+          testing::integration::emit_bank_frame(labels, context, frames_.labels, "ReportSourceOp");
       if (!result) {
         return result;
       }
-      result = testing::detail::emit_bank_frame(sizes, context, frames_.sizes, "ReportSourceOp");
+      result =
+          testing::integration::emit_bank_frame(sizes, context, frames_.sizes, "ReportSourceOp");
       if (!result) {
         return result;
       }
     }
-    auto result =
-        testing::detail::emit_bank_frame(range_bins, context, frames_.range_bins, "ReportSourceOp");
+    auto result = testing::integration::emit_bank_frame(range_bins, context, frames_.range_bins,
+                                                        "ReportSourceOp");
     if (!result) {
       return result;
     }
-    result = testing::detail::emit_bank_frame(velocity_bins, context, frames_.velocity_bins,
-                                              "ReportSourceOp");
+    result = testing::integration::emit_bank_frame(velocity_bins, context, frames_.velocity_bins,
+                                                   "ReportSourceOp");
     if (!result) {
       return result;
     }
-    result = testing::detail::emit_bank_frame(detection_idx, context, frames_.detection_idx,
-                                              "ReportSourceOp");
+    result = testing::integration::emit_bank_frame(detection_idx, context, frames_.detection_idx,
+                                                   "ReportSourceOp");
     if (!result) {
       return result;
     }
-    return testing::detail::emit_bank_frame(points, context, frames_.points, "ReportSourceOp");
+    return testing::integration::emit_bank_frame(points, context, frames_.points, "ReportSourceOp");
   }
 
   holoscan::Output<holoscan::Tensor> points{"points"};
@@ -165,7 +166,7 @@ std::vector<std::string> run_report(ReportFrames frames, app::DetectionReportOp:
   }
 
   holoscan::RunSession session = holoscan::run_async(plan);
-  const auto deadline = std::chrono::steady_clock::now() + testing::detail::kHarnessDeadline;
+  const auto deadline = std::chrono::steady_clock::now() + testing::integration::kHarnessDeadline;
   while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
     {
       const std::lock_guard lock(app::AppFrameBank::mutex);
@@ -173,7 +174,7 @@ std::vector<std::string> run_report(ReportFrames frames, app::DetectionReportOp:
         break;
       }
     }
-    std::this_thread::sleep_for(testing::detail::kHarnessPoll);
+    std::this_thread::sleep_for(testing::integration::kHarnessPoll);
   }
   session.request_stop();
   session.wait();
