@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace holoscan::radar::perf {
@@ -33,6 +34,7 @@ struct TimingCollector {
 
   std::vector<Clock::time_point> starts;
   std::vector<Clock::time_point> ends;
+  std::vector<int64_t> live_emissions;  // changed-value sideband frame indexes
 
   // ms from graph construction to the first tick: setup / "ready-to-tick".
   double setup_ms() const { return to_ms(t_first_tick - t_construct); }

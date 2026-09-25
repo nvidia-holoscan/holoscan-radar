@@ -56,6 +56,8 @@ struct Options {
   std::string output;
   std::string text;
   bool quiet{false};
+  bool validate_only{false};
+  bool list_cases{false};
   std::string scope{"limited"};
   std::vector<std::string> sizes;  // empty = tier default
   bool sizes_all{false};
@@ -81,6 +83,8 @@ template <typename Traits>
 void print_help() {
   std::cout << Traits::tool_name() << " — " << Traits::tool_description() << "\n\n"
             << "Usage: " << Traits::tool_name() << " [options]\n\n"
+            << "  --validate        Validate every YAML case without running a Graph\n"
+            << "  --list-cases      Validate and list selected cases without a GPU\n"
             << "  --output <path>   Write machine-readable JSON report\n"
                "  --text <path>     Also write the text summary to a file\n"
                "  --quiet           Suppress the stdout text summary\n"
@@ -112,6 +116,10 @@ bool parse_args(int argc, char** argv, Options* opt) {
     if (a == "--help" || a == "-h") {
       print_help<Traits>();
       std::exit(0);
+    } else if (a == "--validate") {
+      opt->validate_only = true;
+    } else if (a == "--list-cases") {
+      opt->list_cases = true;
     } else if (a == "--output") {
       opt->output = next("--output");
     } else if (a == "--text") {
@@ -177,31 +185,36 @@ inline void default_log_level() {
 template <typename Traits>
 ProfileSuite load_adapter_suite() {
   const std::string operator_name = std::string(Traits::tool_name()).substr(5);
-  return load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / (operator_name + ".yaml"),
-      operator_name);
+  const auto path =
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / (operator_name + ".yaml");
+  return load_profile_suite(path, operator_name);
 }
 
 template <typename Traits>
-std::vector<typename Traits::Scenario> select_scenarios(const ProfileSuite& suite,
-                                                        const Options& opt) {
-  return select_validated_cases<typename Traits::Scenario>(
+std::vector<SelectedScenario<typename Traits::Scenario>> select_scenarios(const ProfileSuite& suite,
+                                                                          const Options& opt) {
+  return select_validated_scenarios<typename Traits::Scenario>(
       suite, opt.scope, opt.sizes_all ? std::vector<std::string>{} : opt.sizes,
       [](const ProfileCase& c, const std::vector<int64_t>& shape) {
-        return Traits::parse_case(c, shape);
+        auto scenario = Traits::parse_case(c, shape);
+        const std::string port =
+            c.override_value ? (*c.override_value)["port"].as<std::string>() : std::string{};
+        if (base_row(scenario).live_port != port)
+          throw std::invalid_argument("adapter live port disagrees with YAML");
+        return scenario;
       });
 }
 
 // The YAML suite owns the size ladder. Each adapter only translates one shape
 // into the scale fields meaningful for its operator.
 template <typename Traits>
-void record_exercised_sizes(const ProfileSuite& suite,
-                            const std::vector<typename Traits::Scenario>& scenarios,
-                            PerfReport* report) {
+void record_exercised_sizes(
+    const ProfileSuite& suite,
+    const std::vector<SelectedScenario<typename Traits::Scenario>>& scenarios, PerfReport* report) {
   std::vector<std::string> used;
   for (const auto& sc : scenarios) {
-    if (std::find(used.begin(), used.end(), sc.size_id) == used.end()) {
-      used.push_back(sc.size_id);
+    if (std::find(used.begin(), used.end(), sc.scenario.size_id) == used.end()) {
+      used.push_back(sc.scenario.size_id);
     }
   }
   for (size_t i = 0; i < kProfiles.size(); ++i) {
@@ -216,16 +229,20 @@ void record_exercised_sizes(const ProfileSuite& suite,
 // describes operator-specific result fields. The driver owns the repetitions,
 // live-frame plan, and both report rows for every operator.
 template <typename Traits>
-void run_adapter_case(const typename Traits::Scenario& scenario, const RunSettings& settings,
-                      PerfReport* report) {
+void run_adapter_case(const SelectedScenario<typename Traits::Scenario>& selected,
+                      const RunSettings& settings, PerfReport* report) {
+  const auto& scenario = selected.scenario;
   if constexpr (requires { validate_run_settings(scenario, settings); }) {
     validate_run_settings(scenario, settings);
   }
   ResultRow row = base_row(scenario);
   row.scenario_id = scenario.id;
   row.size_id = scenario.size_id;
+  if (row.live_port != selected.live_port)
+    throw std::invalid_argument("adapter live port disagrees with YAML case: " + scenario.id);
+  row.live_port = selected.live_port;
   measure_scenario(
-      settings, !row.live_port.empty(),
+      settings, !selected.live_port.empty(),
       [&](int /*repeat*/, const RunPlan& plan) {
         return run_graph(scenario, plan);
       },
@@ -234,16 +251,17 @@ void run_adapter_case(const typename Traits::Scenario& scenario, const RunSettin
         if constexpr (requires { decorate_row(compute, scenario); }) {
           decorate_row(compute, scenario);
         }
-      });
+      },
+      selected.cached);
 }
 
 template <typename Traits>
-void run_all_scenarios(const std::vector<typename Traits::Scenario>& scenarios, const Options& opt,
-                       PerfReport* report) {
+void run_all_scenarios(const std::vector<SelectedScenario<typename Traits::Scenario>>& scenarios,
+                       const Options& opt, PerfReport* report) {
   const size_t n = scenarios.size();
   bool stopped_early = false;
   for (size_t i = 0; i < n; ++i) {
-    std::cerr << "[" << (i + 1) << "/" << n << "] " << scenarios[i].id << std::flush;
+    std::cerr << "[" << (i + 1) << "/" << n << "] " << scenarios[i].scenario.id << std::flush;
     const auto t0 = Clock::now();
     run_adapter_case<Traits>(scenarios[i], opt.rs, report);
     const double elapsed_s = to_ms(Clock::now() - t0) / 1000.0;
@@ -316,20 +334,35 @@ int perf_main(int argc, char** argv) {
   if (!detail::parse_args<Traits>(argc, argv, &opt)) {
     return 2;
   }
-  if (!detail::ensure_cuda_device(Traits::tool_name())) {
-    return 1;
-  }
-  detail::default_log_level();
-
   ProfileSuite suite;
-  std::vector<typename Traits::Scenario> scenarios;
+  std::vector<SelectedScenario<typename Traits::Scenario>> scenarios;
   try {
     suite = detail::load_adapter_suite<Traits>();
     scenarios = detail::select_scenarios<Traits>(suite, opt);
   } catch (const std::exception& e) {
-    std::cerr << "error: " << e.what() << "\n";
+    const std::string operator_name = std::string(Traits::tool_name()).substr(5);
+    const auto path =
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / (operator_name + ".yaml");
+    std::cerr << "error: " << path << ": " << e.what() << "\n";
     return 2;
   }
+  if (opt.validate_only || opt.list_cases) {
+    if (opt.list_cases) {
+      for (const auto& selected : scenarios) {
+        std::cout << selected.scenario.id << "\t" << selected.scenario.size_id;
+        if (!selected.live_port.empty())
+          std::cout << "\t" << selected.live_port;
+        std::cout << "\n";
+      }
+    } else {
+      std::cout << "validated " << suite.cases.size() << " cases; " << scenarios.size()
+                << " selected\n";
+    }
+    return 0;
+  }
+  if (!detail::ensure_cuda_device(Traits::tool_name()))
+    return 1;
+  detail::default_log_level();
 
   PerfReport report;
   report.provenance = capture_provenance();
@@ -347,7 +380,7 @@ int perf_main(int argc, char** argv) {
     warm.measured_frames = 2;
     warm.repeats = 1;
     PerfReport discarded;
-    const auto baseline = select_validated_cases<typename Traits::Scenario>(
+    const auto baseline = select_validated_scenarios<typename Traits::Scenario>(
         suite, "minimal", {"small"}, [](const ProfileCase& c, const std::vector<int64_t>& shape) {
           return Traits::parse_case(c, shape);
         });

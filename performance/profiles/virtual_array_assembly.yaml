@@ -8,12 +8,8 @@ profiles:
   large: {shape: [8, 32, 256, 1024]}
 live_ports: [wavelength]
 cases:
-  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {overlap_policy: dedup}}
-  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {overlap_policy: dedup}}
-  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {overlap_policy: dedup}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {overlap_policy: dedup}}
   - {id: average-medium, profile: medium, scopes: [limited], parameters: {overlap_policy: average}}
   - {id: keep-all-medium, profile: medium, scopes: [limited], parameters: {overlap_policy: keep_all}}
-  - {id: wavelength-small, profile: small, scopes: [overrides, moderate], parameters: {overlap_policy: dedup}, override: {port: wavelength, value: 0.033}}
-  - {id: wavelength-medium, profile: medium, scopes: [overrides, moderate], parameters: {overlap_policy: dedup}, override: {port: wavelength, value: 0.033}}
-  - {id: wavelength-large, profile: large, scopes: [overrides, moderate], parameters: {overlap_policy: dedup}, override: {port: wavelength, value: 0.033}}
+  - {id: "wavelength-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {overlap_policy: dedup}, override: {port: wavelength, value: 0.033}}
   - {id: average-large, profile: large, scopes: [thorough], parameters: {overlap_policy: average}}

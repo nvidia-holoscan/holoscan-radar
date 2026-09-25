@@ -8,20 +8,10 @@ profiles:
   large: {shape: [16, 41, 11, 32, 128]}
 live_ports: [array_geometry, az_coordinates, el_coordinates, array_taper]
 cases:
-  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {array_taper: none}}
-  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {array_taper: none}}
-  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {array_taper: none}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {array_taper: none}}
   - {id: tapered-medium, profile: medium, scopes: [limited], parameters: {array_taper: hann}}
-  - {id: geometry-small, profile: small, scopes: [overrides, moderate], parameters: {array_taper: none}, override: {port: array_geometry, value: spacing_045}}
-  - {id: geometry-medium, profile: medium, scopes: [overrides, moderate], parameters: {array_taper: none}, override: {port: array_geometry, value: spacing_045}}
-  - {id: geometry-large, profile: large, scopes: [overrides, moderate], parameters: {array_taper: none}, override: {port: array_geometry, value: spacing_045}}
-  - {id: az-small, profile: small, scopes: [overrides, moderate], parameters: {array_taper: none}, override: {port: az_coordinates, value: shift_005}}
-  - {id: az-medium, profile: medium, scopes: [overrides, moderate], parameters: {array_taper: none}, override: {port: az_coordinates, value: shift_005}}
-  - {id: az-large, profile: large, scopes: [overrides, moderate], parameters: {array_taper: none}, override: {port: az_coordinates, value: shift_005}}
-  - {id: el-small, profile: small, scopes: [overrides], parameters: {array_taper: none}, override: {port: el_coordinates, value: shift_005}}
-  - {id: el-medium, profile: medium, scopes: [overrides], parameters: {array_taper: none}, override: {port: el_coordinates, value: shift_005}}
-  - {id: el-large, profile: large, scopes: [overrides], parameters: {array_taper: none}, override: {port: el_coordinates, value: shift_005}}
-  - {id: taper-small, profile: small, scopes: [overrides, moderate], parameters: {array_taper: none}, override: {port: array_taper, value: hann}}
-  - {id: taper-medium, profile: medium, scopes: [overrides, moderate], parameters: {array_taper: none}, override: {port: array_taper, value: hann}}
-  - {id: taper-large, profile: large, scopes: [overrides, moderate], parameters: {array_taper: none}, override: {port: array_taper, value: hann}}
+  - {id: "geometry-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {array_taper: none}, override: {port: array_geometry, value: spacing_045}}
+  - {id: "az-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {array_taper: none}, override: {port: az_coordinates, value: shift_005}}
+  - {id: "el-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {array_taper: none}, override: {port: el_coordinates, value: shift_005}}
+  - {id: "taper-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {array_taper: none}, override: {port: array_taper, value: hann}}
   - {id: tapered-geometry-medium, profile: medium, scopes: [thorough], parameters: {array_taper: hann}, override: {port: array_geometry, value: spacing_045}}

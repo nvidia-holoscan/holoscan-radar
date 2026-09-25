@@ -11,13 +11,55 @@
 #include <vector>
 
 #include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/sdk/live_override_payloads.hpp"
+#include "radar_common/sdk/tensor_io.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
+#include "radar_schemas/window_spec_bridge.hpp"
 
 namespace holoscan::radar::perf {
 namespace hr = holoscan::radar;
+
+// Common pool declarations for typed angle-source ports. Each adapter keeps
+// the port names and wires the matching operator input explicitly.
+inline constexpr std::size_t kHostPayloadSpan = 4096U * sizeof(double);
+
+template <typename Output>
+void setup_device_input(holoscan::OperatorSpec& spec, Output& output, std::size_t span) {
+  constexpr holoscan::TensorRepresentation representation{
+      .memory_kind = holoscan::MemoryKind::kCudaDevice,
+      .dtype = std::nullopt,
+      .rank = std::nullopt,
+  };
+  spec.output(output).produces_tensor(hr::pooled_tensor_output(representation, 8U, span));
+}
+
+template <typename Output>
+void setup_host_payload(holoscan::OperatorSpec& spec, Output& output, std::size_t rank,
+                        std::size_t slots) {
+  const holoscan::TensorRepresentation representation{
+      .memory_kind = holoscan::MemoryKind::kHost,
+      .dtype = DLDataType{kDLFloat, 64U, 1U},
+      .rank = rank,
+  };
+  spec.output(output).max_emits_per_compute(1U).produces_tensor(
+      hr::pooled_tensor_output(representation, slots, kHostPayloadSpan));
+}
+
+template <typename Value>
+void setup_scalar_payload(holoscan::OperatorSpec& spec, holoscan::Output<Value>& output) {
+  spec.output(output).max_emits_per_compute(1U);
+}
+
+template <typename Value>
+holoscan::expected<void, holoscan::Error> emit_scalar_payload(holoscan::Output<Value>& output,
+                                                              Value value,
+                                                              holoscan::TimePoint time) {
+  return output.emit(std::move(value), holoscan::EmitOptions{.capture_time = time});
+}
 
 inline std::vector<double> linspace(double start, double stop, int64_t n) {
   std::vector<double> out(static_cast<size_t>(n));
@@ -87,6 +129,21 @@ holoscan::expected<void, holoscan::Error> emit_wire_doubles(holoscan::Output<Wir
                             holoscan::EmitOptions{.capture_time = capture_time});
 }
 
+inline holoscan::expected<void, holoscan::Error> emit_geometry_payload(
+    holoscan::Output<hr::WireArrayGeometry>& output, const hr::ArrayGeometry& geometry,
+    holoscan::TimePoint time) {
+  const auto packed = hr::pack_array_geometry(geometry);
+  const std::array<int64_t, 2> shape{geometry.num_elements() + 1, 3};
+  return emit_wire_doubles(output, hr::to_wire(geometry), packed, shape, time);
+}
+
+inline holoscan::expected<void, holoscan::Error> emit_window_payload(
+    holoscan::Output<hr::WireWindowSpec>& output, const hr::WindowSpec& window,
+    holoscan::TimePoint time) {
+  const std::array<int64_t, 1> shape{static_cast<int64_t>(window.coefficients.size())};
+  return emit_wire_doubles(output, hr::to_wire(window), window.coefficients, shape, time);
+}
+
 inline hr::SpatialSmoothingOverride smoothing_wire(const std::vector<int64_t>& smoothing) {
   hr::SpatialSmoothingOverride wire;
   wire.count = static_cast<int64_t>(smoothing.size());
@@ -97,6 +154,12 @@ inline hr::SpatialSmoothingOverride smoothing_wire(const std::vector<int64_t>& s
     wire.second = smoothing[1];
   }
   return wire;
+}
+
+inline holoscan::expected<void, holoscan::Error> emit_smoothing_payload(
+    holoscan::Output<hr::SpatialSmoothingOverride>& output, const std::vector<int64_t>& smoothing,
+    holoscan::TimePoint time) {
+  return emit_scalar_payload(output, smoothing_wire(smoothing), time);
 }
 
 }  // namespace holoscan::radar::perf

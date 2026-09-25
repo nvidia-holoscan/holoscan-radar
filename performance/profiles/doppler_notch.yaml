@@ -8,20 +8,12 @@ profiles:
   large: {shape: [256, 2048]}
 live_ports: [center_velocity, stop_half_width, transition_width]
 cases:
-  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {transition: hard, mimo: false}}
-  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {transition: hard, mimo: false}}
-  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {transition: hard, mimo: false}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {transition: hard, mimo: false}}
   - {id: cosine-medium, profile: medium, scopes: [limited], parameters: {transition: cosine, mimo: false}}
   - {id: mimo-medium, profile: medium, scopes: [limited], parameters: {transition: hard, mimo: true}}
   - {id: noncyclic-medium, profile: medium, scopes: [limited], parameters: {transition: hard, mimo: false, cyclic: false}}
-  - {id: center-small, profile: small, scopes: [overrides, moderate], parameters: {transition: hard, mimo: false}, override: {port: center_velocity, value: 1.0}}
-  - {id: center-medium, profile: medium, scopes: [overrides, moderate], parameters: {transition: hard, mimo: false}, override: {port: center_velocity, value: 1.0}}
-  - {id: center-large, profile: large, scopes: [overrides, moderate], parameters: {transition: hard, mimo: false}, override: {port: center_velocity, value: 1.0}}
-  - {id: stop-small, profile: small, scopes: [overrides], parameters: {transition: hard, mimo: false}, override: {port: stop_half_width, value: 1.0}}
-  - {id: stop-medium, profile: medium, scopes: [overrides], parameters: {transition: hard, mimo: false}, override: {port: stop_half_width, value: 1.0}}
-  - {id: stop-large, profile: large, scopes: [overrides], parameters: {transition: hard, mimo: false}, override: {port: stop_half_width, value: 1.0}}
-  - {id: transition-small, profile: small, scopes: [overrides], parameters: {transition: hard, mimo: false}, override: {port: transition_width, value: 1.0}}
-  - {id: transition-medium, profile: medium, scopes: [overrides], parameters: {transition: hard, mimo: false}, override: {port: transition_width, value: 1.0}}
-  - {id: transition-large, profile: large, scopes: [overrides], parameters: {transition: hard, mimo: false}, override: {port: transition_width, value: 1.0}}
+  - {id: "center-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {transition: hard, mimo: false}, override: {port: center_velocity, value: 1.0}}
+  - {id: "stop-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {transition: hard, mimo: false}, override: {port: stop_half_width, value: 1.0}}
+  - {id: "transition-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {transition: hard, mimo: false}, override: {port: transition_width, value: 1.0}}
   - {id: cosine-mimo-medium, profile: medium, scopes: [moderate], parameters: {transition: cosine, mimo: true}}
   - {id: noncyclic-mimo-large, profile: large, scopes: [thorough], parameters: {transition: cosine, mimo: true, cyclic: false}}

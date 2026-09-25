@@ -71,10 +71,18 @@ struct ScenarioSamples {
 // The following frame exercises Params reversion and is excluded from stats.
 template <typename RunRepFn>
 ScenarioSamples collect_scenario_samples(const RunSettings& rs, const RunPlan& plan,
-                                         RunRepFn run_rep) {
+                                         RunRepFn run_rep, bool expect_prime = false) {
   ScenarioSamples s;
   for (int rep = 0; rep < rs.repeats; ++rep) {
     TimingCollector collector = run_rep(rep, plan);
+    // Cached-plan scenarios prime the changed value on frame zero, then
+    // emit it once more on the measured changed frame.
+    const std::vector<int64_t> expected = expect_prime ? std::vector<int64_t>{0, plan.override_at}
+                                                       : std::vector<int64_t>{plan.override_at};
+    if (plan.has_override() && collector.live_emissions != expected)
+      throw std::runtime_error("performance live emission count or frame mismatch");
+    if (!plan.has_override() && !collector.live_emissions.empty())
+      throw std::runtime_error("performance baseline emitted a live override");
     s.setup.push_back(collector.setup_ms());
     const auto lat = collector.frame_latencies_ms();
     if (lat.size() != static_cast<size_t>(plan.total_frames) ||
@@ -145,9 +153,11 @@ void append_scenario_rows(ResultRow row, const ScenarioSamples& samples, PerfRep
 // and write both report buckets. Only the Graph callback and metadata vary.
 template <typename RunRep, typename Decorate>
 void measure_scenario(const RunSettings& settings, bool has_override, RunRep&& run_rep,
-                      ResultRow row, PerfReport* report, Decorate&& decorate) {
+                      ResultRow row, PerfReport* report, Decorate&& decorate,
+                      bool expect_prime = false) {
   const RunPlan plan = make_run_plan(settings, has_override);
-  const auto samples = collect_scenario_samples(settings, plan, std::forward<RunRep>(run_rep));
+  const auto samples =
+      collect_scenario_samples(settings, plan, std::forward<RunRep>(run_rep), expect_prime);
   append_scenario_rows(std::move(row), samples, report, std::forward<Decorate>(decorate));
 }
 

@@ -208,7 +208,9 @@ in Jira.
       throughput units or notes. `performance/profiles/<operator>.yaml` names
       small, medium, and large profiles and curated cases for all five scopes.
       Limited includes every backend; Overrides covers every `[live]` input
-      alone at all three sizes. No implicit Cartesian product.
+      alone at all three sizes. Use an explicit `{profile}` family only when
+      cases share parameters and tags across named sizes. No implicit Cartesian
+      product. Run `--validate` and `--list-cases` before GPU profiling.
 - [ ] Wire **every output port** (terminal sink on the primary sparse/dense
       result; null sinks on the rest) so the operator ticks.
 - [ ] **Process warmup** — the shared driver runs a discarded small-profile

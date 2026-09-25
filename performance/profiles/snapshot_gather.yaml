@@ -8,12 +8,8 @@ profiles:
   large: {shape: [32, 512, 1024, 4096]}
 live_ports: [snapshot_window]
 cases:
-  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {window: [1, 1]}}
-  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {window: [1, 1]}}
-  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {window: [1, 1]}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {window: [1, 1]}}
   - {id: point-medium, profile: medium, scopes: [limited], parameters: {window: [0, 0]}}
   - {id: wide-medium, profile: medium, scopes: [limited], parameters: {window: [2, 2]}}
-  - {id: window-small, profile: small, scopes: [overrides, moderate], parameters: {window: [0, 0]}, override: {port: snapshot_window, value: [1, 1]}}
-  - {id: window-medium, profile: medium, scopes: [overrides, moderate], parameters: {window: [0, 0]}, override: {port: snapshot_window, value: [1, 1]}}
-  - {id: window-large, profile: large, scopes: [overrides, moderate], parameters: {window: [0, 0]}, override: {port: snapshot_window, value: [1, 1]}}
+  - {id: "window-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {window: [0, 0]}, override: {port: snapshot_window, value: [1, 1]}}
   - {id: wide-window-medium, profile: medium, scopes: [thorough], parameters: {window: [1, 1]}, override: {port: snapshot_window, value: [2, 2]}}

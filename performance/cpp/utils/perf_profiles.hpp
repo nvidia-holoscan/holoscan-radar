@@ -65,6 +65,7 @@ struct ProfileCase {
   std::vector<std::string> scopes;
   YAML::Node parameters;
   std::optional<YAML::Node> override_value;
+  int source_line{0};
 };
 
 struct ProfileSuite {
@@ -144,20 +145,18 @@ inline ProfileSuite load_profile_suite(const std::filesystem::path& path,
     throw std::invalid_argument("cases must be a sequence");
   std::set<std::string> ids;
   for (const auto& item : cases) {
-    require_keys(item, {"id", "profile", "scopes", "parameters", "override"}, "case");
-    for (const char* key : {"id", "profile", "scopes", "parameters"}) {
+    require_keys(item, {"id", "profile", "profiles", "scopes", "parameters", "override"}, "case");
+    for (const char* key : {"id", "scopes", "parameters"}) {
       if (!item[key])
         throw std::invalid_argument("case missing required key: " + std::string(key));
     }
+    if (static_cast<bool>(item["profile"]) == static_cast<bool>(item["profiles"]))
+      throw std::invalid_argument("case requires exactly one of profile or profiles");
     ProfileCase c;
     c.id = item["id"].as<std::string>();
     if (c.id.empty())
       throw std::invalid_argument("case ID cannot be empty");
-    c.profile = item["profile"].as<std::string>();
-    if (!ids.insert(c.id).second)
-      throw std::invalid_argument("duplicate case: " + c.id);
-    if (!known_profile(c.profile))
-      throw std::invalid_argument("unknown profile: " + c.profile);
+    c.source_line = item.Mark().line + 1;
     const YAML::Node scopes = item["scopes"];
     if (!scopes.IsSequence() || scopes.size() == 0) {
       throw std::invalid_argument("case scopes must be a nonempty sequence");
@@ -188,7 +187,38 @@ inline ProfileSuite load_profile_suite(const std::filesystem::path& path,
       if (!live_set.contains(port))
         throw std::invalid_argument("unknown live port: " + port);
     }
-    result.cases.push_back(std::move(c));
+    std::vector<std::string> profiles;
+    if (item["profile"]) {
+      profiles.push_back(item["profile"].as<std::string>());
+      if (c.id.find("{profile}") != std::string::npos)
+        throw std::invalid_argument("single case ID cannot contain {profile}: " + c.id);
+    } else {
+      const auto family = item["profiles"];
+      if (!family.IsSequence() || family.size() == 0)
+        throw std::invalid_argument("case profiles must be a nonempty sequence");
+      const auto marker = c.id.find("{profile}");
+      if (marker == std::string::npos || c.id.find("{profile}", marker + 9) != std::string::npos)
+        throw std::invalid_argument("case family ID requires one {profile}: " + c.id);
+      std::set<std::string> seen_profiles;
+      for (const auto& profile : family) {
+        const auto name = profile.as<std::string>();
+        if (!seen_profiles.insert(name).second)
+          throw std::invalid_argument("duplicate family profile: " + name);
+        profiles.push_back(name);
+      }
+    }
+    for (const auto& profile : profiles) {
+      if (!known_profile(profile))
+        throw std::invalid_argument("unknown profile: " + profile);
+      ProfileCase expanded = c;
+      expanded.profile = profile;
+      const auto marker = expanded.id.find("{profile}");
+      if (marker != std::string::npos)
+        expanded.id.replace(marker, 9, profile);
+      if (!ids.insert(expanded.id).second)
+        throw std::invalid_argument("duplicate case: " + expanded.id);
+      result.cases.push_back(std::move(expanded));
+    }
   }
   for (const auto profile : kProfiles) {
     bool baseline = false;
@@ -211,25 +241,54 @@ inline ProfileSuite load_profile_suite(const std::filesystem::path& path,
   return result;
 }
 
+template <typename Scenario>
+struct SelectedScenario {
+  Scenario scenario;
+  std::string live_port;
+  bool cached{false};
+};
+
+template <typename Scenario, typename Parse>
+std::vector<SelectedScenario<Scenario>> select_validated_scenarios(
+    const ProfileSuite& suite, std::string_view scope, const std::vector<std::string>& sizes,
+    Parse&& parse) {
+  std::set<std::string> selected;
+  for (const auto& c : suite.select(scope))
+    selected.insert(c.id);
+  std::vector<SelectedScenario<Scenario>> result;
+  for (const auto& c : suite.cases) {
+    try {
+      Scenario scenario = parse(c, suite.shape_for(c.profile));
+      if (scenario.id != c.id || scenario.size_id != c.profile)
+        throw std::invalid_argument("adapter changed YAML case identity");
+      if (selected.contains(c.id) &&
+          (sizes.empty() || std::find(sizes.begin(), sizes.end(), c.profile) != sizes.end())) {
+        const std::string port =
+            c.override_value ? (*c.override_value)["port"].as<std::string>() : std::string{};
+        const bool cached = c.override_value && (*c.override_value)["cache"] &&
+                            (*c.override_value)["cache"].as<std::string>() == "cached";
+        result.push_back({std::move(scenario), port, cached});
+      }
+    } catch (const std::exception& e) {
+      throw std::invalid_argument("case '" + c.id + "' at line " + std::to_string(c.source_line) +
+                                  ": " + e.what());
+    }
+  }
+  if (result.empty())
+    throw std::invalid_argument("no YAML cases match requested sizes");
+  return result;
+}
+
 // Decode every case before applying scope and size filters. Operators provide
 // only the typed conversion and contract-specific validation callback.
 template <typename Scenario, typename Parse>
 std::vector<Scenario> select_validated_cases(const ProfileSuite& suite, std::string_view scope,
                                              const std::vector<std::string>& sizes, Parse&& parse) {
-  std::set<std::string> selected;
-  for (const auto& c : suite.select(scope))
-    selected.insert(c.id);
+  auto selected =
+      select_validated_scenarios<Scenario>(suite, scope, sizes, std::forward<Parse>(parse));
   std::vector<Scenario> result;
-  for (const auto& c : suite.cases) {
-    Scenario scenario = parse(c, suite.shape_for(c.profile));
-    if (scenario.id != c.id || scenario.size_id != c.profile)
-      throw std::invalid_argument("adapter changed YAML case identity: " + c.id);
-    if (selected.contains(c.id) &&
-        (sizes.empty() || std::find(sizes.begin(), sizes.end(), c.profile) != sizes.end()))
-      result.push_back(std::move(scenario));
-  }
-  if (result.empty())
-    throw std::invalid_argument("no YAML cases match requested sizes");
+  for (auto& item : selected)
+    result.push_back(std::move(item.scenario));
   return result;
 }
 

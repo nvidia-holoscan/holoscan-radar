@@ -122,38 +122,14 @@ struct LivePorts {
   : override_(std::move(override)), kind_(kind) {}
 
   void setup(holoscan::OperatorSpec& spec) {
-    constexpr holoscan::TensorRepresentation kDevice{
-        .memory_kind = holoscan::MemoryKind::kCudaDevice,
-        .dtype = std::nullopt,
-        .rank = std::nullopt,
-    };
-    constexpr holoscan::TensorRepresentation kHostVector{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = DLDataType{kDLFloat, 64U, 1U},
-        .rank = 1U,
-    };
-    constexpr holoscan::TensorRepresentation kHostMatrix{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = DLDataType{kDLFloat, 64U, 1U},
-        .rank = 2U,
-    };
-    constexpr std::size_t kHostPayloadSpan = 4096U * sizeof(double);
-    spec.output(snapshot).produces_tensor(
-        hr::pooled_tensor_output(kDevice, 8U, perf::PerfFrameBank::span_a()));
-    spec.output(array_geometry)
-        .max_emits_per_compute(1U)
-        .produces_tensor(hr::pooled_tensor_output(kHostMatrix, 2U, kHostPayloadSpan));
-    spec.output(az_coordinates)
-        .max_emits_per_compute(1U)
-        .produces_tensor(hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
-    spec.output(el_coordinates)
-        .max_emits_per_compute(1U)
-        .produces_tensor(hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
-    spec.output(spatial_smoothing).max_emits_per_compute(1U);
-    spec.output(diagonal_loading).max_emits_per_compute(1U);
-    spec.output(max_sources).max_emits_per_compute(1U);
+    perf::setup_device_input(spec, snapshot, perf::PerfFrameBank::span_a());
+    perf::setup_host_payload(spec, array_geometry, 2U, 2U);
+    perf::setup_host_payload(spec, az_coordinates, 1U, 1U);
+    perf::setup_host_payload(spec, el_coordinates, 1U, 1U);
+    perf::setup_scalar_payload(spec, spatial_smoothing);
+    perf::setup_scalar_payload(spec, diagonal_loading);
+    perf::setup_scalar_payload(spec, max_sources);
   }
-
   [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
       holoscan::ExecutionContext& context) {
     const holoscan::TimePoint time = context.activation_time();
@@ -162,10 +138,7 @@ struct LivePorts {
       case MvdrScenario::OverrideKind::kNone:
         break;
       case MvdrScenario::OverrideKind::kArrayGeometry: {
-        const auto packed = hr::pack_array_geometry(override_.array_geometry);
-        const std::array<int64_t, 2> shape{override_.array_geometry.num_elements() + 1, 3};
-        emitted = emit_wire_doubles(array_geometry, hr::to_wire(override_.array_geometry), packed,
-                                    shape, time);
+        emitted = perf::emit_geometry_payload(array_geometry, override_.array_geometry, time);
         break;
       }
       case MvdrScenario::OverrideKind::kAzAngles: {
@@ -177,18 +150,16 @@ struct LivePorts {
         break;
       }
       case MvdrScenario::OverrideKind::kSpatialSmoothing: {
-        emitted = spatial_smoothing.emit(smoothing_wire(override_.spatial_smoothing),
-                                         holoscan::EmitOptions{.capture_time = time});
+        emitted =
+            perf::emit_smoothing_payload(spatial_smoothing, override_.spatial_smoothing, time);
         break;
       }
       case MvdrScenario::OverrideKind::kDiagonalLoading: {
-        emitted = diagonal_loading.emit(override_.diagonal_loading,
-                                        holoscan::EmitOptions{.capture_time = time});
+        emitted = perf::emit_scalar_payload(diagonal_loading, override_.diagonal_loading, time);
         break;
       }
       case MvdrScenario::OverrideKind::kMaxSources: {
-        emitted =
-            max_sources.emit(override_.max_sources, holoscan::EmitOptions{.capture_time = time});
+        emitted = perf::emit_scalar_payload(max_sources, override_.max_sources, time);
         break;
       }
     }

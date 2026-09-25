@@ -17,7 +17,10 @@ wiring and records source and synchronized sink times directly.
 ## C++ adapter boundary
 
 The common driver parses every YAML case and asks each operator adapter to
-validate and convert one case before applying scope or size filters. It owns
+validate and convert one case before applying scope or size filters. YAML
+override metadata selects the live run plan; the adapter must name the same
+live port. The runner checks that one changed payload was emitted at the
+planned frame in every independent run. It owns
 process warmup, run planning, independent Graph sessions, and the setup and
 compute report rows. An adapter supplies valid input tensors and descriptors,
 operator parameters and port wiring, plus any operator-specific throughput
@@ -28,7 +31,10 @@ contract. The source and sink capture paired per-frame timestamps.
 ### Adding a C++ operator
 
 1. Define `performance/profiles/<operator>.yaml` with three sizes and curated
-   scope cases. Name every documented live port in its manifest.
+   scope cases. Name every documented live port in its manifest. Use an explicit
+   case family such as `id: "baseline-{profile}", profiles: [small, medium, large]`
+   when the parameters and scope tags are identical across sizes. Expansion
+   follows that list in order; it never combines independent parameter axes.
 2. Add `performance/cpp/perf_<operator>.cpp`. Its typed adapter defines a
    `Scenario`, `parse_case`, `size_def`, `run_graph`, and `base_row`. Add
    `decorate_row` only for throughput units or notes, and `validate_run_settings`
@@ -43,8 +49,10 @@ contract. The source and sink capture paired per-frame timestamps.
 `perf_ddm_power_fold.cpp` is a small no-live example; angle estimators show
 multi-port descriptor payloads. Keep input generation, typed HSDK ports,
 `MaxTensorExtents`, and operator-specific scale calculations in the adapter.
-The unit-test harness remains suitable for correctness checks; its bounded
-output snapshots add copies and lack the paired timestamps used here.
+The shared `perf_payloads.hpp` helpers set up typed host/device source ports
+and emit angle geometry, windows, coordinate vectors, smoothing, and scalar
+sidebands. The unit-test harness remains suitable for correctness checks; its
+bounded output snapshots add copies and lack the paired timestamps used here.
 
 ## YAML profiles and scopes
 
@@ -60,6 +68,19 @@ The `fmcw_range_processor` and `fmcw_doppler_processor` Thorough suites include
 cached `nfft` transitions: frame zero primes the new FFT plan during warmup,
 then the measured change reuses it. Their unseen cases make the same change
 without priming. Cached cases require at least one warmup frame.
+
+Check every YAML case and typed adapter conversion before running a Graph:
+
+```bash
+./build/performance/cpp/perf_clutter_filter --validate
+./build/performance/cpp/perf_clutter_filter --list-cases --scope overrides
+```
+
+`--list-cases` prints selected case IDs, sizes, and live ports in YAML order.
+Both commands validate unselected cases too. They do not create a Graph or
+query a CUDA device; the executable still needs its linked HSDK/CUDA libraries.
+Errors name the suite file and, for adapter conversion failures, the case ID
+and YAML line.
 
 Example in the pinned HSDK 5 GPU container:
 

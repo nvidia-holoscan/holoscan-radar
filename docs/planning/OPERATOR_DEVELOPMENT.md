@@ -739,7 +739,12 @@ A new adapter supplies `Scenario`, `parse_case`, `size_def`, `run_graph`, and
 driver loads the YAML suite once and owns process warmup, source publication,
 Graph execution, sampling, scenario identity, and both report buckets. Add the
 operator name once to `HOLOSCAN_RADAR_PERF_TARGETS` for its executable and
-Minimal GPU smoke.
+Minimal GPU smoke. Use the shared typed payload helpers for geometry,
+windows, vectors, smoothing, and scalar live ports; keep only operator-specific
+port wiring in the adapter. `--validate` parses every YAML case and checks the
+adapter live port before Graph execution; `--list-cases` shows selected IDs in
+YAML order. An explicit `{profile}` case family reduces repeated definitions
+across named sizes without introducing a Cartesian product.
 
 Operators with no `[live]` parameters are exempt from the override rule; note
 that in the consumer header comment. Process warmup still applies.

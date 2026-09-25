@@ -25,6 +25,7 @@ TEST(PerfRunner, BucketsFullSteadyWindowAndOneChangedFramePerRun) {
   const auto samples =
       perf::collect_scenario_samples(settings, plan, [](int, const perf::RunPlan& current) {
         perf::TimingCollector collector;
+        collector.live_emissions.push_back(current.override_at);
         collector.t_construct = perf::Clock::time_point{};
         collector.t_first_tick = collector.t_construct + std::chrono::milliseconds{1};
         for (int frame = 0; frame < current.total_frames; ++frame) {
@@ -53,6 +54,49 @@ TEST(PerfRunner, BucketsFullSteadyWindowAndOneChangedFramePerRun) {
   EXPECT_EQ(row.latency.samples, 150);
 }
 
+TEST(PerfRunner, RejectsMissingOrMisplacedLiveEmission) {
+  perf::RunSettings settings;
+  settings.warmup_frames = 1;
+  settings.measured_frames = 3;
+  settings.repeats = 1;
+  const auto plan = perf::make_run_plan(settings, true);
+  const auto faulty = [](int, const perf::RunPlan& current) {
+    perf::TimingCollector collector;
+    collector.t_construct = perf::Clock::time_point{};
+    collector.t_first_tick = collector.t_construct;
+    collector.live_emissions.push_back(current.override_at - 1);
+    for (int frame = 0; frame < current.total_frames; ++frame) {
+      const auto start = collector.t_construct + std::chrono::milliseconds{frame + 1};
+      collector.starts.push_back(start);
+      collector.ends.push_back(start + std::chrono::microseconds{100});
+    }
+    return collector;
+  };
+  EXPECT_THROW(perf::collect_scenario_samples(settings, plan, faulty), std::runtime_error);
+}
+
+TEST(PerfRunner, AllowsFrameZeroPrimeOnlyWhenDeclaredCached) {
+  perf::RunSettings settings;
+  settings.warmup_frames = 1;
+  settings.measured_frames = 3;
+  settings.repeats = 1;
+  const auto plan = perf::make_run_plan(settings, true);
+  const auto primed = [](int, const perf::RunPlan& current) {
+    perf::TimingCollector collector;
+    collector.t_construct = perf::Clock::time_point{};
+    collector.t_first_tick = collector.t_construct;
+    collector.live_emissions = {0, current.override_at};
+    for (int frame = 0; frame < current.total_frames; ++frame) {
+      const auto start = collector.t_construct + std::chrono::milliseconds{frame + 1};
+      collector.starts.push_back(start);
+      collector.ends.push_back(start + std::chrono::microseconds{100});
+    }
+    return collector;
+  };
+  EXPECT_THROW(perf::collect_scenario_samples(settings, plan, primed), std::runtime_error);
+  EXPECT_NO_THROW(perf::collect_scenario_samples(settings, plan, primed, true));
+}
+
 TEST(PerfRunner, PairsChangedFrameWithItsOwnRunBaseline) {
   perf::RunSettings settings;
   settings.warmup_frames = 0;
@@ -62,6 +106,7 @@ TEST(PerfRunner, PairsChangedFrameWithItsOwnRunBaseline) {
   const auto samples =
       perf::collect_scenario_samples(settings, plan, [](int rep, const perf::RunPlan& current) {
         perf::TimingCollector collector;
+        collector.live_emissions.push_back(current.override_at);
         collector.t_construct = perf::Clock::time_point{};
         collector.t_first_tick = collector.t_construct;
         const int steady_us[] = {1000, 10000, 100000};
@@ -99,6 +144,7 @@ TEST(PerfRunner, SharedMeasurementWritesBothBucketsForIndependentRuns) {
         EXPECT_EQ(plan.override_at, 4);
         EXPECT_EQ(plan.total_frames, 6);
         perf::TimingCollector collector;
+        collector.live_emissions.push_back(plan.override_at);
         collector.t_construct = perf::Clock::time_point{};
         collector.t_first_tick = collector.t_construct + std::chrono::milliseconds{1};
         for (int frame = 0; frame < plan.total_frames; ++frame) {

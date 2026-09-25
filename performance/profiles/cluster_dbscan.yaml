@@ -8,20 +8,12 @@ profiles:
   large: {shape: [2048, 5, 64]}
 live_ports: [epsilon, min_points, max_clusters]
 cases:
-  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {epsilon: 0.5}}
-  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {epsilon: 0.5}}
-  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {epsilon: 0.5}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {epsilon: 0.5}}
   - {id: wider-epsilon-medium, profile: medium, scopes: [limited], parameters: {epsilon: 0.8}}
   - {id: dense-core-medium, profile: medium, scopes: [limited], parameters: {epsilon: 0.5, min_points: 12}}
   - {id: cluster-cap-medium, profile: medium, scopes: [limited], parameters: {epsilon: 0.5, max_clusters: 16}}
-  - {id: epsilon-small, profile: small, scopes: [overrides, moderate], parameters: {epsilon: 0.5}, override: {port: epsilon, value: 0.8}}
-  - {id: epsilon-medium, profile: medium, scopes: [overrides, moderate], parameters: {epsilon: 0.5}, override: {port: epsilon, value: 0.8}}
-  - {id: epsilon-large, profile: large, scopes: [overrides, moderate], parameters: {epsilon: 0.5}, override: {port: epsilon, value: 0.8}}
-  - {id: min-points-small, profile: small, scopes: [overrides, moderate], parameters: {epsilon: 0.5}, override: {port: min_points, value: 8}}
-  - {id: min-points-medium, profile: medium, scopes: [overrides, moderate], parameters: {epsilon: 0.5}, override: {port: min_points, value: 8}}
-  - {id: min-points-large, profile: large, scopes: [overrides, moderate], parameters: {epsilon: 0.5}, override: {port: min_points, value: 8}}
-  - {id: max-clusters-small, profile: small, scopes: [overrides], parameters: {epsilon: 0.5}, override: {port: max_clusters, value: 4}}
-  - {id: max-clusters-medium, profile: medium, scopes: [overrides], parameters: {epsilon: 0.5}, override: {port: max_clusters, value: 4}}
-  - {id: max-clusters-large, profile: large, scopes: [overrides], parameters: {epsilon: 0.5}, override: {port: max_clusters, value: 4}}
+  - {id: "epsilon-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {epsilon: 0.5}, override: {port: epsilon, value: 0.8}}
+  - {id: "min-points-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {epsilon: 0.5}, override: {port: min_points, value: 8}}
+  - {id: "max-clusters-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {epsilon: 0.5}, override: {port: max_clusters, value: 4}}
   - {id: wide-core-medium, profile: medium, scopes: [moderate], parameters: {epsilon: 0.8, min_points: 12}}
   - {id: tight-cap-large, profile: large, scopes: [thorough], parameters: {epsilon: 0.5, min_points: 12, max_clusters: 8}}

@@ -8,6 +8,4 @@ profiles:
   large: {shape: [8, 32, 64, 512]}
 live_ports: []
 cases:
-  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {tx_schedule: round_robin}}
-  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {tx_schedule: round_robin}}
-  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {tx_schedule: round_robin}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {tx_schedule: round_robin}}

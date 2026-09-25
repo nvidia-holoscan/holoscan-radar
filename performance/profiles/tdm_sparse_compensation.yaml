@@ -8,16 +8,10 @@ profiles:
   large: {shape: [4, 16, 512, 1024, 1024]}
 live_ports: [waveform, snapshot_window]
 cases:
-  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all}}
-  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all}}
-  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all}}
   - {id: neighborhood-medium, profile: medium, scopes: [limited], parameters: {snapshot_window: [1, 1], overlap_policy: keep_all}}
   - {id: dedup-medium, profile: medium, scopes: [limited], parameters: {snapshot_window: [0, 0], overlap_policy: dedup}}
   - {id: longer-pri-medium, profile: medium, scopes: [limited], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all, pri: 0.0011}}
-  - {id: waveform-small, profile: small, scopes: [overrides, moderate], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all}, override: {port: waveform, value: 0.0011}}
-  - {id: waveform-medium, profile: medium, scopes: [overrides, moderate], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all}, override: {port: waveform, value: 0.0011}}
-  - {id: waveform-large, profile: large, scopes: [overrides, moderate], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all}, override: {port: waveform, value: 0.0011}}
-  - {id: window-small, profile: small, scopes: [overrides, moderate], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all}, override: {port: snapshot_window, value: [1, 1]}}
-  - {id: window-medium, profile: medium, scopes: [overrides, moderate], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all}, override: {port: snapshot_window, value: [1, 1]}}
-  - {id: window-large, profile: large, scopes: [overrides, moderate], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all}, override: {port: snapshot_window, value: [1, 1]}}
+  - {id: "waveform-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all}, override: {port: waveform, value: 0.0011}}
+  - {id: "window-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {snapshot_window: [0, 0], overlap_policy: keep_all}, override: {port: snapshot_window, value: [1, 1]}}
   - {id: average-window-medium, profile: medium, scopes: [thorough], parameters: {snapshot_window: [1, 1], overlap_policy: average}, override: {port: snapshot_window, value: [2, 2]}}

@@ -327,6 +327,12 @@ inline void wait_for_frames(holoscan::RunSession& session, int total_frames) {
   }
 }
 
+inline void record_live_emission(int64_t frame_index) {
+  const std::lock_guard lock(PerfFrameBank::mutex);
+  if (PerfFrameBank::collector_ != nullptr)
+    PerfFrameBank::collector_->live_emissions.push_back(frame_index);
+}
+
 inline void record_start_locked() {
   if (PerfFrameBank::collector_ != nullptr) {
     if (!PerfFrameBank::collector_->first_tick_set) {
@@ -478,6 +484,7 @@ class PerfTensorOverrideSourceOp final : public holoscan::Operator<> {
         HOLOSCAN_RETURN_IF_ERROR(override_out.emit(
             value, holoscan::EmitOptions{.capture_time = context.activation_time()}));
       }
+      detail::record_live_emission(frame_index_);
     }
     ++frame_index_;
     return detail::emit_device_frame(out, context, frame, mode);
@@ -560,6 +567,7 @@ class PerfTensorWindowOverrideSourceOp final : public holoscan::Operator<> {
       HOLOSCAN_RETURN_IF_ERROR(override_out.emit_tensor(
           std::move(*loan), holoscan::radar::to_wire(value),
           holoscan::EmitOptions{.capture_time = context.activation_time()}));
+      detail::record_live_emission(frame_index_);
     }
     ++frame_index_;
     return detail::emit_device_frame(out, context, frame, mode);
@@ -639,6 +647,7 @@ class PerfTensorVectorOverrideSourceOp final : public holoscan::Operator<> {
         return holoscan::make_unexpected(std::move(written).error());
       HOLOSCAN_RETURN_IF_ERROR(override_out.emit(
           std::move(*loan), holoscan::EmitOptions{.capture_time = context.activation_time()}));
+      detail::record_live_emission(frame_index_);
     }
     ++frame_index_;
     return detail::emit_device_frame(out, context, frame, mode);
@@ -797,6 +806,7 @@ class PerfDualTensorOverrideSourceOp final : public holoscan::Operator<> {
         HOLOSCAN_RETURN_IF_ERROR(override_out.emit(
             value, holoscan::EmitOptions{.capture_time = context.activation_time()}));
       }
+      detail::record_live_emission(frame_index_);
     }
     ++frame_index_;
     HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(out_a, context, a, mode));
@@ -970,8 +980,10 @@ class PerfLiveSourceOp final : public holoscan::Operator<>, public Sidebands {
       mode = PerfFrameBank::publish_mode;
       detail::record_start_locked();
     }
-    if (frame_index_ == override_at_)
+    if (frame_index_ == override_at_) {
       HOLOSCAN_RETURN_IF_ERROR(Sidebands::emit_override(context));
+      detail::record_live_emission(frame_index_);
+    }
     ++frame_index_;
     return emit_data<0, DataPorts...>(context, frames, mode);
   }
@@ -1171,7 +1183,7 @@ TimingCollector run_perf_graph_with_override(std::shared_ptr<holoscan::Tensor> i
                                              Value initial_value, Value override_value,
                                              const char* graph_name, BuildFn build,
                                              PerfPublishMode publish = PerfPublishMode::kCopy,
-                                             bool one_shot = false, bool prime_changed = false) {
+                                             bool one_shot = true, bool prime_changed = false) {
   if (override_at < 0 || override_at >= total_frames) {
     throw std::invalid_argument("run_perf_graph_with_override: override_at outside frame plan");
   }
@@ -1194,7 +1206,7 @@ template <typename BuildFn>
 TimingCollector run_perf_graph_with_window_override(
     std::shared_ptr<holoscan::Tensor> input, int total_frames, int64_t override_at,
     WindowSpec initial_value, WindowSpec override_value, const char* graph_name, BuildFn build,
-    PerfPublishMode publish = PerfPublishMode::kCopy, bool one_shot = false) {
+    PerfPublishMode publish = PerfPublishMode::kCopy, bool one_shot = true) {
   if (override_at < 0 || override_at >= total_frames) {
     throw std::invalid_argument(
         "run_perf_graph_with_window_override: override_at outside frame plan");
@@ -1217,7 +1229,7 @@ template <typename Element, typename BuildFn>
 TimingCollector run_perf_graph_with_vector_override(
     std::shared_ptr<holoscan::Tensor> input, int total_frames, int64_t override_at,
     std::vector<Element> initial_value, std::vector<Element> override_value, const char* graph_name,
-    BuildFn build, PerfPublishMode publish = PerfPublishMode::kCopy, bool one_shot = false) {
+    BuildFn build, PerfPublishMode publish = PerfPublishMode::kCopy, bool one_shot = true) {
   if (override_at < 0 || override_at >= total_frames) {
     throw std::invalid_argument(
         "run_perf_graph_with_vector_override: override_at outside frame plan");
@@ -1263,7 +1275,7 @@ TimingCollector run_perf_graph_dual_with_override(std::shared_ptr<holoscan::Tens
                                                   Value initial_value, Value override_value,
                                                   const char* graph_name, BuildFn build,
                                                   PerfPublishMode publish = PerfPublishMode::kCopy,
-                                                  bool one_shot = false) {
+                                                  bool one_shot = true) {
   if (override_at < 0 || override_at >= total_frames) {
     throw std::invalid_argument(
         "run_perf_graph_dual_with_override: override_at outside frame plan");

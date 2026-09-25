@@ -8,6 +8,4 @@ profiles:
   large: {shape: [4, 16, 512, 1024]}
 live_ports: []
 cases:
-  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {ddm_code: linear}}
-  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {ddm_code: linear}}
-  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {ddm_code: linear}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {ddm_code: linear}}

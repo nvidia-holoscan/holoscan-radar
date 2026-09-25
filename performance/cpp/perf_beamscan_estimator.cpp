@@ -112,39 +112,13 @@ struct LivePorts {
   : override_(std::move(override)), kind_(kind) {}
 
   void setup(holoscan::OperatorSpec& spec) {
-    constexpr holoscan::TensorRepresentation kDevice{
-        .memory_kind = holoscan::MemoryKind::kCudaDevice,
-        .dtype = std::nullopt,
-        .rank = std::nullopt,
-    };
-    constexpr holoscan::TensorRepresentation kHostVector{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = DLDataType{kDLFloat, 64U, 1U},
-        .rank = 1U,
-    };
-    constexpr holoscan::TensorRepresentation kHostMatrix{
-        .memory_kind = holoscan::MemoryKind::kHost,
-        .dtype = DLDataType{kDLFloat, 64U, 1U},
-        .rank = 2U,
-    };
-    constexpr std::size_t kHostPayloadSpan = 4096U * sizeof(double);
-    spec.output(snapshot).produces_tensor(
-        hr::pooled_tensor_output(kDevice, 8U, perf::PerfFrameBank::span_a()));
-    spec.output(array_geometry)
-        .max_emits_per_compute(1U)
-        .produces_tensor(hr::pooled_tensor_output(kHostMatrix, 2U, kHostPayloadSpan));
-    spec.output(az_coordinates)
-        .max_emits_per_compute(1U)
-        .produces_tensor(hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
-    spec.output(el_coordinates)
-        .max_emits_per_compute(1U)
-        .produces_tensor(hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
-    spec.output(array_taper)
-        .max_emits_per_compute(1U)
-        .produces_tensor(hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
-    spec.output(peak_interpolation).max_emits_per_compute(1U);
+    perf::setup_device_input(spec, snapshot, perf::PerfFrameBank::span_a());
+    perf::setup_host_payload(spec, array_geometry, 2U, 2U);
+    perf::setup_host_payload(spec, az_coordinates, 1U, 1U);
+    perf::setup_host_payload(spec, el_coordinates, 1U, 1U);
+    perf::setup_host_payload(spec, array_taper, 1U, 1U);
+    perf::setup_scalar_payload(spec, peak_interpolation);
   }
-
   [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
       holoscan::ExecutionContext& context) {
     const holoscan::TimePoint time = context.activation_time();
@@ -153,10 +127,7 @@ struct LivePorts {
       case BeamScenario::OverrideKind::kNone:
         break;
       case BeamScenario::OverrideKind::kArrayGeometry: {
-        const auto packed = hr::pack_array_geometry(override_.array_geometry);
-        const std::array<int64_t, 2> shape{override_.array_geometry.num_elements() + 1, 3};
-        emitted = emit_wire_doubles(array_geometry, hr::to_wire(override_.array_geometry), packed,
-                                    shape, time);
+        emitted = perf::emit_geometry_payload(array_geometry, override_.array_geometry, time);
         break;
       }
       case BeamScenario::OverrideKind::kAzAngles:
@@ -166,15 +137,11 @@ struct LivePorts {
         emitted = emit_host_vector(el_coordinates, override_.el_coordinates, time);
         break;
       case BeamScenario::OverrideKind::kArrayTaper: {
-        const std::array<int64_t, 1> shape{
-            static_cast<int64_t>(override_.array_taper.coefficients.size())};
-        emitted = emit_wire_doubles(array_taper, hr::to_wire(override_.array_taper),
-                                    override_.array_taper.coefficients, shape, time);
+        emitted = perf::emit_window_payload(array_taper, override_.array_taper, time);
         break;
       }
       case BeamScenario::OverrideKind::kPeakInterpolation:
-        emitted = peak_interpolation.emit(override_.peak_interpolation,
-                                          holoscan::EmitOptions{.capture_time = time});
+        emitted = perf::emit_scalar_payload(peak_interpolation, override_.peak_interpolation, time);
         break;
     }
     if (!emitted)

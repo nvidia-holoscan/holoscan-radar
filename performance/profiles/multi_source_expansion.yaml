@@ -8,9 +8,7 @@ profiles:
   large: {shape: [16384]}
 live_ports: []
 cases:
-  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {selected_fraction: 0.25, sources: 2, index_columns: 2}}
-  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {selected_fraction: 0.25, sources: 2, index_columns: 2}}
-  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {selected_fraction: 0.25, sources: 2, index_columns: 2}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {selected_fraction: 0.25, sources: 2, index_columns: 2}}
   - {id: sparse-medium, profile: medium, scopes: [limited], parameters: {selected_fraction: 0.10, sources: 2, index_columns: 2}}
   - {id: dense-medium, profile: medium, scopes: [limited], parameters: {selected_fraction: 0.50, sources: 2, index_columns: 2}}
   - {id: four-sources-medium, profile: medium, scopes: [moderate], parameters: {selected_fraction: 0.25, sources: 4, index_columns: 2}}

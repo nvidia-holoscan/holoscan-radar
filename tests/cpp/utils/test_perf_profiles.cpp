@@ -104,8 +104,13 @@ TEST(PerfProfiles, AdapterValidatesUnselectedCasesBeforeFiltering) {
       throw std::invalid_argument("invalid adapter parameter");
     return Scenario{c.id, c.profile};
   };
-  EXPECT_THROW(perf::select_validated_cases<Scenario>(suite, "minimal", {"small"}, invalid),
-               std::invalid_argument);
+  try {
+    (void)perf::select_validated_cases<Scenario>(suite, "minimal", {"small"}, invalid);
+    FAIL() << "invalid unselected case should fail";
+  } catch (const std::invalid_argument& e) {
+    EXPECT_NE(std::string(e.what()).find("sixteen-channels-large"), std::string::npos);
+    EXPECT_NE(std::string(e.what()).find("line"), std::string::npos);
+  }
 
   std::vector<std::string> decoded;
   auto valid = [&](const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
@@ -118,6 +123,12 @@ TEST(PerfProfiles, AdapterValidatesUnselectedCasesBeforeFiltering) {
   ASSERT_EQ(selected.size(), 6U);
   EXPECT_EQ(selected.front().id, "baseline-small");
   EXPECT_EQ(selected.back().id, "passthrough-medium");
+  const auto live =
+      perf::select_validated_scenarios<Scenario>(suite, "overrides", {"small"}, valid);
+  ASSERT_EQ(live.size(), 3U);
+  EXPECT_EQ(live[0].live_port, "");
+  EXPECT_EQ(live[1].live_port, "method");
+  EXPECT_EQ(live[2].live_port, "doppler_window");
   EXPECT_THROW(perf::select_validated_cases<Scenario>(suite, "minimal", {"unknown"}, valid),
                std::invalid_argument);
 }
@@ -203,7 +214,50 @@ TEST(PerfProfiles, FftPlanCasesDistinguishUnseenAndCached) {
         cache_modes.insert((*c.override_value)["cache"].as<std::string>());
     }
     EXPECT_EQ(cache_modes, (std::set<std::string>{"cached", "unseen"}));
+    struct Scenario {
+      std::string id;
+      std::string size_id;
+    };
+    const auto selected = perf::select_validated_scenarios<Scenario>(
+        suite, "thorough", {"medium"}, [](const perf::ProfileCase& c, const std::vector<int64_t>&) {
+          return Scenario{c.id, c.profile};
+        });
+    int cached_count = 0;
+    for (const auto& item : selected) {
+      if (item.cached) {
+        ++cached_count;
+        EXPECT_EQ(item.live_port, "nfft");
+      }
+    }
+    EXPECT_EQ(cached_count, 1);
   }
+}
+
+TEST(PerfProfiles, ExpandsOnlyNamedFamilyProfilesInOrder) {
+  const auto path = std::filesystem::temp_directory_path() / "radar-perf-family.yaml";
+  const std::string yaml =
+      "version: 1\noperator: fixture\n"
+      "profiles:\n  small: {shape: [1]}\n  medium: {shape: [2]}\n"
+      "  large: {shape: [3]}\n"
+      "live_ports: []\ncases:\n"
+      "  - {id: \"baseline-{profile}\", profiles: [small, medium, large], "
+      "scopes: [minimal], parameters: {mode: default}}\n";
+  {
+    std::ofstream out(path);
+    out << yaml;
+  }
+  const auto suite = perf::load_profile_suite(path, "fixture");
+  ASSERT_EQ(suite.cases.size(), 3U);
+  EXPECT_EQ(suite.cases[0].id, "baseline-small");
+  EXPECT_EQ(suite.cases[1].id, "baseline-medium");
+  EXPECT_EQ(suite.cases[2].id, "baseline-large");
+  EXPECT_EQ(suite.cases[1].parameters["mode"].as<std::string>(), "default");
+  {
+    std::ofstream out(path, std::ios::app);
+    out << "  - {id: baseline-medium, profile: medium, scopes: [limited], parameters: {}}\n";
+  }
+  EXPECT_THROW(perf::load_profile_suite(path, "fixture"), std::invalid_argument);
+  std::filesystem::remove(path);
 }
 
 TEST(PerfProfiles, RejectsUnknownKeyAndInvalidExtent) {
@@ -276,6 +330,8 @@ perf::ResultRow base_row(const AdapterFixtureScenario& scenario) {
 
 perf::TimingCollector run_graph(const AdapterFixtureScenario&, const perf::RunPlan& plan) {
   perf::TimingCollector collector;
+  if (plan.has_override())
+    collector.live_emissions.push_back(plan.override_at);
   collector.t_construct = perf::Clock::time_point{};
   collector.t_first_tick = collector.t_construct + std::chrono::milliseconds{1};
   for (int frame = 0; frame < plan.total_frames; ++frame) {
@@ -297,8 +353,9 @@ TEST(PerfProfiles, SharedAdapterOwnsSizeAndReportIdentity) {
       std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml",
       "clutter_filter");
   const AdapterFixtureScenario scenario{"fixture-live", "small", true};
+  const perf::SelectedScenario<AdapterFixtureScenario> selected{scenario, "method"};
   perf::PerfReport report;
-  perf::detail::record_exercised_sizes<AdapterFixtureTraits>(suite, {scenario}, &report);
+  perf::detail::record_exercised_sizes<AdapterFixtureTraits>(suite, {selected}, &report);
   ASSERT_EQ(report.sizes.size(), 1U);
   EXPECT_EQ(report.sizes[0].id, "small");
   EXPECT_EQ(report.sizes[0].shape, suite.shapes[0]);
@@ -307,7 +364,7 @@ TEST(PerfProfiles, SharedAdapterOwnsSizeAndReportIdentity) {
   settings.warmup_frames = 1;
   settings.measured_frames = 3;
   settings.repeats = 2;
-  perf::detail::run_adapter_case<AdapterFixtureTraits>(scenario, settings, &report);
+  perf::detail::run_adapter_case<AdapterFixtureTraits>(selected, settings, &report);
   ASSERT_EQ(report.results.size(), 2U);
   EXPECT_EQ(report.results[0].scenario_id, scenario.id);
   EXPECT_EQ(report.results[1].size_id, scenario.size_id);
@@ -315,6 +372,10 @@ TEST(PerfProfiles, SharedAdapterOwnsSizeAndReportIdentity) {
   EXPECT_EQ(report.results[1].latency.samples, 6);
   EXPECT_NEAR(report.results[1].override_delta_ms, 0.1, 1e-9);
   EXPECT_EQ(report.results[1].notes, "typed adapter");
+  const perf::SelectedScenario<AdapterFixtureScenario> missing_live{scenario, ""};
+  EXPECT_THROW(
+      perf::detail::run_adapter_case<AdapterFixtureTraits>(missing_live, settings, &report),
+      std::invalid_argument);
 }
 
 }  // namespace
