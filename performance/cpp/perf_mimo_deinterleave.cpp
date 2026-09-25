@@ -2,17 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Performance characterization for MIMODeinterleaveOp — TDM slow-time gather
-// into an explicit TX axis. Sweeps (M_tx, N_rx, L, samples) and a leading
-// batch axis. No [live] parameters. Measurement tool only.
-//
-//  Graph rewrite; drains adc_cube_out (§2 unique out name).
+// into an explicit TX axis. YAML profiles vary named TX, RX, chirp, and
+// sample extents. No [live] parameters. Measurement tool only.
 
 #include <complex>
 #include <cstdint>
-#include <cstdlib>
-#include <iostream>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <stdexcept>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,6 +22,7 @@
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
+#include "utils/perf_profiles.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
@@ -38,15 +36,6 @@ namespace {
 
 using PerfPrecision = float;
 
-struct SizeSpec {
-  std::string id;
-  int64_t num_tx;
-  int64_t num_rx;
-  int64_t chirps_per_tx;
-  int64_t samples;
-  std::string role;
-};
-
 struct DeinterleaveScenario {
   std::string id;
   std::string size_id;
@@ -55,34 +44,6 @@ struct DeinterleaveScenario {
   int64_t chirps_per_tx{0};
   int64_t samples{0};
 };
-
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 2, 4, 8, 64, "small TDM; fast smoke"},
-      {"sm", 4, 8, 16, 128, "compact MIMO"},
-      {"md", 4, 16, 32, 256, "common dev size"},
-      {"lg", 8, 32, 64, 512, "moderate MIMO"},
-      {"xl", 8, 64, 128, 1024, "upper characterization bound"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& s : size_ladder()) {
-    if (s.id == id) {
-      return &s;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* s = find_size(id);
-  if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *s;
-}
 
 // The contract input is exactly (N_rx, slow_time, samples). There is no
 // leading batch rung: an extra leading dim is opaque batch, which the operator
@@ -141,19 +102,6 @@ perf::ResultRow base_row(const DeinterleaveScenario& scen) {
   return row;
 }
 
-DeinterleaveScenario make_scenario(const SizeSpec& s) {
-  DeinterleaveScenario sc;
-  sc.size_id = s.id;
-  sc.num_tx = s.num_tx;
-  sc.num_rx = s.num_rx;
-  sc.chirps_per_tx = s.chirps_per_tx;
-  sc.samples = s.samples;
-  std::ostringstream id;
-  id << "deinterleave_rr_" << s.id;
-  sc.id = id.str();
-  return sc;
-}
-
 struct DeinterleaveTraits : perf::PerfDriverDefaults {
   using Scenario = DeinterleaveScenario;
 
@@ -168,46 +116,48 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
   static const char* full_help() { return "Round-robin TDM gather across the full ladder"; }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
+    const auto suite = perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "mimo_deinterleave.yaml",
+        "mimo_deinterleave");
     std::vector<perf::SizeDef> out;
-    for (const auto& s : size_ladder()) {
-      perf::SizeDef def;
-      def.id = s.id;
-      const int64_t slow = s.num_tx * s.chirps_per_tx;
-      def.shape = {s.num_rx, slow, s.samples};
-      def.cells = s.num_rx * slow * s.samples;
-      def.role = s.role;
-      out.push_back(def);
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = suite.shapes[i];
+      if (shape.size() != 4)
+        throw std::invalid_argument("profile shape rank mismatch");
+      const int64_t slow = shape[0] * shape[2];
+      out.push_back({std::string(perf::kProfiles[i]),
+                     {shape[1], slow, shape[3]},
+                     shape[1] * slow * shape[3],
+                     std::string(perf::kProfiles[i])});
     }
     return out;
   }
 
-  static std::vector<DeinterleaveScenario> build_default_matrix() {
-    std::vector<DeinterleaveScenario> out;
-    for (const char* sid : {"xs", "md", "lg", "xl"}) {
-      out.push_back(make_scenario(must_find_size(sid)));
-    }
-    return out;
-  }
-
-  static std::vector<DeinterleaveScenario> build_size_sweep(const std::vector<std::string>& sizes) {
-    std::vector<DeinterleaveScenario> out;
-    for (const auto& sid : sizes) {
-      const SizeSpec* s = find_size(sid);
-      if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
-        continue;
+  static std::vector<DeinterleaveScenario> build_profile_matrix(const std::string& scope) {
+    const auto suite = perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "mimo_deinterleave.yaml",
+        "mimo_deinterleave");
+    std::vector<DeinterleaveScenario> result;
+    for (const auto& c : suite.cases) {
+      perf::require_keys(c.parameters, {"tx_schedule"}, "parameters");
+      if (c.parameters["tx_schedule"].as<std::string>() != "round_robin" ||
+          c.override_value.has_value()) {
+        throw std::invalid_argument("MIMODeinterleave supports round-robin schedule only");
       }
-      out.push_back(make_scenario(*s));
     }
-    return out;
-  }
-
-  static std::vector<DeinterleaveScenario> build_full_matrix() {
-    std::vector<DeinterleaveScenario> out;
-    for (const auto& s : size_ladder()) {
-      out.push_back(make_scenario(s));
+    for (const auto& c : suite.select(scope)) {
+      size_t index = 0;
+      for (; index < perf::kProfiles.size(); ++index) {
+        if (c.profile == perf::kProfiles[index])
+          break;
+      }
+      const auto& shape = suite.shapes.at(index);
+      if (shape.size() != 4) {
+        throw std::invalid_argument("MIMODeinterleave profile must have TX,RX,chirps,samples");
+      }
+      result.push_back({c.id, c.profile, shape[0], shape[1], shape[2], shape[3]});
     }
-    return out;
+    return result;
   }
 
   static void run_scenario(const DeinterleaveScenario& scen, const perf::RunSettings& rs,
@@ -236,7 +186,7 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs")), warm, &discarded);
+      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
     });
   }
 };

@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <stdexcept>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -215,55 +217,57 @@ struct FeatTraits : perf::PerfDriverDefaults {
            "remain covered by unit tests";
   }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "feature_assembly.yaml",
+        "feature_assembly");
+  }
+
   static std::vector<perf::SizeDef> size_ladder_defs() {
-    std::vector<perf::SizeDef> out;
-    for (const auto& s : size_ladder()) {
-      perf::SizeDef def;
-      def.id = s.id;
-      def.shape = {s.doppler, s.range};
-      def.cells = s.doppler * s.range;
-      def.role = s.role;
-      out.push_back(def);
+    const auto profiles = suite();
+    std::vector<perf::SizeDef> result;
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 2)
+        throw std::invalid_argument("feature_assembly profile rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1],
+                        std::string(perf::kProfiles[i])});
     }
-    return out;
+    return result;
   }
 
-  static std::vector<FeatScenario> build_default_matrix() {
-    std::vector<FeatScenario> out;
-    const SizeSpec& md = must_find_size("md");
-    const std::vector<int64_t> counts = {0, 64, 1024, 16384};
-    for (int64_t n : counts) {
-      out.push_back(make_scenario(md, n));
-    }
-    for (const char* sid : {"xs", "md", "lg", "xlw"}) {
-      const SizeSpec& s = must_find_size(sid);
-      out.push_back(make_scenario(s, 1024));
-    }
-    return out;
-  }
-
-  static std::vector<FeatScenario> build_size_sweep(const std::vector<std::string>& sizes) {
-    std::vector<FeatScenario> out;
-    for (const auto& sid : sizes) {
-      const SizeSpec* s = find_size(sid);
-      if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
+  static std::vector<FeatScenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    std::vector<FeatScenario> result;
+    const auto selected = profiles.select(scope);
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i) {
+        if (c.profile == perf::kProfiles[i])
+          break;
+      }
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 2)
+        throw std::invalid_argument("feature_assembly profile rank mismatch");
+      perf::require_keys(c.parameters, {"detections"}, "parameters");
+      if (c.override_value.has_value())
+        throw std::invalid_argument("FeatureAssembly has no live input");
+      const int64_t count = c.parameters["detections"].as<int64_t>();
+      if (count < 0 || count > 65536)
+        throw std::invalid_argument("FeatureAssembly detections out of range");
+      const bool chosen =
+          std::any_of(selected.begin(), selected.end(), [&](const perf::ProfileCase& item) {
+            return item.id == c.id;
+          });
+      if (!chosen)
         continue;
-      }
-      out.push_back(make_scenario(*s, 1024));
+      const SizeSpec size{c.profile, shape[0], shape[1], c.profile};
+      auto scenario = make_scenario(size, count);
+      scenario.id = c.id;
+      scenario.size_id = c.profile;
+      result.push_back(std::move(scenario));
     }
-    return out;
-  }
-
-  static std::vector<FeatScenario> build_full_matrix() {
-    std::vector<FeatScenario> out;
-    const std::vector<int64_t> counts = {0, 64, 256, 1024, 4096, 16384, 65536};
-    for (const auto& s : size_ladder()) {
-      for (int64_t n : counts) {
-        out.push_back(make_scenario(s, n));
-      }
-    }
-    return out;
+    return result;
   }
 
   static void run_scenario(const FeatScenario& scen, const perf::RunSettings& rs,

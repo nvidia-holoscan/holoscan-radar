@@ -13,6 +13,8 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <stdexcept>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -343,45 +345,59 @@ struct ExpansionTraits : perf::PerfDriverDefaults {
     return "Rows x selected fraction x sources x index-column width";
   }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "multi_source_expansion.yaml",
+        "multi_source_expansion");
+  }
+
   static std::vector<perf::SizeDef> size_ladder_defs() {
+    const auto profiles = suite();
     std::vector<perf::SizeDef> result;
-    for (const auto& size : size_ladder()) {
-      result.push_back(perf::SizeDef{
-          .id = size.id, .shape = {size.rows, 2}, .cells = size.rows, .role = size.role});
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 1)
+        throw std::invalid_argument("multi_source_expansion profile rank mismatch");
+      result.push_back(
+          {std::string(perf::kProfiles[i]), shape, shape[0], std::string(perf::kProfiles[i])});
     }
     return result;
   }
 
-  static std::vector<Scenario> build_default_matrix() {
-    const auto& medium = must_find_size("md");
-    return {make_scenario(must_find_size("xs"), 0.25, 2, 2),
-            make_scenario(medium, 0.10, 2, 2),
-            make_scenario(medium, 0.50, 2, 2),
-            make_scenario(medium, 0.25, 4, 2),
-            make_scenario(medium, 0.25, 2, 10),
-            make_scenario(must_find_size("lg"), 0.25, 2, 2)};
-  }
-
-  static std::vector<Scenario> build_size_sweep(const std::vector<std::string>& sizes) {
+  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
     std::vector<Scenario> result;
-    for (const auto& id : sizes) {
-      if (const auto* size = find_size(id)) {
-        result.push_back(make_scenario(*size, 0.25, 2, 2));
+    const auto selected = profiles.select(scope);
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i) {
+        if (c.profile == perf::kProfiles[i])
+          break;
       }
-    }
-    return result;
-  }
-
-  static std::vector<Scenario> build_full_matrix() {
-    std::vector<Scenario> result;
-    for (const auto& size : size_ladder()) {
-      for (double fraction : {0.10, 0.50, 1.0}) {
-        for (int64_t sources : {2, 3, 4}) {
-          for (int64_t columns : {2, 4, 10}) {
-            result.push_back(make_scenario(size, fraction, sources, columns));
-          }
-        }
-      }
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 1)
+        throw std::invalid_argument("multi_source_expansion profile rank mismatch");
+      perf::require_keys(c.parameters, {"selected_fraction", "sources", "index_columns"},
+                         "parameters");
+      if (c.override_value.has_value())
+        throw std::invalid_argument("MultiSourceExpansion has no live input");
+      const double fraction = c.parameters["selected_fraction"].as<double>();
+      const int64_t sources = c.parameters["sources"].as<int64_t>();
+      const int64_t columns = c.parameters["index_columns"].as<int64_t>();
+      if (!(fraction > 0.0 && fraction <= 1.0) || sources < 1 || sources > 4 || columns < 2 ||
+          columns > 10)
+        throw std::invalid_argument("MultiSourceExpansion parameters out of range");
+      const bool chosen =
+          std::any_of(selected.begin(), selected.end(), [&](const perf::ProfileCase& item) {
+            return item.id == c.id;
+          });
+      if (!chosen)
+        continue;
+      const SizeSpec size{c.profile, shape[0], c.profile};
+      auto scenario = make_scenario(size, fraction, sources, columns);
+      scenario.id = c.id;
+      scenario.size_id = c.profile;
+      result.push_back(std::move(scenario));
     }
     return result;
   }
@@ -410,7 +426,7 @@ struct ExpansionTraits : perf::PerfDriverDefaults {
       settings.warmup_frames = 0;
       settings.measured_frames = 2;
       settings.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs"), 0.25, 2, 2), settings, &discarded);
+      run_scenario(build_profile_matrix("minimal").front(), settings, &discarded);
     });
   }
 };

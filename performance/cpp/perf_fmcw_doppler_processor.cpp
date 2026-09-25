@@ -13,6 +13,9 @@
 #include <complex>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <set>
+#include <stdexcept>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -57,6 +60,13 @@ struct DopplerScenario {
   int64_t num_range_bins{0};
   int64_t channels{1};  // leading batch axis (e.g. rx elements)
   hr::WindowType window{hr::WindowType::kNone};
+  bool center_zero{true};
+  hr::FftNorm fft_norm{hr::FftNorm::kBackward};
+  int64_t nfft{0};
+  double pri{25.0e-6};
+  std::string live_port;
+  std::string override_value;
+  bool cached_override{false};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -99,13 +109,13 @@ hr::WindowSpec window_of(hr::WindowType type) {
 
 // Fixed valid waveform so velocity_bins is emitted every tick. Values only need
 // to pass descriptor validation; they do not affect timing.
-hr::FMCWWaveformDescriptor make_waveform() {
+hr::FMCWWaveformDescriptor make_waveform(double pri = 25.0e-6) {
   hr::FMCWWaveformSpec spec;
   spec.carrier_frequency = 77.0e9;
   spec.bandwidth = 150.0e6;
   spec.chirp_duration = 20.0e-6;
   spec.sample_rate = 12.8e6;
-  spec.chirp_repetition_interval = 25.0e-6;
+  spec.chirp_repetition_interval = pri;
   return hr::FMCWWaveformDescriptor(spec);
 }
 
@@ -121,31 +131,120 @@ std::vector<int64_t> profiles_shape(const DopplerScenario& scen) {
 // (velocity_bins). velocity_bins is always emitted because we set a valid
 // waveform.
 // ---------------------------------------------------------------------------
-perf::TimingCollector run_doppler_graph(const DopplerScenario& scen, int total_frames) {
+hr::FftNorm norm_of(const std::string& value) {
+  if (value == "backward")
+    return hr::FftNorm::kBackward;
+  if (value == "ortho")
+    return hr::FftNorm::kOrtho;
+  if (value == "forward")
+    return hr::FftNorm::kForward;
+  throw std::invalid_argument("unknown FFT normalization: " + value);
+}
+
+hr::WindowType window_type_of(const std::string& value) {
+  if (value == "none")
+    return hr::WindowType::kNone;
+  if (value == "hann")
+    return hr::WindowType::kHann;
+  if (value == "hamming")
+    return hr::WindowType::kHamming;
+  throw std::invalid_argument("unknown Doppler window: " + value);
+}
+
+perf::TimingCollector run_doppler_graph(const DopplerScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(profiles_shape(scen));
-  return perf::run_perf_graph(
-      std::move(cube), total_frames, "doppler-perf",
-      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
-        hr::MaxTensorExtents extents;
-        extents.max_chirps = scen.num_chirps;
-        extents.max_range_bins = scen.num_range_bins;
-        if (scen.channels > 1) {
-          extents.max_rx = scen.channels;
-        }
-        auto op = graph.op<hr::FMCWDopplerProcessorOp<PerfPrecision>>("doppler", extents);
-        hr::FMCWDopplerProcessorParams params;
-        params.waveform = make_waveform();
-        params.doppler_window = window_of(scen.window);
-        op.set_params(std::move(params));
-        const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
-        const auto ns = graph.op<perf::PerfNullSinkOp>("vel_sink");
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(src->out, op->range_profiles, q);
-        graph.add_flow(op->rd_maps, sink->in, q);
-        graph.add_flow(op->velocity_bins, ns->in, q);
-        perf::bind_tensor_out(options, "doppler", "rd_maps");
-        perf::bind_tensor_out(options, "doppler", "velocity_bins");
-      });
+  const auto configure = [&](holoscan::Graph& graph, const auto& src,
+                             holoscan::CompileOptions& options, auto connect) {
+    hr::MaxTensorExtents extents;
+    extents.max_chirps = std::max<int64_t>(
+        scen.live_port == "nfft" ? scen.num_chirps * 2 : scen.num_chirps, scen.nfft);
+    extents.max_range_bins = scen.num_range_bins;
+    if (scen.channels > 1)
+      extents.max_rx = scen.channels;
+    auto op = graph.op<hr::FMCWDopplerProcessorOp<PerfPrecision>>("doppler", extents);
+    hr::FMCWDopplerProcessorParams params;
+    params.waveform = make_waveform(scen.pri);
+    params.doppler_window = window_of(scen.window);
+    params.center_zero_doppler = scen.center_zero;
+    params.fft_norm = scen.fft_norm;
+    params.nfft = scen.nfft;
+    op.set_params(std::move(params));
+    const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
+    const auto ns = graph.op<perf::PerfNullSinkOp>("vel_sink");
+    const holoscan::ConnectionOptions q{.queue_depth = 4U};
+    graph.add_flow(src->out, op->range_profiles, q);
+    connect(graph, src, op, q);
+    graph.add_flow(op->rd_maps, sink->in, q);
+    graph.add_flow(op->velocity_bins, ns->in, q);
+    perf::bind_tensor_out(options, "doppler", "rd_maps");
+    perf::bind_tensor_out(options, "doppler", "velocity_bins");
+  };
+  if (scen.live_port == "doppler_window") {
+    auto changed = window_of(window_type_of(scen.override_value));
+    return perf::run_perf_graph_with_window_override(
+        std::move(cube), plan.total_frames, plan.override_at, window_of(scen.window), changed,
+        "doppler-perf",
+        [&](auto& graph, const auto& src, auto& options) {
+          configure(graph, src, options,
+                    [](auto& g, const auto& source, const auto& op, const auto& q) {
+                      g.add_flow(source->override_out, op->doppler_window_in, q);
+                    });
+        },
+        perf::PerfPublishMode::kCopy, true);
+  }
+  if (scen.live_port == "center_zero_doppler") {
+    return perf::run_perf_graph_with_override(
+        std::move(cube), plan.total_frames, plan.override_at, scen.center_zero,
+        scen.override_value == "true", "doppler-perf",
+        [&](auto& graph, const auto& src, auto& options) {
+          configure(graph, src, options,
+                    [](auto& g, const auto& source, const auto& op, const auto& q) {
+                      g.add_flow(source->override_out, op->center_zero_doppler_in, q);
+                    });
+        },
+        perf::PerfPublishMode::kCopy, true);
+  }
+  if (scen.live_port == "waveform") {
+    return perf::run_perf_graph_with_override(
+        std::move(cube), plan.total_frames, plan.override_at, hr::to_wire(make_waveform(scen.pri)),
+        hr::to_wire(make_waveform(std::stod(scen.override_value))), "doppler-perf",
+        [&](auto& graph, const auto& src, auto& options) {
+          configure(graph, src, options,
+                    [](auto& g, const auto& source, const auto& op, const auto& q) {
+                      g.add_flow(source->override_out, op->waveform_in, q);
+                    });
+        },
+        perf::PerfPublishMode::kCopy, true);
+  }
+  if (scen.live_port == "fft_norm") {
+    return perf::run_perf_graph_with_override(
+        std::move(cube), plan.total_frames, plan.override_at, scen.fft_norm,
+        norm_of(scen.override_value), "doppler-perf",
+        [&](auto& graph, const auto& src, auto& options) {
+          configure(graph, src, options,
+                    [](auto& g, const auto& source, const auto& op, const auto& q) {
+                      g.add_flow(source->override_out, op->fft_norm_in, q);
+                    });
+        },
+        perf::PerfPublishMode::kCopy, true);
+  }
+  if (scen.live_port == "nfft") {
+    return perf::run_perf_graph_with_override(
+        std::move(cube), plan.total_frames, plan.override_at, scen.nfft,
+        int64_t{2 * scen.num_chirps}, "doppler-perf",
+        [&](auto& graph, const auto& src, auto& options) {
+          configure(graph, src, options,
+                    [](auto& g, const auto& source, const auto& op, const auto& q) {
+                      g.add_flow(source->override_out, op->nfft_in, q);
+                    });
+        },
+        perf::PerfPublishMode::kCopy, true, scen.cached_override);
+  }
+  return perf::run_perf_graph(std::move(cube), plan.total_frames, "doppler-perf",
+                              [&](auto& graph, const auto& src, auto& options) {
+                                configure(graph, src, options,
+                                          [](auto&, const auto&, const auto&, const auto&) {});
+                              });
 }
 
 void fill_throughput(perf::ResultRow* row, const DopplerScenario& scen, double median_ms) {
@@ -175,7 +274,7 @@ perf::ResultRow base_row(const DopplerScenario& scen) {
   row.input_shape = profiles_shape(scen);
   row.out_batch = scen.channels;
   row.k = scen.num_chirps;
-  row.notes = "live_override=not_measured";
+  row.live_port = scen.live_port;
   return row;
 }
 
@@ -220,66 +319,101 @@ struct DopplerTraits : perf::PerfDriverDefaults {
            "live-override timing is not measured";
   }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "fmcw_doppler_processor.yaml",
+        "fmcw_doppler_processor");
+  }
   static std::vector<perf::SizeDef> size_ladder_defs() {
-    std::vector<perf::SizeDef> out;
-    for (const auto& s : size_ladder()) {
-      perf::SizeDef def;
-      def.id = s.id;
-      def.shape = {s.num_chirps, s.num_range_bins};
-      def.cells = s.num_chirps * s.num_range_bins;
-      def.role = s.role;
-      out.push_back(def);
+    const auto profiles = suite();
+    std::vector<perf::SizeDef> result;
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 2)
+        throw std::invalid_argument("FMCWDoppler profile rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1],
+                        std::string(perf::kProfiles[i])});
     }
-    return out;
+    return result;
   }
-
-  static std::vector<DopplerScenario> build_default_matrix() {
-    std::vector<DopplerScenario> out;
-    for (const char* sid : {"xs", "md", "lg", "xl"}) {
-      out.push_back(make_scenario(hr::WindowType::kNone, must_find_size(sid)));
-    }
-    const SizeSpec& md = must_find_size("md");
-    out.push_back(make_scenario(hr::WindowType::kHann, md));
-    out.push_back(make_scenario(hr::WindowType::kNone, md, 4));
-    return out;
-  }
-
-  static std::vector<DopplerScenario> build_size_sweep(const std::vector<std::string>& sizes) {
-    std::vector<DopplerScenario> out;
-    for (const auto& sid : sizes) {
-      const SizeSpec* s = find_size(sid);
-      if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
-        continue;
+  static std::vector<DopplerScenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    std::set<std::string> selected_ids;
+    for (const auto& c : profiles.select(scope))
+      selected_ids.insert(c.id);
+    std::vector<DopplerScenario> result;
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i) {
+        if (c.profile == perf::kProfiles[i])
+          break;
       }
-      out.push_back(make_scenario(hr::WindowType::kNone, *s));
-    }
-    return out;
-  }
-
-  static std::vector<DopplerScenario> build_full_matrix() {
-    std::vector<DopplerScenario> out;
-    for (const auto& s : size_ladder()) {
-      for (auto w : {hr::WindowType::kNone, hr::WindowType::kHann}) {
-        out.push_back(make_scenario(w, s));
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 2 || shape[0] < 2)
+        throw std::invalid_argument("FMCWDoppler invalid profile shape");
+      perf::require_keys(
+          c.parameters,
+          {"doppler_window", "center_zero_doppler", "fft_norm", "nfft", "pri", "channels"},
+          "parameters");
+      if (!c.parameters["doppler_window"] || !c.parameters["fft_norm"])
+        throw std::invalid_argument("FMCWDoppler needs window and FFT norm");
+      const auto window = window_type_of(c.parameters["doppler_window"].as<std::string>());
+      const SizeSpec size{c.profile, shape[0], shape[1], c.profile};
+      auto scenario = make_scenario(window, size);
+      scenario.id = c.id;
+      scenario.size_id = c.profile;
+      scenario.fft_norm = norm_of(c.parameters["fft_norm"].as<std::string>());
+      if (c.parameters["center_zero_doppler"])
+        scenario.center_zero = c.parameters["center_zero_doppler"].as<bool>();
+      if (c.parameters["channels"])
+        scenario.channels = c.parameters["channels"].as<int64_t>();
+      if (c.parameters["nfft"])
+        scenario.nfft = c.parameters["nfft"].as<int64_t>();
+      if (c.parameters["pri"])
+        scenario.pri = c.parameters["pri"].as<double>();
+      if (scenario.channels <= 0 || (scenario.nfft != 0 && scenario.nfft < shape[0]) ||
+          scenario.nfft > 2 * shape[0] || scenario.pri <= 20.0e-6)
+        throw std::invalid_argument("FMCWDoppler incompatible parameters");
+      if (c.override_value) {
+        scenario.live_port = (*c.override_value)["port"].as<std::string>();
+        scenario.override_value = (*c.override_value)["value"].as<std::string>();
+        if ((*c.override_value)["cache"]) {
+          const auto cache = (*c.override_value)["cache"].as<std::string>();
+          if (scenario.live_port != "nfft")
+            throw std::invalid_argument("cached transition only applies to nfft");
+          scenario.cached_override = cache == "cached";
+        }
+        if (scenario.live_port == "doppler_window") {
+          (void)window_type_of(scenario.override_value);
+        } else if (scenario.live_port == "center_zero_doppler") {
+          if (scenario.override_value != "true" && scenario.override_value != "false")
+            throw std::invalid_argument("invalid center_zero_doppler override");
+        } else if (scenario.live_port == "waveform") {
+          if (std::stod(scenario.override_value) <= 20.0e-6)
+            throw std::invalid_argument("invalid waveform PRI override");
+        } else if (scenario.live_port == "fft_norm") {
+          (void)norm_of(scenario.override_value);
+        } else if (scenario.live_port == "nfft") {
+          if (scenario.override_value != "double")
+            throw std::invalid_argument("nfft override must be double");
+        } else {
+          throw std::invalid_argument("unknown FMCWDoppler live port");
+        }
       }
+      if (selected_ids.contains(c.id))
+        result.push_back(std::move(scenario));
     }
-    for (const char* sid : {"md", "lg"}) {
-      const SizeSpec& s = must_find_size(sid);
-      for (int64_t ch : {4, 16}) {
-        out.push_back(make_scenario(hr::WindowType::kNone, s, ch));
-      }
-    }
-    return out;
+    return result;
   }
 
   static void run_scenario(const DopplerScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    // Port coverage is landed; override_ms timing remains deferred (§1 / §8).
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
+    if (scen.cached_override && rs.warmup_frames < 1)
+      throw std::invalid_argument("cached transition requires at least one warmup frame");
+    const perf::RunPlan plan = perf::make_run_plan(rs, !scen.live_port.empty());
     const auto samples =
         perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_doppler_graph(scen, p.total_frames);
+          return run_doppler_graph(scen, p);
         });
 
     perf::append_setup_row(base_row(scen), samples, report);
@@ -287,12 +421,9 @@ struct DopplerTraits : perf::PerfDriverDefaults {
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes =
-        "cold_ms is first-frame latency including initial "
-        "window/FFT plan build; median/p90 are post-warmup "
-        "steady state; live doppler_window override timing is not "
-        "measured; "
-        "cells/s is complex rd-map cells/s";
+    row.notes = "end-to-end Graph latency; cells/s is complex RD-map cells/s";
+    if (!scen.live_port.empty())
+      row.notes += "; one-frame " + scen.live_port + " change";
     report->results.push_back(row);
   }
 
@@ -303,7 +434,7 @@ struct DopplerTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(make_scenario(hr::WindowType::kNone, must_find_size("xs")), warm, &discarded);
+      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
     });
   }
 };

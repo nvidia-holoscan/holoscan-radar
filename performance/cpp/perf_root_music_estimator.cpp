@@ -38,6 +38,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <set>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -87,6 +89,7 @@ struct SizeSpec {
 
 struct RootMusicScenario {
   enum class OverrideKind {
+    kNone,
     kArrayGeometry,
     kSpatialSmoothing,
     kNumSources,
@@ -102,12 +105,14 @@ struct RootMusicScenario {
   bool is_ura{false};
   int64_t ny{0};
   int64_t nz{0};
-  OverrideKind override_kind{OverrideKind::kMaxSources};
+  OverrideKind override_kind{OverrideKind::kNone};
   std::optional<int64_t> fixed_model_order;
 };
 
 const char* override_name(RootMusicScenario::OverrideKind kind) {
   switch (kind) {
+    case RootMusicScenario::OverrideKind::kNone:
+      return "";
     case RootMusicScenario::OverrideKind::kArrayGeometry:
       return "array_geometry";
     case RootMusicScenario::OverrideKind::kSpatialSmoothing:
@@ -225,8 +230,11 @@ hr::SpatialSmoothingOverride smoothing_wire(const std::vector<int64_t>& smoothin
 class PerfRootMUSICOverrideSourceOp final : public holoscan::Operator<> {
  public:
   PerfRootMUSICOverrideSourceOp(int64_t override_at, hr::RootMUSICParams initial,
-                                hr::RootMUSICParams override)
-  : override_at_(override_at), initial_(std::move(initial)), override_(std::move(override)) {}
+                                hr::RootMUSICParams override, RootMusicScenario::OverrideKind kind)
+  : override_at_(override_at),
+    initial_(std::move(initial)),
+    override_(std::move(override)),
+    kind_(kind) {}
 
   void setup(holoscan::OperatorSpec& spec) override {
     constexpr holoscan::TensorRepresentation kDevice{
@@ -263,46 +271,52 @@ class PerfRootMUSICOverrideSourceOp final : public holoscan::Operator<> {
     perf::PerfPublishMode mode = perf::PerfPublishMode::kCopy;
     {
       const std::lock_guard lock(perf::PerfFrameBank::mutex);
-      if (perf::PerfFrameBank::frames_remaining <= 0 ||
+      if (perf::PerfFrameBank::in_flight != 0 || perf::PerfFrameBank::frames_remaining <= 0 ||
           perf::PerfFrameBank::input_frame == nullptr) {
         return {};
       }
       --perf::PerfFrameBank::frames_remaining;
       frame = perf::PerfFrameBank::input_frame;
       mode = perf::PerfFrameBank::publish_mode;
+      perf::detail::record_start_locked();
     }
 
-    const auto& values = frame_index_ < override_at_ ? initial_ : override_;
-    const holoscan::TimePoint time = context.activation_time();
-    const auto packed = hr::pack_array_geometry(values.array_geometry);
-    auto geometry_wire = hr::to_wire(values.array_geometry);
-    const std::array<int64_t, 2> geometry_shape{values.array_geometry.num_elements() + 1, 3};
-    auto emitted =
-        emit_wire_doubles(array_geometry, std::move(geometry_wire), packed, geometry_shape, time);
-    if (!emitted) {
-      return emitted;
-    }
-    emitted = spatial_smoothing.emit(smoothing_wire(values.spatial_smoothing),
-                                     holoscan::EmitOptions{.capture_time = time});
-    if (!emitted) {
-      return emitted;
-    }
-    emitted = num_sources.emit(values.num_sources, holoscan::EmitOptions{.capture_time = time});
-    if (!emitted) {
-      return emitted;
-    }
-    emitted =
-        source_count_pfa.emit(values.source_count_pfa, holoscan::EmitOptions{.capture_time = time});
-    if (!emitted) {
-      return emitted;
-    }
-    emitted = max_sources.emit(values.max_sources, holoscan::EmitOptions{.capture_time = time});
-    if (!emitted) {
-      return emitted;
-    }
-    {
-      const std::lock_guard lock(perf::PerfFrameBank::mutex);
-      perf::detail::record_start_locked();
+    if (frame_index_ == override_at_) {
+      const holoscan::TimePoint time = context.activation_time();
+      holoscan::expected<void, holoscan::Error> emitted;
+      switch (kind_) {
+        case RootMusicScenario::OverrideKind::kNone:
+          break;
+        case RootMusicScenario::OverrideKind::kArrayGeometry: {
+          const auto packed = hr::pack_array_geometry(override_.array_geometry);
+          const std::array<int64_t, 2> shape{override_.array_geometry.num_elements() + 1, 3};
+          emitted = emit_wire_doubles(array_geometry, hr::to_wire(override_.array_geometry), packed,
+                                      shape, time);
+          break;
+        }
+        case RootMusicScenario::OverrideKind::kSpatialSmoothing: {
+          emitted = spatial_smoothing.emit(smoothing_wire(override_.spatial_smoothing),
+                                           holoscan::EmitOptions{.capture_time = time});
+          break;
+        }
+        case RootMusicScenario::OverrideKind::kNumSources: {
+          emitted =
+              num_sources.emit(override_.num_sources, holoscan::EmitOptions{.capture_time = time});
+          break;
+        }
+        case RootMusicScenario::OverrideKind::kSourceCountPfa: {
+          emitted = source_count_pfa.emit(override_.source_count_pfa,
+                                          holoscan::EmitOptions{.capture_time = time});
+          break;
+        }
+        case RootMusicScenario::OverrideKind::kMaxSources: {
+          emitted =
+              max_sources.emit(override_.max_sources, holoscan::EmitOptions{.capture_time = time});
+          break;
+        }
+      }
+      if (!emitted)
+        return emitted;
     }
     ++frame_index_;
     return perf::detail::emit_device_frame(snapshot, context, frame, mode);
@@ -319,6 +333,7 @@ class PerfRootMUSICOverrideSourceOp final : public holoscan::Operator<> {
   int64_t override_at_{-1};
   hr::RootMUSICParams initial_;
   hr::RootMUSICParams override_;
+  RootMusicScenario::OverrideKind kind_{RootMusicScenario::OverrideKind::kNone};
   int64_t frame_index_{0};
 };
 
@@ -331,12 +346,15 @@ perf::TimingCollector run_root_music_graph(const RootMusicScenario& scen,
   hr::RootMUSICParams initial;
   initial.array_geometry = scenario_geometry(scen, 0.5, 1.0);
   initial.angle_convention.preset = hr::AngleConventionPreset::kRadarBoresight;
-  initial.num_sources = scen.fixed_model_order.value_or(
-      scen.override_kind == RootMusicScenario::OverrideKind::kSourceCountPfa ? -1 : 1);
-  initial.source_count_pfa = 1e-4;
+  initial.num_sources = scen.override_kind == RootMusicScenario::OverrideKind::kSourceCountPfa
+                            ? -1
+                            : scen.fixed_model_order.value_or(-1);
+  initial.source_count_pfa = 1e-2;
   initial.max_sources = kInitialMaxSources;
   hr::RootMUSICParams override = initial;
   switch (scen.override_kind) {
+    case RootMusicScenario::OverrideKind::kNone:
+      break;
     case RootMusicScenario::OverrideKind::kArrayGeometry:
       override.array_geometry = scenario_geometry(scen, 0.45, 1.0);
       break;
@@ -345,17 +363,14 @@ perf::TimingCollector run_root_music_graph(const RootMusicScenario& scen,
           scen.is_ura ? std::vector<int64_t>{2, 2} : std::vector<int64_t>{2};
       break;
     case RootMusicScenario::OverrideKind::kNumSources:
-      override.num_sources = -1;
+      override.num_sources = 2;
       break;
     case RootMusicScenario::OverrideKind::kSourceCountPfa:
-      override.source_count_pfa = 1e-2;
+      override.source_count_pfa = 1e-3;
       break;
     case RootMusicScenario::OverrideKind::kMaxSources:
       override.max_sources = kOverrideMaxSources;
       break;
-  }
-  if (scen.fixed_model_order.has_value()) {
-    override = initial;
   }
 
   hr::MaxTensorExtents extents;
@@ -367,8 +382,8 @@ perf::TimingCollector run_root_music_graph(const RootMusicScenario& scen,
   perf::PerfFrameBank::reset(std::move(snap), plan.total_frames, &collector);
 
   holoscan::Graph graph{"root-music-perf"};
-  const auto source =
-      graph.op<PerfRootMUSICOverrideSourceOp>("src", plan.override_at, initial, override);
+  const auto source = graph.op<PerfRootMUSICOverrideSourceOp>("src", plan.override_at, initial,
+                                                              override, scen.override_kind);
   auto op = graph.op<hr::RootMUSICEstimatorOp<PerfPrecision>>("root_music", extents);
   op.set_params(std::move(initial));
   const auto sink = graph.op<perf::PerfTerminalSinkOp>("aoa_sink");
@@ -378,11 +393,16 @@ perf::TimingCollector run_root_music_graph(const RootMusicScenario& scen,
   const holoscan::ConnectionOptions q{.queue_depth = 8U};
 
   graph.add_flow(source->snapshot, op->snapshot, q);
-  graph.add_flow(source->array_geometry, op->array_geometry, q);
-  graph.add_flow(source->spatial_smoothing, op->spatial_smoothing, q);
-  graph.add_flow(source->num_sources, op->num_sources, q);
-  graph.add_flow(source->source_count_pfa, op->source_count_pfa, q);
-  graph.add_flow(source->max_sources, op->max_sources, q);
+  if (scen.override_kind == RootMusicScenario::OverrideKind::kArrayGeometry)
+    graph.add_flow(source->array_geometry, op->array_geometry, q);
+  if (scen.override_kind == RootMusicScenario::OverrideKind::kSpatialSmoothing)
+    graph.add_flow(source->spatial_smoothing, op->spatial_smoothing, q);
+  if (scen.override_kind == RootMusicScenario::OverrideKind::kNumSources)
+    graph.add_flow(source->num_sources, op->num_sources, q);
+  if (scen.override_kind == RootMusicScenario::OverrideKind::kSourceCountPfa)
+    graph.add_flow(source->source_count_pfa, op->source_count_pfa, q);
+  if (scen.override_kind == RootMusicScenario::OverrideKind::kMaxSources)
+    graph.add_flow(source->max_sources, op->max_sources, q);
   graph.add_flow(op->aoa_estimates, sink->in, q);
   graph.add_flow(op->doa_multi, doa->in, q);
   graph.add_flow(op->source_count, count->in, q);
@@ -430,20 +450,24 @@ perf::ResultRow base_row(const RootMusicScenario& scen) {
   perf::ResultRow row;
   row.scenario_id = scen.id;
   row.op_name = "RootMUSICEstimatorOp";
-  row.variant = scen.fixed_model_order.has_value()
+  row.variant = scen.override_kind == RootMusicScenario::OverrideKind::kNone &&
+                        scen.fixed_model_order.has_value()
                     ? "root_music_model_order_" + std::to_string(*scen.fixed_model_order)
                     : std::string("root_music_live_") + override_name(scen.override_kind);
+  row.live_port = override_name(scen.override_kind);
   row.size_id = scen.size_id;
   row.input_shape = {scen.detections, scen.channels, scen.snapshots};
   row.out_batch = scen.detections;
   row.k = scen.channels;
-  row.notes = scen.fixed_model_order.has_value()
+  row.notes = scen.override_kind == RootMusicScenario::OverrideKind::kNone &&
+                      scen.fixed_model_order.has_value()
                   ? "fixed_model_order=" + std::to_string(*scen.fixed_model_order)
                   : std::string("live_override=") + override_name(scen.override_kind);
   return row;
 }
 
-RootMusicScenario make_scenario(const SizeSpec& s, RootMusicScenario::OverrideKind kind) {
+RootMusicScenario make_scenario(const SizeSpec& s, RootMusicScenario::OverrideKind kind =
+                                                       RootMusicScenario::OverrideKind::kNone) {
   RootMusicScenario sc;
   sc.size_id = s.id;
   sc.channels = s.channels;
@@ -575,55 +599,76 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
     return "Full sizes with five live overrides and model-order sweep";
   }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "root_music_estimator.yaml",
+        "root_music_estimator");
+  }
   static std::vector<perf::SizeDef> size_ladder_defs() {
-    std::vector<perf::SizeDef> out;
-    for (const auto& s : size_ladder()) {
-      perf::SizeDef def;
-      def.id = s.id;
-      def.shape = {s.channels, s.detections, s.snapshots};
-      def.cells = s.detections;
-      def.role = s.role;
-      out.push_back(def);
+    const auto profiles = suite();
+    std::vector<perf::SizeDef> result;
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 3)
+        throw std::invalid_argument("root_music_estimator profile rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
+                        std::string(perf::kProfiles[i])});
     }
-    return out;
+    return result;
   }
-
-  static std::vector<RootMusicScenario> build_default_matrix() {
-    std::vector<RootMusicScenario> out;
-    for (const char* sid : {"xs", "sm", "md"}) {
-      append_scenarios(&out, must_find_size(sid));
-    }
-    append_ura_scenarios(&out, "ura_sm", 6, 6, 128, 96);
-    return out;
-  }
-
-  static std::vector<RootMusicScenario> build_size_sweep(const std::vector<std::string>& sizes) {
-    std::vector<RootMusicScenario> out;
-    for (const auto& sid : sizes) {
-      const SizeSpec* s = find_size(sid);
-      if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
-        continue;
+  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    std::set<std::string> selected_ids;
+    for (const auto& c : profiles.select(scope))
+      selected_ids.insert(c.id);
+    std::vector<Scenario> result;
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i)
+        if (c.profile == perf::kProfiles[i])
+          break;
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 3 || shape[0] < 4 || shape[1] < 1 || shape[2] < 2)
+        throw std::invalid_argument("root_music_estimator invalid shape");
+      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
+      auto scenario = make_scenario(size);
+      scenario.id = c.id;
+      perf::require_keys(c.parameters, {"num_sources"}, "parameters");
+      const auto model_order = c.parameters["num_sources"].as<std::string>();
+      if (model_order == "auto") {
+        scenario.fixed_model_order.reset();
+      } else {
+        const int64_t value = std::stoll(model_order);
+        if (value < 1 || value > 3)
+          throw std::invalid_argument("invalid model order");
+        scenario.fixed_model_order = value;
       }
-      append_scenarios(&out, *s);
+      if (c.override_value) {
+        const auto port = (*c.override_value)["port"].as<std::string>();
+        const auto value = (*c.override_value)["value"].as<std::string>();
+        if (port == "array_geometry" && value == "spacing_045")
+          scenario.override_kind = RootMusicScenario::OverrideKind::kArrayGeometry;
+        else if (port == "spatial_smoothing" && value == "two")
+          scenario.override_kind = RootMusicScenario::OverrideKind::kSpatialSmoothing;
+        else if (port == "num_sources" && value == "2")
+          scenario.override_kind = RootMusicScenario::OverrideKind::kNumSources;
+        else if (port == "source_count_pfa" && value == "0.001")
+          scenario.override_kind = RootMusicScenario::OverrideKind::kSourceCountPfa;
+        else if (port == "max_sources" && value == "3")
+          scenario.override_kind = RootMusicScenario::OverrideKind::kMaxSources;
+        else
+          throw std::invalid_argument("root_music_estimator invalid live override");
+      }
+      if (selected_ids.contains(c.id))
+        result.push_back(std::move(scenario));
     }
-    return out;
-  }
-
-  static std::vector<RootMusicScenario> build_full_matrix() {
-    std::vector<RootMusicScenario> out;
-    for (const auto& s : size_ladder()) {
-      append_scenarios(&out, s);
-    }
-    append_ura_scenarios(&out, "ura_sm", 6, 6, 128, 96);
-    append_ura_scenarios(&out, "ura_lg", 8, 8, 256, 128);
-    return out;
+    return result;
   }
 
   static void run_scenario(const RootMusicScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan =
-        perf::make_run_plan(rs, /*has_override=*/!scen.fixed_model_order.has_value());
+    const perf::RunPlan plan = perf::make_run_plan(
+        rs, /*has_override=*/scen.override_kind != RootMusicScenario::OverrideKind::kNone);
     const auto samples =
         perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_root_music_graph(scen, p);
@@ -634,15 +679,14 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
-    if (scen.fixed_model_order.has_value()) {
-      row.notes = "fixed num_sources=" + std::to_string(*scen.fixed_model_order) +
-                  " model-order characterization; no inline override; "
-                  "cells/s is detections/s";
+    if (scen.override_kind == RootMusicScenario::OverrideKind::kNone) {
+      row.notes = "Params num_sources=" +
+                  (scen.fixed_model_order ? std::to_string(*scen.fixed_model_order) : "auto") +
+                  "; no inline override; cells/s is detections/s";
     } else {
       row.notes = "override_ms isolates inline " + std::string(override_name(scen.override_kind)) +
-                  "; steady num_sources is fixed at one except the "
-                  "source_count_pfa scenario, which uses auto; "
-                  "cells/s is detections/s";
+                  "; Params num_sources=" + std::to_string(scen.fixed_model_order.value_or(-1)) +
+                  "; cells/s is detections/s";
     }
     report->results.push_back(row);
   }

@@ -1,23 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Performance characterization for ClutterFilterOp — slow-time static-clutter
-// suppression (mean subtraction / 1st- / 2nd-order delay-line MTI). Sweeps the
-// (chirps x range_bins) size ladder, the suppression method, and a
-// multi-channel batch. Every compute run inlines a mid-session [live] method
-// override so the method-switch cost (and output chirp-count change) is
-// measured.
-//
-//  Graph-based rewrite of the HSDK 4.x Application harness.
-// Measurement tool only: no timing assertions. See
-// docs/planning/OPERATOR_DEVELOPMENT.md.
+// ClutterFilterOp characterization from curated YAML cases: three input
+// sizes, static method/window choices, and isolated one-frame Exact overrides
+// for both live inputs. Measurement tool only; no timing thresholds.
 
 #include <complex>
 #include <cstdint>
-#include <cstdlib>
-#include <iostream>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <stdexcept>
 #include <memory>
-#include <sstream>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,6 +24,7 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
+#include "utils/perf_profiles.hpp"
 #include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
@@ -43,13 +37,6 @@ namespace {
 
 using PerfPrecision = float;  // v1 characterizes single precision (complex64).
 
-struct SizeSpec {
-  std::string id;
-  int64_t num_chirps;
-  int64_t num_range_bins;
-  std::string role;
-};
-
 struct ClutterScenario {
   std::string id;
   std::string size_id;
@@ -59,35 +46,8 @@ struct ClutterScenario {
   hr::ClutterFilterMethod method{hr::ClutterFilterMethod::kMeanSubtraction};
   hr::WindowSpec window{};
   bool time_window_override{false};
+  bool time_method_override{false};
 };
-
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 16, 128, "small map; fast smoke"},
-      {"sm", 32, 256, "compact sensor / few chirps"},
-      {"md", 64, 512, "common dev size"},
-      {"lg", 128, 1024, "moderate production-scale"},
-      {"xl", 256, 2048, "range-heavy moderate (v1 upper bound)"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& s : size_ladder()) {
-    if (s.id == id) {
-      return &s;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* s = find_size(id);
-  if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *s;
-}
 
 std::string method_tag(hr::ClutterFilterMethod m) {
   switch (m) {
@@ -132,7 +92,7 @@ perf::TimingCollector run_clutter_graph(const ClutterScenario& scen, const perf:
     extents.max_rx = scen.channels;
   }
   using BaseOp = hr::ClutterFilterOp<PerfPrecision>;
-  // Production Exact{} + per-tick co-emit. Do not wrap PerfLiveContractOp
+  // Production Exact{} uses the one-frame source sideband.
   // (restacking LatestWithin is TEMPORAL_CONTRACT_INVALID).
   if (scen.time_window_override) {
     hr::WindowSpec unseen;
@@ -153,6 +113,23 @@ perf::TimingCollector run_clutter_graph(const ClutterScenario& scen, const perf:
           graph.add_flow(op->range_profiles_out, sink->in, q);
           graph.partition("perf").add(src).add(op).add(sink);
           perf::bind_tensor_out(options, "clutter", "range_profiles_out");
+        },
+        perf::PerfPublishMode::kCopy, true);
+  }
+  if (!scen.time_method_override) {
+    return perf::run_perf_graph(
+        std::move(cube), plan.total_frames, "clutter-perf",
+        [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
+          auto op = graph.op<BaseOp>("clutter", extents);
+          hr::ClutterFilterParams params;
+          params.method = scen.method;
+          params.doppler_window = scen.window;
+          op.set_params(std::move(params));
+          const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
+          const holoscan::ConnectionOptions q{.queue_depth = 4U};
+          graph.add_flow(src->out, op->range_profiles, q);
+          graph.add_flow(op->range_profiles_out, sink->in, q);
+          perf::bind_tensor_out(options, "clutter", "range_profiles_out");
         });
   }
   const hr::ClutterFilterMethod override_method = flip_method(scen.method);
@@ -172,7 +149,8 @@ perf::TimingCollector run_clutter_graph(const ClutterScenario& scen, const perf:
         graph.add_flow(op->range_profiles_out, sink->in, q);
         graph.partition("perf").add(src).add(op).add(sink);
         perf::bind_tensor_out(options, "clutter", "range_profiles_out");
-      });
+      },
+      perf::PerfPublishMode::kCopy, true);
 }
 
 void fill_throughput(perf::ResultRow* row, const ClutterScenario& scen, double median_ms) {
@@ -201,30 +179,9 @@ perf::ResultRow base_row(const ClutterScenario& scen) {
   row.input_shape = profiles_shape(scen);
   row.out_batch = scen.channels;
   row.k = scen.num_chirps;
-  row.notes = scen.time_window_override ? "live_override=doppler_window(unseen_hamming)"
-                                        : "live_override=method";
+  row.live_port =
+      scen.time_window_override ? "doppler_window" : (scen.time_method_override ? "method" : "");
   return row;
-}
-
-ClutterScenario make_scenario(hr::ClutterFilterMethod method, const SizeSpec& s,
-                              int64_t channels = 1, hr::WindowType window = hr::WindowType::kNone,
-                              bool time_window_override = false) {
-  ClutterScenario sc;
-  sc.size_id = s.id;
-  sc.num_chirps = s.num_chirps;
-  sc.num_range_bins = s.num_range_bins;
-  sc.channels = channels;
-  sc.method = method;
-  sc.window.type = window;
-  sc.time_window_override = time_window_override;
-  std::ostringstream id;
-  id << "clutter_" << method_tag(method) << "_" << window_tag(sc.window) << "_" << s.id;
-  if (channels > 1) {
-    id << "_ch" << channels;
-  }
-  id << "_compute";
-  sc.id = id.str();
-  return sc;
 }
 
 struct ClutterTraits : perf::PerfDriverDefaults {
@@ -246,69 +203,94 @@ struct ClutterTraits : perf::PerfDriverDefaults {
   }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
+    const auto suite = perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml",
+        "clutter_filter");
     std::vector<perf::SizeDef> out;
-    for (const auto& s : size_ladder()) {
-      perf::SizeDef def;
-      def.id = s.id;
-      def.shape = {s.num_chirps, s.num_range_bins};
-      def.cells = s.num_chirps * s.num_range_bins;
-      def.role = s.role;
-      out.push_back(def);
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = suite.shapes[i];
+      if (shape.size() != 2)
+        throw std::invalid_argument("profile shape rank mismatch");
+      out.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1],
+                     std::string(perf::kProfiles[i])});
     }
     return out;
   }
 
-  static std::vector<ClutterScenario> build_default_matrix() {
-    std::vector<ClutterScenario> out;
-    for (const char* sid : {"xs", "md", "lg", "xl"}) {
-      out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, must_find_size(sid)));
-    }
-    const SizeSpec& md = must_find_size("md");
-    out.push_back(make_scenario(hr::ClutterFilterMethod::kSingleDelay, md));
-    out.push_back(make_scenario(hr::ClutterFilterMethod::kDoubleDelay, md));
-    out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, md, 4));
-    out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, md, 1,
-                                hr::WindowType::kHann, /*time_window_override=*/true));
-    return out;
-  }
-
-  static std::vector<ClutterScenario> build_size_sweep(const std::vector<std::string>& sizes) {
-    std::vector<ClutterScenario> out;
-    for (const auto& sid : sizes) {
-      const SizeSpec* s = find_size(sid);
-      if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
-        continue;
+  static std::vector<ClutterScenario> build_profile_matrix(const std::string& scope) {
+    const auto path =
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml";
+    const auto suite = perf::load_profile_suite(path, "clutter_filter");
+    std::vector<ClutterScenario> result;
+    std::set<std::string> selected_ids;
+    for (const auto& c : suite.select(scope))
+      selected_ids.insert(c.id);
+    for (const auto& c : suite.cases) {
+      perf::require_keys(c.parameters, {"method", "doppler_window", "channels"}, "parameters");
+      auto method_of = [](const std::string& name) {
+        if (name == "mean_subtraction")
+          return hr::ClutterFilterMethod::kMeanSubtraction;
+        if (name == "single_delay")
+          return hr::ClutterFilterMethod::kSingleDelay;
+        if (name == "double_delay")
+          return hr::ClutterFilterMethod::kDoubleDelay;
+        if (name == "none")
+          return hr::ClutterFilterMethod::kNone;
+        throw std::invalid_argument("unknown clutter method: " + name);
+      };
+      auto window_of = [](const std::string& name) {
+        if (name == "none")
+          return hr::WindowType::kNone;
+        if (name == "hann")
+          return hr::WindowType::kHann;
+        if (name == "hamming")
+          return hr::WindowType::kHamming;
+        throw std::invalid_argument("unknown clutter window: " + name);
+      };
+      size_t profile_index = 0;
+      for (; profile_index < perf::kProfiles.size(); ++profile_index) {
+        if (c.profile == perf::kProfiles[profile_index])
+          break;
       }
-      out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, *s));
-    }
-    return out;
-  }
-
-  static std::vector<ClutterScenario> build_full_matrix() {
-    std::vector<ClutterScenario> out;
-    const auto methods = {hr::ClutterFilterMethod::kMeanSubtraction,
-                          hr::ClutterFilterMethod::kSingleDelay,
-                          hr::ClutterFilterMethod::kDoubleDelay};
-    for (const auto& s : size_ladder()) {
-      for (auto m : methods) {
-        out.push_back(make_scenario(m, s));
+      const auto& shape = suite.shapes.at(profile_index);
+      if (shape.size() != 2)
+        throw std::invalid_argument("clutter profile shape must be rank 2");
+      ClutterScenario scenario;
+      scenario.id = c.id;
+      scenario.size_id = c.profile;
+      scenario.num_chirps = shape[0];
+      scenario.num_range_bins = shape[1];
+      scenario.method = method_of(c.parameters["method"].as<std::string>());
+      scenario.window.type = window_of(c.parameters["doppler_window"].as<std::string>());
+      if (c.parameters["channels"])
+        scenario.channels = c.parameters["channels"].as<int64_t>();
+      if (scenario.channels <= 0)
+        throw std::invalid_argument("channels must be positive");
+      if (c.override_value.has_value()) {
+        const auto port = (*c.override_value)["port"].as<std::string>();
+        const auto value = (*c.override_value)["value"].as<std::string>();
+        if (port == "method") {
+          scenario.time_method_override = true;
+          if (method_of(value) != flip_method(scenario.method)) {
+            throw std::invalid_argument("method override must select the one-frame flip");
+          }
+        } else if (port == "doppler_window") {
+          scenario.time_window_override = true;
+          if (window_of(value) != hr::WindowType::kHamming) {
+            throw std::invalid_argument("window override must select Hamming");
+          }
+        }
       }
-      out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, s, 1,
-                                  hr::WindowType::kHann, /*time_window_override=*/true));
+      if (selected_ids.contains(c.id))
+        result.push_back(std::move(scenario));
     }
-    for (const char* sid : {"md", "lg"}) {
-      const SizeSpec& s = must_find_size(sid);
-      for (int64_t ch : {4, 16}) {
-        out.push_back(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, s, ch));
-      }
-    }
-    return out;
+    return result;
   }
 
   static void run_scenario(const ClutterScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    const perf::RunPlan plan =
+        perf::make_run_plan(rs, scen.time_window_override || scen.time_method_override);
     const auto samples =
         perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_clutter_graph(scen, p);
@@ -319,13 +301,11 @@ struct ClutterTraits : perf::PerfDriverDefaults {
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes =
-        "cold_ms is first-frame latency; median/p90 are pre-override "
-        "steady state; override_ms is peak latency over the 3-frame live ";
-    row.notes += scen.time_window_override
-                     ? "doppler_window switch to an unseen Hamming cache key; "
-                     : "method switch (changes kernel and output shape); ";
-    row.notes += "cells/s is complex cells/s";
+    row.notes = "end-to-end Graph latency; cells/s is complex cells/s";
+    if (scen.time_window_override)
+      row.notes += "; unseen Hamming window on one frame";
+    if (scen.time_method_override)
+      row.notes += "; method changes for one frame";
     report->results.push_back(row);
   }
 
@@ -336,8 +316,7 @@ struct ClutterTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(make_scenario(hr::ClutterFilterMethod::kMeanSubtraction, must_find_size("xs")),
-                   warm, &discarded);
+      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
     });
   }
 };

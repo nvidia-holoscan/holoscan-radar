@@ -4,6 +4,9 @@
 // Performance characterization for DopplerNotchOp. Measurement only.
 
 #include <complex>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <set>
+#include <stdexcept>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -36,6 +39,9 @@ struct NotchScenario {
   int64_t num_rx;
   bool cosine;
   bool live_override;
+  std::string live_port;
+  double override_value{0.0};
+  bool cyclic{true};
 };
 
 struct SizeSpec {
@@ -97,6 +103,7 @@ perf::TimingCollector run_notch_graph(const NotchScenario& scenario, const perf:
     hr::DopplerNotchParams params;
     params.stop_half_width = 0.5;
     params.transition_width = scenario.cosine ? 1.0 : 0.0;
+    params.cyclic_velocity_axis = scenario.cyclic;
     op.set_params(std::move(params));
     const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
     perf::bind_tensor_out(options, "notch", "rd_maps_out");
@@ -104,17 +111,23 @@ perf::TimingCollector run_notch_graph(const NotchScenario& scenario, const perf:
   };
   if (scenario.live_override) {
     return perf::run_perf_graph_dual_with_override(
-        std::move(axis), std::move(maps), plan.total_frames, plan.override_at, 0.0, 1.0,
-        "doppler-notch-perf",
+        std::move(axis), std::move(maps), plan.total_frames, plan.override_at, 0.0,
+        scenario.override_value, "doppler-notch-perf",
         [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
           auto [op, sink] = configure(graph, options);
           const holoscan::ConnectionOptions queue{.queue_depth = 4U};
           graph.add_flow(source->out_a, op->velocity_bins, queue);
           graph.add_flow(source->out_b, op->rd_maps, queue);
-          graph.add_flow(source->override_out, op->center_velocity, queue);
+          if (scenario.live_port == "center_velocity")
+            graph.add_flow(source->override_out, op->center_velocity, queue);
+          else if (scenario.live_port == "stop_half_width")
+            graph.add_flow(source->override_out, op->stop_half_width, queue);
+          else
+            graph.add_flow(source->override_out, op->transition_width, queue);
           graph.add_flow(op->rd_maps_out, sink->in, queue);
           graph.partition("perf").add(source).add(op).add(sink);
-        });
+        },
+        perf::PerfPublishMode::kCopy, true);
   }
   return perf::run_perf_graph_dual(
       std::move(axis), std::move(maps), plan.total_frames, "doppler-notch-perf",
@@ -137,7 +150,8 @@ perf::ResultRow base_row(const NotchScenario& scenario) {
   row.size_id = scenario.size_id;
   row.input_shape = input_shape(scenario);
   row.k = scenario.num_doppler;
-  row.notes = scenario.live_override ? "center_velocity live override" : "";
+  row.live_port = scenario.live_port;
+  row.notes = scenario.live_override ? "one-frame live override" : "";
   return row;
 }
 
@@ -162,38 +176,67 @@ struct NotchTraits : perf::PerfDriverDefaults {
   static const char* sizes_subset_help() { return "Notch sweep over selected sizes"; }
   static const char* full_help() { return "Full notch variant and size matrix"; }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "doppler_notch.yaml",
+        "doppler_notch");
+  }
+
   static std::vector<perf::SizeDef> size_ladder_defs() {
+    const auto profiles = suite();
     std::vector<perf::SizeDef> result;
-    for (const auto& size : size_ladder()) {
-      result.push_back(perf::SizeDef{.id = size.id,
-                                     .shape = {size.doppler, size.range},
-                                     .cells = size.doppler * size.range,
-                                     .role = size.role});
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 2)
+        throw std::invalid_argument("DopplerNotch profile rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1],
+                        std::string(perf::kProfiles[i])});
     }
     return result;
   }
 
-  static std::vector<Scenario> build_size_sweep(const std::vector<std::string>& ids) {
+  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    std::set<std::string> selected_ids;
+    for (const auto& c : profiles.select(scope))
+      selected_ids.insert(c.id);
     std::vector<Scenario> result;
-    for (const auto& id : ids) {
-      const SizeSpec* size = find_size(id);
-      if (size == nullptr)
-        continue;
-      for (const bool cosine : {false, true}) {
-        result.push_back(make_scenario(*size, cosine, false));
-        result.push_back(make_scenario(*size, cosine, true));
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i) {
+        if (c.profile == perf::kProfiles[i])
+          break;
       }
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 2 || shape[0] < 2)
+        throw std::invalid_argument("DopplerNotch invalid profile shape");
+      perf::require_keys(c.parameters, {"transition", "mimo", "cyclic"}, "parameters");
+      if (!c.parameters["transition"] || !c.parameters["mimo"])
+        throw std::invalid_argument("DopplerNotch case requires transition and mimo");
+      const auto transition = c.parameters["transition"].as<std::string>();
+      if (transition != "hard" && transition != "cosine")
+        throw std::invalid_argument("DopplerNotch transition must be hard or cosine");
+      const SizeSpec size{c.profile.c_str(), shape[0], shape[1], c.profile.c_str()};
+      auto scenario = make_scenario(size, transition == "cosine", c.parameters["mimo"].as<bool>());
+      scenario.id = c.id;
+      scenario.size_id = c.profile;
+      if (c.parameters["cyclic"])
+        scenario.cyclic = c.parameters["cyclic"].as<bool>();
+      if (c.override_value) {
+        scenario.live_port = (*c.override_value)["port"].as<std::string>();
+        scenario.override_value = (*c.override_value)["value"].as<double>();
+        if (scenario.live_port != "center_velocity" && scenario.live_port != "stop_half_width" &&
+            scenario.live_port != "transition_width")
+          throw std::invalid_argument("DopplerNotch unknown live port");
+        if (scenario.live_port != "center_velocity" && scenario.override_value < 0.0)
+          throw std::invalid_argument("DopplerNotch widths must be nonnegative");
+        scenario.live_override = true;
+      }
+      if (selected_ids.contains(c.id))
+        result.push_back(std::move(scenario));
     }
     return result;
   }
-
-  static std::vector<Scenario> build_default_matrix() {
-    auto result = build_size_sweep({"xs", "md", "xl"});
-    result.push_back(make_scenario(*find_size("md"), true, true, true));
-    return result;
-  }
-
-  static std::vector<Scenario> build_full_matrix() { return build_size_sweep({"xs", "md", "xl"}); }
 
   static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
@@ -216,7 +259,7 @@ struct NotchTraits : perf::PerfDriverDefaults {
       settings.warmup_frames = 0;
       settings.measured_frames = 2;
       settings.repeats = 1;
-      run_scenario(make_scenario(*find_size("xs"), false, false), settings, &discarded);
+      run_scenario(build_profile_matrix("minimal").front(), settings, &discarded);
     });
   }
 };

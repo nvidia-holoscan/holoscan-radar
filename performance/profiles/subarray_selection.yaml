@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 1
+operator: subarray_selection
+profiles:
+  small: {shape: [64, 4, 2]}
+  medium: {shape: [256, 8, 4]}
+  large: {shape: [1024, 16, 8]}
+live_ports: [array_geometry, subarray]
+cases:
+  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {min_subarray_size: 2}}
+  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {min_subarray_size: 2}}
+  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {min_subarray_size: 2}}
+  - {id: minimum-medium, profile: medium, scopes: [limited], parameters: {min_subarray_size: 4}}
+  - {id: array_geometry-small, profile: small, scopes: [overrides, moderate], parameters: {min_subarray_size: 2}, override: {port: array_geometry, value: wavelength_09}}
+  - {id: array_geometry-medium, profile: medium, scopes: [overrides, moderate], parameters: {min_subarray_size: 2}, override: {port: array_geometry, value: wavelength_09}}
+  - {id: array_geometry-large, profile: large, scopes: [overrides, moderate], parameters: {min_subarray_size: 2}, override: {port: array_geometry, value: wavelength_09}}
+  - {id: subarray-small, profile: small, scopes: [overrides, moderate], parameters: {min_subarray_size: 2}, override: {port: subarray, value: contiguous}}
+  - {id: subarray-medium, profile: medium, scopes: [overrides, moderate], parameters: {min_subarray_size: 2}, override: {port: subarray, value: contiguous}}
+  - {id: subarray-large, profile: large, scopes: [overrides, moderate], parameters: {min_subarray_size: 2}, override: {port: subarray, value: contiguous}}
+  - {id: min-geometry-medium, profile: medium, scopes: [thorough], parameters: {min_subarray_size: 4}, override: {port: array_geometry, value: wavelength_09}}

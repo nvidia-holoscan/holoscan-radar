@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 1
+operator: detection_reduction
+profiles:
+  small: {shape: [256, 32, 2]}
+  medium: {shape: [1024, 64, 2]}
+  large: {shape: [4096, 128, 2]}
+live_ports: [representative, score_method, feature_weights]
+cases:
+  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {representative: peak, score_method: weighted_sum}}
+  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {representative: peak, score_method: weighted_sum}}
+  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {representative: peak, score_method: weighted_sum}}
+  - {id: first-medium, profile: medium, scopes: [limited], parameters: {representative: first, score_method: weighted_sum}}
+  - {id: medoid-medium, profile: medium, scopes: [limited], parameters: {representative: medoid, score_method: weighted_sum}}
+  - {id: weighted_mean-medium, profile: medium, scopes: [limited], parameters: {representative: weighted_mean, score_method: weighted_sum}}
+  - {id: l2-large, profile: large, scopes: [moderate], parameters: {representative: peak, score_method: weighted_l2}}
+  - {id: representative-small, profile: small, scopes: [overrides, moderate], parameters: {representative: peak, score_method: weighted_sum}, override: {port: representative, value: medoid}}
+  - {id: representative-medium, profile: medium, scopes: [overrides, moderate], parameters: {representative: peak, score_method: weighted_sum}, override: {port: representative, value: medoid}}
+  - {id: representative-large, profile: large, scopes: [overrides, moderate], parameters: {representative: peak, score_method: weighted_sum}, override: {port: representative, value: medoid}}
+  - {id: score_method-small, profile: small, scopes: [overrides, moderate], parameters: {representative: peak, score_method: weighted_sum}, override: {port: score_method, value: weighted_l2}}
+  - {id: score_method-medium, profile: medium, scopes: [overrides, moderate], parameters: {representative: peak, score_method: weighted_sum}, override: {port: score_method, value: weighted_l2}}
+  - {id: score_method-large, profile: large, scopes: [overrides, moderate], parameters: {representative: peak, score_method: weighted_sum}, override: {port: score_method, value: weighted_l2}}
+  - {id: feature_weights-small, profile: small, scopes: [overrides, moderate], parameters: {representative: peak, score_method: weighted_sum}, override: {port: feature_weights, value: first_double}}
+  - {id: feature_weights-medium, profile: medium, scopes: [overrides, moderate], parameters: {representative: peak, score_method: weighted_sum}, override: {port: feature_weights, value: first_double}}
+  - {id: feature_weights-large, profile: large, scopes: [overrides, moderate], parameters: {representative: peak, score_method: weighted_sum}, override: {port: feature_weights, value: first_double}}
+  - {id: weighted-weights-medium, profile: medium, scopes: [thorough], parameters: {representative: weighted_mean, score_method: weighted_sum}, override: {port: feature_weights, value: first_double}}

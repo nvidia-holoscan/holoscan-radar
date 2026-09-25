@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 1
+operator: fmcw_doppler_processor
+profiles:
+  small: {shape: [16, 128]}
+  medium: {shape: [64, 512]}
+  large: {shape: [128, 1024]}
+live_ports: [doppler_window, center_zero_doppler, waveform, fft_norm, nfft]
+cases:
+  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {doppler_window: none, fft_norm: backward}}
+  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {doppler_window: none, fft_norm: backward}}
+  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {doppler_window: none, fft_norm: backward}}
+  - {id: hann-medium, profile: medium, scopes: [limited], parameters: {doppler_window: hann, fft_norm: backward}}
+  - {id: four-channels-medium, profile: medium, scopes: [limited], parameters: {doppler_window: none, fft_norm: backward, channels: 4}}
+  - {id: padded-medium, profile: medium, scopes: [limited], parameters: {doppler_window: none, fft_norm: backward, nfft: 128}}
+  - {id: window-small, profile: small, scopes: [overrides, moderate], parameters: {doppler_window: none, fft_norm: backward}, override: {port: doppler_window, value: hann}}
+  - {id: window-medium, profile: medium, scopes: [overrides, moderate], parameters: {doppler_window: none, fft_norm: backward}, override: {port: doppler_window, value: hann}}
+  - {id: window-large, profile: large, scopes: [overrides, moderate], parameters: {doppler_window: none, fft_norm: backward}, override: {port: doppler_window, value: hann}}
+  - {id: shift-small, profile: small, scopes: [overrides], parameters: {doppler_window: none, fft_norm: backward}, override: {port: center_zero_doppler, value: false}}
+  - {id: shift-medium, profile: medium, scopes: [overrides], parameters: {doppler_window: none, fft_norm: backward}, override: {port: center_zero_doppler, value: false}}
+  - {id: shift-large, profile: large, scopes: [overrides], parameters: {doppler_window: none, fft_norm: backward}, override: {port: center_zero_doppler, value: false}}
+  - {id: waveform-small, profile: small, scopes: [overrides], parameters: {doppler_window: none, fft_norm: backward}, override: {port: waveform, value: 0.00003}}
+  - {id: waveform-medium, profile: medium, scopes: [overrides], parameters: {doppler_window: none, fft_norm: backward}, override: {port: waveform, value: 0.00003}}
+  - {id: waveform-large, profile: large, scopes: [overrides], parameters: {doppler_window: none, fft_norm: backward}, override: {port: waveform, value: 0.00003}}
+  - {id: norm-small, profile: small, scopes: [overrides], parameters: {doppler_window: none, fft_norm: backward}, override: {port: fft_norm, value: ortho}}
+  - {id: norm-medium, profile: medium, scopes: [overrides], parameters: {doppler_window: none, fft_norm: backward}, override: {port: fft_norm, value: ortho}}
+  - {id: norm-large, profile: large, scopes: [overrides], parameters: {doppler_window: none, fft_norm: backward}, override: {port: fft_norm, value: ortho}}
+  - {id: nfft-small, profile: small, scopes: [overrides, moderate], parameters: {doppler_window: none, fft_norm: backward}, override: {port: nfft, value: double, cache: unseen}}
+  - {id: nfft-medium, profile: medium, scopes: [overrides, moderate], parameters: {doppler_window: none, fft_norm: backward}, override: {port: nfft, value: double, cache: unseen}}
+  - {id: nfft-large, profile: large, scopes: [overrides, moderate], parameters: {doppler_window: none, fft_norm: backward}, override: {port: nfft, value: double, cache: unseen}}
+  - {id: ortho-hann-medium, profile: medium, scopes: [moderate], parameters: {doppler_window: hann, fft_norm: ortho}}
+  - {id: hamming-window-medium, profile: medium, scopes: [thorough], parameters: {doppler_window: hann, fft_norm: ortho}, override: {port: doppler_window, value: hamming}}
+  - {id: nfft-cached-medium, profile: medium, scopes: [thorough], parameters: {doppler_window: none, fft_norm: backward}, override: {port: nfft, value: double, cache: cached}}

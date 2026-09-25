@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 1
+operator: cfar_detector
+profiles:
+  small: {shape: [64, 256]}
+  medium: {shape: [128, 512]}
+  large: {shape: [256, 512]}
+live_ports: [os_rank, guard_cells, training_cells, pfa, alpha_lut, threshold_scale, nci_axes, max_detections]
+cases:
+  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}}
+  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}}
+  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}}
+  - {id: backend-go-medium, profile: medium, scopes: [limited], parameters: {variant: GO, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}}
+  - {id: backend-so-medium, profile: medium, scopes: [limited], parameters: {variant: SO, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}}
+  - {id: backend-os-medium, profile: medium, scopes: [limited], parameters: {variant: OS, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}}
+  - {id: footprint-mid-medium, profile: medium, scopes: [limited], parameters: {variant: CA, footprint: mid, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}}
+  - {id: peak-medium, profile: medium, scopes: [moderate], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: range_doppler, threshold_scale: 1.0}}
+  - {id: os_rank-small, profile: small, scopes: [overrides], parameters: {variant: OS, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: os_rank, value: "lower"}}
+  - {id: os_rank-medium, profile: medium, scopes: [overrides], parameters: {variant: OS, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: os_rank, value: "lower"}}
+  - {id: os_rank-large, profile: large, scopes: [overrides], parameters: {variant: OS, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: os_rank, value: "lower"}}
+  - {id: guard_cells-small, profile: small, scopes: [overrides, moderate], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: guard_cells, value: "zero"}}
+  - {id: guard_cells-medium, profile: medium, scopes: [overrides, moderate], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: guard_cells, value: "zero"}}
+  - {id: guard_cells-large, profile: large, scopes: [overrides, moderate], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: guard_cells, value: "zero"}}
+  - {id: training_cells-small, profile: small, scopes: [overrides], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: training_cells, value: "three"}}
+  - {id: training_cells-medium, profile: medium, scopes: [overrides], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: training_cells, value: "three"}}
+  - {id: training_cells-large, profile: large, scopes: [overrides], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: training_cells, value: "three"}}
+  - {id: pfa-small, profile: small, scopes: [overrides, moderate], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: pfa, value: "0.001"}}
+  - {id: pfa-medium, profile: medium, scopes: [overrides, moderate], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: pfa, value: "0.001"}}
+  - {id: pfa-large, profile: large, scopes: [overrides, moderate], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: pfa, value: "0.001"}}
+  - {id: alpha_lut-small, profile: small, scopes: [overrides], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: alpha_lut, value: "scaled"}}
+  - {id: alpha_lut-medium, profile: medium, scopes: [overrides], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: alpha_lut, value: "scaled"}}
+  - {id: alpha_lut-large, profile: large, scopes: [overrides], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: alpha_lut, value: "scaled"}}
+  - {id: threshold_scale-small, profile: small, scopes: [overrides, moderate], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: threshold_scale, value: "1.1"}}
+  - {id: threshold_scale-medium, profile: medium, scopes: [overrides, moderate], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: threshold_scale, value: "1.1"}}
+  - {id: threshold_scale-large, profile: large, scopes: [overrides, moderate], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: threshold_scale, value: "1.1"}}
+  - {id: nci_axes-small, profile: small, scopes: [overrides, moderate], parameters: {variant: CA, footprint: small, channels: 4, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: nci_axes, value: "channel"}}
+  - {id: nci_axes-medium, profile: medium, scopes: [overrides, moderate], parameters: {variant: CA, footprint: small, channels: 4, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: nci_axes, value: "channel"}}
+  - {id: nci_axes-large, profile: large, scopes: [overrides, moderate], parameters: {variant: CA, footprint: small, channels: 4, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: nci_axes, value: "channel"}}
+  - {id: max_detections-small, profile: small, scopes: [overrides], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: max_detections, value: "100"}}
+  - {id: max_detections-medium, profile: medium, scopes: [overrides], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: max_detections, value: "100"}}
+  - {id: max_detections-large, profile: large, scopes: [overrides], parameters: {variant: CA, footprint: small, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: max_detections, value: "100"}}
+  - {id: footprint-pfa-medium, profile: medium, scopes: [thorough], parameters: {variant: CA, footprint: mid, channels: 1, pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}, override: {port: pfa, value: "0.001"}}

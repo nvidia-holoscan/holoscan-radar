@@ -26,8 +26,9 @@ namespace holoscan::radar::perf {
 
 struct RunSettings {
   int warmup_frames{5};
-  int measured_frames{20};
-  int repeats{1};
+  int measured_frames{50};
+  int repeats{3};
+  std::string scope{"limited"};
   std::string sync_policy{"device_sync_at_terminal_sink"};
   double stop_after_s{0.0};  // 0 = disabled; wall-clock cap per scenario
   bool stopped_early{false};
@@ -67,6 +68,9 @@ struct ResultRow {
 
   double override_ms{std::numeric_limits<double>::quiet_NaN()};
   double override_delta_ms{std::numeric_limits<double>::quiet_NaN()};
+  double achieved_frames_per_second{std::numeric_limits<double>::quiet_NaN()};
+  double source_frames_per_second{std::numeric_limits<double>::quiet_NaN()};
+  std::string live_port;
 
   double cells_per_second{std::numeric_limits<double>::quiet_NaN()};
   double slices_per_second{std::numeric_limits<double>::quiet_NaN()};
@@ -215,7 +219,7 @@ inline int shape_column_width(const PerfReport& r, int min_width = 14) {
 
 inline void write_json(std::ostream& os, const PerfReport& r) {
   os << "{\n";
-  os << "  \"schema_version\": 2,\n";
+  os << "  \"schema_version\": 3,\n";
   os << "  \"provenance\": {\n";
   os << "    \"git_commit\": \"" << detail::json_escape(r.provenance.git_commit) << "\",\n";
   os << "    \"git_dirty\": " << (r.provenance.git_dirty ? "true" : "false") << ",\n";
@@ -234,6 +238,7 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
   os << "    \"warmup_frames\": " << r.run_settings.warmup_frames << ",\n";
   os << "    \"measured_frames\": " << r.run_settings.measured_frames << ",\n";
   os << "    \"repeats\": " << r.run_settings.repeats << ",\n";
+  os << "    \"scope\": \"" << detail::json_escape(r.run_settings.scope) << "\",\n";
   os << "    \"sync_policy\": \"" << detail::json_escape(r.run_settings.sync_policy) << "\",\n";
   os << "    \"stop_after_s\": " << detail::num_or_null(r.run_settings.stop_after_s) << ",\n";
   os << "    \"stopped_early\": " << (r.run_settings.stopped_early ? "true" : "false") << ",\n";
@@ -271,8 +276,14 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
     os << "      \"p90_ms\": " << detail::num_or_null(row.latency.p90_ms) << ",\n";
     os << "      \"p99_ms\": " << detail::num_or_null(row.latency.p99_ms) << ",\n";
     os << "      \"max_ms\": " << detail::num_or_null(row.latency.max_ms) << ",\n";
+    os << "      \"samples\": " << row.latency.samples << ",\n";
     os << "      \"override_ms\": " << detail::num_or_null(row.override_ms) << ",\n";
     os << "      \"override_delta_ms\": " << detail::num_or_null(row.override_delta_ms) << ",\n";
+    os << "      \"achieved_frames_per_second\": "
+       << detail::num_or_null(row.achieved_frames_per_second) << ",\n";
+    os << "      \"source_frames_per_second\": "
+       << detail::num_or_null(row.source_frames_per_second) << ",\n";
+    os << "      \"live_port\": \"" << detail::json_escape(row.live_port) << "\",\n";
     os << "      \"cells_per_second\": " << detail::num_or_null(row.cells_per_second) << ",\n";
     os << "      \"slices_per_second\": " << detail::num_or_null(row.slices_per_second) << ",\n";
     os << "      \"estimated_effective_gbps\": "
@@ -311,6 +322,8 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
   os << "platform: " << r.platform.gpu_name << " | driver " << r.platform.gpu_driver << " | CUDA "
      << r.platform.cuda_runtime << " | Holoscan " << r.platform.holoscan_version << "\n";
   os << "          " << r.platform.cpu_model << " | " << r.platform.os_name << "\n";
+  os << "scope: " << r.run_settings.scope << "\n";
+  os << "measurement: end-to-end Graph frame completion (device sync at terminal sink)\n";
   os << "run: warmup=" << r.run_settings.warmup_frames
      << " measured=" << r.run_settings.measured_frames << " repeats=" << r.run_settings.repeats;
   if (r.run_settings.stop_after_s > 0.0) {
@@ -354,15 +367,17 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
 
   // --- compute (steady state + inline live override) ---
   os << "\n--- compute ---\n";
-  os << detail::col("scenario", 40) << detail::col("size", 6) << detail::col("shape", shape_w)
-     << detail::col("cold_ms", 10) << detail::col("median_ms", 10) << detail::col("p90_ms", 10)
-     << detail::col("ovr_ms", 10) << detail::col("ovr_d_ms", 10) << detail::col("cells/s", 11)
-     << detail::col("GB/s", 8) << "\n";
+  os << detail::col("scenario", 40) << detail::col("size", 8) << detail::col("live", 17)
+     << detail::col("shape", shape_w) << detail::col("cold_ms", 10) << detail::col("median_ms", 10)
+     << detail::col("p90_ms", 10) << detail::col("ovr_ms", 10) << detail::col("ovr_d_ms", 10)
+     << detail::col("cells/s", 11) << detail::col("GB/s", 8) << detail::col("frames/s", 12)
+     << detail::col("source/s", 12) << "\n";
   for (const auto& row : r.results) {
     if (row.bucket != "compute") {
       continue;
     }
-    os << detail::col(row.scenario_id, 40) << detail::col(row.size_id, 6)
+    os << detail::col(row.scenario_id, 40) << detail::col(row.size_id, 8)
+       << detail::col(row.live_port, 17)
        << detail::col(detail::shape_text(row.input_shape), shape_w)
        << detail::col(detail::fixed(row.cold_ms, 3), 10)
        << detail::col(detail::fixed(row.latency.median_ms, 3), 10)
@@ -370,7 +385,9 @@ inline void write_text(std::ostream& os, const PerfReport& r) {
        << detail::col(detail::fixed(row.override_ms, 3), 10)
        << detail::col(detail::fixed(row.override_delta_ms, 3), 10)
        << detail::col(detail::sci(row.cells_per_second), 11)
-       << detail::col(detail::fixed(row.estimated_effective_gbps, 1), 8);
+       << detail::col(detail::fixed(row.estimated_effective_gbps, 1), 8)
+       << detail::col(detail::sci(row.achieved_frames_per_second), 12)
+       << detail::col(detail::sci(row.source_frames_per_second), 12);
     if (row.status != "ok") {
       os << " [" << row.status << "]";
     }

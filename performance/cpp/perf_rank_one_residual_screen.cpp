@@ -12,6 +12,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <set>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -56,6 +58,8 @@ struct ScreenScenario {
   int64_t channels{0};
   int64_t looks{0};
   double selection_fraction{0.25};
+  bool live_geometry{false};
+  double changed_spacing{0.49};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -153,50 +157,58 @@ perf::TimingCollector run_screen_graph(const ScreenScenario& scenario, const per
   auto snapshot = make_snapshots(scenario);
   auto baseline = make_baseline(scenario);
   const auto geometry = make_geometry(scenario.channels, 0.5);
-  const auto changed_geometry = make_geometry(scenario.channels, 0.49);
-  return perf::run_perf_graph_dual_with_override(
-      std::move(snapshot), std::move(baseline), plan.total_frames, plan.override_at,
-      hr::to_wire(geometry), hr::to_wire(changed_geometry), "rank-one-residual-screen-perf",
-      [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
-        hr::MaxTensorExtents extents;
-        extents.max_items = scenario.items;
-        extents.max_channels = scenario.channels;
-        extents.max_snapshots = scenario.looks;
-        auto screen = graph.op<hr::RankOneResidualScreenOp<PerfPrecision>>("screen", extents);
-        hr::RankOneResidualScreenParams params;
-        params.array_geometry = geometry;
-        params.residual_threshold = 0.03;
-        screen.set_params(std::move(params));
+  const auto build = [&](holoscan::Graph& graph, const auto& source,
+                         holoscan::CompileOptions& options) {
+    hr::MaxTensorExtents extents;
+    extents.max_items = scenario.items;
+    extents.max_channels = scenario.channels;
+    extents.max_snapshots = scenario.looks;
+    auto screen = graph.op<hr::RankOneResidualScreenOp<PerfPrecision>>("screen", extents);
+    hr::RankOneResidualScreenParams params;
+    params.array_geometry = geometry;
+    params.residual_threshold = 0.03;
+    screen.set_params(std::move(params));
 
-        const auto timed = graph.op<perf::PerfTerminalSinkOp>("snapshot_sink");
-        const auto idx_drain = graph.op<perf::PerfNullSinkOp>("idx_drain");
-        const auto valid_drain = graph.op<perf::PerfNullSinkOp>("valid_drain");
-        const auto score_drain = graph.op<perf::PerfNullSinkOp>("score_drain");
-        const auto mask_drain = graph.op<perf::PerfNullSinkOp>("mask_drain");
-        const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+    const auto timed = graph.op<perf::PerfTerminalSinkOp>("snapshot_sink");
+    const auto idx_drain = graph.op<perf::PerfNullSinkOp>("idx_drain");
+    const auto valid_drain = graph.op<perf::PerfNullSinkOp>("valid_drain");
+    const auto score_drain = graph.op<perf::PerfNullSinkOp>("score_drain");
+    const auto mask_drain = graph.op<perf::PerfNullSinkOp>("mask_drain");
+    const holoscan::ConnectionOptions queue{.queue_depth = 4U};
 
-        graph.add_flow(source->out_a, screen->snapshot, queue);
-        graph.add_flow(source->out_b, screen->baseline_aoa, queue);
-        graph.add_flow(source->override_out, screen->array_geometry, queue);
-        graph.add_flow(screen->snapshot_out, timed->in, queue);
-        graph.add_flow(screen->selected_idx, idx_drain->in, queue);
-        graph.add_flow(screen->is_valid_out, valid_drain->in, queue);
-        graph.add_flow(screen->residual_score, score_drain->in, queue);
-        graph.add_flow(screen->selection_mask, mask_drain->in, queue);
+    graph.add_flow(source->out_a, screen->snapshot, queue);
+    graph.add_flow(source->out_b, screen->baseline_aoa, queue);
+    if constexpr (requires { source->override_out; }) {
+      graph.add_flow(source->override_out, screen->array_geometry, queue);
+    }
+    graph.add_flow(screen->snapshot_out, timed->in, queue);
+    graph.add_flow(screen->selected_idx, idx_drain->in, queue);
+    graph.add_flow(screen->is_valid_out, valid_drain->in, queue);
+    graph.add_flow(screen->residual_score, score_drain->in, queue);
+    graph.add_flow(screen->selection_mask, mask_drain->in, queue);
 
-        graph.partition("perf")
-            .add(source)
-            .add(screen)
-            .add(timed)
-            .add(idx_drain)
-            .add(valid_drain)
-            .add(score_drain)
-            .add(mask_drain);
-        for (const char* port :
-             {"snapshot_out", "selected_idx", "is_valid_out", "residual_score", "selection_mask"}) {
-          perf::bind_tensor_out(options, "screen", port);
-        }
-      });
+    graph.partition("perf")
+        .add(source)
+        .add(screen)
+        .add(timed)
+        .add(idx_drain)
+        .add(valid_drain)
+        .add(score_drain)
+        .add(mask_drain);
+    for (const char* port :
+         {"snapshot_out", "selected_idx", "is_valid_out", "residual_score", "selection_mask"}) {
+      perf::bind_tensor_out(options, "screen", port);
+    }
+  };
+  if (scenario.live_geometry) {
+    const auto changed_geometry = make_geometry(scenario.channels, scenario.changed_spacing);
+    return perf::run_perf_graph_dual_with_override(
+        std::move(snapshot), std::move(baseline), plan.total_frames, plan.override_at,
+        hr::to_wire(geometry), hr::to_wire(changed_geometry), "rank-one-residual-screen-perf",
+        build, perf::PerfPublishMode::kCopy, true);
+  }
+  return perf::run_perf_graph_dual(std::move(snapshot), std::move(baseline), plan.total_frames,
+                                   "rank-one-residual-screen-perf", build);
 }
 
 ScreenScenario make_scenario(const SizeSpec& size, double fraction) {
@@ -222,7 +234,8 @@ perf::ResultRow base_row(const ScreenScenario& scenario) {
   row.input_shape = {scenario.items, scenario.channels, scenario.looks};
   row.out_batch = static_cast<int64_t>(std::llround(scenario.selection_fraction * scenario.items));
   row.k = scenario.channels;
-  row.notes = "all outputs drained; Exact live geometry override";
+  row.live_port = scenario.live_geometry ? "array_geometry" : "";
+  row.notes = "all outputs drained";
   return row;
 }
 
@@ -249,47 +262,65 @@ struct ScreenTraits : perf::PerfDriverDefaults {
     return "Sizes x selection fraction; every scenario measures geometry override";
   }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "rank_one_residual_screen.yaml",
+        "rank_one_residual_screen");
+  }
   static std::vector<perf::SizeDef> size_ladder_defs() {
+    const auto profiles = suite();
     std::vector<perf::SizeDef> result;
-    for (const auto& size : size_ladder()) {
-      result.push_back(perf::SizeDef{.id = size.id,
-                                     .shape = {size.items, size.channels, size.looks},
-                                     .cells = size.items * size.channels * size.looks,
-                                     .role = size.role});
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 3)
+        throw std::invalid_argument("RankOneResidualScreen profile rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
+                        std::string(perf::kProfiles[i])});
     }
     return result;
   }
-
-  static std::vector<Scenario> build_default_matrix() {
-    const auto& medium = must_find_size("md");
-    return {make_scenario(must_find_size("xs"), 0.25), make_scenario(medium, 0.0),
-            make_scenario(medium, 0.25), make_scenario(medium, 0.75),
-            make_scenario(must_find_size("lg"), 0.25)};
-  }
-
-  static std::vector<Scenario> build_size_sweep(const std::vector<std::string>& sizes) {
+  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    std::set<std::string> selected_ids;
+    for (const auto& c : profiles.select(scope))
+      selected_ids.insert(c.id);
     std::vector<Scenario> result;
-    for (const auto& id : sizes) {
-      if (const auto* size = find_size(id)) {
-        result.push_back(make_scenario(*size, 0.25));
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i) {
+        if (c.profile == perf::kProfiles[i])
+          break;
       }
-    }
-    return result;
-  }
-
-  static std::vector<Scenario> build_full_matrix() {
-    std::vector<Scenario> result;
-    for (const auto& size : size_ladder()) {
-      for (double fraction : {0.0, 0.10, 0.50, 1.0}) {
-        result.push_back(make_scenario(size, fraction));
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 3 || shape[0] < 1 || shape[1] < 2 || shape[2] < 1)
+        throw std::invalid_argument("RankOneResidualScreen invalid profile shape");
+      perf::require_keys(c.parameters, {"selection_fraction"}, "parameters");
+      if (!c.parameters["selection_fraction"])
+        throw std::invalid_argument("RankOneResidualScreen needs selection_fraction");
+      const double fraction = c.parameters["selection_fraction"].as<double>();
+      if (fraction < 0.0 || fraction > 1.0)
+        throw std::invalid_argument("RankOneResidualScreen invalid selection fraction");
+      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
+      auto scenario = make_scenario(size, fraction);
+      scenario.id = c.id;
+      scenario.size_id = c.profile;
+      if (c.override_value) {
+        if ((*c.override_value)["port"].as<std::string>() != "array_geometry")
+          throw std::invalid_argument("RankOneResidualScreen only geometry is live");
+        scenario.changed_spacing = (*c.override_value)["value"].as<double>();
+        if (scenario.changed_spacing <= 0.0)
+          throw std::invalid_argument("RankOneResidualScreen invalid geometry spacing");
+        scenario.live_geometry = true;
       }
+      if (selected_ids.contains(c.id))
+        result.push_back(std::move(scenario));
     }
     return result;
   }
 
   static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(settings, /*has_override=*/true);
+    const perf::RunPlan plan = perf::make_run_plan(settings, scenario.live_geometry);
     const auto samples =
         perf::collect_scenario_samples(settings, plan, [&](int, const perf::RunPlan& run_plan) {
           return run_screen_graph(scenario, run_plan);
@@ -298,10 +329,9 @@ struct ScreenTraits : perf::PerfDriverDefaults {
     auto row = base_row(scenario);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scenario, row.latency.median_ms);
-    row.notes =
-        "cold_ms is first frame; steady metrics precede the Exact geometry "
-        "override; override_ms measures a new geometry cache key; all outputs "
-        "are drained; cells/s is complex snapshot values/s";
+    row.notes = "end-to-end Graph latency; cells/s is complex snapshot values/s";
+    if (scenario.live_geometry)
+      row.notes += "; one-frame geometry change";
     report->results.push_back(std::move(row));
   }
 
@@ -312,7 +342,7 @@ struct ScreenTraits : perf::PerfDriverDefaults {
       settings.warmup_frames = 0;
       settings.measured_frames = 2;
       settings.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs"), 0.25), settings, &discarded);
+      run_scenario(build_profile_matrix("minimal").front(), settings, &discarded);
     });
   }
 };

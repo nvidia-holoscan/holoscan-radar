@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <set>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -69,6 +71,8 @@ struct SnapScenario {
   int64_t range{0};
   int64_t detections{0};
   Window window;
+  bool live_window{false};
+  Window override_window;
 };
 
 int64_t snapshots_for(const Window& w) {
@@ -147,42 +151,44 @@ std::shared_ptr<holoscan::Tensor> make_detection_idx(int64_t detections, int64_t
 perf::TimingCollector run_snapshot_graph(const SnapScenario& scen, const perf::RunPlan& plan) {
   auto rd = make_rd_maps<PerfPrecision>(scen.channels, scen.doppler, scen.range);
   auto idx = make_detection_idx(scen.detections, scen.doppler, scen.range);
-  const Window override_window =
-      scen.window.wd == 0 && scen.window.wr == 0 ? Window{1, 1} : Window{0, 0};
-  const hr::SnapshotWindowOverride initial{.doppler = scen.window.wd, .range = scen.window.wr};
-  const hr::SnapshotWindowOverride override{.doppler = override_window.wd,
-                                            .range = override_window.wr};
   using BaseOp = hr::SnapshotGatherOp<PerfPrecision>;
-  return perf::run_perf_graph_dual_with_override(
-      std::move(rd), std::move(idx), plan.total_frames, plan.override_at, initial, override,
-      "snapshot-perf",
-      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
-        hr::MaxTensorExtents extents;
-        extents.max_detections = scen.detections;
-        extents.max_channels = scen.channels;
-        extents.max_snapshots =
-            std::max(snapshots_for(scen.window), snapshots_for(override_window));
-        auto op = graph.op<BaseOp>("gather", extents);
-        hr::SnapshotGatherParams params;
-        params.snapshot_window = {scen.window.wd, scen.window.wr};
-        params.doppler_edge = hr::SnapshotEdgeMode::kWrap;
-        params.range_edge = hr::SnapshotEdgeMode::kShift;
-        op.set_params(std::move(params));
-
-        const auto snap_sink = graph.op<perf::PerfTerminalSinkOp>("snap_sink");
-        const auto valid_drain = graph.op<perf::PerfNullSinkOp>("valid_drain");
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-
-        graph.add_flow(src->out_a, op->rd_maps, q);
-        graph.add_flow(src->out_b, op->detection_idx, q);
-        graph.add_flow(src->override_out, op->snapshot_window, q);
-        graph.add_flow(op->snapshot, snap_sink->in, q);
-        graph.add_flow(op->is_valid, valid_drain->in, q);
-        graph.partition("perf").add(src).add(op).add(snap_sink).add(valid_drain);
-
-        perf::bind_tensor_out(options, "gather", "snapshot");
-        perf::bind_tensor_out(options, "gather", "is_valid");
-      });
+  const auto build = [&](holoscan::Graph& graph, const auto& src,
+                         holoscan::CompileOptions& options) {
+    hr::MaxTensorExtents extents;
+    extents.max_detections = scen.detections;
+    extents.max_channels = scen.channels;
+    extents.max_snapshots = std::max(snapshots_for(scen.window),
+                                     scen.live_window ? snapshots_for(scen.override_window) : 1);
+    auto op = graph.op<BaseOp>("gather", extents);
+    hr::SnapshotGatherParams params;
+    params.snapshot_window = {scen.window.wd, scen.window.wr};
+    params.doppler_edge = hr::SnapshotEdgeMode::kWrap;
+    params.range_edge = hr::SnapshotEdgeMode::kShift;
+    op.set_params(std::move(params));
+    const auto snap_sink = graph.op<perf::PerfTerminalSinkOp>("snap_sink");
+    const auto valid_drain = graph.op<perf::PerfNullSinkOp>("valid_drain");
+    const holoscan::ConnectionOptions q{.queue_depth = 4U};
+    graph.add_flow(src->out_a, op->rd_maps, q);
+    graph.add_flow(src->out_b, op->detection_idx, q);
+    if constexpr (requires { src->override_out; }) {
+      graph.add_flow(src->override_out, op->snapshot_window, q);
+    }
+    graph.add_flow(op->snapshot, snap_sink->in, q);
+    graph.add_flow(op->is_valid, valid_drain->in, q);
+    graph.partition("perf").add(src).add(op).add(snap_sink).add(valid_drain);
+    perf::bind_tensor_out(options, "gather", "snapshot");
+    perf::bind_tensor_out(options, "gather", "is_valid");
+  };
+  if (scen.live_window) {
+    const hr::SnapshotWindowOverride initial{.doppler = scen.window.wd, .range = scen.window.wr};
+    const hr::SnapshotWindowOverride changed{.doppler = scen.override_window.wd,
+                                             .range = scen.override_window.wr};
+    return perf::run_perf_graph_dual_with_override(
+        std::move(rd), std::move(idx), plan.total_frames, plan.override_at, initial, changed,
+        "snapshot-perf", build, perf::PerfPublishMode::kCopy, true);
+  }
+  return perf::run_perf_graph_dual(std::move(rd), std::move(idx), plan.total_frames,
+                                   "snapshot-perf", build);
 }
 
 void fill_throughput(perf::ResultRow* row, const SnapScenario& scen, double median_ms) {
@@ -214,7 +220,7 @@ perf::ResultRow base_row(const SnapScenario& scen) {
   row.input_shape = {scen.detections, 2};
   row.out_batch = scen.detections;
   row.k = scen.channels;
-  row.notes = "live_override=snapshot_window";
+  row.live_port = scen.live_window ? "snapshot_window" : "";
   return row;
 }
 
@@ -252,57 +258,72 @@ struct SnapTraits : perf::PerfDriverDefaults {
            "inline snapshot_window override timing";
   }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "snapshot_gather.yaml",
+        "snapshot_gather");
+  }
+
   static std::vector<perf::SizeDef> size_ladder_defs() {
-    std::vector<perf::SizeDef> out;
-    for (const auto& s : size_ladder()) {
-      perf::SizeDef def;
-      def.id = s.id;
-      def.shape = {s.doppler, s.range};
-      def.cells = s.doppler * s.range;
-      def.role = s.role;
-      out.push_back(def);
+    const auto profiles = suite();
+    std::vector<perf::SizeDef> result;
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 4)
+        throw std::invalid_argument("SnapshotGather profile rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
+                        std::string(perf::kProfiles[i])});
     }
-    return out;
+    return result;
   }
 
-  static std::vector<SnapScenario> build_default_matrix() {
-    std::vector<SnapScenario> out;
-    const SizeSpec& md = must_find_size("md");
-    for (const Window w : {Window{0, 0}, Window{1, 1}, Window{2, 2}}) {
-      out.push_back(make_scenario(md, w));
-    }
-    for (const char* sid : {"xs", "sm", "md", "lg"}) {
-      out.push_back(make_scenario(must_find_size(sid), Window{1, 1}));
-    }
-    return out;
-  }
-
-  static std::vector<SnapScenario> build_size_sweep(const std::vector<std::string>& sizes) {
-    std::vector<SnapScenario> out;
-    for (const auto& sid : sizes) {
-      const SizeSpec* s = find_size(sid);
-      if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
-        continue;
+  static std::vector<SnapScenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    std::set<std::string> selected_ids;
+    for (const auto& c : profiles.select(scope))
+      selected_ids.insert(c.id);
+    std::vector<SnapScenario> result;
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i) {
+        if (c.profile == perf::kProfiles[i])
+          break;
       }
-      out.push_back(make_scenario(*s, Window{1, 1}));
-    }
-    return out;
-  }
-
-  static std::vector<SnapScenario> build_full_matrix() {
-    std::vector<SnapScenario> out;
-    for (const auto& s : size_ladder()) {
-      for (const Window w : {Window{0, 0}, Window{1, 1}, Window{2, 2}}) {
-        out.push_back(make_scenario(s, w));
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 4 || shape[3] < 1)
+        throw std::invalid_argument("SnapshotGather invalid profile shape");
+      perf::require_keys(c.parameters, {"window"}, "parameters");
+      const auto window = c.parameters["window"];
+      if (!window || !window.IsSequence() || window.size() != 2)
+        throw std::invalid_argument("SnapshotGather window must have two extents");
+      const Window w{window[0].as<int64_t>(), window[1].as<int64_t>()};
+      if (w.wd < 0 || w.wr < 0 || w.wd > 2 || w.wr > 2)
+        throw std::invalid_argument("SnapshotGather window out of range");
+      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], c.profile};
+      auto scenario = make_scenario(size, w);
+      scenario.id = c.id;
+      scenario.size_id = c.profile;
+      if (c.override_value) {
+        if ((*c.override_value)["port"].as<std::string>() != "snapshot_window")
+          throw std::invalid_argument("SnapshotGather only snapshot_window is live");
+        const auto changed = (*c.override_value)["value"];
+        if (!changed.IsSequence() || changed.size() != 2)
+          throw std::invalid_argument("SnapshotGather override window needs two extents");
+        scenario.override_window = {changed[0].as<int64_t>(), changed[1].as<int64_t>()};
+        if (scenario.override_window.wd < 0 || scenario.override_window.wr < 0 ||
+            scenario.override_window.wd > 2 || scenario.override_window.wr > 2)
+          throw std::invalid_argument("SnapshotGather override window out of range");
+        scenario.live_window = true;
       }
+      if (selected_ids.contains(c.id))
+        result.push_back(std::move(scenario));
     }
-    return out;
+    return result;
   }
 
   static void run_scenario(const SnapScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    const perf::RunPlan plan = perf::make_run_plan(rs, scen.live_window);
     const auto samples =
         perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_snapshot_graph(scen, p);
@@ -313,10 +334,9 @@ struct SnapTraits : perf::PerfDriverDefaults {
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes =
-        "cold_ms is first-frame latency; median/p90 are steady "
-        "state; override_ms is the peak after an inline snapshot_window "
-        "change; cells/s is detections/s";
+    row.notes = "end-to-end Graph latency; cells/s is detections/s";
+    if (scen.live_window)
+      row.notes += "; one-frame snapshot_window change";
     report->results.push_back(row);
   }
 

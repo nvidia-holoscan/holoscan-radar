@@ -8,8 +8,8 @@ sync at the terminal sink, and print a unified text report (optional JSON via
 
 Most C++ performance tools have a Python counterpart. The current exceptions
 are multi-source expansion, rank-one residual screening, and subarray
-selection. Shared scenario matrices are still hand-mirrored where both forms
-exist ([CLARAHOLOS-3419](https://jirasw.nvidia.com/browse/CLARAHOLOS-3419)).
+selection. Python scripts have not yet moved to the C++ YAML profile suites; scenario matrices
+are still hand-mirrored where both forms exist ([CLARAHOLOS-3419](https://jirasw.nvidia.com/browse/CLARAHOLOS-3419)).
 
 The current `main-5x` source image does not export the SDK Python binding
 target, so these scripts are retained but are not built by the default
@@ -42,7 +42,6 @@ If unset, scripts default to `../../build` relative to this directory.
 | `perf_fmcw_range_processor.py` | `FMCWRangeProcessorOp` | windows × sizes × channels |
 | `perf_fmcw_doppler_processor.py` | `FMCWDopplerProcessorOp` | windows × sizes × channels |
 | `perf_fmcw_range_doppler_processor.py` | `FMCWRangeDopplerProcessorOp` | clutter modes × sizes × channels |
-| `perf_fmcw_split_vs_fused.py` | split chain vs fused RD | noclt+msub pairs × sizes (e2e compare) |
 | `perf_mimo_deinterleave.py` | `MIMODeinterleaveOp` | sizes + batch (no live override) |
 | `perf_tdm_dense_compensation.py` | `TDMDenseCompensationOp` | TDM sizes × batch |
 | `perf_ddm_dense_demultiplex.py` | `DDMDenseDemultiplexOp` | Linear/nonlinear DDM × sizes |

@@ -17,6 +17,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <set>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -68,6 +70,7 @@ struct SizeSpec {
 
 struct MvdrScenario {
   enum class OverrideKind {
+    kNone,
     kArrayGeometry,
     kAzAngles,
     kElAngles,
@@ -83,11 +86,15 @@ struct MvdrScenario {
   int64_t snapshots{0};
   int64_t num_az{0};
   int64_t num_el{0};
-  OverrideKind override_kind{OverrideKind::kMaxSources};
+  OverrideKind override_kind{OverrideKind::kNone};
+  double static_loading{-1.0};
+  int64_t static_max_sources{1};
 };
 
 const char* override_name(MvdrScenario::OverrideKind kind) {
   switch (kind) {
+    case MvdrScenario::OverrideKind::kNone:
+      return "";
     case MvdrScenario::OverrideKind::kArrayGeometry:
       return "array_geometry";
     case MvdrScenario::OverrideKind::kAzAngles:
@@ -215,8 +222,12 @@ hr::SpatialSmoothingOverride smoothing_wire(const std::vector<int64_t>& smoothin
 
 class PerfMVDROverrideSourceOp final : public holoscan::Operator<> {
  public:
-  PerfMVDROverrideSourceOp(int64_t override_at, hr::MVDRParams initial, hr::MVDRParams override)
-  : override_at_(override_at), initial_(std::move(initial)), override_(std::move(override)) {}
+  PerfMVDROverrideSourceOp(int64_t override_at, hr::MVDRParams initial, hr::MVDRParams override,
+                           MvdrScenario::OverrideKind kind)
+  : override_at_(override_at),
+    initial_(std::move(initial)),
+    override_(std::move(override)),
+    kind_(kind) {}
 
   void setup(holoscan::OperatorSpec& spec) override {
     constexpr holoscan::TensorRepresentation kDevice{
@@ -263,50 +274,55 @@ class PerfMVDROverrideSourceOp final : public holoscan::Operator<> {
     perf::PerfPublishMode mode = perf::PerfPublishMode::kCopy;
     {
       const std::lock_guard lock(perf::PerfFrameBank::mutex);
-      if (perf::PerfFrameBank::frames_remaining <= 0 ||
+      if (perf::PerfFrameBank::in_flight != 0 || perf::PerfFrameBank::frames_remaining <= 0 ||
           perf::PerfFrameBank::input_frame == nullptr) {
         return {};
       }
       --perf::PerfFrameBank::frames_remaining;
       frame = perf::PerfFrameBank::input_frame;
       mode = perf::PerfFrameBank::publish_mode;
+      perf::detail::record_start_locked();
     }
 
-    const auto& values = frame_index_ < override_at_ ? initial_ : override_;
-    const holoscan::TimePoint time = context.activation_time();
-    const auto packed = hr::pack_array_geometry(values.array_geometry);
-    auto geometry_wire = hr::to_wire(values.array_geometry);
-    const std::array<int64_t, 2> geometry_shape{values.array_geometry.num_elements() + 1, 3};
-    auto emitted =
-        emit_wire_doubles(array_geometry, std::move(geometry_wire), packed, geometry_shape, time);
-    if (!emitted) {
-      return emitted;
-    }
-    emitted = emit_host_vector(az_coordinates, values.az_coordinates, time);
-    if (!emitted) {
-      return emitted;
-    }
-    emitted = emit_host_vector(el_coordinates, values.el_coordinates, time);
-    if (!emitted) {
-      return emitted;
-    }
-    emitted = spatial_smoothing.emit(smoothing_wire(values.spatial_smoothing),
-                                     holoscan::EmitOptions{.capture_time = time});
-    if (!emitted) {
-      return emitted;
-    }
-    emitted =
-        diagonal_loading.emit(values.diagonal_loading, holoscan::EmitOptions{.capture_time = time});
-    if (!emitted) {
-      return emitted;
-    }
-    emitted = max_sources.emit(values.max_sources, holoscan::EmitOptions{.capture_time = time});
-    if (!emitted) {
-      return emitted;
-    }
-    {
-      const std::lock_guard lock(perf::PerfFrameBank::mutex);
-      perf::detail::record_start_locked();
+    if (frame_index_ == override_at_) {
+      const holoscan::TimePoint time = context.activation_time();
+      holoscan::expected<void, holoscan::Error> emitted;
+      switch (kind_) {
+        case MvdrScenario::OverrideKind::kNone:
+          break;
+        case MvdrScenario::OverrideKind::kArrayGeometry: {
+          const auto packed = hr::pack_array_geometry(override_.array_geometry);
+          const std::array<int64_t, 2> shape{override_.array_geometry.num_elements() + 1, 3};
+          emitted = emit_wire_doubles(array_geometry, hr::to_wire(override_.array_geometry), packed,
+                                      shape, time);
+          break;
+        }
+        case MvdrScenario::OverrideKind::kAzAngles: {
+          emitted = emit_host_vector(az_coordinates, override_.az_coordinates, time);
+          break;
+        }
+        case MvdrScenario::OverrideKind::kElAngles: {
+          emitted = emit_host_vector(el_coordinates, override_.el_coordinates, time);
+          break;
+        }
+        case MvdrScenario::OverrideKind::kSpatialSmoothing: {
+          emitted = spatial_smoothing.emit(smoothing_wire(override_.spatial_smoothing),
+                                           holoscan::EmitOptions{.capture_time = time});
+          break;
+        }
+        case MvdrScenario::OverrideKind::kDiagonalLoading: {
+          emitted = diagonal_loading.emit(override_.diagonal_loading,
+                                          holoscan::EmitOptions{.capture_time = time});
+          break;
+        }
+        case MvdrScenario::OverrideKind::kMaxSources: {
+          emitted =
+              max_sources.emit(override_.max_sources, holoscan::EmitOptions{.capture_time = time});
+          break;
+        }
+      }
+      if (!emitted)
+        return emitted;
     }
     ++frame_index_;
     return perf::detail::emit_device_frame(snapshot, context, frame, mode);
@@ -324,6 +340,7 @@ class PerfMVDROverrideSourceOp final : public holoscan::Operator<> {
   int64_t override_at_{-1};
   hr::MVDRParams initial_;
   hr::MVDRParams override_;
+  MvdrScenario::OverrideKind kind_{MvdrScenario::OverrideKind::kNone};
   int64_t frame_index_{0};
 };
 
@@ -339,10 +356,12 @@ perf::TimingCollector run_mvdr_graph(const MvdrScenario& scen, const perf::RunPl
   initial.angle_convention.preset = hr::AngleConventionPreset::kRadarBoresight;
   initial.az_coordinates = linspace(-0.5, 0.5, scen.num_az);
   initial.el_coordinates = linspace(-0.3, 0.3, scen.num_el);
-  initial.diagonal_loading = kInitialLoading;
-  initial.max_sources = kInitialMaxSources;
+  initial.diagonal_loading = scen.static_loading;
+  initial.max_sources = scen.static_max_sources;
   hr::MVDRParams override = initial;
   switch (scen.override_kind) {
+    case MvdrScenario::OverrideKind::kNone:
+      break;
     case MvdrScenario::OverrideKind::kArrayGeometry:
       override.array_geometry = make_ula_geometry(scen.channels, 0.45, 1.0);
       break;
@@ -374,8 +393,8 @@ perf::TimingCollector run_mvdr_graph(const MvdrScenario& scen, const perf::RunPl
   perf::PerfFrameBank::reset(std::move(snap), plan.total_frames, &collector);
 
   holoscan::Graph graph{"mvdr-perf"};
-  const auto source =
-      graph.op<PerfMVDROverrideSourceOp>("src", plan.override_at, initial, override);
+  const auto source = graph.op<PerfMVDROverrideSourceOp>("src", plan.override_at, initial, override,
+                                                         scen.override_kind);
   auto op = graph.op<hr::MVDREstimatorOp<PerfPrecision>>("mvdr", extents);
   op.set_params(std::move(initial));
   const auto sink = graph.op<perf::PerfTerminalSinkOp>("aoa_sink");
@@ -386,12 +405,18 @@ perf::TimingCollector run_mvdr_graph(const MvdrScenario& scen, const perf::RunPl
   const holoscan::ConnectionOptions q{.queue_depth = 8U};
 
   graph.add_flow(source->snapshot, op->snapshot, q);
-  graph.add_flow(source->array_geometry, op->array_geometry, q);
-  graph.add_flow(source->az_coordinates, op->az_coordinates, q);
-  graph.add_flow(source->el_coordinates, op->el_coordinates, q);
-  graph.add_flow(source->spatial_smoothing, op->spatial_smoothing, q);
-  graph.add_flow(source->diagonal_loading, op->diagonal_loading, q);
-  graph.add_flow(source->max_sources, op->max_sources, q);
+  if (scen.override_kind == MvdrScenario::OverrideKind::kArrayGeometry)
+    graph.add_flow(source->array_geometry, op->array_geometry, q);
+  if (scen.override_kind == MvdrScenario::OverrideKind::kAzAngles)
+    graph.add_flow(source->az_coordinates, op->az_coordinates, q);
+  if (scen.override_kind == MvdrScenario::OverrideKind::kElAngles)
+    graph.add_flow(source->el_coordinates, op->el_coordinates, q);
+  if (scen.override_kind == MvdrScenario::OverrideKind::kSpatialSmoothing)
+    graph.add_flow(source->spatial_smoothing, op->spatial_smoothing, q);
+  if (scen.override_kind == MvdrScenario::OverrideKind::kDiagonalLoading)
+    graph.add_flow(source->diagonal_loading, op->diagonal_loading, q);
+  if (scen.override_kind == MvdrScenario::OverrideKind::kMaxSources)
+    graph.add_flow(source->max_sources, op->max_sources, q);
   graph.add_flow(op->aoa_estimates, sink->in, q);
   graph.add_flow(op->angle_spectrum, spectrum->in, q);
   graph.add_flow(op->doa_multi, doa->in, q);
@@ -445,6 +470,7 @@ perf::ResultRow base_row(const MvdrScenario& scen) {
   row.scenario_id = scen.id;
   row.op_name = "MVDREstimatorOp";
   row.variant = std::string("capon_live_") + override_name(scen.override_kind);
+  row.live_port = override_name(scen.override_kind);
   row.size_id = scen.size_id;
   row.map_shape = {scen.num_az, scen.num_el};
   row.input_shape = {scen.detections, scen.channels, scen.snapshots};
@@ -454,7 +480,8 @@ perf::ResultRow base_row(const MvdrScenario& scen) {
   return row;
 }
 
-MvdrScenario make_scenario(const SizeSpec& s, MvdrScenario::OverrideKind kind) {
+MvdrScenario make_scenario(const SizeSpec& s,
+                           MvdrScenario::OverrideKind kind = MvdrScenario::OverrideKind::kNone) {
   MvdrScenario sc;
   sc.size_id = s.id;
   sc.channels = s.channels;
@@ -491,51 +518,76 @@ struct MvdrTraits : perf::PerfDriverDefaults {
   static const char* sizes_subset_help() { return "Size sweep across an explicit subset"; }
   static const char* full_help() { return "Full size ladder with all six live overrides"; }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "mvdr_estimator.yaml",
+        "mvdr_estimator");
+  }
   static std::vector<perf::SizeDef> size_ladder_defs() {
-    std::vector<perf::SizeDef> out;
-    for (const auto& s : size_ladder()) {
-      perf::SizeDef def;
-      def.id = s.id;
-      def.shape = {s.num_az, s.num_el};
-      def.cells = s.num_az * s.num_el;
-      def.role = s.role;
-      out.push_back(def);
+    const auto profiles = suite();
+    std::vector<perf::SizeDef> result;
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 5)
+        throw std::invalid_argument("mvdr_estimator profile rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
+                        std::string(perf::kProfiles[i])});
     }
-    return out;
+    return result;
   }
-
-  static std::vector<MvdrScenario> build_default_matrix() {
-    std::vector<MvdrScenario> out;
-    for (const char* sid : {"xs", "sm", "md"}) {
-      append_override_scenarios(&out, must_find_size(sid));
-    }
-    return out;
-  }
-
-  static std::vector<MvdrScenario> build_size_sweep(const std::vector<std::string>& sizes) {
-    std::vector<MvdrScenario> out;
-    for (const auto& sid : sizes) {
-      const SizeSpec* s = find_size(sid);
-      if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
-        continue;
+  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    std::set<std::string> selected_ids;
+    for (const auto& c : profiles.select(scope))
+      selected_ids.insert(c.id);
+    std::vector<Scenario> result;
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i)
+        if (c.profile == perf::kProfiles[i])
+          break;
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 5 || shape[0] < 4 || shape[1] < 1 || shape[2] < 2 || shape[3] < 1 ||
+          shape[4] < 1)
+        throw std::invalid_argument("mvdr_estimator invalid shape");
+      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], shape[4], c.profile};
+      auto scenario = make_scenario(size);
+      scenario.id = c.id;
+      perf::require_keys(c.parameters, {"diagonal_loading", "max_sources"}, "parameters");
+      scenario.static_loading = c.parameters["diagonal_loading"].as<double>();
+      if (c.parameters["max_sources"])
+        scenario.static_max_sources = c.parameters["max_sources"].as<int64_t>();
+      if (scenario.static_max_sources < 1 || scenario.static_max_sources > 4 ||
+          scenario.static_loading < -1.0)
+        throw std::invalid_argument("MVDR invalid loading");
+      if (c.override_value) {
+        const auto port = (*c.override_value)["port"].as<std::string>();
+        const auto value = (*c.override_value)["value"].as<std::string>();
+        if (port == "array_geometry" && value == "spacing_045")
+          scenario.override_kind = MvdrScenario::OverrideKind::kArrayGeometry;
+        else if (port == "az_coordinates" && value == "shift_005")
+          scenario.override_kind = MvdrScenario::OverrideKind::kAzAngles;
+        else if (port == "el_coordinates" && value == "shift_005")
+          scenario.override_kind = MvdrScenario::OverrideKind::kElAngles;
+        else if (port == "spatial_smoothing" && value == "two")
+          scenario.override_kind = MvdrScenario::OverrideKind::kSpatialSmoothing;
+        else if (port == "diagonal_loading" && value == "0.01")
+          scenario.override_kind = MvdrScenario::OverrideKind::kDiagonalLoading;
+        else if (port == "max_sources" && value == "3")
+          scenario.override_kind = MvdrScenario::OverrideKind::kMaxSources;
+        else
+          throw std::invalid_argument("mvdr_estimator invalid live override");
       }
-      append_override_scenarios(&out, *s);
+      if (selected_ids.contains(c.id))
+        result.push_back(std::move(scenario));
     }
-    return out;
-  }
-
-  static std::vector<MvdrScenario> build_full_matrix() {
-    std::vector<MvdrScenario> out;
-    for (const auto& s : size_ladder()) {
-      append_override_scenarios(&out, s);
-    }
-    return out;
+    return result;
   }
 
   static void run_scenario(const MvdrScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    const perf::RunPlan plan = perf::make_run_plan(
+        rs, /*has_override=*/scen.override_kind != MvdrScenario::OverrideKind::kNone);
     const auto samples =
         perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_mvdr_graph(scen, p);
@@ -548,6 +600,8 @@ struct MvdrTraits : perf::PerfDriverDefaults {
     fill_throughput(&row, scen, row.latency.median_ms);
     row.notes = "override_ms isolates inline " + std::string(override_name(scen.override_kind)) +
                 "; cells/s is detections/s; Capon scan dominates per tick";
+    if (row.live_port.empty())
+      row.notes = "default parameters; no live override";
     report->results.push_back(row);
   }
 

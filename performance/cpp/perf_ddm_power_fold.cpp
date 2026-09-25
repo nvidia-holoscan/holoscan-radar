@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <cstdint>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,6 +15,7 @@
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
+#include "utils/perf_profiles.hpp"
 #include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
@@ -36,15 +38,6 @@ struct Scenario {
   std::string size_id;
   SizeSpec size;
 };
-
-const std::vector<SizeSpec>& sizes() {
-  static const std::vector<SizeSpec> result{{"xs", 2, 4, 64, 256, "smoke"},
-                                            {"sm", 4, 4, 128, 512, "sparse automotive"},
-                                            {"md", 4, 8, 256, 512, "common MIMO"},
-                                            {"lg", 4, 16, 512, 1024, "large array"},
-                                            {"xl", 8, 16, 512, 2048, "upper bound"}};
-  return result;
-}
 
 hr::DDMCodeDescriptor code(int64_t tx) {
   hr::DDMCodeDescriptor result;
@@ -98,25 +91,47 @@ struct Traits : perf::PerfDriverDefaults {
   static const char* full_help() { return "Run all DDM fold sizes"; }
   static std::vector<perf::SizeDef> size_ladder_defs() {
     std::vector<perf::SizeDef> result;
-    for (const auto& size : sizes()) {
-      result.push_back({size.id, {size.doppler, size.range}, size.doppler * size.range, size.role});
+    const auto suite = perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_power_fold.yaml",
+        "ddm_power_fold");
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = suite.shapes[i];
+      if (shape.size() != 4)
+        throw std::invalid_argument("profile shape rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]),
+                        {shape[2], shape[3]},
+                        shape[2] * shape[3],
+                        std::string(perf::kProfiles[i])});
     }
     return result;
   }
-  static std::vector<Scenario> build_size_sweep(const std::vector<std::string>& ids) {
+  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
+    const auto suite = perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_power_fold.yaml",
+        "ddm_power_fold");
     std::vector<Scenario> result;
-    for (const auto& size : sizes()) {
-      if (std::find(ids.begin(), ids.end(), size.id) != ids.end()) {
-        result.push_back({"ddm_fold_" + size.id, size.id, size});
+    for (const auto& c : suite.cases) {
+      perf::require_keys(c.parameters, {"ddm_code"}, "parameters");
+      if (c.parameters["ddm_code"].as<std::string>() != "linear" || c.override_value.has_value()) {
+        throw std::invalid_argument("DDMPowerFold supports only linear code and no live override");
       }
     }
+    for (const auto& c : suite.select(scope)) {
+      size_t index = 0;
+      for (; index < perf::kProfiles.size(); ++index) {
+        if (c.profile == perf::kProfiles[index])
+          break;
+      }
+      const auto& shape = suite.shapes.at(index);
+      if (shape.size() != 4)
+        throw std::invalid_argument("DDMPowerFold profile must be rank 4");
+      if (shape[2] % shape[0] != 0) {
+        throw std::invalid_argument("DDMPowerFold Doppler size must be divisible by TX count");
+      }
+      result.push_back(
+          {c.id, c.profile, {c.profile, shape[0], shape[1], shape[2], shape[3], c.profile}});
+    }
     return result;
-  }
-  static std::vector<Scenario> build_default_matrix() {
-    return build_size_sweep({"xs", "sm", "md"});
-  }
-  static std::vector<Scenario> build_full_matrix() {
-    return build_size_sweep({"xs", "sm", "md", "lg", "xl"});
   }
   static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
@@ -141,7 +156,7 @@ struct Traits : perf::PerfDriverDefaults {
       settings.warmup_frames = 0;
       settings.measured_frames = 2;
       settings.repeats = 1;
-      run_scenario(build_size_sweep({"xs"}).front(), settings, &report);
+      run_scenario(build_profile_matrix("minimal").front(), settings, &report);
     });
   }
 };

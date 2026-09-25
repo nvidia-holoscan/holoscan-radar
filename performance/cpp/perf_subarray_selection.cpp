@@ -7,6 +7,9 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <set>
+#include <type_traits>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -50,6 +53,8 @@ struct SubarrayScenario {
   int64_t channels{0};
   int64_t selected_channels{0};
   int64_t snapshots{0};
+  int64_t min_subarray_size{2};
+  std::string live_port;
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -107,32 +112,58 @@ hr::ArrayGeometry make_holey_ula(const SubarrayScenario& scenario) {
   return geometry;
 }
 
-perf::TimingCollector run_subarray_graph(const SubarrayScenario& scenario, int total_frames) {
+perf::TimingCollector run_subarray_graph(const SubarrayScenario& scenario,
+                                         const perf::RunPlan& plan) {
   auto snapshot = perf::make_iq_cube_device<PerfPrecision>(
       {scenario.items, scenario.channels, scenario.snapshots});
-  return perf::run_perf_graph(
-      std::move(snapshot), total_frames, "subarray-selection-perf",
-      [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
-        hr::MaxTensorExtents extents;
-        extents.max_items = scenario.items;
-        extents.max_subarray_channels = scenario.channels;
-        extents.max_snapshots = scenario.snapshots;
-        auto op = graph.op<hr::SubarraySelectionOp<PerfPrecision>>("subarray_selection", extents);
-        hr::SubarraySelectionParams params;
-        params.array_geometry = make_holey_ula(scenario);
-        op.set_params(std::move(params));
+  const auto build = [&](holoscan::Graph& graph, const auto& source,
+                         holoscan::CompileOptions& options) {
+    hr::MaxTensorExtents extents;
+    extents.max_items = scenario.items;
+    extents.max_subarray_channels = scenario.channels;
+    extents.max_snapshots = scenario.snapshots;
+    auto op = graph.op<hr::SubarraySelectionOp<PerfPrecision>>("subarray_selection", extents);
+    hr::SubarraySelectionParams params;
+    params.array_geometry = make_holey_ula(scenario);
+    params.min_subarray_size = scenario.min_subarray_size;
+    op.set_params(std::move(params));
 
-        const auto snapshot_sink = graph.op<perf::PerfTerminalSinkOp>("snapshot_sink");
-        const auto geometry_drain =
-            graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>("geometry_drain");
-        const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-        graph.add_flow(source->out, op->snapshot, queue);
-        graph.add_flow(op->snapshot_out, snapshot_sink->in, queue);
-        graph.add_flow(op->array_geometry, geometry_drain->in, queue);
-        perf::bind_tensor_out(options, "subarray_selection", "snapshot_out");
-        // Declared optional device outputs still require placement on EA.
-        perf::bind_tensor_out(options, "subarray_selection", "is_valid_out");
-      });
+    const auto snapshot_sink = graph.op<perf::PerfTerminalSinkOp>("snapshot_sink");
+    const auto geometry_drain =
+        graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>("geometry_drain");
+    const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+    graph.add_flow(source->out, op->snapshot, queue);
+    if constexpr (requires { source->override_out; }) {
+      if constexpr (std::is_same_v<std::remove_reference_t<decltype(source->override_out)>,
+                                   holoscan::Output<hr::WireArrayGeometry>>)
+        graph.add_flow(source->override_out, op->array_geometry_in, queue);
+      else
+        graph.add_flow(source->override_out, op->subarray, queue);
+    }
+    graph.add_flow(op->snapshot_out, snapshot_sink->in, queue);
+    graph.add_flow(op->array_geometry, geometry_drain->in, queue);
+    perf::bind_tensor_out(options, "subarray_selection", "snapshot_out");
+    // Declared optional device outputs still require placement on EA.
+    perf::bind_tensor_out(options, "subarray_selection", "is_valid_out");
+  };
+  if (scenario.live_port == "array_geometry") {
+    auto changed = make_holey_ula(scenario);
+    changed.wavelength = 0.9;
+    return perf::run_perf_graph_with_override(
+        std::move(snapshot), plan.total_frames, plan.override_at,
+        hr::to_wire(make_holey_ula(scenario)), hr::to_wire(changed), "subarray-selection-perf",
+        build, perf::PerfPublishMode::kCopy, true);
+  }
+  if (scenario.live_port == "subarray") {
+    std::vector<int64_t> indices;
+    for (int64_t i = 0; i < scenario.selected_channels; ++i)
+      indices.push_back(i);
+    return perf::run_perf_graph_with_vector_override<int64_t>(
+        std::move(snapshot), plan.total_frames, plan.override_at, {}, indices,
+        "subarray-selection-perf", build, perf::PerfPublishMode::kCopy, true);
+  }
+  return perf::run_perf_graph(std::move(snapshot), plan.total_frames, "subarray-selection-perf",
+                              build);
 }
 
 void fill_throughput(perf::ResultRow* row, const SubarrayScenario& scenario, double median_ms) {
@@ -158,6 +189,7 @@ perf::ResultRow base_row(const SubarrayScenario& scenario) {
   row.input_shape = {scenario.items, scenario.channels, scenario.snapshots};
   row.out_batch = scenario.items;
   row.k = scenario.selected_channels;
+  row.live_port = scenario.live_port;
   return row;
 }
 
@@ -173,69 +205,77 @@ struct SubarrayTraits : perf::PerfDriverDefaults {
   static const char* sizes_subset_help() {
     return "Holey-ULA sweep across an explicit size subset";
   }
-  static const char* full_help() {
-    return "Full item/channel/snapshot size ladder; schema and host-Tensor "
-           "live override timing is not measured";
-  }
+  static const char* full_help() { return "All curated sizes and live-override cases"; }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "subarray_selection.yaml",
+        "subarray_selection");
+  }
   static std::vector<perf::SizeDef> size_ladder_defs() {
-    std::vector<perf::SizeDef> output;
-    for (const auto& size : size_ladder()) {
-      perf::SizeDef definition;
-      definition.id = size.id;
-      definition.shape = {size.items, size.channels, size.snapshots};
-      definition.cells = size.items * size.channels * size.snapshots;
-      definition.role = size.role;
-      output.push_back(definition);
+    const auto profiles = suite();
+    std::vector<perf::SizeDef> result;
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 3)
+        throw std::invalid_argument("SubarraySelection profile rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
+                        std::string(perf::kProfiles[i])});
     }
-    return output;
+    return result;
   }
-
-  static std::vector<SubarrayScenario> build_default_matrix() {
-    std::vector<SubarrayScenario> output;
-    for (const char* id : {"xs", "sm", "md"}) {
-      output.push_back(make_scenario(must_find_size(id)));
-    }
-    return output;
-  }
-
-  static std::vector<SubarrayScenario> build_size_sweep(const std::vector<std::string>& sizes) {
-    std::vector<SubarrayScenario> output;
-    for (const auto& id : sizes) {
-      const SizeSpec* size = find_size(id);
-      if (size == nullptr) {
-        std::cerr << "warning: unknown size id '" << id << "', skipping\n";
-        continue;
+  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    std::set<std::string> selected_ids;
+    for (const auto& c : profiles.select(scope))
+      selected_ids.insert(c.id);
+    std::vector<Scenario> result;
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i)
+        if (c.profile == perf::kProfiles[i])
+          break;
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 3 || shape[0] < 1 || shape[1] < 4 || shape[2] < 1)
+        throw std::invalid_argument("SubarraySelection invalid shape");
+      perf::require_keys(c.parameters, {"min_subarray_size"}, "parameters");
+      const auto min_size = c.parameters["min_subarray_size"].as<int64_t>();
+      if (min_size < 2 || min_size > shape[1] - shape[1] / 4)
+        throw std::invalid_argument("SubarraySelection invalid minimum size");
+      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
+      auto scenario = make_scenario(size);
+      scenario.id = c.id;
+      scenario.min_subarray_size = min_size;
+      if (c.override_value) {
+        scenario.live_port = (*c.override_value)["port"].as<std::string>();
+        const auto value = (*c.override_value)["value"].as<std::string>();
+        if ((scenario.live_port == "array_geometry" && value != "wavelength_09") ||
+            (scenario.live_port == "subarray" && value != "contiguous") ||
+            (scenario.live_port != "array_geometry" && scenario.live_port != "subarray"))
+          throw std::invalid_argument("SubarraySelection invalid override");
       }
-      output.push_back(make_scenario(*size));
+      if (selected_ids.contains(c.id))
+        result.push_back(std::move(scenario));
     }
-    return output;
-  }
-
-  static std::vector<SubarrayScenario> build_full_matrix() {
-    std::vector<SubarrayScenario> output;
-    for (const auto& size : size_ladder()) {
-      output.push_back(make_scenario(size));
-    }
-    return output;
+    return result;
   }
 
   static void run_scenario(const SubarrayScenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(settings, /*has_override=*/false);
+    const perf::RunPlan plan = perf::make_run_plan(settings, !scenario.live_port.empty());
     const auto samples = perf::collect_scenario_samples(
         settings, plan, [&](int /*repeat*/, const perf::RunPlan& current) {
-          return run_subarray_graph(scenario, current.total_frames);
+          return run_subarray_graph(scenario, current);
         });
     perf::append_setup_row(base_row(scenario), samples, report);
 
     perf::ResultRow row = base_row(scenario);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scenario, row.latency.median_ms);
-    row.notes =
-        "cold_ms includes first selection plan/table upload; median/p90 are "
-        "steady gather + geometry publication; cells/s is items/s; live "
-        "schema/host-Tensor override timing deferred";
+    row.notes = "cold_ms includes first selection plan; override_ms is one changed frame for " +
+                scenario.live_port + "; cells/s is items/s";
+    if (row.live_port.empty())
+      row.notes = "default parameters; no live override";
     report->results.push_back(row);
   }
 

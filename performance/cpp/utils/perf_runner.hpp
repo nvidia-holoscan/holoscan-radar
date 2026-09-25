@@ -5,7 +5,7 @@
 // scenario the same way: decide a frame plan (with or without a mid-session
 // live-override window), run `repeats` graph sessions collecting one
 // TimingCollector each, bucket the per-frame latencies into cold / steady /
-// override-spike samples, then emit one "setup" row and one "compute" row.
+// changed-frame samples, then emit one "setup" row and one "compute" row.
 //
 // Only two pieces are operator-specific and stay in the consumer:
 //   1. building + running one graph session (the RunRepFn passed to
@@ -13,8 +13,7 @@
 //   2. finishing the compute row (throughput model + notes) after
 //      fill_compute_row() has filled the timing fields.
 //
-// Keeping the bucketing here means the subtle override-window logic (shared
-// verbatim by CFAR and DetectionReduction) is single-sourced.
+// Keeping the bucketing here makes steady and changed-frame accounting consistent.
 
 #pragma once
 
@@ -22,6 +21,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -32,46 +32,43 @@
 namespace holoscan::radar::perf {
 
 // Frame plan for one scenario: how many frames to run and, when the operator
-// has a [live] override, which frames form the post-override spike window.
+// has a [live] override, which one frame receives the changed value.
 struct RunPlan {
   int total_frames{0};
-  int64_t override_at{-1};       // -1 => no live-override window
-  int override_spike_frames{0};  // frames measured as the override spike
+  int64_t override_at{-1};  // -1 => no live override
   bool has_override() const { return override_at >= 0; }
 };
 
-// Build the plan. With an override the spike lands mid-window (after warmup +
-// half the measured frames) and total is stretched to fit the spike; without
-// one it is simply warmup + measured frames.
-inline RunPlan make_run_plan(const RunSettings& rs, bool has_override, int spike_frames = 3) {
+// Build the plan. Measure the requested number of steady frames after warmup.
+// An override run adds one changed frame and one Params-reversion frame.
+inline RunPlan make_run_plan(const RunSettings& rs, bool has_override) {
   RunPlan p;
   if (has_override) {
-    p.override_at = rs.warmup_frames + std::max(2, rs.measured_frames / 2);
-    p.override_spike_frames = spike_frames;
-    p.total_frames = std::max(rs.warmup_frames + rs.measured_frames,
-                              static_cast<int>(p.override_at) + spike_frames);
+    p.override_at = rs.warmup_frames + rs.measured_frames;
+    p.total_frames = static_cast<int>(p.override_at) + 2;
   } else {
     p.override_at = -1;
-    p.override_spike_frames = 0;
     p.total_frames = rs.warmup_frames + rs.measured_frames;
   }
   return p;
 }
 
-// Per-frame samples pooled across all repeats of one scenario.
+// Per-frame samples pooled across independent runs of one scenario.
 struct ScenarioSamples {
   std::vector<double> setup;   // ready-to-tick time per repeat
   std::vector<double> cold;    // first frame latency per repeat
   std::vector<double> steady;  // post-warmup, pre-override frames
-  double override_ms_best{std::numeric_limits<double>::quiet_NaN()};
+  std::vector<double> override;
+  std::vector<double> override_delta;
+  std::vector<double> achieved_fps;
+  std::vector<double> source_fps;
 };
 
 // Run `rs.repeats` graph sessions and bucket their frames. `run_rep(rep, plan)`
 // must build and run one graph for `plan.total_frames` frames and return the
 // populated TimingCollector. Frame 0 is the cold sample; post-warmup frames
-// before override_at are steady; frames in [override_at, override_at + spike)
-// contribute the peak override latency; later frames are ignored (the plan
-// sizes total so there are few or none).
+// before override_at are steady; the changed frame is an override sample.
+// The following frame exercises Params reversion and is excluded from stats.
 template <typename RunRepFn>
 ScenarioSamples collect_scenario_samples(const RunSettings& rs, const RunPlan& plan,
                                          RunRepFn run_rep) {
@@ -80,18 +77,32 @@ ScenarioSamples collect_scenario_samples(const RunSettings& rs, const RunPlan& p
     TimingCollector collector = run_rep(rep, plan);
     s.setup.push_back(collector.setup_ms());
     const auto lat = collector.frame_latencies_ms();
-    if (!lat.empty()) {
-      s.cold.push_back(lat.front());
+    if (lat.size() != static_cast<size_t>(plan.total_frames) ||
+        collector.starts.size() != lat.size() || collector.ends.size() != lat.size()) {
+      throw std::runtime_error("performance frame timing count mismatch");
     }
+    s.cold.push_back(lat.front());
+    const size_t first = static_cast<size_t>(rs.warmup_frames);
+    const size_t last =
+        plan.has_override() ? static_cast<size_t>(plan.override_at - 1) : lat.size() - 1;
+    if (last > first) {
+      const double elapsed_s = to_ms(collector.ends[last] - collector.ends[first]) / 1000.0;
+      const double source_s = to_ms(collector.starts[last] - collector.starts[first]) / 1000.0;
+      if (elapsed_s > 0.0)
+        s.achieved_fps.push_back(static_cast<double>(last - first) / elapsed_s);
+      if (source_s > 0.0)
+        s.source_fps.push_back(static_cast<double>(last - first) / source_s);
+    }
+    std::vector<double> run_steady;
     for (size_t i = static_cast<size_t>(rs.warmup_frames); i < lat.size(); ++i) {
       const int64_t frame = static_cast<int64_t>(i);
       if (!plan.has_override() || frame < plan.override_at) {
         s.steady.push_back(lat[i]);
-      } else if (frame < plan.override_at + plan.override_spike_frames) {
+        run_steady.push_back(lat[i]);
+      } else if (frame == plan.override_at) {
         const double v = lat[i];
-        if (std::isnan(s.override_ms_best) || v > s.override_ms_best) {
-          s.override_ms_best = v;
-        }
+        s.override.push_back(v);
+        s.override_delta.push_back(v - summarize(run_steady).median_ms);
       }
     }
   }
@@ -107,16 +118,16 @@ inline void append_setup_row(ResultRow row, const ScenarioSamples& s, PerfReport
 }
 
 // Fill the timing fields of a "compute" row (cold, steady latency stats, and
-// the live-override peak/delta when present). The caller finishes the row with
+// the changed-frame latency/delta when present). The caller finishes the row with
 // the operator-specific throughput model and notes, then appends it.
 inline void fill_compute_row(ResultRow* row, const ScenarioSamples& s) {
   row->bucket = "compute";
   row->cold_ms = summarize(s.cold).median_ms;
   row->latency = summarize(s.steady);
-  row->override_ms = s.override_ms_best;
-  if (!std::isnan(s.override_ms_best) && !std::isnan(row->latency.median_ms)) {
-    row->override_delta_ms = s.override_ms_best - row->latency.median_ms;
-  }
+  row->override_ms = summarize(s.override).median_ms;
+  row->achieved_frames_per_second = summarize(s.achieved_fps).median_ms;
+  row->source_frames_per_second = summarize(s.source_fps).median_ms;
+  row->override_delta_ms = summarize(s.override_delta).median_ms;
 }
 
 }  // namespace holoscan::radar::perf

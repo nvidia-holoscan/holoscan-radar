@@ -720,12 +720,12 @@ operator has any — not only build-time `Arg` variants. Match the CFAR pattern:
 - Inline a mid-session override in the **same** graph run as steady-state
   compute (do not require a separate scenario loop just to touch the override
   port).
-- Report `override_ms` / `override_delta_ms` on the compute row (peak latency
-  over a short post-override window vs pre-override median).
-- Cover each functionally distinct live param at least once in the default or
-  `--full` matrix (cheap value flips and any costly rebuild paths). Claiming
-  a fast path (`alpha_lut`, cached plans, …) while only timing the slow path
-  is a harness bug.
+- Report `override_ms` / `override_delta_ms` on the compute row (median of one
+  changed frame per independent run versus the pre-override steady median).
+- In the YAML `overrides` scope, cover every `[live]` input alone at small,
+  medium, and large sizes. `thorough` includes this coverage; `moderate` may
+  focus on the most important live inputs. Claiming a fast path (`alpha_lut`,
+  cached plans, …) while only timing the slow path is a harness bug.
 
 **Process warmup (required).** Before the measured scenario loop, run one
 discarded graph session (`perf_process_warmup.hpp`) so CUDA context init and
@@ -744,7 +744,9 @@ that in the consumer header comment. Process warmup still applies.
 - **Setup / instantiate** time vs **compute** time.
 - **Cold** (first timed frame after config) vs **median / p90** steady.
 - Live-override cost (`override_ms` / `override_delta_ms`) as above.
-- Size ladder up to moderate real application shapes, not only micro sizes.
+- Small, medium, and large application-relevant input/output profiles.
+- Achieved steady frames/s and observed source cadence alongside latency and
+  scale-normalized throughput. Both are source-to-terminal Graph measurements.
 
 ### How to diagnose a slow scenario
 

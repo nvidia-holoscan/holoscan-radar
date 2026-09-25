@@ -3,12 +3,11 @@
 
 // Reusable driver shell for the performance harness. Every perf_<operator>
 // consumer shares the same outer program: parse a common CLI, verify a GPU is
-// present, quiet the SDK, pick a scenario matrix (default / --full / --sizes),
-// stamp the report header, record the exercised size ladder, run the scenarios
+// present, quiet the SDK, select YAML scope cases,
+// stamp the report header, record the exercised size profiles, run the scenarios
 // (progress + optional --stop-after-s cap + optional failure isolation), and
-// write JSON / text / stdout. Only the scenario matrix, the graph, the input
-// tensors, and the throughput model are operator-specific; those stay in the
-// consumer via a Traits struct.
+// write JSON / text / stdout. Each Traits adapter builds valid tensors and
+// Graph wiring for the scenario selected from its YAML suite.
 //
 // A consumer provides a Traits type and calls perf_main<Traits>() from main().
 // Traits must supply (all static):
@@ -21,9 +20,7 @@
 //   const char* sizes_subset_help();  // --sizes a,b,c description
 //   const char* full_help();          // --full description (may be multi-line)
 //   std::vector<SizeDef> size_ladder_defs();  // full ladder, in ladder order
-//   std::vector<Scenario> build_default_matrix();
-//   std::vector<Scenario> build_full_matrix();
-//   std::vector<Scenario> build_size_sweep(const std::vector<std::string>&);
+//   std::vector<Scenario> build_profile_matrix(const std::string& scope);
 //   void run_scenario(const Scenario&, const RunSettings&, PerfReport*);
 //
 // Optional hooks come from PerfDriverDefaults (inherit to get no-op defaults,
@@ -31,23 +28,25 @@
 //
 //   void process_warmup(const RunSettings&);  // discarded prime run
 //   void post_run(PerfReport*, bool quiet);   // e.g. calibration / tables
-//   bool isolate_failures();                  // try/catch each scenario
 
 #pragma once
 
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <exception>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "utils/perf_app.hpp"
 #include "utils/perf_platform.hpp"
+#include "utils/perf_profiles.hpp"
 #include "utils/perf_report.hpp"
 
 namespace holoscan::radar::perf {
@@ -57,7 +56,6 @@ namespace holoscan::radar::perf {
 struct PerfDriverDefaults {
   static void process_warmup(const RunSettings&) {}
   static void post_run(PerfReport*, bool /*quiet*/) {}
-  static bool isolate_failures() { return false; }
 };
 
 // Common CLI shared by every consumer. Operator-specific behavior enters only
@@ -67,6 +65,7 @@ struct Options {
   std::string text;
   bool quiet{false};
   bool full{false};
+  std::string scope{"limited"};
   std::vector<std::string> sizes;  // empty = tier default
   bool sizes_all{false};
   double stop_after_s{0.0};  // 0 = disabled; per-scenario wall-clock cap
@@ -96,9 +95,10 @@ void print_help() {
                "  --quiet           Suppress the stdout text summary\n"
                "  --warmup N        Warmup frames excluded from stats "
                "(default 5)\n"
-               "  --frames N        Measured frames per scenario (default 20)\n"
+               "  --frames N        Measured frames per scenario (default 50)\n"
                "  --repeats N       Repeat each scenario N times, pooled "
-               "(default 1)\n"
+               "(default 3)\n"
+            << "  --scope NAME      minimal|limited|overrides|moderate|thorough\n"
             << "  --sizes all       " << Traits::sizes_all_help() << "\n"
             << "  --sizes a,b,c     " << Traits::sizes_subset_help() << "\n"
             << "  --full            " << Traits::full_help() << "\n"
@@ -129,6 +129,13 @@ bool parse_args(int argc, char** argv, Options* opt) {
       opt->quiet = true;
     } else if (a == "--full") {
       opt->full = true;
+      opt->scope = "thorough";
+    } else if (a == "--scope") {
+      opt->scope = next("--scope");
+      if (!known_scope(opt->scope)) {
+        std::cerr << "error: unknown scope " << opt->scope << "\n";
+        return false;
+      }
     } else if (a == "--warmup") {
       opt->rs.warmup_frames = std::stoi(next("--warmup"));
     } else if (a == "--frames") {
@@ -153,6 +160,10 @@ bool parse_args(int argc, char** argv, Options* opt) {
       return false;
     }
   }
+  if (opt->rs.warmup_frames < 0 || opt->rs.measured_frames < 2 || opt->rs.repeats < 1) {
+    std::cerr << "error: require --warmup >= 0, --frames >= 2, --repeats >= 1\n";
+    return false;
+  }
   return true;
 }
 
@@ -175,20 +186,17 @@ inline void default_log_level() {
 
 template <typename Traits>
 std::vector<typename Traits::Scenario> select_scenarios(const Options& opt) {
-  if (opt.full) {
-    return Traits::build_full_matrix();
+  auto scenarios = Traits::build_profile_matrix(opt.scope);
+  if (opt.sizes_all || opt.sizes.empty())
+    return scenarios;
+  std::vector<typename Traits::Scenario> filtered;
+  for (const auto& scenario : scenarios) {
+    if (std::find(opt.sizes.begin(), opt.sizes.end(), scenario.size_id) != opt.sizes.end())
+      filtered.push_back(scenario);
   }
-  if (opt.sizes_all) {
-    std::vector<std::string> all;
-    for (const auto& def : Traits::size_ladder_defs()) {
-      all.push_back(def.id);
-    }
-    return Traits::build_size_sweep(all);
-  }
-  if (!opt.sizes.empty()) {
-    return Traits::build_size_sweep(opt.sizes);
-  }
-  return Traits::build_default_matrix();
+  if (filtered.empty())
+    throw std::invalid_argument("no YAML cases match requested sizes");
+  return filtered;
 }
 
 // Record ladder definitions for the sizes this run actually exercises, in
@@ -217,19 +225,7 @@ void run_all_scenarios(const std::vector<typename Traits::Scenario>& scenarios, 
   for (size_t i = 0; i < n; ++i) {
     std::cerr << "[" << (i + 1) << "/" << n << "] " << scenarios[i].id << std::flush;
     const auto t0 = Clock::now();
-    // Optional failure isolation: a thrown graph error (e.g. an operator
-    // rejecting an invalid parameter) would otherwise propagate out of main
-    // and abort the process, losing the remaining scenarios and the report.
-    if (Traits::isolate_failures()) {
-      try {
-        Traits::run_scenario(scenarios[i], opt.rs, report);
-      } catch (const std::exception& e) {
-        std::cerr << "  FAILED: " << e.what() << "\n";
-        continue;
-      }
-    } else {
-      Traits::run_scenario(scenarios[i], opt.rs, report);
-    }
+    Traits::run_scenario(scenarios[i], opt.rs, report);
     const double elapsed_s = to_ms(Clock::now() - t0) / 1000.0;
     std::cerr << "  (" << elapsed_s << " s)\n";
     report->run_settings.scenarios_completed = static_cast<int>(i + 1);
@@ -241,6 +237,28 @@ void run_all_scenarios(const std::vector<typename Traits::Scenario>& scenarios, 
     }
   }
   report->run_settings.stopped_early = stopped_early;
+}
+
+inline bool complete_report(const PerfReport& report) {
+  const auto completed = static_cast<size_t>(report.run_settings.scenarios_completed);
+  if (report.results.size() != 2U * completed)
+    return false;
+  for (size_t i = 0; i < completed; ++i) {
+    const auto& setup = report.results[2U * i];
+    const auto& compute = report.results[2U * i + 1U];
+    if (setup.bucket != "setup" || compute.bucket != "compute" ||
+        setup.scenario_id != compute.scenario_id || !std::isfinite(setup.setup_ms) ||
+        !std::isfinite(compute.cold_ms) || !std::isfinite(compute.latency.median_ms) ||
+        compute.latency.samples !=
+            report.run_settings.measured_frames * report.run_settings.repeats ||
+        !std::isfinite(compute.achieved_frames_per_second) ||
+        !std::isfinite(compute.source_frames_per_second))
+      return false;
+    if (!compute.live_port.empty() &&
+        (!std::isfinite(compute.override_ms) || !std::isfinite(compute.override_delta_ms)))
+      return false;
+  }
+  return true;
 }
 
 inline int write_outputs(const Options& opt, const PerfReport& report) {
@@ -283,21 +301,36 @@ int perf_main(int argc, char** argv) {
   }
   detail::default_log_level();
 
-  std::vector<typename Traits::Scenario> scenarios = detail::select_scenarios<Traits>(opt);
+  std::vector<typename Traits::Scenario> scenarios;
+  try {
+    scenarios = detail::select_scenarios<Traits>(opt);
+  } catch (const std::exception& e) {
+    std::cerr << "error: " << e.what() << "\n";
+    return 2;
+  }
 
   PerfReport report;
   report.provenance = capture_provenance();
   report.platform = capture_platform();
   report.run_settings = opt.rs;
+  report.run_settings.scope = opt.scope;
   report.run_settings.stop_after_s = opt.stop_after_s;
   report.run_settings.scenarios_planned = static_cast<int>(scenarios.size());
 
   detail::record_exercised_sizes<Traits>(scenarios, &report);
 
   Traits::process_warmup(opt.rs);
-  detail::run_all_scenarios<Traits>(scenarios, opt, &report);
-  Traits::post_run(&report, opt.quiet);
-
+  try {
+    detail::run_all_scenarios<Traits>(scenarios, opt, &report);
+    Traits::post_run(&report, opt.quiet);
+  } catch (const std::exception& e) {
+    std::cerr << "error: " << e.what() << "\n";
+    return 1;
+  }
+  if (!detail::complete_report(report)) {
+    std::cerr << "error: incomplete performance report\n";
+    return 1;
+  }
   return detail::write_outputs(opt, report);
 }
 

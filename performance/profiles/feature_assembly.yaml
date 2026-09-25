@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 1
+operator: feature_assembly
+profiles:
+  small: {shape: [64, 256]}
+  medium: {shape: [256, 512]}
+  large: {shape: [1024, 2048]}
+live_ports: []
+cases:
+  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {detections: 64}}
+  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {detections: 1024}}
+  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {detections: 16384}}
+  - {id: sparse-medium, profile: medium, scopes: [limited], parameters: {detections: 64}}
+  - {id: dense-medium, profile: medium, scopes: [limited], parameters: {detections: 4096}}
+  - {id: empty-medium, profile: medium, scopes: [moderate], parameters: {detections: 0}}
+  - {id: dense-large, profile: large, scopes: [moderate], parameters: {detections: 65536}}
+  - {id: empty-small, profile: small, scopes: [thorough], parameters: {detections: 0}}
+  - {id: dense-small, profile: small, scopes: [thorough], parameters: {detections: 4096}}

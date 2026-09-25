@@ -8,14 +8,15 @@
 // typically F∈{2,3,5}). Measurement tool only: no timing assertions. See
 // docs/planning/OPERATOR_DEVELOPMENT.md.
 //
-// Measures a mid-session min_points override through the production Exact
-// contract. The epsilon and max_clusters live ports are not timed.
+// Curated YAML cases measure each documented live input on one frame.
 
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <set>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -62,6 +63,9 @@ struct DbscanScenario {
   std::vector<double> epsilon{0.5};
   int64_t min_points{0};
   int64_t max_clusters{0};
+  std::string live_port;
+  double changed_epsilon{0.8};
+  int64_t changed_scalar{0};
 };
 
 // O(N² · F) sweeps. N spans compact→dense detection clouds; F spans the
@@ -142,31 +146,70 @@ std::shared_ptr<holoscan::Tensor> make_points(int64_t num_points, int64_t num_fe
 perf::TimingCollector run_dbscan_graph(const DbscanScenario& scen, const perf::RunPlan& plan) {
   auto pts = make_points<PerfPrecision>(scen.num_points, scen.num_features, scen.num_clusters);
   using BaseOp = hr::ClusterDBSCANOp<PerfPrecision>;
-  const int64_t override_min_points = scen.min_points + 1;
-  return perf::run_perf_graph_with_override(
-      std::move(pts), plan.total_frames, plan.override_at, scen.min_points, override_min_points,
-      "dbscan-perf",
-      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
-        hr::MaxTensorExtents extents;
-        extents.max_points = std::max<int64_t>(scen.num_points, 1);
-        extents.max_clusters = std::max<int64_t>(scen.num_clusters, 1);
-        auto op = graph.op<BaseOp>("dbscan", extents);
-        hr::ClusterDBSCANParams params;
-        params.epsilon = scen.epsilon;
-        params.min_points = scen.min_points;
-        params.max_clusters = scen.max_clusters;
-        op.set_params(std::move(params));
-        const auto sink = graph.op<perf::PerfTerminalSinkOp>("labels_sink");
-        const auto null = graph.op<perf::PerfNullSinkOp>("sizes_drain");
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(src->out, op->points, q);
-        graph.add_flow(src->override_out, op->min_points, q);
-        graph.add_flow(op->labels, sink->in, q);
-        graph.add_flow(op->sizes, null->in, q);
-        graph.partition("perf").add(src).add(op).add(sink).add(null);
-        perf::bind_tensor_out(options, "dbscan", "labels");
-        perf::bind_tensor_out(options, "dbscan", "sizes");
-      });
+  const auto configure = [&](holoscan::Graph& graph, const auto& src,
+                             holoscan::CompileOptions& options, auto connect) {
+    hr::MaxTensorExtents extents;
+    extents.max_points = std::max<int64_t>(scen.num_points, 1);
+    extents.max_features = scen.num_features;
+    extents.max_clusters = std::max<int64_t>(scen.num_clusters, 1);
+    auto op = graph.op<BaseOp>("dbscan", extents);
+    hr::ClusterDBSCANParams params;
+    params.epsilon = scen.epsilon;
+    params.min_points = scen.min_points;
+    params.max_clusters = scen.max_clusters;
+    op.set_params(std::move(params));
+    const auto sink = graph.op<perf::PerfTerminalSinkOp>("labels_sink");
+    const auto null = graph.op<perf::PerfNullSinkOp>("sizes_drain");
+    const holoscan::ConnectionOptions q{.queue_depth = 4U};
+    graph.add_flow(src->out, op->points, q);
+    connect(graph, src, op, q);
+    graph.add_flow(op->labels, sink->in, q);
+    graph.add_flow(op->sizes, null->in, q);
+    graph.partition("perf").add(src).add(op).add(sink).add(null);
+    perf::bind_tensor_out(options, "dbscan", "labels");
+    perf::bind_tensor_out(options, "dbscan", "sizes");
+  };
+  if (scen.live_port == "epsilon") {
+    return perf::run_perf_graph_with_vector_override<double>(
+        std::move(pts), plan.total_frames, plan.override_at, scen.epsilon,
+        std::vector<double>{scen.changed_epsilon}, "dbscan-perf",
+        [&](auto& graph, const auto& src, auto& options) {
+          configure(graph, src, options,
+                    [](auto& g, const auto& source, const auto& op, const auto& q) {
+                      g.add_flow(source->override_out, op->epsilon, q);
+                    });
+        },
+        perf::PerfPublishMode::kCopy, true);
+  }
+  if (scen.live_port == "min_points") {
+    return perf::run_perf_graph_with_override(
+        std::move(pts), plan.total_frames, plan.override_at, scen.min_points, scen.changed_scalar,
+        "dbscan-perf",
+        [&](auto& graph, const auto& src, auto& options) {
+          configure(graph, src, options,
+                    [](auto& g, const auto& source, const auto& op, const auto& q) {
+                      g.add_flow(source->override_out, op->min_points, q);
+                    });
+        },
+        perf::PerfPublishMode::kCopy, true);
+  }
+  if (scen.live_port == "max_clusters") {
+    return perf::run_perf_graph_with_override(
+        std::move(pts), plan.total_frames, plan.override_at, scen.max_clusters, scen.changed_scalar,
+        "dbscan-perf",
+        [&](auto& graph, const auto& src, auto& options) {
+          configure(graph, src, options,
+                    [](auto& g, const auto& source, const auto& op, const auto& q) {
+                      g.add_flow(source->override_out, op->max_clusters, q);
+                    });
+        },
+        perf::PerfPublishMode::kCopy, true);
+  }
+  return perf::run_perf_graph(std::move(pts), plan.total_frames, "dbscan-perf",
+                              [&](auto& graph, const auto& src, auto& options) {
+                                configure(graph, src, options,
+                                          [](auto&, const auto&, const auto&, const auto&) {});
+                              });
 }
 
 void fill_throughput(perf::ResultRow* row, const DbscanScenario& scen, double median_ms) {
@@ -194,7 +237,7 @@ perf::ResultRow base_row(const DbscanScenario& scen) {
   row.input_shape = {scen.num_points, scen.num_features};
   row.out_batch = scen.num_clusters;
   row.k = scen.num_features;
-  row.notes = "live_override=min_points; epsilon/max_clusters not timed";
+  row.live_port = scen.live_port;
   return row;
 }
 
@@ -227,51 +270,78 @@ struct DbscanTraits : perf::PerfDriverDefaults {
     return "Full size x feature ladder with min_points override timing";
   }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "cluster_dbscan.yaml",
+        "cluster_dbscan");
+  }
   static std::vector<perf::SizeDef> size_ladder_defs() {
-    std::vector<perf::SizeDef> out;
-    for (const auto& s : size_ladder()) {
-      perf::SizeDef def;
-      def.id = s.id;
-      def.shape = {s.num_points, s.num_features};
-      def.cells = s.num_points;
-      def.role = s.role;
-      out.push_back(def);
+    const auto profiles = suite();
+    std::vector<perf::SizeDef> result;
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 3)
+        throw std::invalid_argument("ClusterDBSCAN profile rank mismatch");
+      result.push_back(
+          {std::string(perf::kProfiles[i]), shape, shape[0], std::string(perf::kProfiles[i])});
     }
-    return out;
+    return result;
   }
-
-  static std::vector<DbscanScenario> build_default_matrix() {
-    std::vector<DbscanScenario> out;
-    for (const char* sid : {"xs", "sm", "sm3", "md", "md3", "md5", "lg", "lg5"}) {
-      out.push_back(make_scenario(must_find_size(sid)));
-    }
-    return out;
-  }
-
-  static std::vector<DbscanScenario> build_size_sweep(const std::vector<std::string>& sizes) {
-    std::vector<DbscanScenario> out;
-    for (const auto& sid : sizes) {
-      const SizeSpec* s = find_size(sid);
-      if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
-        continue;
+  static std::vector<DbscanScenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    std::set<std::string> selected_ids;
+    for (const auto& c : profiles.select(scope))
+      selected_ids.insert(c.id);
+    std::vector<DbscanScenario> result;
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i) {
+        if (c.profile == perf::kProfiles[i])
+          break;
       }
-      out.push_back(make_scenario(*s));
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 3 || shape[0] < 1 || shape[1] < 2 || shape[1] > 5 || shape[2] < 1)
+        throw std::invalid_argument("ClusterDBSCAN invalid profile shape");
+      perf::require_keys(c.parameters, {"epsilon", "min_points", "max_clusters"}, "parameters");
+      if (!c.parameters["epsilon"])
+        throw std::invalid_argument("ClusterDBSCAN requires epsilon");
+      const double epsilon = c.parameters["epsilon"].as<double>();
+      if (epsilon <= 0.0)
+        throw std::invalid_argument("ClusterDBSCAN epsilon must be positive");
+      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
+      auto scenario = make_scenario(size);
+      scenario.id = c.id;
+      scenario.size_id = c.profile;
+      scenario.epsilon = {epsilon};
+      if (c.parameters["min_points"])
+        scenario.min_points = c.parameters["min_points"].as<int64_t>();
+      if (c.parameters["max_clusters"])
+        scenario.max_clusters = c.parameters["max_clusters"].as<int64_t>();
+      if (scenario.min_points < 0 || scenario.max_clusters < 0)
+        throw std::invalid_argument("ClusterDBSCAN counts must be nonnegative");
+      if (c.override_value) {
+        scenario.live_port = (*c.override_value)["port"].as<std::string>();
+        if (scenario.live_port == "epsilon") {
+          scenario.changed_epsilon = (*c.override_value)["value"].as<double>();
+          if (scenario.changed_epsilon <= 0.0)
+            throw std::invalid_argument("ClusterDBSCAN override epsilon must be positive");
+        } else if (scenario.live_port == "min_points" || scenario.live_port == "max_clusters") {
+          scenario.changed_scalar = (*c.override_value)["value"].as<int64_t>();
+          if (scenario.changed_scalar < 0)
+            throw std::invalid_argument("ClusterDBSCAN override count must be nonnegative");
+        } else {
+          throw std::invalid_argument("unknown ClusterDBSCAN live port");
+        }
+      }
+      if (selected_ids.contains(c.id))
+        result.push_back(std::move(scenario));
     }
-    return out;
-  }
-
-  static std::vector<DbscanScenario> build_full_matrix() {
-    std::vector<DbscanScenario> out;
-    for (const auto& s : size_ladder()) {
-      out.push_back(make_scenario(s));
-    }
-    return out;
+    return result;
   }
 
   static void run_scenario(const DbscanScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    const perf::RunPlan plan = perf::make_run_plan(rs, !scen.live_port.empty());
     const auto samples =
         perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_dbscan_graph(scen, p);
@@ -282,11 +352,9 @@ struct DbscanTraits : perf::PerfDriverDefaults {
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes =
-        "cold_ms is first-frame latency; median/p90 are "
-        "post-warmup steady state; override_ms is the peak after an inline "
-        "min_points change; epsilon/max_clusters not timed; cells/s is "
-        "points/s";
+    row.notes = "end-to-end Graph latency; cells/s is points/s";
+    if (!scen.live_port.empty())
+      row.notes += "; one-frame " + scen.live_port + " change";
     report->results.push_back(row);
   }
 
@@ -297,7 +365,7 @@ struct DbscanTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs")), warm, &discarded);
+      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
     });
   }
 };

@@ -5,6 +5,9 @@
 // Measurement only; no timing assertions.
 
 #include <complex>
+#include <algorithm>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <stdexcept>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -231,55 +234,59 @@ struct CompensationTraits : perf::PerfDriverDefaults {
   }
   static const char* full_help() { return "Full linear and nonlinear DDM size matrix"; }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_dense_demultiplex.yaml",
+        "ddm_dense_demultiplex");
+  }
+
   static std::vector<perf::SizeDef> size_ladder_defs() {
-    std::vector<perf::SizeDef> out;
-    for (const auto& s : size_ladder()) {
-      perf::SizeDef def;
-      def.id = s.id;
-      def.shape = {s.num_tx, s.num_rx, s.num_doppler, s.num_range_bins};
-      def.cells = s.num_tx * s.num_rx * s.num_doppler * s.num_range_bins;
-      def.role = s.role;
-      out.push_back(def);
+    const auto profiles = suite();
+    std::vector<perf::SizeDef> result;
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 4)
+        throw std::invalid_argument("DDMDenseDemultiplex profile rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]), shape,
+                        shape[0] * shape[1] * shape[2] * shape[3],
+                        std::string(perf::kProfiles[i])});
     }
-    return out;
+    return result;
   }
 
-  static std::vector<CompensationScenario> build_default_matrix() {
-    std::vector<CompensationScenario> out;
-    for (const char* sid : {"xs", "md", "xl"}) {
-      out.push_back(make_scenario(must_find_size(sid)));
-      out.push_back(make_scenario(must_find_size(sid), true));
-      if (std::string(sid) == "md") {
-        out.push_back(make_scenario(must_find_size(sid), false, true));
-        out.push_back(make_scenario(must_find_size(sid), true, true));
+  static std::vector<CompensationScenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    const auto selected = profiles.select(scope);
+    std::vector<CompensationScenario> result;
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i) {
+        if (c.profile == perf::kProfiles[i])
+          break;
       }
-    }
-    return out;
-  }
-
-  static std::vector<CompensationScenario> build_size_sweep(const std::vector<std::string>& sizes) {
-    std::vector<CompensationScenario> out;
-    for (const auto& sid : sizes) {
-      const SizeSpec* size = find_size(sid);
-      if (size == nullptr)
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 4 || shape[0] < 2 || shape[2] % shape[0] != 0)
+        throw std::invalid_argument("DDMDenseDemultiplex invalid profile shape");
+      perf::require_keys(c.parameters, {"code", "velocity_axis"}, "parameters");
+      if (!c.parameters["code"] || !c.parameters["velocity_axis"] || c.override_value)
+        throw std::invalid_argument("DDMDenseDemultiplex case needs static code and axis mode");
+      const auto code = c.parameters["code"].as<std::string>();
+      if (code != "linear" && code != "nonlinear")
+        throw std::invalid_argument("DDMDenseDemultiplex code must be linear or nonlinear");
+      const bool axis = c.parameters["velocity_axis"].as<bool>();
+      const bool chosen =
+          std::any_of(selected.begin(), selected.end(), [&](const perf::ProfileCase& item) {
+            return item.id == c.id;
+          });
+      if (!chosen)
         continue;
-      out.push_back(make_scenario(*size));
-      out.push_back(make_scenario(*size, true));
-      out.push_back(make_scenario(*size, false, true));
-      out.push_back(make_scenario(*size, true, true));
+      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], c.profile};
+      auto scenario = make_scenario(size, code == "nonlinear", axis);
+      scenario.id = c.id;
+      scenario.size_id = c.profile;
+      result.push_back(std::move(scenario));
     }
-    return out;
-  }
-
-  static std::vector<CompensationScenario> build_full_matrix() {
-    std::vector<CompensationScenario> out;
-    for (const auto& size : size_ladder()) {
-      out.push_back(make_scenario(size));
-      out.push_back(make_scenario(size, true));
-      out.push_back(make_scenario(size, false, true));
-      out.push_back(make_scenario(size, true, true));
-    }
-    return out;
+    return result;
   }
 
   static void run_scenario(const CompensationScenario& scen, const perf::RunSettings& rs,
@@ -315,7 +322,7 @@ struct CompensationTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs")), warm, &discarded);
+      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
     });
   }
 };

@@ -4,6 +4,8 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <set>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -41,6 +43,13 @@ struct Scenario {
   std::string id;
   std::string size_id;
   SizeSpec size;
+  std::string live_port;
+  double changed_wavelength{0.0041};
+  int64_t window_doppler{0};
+  int64_t window_range{0};
+  int64_t changed_doppler{1};
+  int64_t changed_range{1};
+  hr::OverlapPolicy policy{hr::OverlapPolicy::kKeepAll};
 };
 
 const std::vector<SizeSpec>& sizes() {
@@ -89,37 +98,75 @@ perf::TimingCollector run_graph(const Scenario& scenario, const perf::RunPlan& p
   const auto& size = scenario.size;
   auto rd = perf::make_iq_cube_device<float>({size.rx, size.doppler, size.range});
   auto idx = detections(size.detections, size.doppler / size.tx, size.range);
+  const auto configure = [&](holoscan::Graph& graph, const auto& source,
+                             holoscan::CompileOptions& options, auto connect) {
+    hr::MaxTensorExtents extents;
+    extents.max_tx = size.tx;
+    extents.max_rx = size.rx;
+    extents.max_virtual_channels = size.tx * size.rx;
+    extents.max_doppler_bins = size.doppler;
+    extents.max_range_bins = size.range;
+    extents.max_detections = size.detections;
+    extents.max_snapshots = std::max<int64_t>(
+        (2 * scenario.window_doppler + 1) * (2 * scenario.window_range + 1),
+        scenario.live_port == "snapshot_window"
+            ? (2 * scenario.changed_doppler + 1) * (2 * scenario.changed_range + 1)
+            : 1);
+    auto op = graph.op<hr::DDMSparseDemultiplexOp<float>>("sparse", extents);
+    hr::DDMSparseDemultiplexParams params;
+    params.ddm_code = code(size.tx);
+    params.tx_positions = positions(size.tx, 0.02);
+    params.rx_positions = positions(size.rx, 0.002);
+    params.overlap_policy = scenario.policy;
+    params.wavelength = 0.0039;
+    params.snapshot_window = {scenario.window_doppler, scenario.window_range};
+    op.set_params(std::move(params));
+    const auto terminal = graph.op<perf::PerfTerminalSinkOp>("terminal");
+    const auto mask = graph.op<perf::PerfNullSinkOp>("mask");
+    const auto geometry = graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>("geometry");
+    const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+    graph.add_flow(source->out_a, op->rd_maps, queue);
+    graph.add_flow(source->out_b, op->detection_idx, queue);
+    connect(graph, source, op, queue);
+    graph.add_flow(op->snapshot, terminal->in, queue);
+    graph.add_flow(op->is_valid, mask->in, queue);
+    graph.add_flow(op->array_geometry, geometry->in, queue);
+    graph.partition("perf").add(source).add(op).add(terminal).add(mask).add(geometry);
+    perf::bind_tensor_out(options, "sparse", "snapshot");
+    perf::bind_tensor_out(options, "sparse", "is_valid");
+  };
+  if (scenario.live_port == "wavelength") {
+    return perf::run_perf_graph_dual_with_override(
+        std::move(rd), std::move(idx), plan.total_frames, plan.override_at, 0.0039,
+        scenario.changed_wavelength, "ddm-sparse-perf",
+        [&](auto& graph, const auto& source, auto& options) {
+          configure(graph, source, options,
+                    [](auto& g, const auto& src, const auto& op, const auto& q) {
+                      g.add_flow(src->override_out, op->wavelength_in, q);
+                    });
+        },
+        perf::PerfPublishMode::kCopy, true);
+  }
+  if (scenario.live_port == "snapshot_window") {
+    const hr::DDMSparseWindowOverride initial{.doppler = scenario.window_doppler,
+                                              .range = scenario.window_range};
+    const hr::DDMSparseWindowOverride changed{.doppler = scenario.changed_doppler,
+                                              .range = scenario.changed_range};
+    return perf::run_perf_graph_dual_with_override(
+        std::move(rd), std::move(idx), plan.total_frames, plan.override_at, initial, changed,
+        "ddm-sparse-perf",
+        [&](auto& graph, const auto& source, auto& options) {
+          configure(graph, source, options,
+                    [](auto& g, const auto& src, const auto& op, const auto& q) {
+                      g.add_flow(src->override_out, op->snapshot_window_in, q);
+                    });
+        },
+        perf::PerfPublishMode::kCopy, true);
+  }
   return perf::run_perf_graph_dual(
       std::move(rd), std::move(idx), plan.total_frames, "ddm-sparse-perf",
-      [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
-        hr::MaxTensorExtents extents;
-        extents.max_tx = size.tx;
-        extents.max_rx = size.rx;
-        extents.max_virtual_channels = size.tx * size.rx;
-        extents.max_doppler_bins = size.doppler;
-        extents.max_range_bins = size.range;
-        extents.max_detections = size.detections;
-        extents.max_snapshots = 1;
-        auto op = graph.op<hr::DDMSparseDemultiplexOp<float>>("sparse", extents);
-        hr::DDMSparseDemultiplexParams params;
-        params.ddm_code = code(size.tx);
-        params.tx_positions = positions(size.tx, 0.02);
-        params.rx_positions = positions(size.rx, 0.002);
-        params.overlap_policy = hr::OverlapPolicy::kKeepAll;
-        params.wavelength = 0.0039;
-        op.set_params(std::move(params));
-        const auto terminal = graph.op<perf::PerfTerminalSinkOp>("terminal");
-        const auto mask = graph.op<perf::PerfNullSinkOp>("mask");
-        const auto geometry = graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>("geometry");
-        const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-        graph.add_flow(source->out_a, op->rd_maps, queue);
-        graph.add_flow(source->out_b, op->detection_idx, queue);
-        graph.add_flow(op->snapshot, terminal->in, queue);
-        graph.add_flow(op->is_valid, mask->in, queue);
-        graph.add_flow(op->array_geometry, geometry->in, queue);
-        graph.partition("perf").add(source).add(op).add(terminal).add(mask).add(geometry);
-        perf::bind_tensor_out(options, "sparse", "snapshot");
-        perf::bind_tensor_out(options, "sparse", "is_valid");
+      [&](auto& graph, const auto& source, auto& options) {
+        configure(graph, source, options, [](auto&, const auto&, const auto&, const auto&) {});
       });
 }
 
@@ -127,7 +174,8 @@ perf::ResultRow base_row(const Scenario& scenario) {
   perf::ResultRow row;
   row.scenario_id = scenario.id;
   row.op_name = "DDMSparseDemultiplexOp";
-  row.variant = "keep_all_k1";
+  row.variant = "sparse_ddm";
+  row.live_port = scenario.live_port;
   row.size_id = scenario.size_id;
   row.map_shape = {scenario.size.doppler, scenario.size.range};
   row.input_shape = {scenario.size.rx, scenario.size.doppler, scenario.size.range};
@@ -144,31 +192,89 @@ struct Traits : perf::PerfDriverDefaults {
   static const char* sizes_all_help() { return "Run full size ladder"; }
   static const char* sizes_subset_help() { return "Run selected sizes"; }
   static const char* full_help() { return "Run all sparse DDM sizes"; }
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_sparse_demultiplex.yaml",
+        "ddm_sparse_demultiplex");
+  }
   static std::vector<perf::SizeDef> size_ladder_defs() {
+    const auto profiles = suite();
     std::vector<perf::SizeDef> result;
-    for (const auto& size : sizes()) {
-      result.push_back({size.id, {size.doppler, size.range}, size.doppler * size.range, size.role});
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 5)
+        throw std::invalid_argument("DDMSparseDemultiplex profile rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]), shape, shape[1] * shape[2] * shape[3],
+                        std::string(perf::kProfiles[i])});
     }
     return result;
   }
-  static std::vector<Scenario> build_size_sweep(const std::vector<std::string>& ids) {
+  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    std::set<std::string> selected_ids;
+    for (const auto& c : profiles.select(scope))
+      selected_ids.insert(c.id);
     std::vector<Scenario> result;
-    for (const auto& size : sizes()) {
-      if (std::find(ids.begin(), ids.end(), size.id) != ids.end()) {
-        result.push_back({"ddm_sparse_" + size.id, size.id, size});
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i) {
+        if (c.profile == perf::kProfiles[i])
+          break;
       }
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 5 || shape[0] < 2 || shape[2] % shape[0] != 0 || shape[4] < 1)
+        throw std::invalid_argument("DDMSparseDemultiplex invalid profile shape");
+      perf::require_keys(c.parameters, {"snapshot_window", "overlap_policy"}, "parameters");
+      if (!c.parameters["snapshot_window"] || !c.parameters["overlap_policy"])
+        throw std::invalid_argument("DDMSparseDemultiplex missing parameter");
+      const auto window = c.parameters["snapshot_window"];
+      if (!window.IsSequence() || window.size() != 2)
+        throw std::invalid_argument("DDMSparseDemultiplex window must have two extents");
+      const auto policy = c.parameters["overlap_policy"].as<std::string>();
+      hr::OverlapPolicy overlap;
+      if (policy == "keep_all")
+        overlap = hr::OverlapPolicy::kKeepAll;
+      else if (policy == "dedup")
+        overlap = hr::OverlapPolicy::kDedup;
+      else if (policy == "average")
+        overlap = hr::OverlapPolicy::kAverage;
+      else
+        throw std::invalid_argument("DDMSparseDemultiplex invalid overlap policy");
+      SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], shape[4], c.profile};
+      Scenario scenario{c.id, c.profile, size};
+      scenario.policy = overlap;
+      scenario.window_doppler = window[0].as<int64_t>();
+      scenario.window_range = window[1].as<int64_t>();
+      if (scenario.window_doppler < 0 || scenario.window_range < 0 || scenario.window_doppler > 2 ||
+          scenario.window_range > 2)
+        throw std::invalid_argument("DDMSparseDemultiplex window out of range");
+      if (c.override_value) {
+        scenario.live_port = (*c.override_value)["port"].as<std::string>();
+        if (scenario.live_port == "wavelength") {
+          scenario.changed_wavelength = (*c.override_value)["value"].as<double>();
+          if (scenario.changed_wavelength <= 0.0)
+            throw std::invalid_argument("DDMSparseDemultiplex invalid wavelength");
+        } else if (scenario.live_port == "snapshot_window") {
+          const auto changed = (*c.override_value)["value"];
+          if (!changed.IsSequence() || changed.size() != 2)
+            throw std::invalid_argument("DDMSparseDemultiplex invalid changed window");
+          scenario.changed_doppler = changed[0].as<int64_t>();
+          scenario.changed_range = changed[1].as<int64_t>();
+          if (scenario.changed_doppler < 0 || scenario.changed_range < 0 ||
+              scenario.changed_doppler > 2 || scenario.changed_range > 2)
+            throw std::invalid_argument("DDMSparseDemultiplex changed window out of range");
+        } else {
+          throw std::invalid_argument("unknown DDMSparseDemultiplex live port");
+        }
+      }
+      if (selected_ids.contains(c.id))
+        result.push_back(std::move(scenario));
     }
     return result;
-  }
-  static std::vector<Scenario> build_default_matrix() {
-    return build_size_sweep({"xs", "sm", "md"});
-  }
-  static std::vector<Scenario> build_full_matrix() {
-    return build_size_sweep({"xs", "sm", "md", "lg", "xl"});
   }
   static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const auto plan = perf::make_run_plan(settings, false);
+    const auto plan = perf::make_run_plan(settings, !scenario.live_port.empty());
     const auto samples =
         perf::collect_scenario_samples(settings, plan, [&](int, const perf::RunPlan& current) {
           return run_graph(scenario, current);
@@ -185,7 +291,7 @@ struct Traits : perf::PerfDriverDefaults {
       settings.warmup_frames = 0;
       settings.measured_frames = 2;
       settings.repeats = 1;
-      run_scenario(build_size_sweep({"xs"}).front(), settings, &report);
+      run_scenario(build_profile_matrix("minimal").front(), settings, &report);
     });
   }
 };

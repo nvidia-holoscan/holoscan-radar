@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 1
+operator: multi_source_expansion
+profiles:
+  small: {shape: [32]}
+  medium: {shape: [2048]}
+  large: {shape: [16384]}
+live_ports: []
+cases:
+  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {selected_fraction: 0.25, sources: 2, index_columns: 2}}
+  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {selected_fraction: 0.25, sources: 2, index_columns: 2}}
+  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {selected_fraction: 0.25, sources: 2, index_columns: 2}}
+  - {id: sparse-medium, profile: medium, scopes: [limited], parameters: {selected_fraction: 0.10, sources: 2, index_columns: 2}}
+  - {id: dense-medium, profile: medium, scopes: [limited], parameters: {selected_fraction: 0.50, sources: 2, index_columns: 2}}
+  - {id: four-sources-medium, profile: medium, scopes: [moderate], parameters: {selected_fraction: 0.25, sources: 4, index_columns: 2}}
+  - {id: wide-indices-medium, profile: medium, scopes: [moderate], parameters: {selected_fraction: 0.25, sources: 2, index_columns: 10}}
+  - {id: full-selected-large, profile: large, scopes: [thorough], parameters: {selected_fraction: 1.0, sources: 4, index_columns: 10}}

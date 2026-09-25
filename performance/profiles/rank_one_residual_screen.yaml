@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 1
+operator: rank_one_residual_screen
+profiles:
+  small: {shape: [32, 8, 3]}
+  medium: {shape: [1024, 32, 9]}
+  large: {shape: [4096, 64, 9]}
+live_ports: [array_geometry]
+cases:
+  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {selection_fraction: 0.25}}
+  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {selection_fraction: 0.25}}
+  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {selection_fraction: 0.25}}
+  - {id: no-selection-medium, profile: medium, scopes: [limited], parameters: {selection_fraction: 0.0}}
+  - {id: most-selected-medium, profile: medium, scopes: [limited], parameters: {selection_fraction: 0.75}}
+  - {id: geometry-small, profile: small, scopes: [overrides, moderate], parameters: {selection_fraction: 0.25}, override: {port: array_geometry, value: 0.49}}
+  - {id: geometry-medium, profile: medium, scopes: [overrides, moderate], parameters: {selection_fraction: 0.25}, override: {port: array_geometry, value: 0.49}}
+  - {id: geometry-large, profile: large, scopes: [overrides, moderate], parameters: {selection_fraction: 0.25}, override: {port: array_geometry, value: 0.49}}
+  - {id: all-selected-medium, profile: medium, scopes: [moderate], parameters: {selection_fraction: 1.0}}
+  - {id: geometry-most-selected-large, profile: large, scopes: [thorough], parameters: {selection_fraction: 0.75}, override: {port: array_geometry, value: 0.45}}

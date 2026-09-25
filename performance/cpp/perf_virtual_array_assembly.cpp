@@ -11,6 +11,9 @@
 // output is drained by PerfNullSinkOp.
 
 #include <complex>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <set>
+#include <stdexcept>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -61,6 +64,8 @@ struct AssemblyScenario {
   int64_t num_doppler{0};
   int64_t num_range_bins{0};
   hr::OverlapPolicy policy{hr::OverlapPolicy::kDedup};
+  bool live_wavelength{false};
+  double override_wavelength{kDefaultWavelength * 1.1};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -123,37 +128,41 @@ std::vector<int64_t> separated_shape(const AssemblyScenario& scen) {
 
 perf::TimingCollector run_assembly_graph(const AssemblyScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(separated_shape(scen));
-  // Value-agnostic gather: zero-fill loan is valid. Remaining xl gap vs
-  // Include Graph publication cost in the measured path.
-  constexpr double kOverrideWavelength = kDefaultWavelength * 1.1;
-  return perf::run_perf_graph_with_override(
-      std::move(cube), plan.total_frames, plan.override_at, kDefaultWavelength, kOverrideWavelength,
-      "assembly-perf",
-      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
-        hr::MaxTensorExtents extents;
-        extents.max_tx = scen.num_tx;
-        extents.max_rx = scen.num_rx;
-        extents.max_doppler_bins = scen.num_doppler;
-        extents.max_range_bins = scen.num_range_bins;
-        auto op = graph.op<hr::VirtualArrayAssemblyOp<PerfPrecision>>("virtual_array", extents);
-        hr::VirtualArrayAssemblyParams params;
-        params.tx_positions = linear_positions(scen.num_tx, 0.5);
-        params.rx_positions = linear_positions(scen.num_rx, 0.5);
-        params.wavelength = kDefaultWavelength;
-        params.overlap_policy = scen.policy;
-        op.set_params(std::move(params));
-        const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
-        const auto geom_drain =
-            graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>("geom_drain");
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(src->out, op->rd_maps, q);
-        graph.add_flow(src->override_out, op->wavelength, q);
-        graph.add_flow(op->rd_maps_out, sink->in, q);
-        graph.add_flow(op->array_geometry, geom_drain->in, q);
-        graph.partition("perf").add(src).add(op).add(sink).add(geom_drain);
-        perf::bind_tensor_out(options, "virtual_array", "rd_maps_out");
-      },
-      perf::PerfPublishMode::kFillInPlace);
+  // Value-agnostic gather: zero-fill loan is valid.
+  const auto build = [&](holoscan::Graph& graph, const auto& src,
+                         holoscan::CompileOptions& options) {
+    hr::MaxTensorExtents extents;
+    extents.max_tx = scen.num_tx;
+    extents.max_rx = scen.num_rx;
+    extents.max_doppler_bins = scen.num_doppler;
+    extents.max_range_bins = scen.num_range_bins;
+    auto op = graph.op<hr::VirtualArrayAssemblyOp<PerfPrecision>>("virtual_array", extents);
+    hr::VirtualArrayAssemblyParams params;
+    params.tx_positions = linear_positions(scen.num_tx, 0.5);
+    params.rx_positions = linear_positions(scen.num_rx, 0.5);
+    params.wavelength = kDefaultWavelength;
+    params.overlap_policy = scen.policy;
+    op.set_params(std::move(params));
+    const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
+    const auto geom_drain = graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>("geom_drain");
+    const holoscan::ConnectionOptions q{.queue_depth = 4U};
+    graph.add_flow(src->out, op->rd_maps, q);
+    if constexpr (requires { src->override_out; }) {
+      graph.add_flow(src->override_out, op->wavelength, q);
+    }
+    graph.add_flow(op->rd_maps_out, sink->in, q);
+    graph.add_flow(op->array_geometry, geom_drain->in, q);
+    graph.partition("perf").add(src).add(op).add(sink).add(geom_drain);
+    perf::bind_tensor_out(options, "virtual_array", "rd_maps_out");
+  };
+  if (scen.live_wavelength) {
+    return perf::run_perf_graph_with_override(std::move(cube), plan.total_frames, plan.override_at,
+                                              kDefaultWavelength, scen.override_wavelength,
+                                              "assembly-perf", build,
+                                              perf::PerfPublishMode::kFillInPlace, true);
+  }
+  return perf::run_perf_graph(std::move(cube), plan.total_frames, "assembly-perf", build,
+                              perf::PerfPublishMode::kFillInPlace);
 }
 
 void fill_throughput(perf::ResultRow* row, const AssemblyScenario& scen, double median_ms) {
@@ -181,7 +190,7 @@ perf::ResultRow base_row(const AssemblyScenario& scen) {
   row.size_id = scen.size_id;
   row.input_shape = separated_shape(scen);
   row.k = scen.num_doppler;
-  row.notes = "live_override=wavelength";
+  row.live_port = scen.live_wavelength ? "wavelength" : "";
   return row;
 }
 
@@ -218,54 +227,75 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
            "inline wavelength-override timing";
   }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "virtual_array_assembly.yaml",
+        "virtual_array_assembly");
+  }
+
   static std::vector<perf::SizeDef> size_ladder_defs() {
-    std::vector<perf::SizeDef> out;
-    for (const auto& s : size_ladder()) {
-      perf::SizeDef def;
-      def.id = s.id;
-      def.shape = {s.num_tx, s.num_rx, s.num_doppler, s.num_range_bins};
-      def.cells = s.num_tx * s.num_rx * s.num_doppler * s.num_range_bins;
-      def.role = s.role;
-      out.push_back(def);
+    const auto profiles = suite();
+    std::vector<perf::SizeDef> result;
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 4)
+        throw std::invalid_argument("VirtualArrayAssembly profile rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]), shape,
+                        shape[0] * shape[1] * shape[2] * shape[3],
+                        std::string(perf::kProfiles[i])});
     }
-    return out;
+    return result;
   }
 
-  static std::vector<AssemblyScenario> build_default_matrix() {
-    std::vector<AssemblyScenario> out;
-    for (const char* sid : {"xs", "md", "lg", "xl"}) {
-      out.push_back(make_scenario(must_find_size(sid)));
-    }
-    return out;
-  }
-
-  static std::vector<AssemblyScenario> build_size_sweep(const std::vector<std::string>& sizes) {
-    std::vector<AssemblyScenario> out;
-    for (const auto& sid : sizes) {
-      const SizeSpec* s = find_size(sid);
-      if (s == nullptr) {
-        std::cerr << "warning: unknown size id '" << sid << "', skipping\n";
-        continue;
+  static std::vector<AssemblyScenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    std::set<std::string> selected_ids;
+    for (const auto& c : profiles.select(scope))
+      selected_ids.insert(c.id);
+    std::vector<AssemblyScenario> result;
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i) {
+        if (c.profile == perf::kProfiles[i])
+          break;
       }
-      out.push_back(make_scenario(*s));
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 4 || shape[0] < 1 || shape[1] < 1)
+        throw std::invalid_argument("VirtualArrayAssembly invalid profile shape");
+      perf::require_keys(c.parameters, {"overlap_policy"}, "parameters");
+      if (!c.parameters["overlap_policy"])
+        throw std::invalid_argument("VirtualArrayAssembly requires overlap_policy");
+      const auto policy = c.parameters["overlap_policy"].as<std::string>();
+      hr::OverlapPolicy mode;
+      if (policy == "dedup")
+        mode = hr::OverlapPolicy::kDedup;
+      else if (policy == "average")
+        mode = hr::OverlapPolicy::kAverage;
+      else if (policy == "keep_all")
+        mode = hr::OverlapPolicy::kKeepAll;
+      else
+        throw std::invalid_argument("VirtualArrayAssembly invalid overlap_policy");
+      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], c.profile};
+      auto scenario = make_scenario(size, mode);
+      scenario.id = c.id;
+      scenario.size_id = c.profile;
+      if (c.override_value) {
+        if ((*c.override_value)["port"].as<std::string>() != "wavelength")
+          throw std::invalid_argument("VirtualArrayAssembly only wavelength is live");
+        scenario.live_wavelength = true;
+        scenario.override_wavelength = (*c.override_value)["value"].as<double>();
+        if (scenario.override_wavelength <= 0.0)
+          throw std::invalid_argument("VirtualArrayAssembly wavelength must be positive");
+      }
+      if (selected_ids.contains(c.id))
+        result.push_back(std::move(scenario));
     }
-    return out;
-  }
-
-  static std::vector<AssemblyScenario> build_full_matrix() {
-    std::vector<AssemblyScenario> out;
-    for (const auto& s : size_ladder()) {
-      out.push_back(make_scenario(s));
-    }
-    const SizeSpec& md = must_find_size("md");
-    out.push_back(make_scenario(md, hr::OverlapPolicy::kAverage));
-    out.push_back(make_scenario(md, hr::OverlapPolicy::kKeepAll));
-    return out;
+    return result;
   }
 
   static void run_scenario(const AssemblyScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/true);
+    const perf::RunPlan plan = perf::make_run_plan(rs, scen.live_wavelength);
     const auto samples =
         perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
           return run_assembly_graph(scen, p);
@@ -276,12 +306,9 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
     perf::ResultRow row = base_row(scen);
     perf::fill_compute_row(&row, samples);
     fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes =
-        "virtual channel flatten + geometry emit; "
-        "cold_ms is first-frame latency; median/p90 are "
-        "steady state; override_ms is the peak after an inline wavelength "
-        "change; cells/s counts "
-        "input complex samples";
+    row.notes = "virtual channel flatten + geometry emit; cells/s counts input complex samples";
+    if (scen.live_wavelength)
+      row.notes += "; one-frame wavelength change";
     report->results.push_back(row);
   }
 
@@ -292,7 +319,7 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs")), warm, &discarded);
+      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
     });
   }
 };

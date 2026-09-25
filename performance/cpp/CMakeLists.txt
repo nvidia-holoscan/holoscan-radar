@@ -12,7 +12,10 @@ target_link_libraries(radar_perf_utils INTERFACE
     holoscan::core
     holoscan::radar_common
     holoscan::radar_schemas
-    CUDA::cudart)
+    CUDA::cudart
+    yaml-cpp)
+target_compile_definitions(radar_perf_utils INTERFACE
+    HOLOSCAN_RADAR_PERF_PROFILE_DIR="${PROJECT_SOURCE_DIR}/performance/profiles")
 
 # Public performance targets, also used to register smoke tests.
 set(HOLOSCAN_RADAR_PERF_TARGETS
@@ -29,7 +32,6 @@ set(HOLOSCAN_RADAR_PERF_TARGETS
     fmcw_range_processor
     fmcw_doppler_processor
     fmcw_range_doppler_processor
-    fmcw_split_vs_fused
     cluster_dbscan
     beamscan_estimator
     mvdr_estimator
@@ -71,23 +73,6 @@ radar_add_perf(clutter_filter holoscan::clutter_filter_op)
 radar_add_perf(fmcw_range_doppler_processor
     holoscan::fmcw_range_doppler_processor_op)
 
-# Multi-op fused/split harness needs every constituent operator target.
-if(TARGET holoscan::fmcw_range_processor_op
-   AND TARGET holoscan::clutter_filter_op
-   AND TARGET holoscan::fmcw_doppler_processor_op
-   AND TARGET holoscan::fmcw_range_doppler_processor_op)
-    add_executable(perf_fmcw_split_vs_fused perf_fmcw_split_vs_fused.cpp)
-    target_link_libraries(perf_fmcw_split_vs_fused PRIVATE
-        radar_perf_utils
-        holoscan::fmcw_range_processor_op
-        holoscan::clutter_filter_op
-        holoscan::fmcw_doppler_processor_op
-        holoscan::fmcw_range_doppler_processor_op)
-else()
-    message(STATUS
-        "Skipping perf_fmcw_split_vs_fused (missing operator targets)")
-endif()
-
 radar_add_perf(cluster_dbscan holoscan::cluster_dbscan_op)
 radar_add_perf(snapshot_gather holoscan::snapshot_gather_op)
 radar_add_perf(subarray_selection holoscan::subarray_selection_op)
@@ -111,21 +96,15 @@ radar_add_perf(ddm_sparse_demultiplex
 radar_add_perf(tdm_sparse_compensation
     holoscan::tdm_sparse_compensation_op)
 
-# Optional smoke: runs a tiny scenario subset and verifies a report file is
-# written. No timing thresholds — CI only checks the tool executes and emits.
+# Minimal smoke for every operator. Timing values remain informational.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
-    function(radar_add_perf_smoke NAME)
-        if(NOT TARGET perf_${NAME})
-            return()
-        endif()
-        add_test(NAME perf_${NAME}_smoke
-            COMMAND perf_${NAME} --sizes xs --warmup 1 --frames 2 --quiet
-                --output ${CMAKE_CURRENT_BINARY_DIR}/perf_${NAME}_smoke.json)
-        set_tests_properties(perf_${NAME}_smoke PROPERTIES
-            LABELS "performance")
-    endfunction()
-
     foreach(_perf_name IN LISTS HOLOSCAN_RADAR_PERF_TARGETS)
-        radar_add_perf_smoke(${_perf_name})
+        if(TARGET perf_${_perf_name})
+            add_test(NAME perf_${_perf_name}_smoke
+                COMMAND perf_${_perf_name} --scope minimal --sizes small
+                    --warmup 1 --frames 3 --repeats 1 --quiet
+                    --output ${CMAKE_CURRENT_BINARY_DIR}/perf_${_perf_name}_smoke.json)
+            set_tests_properties(perf_${_perf_name}_smoke PROPERTIES LABELS "performance")
+        endif()
     endforeach()
 endif()

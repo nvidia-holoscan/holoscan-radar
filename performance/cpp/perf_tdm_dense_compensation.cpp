@@ -5,6 +5,9 @@
 // Measurement only; no timing assertions.
 
 #include <complex>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <set>
+#include <stdexcept>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -22,6 +25,7 @@
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_schemas/fmcw_waveform_bridge.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
@@ -57,6 +61,9 @@ struct CompensationScenario {
   int64_t num_doppler{0};
   int64_t num_range_bins{0};
   bool non_linear_ddm{false};
+  double pri{kDefaultPri};
+  bool live_waveform{false};
+  double changed_pri{kDefaultPri * 1.1};
 };
 
 const std::vector<SizeSpec>& size_ladder() {
@@ -128,26 +135,36 @@ std::vector<int64_t> input_shape(const CompensationScenario& scen) {
   return {scen.num_tx, scen.num_rx, scen.num_doppler, scen.num_range_bins};
 }
 
-perf::TimingCollector run_compensation_graph(const CompensationScenario& scen, int total_frames) {
+perf::TimingCollector run_compensation_graph(const CompensationScenario& scen,
+                                             const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(input_shape(scen));
-  return perf::run_perf_graph(
-      std::move(cube), total_frames, "compensation-perf",
-      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
-        hr::MaxTensorExtents extents;
-        extents.max_tx = scen.num_tx;
-        extents.max_rx = scen.num_rx;
-        extents.max_doppler_bins = scen.num_doppler;
-        extents.max_range_bins = scen.num_range_bins;
-        auto op = graph.op<hr::TDMDenseCompensationOp<PerfPrecision>>("compensation", extents);
-        hr::TDMDenseCompensationParams params;
-        params.waveform = make_waveform(kDefaultPri);
-        op.set_params(std::move(params));
-        const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(src->out, op->rd_maps, q);
-        graph.add_flow(op->rd_maps_out, sink->in, q);
-        perf::bind_tensor_out(options, "compensation", "rd_maps_out");
-      });
+  const auto build = [&](holoscan::Graph& graph, const auto& src,
+                         holoscan::CompileOptions& options) {
+    hr::MaxTensorExtents extents;
+    extents.max_tx = scen.num_tx;
+    extents.max_rx = scen.num_rx;
+    extents.max_doppler_bins = scen.num_doppler;
+    extents.max_range_bins = scen.num_range_bins;
+    auto op = graph.op<hr::TDMDenseCompensationOp<PerfPrecision>>("compensation", extents);
+    hr::TDMDenseCompensationParams params;
+    params.waveform = make_waveform(scen.pri);
+    op.set_params(std::move(params));
+    const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
+    const holoscan::ConnectionOptions q{.queue_depth = 4U};
+    graph.add_flow(src->out, op->rd_maps, q);
+    if constexpr (requires { src->override_out; }) {
+      graph.add_flow(src->override_out, op->waveform_in, q);
+    }
+    graph.add_flow(op->rd_maps_out, sink->in, q);
+    perf::bind_tensor_out(options, "compensation", "rd_maps_out");
+  };
+  if (scen.live_waveform) {
+    return perf::run_perf_graph_with_override(
+        std::move(cube), plan.total_frames, plan.override_at, hr::to_wire(make_waveform(scen.pri)),
+        hr::to_wire(make_waveform(scen.changed_pri)), "compensation-perf", build,
+        perf::PerfPublishMode::kCopy, true);
+  }
+  return perf::run_perf_graph(std::move(cube), plan.total_frames, "compensation-perf", build);
 }
 
 void fill_throughput(perf::ResultRow* row, const CompensationScenario& scen, double median_ms) {
@@ -173,8 +190,7 @@ perf::ResultRow base_row(const CompensationScenario& scen) {
   row.size_id = scen.size_id;
   row.input_shape = input_shape(scen);
   row.k = scen.num_doppler;
-  // This scenario measures the Params-selected waveform configuration.
-  row.notes = "live_override=not_measured";
+  row.live_port = scen.live_waveform ? "waveform" : "";
   return row;
 }
 
@@ -206,50 +222,67 @@ struct CompensationTraits : perf::PerfDriverDefaults {
   }
   static const char* full_help() { return "Full TDM dense compensation size matrix"; }
 
+  static perf::ProfileSuite suite() {
+    return perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "tdm_dense_compensation.yaml",
+        "tdm_dense_compensation");
+  }
   static std::vector<perf::SizeDef> size_ladder_defs() {
-    std::vector<perf::SizeDef> out;
-    for (const auto& s : size_ladder()) {
-      perf::SizeDef def;
-      def.id = s.id;
-      def.shape = {s.num_tx, s.num_rx, s.num_doppler, s.num_range_bins};
-      def.cells = s.num_tx * s.num_rx * s.num_doppler * s.num_range_bins;
-      def.role = s.role;
-      out.push_back(def);
+    const auto profiles = suite();
+    std::vector<perf::SizeDef> result;
+    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
+      const auto& shape = profiles.shapes[i];
+      if (shape.size() != 4)
+        throw std::invalid_argument("TDMDenseCompensation profile rank mismatch");
+      result.push_back({std::string(perf::kProfiles[i]), shape,
+                        shape[0] * shape[1] * shape[2] * shape[3],
+                        std::string(perf::kProfiles[i])});
     }
-    return out;
+    return result;
   }
-
-  static std::vector<CompensationScenario> build_default_matrix() {
-    std::vector<CompensationScenario> out;
-    for (const char* sid : {"xs", "md", "lg", "xl"}) {
-      out.push_back(make_scenario(must_find_size(sid)));
+  static std::vector<CompensationScenario> build_profile_matrix(const std::string& scope) {
+    const auto profiles = suite();
+    std::set<std::string> selected_ids;
+    for (const auto& c : profiles.select(scope))
+      selected_ids.insert(c.id);
+    std::vector<CompensationScenario> result;
+    for (const auto& c : profiles.cases) {
+      size_t i = 0;
+      for (; i < perf::kProfiles.size(); ++i) {
+        if (c.profile == perf::kProfiles[i])
+          break;
+      }
+      const auto& shape = profiles.shapes.at(i);
+      if (shape.size() != 4 || shape[0] < 2)
+        throw std::invalid_argument("TDMDenseCompensation invalid profile shape");
+      perf::require_keys(c.parameters, {"pri"}, "parameters");
+      if (!c.parameters["pri"] || c.parameters["pri"].as<double>() <= 20.0e-6)
+        throw std::invalid_argument("TDMDenseCompensation requires valid PRI");
+      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], c.profile};
+      auto scenario = make_scenario(size);
+      scenario.pri = c.parameters["pri"].as<double>();
+      scenario.id = c.id;
+      scenario.size_id = c.profile;
+      if (c.override_value) {
+        if ((*c.override_value)["port"].as<std::string>() != "waveform")
+          throw std::invalid_argument("TDMDenseCompensation only waveform is live");
+        scenario.changed_pri = (*c.override_value)["value"].as<double>();
+        if (scenario.changed_pri <= 20.0e-6)
+          throw std::invalid_argument("TDMDenseCompensation override PRI too short");
+        scenario.live_waveform = true;
+      }
+      if (selected_ids.contains(c.id))
+        result.push_back(std::move(scenario));
     }
-    return out;
-  }
-
-  static std::vector<CompensationScenario> build_size_sweep(const std::vector<std::string>& sizes) {
-    std::vector<CompensationScenario> out;
-    for (const auto& sid : sizes) {
-      const SizeSpec* size = find_size(sid);
-      if (size != nullptr)
-        out.push_back(make_scenario(*size));
-    }
-    return out;
-  }
-
-  static std::vector<CompensationScenario> build_full_matrix() {
-    std::vector<CompensationScenario> out;
-    for (const auto& size : size_ladder())
-      out.push_back(make_scenario(size));
-    return out;
+    return result;
   }
 
   static void run_scenario(const CompensationScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
+    const perf::RunPlan plan = perf::make_run_plan(rs, scen.live_waveform);
     const auto samples =
         perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_compensation_graph(scen, p.total_frames);
+          return run_compensation_graph(scen, p);
         });
 
     perf::append_setup_row(base_row(scen), samples, report);
@@ -271,7 +304,7 @@ struct CompensationTraits : perf::PerfDriverDefaults {
       warm.warmup_frames = 0;
       warm.measured_frames = 2;
       warm.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs")), warm, &discarded);
+      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
     });
   }
 };

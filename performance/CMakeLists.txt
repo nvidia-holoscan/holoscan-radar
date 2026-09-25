@@ -6,4 +6,5 @@
 # executables; they are not part of the operator libraries or the packaged
 # module, and deliberately add no third-party benchmarking dependencies.
 
+find_package(yaml-cpp REQUIRED)
 add_subdirectory(cpp)

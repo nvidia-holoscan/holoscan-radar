@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 1
+operator: music_estimator
+profiles:
+  small: {shape: [4, 64, 16, 21, 11]}
+  medium: {shape: [8, 128, 32, 41, 21]}
+  large: {shape: [16, 256, 48, 61, 31]}
+live_ports: [array_geometry, az_coordinates, el_coordinates, spatial_smoothing, num_sources, source_count_pfa, max_sources]
+cases:
+  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {num_sources: auto}}
+  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {num_sources: auto}}
+  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {num_sources: auto}}
+  - {id: parameter-medium, profile: medium, scopes: [limited], parameters: {num_sources: 2}}
+  - {id: parameter-large, profile: large, scopes: [moderate], parameters: {num_sources: 2}}
+  - {id: array-geometry-small, profile: small, scopes: [overrides, moderate], parameters: {num_sources: auto}, override: {port: array_geometry, value: "spacing_045"}}
+  - {id: array-geometry-medium, profile: medium, scopes: [overrides, moderate], parameters: {num_sources: auto}, override: {port: array_geometry, value: "spacing_045"}}
+  - {id: array-geometry-large, profile: large, scopes: [overrides, moderate], parameters: {num_sources: auto}, override: {port: array_geometry, value: "spacing_045"}}
+  - {id: az-coordinates-small, profile: small, scopes: [overrides, moderate], parameters: {num_sources: auto}, override: {port: az_coordinates, value: "shift_005"}}
+  - {id: az-coordinates-medium, profile: medium, scopes: [overrides, moderate], parameters: {num_sources: auto}, override: {port: az_coordinates, value: "shift_005"}}
+  - {id: az-coordinates-large, profile: large, scopes: [overrides, moderate], parameters: {num_sources: auto}, override: {port: az_coordinates, value: "shift_005"}}
+  - {id: el-coordinates-small, profile: small, scopes: [overrides], parameters: {num_sources: auto}, override: {port: el_coordinates, value: "shift_005"}}
+  - {id: el-coordinates-medium, profile: medium, scopes: [overrides], parameters: {num_sources: auto}, override: {port: el_coordinates, value: "shift_005"}}
+  - {id: el-coordinates-large, profile: large, scopes: [overrides], parameters: {num_sources: auto}, override: {port: el_coordinates, value: "shift_005"}}
+  - {id: spatial-smoothing-small, profile: small, scopes: [overrides], parameters: {num_sources: auto}, override: {port: spatial_smoothing, value: "two"}}
+  - {id: spatial-smoothing-medium, profile: medium, scopes: [overrides], parameters: {num_sources: auto}, override: {port: spatial_smoothing, value: "two"}}
+  - {id: spatial-smoothing-large, profile: large, scopes: [overrides], parameters: {num_sources: auto}, override: {port: spatial_smoothing, value: "two"}}
+  - {id: num-sources-small, profile: small, scopes: [overrides, moderate], parameters: {num_sources: auto}, override: {port: num_sources, value: "2"}}
+  - {id: num-sources-medium, profile: medium, scopes: [overrides, moderate], parameters: {num_sources: auto}, override: {port: num_sources, value: "2"}}
+  - {id: num-sources-large, profile: large, scopes: [overrides, moderate], parameters: {num_sources: auto}, override: {port: num_sources, value: "2"}}
+  - {id: source-count-pfa-small, profile: small, scopes: [overrides], parameters: {num_sources: auto}, override: {port: source_count_pfa, value: "0.001"}}
+  - {id: source-count-pfa-medium, profile: medium, scopes: [overrides], parameters: {num_sources: auto}, override: {port: source_count_pfa, value: "0.001"}}
+  - {id: source-count-pfa-large, profile: large, scopes: [overrides], parameters: {num_sources: auto}, override: {port: source_count_pfa, value: "0.001"}}
+  - {id: max-sources-small, profile: small, scopes: [overrides], parameters: {num_sources: auto}, override: {port: max_sources, value: "3"}}
+  - {id: max-sources-medium, profile: medium, scopes: [overrides], parameters: {num_sources: auto}, override: {port: max_sources, value: "3"}}
+  - {id: max-sources-large, profile: large, scopes: [overrides], parameters: {num_sources: auto}, override: {port: max_sources, value: "3"}}
+  - {id: transition-medium, profile: medium, scopes: [thorough], parameters: {num_sources: 2}, override: {port: array_geometry, value: spacing_045}}

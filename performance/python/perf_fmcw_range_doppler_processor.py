@@ -13,9 +13,7 @@ mid-session [live] clutter_filter override so the cost of toggling the
 inline clutter stage is measured. Default CLI matches C++ (default matrix,
 not ``--full``).
 
-This tool times the fused node alone; for an end-to-end split vs fused
-comparison (range → [clutter] → Doppler vs this op), use
-perf_fmcw_split_vs_fused — do not sum the three per-operator tools.
+This tool characterizes the fused operator as an individual Graph node.
 """
 
 from __future__ import annotations
