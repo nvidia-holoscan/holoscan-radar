@@ -7,7 +7,6 @@
 
 #include <complex>
 #include <cstdint>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
 #include <memory>
 #include <string>
@@ -52,10 +51,10 @@ std::vector<int64_t> interleaved_shape(const DeinterleaveScenario& scen) {
   return {scen.num_rx, slow, scen.samples};
 }
 
-perf::TimingCollector run_deinterleave_graph(const DeinterleaveScenario& scen, int total_frames) {
+perf::TimingCollector run_graph(const DeinterleaveScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(interleaved_shape(scen));
   return perf::run_perf_graph(
-      std::move(cube), total_frames, "deinterleave-perf",
+      std::move(cube), plan.total_frames, "deinterleave-perf",
       [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_tx = scen.num_tx;
@@ -92,13 +91,18 @@ void fill_throughput(perf::ResultRow* row, const DeinterleaveScenario& scen, dou
 
 perf::ResultRow base_row(const DeinterleaveScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "MIMODeinterleaveOp";
   row.variant = "rr";
-  row.size_id = scen.size_id;
   row.input_shape = interleaved_shape(scen);
   row.k = scen.chirps_per_tx;
   return row;
+}
+
+void decorate_row(perf::ResultRow& row, const DeinterleaveScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes =
+      "pure gather marshaling; cold_ms is first-frame latency; "
+      "median/p90 are steady state; cells/s counts complex samples moved";
 }
 
 struct DeinterleaveTraits : perf::PerfDriverDefaults {
@@ -109,22 +113,11 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
     return "MIMODeinterleaveOp performance characterization (HSDK 5 Graph)";
   }
 
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto suite = perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "mimo_deinterleave.yaml",
-        "mimo_deinterleave");
-    std::vector<perf::SizeDef> out;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = suite.shapes[i];
-      if (shape.size() != 4)
-        throw std::invalid_argument("profile shape rank mismatch");
-      const int64_t slow = shape[0] * shape[2];
-      out.push_back({std::string(perf::kProfiles[i]),
-                     {shape[1], slow, shape[3]},
-                     shape[1] * slow * shape[3],
-                     std::string(perf::kProfiles[i])});
-    }
-    return out;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 4)
+      throw std::invalid_argument("profile shape rank mismatch");
+    const int64_t slow = shape[0] * shape[2];
+    return {id, {shape[1], slow, shape[3]}, shape[1] * slow * shape[3], id};
   }
 
   static DeinterleaveScenario parse_case(const perf::ProfileCase& c,
@@ -139,22 +132,6 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
       throw std::invalid_argument("MIMODeinterleave profile must have TX,RX,chirps,samples");
     }
     return {c.id, c.profile, shape[0], shape[1], shape[2], shape[3]};
-  }
-
-  static void run_scenario(const DeinterleaveScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, false,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_deinterleave_graph(scen, p.total_frames);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes =
-              "pure gather marshaling; cold_ms is first-frame latency; "
-              "median/p90 are steady state; cells/s counts complex samples moved";
-        });
   }
 };
 

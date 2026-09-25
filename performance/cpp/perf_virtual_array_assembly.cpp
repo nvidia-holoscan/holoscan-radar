@@ -11,7 +11,6 @@
 // output is drained by PerfNullSinkOp.
 
 #include <complex>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <stdexcept>
 #include <cstdint>
@@ -97,7 +96,7 @@ std::vector<int64_t> separated_shape(const AssemblyScenario& scen) {
   return {scen.num_tx, scen.num_rx, scen.num_doppler, scen.num_range_bins};
 }
 
-perf::TimingCollector run_assembly_graph(const AssemblyScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const AssemblyScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(separated_shape(scen));
   // Value-agnostic gather: zero-fill loan is valid.
   const auto build = [&](holoscan::Graph& graph, const auto& src,
@@ -155,10 +154,8 @@ void fill_throughput(perf::ResultRow* row, const AssemblyScenario& scen, double 
 
 perf::ResultRow base_row(const AssemblyScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "VirtualArrayAssemblyOp";
   row.variant = policy_tag(scen.policy);
-  row.size_id = scen.size_id;
   row.input_shape = separated_shape(scen);
   row.k = scen.num_doppler;
   row.live_port = scen.live_wavelength ? "wavelength" : "";
@@ -180,6 +177,13 @@ AssemblyScenario make_scenario(const SizeSpec& s,
   return sc;
 }
 
+void decorate_row(perf::ResultRow& row, const AssemblyScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes = "virtual channel flatten + geometry emit; cells/s counts input complex samples";
+  if (scen.live_wavelength)
+    row.notes += "; one-frame wavelength change";
+}
+
 struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
   using Scenario = AssemblyScenario;
 
@@ -189,24 +193,10 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
            "characterization (HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "virtual_array_assembly.yaml",
-        "virtual_array_assembly");
-  }
-
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 4)
-        throw std::invalid_argument("VirtualArrayAssembly profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape,
-                        shape[0] * shape[1] * shape[2] * shape[3],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 4)
+      throw std::invalid_argument("VirtualArrayAssembly profile rank mismatch");
+    return {id, shape, shape[0] * shape[1] * shape[2] * shape[3], id};
   }
 
   static AssemblyScenario parse_case(const perf::ProfileCase& c,
@@ -239,23 +229,6 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
         throw std::invalid_argument("VirtualArrayAssembly wavelength must be positive");
     }
     return scenario;
-  }
-
-  static void run_scenario(const AssemblyScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, scen.live_wavelength,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_assembly_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes =
-              "virtual channel flatten + geometry emit; cells/s counts input complex samples";
-          if (scen.live_wavelength)
-            row.notes += "; one-frame wavelength change";
-        });
   }
 };
 

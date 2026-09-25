@@ -4,7 +4,6 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <cstdint>
 #include <memory>
@@ -171,11 +170,9 @@ perf::TimingCollector run_graph(const Scenario& scenario, const perf::RunPlan& p
 
 perf::ResultRow base_row(const Scenario& scenario) {
   perf::ResultRow row;
-  row.scenario_id = scenario.id;
   row.op_name = "DDMSparseDemultiplexOp";
   row.variant = "sparse_ddm";
   row.live_port = scenario.live_port;
-  row.size_id = scenario.size_id;
   row.map_shape = {scenario.size.doppler, scenario.size.range};
   row.input_shape = {scenario.size.rx, scenario.size.doppler, scenario.size.range};
   row.out_batch = scenario.size.detections;
@@ -189,22 +186,10 @@ struct Traits : perf::PerfDriverDefaults {
   static const char* tool_name() { return "perf_ddm_sparse_demultiplex"; }
   static const char* tool_description() { return "Sparse DDM detection-count characterization"; }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_sparse_demultiplex.yaml",
-        "ddm_sparse_demultiplex");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 5)
-        throw std::invalid_argument("DDMSparseDemultiplex profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[1] * shape[2] * shape[3],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 5)
+      throw std::invalid_argument("DDMSparseDemultiplex profile rank mismatch");
+    return {id, shape, shape[1] * shape[2] * shape[3], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 5 || shape[0] < 2 || shape[2] % shape[0] != 0 || shape[4] < 1)
@@ -253,15 +238,6 @@ struct Traits : perf::PerfDriverDefaults {
       }
     }
     return scenario;
-  }
-  static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        settings, !scenario.live_port.empty(),
-        [&](int, const perf::RunPlan& current) {
-          return run_graph(scenario, current);
-        },
-        base_row(scenario), report, [&](perf::ResultRow& row) {});
   }
 };
 

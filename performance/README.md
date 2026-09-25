@@ -25,6 +25,27 @@ units. Shared typed sources publish one to three inputs and a one-frame live
 sideband; MultiSourceExpansion uses the shared six-input source required by its
 contract. The source and sink capture paired per-frame timestamps.
 
+### Adding a C++ operator
+
+1. Define `performance/profiles/<operator>.yaml` with three sizes and curated
+   scope cases. Name every documented live port in its manifest.
+2. Add `performance/cpp/perf_<operator>.cpp`. Its typed adapter defines a
+   `Scenario`, `parse_case`, `size_def`, `run_graph`, and `base_row`. Add
+   `decorate_row` only for throughput units or notes, and `validate_run_settings`
+   only for constraints such as a cached transition needing a warmup frame.
+   The shared driver supplies CLI, process warmup, run planning, all independent
+   runs, scenario/size identity, and the setup/compute report rows.
+3. Add the operator name once to `HOLOSCAN_RADAR_PERF_TARGETS` in
+   `performance/cpp/CMakeLists.txt`. That list registers its target and Minimal
+   GPU smoke. Add a focused Overrides smoke when its live payload has a new
+   representation or timing behavior.
+
+`perf_ddm_power_fold.cpp` is a small no-live example; angle estimators show
+multi-port descriptor payloads. Keep input generation, typed HSDK ports,
+`MaxTensorExtents`, and operator-specific scale calculations in the adapter.
+The unit-test harness remains suitable for correctness checks; its bounded
+output snapshots add copies and lack the paired timestamps used here.
+
 ## YAML profiles and scopes
 
 Migrated tools read `performance/profiles/<operator>.yaml`. Each suite names

@@ -59,41 +59,9 @@ function(radar_add_perf NAME)
         ${_op_target})
 endfunction()
 
-radar_add_perf(cfar_detector holoscan::cfar_detector_op)
-radar_add_perf(detection_reduction holoscan::detection_reduction_op)
-radar_add_perf(feature_assembly holoscan::feature_assembly_op)
-radar_add_perf(rank_one_residual_screen
-    holoscan::rank_one_residual_screen_op)
-radar_add_perf(multi_source_expansion
-    holoscan::multi_source_expansion_op)
-radar_add_perf(fmcw_range_processor holoscan::fmcw_range_processor_op)
-radar_add_perf(fmcw_doppler_processor holoscan::fmcw_doppler_processor_op)
-radar_add_perf(clutter_filter holoscan::clutter_filter_op)
-radar_add_perf(fmcw_range_doppler_processor
-    holoscan::fmcw_range_doppler_processor_op)
-
-radar_add_perf(cluster_dbscan holoscan::cluster_dbscan_op)
-radar_add_perf(snapshot_gather holoscan::snapshot_gather_op)
-radar_add_perf(subarray_selection holoscan::subarray_selection_op)
-radar_add_perf(beamscan_estimator holoscan::beamscan_estimator_op)
-radar_add_perf(mvdr_estimator holoscan::mvdr_estimator_op)
-radar_add_perf(music_estimator holoscan::music_estimator_op)
-radar_add_perf(root_music_estimator holoscan::root_music_estimator_op)
-radar_add_perf(esprit_estimator holoscan::esprit_estimator_op)
-radar_add_perf(phase_shift_beamformer holoscan::phase_shift_beamformer_op)
-radar_add_perf(mimo_deinterleave holoscan::mimo_deinterleave_op)
-radar_add_perf(virtual_array_assembly holoscan::virtual_array_assembly_op)
-radar_add_perf(tdm_dense_compensation
-    holoscan::tdm_dense_compensation_op)
-radar_add_perf(ddm_dense_demultiplex
-    holoscan::ddm_dense_demultiplex_op)
-radar_add_perf(doppler_notch holoscan::doppler_notch_op)
-radar_add_perf(ddm_power_fold
-    holoscan::ddm_power_fold_op)
-radar_add_perf(ddm_sparse_demultiplex
-    holoscan::ddm_sparse_demultiplex_op)
-radar_add_perf(tdm_sparse_compensation
-    holoscan::tdm_sparse_compensation_op)
+foreach(_perf_name IN LISTS HOLOSCAN_RADAR_PERF_TARGETS)
+    radar_add_perf(${_perf_name} holoscan::${_perf_name}_op)
+endforeach()
 
 # Minimal smoke for every operator. Timing values remain informational.
 if(HOLOSCAN_RADAR_BUILD_TESTING)

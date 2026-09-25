@@ -202,16 +202,18 @@ Measurement harness (not pass/fail thresholds). See
 characterization. Skip only if the operator has no GPU/hot path yet; say so
 in Jira.
 
-- [ ] **Performance driver + YAML suite** — `performance/cpp/perf_<operator>.cpp`
-      consumes `radar_perf_utils`; `performance/profiles/<operator>.yaml` names
+- [ ] **Performance adapter + YAML suite** — `performance/cpp/perf_<operator>.cpp`
+      defines typed `Scenario`, `parse_case`, `size_def`, `run_graph`, and
+      `base_row` hooks for the shared driver. Add `decorate_row` only for
+      throughput units or notes. `performance/profiles/<operator>.yaml` names
       small, medium, and large profiles and curated cases for all five scopes.
       Limited includes every backend; Overrides covers every `[live]` input
       alone at all three sizes. No implicit Cartesian product.
 - [ ] Wire **every output port** (terminal sink on the primary sparse/dense
       result; null sinks on the rest) so the operator ticks.
-- [ ] **Process warmup** — discarded graph session before the measured matrix
-      (`performance/cpp/utils/perf_process_warmup.hpp`) so scenario #1
-      `cold_ms` is not inflated by CUDA/Holoscan first-touch.
+- [ ] **Process warmup** — the shared driver runs a discarded small-profile
+      graph session before the measured matrix so scenario #1 `cold_ms` is not
+      inflated by CUDA/Holoscan first-touch.
 - [ ] Report **setup**, **cold** (first timed frame), and **steady**
       (median / p90) separately; annotate platform / provenance, achieved
       frames/s, and source cadence.
@@ -221,16 +223,17 @@ in Jira.
       any `[live]` fast paths (named slow/fast pairs if applicable); do not
       claim a fast path while timing only the slow one. See `OPERATOR_DEVELOPMENT.md` → Performance
       characterization → Required coverage.
-- [ ] **CMake** — `add_executable(perf_<operator> …)` linked to the operator
-      lib; optional `add_test(… LABELS performance)` `*_smoke`
-      (`--scope minimal --warmup 1 --frames 3 --repeats 1 --quiet --output …`) in
-      **`performance/cpp/CMakeLists.txt`**.
+- [ ] **CMake** — add the name once to `HOLOSCAN_RADAR_PERF_TARGETS` in
+      **`performance/cpp/CMakeLists.txt`**. That registers the executable and
+      Minimal GPU smoke. Add a focused Overrides smoke for a new live payload
+      representation or timing behavior.
 - [ ] Smoke passes: `ctest --test-dir build -R perf_<operator>_smoke` (or via
       `ctest -L performance`); skim cold vs steady for per-tick alloc / D2H /
       host-scan red flags before calling the operator performance-ready.
 
-Exemplar: `performance/cpp/perf_clutter_filter.cpp` and
-`performance/profiles/clutter_filter.yaml`.
+Simple exemplar: `performance/cpp/perf_ddm_power_fold.cpp` and
+`performance/profiles/ddm_power_fold.yaml`. Use an angle estimator as the
+multi-port live-payload example.
 
 ---
 

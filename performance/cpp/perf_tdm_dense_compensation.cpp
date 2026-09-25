@@ -5,7 +5,6 @@
 // Measurement only; no timing assertions.
 
 #include <complex>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <stdexcept>
 #include <cmath>
@@ -106,8 +105,7 @@ std::vector<int64_t> input_shape(const CompensationScenario& scen) {
   return {scen.num_tx, scen.num_rx, scen.num_doppler, scen.num_range_bins};
 }
 
-perf::TimingCollector run_compensation_graph(const CompensationScenario& scen,
-                                             const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const CompensationScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(input_shape(scen));
   const auto build = [&](holoscan::Graph& graph, const auto& src,
                          holoscan::CompileOptions& options) {
@@ -155,10 +153,8 @@ void fill_throughput(perf::ResultRow* row, const CompensationScenario& scen, dou
 
 perf::ResultRow base_row(const CompensationScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "TDMDenseCompensationOp";
   row.variant = scen.variant;
-  row.size_id = scen.size_id;
   row.input_shape = input_shape(scen);
   row.k = scen.num_doppler;
   row.live_port = scen.live_waveform ? "waveform" : "";
@@ -177,6 +173,14 @@ CompensationScenario make_scenario(const SizeSpec& size) {
   return scenario;
 }
 
+void decorate_row(perf::ResultRow& row, const CompensationScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes =
+      "TDM per-bin complex multiply; cold_ms includes the initial "
+      "correction-table build; median/p90 are steady state; cells/s "
+      "counts complex samples touched";
+}
+
 struct CompensationTraits : perf::PerfDriverDefaults {
   using Scenario = CompensationScenario;
 
@@ -186,23 +190,10 @@ struct CompensationTraits : perf::PerfDriverDefaults {
            "characterization (HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "tdm_dense_compensation.yaml",
-        "tdm_dense_compensation");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 4)
-        throw std::invalid_argument("TDMDenseCompensation profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape,
-                        shape[0] * shape[1] * shape[2] * shape[3],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 4)
+      throw std::invalid_argument("TDMDenseCompensation profile rank mismatch");
+    return {id, shape, shape[0] * shape[1] * shape[2] * shape[3], id};
   }
   static CompensationScenario parse_case(const perf::ProfileCase& c,
                                          const std::vector<int64_t>& shape) {
@@ -225,23 +216,6 @@ struct CompensationTraits : perf::PerfDriverDefaults {
       scenario.live_waveform = true;
     }
     return scenario;
-  }
-
-  static void run_scenario(const CompensationScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, scen.live_waveform,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_compensation_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes =
-              "TDM per-bin complex multiply; cold_ms includes the initial "
-              "correction-table build; median/p90 are steady state; cells/s "
-              "counts complex samples touched";
-        });
   }
 };
 

@@ -14,7 +14,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <iostream>
 #include <memory>
@@ -234,7 +233,7 @@ struct LivePorts {
 
 using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::snapshot>;
 
-perf::TimingCollector run_esprit_graph(const Scenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
   auto cube =
       perf::make_iq_cube_device<PerfPrecision>({scen.detections, scen.channels, scen.snapshots});
   constexpr int64_t kInitialMaxSources = 4;
@@ -314,17 +313,26 @@ perf::TimingCollector run_esprit_graph(const Scenario& scen, const perf::RunPlan
 
 perf::ResultRow base_row(const Scenario& scenario) {
   perf::ResultRow row;
-  row.scenario_id = scenario.id;
   row.op_name = "ESPRITEstimatorOp";
   row.variant = std::string("esprit_ls_live_") + override_name(scenario.override_kind);
   row.live_port = override_name(scenario.override_kind);
-  row.size_id = scenario.size_id;
   row.input_shape = {scenario.detections, scenario.channels, scenario.snapshots};
   row.out_batch = scenario.detections;
   row.k = scenario.channels;
   row.notes = std::string("live_override=") + override_name(scenario.override_kind) +
               "; subarray_spec is static";
   return row;
+}
+
+void decorate_row(perf::ResultRow& row, const Scenario& scenario) {
+  if (row.latency.median_ms > 0.0) {
+    row.cells_per_second = scenario.detections / (row.latency.median_ms / 1000.0);
+  }
+  row.notes = "override_ms isolates inline " + std::string(override_name(scenario.override_kind)) +
+              "; steady num_sources is fixed at one except the "
+              "source_count_pfa scenario, which uses auto; subarray_spec is static";
+  if (row.live_port.empty())
+    row.notes = "default parameters; no live override";
 }
 
 struct Traits : perf::PerfDriverDefaults {
@@ -336,22 +344,10 @@ struct Traits : perf::PerfDriverDefaults {
            "(HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "esprit_estimator.yaml",
-        "esprit_estimator");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 3)
-        throw std::invalid_argument("esprit_estimator profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 3)
+      throw std::invalid_argument("esprit_estimator profile rank mismatch");
+    return {id, shape, shape[0] * shape[1] * shape[2], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 3 || shape[0] < 4 || shape[1] < 1 || shape[2] < 2)
@@ -386,27 +382,6 @@ struct Traits : perf::PerfDriverDefaults {
         throw std::invalid_argument("esprit_estimator invalid live override");
     }
     return scenario;
-  }
-
-  static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        settings, scenario.override_kind != Scenario::OverrideKind::kNone,
-        [&](int, const perf::RunPlan& run_plan) {
-          return run_esprit_graph(scenario, run_plan);
-        },
-        base_row(scenario), report,
-        [&](perf::ResultRow& row) {
-          if (row.latency.median_ms > 0.0) {
-            row.cells_per_second = scenario.detections / (row.latency.median_ms / 1000.0);
-          }
-          row.notes = "override_ms isolates inline " +
-                      std::string(override_name(scenario.override_kind)) +
-                      "; steady num_sources is fixed at one except the "
-                      "source_count_pfa scenario, which uses auto; subarray_spec is static";
-          if (row.live_port.empty())
-            row.notes = "default parameters; no live override";
-        });
   }
 };
 

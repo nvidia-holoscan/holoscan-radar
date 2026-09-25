@@ -1159,30 +1159,7 @@ TimingCollector run_perf_graph(std::shared_ptr<holoscan::Tensor> input, int tota
   holoscan::CompileOptions options;
   bind_tensor_out(options, "src", "out");
   build(graph, src, options);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-
-  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-  if (!plan.ok()) {
-    throw std::runtime_error(std::string(graph_name) +
-                             " perf compile failed: " + std::string(plan.json()));
-  }
-
-  holoscan::RunSession session = holoscan::run_async(plan);
-  detail::wait_for_frames(session, total_frames);
-  session.request_stop();
-  session.wait();
-  if (!session.diagnostics().empty()) {
-    std::string msg = std::string(graph_name) + " perf run diagnostics:";
-    for (const auto& d : session.diagnostics()) {
-      msg += " ";
-      msg += std::string(d.token);
-    }
-    throw std::runtime_error(msg);
-  }
-  if (collector.ends.size() < static_cast<size_t>(total_frames)) {
-    throw std::runtime_error(
-        detail::stall_message(graph_name, collector.ends.size(), total_frames));
-  }
+  execute_perf_graph(graph, std::move(options), total_frames, graph_name, &collector);
   return collector;
 }
 
@@ -1209,30 +1186,7 @@ TimingCollector run_perf_graph_with_override(std::shared_ptr<holoscan::Tensor> i
   holoscan::CompileOptions options;
   bind_tensor_out(options, "src", "out");
   build(graph, src, options);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-
-  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-  if (!plan.ok()) {
-    throw std::runtime_error(std::string(graph_name) +
-                             " perf compile failed: " + std::string(plan.json()));
-  }
-
-  holoscan::RunSession session = holoscan::run_async(plan);
-  detail::wait_for_frames(session, total_frames);
-  session.request_stop();
-  session.wait();
-  if (!session.diagnostics().empty()) {
-    std::string msg = std::string(graph_name) + " perf run diagnostics:";
-    for (const auto& d : session.diagnostics()) {
-      msg += " ";
-      msg += std::string(d.token);
-    }
-    throw std::runtime_error(msg);
-  }
-  if (collector.ends.size() < static_cast<size_t>(total_frames)) {
-    throw std::runtime_error(
-        detail::stall_message(graph_name, collector.ends.size(), total_frames));
-  }
+  execute_perf_graph(graph, std::move(options), total_frames, graph_name, &collector);
   return collector;
 }
 
@@ -1255,30 +1209,7 @@ TimingCollector run_perf_graph_with_window_override(
   holoscan::CompileOptions options;
   bind_tensor_out(options, "src", "out");
   build(graph, src, options);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-
-  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-  if (!plan.ok()) {
-    throw std::runtime_error(std::string(graph_name) +
-                             " perf compile failed: " + std::string(plan.json()));
-  }
-
-  holoscan::RunSession session = holoscan::run_async(plan);
-  detail::wait_for_frames(session, total_frames);
-  session.request_stop();
-  session.wait();
-  if (!session.diagnostics().empty()) {
-    std::string msg = std::string(graph_name) + " perf run diagnostics:";
-    for (const auto& d : session.diagnostics()) {
-      msg += " ";
-      msg += std::string(d.token);
-    }
-    throw std::runtime_error(msg);
-  }
-  if (collector.ends.size() < static_cast<size_t>(total_frames)) {
-    throw std::runtime_error(
-        detail::stall_message(graph_name, collector.ends.size(), total_frames));
-  }
+  execute_perf_graph(graph, std::move(options), total_frames, graph_name, &collector);
   return collector;
 }
 
@@ -1301,30 +1232,7 @@ TimingCollector run_perf_graph_with_vector_override(
   holoscan::CompileOptions options;
   bind_tensor_out(options, "src", "out");
   build(graph, src, options);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-
-  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-  if (!plan.ok()) {
-    throw std::runtime_error(std::string(graph_name) +
-                             " perf compile failed: " + std::string(plan.json()));
-  }
-
-  holoscan::RunSession session = holoscan::run_async(plan);
-  detail::wait_for_frames(session, total_frames);
-  session.request_stop();
-  session.wait();
-  if (!session.diagnostics().empty()) {
-    std::string msg = std::string(graph_name) + " perf run diagnostics:";
-    for (const auto& d : session.diagnostics()) {
-      msg += " ";
-      msg += std::string(d.token);
-    }
-    throw std::runtime_error(msg);
-  }
-  if (collector.ends.size() < static_cast<size_t>(total_frames)) {
-    throw std::runtime_error(
-        detail::stall_message(graph_name, collector.ends.size(), total_frames));
-  }
+  execute_perf_graph(graph, std::move(options), total_frames, graph_name, &collector);
   return collector;
 }
 
@@ -1344,30 +1252,7 @@ TimingCollector run_perf_graph_dual(std::shared_ptr<holoscan::Tensor> input_a,
   bind_tensor_out(options, "src", "out_a");
   bind_tensor_out(options, "src", "out_b");
   build(graph, src, options);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-
-  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-  if (!plan.ok()) {
-    throw std::runtime_error(std::string(graph_name) +
-                             " perf compile failed: " + std::string(plan.json()));
-  }
-
-  holoscan::RunSession session = holoscan::run_async(plan);
-  detail::wait_for_frames(session, total_frames);
-  session.request_stop();
-  session.wait();
-  if (!session.diagnostics().empty()) {
-    std::string msg = std::string(graph_name) + " perf run diagnostics:";
-    for (const auto& d : session.diagnostics()) {
-      msg += " ";
-      msg += std::string(d.token);
-    }
-    throw std::runtime_error(msg);
-  }
-  if (collector.ends.size() < static_cast<size_t>(total_frames)) {
-    throw std::runtime_error(
-        detail::stall_message(graph_name, collector.ends.size(), total_frames));
-  }
+  execute_perf_graph(graph, std::move(options), total_frames, graph_name, &collector);
   return collector;
 }
 
@@ -1395,30 +1280,7 @@ TimingCollector run_perf_graph_dual_with_override(std::shared_ptr<holoscan::Tens
   bind_tensor_out(options, "src", "out_a");
   bind_tensor_out(options, "src", "out_b");
   build(graph, src, options);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-
-  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-  if (!plan.ok()) {
-    throw std::runtime_error(std::string(graph_name) +
-                             " perf compile failed: " + std::string(plan.json()));
-  }
-
-  holoscan::RunSession session = holoscan::run_async(plan);
-  detail::wait_for_frames(session, total_frames);
-  session.request_stop();
-  session.wait();
-  if (!session.diagnostics().empty()) {
-    std::string msg = std::string(graph_name) + " perf run diagnostics:";
-    for (const auto& d : session.diagnostics()) {
-      msg += " ";
-      msg += std::string(d.token);
-    }
-    throw std::runtime_error(msg);
-  }
-  if (collector.ends.size() < static_cast<size_t>(total_frames)) {
-    throw std::runtime_error(
-        detail::stall_message(graph_name, collector.ends.size(), total_frames));
-  }
+  execute_perf_graph(graph, std::move(options), total_frames, graph_name, &collector);
   return collector;
 }
 
@@ -1440,30 +1302,7 @@ TimingCollector run_perf_graph_triple(std::shared_ptr<holoscan::Tensor> input_a,
   bind_tensor_out(options, "src", "out_b");
   bind_tensor_out(options, "src", "out_c");
   build(graph, src, options);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-
-  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-  if (!plan.ok()) {
-    throw std::runtime_error(std::string(graph_name) +
-                             " perf compile failed: " + std::string(plan.json()));
-  }
-
-  holoscan::RunSession session = holoscan::run_async(plan);
-  detail::wait_for_frames(session, total_frames);
-  session.request_stop();
-  session.wait();
-  if (!session.diagnostics().empty()) {
-    std::string msg = std::string(graph_name) + " perf run diagnostics:";
-    for (const auto& d : session.diagnostics()) {
-      msg += " ";
-      msg += std::string(d.token);
-    }
-    throw std::runtime_error(msg);
-  }
-  if (collector.ends.size() < static_cast<size_t>(total_frames)) {
-    throw std::runtime_error(
-        detail::stall_message(graph_name, collector.ends.size(), total_frames));
-  }
+  execute_perf_graph(graph, std::move(options), total_frames, graph_name, &collector);
   return collector;
 }
 
@@ -1485,24 +1324,7 @@ TimingCollector run_perf_graph_triple_with_override(std::shared_ptr<holoscan::Te
   bind_tensor_out(options, "src", "out_b");
   bind_tensor_out(options, "src", "out_c");
   build(graph, src, options);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-  if (!plan.ok())
-    throw std::runtime_error(std::string(graph_name) +
-                             " perf compile failed: " + std::string(plan.json()));
-  holoscan::RunSession session = holoscan::run_async(plan);
-  detail::wait_for_frames(session, total_frames);
-  session.request_stop();
-  session.wait();
-  if (!session.diagnostics().empty()) {
-    std::string msg = std::string(graph_name) + " perf run diagnostics:";
-    for (const auto& d : session.diagnostics())
-      msg += " " + std::string(d.token);
-    throw std::runtime_error(msg);
-  }
-  if (collector.ends.size() < static_cast<size_t>(total_frames))
-    throw std::runtime_error(
-        detail::stall_message(graph_name, collector.ends.size(), total_frames));
+  execute_perf_graph(graph, std::move(options), total_frames, graph_name, &collector);
   return collector;
 }
 
@@ -1518,24 +1340,7 @@ TimingCollector run_perf_graph_with_source(std::shared_ptr<holoscan::Tensor> inp
   holoscan::CompileOptions options;
   bind_tensor_out(options, "src", "out");
   build(graph, src, options);
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
-  if (!plan.ok())
-    throw std::runtime_error(std::string(graph_name) +
-                             " perf compile failed: " + std::string(plan.json()));
-  holoscan::RunSession session = holoscan::run_async(plan);
-  detail::wait_for_frames(session, total_frames);
-  session.request_stop();
-  session.wait();
-  if (!session.diagnostics().empty()) {
-    std::string msg = std::string(graph_name) + " perf run diagnostics:";
-    for (const auto& d : session.diagnostics())
-      msg += " " + std::string(d.token);
-    throw std::runtime_error(msg);
-  }
-  if (collector.ends.size() < static_cast<size_t>(total_frames))
-    throw std::runtime_error(
-        detail::stall_message(graph_name, collector.ends.size(), total_frames));
+  execute_perf_graph(graph, std::move(options), total_frames, graph_name, &collector);
   return collector;
 }
 

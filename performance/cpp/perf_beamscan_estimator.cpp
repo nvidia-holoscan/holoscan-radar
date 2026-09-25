@@ -13,7 +13,6 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <iostream>
 #include <memory>
@@ -197,7 +196,7 @@ struct LivePorts {
 
 using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::snapshot>;
 
-perf::TimingCollector run_beamscan_graph(const BeamScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const BeamScenario& scen, const perf::RunPlan& plan) {
   auto snapshot =
       perf::make_iq_cube_device<PerfPrecision>({scen.detections, scen.channels, scen.snapshots});
   hr::BeamscanParams initial;
@@ -286,10 +285,8 @@ void fill_throughput(perf::ResultRow* row, const BeamScenario& scen, double medi
 
 perf::ResultRow base_row(const BeamScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "BeamscanEstimatorOp";
   row.variant = "bartlett";
-  row.size_id = scen.size_id;
   row.map_shape = {scen.num_az, scen.num_el};
   row.input_shape = {scen.detections, scen.channels, scen.snapshots};
   row.out_batch = scen.detections;
@@ -315,6 +312,17 @@ BeamScenario make_scenario(const SizeSpec& s,
   return sc;
 }
 
+void decorate_row(perf::ResultRow& row, const BeamScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes =
+      "cold_ms is first-frame latency; median/p90 "
+      "are post-warmup steady state; override_ms "
+      "isolates " +
+      std::string(override_name(scen.override_kind)) + "; cells/s is detections/s";
+  if (row.live_port.empty())
+    row.notes = "default parameters; no live override";
+}
+
 struct BeamTraits : perf::PerfDriverDefaults {
   using Scenario = BeamScenario;
 
@@ -324,22 +332,10 @@ struct BeamTraits : perf::PerfDriverDefaults {
            "characterization (HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "beamscan_estimator.yaml",
-        "beamscan_estimator");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 5)
-        throw std::invalid_argument("Beamscan profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 5)
+      throw std::invalid_argument("Beamscan profile rank mismatch");
+    return {id, shape, shape[0] * shape[1] * shape[2], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 5 || shape[0] < 2 || shape[1] < 1 || shape[2] < 1 || shape[3] < 1 ||
@@ -370,26 +366,6 @@ struct BeamTraits : perf::PerfDriverDefaults {
         throw std::invalid_argument("Beamscan invalid live override");
     }
     return scenario;
-  }
-
-  static void run_scenario(const BeamScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, scen.override_kind != BeamScenario::OverrideKind::kNone,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_beamscan_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes =
-              "cold_ms is first-frame latency; median/p90 "
-              "are post-warmup steady state; override_ms "
-              "isolates " +
-              std::string(override_name(scen.override_kind)) + "; cells/s is detections/s";
-          if (row.live_port.empty())
-            row.notes = "default parameters; no live override";
-        });
   }
 };
 

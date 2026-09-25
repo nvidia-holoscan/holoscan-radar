@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -70,10 +69,8 @@ perf::TimingCollector run_graph(const Scenario& scenario, const perf::RunPlan& p
 
 perf::ResultRow base_row(const Scenario& scenario) {
   perf::ResultRow row;
-  row.scenario_id = scenario.id;
   row.op_name = "DDMPowerFoldOp";
   row.variant = "linear_exact";
-  row.size_id = scenario.size_id;
   row.map_shape = {scenario.size.doppler, scenario.size.range};
   row.input_shape = {scenario.size.rx, scenario.size.doppler, scenario.size.range};
   row.k = scenario.size.tx * scenario.size.rx;
@@ -81,26 +78,22 @@ perf::ResultRow base_row(const Scenario& scenario) {
   return row;
 }
 
+void decorate_row(perf::ResultRow& row, const Scenario& scenario) {
+  if (row.latency.median_ms > 0.0) {
+    row.cells_per_second = static_cast<double>(scenario.size.doppler * scenario.size.range) /
+                           (row.latency.median_ms / 1000.0);
+  }
+}
+
 struct Traits : perf::PerfDriverDefaults {
   using Scenario = ::Scenario;
   static const char* tool_name() { return "perf_ddm_power_fold"; }
   static const char* tool_description() { return "Sparse DDM power-fold characterization"; }
 
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto suite = perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_power_fold.yaml",
-        "ddm_power_fold");
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = suite.shapes[i];
-      if (shape.size() != 4)
-        throw std::invalid_argument("profile shape rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]),
-                        {shape[2], shape[3]},
-                        shape[2] * shape[3],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 4)
+      throw std::invalid_argument("profile shape rank mismatch");
+    return {id, {shape[2], shape[3]}, shape[2] * shape[3], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     perf::require_keys(c.parameters, {"ddm_code"}, "parameters");
@@ -114,22 +107,6 @@ struct Traits : perf::PerfDriverDefaults {
       throw std::invalid_argument("DDMPowerFold Doppler size must be divisible by TX count");
     }
     return {c.id, c.profile, {c.profile, shape[0], shape[1], shape[2], shape[3], c.profile}};
-  }
-  static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        settings, false,
-        [&](int, const perf::RunPlan& current) {
-          return run_graph(scenario, current);
-        },
-        base_row(scenario), report,
-        [&](perf::ResultRow& row) {
-          if (row.latency.median_ms > 0.0) {
-            row.cells_per_second =
-                static_cast<double>(scenario.size.doppler * scenario.size.range) /
-                (row.latency.median_ms / 1000.0);
-          }
-        });
   }
 };
 

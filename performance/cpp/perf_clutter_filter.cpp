@@ -7,7 +7,6 @@
 
 #include <complex>
 #include <cstdint>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
 #include <memory>
 #include <set>
@@ -82,7 +81,7 @@ std::vector<int64_t> profiles_shape(const ClutterScenario& scen) {
   return {scen.num_chirps, scen.num_range_bins};
 }
 
-perf::TimingCollector run_clutter_graph(const ClutterScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const ClutterScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(profiles_shape(scen));
   hr::MaxTensorExtents extents;
   extents.max_chirps = scen.num_chirps;
@@ -170,10 +169,8 @@ void fill_throughput(perf::ResultRow* row, const ClutterScenario& scen, double m
 
 perf::ResultRow base_row(const ClutterScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "ClutterFilterOp";
   row.variant = method_tag(scen.method) + "_" + window_tag(scen.window);
-  row.size_id = scen.size_id;
   row.map_shape = {scen.num_chirps, scen.num_range_bins};
   row.input_shape = profiles_shape(scen);
   row.out_batch = scen.channels;
@@ -181,6 +178,15 @@ perf::ResultRow base_row(const ClutterScenario& scen) {
   row.live_port =
       scen.time_window_override ? "doppler_window" : (scen.time_method_override ? "method" : "");
   return row;
+}
+
+void decorate_row(perf::ResultRow& row, const ClutterScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes = "end-to-end Graph latency; cells/s is complex cells/s";
+  if (scen.time_window_override)
+    row.notes += "; unseen Hamming window on one frame";
+  if (scen.time_method_override)
+    row.notes += "; method changes for one frame";
 }
 
 struct ClutterTraits : perf::PerfDriverDefaults {
@@ -191,19 +197,10 @@ struct ClutterTraits : perf::PerfDriverDefaults {
     return "ClutterFilterOp performance characterization (HSDK 5 Graph)";
   }
 
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto suite = perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml",
-        "clutter_filter");
-    std::vector<perf::SizeDef> out;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = suite.shapes[i];
-      if (shape.size() != 2)
-        throw std::invalid_argument("profile shape rank mismatch");
-      out.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1],
-                     std::string(perf::kProfiles[i])});
-    }
-    return out;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 2)
+      throw std::invalid_argument("profile shape rank mismatch");
+    return {id, shape, shape[0] * shape[1], id};
   }
 
   static ClutterScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
@@ -257,24 +254,6 @@ struct ClutterTraits : perf::PerfDriverDefaults {
       }
     }
     return scenario;
-  }
-
-  static void run_scenario(const ClutterScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, scen.time_window_override || scen.time_method_override,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_clutter_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes = "end-to-end Graph latency; cells/s is complex cells/s";
-          if (scen.time_window_override)
-            row.notes += "; unseen Hamming window on one frame";
-          if (scen.time_method_override)
-            row.notes += "; method changes for one frame";
-        });
   }
 };
 

@@ -18,7 +18,6 @@
 #include <cstdint>
 #include <mutex>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <iostream>
 #include <memory>
@@ -193,7 +192,7 @@ constexpr auto kInputB = &LivePorts::out_b;
 constexpr auto kInputC = &LivePorts::out_c;
 using LiveSource = perf::PerfLiveSourceOp<LivePorts, kInputA, kInputB, kInputC>;
 
-perf::TimingCollector run_reduction_graph(const RedScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const RedScenario& scen, const perf::RunPlan& plan) {
   auto labels_t = make_labels(scen.num_points, scen.num_clusters);
   auto idx_t = make_detection_idx(scen.num_points);
   auto points_t = make_points<PerfPrecision>(scen.num_points, scen.num_features);
@@ -260,10 +259,8 @@ void fill_throughput(perf::ResultRow* row, const RedScenario& scen, double media
 
 perf::ResultRow base_row(const RedScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "DetectionReductionOp";
   row.variant = policy_tag(scen.policy);
-  row.size_id = scen.size_id;
   row.map_shape = {scen.num_points, scen.num_features};
   row.input_shape = {scen.num_points, 2};
   row.out_batch = scen.num_clusters;
@@ -286,6 +283,14 @@ RedScenario make_scenario(hr::RepresentativePolicy policy, const SizeSpec& s) {
   return sc;
 }
 
+void decorate_row(perf::ResultRow& row, const RedScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes = "cold_ms is first-frame latency; override_ms is one changed frame for " +
+              scen.live_port + "; cells/s is points/s";
+  if (row.live_port.empty())
+    row.notes = "default parameters; no live override";
+}
+
 struct RedTraits : perf::PerfDriverDefaults {
   using Scenario = RedScenario;
 
@@ -295,22 +300,10 @@ struct RedTraits : perf::PerfDriverDefaults {
            "(HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "detection_reduction.yaml",
-        "detection_reduction");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 3)
-        throw std::invalid_argument("DetectionReduction profile rank mismatch");
-      result.push_back(
-          {std::string(perf::kProfiles[i]), shape, shape[0], std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 3)
+      throw std::invalid_argument("DetectionReduction profile rank mismatch");
+    return {id, shape, shape[0], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 3 || shape[0] < 1 || shape[1] < 1 || shape[1] > shape[0] || shape[2] < 1)
@@ -343,23 +336,6 @@ struct RedTraits : perf::PerfDriverDefaults {
         throw std::invalid_argument("DetectionReduction invalid override");
     }
     return scenario;
-  }
-
-  static void run_scenario(const RedScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, !scen.live_port.empty(),
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_reduction_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes = "cold_ms is first-frame latency; override_ms is one changed frame for " +
-                      scen.live_port + "; cells/s is points/s";
-          if (row.live_port.empty())
-            row.notes = "default parameters; no live override";
-        });
   }
 };
 

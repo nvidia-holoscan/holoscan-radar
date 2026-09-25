@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <iostream>
 #include <memory>
@@ -110,7 +109,7 @@ std::shared_ptr<holoscan::Tensor> make_points(int64_t num_points, int64_t num_fe
   return make_device_from_host(host, {num_points, num_features});
 }
 
-perf::TimingCollector run_dbscan_graph(const DbscanScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const DbscanScenario& scen, const perf::RunPlan& plan) {
   auto pts = make_points<PerfPrecision>(scen.num_points, scen.num_features, scen.num_clusters);
   using BaseOp = hr::ClusterDBSCANOp<PerfPrecision>;
   const auto configure = [&](holoscan::Graph& graph, const auto& src,
@@ -196,10 +195,8 @@ void fill_throughput(perf::ResultRow* row, const DbscanScenario& scen, double me
 
 perf::ResultRow base_row(const DbscanScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "ClusterDBSCANOp";
   row.variant = "dbscan";
-  row.size_id = scen.size_id;
   row.map_shape = {scen.num_points, scen.num_features};
   row.input_shape = {scen.num_points, scen.num_features};
   row.out_batch = scen.num_clusters;
@@ -223,6 +220,13 @@ DbscanScenario make_scenario(const SizeSpec& s) {
   return sc;
 }
 
+void decorate_row(perf::ResultRow& row, const DbscanScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes = "end-to-end Graph latency; cells/s is points/s";
+  if (!scen.live_port.empty())
+    row.notes += "; one-frame " + scen.live_port + " change";
+}
+
 struct DbscanTraits : perf::PerfDriverDefaults {
   using Scenario = DbscanScenario;
 
@@ -232,22 +236,10 @@ struct DbscanTraits : perf::PerfDriverDefaults {
            "(HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "cluster_dbscan.yaml",
-        "cluster_dbscan");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 3)
-        throw std::invalid_argument("ClusterDBSCAN profile rank mismatch");
-      result.push_back(
-          {std::string(perf::kProfiles[i]), shape, shape[0], std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 3)
+      throw std::invalid_argument("ClusterDBSCAN profile rank mismatch");
+    return {id, shape, shape[0], id};
   }
   static DbscanScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 3 || shape[0] < 1 || shape[1] < 2 || shape[1] > 5 || shape[2] < 1)
@@ -284,22 +276,6 @@ struct DbscanTraits : perf::PerfDriverDefaults {
       }
     }
     return scenario;
-  }
-
-  static void run_scenario(const DbscanScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, !scen.live_port.empty(),
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_dbscan_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes = "end-to-end Graph latency; cells/s is points/s";
-          if (!scen.live_port.empty())
-            row.notes += "; one-frame " + scen.live_port + " change";
-        });
   }
 };
 

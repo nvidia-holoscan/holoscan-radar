@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <iostream>
 #include <memory>
@@ -119,7 +118,7 @@ std::shared_ptr<holoscan::Tensor> make_detection_idx(int64_t detections, int64_t
   return make_device_from_host(host, {detections, 2}, kInt64Dtype);
 }
 
-perf::TimingCollector run_snapshot_graph(const SnapScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const SnapScenario& scen, const perf::RunPlan& plan) {
   auto rd = make_rd_maps<PerfPrecision>(scen.channels, scen.doppler, scen.range);
   auto idx = make_detection_idx(scen.detections, scen.doppler, scen.range);
   using BaseOp = hr::SnapshotGatherOp<PerfPrecision>;
@@ -183,10 +182,8 @@ void fill_throughput(perf::ResultRow* row, const SnapScenario& scen, double medi
 
 perf::ResultRow base_row(const SnapScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "SnapshotGatherOp";
   row.variant = window_tag(scen.window);
-  row.size_id = scen.size_id;
   row.map_shape = {scen.doppler, scen.range};
   row.input_shape = {scen.detections, 2};
   row.out_batch = scen.detections;
@@ -210,6 +207,13 @@ SnapScenario make_scenario(const SizeSpec& s, Window w) {
   return sc;
 }
 
+void decorate_row(perf::ResultRow& row, const SnapScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes = "end-to-end Graph latency; cells/s is detections/s";
+  if (scen.live_window)
+    row.notes += "; one-frame snapshot_window change";
+}
+
 struct SnapTraits : perf::PerfDriverDefaults {
   using Scenario = SnapScenario;
 
@@ -219,23 +223,10 @@ struct SnapTraits : perf::PerfDriverDefaults {
            "(HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "snapshot_gather.yaml",
-        "snapshot_gather");
-  }
-
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 4)
-        throw std::invalid_argument("SnapshotGather profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 4)
+      throw std::invalid_argument("SnapshotGather profile rank mismatch");
+    return {id, shape, shape[0] * shape[1] * shape[2], id};
   }
 
   static SnapScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
@@ -265,22 +256,6 @@ struct SnapTraits : perf::PerfDriverDefaults {
       scenario.live_window = true;
     }
     return scenario;
-  }
-
-  static void run_scenario(const SnapScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, scen.live_window,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_snapshot_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes = "end-to-end Graph latency; cells/s is detections/s";
-          if (scen.live_window)
-            row.notes += "; one-frame snapshot_window change";
-        });
   }
 };
 

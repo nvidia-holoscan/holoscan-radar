@@ -733,8 +733,13 @@ Holoscan's first Application tick are not billed to scenario #1's `cold_ms`.
 `--warmup` frames inside a scenario are separate: they exclude early frames
 *within* a run from the steady median, and do not replace process warmup.
 Each operator adapter validates every YAML case before scope filtering, then
-provides typed input construction, port wiring, and optional throughput units;
-source publication, Graph execution, sampling, and report buckets stay shared.
+provides typed input construction, port wiring, and optional throughput units.
+A new adapter supplies `Scenario`, `parse_case`, `size_def`, `run_graph`, and
+`base_row`; `decorate_row` and run-setting validation are optional. The shared
+driver loads the YAML suite once and owns process warmup, source publication,
+Graph execution, sampling, scenario identity, and both report buckets. Add the
+operator name once to `HOLOSCAN_RADAR_PERF_TARGETS` for its executable and
+Minimal GPU smoke.
 
 Operators with no `[live]` parameters are exempt from the override rule; note
 that in the consumer header comment. Process warmup still applies.

@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <memory>
 #include <stdexcept>
@@ -176,17 +175,22 @@ perf::TimingCollector run_graph(const Scenario& scenario, const perf::RunPlan& p
 perf::ResultRow base_row(const Scenario& scenario) {
   const auto& size = scenario.size;
   perf::ResultRow row;
-  row.scenario_id = scenario.id;
   row.op_name = "TDMSparseCompensationOp";
   row.variant = "sparse_tdm";
   row.live_port = scenario.live_port;
-  row.size_id = size.id;
   row.map_shape = {size.doppler, size.range};
   row.input_shape = {size.tx, size.rx, size.doppler, size.range};
   row.out_batch = size.detections;
   row.k = size.tx * size.rx;
   row.notes = "end-to-end Graph latency; cells/s is detections/s";
   return row;
+}
+
+void decorate_row(perf::ResultRow& row, const Scenario& scenario) {
+  if (row.latency.median_ms > 0.0) {
+    row.cells_per_second =
+        static_cast<double>(scenario.size.detections) / (row.latency.median_ms / 1000.0);
+  }
 }
 
 struct Traits : perf::PerfDriverDefaults {
@@ -197,23 +201,10 @@ struct Traits : perf::PerfDriverDefaults {
     return "Sparse TDM compensation detection-count characterization";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "tdm_sparse_compensation.yaml",
-        "tdm_sparse_compensation");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 5)
-        throw std::invalid_argument("TDMSparseCompensation profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape,
-                        shape[0] * shape[1] * shape[2] * shape[3],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 5)
+      throw std::invalid_argument("TDMSparseCompensation profile rank mismatch");
+    return {id, shape, shape[0] * shape[1] * shape[2] * shape[3], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 5 || shape[0] < 2 || shape[4] < 1)
@@ -266,21 +257,6 @@ struct Traits : perf::PerfDriverDefaults {
       }
     }
     return scenario;
-  }
-  static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        settings, !scenario.live_port.empty(),
-        [&](int, const perf::RunPlan& current) {
-          return run_graph(scenario, current);
-        },
-        base_row(scenario), report,
-        [&](perf::ResultRow& row) {
-          if (row.latency.median_ms > 0.0) {
-            row.cells_per_second =
-                static_cast<double>(scenario.size.detections) / (row.latency.median_ms / 1000.0);
-          }
-        });
   }
 };
 

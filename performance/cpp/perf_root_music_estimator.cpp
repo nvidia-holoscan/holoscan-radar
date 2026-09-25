@@ -38,7 +38,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <iostream>
 #include <memory>
@@ -236,8 +235,7 @@ struct LivePorts {
 
 using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::snapshot>;
 
-perf::TimingCollector run_root_music_graph(const RootMusicScenario& scen,
-                                           const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const RootMusicScenario& scen, const perf::RunPlan& plan) {
   auto snap =
       perf::make_iq_cube_device<PerfPrecision>({scen.detections, scen.channels, scen.snapshots});
   constexpr int64_t kInitialMaxSources = 4;
@@ -327,14 +325,12 @@ void fill_throughput(perf::ResultRow* row, const RootMusicScenario& scen, double
 
 perf::ResultRow base_row(const RootMusicScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "RootMUSICEstimatorOp";
   row.variant = scen.override_kind == RootMusicScenario::OverrideKind::kNone &&
                         scen.fixed_model_order.has_value()
                     ? "root_music_model_order_" + std::to_string(*scen.fixed_model_order)
                     : std::string("root_music_live_") + override_name(scen.override_kind);
   row.live_port = override_name(scen.override_kind);
-  row.size_id = scen.size_id;
   row.input_shape = {scen.detections, scen.channels, scen.snapshots};
   row.out_batch = scen.detections;
   row.k = scen.channels;
@@ -360,6 +356,19 @@ RootMusicScenario make_scenario(const SizeSpec& s, RootMusicScenario::OverrideKi
   return sc;
 }
 
+void decorate_row(perf::ResultRow& row, const RootMusicScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  if (scen.override_kind == RootMusicScenario::OverrideKind::kNone) {
+    row.notes = "Params num_sources=" +
+                (scen.fixed_model_order ? std::to_string(*scen.fixed_model_order) : "auto") +
+                "; no inline override; cells/s is detections/s";
+  } else {
+    row.notes = "override_ms isolates inline " + std::string(override_name(scen.override_kind)) +
+                "; Params num_sources=" + std::to_string(scen.fixed_model_order.value_or(-1)) +
+                "; cells/s is detections/s";
+  }
+}
+
 struct RootMusicTraits : perf::PerfDriverDefaults {
   using Scenario = RootMusicScenario;
 
@@ -369,22 +378,10 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
            "characterization (HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "root_music_estimator.yaml",
-        "root_music_estimator");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 3)
-        throw std::invalid_argument("root_music_estimator profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 3)
+      throw std::invalid_argument("root_music_estimator profile rank mismatch");
+    return {id, shape, shape[0] * shape[1] * shape[2], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 3 || shape[0] < 4 || shape[1] < 1 || shape[2] < 2)
@@ -419,30 +416,6 @@ struct RootMusicTraits : perf::PerfDriverDefaults {
         throw std::invalid_argument("root_music_estimator invalid live override");
     }
     return scenario;
-  }
-
-  static void run_scenario(const RootMusicScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, scen.override_kind != RootMusicScenario::OverrideKind::kNone,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_root_music_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          if (scen.override_kind == RootMusicScenario::OverrideKind::kNone) {
-            row.notes =
-                "Params num_sources=" +
-                (scen.fixed_model_order ? std::to_string(*scen.fixed_model_order) : "auto") +
-                "; no inline override; cells/s is detections/s";
-          } else {
-            row.notes =
-                "override_ms isolates inline " + std::string(override_name(scen.override_kind)) +
-                "; Params num_sources=" + std::to_string(scen.fixed_model_order.value_or(-1)) +
-                "; cells/s is detections/s";
-          }
-        });
   }
 };
 

@@ -13,7 +13,6 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
 #include <iostream>
 #include <memory>
@@ -133,14 +132,14 @@ ExpansionInputs make_inputs(const ExpansionScenario& scenario) {
       .count = upload(count, {selected_count}, kInt32Dtype)};
 }
 
-perf::TimingCollector run_expansion_graph(const ExpansionScenario& scenario, int total_frames) {
+perf::TimingCollector run_graph(const ExpansionScenario& scenario, const perf::RunPlan& plan) {
   auto inputs = make_inputs(scenario);
   perf::TimingCollector collector;
   collector.t_construct = perf::Clock::now();
   perf::PerfFrameBank::reset_six(
       {std::move(inputs.detection_idx), std::move(inputs.baseline), std::move(inputs.selected),
        std::move(inputs.resolved), std::move(inputs.multi), std::move(inputs.count)},
-      total_frames, &collector);
+      plan.total_frames, &collector);
 
   holoscan::Graph graph{"multi-source-expansion-perf"};
   const auto source = graph.op<perf::PerfSixTensorSourceOp>("source");
@@ -166,8 +165,8 @@ perf::TimingCollector run_expansion_graph(const ExpansionScenario& scenario, int
     perf::bind_tensor_out(options, "source", port);
   perf::bind_tensor_out(options, "expansion", "detection_idx_out");
   perf::bind_tensor_out(options, "expansion", "aoa_estimates_out");
-  perf::execute_perf_graph(graph, std::move(options), total_frames, "multi-source-expansion-perf",
-                           &collector);
+  perf::execute_perf_graph(graph, std::move(options), plan.total_frames,
+                           "multi-source-expansion-perf", &collector);
   return collector;
 }
 
@@ -188,10 +187,8 @@ ExpansionScenario make_scenario(const SizeSpec& size, double fraction, int64_t s
 
 perf::ResultRow base_row(const ExpansionScenario& scenario) {
   perf::ResultRow row;
-  row.scenario_id = scenario.id;
   row.op_name = "MultiSourceExpansionOp";
   row.variant = "confirmed_sources";
-  row.size_id = scenario.size_id;
   row.input_shape = {scenario.rows, scenario.index_columns};
   row.out_batch = scenario.rows + selected_rows(scenario) * (scenario.sources - 1);
   row.k = scenario.sources;
@@ -208,6 +205,13 @@ void fill_throughput(perf::ResultRow* row, const ExpansionScenario& scenario, do
   row->slices_per_second = static_cast<double>(row->out_batch) / seconds;
 }
 
+void decorate_row(perf::ResultRow& row, const ExpansionScenario& scenario) {
+  fill_throughput(&row, scenario, row.latency.median_ms);
+  row.notes =
+      "cold_ms is first frame; median/p90 are steady state; both outputs "
+      "are drained; cells/s is original rows/s; slices/s is emitted rows/s";
+}
+
 struct ExpansionTraits : perf::PerfDriverDefaults {
   using Scenario = ExpansionScenario;
 
@@ -216,23 +220,10 @@ struct ExpansionTraits : perf::PerfDriverDefaults {
     return "MultiSourceExpansionOp HSDK 5 Graph characterization";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "multi_source_expansion.yaml",
-        "multi_source_expansion");
-  }
-
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 1)
-        throw std::invalid_argument("multi_source_expansion profile rank mismatch");
-      result.push_back(
-          {std::string(perf::kProfiles[i]), shape, shape[0], std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 1)
+      throw std::invalid_argument("multi_source_expansion profile rank mismatch");
+    return {id, shape, shape[0], id};
   }
 
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
@@ -253,22 +244,6 @@ struct ExpansionTraits : perf::PerfDriverDefaults {
     scenario.id = c.id;
     scenario.size_id = c.profile;
     return scenario;
-  }
-
-  static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        settings, false,
-        [&](int, const perf::RunPlan& run_plan) {
-          return run_expansion_graph(scenario, run_plan.total_frames);
-        },
-        base_row(scenario), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scenario, row.latency.median_ms);
-          row.notes =
-              "cold_ms is first frame; median/p90 are steady state; both outputs "
-              "are drained; cells/s is original rows/s; slices/s is emitted rows/s";
-        });
   }
 };
 

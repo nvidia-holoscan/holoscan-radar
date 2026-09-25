@@ -13,7 +13,6 @@
 #include <complex>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <stdexcept>
 #include <iostream>
@@ -125,7 +124,7 @@ hr::WindowType window_type_of(const std::string& value) {
   throw std::invalid_argument("unknown range window: " + value);
 }
 
-perf::TimingCollector run_range_graph(const RangeScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const RangeScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen));
   const auto configure = [&](holoscan::Graph& graph, const auto& src,
                              holoscan::CompileOptions& options, auto connect) {
@@ -239,10 +238,8 @@ void fill_throughput(perf::ResultRow* row, const RangeScenario& scen, double med
 
 perf::ResultRow base_row(const RangeScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "FMCWRangeProcessorOp";
   row.variant = window_tag(scen.window);
-  row.size_id = scen.size_id;
   row.map_shape = {scen.num_chirps, scen.samples_per_chirp};
   row.input_shape = cube_shape(scen);
   row.out_batch = scen.channels;
@@ -271,6 +268,20 @@ RangeScenario make_scenario(hr::WindowType window, const SizeSpec& s, int64_t ch
 // ---------------------------------------------------------------------------
 // Traits: the operator-specific surface the shared driver plugs into.
 // ---------------------------------------------------------------------------
+void validate_run_settings(const RangeScenario& scen, const perf::RunSettings& rs) {
+  if (scen.cached_override && rs.warmup_frames < 1)
+    throw std::invalid_argument("cached transition requires at least one warmup frame");
+}
+
+void decorate_row(perf::ResultRow& row, const RangeScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes =
+      "cold_ms is first-frame latency including initial "
+      "window/FFT plan build; median/p90 are post-warmup "
+      "steady state; one-frame live changes are timed; "
+      "cells/s is complex range bins/s";
+}
+
 struct RangeTraits : perf::PerfDriverDefaults {
   using Scenario = RangeScenario;
 
@@ -280,22 +291,10 @@ struct RangeTraits : perf::PerfDriverDefaults {
            "(HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "fmcw_range_processor.yaml",
-        "fmcw_range_processor");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 2)
-        throw std::invalid_argument("FMCWRange profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 2)
+      throw std::invalid_argument("FMCWRange profile rank mismatch");
+    return {id, shape, shape[0] * shape[1], id};
   }
   static RangeScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 2 || shape[1] < 2)
@@ -349,26 +348,6 @@ struct RangeTraits : perf::PerfDriverDefaults {
       }
     }
     return scenario;
-  }
-
-  static void run_scenario(const RangeScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    if (scen.cached_override && rs.warmup_frames < 1)
-      throw std::invalid_argument("cached transition requires at least one warmup frame");
-    perf::measure_scenario(
-        rs, !scen.live_port.empty(),
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_range_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes =
-              "cold_ms is first-frame latency including initial "
-              "window/FFT plan build; median/p90 are post-warmup "
-              "steady state; one-frame live changes are timed; "
-              "cells/s is complex range bins/s";
-        });
   }
 };
 

@@ -4,7 +4,6 @@
 // Performance characterization for DopplerNotchOp. Measurement only.
 
 #include <complex>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <stdexcept>
 #include <cstdint>
@@ -71,7 +70,7 @@ std::vector<int64_t> input_shape(const NotchScenario& scenario) {
   return {scenario.num_doppler, scenario.num_range};
 }
 
-perf::TimingCollector run_notch_graph(const NotchScenario& scenario, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const NotchScenario& scenario, const perf::RunPlan& plan) {
   auto axis = perf::make_power_map_device<PerfPrecision>({scenario.num_doppler});
   auto maps = perf::make_iq_cube_device<PerfPrecision>(input_shape(scenario));
   const auto configure = [&](holoscan::Graph& graph, holoscan::CompileOptions& options) {
@@ -126,11 +125,9 @@ perf::TimingCollector run_notch_graph(const NotchScenario& scenario, const perf:
 
 perf::ResultRow base_row(const NotchScenario& scenario) {
   perf::ResultRow row;
-  row.scenario_id = scenario.id;
   row.op_name = "DopplerNotchOp";
   row.variant = scenario.cosine ? "cosine" : "hard";
   row.variant += scenario.num_tx > 1 ? "_mimo" : "_siso";
-  row.size_id = scenario.size_id;
   row.input_shape = input_shape(scenario);
   row.k = scenario.num_doppler;
   row.live_port = scenario.live_port;
@@ -150,29 +147,20 @@ void fill_throughput(perf::ResultRow* row, const NotchScenario& scenario) {
       2.0 * static_cast<double>(elements) * sizeof(std::complex<PerfPrecision>) / seconds / 1e9;
 }
 
+void decorate_row(perf::ResultRow& row, const NotchScenario& scenario) {
+  fill_throughput(&row, scenario);
+}
+
 struct NotchTraits : perf::PerfDriverDefaults {
   using Scenario = NotchScenario;
 
   static const char* tool_name() { return "perf_doppler_notch"; }
   static const char* tool_description() { return "DopplerNotchOp performance characterization"; }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "doppler_notch.yaml",
-        "doppler_notch");
-  }
-
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 2)
-        throw std::invalid_argument("DopplerNotch profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 2)
+      throw std::invalid_argument("DopplerNotch profile rank mismatch");
+    return {id, shape, shape[0] * shape[1], id};
   }
 
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
@@ -201,19 +189,6 @@ struct NotchTraits : perf::PerfDriverDefaults {
       scenario.live_override = true;
     }
     return scenario;
-  }
-
-  static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        settings, scenario.live_override,
-        [&](int, const perf::RunPlan& run) {
-          return run_notch_graph(scenario, run);
-        },
-        base_row(scenario), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scenario);
-        });
   }
 };
 

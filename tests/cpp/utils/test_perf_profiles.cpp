@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <fstream>
 #include <set>
@@ -12,6 +13,7 @@
 #include <string>
 #include <utility>
 
+#include "utils/perf_driver.hpp"
 #include "utils/perf_profiles.hpp"
 
 namespace {
@@ -250,6 +252,69 @@ TEST(PerfProfiles, RejectsMissingLiveCoverageAndDuplicateIds) {
   }
   EXPECT_THROW(perf::load_profile_suite(path, "fixture"), std::invalid_argument);
   std::filesystem::remove(path);
+}
+
+struct AdapterFixtureScenario {
+  std::string id;
+  std::string size_id;
+  bool live{false};
+};
+
+struct AdapterFixtureTraits {
+  using Scenario = AdapterFixtureScenario;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    return {id, shape, shape[0] * shape[1], id};
+  }
+};
+
+perf::ResultRow base_row(const AdapterFixtureScenario& scenario) {
+  perf::ResultRow row;
+  row.op_name = "FixtureOp";
+  row.live_port = scenario.live ? "method" : "";
+  return row;
+}
+
+perf::TimingCollector run_graph(const AdapterFixtureScenario&, const perf::RunPlan& plan) {
+  perf::TimingCollector collector;
+  collector.t_construct = perf::Clock::time_point{};
+  collector.t_first_tick = collector.t_construct + std::chrono::milliseconds{1};
+  for (int frame = 0; frame < plan.total_frames; ++frame) {
+    const auto start = collector.t_construct + std::chrono::milliseconds{frame + 1};
+    const auto duration =
+        frame == plan.override_at ? std::chrono::microseconds{200} : std::chrono::microseconds{100};
+    collector.starts.push_back(start);
+    collector.ends.push_back(start + duration);
+  }
+  return collector;
+}
+
+void decorate_row(perf::ResultRow& row, const AdapterFixtureScenario&) {
+  row.notes = "typed adapter";
+}
+
+TEST(PerfProfiles, SharedAdapterOwnsSizeAndReportIdentity) {
+  const auto suite = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml",
+      "clutter_filter");
+  const AdapterFixtureScenario scenario{"fixture-live", "small", true};
+  perf::PerfReport report;
+  perf::detail::record_exercised_sizes<AdapterFixtureTraits>(suite, {scenario}, &report);
+  ASSERT_EQ(report.sizes.size(), 1U);
+  EXPECT_EQ(report.sizes[0].id, "small");
+  EXPECT_EQ(report.sizes[0].shape, suite.shapes[0]);
+
+  perf::RunSettings settings;
+  settings.warmup_frames = 1;
+  settings.measured_frames = 3;
+  settings.repeats = 2;
+  perf::detail::run_adapter_case<AdapterFixtureTraits>(scenario, settings, &report);
+  ASSERT_EQ(report.results.size(), 2U);
+  EXPECT_EQ(report.results[0].scenario_id, scenario.id);
+  EXPECT_EQ(report.results[1].size_id, scenario.size_id);
+  EXPECT_EQ(report.results[1].live_port, "method");
+  EXPECT_EQ(report.results[1].latency.samples, 6);
+  EXPECT_NEAR(report.results[1].override_delta_ms, 0.1, 1e-9);
+  EXPECT_EQ(report.results[1].notes, "typed adapter");
 }
 
 }  // namespace

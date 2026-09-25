@@ -24,7 +24,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <iostream>
 #include <memory>
@@ -229,7 +228,7 @@ struct LivePorts {
 
 using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::snapshot>;
 
-perf::TimingCollector run_music_graph(const MusicScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const MusicScenario& scen, const perf::RunPlan& plan) {
   auto snap =
       perf::make_iq_cube_device<PerfPrecision>({scen.detections, scen.channels, scen.snapshots});
   constexpr int64_t kInitialMaxSources = 4;
@@ -336,14 +335,12 @@ void fill_throughput(perf::ResultRow* row, const MusicScenario& scen, double med
 
 perf::ResultRow base_row(const MusicScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "MUSICEstimatorOp";
   row.variant =
       scen.override_kind == MusicScenario::OverrideKind::kNone && scen.fixed_model_order.has_value()
           ? "music_model_order_" + std::to_string(*scen.fixed_model_order)
           : std::string("music_live_") + override_name(scen.override_kind);
   row.live_port = override_name(scen.override_kind);
-  row.size_id = scen.size_id;
   row.map_shape = {scen.num_az, scen.num_el};
   row.input_shape = {scen.detections, scen.channels, scen.snapshots};
   row.out_batch = scen.detections;
@@ -372,6 +369,19 @@ MusicScenario make_scenario(const SizeSpec& s,
   return sc;
 }
 
+void decorate_row(perf::ResultRow& row, const MusicScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  if (scen.override_kind == MusicScenario::OverrideKind::kNone) {
+    row.notes = "Params num_sources=" +
+                (scen.fixed_model_order ? std::to_string(*scen.fixed_model_order) : "auto") +
+                "; no inline override; cells/s is detections/s";
+  } else {
+    row.notes = "override_ms isolates inline " + std::string(override_name(scen.override_kind)) +
+                "; Params num_sources=" + std::to_string(scen.fixed_model_order.value_or(-1)) +
+                "; cells/s is detections/s";
+  }
+}
+
 struct MusicTraits : perf::PerfDriverDefaults {
   using Scenario = MusicScenario;
 
@@ -381,22 +391,10 @@ struct MusicTraits : perf::PerfDriverDefaults {
            "characterization (HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "music_estimator.yaml",
-        "music_estimator");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 5)
-        throw std::invalid_argument("music_estimator profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 5)
+      throw std::invalid_argument("music_estimator profile rank mismatch");
+    return {id, shape, shape[0] * shape[1] * shape[2], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 5 || shape[0] < 4 || shape[1] < 1 || shape[2] < 2 || shape[3] < 1 ||
@@ -436,30 +434,6 @@ struct MusicTraits : perf::PerfDriverDefaults {
         throw std::invalid_argument("music_estimator invalid live override");
     }
     return scenario;
-  }
-
-  static void run_scenario(const MusicScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, scen.override_kind != MusicScenario::OverrideKind::kNone,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_music_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          if (scen.override_kind == MusicScenario::OverrideKind::kNone) {
-            row.notes =
-                "Params num_sources=" +
-                (scen.fixed_model_order ? std::to_string(*scen.fixed_model_order) : "auto") +
-                "; no inline override; cells/s is detections/s";
-          } else {
-            row.notes =
-                "override_ms isolates inline " + std::string(override_name(scen.override_kind)) +
-                "; Params num_sources=" + std::to_string(scen.fixed_model_order.value_or(-1)) +
-                "; cells/s is detections/s";
-          }
-        });
   }
 };
 

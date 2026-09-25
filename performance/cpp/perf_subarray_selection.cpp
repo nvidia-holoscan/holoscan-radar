@@ -7,7 +7,6 @@
 
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <type_traits>
 #include <iostream>
@@ -83,8 +82,7 @@ hr::ArrayGeometry make_holey_ula(const SubarrayScenario& scenario) {
   return geometry;
 }
 
-perf::TimingCollector run_subarray_graph(const SubarrayScenario& scenario,
-                                         const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const SubarrayScenario& scenario, const perf::RunPlan& plan) {
   auto snapshot = perf::make_iq_cube_device<PerfPrecision>(
       {scenario.items, scenario.channels, scenario.snapshots});
   const auto build = [&](holoscan::Graph& graph, const auto& source,
@@ -153,15 +151,21 @@ void fill_throughput(perf::ResultRow* row, const SubarrayScenario& scenario, dou
 
 perf::ResultRow base_row(const SubarrayScenario& scenario) {
   perf::ResultRow row;
-  row.scenario_id = scenario.id;
   row.op_name = "SubarraySelectionOp";
   row.variant = "holey_ula";
-  row.size_id = scenario.size_id;
   row.input_shape = {scenario.items, scenario.channels, scenario.snapshots};
   row.out_batch = scenario.items;
   row.k = scenario.selected_channels;
   row.live_port = scenario.live_port;
   return row;
+}
+
+void decorate_row(perf::ResultRow& row, const SubarrayScenario& scenario) {
+  fill_throughput(&row, scenario, row.latency.median_ms);
+  row.notes = "cold_ms includes first selection plan; override_ms is one changed frame for " +
+              scenario.live_port + "; cells/s is items/s";
+  if (row.live_port.empty())
+    row.notes = "default parameters; no live override";
 }
 
 struct SubarrayTraits : perf::PerfDriverDefaults {
@@ -173,22 +177,10 @@ struct SubarrayTraits : perf::PerfDriverDefaults {
            "(HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "subarray_selection.yaml",
-        "subarray_selection");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 3)
-        throw std::invalid_argument("SubarraySelection profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 3)
+      throw std::invalid_argument("SubarraySelection profile rank mismatch");
+    return {id, shape, shape[0] * shape[1] * shape[2], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 3 || shape[0] < 1 || shape[1] < 4 || shape[2] < 1)
@@ -210,24 +202,6 @@ struct SubarrayTraits : perf::PerfDriverDefaults {
         throw std::invalid_argument("SubarraySelection invalid override");
     }
     return scenario;
-  }
-
-  static void run_scenario(const SubarrayScenario& scenario, const perf::RunSettings& settings,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        settings, !scenario.live_port.empty(),
-        [&](int /*repeat*/, const perf::RunPlan& current) {
-          return run_subarray_graph(scenario, current);
-        },
-        base_row(scenario), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scenario, row.latency.median_ms);
-          row.notes =
-              "cold_ms includes first selection plan; override_ms is one changed frame for " +
-              scenario.live_port + "; cells/s is items/s";
-          if (row.live_port.empty())
-            row.notes = "default parameters; no live override";
-        });
   }
 };
 

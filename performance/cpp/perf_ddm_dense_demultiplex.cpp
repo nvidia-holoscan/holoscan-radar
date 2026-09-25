@@ -6,7 +6,6 @@
 
 #include <complex>
 #include <algorithm>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
 #include <cmath>
 #include <cstdint>
@@ -103,7 +102,7 @@ std::vector<int64_t> input_shape(const CompensationScenario& scen) {
   return {scen.num_rx, scen.num_doppler, scen.num_range_bins};
 }
 
-perf::TimingCollector run_compensation_graph(const CompensationScenario& scen, int total_frames) {
+perf::TimingCollector run_graph(const CompensationScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(input_shape(scen));
   const auto configure = [&](holoscan::Graph& graph, holoscan::CompileOptions& options) {
     hr::MaxTensorExtents extents;
@@ -126,7 +125,7 @@ perf::TimingCollector run_compensation_graph(const CompensationScenario& scen, i
   if (scen.velocity_axis) {
     auto axis = perf::make_power_map_device<PerfPrecision>({scen.num_doppler});
     return perf::run_perf_graph_dual(
-        std::move(axis), std::move(cube), total_frames, "compensation-perf",
+        std::move(axis), std::move(cube), plan.total_frames, "compensation-perf",
         [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
           auto op = configure(graph, options);
           const holoscan::ConnectionOptions q{.queue_depth = 4U};
@@ -137,7 +136,7 @@ perf::TimingCollector run_compensation_graph(const CompensationScenario& scen, i
         });
   }
   return perf::run_perf_graph(
-      std::move(cube), total_frames, "compensation-perf",
+      std::move(cube), plan.total_frames, "compensation-perf",
       [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         auto op = configure(graph, options);
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
@@ -162,10 +161,8 @@ void fill_throughput(perf::ResultRow* row, const CompensationScenario& scen, dou
 
 perf::ResultRow base_row(const CompensationScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "DDMDenseDemultiplexOp";
   row.variant = scen.variant + (scen.velocity_axis ? "_axis" : "");
-  row.size_id = scen.size_id;
   row.input_shape = input_shape(scen);
   row.k = scen.num_doppler;
   // This scenario measures the Params-selected waveform configuration.
@@ -189,6 +186,20 @@ CompensationScenario make_scenario(const SizeSpec& size, bool non_linear = false
   return scenario;
 }
 
+void decorate_row(perf::ResultRow& row, const CompensationScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  if (scen.non_linear_ddm) {
+    row.notes =
+        "DDM nonlinear phase-code correlation; cold_ms includes weights "
+        "and FFT setup; output keeps the full Doppler axis";
+  } else {
+    row.notes =
+        "DDM linear per-band gather; cold_ms includes the initial "
+        "demultiplex table build";
+  }
+  row.notes += scen.velocity_axis ? "; velocity_axis=wired" : "; velocity_axis=absent";
+}
+
 struct CompensationTraits : perf::PerfDriverDefaults {
   using Scenario = CompensationScenario;
 
@@ -198,24 +209,10 @@ struct CompensationTraits : perf::PerfDriverDefaults {
            "characterization (HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_dense_demultiplex.yaml",
-        "ddm_dense_demultiplex");
-  }
-
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 4)
-        throw std::invalid_argument("DDMDenseDemultiplex profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape,
-                        shape[0] * shape[1] * shape[2] * shape[3],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 4)
+      throw std::invalid_argument("DDMDenseDemultiplex profile rank mismatch");
+    return {id, shape, shape[0] * shape[1] * shape[2] * shape[3], id};
   }
 
   static CompensationScenario parse_case(const perf::ProfileCase& c,
@@ -234,29 +231,6 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     scenario.id = c.id;
     scenario.size_id = c.profile;
     return scenario;
-  }
-
-  static void run_scenario(const CompensationScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, false,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_compensation_graph(scen, p.total_frames);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          if (scen.non_linear_ddm) {
-            row.notes =
-                "DDM nonlinear phase-code correlation; cold_ms includes weights "
-                "and FFT setup; output keeps the full Doppler axis";
-          } else {
-            row.notes =
-                "DDM linear per-band gather; cold_ms includes the initial "
-                "demultiplex table build";
-          }
-          row.notes += scen.velocity_axis ? "; velocity_axis=wired" : "; velocity_axis=absent";
-        });
   }
 };
 

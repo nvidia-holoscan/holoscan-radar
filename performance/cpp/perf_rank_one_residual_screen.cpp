@@ -12,7 +12,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <iostream>
 #include <memory>
@@ -126,7 +125,7 @@ std::shared_ptr<holoscan::Tensor> make_baseline(const ScreenScenario& scenario) 
       {scenario.items, 2}, hr::real_dtype<PerfPrecision>());
 }
 
-perf::TimingCollector run_screen_graph(const ScreenScenario& scenario, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const ScreenScenario& scenario, const perf::RunPlan& plan) {
   auto snapshot = make_snapshots(scenario);
   auto baseline = make_baseline(scenario);
   const auto geometry = make_geometry(scenario.channels, 0.5);
@@ -200,10 +199,8 @@ ScreenScenario make_scenario(const SizeSpec& size, double fraction) {
 
 perf::ResultRow base_row(const ScreenScenario& scenario) {
   perf::ResultRow row;
-  row.scenario_id = scenario.id;
   row.op_name = "RankOneResidualScreenOp";
   row.variant = "normalized_projection";
-  row.size_id = scenario.size_id;
   row.input_shape = {scenario.items, scenario.channels, scenario.looks};
   row.out_batch = static_cast<int64_t>(std::llround(scenario.selection_fraction * scenario.items));
   row.k = scenario.channels;
@@ -222,6 +219,13 @@ void fill_throughput(perf::ResultRow* row, const ScreenScenario& scenario, doubl
   row->slices_per_second = static_cast<double>(scenario.items) / seconds;
 }
 
+void decorate_row(perf::ResultRow& row, const ScreenScenario& scenario) {
+  fill_throughput(&row, scenario, row.latency.median_ms);
+  row.notes = "end-to-end Graph latency; cells/s is complex snapshot values/s";
+  if (scenario.live_geometry)
+    row.notes += "; one-frame geometry change";
+}
+
 struct ScreenTraits : perf::PerfDriverDefaults {
   using Scenario = ScreenScenario;
 
@@ -230,22 +234,10 @@ struct ScreenTraits : perf::PerfDriverDefaults {
     return "RankOneResidualScreenOp HSDK 5 Graph characterization";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "rank_one_residual_screen.yaml",
-        "rank_one_residual_screen");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 3)
-        throw std::invalid_argument("RankOneResidualScreen profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 3)
+      throw std::invalid_argument("RankOneResidualScreen profile rank mismatch");
+    return {id, shape, shape[0] * shape[1] * shape[2], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 3 || shape[0] < 1 || shape[1] < 2 || shape[2] < 1)
@@ -269,22 +261,6 @@ struct ScreenTraits : perf::PerfDriverDefaults {
       scenario.live_geometry = true;
     }
     return scenario;
-  }
-
-  static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        settings, scenario.live_geometry,
-        [&](int, const perf::RunPlan& run_plan) {
-          return run_screen_graph(scenario, run_plan);
-        },
-        base_row(scenario), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scenario, row.latency.median_ms);
-          row.notes = "end-to-end Graph latency; cells/s is complex snapshot values/s";
-          if (scenario.live_geometry)
-            row.notes += "; one-frame geometry change";
-        });
   }
 };
 

@@ -1,29 +1,21 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Reusable driver shell for the performance harness. Every perf_<operator>
-// consumer shares the same outer program: parse a common CLI, verify a GPU is
-// present, quiet the SDK, select YAML scope cases,
-// stamp the report header, record the exercised size profiles, run the scenarios
-// (progress + optional --stop-after-s cap + optional failure isolation), and
-// write JSON / text / stdout. Each Traits adapter builds valid tensors and
-// Graph wiring for the scenario selected from its YAML suite.
+// Shared CLI, YAML selection, process warmup, independent Graph runs, size
+// metadata, and report assembly for every performance adapter. The adapter
+// keeps only contract-specific case parsing, typed Graph wiring, and result
+// annotations. One YAML suite is loaded and validated before scope filtering.
 //
-// A consumer provides a Traits type and calls perf_main<Traits>() from main().
-// Traits must supply (all static):
-//
-//   using Scenario = <type with public `std::string id` and `std::string
-//                     size_id` members>;
-//   const char* tool_name();          // e.g. "perf_feature_assembly"
-//   const char* tool_description();   // one-line summary for --help
-//   std::vector<SizeDef> size_ladder_defs();  // full ladder, in ladder order
-//   Scenario parse_case(const ProfileCase&, const std::vector<int64_t>& shape);
-//   void run_scenario(const Scenario&, const RunSettings&, PerfReport*);
-//
-// Optional hooks come from PerfDriverDefaults (inherit to get no-op defaults,
-// redefine to customize):
-//
-//   void post_run(PerfReport*, bool quiet);   // e.g. calibration / tables
+// A new perf_<operator>.cpp defines a Scenario with `id` and `size_id`, plus:
+//   Scenario parse_case(ProfileCase, shape);  // as Traits::parse_case
+//   SizeDef size_def(profile_id, shape);      // as Traits::size_def
+//   TimingCollector run_graph(scenario, RunPlan);
+//   ResultRow base_row(scenario);
+//   void decorate_row(ResultRow&, scenario); // optional throughput/notes
+// Traits also names the CLI tool and inherits PerfDriverDefaults. The typed
+// free functions above are found through the Scenario type. An optional
+// validate_run_settings(scenario, settings) enforces special run constraints;
+// Traits::post_run handles summaries such as CFAR calibration.
 
 #pragma once
 
@@ -40,12 +32,14 @@
 #include <sstream>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "utils/perf_app.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_profiles.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_runner.hpp"
 #include "utils/perf_process_warmup.hpp"
 
 namespace holoscan::radar::perf {
@@ -189,8 +183,8 @@ ProfileSuite load_adapter_suite() {
 }
 
 template <typename Traits>
-std::vector<typename Traits::Scenario> select_scenarios(const Options& opt) {
-  const auto suite = load_adapter_suite<Traits>();
+std::vector<typename Traits::Scenario> select_scenarios(const ProfileSuite& suite,
+                                                        const Options& opt) {
   return select_validated_cases<typename Traits::Scenario>(
       suite, opt.scope, opt.sizes_all ? std::vector<std::string>{} : opt.sizes,
       [](const ProfileCase& c, const std::vector<int64_t>& shape) {
@@ -198,10 +192,11 @@ std::vector<typename Traits::Scenario> select_scenarios(const Options& opt) {
       });
 }
 
-// Record ladder definitions for the sizes this run actually exercises, in
-// ladder order, so the report is self-describing.
+// The YAML suite owns the size ladder. Each adapter only translates one shape
+// into the scale fields meaningful for its operator.
 template <typename Traits>
-void record_exercised_sizes(const std::vector<typename Traits::Scenario>& scenarios,
+void record_exercised_sizes(const ProfileSuite& suite,
+                            const std::vector<typename Traits::Scenario>& scenarios,
                             PerfReport* report) {
   std::vector<std::string> used;
   for (const auto& sc : scenarios) {
@@ -209,11 +204,37 @@ void record_exercised_sizes(const std::vector<typename Traits::Scenario>& scenar
       used.push_back(sc.size_id);
     }
   }
-  for (const auto& def : Traits::size_ladder_defs()) {
-    if (std::find(used.begin(), used.end(), def.id) != used.end()) {
-      report->sizes.push_back(def);
+  for (size_t i = 0; i < kProfiles.size(); ++i) {
+    const std::string id(kProfiles[i]);
+    if (std::find(used.begin(), used.end(), id) != used.end()) {
+      report->sizes.push_back(Traits::size_def(id, suite.shapes[i]));
     }
   }
+}
+
+// The adapter only constructs a typed case, runs one Graph session, and
+// describes operator-specific result fields. The driver owns the repetitions,
+// live-frame plan, and both report rows for every operator.
+template <typename Traits>
+void run_adapter_case(const typename Traits::Scenario& scenario, const RunSettings& settings,
+                      PerfReport* report) {
+  if constexpr (requires { validate_run_settings(scenario, settings); }) {
+    validate_run_settings(scenario, settings);
+  }
+  ResultRow row = base_row(scenario);
+  row.scenario_id = scenario.id;
+  row.size_id = scenario.size_id;
+  measure_scenario(
+      settings, !row.live_port.empty(),
+      [&](int /*repeat*/, const RunPlan& plan) {
+        return run_graph(scenario, plan);
+      },
+      std::move(row), report,
+      [&](ResultRow& compute) {
+        if constexpr (requires { decorate_row(compute, scenario); }) {
+          decorate_row(compute, scenario);
+        }
+      });
 }
 
 template <typename Traits>
@@ -224,7 +245,7 @@ void run_all_scenarios(const std::vector<typename Traits::Scenario>& scenarios, 
   for (size_t i = 0; i < n; ++i) {
     std::cerr << "[" << (i + 1) << "/" << n << "] " << scenarios[i].id << std::flush;
     const auto t0 = Clock::now();
-    Traits::run_scenario(scenarios[i], opt.rs, report);
+    run_adapter_case<Traits>(scenarios[i], opt.rs, report);
     const double elapsed_s = to_ms(Clock::now() - t0) / 1000.0;
     std::cerr << "  (" << elapsed_s << " s)\n";
     report->run_settings.scenarios_completed = static_cast<int>(i + 1);
@@ -300,9 +321,11 @@ int perf_main(int argc, char** argv) {
   }
   detail::default_log_level();
 
+  ProfileSuite suite;
   std::vector<typename Traits::Scenario> scenarios;
   try {
-    scenarios = detail::select_scenarios<Traits>(opt);
+    suite = detail::load_adapter_suite<Traits>();
+    scenarios = detail::select_scenarios<Traits>(suite, opt);
   } catch (const std::exception& e) {
     std::cerr << "error: " << e.what() << "\n";
     return 2;
@@ -316,7 +339,7 @@ int perf_main(int argc, char** argv) {
   report.run_settings.stop_after_s = opt.stop_after_s;
   report.run_settings.scenarios_planned = static_cast<int>(scenarios.size());
 
-  detail::record_exercised_sizes<Traits>(scenarios, &report);
+  detail::record_exercised_sizes<Traits>(suite, scenarios, &report);
 
   run_process_warmup([&] {
     RunSettings warm;
@@ -324,12 +347,11 @@ int perf_main(int argc, char** argv) {
     warm.measured_frames = 2;
     warm.repeats = 1;
     PerfReport discarded;
-    const auto suite = detail::load_adapter_suite<Traits>();
     const auto baseline = select_validated_cases<typename Traits::Scenario>(
         suite, "minimal", {"small"}, [](const ProfileCase& c, const std::vector<int64_t>& shape) {
           return Traits::parse_case(c, shape);
         });
-    Traits::run_scenario(baseline.front(), warm, &discarded);
+    detail::run_adapter_case<Traits>(baseline.front(), warm, &discarded);
   });
   try {
     detail::run_all_scenarios<Traits>(scenarios, opt, &report);

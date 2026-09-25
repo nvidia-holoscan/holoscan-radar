@@ -14,7 +14,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <iostream>
 #include <memory>
@@ -187,7 +186,7 @@ struct LivePorts {
 
 using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::rd_maps>;
 
-perf::TimingCollector run_beamformer_graph(const BeamScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const BeamScenario& scen, const perf::RunPlan& plan) {
   auto cube =
       perf::make_iq_cube_device<PerfPrecision>({scen.channels, scen.num_doppler, scen.num_range});
   hr::PhaseShiftBeamformerParams initial;
@@ -276,11 +275,9 @@ void fill_throughput(perf::ResultRow* row, const BeamScenario& scen, double medi
 
 perf::ResultRow base_row(const BeamScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "PhaseShiftBeamformerOp";
   row.variant = "bartlett_dense";
   row.live_port = override_name(scen.override_kind);
-  row.size_id = scen.size_id;
   row.map_shape = {scen.num_az, scen.num_el};
   row.input_shape = {scen.channels, scen.num_doppler, scen.num_range};
   row.out_batch = scen.num_doppler * scen.num_range;
@@ -306,6 +303,18 @@ BeamScenario make_scenario(const SizeSpec& s,
   return sc;
 }
 
+void decorate_row(perf::ResultRow& row, const BeamScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes =
+      "cold_ms is first-frame latency; median/p90 are "
+      "pre-change steady state; override_ms is the one changed frame for " +
+      std::string(override_name(scen.override_kind)) +
+      " changes the steering configuration; cells/s is "
+      "RD-cells/s (beams/s = slices/s)";
+  if (row.live_port.empty())
+    row.notes = "default parameters; no live override";
+}
+
 struct BeamTraits : perf::PerfDriverDefaults {
   using Scenario = BeamScenario;
 
@@ -315,22 +324,10 @@ struct BeamTraits : perf::PerfDriverDefaults {
            "(HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "phase_shift_beamformer.yaml",
-        "phase_shift_beamformer");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 5)
-        throw std::invalid_argument("PhaseShiftBeamformer profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[3] * shape[4],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 5)
+      throw std::invalid_argument("PhaseShiftBeamformer profile rank mismatch");
+    return {id, shape, shape[0] * shape[3] * shape[4], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 5 || shape[0] < 2 || shape[1] < 1 || shape[2] < 1 || shape[3] < 1 ||
@@ -359,27 +356,6 @@ struct BeamTraits : perf::PerfDriverDefaults {
         throw std::invalid_argument("PhaseShiftBeamformer invalid live override");
     }
     return scenario;
-  }
-
-  static void run_scenario(const BeamScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, scen.override_kind != BeamScenario::OverrideKind::kNone,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_beamformer_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes =
-              "cold_ms is first-frame latency; median/p90 are "
-              "pre-change steady state; override_ms is the one changed frame for " +
-              std::string(override_name(scen.override_kind)) +
-              " changes the steering configuration; cells/s is "
-              "RD-cells/s (beams/s = slices/s)";
-          if (row.live_port.empty())
-            row.notes = "default parameters; no live override";
-        });
   }
 };
 

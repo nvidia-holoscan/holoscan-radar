@@ -13,7 +13,6 @@
 #include <complex>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <stdexcept>
 #include <iostream>
@@ -122,7 +121,7 @@ hr::WindowType window_type_of(const std::string& value) {
   throw std::invalid_argument("unknown Doppler window: " + value);
 }
 
-perf::TimingCollector run_doppler_graph(const DopplerScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const DopplerScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(profiles_shape(scen));
   const auto configure = [&](holoscan::Graph& graph, const auto& src,
                              holoscan::CompileOptions& options, auto connect) {
@@ -237,10 +236,8 @@ void fill_throughput(perf::ResultRow* row, const DopplerScenario& scen, double m
 
 perf::ResultRow base_row(const DopplerScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "FMCWDopplerProcessorOp";
   row.variant = window_tag(scen.window);
-  row.size_id = scen.size_id;
   row.map_shape = {scen.num_chirps, scen.num_range_bins};
   row.input_shape = profiles_shape(scen);
   row.out_batch = scen.channels;
@@ -269,6 +266,18 @@ DopplerScenario make_scenario(hr::WindowType window, const SizeSpec& s, int64_t 
 // ---------------------------------------------------------------------------
 // Traits: the operator-specific surface used by the shared driver.
 // ---------------------------------------------------------------------------
+void validate_run_settings(const DopplerScenario& scen, const perf::RunSettings& rs) {
+  if (scen.cached_override && rs.warmup_frames < 1)
+    throw std::invalid_argument("cached transition requires at least one warmup frame");
+}
+
+void decorate_row(perf::ResultRow& row, const DopplerScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes = "end-to-end Graph latency; cells/s is complex RD-map cells/s";
+  if (!scen.live_port.empty())
+    row.notes += "; one-frame " + scen.live_port + " change";
+}
+
 struct DopplerTraits : perf::PerfDriverDefaults {
   using Scenario = DopplerScenario;
 
@@ -278,22 +287,10 @@ struct DopplerTraits : perf::PerfDriverDefaults {
            "characterization (HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "fmcw_doppler_processor.yaml",
-        "fmcw_doppler_processor");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 2)
-        throw std::invalid_argument("FMCWDoppler profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 2)
+      throw std::invalid_argument("FMCWDoppler profile rank mismatch");
+    return {id, shape, shape[0] * shape[1], id};
   }
   static DopplerScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 2 || shape[0] < 2)
@@ -348,24 +345,6 @@ struct DopplerTraits : perf::PerfDriverDefaults {
       }
     }
     return scenario;
-  }
-
-  static void run_scenario(const DopplerScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    if (scen.cached_override && rs.warmup_frames < 1)
-      throw std::invalid_argument("cached transition requires at least one warmup frame");
-    perf::measure_scenario(
-        rs, !scen.live_port.empty(),
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_doppler_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes = "end-to-end Graph latency; cells/s is complex RD-map cells/s";
-          if (!scen.live_port.empty())
-            row.notes += "; one-frame " + scen.live_port + " change";
-        });
   }
 };
 

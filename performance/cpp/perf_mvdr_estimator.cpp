@@ -17,7 +17,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <set>
 #include <iostream>
 #include <memory>
@@ -213,7 +212,7 @@ struct LivePorts {
 
 using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::snapshot>;
 
-perf::TimingCollector run_mvdr_graph(const MvdrScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const MvdrScenario& scen, const perf::RunPlan& plan) {
   auto snap =
       perf::make_iq_cube_device<PerfPrecision>({scen.detections, scen.channels, scen.snapshots});
   constexpr double kInitialLoading = -1.0;
@@ -315,11 +314,9 @@ void fill_throughput(perf::ResultRow* row, const MvdrScenario& scen, double medi
 
 perf::ResultRow base_row(const MvdrScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "MVDREstimatorOp";
   row.variant = std::string("capon_live_") + override_name(scen.override_kind);
   row.live_port = override_name(scen.override_kind);
-  row.size_id = scen.size_id;
   row.map_shape = {scen.num_az, scen.num_el};
   row.input_shape = {scen.detections, scen.channels, scen.snapshots};
   row.out_batch = scen.detections;
@@ -345,6 +342,14 @@ MvdrScenario make_scenario(const SizeSpec& s,
   return sc;
 }
 
+void decorate_row(perf::ResultRow& row, const MvdrScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes = "override_ms isolates inline " + std::string(override_name(scen.override_kind)) +
+              "; cells/s is detections/s; Capon scan dominates per tick";
+  if (row.live_port.empty())
+    row.notes = "default parameters; no live override";
+}
+
 struct MvdrTraits : perf::PerfDriverDefaults {
   using Scenario = MvdrScenario;
 
@@ -354,22 +359,10 @@ struct MvdrTraits : perf::PerfDriverDefaults {
            "characterization (HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "mvdr_estimator.yaml",
-        "mvdr_estimator");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 5)
-        throw std::invalid_argument("mvdr_estimator profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1] * shape[2],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 5)
+      throw std::invalid_argument("mvdr_estimator profile rank mismatch");
+    return {id, shape, shape[0] * shape[1] * shape[2], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 5 || shape[0] < 4 || shape[1] < 1 || shape[2] < 2 || shape[3] < 1 ||
@@ -404,24 +397,6 @@ struct MvdrTraits : perf::PerfDriverDefaults {
         throw std::invalid_argument("mvdr_estimator invalid live override");
     }
     return scenario;
-  }
-
-  static void run_scenario(const MvdrScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, scen.override_kind != MvdrScenario::OverrideKind::kNone,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_mvdr_graph(scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes = "override_ms isolates inline " +
-                      std::string(override_name(scen.override_kind)) +
-                      "; cells/s is detections/s; Capon scan dominates per tick";
-          if (row.live_port.empty())
-            row.notes = "default parameters; no live override";
-        });
   }
 };
 

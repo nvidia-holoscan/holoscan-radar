@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
 #include <iostream>
 #include <memory>
@@ -93,7 +92,7 @@ std::shared_ptr<holoscan::Tensor> make_detection_idx(int64_t num_detections, int
   return make_device_from_host(host, {num_detections, 2}, kInt64Dtype);
 }
 
-perf::TimingCollector run_feat_graph(const FeatScenario& scen, int total_frames) {
+perf::TimingCollector run_graph(const FeatScenario& scen, const perf::RunPlan& plan) {
   auto idx_t = make_detection_idx(scen.num_detections, scen.doppler, scen.range);
   std::vector<PerfPrecision> range_host(static_cast<std::size_t>(scen.range));
   std::vector<PerfPrecision> velocity_host(static_cast<std::size_t>(scen.doppler));
@@ -107,7 +106,8 @@ perf::TimingCollector run_feat_graph(const FeatScenario& scen, int total_frames)
   auto velocity_t =
       make_device_from_host(velocity_host, {scen.doppler}, hr::real_dtype<PerfPrecision>());
   return perf::run_perf_graph_triple(
-      std::move(idx_t), std::move(range_t), std::move(velocity_t), total_frames, "feat-asm-perf",
+      std::move(idx_t), std::move(range_t), std::move(velocity_t), plan.total_frames,
+      "feat-asm-perf",
       [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_points = std::max<int64_t>(scen.num_detections, 1);
@@ -146,10 +146,8 @@ void fill_throughput(perf::ResultRow* row, const FeatScenario& scen, double medi
 
 perf::ResultRow base_row(const FeatScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.op_name = "FeatureAssemblyOp";
   row.variant = "physical_range_velocity";
-  row.size_id = scen.size_id;
   row.map_shape = {scen.doppler, scen.range};
   row.input_shape = {scen.num_detections, 2};
   row.out_batch = scen.num_detections;
@@ -170,6 +168,15 @@ FeatScenario make_scenario(const SizeSpec& s, int64_t num_detections) {
   return sc;
 }
 
+void decorate_row(perf::ResultRow& row, const FeatScenario& scen) {
+  fill_throughput(&row, scen, row.latency.median_ms);
+  row.notes =
+      "bins-only (range+velocity) — score/aoa optional ports "
+      "omitted from this Graph benchmark (covered by stage tests); "
+      "cold_ms is first-frame latency; median/p90 are "
+      "steady state; cells/s is detections/s";
+}
+
 struct FeatTraits : perf::PerfDriverDefaults {
   using Scenario = FeatScenario;
 
@@ -179,23 +186,10 @@ struct FeatTraits : perf::PerfDriverDefaults {
            "(HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "feature_assembly.yaml",
-        "feature_assembly");
-  }
-
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 2)
-        throw std::invalid_argument("feature_assembly profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 2)
+      throw std::invalid_argument("feature_assembly profile rank mismatch");
+    return {id, shape, shape[0] * shape[1], id};
   }
 
   static FeatScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
@@ -212,24 +206,6 @@ struct FeatTraits : perf::PerfDriverDefaults {
     scenario.id = c.id;
     scenario.size_id = c.profile;
     return scenario;
-  }
-
-  static void run_scenario(const FeatScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, false,
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          return run_feat_graph(scen, p.total_frames);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, scen, row.latency.median_ms);
-          row.notes =
-              "bins-only (range+velocity) — score/aoa optional ports "
-              "omitted from this Graph benchmark (covered by stage tests); "
-              "cold_ms is first-frame latency; median/p90 are "
-              "steady state; cells/s is detections/s";
-        });
   }
 };
 

@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <mutex>
 #include <set>
 #include <cstdlib>
@@ -241,7 +240,7 @@ struct LivePorts {
 
 using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::out>;
 
-perf::TimingCollector run_cfar_graph(const CfarScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph_prepared(const CfarScenario& scen, const perf::RunPlan& plan) {
   auto input = perf::make_power_map_device<PerfPrecision>(scen.input_shape);
   using BaseOp = hr::CFARDetectorOp<PerfPrecision>;
   const auto build = [&](holoscan::Graph& graph, const auto& src,
@@ -348,9 +347,7 @@ void fill_throughput(perf::ResultRow* row, double median_ms) {
 
 perf::ResultRow base_row(const CfarScenario& scen) {
   perf::ResultRow row;
-  row.scenario_id = scen.id;
   row.variant = variant_tag(scen.variant);
-  row.size_id = scen.size_id;
   const size_t n = scen.input_shape.size();
   row.map_shape = {scen.input_shape[n - 2], scen.input_shape[n - 1]};
   row.input_shape = scen.input_shape;
@@ -450,6 +447,33 @@ void build_alpha_calibration_summary(perf::PerfReport* report) {
             });
 }
 
+perf::TimingCollector run_graph(const CfarScenario& scenario, const perf::RunPlan& plan) {
+  CfarScenario prepared = scenario;
+  if (prepared.use_alpha_lut && prepared.alpha_lut.empty()) {
+    prepared.alpha_lut = precompute_alpha_lut(prepared);
+  }
+  return run_graph_prepared(prepared, plan);
+}
+
+void decorate_row(perf::ResultRow& row, const CfarScenario& scen) {
+  fill_throughput(&row, row.latency.median_ms);
+  if (scen.use_alpha_lut) {
+    row.notes = "cold_ms includes initial alpha_lut H2D; override_ms is the changed frame for " +
+                scen.live_port;
+  } else {
+    row.notes = "cold_ms includes initial LUT calibration; override_ms is the changed frame for " +
+                scen.live_port;
+  }
+  if (scen.peak_mode != hr::CfarPeakMode::kNone) {
+    row.notes += "; peak_mode=" + std::string(hr::to_string(scen.peak_mode));
+    if (scen.peak_mode == hr::CfarPeakMode::kRangeDoppler) {
+      row.notes += " (radius=" + std::to_string(scen.peak_radius.front()) + ")";
+    }
+  }
+  if (row.live_port.empty())
+    row.notes = "default parameters; no live override";
+}
+
 struct CfarTraits : perf::PerfDriverDefaults {
   using Scenario = CfarScenario;
 
@@ -459,22 +483,10 @@ struct CfarTraits : perf::PerfDriverDefaults {
            "(HSDK 5 Graph)";
   }
 
-  static perf::ProfileSuite suite() {
-    return perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "cfar_detector.yaml",
-        "cfar_detector");
-  }
-  static std::vector<perf::SizeDef> size_ladder_defs() {
-    const auto profiles = suite();
-    std::vector<perf::SizeDef> result;
-    for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
-      const auto& shape = profiles.shapes[i];
-      if (shape.size() != 2)
-        throw std::invalid_argument("CFAR profile rank mismatch");
-      result.push_back({std::string(perf::kProfiles[i]), shape, shape[0] * shape[1],
-                        std::string(perf::kProfiles[i])});
-    }
-    return result;
+  static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
+    if (shape.size() != 2)
+      throw std::invalid_argument("CFAR profile rank mismatch");
+    return {id, shape, shape[0] * shape[1], id};
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     if (shape.size() != 2 || shape[0] < 16 || shape[1] < 16)
@@ -522,40 +534,6 @@ struct CfarTraits : perf::PerfDriverDefaults {
         throw std::invalid_argument("CFAR incompatible live override");
     }
     return scenario;
-  }
-
-  static void run_scenario(const CfarScenario& scen, const perf::RunSettings& rs,
-                           perf::PerfReport* report) {
-    perf::measure_scenario(
-        rs, !scen.live_port.empty(),
-        [&](int /*rep*/, const perf::RunPlan& p) {
-          CfarScenario run_scen = scen;
-          if (run_scen.use_alpha_lut && run_scen.alpha_lut.empty()) {
-            run_scen.alpha_lut = precompute_alpha_lut(run_scen);
-          }
-          return run_cfar_graph(run_scen, p);
-        },
-        base_row(scen), report,
-        [&](perf::ResultRow& row) {
-          fill_throughput(&row, row.latency.median_ms);
-          if (scen.use_alpha_lut) {
-            row.notes =
-                "cold_ms includes initial alpha_lut H2D; override_ms is the changed frame for " +
-                scen.live_port;
-          } else {
-            row.notes =
-                "cold_ms includes initial LUT calibration; override_ms is the changed frame for " +
-                scen.live_port;
-          }
-          if (scen.peak_mode != hr::CfarPeakMode::kNone) {
-            row.notes += "; peak_mode=" + std::string(hr::to_string(scen.peak_mode));
-            if (scen.peak_mode == hr::CfarPeakMode::kRangeDoppler) {
-              row.notes += " (radius=" + std::to_string(scen.peak_radius.front()) + ")";
-            }
-          }
-          if (row.live_port.empty())
-            row.notes = "default parameters; no live override";
-        });
   }
 
   static void post_run(perf::PerfReport* report, bool /*quiet*/) {
