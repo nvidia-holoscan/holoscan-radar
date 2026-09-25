@@ -85,6 +85,9 @@ struct PerfFrameBank {
     input_frame = std::move(frame);
     input_frame_b = nullptr;
     input_frame_c = nullptr;
+    input_frame_d = nullptr;
+    input_frame_e = nullptr;
+    input_frame_f = nullptr;
     frames_remaining = count;
     captured = 0;
     in_flight = 0;
@@ -100,6 +103,9 @@ struct PerfFrameBank {
     input_frame = std::move(frame_a);
     input_frame_b = std::move(frame_b);
     input_frame_c = nullptr;
+    input_frame_d = nullptr;
+    input_frame_e = nullptr;
+    input_frame_f = nullptr;
     frames_remaining = count;
     captured = 0;
     in_flight = 0;
@@ -116,6 +122,26 @@ struct PerfFrameBank {
     input_frame = std::move(frame_a);
     input_frame_b = std::move(frame_b);
     input_frame_c = std::move(frame_c);
+    input_frame_d = nullptr;
+    input_frame_e = nullptr;
+    input_frame_f = nullptr;
+    frames_remaining = count;
+    captured = 0;
+    in_flight = 0;
+    collector_ = collector;
+    publish_mode = publish;
+  }
+
+  static void reset_six(std::array<std::shared_ptr<holoscan::Tensor>, 6> frames, int count,
+                        TimingCollector* collector,
+                        PerfPublishMode publish = PerfPublishMode::kCopy) {
+    const std::lock_guard lock(mutex);
+    input_frame = std::move(frames[0]);
+    input_frame_b = std::move(frames[1]);
+    input_frame_c = std::move(frames[2]);
+    input_frame_d = std::move(frames[3]);
+    input_frame_e = std::move(frames[4]);
+    input_frame_f = std::move(frames[5]);
     frames_remaining = count;
     captured = 0;
     in_flight = 0;
@@ -142,6 +168,19 @@ struct PerfFrameBank {
     return staged_span(input_frame_c);
   }
 
+  static std::size_t span_d() {
+    const std::lock_guard lock(mutex);
+    return staged_span(input_frame_d);
+  }
+  static std::size_t span_e() {
+    const std::lock_guard lock(mutex);
+    return staged_span(input_frame_e);
+  }
+  static std::size_t span_f() {
+    const std::lock_guard lock(mutex);
+    return staged_span(input_frame_f);
+  }
+
   static std::size_t staged_span(const std::shared_ptr<holoscan::Tensor>& frame) {
     if (frame == nullptr || frame->nbytes() <= 0) {
       throw std::runtime_error("PerfFrameBank: source frame must be staged before compile()");
@@ -154,6 +193,9 @@ struct PerfFrameBank {
   static inline std::shared_ptr<holoscan::Tensor> input_frame;
   static inline std::shared_ptr<holoscan::Tensor> input_frame_b;
   static inline std::shared_ptr<holoscan::Tensor> input_frame_c;
+  static inline std::shared_ptr<holoscan::Tensor> input_frame_d;
+  static inline std::shared_ptr<holoscan::Tensor> input_frame_e;
+  static inline std::shared_ptr<holoscan::Tensor> input_frame_f;
   static inline int frames_remaining{0};
   static inline int captured{0};
   static inline int in_flight{0};
@@ -830,6 +872,126 @@ class PerfTripleTensorSourceOp final : public holoscan::Operator<> {
 };
 
 // Timed terminal sink: syncs the device and records end timestamps.
+// MultiSourceExpansionOp has six data inputs. Keep them on the same clock and
+// reuse the same one-frame-in-flight timing discipline as the smaller sources.
+class PerfSixTensorSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    constexpr holoscan::TensorRepresentation device{.memory_kind =
+                                                        holoscan::MemoryKind::kCudaDevice};
+    spec.output(a).produces_tensor(
+        radar::pooled_tensor_output(device, 8U, PerfFrameBank::span_a()));
+    spec.output(b).produces_tensor(
+        radar::pooled_tensor_output(device, 8U, PerfFrameBank::span_b()));
+    spec.output(c).produces_tensor(
+        radar::pooled_tensor_output(device, 8U, PerfFrameBank::span_c()));
+    spec.output(d).produces_tensor(
+        radar::pooled_tensor_output(device, 8U, PerfFrameBank::span_d()));
+    spec.output(e).produces_tensor(
+        radar::pooled_tensor_output(device, 8U, PerfFrameBank::span_e()));
+    spec.output(f).produces_tensor(
+        radar::pooled_tensor_output(device, 8U, PerfFrameBank::span_f()));
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = kPerfTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    std::array<std::shared_ptr<holoscan::Tensor>, 6> frames;
+    PerfPublishMode mode = PerfPublishMode::kCopy;
+    {
+      const std::lock_guard lock(PerfFrameBank::mutex);
+      if (PerfFrameBank::in_flight != 0 || PerfFrameBank::frames_remaining <= 0)
+        return {};
+      --PerfFrameBank::frames_remaining;
+      frames = {PerfFrameBank::input_frame,   PerfFrameBank::input_frame_b,
+                PerfFrameBank::input_frame_c, PerfFrameBank::input_frame_d,
+                PerfFrameBank::input_frame_e, PerfFrameBank::input_frame_f};
+      mode = PerfFrameBank::publish_mode;
+      detail::record_start_locked();
+    }
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(a, context, frames[0], mode));
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(b, context, frames[1], mode));
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(c, context, frames[2], mode));
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(d, context, frames[3], mode));
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(e, context, frames[4], mode));
+    return detail::emit_device_frame(f, context, frames[5], mode);
+  }
+
+  holoscan::Output<holoscan::Tensor> a{"a"};
+  holoscan::Output<holoscan::Tensor> b{"b"};
+  holoscan::Output<holoscan::Tensor> c{"c"};
+  holoscan::Output<holoscan::Tensor> d{"d"};
+  holoscan::Output<holoscan::Tensor> e{"e"};
+  holoscan::Output<holoscan::Tensor> f{"f"};
+};
+
+// Shared source for adapters that have several differently typed live ports.
+// Sidebands declares the output ports and converts the selected YAML value;
+// this source owns the clock, frame publication, and one-frame transition.
+template <typename Sidebands, auto... DataPorts>
+class PerfLiveSourceOp final : public holoscan::Operator<>, public Sidebands {
+ public:
+  static_assert(sizeof...(DataPorts) >= 1 && sizeof...(DataPorts) <= 3);
+
+  template <typename... Args>
+  explicit PerfLiveSourceOp(int64_t override_at, Args&&... args)
+  : Sidebands(std::forward<Args>(args)...), override_at_(override_at) {}
+
+  void setup(holoscan::OperatorSpec& spec) override { Sidebands::setup(spec); }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = kPerfTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    std::array<std::shared_ptr<holoscan::Tensor>, sizeof...(DataPorts)> frames;
+    PerfPublishMode mode = PerfPublishMode::kCopy;
+    {
+      const std::lock_guard lock(PerfFrameBank::mutex);
+      if (PerfFrameBank::in_flight != 0 || PerfFrameBank::frames_remaining <= 0 ||
+          PerfFrameBank::input_frame == nullptr ||
+          (frames.size() > 1 && PerfFrameBank::input_frame_b == nullptr) ||
+          (frames.size() > 2 && PerfFrameBank::input_frame_c == nullptr))
+        return {};
+      --PerfFrameBank::frames_remaining;
+      frames[0] = PerfFrameBank::input_frame;
+      if constexpr (sizeof...(DataPorts) > 1)
+        frames[1] = PerfFrameBank::input_frame_b;
+      if constexpr (sizeof...(DataPorts) > 2)
+        frames[2] = PerfFrameBank::input_frame_c;
+      mode = PerfFrameBank::publish_mode;
+      detail::record_start_locked();
+    }
+    if (frame_index_ == override_at_)
+      HOLOSCAN_RETURN_IF_ERROR(Sidebands::emit_override(context));
+    ++frame_index_;
+    return emit_data<0, DataPorts...>(context, frames, mode);
+  }
+
+ private:
+  template <size_t Index, auto Port, auto... Rest>
+  holoscan::expected<void, holoscan::Error> emit_data(
+      holoscan::ExecutionContext& context,
+      const std::array<std::shared_ptr<holoscan::Tensor>, sizeof...(DataPorts)>& frames,
+      PerfPublishMode mode) {
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(this->*Port, context, frames[Index], mode));
+    if constexpr (sizeof...(Rest) > 0)
+      return emit_data<Index + 1, Rest...>(context, frames, mode);
+    return {};
+  }
+
+  int64_t override_at_{-1};
+  int64_t frame_index_{0};
+};
+
 class PerfTerminalSinkOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override { spec.input(in, "in").queue_depth(8U); }
@@ -958,6 +1120,32 @@ class PerfPayloadSinkOp final : public holoscan::Operator<> {
 //        holoscan::CompileOptions& options)
 // Caller adds the operator under test, sinks, flows, and bind_tensor_out for
 // every device-tensor producer besides "src"/"out" (already bound).
+// Compile, run, and verify a staged source -> operator -> sink Graph.
+inline void execute_perf_graph(holoscan::Graph& graph, holoscan::CompileOptions options,
+                               int total_frames, const char* graph_name,
+                               TimingCollector* collector) {
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
+  if (!plan.ok())
+    throw std::runtime_error(std::string(graph_name) +
+                             " perf compile failed: " + std::string(plan.json()));
+  holoscan::RunSession session = holoscan::run_async(plan);
+  detail::wait_for_frames(session, total_frames);
+  session.request_stop();
+  session.wait();
+  if (!session.diagnostics().empty()) {
+    std::string message = std::string(graph_name) + " perf run diagnostics:";
+    for (const auto& diagnostic : session.diagnostics()) {
+      message += " ";
+      message += std::string(diagnostic.token);
+    }
+    throw std::runtime_error(message);
+  }
+  if (collector->ends.size() < static_cast<size_t>(total_frames))
+    throw std::runtime_error(
+        detail::stall_message(graph_name, collector->ends.size(), total_frames));
+}
+
 template <typename BuildFn>
 TimingCollector run_perf_graph(std::shared_ptr<holoscan::Tensor> input, int total_frames,
                                const char* graph_name, BuildFn build,

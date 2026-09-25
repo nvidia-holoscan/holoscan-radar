@@ -26,7 +26,6 @@
 #include "radar_schemas/array_geometry_bridge.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -56,34 +55,6 @@ struct SubarrayScenario {
   int64_t min_subarray_size{2};
   std::string live_port;
 };
-
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 64, 4, 2, "small array; fast smoke"},
-      {"sm", 256, 8, 4, "compact SIMO array"},
-      {"md", 1024, 16, 8, "common virtual array"},
-      {"lg", 4096, 32, 16, "dense virtual array"},
-      {"xl", 16384, 64, 32, "upper characterization bound"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& size : size_ladder()) {
-    if (size.id == id) {
-      return &size;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* size = find_size(id);
-  if (size == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *size;
-}
 
 SubarrayScenario make_scenario(const SizeSpec& size) {
   SubarrayScenario scenario;
@@ -201,11 +172,6 @@ struct SubarrayTraits : perf::PerfDriverDefaults {
     return "SubarraySelectionOp performance characterization "
            "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() { return "Default holey-ULA size sweep"; }
-  static const char* sizes_subset_help() {
-    return "Holey-ULA sweep across an explicit size subset";
-  }
-  static const char* full_help() { return "All curated sizes and live-override cases"; }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -224,70 +190,44 @@ struct SubarrayTraits : perf::PerfDriverDefaults {
     }
     return result;
   }
-  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::set<std::string> selected_ids;
-    for (const auto& c : profiles.select(scope))
-      selected_ids.insert(c.id);
-    std::vector<Scenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i)
-        if (c.profile == perf::kProfiles[i])
-          break;
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 3 || shape[0] < 1 || shape[1] < 4 || shape[2] < 1)
-        throw std::invalid_argument("SubarraySelection invalid shape");
-      perf::require_keys(c.parameters, {"min_subarray_size"}, "parameters");
-      const auto min_size = c.parameters["min_subarray_size"].as<int64_t>();
-      if (min_size < 2 || min_size > shape[1] - shape[1] / 4)
-        throw std::invalid_argument("SubarraySelection invalid minimum size");
-      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
-      auto scenario = make_scenario(size);
-      scenario.id = c.id;
-      scenario.min_subarray_size = min_size;
-      if (c.override_value) {
-        scenario.live_port = (*c.override_value)["port"].as<std::string>();
-        const auto value = (*c.override_value)["value"].as<std::string>();
-        if ((scenario.live_port == "array_geometry" && value != "wavelength_09") ||
-            (scenario.live_port == "subarray" && value != "contiguous") ||
-            (scenario.live_port != "array_geometry" && scenario.live_port != "subarray"))
-          throw std::invalid_argument("SubarraySelection invalid override");
-      }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    if (shape.size() != 3 || shape[0] < 1 || shape[1] < 4 || shape[2] < 1)
+      throw std::invalid_argument("SubarraySelection invalid shape");
+    perf::require_keys(c.parameters, {"min_subarray_size"}, "parameters");
+    const auto min_size = c.parameters["min_subarray_size"].as<int64_t>();
+    if (min_size < 2 || min_size > shape[1] - shape[1] / 4)
+      throw std::invalid_argument("SubarraySelection invalid minimum size");
+    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
+    auto scenario = make_scenario(size);
+    scenario.id = c.id;
+    scenario.min_subarray_size = min_size;
+    if (c.override_value) {
+      scenario.live_port = (*c.override_value)["port"].as<std::string>();
+      const auto value = (*c.override_value)["value"].as<std::string>();
+      if ((scenario.live_port == "array_geometry" && value != "wavelength_09") ||
+          (scenario.live_port == "subarray" && value != "contiguous") ||
+          (scenario.live_port != "array_geometry" && scenario.live_port != "subarray"))
+        throw std::invalid_argument("SubarraySelection invalid override");
     }
-    return result;
+    return scenario;
   }
 
   static void run_scenario(const SubarrayScenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(settings, !scenario.live_port.empty());
-    const auto samples = perf::collect_scenario_samples(
-        settings, plan, [&](int /*repeat*/, const perf::RunPlan& current) {
+    perf::measure_scenario(
+        settings, !scenario.live_port.empty(),
+        [&](int /*repeat*/, const perf::RunPlan& current) {
           return run_subarray_graph(scenario, current);
+        },
+        base_row(scenario), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scenario, row.latency.median_ms);
+          row.notes =
+              "cold_ms includes first selection plan; override_ms is one changed frame for " +
+              scenario.live_port + "; cells/s is items/s";
+          if (row.live_port.empty())
+            row.notes = "default parameters; no live override";
         });
-    perf::append_setup_row(base_row(scenario), samples, report);
-
-    perf::ResultRow row = base_row(scenario);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scenario, row.latency.median_ms);
-    row.notes = "cold_ms includes first selection plan; override_ms is one changed frame for " +
-                scenario.live_port + "; cells/s is items/s";
-    if (row.live_port.empty())
-      row.notes = "default parameters; no live override";
-    report->results.push_back(row);
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([] {
-      perf::PerfReport discarded;
-      perf::RunSettings settings;
-      settings.warmup_frames = 0;
-      settings.measured_frames = 2;
-      settings.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs")), settings, &discarded);
-    });
   }
 };
 

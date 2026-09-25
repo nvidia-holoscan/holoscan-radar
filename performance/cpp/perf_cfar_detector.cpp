@@ -83,37 +83,6 @@ struct CfarScenario {
   double threshold_scale{1.0};
 };
 
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 64, 256, "small real map; fast smoke; border-heavy"},
-      {"sm", 128, 512, "compact sensor / few chirps"},
-      {"md", 256, 512, "common dev size"},
-      {"mdw", 128, 1024, "range-heavy, same cell count as md"},
-      {"lgs", 512, 512, "square mid-scale"},
-      {"lg", 512, 1024, "moderate production-scale"},
-      {"xl", 1024, 1024, "large moderate"},
-      {"xlw", 1024, 2048, "range-heavy moderate (v1 upper bound)"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& s : size_ladder()) {
-    if (s.id == id) {
-      return &s;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* s = find_size(id);
-  if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *s;
-}
-
 Footprint footprint_small() {
   return {"small", {1, 1}, {2, 2}};
 }
@@ -122,12 +91,6 @@ Footprint footprint_mid() {
 }
 Footprint footprint_large() {
   return {"large", {2, 2}, {8, 8}};
-}
-
-const std::vector<hr::CfarVariant>& all_cfar_variants() {
-  static const std::vector<hr::CfarVariant> variants = {hr::CfarVariant::kCA, hr::CfarVariant::kGO,
-                                                        hr::CfarVariant::kSO, hr::CfarVariant::kOS};
-  return variants;
 }
 
 int64_t interior_training(const Footprint& fp) {
@@ -201,10 +164,9 @@ holoscan::expected<void, holoscan::Error> emit_host_vector(
   return output.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = time});
 }
 
-class PerfCfarSourceOp final : public holoscan::Operator<> {
+struct LivePorts {
  public:
-  PerfCfarSourceOp(int64_t override_at, CfarScenario scenario)
-  : override_at_(override_at), scenario_(std::move(scenario)) {
+  explicit LivePorts(CfarScenario scenario) : scenario_(std::move(scenario)) {
     if (scenario_.live_port == "alpha_lut") {
       changed_alpha_lut_ = precompute_alpha_lut(scenario_);
       for (auto& value : changed_alpha_lut_)
@@ -212,7 +174,7 @@ class PerfCfarSourceOp final : public holoscan::Operator<> {
           value *= 1.1;
     }
   }
-  void setup(holoscan::OperatorSpec& spec) override {
+  void setup(holoscan::OperatorSpec& spec) {
     constexpr holoscan::TensorRepresentation device{.memory_kind =
                                                         holoscan::MemoryKind::kCudaDevice};
     constexpr holoscan::TensorRepresentation host_double{.memory_kind = holoscan::MemoryKind::kHost,
@@ -234,52 +196,33 @@ class PerfCfarSourceOp final : public holoscan::Operator<> {
         hr::pooled_tensor_output(host_int, 1U, 4U * sizeof(int64_t)));
     spec.output(max_detections).max_emits_per_compute(1U);
   }
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnClock{.period = perf::kPerfTick});
-    return result;
-  }
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    std::shared_ptr<holoscan::Tensor> frame;
-    perf::PerfPublishMode mode = perf::PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(perf::PerfFrameBank::mutex);
-      if (perf::PerfFrameBank::in_flight != 0 || perf::PerfFrameBank::frames_remaining <= 0 ||
-          perf::PerfFrameBank::input_frame == nullptr)
-        return {};
-      --perf::PerfFrameBank::frames_remaining;
-      frame = perf::PerfFrameBank::input_frame;
-      mode = perf::PerfFrameBank::publish_mode;
-      perf::detail::record_start_locked();
-    }
-    if (frame_index_ == override_at_) {
-      const auto time = context.activation_time();
-      holoscan::expected<void, holoscan::Error> emitted;
-      if (scenario_.live_port == "os_rank")
-        emitted = os_rank.emit(scenario_.os_rank > 0 ? scenario_.os_rank - 1 : 0,
-                               holoscan::EmitOptions{.capture_time = time});
-      else if (scenario_.live_port == "guard_cells")
-        emitted = guard_cells.emit(hr::CfarCellWindowOverride{0, 0},
-                                   holoscan::EmitOptions{.capture_time = time});
-      else if (scenario_.live_port == "training_cells")
-        emitted = training_cells.emit(hr::CfarCellWindowOverride{3, 3},
-                                      holoscan::EmitOptions{.capture_time = time});
-      else if (scenario_.live_port == "pfa")
-        emitted = pfa.emit(1e-3, holoscan::EmitOptions{.capture_time = time});
-      else if (scenario_.live_port == "alpha_lut")
-        emitted = emit_host_vector(alpha_lut, changed_alpha_lut_, time);
-      else if (scenario_.live_port == "threshold_scale")
-        emitted = threshold_scale.emit(1.1, holoscan::EmitOptions{.capture_time = time});
-      else if (scenario_.live_port == "nci_axes")
-        emitted = emit_host_vector(nci_axes, std::vector<int64_t>{0}, time);
-      else if (scenario_.live_port == "max_detections")
-        emitted = max_detections.emit(100, holoscan::EmitOptions{.capture_time = time});
-      if (!emitted)
-        return emitted;
-    }
-    ++frame_index_;
-    return perf::detail::emit_device_frame(out, context, frame, mode);
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
+      holoscan::ExecutionContext& context) {
+    const auto time = context.activation_time();
+    holoscan::expected<void, holoscan::Error> emitted;
+    if (scenario_.live_port == "os_rank")
+      emitted = os_rank.emit(scenario_.os_rank > 0 ? scenario_.os_rank - 1 : 0,
+                             holoscan::EmitOptions{.capture_time = time});
+    else if (scenario_.live_port == "guard_cells")
+      emitted = guard_cells.emit(hr::CfarCellWindowOverride{0, 0},
+                                 holoscan::EmitOptions{.capture_time = time});
+    else if (scenario_.live_port == "training_cells")
+      emitted = training_cells.emit(hr::CfarCellWindowOverride{3, 3},
+                                    holoscan::EmitOptions{.capture_time = time});
+    else if (scenario_.live_port == "pfa")
+      emitted = pfa.emit(1e-3, holoscan::EmitOptions{.capture_time = time});
+    else if (scenario_.live_port == "alpha_lut")
+      emitted = emit_host_vector(alpha_lut, changed_alpha_lut_, time);
+    else if (scenario_.live_port == "threshold_scale")
+      emitted = threshold_scale.emit(1.1, holoscan::EmitOptions{.capture_time = time});
+    else if (scenario_.live_port == "nci_axes")
+      emitted = emit_host_vector(nci_axes, std::vector<int64_t>{0}, time);
+    else if (scenario_.live_port == "max_detections")
+      emitted = max_detections.emit(100, holoscan::EmitOptions{.capture_time = time});
+    if (!emitted)
+      return emitted;
+    return {};
   }
   holoscan::Output<holoscan::Tensor> out{"out"};
   holoscan::Output<int64_t> os_rank{"os_rank"};
@@ -292,11 +235,11 @@ class PerfCfarSourceOp final : public holoscan::Operator<> {
   holoscan::Output<int64_t> max_detections{"max_detections"};
 
  private:
-  int64_t override_at_{-1};
   CfarScenario scenario_;
   std::vector<double> changed_alpha_lut_;
-  int64_t frame_index_{0};
 };
+
+using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::out>;
 
 perf::TimingCollector run_cfar_graph(const CfarScenario& scen, const perf::RunPlan& plan) {
   auto input = perf::make_power_map_device<PerfPrecision>(scen.input_shape);
@@ -381,8 +324,8 @@ perf::TimingCollector run_cfar_graph(const CfarScenario& scen, const perf::RunPl
   };
   if (scen.live_port.empty())
     return perf::run_perf_graph(std::move(input), plan.total_frames, "cfar-perf", build);
-  return perf::run_perf_graph_with_source<PerfCfarSourceOp>(
-      std::move(input), plan.total_frames, plan.override_at, scen, "cfar-perf", build);
+  return perf::run_perf_graph_with_source<LiveSource>(std::move(input), plan.total_frames,
+                                                      plan.override_at, scen, "cfar-perf", build);
 }
 
 void fill_throughput(perf::ResultRow* row, double median_ms) {
@@ -423,7 +366,7 @@ perf::ResultRow base_row(const CfarScenario& scen) {
   return row;
 }
 
-// --- scenario matrix construction per run tier ---
+// --- typed scenario construction from YAML cases ---
 
 std::vector<int64_t> plane_shape(const SizeSpec& s) {
   return {s.doppler, s.range};
@@ -453,73 +396,6 @@ CfarScenario make_compute_scenario(hr::CfarVariant v, const SizeSpec& s, const F
   return sc;
 }
 
-CfarScenario make_nci_scenario(hr::CfarVariant v, const SizeSpec& s, int64_t channels) {
-  CfarScenario sc;
-  sc.variant = v;
-  sc.size_id = s.id;
-  sc.footprint = footprint_small();
-  sc.input_shape = {channels, s.doppler, s.range};
-  sc.nci_axes = {0};
-  if (v == hr::CfarVariant::kOS) {
-    sc.os_rank = (interior_training(sc.footprint) * 3) / 4;
-  }
-  std::ostringstream id;
-  id << "cfar_" << variant_tag(v) << "_" << s.id << "_small_k" << channels << "_compute";
-  sc.id = id.str();
-  return sc;
-}
-
-CfarScenario make_peak_scenario(hr::CfarVariant v, const SizeSpec& s, const Footprint& fp,
-                                int64_t radius) {
-  CfarScenario sc = make_compute_scenario(v, s, fp, 1);
-  sc.peak_mode = hr::CfarPeakMode::kRangeDoppler;
-  sc.peak_radius = {radius};
-  const std::string suffix = "_compute";
-  const std::string insert = "_peak_radius" + std::to_string(radius);
-  if (sc.id.size() > suffix.size() &&
-      sc.id.compare(sc.id.size() - suffix.size(), suffix.size(), suffix) == 0) {
-    sc.id.insert(sc.id.size() - suffix.size(), insert);
-  } else {
-    sc.id += insert;
-  }
-  return sc;
-}
-
-void append_peak_scenarios(std::vector<CfarScenario>* out, const std::vector<std::string>& sizes,
-                           bool all_variants_at_md) {
-  const Footprint fp = footprint_small();
-  for (const auto& sid : sizes) {
-    const SizeSpec& s = must_find_size(sid);
-    for (const int64_t radius : {int64_t{1}, int64_t{2}}) {
-      out->push_back(make_peak_scenario(hr::CfarVariant::kCA, s, fp, radius));
-    }
-    if (sid == "xs") {
-      CfarScenario rank3 = make_compute_scenario(hr::CfarVariant::kCA, s, fp, 8);
-      rank3.peak_mode = hr::CfarPeakMode::kAll;
-      rank3.id = "cfar_CA_xs_small_peak_all_rank3_compute";
-      out->push_back(std::move(rank3));
-
-      CfarScenario rank4 = make_compute_scenario(hr::CfarVariant::kCA, s, fp, 1);
-      rank4.input_shape = {4, 4, s.doppler, s.range};
-      rank4.peak_mode = hr::CfarPeakMode::kAll;
-      rank4.id = "cfar_CA_xs_small_peak_all_rank4_compute";
-      out->push_back(std::move(rank4));
-    }
-  }
-  if (!all_variants_at_md) {
-    return;
-  }
-  const SizeSpec& md = must_find_size("md");
-  for (auto v : all_cfar_variants()) {
-    if (v == hr::CfarVariant::kCA) {
-      continue;
-    }
-    for (const int64_t radius : {int64_t{1}, int64_t{2}}) {
-      out->push_back(make_peak_scenario(v, md, fp, radius));
-    }
-  }
-}
-
 struct CalibrationPairSpec {
   std::string slow_id;
   std::string pair_id;
@@ -532,36 +408,6 @@ const std::vector<CalibrationPairSpec>& calibration_pair_specs() {
       {"cfar_OS_md_small_k8_compute", "OS_md_k8"},   {"cfar_OS_lg_small_k8_compute", "OS_lg_k8"},
   };
   return specs;
-}
-
-void tag_and_append_alpha_lut_pairs(std::vector<CfarScenario>* scenarios) {
-  std::unordered_map<std::string, CfarScenario> by_id;
-  for (const auto& sc : *scenarios) {
-    by_id.emplace(sc.id, sc);
-  }
-  for (const auto& spec : calibration_pair_specs()) {
-    auto it = by_id.find(spec.slow_id);
-    if (it == by_id.end()) {
-      continue;
-    }
-    for (auto& sc : *scenarios) {
-      if (sc.id == spec.slow_id) {
-        sc.calibration_pair = spec.pair_id;
-      }
-    }
-    CfarScenario fast = it->second;
-    fast.calibration_pair = spec.pair_id;
-    fast.use_alpha_lut = true;
-    fast.alpha_lut.clear();
-    const std::string suffix = "_compute";
-    if (fast.id.size() > suffix.size() &&
-        fast.id.compare(fast.id.size() - suffix.size(), suffix.size(), suffix) == 0) {
-      fast.id.replace(fast.id.size() - suffix.size(), suffix.size(), "_alphalut_compute");
-    } else {
-      fast.id += "_alphalut";
-    }
-    scenarios->push_back(std::move(fast));
-  }
 }
 
 void build_alpha_calibration_summary(perf::PerfReport* report) {
@@ -612,13 +458,6 @@ struct CfarTraits : perf::PerfDriverDefaults {
     return "CFARDetectorOp performance characterization "
            "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() { return "CA size sweep across the full ladder"; }
-  static const char* sizes_subset_help() { return "CA size sweep across an explicit subset"; }
-  static const char* full_help() {
-    return "Full matrix (all variants/footprints/batch/NCI) plus the "
-           "default alpha_lut calibration pairs and peak-mode NMS "
-           "rows; inline threshold_scale override timing";
-  }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -637,102 +476,86 @@ struct CfarTraits : perf::PerfDriverDefaults {
     }
     return result;
   }
-  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::set<std::string> selected_ids;
-    for (const auto& c : profiles.select(scope))
-      selected_ids.insert(c.id);
-    std::vector<Scenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i)
-        if (c.profile == perf::kProfiles[i])
-          break;
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 2 || shape[0] < 16 || shape[1] < 16)
-        throw std::invalid_argument("CFAR invalid shape");
-      perf::require_keys(
-          c.parameters, {"variant", "footprint", "channels", "pfa", "peak_mode", "threshold_scale"},
-          "parameters");
-      const auto variant = c.parameters["variant"].as<std::string>();
-      const auto footprint = c.parameters["footprint"].as<std::string>();
-      const auto channels = c.parameters["channels"].as<int64_t>();
-      const auto peak = c.parameters["peak_mode"].as<std::string>();
-      if ((variant != "CA" && variant != "GO" && variant != "SO" && variant != "OS") ||
-          (footprint != "small" && footprint != "mid" && footprint != "large") ||
-          (channels != 1 && channels != 4) || (peak != "none" && peak != "range_doppler"))
-        throw std::invalid_argument("CFAR invalid parameter choice");
-      const auto v = variant == "GO"   ? hr::CfarVariant::kGO
-                     : variant == "SO" ? hr::CfarVariant::kSO
-                     : variant == "OS" ? hr::CfarVariant::kOS
-                                       : hr::CfarVariant::kCA;
-      const auto fp = footprint == "mid"     ? footprint_mid()
-                      : footprint == "large" ? footprint_large()
-                                             : footprint_small();
-      const SizeSpec size{c.profile, shape[0], shape[1], c.profile};
-      auto scenario = make_compute_scenario(v, size, fp, channels);
-      if (channels == 4)
-        scenario.input_shape = {channels, shape[0], shape[1]};
-      scenario.id = c.id;
-      scenario.pfa = c.parameters["pfa"].as<double>();
-      scenario.threshold_scale = c.parameters["threshold_scale"].as<double>();
-      scenario.peak_mode =
-          peak == "range_doppler" ? hr::CfarPeakMode::kRangeDoppler : hr::CfarPeakMode::kNone;
-      if (scenario.pfa <= 0.0 || scenario.pfa >= 1.0 || scenario.threshold_scale <= 0.0)
-        throw std::invalid_argument("CFAR invalid pfa or threshold scale");
-      if (c.override_value) {
-        scenario.live_port = (*c.override_value)["port"].as<std::string>();
-        const auto value = (*c.override_value)["value"].as<std::string>();
-        const std::map<std::string, std::string> allowed = {
-            {"os_rank", "lower"},    {"guard_cells", "zero"},  {"training_cells", "three"},
-            {"pfa", "0.001"},        {"alpha_lut", "scaled"},  {"threshold_scale", "1.1"},
-            {"nci_axes", "channel"}, {"max_detections", "100"}};
-        if (allowed.at(scenario.live_port) != value ||
-            (scenario.live_port == "os_rank" && v != hr::CfarVariant::kOS) ||
-            (scenario.live_port == "nci_axes" && channels != 4) ||
-            (scenario.live_port == "alpha_lut" && v != hr::CfarVariant::kCA))
-          throw std::invalid_argument("CFAR incompatible live override");
-      }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    if (shape.size() != 2 || shape[0] < 16 || shape[1] < 16)
+      throw std::invalid_argument("CFAR invalid shape");
+    perf::require_keys(c.parameters,
+                       {"variant", "footprint", "channels", "pfa", "peak_mode", "threshold_scale"},
+                       "parameters");
+    const auto variant = c.parameters["variant"].as<std::string>();
+    const auto footprint = c.parameters["footprint"].as<std::string>();
+    const auto channels = c.parameters["channels"].as<int64_t>();
+    const auto peak = c.parameters["peak_mode"].as<std::string>();
+    if ((variant != "CA" && variant != "GO" && variant != "SO" && variant != "OS") ||
+        (footprint != "small" && footprint != "mid" && footprint != "large") ||
+        (channels != 1 && channels != 4) || (peak != "none" && peak != "range_doppler"))
+      throw std::invalid_argument("CFAR invalid parameter choice");
+    const auto v = variant == "GO"   ? hr::CfarVariant::kGO
+                   : variant == "SO" ? hr::CfarVariant::kSO
+                   : variant == "OS" ? hr::CfarVariant::kOS
+                                     : hr::CfarVariant::kCA;
+    const auto fp = footprint == "mid"     ? footprint_mid()
+                    : footprint == "large" ? footprint_large()
+                                           : footprint_small();
+    const SizeSpec size{c.profile, shape[0], shape[1], c.profile};
+    auto scenario = make_compute_scenario(v, size, fp, channels);
+    if (channels == 4)
+      scenario.input_shape = {channels, shape[0], shape[1]};
+    scenario.id = c.id;
+    scenario.pfa = c.parameters["pfa"].as<double>();
+    scenario.threshold_scale = c.parameters["threshold_scale"].as<double>();
+    scenario.peak_mode =
+        peak == "range_doppler" ? hr::CfarPeakMode::kRangeDoppler : hr::CfarPeakMode::kNone;
+    if (scenario.pfa <= 0.0 || scenario.pfa >= 1.0 || scenario.threshold_scale <= 0.0)
+      throw std::invalid_argument("CFAR invalid pfa or threshold scale");
+    if (c.override_value) {
+      scenario.live_port = (*c.override_value)["port"].as<std::string>();
+      const auto value = (*c.override_value)["value"].as<std::string>();
+      const std::map<std::string, std::string> allowed = {
+          {"os_rank", "lower"},    {"guard_cells", "zero"},  {"training_cells", "three"},
+          {"pfa", "0.001"},        {"alpha_lut", "scaled"},  {"threshold_scale", "1.1"},
+          {"nci_axes", "channel"}, {"max_detections", "100"}};
+      if (allowed.at(scenario.live_port) != value ||
+          (scenario.live_port == "os_rank" && v != hr::CfarVariant::kOS) ||
+          (scenario.live_port == "nci_axes" && channels != 4) ||
+          (scenario.live_port == "alpha_lut" && v != hr::CfarVariant::kCA))
+        throw std::invalid_argument("CFAR incompatible live override");
     }
-    return result;
+    return scenario;
   }
 
   static void run_scenario(const CfarScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, !scen.live_port.empty());
-    const auto samples =
-        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    perf::measure_scenario(
+        rs, !scen.live_port.empty(),
+        [&](int /*rep*/, const perf::RunPlan& p) {
           CfarScenario run_scen = scen;
           if (run_scen.use_alpha_lut && run_scen.alpha_lut.empty()) {
             run_scen.alpha_lut = precompute_alpha_lut(run_scen);
           }
           return run_cfar_graph(run_scen, p);
+        },
+        base_row(scen), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, row.latency.median_ms);
+          if (scen.use_alpha_lut) {
+            row.notes =
+                "cold_ms includes initial alpha_lut H2D; override_ms is the changed frame for " +
+                scen.live_port;
+          } else {
+            row.notes =
+                "cold_ms includes initial LUT calibration; override_ms is the changed frame for " +
+                scen.live_port;
+          }
+          if (scen.peak_mode != hr::CfarPeakMode::kNone) {
+            row.notes += "; peak_mode=" + std::string(hr::to_string(scen.peak_mode));
+            if (scen.peak_mode == hr::CfarPeakMode::kRangeDoppler) {
+              row.notes += " (radius=" + std::to_string(scen.peak_radius.front()) + ")";
+            }
+          }
+          if (row.live_port.empty())
+            row.notes = "default parameters; no live override";
         });
-
-    perf::append_setup_row(base_row(scen), samples, report);
-
-    perf::ResultRow row = base_row(scen);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, row.latency.median_ms);
-    if (scen.use_alpha_lut) {
-      row.notes = "cold_ms includes initial alpha_lut H2D; override_ms is the changed frame for " +
-                  scen.live_port;
-    } else {
-      row.notes =
-          "cold_ms includes initial LUT calibration; override_ms is the changed frame for " +
-          scen.live_port;
-    }
-    if (scen.peak_mode != hr::CfarPeakMode::kNone) {
-      row.notes += "; peak_mode=" + std::string(hr::to_string(scen.peak_mode));
-      if (scen.peak_mode == hr::CfarPeakMode::kRangeDoppler) {
-        row.notes += " (radius=" + std::to_string(scen.peak_radius.front()) + ")";
-      }
-    }
-    if (row.live_port.empty())
-      row.notes = "default parameters; no live override";
-    report->results.push_back(row);
   }
 
   static void post_run(perf::PerfReport* report, bool /*quiet*/) {

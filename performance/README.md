@@ -14,6 +14,17 @@ sidebands, but it captures bounded output snapshots with extra copies and does
 not expose paired per-frame timestamps. The performance runner keeps the Graph
 wiring and records source and synchronized sink times directly.
 
+## C++ adapter boundary
+
+The common driver parses every YAML case and asks each operator adapter to
+validate and convert one case before applying scope or size filters. It owns
+process warmup, run planning, independent Graph sessions, and the setup and
+compute report rows. An adapter supplies valid input tensors and descriptors,
+operator parameters and port wiring, plus any operator-specific throughput
+units. Shared typed sources publish one to three inputs and a one-frame live
+sideband; MultiSourceExpansion uses the shared six-input source required by its
+contract. The source and sink capture paired per-frame timestamps.
+
 ## YAML profiles and scopes
 
 Migrated tools read `performance/profiles/<operator>.yaml`. Each suite names

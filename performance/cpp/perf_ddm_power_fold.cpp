@@ -16,7 +16,6 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_profiles.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -86,14 +85,12 @@ struct Traits : perf::PerfDriverDefaults {
   using Scenario = ::Scenario;
   static const char* tool_name() { return "perf_ddm_power_fold"; }
   static const char* tool_description() { return "Sparse DDM power-fold characterization"; }
-  static const char* sizes_all_help() { return "Run full size ladder"; }
-  static const char* sizes_subset_help() { return "Run selected sizes"; }
-  static const char* full_help() { return "Run all DDM fold sizes"; }
+
   static std::vector<perf::SizeDef> size_ladder_defs() {
-    std::vector<perf::SizeDef> result;
     const auto suite = perf::load_profile_suite(
         std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_power_fold.yaml",
         "ddm_power_fold");
+    std::vector<perf::SizeDef> result;
     for (size_t i = 0; i < perf::kProfiles.size(); ++i) {
       const auto& shape = suite.shapes[i];
       if (shape.size() != 4)
@@ -105,59 +102,34 @@ struct Traits : perf::PerfDriverDefaults {
     }
     return result;
   }
-  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
-    const auto suite = perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_power_fold.yaml",
-        "ddm_power_fold");
-    std::vector<Scenario> result;
-    for (const auto& c : suite.cases) {
-      perf::require_keys(c.parameters, {"ddm_code"}, "parameters");
-      if (c.parameters["ddm_code"].as<std::string>() != "linear" || c.override_value.has_value()) {
-        throw std::invalid_argument("DDMPowerFold supports only linear code and no live override");
-      }
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    perf::require_keys(c.parameters, {"ddm_code"}, "parameters");
+    if (c.parameters["ddm_code"].as<std::string>() != "linear" || c.override_value.has_value()) {
+      throw std::invalid_argument("DDMPowerFold supports only linear code and no live override");
     }
-    for (const auto& c : suite.select(scope)) {
-      size_t index = 0;
-      for (; index < perf::kProfiles.size(); ++index) {
-        if (c.profile == perf::kProfiles[index])
-          break;
-      }
-      const auto& shape = suite.shapes.at(index);
-      if (shape.size() != 4)
-        throw std::invalid_argument("DDMPowerFold profile must be rank 4");
-      if (shape[2] % shape[0] != 0) {
-        throw std::invalid_argument("DDMPowerFold Doppler size must be divisible by TX count");
-      }
-      result.push_back(
-          {c.id, c.profile, {c.profile, shape[0], shape[1], shape[2], shape[3], c.profile}});
+
+    if (shape.size() != 4)
+      throw std::invalid_argument("DDMPowerFold profile must be rank 4");
+    if (shape[2] % shape[0] != 0) {
+      throw std::invalid_argument("DDMPowerFold Doppler size must be divisible by TX count");
     }
-    return result;
+    return {c.id, c.profile, {c.profile, shape[0], shape[1], shape[2], shape[3], c.profile}};
   }
   static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const auto plan = perf::make_run_plan(settings, false);
-    const auto samples =
-        perf::collect_scenario_samples(settings, plan, [&](int, const perf::RunPlan& current) {
+    perf::measure_scenario(
+        settings, false,
+        [&](int, const perf::RunPlan& current) {
           return run_graph(scenario, current);
+        },
+        base_row(scenario), report,
+        [&](perf::ResultRow& row) {
+          if (row.latency.median_ms > 0.0) {
+            row.cells_per_second =
+                static_cast<double>(scenario.size.doppler * scenario.size.range) /
+                (row.latency.median_ms / 1000.0);
+          }
         });
-    perf::append_setup_row(base_row(scenario), samples, report);
-    auto row = base_row(scenario);
-    perf::fill_compute_row(&row, samples);
-    if (row.latency.median_ms > 0.0) {
-      row.cells_per_second = static_cast<double>(scenario.size.doppler * scenario.size.range) /
-                             (row.latency.median_ms / 1000.0);
-    }
-    report->results.push_back(std::move(row));
-  }
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([&] {
-      perf::PerfReport report;
-      perf::RunSettings settings;
-      settings.warmup_frames = 0;
-      settings.measured_frames = 2;
-      settings.repeats = 1;
-      run_scenario(build_profile_matrix("minimal").front(), settings, &report);
-    });
   }
 };
 

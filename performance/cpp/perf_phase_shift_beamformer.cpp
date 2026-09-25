@@ -41,8 +41,8 @@
 #include "radar_schemas/window_spec_bridge.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
+#include "utils/perf_payloads.hpp"
 #include "utils/perf_platform.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -51,6 +51,11 @@ namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
 
 namespace {
+
+using perf::linspace;
+using perf::make_ula_geometry;
+using perf::emit_host_vector;
+using perf::emit_wire_doubles;
 
 using PerfPrecision = float;  // v1 characterizes single precision.
 
@@ -98,112 +103,12 @@ const char* override_name(BeamScenario::OverrideKind kind) {
   return "unknown";
 }
 
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 4, 17, 1, 16, 32, "small array; fast smoke"},
-      {"sm", 8, 31, 1, 32, 64, "compact SIMO azimuth scan"},
-      {"md", 16, 41, 11, 32, 128, "planar grid, common dev size"},
-      {"lg", 32, 61, 21, 64, 128, "dense virtual array"},
-      {"xl", 64, 81, 31, 64, 256, "upper characterization bound"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& s : size_ladder()) {
-    if (s.id == id) {
-      return &s;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* s = find_size(id);
-  if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *s;
-}
-
-std::vector<double> linspace(double start, double stop, int64_t n) {
-  std::vector<double> out(static_cast<size_t>(n));
-  if (n == 1) {
-    out[0] = start;
-    return out;
-  }
-  const double step = (stop - start) / static_cast<double>(n - 1);
-  for (int64_t i = 0; i < n; ++i) {
-    out[static_cast<size_t>(i)] = start + step * static_cast<double>(i);
-  }
-  return out;
-}
-
-hr::ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing, double wavelength) {
-  hr::ArrayGeometry geom;
-  geom.wavelength = wavelength;
-  geom.geometry_type = hr::ArrayGeometryType::kUla;
-  geom.element_positions.reserve(static_cast<size_t>(num_elements * 3));
-  for (int64_t m = 0; m < num_elements; ++m) {
-    geom.element_positions.push_back(0.0);
-    geom.element_positions.push_back(static_cast<double>(m) * spacing);
-    geom.element_positions.push_back(0.0);
-  }
-  return geom;
-}
-
-holoscan::expected<void, holoscan::Error> emit_host_vector(
-    holoscan::Output<holoscan::Tensor>& output, std::span<const double> values,
-    holoscan::TimePoint capture_time) {
-  const std::array<int64_t, 1> shape{static_cast<int64_t>(values.size())};
-  constexpr DLDataType dtype{kDLFloat, 64U, 1U};
-  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
-  if (!loan) {
-    return holoscan::make_unexpected(std::move(loan).error());
-  }
-  auto written =
-      loan->write_host_and_commit([values](const holoscan::TensorOutputWriteGuard& writer) {
-        std::copy(values.begin(), values.end(), writer.data_as<double>());
-      });
-  if (!written) {
-    return holoscan::make_unexpected(std::move(written).error());
-  }
-  return output.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = capture_time});
-}
-
-template <typename Wire>
-holoscan::expected<void, holoscan::Error> emit_wire_doubles(holoscan::Output<Wire>& output,
-                                                            Wire wire,
-                                                            std::span<const double> values,
-                                                            std::span<const int64_t> shape,
-                                                            holoscan::TimePoint capture_time) {
-  constexpr DLDataType dtype{kDLFloat, 64U, 1U};
-  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
-  if (!loan) {
-    return holoscan::make_unexpected(std::move(loan).error());
-  }
-  auto written =
-      loan->write_host_and_commit([values](const holoscan::TensorOutputWriteGuard& writer) {
-        std::copy(values.begin(), values.end(), writer.data_as<double>());
-      });
-  if (!written) {
-    return holoscan::make_unexpected(std::move(written).error());
-  }
-  return output.emit_tensor(std::move(*loan), std::move(wire),
-                            holoscan::EmitOptions{.capture_time = capture_time});
-}
-
-class PerfBeamformerOverrideSourceOp final : public holoscan::Operator<> {
+struct LivePorts {
  public:
-  PerfBeamformerOverrideSourceOp(int64_t override_at, hr::PhaseShiftBeamformerParams initial,
-                                 hr::PhaseShiftBeamformerParams override,
-                                 BeamScenario::OverrideKind kind)
-  : override_at_(override_at),
-    initial_(std::move(initial)),
-    override_(std::move(override)),
-    kind_(kind) {}
+  LivePorts(hr::PhaseShiftBeamformerParams override, BeamScenario::OverrideKind kind)
+  : override_(std::move(override)), kind_(kind) {}
 
-  void setup(holoscan::OperatorSpec& spec) override {
+  void setup(holoscan::OperatorSpec& spec) {
     constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
@@ -236,60 +141,37 @@ class PerfBeamformerOverrideSourceOp final : public holoscan::Operator<> {
         .produces_tensor(hr::pooled_tensor_output(kHostVector, 1U, kHostPayloadSpan));
   }
 
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnClock{.period = perf::kPerfTick});
-    return result;
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    std::shared_ptr<holoscan::Tensor> frame;
-    perf::PerfPublishMode mode = perf::PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(perf::PerfFrameBank::mutex);
-      if (perf::PerfFrameBank::in_flight != 0 || perf::PerfFrameBank::frames_remaining <= 0 ||
-          perf::PerfFrameBank::input_frame == nullptr) {
-        return {};
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
+      holoscan::ExecutionContext& context) {
+    const holoscan::TimePoint time = context.activation_time();
+    holoscan::expected<void, holoscan::Error> emitted;
+    switch (kind_) {
+      case BeamScenario::OverrideKind::kNone:
+        break;
+      case BeamScenario::OverrideKind::kArrayGeometry: {
+        const auto packed = hr::pack_array_geometry(override_.array_geometry);
+        const std::array<int64_t, 2> shape{override_.array_geometry.num_elements() + 1, 3};
+        emitted = emit_wire_doubles(array_geometry, hr::to_wire(override_.array_geometry), packed,
+                                    shape, time);
+        break;
       }
-      --perf::PerfFrameBank::frames_remaining;
-      frame = perf::PerfFrameBank::input_frame;
-      mode = perf::PerfFrameBank::publish_mode;
-      perf::detail::record_start_locked();
-    }
-
-    if (frame_index_ == override_at_) {
-      const holoscan::TimePoint time = context.activation_time();
-      holoscan::expected<void, holoscan::Error> emitted;
-      switch (kind_) {
-        case BeamScenario::OverrideKind::kNone:
-          break;
-        case BeamScenario::OverrideKind::kArrayGeometry: {
-          const auto packed = hr::pack_array_geometry(override_.array_geometry);
-          const std::array<int64_t, 2> shape{override_.array_geometry.num_elements() + 1, 3};
-          emitted = emit_wire_doubles(array_geometry, hr::to_wire(override_.array_geometry), packed,
-                                      shape, time);
-          break;
-        }
-        case BeamScenario::OverrideKind::kAzAngles:
-          emitted = emit_host_vector(az_coordinates, override_.az_coordinates, time);
-          break;
-        case BeamScenario::OverrideKind::kElAngles:
-          emitted = emit_host_vector(el_coordinates, override_.el_coordinates, time);
-          break;
-        case BeamScenario::OverrideKind::kArrayTaper: {
-          const std::array<int64_t, 1> shape{
-              static_cast<int64_t>(override_.array_taper.coefficients.size())};
-          emitted = emit_wire_doubles(array_taper, hr::to_wire(override_.array_taper),
-                                      override_.array_taper.coefficients, shape, time);
-          break;
-        }
+      case BeamScenario::OverrideKind::kAzAngles:
+        emitted = emit_host_vector(az_coordinates, override_.az_coordinates, time);
+        break;
+      case BeamScenario::OverrideKind::kElAngles:
+        emitted = emit_host_vector(el_coordinates, override_.el_coordinates, time);
+        break;
+      case BeamScenario::OverrideKind::kArrayTaper: {
+        const std::array<int64_t, 1> shape{
+            static_cast<int64_t>(override_.array_taper.coefficients.size())};
+        emitted = emit_wire_doubles(array_taper, hr::to_wire(override_.array_taper),
+                                    override_.array_taper.coefficients, shape, time);
+        break;
       }
-      if (!emitted)
-        return emitted;
     }
-    ++frame_index_;
-    return perf::detail::emit_device_frame(rd_maps, context, frame, mode);
+    if (!emitted)
+      return emitted;
+    return {};
   }
 
   holoscan::Output<holoscan::Tensor> rd_maps{"rd_maps"};
@@ -299,12 +181,11 @@ class PerfBeamformerOverrideSourceOp final : public holoscan::Operator<> {
   holoscan::Output<hr::WireWindowSpec> array_taper{"array_taper"};
 
  private:
-  int64_t override_at_{-1};
-  hr::PhaseShiftBeamformerParams initial_;
   hr::PhaseShiftBeamformerParams override_;
   BeamScenario::OverrideKind kind_{BeamScenario::OverrideKind::kNone};
-  int64_t frame_index_{0};
 };
+
+using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::rd_maps>;
 
 perf::TimingCollector run_beamformer_graph(const BeamScenario& scen, const perf::RunPlan& plan) {
   auto cube =
@@ -342,8 +223,7 @@ perf::TimingCollector run_beamformer_graph(const BeamScenario& scen, const perf:
   perf::PerfFrameBank::reset(std::move(cube), plan.total_frames, &collector);
 
   holoscan::Graph graph{"beamformer-perf"};
-  const auto src = graph.op<PerfBeamformerOverrideSourceOp>("src", plan.override_at, initial,
-                                                            override, scen.override_kind);
+  const auto src = graph.op<LiveSource>("src", plan.override_at, override, scen.override_kind);
   auto op = graph.op<hr::PhaseShiftBeamformerOp<PerfPrecision>>("beamformer", extents);
   op.set_params(std::move(initial));
   const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
@@ -371,27 +251,8 @@ perf::TimingCollector run_beamformer_graph(const BeamScenario& scen, const perf:
   perf::bind_tensor_out(options, "beamformer", "rda_cube");
   perf::bind_tensor_out(options, "beamformer", "az_grid");
   perf::bind_tensor_out(options, "beamformer", "el_grid");
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-  const holoscan::ExecutionPlan compiled = holoscan::compile(graph, std::move(options));
-  if (!compiled.ok()) {
-    throw std::runtime_error("beamformer-perf compile failed: " + std::string(compiled.json()));
-  }
-  holoscan::RunSession session = holoscan::run_async(compiled);
-  perf::detail::wait_for_frames(session, plan.total_frames);
-  session.request_stop();
-  session.wait();
-  if (!session.diagnostics().empty()) {
-    std::string message = "beamformer-perf run diagnostics:";
-    for (const auto& diagnostic : session.diagnostics()) {
-      message += " ";
-      message += std::string(diagnostic.token);
-    }
-    throw std::runtime_error(message);
-  }
-  if (collector.ends.size() < static_cast<std::size_t>(plan.total_frames)) {
-    throw std::runtime_error(
-        perf::detail::stall_message("beamformer-perf", collector.ends.size(), plan.total_frames));
-  }
+  perf::execute_perf_graph(graph, std::move(options), plan.total_frames, "beamformer-perf",
+                           &collector);
   return collector;
 }
 
@@ -445,14 +306,6 @@ BeamScenario make_scenario(const SizeSpec& s,
   return sc;
 }
 
-void append_override_scenarios(std::vector<BeamScenario>* out, const SizeSpec& size) {
-  for (const auto kind :
-       {BeamScenario::OverrideKind::kArrayGeometry, BeamScenario::OverrideKind::kAzAngles,
-        BeamScenario::OverrideKind::kElAngles, BeamScenario::OverrideKind::kArrayTaper}) {
-    out->push_back(make_scenario(size, kind));
-  }
-}
-
 struct BeamTraits : perf::PerfDriverDefaults {
   using Scenario = BeamScenario;
 
@@ -461,11 +314,6 @@ struct BeamTraits : perf::PerfDriverDefaults {
     return "PhaseShiftBeamformerOp performance characterization "
            "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() {
-    return "Default size sweep with all four inline live overrides";
-  }
-  static const char* sizes_subset_help() { return "Size sweep across an explicit subset"; }
-  static const char* full_help() { return "Full size ladder with all four inline live overrides"; }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -484,83 +332,54 @@ struct BeamTraits : perf::PerfDriverDefaults {
     }
     return result;
   }
-  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::set<std::string> selected_ids;
-    for (const auto& c : profiles.select(scope))
-      selected_ids.insert(c.id);
-    std::vector<Scenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i)
-        if (c.profile == perf::kProfiles[i])
-          break;
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 5 || shape[0] < 2 || shape[1] < 1 || shape[2] < 1 || shape[3] < 1 ||
-          shape[4] < 1)
-        throw std::invalid_argument("PhaseShiftBeamformer invalid shape");
-      perf::require_keys(c.parameters, {"array_taper"}, "parameters");
-      const auto taper = c.parameters["array_taper"].as<std::string>();
-      if (taper != "none" && taper != "hann")
-        throw std::invalid_argument("PhaseShiftBeamformer invalid taper");
-      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], shape[4], c.profile};
-      auto scenario = make_scenario(size);
-      scenario.id = c.id;
-      scenario.static_taper = taper == "hann" ? hr::WindowType::kHann : hr::WindowType::kNone;
-      if (c.override_value) {
-        const auto port = (*c.override_value)["port"].as<std::string>();
-        const auto value = (*c.override_value)["value"].as<std::string>();
-        if (port == "array_geometry" && value == "spacing_045")
-          scenario.override_kind = Scenario::OverrideKind::kArrayGeometry;
-        else if (port == "az_coordinates" && value == "shift_005")
-          scenario.override_kind = Scenario::OverrideKind::kAzAngles;
-        else if (port == "el_coordinates" && value == "shift_005")
-          scenario.override_kind = Scenario::OverrideKind::kElAngles;
-        else if (port == "array_taper" && value == "hann")
-          scenario.override_kind = Scenario::OverrideKind::kArrayTaper;
-        else
-          throw std::invalid_argument("PhaseShiftBeamformer invalid live override");
-      }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    if (shape.size() != 5 || shape[0] < 2 || shape[1] < 1 || shape[2] < 1 || shape[3] < 1 ||
+        shape[4] < 1)
+      throw std::invalid_argument("PhaseShiftBeamformer invalid shape");
+    perf::require_keys(c.parameters, {"array_taper"}, "parameters");
+    const auto taper = c.parameters["array_taper"].as<std::string>();
+    if (taper != "none" && taper != "hann")
+      throw std::invalid_argument("PhaseShiftBeamformer invalid taper");
+    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], shape[4], c.profile};
+    auto scenario = make_scenario(size);
+    scenario.id = c.id;
+    scenario.static_taper = taper == "hann" ? hr::WindowType::kHann : hr::WindowType::kNone;
+    if (c.override_value) {
+      const auto port = (*c.override_value)["port"].as<std::string>();
+      const auto value = (*c.override_value)["value"].as<std::string>();
+      if (port == "array_geometry" && value == "spacing_045")
+        scenario.override_kind = Scenario::OverrideKind::kArrayGeometry;
+      else if (port == "az_coordinates" && value == "shift_005")
+        scenario.override_kind = Scenario::OverrideKind::kAzAngles;
+      else if (port == "el_coordinates" && value == "shift_005")
+        scenario.override_kind = Scenario::OverrideKind::kElAngles;
+      else if (port == "array_taper" && value == "hann")
+        scenario.override_kind = Scenario::OverrideKind::kArrayTaper;
+      else
+        throw std::invalid_argument("PhaseShiftBeamformer invalid live override");
     }
-    return result;
+    return scenario;
   }
 
   static void run_scenario(const BeamScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan =
-        perf::make_run_plan(rs, scen.override_kind != BeamScenario::OverrideKind::kNone);
-    const auto samples =
-        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    perf::measure_scenario(
+        rs, scen.override_kind != BeamScenario::OverrideKind::kNone,
+        [&](int /*rep*/, const perf::RunPlan& p) {
           return run_beamformer_graph(scen, p);
+        },
+        base_row(scen), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scen, row.latency.median_ms);
+          row.notes =
+              "cold_ms is first-frame latency; median/p90 are "
+              "pre-change steady state; override_ms is the one changed frame for " +
+              std::string(override_name(scen.override_kind)) +
+              " changes the steering configuration; cells/s is "
+              "RD-cells/s (beams/s = slices/s)";
+          if (row.live_port.empty())
+            row.notes = "default parameters; no live override";
         });
-
-    perf::append_setup_row(base_row(scen), samples, report);
-
-    perf::ResultRow row = base_row(scen);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes =
-        "cold_ms is first-frame latency; median/p90 are "
-        "pre-change steady state; override_ms is the one changed frame for " +
-        std::string(override_name(scen.override_kind)) +
-        " changes the steering configuration; cells/s is "
-        "RD-cells/s (beams/s = slices/s)";
-    if (row.live_port.empty())
-      row.notes = "default parameters; no live override";
-    report->results.push_back(row);
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([&] {
-      perf::PerfReport discarded;
-      perf::RunSettings warm_rs;
-      warm_rs.warmup_frames = 0;
-      warm_rs.measured_frames = 2;
-      warm_rs.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs")), warm_rs, &discarded);
-    });
   }
 };
 

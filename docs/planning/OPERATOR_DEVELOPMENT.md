@@ -727,13 +727,14 @@ operator has any — not only build-time `Arg` variants. Match the CFAR pattern:
   focus on the most important live inputs. Claiming a fast path (`alpha_lut`,
   cached plans, …) while only timing the slow path is a harness bug.
 
-**Process warmup (required).** Before the measured scenario loop, run one
-discarded graph session (`perf_process_warmup.hpp`) so CUDA context init and
+**Process warmup (required).** The common C++ driver runs one discarded
+small-profile graph session before the measured cases so CUDA context init and
 Holoscan's first Application tick are not billed to scenario #1's `cold_ms`.
-Optionally prime each distinct kernel path the matrix will hit (e.g. each
-policy / variant) so first-touch JIT does not land on a measured row either.
 `--warmup` frames inside a scenario are separate: they exclude early frames
 *within* a run from the steady median, and do not replace process warmup.
+Each operator adapter validates every YAML case before scope filtering, then
+provides typed input construction, port wiring, and optional throughput units;
+source publication, Graph execution, sampling, and report buckets stay shared.
 
 Operators with no `[live]` parameters are exempt from the override rule; note
 that in the consumer header comment. Process warmup still applies.

@@ -16,17 +16,13 @@
 //                     size_id` members>;
 //   const char* tool_name();          // e.g. "perf_feature_assembly"
 //   const char* tool_description();   // one-line summary for --help
-//   const char* sizes_all_help();     // --sizes all description
-//   const char* sizes_subset_help();  // --sizes a,b,c description
-//   const char* full_help();          // --full description (may be multi-line)
 //   std::vector<SizeDef> size_ladder_defs();  // full ladder, in ladder order
-//   std::vector<Scenario> build_profile_matrix(const std::string& scope);
+//   Scenario parse_case(const ProfileCase&, const std::vector<int64_t>& shape);
 //   void run_scenario(const Scenario&, const RunSettings&, PerfReport*);
 //
 // Optional hooks come from PerfDriverDefaults (inherit to get no-op defaults,
 // redefine to customize):
 //
-//   void process_warmup(const RunSettings&);  // discarded prime run
 //   void post_run(PerfReport*, bool quiet);   // e.g. calibration / tables
 
 #pragma once
@@ -37,10 +33,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -48,13 +46,13 @@
 #include "utils/perf_platform.hpp"
 #include "utils/perf_profiles.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_process_warmup.hpp"
 
 namespace holoscan::radar::perf {
 
 // No-op defaults for the optional Traits hooks. Inherit from this so a Traits
 // struct only defines the hooks it actually needs.
 struct PerfDriverDefaults {
-  static void process_warmup(const RunSettings&) {}
   static void post_run(PerfReport*, bool /*quiet*/) {}
 };
 
@@ -64,7 +62,6 @@ struct Options {
   std::string output;
   std::string text;
   bool quiet{false};
-  bool full{false};
   std::string scope{"limited"};
   std::vector<std::string> sizes;  // empty = tier default
   bool sizes_all{false};
@@ -99,9 +96,9 @@ void print_help() {
                "  --repeats N       Repeat each scenario N times, pooled "
                "(default 3)\n"
             << "  --scope NAME      minimal|limited|overrides|moderate|thorough\n"
-            << "  --sizes all       " << Traits::sizes_all_help() << "\n"
-            << "  --sizes a,b,c     " << Traits::sizes_subset_help() << "\n"
-            << "  --full            " << Traits::full_help() << "\n"
+            << "  --sizes all       Use all YAML size profiles\n"
+            << "  --sizes a,b,c     Limit to named YAML profiles\n"
+            << "  --full            Alias for --scope thorough\n"
             << "  --stop-after-s S  Stop after first scenario whose wall time "
                "exceeds S seconds\n"
                "  --help            Show this help\n";
@@ -128,7 +125,6 @@ bool parse_args(int argc, char** argv, Options* opt) {
     } else if (a == "--quiet") {
       opt->quiet = true;
     } else if (a == "--full") {
-      opt->full = true;
       opt->scope = "thorough";
     } else if (a == "--scope") {
       opt->scope = next("--scope");
@@ -185,18 +181,21 @@ inline void default_log_level() {
 }
 
 template <typename Traits>
+ProfileSuite load_adapter_suite() {
+  const std::string operator_name = std::string(Traits::tool_name()).substr(5);
+  return load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / (operator_name + ".yaml"),
+      operator_name);
+}
+
+template <typename Traits>
 std::vector<typename Traits::Scenario> select_scenarios(const Options& opt) {
-  auto scenarios = Traits::build_profile_matrix(opt.scope);
-  if (opt.sizes_all || opt.sizes.empty())
-    return scenarios;
-  std::vector<typename Traits::Scenario> filtered;
-  for (const auto& scenario : scenarios) {
-    if (std::find(opt.sizes.begin(), opt.sizes.end(), scenario.size_id) != opt.sizes.end())
-      filtered.push_back(scenario);
-  }
-  if (filtered.empty())
-    throw std::invalid_argument("no YAML cases match requested sizes");
-  return filtered;
+  const auto suite = load_adapter_suite<Traits>();
+  return select_validated_cases<typename Traits::Scenario>(
+      suite, opt.scope, opt.sizes_all ? std::vector<std::string>{} : opt.sizes,
+      [](const ProfileCase& c, const std::vector<int64_t>& shape) {
+        return Traits::parse_case(c, shape);
+      });
 }
 
 // Record ladder definitions for the sizes this run actually exercises, in
@@ -319,7 +318,19 @@ int perf_main(int argc, char** argv) {
 
   detail::record_exercised_sizes<Traits>(scenarios, &report);
 
-  Traits::process_warmup(opt.rs);
+  run_process_warmup([&] {
+    RunSettings warm;
+    warm.warmup_frames = 0;
+    warm.measured_frames = 2;
+    warm.repeats = 1;
+    PerfReport discarded;
+    const auto suite = detail::load_adapter_suite<Traits>();
+    const auto baseline = select_validated_cases<typename Traits::Scenario>(
+        suite, "minimal", {"small"}, [](const ProfileCase& c, const std::vector<int64_t>& shape) {
+          return Traits::parse_case(c, shape);
+        });
+    Traits::run_scenario(baseline.front(), warm, &discarded);
+  });
   try {
     detail::run_all_scenarios<Traits>(scenarios, opt, &report);
     Traits::post_run(&report, opt.quiet);

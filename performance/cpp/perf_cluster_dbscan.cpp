@@ -35,7 +35,6 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 
@@ -72,38 +71,6 @@ struct DbscanScenario {
 // FeatureAssembly layouts that actually feed this op (2 = range+vel,
 // 3 = +score pre-angle, 5 = +az+el post-angle). Pairwise distance cost
 // grows with F, so the ladder is intentionally (N, F)-diverse, not N-only.
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 256, 2, 8, "small; fast smoke (R+V)"},
-      {"sm", 1024, 2, 32, "compact 2-feature (R+V)"},
-      {"sm3", 1024, 3, 32, "compact 3-feature (R+V+score)"},
-      {"md", 2048, 2, 64, "mid-scale 2-feature"},
-      {"md3", 2048, 3, 64, "mid-scale 3-feature (pre-angle)"},
-      {"md5", 2048, 5, 64, "mid-scale 5-feature (post-angle)"},
-      {"lg", 4096, 2, 128, "dense 2-feature cloud"},
-      {"lg5", 4096, 5, 128, "dense 5-feature cloud"},
-      {"xl", 8192, 2, 256, "upper N bound (O(N²), 2-feature)"},
-      {"xl5", 8192, 5, 256, "upper N×F bound (O(N²F))"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& s : size_ladder()) {
-    if (s.id == id) {
-      return &s;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* s = find_size(id);
-  if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *s;
-}
 
 template <typename T>
 std::shared_ptr<holoscan::Tensor> make_device_from_host(const std::vector<T>& host,
@@ -264,11 +231,6 @@ struct DbscanTraits : perf::PerfDriverDefaults {
     return "ClusterDBSCANOp performance characterization "
            "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() { return "Size sweep across the full ladder"; }
-  static const char* sizes_subset_help() { return "Size sweep across an explicit subset"; }
-  static const char* full_help() {
-    return "Full size x feature ladder with min_points override timing";
-  }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -287,86 +249,57 @@ struct DbscanTraits : perf::PerfDriverDefaults {
     }
     return result;
   }
-  static std::vector<DbscanScenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::set<std::string> selected_ids;
-    for (const auto& c : profiles.select(scope))
-      selected_ids.insert(c.id);
-    std::vector<DbscanScenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i) {
-        if (c.profile == perf::kProfiles[i])
-          break;
+  static DbscanScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    if (shape.size() != 3 || shape[0] < 1 || shape[1] < 2 || shape[1] > 5 || shape[2] < 1)
+      throw std::invalid_argument("ClusterDBSCAN invalid profile shape");
+    perf::require_keys(c.parameters, {"epsilon", "min_points", "max_clusters"}, "parameters");
+    if (!c.parameters["epsilon"])
+      throw std::invalid_argument("ClusterDBSCAN requires epsilon");
+    const double epsilon = c.parameters["epsilon"].as<double>();
+    if (epsilon <= 0.0)
+      throw std::invalid_argument("ClusterDBSCAN epsilon must be positive");
+    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
+    auto scenario = make_scenario(size);
+    scenario.id = c.id;
+    scenario.size_id = c.profile;
+    scenario.epsilon = {epsilon};
+    if (c.parameters["min_points"])
+      scenario.min_points = c.parameters["min_points"].as<int64_t>();
+    if (c.parameters["max_clusters"])
+      scenario.max_clusters = c.parameters["max_clusters"].as<int64_t>();
+    if (scenario.min_points < 0 || scenario.max_clusters < 0)
+      throw std::invalid_argument("ClusterDBSCAN counts must be nonnegative");
+    if (c.override_value) {
+      scenario.live_port = (*c.override_value)["port"].as<std::string>();
+      if (scenario.live_port == "epsilon") {
+        scenario.changed_epsilon = (*c.override_value)["value"].as<double>();
+        if (scenario.changed_epsilon <= 0.0)
+          throw std::invalid_argument("ClusterDBSCAN override epsilon must be positive");
+      } else if (scenario.live_port == "min_points" || scenario.live_port == "max_clusters") {
+        scenario.changed_scalar = (*c.override_value)["value"].as<int64_t>();
+        if (scenario.changed_scalar < 0)
+          throw std::invalid_argument("ClusterDBSCAN override count must be nonnegative");
+      } else {
+        throw std::invalid_argument("unknown ClusterDBSCAN live port");
       }
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 3 || shape[0] < 1 || shape[1] < 2 || shape[1] > 5 || shape[2] < 1)
-        throw std::invalid_argument("ClusterDBSCAN invalid profile shape");
-      perf::require_keys(c.parameters, {"epsilon", "min_points", "max_clusters"}, "parameters");
-      if (!c.parameters["epsilon"])
-        throw std::invalid_argument("ClusterDBSCAN requires epsilon");
-      const double epsilon = c.parameters["epsilon"].as<double>();
-      if (epsilon <= 0.0)
-        throw std::invalid_argument("ClusterDBSCAN epsilon must be positive");
-      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
-      auto scenario = make_scenario(size);
-      scenario.id = c.id;
-      scenario.size_id = c.profile;
-      scenario.epsilon = {epsilon};
-      if (c.parameters["min_points"])
-        scenario.min_points = c.parameters["min_points"].as<int64_t>();
-      if (c.parameters["max_clusters"])
-        scenario.max_clusters = c.parameters["max_clusters"].as<int64_t>();
-      if (scenario.min_points < 0 || scenario.max_clusters < 0)
-        throw std::invalid_argument("ClusterDBSCAN counts must be nonnegative");
-      if (c.override_value) {
-        scenario.live_port = (*c.override_value)["port"].as<std::string>();
-        if (scenario.live_port == "epsilon") {
-          scenario.changed_epsilon = (*c.override_value)["value"].as<double>();
-          if (scenario.changed_epsilon <= 0.0)
-            throw std::invalid_argument("ClusterDBSCAN override epsilon must be positive");
-        } else if (scenario.live_port == "min_points" || scenario.live_port == "max_clusters") {
-          scenario.changed_scalar = (*c.override_value)["value"].as<int64_t>();
-          if (scenario.changed_scalar < 0)
-            throw std::invalid_argument("ClusterDBSCAN override count must be nonnegative");
-        } else {
-          throw std::invalid_argument("unknown ClusterDBSCAN live port");
-        }
-      }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
     }
-    return result;
+    return scenario;
   }
 
   static void run_scenario(const DbscanScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, !scen.live_port.empty());
-    const auto samples =
-        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    perf::measure_scenario(
+        rs, !scen.live_port.empty(),
+        [&](int /*rep*/, const perf::RunPlan& p) {
           return run_dbscan_graph(scen, p);
+        },
+        base_row(scen), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scen, row.latency.median_ms);
+          row.notes = "end-to-end Graph latency; cells/s is points/s";
+          if (!scen.live_port.empty())
+            row.notes += "; one-frame " + scen.live_port + " change";
         });
-
-    perf::append_setup_row(base_row(scen), samples, report);
-
-    perf::ResultRow row = base_row(scen);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes = "end-to-end Graph latency; cells/s is points/s";
-    if (!scen.live_port.empty())
-      row.notes += "; one-frame " + scen.live_port + " change";
-    report->results.push_back(row);
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([] {
-      perf::PerfReport discarded;
-      perf::RunSettings warm;
-      warm.warmup_frames = 0;
-      warm.measured_frames = 2;
-      warm.repeats = 1;
-      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
-    });
   }
 };
 

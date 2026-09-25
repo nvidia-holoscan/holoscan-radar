@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Reusable harness headers (utils/) plus thin per-operator consumers. Shared
-# code lives in utils/ as an INTERFACE library; only the scenario matrix is
-# operator-specific.
+# Shared typed sources, YAML selection, Graph timing, and reporting live in
+# utils/. Per-operator adapters construct valid tensors, parameters, and ports.
 add_library(radar_perf_utils INTERFACE)
 target_include_directories(radar_perf_utils INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -105,6 +104,27 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
                     --warmup 1 --frames 3 --repeats 1 --quiet
                     --output ${CMAKE_CURRENT_BINARY_DIR}/perf_${_perf_name}_smoke.json)
             set_tests_properties(perf_${_perf_name}_smoke PROPERTIES LABELS "performance")
+        endif()
+    endforeach()
+    # Representative live paths exercise POD, host Tensor, descriptor, and
+    # three-input sources. Reports are checked for completeness by perf_main.
+    foreach(_perf_name IN ITEMS
+            clutter_filter cfar_detector beamscan_estimator detection_reduction)
+        if(TARGET perf_${_perf_name})
+            add_test(NAME perf_${_perf_name}_overrides_smoke
+                COMMAND perf_${_perf_name} --scope overrides --sizes small
+                    --warmup 1 --frames 3 --repeats 2 --quiet
+                    --output ${CMAKE_CURRENT_BINARY_DIR}/perf_${_perf_name}_overrides_smoke.json)
+            set_tests_properties(perf_${_perf_name}_overrides_smoke PROPERTIES LABELS "performance")
+        endif()
+    endforeach()
+    foreach(_perf_name IN ITEMS fmcw_range_processor fmcw_doppler_processor)
+        if(TARGET perf_${_perf_name})
+            add_test(NAME perf_${_perf_name}_cached_plan_smoke
+                COMMAND perf_${_perf_name} --scope thorough --sizes medium
+                    --warmup 1 --frames 3 --repeats 2 --quiet
+                    --output ${CMAKE_CURRENT_BINARY_DIR}/perf_${_perf_name}_cached_plan_smoke.json)
+            set_tests_properties(perf_${_perf_name}_cached_plan_smoke PROPERTIES LABELS "performance")
         endif()
     endforeach()
 endif()

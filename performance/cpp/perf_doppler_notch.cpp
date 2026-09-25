@@ -18,7 +18,6 @@
 #include "fmcw/doppler_notch_op/doppler_notch_op.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -50,22 +49,6 @@ struct SizeSpec {
   int64_t range;
   const char* role;
 };
-
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> sizes = {
-      {"xs", 32, 128, "small map; fast smoke"},
-      {"md", 128, 512, "common development size"},
-      {"xl", 256, 2048, "range-heavy upper characterization"}};
-  return sizes;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& size : size_ladder()) {
-    if (size.id == id)
-      return &size;
-  }
-  return nullptr;
-}
 
 NotchScenario make_scenario(const SizeSpec& size, bool cosine, bool rank4,
                             bool live_override = false) {
@@ -172,9 +155,6 @@ struct NotchTraits : perf::PerfDriverDefaults {
 
   static const char* tool_name() { return "perf_doppler_notch"; }
   static const char* tool_description() { return "DopplerNotchOp performance characterization"; }
-  static const char* sizes_all_help() { return "Hard/cosine and rank-2/rank-4 sweep"; }
-  static const char* sizes_subset_help() { return "Notch sweep over selected sizes"; }
-  static const char* full_help() { return "Full notch variant and size matrix"; }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -195,72 +175,45 @@ struct NotchTraits : perf::PerfDriverDefaults {
     return result;
   }
 
-  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::set<std::string> selected_ids;
-    for (const auto& c : profiles.select(scope))
-      selected_ids.insert(c.id);
-    std::vector<Scenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i) {
-        if (c.profile == perf::kProfiles[i])
-          break;
-      }
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 2 || shape[0] < 2)
-        throw std::invalid_argument("DopplerNotch invalid profile shape");
-      perf::require_keys(c.parameters, {"transition", "mimo", "cyclic"}, "parameters");
-      if (!c.parameters["transition"] || !c.parameters["mimo"])
-        throw std::invalid_argument("DopplerNotch case requires transition and mimo");
-      const auto transition = c.parameters["transition"].as<std::string>();
-      if (transition != "hard" && transition != "cosine")
-        throw std::invalid_argument("DopplerNotch transition must be hard or cosine");
-      const SizeSpec size{c.profile.c_str(), shape[0], shape[1], c.profile.c_str()};
-      auto scenario = make_scenario(size, transition == "cosine", c.parameters["mimo"].as<bool>());
-      scenario.id = c.id;
-      scenario.size_id = c.profile;
-      if (c.parameters["cyclic"])
-        scenario.cyclic = c.parameters["cyclic"].as<bool>();
-      if (c.override_value) {
-        scenario.live_port = (*c.override_value)["port"].as<std::string>();
-        scenario.override_value = (*c.override_value)["value"].as<double>();
-        if (scenario.live_port != "center_velocity" && scenario.live_port != "stop_half_width" &&
-            scenario.live_port != "transition_width")
-          throw std::invalid_argument("DopplerNotch unknown live port");
-        if (scenario.live_port != "center_velocity" && scenario.override_value < 0.0)
-          throw std::invalid_argument("DopplerNotch widths must be nonnegative");
-        scenario.live_override = true;
-      }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    if (shape.size() != 2 || shape[0] < 2)
+      throw std::invalid_argument("DopplerNotch invalid profile shape");
+    perf::require_keys(c.parameters, {"transition", "mimo", "cyclic"}, "parameters");
+    if (!c.parameters["transition"] || !c.parameters["mimo"])
+      throw std::invalid_argument("DopplerNotch case requires transition and mimo");
+    const auto transition = c.parameters["transition"].as<std::string>();
+    if (transition != "hard" && transition != "cosine")
+      throw std::invalid_argument("DopplerNotch transition must be hard or cosine");
+    const SizeSpec size{c.profile.c_str(), shape[0], shape[1], c.profile.c_str()};
+    auto scenario = make_scenario(size, transition == "cosine", c.parameters["mimo"].as<bool>());
+    scenario.id = c.id;
+    scenario.size_id = c.profile;
+    if (c.parameters["cyclic"])
+      scenario.cyclic = c.parameters["cyclic"].as<bool>();
+    if (c.override_value) {
+      scenario.live_port = (*c.override_value)["port"].as<std::string>();
+      scenario.override_value = (*c.override_value)["value"].as<double>();
+      if (scenario.live_port != "center_velocity" && scenario.live_port != "stop_half_width" &&
+          scenario.live_port != "transition_width")
+        throw std::invalid_argument("DopplerNotch unknown live port");
+      if (scenario.live_port != "center_velocity" && scenario.override_value < 0.0)
+        throw std::invalid_argument("DopplerNotch widths must be nonnegative");
+      scenario.live_override = true;
     }
-    return result;
+    return scenario;
   }
 
   static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(settings, scenario.live_override);
-    const auto samples =
-        perf::collect_scenario_samples(settings, plan, [&](int, const perf::RunPlan& run) {
+    perf::measure_scenario(
+        settings, scenario.live_override,
+        [&](int, const perf::RunPlan& run) {
           return run_notch_graph(scenario, run);
+        },
+        base_row(scenario), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scenario);
         });
-    perf::append_setup_row(base_row(scenario), samples, report);
-    perf::ResultRow row = base_row(scenario);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scenario);
-    report->results.push_back(std::move(row));
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([] {
-      perf::PerfReport discarded;
-      perf::RunSettings settings;
-      settings.warmup_frames = 0;
-      settings.measured_frames = 2;
-      settings.repeats = 1;
-      run_scenario(build_profile_matrix("minimal").front(), settings, &discarded);
-    });
   }
 };
 

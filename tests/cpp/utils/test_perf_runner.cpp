@@ -82,6 +82,48 @@ TEST(PerfRunner, PairsChangedFrameWithItsOwnRunBaseline) {
   EXPECT_NEAR(row.latency.median_ms, 10.0, 1e-9);
 }
 
+TEST(PerfRunner, SharedMeasurementWritesBothBucketsForIndependentRuns) {
+  perf::RunSettings settings;
+  settings.warmup_frames = 1;
+  settings.measured_frames = 3;
+  settings.repeats = 2;
+  perf::PerfReport report;
+  perf::ResultRow base;
+  base.scenario_id = "live-case";
+  base.live_port = "method";
+  int sessions = 0;
+  perf::measure_scenario(
+      settings, true,
+      [&](int repeat, const perf::RunPlan& plan) {
+        EXPECT_EQ(repeat, sessions++);
+        EXPECT_EQ(plan.override_at, 4);
+        EXPECT_EQ(plan.total_frames, 6);
+        perf::TimingCollector collector;
+        collector.t_construct = perf::Clock::time_point{};
+        collector.t_first_tick = collector.t_construct + std::chrono::milliseconds{1};
+        for (int frame = 0; frame < plan.total_frames; ++frame) {
+          const auto start = collector.t_construct + std::chrono::milliseconds{frame + 1};
+          const auto duration = frame == plan.override_at ? std::chrono::microseconds{200}
+                                                          : std::chrono::microseconds{100};
+          collector.starts.push_back(start);
+          collector.ends.push_back(start + duration);
+        }
+        return collector;
+      },
+      base, &report,
+      [](perf::ResultRow& row) {
+        row.notes = "typed adapter";
+      });
+  ASSERT_EQ(sessions, 2);
+  ASSERT_EQ(report.results.size(), 2U);
+  EXPECT_EQ(report.results[0].bucket, "setup");
+  EXPECT_EQ(report.results[1].bucket, "compute");
+  EXPECT_EQ(report.results[1].latency.samples, 6);
+  EXPECT_NEAR(report.results[1].override_ms, 0.2, 1e-9);
+  EXPECT_NEAR(report.results[1].override_delta_ms, 0.1, 1e-9);
+  EXPECT_EQ(report.results[1].notes, "typed adapter");
+}
+
 TEST(PerfRunner, SerializesScopeAndMeasuredRate) {
   perf::PerfReport report;
   report.run_settings.scope = "overrides";

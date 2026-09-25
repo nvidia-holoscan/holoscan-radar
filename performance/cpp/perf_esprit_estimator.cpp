@@ -41,8 +41,8 @@
 #include "radar_schemas/array_geometry_bridge.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
+#include "utils/perf_payloads.hpp"
 #include "utils/perf_platform.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -51,6 +51,9 @@ namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
 
 namespace {
+
+using perf::emit_wire_doubles;
+using perf::smoothing_wire;
 
 using PerfPrecision = float;
 
@@ -101,32 +104,6 @@ const char* override_name(Scenario::OverrideKind kind) {
   }
   return "unknown";
 }
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> sizes = {{"xs", 4, 64, 16, "small array; fast smoke"},
-                                              {"sm", 8, 128, 32, "compact SIMO array"},
-                                              {"md", 16, 256, 48, "common dev size"},
-                                              {"lg", 32, 512, 64, "wide aperture, many looks"},
-                                              {"xl", 32, 1024, 96, "upper characterization bound"}};
-  return sizes;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& size : size_ladder()) {
-    if (size.id == id) {
-      return &size;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* size = find_size(id);
-  if (size == nullptr) {
-    std::cerr << "unknown size '" << id << "'\n";
-    std::abort();
-  }
-  return *size;
-}
 
 hr::ArrayGeometry make_ula(int64_t channels, double spacing) {
   hr::ArrayGeometry geometry;
@@ -175,68 +152,12 @@ Scenario make_scenario(const SizeSpec& size,
   return scenario;
 }
 
-Scenario make_ura_scenario(const char* size_id, int64_t ny, int64_t nz, int64_t detections,
-                           int64_t snapshots, Scenario::OverrideKind kind) {
-  Scenario scenario;
-  scenario.size_id = size_id;
-  scenario.is_ura = true;
-  scenario.ny = ny;
-  scenario.nz = nz;
-  scenario.channels = ny * nz;
-  scenario.detections = detections;
-  scenario.snapshots = snapshots;
-  scenario.override_kind = kind;
-  std::ostringstream id;
-  id << "esprit_ura_" << ny << "x" << nz << "_n" << detections << "_s" << snapshots << "_live_"
-     << override_name(kind);
-  scenario.id = id.str();
-  return scenario;
-}
-
-template <typename Wire>
-holoscan::expected<void, holoscan::Error> emit_wire_doubles(holoscan::Output<Wire>& output,
-                                                            Wire wire,
-                                                            std::span<const double> values,
-                                                            std::span<const int64_t> shape,
-                                                            holoscan::TimePoint capture_time) {
-  constexpr DLDataType dtype{kDLFloat, 64U, 1U};
-  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
-  if (!loan) {
-    return holoscan::make_unexpected(std::move(loan).error());
-  }
-  auto written =
-      loan->write_host_and_commit([values](const holoscan::TensorOutputWriteGuard& writer) {
-        std::copy(values.begin(), values.end(), writer.data_as<double>());
-      });
-  if (!written) {
-    return holoscan::make_unexpected(std::move(written).error());
-  }
-  return output.emit_tensor(std::move(*loan), std::move(wire),
-                            holoscan::EmitOptions{.capture_time = capture_time});
-}
-
-hr::SpatialSmoothingOverride smoothing_wire(const std::vector<int64_t>& smoothing) {
-  hr::SpatialSmoothingOverride wire;
-  wire.count = static_cast<int64_t>(smoothing.size());
-  if (!smoothing.empty()) {
-    wire.first = smoothing[0];
-  }
-  if (smoothing.size() > 1U) {
-    wire.second = smoothing[1];
-  }
-  return wire;
-}
-
-class PerfESPRITOverrideSourceOp final : public holoscan::Operator<> {
+struct LivePorts {
  public:
-  PerfESPRITOverrideSourceOp(int64_t override_at, hr::ESPRITParams initial,
-                             hr::ESPRITParams override, Scenario::OverrideKind kind)
-  : override_at_(override_at),
-    initial_(std::move(initial)),
-    override_(std::move(override)),
-    kind_(kind) {}
+  LivePorts(hr::ESPRITParams override, Scenario::OverrideKind kind)
+  : override_(std::move(override)), kind_(kind) {}
 
-  void setup(holoscan::OperatorSpec& spec) override {
+  void setup(holoscan::OperatorSpec& spec) {
     constexpr holoscan::TensorRepresentation kDevice{
         .memory_kind = holoscan::MemoryKind::kCudaDevice,
         .dtype = std::nullopt,
@@ -259,67 +180,44 @@ class PerfESPRITOverrideSourceOp final : public holoscan::Operator<> {
     spec.output(max_sources).max_emits_per_compute(1U);
   }
 
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnClock{.period = perf::kPerfTick});
-    return result;
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    std::shared_ptr<holoscan::Tensor> frame;
-    perf::PerfPublishMode mode = perf::PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(perf::PerfFrameBank::mutex);
-      if (perf::PerfFrameBank::in_flight != 0 || perf::PerfFrameBank::frames_remaining <= 0 ||
-          perf::PerfFrameBank::input_frame == nullptr) {
-        return {};
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
+      holoscan::ExecutionContext& context) {
+    const holoscan::TimePoint time = context.activation_time();
+    holoscan::expected<void, holoscan::Error> emitted;
+    switch (kind_) {
+      case Scenario::OverrideKind::kNone:
+        break;
+      case Scenario::OverrideKind::kArrayGeometry: {
+        const auto packed = hr::pack_array_geometry(override_.array_geometry);
+        const std::array<int64_t, 2> shape{override_.array_geometry.num_elements() + 1, 3};
+        emitted = emit_wire_doubles(array_geometry, hr::to_wire(override_.array_geometry), packed,
+                                    shape, time);
+        break;
       }
-      --perf::PerfFrameBank::frames_remaining;
-      frame = perf::PerfFrameBank::input_frame;
-      mode = perf::PerfFrameBank::publish_mode;
-      perf::detail::record_start_locked();
-    }
-
-    if (frame_index_ == override_at_) {
-      const holoscan::TimePoint time = context.activation_time();
-      holoscan::expected<void, holoscan::Error> emitted;
-      switch (kind_) {
-        case Scenario::OverrideKind::kNone:
-          break;
-        case Scenario::OverrideKind::kArrayGeometry: {
-          const auto packed = hr::pack_array_geometry(override_.array_geometry);
-          const std::array<int64_t, 2> shape{override_.array_geometry.num_elements() + 1, 3};
-          emitted = emit_wire_doubles(array_geometry, hr::to_wire(override_.array_geometry), packed,
-                                      shape, time);
-          break;
-        }
-        case Scenario::OverrideKind::kSpatialSmoothing: {
-          emitted = spatial_smoothing.emit(smoothing_wire(override_.spatial_smoothing),
-                                           holoscan::EmitOptions{.capture_time = time});
-          break;
-        }
-        case Scenario::OverrideKind::kNumSources: {
-          emitted =
-              num_sources.emit(override_.num_sources, holoscan::EmitOptions{.capture_time = time});
-          break;
-        }
-        case Scenario::OverrideKind::kSourceCountPfa: {
-          emitted = source_count_pfa.emit(override_.source_count_pfa,
-                                          holoscan::EmitOptions{.capture_time = time});
-          break;
-        }
-        case Scenario::OverrideKind::kMaxSources: {
-          emitted =
-              max_sources.emit(override_.max_sources, holoscan::EmitOptions{.capture_time = time});
-          break;
-        }
+      case Scenario::OverrideKind::kSpatialSmoothing: {
+        emitted = spatial_smoothing.emit(smoothing_wire(override_.spatial_smoothing),
+                                         holoscan::EmitOptions{.capture_time = time});
+        break;
       }
-      if (!emitted)
-        return emitted;
+      case Scenario::OverrideKind::kNumSources: {
+        emitted =
+            num_sources.emit(override_.num_sources, holoscan::EmitOptions{.capture_time = time});
+        break;
+      }
+      case Scenario::OverrideKind::kSourceCountPfa: {
+        emitted = source_count_pfa.emit(override_.source_count_pfa,
+                                        holoscan::EmitOptions{.capture_time = time});
+        break;
+      }
+      case Scenario::OverrideKind::kMaxSources: {
+        emitted =
+            max_sources.emit(override_.max_sources, holoscan::EmitOptions{.capture_time = time});
+        break;
+      }
     }
-    ++frame_index_;
-    return perf::detail::emit_device_frame(snapshot, context, frame, mode);
+    if (!emitted)
+      return emitted;
+    return {};
   }
 
   holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
@@ -330,12 +228,11 @@ class PerfESPRITOverrideSourceOp final : public holoscan::Operator<> {
   holoscan::Output<int64_t> max_sources{"max_sources"};
 
  private:
-  int64_t override_at_{-1};
-  hr::ESPRITParams initial_;
   hr::ESPRITParams override_;
   Scenario::OverrideKind kind_{Scenario::OverrideKind::kNone};
-  int64_t frame_index_{0};
 };
+
+using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::snapshot>;
 
 perf::TimingCollector run_esprit_graph(const Scenario& scen, const perf::RunPlan& plan) {
   auto cube =
@@ -380,8 +277,7 @@ perf::TimingCollector run_esprit_graph(const Scenario& scen, const perf::RunPlan
   perf::PerfFrameBank::reset(std::move(cube), plan.total_frames, &collector);
 
   holoscan::Graph graph{"esprit-perf"};
-  const auto source = graph.op<PerfESPRITOverrideSourceOp>("src", plan.override_at, initial,
-                                                           override, scen.override_kind);
+  const auto source = graph.op<LiveSource>("src", plan.override_at, override, scen.override_kind);
   auto op = graph.op<hr::ESPRITEstimatorOp<PerfPrecision>>("esprit", extents);
   op.set_params(std::move(initial));
   const auto aoa_sink = graph.op<perf::PerfTerminalSinkOp>("aoa_sink");
@@ -412,27 +308,7 @@ perf::TimingCollector run_esprit_graph(const Scenario& scen, const perf::RunPlan
   perf::bind_tensor_out(options, "esprit", "doa_multi");
   perf::bind_tensor_out(options, "esprit", "source_count");
   perf::bind_tensor_out(options, "esprit", "eigenvalues");
-  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
-  const holoscan::ExecutionPlan compiled = holoscan::compile(graph, std::move(options));
-  if (!compiled.ok()) {
-    throw std::runtime_error("esprit-perf compile failed: " + std::string(compiled.json()));
-  }
-  holoscan::RunSession session = holoscan::run_async(compiled);
-  perf::detail::wait_for_frames(session, plan.total_frames);
-  session.request_stop();
-  session.wait();
-  if (!session.diagnostics().empty()) {
-    std::string message = "esprit-perf run diagnostics:";
-    for (const auto& diagnostic : session.diagnostics()) {
-      message += " ";
-      message += std::string(diagnostic.token);
-    }
-    throw std::runtime_error(message);
-  }
-  if (collector.ends.size() < static_cast<std::size_t>(plan.total_frames)) {
-    throw std::runtime_error(
-        perf::detail::stall_message("esprit-perf", collector.ends.size(), plan.total_frames));
-  }
+  perf::execute_perf_graph(graph, std::move(options), plan.total_frames, "esprit-perf", &collector);
   return collector;
 }
 
@@ -451,25 +327,6 @@ perf::ResultRow base_row(const Scenario& scenario) {
   return row;
 }
 
-void append_override_scenarios(std::vector<Scenario>* result, const SizeSpec& size) {
-  for (const auto kind :
-       {Scenario::OverrideKind::kArrayGeometry, Scenario::OverrideKind::kSpatialSmoothing,
-        Scenario::OverrideKind::kNumSources, Scenario::OverrideKind::kSourceCountPfa,
-        Scenario::OverrideKind::kMaxSources}) {
-    result->push_back(make_scenario(size, kind));
-  }
-}
-
-void append_ura_override_scenarios(std::vector<Scenario>* result, const char* size_id, int64_t ny,
-                                   int64_t nz, int64_t detections, int64_t snapshots) {
-  for (const auto kind :
-       {Scenario::OverrideKind::kArrayGeometry, Scenario::OverrideKind::kSpatialSmoothing,
-        Scenario::OverrideKind::kNumSources, Scenario::OverrideKind::kSourceCountPfa,
-        Scenario::OverrideKind::kMaxSources}) {
-    result->push_back(make_ura_scenario(size_id, ny, nz, detections, snapshots, kind));
-  }
-}
-
 struct Traits : perf::PerfDriverDefaults {
   using Scenario = ::Scenario;
 
@@ -478,11 +335,6 @@ struct Traits : perf::PerfDriverDefaults {
     return "ESPRITEstimatorOp performance characterization "
            "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() {
-    return "Default ESPRIT size sweep with all five live overrides";
-  }
-  static const char* sizes_subset_help() { return "ESPRIT sweep across an explicit subset"; }
-  static const char* full_help() { return "Full ESPRIT size ladder with all five live overrides"; }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -501,88 +353,60 @@ struct Traits : perf::PerfDriverDefaults {
     }
     return result;
   }
-  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::set<std::string> selected_ids;
-    for (const auto& c : profiles.select(scope))
-      selected_ids.insert(c.id);
-    std::vector<Scenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i)
-        if (c.profile == perf::kProfiles[i])
-          break;
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 3 || shape[0] < 4 || shape[1] < 1 || shape[2] < 2)
-        throw std::invalid_argument("esprit_estimator invalid shape");
-      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
-      auto scenario = make_scenario(size);
-      scenario.id = c.id;
-      perf::require_keys(c.parameters, {"num_sources"}, "parameters");
-      const auto model_order = c.parameters["num_sources"].as<std::string>();
-      if (model_order == "auto") {
-        scenario.static_model_order = -1;
-      } else {
-        const int64_t value = std::stoll(model_order);
-        if (value < 1 || value > 3)
-          throw std::invalid_argument("invalid model order");
-        scenario.static_model_order = value;
-      }
-      if (c.override_value) {
-        const auto port = (*c.override_value)["port"].as<std::string>();
-        const auto value = (*c.override_value)["value"].as<std::string>();
-        if (port == "array_geometry" && value == "spacing_045")
-          scenario.override_kind = Scenario::OverrideKind::kArrayGeometry;
-        else if (port == "spatial_smoothing" && value == "two")
-          scenario.override_kind = Scenario::OverrideKind::kSpatialSmoothing;
-        else if (port == "num_sources" && value == "2")
-          scenario.override_kind = Scenario::OverrideKind::kNumSources;
-        else if (port == "source_count_pfa" && value == "0.001")
-          scenario.override_kind = Scenario::OverrideKind::kSourceCountPfa;
-        else if (port == "max_sources" && value == "3")
-          scenario.override_kind = Scenario::OverrideKind::kMaxSources;
-        else
-          throw std::invalid_argument("esprit_estimator invalid live override");
-      }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    if (shape.size() != 3 || shape[0] < 4 || shape[1] < 1 || shape[2] < 2)
+      throw std::invalid_argument("esprit_estimator invalid shape");
+    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
+    auto scenario = make_scenario(size);
+    scenario.id = c.id;
+    perf::require_keys(c.parameters, {"num_sources"}, "parameters");
+    const auto model_order = c.parameters["num_sources"].as<std::string>();
+    if (model_order == "auto") {
+      scenario.static_model_order = -1;
+    } else {
+      const int64_t value = std::stoll(model_order);
+      if (value < 1 || value > 3)
+        throw std::invalid_argument("invalid model order");
+      scenario.static_model_order = value;
     }
-    return result;
+    if (c.override_value) {
+      const auto port = (*c.override_value)["port"].as<std::string>();
+      const auto value = (*c.override_value)["value"].as<std::string>();
+      if (port == "array_geometry" && value == "spacing_045")
+        scenario.override_kind = Scenario::OverrideKind::kArrayGeometry;
+      else if (port == "spatial_smoothing" && value == "two")
+        scenario.override_kind = Scenario::OverrideKind::kSpatialSmoothing;
+      else if (port == "num_sources" && value == "2")
+        scenario.override_kind = Scenario::OverrideKind::kNumSources;
+      else if (port == "source_count_pfa" && value == "0.001")
+        scenario.override_kind = Scenario::OverrideKind::kSourceCountPfa;
+      else if (port == "max_sources" && value == "3")
+        scenario.override_kind = Scenario::OverrideKind::kMaxSources;
+      else
+        throw std::invalid_argument("esprit_estimator invalid live override");
+    }
+    return scenario;
   }
 
   static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const auto plan = perf::make_run_plan(
-        settings, /*has_override=*/scenario.override_kind != Scenario::OverrideKind::kNone);
-    const auto samples =
-        perf::collect_scenario_samples(settings, plan, [&](int, const perf::RunPlan& run_plan) {
+    perf::measure_scenario(
+        settings, scenario.override_kind != Scenario::OverrideKind::kNone,
+        [&](int, const perf::RunPlan& run_plan) {
           return run_esprit_graph(scenario, run_plan);
+        },
+        base_row(scenario), report,
+        [&](perf::ResultRow& row) {
+          if (row.latency.median_ms > 0.0) {
+            row.cells_per_second = scenario.detections / (row.latency.median_ms / 1000.0);
+          }
+          row.notes = "override_ms isolates inline " +
+                      std::string(override_name(scenario.override_kind)) +
+                      "; steady num_sources is fixed at one except the "
+                      "source_count_pfa scenario, which uses auto; subarray_spec is static";
+          if (row.live_port.empty())
+            row.notes = "default parameters; no live override";
         });
-    perf::append_setup_row(base_row(scenario), samples, report);
-    perf::ResultRow row = base_row(scenario);
-    perf::fill_compute_row(&row, samples);
-    if (row.latency.median_ms > 0.0) {
-      row.cells_per_second = scenario.detections / (row.latency.median_ms / 1000.0);
-    }
-    row.notes = "override_ms isolates inline " +
-                std::string(override_name(scenario.override_kind)) +
-                "; steady num_sources is fixed at one except the "
-                "source_count_pfa scenario, which uses auto; subarray_spec is static";
-    if (row.live_port.empty())
-      row.notes = "default parameters; no live override";
-    report->results.push_back(row);
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([] {
-      perf::PerfReport discarded;
-      perf::RunSettings settings;
-      settings.warmup_frames = 0;
-      settings.measured_frames = 2;
-      settings.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs"), Scenario::OverrideKind::kMaxSources),
-                   settings, &discarded);
-    });
   }
 };
 

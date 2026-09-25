@@ -59,34 +59,6 @@ struct FeatScenario {
   int64_t range{0};
 };
 
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 64, 256, "small map; fast smoke"},
-      {"sm", 128, 512, "compact sensor"},
-      {"md", 256, 512, "common dev size"},
-      {"lg", 512, 1024, "moderate production-scale"},
-      {"xlw", 1024, 2048, "range-heavy moderate (v1 upper bound)"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& s : size_ladder()) {
-    if (s.id == id) {
-      return &s;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* s = find_size(id);
-  if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *s;
-}
-
 std::vector<hr::AssemblyFeature> pack_features() {
   return {hr::AssemblyFeature::kRange, hr::AssemblyFeature::kVelocity};
 }
@@ -206,16 +178,6 @@ struct FeatTraits : perf::PerfDriverDefaults {
     return "FeatureAssemblyOp performance characterization "
            "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() {
-    return "Physical range/velocity pack sweep across the full ladder";
-  }
-  static const char* sizes_subset_help() {
-    return "Physical range/velocity pack sweep across an explicit subset";
-  }
-  static const char* full_help() {
-    return "Full matrix (sizes x detection counts); score and angle packs "
-           "remain covered by unit tests";
-  }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -236,59 +198,38 @@ struct FeatTraits : perf::PerfDriverDefaults {
     return result;
   }
 
-  static std::vector<FeatScenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::vector<FeatScenario> result;
-    const auto selected = profiles.select(scope);
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i) {
-        if (c.profile == perf::kProfiles[i])
-          break;
-      }
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 2)
-        throw std::invalid_argument("feature_assembly profile rank mismatch");
-      perf::require_keys(c.parameters, {"detections"}, "parameters");
-      if (c.override_value.has_value())
-        throw std::invalid_argument("FeatureAssembly has no live input");
-      const int64_t count = c.parameters["detections"].as<int64_t>();
-      if (count < 0 || count > 65536)
-        throw std::invalid_argument("FeatureAssembly detections out of range");
-      const bool chosen =
-          std::any_of(selected.begin(), selected.end(), [&](const perf::ProfileCase& item) {
-            return item.id == c.id;
-          });
-      if (!chosen)
-        continue;
-      const SizeSpec size{c.profile, shape[0], shape[1], c.profile};
-      auto scenario = make_scenario(size, count);
-      scenario.id = c.id;
-      scenario.size_id = c.profile;
-      result.push_back(std::move(scenario));
-    }
-    return result;
+  static FeatScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    if (shape.size() != 2)
+      throw std::invalid_argument("feature_assembly profile rank mismatch");
+    perf::require_keys(c.parameters, {"detections"}, "parameters");
+    if (c.override_value.has_value())
+      throw std::invalid_argument("FeatureAssembly has no live input");
+    const int64_t count = c.parameters["detections"].as<int64_t>();
+    if (count < 0 || count > 65536)
+      throw std::invalid_argument("FeatureAssembly detections out of range");
+    const SizeSpec size{c.profile, shape[0], shape[1], c.profile};
+    auto scenario = make_scenario(size, count);
+    scenario.id = c.id;
+    scenario.size_id = c.profile;
+    return scenario;
   }
 
   static void run_scenario(const FeatScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
-    const auto samples =
-        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    perf::measure_scenario(
+        rs, false,
+        [&](int /*rep*/, const perf::RunPlan& p) {
           return run_feat_graph(scen, p.total_frames);
+        },
+        base_row(scen), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scen, row.latency.median_ms);
+          row.notes =
+              "bins-only (range+velocity) — score/aoa optional ports "
+              "omitted from this Graph benchmark (covered by stage tests); "
+              "cold_ms is first-frame latency; median/p90 are "
+              "steady state; cells/s is detections/s";
         });
-
-    perf::append_setup_row(base_row(scen), samples, report);
-
-    perf::ResultRow row = base_row(scen);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes =
-        "bins-only (range+velocity) — score/aoa optional ports "
-        "omitted from this Graph benchmark (covered by stage tests); "
-        "cold_ms is first-frame latency; median/p90 are "
-        "steady state; cells/s is detections/s";
-    report->results.push_back(row);
   }
 };
 

@@ -33,7 +33,6 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -67,34 +66,6 @@ struct AssemblyScenario {
   bool live_wavelength{false};
   double override_wavelength{kDefaultWavelength * 1.1};
 };
-
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 2, 4, 32, 128, "small MIMO; fast smoke"},
-      {"sm", 4, 8, 64, 256, "compact MIMO"},
-      {"md", 4, 16, 128, 512, "common dev size"},
-      {"lg", 8, 32, 256, 1024, "moderate MIMO"},
-      {"xl", 8, 64, 512, 2048, "upper characterization bound"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& s : size_ladder()) {
-    if (s.id == id) {
-      return &s;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* s = find_size(id);
-  if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *s;
-}
 
 std::vector<double> linear_positions(int64_t count, double spacing) {
   std::vector<double> out(static_cast<size_t>(count * 3));
@@ -217,15 +188,6 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
     return "VirtualArrayAssemblyOp performance "
            "characterization (HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() { return "Dedup policy size sweep across the full ladder"; }
-  static const char* sizes_subset_help() {
-    return "Dedup policy size sweep across an explicit "
-           "subset";
-  }
-  static const char* full_help() {
-    return "Full matrix (sizes + overlap policies); "
-           "inline wavelength-override timing";
-  }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -247,80 +209,53 @@ struct VirtualAssemblyTraits : perf::PerfDriverDefaults {
     return result;
   }
 
-  static std::vector<AssemblyScenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::set<std::string> selected_ids;
-    for (const auto& c : profiles.select(scope))
-      selected_ids.insert(c.id);
-    std::vector<AssemblyScenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i) {
-        if (c.profile == perf::kProfiles[i])
-          break;
-      }
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 4 || shape[0] < 1 || shape[1] < 1)
-        throw std::invalid_argument("VirtualArrayAssembly invalid profile shape");
-      perf::require_keys(c.parameters, {"overlap_policy"}, "parameters");
-      if (!c.parameters["overlap_policy"])
-        throw std::invalid_argument("VirtualArrayAssembly requires overlap_policy");
-      const auto policy = c.parameters["overlap_policy"].as<std::string>();
-      hr::OverlapPolicy mode;
-      if (policy == "dedup")
-        mode = hr::OverlapPolicy::kDedup;
-      else if (policy == "average")
-        mode = hr::OverlapPolicy::kAverage;
-      else if (policy == "keep_all")
-        mode = hr::OverlapPolicy::kKeepAll;
-      else
-        throw std::invalid_argument("VirtualArrayAssembly invalid overlap_policy");
-      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], c.profile};
-      auto scenario = make_scenario(size, mode);
-      scenario.id = c.id;
-      scenario.size_id = c.profile;
-      if (c.override_value) {
-        if ((*c.override_value)["port"].as<std::string>() != "wavelength")
-          throw std::invalid_argument("VirtualArrayAssembly only wavelength is live");
-        scenario.live_wavelength = true;
-        scenario.override_wavelength = (*c.override_value)["value"].as<double>();
-        if (scenario.override_wavelength <= 0.0)
-          throw std::invalid_argument("VirtualArrayAssembly wavelength must be positive");
-      }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
+  static AssemblyScenario parse_case(const perf::ProfileCase& c,
+                                     const std::vector<int64_t>& shape) {
+    if (shape.size() != 4 || shape[0] < 1 || shape[1] < 1)
+      throw std::invalid_argument("VirtualArrayAssembly invalid profile shape");
+    perf::require_keys(c.parameters, {"overlap_policy"}, "parameters");
+    if (!c.parameters["overlap_policy"])
+      throw std::invalid_argument("VirtualArrayAssembly requires overlap_policy");
+    const auto policy = c.parameters["overlap_policy"].as<std::string>();
+    hr::OverlapPolicy mode;
+    if (policy == "dedup")
+      mode = hr::OverlapPolicy::kDedup;
+    else if (policy == "average")
+      mode = hr::OverlapPolicy::kAverage;
+    else if (policy == "keep_all")
+      mode = hr::OverlapPolicy::kKeepAll;
+    else
+      throw std::invalid_argument("VirtualArrayAssembly invalid overlap_policy");
+    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], c.profile};
+    auto scenario = make_scenario(size, mode);
+    scenario.id = c.id;
+    scenario.size_id = c.profile;
+    if (c.override_value) {
+      if ((*c.override_value)["port"].as<std::string>() != "wavelength")
+        throw std::invalid_argument("VirtualArrayAssembly only wavelength is live");
+      scenario.live_wavelength = true;
+      scenario.override_wavelength = (*c.override_value)["value"].as<double>();
+      if (scenario.override_wavelength <= 0.0)
+        throw std::invalid_argument("VirtualArrayAssembly wavelength must be positive");
     }
-    return result;
+    return scenario;
   }
 
   static void run_scenario(const AssemblyScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, scen.live_wavelength);
-    const auto samples =
-        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    perf::measure_scenario(
+        rs, scen.live_wavelength,
+        [&](int /*rep*/, const perf::RunPlan& p) {
           return run_assembly_graph(scen, p);
+        },
+        base_row(scen), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scen, row.latency.median_ms);
+          row.notes =
+              "virtual channel flatten + geometry emit; cells/s counts input complex samples";
+          if (scen.live_wavelength)
+            row.notes += "; one-frame wavelength change";
         });
-
-    perf::append_setup_row(base_row(scen), samples, report);
-
-    perf::ResultRow row = base_row(scen);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes = "virtual channel flatten + geometry emit; cells/s counts input complex samples";
-    if (scen.live_wavelength)
-      row.notes += "; one-frame wavelength change";
-    report->results.push_back(row);
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([] {
-      perf::PerfReport discarded;
-      perf::RunSettings warm;
-      warm.warmup_frames = 0;
-      warm.measured_frames = 2;
-      warm.repeats = 1;
-      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
-    });
   }
 };
 

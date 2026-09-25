@@ -88,6 +88,38 @@ TEST(PerfProfiles, EveryMigratedSuiteHasThreeBaselinesAndBoundedThorough) {
   }
 }
 
+TEST(PerfProfiles, AdapterValidatesUnselectedCasesBeforeFiltering) {
+  struct Scenario {
+    std::string id;
+    std::string size_id;
+  };
+  const auto suite = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml",
+      "clutter_filter");
+  auto invalid = [](const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    EXPECT_EQ(shape.size(), 2U);
+    if (c.id == "sixteen-channels-large")
+      throw std::invalid_argument("invalid adapter parameter");
+    return Scenario{c.id, c.profile};
+  };
+  EXPECT_THROW(perf::select_validated_cases<Scenario>(suite, "minimal", {"small"}, invalid),
+               std::invalid_argument);
+
+  std::vector<std::string> decoded;
+  auto valid = [&](const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    EXPECT_EQ(shape.size(), 2U);
+    decoded.push_back(c.id);
+    return Scenario{c.id, c.profile};
+  };
+  const auto selected = perf::select_validated_cases<Scenario>(suite, "limited", {}, valid);
+  EXPECT_EQ(decoded.size(), suite.cases.size());
+  ASSERT_EQ(selected.size(), 6U);
+  EXPECT_EQ(selected.front().id, "baseline-small");
+  EXPECT_EQ(selected.back().id, "passthrough-medium");
+  EXPECT_THROW(perf::select_validated_cases<Scenario>(suite, "minimal", {"unknown"}, valid),
+               std::invalid_argument);
+}
+
 TEST(PerfProfiles, LivePortManifestMatchesLockedContractForMigratedOperators) {
   const std::vector<std::pair<std::string, std::set<std::string>>> expected = {
       {"clutter_filter", {"method", "doppler_window"}},

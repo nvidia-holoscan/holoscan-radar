@@ -28,7 +28,6 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -62,34 +61,6 @@ struct CompensationScenario {
   bool non_linear_ddm{false};
   bool velocity_axis{false};
 };
-
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 2, 4, 32, 128, "small MIMO; fast smoke"},
-      {"sm", 4, 8, 64, 256, "compact MIMO"},
-      {"md", 4, 16, 128, 512, "common dev size"},
-      {"lg", 8, 32, 256, 1024, "moderate MIMO"},
-      {"xl", 8, 64, 512, 2048, "upper characterization bound"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& s : size_ladder()) {
-    if (s.id == id) {
-      return &s;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* s = find_size(id);
-  if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *s;
-}
 
 hr::FMCWWaveformDescriptor make_waveform(double pri) {
   hr::FMCWWaveformSpec spec;
@@ -226,13 +197,6 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     return "DDMDenseDemultiplexOp performance "
            "characterization (HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() {
-    return "Linear and nonlinear DDM size sweep across the full ladder";
-  }
-  static const char* sizes_subset_help() {
-    return "Linear and nonlinear DDM sweep across an explicit subset";
-  }
-  static const char* full_help() { return "Full linear and nonlinear DDM size matrix"; }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -254,76 +218,45 @@ struct CompensationTraits : perf::PerfDriverDefaults {
     return result;
   }
 
-  static std::vector<CompensationScenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    const auto selected = profiles.select(scope);
-    std::vector<CompensationScenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i) {
-        if (c.profile == perf::kProfiles[i])
-          break;
-      }
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 4 || shape[0] < 2 || shape[2] % shape[0] != 0)
-        throw std::invalid_argument("DDMDenseDemultiplex invalid profile shape");
-      perf::require_keys(c.parameters, {"code", "velocity_axis"}, "parameters");
-      if (!c.parameters["code"] || !c.parameters["velocity_axis"] || c.override_value)
-        throw std::invalid_argument("DDMDenseDemultiplex case needs static code and axis mode");
-      const auto code = c.parameters["code"].as<std::string>();
-      if (code != "linear" && code != "nonlinear")
-        throw std::invalid_argument("DDMDenseDemultiplex code must be linear or nonlinear");
-      const bool axis = c.parameters["velocity_axis"].as<bool>();
-      const bool chosen =
-          std::any_of(selected.begin(), selected.end(), [&](const perf::ProfileCase& item) {
-            return item.id == c.id;
-          });
-      if (!chosen)
-        continue;
-      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], c.profile};
-      auto scenario = make_scenario(size, code == "nonlinear", axis);
-      scenario.id = c.id;
-      scenario.size_id = c.profile;
-      result.push_back(std::move(scenario));
-    }
-    return result;
+  static CompensationScenario parse_case(const perf::ProfileCase& c,
+                                         const std::vector<int64_t>& shape) {
+    if (shape.size() != 4 || shape[0] < 2 || shape[2] % shape[0] != 0)
+      throw std::invalid_argument("DDMDenseDemultiplex invalid profile shape");
+    perf::require_keys(c.parameters, {"code", "velocity_axis"}, "parameters");
+    if (!c.parameters["code"] || !c.parameters["velocity_axis"] || c.override_value)
+      throw std::invalid_argument("DDMDenseDemultiplex case needs static code and axis mode");
+    const auto code = c.parameters["code"].as<std::string>();
+    if (code != "linear" && code != "nonlinear")
+      throw std::invalid_argument("DDMDenseDemultiplex code must be linear or nonlinear");
+    const bool axis = c.parameters["velocity_axis"].as<bool>();
+    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], c.profile};
+    auto scenario = make_scenario(size, code == "nonlinear", axis);
+    scenario.id = c.id;
+    scenario.size_id = c.profile;
+    return scenario;
   }
 
   static void run_scenario(const CompensationScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
-    const auto samples =
-        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    perf::measure_scenario(
+        rs, false,
+        [&](int /*rep*/, const perf::RunPlan& p) {
           return run_compensation_graph(scen, p.total_frames);
+        },
+        base_row(scen), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scen, row.latency.median_ms);
+          if (scen.non_linear_ddm) {
+            row.notes =
+                "DDM nonlinear phase-code correlation; cold_ms includes weights "
+                "and FFT setup; output keeps the full Doppler axis";
+          } else {
+            row.notes =
+                "DDM linear per-band gather; cold_ms includes the initial "
+                "demultiplex table build";
+          }
+          row.notes += scen.velocity_axis ? "; velocity_axis=wired" : "; velocity_axis=absent";
         });
-
-    perf::append_setup_row(base_row(scen), samples, report);
-
-    perf::ResultRow row = base_row(scen);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scen, row.latency.median_ms);
-    if (scen.non_linear_ddm) {
-      row.notes =
-          "DDM nonlinear phase-code correlation; cold_ms includes weights "
-          "and FFT setup; output keeps the full Doppler axis";
-    } else {
-      row.notes =
-          "DDM linear per-band gather; cold_ms includes the initial "
-          "demultiplex table build";
-    }
-    row.notes += scen.velocity_axis ? "; velocity_axis=wired" : "; velocity_axis=absent";
-    report->results.push_back(row);
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([] {
-      perf::PerfReport discarded;
-      perf::RunSettings warm;
-      warm.warmup_frames = 0;
-      warm.measured_frames = 2;
-      warm.repeats = 1;
-      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
-    });
   }
 };
 

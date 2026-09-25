@@ -32,7 +32,6 @@
 #include "radar_schemas/array_geometry_bridge.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 
@@ -61,32 +60,6 @@ struct ScreenScenario {
   bool live_geometry{false};
   double changed_spacing{0.49};
 };
-
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {{"xs", 32, 8, 3, "small; performance smoke"},
-                                               {"sm", 256, 16, 5, "compact sparse-angle workload"},
-                                               {"md", 1024, 32, 9, "common multi-look workload"},
-                                               {"lg", 4096, 64, 9, "dense detection workload"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& size : size_ladder()) {
-    if (size.id == id) {
-      return &size;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* size = find_size(id);
-  if (size == nullptr) {
-    std::cerr << "unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *size;
-}
 
 template <typename Element>
 std::shared_ptr<holoscan::Tensor> upload(const std::vector<Element>& host,
@@ -256,11 +229,6 @@ struct ScreenTraits : perf::PerfDriverDefaults {
   static const char* tool_description() {
     return "RankOneResidualScreenOp HSDK 5 Graph characterization";
   }
-  static const char* sizes_all_help() { return "Item/channel/look sweep at 25 percent selection"; }
-  static const char* sizes_subset_help() { return "Selected size subset at 25 percent selection"; }
-  static const char* full_help() {
-    return "Sizes x selection fraction; every scenario measures geometry override";
-  }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -279,71 +247,44 @@ struct ScreenTraits : perf::PerfDriverDefaults {
     }
     return result;
   }
-  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::set<std::string> selected_ids;
-    for (const auto& c : profiles.select(scope))
-      selected_ids.insert(c.id);
-    std::vector<Scenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i) {
-        if (c.profile == perf::kProfiles[i])
-          break;
-      }
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 3 || shape[0] < 1 || shape[1] < 2 || shape[2] < 1)
-        throw std::invalid_argument("RankOneResidualScreen invalid profile shape");
-      perf::require_keys(c.parameters, {"selection_fraction"}, "parameters");
-      if (!c.parameters["selection_fraction"])
-        throw std::invalid_argument("RankOneResidualScreen needs selection_fraction");
-      const double fraction = c.parameters["selection_fraction"].as<double>();
-      if (fraction < 0.0 || fraction > 1.0)
-        throw std::invalid_argument("RankOneResidualScreen invalid selection fraction");
-      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
-      auto scenario = make_scenario(size, fraction);
-      scenario.id = c.id;
-      scenario.size_id = c.profile;
-      if (c.override_value) {
-        if ((*c.override_value)["port"].as<std::string>() != "array_geometry")
-          throw std::invalid_argument("RankOneResidualScreen only geometry is live");
-        scenario.changed_spacing = (*c.override_value)["value"].as<double>();
-        if (scenario.changed_spacing <= 0.0)
-          throw std::invalid_argument("RankOneResidualScreen invalid geometry spacing");
-        scenario.live_geometry = true;
-      }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    if (shape.size() != 3 || shape[0] < 1 || shape[1] < 2 || shape[2] < 1)
+      throw std::invalid_argument("RankOneResidualScreen invalid profile shape");
+    perf::require_keys(c.parameters, {"selection_fraction"}, "parameters");
+    if (!c.parameters["selection_fraction"])
+      throw std::invalid_argument("RankOneResidualScreen needs selection_fraction");
+    const double fraction = c.parameters["selection_fraction"].as<double>();
+    if (fraction < 0.0 || fraction > 1.0)
+      throw std::invalid_argument("RankOneResidualScreen invalid selection fraction");
+    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
+    auto scenario = make_scenario(size, fraction);
+    scenario.id = c.id;
+    scenario.size_id = c.profile;
+    if (c.override_value) {
+      if ((*c.override_value)["port"].as<std::string>() != "array_geometry")
+        throw std::invalid_argument("RankOneResidualScreen only geometry is live");
+      scenario.changed_spacing = (*c.override_value)["value"].as<double>();
+      if (scenario.changed_spacing <= 0.0)
+        throw std::invalid_argument("RankOneResidualScreen invalid geometry spacing");
+      scenario.live_geometry = true;
     }
-    return result;
+    return scenario;
   }
 
   static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(settings, scenario.live_geometry);
-    const auto samples =
-        perf::collect_scenario_samples(settings, plan, [&](int, const perf::RunPlan& run_plan) {
+    perf::measure_scenario(
+        settings, scenario.live_geometry,
+        [&](int, const perf::RunPlan& run_plan) {
           return run_screen_graph(scenario, run_plan);
+        },
+        base_row(scenario), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scenario, row.latency.median_ms);
+          row.notes = "end-to-end Graph latency; cells/s is complex snapshot values/s";
+          if (scenario.live_geometry)
+            row.notes += "; one-frame geometry change";
         });
-    perf::append_setup_row(base_row(scenario), samples, report);
-    auto row = base_row(scenario);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scenario, row.latency.median_ms);
-    row.notes = "end-to-end Graph latency; cells/s is complex snapshot values/s";
-    if (scenario.live_geometry)
-      row.notes += "; one-frame geometry change";
-    report->results.push_back(std::move(row));
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([] {
-      perf::PerfReport discarded;
-      perf::RunSettings settings;
-      settings.warmup_frames = 0;
-      settings.measured_frames = 2;
-      settings.repeats = 1;
-      run_scenario(build_profile_matrix("minimal").front(), settings, &discarded);
-    });
   }
 };
 

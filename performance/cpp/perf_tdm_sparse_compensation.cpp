@@ -25,7 +25,6 @@
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -61,24 +60,6 @@ struct Scenario {
   int64_t changed_range{1};
   hr::OverlapPolicy policy{hr::OverlapPolicy::kKeepAll};
 };
-
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> result{{"xs", 2, 4, 64, 256, 16, "smoke"},
-                                            {"sm", 3, 4, 128, 512, 64, "sparse automotive"},
-                                            {"md", 4, 8, 256, 512, 256, "common MIMO"},
-                                            {"lg", 4, 16, 512, 1024, 1024, "large array"},
-                                            {"xl", 8, 16, 512, 2048, 4096, "upper bound"}};
-  return result;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& size : size_ladder()) {
-    if (size.id == id) {
-      return &size;
-    }
-  }
-  return nullptr;
-}
 
 hr::FMCWWaveformDescriptor waveform(double pri = 1.0e-3) {
   hr::FMCWWaveformSpec spec;
@@ -215,11 +196,6 @@ struct Traits : perf::PerfDriverDefaults {
   static const char* tool_description() {
     return "Sparse TDM compensation detection-count characterization";
   }
-  static const char* sizes_all_help() { return "Run the full sparse TDM size ladder"; }
-  static const char* sizes_subset_help() { return "Run selected sparse TDM sizes"; }
-  static const char* full_help() {
-    return "Run all sizes; compare dense operator reports separately";
-  }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -239,99 +215,72 @@ struct Traits : perf::PerfDriverDefaults {
     }
     return result;
   }
-  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::set<std::string> selected_ids;
-    for (const auto& c : profiles.select(scope))
-      selected_ids.insert(c.id);
-    std::vector<Scenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i) {
-        if (c.profile == perf::kProfiles[i])
-          break;
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    if (shape.size() != 5 || shape[0] < 2 || shape[4] < 1)
+      throw std::invalid_argument("TDMSparseCompensation invalid profile shape");
+    perf::require_keys(c.parameters, {"snapshot_window", "overlap_policy", "pri"}, "parameters");
+    if (!c.parameters["snapshot_window"] || !c.parameters["overlap_policy"])
+      throw std::invalid_argument("TDMSparseCompensation missing parameter");
+    const auto window = c.parameters["snapshot_window"];
+    if (!window.IsSequence() || window.size() != 2)
+      throw std::invalid_argument("TDMSparseCompensation window must have two extents");
+    const auto policy = c.parameters["overlap_policy"].as<std::string>();
+    hr::OverlapPolicy overlap;
+    if (policy == "keep_all")
+      overlap = hr::OverlapPolicy::kKeepAll;
+    else if (policy == "dedup")
+      overlap = hr::OverlapPolicy::kDedup;
+    else if (policy == "average")
+      overlap = hr::OverlapPolicy::kAverage;
+    else
+      throw std::invalid_argument("TDMSparseCompensation invalid overlap policy");
+    SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], shape[4], c.profile};
+    Scenario scenario{c.id, c.profile, size};
+    scenario.policy = overlap;
+    if (c.parameters["pri"])
+      scenario.pri = c.parameters["pri"].as<double>();
+    if (scenario.pri <= 40.0e-6)
+      throw std::invalid_argument("TDMSparseCompensation PRI too short");
+    scenario.window_doppler = window[0].as<int64_t>();
+    scenario.window_range = window[1].as<int64_t>();
+    if (scenario.window_doppler < 0 || scenario.window_range < 0 || scenario.window_doppler > 2 ||
+        scenario.window_range > 2)
+      throw std::invalid_argument("TDMSparseCompensation window out of range");
+    if (c.override_value) {
+      scenario.live_port = (*c.override_value)["port"].as<std::string>();
+      if (scenario.live_port == "waveform") {
+        scenario.changed_pri = (*c.override_value)["value"].as<double>();
+        if (scenario.changed_pri <= 40.0e-6)
+          throw std::invalid_argument("TDMSparseCompensation invalid waveform PRI");
+      } else if (scenario.live_port == "snapshot_window") {
+        const auto changed = (*c.override_value)["value"];
+        if (!changed.IsSequence() || changed.size() != 2)
+          throw std::invalid_argument("TDMSparseCompensation invalid changed window");
+        scenario.changed_doppler = changed[0].as<int64_t>();
+        scenario.changed_range = changed[1].as<int64_t>();
+        if (scenario.changed_doppler < 0 || scenario.changed_range < 0 ||
+            scenario.changed_doppler > 2 || scenario.changed_range > 2)
+          throw std::invalid_argument("TDMSparseCompensation changed window out of range");
+      } else {
+        throw std::invalid_argument("unknown TDMSparseCompensation live port");
       }
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 5 || shape[0] < 2 || shape[4] < 1)
-        throw std::invalid_argument("TDMSparseCompensation invalid profile shape");
-      perf::require_keys(c.parameters, {"snapshot_window", "overlap_policy", "pri"}, "parameters");
-      if (!c.parameters["snapshot_window"] || !c.parameters["overlap_policy"])
-        throw std::invalid_argument("TDMSparseCompensation missing parameter");
-      const auto window = c.parameters["snapshot_window"];
-      if (!window.IsSequence() || window.size() != 2)
-        throw std::invalid_argument("TDMSparseCompensation window must have two extents");
-      const auto policy = c.parameters["overlap_policy"].as<std::string>();
-      hr::OverlapPolicy overlap;
-      if (policy == "keep_all")
-        overlap = hr::OverlapPolicy::kKeepAll;
-      else if (policy == "dedup")
-        overlap = hr::OverlapPolicy::kDedup;
-      else if (policy == "average")
-        overlap = hr::OverlapPolicy::kAverage;
-      else
-        throw std::invalid_argument("TDMSparseCompensation invalid overlap policy");
-      SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], shape[4], c.profile};
-      Scenario scenario{c.id, c.profile, size};
-      scenario.policy = overlap;
-      if (c.parameters["pri"])
-        scenario.pri = c.parameters["pri"].as<double>();
-      if (scenario.pri <= 40.0e-6)
-        throw std::invalid_argument("TDMSparseCompensation PRI too short");
-      scenario.window_doppler = window[0].as<int64_t>();
-      scenario.window_range = window[1].as<int64_t>();
-      if (scenario.window_doppler < 0 || scenario.window_range < 0 || scenario.window_doppler > 2 ||
-          scenario.window_range > 2)
-        throw std::invalid_argument("TDMSparseCompensation window out of range");
-      if (c.override_value) {
-        scenario.live_port = (*c.override_value)["port"].as<std::string>();
-        if (scenario.live_port == "waveform") {
-          scenario.changed_pri = (*c.override_value)["value"].as<double>();
-          if (scenario.changed_pri <= 40.0e-6)
-            throw std::invalid_argument("TDMSparseCompensation invalid waveform PRI");
-        } else if (scenario.live_port == "snapshot_window") {
-          const auto changed = (*c.override_value)["value"];
-          if (!changed.IsSequence() || changed.size() != 2)
-            throw std::invalid_argument("TDMSparseCompensation invalid changed window");
-          scenario.changed_doppler = changed[0].as<int64_t>();
-          scenario.changed_range = changed[1].as<int64_t>();
-          if (scenario.changed_doppler < 0 || scenario.changed_range < 0 ||
-              scenario.changed_doppler > 2 || scenario.changed_range > 2)
-            throw std::invalid_argument("TDMSparseCompensation changed window out of range");
-        } else {
-          throw std::invalid_argument("unknown TDMSparseCompensation live port");
-        }
-      }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
     }
-    return result;
+    return scenario;
   }
   static void run_scenario(const Scenario& scenario, const perf::RunSettings& settings,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(settings, !scenario.live_port.empty());
-    const auto samples =
-        perf::collect_scenario_samples(settings, plan, [&](int, const perf::RunPlan& current) {
+    perf::measure_scenario(
+        settings, !scenario.live_port.empty(),
+        [&](int, const perf::RunPlan& current) {
           return run_graph(scenario, current);
+        },
+        base_row(scenario), report,
+        [&](perf::ResultRow& row) {
+          if (row.latency.median_ms > 0.0) {
+            row.cells_per_second =
+                static_cast<double>(scenario.size.detections) / (row.latency.median_ms / 1000.0);
+          }
         });
-    perf::append_setup_row(base_row(scenario), samples, report);
-    auto row = base_row(scenario);
-    perf::fill_compute_row(&row, samples);
-    if (row.latency.median_ms > 0.0) {
-      row.cells_per_second =
-          static_cast<double>(scenario.size.detections) / (row.latency.median_ms / 1000.0);
-    }
-    report->results.push_back(std::move(row));
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([&] {
-      perf::PerfReport report;
-      perf::RunSettings settings;
-      settings.warmup_frames = 0;
-      settings.measured_frames = 2;
-      settings.repeats = 1;
-      run_scenario(build_profile_matrix("minimal").front(), settings, &report);
-    });
   }
 };
 

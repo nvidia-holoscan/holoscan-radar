@@ -25,7 +25,6 @@
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_profiles.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -191,16 +190,6 @@ struct ClutterTraits : perf::PerfDriverDefaults {
   static const char* tool_description() {
     return "ClutterFilterOp performance characterization (HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() {
-    return "Mean-subtraction size sweep across the full ladder";
-  }
-  static const char* sizes_subset_help() {
-    return "Mean-subtraction size sweep across an explicit subset";
-  }
-  static const char* full_help() {
-    return "Full matrix (methods x sizes x channel batch) with live "
-           "method-override timing";
-  }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
     const auto suite = perf::load_profile_suite(
@@ -217,107 +206,75 @@ struct ClutterTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<ClutterScenario> build_profile_matrix(const std::string& scope) {
-    const auto path =
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml";
-    const auto suite = perf::load_profile_suite(path, "clutter_filter");
-    std::vector<ClutterScenario> result;
-    std::set<std::string> selected_ids;
-    for (const auto& c : suite.select(scope))
-      selected_ids.insert(c.id);
-    for (const auto& c : suite.cases) {
-      perf::require_keys(c.parameters, {"method", "doppler_window", "channels"}, "parameters");
-      auto method_of = [](const std::string& name) {
-        if (name == "mean_subtraction")
-          return hr::ClutterFilterMethod::kMeanSubtraction;
-        if (name == "single_delay")
-          return hr::ClutterFilterMethod::kSingleDelay;
-        if (name == "double_delay")
-          return hr::ClutterFilterMethod::kDoubleDelay;
-        if (name == "none")
-          return hr::ClutterFilterMethod::kNone;
-        throw std::invalid_argument("unknown clutter method: " + name);
-      };
-      auto window_of = [](const std::string& name) {
-        if (name == "none")
-          return hr::WindowType::kNone;
-        if (name == "hann")
-          return hr::WindowType::kHann;
-        if (name == "hamming")
-          return hr::WindowType::kHamming;
-        throw std::invalid_argument("unknown clutter window: " + name);
-      };
-      size_t profile_index = 0;
-      for (; profile_index < perf::kProfiles.size(); ++profile_index) {
-        if (c.profile == perf::kProfiles[profile_index])
-          break;
-      }
-      const auto& shape = suite.shapes.at(profile_index);
-      if (shape.size() != 2)
-        throw std::invalid_argument("clutter profile shape must be rank 2");
-      ClutterScenario scenario;
-      scenario.id = c.id;
-      scenario.size_id = c.profile;
-      scenario.num_chirps = shape[0];
-      scenario.num_range_bins = shape[1];
-      scenario.method = method_of(c.parameters["method"].as<std::string>());
-      scenario.window.type = window_of(c.parameters["doppler_window"].as<std::string>());
-      if (c.parameters["channels"])
-        scenario.channels = c.parameters["channels"].as<int64_t>();
-      if (scenario.channels <= 0)
-        throw std::invalid_argument("channels must be positive");
-      if (c.override_value.has_value()) {
-        const auto port = (*c.override_value)["port"].as<std::string>();
-        const auto value = (*c.override_value)["value"].as<std::string>();
-        if (port == "method") {
-          scenario.time_method_override = true;
-          if (method_of(value) != flip_method(scenario.method)) {
-            throw std::invalid_argument("method override must select the one-frame flip");
-          }
-        } else if (port == "doppler_window") {
-          scenario.time_window_override = true;
-          if (window_of(value) != hr::WindowType::kHamming) {
-            throw std::invalid_argument("window override must select Hamming");
-          }
+  static ClutterScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    perf::require_keys(c.parameters, {"method", "doppler_window", "channels"}, "parameters");
+    auto method_of = [](const std::string& name) {
+      if (name == "mean_subtraction")
+        return hr::ClutterFilterMethod::kMeanSubtraction;
+      if (name == "single_delay")
+        return hr::ClutterFilterMethod::kSingleDelay;
+      if (name == "double_delay")
+        return hr::ClutterFilterMethod::kDoubleDelay;
+      if (name == "none")
+        return hr::ClutterFilterMethod::kNone;
+      throw std::invalid_argument("unknown clutter method: " + name);
+    };
+    auto window_of = [](const std::string& name) {
+      if (name == "none")
+        return hr::WindowType::kNone;
+      if (name == "hann")
+        return hr::WindowType::kHann;
+      if (name == "hamming")
+        return hr::WindowType::kHamming;
+      throw std::invalid_argument("unknown clutter window: " + name);
+    };
+    if (shape.size() != 2)
+      throw std::invalid_argument("clutter profile shape must be rank 2");
+    ClutterScenario scenario;
+    scenario.id = c.id;
+    scenario.size_id = c.profile;
+    scenario.num_chirps = shape[0];
+    scenario.num_range_bins = shape[1];
+    scenario.method = method_of(c.parameters["method"].as<std::string>());
+    scenario.window.type = window_of(c.parameters["doppler_window"].as<std::string>());
+    if (c.parameters["channels"])
+      scenario.channels = c.parameters["channels"].as<int64_t>();
+    if (scenario.channels <= 0)
+      throw std::invalid_argument("channels must be positive");
+    if (c.override_value.has_value()) {
+      const auto port = (*c.override_value)["port"].as<std::string>();
+      const auto value = (*c.override_value)["value"].as<std::string>();
+      if (port == "method") {
+        scenario.time_method_override = true;
+        if (method_of(value) != flip_method(scenario.method)) {
+          throw std::invalid_argument("method override must select the one-frame flip");
+        }
+      } else if (port == "doppler_window") {
+        scenario.time_window_override = true;
+        if (window_of(value) != hr::WindowType::kHamming) {
+          throw std::invalid_argument("window override must select Hamming");
         }
       }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
     }
-    return result;
+    return scenario;
   }
 
   static void run_scenario(const ClutterScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan =
-        perf::make_run_plan(rs, scen.time_window_override || scen.time_method_override);
-    const auto samples =
-        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    perf::measure_scenario(
+        rs, scen.time_window_override || scen.time_method_override,
+        [&](int /*rep*/, const perf::RunPlan& p) {
           return run_clutter_graph(scen, p);
+        },
+        base_row(scen), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scen, row.latency.median_ms);
+          row.notes = "end-to-end Graph latency; cells/s is complex cells/s";
+          if (scen.time_window_override)
+            row.notes += "; unseen Hamming window on one frame";
+          if (scen.time_method_override)
+            row.notes += "; method changes for one frame";
         });
-
-    perf::append_setup_row(base_row(scen), samples, report);
-
-    perf::ResultRow row = base_row(scen);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes = "end-to-end Graph latency; cells/s is complex cells/s";
-    if (scen.time_window_override)
-      row.notes += "; unseen Hamming window on one frame";
-    if (scen.time_method_override)
-      row.notes += "; method changes for one frame";
-    report->results.push_back(row);
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([] {
-      perf::PerfReport discarded;
-      perf::RunSettings warm;
-      warm.warmup_frames = 0;
-      warm.measured_frames = 2;
-      warm.repeats = 1;
-      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
-    });
   }
 };
 

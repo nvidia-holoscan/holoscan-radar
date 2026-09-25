@@ -34,7 +34,6 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -71,33 +70,6 @@ struct RangeScenario {
 
 // FFT-friendly powers of two so cuFFT takes its fast path; the ladder spans a
 // smoke size up to a moderate production cube.
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 16, 128, "small cube; fast smoke"},
-      {"sm", 32, 256, "compact sensor"},
-      {"md", 64, 512, "common dev size"},
-      {"lg", 128, 1024, "moderate production-scale"},
-      {"xl", 256, 2048, "range-heavy moderate (v1 upper bound)"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& s : size_ladder()) {
-    if (s.id == id) {
-      return &s;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* s = find_size(id);
-  if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *s;
-}
 
 std::string window_tag(hr::WindowType w) {
   return w == hr::WindowType::kHann ? "hann" : "rect";
@@ -307,17 +279,6 @@ struct RangeTraits : perf::PerfDriverDefaults {
     return "FMCWRangeProcessorOp performance characterization "
            "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() {
-    return "Rectangular-window size sweep across the full ladder";
-  }
-  static const char* sizes_subset_help() {
-    return "Rectangular-window size sweep across an explicit "
-           "subset";
-  }
-  static const char* full_help() {
-    return "Full matrix (windows x sizes x channel batch); "
-           "live-override timing is not measured";
-  }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -336,108 +297,78 @@ struct RangeTraits : perf::PerfDriverDefaults {
     }
     return result;
   }
-  static std::vector<RangeScenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::set<std::string> selected_ids;
-    for (const auto& c : profiles.select(scope))
-      selected_ids.insert(c.id);
-    std::vector<RangeScenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i) {
-        if (c.profile == perf::kProfiles[i])
-          break;
+  static RangeScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    if (shape.size() != 2 || shape[1] < 2)
+      throw std::invalid_argument("FMCWRange invalid profile shape");
+    perf::require_keys(c.parameters,
+                       {"range_window", "apply_dechirp", "fft_norm", "nfft", "pri", "channels"},
+                       "parameters");
+    if (!c.parameters["range_window"] || !c.parameters["fft_norm"])
+      throw std::invalid_argument("FMCWRange needs window and FFT norm");
+    const auto window = window_type_of(c.parameters["range_window"].as<std::string>());
+    const SizeSpec size{c.profile, shape[0], shape[1], c.profile};
+    auto scenario = make_scenario(window, size);
+    scenario.id = c.id;
+    scenario.size_id = c.profile;
+    scenario.fft_norm = norm_of(c.parameters["fft_norm"].as<std::string>());
+    if (c.parameters["apply_dechirp"])
+      scenario.apply_dechirp = c.parameters["apply_dechirp"].as<bool>();
+    if (c.parameters["channels"])
+      scenario.channels = c.parameters["channels"].as<int64_t>();
+    if (c.parameters["nfft"])
+      scenario.nfft = c.parameters["nfft"].as<int64_t>();
+    if (c.parameters["pri"])
+      scenario.pri = c.parameters["pri"].as<double>();
+    if (scenario.channels <= 0 || (scenario.nfft != 0 && scenario.nfft < shape[1]) ||
+        scenario.nfft > 2 * shape[1] || scenario.pri <= 20.0e-6)
+      throw std::invalid_argument("FMCWRange incompatible parameters");
+    if (c.override_value) {
+      scenario.live_port = (*c.override_value)["port"].as<std::string>();
+      scenario.override_value = (*c.override_value)["value"].as<std::string>();
+      if ((*c.override_value)["cache"]) {
+        const auto cache = (*c.override_value)["cache"].as<std::string>();
+        if (scenario.live_port != "nfft")
+          throw std::invalid_argument("cached transition only applies to nfft");
+        scenario.cached_override = cache == "cached";
       }
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 2 || shape[1] < 2)
-        throw std::invalid_argument("FMCWRange invalid profile shape");
-      perf::require_keys(c.parameters,
-                         {"range_window", "apply_dechirp", "fft_norm", "nfft", "pri", "channels"},
-                         "parameters");
-      if (!c.parameters["range_window"] || !c.parameters["fft_norm"])
-        throw std::invalid_argument("FMCWRange needs window and FFT norm");
-      const auto window = window_type_of(c.parameters["range_window"].as<std::string>());
-      const SizeSpec size{c.profile, shape[0], shape[1], c.profile};
-      auto scenario = make_scenario(window, size);
-      scenario.id = c.id;
-      scenario.size_id = c.profile;
-      scenario.fft_norm = norm_of(c.parameters["fft_norm"].as<std::string>());
-      if (c.parameters["apply_dechirp"])
-        scenario.apply_dechirp = c.parameters["apply_dechirp"].as<bool>();
-      if (c.parameters["channels"])
-        scenario.channels = c.parameters["channels"].as<int64_t>();
-      if (c.parameters["nfft"])
-        scenario.nfft = c.parameters["nfft"].as<int64_t>();
-      if (c.parameters["pri"])
-        scenario.pri = c.parameters["pri"].as<double>();
-      if (scenario.channels <= 0 || (scenario.nfft != 0 && scenario.nfft < shape[1]) ||
-          scenario.nfft > 2 * shape[1] || scenario.pri <= 20.0e-6)
-        throw std::invalid_argument("FMCWRange incompatible parameters");
-      if (c.override_value) {
-        scenario.live_port = (*c.override_value)["port"].as<std::string>();
-        scenario.override_value = (*c.override_value)["value"].as<std::string>();
-        if ((*c.override_value)["cache"]) {
-          const auto cache = (*c.override_value)["cache"].as<std::string>();
-          if (scenario.live_port != "nfft")
-            throw std::invalid_argument("cached transition only applies to nfft");
-          scenario.cached_override = cache == "cached";
-        }
-        if (scenario.live_port == "range_window") {
-          (void)window_type_of(scenario.override_value);
-        } else if (scenario.live_port == "apply_dechirp") {
-          if (scenario.override_value != "true" && scenario.override_value != "false")
-            throw std::invalid_argument("invalid apply_dechirp override");
-        } else if (scenario.live_port == "waveform") {
-          if (std::stod(scenario.override_value) <= 20.0e-6)
-            throw std::invalid_argument("invalid waveform PRI override");
-        } else if (scenario.live_port == "fft_norm") {
-          (void)norm_of(scenario.override_value);
-        } else if (scenario.live_port == "nfft") {
-          if (scenario.override_value != "double")
-            throw std::invalid_argument("nfft override must be double");
-        } else {
-          throw std::invalid_argument("unknown FMCWRange live port");
-        }
+      if (scenario.live_port == "range_window") {
+        (void)window_type_of(scenario.override_value);
+      } else if (scenario.live_port == "apply_dechirp") {
+        if (scenario.override_value != "true" && scenario.override_value != "false")
+          throw std::invalid_argument("invalid apply_dechirp override");
+      } else if (scenario.live_port == "waveform") {
+        if (std::stod(scenario.override_value) <= 20.0e-6)
+          throw std::invalid_argument("invalid waveform PRI override");
+      } else if (scenario.live_port == "fft_norm") {
+        (void)norm_of(scenario.override_value);
+      } else if (scenario.live_port == "nfft") {
+        if (scenario.override_value != "double")
+          throw std::invalid_argument("nfft override must be double");
+      } else {
+        throw std::invalid_argument("unknown FMCWRange live port");
       }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
     }
-    return result;
+    return scenario;
   }
 
   static void run_scenario(const RangeScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
     if (scen.cached_override && rs.warmup_frames < 1)
       throw std::invalid_argument("cached transition requires at least one warmup frame");
-    const perf::RunPlan plan = perf::make_run_plan(rs, !scen.live_port.empty());
-    const auto samples =
-        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    perf::measure_scenario(
+        rs, !scen.live_port.empty(),
+        [&](int /*rep*/, const perf::RunPlan& p) {
           return run_range_graph(scen, p);
+        },
+        base_row(scen), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scen, row.latency.median_ms);
+          row.notes =
+              "cold_ms is first-frame latency including initial "
+              "window/FFT plan build; median/p90 are post-warmup "
+              "steady state; one-frame live changes are timed; "
+              "cells/s is complex range bins/s";
         });
-
-    perf::append_setup_row(base_row(scen), samples, report);
-
-    perf::ResultRow row = base_row(scen);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes =
-        "cold_ms is first-frame latency including initial "
-        "window/FFT plan build; median/p90 are post-warmup "
-        "steady state; live range_window override timing is not "
-        "measured; "
-        "cells/s is complex range bins/s";
-    report->results.push_back(row);
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([] {
-      perf::PerfReport discarded;
-      perf::RunSettings warm;
-      warm.warmup_frames = 0;
-      warm.measured_frames = 2;
-      warm.repeats = 1;
-      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
-    });
   }
 };
 

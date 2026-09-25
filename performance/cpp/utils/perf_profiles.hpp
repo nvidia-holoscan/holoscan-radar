@@ -5,6 +5,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <cstdint>
 
 #include <array>
@@ -70,6 +71,13 @@ struct ProfileSuite {
   std::array<std::vector<int64_t>, 3> shapes;
   std::vector<std::string> live_ports;
   std::vector<ProfileCase> cases;
+
+  [[nodiscard]] const std::vector<int64_t>& shape_for(std::string_view profile) const {
+    for (size_t i = 0; i < kProfiles.size(); ++i)
+      if (kProfiles[i] == profile)
+        return shapes[i];
+    throw std::invalid_argument("unknown profile: " + std::string(profile));
+  }
 
   [[nodiscard]] std::vector<ProfileCase> select(std::string_view scope) const {
     if (!known_scope(scope))
@@ -200,6 +208,28 @@ inline ProfileSuite load_profile_suite(const std::filesystem::path& path,
       }
     }
   }
+  return result;
+}
+
+// Decode every case before applying scope and size filters. Operators provide
+// only the typed conversion and contract-specific validation callback.
+template <typename Scenario, typename Parse>
+std::vector<Scenario> select_validated_cases(const ProfileSuite& suite, std::string_view scope,
+                                             const std::vector<std::string>& sizes, Parse&& parse) {
+  std::set<std::string> selected;
+  for (const auto& c : suite.select(scope))
+    selected.insert(c.id);
+  std::vector<Scenario> result;
+  for (const auto& c : suite.cases) {
+    Scenario scenario = parse(c, suite.shape_for(c.profile));
+    if (scenario.id != c.id || scenario.size_id != c.profile)
+      throw std::invalid_argument("adapter changed YAML case identity: " + c.id);
+    if (selected.contains(c.id) &&
+        (sizes.empty() || std::find(sizes.begin(), sizes.end(), c.profile) != sizes.end()))
+      result.push_back(std::move(scenario));
+  }
+  if (result.empty())
+    throw std::invalid_argument("no YAML cases match requested sizes");
   return result;
 }
 

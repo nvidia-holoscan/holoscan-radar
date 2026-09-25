@@ -130,4 +130,25 @@ inline void fill_compute_row(ResultRow* row, const ScenarioSamples& s) {
   row->override_delta_ms = summarize(s.override_delta).median_ms;
 }
 
+// Emit the standard setup and compute buckets. Adapters only annotate the
+// compute row with throughput units and operator-specific notes.
+template <typename Decorate>
+void append_scenario_rows(ResultRow row, const ScenarioSamples& samples, PerfReport* report,
+                          Decorate&& decorate) {
+  append_setup_row(row, samples, report);
+  fill_compute_row(&row, samples);
+  std::forward<Decorate>(decorate)(row);
+  report->results.push_back(std::move(row));
+}
+
+// One adapter invocation: build the frame plan, run independent Graph sessions,
+// and write both report buckets. Only the Graph callback and metadata vary.
+template <typename RunRep, typename Decorate>
+void measure_scenario(const RunSettings& settings, bool has_override, RunRep&& run_rep,
+                      ResultRow row, PerfReport* report, Decorate&& decorate) {
+  const RunPlan plan = make_run_plan(settings, has_override);
+  const auto samples = collect_scenario_samples(settings, plan, std::forward<RunRep>(run_rep));
+  append_scenario_rows(std::move(row), samples, report, std::forward<Decorate>(decorate));
+}
+
 }  // namespace holoscan::radar::perf

@@ -24,7 +24,6 @@
 #include "utils/perf_graph.hpp"
 #include "utils/perf_profiles.hpp"
 #include "utils/perf_platform.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -109,11 +108,6 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
   static const char* tool_description() {
     return "MIMODeinterleaveOp performance characterization (HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() { return "Round-robin TDM gather across the full ladder"; }
-  static const char* sizes_subset_help() {
-    return "Round-robin TDM gather across an explicit subset";
-  }
-  static const char* full_help() { return "Round-robin TDM gather across the full ladder"; }
 
   static std::vector<perf::SizeDef> size_ladder_defs() {
     const auto suite = perf::load_profile_suite(
@@ -133,61 +127,34 @@ struct DeinterleaveTraits : perf::PerfDriverDefaults {
     return out;
   }
 
-  static std::vector<DeinterleaveScenario> build_profile_matrix(const std::string& scope) {
-    const auto suite = perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "mimo_deinterleave.yaml",
-        "mimo_deinterleave");
-    std::vector<DeinterleaveScenario> result;
-    for (const auto& c : suite.cases) {
-      perf::require_keys(c.parameters, {"tx_schedule"}, "parameters");
-      if (c.parameters["tx_schedule"].as<std::string>() != "round_robin" ||
-          c.override_value.has_value()) {
-        throw std::invalid_argument("MIMODeinterleave supports round-robin schedule only");
-      }
+  static DeinterleaveScenario parse_case(const perf::ProfileCase& c,
+                                         const std::vector<int64_t>& shape) {
+    perf::require_keys(c.parameters, {"tx_schedule"}, "parameters");
+    if (c.parameters["tx_schedule"].as<std::string>() != "round_robin" ||
+        c.override_value.has_value()) {
+      throw std::invalid_argument("MIMODeinterleave supports round-robin schedule only");
     }
-    for (const auto& c : suite.select(scope)) {
-      size_t index = 0;
-      for (; index < perf::kProfiles.size(); ++index) {
-        if (c.profile == perf::kProfiles[index])
-          break;
-      }
-      const auto& shape = suite.shapes.at(index);
-      if (shape.size() != 4) {
-        throw std::invalid_argument("MIMODeinterleave profile must have TX,RX,chirps,samples");
-      }
-      result.push_back({c.id, c.profile, shape[0], shape[1], shape[2], shape[3]});
+
+    if (shape.size() != 4) {
+      throw std::invalid_argument("MIMODeinterleave profile must have TX,RX,chirps,samples");
     }
-    return result;
+    return {c.id, c.profile, shape[0], shape[1], shape[2], shape[3]};
   }
 
   static void run_scenario(const DeinterleaveScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, /*has_override=*/false);
-    const auto samples =
-        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    perf::measure_scenario(
+        rs, false,
+        [&](int /*rep*/, const perf::RunPlan& p) {
           return run_deinterleave_graph(scen, p.total_frames);
+        },
+        base_row(scen), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scen, row.latency.median_ms);
+          row.notes =
+              "pure gather marshaling; cold_ms is first-frame latency; "
+              "median/p90 are steady state; cells/s counts complex samples moved";
         });
-
-    perf::append_setup_row(base_row(scen), samples, report);
-
-    perf::ResultRow row = base_row(scen);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes =
-        "pure gather marshaling; cold_ms is first-frame latency; "
-        "median/p90 are steady state; cells/s counts complex samples moved";
-    report->results.push_back(row);
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([] {
-      perf::PerfReport discarded;
-      perf::RunSettings warm;
-      warm.warmup_frames = 0;
-      warm.measured_frames = 2;
-      warm.repeats = 1;
-      run_scenario(build_profile_matrix("minimal").front(), warm, &discarded);
-    });
   }
 };
 

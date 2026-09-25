@@ -35,7 +35,6 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -77,34 +76,6 @@ struct SnapScenario {
 
 int64_t snapshots_for(const Window& w) {
   return (2 * w.wd + 1) * (2 * w.wr + 1);
-}
-
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 4, 64, 256, 64, "small map; fast smoke"},
-      {"sm", 8, 128, 512, 256, "compact SIMO array"},
-      {"md", 16, 256, 512, 1024, "common dev size"},
-      {"lg", 32, 512, 1024, 4096, "dense virtual array"},
-      {"xl", 64, 512, 2048, 16384, "upper characterization bound"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& s : size_ladder()) {
-    if (s.id == id) {
-      return &s;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* s = find_size(id);
-  if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *s;
 }
 
 std::string window_tag(const Window& w) {
@@ -247,16 +218,6 @@ struct SnapTraits : perf::PerfDriverDefaults {
     return "SnapshotGatherOp performance characterization "
            "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() {
-    return "Window w1x1 size sweep with snapshot_window override timing";
-  }
-  static const char* sizes_subset_help() {
-    return "Window w1x1 size sweep across an explicit subset";
-  }
-  static const char* full_help() {
-    return "Full matrix (sizes x windows {0x0, 1x1, 2x2}); "
-           "inline snapshot_window override timing";
-  }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -277,78 +238,49 @@ struct SnapTraits : perf::PerfDriverDefaults {
     return result;
   }
 
-  static std::vector<SnapScenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::set<std::string> selected_ids;
-    for (const auto& c : profiles.select(scope))
-      selected_ids.insert(c.id);
-    std::vector<SnapScenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i) {
-        if (c.profile == perf::kProfiles[i])
-          break;
-      }
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 4 || shape[3] < 1)
-        throw std::invalid_argument("SnapshotGather invalid profile shape");
-      perf::require_keys(c.parameters, {"window"}, "parameters");
-      const auto window = c.parameters["window"];
-      if (!window || !window.IsSequence() || window.size() != 2)
-        throw std::invalid_argument("SnapshotGather window must have two extents");
-      const Window w{window[0].as<int64_t>(), window[1].as<int64_t>()};
-      if (w.wd < 0 || w.wr < 0 || w.wd > 2 || w.wr > 2)
-        throw std::invalid_argument("SnapshotGather window out of range");
-      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], c.profile};
-      auto scenario = make_scenario(size, w);
-      scenario.id = c.id;
-      scenario.size_id = c.profile;
-      if (c.override_value) {
-        if ((*c.override_value)["port"].as<std::string>() != "snapshot_window")
-          throw std::invalid_argument("SnapshotGather only snapshot_window is live");
-        const auto changed = (*c.override_value)["value"];
-        if (!changed.IsSequence() || changed.size() != 2)
-          throw std::invalid_argument("SnapshotGather override window needs two extents");
-        scenario.override_window = {changed[0].as<int64_t>(), changed[1].as<int64_t>()};
-        if (scenario.override_window.wd < 0 || scenario.override_window.wr < 0 ||
-            scenario.override_window.wd > 2 || scenario.override_window.wr > 2)
-          throw std::invalid_argument("SnapshotGather override window out of range");
-        scenario.live_window = true;
-      }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
+  static SnapScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    if (shape.size() != 4 || shape[3] < 1)
+      throw std::invalid_argument("SnapshotGather invalid profile shape");
+    perf::require_keys(c.parameters, {"window"}, "parameters");
+    const auto window = c.parameters["window"];
+    if (!window || !window.IsSequence() || window.size() != 2)
+      throw std::invalid_argument("SnapshotGather window must have two extents");
+    const Window w{window[0].as<int64_t>(), window[1].as<int64_t>()};
+    if (w.wd < 0 || w.wr < 0 || w.wd > 2 || w.wr > 2)
+      throw std::invalid_argument("SnapshotGather window out of range");
+    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], c.profile};
+    auto scenario = make_scenario(size, w);
+    scenario.id = c.id;
+    scenario.size_id = c.profile;
+    if (c.override_value) {
+      if ((*c.override_value)["port"].as<std::string>() != "snapshot_window")
+        throw std::invalid_argument("SnapshotGather only snapshot_window is live");
+      const auto changed = (*c.override_value)["value"];
+      if (!changed.IsSequence() || changed.size() != 2)
+        throw std::invalid_argument("SnapshotGather override window needs two extents");
+      scenario.override_window = {changed[0].as<int64_t>(), changed[1].as<int64_t>()};
+      if (scenario.override_window.wd < 0 || scenario.override_window.wr < 0 ||
+          scenario.override_window.wd > 2 || scenario.override_window.wr > 2)
+        throw std::invalid_argument("SnapshotGather override window out of range");
+      scenario.live_window = true;
     }
-    return result;
+    return scenario;
   }
 
   static void run_scenario(const SnapScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, scen.live_window);
-    const auto samples =
-        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    perf::measure_scenario(
+        rs, scen.live_window,
+        [&](int /*rep*/, const perf::RunPlan& p) {
           return run_snapshot_graph(scen, p);
+        },
+        base_row(scen), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scen, row.latency.median_ms);
+          row.notes = "end-to-end Graph latency; cells/s is detections/s";
+          if (scen.live_window)
+            row.notes += "; one-frame snapshot_window change";
         });
-
-    perf::append_setup_row(base_row(scen), samples, report);
-
-    perf::ResultRow row = base_row(scen);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes = "end-to-end Graph latency; cells/s is detections/s";
-    if (scen.live_window)
-      row.notes += "; one-frame snapshot_window change";
-    report->results.push_back(row);
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([&] {
-      perf::PerfReport discarded;
-      perf::RunSettings warm_rs;
-      warm_rs.warmup_frames = 0;
-      warm_rs.measured_frames = 2;
-      warm_rs.repeats = 1;
-      run_scenario(make_scenario(must_find_size("xs"), Window{1, 1}), warm_rs, &discarded);
-    });
   }
 };
 

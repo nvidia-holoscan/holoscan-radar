@@ -38,7 +38,6 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
-#include "utils/perf_process_warmup.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -71,34 +70,6 @@ struct RedScenario {
   std::string live_port;
   std::vector<double> weights;
 };
-
-const std::vector<SizeSpec>& size_ladder() {
-  static const std::vector<SizeSpec> ladder = {
-      {"xs", 256, 32, 2, "small; fast smoke"},
-      {"sm", 1024, 64, 2, "compact detection set"},
-      {"md", 4096, 128, 2, "common mid-scale"},
-      {"lg", 16384, 256, 2, "dense cluster-then-angle"},
-      {"xl", 65536, 512, 2, "upper characterization bound"}};
-  return ladder;
-}
-
-const SizeSpec* find_size(const std::string& id) {
-  for (const auto& s : size_ladder()) {
-    if (s.id == id) {
-      return &s;
-    }
-  }
-  return nullptr;
-}
-
-const SizeSpec& must_find_size(const std::string& id) {
-  const SizeSpec* s = find_size(id);
-  if (s == nullptr) {
-    std::cerr << "internal error: unknown size id '" << id << "'\n";
-    std::abort();
-  }
-  return *s;
-}
 
 std::string policy_tag(hr::RepresentativePolicy p) {
   return std::string(hr::to_string(p));
@@ -153,11 +124,10 @@ std::shared_ptr<holoscan::Tensor> make_points(int64_t num_points, int64_t num_fe
   return make_device_from_host(host, {num_points, num_features}, hr::real_dtype<T>());
 }
 
-class PerfReductionSourceOp final : public holoscan::Operator<> {
+struct LivePorts {
  public:
-  PerfReductionSourceOp(int64_t override_at, std::string port, int64_t features)
-  : override_at_(override_at), port_(std::move(port)), features_(features) {}
-  void setup(holoscan::OperatorSpec& spec) override {
+  LivePorts(std::string port, int64_t features) : port_(std::move(port)), features_(features) {}
+  void setup(holoscan::OperatorSpec& spec) {
     constexpr holoscan::TensorRepresentation device{.memory_kind =
                                                         holoscan::MemoryKind::kCudaDevice};
     constexpr holoscan::TensorRepresentation host{.memory_kind = holoscan::MemoryKind::kHost,
@@ -176,60 +146,35 @@ class PerfReductionSourceOp final : public holoscan::Operator<> {
         .produces_tensor(
             hr::pooled_tensor_output(host, 1U, static_cast<size_t>(features_) * sizeof(double)));
   }
-  [[nodiscard]] holoscan::Contract contract() const override {
-    holoscan::Contract result;
-    result.trigger(holoscan::OnClock{.period = perf::kPerfTick});
-    return result;
-  }
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext& context) override {
-    std::shared_ptr<holoscan::Tensor> a, b, c;
-    perf::PerfPublishMode mode = perf::PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(perf::PerfFrameBank::mutex);
-      if (perf::PerfFrameBank::in_flight != 0 || perf::PerfFrameBank::frames_remaining <= 0 ||
-          perf::PerfFrameBank::input_frame == nullptr ||
-          perf::PerfFrameBank::input_frame_b == nullptr ||
-          perf::PerfFrameBank::input_frame_c == nullptr)
-        return {};
-      --perf::PerfFrameBank::frames_remaining;
-      a = perf::PerfFrameBank::input_frame;
-      b = perf::PerfFrameBank::input_frame_b;
-      c = perf::PerfFrameBank::input_frame_c;
-      mode = perf::PerfFrameBank::publish_mode;
-      perf::detail::record_start_locked();
-    }
-    if (frame_index_ == override_at_) {
-      const auto time = context.activation_time();
-      if (port_ == "representative") {
-        HOLOSCAN_RETURN_IF_ERROR(representative.emit(hr::RepresentativePolicy::kMedoid,
-                                                     holoscan::EmitOptions{.capture_time = time}));
-      } else if (port_ == "score_method") {
-        HOLOSCAN_RETURN_IF_ERROR(score_method.emit(hr::ScoreMethod::kWeightedL2,
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
+      holoscan::ExecutionContext& context) {
+    const auto time = context.activation_time();
+    if (port_ == "representative") {
+      HOLOSCAN_RETURN_IF_ERROR(representative.emit(hr::RepresentativePolicy::kMedoid,
                                                    holoscan::EmitOptions{.capture_time = time}));
-      } else if (port_ == "feature_weights") {
-        constexpr DLDataType dtype{kDLFloat, 64U, 1U};
-        const std::array<int64_t, 1> shape{features_};
-        auto loan = feature_weights.allocate_tensor(
-            holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
-        if (!loan)
-          return holoscan::make_unexpected(std::move(loan).error());
-        auto written =
-            loan->write_host_and_commit([this](const holoscan::TensorOutputWriteGuard& writer) {
-              auto* data = writer.data_as<double>();
-              for (int64_t i = 0; i < features_; ++i)
-                data[i] = i == 0 ? 2.0 : 1.0;
-            });
-        if (!written)
-          return holoscan::make_unexpected(std::move(written).error());
-        HOLOSCAN_RETURN_IF_ERROR(
-            feature_weights.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = time}));
-      }
+    } else if (port_ == "score_method") {
+      HOLOSCAN_RETURN_IF_ERROR(score_method.emit(hr::ScoreMethod::kWeightedL2,
+                                                 holoscan::EmitOptions{.capture_time = time}));
+    } else if (port_ == "feature_weights") {
+      constexpr DLDataType dtype{kDLFloat, 64U, 1U};
+      const std::array<int64_t, 1> shape{features_};
+      auto loan = feature_weights.allocate_tensor(
+          holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
+      if (!loan)
+        return holoscan::make_unexpected(std::move(loan).error());
+      auto written =
+          loan->write_host_and_commit([this](const holoscan::TensorOutputWriteGuard& writer) {
+            auto* data = writer.data_as<double>();
+            for (int64_t i = 0; i < features_; ++i)
+              data[i] = i == 0 ? 2.0 : 1.0;
+          });
+      if (!written)
+        return holoscan::make_unexpected(std::move(written).error());
+      HOLOSCAN_RETURN_IF_ERROR(
+          feature_weights.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = time}));
     }
-    ++frame_index_;
-    HOLOSCAN_RETURN_IF_ERROR(perf::detail::emit_device_frame(out_a, context, a, mode));
-    HOLOSCAN_RETURN_IF_ERROR(perf::detail::emit_device_frame(out_b, context, b, mode));
-    return perf::detail::emit_device_frame(out_c, context, c, mode);
+    return {};
   }
   holoscan::Output<holoscan::Tensor> out_a{"out_a"};
   holoscan::Output<holoscan::Tensor> out_b{"out_b"};
@@ -239,11 +184,14 @@ class PerfReductionSourceOp final : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> feature_weights{"feature_weights"};
 
  private:
-  int64_t override_at_{-1};
   std::string port_;
   int64_t features_{0};
-  int64_t frame_index_{0};
 };
+
+constexpr auto kInputA = &LivePorts::out_a;
+constexpr auto kInputB = &LivePorts::out_b;
+constexpr auto kInputC = &LivePorts::out_c;
+using LiveSource = perf::PerfLiveSourceOp<LivePorts, kInputA, kInputB, kInputC>;
 
 perf::TimingCollector run_reduction_graph(const RedScenario& scen, const perf::RunPlan& plan) {
   auto labels_t = make_labels(scen.num_points, scen.num_clusters);
@@ -285,7 +233,7 @@ perf::TimingCollector run_reduction_graph(const RedScenario& scen, const perf::R
   if (scen.live_port.empty())
     return perf::run_perf_graph_triple(std::move(labels_t), std::move(idx_t), std::move(points_t),
                                        plan.total_frames, "reduction-perf", build);
-  return perf::run_perf_graph_triple_with_override<PerfReductionSourceOp>(
+  return perf::run_perf_graph_triple_with_override<LiveSource>(
       std::move(labels_t), std::move(idx_t), std::move(points_t), plan.total_frames,
       plan.override_at, scen.live_port, scen.num_features, "reduction-perf", build);
 }
@@ -346,11 +294,6 @@ struct RedTraits : perf::PerfDriverDefaults {
     return "DetectionReductionOp performance characterization "
            "(HSDK 5 Graph)";
   }
-  static const char* sizes_all_help() { return "Peak-policy size sweep"; }
-  static const char* sizes_subset_help() {
-    return "Peak-policy size sweep across an explicit subset";
-  }
-  static const char* full_help() { return "All curated policy and live-override cases"; }
 
   static perf::ProfileSuite suite() {
     return perf::load_profile_suite(
@@ -369,87 +312,54 @@ struct RedTraits : perf::PerfDriverDefaults {
     }
     return result;
   }
-  static std::vector<Scenario> build_profile_matrix(const std::string& scope) {
-    const auto profiles = suite();
-    std::set<std::string> selected_ids;
-    for (const auto& c : profiles.select(scope))
-      selected_ids.insert(c.id);
-    std::vector<Scenario> result;
-    for (const auto& c : profiles.cases) {
-      size_t i = 0;
-      for (; i < perf::kProfiles.size(); ++i)
-        if (c.profile == perf::kProfiles[i])
-          break;
-      const auto& shape = profiles.shapes.at(i);
-      if (shape.size() != 3 || shape[0] < 1 || shape[1] < 1 || shape[1] > shape[0] || shape[2] < 1)
-        throw std::invalid_argument("DetectionReduction invalid shape");
-      perf::require_keys(c.parameters, {"representative", "score_method"}, "parameters");
-      const auto policy = c.parameters["representative"].as<std::string>();
-      const auto method = c.parameters["score_method"].as<std::string>();
-      if (policy != "peak" && policy != "medoid" && policy != "first" && policy != "weighted_mean")
-        throw std::invalid_argument("DetectionReduction invalid policy");
-      if (method != "weighted_sum" && method != "weighted_l2" && method != "weighted_max")
-        throw std::invalid_argument("DetectionReduction invalid score method");
-      const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
-      const auto parsed_policy = policy == "first"    ? hr::RepresentativePolicy::kFirst
-                                 : policy == "medoid" ? hr::RepresentativePolicy::kMedoid
-                                 : policy == "weighted_mean"
-                                     ? hr::RepresentativePolicy::kWeightedMean
-                                     : hr::RepresentativePolicy::kPeak;
-      auto scenario = make_scenario(parsed_policy, size);
-      scenario.id = c.id;
-      scenario.score_method = method == "weighted_l2"    ? hr::ScoreMethod::kWeightedL2
-                              : method == "weighted_max" ? hr::ScoreMethod::kWeightedMax
-                                                         : hr::ScoreMethod::kWeightedSum;
-      if (c.override_value) {
-        scenario.live_port = (*c.override_value)["port"].as<std::string>();
-        const auto value = (*c.override_value)["value"].as<std::string>();
-        if ((scenario.live_port == "representative" && value != "medoid") ||
-            (scenario.live_port == "score_method" && value != "weighted_l2") ||
-            (scenario.live_port == "feature_weights" && value != "first_double") ||
-            (scenario.live_port != "representative" && scenario.live_port != "score_method" &&
-             scenario.live_port != "feature_weights"))
-          throw std::invalid_argument("DetectionReduction invalid override");
-      }
-      if (selected_ids.contains(c.id))
-        result.push_back(std::move(scenario));
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
+    if (shape.size() != 3 || shape[0] < 1 || shape[1] < 1 || shape[1] > shape[0] || shape[2] < 1)
+      throw std::invalid_argument("DetectionReduction invalid shape");
+    perf::require_keys(c.parameters, {"representative", "score_method"}, "parameters");
+    const auto policy = c.parameters["representative"].as<std::string>();
+    const auto method = c.parameters["score_method"].as<std::string>();
+    if (policy != "peak" && policy != "medoid" && policy != "first" && policy != "weighted_mean")
+      throw std::invalid_argument("DetectionReduction invalid policy");
+    if (method != "weighted_sum" && method != "weighted_l2" && method != "weighted_max")
+      throw std::invalid_argument("DetectionReduction invalid score method");
+    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
+    const auto parsed_policy = policy == "first"           ? hr::RepresentativePolicy::kFirst
+                               : policy == "medoid"        ? hr::RepresentativePolicy::kMedoid
+                               : policy == "weighted_mean" ? hr::RepresentativePolicy::kWeightedMean
+                                                           : hr::RepresentativePolicy::kPeak;
+    auto scenario = make_scenario(parsed_policy, size);
+    scenario.id = c.id;
+    scenario.score_method = method == "weighted_l2"    ? hr::ScoreMethod::kWeightedL2
+                            : method == "weighted_max" ? hr::ScoreMethod::kWeightedMax
+                                                       : hr::ScoreMethod::kWeightedSum;
+    if (c.override_value) {
+      scenario.live_port = (*c.override_value)["port"].as<std::string>();
+      const auto value = (*c.override_value)["value"].as<std::string>();
+      if ((scenario.live_port == "representative" && value != "medoid") ||
+          (scenario.live_port == "score_method" && value != "weighted_l2") ||
+          (scenario.live_port == "feature_weights" && value != "first_double") ||
+          (scenario.live_port != "representative" && scenario.live_port != "score_method" &&
+           scenario.live_port != "feature_weights"))
+        throw std::invalid_argument("DetectionReduction invalid override");
     }
-    return result;
+    return scenario;
   }
 
   static void run_scenario(const RedScenario& scen, const perf::RunSettings& rs,
                            perf::PerfReport* report) {
-    const perf::RunPlan plan = perf::make_run_plan(rs, !scen.live_port.empty());
-    const auto samples =
-        perf::collect_scenario_samples(rs, plan, [&](int /*rep*/, const perf::RunPlan& p) {
+    perf::measure_scenario(
+        rs, !scen.live_port.empty(),
+        [&](int /*rep*/, const perf::RunPlan& p) {
           return run_reduction_graph(scen, p);
+        },
+        base_row(scen), report,
+        [&](perf::ResultRow& row) {
+          fill_throughput(&row, scen, row.latency.median_ms);
+          row.notes = "cold_ms is first-frame latency; override_ms is one changed frame for " +
+                      scen.live_port + "; cells/s is points/s";
+          if (row.live_port.empty())
+            row.notes = "default parameters; no live override";
         });
-
-    perf::append_setup_row(base_row(scen), samples, report);
-
-    perf::ResultRow row = base_row(scen);
-    perf::fill_compute_row(&row, samples);
-    fill_throughput(&row, scen, row.latency.median_ms);
-    row.notes = "cold_ms is first-frame latency; override_ms is one changed frame for " +
-                scen.live_port + "; cells/s is points/s";
-    if (row.live_port.empty())
-      row.notes = "default parameters; no live override";
-    report->results.push_back(row);
-  }
-
-  static void process_warmup(const perf::RunSettings&) {
-    perf::run_process_warmup([&] {
-      perf::PerfReport discarded;
-      perf::RunSettings warm_rs;
-      warm_rs.warmup_frames = 0;
-      warm_rs.measured_frames = 2;
-      warm_rs.repeats = 1;
-      const SizeSpec& xs = must_find_size("xs");
-      for (auto p : {hr::RepresentativePolicy::kFirst, hr::RepresentativePolicy::kPeak,
-                     hr::RepresentativePolicy::kMedoid, hr::RepresentativePolicy::kWeightedMean}) {
-        run_scenario(make_scenario(p, xs), warm_rs, &discarded);
-      }
-    });
   }
 };
 
