@@ -35,6 +35,7 @@
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -122,8 +123,8 @@ perf::TimingCollector run_graph(const SnapScenario& scen, const perf::RunPlan& p
   auto rd = make_rd_maps<PerfPrecision>(scen.channels, scen.doppler, scen.range);
   auto idx = make_detection_idx(scen.detections, scen.doppler, scen.range);
   using BaseOp = hr::SnapshotGatherOp<PerfPrecision>;
-  const auto build = [&](holoscan::Graph& graph, const auto& src,
-                         holoscan::CompileOptions& options) {
+  const auto configure = [&](holoscan::Graph& graph, const auto& src,
+                             holoscan::CompileOptions& options, auto connect) {
     hr::MaxTensorExtents extents;
     extents.max_detections = scen.detections;
     extents.max_channels = scen.channels;
@@ -135,30 +136,32 @@ perf::TimingCollector run_graph(const SnapScenario& scen, const perf::RunPlan& p
     params.doppler_edge = hr::SnapshotEdgeMode::kWrap;
     params.range_edge = hr::SnapshotEdgeMode::kShift;
     op.set_params(std::move(params));
-    const auto snap_sink = graph.op<perf::PerfTerminalSinkOp>("snap_sink");
-    const auto valid_drain = graph.op<perf::PerfNullSinkOp>("valid_drain");
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(src->out_a, op->rd_maps, q);
     graph.add_flow(src->out_b, op->detection_idx, q);
-    if constexpr (requires { src->override_out; }) {
-      graph.add_flow(src->override_out, op->snapshot_window, q);
-    }
-    graph.add_flow(op->snapshot, snap_sink->in, q);
-    graph.add_flow(op->is_valid, valid_drain->in, q);
-    graph.partition("perf").add(src).add(op).add(snap_sink).add(valid_drain);
-    perf::bind_tensor_out(options, "gather", "snapshot");
-    perf::bind_tensor_out(options, "gather", "is_valid");
+    connect(graph, src, op, q);
+    perf::PerfRecipeOutputs outputs(graph, options, "gather");
+    outputs.timed(op->snapshot, "snapshot");
+    outputs.drain(op->is_valid, "is_valid");
+    outputs.finish(src, op);
   };
   if (scen.live_window) {
-    const hr::SnapshotWindowOverride initial{.doppler = scen.window.wd, .range = scen.window.wr};
-    const hr::SnapshotWindowOverride changed{.doppler = scen.override_window.wd,
-                                             .range = scen.override_window.wr};
-    return perf::run_perf_graph_dual_with_override(
-        std::move(rd), std::move(idx), plan.total_frames, plan.override_at, initial, changed,
-        "snapshot-perf", build, perf::PerfPublishMode::kCopy, true);
+    const auto selected = perf::live_case(
+        "snapshot_window",
+        hr::SnapshotWindowOverride{.doppler = scen.window.wd, .range = scen.window.wr},
+        hr::SnapshotWindowOverride{.doppler = scen.override_window.wd,
+                                   .range = scen.override_window.wr},
+        [](auto& graph, const auto& src, const auto& op, const auto& q) {
+          graph.add_flow(src->override_out, op->snapshot_window, q);
+        });
+    return perf::run_selected_live_recipe(std::array{std::move(rd), std::move(idx)}, plan,
+                                          "snapshot-perf", selected, configure);
   }
-  return perf::run_perf_graph_dual(std::move(rd), std::move(idx), plan.total_frames,
-                                   "snapshot-perf", build);
+  return perf::run_data_recipe(std::array{std::move(rd), std::move(idx)}, plan, "snapshot-perf",
+                               [&](auto& graph, const auto& src, auto& options) {
+                                 configure(graph, src, options,
+                                           [](auto&, const auto&, const auto&, const auto&) {});
+                               });
 }
 
 void fill_throughput(perf::ResultRow* row, const SnapScenario& scen, double median_ms) {

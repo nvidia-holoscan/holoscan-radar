@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <cstdint>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,7 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -73,7 +75,8 @@ std::vector<int64_t> input_shape(const NotchScenario& scenario) {
 perf::TimingCollector run_graph(const NotchScenario& scenario, const perf::RunPlan& plan) {
   auto axis = perf::make_power_map_device<PerfPrecision>({scenario.num_doppler});
   auto maps = perf::make_iq_cube_device<PerfPrecision>(input_shape(scenario));
-  const auto configure = [&](holoscan::Graph& graph, holoscan::CompileOptions& options) {
+  const auto configure = [&](holoscan::Graph& graph, const auto& source,
+                             holoscan::CompileOptions& options, auto connect) {
     hr::MaxTensorExtents extents;
     extents.max_doppler_bins = scenario.num_doppler;
     extents.max_range_bins = scenario.num_range;
@@ -87,40 +90,48 @@ perf::TimingCollector run_graph(const NotchScenario& scenario, const perf::RunPl
     params.transition_width = scenario.cosine ? 1.0 : 0.0;
     params.cyclic_velocity_axis = scenario.cyclic;
     op.set_params(std::move(params));
-    const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
-    perf::bind_tensor_out(options, "notch", "rd_maps_out");
-    return std::make_pair(op, sink);
+    const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+    graph.add_flow(source->out_a, op->velocity_bins, queue);
+    graph.add_flow(source->out_b, op->rd_maps, queue);
+    connect(graph, source, op, queue);
+    perf::PerfRecipeOutputs outputs(graph, options, "notch");
+    outputs.timed(op->rd_maps_out, "rd_maps_out");
+    outputs.finish(source, op);
   };
-  if (scenario.live_override) {
-    return perf::run_perf_graph_dual_with_override(
-        std::move(axis), std::move(maps), plan.total_frames, plan.override_at, 0.0,
-        scenario.override_value, "doppler-notch-perf",
-        [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
-          auto [op, sink] = configure(graph, options);
-          const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-          graph.add_flow(source->out_a, op->velocity_bins, queue);
-          graph.add_flow(source->out_b, op->rd_maps, queue);
-          if (scenario.live_port == "center_velocity")
-            graph.add_flow(source->override_out, op->center_velocity, queue);
-          else if (scenario.live_port == "stop_half_width")
-            graph.add_flow(source->override_out, op->stop_half_width, queue);
-          else
-            graph.add_flow(source->override_out, op->transition_width, queue);
-          graph.add_flow(op->rd_maps_out, sink->in, queue);
-          graph.partition("perf").add(source).add(op).add(sink);
-        },
-        perf::PerfPublishMode::kCopy, true);
+  if (!scenario.live_override) {
+    return perf::run_data_recipe(
+        std::array{std::move(axis), std::move(maps)}, plan, "doppler-notch-perf",
+        [&](auto& graph, const auto& source, auto& options) {
+          configure(graph, source, options, [](auto&, const auto&, const auto&, const auto&) {});
+        });
   }
-  return perf::run_perf_graph_dual(
-      std::move(axis), std::move(maps), plan.total_frames, "doppler-notch-perf",
-      [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
-        auto [op, sink] = configure(graph, options);
-        const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-        graph.add_flow(source->out_a, op->velocity_bins, queue);
-        graph.add_flow(source->out_b, op->rd_maps, queue);
-        graph.add_flow(op->rd_maps_out, sink->in, queue);
-        graph.partition("perf").add(source).add(op).add(sink);
-      });
+  const auto cases = std::make_tuple(
+      perf::live_option("center_velocity",
+                        [&] {
+                          return perf::live_case(
+                              "center_velocity", 0.0, scenario.override_value,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->center_velocity, q);
+                              });
+                        }),
+      perf::live_option("stop_half_width",
+                        [&] {
+                          return perf::live_case(
+                              "stop_half_width", 0.0, scenario.override_value,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->stop_half_width, q);
+                              });
+                        }),
+      perf::live_option("transition_width", [&] {
+        return perf::live_case("transition_width", 0.0, scenario.override_value,
+                               [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                 graph.add_flow(source->override_out, op->transition_width, q);
+                               });
+      }));
+  return perf::dispatch_live_case(scenario.live_port, cases, [&](const auto& selected) {
+    return perf::run_selected_live_recipe(std::array{std::move(axis), std::move(maps)}, plan,
+                                          "doppler-notch-perf", selected, configure);
+  });
 }
 
 perf::ResultRow base_row(const NotchScenario& scenario) {

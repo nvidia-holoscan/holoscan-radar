@@ -86,6 +86,23 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
             set_tests_properties(perf_${_perf_name}_overrides_smoke PROPERTIES LABELS "performance")
         endif()
     endforeach()
+    # Exercise recipe dispatch across scalar, host-vector, descriptor, and
+    # aligned multi-input payloads beyond the initial focused smoke group.
+    foreach(_perf_name IN ITEMS
+            phase_shift_beamformer mvdr_estimator music_estimator
+            root_music_estimator esprit_estimator cluster_dbscan
+            subarray_selection snapshot_gather tdm_sparse_compensation
+            ddm_sparse_demultiplex virtual_array_assembly doppler_notch
+            tdm_dense_compensation fmcw_range_doppler_processor)
+        if(TARGET perf_${_perf_name})
+            add_test(NAME perf_${_perf_name}_recipe_overrides_smoke
+                COMMAND perf_${_perf_name} --scope overrides --sizes small
+                    --warmup 1 --frames 3 --repeats 2 --quiet
+                    --output ${CMAKE_CURRENT_BINARY_DIR}/perf_${_perf_name}_recipe_overrides_smoke.json)
+            set_tests_properties(perf_${_perf_name}_recipe_overrides_smoke
+                PROPERTIES LABELS "performance")
+        endif()
+    endforeach()
     foreach(_perf_name IN ITEMS fmcw_range_processor fmcw_doppler_processor)
         if(TARGET perf_${_perf_name})
             add_test(NAME perf_${_perf_name}_cached_plan_smoke

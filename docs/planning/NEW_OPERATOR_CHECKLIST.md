@@ -204,8 +204,11 @@ in Jira.
 
 - [ ] **Performance adapter + YAML suite** — `performance/cpp/perf_<operator>.cpp`
       defines typed `Scenario`, `parse_case`, `size_def`, `run_graph`, and
-      `base_row` hooks for the shared driver. Add `decorate_row` only for
-      throughput units or notes. `performance/profiles/<operator>.yaml` names
+      `base_row` hooks for the shared driver. In `run_graph`, use
+      `run_data_recipe` or `run_selected_live_recipe`; declare timed and
+      drained outputs with `PerfRecipeOutputs`. The recipe runner stages inputs,
+      creates sources and sinks, assembles the Graph partition, and returns
+      paired timestamps. Add `decorate_row` only for throughput units or notes. `performance/profiles/<operator>.yaml` names
       small, medium, and large profiles and curated cases for all five scopes.
       Limited includes every backend; Overrides covers every `[live]` input
       alone at all three sizes. Use an explicit `{profile}` family only when
@@ -221,8 +224,9 @@ in Jira.
       frames/s, and source cadence.
 - [ ] **`[live]` overrides in the harness** — if the operator has any live
       params, the YAML Overrides scope must isolate each `[live]` port at
-      each size and report the one changed frame per independent run. Exercise
-      any `[live]` fast paths (named slow/fast pairs if applicable); do not
+      each size and report the one changed frame per independent run. Declare
+      one typed `live_option` per YAML port and connect its selected source
+      output to the operator input. Exercise any `[live]` fast paths (named slow/fast pairs if applicable); do not
       claim a fast path while timing only the slow one. See `OPERATOR_DEVELOPMENT.md` → Performance
       characterization → Required coverage.
 - [ ] **CMake** — add the name once to `HOLOSCAN_RADAR_PERF_TARGETS` in

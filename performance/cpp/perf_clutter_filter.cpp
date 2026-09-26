@@ -11,6 +11,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -25,6 +26,7 @@
 #include "utils/perf_platform.hpp"
 #include "utils/perf_profiles.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -90,65 +92,50 @@ perf::TimingCollector run_graph(const ClutterScenario& scen, const perf::RunPlan
     extents.max_rx = scen.channels;
   }
   using BaseOp = hr::ClutterFilterOp<PerfPrecision>;
-  // Production Exact{} uses the one-frame source sideband.
-  // (restacking LatestWithin is TEMPORAL_CONTRACT_INVALID).
-  if (scen.time_window_override) {
-    hr::WindowSpec unseen;
-    unseen.type = hr::WindowType::kHamming;
-    return perf::run_perf_graph_with_window_override(
-        std::move(cube), plan.total_frames, plan.override_at, scen.window, unseen,
-        "clutter-window-perf",
-        [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
-          auto op = graph.op<BaseOp>("clutter", extents);
-          hr::ClutterFilterParams params;
-          params.method = scen.method;
-          params.doppler_window = scen.window;
-          op.set_params(std::move(params));
-          const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
-          const holoscan::ConnectionOptions q{.queue_depth = 4U};
-          graph.add_flow(src->out, op->range_profiles, q);
-          graph.add_flow(src->override_out, op->doppler_window_in, q);
-          graph.add_flow(op->range_profiles_out, sink->in, q);
-          graph.partition("perf").add(src).add(op).add(sink);
-          perf::bind_tensor_out(options, "clutter", "range_profiles_out");
-        },
-        perf::PerfPublishMode::kCopy, true);
+  const auto configure = [&](holoscan::Graph& graph, const auto& src,
+                             holoscan::CompileOptions& options, auto connect) {
+    auto op = graph.op<BaseOp>("clutter", extents);
+    hr::ClutterFilterParams params;
+    params.method = scen.method;
+    params.doppler_window = scen.window;
+    op.set_params(std::move(params));
+    const holoscan::ConnectionOptions q{.queue_depth = 4U};
+    graph.add_flow(src->out, op->range_profiles, q);
+    connect(graph, src, op, q);
+    perf::PerfRecipeOutputs outputs(graph, options, "clutter");
+    outputs.timed(op->range_profiles_out, "range_profiles_out");
+    outputs.finish(src, op);
+  };
+  if (!scen.time_window_override && !scen.time_method_override) {
+    return perf::run_data_recipe(std::array{std::move(cube)}, plan, "clutter-perf",
+                                 [&](auto& graph, const auto& src, auto& options) {
+                                   configure(graph, src, options,
+                                             [](auto&, const auto&, const auto&, const auto&) {});
+                                 });
   }
-  if (!scen.time_method_override) {
-    return perf::run_perf_graph(
-        std::move(cube), plan.total_frames, "clutter-perf",
-        [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
-          auto op = graph.op<BaseOp>("clutter", extents);
-          hr::ClutterFilterParams params;
-          params.method = scen.method;
-          params.doppler_window = scen.window;
-          op.set_params(std::move(params));
-          const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
-          const holoscan::ConnectionOptions q{.queue_depth = 4U};
-          graph.add_flow(src->out, op->range_profiles, q);
-          graph.add_flow(op->range_profiles_out, sink->in, q);
-          perf::bind_tensor_out(options, "clutter", "range_profiles_out");
-        });
-  }
-  const hr::ClutterFilterMethod override_method = flip_method(scen.method);
-  return perf::run_perf_graph_with_override(
-      std::move(cube), plan.total_frames, plan.override_at, scen.method, override_method,
-      "clutter-perf",
-      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
-        auto op = graph.op<BaseOp>("clutter", extents);
-        hr::ClutterFilterParams params;
-        params.method = scen.method;
-        params.doppler_window = scen.window;
-        op.set_params(std::move(params));
-        const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(src->out, op->range_profiles, q);
-        graph.add_flow(src->override_out, op->method, q);
-        graph.add_flow(op->range_profiles_out, sink->in, q);
-        graph.partition("perf").add(src).add(op).add(sink);
-        perf::bind_tensor_out(options, "clutter", "range_profiles_out");
-      },
-      perf::PerfPublishMode::kCopy, true);
+  const auto cases = std::make_tuple(
+      perf::live_option("doppler_window",
+                        [&] {
+                          hr::WindowSpec changed;
+                          changed.type = hr::WindowType::kHamming;
+                          return perf::live_case(
+                              "doppler_window", scen.window, changed,
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->doppler_window_in, q);
+                              });
+                        }),
+      perf::live_option("method", [&] {
+        return perf::live_case("method", scen.method, flip_method(scen.method),
+                               [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                 graph.add_flow(src->override_out, op->method, q);
+                               });
+      }));
+  const std::string port = scen.time_window_override ? "doppler_window" : "method";
+  const char* graph_name = scen.time_window_override ? "clutter-window-perf" : "clutter-perf";
+  return perf::dispatch_live_case(port, cases, [&](const auto& selected) {
+    return perf::run_selected_live_recipe(std::array{std::move(cube)}, plan, graph_name, selected,
+                                          configure);
+  });
 }
 
 void fill_throughput(perf::ResultRow* row, const ClutterScenario& scen, double median_ms) {
@@ -171,8 +158,7 @@ perf::ResultRow base_row(const ClutterScenario& scen) {
   perf::ResultRow row;
   row.op_name = "ClutterFilterOp";
   row.variant = method_tag(scen.method) + "_" + window_tag(scen.window);
-  row.map_shape = {scen.num_chirps, scen.num_range_bins};
-  row.input_shape = profiles_shape(scen);
+  perf::set_input_and_trailing_map_shape(row, profiles_shape(scen));
   row.out_batch = scen.channels;
   row.k = scen.num_chirps;
   row.live_port =

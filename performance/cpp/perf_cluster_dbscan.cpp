@@ -21,6 +21,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -35,6 +36,7 @@
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 
 namespace hr = holoscan::radar;
@@ -124,58 +126,48 @@ perf::TimingCollector run_graph(const DbscanScenario& scen, const perf::RunPlan&
     params.min_points = scen.min_points;
     params.max_clusters = scen.max_clusters;
     op.set_params(std::move(params));
-    const auto sink = graph.op<perf::PerfTerminalSinkOp>("labels_sink");
-    const auto null = graph.op<perf::PerfNullSinkOp>("sizes_drain");
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(src->out, op->points, q);
     connect(graph, src, op, q);
-    graph.add_flow(op->labels, sink->in, q);
-    graph.add_flow(op->sizes, null->in, q);
-    graph.partition("perf").add(src).add(op).add(sink).add(null);
-    perf::bind_tensor_out(options, "dbscan", "labels");
-    perf::bind_tensor_out(options, "dbscan", "sizes");
+    perf::PerfRecipeOutputs outputs(graph, options, "dbscan");
+    outputs.timed(op->labels, "labels");
+    outputs.drain(op->sizes, "sizes");
+    outputs.finish(src, op);
   };
-  if (scen.live_port == "epsilon") {
-    return perf::run_perf_graph_with_vector_override<double>(
-        std::move(pts), plan.total_frames, plan.override_at, scen.epsilon,
-        std::vector<double>{scen.changed_epsilon}, "dbscan-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->epsilon, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
+  if (scen.live_port.empty()) {
+    return perf::run_data_recipe(std::array{std::move(pts)}, plan, "dbscan-perf",
+                                 [&](auto& graph, const auto& src, auto& options) {
+                                   configure(graph, src, options,
+                                             [](auto&, const auto&, const auto&, const auto&) {});
+                                 });
   }
-  if (scen.live_port == "min_points") {
-    return perf::run_perf_graph_with_override(
-        std::move(pts), plan.total_frames, plan.override_at, scen.min_points, scen.changed_scalar,
-        "dbscan-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->min_points, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  if (scen.live_port == "max_clusters") {
-    return perf::run_perf_graph_with_override(
-        std::move(pts), plan.total_frames, plan.override_at, scen.max_clusters, scen.changed_scalar,
-        "dbscan-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->max_clusters, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  return perf::run_perf_graph(std::move(pts), plan.total_frames, "dbscan-perf",
-                              [&](auto& graph, const auto& src, auto& options) {
-                                configure(graph, src, options,
-                                          [](auto&, const auto&, const auto&, const auto&) {});
+  const auto cases = std::make_tuple(
+      perf::live_option("epsilon",
+                        [&] {
+                          return perf::live_case(
+                              "epsilon", scen.epsilon, std::vector<double>{scen.changed_epsilon},
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->epsilon, q);
                               });
+                        }),
+      perf::live_option("min_points",
+                        [&] {
+                          return perf::live_case(
+                              "min_points", scen.min_points, scen.changed_scalar,
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->min_points, q);
+                              });
+                        }),
+      perf::live_option("max_clusters", [&] {
+        return perf::live_case("max_clusters", scen.max_clusters, scen.changed_scalar,
+                               [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                 graph.add_flow(src->override_out, op->max_clusters, q);
+                               });
+      }));
+  return perf::dispatch_live_case(scen.live_port, cases, [&](const auto& selected) {
+    return perf::run_selected_live_recipe(std::array{std::move(pts)}, plan, "dbscan-perf", selected,
+                                          configure);
+  });
 }
 
 void fill_throughput(perf::ResultRow* row, const DbscanScenario& scen, double median_ms) {

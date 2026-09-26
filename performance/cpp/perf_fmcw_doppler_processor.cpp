@@ -19,6 +19,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -34,6 +35,7 @@
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -139,82 +141,69 @@ perf::TimingCollector run_graph(const DopplerScenario& scen, const perf::RunPlan
     params.fft_norm = scen.fft_norm;
     params.nfft = scen.nfft;
     op.set_params(std::move(params));
-    const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
-    const auto ns = graph.op<perf::PerfNullSinkOp>("vel_sink");
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(src->out, op->range_profiles, q);
     connect(graph, src, op, q);
-    graph.add_flow(op->rd_maps, sink->in, q);
-    graph.add_flow(op->velocity_bins, ns->in, q);
-    perf::bind_tensor_out(options, "doppler", "rd_maps");
-    perf::bind_tensor_out(options, "doppler", "velocity_bins");
+    perf::PerfRecipeOutputs outputs(graph, options, "doppler");
+    outputs.timed(op->rd_maps, "rd_maps");
+    outputs.drain(op->velocity_bins, "velocity_bins");
+    outputs.finish(src, op);
   };
-  if (scen.live_port == "doppler_window") {
-    auto changed = window_of(window_type_of(scen.override_value));
-    return perf::run_perf_graph_with_window_override(
-        std::move(cube), plan.total_frames, plan.override_at, window_of(scen.window), changed,
-        "doppler-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->doppler_window_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
+  if (scen.live_port.empty()) {
+    return perf::run_data_recipe(std::array{std::move(cube)}, plan, "doppler-perf",
+                                 [&](auto& graph, const auto& src, auto& options) {
+                                   configure(graph, src, options,
+                                             [](auto&, const auto&, const auto&, const auto&) {});
+                                 });
   }
-  if (scen.live_port == "center_zero_doppler") {
-    return perf::run_perf_graph_with_override(
-        std::move(cube), plan.total_frames, plan.override_at, scen.center_zero,
-        scen.override_value == "true", "doppler-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->center_zero_doppler_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  if (scen.live_port == "waveform") {
-    return perf::run_perf_graph_with_override(
-        std::move(cube), plan.total_frames, plan.override_at, hr::to_wire(make_waveform(scen.pri)),
-        hr::to_wire(make_waveform(std::stod(scen.override_value))), "doppler-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->waveform_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  if (scen.live_port == "fft_norm") {
-    return perf::run_perf_graph_with_override(
-        std::move(cube), plan.total_frames, plan.override_at, scen.fft_norm,
-        norm_of(scen.override_value), "doppler-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->fft_norm_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  if (scen.live_port == "nfft") {
-    return perf::run_perf_graph_with_override(
-        std::move(cube), plan.total_frames, plan.override_at, scen.nfft,
-        int64_t{2 * scen.num_chirps}, "doppler-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->nfft_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true, scen.cached_override);
-  }
-  return perf::run_perf_graph(std::move(cube), plan.total_frames, "doppler-perf",
-                              [&](auto& graph, const auto& src, auto& options) {
-                                configure(graph, src, options,
-                                          [](auto&, const auto&, const auto&, const auto&) {});
+  const auto cases = std::make_tuple(
+      perf::live_option("doppler_window",
+                        [&] {
+                          return perf::live_case(
+                              "doppler_window", window_of(scen.window),
+                              window_of(window_type_of(scen.override_value)),
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->doppler_window_in, q);
                               });
+                        }),
+      perf::live_option("center_zero_doppler",
+                        [&] {
+                          return perf::live_case(
+                              "center_zero_doppler", scen.center_zero,
+                              scen.override_value == "true",
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->center_zero_doppler_in, q);
+                              });
+                        }),
+      perf::live_option("waveform",
+                        [&] {
+                          return perf::live_case(
+                              "waveform", hr::to_wire(make_waveform(scen.pri)),
+                              hr::to_wire(make_waveform(std::stod(scen.override_value))),
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->waveform_in, q);
+                              });
+                        }),
+      perf::live_option("fft_norm",
+                        [&] {
+                          return perf::live_case(
+                              "fft_norm", scen.fft_norm, norm_of(scen.override_value),
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->fft_norm_in, q);
+                              });
+                        }),
+      perf::live_option("nfft", [&] {
+        return perf::live_case(
+            "nfft", scen.nfft, int64_t{2 * scen.num_chirps},
+            [](auto& graph, const auto& src, const auto& op, const auto& q) {
+              graph.add_flow(src->override_out, op->nfft_in, q);
+            },
+            scen.cached_override);
+      }));
+  return perf::dispatch_live_case(scen.live_port, cases, [&](const auto& selected) {
+    return perf::run_selected_live_recipe(std::array{std::move(cube)}, plan, "doppler-perf",
+                                          selected, configure);
+  });
 }
 
 void fill_throughput(perf::ResultRow* row, const DopplerScenario& scen, double median_ms) {
@@ -238,8 +227,7 @@ perf::ResultRow base_row(const DopplerScenario& scen) {
   perf::ResultRow row;
   row.op_name = "FMCWDopplerProcessorOp";
   row.variant = window_tag(scen.window);
-  row.map_shape = {scen.num_chirps, scen.num_range_bins};
-  row.input_shape = profiles_shape(scen);
+  perf::set_input_and_trailing_map_shape(row, profiles_shape(scen));
   row.out_batch = scen.channels;
   row.k = scen.num_chirps;
   row.live_port = scen.live_port;

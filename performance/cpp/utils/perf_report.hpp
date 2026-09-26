@@ -16,7 +16,9 @@
 #include <limits>
 #include <ostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "utils/perf_platform.hpp"
@@ -81,6 +83,15 @@ struct ResultRow {
   std::string calibration_pair;  // paired slow/fast id, empty if none
   std::string calibration_mode;  // "pfa" | "alpha_lut"
 };
+
+// Common scale metadata for operators whose reported map is the input's
+// trailing two axes. Operators with another output grid set map_shape directly.
+inline void set_input_and_trailing_map_shape(ResultRow& row, std::vector<int64_t> shape) {
+  if (shape.size() < 2)
+    throw std::invalid_argument("performance input shape must have at least two axes");
+  row.map_shape = {shape[shape.size() - 2], shape.back()};
+  row.input_shape = std::move(shape);
+}
 
 struct AlphaCalibrationRow {
   std::string pair_id;

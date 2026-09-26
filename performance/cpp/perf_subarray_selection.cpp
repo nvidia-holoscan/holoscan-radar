@@ -13,6 +13,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -26,6 +27,7 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -85,8 +87,8 @@ hr::ArrayGeometry make_holey_ula(const SubarrayScenario& scenario) {
 perf::TimingCollector run_graph(const SubarrayScenario& scenario, const perf::RunPlan& plan) {
   auto snapshot = perf::make_iq_cube_device<PerfPrecision>(
       {scenario.items, scenario.channels, scenario.snapshots});
-  const auto build = [&](holoscan::Graph& graph, const auto& source,
-                         holoscan::CompileOptions& options) {
+  const auto configure = [&](holoscan::Graph& graph, const auto& source,
+                             holoscan::CompileOptions& options, auto connect) {
     hr::MaxTensorExtents extents;
     extents.max_items = scenario.items;
     extents.max_subarray_channels = scenario.channels;
@@ -97,42 +99,48 @@ perf::TimingCollector run_graph(const SubarrayScenario& scenario, const perf::Ru
     params.min_subarray_size = scenario.min_subarray_size;
     op.set_params(std::move(params));
 
-    const auto snapshot_sink = graph.op<perf::PerfTerminalSinkOp>("snapshot_sink");
-    const auto geometry_drain =
-        graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>("geometry_drain");
     const holoscan::ConnectionOptions queue{.queue_depth = 4U};
     graph.add_flow(source->out, op->snapshot, queue);
-    if constexpr (requires { source->override_out; }) {
-      if constexpr (std::is_same_v<std::remove_reference_t<decltype(source->override_out)>,
-                                   holoscan::Output<hr::WireArrayGeometry>>)
-        graph.add_flow(source->override_out, op->array_geometry_in, queue);
-      else
-        graph.add_flow(source->override_out, op->subarray, queue);
-    }
-    graph.add_flow(op->snapshot_out, snapshot_sink->in, queue);
-    graph.add_flow(op->array_geometry, geometry_drain->in, queue);
-    perf::bind_tensor_out(options, "subarray_selection", "snapshot_out");
-    // Declared optional device outputs still require placement on EA.
-    perf::bind_tensor_out(options, "subarray_selection", "is_valid_out");
+    connect(graph, source, op, queue);
+    perf::PerfRecipeOutputs outputs(graph, options, "subarray_selection");
+    outputs.timed(op->snapshot_out, "snapshot_out");
+    outputs.drain(op->array_geometry, "array_geometry");
+    // The declared optional device output still requires placement on EA.
+    outputs.unwired(op->is_valid_out, "is_valid_out");
+    outputs.finish(source, op);
   };
-  if (scenario.live_port == "array_geometry") {
-    auto changed = make_holey_ula(scenario);
-    changed.wavelength = 0.9;
-    return perf::run_perf_graph_with_override(
-        std::move(snapshot), plan.total_frames, plan.override_at,
-        hr::to_wire(make_holey_ula(scenario)), hr::to_wire(changed), "subarray-selection-perf",
-        build, perf::PerfPublishMode::kCopy, true);
+  if (scenario.live_port.empty()) {
+    return perf::run_data_recipe(std::array{std::move(snapshot)}, plan, "subarray-selection-perf",
+                                 [&](auto& graph, const auto& source, auto& options) {
+                                   configure(graph, source, options,
+                                             [](auto&, const auto&, const auto&, const auto&) {});
+                                 });
   }
-  if (scenario.live_port == "subarray") {
-    std::vector<int64_t> indices;
-    for (int64_t i = 0; i < scenario.selected_channels; ++i)
-      indices.push_back(i);
-    return perf::run_perf_graph_with_vector_override<int64_t>(
-        std::move(snapshot), plan.total_frames, plan.override_at, {}, indices,
-        "subarray-selection-perf", build, perf::PerfPublishMode::kCopy, true);
-  }
-  return perf::run_perf_graph(std::move(snapshot), plan.total_frames, "subarray-selection-perf",
-                              build);
+  const auto cases = std::make_tuple(
+      perf::live_option("array_geometry",
+                        [&] {
+                          auto changed = make_holey_ula(scenario);
+                          changed.wavelength = 0.9;
+                          return perf::live_case(
+                              "array_geometry", hr::to_wire(make_holey_ula(scenario)),
+                              hr::to_wire(changed),
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->array_geometry_in, q);
+                              });
+                        }),
+      perf::live_option("subarray", [&] {
+        std::vector<int64_t> indices;
+        for (int64_t i = 0; i < scenario.selected_channels; ++i)
+          indices.push_back(i);
+        return perf::live_case("subarray", std::vector<int64_t>{}, std::move(indices),
+                               [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                 graph.add_flow(source->override_out, op->subarray, q);
+                               });
+      }));
+  return perf::dispatch_live_case(scenario.live_port, cases, [&](const auto& selected) {
+    return perf::run_selected_live_recipe(std::array{std::move(snapshot)}, plan,
+                                          "subarray-selection-perf", selected, configure);
+  });
 }
 
 void fill_throughput(perf::ResultRow* row, const SubarrayScenario& scenario, double median_ms) {

@@ -7,11 +7,9 @@
 // TimingCollector each, bucket the per-frame latencies into cold / steady /
 // changed-frame samples, then emit one "setup" row and one "compute" row.
 //
-// Only two pieces are operator-specific and stay in the consumer:
-//   1. building + running one graph session (the RunRepFn passed to
-//      collect_scenario_samples), and
-//   2. finishing the compute row (throughput model + notes) after
-//      fill_compute_row() has filled the timing fields.
+// The typed recipe runner handles each Graph session. An adapter supplies
+// valid inputs, operator construction and port wiring, then optionally adds
+// throughput units and notes after fill_compute_row() fills timing fields.
 //
 // Keeping the bucketing here makes steady and changed-frame accounting consistent.
 

@@ -16,17 +16,18 @@ wiring and records source and synchronized sink times directly.
 
 ## C++ adapter boundary
 
-The common driver parses every YAML case and asks each operator adapter to
-validate and convert one case before applying scope or size filters. YAML
-override metadata selects the live run plan; the adapter must name the same
-live port. The runner checks that one changed payload was emitted at the
-planned frame in every independent run. It owns
-process warmup, run planning, independent Graph sessions, and the setup and
-compute report rows. An adapter supplies valid input tensors and descriptors,
-operator parameters and port wiring, plus any operator-specific throughput
-units. Shared typed sources publish one to three inputs and a one-frame live
-sideband; MultiSourceExpansion uses the shared six-input source required by its
-contract. The source and sink capture paired per-frame timestamps.
+The common driver validates and converts every YAML case before scope selection.
+It owns process warmup, independent Graph runs, sampling, and report rows. The
+typed recipe runner stages one, two, three, or six data tensors, creates the
+source, binds device outputs, assembles one partition, and captures paired
+source/synchronized-sink timestamps. `PerfRecipeOutputs` connects the timed
+output or aligned timed pair, drains the other outputs, and declares placement
+for optional unwired Tensor outputs. The same typed data-port source serves
+baseline and selected-live cases. An adapter builds valid tensors and Params, connects the operator's typed data ports, and names
+its outputs. Live adapters declare one selected value and its typed destination
+port; the shared source emits it on one frame and the runner checks emission
+and Params reversion. The adapter retains contract-specific value conversion
+and throughput units.
 
 ### Adding a C++ operator
 
@@ -36,23 +37,27 @@ contract. The source and sink capture paired per-frame timestamps.
    when the parameters and scope tags are identical across sizes. Expansion
    follows that list in order; it never combines independent parameter axes.
 2. Add `performance/cpp/perf_<operator>.cpp`. Its typed adapter defines a
-   `Scenario`, `parse_case`, `size_def`, `run_graph`, and `base_row`. Add
-   `decorate_row` only for throughput units or notes, and `validate_run_settings`
-   only for constraints such as a cached transition needing a warmup frame.
-   The shared driver supplies CLI, process warmup, run planning, all independent
-   runs, scenario/size identity, and the setup/compute report rows.
+   `Scenario`, `parse_case`, `size_def`, `run_graph`, and `base_row`. In
+   `run_graph`, call `run_data_recipe` for defaults or declare `live_option`
+   and `selected_live_case` entries for overrides, then call
+   `run_selected_live_recipe`. Use `PerfRecipeOutputs` for timed and drained
+   outputs. Add `decorate_row` only for throughput units or notes, and
+   `validate_run_settings` only for special constraints such as a cached
+   transition needing a warmup frame. The shared driver supplies CLI, run
+   planning, sampling, and report rows.
 3. Add the operator name once to `HOLOSCAN_RADAR_PERF_TARGETS` in
    `performance/cpp/CMakeLists.txt`. That list registers its target and Minimal
    GPU smoke. Add a focused Overrides smoke when its live payload has a new
    representation or timing behavior.
 
-`perf_ddm_power_fold.cpp` is a small no-live example; angle estimators show
-multi-port descriptor payloads. Keep input generation, typed HSDK ports,
-`MaxTensorExtents`, and operator-specific scale calculations in the adapter.
-The shared `perf_payloads.hpp` helpers set up typed host/device source ports
-and emit geometry, windows, double/int64 host vectors, smoothing, and scalar
-sidebands. The unit-test harness remains suitable for correctness checks; its
-bounded output snapshots add copies and lack the paired timestamps used here.
+`perf_ddm_power_fold.cpp` is a small no-live example; an angle estimator shows
+selected descriptor, host-vector, and scalar live cases. Keep valid input
+generation, typed HSDK data connections, `MaxTensorExtents`, and
+operator-specific scale calculations in the adapter. The shared payload codecs
+emit geometry, windows, double/int64 host vectors, smoothing, waveform, and
+scalar sidebands. The unit-test harness remains suitable for correctness
+checks; its bounded output snapshots add copies and lack the paired timestamps
+used here.
 
 ### Onboarding trial: DDM power fold
 
@@ -67,20 +72,18 @@ used as a fresh-adapter walkthrough. The required work is:
    operator the rank-4 shape and Doppler divisibility by TX count are specific
    to its locked API.
 3. Stage a valid input tensor, create `DDMPowerFoldOp<float>` with its
-   `MaxTensorExtents` and descriptor, connect the named data/output ports, and
-   choose a terminal sink. These typed choices remain in the adapter.
+   `MaxTensorExtents` and descriptor, connect the named data port, and declare
+   the timed output. The recipe runner creates the source and sink.
 4. Describe input/output scale in `base_row`, then register one CMake target
    name. `--list-cases` checks ordering; the generated Minimal smoke checks
    Graph execution and a complete report without a speed threshold.
 
-The existing no-live adapter is 117 lines, including includes and a throughput
-unit. Its remaining custom code is the descriptor, valid tensor shape,
-operator construction, named port wiring, and scale calculation. A live
-operator also declares typed sideband ports and maps each YAML override to a
-valid payload; `perf_payloads.hpp` supplies pool setup and common payload
-codecs. The shared source claims staged frames and timestamps for one, two,
-three, or six inputs. Separate source classes retain the HSDK port names and
-payload types expected by each Graph connection.
+The no-live adapter remains mostly descriptor and shape construction,
+operator creation, named data wiring, and scale calculation. A live adapter
+adds one typed case per YAML live port; the shared selected-live source owns
+payload pools and one-frame emission. `PerfRecipeOutputs` owns sink creation,
+output placement, and partition membership. No adapter implements a source
+`compute()` loop or a sampling loop.
 
 ## YAML profiles and scopes
 

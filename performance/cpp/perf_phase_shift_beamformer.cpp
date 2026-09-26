@@ -22,6 +22,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -43,6 +44,7 @@
 #include "utils/perf_payloads.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -102,58 +104,6 @@ const char* override_name(BeamScenario::OverrideKind kind) {
   return "unknown";
 }
 
-struct LivePorts {
- public:
-  LivePorts(hr::PhaseShiftBeamformerParams override, BeamScenario::OverrideKind kind)
-  : override_(std::move(override)), kind_(kind) {}
-
-  void setup(holoscan::OperatorSpec& spec) {
-    perf::setup_device_input(spec, rd_maps, perf::PerfFrameBank::span_a());
-    perf::setup_host_payload(spec, array_geometry, 2U, 2U);
-    perf::setup_host_payload(spec, az_coordinates, 1U, 1U);
-    perf::setup_host_payload(spec, el_coordinates, 1U, 1U);
-    perf::setup_host_payload(spec, array_taper, 1U, 1U);
-  }
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
-      holoscan::ExecutionContext& context) {
-    const holoscan::TimePoint time = context.activation_time();
-    holoscan::expected<void, holoscan::Error> emitted;
-    switch (kind_) {
-      case BeamScenario::OverrideKind::kNone:
-        break;
-      case BeamScenario::OverrideKind::kArrayGeometry: {
-        emitted = perf::emit_geometry_payload(array_geometry, override_.array_geometry, time);
-        break;
-      }
-      case BeamScenario::OverrideKind::kAzAngles:
-        emitted = emit_host_vector(az_coordinates, override_.az_coordinates, time);
-        break;
-      case BeamScenario::OverrideKind::kElAngles:
-        emitted = emit_host_vector(el_coordinates, override_.el_coordinates, time);
-        break;
-      case BeamScenario::OverrideKind::kArrayTaper: {
-        emitted = perf::emit_window_payload(array_taper, override_.array_taper, time);
-        break;
-      }
-    }
-    if (!emitted)
-      return emitted;
-    return {};
-  }
-
-  holoscan::Output<holoscan::Tensor> rd_maps{"rd_maps"};
-  holoscan::Output<hr::WireArrayGeometry> array_geometry{"array_geometry"};
-  holoscan::Output<holoscan::Tensor> az_coordinates{"az_coordinates"};
-  holoscan::Output<holoscan::Tensor> el_coordinates{"el_coordinates"};
-  holoscan::Output<hr::WireWindowSpec> array_taper{"array_taper"};
-
- private:
-  hr::PhaseShiftBeamformerParams override_;
-  BeamScenario::OverrideKind kind_{BeamScenario::OverrideKind::kNone};
-};
-
-using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::rd_maps>;
-
 perf::TimingCollector run_graph(const BeamScenario& scen, const perf::RunPlan& plan) {
   auto cube =
       perf::make_iq_cube_device<PerfPrecision>({scen.channels, scen.num_doppler, scen.num_range});
@@ -185,42 +135,64 @@ perf::TimingCollector run_graph(const BeamScenario& scen, const perf::RunPlan& p
   extents.max_el = scen.num_el;
   extents.max_doppler_bins = scen.num_doppler;
   extents.max_range_bins = scen.num_range;
-  perf::TimingCollector collector;
-  collector.t_construct = perf::Clock::now();
-  perf::PerfFrameBank::reset(std::move(cube), plan.total_frames, &collector);
-
-  holoscan::Graph graph{"beamformer-perf"};
-  const auto src = graph.op<LiveSource>("src", plan.override_at, override, scen.override_kind);
-  auto op = graph.op<hr::PhaseShiftBeamformerOp<PerfPrecision>>("beamformer", extents);
-  op.set_params(std::move(initial));
-  const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
-  const holoscan::ConnectionOptions q{.queue_depth = 8U};
-  auto add_flow = [&](auto& output, auto& input, const char* edge) {
-    try {
-      graph.add_flow(output, input, q);
-    } catch (const holoscan::RuntimeError& error) {
-      throw std::runtime_error(std::string("beamformer-perf edge ") + edge + ": " + error.what());
-    }
+  const auto configure = [&](holoscan::Graph& graph, const auto& source,
+                             holoscan::CompileOptions& options, auto connect) {
+    auto op = graph.op<hr::PhaseShiftBeamformerOp<PerfPrecision>>("beamformer", extents);
+    op.set_params(std::move(initial));
+    const holoscan::ConnectionOptions q{.queue_depth = 8U};
+    graph.add_flow(source->out, op->rd_maps, q);
+    connect(graph, source, op, q);
+    perf::PerfRecipeOutputs outputs(graph, options, "beamformer", 8U);
+    outputs.timed(op->rda_cube, "rda_cube");
+    // Declared optional axes require placement even when unwired.
+    outputs.unwired(op->az_grid, "az_grid");
+    outputs.unwired(op->el_grid, "el_grid");
+    outputs.finish(source, op);
   };
-  add_flow(src->rd_maps, op->rd_maps, "rd_maps");
-  if (scen.override_kind == BeamScenario::OverrideKind::kArrayGeometry)
-    add_flow(src->array_geometry, op->array_geometry, "array_geometry");
-  if (scen.override_kind == BeamScenario::OverrideKind::kAzAngles)
-    add_flow(src->az_coordinates, op->az_coordinates, "az_coordinates");
-  if (scen.override_kind == BeamScenario::OverrideKind::kElAngles)
-    add_flow(src->el_coordinates, op->el_coordinates, "el_coordinates");
-  if (scen.override_kind == BeamScenario::OverrideKind::kArrayTaper)
-    add_flow(src->array_taper, op->array_taper, "array_taper");
-  add_flow(op->rda_cube, sink->in, "rda_cube");
-
-  holoscan::CompileOptions options;
-  perf::bind_tensor_out(options, "src", "rd_maps");
-  perf::bind_tensor_out(options, "beamformer", "rda_cube");
-  perf::bind_tensor_out(options, "beamformer", "az_grid");
-  perf::bind_tensor_out(options, "beamformer", "el_grid");
-  perf::execute_perf_graph(graph, std::move(options), plan.total_frames, "beamformer-perf",
-                           &collector);
-  return collector;
+  if (scen.override_kind == BeamScenario::OverrideKind::kNone) {
+    return perf::run_data_recipe(std::array{std::move(cube)}, plan, "beamformer-perf",
+                                 [&](auto& graph, const auto& source, auto& options) {
+                                   configure(graph, source, options,
+                                             [](auto&, const auto&, const auto&, const auto&) {});
+                                 });
+  }
+  const auto cases = std::make_tuple(
+      perf::live_option("array_geometry",
+                        [&] {
+                          return perf::selected_live_case(
+                              "array_geometry", override.array_geometry,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->array_geometry, q);
+                              });
+                        }),
+      perf::live_option("az_coordinates",
+                        [&] {
+                          return perf::selected_live_case(
+                              "az_coordinates", override.az_coordinates,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->az_coordinates, q);
+                              });
+                        }),
+      perf::live_option("el_coordinates",
+                        [&] {
+                          return perf::selected_live_case(
+                              "el_coordinates", override.el_coordinates,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->el_coordinates, q);
+                              });
+                        }),
+      perf::live_option("array_taper", [&] {
+        return perf::selected_live_case(
+            "array_taper", override.array_taper,
+            [](auto& graph, const auto& source, const auto& op, const auto& q) {
+              graph.add_flow(source->override_out, op->array_taper, q);
+            });
+      }));
+  return perf::dispatch_live_case(
+      override_name(scen.override_kind), cases, [&](const auto& selected) {
+        return perf::run_selected_live_recipe(std::array{std::move(cube)}, plan, "beamformer-perf",
+                                              selected, configure);
+      });
 }
 
 void fill_throughput(perf::ResultRow* row, const BeamScenario& scen, double median_ms) {

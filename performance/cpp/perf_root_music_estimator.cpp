@@ -47,6 +47,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -68,6 +69,7 @@
 #include "utils/perf_payloads.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -153,67 +155,6 @@ hr::ArrayGeometry scenario_geometry(const RootMusicScenario& scen, double spacin
   return make_ula_geometry(scen.channels, spacing, wavelength);
 }
 
-struct LivePorts {
- public:
-  LivePorts(hr::RootMUSICParams override, RootMusicScenario::OverrideKind kind)
-  : override_(std::move(override)), kind_(kind) {}
-
-  void setup(holoscan::OperatorSpec& spec) {
-    perf::setup_device_input(spec, snapshot, perf::PerfFrameBank::span_a());
-    perf::setup_host_payload(spec, array_geometry, 2U, 2U);
-    perf::setup_scalar_payload(spec, spatial_smoothing);
-    perf::setup_scalar_payload(spec, num_sources);
-    perf::setup_scalar_payload(spec, source_count_pfa);
-    perf::setup_scalar_payload(spec, max_sources);
-  }
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
-      holoscan::ExecutionContext& context) {
-    const holoscan::TimePoint time = context.activation_time();
-    holoscan::expected<void, holoscan::Error> emitted;
-    switch (kind_) {
-      case RootMusicScenario::OverrideKind::kNone:
-        break;
-      case RootMusicScenario::OverrideKind::kArrayGeometry: {
-        emitted = perf::emit_geometry_payload(array_geometry, override_.array_geometry, time);
-        break;
-      }
-      case RootMusicScenario::OverrideKind::kSpatialSmoothing: {
-        emitted =
-            perf::emit_smoothing_payload(spatial_smoothing, override_.spatial_smoothing, time);
-        break;
-      }
-      case RootMusicScenario::OverrideKind::kNumSources: {
-        emitted = perf::emit_scalar_payload(num_sources, override_.num_sources, time);
-        break;
-      }
-      case RootMusicScenario::OverrideKind::kSourceCountPfa: {
-        emitted = perf::emit_scalar_payload(source_count_pfa, override_.source_count_pfa, time);
-        break;
-      }
-      case RootMusicScenario::OverrideKind::kMaxSources: {
-        emitted = perf::emit_scalar_payload(max_sources, override_.max_sources, time);
-        break;
-      }
-    }
-    if (!emitted)
-      return emitted;
-    return {};
-  }
-
-  holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
-  holoscan::Output<hr::WireArrayGeometry> array_geometry{"array_geometry"};
-  holoscan::Output<hr::SpatialSmoothingOverride> spatial_smoothing{"spatial_smoothing"};
-  holoscan::Output<int64_t> num_sources{"num_sources"};
-  holoscan::Output<double> source_count_pfa{"source_count_pfa"};
-  holoscan::Output<int64_t> max_sources{"max_sources"};
-
- private:
-  hr::RootMUSICParams override_;
-  RootMusicScenario::OverrideKind kind_{RootMusicScenario::OverrideKind::kNone};
-};
-
-using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::snapshot>;
-
 perf::TimingCollector run_graph(const RootMusicScenario& scen, const perf::RunPlan& plan) {
   auto snap =
       perf::make_iq_cube_device<PerfPrecision>({scen.detections, scen.channels, scen.snapshots});
@@ -253,45 +194,72 @@ perf::TimingCollector run_graph(const RootMusicScenario& scen, const perf::RunPl
   extents.max_items = scen.detections;
   extents.max_sources = kInitialMaxSources;
   extents.max_channels = scen.channels;
-  perf::TimingCollector collector;
-  collector.t_construct = perf::Clock::now();
-  perf::PerfFrameBank::reset(std::move(snap), plan.total_frames, &collector);
-
-  holoscan::Graph graph{"root-music-perf"};
-  const auto source = graph.op<LiveSource>("src", plan.override_at, override, scen.override_kind);
-  auto op = graph.op<hr::RootMUSICEstimatorOp<PerfPrecision>>("root_music", extents);
-  op.set_params(std::move(initial));
-  const auto sink = graph.op<perf::PerfTerminalSinkOp>("aoa_sink");
-  const auto doa = graph.op<perf::PerfNullSinkOp>("doa_drain");
-  const auto count = graph.op<perf::PerfNullSinkOp>("count_drain");
-  const auto eigen = graph.op<perf::PerfNullSinkOp>("eig_drain");
-  const holoscan::ConnectionOptions q{.queue_depth = 8U};
-
-  graph.add_flow(source->snapshot, op->snapshot, q);
-  if (scen.override_kind == RootMusicScenario::OverrideKind::kArrayGeometry)
-    graph.add_flow(source->array_geometry, op->array_geometry, q);
-  if (scen.override_kind == RootMusicScenario::OverrideKind::kSpatialSmoothing)
-    graph.add_flow(source->spatial_smoothing, op->spatial_smoothing, q);
-  if (scen.override_kind == RootMusicScenario::OverrideKind::kNumSources)
-    graph.add_flow(source->num_sources, op->num_sources, q);
-  if (scen.override_kind == RootMusicScenario::OverrideKind::kSourceCountPfa)
-    graph.add_flow(source->source_count_pfa, op->source_count_pfa, q);
-  if (scen.override_kind == RootMusicScenario::OverrideKind::kMaxSources)
-    graph.add_flow(source->max_sources, op->max_sources, q);
-  graph.add_flow(op->aoa_estimates, sink->in, q);
-  graph.add_flow(op->doa_multi, doa->in, q);
-  graph.add_flow(op->source_count, count->in, q);
-  graph.add_flow(op->eigenvalues, eigen->in, q);
-
-  holoscan::CompileOptions options;
-  perf::bind_tensor_out(options, "src", "snapshot");
-  perf::bind_tensor_out(options, "root_music", "aoa_estimates");
-  perf::bind_tensor_out(options, "root_music", "doa_multi");
-  perf::bind_tensor_out(options, "root_music", "source_count");
-  perf::bind_tensor_out(options, "root_music", "eigenvalues");
-  perf::execute_perf_graph(graph, std::move(options), plan.total_frames, "root-music-perf",
-                           &collector);
-  return collector;
+  const auto configure = [&](holoscan::Graph& graph, const auto& source,
+                             holoscan::CompileOptions& options, auto connect) {
+    auto op = graph.op<hr::RootMUSICEstimatorOp<PerfPrecision>>("root_music", extents);
+    op.set_params(std::move(initial));
+    const holoscan::ConnectionOptions q{.queue_depth = 8U};
+    graph.add_flow(source->out, op->snapshot, q);
+    connect(graph, source, op, q);
+    perf::PerfRecipeOutputs outputs(graph, options, "root_music", 8U);
+    outputs.timed(op->aoa_estimates, "aoa_estimates");
+    outputs.drain(op->doa_multi, "doa_multi");
+    outputs.drain(op->source_count, "source_count");
+    outputs.drain(op->eigenvalues, "eigenvalues");
+    outputs.finish(source, op);
+  };
+  if (scen.override_kind == RootMusicScenario::OverrideKind::kNone) {
+    return perf::run_data_recipe(std::array{std::move(snap)}, plan, "root-music-perf",
+                                 [&](auto& graph, const auto& source, auto& options) {
+                                   configure(graph, source, options,
+                                             [](auto&, const auto&, const auto&, const auto&) {});
+                                 });
+  }
+  const auto cases = std::make_tuple(
+      perf::live_option("array_geometry",
+                        [&] {
+                          return perf::selected_live_case(
+                              "array_geometry", override.array_geometry,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->array_geometry, q);
+                              });
+                        }),
+      perf::live_option("spatial_smoothing",
+                        [&] {
+                          return perf::selected_live_case(
+                              "spatial_smoothing", perf::smoothing_wire(override.spatial_smoothing),
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->spatial_smoothing, q);
+                              });
+                        }),
+      perf::live_option("num_sources",
+                        [&] {
+                          return perf::selected_live_case(
+                              "num_sources", override.num_sources,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->num_sources, q);
+                              });
+                        }),
+      perf::live_option("source_count_pfa",
+                        [&] {
+                          return perf::selected_live_case(
+                              "source_count_pfa", override.source_count_pfa,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->source_count_pfa, q);
+                              });
+                        }),
+      perf::live_option("max_sources", [&] {
+        return perf::selected_live_case(
+            "max_sources", override.max_sources,
+            [](auto& graph, const auto& source, const auto& op, const auto& q) {
+              graph.add_flow(source->override_out, op->max_sources, q);
+            });
+      }));
+  return perf::dispatch_live_case(
+      override_name(scen.override_kind), cases, [&](const auto& selected) {
+        return perf::run_selected_live_recipe(std::array{std::move(snap)}, plan, "root-music-perf",
+                                              selected, configure);
+      });
 }
 
 void fill_throughput(perf::ResultRow* row, const RootMusicScenario& scen, double median_ms) {

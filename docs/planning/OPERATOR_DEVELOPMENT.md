@@ -737,8 +737,12 @@ provides typed input construction, port wiring, and optional throughput units.
 A new adapter supplies `Scenario`, `parse_case`, `size_def`, `run_graph`, and
 `base_row`; `decorate_row` and run-setting validation are optional. The shared
 driver loads the YAML suite once and owns process warmup, source publication,
-Graph execution, sampling, scenario identity, and both report buckets. Add the
-operator name once to `HOLOSCAN_RADAR_PERF_TARGETS` for its executable and
+Graph execution, sampling, scenario identity, and both report buckets. In
+`run_graph`, use `run_data_recipe` for defaults or `run_selected_live_recipe`
+with typed `live_option` declarations for live cases. `PerfRecipeOutputs`
+connects timed and drained outputs, binds device outputs, and assembles the
+Graph partition. The adapter keeps valid tensor construction, Params, and
+contract-dependent shape calculations. Add the operator name once to `HOLOSCAN_RADAR_PERF_TARGETS` for its executable and
 Minimal GPU smoke. Use the shared typed payload helpers for geometry,
 windows, vectors, smoothing, and scalar live ports; keep only operator-specific
 port wiring in the adapter. `--validate` parses every YAML case and checks the

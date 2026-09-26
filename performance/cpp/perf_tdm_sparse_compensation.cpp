@@ -11,6 +11,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -25,6 +26,7 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -122,54 +124,47 @@ perf::TimingCollector run_graph(const Scenario& scenario, const perf::RunPlan& p
     params.overlap_policy = scenario.policy;
     params.snapshot_window = {scenario.window_doppler, scenario.window_range};
     op.set_params(std::move(params));
-    const auto terminal = graph.op<perf::PerfTerminalSinkOp>("terminal");
-    const auto mask = graph.op<perf::PerfNullSinkOp>("mask");
-    const auto geometry = graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>("geometry");
     const holoscan::ConnectionOptions queue{.queue_depth = 4U};
     graph.add_flow(source->out_a, op->rd_maps, queue);
     graph.add_flow(source->out_b, op->detection_idx, queue);
     connect(graph, source, op, queue);
-    graph.add_flow(op->snapshot, terminal->in, queue);
-    graph.add_flow(op->is_valid, mask->in, queue);
-    graph.add_flow(op->array_geometry, geometry->in, queue);
-    graph.partition("perf").add(source).add(op).add(terminal).add(mask).add(geometry);
-    perf::bind_tensor_out(options, "sparse", "snapshot");
-    perf::bind_tensor_out(options, "sparse", "is_valid");
+    perf::PerfRecipeOutputs outputs(graph, options, "sparse");
+    outputs.timed(op->snapshot, "snapshot");
+    outputs.drain(op->is_valid, "is_valid");
+    outputs.drain(op->array_geometry, "array_geometry");
+    outputs.finish(source, op);
   };
-  if (scenario.live_port == "waveform") {
-    return perf::run_perf_graph_dual_with_override(
-        std::move(rd), std::move(idx), plan.total_frames, plan.override_at,
-        hr::to_wire(waveform(scenario.pri)), hr::to_wire(waveform(scenario.changed_pri)),
-        "tdm-sparse-compensation-perf",
+  if (scenario.live_port.empty()) {
+    return perf::run_data_recipe(
+        std::array{std::move(rd), std::move(idx)}, plan, "tdm-sparse-compensation-perf",
         [&](auto& graph, const auto& source, auto& options) {
-          configure(graph, source, options,
-                    [](auto& g, const auto& src, const auto& op, const auto& q) {
-                      g.add_flow(src->override_out, op->waveform_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
+          configure(graph, source, options, [](auto&, const auto&, const auto&, const auto&) {});
+        });
   }
-  if (scenario.live_port == "snapshot_window") {
-    const hr::TDMSparseWindowOverride initial{.doppler = scenario.window_doppler,
-                                              .range = scenario.window_range};
-    const hr::TDMSparseWindowOverride changed{.doppler = scenario.changed_doppler,
-                                              .range = scenario.changed_range};
-    return perf::run_perf_graph_dual_with_override(
-        std::move(rd), std::move(idx), plan.total_frames, plan.override_at, initial, changed,
-        "tdm-sparse-compensation-perf",
-        [&](auto& graph, const auto& source, auto& options) {
-          configure(graph, source, options,
-                    [](auto& g, const auto& src, const auto& op, const auto& q) {
-                      g.add_flow(src->override_out, op->snapshot_window_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  return perf::run_perf_graph_dual(
-      std::move(rd), std::move(idx), plan.total_frames, "tdm-sparse-compensation-perf",
-      [&](auto& graph, const auto& source, auto& options) {
-        configure(graph, source, options, [](auto&, const auto&, const auto&, const auto&) {});
-      });
+  const auto cases = std::make_tuple(
+      perf::live_option("waveform",
+                        [&] {
+                          return perf::live_case(
+                              "waveform", hr::to_wire(waveform(scenario.pri)),
+                              hr::to_wire(waveform(scenario.changed_pri)),
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->waveform_in, q);
+                              });
+                        }),
+      perf::live_option("snapshot_window", [&] {
+        return perf::live_case("snapshot_window",
+                               hr::TDMSparseWindowOverride{.doppler = scenario.window_doppler,
+                                                           .range = scenario.window_range},
+                               hr::TDMSparseWindowOverride{.doppler = scenario.changed_doppler,
+                                                           .range = scenario.changed_range},
+                               [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                 graph.add_flow(source->override_out, op->snapshot_window_in, q);
+                               });
+      }));
+  return perf::dispatch_live_case(scenario.live_port, cases, [&](const auto& selected) {
+    return perf::run_selected_live_recipe(std::array{std::move(rd), std::move(idx)}, plan,
+                                          "tdm-sparse-compensation-perf", selected, configure);
+  });
 }
 
 perf::ResultRow base_row(const Scenario& scenario) {
@@ -178,8 +173,7 @@ perf::ResultRow base_row(const Scenario& scenario) {
   row.op_name = "TDMSparseCompensationOp";
   row.variant = "sparse_tdm";
   row.live_port = scenario.live_port;
-  row.map_shape = {size.doppler, size.range};
-  row.input_shape = {size.tx, size.rx, size.doppler, size.range};
+  perf::set_input_and_trailing_map_shape(row, {size.tx, size.rx, size.doppler, size.range});
   row.out_batch = size.detections;
   row.k = size.tx * size.rx;
   row.notes = "end-to-end Graph latency; cells/s is detections/s";

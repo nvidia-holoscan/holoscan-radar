@@ -26,6 +26,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -47,6 +48,7 @@
 #include "utils/perf_payloads.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -116,73 +118,6 @@ const char* override_name(MvdrScenario::OverrideKind kind) {
   return "unknown";
 }
 
-struct LivePorts {
- public:
-  LivePorts(hr::MVDRParams override, MvdrScenario::OverrideKind kind)
-  : override_(std::move(override)), kind_(kind) {}
-
-  void setup(holoscan::OperatorSpec& spec) {
-    perf::setup_device_input(spec, snapshot, perf::PerfFrameBank::span_a());
-    perf::setup_host_payload(spec, array_geometry, 2U, 2U);
-    perf::setup_host_payload(spec, az_coordinates, 1U, 1U);
-    perf::setup_host_payload(spec, el_coordinates, 1U, 1U);
-    perf::setup_scalar_payload(spec, spatial_smoothing);
-    perf::setup_scalar_payload(spec, diagonal_loading);
-    perf::setup_scalar_payload(spec, max_sources);
-  }
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
-      holoscan::ExecutionContext& context) {
-    const holoscan::TimePoint time = context.activation_time();
-    holoscan::expected<void, holoscan::Error> emitted;
-    switch (kind_) {
-      case MvdrScenario::OverrideKind::kNone:
-        break;
-      case MvdrScenario::OverrideKind::kArrayGeometry: {
-        emitted = perf::emit_geometry_payload(array_geometry, override_.array_geometry, time);
-        break;
-      }
-      case MvdrScenario::OverrideKind::kAzAngles: {
-        emitted = emit_host_vector(az_coordinates, override_.az_coordinates, time);
-        break;
-      }
-      case MvdrScenario::OverrideKind::kElAngles: {
-        emitted = emit_host_vector(el_coordinates, override_.el_coordinates, time);
-        break;
-      }
-      case MvdrScenario::OverrideKind::kSpatialSmoothing: {
-        emitted =
-            perf::emit_smoothing_payload(spatial_smoothing, override_.spatial_smoothing, time);
-        break;
-      }
-      case MvdrScenario::OverrideKind::kDiagonalLoading: {
-        emitted = perf::emit_scalar_payload(diagonal_loading, override_.diagonal_loading, time);
-        break;
-      }
-      case MvdrScenario::OverrideKind::kMaxSources: {
-        emitted = perf::emit_scalar_payload(max_sources, override_.max_sources, time);
-        break;
-      }
-    }
-    if (!emitted)
-      return emitted;
-    return {};
-  }
-
-  holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
-  holoscan::Output<hr::WireArrayGeometry> array_geometry{"array_geometry"};
-  holoscan::Output<holoscan::Tensor> az_coordinates{"az_coordinates"};
-  holoscan::Output<holoscan::Tensor> el_coordinates{"el_coordinates"};
-  holoscan::Output<hr::SpatialSmoothingOverride> spatial_smoothing{"spatial_smoothing"};
-  holoscan::Output<double> diagonal_loading{"diagonal_loading"};
-  holoscan::Output<int64_t> max_sources{"max_sources"};
-
- private:
-  hr::MVDRParams override_;
-  MvdrScenario::OverrideKind kind_{MvdrScenario::OverrideKind::kNone};
-};
-
-using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::snapshot>;
-
 perf::TimingCollector run_graph(const MvdrScenario& scen, const perf::RunPlan& plan) {
   auto snap =
       perf::make_iq_cube_device<PerfPrecision>({scen.detections, scen.channels, scen.snapshots});
@@ -227,49 +162,81 @@ perf::TimingCollector run_graph(const MvdrScenario& scen, const perf::RunPlan& p
   extents.max_el = scen.num_el;
   extents.max_sources = kInitialMaxSources;
   extents.max_channels = scen.channels;
-  perf::TimingCollector collector;
-  collector.t_construct = perf::Clock::now();
-  perf::PerfFrameBank::reset(std::move(snap), plan.total_frames, &collector);
-
-  holoscan::Graph graph{"mvdr-perf"};
-  const auto source = graph.op<LiveSource>("src", plan.override_at, override, scen.override_kind);
-  auto op = graph.op<hr::MVDREstimatorOp<PerfPrecision>>("mvdr", extents);
-  op.set_params(std::move(initial));
-  const auto sink = graph.op<perf::PerfTerminalSinkOp>("aoa_sink");
-  const auto spectrum = graph.op<perf::PerfNullSinkOp>("spectrum_drain");
-  const auto doa = graph.op<perf::PerfNullSinkOp>("doa_drain");
-  const auto count = graph.op<perf::PerfNullSinkOp>("count_drain");
-  const auto eigen = graph.op<perf::PerfNullSinkOp>("eig_drain");
-  const holoscan::ConnectionOptions q{.queue_depth = 8U};
-
-  graph.add_flow(source->snapshot, op->snapshot, q);
-  if (scen.override_kind == MvdrScenario::OverrideKind::kArrayGeometry)
-    graph.add_flow(source->array_geometry, op->array_geometry, q);
-  if (scen.override_kind == MvdrScenario::OverrideKind::kAzAngles)
-    graph.add_flow(source->az_coordinates, op->az_coordinates, q);
-  if (scen.override_kind == MvdrScenario::OverrideKind::kElAngles)
-    graph.add_flow(source->el_coordinates, op->el_coordinates, q);
-  if (scen.override_kind == MvdrScenario::OverrideKind::kSpatialSmoothing)
-    graph.add_flow(source->spatial_smoothing, op->spatial_smoothing, q);
-  if (scen.override_kind == MvdrScenario::OverrideKind::kDiagonalLoading)
-    graph.add_flow(source->diagonal_loading, op->diagonal_loading, q);
-  if (scen.override_kind == MvdrScenario::OverrideKind::kMaxSources)
-    graph.add_flow(source->max_sources, op->max_sources, q);
-  graph.add_flow(op->aoa_estimates, sink->in, q);
-  graph.add_flow(op->angle_spectrum, spectrum->in, q);
-  graph.add_flow(op->doa_multi, doa->in, q);
-  graph.add_flow(op->source_count, count->in, q);
-  graph.add_flow(op->eigenvalues, eigen->in, q);
-
-  holoscan::CompileOptions options;
-  perf::bind_tensor_out(options, "src", "snapshot");
-  perf::bind_tensor_out(options, "mvdr", "aoa_estimates");
-  perf::bind_tensor_out(options, "mvdr", "angle_spectrum");
-  perf::bind_tensor_out(options, "mvdr", "doa_multi");
-  perf::bind_tensor_out(options, "mvdr", "source_count");
-  perf::bind_tensor_out(options, "mvdr", "eigenvalues");
-  perf::execute_perf_graph(graph, std::move(options), plan.total_frames, "mvdr-perf", &collector);
-  return collector;
+  const auto configure = [&](holoscan::Graph& graph, const auto& source,
+                             holoscan::CompileOptions& options, auto connect) {
+    auto op = graph.op<hr::MVDREstimatorOp<PerfPrecision>>("mvdr", extents);
+    op.set_params(std::move(initial));
+    const holoscan::ConnectionOptions q{.queue_depth = 8U};
+    graph.add_flow(source->out, op->snapshot, q);
+    connect(graph, source, op, q);
+    perf::PerfRecipeOutputs outputs(graph, options, "mvdr", 8U);
+    outputs.timed(op->aoa_estimates, "aoa_estimates");
+    outputs.drain(op->angle_spectrum, "angle_spectrum");
+    outputs.drain(op->doa_multi, "doa_multi");
+    outputs.drain(op->source_count, "source_count");
+    outputs.drain(op->eigenvalues, "eigenvalues");
+    outputs.finish(source, op);
+  };
+  if (scen.override_kind == MvdrScenario::OverrideKind::kNone) {
+    return perf::run_data_recipe(std::array{std::move(snap)}, plan, "mvdr-perf",
+                                 [&](auto& graph, const auto& source, auto& options) {
+                                   configure(graph, source, options,
+                                             [](auto&, const auto&, const auto&, const auto&) {});
+                                 });
+  }
+  const auto cases = std::make_tuple(
+      perf::live_option("array_geometry",
+                        [&] {
+                          return perf::selected_live_case(
+                              "array_geometry", override.array_geometry,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->array_geometry, q);
+                              });
+                        }),
+      perf::live_option("az_coordinates",
+                        [&] {
+                          return perf::selected_live_case(
+                              "az_coordinates", override.az_coordinates,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->az_coordinates, q);
+                              });
+                        }),
+      perf::live_option("el_coordinates",
+                        [&] {
+                          return perf::selected_live_case(
+                              "el_coordinates", override.el_coordinates,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->el_coordinates, q);
+                              });
+                        }),
+      perf::live_option("spatial_smoothing",
+                        [&] {
+                          return perf::selected_live_case(
+                              "spatial_smoothing", perf::smoothing_wire(override.spatial_smoothing),
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->spatial_smoothing, q);
+                              });
+                        }),
+      perf::live_option("diagonal_loading",
+                        [&] {
+                          return perf::selected_live_case(
+                              "diagonal_loading", override.diagonal_loading,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->diagonal_loading, q);
+                              });
+                        }),
+      perf::live_option("max_sources", [&] {
+        return perf::selected_live_case(
+            "max_sources", override.max_sources,
+            [](auto& graph, const auto& source, const auto& op, const auto& q) {
+              graph.add_flow(source->override_out, op->max_sources, q);
+            });
+      }));
+  return perf::dispatch_live_case(
+      override_name(scen.override_kind), cases, [&](const auto& selected) {
+        return perf::run_selected_live_recipe(std::array{std::move(snap)}, plan, "mvdr-perf",
+                                              selected, configure);
+      });
 }
 
 void fill_throughput(perf::ResultRow* row, const MvdrScenario& scen, double median_ms) {

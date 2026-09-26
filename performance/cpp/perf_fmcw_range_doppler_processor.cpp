@@ -22,6 +22,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -37,6 +38,7 @@
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -164,134 +166,101 @@ perf::TimingCollector run_graph(const FusedScenario& scen, const perf::RunPlan& 
     params.nfft_range = scen.nfft_range;
     params.nfft_doppler = scen.nfft_doppler;
     op.set_params(std::move(params));
-    const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
-    const auto rb = graph.op<perf::PerfNullSinkOp>("rb_sink");
-    const auto vb = graph.op<perf::PerfNullSinkOp>("vb_sink");
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(src->out, op->adc_cube, q);
     connect(graph, src, op, q);
-    graph.add_flow(op->rd_maps, sink->in, q);
-    graph.add_flow(op->range_bins, rb->in, q);
-    graph.add_flow(op->velocity_bins, vb->in, q);
-    perf::bind_tensor_out(options, "fused", "rd_maps");
-    perf::bind_tensor_out(options, "fused", "range_bins");
-    perf::bind_tensor_out(options, "fused", "velocity_bins");
+    perf::PerfRecipeOutputs outputs(graph, options, "fused");
+    outputs.timed(op->rd_maps, "rd_maps");
+    outputs.drain(op->range_bins, "range_bins");
+    outputs.drain(op->velocity_bins, "velocity_bins");
+    outputs.finish(src, op);
   };
-  if (scen.live_port == "range_window") {
-    return perf::run_perf_graph_with_window_override(
-        std::move(cube), plan.total_frames, plan.override_at,
-        hr::WindowSpec{.type = scen.range_window},
-        hr::WindowSpec{.type = window_type_of(scen.override_value)}, "rdproc-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->range_window_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
+  if (scen.live_port.empty()) {
+    return perf::run_data_recipe(std::array{std::move(cube)}, plan, "rdproc-perf",
+                                 [&](auto& graph, const auto& src, auto& options) {
+                                   configure(graph, src, options,
+                                             [](auto&, const auto&, const auto&, const auto&) {});
+                                 });
   }
-  if (scen.live_port == "doppler_window") {
-    return perf::run_perf_graph_with_window_override(
-        std::move(cube), plan.total_frames, plan.override_at,
-        hr::WindowSpec{.type = scen.doppler_window},
-        hr::WindowSpec{.type = window_type_of(scen.override_value)}, "rdproc-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->doppler_window_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  if (scen.live_port == "apply_dechirp") {
-    return perf::run_perf_graph_with_override(
-        std::move(cube), plan.total_frames, plan.override_at, scen.apply_dechirp,
-        scen.override_value == "true", "rdproc-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->apply_dechirp_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  if (scen.live_port == "clutter_filter") {
-    return perf::run_perf_graph_with_override(
-        std::move(cube), plan.total_frames, plan.override_at, scen.clutter,
-        clutter_of(scen.override_value), "rdproc-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->clutter_filter_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  if (scen.live_port == "waveform") {
-    return perf::run_perf_graph_with_override(
-        std::move(cube), plan.total_frames, plan.override_at, hr::to_wire(make_waveform(scen.pri)),
-        hr::to_wire(make_waveform(std::stod(scen.override_value))), "rdproc-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->waveform_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  if (scen.live_port == "fft_norm") {
-    return perf::run_perf_graph_with_override(
-        std::move(cube), plan.total_frames, plan.override_at, scen.fft_norm,
-        norm_of(scen.override_value), "rdproc-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->fft_norm_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  if (scen.live_port == "center_zero_doppler") {
-    return perf::run_perf_graph_with_override(
-        std::move(cube), plan.total_frames, plan.override_at, scen.center_zero,
-        scen.override_value == "true", "rdproc-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->center_zero_doppler_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  if (scen.live_port == "nfft_range") {
-    return perf::run_perf_graph_with_override(
-        std::move(cube), plan.total_frames, plan.override_at, scen.nfft_range,
-        int64_t{2 * scen.samples_per_chirp}, "rdproc-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->nfft_range_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  if (scen.live_port == "nfft_doppler") {
-    return perf::run_perf_graph_with_override(
-        std::move(cube), plan.total_frames, plan.override_at, scen.nfft_doppler,
-        int64_t{2 * scen.num_chirps}, "rdproc-perf",
-        [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options,
-                    [](auto& g, const auto& source, const auto& op, const auto& q) {
-                      g.add_flow(source->override_out, op->nfft_doppler_in, q);
-                    });
-        },
-        perf::PerfPublishMode::kCopy, true);
-  }
-  return perf::run_perf_graph(std::move(cube), plan.total_frames, "rdproc-perf",
-                              [&](auto& graph, const auto& src, auto& options) {
-                                configure(graph, src, options,
-                                          [](auto&, const auto&, const auto&, const auto&) {});
+  const auto cases = std::make_tuple(
+      perf::live_option("range_window",
+                        [&] {
+                          return perf::live_case(
+                              "range_window", hr::WindowSpec{.type = scen.range_window},
+                              hr::WindowSpec{.type = window_type_of(scen.override_value)},
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->range_window_in, q);
                               });
+                        }),
+      perf::live_option("doppler_window",
+                        [&] {
+                          return perf::live_case(
+                              "doppler_window", hr::WindowSpec{.type = scen.doppler_window},
+                              hr::WindowSpec{.type = window_type_of(scen.override_value)},
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->doppler_window_in, q);
+                              });
+                        }),
+      perf::live_option("apply_dechirp",
+                        [&] {
+                          return perf::live_case(
+                              "apply_dechirp", scen.apply_dechirp, scen.override_value == "true",
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->apply_dechirp_in, q);
+                              });
+                        }),
+      perf::live_option("clutter_filter",
+                        [&] {
+                          return perf::live_case(
+                              "clutter_filter", scen.clutter, clutter_of(scen.override_value),
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->clutter_filter_in, q);
+                              });
+                        }),
+      perf::live_option("waveform",
+                        [&] {
+                          return perf::live_case(
+                              "waveform", hr::to_wire(make_waveform(scen.pri)),
+                              hr::to_wire(make_waveform(std::stod(scen.override_value))),
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->waveform_in, q);
+                              });
+                        }),
+      perf::live_option("fft_norm",
+                        [&] {
+                          return perf::live_case(
+                              "fft_norm", scen.fft_norm, norm_of(scen.override_value),
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->fft_norm_in, q);
+                              });
+                        }),
+      perf::live_option("center_zero_doppler",
+                        [&] {
+                          return perf::live_case(
+                              "center_zero_doppler", scen.center_zero,
+                              scen.override_value == "true",
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->center_zero_doppler_in, q);
+                              });
+                        }),
+      perf::live_option("nfft_range",
+                        [&] {
+                          return perf::live_case(
+                              "nfft_range", scen.nfft_range, int64_t{2 * scen.samples_per_chirp},
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->nfft_range_in, q);
+                              });
+                        }),
+      perf::live_option("nfft_doppler", [&] {
+        return perf::live_case("nfft_doppler", scen.nfft_doppler, int64_t{2 * scen.num_chirps},
+                               [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                 graph.add_flow(src->override_out, op->nfft_doppler_in, q);
+                               });
+      }));
+  return perf::dispatch_live_case(scen.live_port, cases, [&](const auto& selected) {
+    return perf::run_selected_live_recipe(std::array{std::move(cube)}, plan, "rdproc-perf",
+                                          selected, configure);
+  });
 }
 
 void fill_throughput(perf::ResultRow* row, const FusedScenario& scen, double median_ms) {
@@ -315,8 +284,7 @@ perf::ResultRow base_row(const FusedScenario& scen) {
   perf::ResultRow row;
   row.op_name = "FMCWRangeDopplerProcessorOp";
   row.variant = clutter_tag(scen.clutter) + "_" + std::string(hr::to_string(scen.doppler_window));
-  row.map_shape = {scen.num_chirps, scen.samples_per_chirp};
-  row.input_shape = cube_shape(scen);
+  perf::set_input_and_trailing_map_shape(row, cube_shape(scen));
   row.out_batch = scen.channels;
   row.k = scen.samples_per_chirp;
   row.live_port = scen.live_port;

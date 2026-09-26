@@ -6,7 +6,7 @@
 // cluster counts, and representative policies. Measurement tool only: no
 // timing assertions.
 //
-//  Graph-based rewrite via run_perf_graph_triple (labels /
+//  Typed recipe Graph run with three aligned inputs (labels /
 // detection_idx / points co-emitted on the same OnClock tick). Mid-session
 // [live] representative / feature_weights / score_method overrides share
 // the same one-frame Exact source timing path as other adapters.
@@ -23,6 +23,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -39,6 +40,7 @@
 #include "utils/perf_payloads.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -124,63 +126,12 @@ std::shared_ptr<holoscan::Tensor> make_points(int64_t num_points, int64_t num_fe
   return make_device_from_host(host, {num_points, num_features}, hr::real_dtype<T>());
 }
 
-struct LivePorts {
- public:
-  LivePorts(std::string port, int64_t features) : port_(std::move(port)), features_(features) {}
-  void setup(holoscan::OperatorSpec& spec) {
-    perf::setup_device_input(spec, out_a, perf::PerfFrameBank::span_a());
-    perf::setup_device_input(spec, out_b, perf::PerfFrameBank::span_b());
-    perf::setup_device_input(spec, out_c, perf::PerfFrameBank::span_c());
-    perf::setup_scalar_payload(spec, representative);
-    perf::setup_scalar_payload(spec, score_method);
-    perf::setup_host_payload(spec, feature_weights, 1U, 1U, DLDataType{kDLFloat, 64U, 1U},
-                             static_cast<size_t>(features_) * sizeof(double));
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
-      holoscan::ExecutionContext& context) {
-    const auto time = context.activation_time();
-    if (port_ == "representative") {
-      return perf::emit_scalar_payload(representative, hr::RepresentativePolicy::kMedoid, time);
-    }
-    if (port_ == "score_method") {
-      return perf::emit_scalar_payload(score_method, hr::ScoreMethod::kWeightedL2, time);
-    }
-    if (port_ == "feature_weights") {
-      return perf::emit_host_vector_generated<double>(
-          feature_weights, features_,
-          [features = features_](double* data) {
-            for (int64_t i = 0; i < features; ++i)
-              data[i] = i == 0 ? 2.0 : 1.0;
-          },
-          time);
-    }
-    return {};
-  }
-
-  holoscan::Output<holoscan::Tensor> out_a{"out_a"};
-  holoscan::Output<holoscan::Tensor> out_b{"out_b"};
-  holoscan::Output<holoscan::Tensor> out_c{"out_c"};
-  holoscan::Output<hr::RepresentativePolicy> representative{"representative"};
-  holoscan::Output<hr::ScoreMethod> score_method{"score_method"};
-  holoscan::Output<holoscan::Tensor> feature_weights{"feature_weights"};
-
- private:
-  std::string port_;
-  int64_t features_{0};
-};
-
-constexpr auto kInputA = &LivePorts::out_a;
-constexpr auto kInputB = &LivePorts::out_b;
-constexpr auto kInputC = &LivePorts::out_c;
-using LiveSource = perf::PerfLiveSourceOp<LivePorts, kInputA, kInputB, kInputC>;
-
 perf::TimingCollector run_graph(const RedScenario& scen, const perf::RunPlan& plan) {
   auto labels_t = make_labels(scen.num_points, scen.num_clusters);
   auto idx_t = make_detection_idx(scen.num_points);
   auto points_t = make_points<PerfPrecision>(scen.num_points, scen.num_features);
-  const auto build = [&](holoscan::Graph& graph, const auto& src,
-                         holoscan::CompileOptions& options) {
+  const auto configure = [&](holoscan::Graph& graph, const auto& src,
+                             holoscan::CompileOptions& options, auto connect) {
     hr::MaxTensorExtents extents;
     extents.max_clusters = std::max<int64_t>(scen.num_clusters, 1);
     extents.max_points = std::max<int64_t>(scen.num_points, 1);
@@ -192,32 +143,54 @@ perf::TimingCollector run_graph(const RedScenario& scen, const perf::RunPlan& pl
     auto op = graph.op<hr::DetectionReductionOp<PerfPrecision>>("reduction", extents);
     op.set_params(std::move(params));
 
-    const auto sink = graph.op<perf::PerfDualTerminalSinkOp>("sink");
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
 
     graph.add_flow(src->out_a, op->labels, q);
     graph.add_flow(src->out_b, op->detection_idx, q);
     graph.add_flow(src->out_c, op->points, q);
-    if constexpr (requires { src->representative; }) {
-      if (scen.live_port == "representative")
-        graph.add_flow(src->representative, op->representative, q);
-      if (scen.live_port == "score_method")
-        graph.add_flow(src->score_method, op->score_method, q);
-      if (scen.live_port == "feature_weights")
-        graph.add_flow(src->feature_weights, op->feature_weights, q);
-    }
-    graph.add_flow(op->rep_idx, sink->in0, q);
-    graph.add_flow(op->reduced_points, sink->in1, q);
-
-    perf::bind_tensor_out(options, "reduction", "rep_idx");
-    perf::bind_tensor_out(options, "reduction", "reduced_points");
+    connect(graph, src, op, q);
+    perf::PerfRecipeOutputs outputs(graph, options, "reduction");
+    outputs.timed_pair(op->rep_idx, "rep_idx", op->reduced_points, "reduced_points");
+    outputs.finish(src, op);
   };
-  if (scen.live_port.empty())
-    return perf::run_perf_graph_triple(std::move(labels_t), std::move(idx_t), std::move(points_t),
-                                       plan.total_frames, "reduction-perf", build);
-  return perf::run_perf_graph_triple_with_override<LiveSource>(
-      std::move(labels_t), std::move(idx_t), std::move(points_t), plan.total_frames,
-      plan.override_at, scen.live_port, scen.num_features, "reduction-perf", build);
+  if (scen.live_port.empty()) {
+    return perf::run_data_recipe(
+        std::array{std::move(labels_t), std::move(idx_t), std::move(points_t)}, plan,
+        "reduction-perf", [&](auto& graph, const auto& src, auto& options) {
+          configure(graph, src, options, [](auto&, const auto&, const auto&, const auto&) {});
+        });
+  }
+  const auto cases = std::make_tuple(
+      perf::live_option("representative",
+                        [&] {
+                          return perf::selected_live_case(
+                              "representative", hr::RepresentativePolicy::kMedoid,
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->representative, q);
+                              });
+                        }),
+      perf::live_option("score_method",
+                        [&] {
+                          return perf::selected_live_case(
+                              "score_method", hr::ScoreMethod::kWeightedL2,
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->score_method, q);
+                              });
+                        }),
+      perf::live_option("feature_weights", [&] {
+        std::vector<double> changed(static_cast<size_t>(scen.num_features), 1.0);
+        changed[0] = 2.0;
+        return perf::selected_live_case(
+            "feature_weights", std::move(changed),
+            [](auto& graph, const auto& src, const auto& op, const auto& q) {
+              graph.add_flow(src->override_out, op->feature_weights, q);
+            });
+      }));
+  return perf::dispatch_live_case(scen.live_port, cases, [&](const auto& selected) {
+    return perf::run_selected_live_recipe(
+        std::array{std::move(labels_t), std::move(idx_t), std::move(points_t)}, plan,
+        "reduction-perf", selected, configure);
+  });
 }
 
 void fill_throughput(perf::ResultRow* row, const RedScenario& scen, double median_ms) {

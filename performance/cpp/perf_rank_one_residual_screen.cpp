@@ -32,6 +32,7 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 
 namespace hr = holoscan::radar;
@@ -129,8 +130,8 @@ perf::TimingCollector run_graph(const ScreenScenario& scenario, const perf::RunP
   auto snapshot = make_snapshots(scenario);
   auto baseline = make_baseline(scenario);
   const auto geometry = make_geometry(scenario.channels, 0.5);
-  const auto build = [&](holoscan::Graph& graph, const auto& source,
-                         holoscan::CompileOptions& options) {
+  const auto configure = [&](holoscan::Graph& graph, const auto& source,
+                             holoscan::CompileOptions& options, auto connect) {
     hr::MaxTensorExtents extents;
     extents.max_items = scenario.items;
     extents.max_channels = scenario.channels;
@@ -141,46 +142,34 @@ perf::TimingCollector run_graph(const ScreenScenario& scenario, const perf::RunP
     params.residual_threshold = 0.03;
     screen.set_params(std::move(params));
 
-    const auto timed = graph.op<perf::PerfTerminalSinkOp>("snapshot_sink");
-    const auto idx_drain = graph.op<perf::PerfNullSinkOp>("idx_drain");
-    const auto valid_drain = graph.op<perf::PerfNullSinkOp>("valid_drain");
-    const auto score_drain = graph.op<perf::PerfNullSinkOp>("score_drain");
-    const auto mask_drain = graph.op<perf::PerfNullSinkOp>("mask_drain");
     const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-
     graph.add_flow(source->out_a, screen->snapshot, queue);
     graph.add_flow(source->out_b, screen->baseline_aoa, queue);
-    if constexpr (requires { source->override_out; }) {
-      graph.add_flow(source->override_out, screen->array_geometry, queue);
-    }
-    graph.add_flow(screen->snapshot_out, timed->in, queue);
-    graph.add_flow(screen->selected_idx, idx_drain->in, queue);
-    graph.add_flow(screen->is_valid_out, valid_drain->in, queue);
-    graph.add_flow(screen->residual_score, score_drain->in, queue);
-    graph.add_flow(screen->selection_mask, mask_drain->in, queue);
-
-    graph.partition("perf")
-        .add(source)
-        .add(screen)
-        .add(timed)
-        .add(idx_drain)
-        .add(valid_drain)
-        .add(score_drain)
-        .add(mask_drain);
-    for (const char* port :
-         {"snapshot_out", "selected_idx", "is_valid_out", "residual_score", "selection_mask"}) {
-      perf::bind_tensor_out(options, "screen", port);
-    }
+    connect(graph, source, screen, queue);
+    perf::PerfRecipeOutputs outputs(graph, options, "screen");
+    outputs.timed(screen->snapshot_out, "snapshot_out");
+    outputs.drain(screen->selected_idx, "selected_idx");
+    outputs.drain(screen->is_valid_out, "is_valid_out");
+    outputs.drain(screen->residual_score, "residual_score");
+    outputs.drain(screen->selection_mask, "selection_mask");
+    outputs.finish(source, screen);
   };
   if (scenario.live_geometry) {
     const auto changed_geometry = make_geometry(scenario.channels, scenario.changed_spacing);
-    return perf::run_perf_graph_dual_with_override(
-        std::move(snapshot), std::move(baseline), plan.total_frames, plan.override_at,
-        hr::to_wire(geometry), hr::to_wire(changed_geometry), "rank-one-residual-screen-perf",
-        build, perf::PerfPublishMode::kCopy, true);
+    const auto selected =
+        perf::live_case("array_geometry", hr::to_wire(geometry), hr::to_wire(changed_geometry),
+                        [](auto& graph, const auto& source, const auto& screen, const auto& queue) {
+                          graph.add_flow(source->override_out, screen->array_geometry, queue);
+                        });
+    return perf::run_selected_live_recipe(std::array{std::move(snapshot), std::move(baseline)},
+                                          plan, "rank-one-residual-screen-perf", selected,
+                                          configure);
   }
-  return perf::run_perf_graph_dual(std::move(snapshot), std::move(baseline), plan.total_frames,
-                                   "rank-one-residual-screen-perf", build);
+  return perf::run_data_recipe(
+      std::array{std::move(snapshot), std::move(baseline)}, plan, "rank-one-residual-screen-perf",
+      [&](auto& graph, const auto& source, auto& options) {
+        configure(graph, source, options, [](auto&, const auto&, const auto&, const auto&) {});
+      });
 }
 
 ScreenScenario make_scenario(const SizeSpec& size, double fraction) {

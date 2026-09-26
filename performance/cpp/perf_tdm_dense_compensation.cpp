@@ -29,6 +29,7 @@
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -107,8 +108,8 @@ std::vector<int64_t> input_shape(const CompensationScenario& scen) {
 
 perf::TimingCollector run_graph(const CompensationScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(input_shape(scen));
-  const auto build = [&](holoscan::Graph& graph, const auto& src,
-                         holoscan::CompileOptions& options) {
+  const auto configure = [&](holoscan::Graph& graph, const auto& src,
+                             holoscan::CompileOptions& options, auto connect) {
     hr::MaxTensorExtents extents;
     extents.max_tx = scen.num_tx;
     extents.max_rx = scen.num_rx;
@@ -118,22 +119,29 @@ perf::TimingCollector run_graph(const CompensationScenario& scen, const perf::Ru
     hr::TDMDenseCompensationParams params;
     params.waveform = make_waveform(scen.pri);
     op.set_params(std::move(params));
-    const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(src->out, op->rd_maps, q);
-    if constexpr (requires { src->override_out; }) {
-      graph.add_flow(src->override_out, op->waveform_in, q);
-    }
-    graph.add_flow(op->rd_maps_out, sink->in, q);
-    perf::bind_tensor_out(options, "compensation", "rd_maps_out");
+    connect(graph, src, op, q);
+    perf::PerfRecipeOutputs outputs(graph, options, "compensation");
+    outputs.timed(op->rd_maps_out, "rd_maps_out");
+    outputs.finish(src, op);
   };
   if (scen.live_waveform) {
-    return perf::run_perf_graph_with_override(
-        std::move(cube), plan.total_frames, plan.override_at, hr::to_wire(make_waveform(scen.pri)),
-        hr::to_wire(make_waveform(scen.changed_pri)), "compensation-perf", build,
-        perf::PerfPublishMode::kCopy, true);
+    const auto selected =
+        perf::live_case("waveform_in", hr::to_wire(make_waveform(scen.pri)),
+                        hr::to_wire(make_waveform(scen.changed_pri)),
+                        [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                          graph.add_flow(src->override_out, op->waveform_in, q);
+                        });
+    return perf::run_selected_live_recipe(std::array{std::move(cube)}, plan, "compensation-perf",
+                                          selected, configure, perf::PerfPublishMode::kCopy);
   }
-  return perf::run_perf_graph(std::move(cube), plan.total_frames, "compensation-perf", build);
+  return perf::run_data_recipe(
+      std::array{std::move(cube)}, plan, "compensation-perf",
+      [&](auto& graph, const auto& src, auto& options) {
+        configure(graph, src, options, [](auto&, const auto&, const auto&, const auto&) {});
+      },
+      perf::PerfPublishMode::kCopy);
 }
 
 void fill_throughput(perf::ResultRow* row, const CompensationScenario& scen, double median_ms) {

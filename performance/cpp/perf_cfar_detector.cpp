@@ -23,6 +23,7 @@
 #include <numeric>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -41,6 +42,7 @@
 #include "utils/perf_payloads.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/perf_stats.hpp"
 #include "utils/tensor_factory.hpp"
@@ -145,71 +147,6 @@ std::vector<double> precompute_alpha_lut(const CfarScenario& scen) {
   return {};
 }
 
-struct LivePorts {
- public:
-  explicit LivePorts(CfarScenario scenario) : scenario_(std::move(scenario)) {
-    if (scenario_.live_port == "alpha_lut") {
-      changed_alpha_lut_ = precompute_alpha_lut(scenario_);
-      for (auto& value : changed_alpha_lut_)
-        if (value > 0.0)
-          value *= 1.1;
-    }
-  }
-  void setup(holoscan::OperatorSpec& spec) {
-    perf::setup_device_input(spec, out, perf::PerfFrameBank::span_a());
-    perf::setup_scalar_payload(spec, os_rank);
-    perf::setup_scalar_payload(spec, guard_cells);
-    perf::setup_scalar_payload(spec, training_cells);
-    perf::setup_scalar_payload(spec, pfa);
-    perf::setup_host_payload(spec, alpha_lut, 1U, 1U);
-    perf::setup_scalar_payload(spec, threshold_scale);
-    perf::setup_host_payload(spec, nci_axes, 1U, 1U, DLDataType{kDLInt, 64U, 1U},
-                             4U * sizeof(int64_t));
-    perf::setup_scalar_payload(spec, max_detections);
-  }
-
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
-      holoscan::ExecutionContext& context) {
-    const auto time = context.activation_time();
-    holoscan::expected<void, holoscan::Error> emitted;
-    if (scenario_.live_port == "os_rank")
-      emitted = perf::emit_scalar_payload(os_rank,
-                                          scenario_.os_rank > 0 ? scenario_.os_rank - 1 : 0, time);
-    else if (scenario_.live_port == "guard_cells")
-      emitted = perf::emit_scalar_payload(guard_cells, hr::CfarCellWindowOverride{0, 0}, time);
-    else if (scenario_.live_port == "training_cells")
-      emitted = perf::emit_scalar_payload(training_cells, hr::CfarCellWindowOverride{3, 3}, time);
-    else if (scenario_.live_port == "pfa")
-      emitted = perf::emit_scalar_payload(pfa, 1e-3, time);
-    else if (scenario_.live_port == "alpha_lut")
-      emitted = perf::emit_host_vector(alpha_lut, changed_alpha_lut_, time);
-    else if (scenario_.live_port == "threshold_scale")
-      emitted = perf::emit_scalar_payload(threshold_scale, 1.1, time);
-    else if (scenario_.live_port == "nci_axes")
-      emitted = perf::emit_host_vector(nci_axes, std::vector<int64_t>{0}, time);
-    else if (scenario_.live_port == "max_detections")
-      emitted = perf::emit_scalar_payload(max_detections, int64_t{100}, time);
-    if (!emitted)
-      return emitted;
-    return {};
-  }
-  holoscan::Output<holoscan::Tensor> out{"out"};
-  holoscan::Output<int64_t> os_rank{"os_rank"};
-  holoscan::Output<hr::CfarCellWindowOverride> guard_cells{"guard_cells"};
-  holoscan::Output<hr::CfarCellWindowOverride> training_cells{"training_cells"};
-  holoscan::Output<double> pfa{"pfa"};
-  holoscan::Output<holoscan::Tensor> alpha_lut{"alpha_lut"};
-  holoscan::Output<double> threshold_scale{"threshold_scale"};
-  holoscan::Output<holoscan::Tensor> nci_axes{"nci_axes"};
-  holoscan::Output<int64_t> max_detections{"max_detections"};
-
- private:
-  CfarScenario scenario_;
-  std::vector<double> changed_alpha_lut_;
-};
-
-using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::out>;
-
 perf::TimingCollector run_graph(const CfarScenario& scenario, const perf::RunPlan& plan) {
   CfarScenario prepared = scenario;
   if (prepared.use_alpha_lut && prepared.alpha_lut.empty()) {
@@ -218,8 +155,8 @@ perf::TimingCollector run_graph(const CfarScenario& scenario, const perf::RunPla
   const CfarScenario& scen = prepared;
   auto input = perf::make_power_map_device<PerfPrecision>(scen.input_shape);
   using BaseOp = hr::CFARDetectorOp<PerfPrecision>;
-  const auto build = [&](holoscan::Graph& graph, const auto& src,
-                         holoscan::CompileOptions& options) {
+  const auto configure = [&](holoscan::Graph& graph, const auto& src,
+                             holoscan::CompileOptions& options, auto connect) {
     hr::MaxTensorExtents extents;
     extents.max_doppler_bins = scen.input_shape[scen.input_shape.size() - 2];
     extents.max_range_bins = scen.input_shape[scen.input_shape.size() - 1];
@@ -250,56 +187,97 @@ perf::TimingCollector run_graph(const CfarScenario& scenario, const perf::RunPla
     params.peak_radius = scen.peak_radius;
     op.set_params(std::move(params));
 
-    const auto idx_sink = graph.op<perf::PerfTerminalSinkOp>("idx_sink");
-    const auto mask_drain = graph.op<perf::PerfNullSinkOp>("mask_drain");
-    const auto score_drain = graph.op<perf::PerfNullSinkOp>("score_drain");
-    const auto noise_drain = graph.op<perf::PerfNullSinkOp>("noise_drain");
-    const auto power_drain = graph.op<perf::PerfNullSinkOp>("power_drain");
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
 
     graph.add_flow(src->out, op->rd_maps, q);
-    if constexpr (requires { src->os_rank; }) {
-      if (scen.live_port == "os_rank")
-        graph.add_flow(src->os_rank, op->os_rank, q);
-      if (scen.live_port == "guard_cells")
-        graph.add_flow(src->guard_cells, op->guard_cells, q);
-      if (scen.live_port == "training_cells")
-        graph.add_flow(src->training_cells, op->training_cells, q);
-      if (scen.live_port == "pfa")
-        graph.add_flow(src->pfa, op->pfa, q);
-      if (scen.live_port == "alpha_lut")
-        graph.add_flow(src->alpha_lut, op->alpha_lut, q);
-      if (scen.live_port == "threshold_scale")
-        graph.add_flow(src->threshold_scale, op->threshold_scale, q);
-      if (scen.live_port == "nci_axes")
-        graph.add_flow(src->nci_axes, op->nci_axes, q);
-      if (scen.live_port == "max_detections")
-        graph.add_flow(src->max_detections, op->max_detections, q);
-    }
-    graph.add_flow(op->detection_idx, idx_sink->in, q);
-    graph.add_flow(op->detection_mask, mask_drain->in, q);
-    graph.add_flow(op->detection_score, score_drain->in, q);
-    graph.add_flow(op->noise_estimate, noise_drain->in, q);
-    graph.add_flow(op->cfar_power, power_drain->in, q);
-    graph.partition("perf")
-        .add(src)
-        .add(op)
-        .add(idx_sink)
-        .add(mask_drain)
-        .add(score_drain)
-        .add(noise_drain)
-        .add(power_drain);
-
-    perf::bind_tensor_out(options, "cfar", "detection_idx");
-    perf::bind_tensor_out(options, "cfar", "detection_mask");
-    perf::bind_tensor_out(options, "cfar", "detection_score");
-    perf::bind_tensor_out(options, "cfar", "noise_estimate");
-    perf::bind_tensor_out(options, "cfar", "cfar_power");
+    connect(graph, src, op, q);
+    perf::PerfRecipeOutputs outputs(graph, options, "cfar");
+    outputs.timed(op->detection_idx, "detection_idx");
+    outputs.drain(op->detection_mask, "detection_mask");
+    outputs.drain(op->detection_score, "detection_score");
+    outputs.drain(op->noise_estimate, "noise_estimate");
+    outputs.drain(op->cfar_power, "cfar_power");
+    outputs.finish(src, op);
   };
-  if (scen.live_port.empty())
-    return perf::run_perf_graph(std::move(input), plan.total_frames, "cfar-perf", build);
-  return perf::run_perf_graph_with_source<LiveSource>(std::move(input), plan.total_frames,
-                                                      plan.override_at, scen, "cfar-perf", build);
+  if (scen.live_port.empty()) {
+    return perf::run_data_recipe(std::array{std::move(input)}, plan, "cfar-perf",
+                                 [&](auto& graph, const auto& src, auto& options) {
+                                   configure(graph, src, options,
+                                             [](auto&, const auto&, const auto&, const auto&) {});
+                                 });
+  }
+  const auto cases = std::make_tuple(
+      perf::live_option("os_rank",
+                        [&] {
+                          return perf::selected_live_case(
+                              "os_rank", int64_t{scen.os_rank > 0 ? scen.os_rank - 1 : 0},
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->os_rank, q);
+                              });
+                        }),
+      perf::live_option("guard_cells",
+                        [&] {
+                          return perf::selected_live_case(
+                              "guard_cells", hr::CfarCellWindowOverride{0, 0},
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->guard_cells, q);
+                              });
+                        }),
+      perf::live_option("training_cells",
+                        [&] {
+                          return perf::selected_live_case(
+                              "training_cells", hr::CfarCellWindowOverride{3, 3},
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->training_cells, q);
+                              });
+                        }),
+      perf::live_option("pfa",
+                        [&] {
+                          return perf::selected_live_case(
+                              "pfa", 1e-3,
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->pfa, q);
+                              });
+                        }),
+      perf::live_option("alpha_lut",
+                        [&] {
+                          auto changed = precompute_alpha_lut(scen);
+                          for (auto& value : changed)
+                            if (value > 0.0)
+                              value *= 1.1;
+                          return perf::selected_live_case(
+                              "alpha_lut", std::move(changed),
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->alpha_lut, q);
+                              });
+                        }),
+      perf::live_option("threshold_scale",
+                        [&] {
+                          return perf::selected_live_case(
+                              "threshold_scale", 1.1,
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->threshold_scale, q);
+                              });
+                        }),
+      perf::live_option("nci_axes",
+                        [&] {
+                          return perf::selected_live_case(
+                              "nci_axes", std::vector<int64_t>{0},
+                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                                graph.add_flow(src->override_out, op->nci_axes, q);
+                              });
+                        }),
+      perf::live_option("max_detections", [&] {
+        return perf::selected_live_case(
+            "max_detections", int64_t{100},
+            [](auto& graph, const auto& src, const auto& op, const auto& q) {
+              graph.add_flow(src->override_out, op->max_detections, q);
+            });
+      }));
+  return perf::dispatch_live_case(scen.live_port, cases, [&](const auto& selected) {
+    return perf::run_selected_live_recipe(std::array{std::move(input)}, plan, "cfar-perf", selected,
+                                          configure);
+  });
 }
 
 void fill_throughput(perf::ResultRow* row, double median_ms) {
@@ -323,9 +301,7 @@ void fill_throughput(perf::ResultRow* row, double median_ms) {
 perf::ResultRow base_row(const CfarScenario& scen) {
   perf::ResultRow row;
   row.variant = variant_tag(scen.variant);
-  const size_t n = scen.input_shape.size();
-  row.map_shape = {scen.input_shape[n - 2], scen.input_shape[n - 1]};
-  row.input_shape = scen.input_shape;
+  perf::set_input_and_trailing_map_shape(row, scen.input_shape);
   row.guard = scen.footprint.guard;
   row.training = scen.footprint.training;
   int64_t out_batch = 1, k = 1;

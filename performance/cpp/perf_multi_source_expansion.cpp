@@ -42,6 +42,7 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 
 namespace hr = holoscan::radar;
@@ -134,40 +135,30 @@ ExpansionInputs make_inputs(const ExpansionScenario& scenario) {
 
 perf::TimingCollector run_graph(const ExpansionScenario& scenario, const perf::RunPlan& plan) {
   auto inputs = make_inputs(scenario);
-  perf::TimingCollector collector;
-  collector.t_construct = perf::Clock::now();
-  perf::PerfFrameBank::reset_six(
-      {std::move(inputs.detection_idx), std::move(inputs.baseline), std::move(inputs.selected),
-       std::move(inputs.resolved), std::move(inputs.multi), std::move(inputs.count)},
-      plan.total_frames, &collector);
-
-  holoscan::Graph graph{"multi-source-expansion-perf"};
-  const auto source = graph.op<perf::PerfSixTensorSourceOp>("source");
-
-  hr::MaxTensorExtents extents;
-  extents.max_items = scenario.rows;
-  extents.max_sources = scenario.sources;
-  extents.max_points = scenario.rows + selected_rows(scenario) * (scenario.sources - 1);
-  const auto expansion = graph.op<hr::MultiSourceExpansionOp<PerfPrecision>>("expansion", extents);
-  const auto timed = graph.op<perf::PerfTerminalSinkOp>("idx_sink");
-  const auto aoa_drain = graph.op<perf::PerfNullSinkOp>("aoa_drain");
-  const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-  graph.add_flow(source->a, expansion->detection_idx, queue);
-  graph.add_flow(source->b, expansion->baseline_aoa, queue);
-  graph.add_flow(source->c, expansion->selected_idx, queue);
-  graph.add_flow(source->d, expansion->resolved_aoa, queue);
-  graph.add_flow(source->e, expansion->doa_multi, queue);
-  graph.add_flow(source->f, expansion->source_count, queue);
-  graph.add_flow(expansion->detection_idx_out, timed->in, queue);
-  graph.add_flow(expansion->aoa_estimates_out, aoa_drain->in, queue);
-  holoscan::CompileOptions options;
-  for (const char* port : {"a", "b", "c", "d", "e", "f"})
-    perf::bind_tensor_out(options, "source", port);
-  perf::bind_tensor_out(options, "expansion", "detection_idx_out");
-  perf::bind_tensor_out(options, "expansion", "aoa_estimates_out");
-  perf::execute_perf_graph(graph, std::move(options), plan.total_frames,
-                           "multi-source-expansion-perf", &collector);
-  return collector;
+  return perf::run_data_recipe(
+      std::array{std::move(inputs.detection_idx), std::move(inputs.baseline),
+                 std::move(inputs.selected), std::move(inputs.resolved), std::move(inputs.multi),
+                 std::move(inputs.count)},
+      plan, "multi-source-expansion-perf",
+      [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
+        hr::MaxTensorExtents extents;
+        extents.max_items = scenario.rows;
+        extents.max_sources = scenario.sources;
+        extents.max_points = scenario.rows + selected_rows(scenario) * (scenario.sources - 1);
+        const auto expansion =
+            graph.op<hr::MultiSourceExpansionOp<PerfPrecision>>("expansion", extents);
+        const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+        graph.add_flow(source->a, expansion->detection_idx, queue);
+        graph.add_flow(source->b, expansion->baseline_aoa, queue);
+        graph.add_flow(source->c, expansion->selected_idx, queue);
+        graph.add_flow(source->d, expansion->resolved_aoa, queue);
+        graph.add_flow(source->e, expansion->doa_multi, queue);
+        graph.add_flow(source->f, expansion->source_count, queue);
+        perf::PerfRecipeOutputs outputs(graph, options, "expansion");
+        outputs.timed(expansion->detection_idx_out, "detection_idx_out");
+        outputs.drain(expansion->aoa_estimates_out, "aoa_estimates_out");
+        outputs.finish(source, expansion);
+      });
 }
 
 ExpansionScenario make_scenario(const SizeSpec& size, double fraction, int64_t sources,

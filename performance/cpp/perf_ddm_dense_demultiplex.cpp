@@ -28,6 +28,7 @@
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -104,7 +105,8 @@ std::vector<int64_t> input_shape(const CompensationScenario& scen) {
 
 perf::TimingCollector run_graph(const CompensationScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(input_shape(scen));
-  const auto configure = [&](holoscan::Graph& graph, holoscan::CompileOptions& options) {
+  const auto configure = [&](holoscan::Graph& graph, const auto& source,
+                             holoscan::CompileOptions& options) {
     hr::MaxTensorExtents extents;
     extents.max_tx = scen.num_tx;
     extents.max_rx = scen.num_rx;
@@ -115,33 +117,27 @@ perf::TimingCollector run_graph(const CompensationScenario& scen, const perf::Ru
     params.ddm_code = scen.non_linear_ddm ? make_ddm_nl_code(scen.num_tx, scen.num_doppler)
                                           : make_ddm_code(scen.num_tx);
     op.set_params(std::move(params));
-    const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
-    graph.add_flow(op->rd_maps_out, sink->in, q);
-    perf::bind_tensor_out(options, "compensation", "velocity_bins_out");
-    perf::bind_tensor_out(options, "compensation", "rd_maps_out");
-    return op;
+    if constexpr (requires { source->out_a; }) {
+      graph.add_flow(source->out_a, op->velocity_bins, q);
+      graph.add_flow(source->out_b, op->rd_maps, q);
+    } else {
+      graph.add_flow(source->out, op->rd_maps, q);
+    }
+    perf::PerfRecipeOutputs outputs(graph, options, "compensation");
+    outputs.timed(op->rd_maps_out, "rd_maps_out");
+    if (scen.velocity_axis)
+      outputs.drain(op->velocity_bins_out, "velocity_bins_out");
+    else
+      outputs.unwired(op->velocity_bins_out, "velocity_bins_out");
+    outputs.finish(source, op);
   };
   if (scen.velocity_axis) {
     auto axis = perf::make_power_map_device<PerfPrecision>({scen.num_doppler});
-    return perf::run_perf_graph_dual(
-        std::move(axis), std::move(cube), plan.total_frames, "compensation-perf",
-        [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
-          auto op = configure(graph, options);
-          const holoscan::ConnectionOptions q{.queue_depth = 4U};
-          graph.add_flow(src->out_a, op->velocity_bins, q);
-          graph.add_flow(src->out_b, op->rd_maps, q);
-          const auto axis_sink = graph.op<perf::PerfNullSinkOp>("velocity_axis_sink");
-          graph.add_flow(op->velocity_bins_out, axis_sink->in, q);
-        });
+    return perf::run_data_recipe(std::array{std::move(axis), std::move(cube)}, plan,
+                                 "compensation-perf", configure);
   }
-  return perf::run_perf_graph(
-      std::move(cube), plan.total_frames, "compensation-perf",
-      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
-        auto op = configure(graph, options);
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-        graph.add_flow(src->out, op->rd_maps, q);
-      });
+  return perf::run_data_recipe(std::array{std::move(cube)}, plan, "compensation-perf", configure);
 }
 
 void fill_throughput(perf::ResultRow* row, const CompensationScenario& scen, double median_ms) {

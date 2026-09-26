@@ -4,7 +4,7 @@
 // Performance characterization for FeatureAssemblyOp — sweeps detection count
 // and map size. Measurement tool only: no timing assertions.
 //
-// Graph rewrite via run_perf_graph_triple. The driver times the physical
+// Typed recipe runner times the physical
 // {range, velocity} pack with exact-aligned axis inputs. No [live] parameters.
 
 #include <cuda_runtime_api.h>
@@ -31,6 +31,7 @@
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -105,8 +106,8 @@ perf::TimingCollector run_graph(const FeatScenario& scen, const perf::RunPlan& p
   auto range_t = make_device_from_host(range_host, {scen.range}, hr::real_dtype<PerfPrecision>());
   auto velocity_t =
       make_device_from_host(velocity_host, {scen.doppler}, hr::real_dtype<PerfPrecision>());
-  return perf::run_perf_graph_triple(
-      std::move(idx_t), std::move(range_t), std::move(velocity_t), plan.total_frames,
+  return perf::run_data_recipe(
+      std::array{std::move(idx_t), std::move(range_t), std::move(velocity_t)}, plan,
       "feat-asm-perf",
       [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
@@ -116,15 +117,14 @@ perf::TimingCollector run_graph(const FeatScenario& scen, const perf::RunPlan& p
         auto op =
             graph.op<hr::FeatureAssemblyOp<PerfPrecision>>("feat", extents, std::move(features));
 
-        const auto pts_sink = graph.op<perf::PerfTerminalSinkOp>("pts_sink");
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
 
         graph.add_flow(src->out_a, op->detection_idx, q);
         graph.add_flow(src->out_b, op->range_bins, q);
         graph.add_flow(src->out_c, op->velocity_bins, q);
-        graph.add_flow(op->points, pts_sink->in, q);
-
-        perf::bind_tensor_out(options, "feat", "points");
+        perf::PerfRecipeOutputs outputs(graph, options, "feat");
+        outputs.timed(op->points, "points");
+        outputs.finish(src, op);
       });
 }
 

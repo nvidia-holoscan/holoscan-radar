@@ -21,6 +21,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -44,6 +45,7 @@
 #include "utils/perf_payloads.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -106,63 +108,6 @@ const char* override_name(BeamScenario::OverrideKind kind) {
   return "unknown";
 }
 
-struct LivePorts {
- public:
-  LivePorts(hr::BeamscanParams override, BeamScenario::OverrideKind kind)
-  : override_(std::move(override)), kind_(kind) {}
-
-  void setup(holoscan::OperatorSpec& spec) {
-    perf::setup_device_input(spec, snapshot, perf::PerfFrameBank::span_a());
-    perf::setup_host_payload(spec, array_geometry, 2U, 2U);
-    perf::setup_host_payload(spec, az_coordinates, 1U, 1U);
-    perf::setup_host_payload(spec, el_coordinates, 1U, 1U);
-    perf::setup_host_payload(spec, array_taper, 1U, 1U);
-    perf::setup_scalar_payload(spec, peak_interpolation);
-  }
-  [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
-      holoscan::ExecutionContext& context) {
-    const holoscan::TimePoint time = context.activation_time();
-    holoscan::expected<void, holoscan::Error> emitted;
-    switch (kind_) {
-      case BeamScenario::OverrideKind::kNone:
-        break;
-      case BeamScenario::OverrideKind::kArrayGeometry: {
-        emitted = perf::emit_geometry_payload(array_geometry, override_.array_geometry, time);
-        break;
-      }
-      case BeamScenario::OverrideKind::kAzAngles:
-        emitted = emit_host_vector(az_coordinates, override_.az_coordinates, time);
-        break;
-      case BeamScenario::OverrideKind::kElAngles:
-        emitted = emit_host_vector(el_coordinates, override_.el_coordinates, time);
-        break;
-      case BeamScenario::OverrideKind::kArrayTaper: {
-        emitted = perf::emit_window_payload(array_taper, override_.array_taper, time);
-        break;
-      }
-      case BeamScenario::OverrideKind::kPeakInterpolation:
-        emitted = perf::emit_scalar_payload(peak_interpolation, override_.peak_interpolation, time);
-        break;
-    }
-    if (!emitted)
-      return emitted;
-    return {};
-  }
-
-  holoscan::Output<holoscan::Tensor> snapshot{"snapshot"};
-  holoscan::Output<hr::WireArrayGeometry> array_geometry{"array_geometry"};
-  holoscan::Output<holoscan::Tensor> az_coordinates{"az_coordinates"};
-  holoscan::Output<holoscan::Tensor> el_coordinates{"el_coordinates"};
-  holoscan::Output<hr::WireWindowSpec> array_taper{"array_taper"};
-  holoscan::Output<hr::PeakInterpolation> peak_interpolation{"peak_interpolation"};
-
- private:
-  hr::BeamscanParams override_;
-  BeamScenario::OverrideKind kind_{BeamScenario::OverrideKind::kNone};
-};
-
-using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::snapshot>;
-
 perf::TimingCollector run_graph(const BeamScenario& scen, const perf::RunPlan& plan) {
   auto snapshot =
       perf::make_iq_cube_device<PerfPrecision>({scen.detections, scen.channels, scen.snapshots});
@@ -197,38 +142,70 @@ perf::TimingCollector run_graph(const BeamScenario& scen, const perf::RunPlan& p
   extents.max_snapshots = scen.snapshots;
   extents.max_az = scen.num_az;
   extents.max_el = scen.num_el;
-  perf::TimingCollector collector;
-  collector.t_construct = perf::Clock::now();
-  perf::PerfFrameBank::reset(std::move(snapshot), plan.total_frames, &collector);
-
-  holoscan::Graph graph{"beamscan-perf"};
-  const auto source = graph.op<LiveSource>("src", plan.override_at, override, scen.override_kind);
-  auto op = graph.op<hr::BeamscanEstimatorOp<PerfPrecision>>("beamscan", extents);
-  op.set_params(std::move(initial));
-  const auto sink = graph.op<perf::PerfTerminalSinkOp>("aoa_sink");
-  const auto spectrum = graph.op<perf::PerfNullSinkOp>("spectrum_drain");
-  const holoscan::ConnectionOptions q{.queue_depth = 8U};
-  graph.add_flow(source->snapshot, op->snapshot, q);
-  if (scen.override_kind == BeamScenario::OverrideKind::kArrayGeometry)
-    graph.add_flow(source->array_geometry, op->array_geometry, q);
-  if (scen.override_kind == BeamScenario::OverrideKind::kAzAngles)
-    graph.add_flow(source->az_coordinates, op->az_coordinates, q);
-  if (scen.override_kind == BeamScenario::OverrideKind::kElAngles)
-    graph.add_flow(source->el_coordinates, op->el_coordinates, q);
-  if (scen.override_kind == BeamScenario::OverrideKind::kArrayTaper)
-    graph.add_flow(source->array_taper, op->array_taper, q);
-  if (scen.override_kind == BeamScenario::OverrideKind::kPeakInterpolation)
-    graph.add_flow(source->peak_interpolation, op->peak_interpolation, q);
-  graph.add_flow(op->aoa_estimates, sink->in, q);
-  graph.add_flow(op->angle_spectrum, spectrum->in, q);
-
-  holoscan::CompileOptions options;
-  perf::bind_tensor_out(options, "src", "snapshot");
-  perf::bind_tensor_out(options, "beamscan", "aoa_estimates");
-  perf::bind_tensor_out(options, "beamscan", "angle_spectrum");
-  perf::execute_perf_graph(graph, std::move(options), plan.total_frames, "beamscan-perf",
-                           &collector);
-  return collector;
+  const auto configure = [&](holoscan::Graph& graph, const auto& source,
+                             holoscan::CompileOptions& options, auto connect) {
+    auto op = graph.op<hr::BeamscanEstimatorOp<PerfPrecision>>("beamscan", extents);
+    op.set_params(std::move(initial));
+    const holoscan::ConnectionOptions q{.queue_depth = 8U};
+    graph.add_flow(source->out, op->snapshot, q);
+    connect(graph, source, op, q);
+    perf::PerfRecipeOutputs outputs(graph, options, "beamscan", 8U);
+    outputs.timed(op->aoa_estimates, "aoa_estimates");
+    outputs.drain(op->angle_spectrum, "angle_spectrum");
+    outputs.finish(source, op);
+  };
+  if (scen.override_kind == BeamScenario::OverrideKind::kNone) {
+    return perf::run_data_recipe(std::array{std::move(snapshot)}, plan, "beamscan-perf",
+                                 [&](auto& graph, const auto& source, auto& options) {
+                                   configure(graph, source, options,
+                                             [](auto&, const auto&, const auto&, const auto&) {});
+                                 });
+  }
+  const auto cases = std::make_tuple(
+      perf::live_option("array_geometry",
+                        [&] {
+                          return perf::selected_live_case(
+                              "array_geometry", override.array_geometry,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->array_geometry, q);
+                              });
+                        }),
+      perf::live_option("az_coordinates",
+                        [&] {
+                          return perf::selected_live_case(
+                              "az_coordinates", override.az_coordinates,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->az_coordinates, q);
+                              });
+                        }),
+      perf::live_option("el_coordinates",
+                        [&] {
+                          return perf::selected_live_case(
+                              "el_coordinates", override.el_coordinates,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->el_coordinates, q);
+                              });
+                        }),
+      perf::live_option("array_taper",
+                        [&] {
+                          return perf::selected_live_case(
+                              "array_taper", override.array_taper,
+                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
+                                graph.add_flow(source->override_out, op->array_taper, q);
+                              });
+                        }),
+      perf::live_option("peak_interpolation", [&] {
+        return perf::selected_live_case(
+            "peak_interpolation", override.peak_interpolation,
+            [](auto& graph, const auto& source, const auto& op, const auto& q) {
+              graph.add_flow(source->override_out, op->peak_interpolation, q);
+            });
+      }));
+  return perf::dispatch_live_case(
+      override_name(scen.override_kind), cases, [&](const auto& selected) {
+        return perf::run_selected_live_recipe(std::array{std::move(snapshot)}, plan,
+                                              "beamscan-perf", selected, configure);
+      });
 }
 
 void fill_throughput(perf::ResultRow* row, const BeamScenario& scen, double median_ms) {

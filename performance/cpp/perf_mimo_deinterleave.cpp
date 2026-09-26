@@ -24,6 +24,7 @@
 #include "utils/perf_profiles.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -53,8 +54,8 @@ std::vector<int64_t> interleaved_shape(const DeinterleaveScenario& scen) {
 
 perf::TimingCollector run_graph(const DeinterleaveScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(interleaved_shape(scen));
-  return perf::run_perf_graph(
-      std::move(cube), plan.total_frames, "deinterleave-perf",
+  return perf::run_data_recipe(
+      std::array{std::move(cube)}, plan, "deinterleave-perf",
       [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_tx = scen.num_tx;
@@ -65,11 +66,11 @@ perf::TimingCollector run_graph(const DeinterleaveScenario& scen, const perf::Ru
         hr::MIMODeinterleaveParams params;
         params.tx_schedule.num_tx = scen.num_tx;
         op.set_params(std::move(params));
-        const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
         const holoscan::ConnectionOptions q{.queue_depth = 4U};
         graph.add_flow(src->out, op->adc_cube, q);
-        graph.add_flow(op->adc_cube_out, sink->in, q);
-        perf::bind_tensor_out(options, "deinterleave", "adc_cube_out");
+        perf::PerfRecipeOutputs outputs(graph, options, "deinterleave");
+        outputs.timed(op->adc_cube_out, "adc_cube_out");
+        outputs.finish(src, op);
       });
 }
 

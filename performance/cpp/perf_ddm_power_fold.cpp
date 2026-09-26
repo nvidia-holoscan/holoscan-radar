@@ -15,6 +15,7 @@
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
 #include "utils/perf_profiles.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
@@ -49,8 +50,8 @@ hr::DDMCodeDescriptor code(int64_t tx) {
 perf::TimingCollector run_graph(const Scenario& scenario, const perf::RunPlan& plan) {
   const auto& size = scenario.size;
   auto input = perf::make_iq_cube_device<float>({size.rx, size.doppler, size.range});
-  return perf::run_perf_graph(
-      std::move(input), plan.total_frames, "ddm-power-fold-perf",
+  return perf::run_data_recipe(
+      std::array{std::move(input)}, plan, "ddm-power-fold-perf",
       [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
         hr::MaxTensorExtents extents;
         extents.max_rx = size.rx;
@@ -58,12 +59,11 @@ perf::TimingCollector run_graph(const Scenario& scenario, const perf::RunPlan& p
         extents.max_range_bins = size.range;
         auto op = graph.op<hr::DDMPowerFoldOp<float>>("fold", extents);
         op.set_params(hr::DDMPowerFoldParams{.ddm_code = code(size.tx)});
-        const auto terminal = graph.op<perf::PerfTerminalSinkOp>("terminal");
         const holoscan::ConnectionOptions queue{.queue_depth = 4U};
         graph.add_flow(source->out, op->rd_maps, queue);
-        graph.add_flow(op->power_map, terminal->in, queue);
-        graph.partition("perf").add(source).add(op).add(terminal);
-        perf::bind_tensor_out(options, "fold", "power_map");
+        perf::PerfRecipeOutputs outputs(graph, options, "fold");
+        outputs.timed(op->power_map, "power_map");
+        outputs.finish(source, op);
       });
 }
 
@@ -71,8 +71,8 @@ perf::ResultRow base_row(const Scenario& scenario) {
   perf::ResultRow row;
   row.op_name = "DDMPowerFoldOp";
   row.variant = "linear_exact";
-  row.map_shape = {scenario.size.doppler, scenario.size.range};
-  row.input_shape = {scenario.size.rx, scenario.size.doppler, scenario.size.range};
+  perf::set_input_and_trailing_map_shape(
+      row, {scenario.size.rx, scenario.size.doppler, scenario.size.range});
   row.k = scenario.size.tx * scenario.size.rx;
   row.notes = "reads N_rx*D*R; emits honest folded (D/M)*R extent";
   return row;

@@ -4,14 +4,53 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <tuple>
 
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 
 namespace {
 
 namespace perf = holoscan::radar::perf;
+
+TEST(PerfRecipe, SelectsOneTypedLiveCaseAndRejectsPortMismatch) {
+  int factory_calls = 0;
+  const auto cases = std::make_tuple(
+      perf::live_option("first",
+                        [&] {
+                          ++factory_calls;
+                          return perf::selected_live_case("first", int64_t{1}, [](auto&&...) {});
+                        }),
+      perf::live_option("second", [&] {
+        ++factory_calls;
+        return perf::selected_live_case("second", int64_t{2}, [](auto&&...) {});
+      }));
+  const auto changed = perf::dispatch_live_case("second", cases, [](const auto& selected) {
+    perf::TimingCollector collector;
+    collector.live_emissions.push_back(selected.changed);
+    return collector;
+  });
+  ASSERT_EQ(changed.live_emissions.size(), 1U);
+  EXPECT_EQ(changed.live_emissions.front(), 2);
+  EXPECT_EQ(factory_calls, 1);
+  EXPECT_THROW(perf::dispatch_live_case("missing", cases,
+                                        [](const auto&) {
+                                          return perf::TimingCollector{};
+                                        }),
+               std::invalid_argument);
+  const auto mismatched = std::make_tuple(perf::live_option("declared", [&] {
+    return perf::selected_live_case("different", int64_t{3}, [](auto&&...) {});
+  }));
+  EXPECT_THROW(perf::dispatch_live_case("declared", mismatched,
+                                        [](const auto&) {
+                                          return perf::TimingCollector{};
+                                        }),
+               std::invalid_argument);
+}
 
 TEST(PerfRunner, BucketsFullSteadyWindowAndOneChangedFramePerRun) {
   perf::RunSettings settings;

@@ -8,7 +8,7 @@
 // assertions. See docs/planning/OPERATOR_DEVELOPMENT.md.
 //
 // Params select the overlap policy under test. The always-emitted geometry
-// output is drained by PerfNullSinkOp.
+// output is drained by the recipe output assembler.
 
 #include <complex>
 #include <set>
@@ -33,6 +33,7 @@
 #include "utils/perf_graph.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
+#include "utils/perf_recipe.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
@@ -99,8 +100,8 @@ std::vector<int64_t> separated_shape(const AssemblyScenario& scen) {
 perf::TimingCollector run_graph(const AssemblyScenario& scen, const perf::RunPlan& plan) {
   auto cube = perf::make_iq_cube_device<PerfPrecision>(separated_shape(scen));
   // Value-agnostic gather: zero-fill loan is valid.
-  const auto build = [&](holoscan::Graph& graph, const auto& src,
-                         holoscan::CompileOptions& options) {
+  const auto configure = [&](holoscan::Graph& graph, const auto& src,
+                             holoscan::CompileOptions& options, auto connect) {
     hr::MaxTensorExtents extents;
     extents.max_tx = scen.num_tx;
     extents.max_rx = scen.num_rx;
@@ -113,26 +114,29 @@ perf::TimingCollector run_graph(const AssemblyScenario& scen, const perf::RunPla
     params.wavelength = kDefaultWavelength;
     params.overlap_policy = scen.policy;
     op.set_params(std::move(params));
-    const auto sink = graph.op<perf::PerfTerminalSinkOp>("out_sink");
-    const auto geom_drain = graph.op<perf::PerfPayloadSinkOp<hr::WireArrayGeometry>>("geom_drain");
     const holoscan::ConnectionOptions q{.queue_depth = 4U};
     graph.add_flow(src->out, op->rd_maps, q);
-    if constexpr (requires { src->override_out; }) {
-      graph.add_flow(src->override_out, op->wavelength, q);
-    }
-    graph.add_flow(op->rd_maps_out, sink->in, q);
-    graph.add_flow(op->array_geometry, geom_drain->in, q);
-    graph.partition("perf").add(src).add(op).add(sink).add(geom_drain);
-    perf::bind_tensor_out(options, "virtual_array", "rd_maps_out");
+    connect(graph, src, op, q);
+    perf::PerfRecipeOutputs outputs(graph, options, "virtual_array");
+    outputs.timed(op->rd_maps_out, "rd_maps_out");
+    outputs.drain(op->array_geometry, "array_geometry");
+    outputs.finish(src, op);
   };
   if (scen.live_wavelength) {
-    return perf::run_perf_graph_with_override(std::move(cube), plan.total_frames, plan.override_at,
-                                              kDefaultWavelength, scen.override_wavelength,
-                                              "assembly-perf", build,
-                                              perf::PerfPublishMode::kFillInPlace, true);
+    const auto selected =
+        perf::live_case("wavelength", kDefaultWavelength, scen.override_wavelength,
+                        [](auto& graph, const auto& src, const auto& op, const auto& q) {
+                          graph.add_flow(src->override_out, op->wavelength, q);
+                        });
+    return perf::run_selected_live_recipe(std::array{std::move(cube)}, plan, "assembly-perf",
+                                          selected, configure, perf::PerfPublishMode::kFillInPlace);
   }
-  return perf::run_perf_graph(std::move(cube), plan.total_frames, "assembly-perf", build,
-                              perf::PerfPublishMode::kFillInPlace);
+  return perf::run_data_recipe(
+      std::array{std::move(cube)}, plan, "assembly-perf",
+      [&](auto& graph, const auto& src, auto& options) {
+        configure(graph, src, options, [](auto&, const auto&, const auto&, const auto&) {});
+      },
+      perf::PerfPublishMode::kFillInPlace);
 }
 
 void fill_throughput(perf::ResultRow* row, const AssemblyScenario& scen, double median_ms) {
