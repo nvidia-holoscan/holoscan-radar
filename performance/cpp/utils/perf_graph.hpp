@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -344,6 +345,86 @@ inline void record_start_locked() {
   }
 }
 
+template <size_t Count>
+struct StagedFrames {
+  std::array<std::shared_ptr<holoscan::Tensor>, Count> frames;
+  PerfPublishMode mode{PerfPublishMode::kCopy};
+};
+
+// One source tick claims the staged inputs and records one start timestamp.
+// Every source variant shares this pacing and timestamp boundary.
+template <size_t Count>
+std::optional<StagedFrames<Count>> take_staged_frames() {
+  static_assert(Count >= 1 && Count <= 6);
+  const std::lock_guard lock(PerfFrameBank::mutex);
+  if (PerfFrameBank::in_flight != 0 || PerfFrameBank::frames_remaining <= 0)
+    return std::nullopt;
+  const std::array<const std::shared_ptr<holoscan::Tensor>*, 6> staged{
+      &PerfFrameBank::input_frame,   &PerfFrameBank::input_frame_b, &PerfFrameBank::input_frame_c,
+      &PerfFrameBank::input_frame_d, &PerfFrameBank::input_frame_e, &PerfFrameBank::input_frame_f};
+  StagedFrames<Count> result;
+  for (size_t i = 0; i < Count; ++i) {
+    if (*staged[i] == nullptr)
+      return std::nullopt;
+    result.frames[i] = *staged[i];
+  }
+  --PerfFrameBank::frames_remaining;
+  result.mode = PerfFrameBank::publish_mode;
+  record_start_locked();
+  return result;
+}
+
+template <typename Value>
+void setup_live_output(holoscan::OperatorSpec& spec, holoscan::Output<Value>& output,
+                       const Value& initial, const Value& changed) {
+  if constexpr (std::is_same_v<Value, WireFMCWWaveform>) {
+    constexpr holoscan::TensorRepresentation kWaveform{
+        .memory_kind = holoscan::MemoryKind::kHost,
+        .dtype = DLDataType{kDLComplex, 128U, 1U},
+        .rank = 1U,
+    };
+    const auto reference_bytes = [](const WireFMCWWaveform& waveform) {
+      return waveform.reference_samples
+                 ? static_cast<std::size_t>(waveform.reference_samples->nbytes())
+                 : 0U;
+    };
+    const std::size_t max_bytes = std::max(
+        {sizeof(std::complex<double>), reference_bytes(initial), reference_bytes(changed)});
+    spec.output(output, "override_out")
+        .max_emits_per_compute(1U)
+        .produces_tensor(holoscan::radar::pooled_tensor_output(kWaveform, 1U, max_bytes));
+  } else {
+    spec.output(output, "override_out");
+  }
+}
+
+template <typename Value>
+holoscan::expected<void, holoscan::Error> emit_live_value(holoscan::Output<Value>& output,
+                                                          holoscan::ExecutionContext& context,
+                                                          const Value& value) {
+  if constexpr (std::is_same_v<Value, WireFMCWWaveform>) {
+    auto reference = wire_bridge_detail::read_host_vector<std::complex<double>>(
+        value.reference_samples, DLDataType{kDLComplex, 128U, 1U}, "reference_samples");
+    if (!reference)
+      return holoscan::make_unexpected(std::move(reference).error());
+    const std::array<int64_t, 1> shape{static_cast<int64_t>(reference->size())};
+    auto loan = output.allocate_tensor(
+        holoscan::TensorLoanRequest{.shape = shape, .dtype = DLDataType{kDLComplex, 128U, 1U}});
+    if (!loan)
+      return holoscan::make_unexpected(std::move(loan).error());
+    auto written =
+        loan->write_host_and_commit([&reference](const holoscan::TensorOutputWriteGuard& writer) {
+          std::copy(reference->begin(), reference->end(), writer.data_as<std::complex<double>>());
+        });
+    if (!written)
+      return holoscan::make_unexpected(std::move(written).error());
+    return output.emit_tensor(std::move(*loan), Value(value),
+                              holoscan::EmitOptions{.capture_time = context.activation_time()});
+  } else {
+    return output.emit(value, holoscan::EmitOptions{.capture_time = context.activation_time()});
+  }
+}
+
 }  // namespace detail
 
 // Single-output device Tensor source for 1-in graphs.
@@ -368,20 +449,12 @@ class PerfTensorSourceOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
       holoscan::ExecutionContext& context) override {
-    std::shared_ptr<holoscan::Tensor> frame;
-    PerfPublishMode mode = PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(PerfFrameBank::mutex);
-      if (PerfFrameBank::in_flight != 0 || PerfFrameBank::frames_remaining <= 0 ||
-          PerfFrameBank::input_frame == nullptr) {
-        return {};
-      }
-      --PerfFrameBank::frames_remaining;
-      frame = PerfFrameBank::input_frame;
-      mode = PerfFrameBank::publish_mode;
-      detail::record_start_locked();
-    }
-    return detail::emit_device_frame(out, context, frame, mode);
+    auto staged = detail::take_staged_frames<1>();
+    if (!staged)
+      return {};
+    const auto& frames = staged->frames;
+    const auto mode = staged->mode;
+    return detail::emit_device_frame(out, context, frames[0], mode);
   }
 
   holoscan::Output<holoscan::Tensor> out{"out"};
@@ -413,26 +486,7 @@ class PerfTensorOverrideSourceOp final : public holoscan::Operator<> {
     spec.output(out, "out")
         .produces_tensor(
             holoscan::radar::pooled_tensor_output(kDevice, 8U, PerfFrameBank::span_a()));
-    if constexpr (std::is_same_v<Value, WireFMCWWaveform>) {
-      constexpr holoscan::TensorRepresentation kWaveform{
-          .memory_kind = holoscan::MemoryKind::kHost,
-          .dtype = DLDataType{kDLComplex, 128U, 1U},
-          .rank = 1U,
-      };
-      const auto reference_bytes = [](const WireFMCWWaveform& waveform) {
-        return waveform.reference_samples
-                   ? static_cast<std::size_t>(waveform.reference_samples->nbytes())
-                   : 0U;
-      };
-      const std::size_t max_bytes =
-          std::max({sizeof(std::complex<double>), reference_bytes(initial_value_),
-                    reference_bytes(override_value_)});
-      spec.output(override_out, "override_out")
-          .max_emits_per_compute(1U)
-          .produces_tensor(holoscan::radar::pooled_tensor_output(kWaveform, 1U, max_bytes));
-    } else {
-      spec.output(override_out, "override_out");
-    }
+    detail::setup_live_output(spec, override_out, initial_value_, override_value_);
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -443,51 +497,20 @@ class PerfTensorOverrideSourceOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
       holoscan::ExecutionContext& context) override {
-    std::shared_ptr<holoscan::Tensor> frame;
-    PerfPublishMode mode = PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(PerfFrameBank::mutex);
-      if (PerfFrameBank::in_flight != 0 || PerfFrameBank::frames_remaining <= 0 ||
-          PerfFrameBank::input_frame == nullptr) {
-        return {};
-      }
-      --PerfFrameBank::frames_remaining;
-      frame = PerfFrameBank::input_frame;
-      mode = PerfFrameBank::publish_mode;
-      detail::record_start_locked();
-    }
+    auto staged = detail::take_staged_frames<1>();
+    if (!staged)
+      return {};
+    const auto& frames = staged->frames;
+    const auto mode = staged->mode;
     if (!one_shot_ || frame_index_ == override_at_ || (prime_changed_ && frame_index_ == 0)) {
       const Value& value = (frame_index_ == override_at_ || (prime_changed_ && frame_index_ == 0))
                                ? override_value_
                                : initial_value_;
-      if constexpr (std::is_same_v<Value, WireFMCWWaveform>) {
-        auto reference = wire_bridge_detail::read_host_vector<std::complex<double>>(
-            value.reference_samples, DLDataType{kDLComplex, 128U, 1U}, "reference_samples");
-        if (!reference)
-          return holoscan::make_unexpected(std::move(reference).error());
-        const std::array<int64_t, 1> shape{static_cast<int64_t>(reference->size())};
-        auto loan = override_out.allocate_tensor(
-            holoscan::TensorLoanRequest{.shape = shape, .dtype = DLDataType{kDLComplex, 128U, 1U}});
-        if (!loan)
-          return holoscan::make_unexpected(std::move(loan).error());
-        auto written = loan->write_host_and_commit(
-            [&reference](const holoscan::TensorOutputWriteGuard& writer) {
-              std::copy(reference->begin(), reference->end(),
-                        writer.data_as<std::complex<double>>());
-            });
-        if (!written)
-          return holoscan::make_unexpected(std::move(written).error());
-        HOLOSCAN_RETURN_IF_ERROR(override_out.emit_tensor(
-            std::move(*loan), Value(value),
-            holoscan::EmitOptions{.capture_time = context.activation_time()}));
-      } else {
-        HOLOSCAN_RETURN_IF_ERROR(override_out.emit(
-            value, holoscan::EmitOptions{.capture_time = context.activation_time()}));
-      }
+      HOLOSCAN_RETURN_IF_ERROR(detail::emit_live_value(override_out, context, value));
       detail::record_live_emission(frame_index_);
     }
     ++frame_index_;
-    return detail::emit_device_frame(out, context, frame, mode);
+    return detail::emit_device_frame(out, context, frames[0], mode);
   }
 
   holoscan::Output<holoscan::Tensor> out{"out"};
@@ -535,19 +558,11 @@ class PerfTensorWindowOverrideSourceOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
       holoscan::ExecutionContext& context) override {
-    std::shared_ptr<holoscan::Tensor> frame;
-    PerfPublishMode mode = PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(PerfFrameBank::mutex);
-      if (PerfFrameBank::in_flight != 0 || PerfFrameBank::frames_remaining <= 0 ||
-          PerfFrameBank::input_frame == nullptr) {
-        return {};
-      }
-      --PerfFrameBank::frames_remaining;
-      frame = PerfFrameBank::input_frame;
-      mode = PerfFrameBank::publish_mode;
-      detail::record_start_locked();
-    }
+    auto staged = detail::take_staged_frames<1>();
+    if (!staged)
+      return {};
+    const auto& frames = staged->frames;
+    const auto mode = staged->mode;
     if (!one_shot_ || frame_index_ == override_at_) {
       const WindowSpec& value = frame_index_ == override_at_ ? override_value_ : initial_value_;
       const std::array<int64_t, 1> shape{static_cast<int64_t>(value.coefficients.size())};
@@ -570,7 +585,7 @@ class PerfTensorWindowOverrideSourceOp final : public holoscan::Operator<> {
       detail::record_live_emission(frame_index_);
     }
     ++frame_index_;
-    return detail::emit_device_frame(out, context, frame, mode);
+    return detail::emit_device_frame(out, context, frames[0], mode);
   }
 
   holoscan::Output<holoscan::Tensor> out{"out"};
@@ -618,18 +633,11 @@ class PerfTensorVectorOverrideSourceOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
       holoscan::ExecutionContext& context) override {
-    std::shared_ptr<holoscan::Tensor> frame;
-    PerfPublishMode mode = PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(PerfFrameBank::mutex);
-      if (PerfFrameBank::in_flight != 0 || PerfFrameBank::frames_remaining <= 0 ||
-          PerfFrameBank::input_frame == nullptr)
-        return {};
-      --PerfFrameBank::frames_remaining;
-      frame = PerfFrameBank::input_frame;
-      mode = PerfFrameBank::publish_mode;
-      detail::record_start_locked();
-    }
+    auto staged = detail::take_staged_frames<1>();
+    if (!staged)
+      return {};
+    const auto& frames = staged->frames;
+    const auto mode = staged->mode;
     if (!one_shot_ || frame_index_ == override_at_) {
       constexpr DLDataType kDtype = std::is_same_v<Element, double> ? DLDataType{kDLFloat, 64U, 1U}
                                                                     : DLDataType{kDLInt, 64U, 1U};
@@ -650,7 +658,7 @@ class PerfTensorVectorOverrideSourceOp final : public holoscan::Operator<> {
       detail::record_live_emission(frame_index_);
     }
     ++frame_index_;
-    return detail::emit_device_frame(out, context, frame, mode);
+    return detail::emit_device_frame(out, context, frames[0], mode);
   }
 
   holoscan::Output<holoscan::Tensor> out{"out"};
@@ -690,23 +698,13 @@ class PerfDualTensorSourceOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
       holoscan::ExecutionContext& context) override {
-    std::shared_ptr<holoscan::Tensor> a;
-    std::shared_ptr<holoscan::Tensor> b;
-    PerfPublishMode mode = PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(PerfFrameBank::mutex);
-      if (PerfFrameBank::in_flight != 0 || PerfFrameBank::frames_remaining <= 0 ||
-          PerfFrameBank::input_frame == nullptr || PerfFrameBank::input_frame_b == nullptr) {
-        return {};
-      }
-      --PerfFrameBank::frames_remaining;
-      a = PerfFrameBank::input_frame;
-      b = PerfFrameBank::input_frame_b;
-      mode = PerfFrameBank::publish_mode;
-      detail::record_start_locked();
-    }
-    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(out_a, context, a, mode));
-    return detail::emit_device_frame(out_b, context, b, mode);
+    auto staged = detail::take_staged_frames<2>();
+    if (!staged)
+      return {};
+    const auto& frames = staged->frames;
+    const auto mode = staged->mode;
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(out_a, context, frames[0], mode));
+    return detail::emit_device_frame(out_b, context, frames[1], mode);
   }
 
   holoscan::Output<holoscan::Tensor> out_a{"out_a"};
@@ -735,26 +733,7 @@ class PerfDualTensorOverrideSourceOp final : public holoscan::Operator<> {
     spec.output(out_b, "out_b")
         .produces_tensor(
             holoscan::radar::pooled_tensor_output(kDevice, 8U, PerfFrameBank::span_b()));
-    if constexpr (std::is_same_v<Value, WireFMCWWaveform>) {
-      constexpr holoscan::TensorRepresentation kWaveform{
-          .memory_kind = holoscan::MemoryKind::kHost,
-          .dtype = DLDataType{kDLComplex, 128U, 1U},
-          .rank = 1U,
-      };
-      const auto reference_bytes = [](const WireFMCWWaveform& waveform) {
-        return waveform.reference_samples
-                   ? static_cast<std::size_t>(waveform.reference_samples->nbytes())
-                   : 0U;
-      };
-      const std::size_t max_bytes =
-          std::max({sizeof(std::complex<double>), reference_bytes(initial_value_),
-                    reference_bytes(override_value_)});
-      spec.output(override_out, "override_out")
-          .max_emits_per_compute(1U)
-          .produces_tensor(holoscan::radar::pooled_tensor_output(kWaveform, 1U, max_bytes));
-    } else {
-      spec.output(override_out, "override_out");
-    }
+    detail::setup_live_output(spec, override_out, initial_value_, override_value_);
   }
 
   [[nodiscard]] holoscan::Contract contract() const override {
@@ -765,52 +744,19 @@ class PerfDualTensorOverrideSourceOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
       holoscan::ExecutionContext& context) override {
-    std::shared_ptr<holoscan::Tensor> a;
-    std::shared_ptr<holoscan::Tensor> b;
-    PerfPublishMode mode = PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(PerfFrameBank::mutex);
-      if (PerfFrameBank::in_flight != 0 || PerfFrameBank::frames_remaining <= 0 ||
-          PerfFrameBank::input_frame == nullptr || PerfFrameBank::input_frame_b == nullptr) {
-        return {};
-      }
-      --PerfFrameBank::frames_remaining;
-      a = PerfFrameBank::input_frame;
-      b = PerfFrameBank::input_frame_b;
-      mode = PerfFrameBank::publish_mode;
-      detail::record_start_locked();
-    }
+    auto staged = detail::take_staged_frames<2>();
+    if (!staged)
+      return {};
+    const auto& frames = staged->frames;
+    const auto mode = staged->mode;
     if (!one_shot_ || frame_index_ == override_at_) {
       const Value& value = frame_index_ == override_at_ ? override_value_ : initial_value_;
-      if constexpr (std::is_same_v<Value, WireFMCWWaveform>) {
-        auto reference = wire_bridge_detail::read_host_vector<std::complex<double>>(
-            value.reference_samples, DLDataType{kDLComplex, 128U, 1U}, "reference_samples");
-        if (!reference)
-          return holoscan::make_unexpected(std::move(reference).error());
-        const std::array<int64_t, 1> shape{static_cast<int64_t>(reference->size())};
-        auto loan = override_out.allocate_tensor(
-            holoscan::TensorLoanRequest{.shape = shape, .dtype = DLDataType{kDLComplex, 128U, 1U}});
-        if (!loan)
-          return holoscan::make_unexpected(std::move(loan).error());
-        auto written = loan->write_host_and_commit(
-            [&reference](const holoscan::TensorOutputWriteGuard& writer) {
-              std::copy(reference->begin(), reference->end(),
-                        writer.data_as<std::complex<double>>());
-            });
-        if (!written)
-          return holoscan::make_unexpected(std::move(written).error());
-        HOLOSCAN_RETURN_IF_ERROR(override_out.emit_tensor(
-            std::move(*loan), Value(value),
-            holoscan::EmitOptions{.capture_time = context.activation_time()}));
-      } else {
-        HOLOSCAN_RETURN_IF_ERROR(override_out.emit(
-            value, holoscan::EmitOptions{.capture_time = context.activation_time()}));
-      }
+      HOLOSCAN_RETURN_IF_ERROR(detail::emit_live_value(override_out, context, value));
       detail::record_live_emission(frame_index_);
     }
     ++frame_index_;
-    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(out_a, context, a, mode));
-    return detail::emit_device_frame(out_b, context, b, mode);
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(out_a, context, frames[0], mode));
+    return detail::emit_device_frame(out_b, context, frames[1], mode);
   }
 
   holoscan::Output<holoscan::Tensor> out_a{"out_a"};
@@ -853,27 +799,14 @@ class PerfTripleTensorSourceOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
       holoscan::ExecutionContext& context) override {
-    std::shared_ptr<holoscan::Tensor> a;
-    std::shared_ptr<holoscan::Tensor> b;
-    std::shared_ptr<holoscan::Tensor> c;
-    PerfPublishMode mode = PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(PerfFrameBank::mutex);
-      if (PerfFrameBank::in_flight != 0 || PerfFrameBank::frames_remaining <= 0 ||
-          PerfFrameBank::input_frame == nullptr || PerfFrameBank::input_frame_b == nullptr ||
-          PerfFrameBank::input_frame_c == nullptr) {
-        return {};
-      }
-      --PerfFrameBank::frames_remaining;
-      a = PerfFrameBank::input_frame;
-      b = PerfFrameBank::input_frame_b;
-      c = PerfFrameBank::input_frame_c;
-      mode = PerfFrameBank::publish_mode;
-      detail::record_start_locked();
-    }
-    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(out_a, context, a, mode));
-    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(out_b, context, b, mode));
-    return detail::emit_device_frame(out_c, context, c, mode);
+    auto staged = detail::take_staged_frames<3>();
+    if (!staged)
+      return {};
+    const auto& frames = staged->frames;
+    const auto mode = staged->mode;
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(out_a, context, frames[0], mode));
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(out_b, context, frames[1], mode));
+    return detail::emit_device_frame(out_c, context, frames[2], mode);
   }
 
   holoscan::Output<holoscan::Tensor> out_a{"out_a"};
@@ -881,7 +814,6 @@ class PerfTripleTensorSourceOp final : public holoscan::Operator<> {
   holoscan::Output<holoscan::Tensor> out_c{"out_c"};
 };
 
-// Timed terminal sink: syncs the device and records end timestamps.
 // MultiSourceExpansionOp has six data inputs. Keep them on the same clock and
 // reuse the same one-frame-in-flight timing discipline as the smaller sources.
 class PerfSixTensorSourceOp final : public holoscan::Operator<> {
@@ -911,19 +843,11 @@ class PerfSixTensorSourceOp final : public holoscan::Operator<> {
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
       holoscan::ExecutionContext& context) override {
-    std::array<std::shared_ptr<holoscan::Tensor>, 6> frames;
-    PerfPublishMode mode = PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(PerfFrameBank::mutex);
-      if (PerfFrameBank::in_flight != 0 || PerfFrameBank::frames_remaining <= 0)
-        return {};
-      --PerfFrameBank::frames_remaining;
-      frames = {PerfFrameBank::input_frame,   PerfFrameBank::input_frame_b,
-                PerfFrameBank::input_frame_c, PerfFrameBank::input_frame_d,
-                PerfFrameBank::input_frame_e, PerfFrameBank::input_frame_f};
-      mode = PerfFrameBank::publish_mode;
-      detail::record_start_locked();
-    }
+    auto staged = detail::take_staged_frames<6>();
+    if (!staged)
+      return {};
+    const auto& frames = staged->frames;
+    const auto mode = staged->mode;
     HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(a, context, frames[0], mode));
     HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(b, context, frames[1], mode));
     HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(c, context, frames[2], mode));
@@ -962,24 +886,11 @@ class PerfLiveSourceOp final : public holoscan::Operator<>, public Sidebands {
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
       holoscan::ExecutionContext& context) override {
-    std::array<std::shared_ptr<holoscan::Tensor>, sizeof...(DataPorts)> frames;
-    PerfPublishMode mode = PerfPublishMode::kCopy;
-    {
-      const std::lock_guard lock(PerfFrameBank::mutex);
-      if (PerfFrameBank::in_flight != 0 || PerfFrameBank::frames_remaining <= 0 ||
-          PerfFrameBank::input_frame == nullptr ||
-          (frames.size() > 1 && PerfFrameBank::input_frame_b == nullptr) ||
-          (frames.size() > 2 && PerfFrameBank::input_frame_c == nullptr))
-        return {};
-      --PerfFrameBank::frames_remaining;
-      frames[0] = PerfFrameBank::input_frame;
-      if constexpr (sizeof...(DataPorts) > 1)
-        frames[1] = PerfFrameBank::input_frame_b;
-      if constexpr (sizeof...(DataPorts) > 2)
-        frames[2] = PerfFrameBank::input_frame_c;
-      mode = PerfFrameBank::publish_mode;
-      detail::record_start_locked();
-    }
+    auto staged = detail::take_staged_frames<sizeof...(DataPorts)>();
+    if (!staged)
+      return {};
+    const auto& frames = staged->frames;
+    const auto mode = staged->mode;
     if (frame_index_ == override_at_) {
       HOLOSCAN_RETURN_IF_ERROR(Sidebands::emit_override(context));
       detail::record_live_emission(frame_index_);

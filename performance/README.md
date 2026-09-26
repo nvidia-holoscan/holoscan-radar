@@ -50,9 +50,37 @@ contract. The source and sink capture paired per-frame timestamps.
 multi-port descriptor payloads. Keep input generation, typed HSDK ports,
 `MaxTensorExtents`, and operator-specific scale calculations in the adapter.
 The shared `perf_payloads.hpp` helpers set up typed host/device source ports
-and emit angle geometry, windows, coordinate vectors, smoothing, and scalar
+and emit geometry, windows, double/int64 host vectors, smoothing, and scalar
 sidebands. The unit-test harness remains suitable for correctness checks; its
 bounded output snapshots add copies and lack the paired timestamps used here.
+
+### Onboarding trial: DDM power fold
+
+All 26 current C++ operators already have performance drivers. To check the
+new-operator path, the smallest existing driver, `perf_ddm_power_fold.cpp`, was
+used as a fresh-adapter walkthrough. The required work is:
+
+1. Choose three valid input shapes and curated cases in the YAML suite. The
+   shared loader supplies size selection and case IDs; `--validate` checks
+   every case before any Graph work.
+2. Decode one typed scenario and reject contract-invalid parameters. For this
+   operator the rank-4 shape and Doppler divisibility by TX count are specific
+   to its locked API.
+3. Stage a valid input tensor, create `DDMPowerFoldOp<float>` with its
+   `MaxTensorExtents` and descriptor, connect the named data/output ports, and
+   choose a terminal sink. These typed choices remain in the adapter.
+4. Describe input/output scale in `base_row`, then register one CMake target
+   name. `--list-cases` checks ordering; the generated Minimal smoke checks
+   Graph execution and a complete report without a speed threshold.
+
+The existing no-live adapter is 117 lines, including includes and a throughput
+unit. Its remaining custom code is the descriptor, valid tensor shape,
+operator construction, named port wiring, and scale calculation. A live
+operator also declares typed sideband ports and maps each YAML override to a
+valid payload; `perf_payloads.hpp` supplies pool setup and common payload
+codecs. The shared source claims staged frames and timestamps for one, two,
+three, or six inputs. Separate source classes retain the HSDK port names and
+payload types expected by each Graph connection.
 
 ## YAML profiles and scopes
 

@@ -3,7 +3,7 @@
 
 // Performance characterization for CFARDetectorOp — runs a matrix of scenarios
 // (size ladder, batch tiers, CFAR variants, footprints, NCI, peak modes) in
-// one session and emits a single unified report. Measurement tool only: no
+// independent Graph sessions and emits one report. Measurement tool only: no
 // timing assertions.
 //
 // Graph-based harness with one-frame Exact live overrides and Params reversion.
@@ -38,6 +38,7 @@
 #include "utils/perf_app.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
+#include "utils/perf_payloads.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
@@ -144,25 +145,6 @@ std::vector<double> precompute_alpha_lut(const CfarScenario& scen) {
   return {};
 }
 
-template <typename Element>
-holoscan::expected<void, holoscan::Error> emit_host_vector(
-    holoscan::Output<holoscan::Tensor>& output, const std::vector<Element>& values,
-    holoscan::TimePoint time) {
-  constexpr DLDataType dtype =
-      std::is_same_v<Element, double> ? DLDataType{kDLFloat, 64U, 1U} : DLDataType{kDLInt, 64U, 1U};
-  const std::array<int64_t, 1> shape{static_cast<int64_t>(values.size())};
-  auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
-  if (!loan)
-    return holoscan::make_unexpected(std::move(loan).error());
-  auto written =
-      loan->write_host_and_commit([&values](const holoscan::TensorOutputWriteGuard& writer) {
-        std::copy(values.begin(), values.end(), writer.data_as<Element>());
-      });
-  if (!written)
-    return holoscan::make_unexpected(std::move(written).error());
-  return output.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = time});
-}
-
 struct LivePorts {
  public:
   explicit LivePorts(CfarScenario scenario) : scenario_(std::move(scenario)) {
@@ -174,26 +156,16 @@ struct LivePorts {
     }
   }
   void setup(holoscan::OperatorSpec& spec) {
-    constexpr holoscan::TensorRepresentation device{.memory_kind =
-                                                        holoscan::MemoryKind::kCudaDevice};
-    constexpr holoscan::TensorRepresentation host_double{.memory_kind = holoscan::MemoryKind::kHost,
-                                                         .dtype = DLDataType{kDLFloat, 64U, 1U},
-                                                         .rank = 1U};
-    constexpr holoscan::TensorRepresentation host_int{.memory_kind = holoscan::MemoryKind::kHost,
-                                                      .dtype = DLDataType{kDLInt, 64U, 1U},
-                                                      .rank = 1U};
-    spec.output(out).produces_tensor(
-        hr::pooled_tensor_output(device, 8U, perf::PerfFrameBank::span_a()));
-    spec.output(os_rank).max_emits_per_compute(1U);
-    spec.output(guard_cells).max_emits_per_compute(1U);
-    spec.output(training_cells).max_emits_per_compute(1U);
-    spec.output(pfa).max_emits_per_compute(1U);
-    spec.output(alpha_lut).max_emits_per_compute(1U).produces_tensor(
-        hr::pooled_tensor_output(host_double, 1U, 4096U * sizeof(double)));
-    spec.output(threshold_scale).max_emits_per_compute(1U);
-    spec.output(nci_axes).max_emits_per_compute(1U).produces_tensor(
-        hr::pooled_tensor_output(host_int, 1U, 4U * sizeof(int64_t)));
-    spec.output(max_detections).max_emits_per_compute(1U);
+    perf::setup_device_input(spec, out, perf::PerfFrameBank::span_a());
+    perf::setup_scalar_payload(spec, os_rank);
+    perf::setup_scalar_payload(spec, guard_cells);
+    perf::setup_scalar_payload(spec, training_cells);
+    perf::setup_scalar_payload(spec, pfa);
+    perf::setup_host_payload(spec, alpha_lut, 1U, 1U);
+    perf::setup_scalar_payload(spec, threshold_scale);
+    perf::setup_host_payload(spec, nci_axes, 1U, 1U, DLDataType{kDLInt, 64U, 1U},
+                             4U * sizeof(int64_t));
+    perf::setup_scalar_payload(spec, max_detections);
   }
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
@@ -201,24 +173,22 @@ struct LivePorts {
     const auto time = context.activation_time();
     holoscan::expected<void, holoscan::Error> emitted;
     if (scenario_.live_port == "os_rank")
-      emitted = os_rank.emit(scenario_.os_rank > 0 ? scenario_.os_rank - 1 : 0,
-                             holoscan::EmitOptions{.capture_time = time});
+      emitted = perf::emit_scalar_payload(os_rank,
+                                          scenario_.os_rank > 0 ? scenario_.os_rank - 1 : 0, time);
     else if (scenario_.live_port == "guard_cells")
-      emitted = guard_cells.emit(hr::CfarCellWindowOverride{0, 0},
-                                 holoscan::EmitOptions{.capture_time = time});
+      emitted = perf::emit_scalar_payload(guard_cells, hr::CfarCellWindowOverride{0, 0}, time);
     else if (scenario_.live_port == "training_cells")
-      emitted = training_cells.emit(hr::CfarCellWindowOverride{3, 3},
-                                    holoscan::EmitOptions{.capture_time = time});
+      emitted = perf::emit_scalar_payload(training_cells, hr::CfarCellWindowOverride{3, 3}, time);
     else if (scenario_.live_port == "pfa")
-      emitted = pfa.emit(1e-3, holoscan::EmitOptions{.capture_time = time});
+      emitted = perf::emit_scalar_payload(pfa, 1e-3, time);
     else if (scenario_.live_port == "alpha_lut")
-      emitted = emit_host_vector(alpha_lut, changed_alpha_lut_, time);
+      emitted = perf::emit_host_vector(alpha_lut, changed_alpha_lut_, time);
     else if (scenario_.live_port == "threshold_scale")
-      emitted = threshold_scale.emit(1.1, holoscan::EmitOptions{.capture_time = time});
+      emitted = perf::emit_scalar_payload(threshold_scale, 1.1, time);
     else if (scenario_.live_port == "nci_axes")
-      emitted = emit_host_vector(nci_axes, std::vector<int64_t>{0}, time);
+      emitted = perf::emit_host_vector(nci_axes, std::vector<int64_t>{0}, time);
     else if (scenario_.live_port == "max_detections")
-      emitted = max_detections.emit(100, holoscan::EmitOptions{.capture_time = time});
+      emitted = perf::emit_scalar_payload(max_detections, int64_t{100}, time);
     if (!emitted)
       return emitted;
     return {};
@@ -240,7 +210,12 @@ struct LivePorts {
 
 using LiveSource = perf::PerfLiveSourceOp<LivePorts, &LivePorts::out>;
 
-perf::TimingCollector run_graph_prepared(const CfarScenario& scen, const perf::RunPlan& plan) {
+perf::TimingCollector run_graph(const CfarScenario& scenario, const perf::RunPlan& plan) {
+  CfarScenario prepared = scenario;
+  if (prepared.use_alpha_lut && prepared.alpha_lut.empty()) {
+    prepared.alpha_lut = precompute_alpha_lut(prepared);
+  }
+  const CfarScenario& scen = prepared;
   auto input = perf::make_power_map_device<PerfPrecision>(scen.input_shape);
   using BaseOp = hr::CFARDetectorOp<PerfPrecision>;
   const auto build = [&](holoscan::Graph& graph, const auto& src,
@@ -445,14 +420,6 @@ void build_alpha_calibration_summary(perf::PerfReport* report) {
             [](const perf::AlphaCalibrationRow& a, const perf::AlphaCalibrationRow& b) {
               return a.pair_id < b.pair_id;
             });
-}
-
-perf::TimingCollector run_graph(const CfarScenario& scenario, const perf::RunPlan& plan) {
-  CfarScenario prepared = scenario;
-  if (prepared.use_alpha_lut && prepared.alpha_lut.empty()) {
-    prepared.alpha_lut = precompute_alpha_lut(prepared);
-  }
-  return run_graph_prepared(prepared, plan);
 }
 
 void decorate_row(perf::ResultRow& row, const CfarScenario& scen) {

@@ -8,8 +8,8 @@
 //
 //  Graph-based rewrite via run_perf_graph_triple (labels /
 // detection_idx / points co-emitted on the same OnClock tick). Mid-session
-// [live] representative / feature_weights / score_method override timing is
-// not part of this harness. Params select the policy under test.
+// [live] representative / feature_weights / score_method overrides share
+// the same one-frame Exact source timing path as other adapters.
 
 #include <cuda_runtime_api.h>
 
@@ -36,6 +36,7 @@
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/perf_driver.hpp"
 #include "utils/perf_graph.hpp"
+#include "utils/perf_payloads.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
@@ -127,54 +128,36 @@ struct LivePorts {
  public:
   LivePorts(std::string port, int64_t features) : port_(std::move(port)), features_(features) {}
   void setup(holoscan::OperatorSpec& spec) {
-    constexpr holoscan::TensorRepresentation device{.memory_kind =
-                                                        holoscan::MemoryKind::kCudaDevice};
-    constexpr holoscan::TensorRepresentation host{.memory_kind = holoscan::MemoryKind::kHost,
-                                                  .dtype = DLDataType{kDLFloat, 64U, 1U},
-                                                  .rank = 1U};
-    spec.output(out_a).produces_tensor(
-        hr::pooled_tensor_output(device, 8U, perf::PerfFrameBank::span_a()));
-    spec.output(out_b).produces_tensor(
-        hr::pooled_tensor_output(device, 8U, perf::PerfFrameBank::span_b()));
-    spec.output(out_c).produces_tensor(
-        hr::pooled_tensor_output(device, 8U, perf::PerfFrameBank::span_c()));
-    spec.output(representative).max_emits_per_compute(1U);
-    spec.output(score_method).max_emits_per_compute(1U);
-    spec.output(feature_weights)
-        .max_emits_per_compute(1U)
-        .produces_tensor(
-            hr::pooled_tensor_output(host, 1U, static_cast<size_t>(features_) * sizeof(double)));
+    perf::setup_device_input(spec, out_a, perf::PerfFrameBank::span_a());
+    perf::setup_device_input(spec, out_b, perf::PerfFrameBank::span_b());
+    perf::setup_device_input(spec, out_c, perf::PerfFrameBank::span_c());
+    perf::setup_scalar_payload(spec, representative);
+    perf::setup_scalar_payload(spec, score_method);
+    perf::setup_host_payload(spec, feature_weights, 1U, 1U, DLDataType{kDLFloat, 64U, 1U},
+                             static_cast<size_t>(features_) * sizeof(double));
   }
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> emit_override(
       holoscan::ExecutionContext& context) {
     const auto time = context.activation_time();
     if (port_ == "representative") {
-      HOLOSCAN_RETURN_IF_ERROR(representative.emit(hr::RepresentativePolicy::kMedoid,
-                                                   holoscan::EmitOptions{.capture_time = time}));
-    } else if (port_ == "score_method") {
-      HOLOSCAN_RETURN_IF_ERROR(score_method.emit(hr::ScoreMethod::kWeightedL2,
-                                                 holoscan::EmitOptions{.capture_time = time}));
-    } else if (port_ == "feature_weights") {
-      constexpr DLDataType dtype{kDLFloat, 64U, 1U};
-      const std::array<int64_t, 1> shape{features_};
-      auto loan = feature_weights.allocate_tensor(
-          holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
-      if (!loan)
-        return holoscan::make_unexpected(std::move(loan).error());
-      auto written =
-          loan->write_host_and_commit([this](const holoscan::TensorOutputWriteGuard& writer) {
-            auto* data = writer.data_as<double>();
-            for (int64_t i = 0; i < features_; ++i)
+      return perf::emit_scalar_payload(representative, hr::RepresentativePolicy::kMedoid, time);
+    }
+    if (port_ == "score_method") {
+      return perf::emit_scalar_payload(score_method, hr::ScoreMethod::kWeightedL2, time);
+    }
+    if (port_ == "feature_weights") {
+      return perf::emit_host_vector_generated<double>(
+          feature_weights, features_,
+          [features = features_](double* data) {
+            for (int64_t i = 0; i < features; ++i)
               data[i] = i == 0 ? 2.0 : 1.0;
-          });
-      if (!written)
-        return holoscan::make_unexpected(std::move(written).error());
-      HOLOSCAN_RETURN_IF_ERROR(
-          feature_weights.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = time}));
+          },
+          time);
     }
     return {};
   }
+
   holoscan::Output<holoscan::Tensor> out_a{"out_a"};
   holoscan::Output<holoscan::Tensor> out_b{"out_b"};
   holoscan::Output<holoscan::Tensor> out_c{"out_c"};

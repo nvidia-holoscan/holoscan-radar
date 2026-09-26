@@ -234,8 +234,10 @@ in Jira.
       host-scan red flags before calling the operator performance-ready.
 
 Simple exemplar: `performance/cpp/perf_ddm_power_fold.cpp` and
-`performance/profiles/ddm_power_fold.yaml`. Use an angle estimator as the
-multi-port live-payload example.
+`performance/profiles/ddm_power_fold.yaml`. The `performance/README.md`
+onboarding trial walks through its remaining typed code. Use an angle
+estimator as the multi-port live-payload example; CFAR and DetectionReduction
+show double/int64 host-vector payloads.
 
 ---
 

@@ -5,8 +5,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -39,14 +42,15 @@ void setup_device_input(holoscan::OperatorSpec& spec, Output& output, std::size_
 
 template <typename Output>
 void setup_host_payload(holoscan::OperatorSpec& spec, Output& output, std::size_t rank,
-                        std::size_t slots) {
+                        std::size_t slots, DLDataType dtype = DLDataType{kDLFloat, 64U, 1U},
+                        std::size_t span = kHostPayloadSpan) {
   const holoscan::TensorRepresentation representation{
       .memory_kind = holoscan::MemoryKind::kHost,
-      .dtype = DLDataType{kDLFloat, 64U, 1U},
+      .dtype = dtype,
       .rank = rank,
   };
   spec.output(output).max_emits_per_compute(1U).produces_tensor(
-      hr::pooled_tensor_output(representation, slots, kHostPayloadSpan));
+      hr::pooled_tensor_output(representation, slots, span));
 }
 
 template <typename Value>
@@ -88,23 +92,43 @@ inline hr::ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
   return geom;
 }
 
-inline holoscan::expected<void, holoscan::Error> emit_host_vector(
-    holoscan::Output<holoscan::Tensor>& output, std::span<const double> values,
+template <typename Element, typename Fill>
+holoscan::expected<void, holoscan::Error> emit_host_vector_generated(
+    holoscan::Output<holoscan::Tensor>& output, int64_t count, Fill&& fill,
     holoscan::TimePoint capture_time) {
-  const std::array<int64_t, 1> shape{static_cast<int64_t>(values.size())};
-  constexpr DLDataType dtype{kDLFloat, 64U, 1U};
+  static_assert(std::is_same_v<Element, double> || std::is_same_v<Element, int64_t>);
+  const std::array<int64_t, 1> shape{count};
+  constexpr DLDataType dtype =
+      std::is_same_v<Element, double> ? DLDataType{kDLFloat, 64U, 1U} : DLDataType{kDLInt, 64U, 1U};
   auto loan = output.allocate_tensor(holoscan::TensorLoanRequest{.shape = shape, .dtype = dtype});
-  if (!loan) {
+  if (!loan)
     return holoscan::make_unexpected(std::move(loan).error());
-  }
-  auto written =
-      loan->write_host_and_commit([values](const holoscan::TensorOutputWriteGuard& writer) {
-        std::copy(values.begin(), values.end(), writer.data_as<double>());
+  auto written = loan->write_host_and_commit(
+      [fill = std::forward<Fill>(fill)](const holoscan::TensorOutputWriteGuard& writer) {
+        fill(writer.data_as<Element>());
       });
-  if (!written) {
+  if (!written)
     return holoscan::make_unexpected(std::move(written).error());
-  }
   return output.emit(std::move(*loan), holoscan::EmitOptions{.capture_time = capture_time});
+}
+
+template <typename Element>
+holoscan::expected<void, holoscan::Error> emit_host_vector(
+    holoscan::Output<holoscan::Tensor>& output, std::span<const Element> values,
+    holoscan::TimePoint capture_time) {
+  return emit_host_vector_generated<Element>(
+      output, static_cast<int64_t>(values.size()),
+      [values](Element* data) {
+        std::copy(values.begin(), values.end(), data);
+      },
+      capture_time);
+}
+
+template <typename Element>
+holoscan::expected<void, holoscan::Error> emit_host_vector(
+    holoscan::Output<holoscan::Tensor>& output, const std::vector<Element>& values,
+    holoscan::TimePoint capture_time) {
+  return emit_host_vector(output, std::span<const Element>{values}, capture_time);
 }
 
 template <typename Wire>
