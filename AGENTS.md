@@ -71,7 +71,7 @@ Rules that follow from "lockdown":
 | `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
 | `operators/fmcw/` | FMCW signal processing and MIMO marshaling |
 | `operators/sar/`, `operators/io/` | SAR formation, CPHD ingress, and tensor dump operators |
-| `applications/sar_formation/` | Five SAR formation modes with C++ fixture smoke tests |
+| `applications/sar/` | Five standalone SAR workflows with C++ fixture smoke tests |
 | `applications/fmcw/simo/` | Detect-then-beamform SIMO workflow |
 | `applications/fmcw/siso/` | Baseline SISO range-Doppler workflow |
 | `applications/fmcw/dense_beamforming/` | Dense beamform-then-detect SIMO workflow |

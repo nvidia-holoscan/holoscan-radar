@@ -324,17 +324,63 @@ if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     radar_add_test(app/test_fmcw_dashboard holoscan::fmcw_dashboard)
 endif()
 
-if(TARGET sar_formation)
-    set(SAR_SMOKE_DIR "${PROJECT_BINARY_DIR}/applications/sar_formation/cpp")
-    add_test(NAME SarFormationFixture
+set(SAR_SMOKE_DIR "${PROJECT_BINARY_DIR}/tests/cpp")
+set(SAR_APP_NAMES spotlight video_sar tiled_strip continuous_strip independent_images)
+set(SAR_COUNTS 1 5 5 5 2)
+set(SAR_DIMS "5x5" "5x5" "15x6" "15x6" "5x5")
+if(TARGET spotlight OR TARGET video_sar OR TARGET tiled_strip OR
+        TARGET continuous_strip OR TARGET independent_images)
+    add_test(NAME SarFixture
         COMMAND $<TARGET_FILE:generate_cphd_fixture>
-            "${SAR_SMOKE_DIR}/generated_smoke.cphd")
-    set_tests_properties(SarFormationFixture PROPERTIES FIXTURES_SETUP sar_cphd)
-    foreach(mode 01 02 03 04 05 01_viz)
-        add_test(NAME SarFormationMode${mode}Smoke
-            COMMAND $<TARGET_FILE:sar_formation>
-                "${SAR_SMOKE_DIR}/mode${mode}_generated_smoke.yaml")
-        set_tests_properties(SarFormationMode${mode}Smoke PROPERTIES
-            FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
-    endforeach()
+            "${SAR_SMOKE_DIR}/generated_sar_smoke.cphd")
+    set_tests_properties(SarFixture PROPERTIES FIXTURES_SETUP sar_cphd)
+endif()
+foreach(index RANGE 0 4)
+    list(GET SAR_APP_NAMES ${index} name)
+    list(GET SAR_COUNTS ${index} count)
+    list(GET SAR_DIMS ${index} dims)
+    if(TARGET ${name})
+        set(config_dir "${PROJECT_BINARY_DIR}/applications/sar/${name}/cpp")
+        foreach(variant smoke viz)
+            if(variant STREQUAL "viz")
+                set(config "${config_dir}/${name}_viz_generated_smoke.yaml")
+            else()
+                set(config "${config_dir}/${name}_generated_smoke.yaml")
+            endif()
+            add_test(NAME Sar_${name}_${variant}
+                COMMAND ${CMAKE_COMMAND}
+                    -DSAR_EXECUTABLE=$<TARGET_FILE:${name}>
+                    -DSAR_CONFIG=${config}
+                    -DSAR_COUNT=${count}
+                    -DSAR_DIMS=${dims}
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_smoke.cmake)
+            set_tests_properties(Sar_${name}_${variant} PROPERTIES
+                FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+        endforeach()
+        math(EXPR next_index "(${index} + 1) % 5")
+        list(GET SAR_APP_NAMES ${next_index} wrong_name)
+        set(wrong_config
+            "${PROJECT_BINARY_DIR}/applications/sar/${wrong_name}/cpp/${wrong_name}_generated_smoke.yaml")
+        if(TARGET ${wrong_name})
+            add_test(NAME Sar_${name}_rejects_other_topology
+                COMMAND ${CMAKE_COMMAND}
+                    -DSAR_EXECUTABLE=$<TARGET_FILE:${name}>
+                    -DSAR_CONFIG=${wrong_config}
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_reject.cmake)
+            set_tests_properties(Sar_${name}_rejects_other_topology PROPERTIES
+                FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+        endif()
+    endif()
+endforeach()
+
+if(TARGET spotlight)
+    set(spotlight_dir "${PROJECT_BINARY_DIR}/applications/sar/spotlight/cpp")
+    add_test(NAME Sar_spotlight_dump
+        COMMAND ${CMAKE_COMMAND}
+            -DSAR_EXECUTABLE=$<TARGET_FILE:spotlight>
+            -DSAR_CONFIG=${spotlight_dir}/spotlight_dump_generated_smoke.yaml
+            -DSAR_DUMP_PATH=${spotlight_dir}/spotlight_dump_0.npy
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_dump.cmake)
+    set_tests_properties(Sar_spotlight_dump PROPERTIES
+        FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
 endif()

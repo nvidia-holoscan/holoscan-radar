@@ -164,7 +164,9 @@ The Capella half of that coverage — every `CI4` and every `AmpSF` path — rid
 
 ## Demo application
 
-**One executable**, `applications/sar_formation/`, with a YAML per shipped mode — the [`fmcw_mimo`](../../../applications/fmcw_mimo/) pattern rather than an executable per mode. Modes 1–5 are three chain configurations of one spine, so separate executables would be the same `compose()` copied five times with different parameters.
+The current HSDK 5 implementation uses [five standalone SAR applications](../../../applications/sar/README.md), each with its own graph and descriptive YAML. The design discussion below records the earlier single-executable plan.
+
+**Historical application plan (superseded 2026-09-28).** The initial plan specified one executable, `applications/sar_formation/`, with a YAML per shipped mode — the [`fmcw_mimo`](../../../applications/fmcw_mimo/) pattern rather than an executable per mode. Modes 1–5 are three chain configurations of one spine, so separate executables would be the same `compose()` copied five times with different parameters.
 
 *This supersedes the earlier `applications/sar_backprojection/` naming.* The app forms images in several modes; only one of them is a plain spotlight backprojection.
 

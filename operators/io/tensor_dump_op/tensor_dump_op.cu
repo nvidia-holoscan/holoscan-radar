@@ -133,7 +133,8 @@ expected<void, Error> TensorDumpOp::compute(ExecutionContext& context) {
                 std::string("TensorDumpOp: stream sync failed: ") + cudaGetErrorString(synced)});
     }
   }
-  const std::vector<int64_t> shape(input.shape().begin(), input.shape().end());
+  const auto shape_view = input.shape();
+  const std::vector<int64_t> shape(shape_view.begin(), shape_view.end());
   try {
     if (p.format == TensorDumpFormat::kNpy) {
       npy::write(out_path, input.dtype(), shape, host_.data(), nbytes);

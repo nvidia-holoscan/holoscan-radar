@@ -2,8 +2,8 @@
 
 ## HSDK 5 implementation scope (2026-09-28)
 
-The C++ `sar_formation` app implements modes 1–5 in this document. Its
-[README](../../applications/sar_formation/README.md) contains the current
+Five C++ applications under `applications/sar/` implement modes 1–5 in this document. Their
+[README](../../../applications/sar/README.md) contains the current
 HSDK 5 Graph diagrams for each mode. Modes 6–9 and the operators in the
 deramped, direct-sampled, autofocus, and product branches remain planned.
 Historical diagrams below may use the source branch's metadata boundary and

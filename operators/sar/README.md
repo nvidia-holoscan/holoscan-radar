@@ -21,7 +21,7 @@ inputs. `PhaseCorrectionOp` likewise uses `range_profiles_out`.
 
 The [SAR operator contract](../../docs/planning/SAR/OPERATOR_API.md) defines
 shapes, defaults, and numerical conventions. The
-[sar_formation application](../../applications/sar_formation/README.md) shows
+[SAR applications](../../applications/sar/README.md) shows
 five runnable modes. `AutofocusOp`, direct-sampled and deramped branches, and
 standard-format product writers remain planned, not implemented in this port.
 The copied NVRadar kernels require the recorded review in the untracked

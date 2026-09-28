@@ -114,10 +114,26 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## SAR HSDK 5 port
 
+- **2026-09-28 — standalone SAR apps:** split the five SAR graphs into `spotlight`,
+  `video_sar`, `tiled_strip`, `continuous_strip`, and `independent_images`. Each
+  has an `APP_<name>` gate, YAML, metadata, README, and fixture smoke. The
+  former `sar_formation` command and mode-numbered app YAMLs are removed.
+  Shared SAR Graph driving and visualization live under `radar_app/sar/`;
+  library operator contracts are unchanged. A generated CPHD fixture gave
+  identical complex image tensors for every old/new pair (1, 5, 5, 5, and 2
+  images; maximum absolute difference 0). The app split also fixes a
+  `TensorDumpOp` shape-view lifetime bug exposed by that comparison. The
+  complete C++ build passed in the pinned HSDK 5 GPU image with Python off;
+  1024/1024 non-performance tests passed before the final focused additions,
+  then 17/17 SAR fixture, visualization, topology, and dump checks passed.
+  All five apps also built through their individual `APP_<name>` gates.
+  Repository-wide pinned pre-commit checks passed. Interactive X11 and
+  real-collection validation remain open in local `OPEN_ITEMS.md`.
+
 - **2026-09-28 — implemented and validating (deustice):** port the SAR C++/CUDA stack
   from `origin/dpc/sar-plan` in `deustice/sar-hsdk5`, based on `main-5x`.
-  This includes the six implemented library operators and `sar_formation`
-  modes 1–5. Python and performance code are deferred. The SAR contract gains
+  This includes the six implemented library operators and five standalone
+  `applications/sar/` workflows. Python and performance code are deferred. The SAR contract gains
   an explicit per-tick reader `stream_boundary` scalar because HSDK 5 has no
   arbitrary message-metadata key. Unresolved SAR questions are collected in a
   local untracked top-level `OPEN_ITEMS.md`. The six operators, five app modes,
