@@ -8,10 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 
-// Device path for SarImageToLutOp. Kept out of the Holoscan TU so
-// nvcc does not parse holoscan.hpp (that was the slow
-// sar_image_lut.cu.o). Windowing is on the displayed grid: |z|,
-// optional box-average, GPU percentile, uint8 LUT.
+// CUDA magnitude and percentile helpers for the HSDK 5 SarImageVizOp.
+// The display windows its downsampled positive-magnitude grid.
 
 void sar_image_magnitude_c64(const void* in, float* out, size_t count, cudaStream_t stream);
 void sar_image_magnitude_c128(const void* in, float* out, size_t count, cudaStream_t stream);

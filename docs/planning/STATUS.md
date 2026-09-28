@@ -126,7 +126,9 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   1018/1018 tests, including synthetic mode 1â€“5 and headless Holoviz smoke;
   the repository-wide pinned pre-commit suite passed. Final focused reruns
   cover test-harness corrections added after that full run. Public CPHD
-  collection validation and display-fidelity work remain open.
+  collection validation remains open. HSDK 5 visualization uses the
+  source-branch percentile window; compass, timeline, crop, and display hold
+  remain open in local `OPEN_ITEMS.md`.
 
 ## In flight / claims
 

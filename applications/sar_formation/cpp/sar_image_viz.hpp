@@ -29,6 +29,6 @@ class SarImageVizOp : public Operator<> {
 
  private:
   int64_t max_v_{0}, max_u_{0}, display_side_{0};
-  std::uint32_t* max_bits_{nullptr};
+  float* sampled_magnitude_{nullptr};
 };
 }  // namespace holoscan::radar::app::sar

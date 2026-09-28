@@ -142,8 +142,9 @@ manual runs, pass an application YAML and a local CPHD path:
 `visualize: true` opens a grayscale log-magnitude image via Holoviz when a
 usable X11 display exists; `headless: true` exercises offscreen rendering.
 `dump: true` writes the complex image through `TensorDumpOp`. The current
-raster uses a per-image maximum and a 30 dB window. The source branch's
-percentile window, compass, timeline, and display hold behavior remain open;
+raster uses the displayed grid's 99.8th-percentile magnitude as 0 dB
+and its 25th percentile as the floor, capped at a 30 dB window. The source
+branch's compass, timeline, crop, and display hold behavior remain open;
 see the untracked top-level `OPEN_ITEMS.md`. The app requires real collections
 to validate image quality and throughput; generated fixtures prove decoding,
 graph wiring, and simple point-target behavior only.

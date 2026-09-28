@@ -5,7 +5,7 @@ find_package(yaml-cpp REQUIRED)
 
 find_package(holoscan 5 CONFIG REQUIRED COMPONENTS core visualization)
 if(TARGET holoscan::visualization::op_holoviz)
-    add_library(sar_image_viz STATIC sar_image_viz.cu)
+    add_library(sar_image_viz STATIC sar_image_viz.cu sar_image_lut.cu)
     target_include_directories(sar_image_viz PRIVATE
         ${PROJECT_SOURCE_DIR}/operators
         ${PROJECT_SOURCE_DIR}/operators/common)

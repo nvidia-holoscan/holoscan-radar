@@ -460,7 +460,7 @@ inline int64_t display_downsample_factor(int64_t height, int64_t width, int64_t 
 }
 
 // Holoviz (width, height). Landscape when the lattice is taller
-// than wide (along-track on v), matching SarImageToLutOp.
+// than wide (along-track on v), matching SarImageVizOp.
 inline std::array<uint32_t, 2> holoviz_window_wh(int64_t num_v, int64_t num_u, int64_t max_side) {
   const int64_t factor = display_downsample_factor(num_v, num_u, max_side);
   const int64_t ov = num_v / factor;
