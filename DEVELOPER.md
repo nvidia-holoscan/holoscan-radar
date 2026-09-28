@@ -58,28 +58,40 @@ python -m pip install --extra-index-url https://pypi.nvidia.com --group cli --gr
 holoscan version
 ```
 
-The development Dockerfile installs the same groups. Run commands from the
-repository root, or pass `holoscan --project-root <path>` before the command.
-The HSDK 5 development container needs the local SDK image from
-[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md); pass it with `--base-img`.
+The development Dockerfile installs the same groups. Run the CLI from the
+repository root on the host, or pass `holoscan --project-root <path>` before the
+command. First build the HSDK 5 image from [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md),
+then build one named development image:
+
+```bash
+holoscan build-container --base-img <reported-image> --img holoscan-radar-dev:hsdk5
+```
+
+The following host commands reuse that image. The CLI starts a container for
+each command; no interactive container shell is required. Keep the same `--img`
+value throughout because the CLI otherwise derives a different image name for
+each project.
 
 | Command | What it does |
 | --- | --- |
-| `holoscan run-container --base-img <image>` | Build and start the development container |
-| `holoscan build simo --local` | Configure and build the example pipeline inside the HSDK 5 container |
-| `holoscan run simo --local` | Configure, build, and run the example pipeline inside the HSDK 5 container |
-| `holoscan test --local` | Configure, build, and run the test suite inside the HSDK 5 container |
-| `holoscan install holoscan-radar --dev` | Install a `.pth` hook so `import holoscan.radar` works in the selected Python environment |
-| `holoscan package holoscan-radar --local` | Build a native Debian package inside the HSDK 5 container |
-| `holoscan package holoscan-radar --local --pkg-generator=WHEEL` | Build a native Python package inside the HSDK 5 container |
+| `holoscan build holoscan-radar --language cpp --img holoscan-radar-dev:hsdk5 --no-docker-build` | Build the C++ module in the container |
+| `holoscan build simo --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-DBUILD_ALL=OFF --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF` | Build SIMO and its dependencies in the container |
+| `holoscan run simo --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-DBUILD_ALL=OFF --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF` | Build and run SIMO in the container |
+| `holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build` | Build and run the test suite in the container |
+| `holoscan package holoscan-radar --img holoscan-radar-dev:hsdk5 --no-docker-build` | Build the Debian package in the container |
+| `holoscan run-container --img holoscan-radar-dev:hsdk5 --no-docker-build` | Open an interactive container shell when needed |
 
+The focused app flags turn off `BUILD_ALL` and the test suite; without them,
+a standalone CMake build enables every app, operator, and test by default.
 `[tool.holoscan]` selects [`ci/container.ctest`](ci/container.ctest) for `holoscan test`.
 To try an unpublished CLI checkout, install it into the selected environment and
 run its `holoscan` command there.
 
 ---
 
-## Building directly with CMake
+## Building directly with CMake inside the container
+
+For manual debugging in an interactive development container:
 
 ```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
@@ -106,16 +118,17 @@ pytest tests/python/ -v
 
 ## Running the full suite with `holoscan test`
 
-`holoscan test` configures, builds, and tests inside the development container in one
-step — the containerized equivalent of the manual sequence above. Pass the local
-HSDK 5 image when invoking it on the host:
+From the host, `holoscan test` starts the named development image, configures
+and builds the module, and runs the suite in that container:
 
 ```bash
-holoscan test --base-img <reported-image>
-holoscan test --no-docker-build   # reuse an existing development image
-holoscan test --local             # from inside the HSDK 5 container
-holoscan test --local --dryrun --verbose
+holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build
+holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build --dryrun --verbose
 ```
+
+If the development image has not been built yet, run the `build-container`
+command above first. The test command can also build it with
+`--base-img <reported-image>` instead of `--no-docker-build`.
 
 What it does, and where to change it:
 
@@ -143,7 +156,7 @@ Useful escapes:
 | `--no-xvfb` | Skip the default `xvfb-run -a` wrapper |
 | `--cmake-options OPT` | Append a CMake configure flag (repeatable) |
 | `--ctest-options OPT` | Append a raw ctest argument (repeatable) |
-| `--local` | Run on the host instead of in the container |
+| `--local` | Run natively in the current environment; omit it for host-invoked container execution |
 
 A note on `xvfb`: it satisfies the CLI's default wrapper but does **not** make Holoviz
 render headlessly — that needs Vulkan support. Application smoke runs keep visualization

@@ -29,7 +29,8 @@ select its image with:
 ```bash
 ./.devcontainer/build-hsdk5-ea-image.sh \
   --pin 79dc6cb48e5b571b6f0a6daf2b5dbc783de01b76
-holoscan run-container --base-img holoscan-radar-hsdk5-ea:79dc6cb
+holoscan build-container --base-img holoscan-radar-hsdk5-ea:79dc6cb \
+  --img holoscan-radar-dev:hsdk5
 ```
 
 Use `--print-pin` to resolve the current branch tip and image name without
@@ -44,14 +45,22 @@ remote tip; if it does not, remove that pin's stale `.cache/holoscan-sdk-*`
 checkout and rebuild. Update `.devcontainer/devcontainer.json` when the
 commit-addressed image name changes.
 
-To use the image outside the dev container:
+Run the CLI on the host and let it execute builds, applications, and tests in
+the named development image:
 
 ```bash
-holoscan run-container --base-img <reported-image>
+holoscan build-container --base-img <reported-image> --img holoscan-radar-dev:hsdk5
+holoscan build holoscan-radar --language cpp --img holoscan-radar-dev:hsdk5 --no-docker-build
+holoscan run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --configure-args=-DBUILD_ALL=OFF \
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --run-args=siso_smoke.yaml
+holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build
 ```
 
-Inside the dev container, use `holoscan build --local`, `holoscan run --local`,
-and `holoscan test --local` so the CLI reuses the installed SDK.
+`holoscan run-container --img holoscan-radar-dev:hsdk5 --no-docker-build`
+opens an interactive shell if needed. Do not pass `--local` to the host commands:
+that flag runs the build or application on the host instead of in the container.
 
 ## Current packaging limitation
 

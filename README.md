@@ -12,24 +12,24 @@ in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 ## Quick start
 
 Install the development CLI as described in [`DEVELOPER.md`](DEVELOPER.md#holoscan-cli),
-then build the local HSDK 5 image:
+then run these commands on the host. The CLI performs the project build and
+application run in the named development container:
 
 ```bash
 ./.devcontainer/build-hsdk5-ea-image.sh
 ./.devcontainer/build-hsdk5-ea-image.sh --print-pin
-holoscan run-container --base-img <reported-image>
+holoscan build-container --base-img <reported-image> --img holoscan-radar-dev:hsdk5
+holoscan build siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --configure-args=-DBUILD_ALL=OFF \
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF
+holoscan run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --configure-args=-DBUILD_ALL=OFF \
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --run-args=siso_smoke.yaml
 ```
 
-Inside the container:
-
-```bash
-cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
-cmake --build build -j"$(nproc)"
-./build/applications/fmcw/siso/cpp/siso
-```
-
-The SISO executable uses `applications/fmcw/siso/config/siso.yaml` by default.
-Pass the smoke configuration explicitly for a two-frame headless run.
+The `--run-args=siso_smoke.yaml` example runs two headless frames. Omit that
+flag to use the SISO executable's default `siso.yaml` configuration.
 
 ## Operator groups
 
