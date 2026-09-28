@@ -1,0 +1,18 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+include "tensor.fbs";
+
+namespace holoscan.radar.wire;
+
+table CoordinateFrame {
+  frame: ubyte (id: 0);
+  origin_llh: holoscan.schema.Tensor (id: 1);
+  has_origin_llh: bool = false (id: 2);
+  epoch: double (id: 3);
+  has_epoch: bool = false (id: 4);
+  ellipsoid: ubyte (id: 5);
+}
+
+root_type CoordinateFrame;
+file_identifier "RCFR";

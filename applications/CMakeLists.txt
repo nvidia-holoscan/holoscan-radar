@@ -101,3 +101,13 @@ holoscan_radar_add_application(mimo_ddm
         detection_reduction_op
         cluster_dbscan_op
 )
+
+holoscan_radar_add_application(sar_formation
+    DIRECTORY sar_formation
+    DEPENDS OPERATORS
+        cphd_reader_op
+        sar_range_compression_op
+        aperture_manager_op
+        backprojection_op
+        tensor_dump_op
+)

@@ -42,6 +42,10 @@ inline MaxTensorExtents MaxTensorExtentsFromYaml(const YAML::Node& node) {
   }
   MaxTensorExtents extents;
   extents.max_samples_per_chirp = detail::optional_positive_i64(node, "max_samples_per_chirp");
+  extents.max_samples_per_pulse = detail::optional_positive_i64(node, "max_samples_per_pulse");
+  extents.max_pulses = detail::optional_positive_i64(node, "max_pulses");
+  extents.max_image_u = detail::optional_positive_i64(node, "max_image_u");
+  extents.max_image_v = detail::optional_positive_i64(node, "max_image_v");
   extents.max_chirps = detail::optional_positive_i64(node, "max_chirps");
   extents.max_range_bins = detail::optional_positive_i64(node, "max_range_bins");
   extents.max_doppler_bins = detail::optional_positive_i64(node, "max_doppler_bins");
@@ -77,6 +81,10 @@ struct convert<holoscan::radar::MaxTensorExtents> {
       }
     };
     put("max_samples_per_chirp", rhs.max_samples_per_chirp);
+    put("max_samples_per_pulse", rhs.max_samples_per_pulse);
+    put("max_pulses", rhs.max_pulses);
+    put("max_image_u", rhs.max_image_u);
+    put("max_image_v", rhs.max_image_v);
     put("max_chirps", rhs.max_chirps);
     put("max_range_bins", rhs.max_range_bins);
     put("max_doppler_bins", rhs.max_doppler_bins);

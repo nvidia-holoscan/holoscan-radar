@@ -1,0 +1,15 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+include "tensor.fbs";
+
+namespace holoscan.radar.wire;
+
+table SampleGeometry {
+  packed_axes: holoscan.schema.Tensor (id: 0);
+  num_v: long (id: 1);
+  num_u: long (id: 2);
+}
+
+root_type SampleGeometry;
+file_identifier "RSGE";

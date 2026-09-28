@@ -74,6 +74,14 @@ target_include_directories(test_perf_profiles PRIVATE
 target_compile_definitions(test_perf_profiles PRIVATE
     HOLOSCAN_RADAR_PERF_OPERATOR_ROOT="${PROJECT_SOURCE_DIR}/performance/operators")
 radar_add_test(common/test_sim)
+radar_add_test(sar/test_phase_correction holoscan::phase_correction_op)
+radar_add_test(sar/test_aperture_manager holoscan::aperture_manager_op)
+radar_add_test(sar/test_backprojection holoscan::backprojection_op)
+radar_add_test(sar/test_sar_range_compression holoscan::sar_range_compression_op)
+radar_add_test(io/test_tensor_dump holoscan::tensor_dump_op)
+radar_add_test(io/test_cphd_reader holoscan::cphd_reader_op)
+add_executable(generate_cphd_fixture io/generate_cphd_fixture.cpp)
+target_include_directories(generate_cphd_fixture PRIVATE ${PROJECT_SOURCE_DIR}/tests/cpp)
 radar_add_test(common/test_sim_gpu holoscan::radar_common_simulator)
 radar_add_test(common/test_tensor)
 radar_add_test(common/test_virtual_array)
@@ -314,4 +322,19 @@ target_include_directories(test_fmcw_simo_report PRIVATE
 
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     radar_add_test(app/test_fmcw_dashboard holoscan::fmcw_dashboard)
+endif()
+
+if(TARGET sar_formation)
+    set(SAR_SMOKE_DIR "${PROJECT_BINARY_DIR}/applications/sar_formation/cpp")
+    add_test(NAME SarFormationFixture
+        COMMAND $<TARGET_FILE:generate_cphd_fixture>
+            "${SAR_SMOKE_DIR}/generated_smoke.cphd")
+    set_tests_properties(SarFormationFixture PROPERTIES FIXTURES_SETUP sar_cphd)
+    foreach(mode 01 02 03 04 05 01_viz)
+        add_test(NAME SarFormationMode${mode}Smoke
+            COMMAND $<TARGET_FILE:sar_formation>
+                "${SAR_SMOKE_DIR}/mode${mode}_generated_smoke.yaml")
+        set_tests_properties(SarFormationMode${mode}Smoke PROPERTIES
+            FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+    endforeach()
 endif()

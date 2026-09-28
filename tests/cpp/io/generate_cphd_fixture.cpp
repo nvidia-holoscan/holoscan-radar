@@ -1,0 +1,22 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#include <exception>
+#include <iostream>
+
+#include "io/cphd_fixture.hpp"  // NOLINT(build/include_subdir)
+
+int main(int argc, char** argv) {
+  if (argc != 2) {
+    std::cerr << "usage: generate_cphd_fixture <path.cphd>\n";
+    return 2;
+  }
+  try {
+    const auto path = holoscan::radar::testing::cphd_fixture::make_fixture(argv[1]);
+    holoscan::radar::testing::cphd_fixture::write_truth(path);
+    return 0;
+  } catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    return 1;
+  }
+}

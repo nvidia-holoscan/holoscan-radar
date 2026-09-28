@@ -21,6 +21,10 @@ add_subdirectory(common)
 # CMakeLists.txt for grouped operators).
 add_subdirectory(fmcw)
 
+# SAR image-formation operators (ported slices are registered in the group).
+add_subdirectory(sar)
+add_subdirectory(io)
+
 # Detection operators (one add_holohub_operator() per operator inside).
 add_subdirectory(detection)
 

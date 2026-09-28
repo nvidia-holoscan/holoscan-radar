@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Mode-1 CI / bring-up: generated point-target fixture. Lattice and
+# stored-sample-N/2 frequency come from <stem>_truth.json beside the CPHD.
+#
+#   python3 tools/sar_sim/generate_cphd.py \
+#       tools/sar_sim/recipes/mode01_smoke.yaml -o /tmp/sar
+#   sar_formation mode01_smoke.yaml /tmp/sar/mode01_smoke.cphd
+
+cphd:
+  path: ""
+  sidecar: ""
+
+# dump: true writes a .npy (off by default).
+# output:
+#   path: /tmp/sar/mode01_smoke_image_{index}.npy
+
+cphd_reader:
+  coordinate_frame: ecef
+  pulses_per_tick: 256
+
+aperture_manager:
+  max_aperture_pulses: 0
+  emit_interval_pulses: 0
+  emit_mode: reset
+
+# No waveform: RC does not emit range_bins. BP gets spacing from
+# the CPHD (SCSS, num_samples); origin is the centred default.
+range_compression:
+  propagation_speed: 299792458.0
+
+backprojection:
+  coordinate_frame: ecef
+
+# CI / bring-up: no display. The Atlanta demo YAML turns this on.
+visualize: false

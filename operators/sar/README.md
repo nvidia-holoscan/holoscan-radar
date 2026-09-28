@@ -1,0 +1,29 @@
+# SAR formation operators
+
+The HSDK 5 C++/CUDA port implements four SAR library operators. The CPHD reader
+and tensor dump are in [operators/io](../io/README.md). All floating-point
+operators instantiate `<float>` and `<double>`; data ports use plain tensors
+with named axes. Fat outputs capture `MaxTensorExtents` when added to the graph.
+
+| Operator | Main data flow | Role |
+| --- | --- | --- |
+| `SARRangeCompressionOp<T>` | `phase_history` → `range_profiles` | Window, shift, inverse FFT and center the differential-range axis |
+| `ApertureManagerOp<T>` | pulse batch + typed boundary → managed batch + `control_out` | Retain, evict, weight, and flush pulses at aperture/collection boundaries |
+| `BackprojectionOp<T>` | managed profiles + positions + control → `image` | Accumulate complex images on a grid or sample points, with reset or scroll geometry |
+| `PhaseCorrectionOp<T>` | profiles + per-pulse phase → `range_profiles_out` | Apply a declared add/subtract phase convention |
+
+The manager joins `range_profiles`, `positions`, `reference_position`, and
+`stream_boundary` at the same capture time. Other `[live]` inputs use HSDK 5
+`Exact{}` with `SafeDefault{}` per tick. Optional outputs avoid computation
+when unwired. The range stage emits `range_window_out` and backprojection emits
+`sample_geometry_out` as descriptor outputs with distinct names from their
+inputs. `PhaseCorrectionOp` likewise uses `range_profiles_out`.
+
+The [SAR operator contract](../../docs/planning/SAR/OPERATOR_API.md) defines
+shapes, defaults, and numerical conventions. The
+[sar_formation application](../../applications/sar_formation/README.md) shows
+five runnable modes. `AutofocusOp`, direct-sampled and deramped branches, and
+standard-format product writers remain planned, not implemented in this port.
+The copied NVRadar kernels require the recorded review in the untracked
+`OPEN_ITEMS.md`; neither that review nor public-collection validation is
+implied by the synthetic C++ tests.

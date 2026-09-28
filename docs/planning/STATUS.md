@@ -112,6 +112,22 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 - **2026-08-31** — **An unconsumed optional output no longer kills the tick.** Nothing exposes an output's wiring to the operator, so it cannot tell "computable" from "wanted", and its emit to an unwired port fails. Wrapping that in `HOLOSCAN_TRY` propagated the failure out of `compute()` and failed the whole activation, so a graph that merely declined an optional output produced nothing and said nothing. First fix, since generalized by the 2026-09-01 entry: discard the result at the five conditional outputs; the failure is confined to that call and siblings still deliver (measured, 32 ticks). The emit helpers gained `[[nodiscard]]`, laundered away from `Output::emit` until now, so a forgotten check is a build error.
 - **2026-08-23** — **Mixed HSDK 5 `[live]` payload policy ratified (L18):** shared owning descriptors use generated `holoscan::radar::wire` descriptor-Tensor schemas; bounded fixed-layout tuples use ChannelPod; variable-length scalar vectors use rank-1 pageable-host `Input<Tensor>` with ctor-captured bounds. Logical Params/YAML types remain unchanged. The FMCW window/waveform schema path and SnapshotGather tuple are landed; other ports are implementation follow-up. Schema identity/evolution, EA generator workarounds, and the C++-only wire-object limitation remain locked in [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md).
 
+## SAR HSDK 5 port
+
+- **2026-09-28 — implemented and validating (deustice):** port the SAR C++/CUDA stack
+  from `origin/dpc/sar-plan` in `deustice/sar-hsdk5`, based on `main-5x`.
+  This includes the six implemented library operators and `sar_formation`
+  modes 1–5. Python and performance code are deferred. The SAR contract gains
+  an explicit per-tick reader `stream_boundary` scalar because HSDK 5 has no
+  arbitrary message-metadata key. Unresolved SAR questions are collected in a
+  local untracked top-level `OPEN_ITEMS.md`. The six operators, five app modes,
+  C++ fixture generator, C++ operator tests, and headless Holoviz smoke path
+  build in the pinned HSDK 5 GPU image. The non-performance C++ suite passed
+  1018/1018 tests, including synthetic mode 1–5 and headless Holoviz smoke;
+  the repository-wide pinned pre-commit suite passed. Final focused reruns
+  cover test-harness corrections added after that full run. Public CPHD
+  collection validation and display-fidelity work remain open.
+
 ## In flight / claims
 
 | Work | Owner | Branch | Status |
