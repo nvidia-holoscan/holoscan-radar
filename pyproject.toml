@@ -16,6 +16,15 @@ authors = [
 ]
 requires-python = ">=3.10"
 
+# Development tools stay out of the published radar wheel. The CLI requires
+# Python 3.11+; the radar wheel itself still supports Python 3.10.
+[dependency-groups]
+cli = ["holoscan-cli==5.0.0a2"]
+test = ["pytest==8.4.2", "pytest-timeout==2.4.0"]
+
+[tool.holoscan]
+ctest-script = "ci/container.ctest"
+
 # NOTE: holoscan SDK is not declared as a runtime dependency here because the
 # wheel cannot guarantee binary compatibility across CUDA variants (cu12/cu13).
 # Document the install command in the README.

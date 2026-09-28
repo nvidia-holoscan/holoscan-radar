@@ -9,10 +9,9 @@ distributing this Holoscan Module.
 
 ```text
 holoscan-radar/
-├── holohub                         # CLI wrapper (delegates to holoscan-cli)
+├── pyproject.toml                  # CLI, CTest, and wheel configuration
 ├── Dockerfile                      # Development container image
 ├── CMakeLists.txt                  # Root CMake — orchestrates operators/applications/tests
-├── pyproject.toml                  # Python packaging metadata (scikit-build-core)
 ├── metadata.json                   # Module-level metadata (schema: urn:holohub:module:v2)
 ├── operators/
 │   ├── common/                     # Shared radar_common library
@@ -45,31 +44,42 @@ holoscan-radar/
 
 ---
 
-## `holohub` wrapper commands
+## Holoscan CLI
 
-The `holohub` script at the module root wraps the `holoscan-cli` package with module-specific
-defaults. On first run it installs `holoscan-cli` via pip if it isn't already importable
-(internet required); subsequent runs reuse the installed copy.
+The development-only `cli` and `test` groups in [`pyproject.toml`](pyproject.toml)
+pin the Holoscan CLI and Python CTest dependencies. Install them into a Python
+3.11+ environment with pip 25.1+ (the groups are not part of the radar wheel):
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade 'pip>=25.1'
+python -m pip install --extra-index-url https://pypi.nvidia.com --group cli --group test
+holoscan version
+```
+
+The development Dockerfile installs the same groups. Run commands from the
+repository root, or pass `holoscan --project-root <path>` before the command.
+The HSDK 5 development container needs the local SDK image from
+[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md); pass it with `--base-img`.
 
 | Command | What it does |
 | --- | --- |
-| `./holohub run-container` | Build and start the development container |
-| `./holohub build simo` | Configure and build the example pipeline inside the container |
-| `./holohub run simo` | Configure, build, and run the example pipeline inside the container |
-| `./holohub test` | Configure, build, and run the test suite inside the container |
-| `./holohub install --dev` | Install a `.pth` hook so `import holoscan.radar` works in any shell |
-| `./holohub package holoscan-radar` | Build a native Debian package with Holoscan Radar operators |
-| `./holohub package holoscan-radar --pkg-generator=WHEEL` | Build a native Python 3.12 package with Holoscan Radar operators |
+| `holoscan run-container --base-img <image>` | Build and start the development container |
+| `holoscan build simo --local` | Configure and build the example pipeline inside the HSDK 5 container |
+| `holoscan run simo --local` | Configure, build, and run the example pipeline inside the HSDK 5 container |
+| `holoscan test --local` | Configure, build, and run the test suite inside the HSDK 5 container |
+| `holoscan install holoscan-radar --dev` | Install a `.pth` hook so `import holoscan.radar` works in the selected Python environment |
+| `holoscan package holoscan-radar --local` | Build a native Debian package inside the HSDK 5 container |
+| `holoscan package holoscan-radar --local --pkg-generator=WHEEL` | Build a native Python package inside the HSDK 5 container |
 
-Set `HOLOSCAN_CLI_INSTALL_ARGS` to override the pip install arguments. The
-wrapper forwards this value into Docker builds as the
-`HOLOSCAN_CLI_INSTALL_ARGS` build arg, so the development image installs the
-same CLI package spec as the host wrapper. Set `HOLOSCAN_CLI_SOURCE` to a local
-checkout for host-side CLI development.
+`[tool.holoscan]` selects [`ci/container.ctest`](ci/container.ctest) for `holoscan test`.
+To try an unpublished CLI checkout, install it into the selected environment and
+run its `holoscan` command there.
 
 ---
 
-## Building without the wrapper
+## Building directly with CMake
 
 ```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
@@ -94,22 +104,24 @@ pytest tests/python/ -v
 
 ---
 
-## Running the full suite with `./holohub test`
+## Running the full suite with `holoscan test`
 
-`./holohub test` configures, builds, and tests inside the development container in one
-step — the containerized equivalent of the manual sequence above.
+`holoscan test` configures, builds, and tests inside the development container in one
+step — the containerized equivalent of the manual sequence above. Pass the local
+HSDK 5 image when invoking it on the host:
 
 ```bash
-./holohub test                    # build the image if needed, then configure/build/test
-./holohub test --no-docker-build  # reuse the existing image (faster)
-./holohub test --dryrun --verbose # print the commands without running them
+holoscan test --base-img <reported-image>
+holoscan test --no-docker-build   # reuse an existing development image
+holoscan test --local             # from inside the HSDK 5 container
+holoscan test --local --dryrun --verbose
 ```
 
 What it does, and where to change it:
 
-- Runs [`ci/container.ctest`](ci/container.ctest), this module's CTest driver. The wrapper
-  points `HOLOSCAN_CLI_CTEST_SCRIPT` at it; the driver bundled with `holoscan-cli` resolves
-  its source directory inside the pip install tree and cannot see this repo.
+- Runs [`ci/container.ctest`](ci/container.ctest), this module's CTest driver, selected
+  by `pyproject.toml`. The driver bundled with `holoscan-cli` resolves its source directory
+  inside the pip install tree and cannot see this repo.
 - Builds into **`build-test/`**, a dedicated tree. The driver wipes it on every run, which
   is why it is deliberately not your `build/` directory.
 - Runs every tier except `performance`, which has its own invocation. That includes the
@@ -159,8 +171,9 @@ produce different layouts.
 
 ## `pyproject.toml`
 
-`pyproject.toml` configures [scikit-build-core](https://scikit-build-core.readthedocs.io/) for
-wheel packaging. Key fields to update before publishing:
+`pyproject.toml` configures CLI tooling and CTest as well as
+[scikit-build-core](https://scikit-build-core.readthedocs.io/) wheel packaging.
+Key fields to update before publishing:
 
 | Field | Purpose |
 | --- | --- |

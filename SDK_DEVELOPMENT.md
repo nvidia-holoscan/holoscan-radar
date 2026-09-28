@@ -29,7 +29,7 @@ select its image with:
 ```bash
 ./.devcontainer/build-hsdk5-ea-image.sh \
   --pin 79dc6cb48e5b571b6f0a6daf2b5dbc783de01b76
-./holohub run-container --base-img holoscan-radar-hsdk5-ea:79dc6cb
+holoscan run-container --base-img holoscan-radar-hsdk5-ea:79dc6cb
 ```
 
 Use `--print-pin` to resolve the current branch tip and image name without
@@ -47,11 +47,11 @@ commit-addressed image name changes.
 To use the image outside the dev container:
 
 ```bash
-./holohub run-container --base-img <reported-image>
+holoscan run-container --base-img <reported-image>
 ```
 
-Inside the dev container, use `./holohub build --local`, `run --local`, and
-`test --local` so HoloHub reuses the installed SDK.
+Inside the dev container, use `holoscan build --local`, `holoscan run --local`,
+and `holoscan test --local` so the CLI reuses the installed SDK.
 
 ## Current packaging limitation
 

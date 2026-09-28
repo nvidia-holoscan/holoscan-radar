@@ -5,16 +5,19 @@ Operators are implemented in C++/CUDA on MatX and compose through typed ports,
 without pipeline-specific glue between processing stages.
 
 Holoscan Radar currently targets the HSDK 5 `main-5x` development branch. Build
-the local SDK image once before opening the dev container or using HoloHub; the
+the local SDK image once before opening the dev container or using the Holoscan CLI; the
 temporary source-build workflow and current packaging limitation are documented
 in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 
 ## Quick start
 
+Install the development CLI as described in [`DEVELOPER.md`](DEVELOPER.md#holoscan-cli),
+then build the local HSDK 5 image:
+
 ```bash
 ./.devcontainer/build-hsdk5-ea-image.sh
 ./.devcontainer/build-hsdk5-ea-image.sh --print-pin
-./holohub run-container --base-img <reported-image>
+holoscan run-container --base-img <reported-image>
 ```
 
 Inside the container:
