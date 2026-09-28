@@ -231,7 +231,8 @@ int main(int argc, char** argv) {
                                  : cfg.parent_geometry.is_valid() ? cfg.parent_geometry
                                                                   : cfg.sample_geometry;
       auto raster = graph.op<app::sar::SarImageVizOp>("sar_image_viz", viz_geometry.num_v(),
-                                                      viz_geometry.num_u(), cfg.visualize_size);
+                                                      viz_geometry.num_u(), cfg.visualize_size,
+                                                      cfg.headless ? 0.0 : cfg.visualize_hold_s);
       application.add(raster);
       bind_outputs(options, "sar_image_viz", {"frame"});
       holoscan::visualization::LayerStack layers;

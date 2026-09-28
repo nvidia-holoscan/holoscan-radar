@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
+#include <thread>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -65,8 +67,8 @@ __global__ void render_gray(const float* magnitude, std::uint8_t* output, int64_
 }
 }  // namespace
 
-SarImageVizOp::SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side)
-: max_v_(max_v), max_u_(max_u), display_side_(display_side) {
+SarImageVizOp::SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side, double hold_s)
+: max_v_(max_v), max_u_(max_u), display_side_(display_side), hold_s_(hold_s) {
   if (max_v_ < 1 || max_u_ < 1 || display_side_ < 1)
     throw std::invalid_argument("SarImageVizOp: invalid image extents");
 }
@@ -146,7 +148,10 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
   descriptor.width = static_cast<std::int32_t>(width);
   descriptor.encoding = schema::ImageEncoding_RGBA8;
   descriptor.color_space = schema::ColorSpace_UNSPECIFIED;
-  return frame.emit_tensor(std::move(*loan), descriptor,
-                           EmitOptions{.capture_time = context.activation_time()});
+  HOLOSCAN_RETURN_IF_ERROR(frame.emit_tensor(
+      std::move(*loan), descriptor, EmitOptions{.capture_time = context.activation_time()}));
+  if (hold_s_ > 0.0)
+    std::this_thread::sleep_for(std::chrono::duration<double>(hold_s_));
+  return {};
 }
 }  // namespace holoscan::radar::app::sar

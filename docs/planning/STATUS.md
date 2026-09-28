@@ -127,8 +127,8 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   the repository-wide pinned pre-commit suite passed. Final focused reruns
   cover test-harness corrections added after that full run. Public CPHD
   collection validation remains open. HSDK 5 visualization uses the
-  source-branch percentile window; compass, timeline, crop, and display hold
-  remain open in local `OPEN_ITEMS.md`.
+  source-branch percentile window and finite GUI hold; compass, timeline,
+  crop, and indefinite display hold remain open in local `OPEN_ITEMS.md`.
 
 ## In flight / claims
 
