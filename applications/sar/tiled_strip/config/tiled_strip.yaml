@@ -26,7 +26,8 @@
 # nfft_pad: next_fast. The loop repeats until stopped; wrap
 # restages tile 0 and clears the mosaic. A display u-crop was
 # planned but is not wired; Holoviz and dump show the full
-# parent union. visualize_size bounds the raster in pixels.
+# parent union. The display puts along-track v horizontally;
+# formation and dump keep (v,u). visualize_size bounds the raster.
 
 cphd:
   path: /tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd

@@ -86,7 +86,9 @@ The template precision fixes complex profile/image and real geometry types.
 All `[live]` inputs are joined per tick with `Exact{}` and a Params fallback
 when absent. `sample_geometry`, range spacing/origin, and frequency changes
 on a closing `emit_and_reset` tick are staged for the next aperture, so that
-collection's image uses its own geometry and frequency.
+collection's image uses its own geometry and frequency. The optional
+`sample_geometry_out` describes the emitted image, even when the next lattice
+is staged on that closing tick; mosaic consumers pair it with `image`.
 
 ## Supported choices and failures
 

@@ -114,6 +114,16 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## SAR HSDK 5 port
 
+- **2026-09-29 — Tiled strip seam and landscape display fixed:** The tile
+  stager sends the next lattice with each closing tile's `EmitAndReset`, and
+  `BackprojectionOp.sample_geometry_out` now describes the tile just formed
+  even when a new lattice is staged. The mosaic therefore joins the correct
+  image and geometry. Tiled strip transposes only the Holoviz raster/window,
+  placing its long `v` axis horizontally; formation and dumps retain `(v,u)`.
+  A two-tick-per-tile headless fixture and a finite ten-tile Capella run with
+  512-pixel tile caps both pass. Full-resolution image quality and interactive
+  X11 presentation remain open.
+
 - **2026-09-29 — SAR display accepts changing image dimensions:** The shared
   Graph driver sizes `SarImageVizOp` input bounds from both the maximum
   configured collection extents and the display/mosaic geometry. A generated headless regression

@@ -48,7 +48,10 @@ recorded in its operator notes, now enforced by the HSDK 5 implementation.
 The sanctioned SAR descriptor outputs are `CPHDReaderOp.coordinate_frame`,
 `SARRangeCompressionOp.range_window_out`, `ApertureManagerOp.sample_geometry_out`,
 and `BackprojectionOp.sample_geometry_out`. They are config-plane values; data
-ports remain plain tensors. The SAR descriptors are `CoordinateFrame`,
+ports remain plain tensors. On an `emit_and_reset` tick carrying the next
+lattice, `BackprojectionOp.sample_geometry_out` describes the image formed on
+the current lattice; the next lattice becomes effective only after that emit.
+The SAR descriptors are `CoordinateFrame`,
 `SampleGeometry`, and `LFMWaveformDescriptor`.
 
 ### Implemented parameter names and defaults

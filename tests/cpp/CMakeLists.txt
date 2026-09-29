@@ -375,6 +375,19 @@ foreach(index RANGE 0 4)
     endif()
 endforeach()
 
+if(TARGET tiled_strip)
+    set(tiled_dir "${PROJECT_BINARY_DIR}/applications/sar/tiled_strip/cpp")
+    add_test(NAME Sar_tiled_strip_seam_viz
+        COMMAND ${CMAKE_COMMAND}
+            -DSAR_EXECUTABLE=$<TARGET_FILE:tiled_strip>
+            -DSAR_CONFIG=${tiled_dir}/tiled_strip_seam_viz_generated_smoke.yaml
+            -DSAR_COUNT=2
+            -DSAR_DIMS=11x6
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_smoke.cmake)
+    set_tests_properties(Sar_tiled_strip_seam_viz PROPERTIES
+        FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+endif()
+
 if(TARGET independent_images)
     set(independent_dir "${PROJECT_BINARY_DIR}/applications/sar/independent_images/cpp")
     add_test(NAME Sar_independent_images_varying_viz

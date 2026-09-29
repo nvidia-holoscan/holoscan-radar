@@ -24,6 +24,10 @@ flowchart LR
 The solid paths are required data and control flows. Dashed dump and
 visualization branches are enabled by application configuration. The reader's
 typed `stream_boundary` is joined to the aperture manager on the same tick.
+The tile stager sends the next lattice on a tile's closing batch, alongside
+`EmitAndReset`. Backprojection forms the closing tile on its current lattice,
+then installs the next one. Its geometry output describes the emitted tile so
+the mosaic places that tile in the correct parent location.
 
 ## Build and offline fixture
 
@@ -32,13 +36,14 @@ Build in the pinned HSDK 5 GPU image with Python application bindings disabled:
 ```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build --target tiled_strip generate_cphd_fixture
-ctest --test-dir build -R '^Sar_tiled_strip_(smoke|viz)$' --output-on-failure
+ctest --test-dir build -R '^Sar_tiled_strip_(smoke|viz|seam_viz)$' --output-on-failure
 ```
 
 CTest generates the CPHD fixture in C++, then checks 5 images of
-15 × 6 pixels and runs a headless Holoviz path. These runs check graph wiring,
-count, dimensions, and successful execution; they do not establish focus on
-real collections.
+15 × 6 pixels and runs a headless Holoviz path. An additional seam test
+uses two pulse ticks per tile, checking two 11 × 6 mosaics through headless
+Holoviz. These runs check graph wiring, count, dimensions, and successful
+execution; they do not establish focus on real collections.
 
 ## Real collection preset
 
@@ -68,7 +73,7 @@ a CPHD path may replace `cphd.path` directly, or follow a YAML path as the secon
 
 ## Output and display
 
-Each completed tile produces an image; the mosaic places emitted tiles into a parent canvas. The fixture reports five 15 × 6 mosaic images. Optional dump writes that parent complex mosaic; Holoviz displays its raster. The present visualization does not apply the YAML comment's proposed u-axis crop; this gap is tracked in the untracked root `OPEN_ITEMS.md`.
+Each completed tile produces an image; the mosaic places emitted tiles into a parent canvas. The fixture reports five 15 × 6 mosaic images. Optional dump writes that parent complex mosaic; Holoviz displays its raster with the long along-track `v` axis horizontally. The formed mosaic and dump keep their `(v,u)` layout. The present visualization does not apply the YAML comment's proposed u-axis crop; this gap is tracked in the untracked root `OPEN_ITEMS.md`.
 
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.

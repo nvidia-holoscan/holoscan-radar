@@ -716,7 +716,10 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
     int64_t emitted_pulses = 0;
     int64_t emitted_pixels = 0;
     std::optional<TensorOutputLoan> image_loan;
+    std::optional<SampleGeometry> emitted_geometry;
     if (control_value.has_value() && is_emit(*control_value)) {
+      // Keep the lattice of this image before EmitAndReset installs the next one.
+      emitted_geometry.emplace(effective_geometry_);
       emitted = true;
       emitted_pulses = unemitted_pulses_;
       emitted_pixels = num_v * num_u;
@@ -795,9 +798,9 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       last_image_emit_ns_.store(ns, std::memory_order_relaxed);
       last_image_emit_valid_.store(true, std::memory_order_release);
       HOLOSCAN_RETURN_IF_ERROR(emit_prepared_tensor(image, context, std::move(*image_loan)));
-      if (!sample_points_connected_ && effective_geometry_.is_valid()) {
+      if (!sample_points_connected_ && emitted_geometry->is_valid()) {
         if (geometry_output_.active()) {
-          const auto packed = pack_sample_geometry(effective_geometry_);
+          const auto packed = pack_sample_geometry(*emitted_geometry);
           auto loan = sample_geometry_out.allocate_tensor(TensorLoanRequest{
               .shape = std::vector<int64_t>{11}, .dtype = DLDataType{kDLFloat, 64U, 1U}});
           if (!loan)
@@ -808,7 +811,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
           if (!written)
             return make_unexpected(std::move(written).error());
           geometry_output_.emit_schema_tensor(sample_geometry_out, context, std::move(*loan),
-                                              to_wire(effective_geometry_),
+                                              to_wire(*emitted_geometry),
                                               "BackprojectionOp.sample_geometry_out");
         }
       }

@@ -40,11 +40,18 @@ class TileGeometryStagerOp : public Operator<> {
     if (shape.size() != 2U || shape[0] < 1)
       return make_unexpected(Error{ErrorCode::kInvalidArgument,
                                    "TileGeometryStagerOp: expected pulse x range tensor"});
-    // The cadence must close on a batch edge, so each image uses one geometry.
-    const int64_t last = pulses_seen_ + shape[0] - 1;
-    const auto index = std::min<std::size_t>(static_cast<std::size_t>(last / tile_pulses_),
-                                             geometries_.size() - 1U);
-    HOLOSCAN_RETURN_IF_ERROR(detail::emit_geometry(sample_geometry, context, geometries_[index],
+    // The cadence closes on a batch edge. Stage the next tile with this
+    // batch's EmitAndReset so backprojection forms the closing tile first.
+    const int64_t end = pulses_seen_ + shape[0];
+    const auto current = std::min<std::size_t>(static_cast<std::size_t>((end - 1) / tile_pulses_),
+                                               geometries_.size() - 1U);
+    std::size_t staged = current;
+    if (boundary == 1U) {
+      staged = 0U;  // A looping collection restarts at tile zero.
+    } else if (boundary == 0U && end % tile_pulses_ == 0 && current + 1U < geometries_.size()) {
+      staged = current + 1U;
+    }
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_geometry(sample_geometry, context, geometries_[staged],
                                                    context.activation_time()));
     HOLOSCAN_RETURN_IF_ERROR(range_profiles_out.emit(
         std::move(profiles), EmitOptions{.capture_time = context.activation_time()}));

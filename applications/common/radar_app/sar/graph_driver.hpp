@@ -157,8 +157,8 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
       const auto& viz_geometry = cfg.scroll                       ? cfg.scroll_parent
                                  : cfg.parent_geometry.is_valid() ? cfg.parent_geometry
                                                                   : cfg.sample_geometry;
-      // Scroll along-track v horizontally so its long mosaic fits a landscape display.
-      const bool transpose_display_axes = cfg.scroll;
+      // Strip mosaics place along-track v horizontally to fit a landscape display.
+      const bool transpose_display_axes = cfg.scroll || !cfg.tile_geometries.empty();
       const int64_t raster_max_v = std::max(viz_geometry.num_v(), *extents.max_image_v);
       const int64_t raster_max_u = std::max(viz_geometry.num_u(), *extents.max_image_u);
       auto raster = graph.op<app::sar::SarImageVizOp>(

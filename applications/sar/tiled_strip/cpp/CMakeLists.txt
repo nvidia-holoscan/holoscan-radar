@@ -31,4 +31,6 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
         ${CMAKE_CURRENT_BINARY_DIR}/tiled_strip_generated_smoke.yaml @ONLY)
     configure_file(tiled_strip_viz_smoke.yaml.in
         ${CMAKE_CURRENT_BINARY_DIR}/tiled_strip_viz_generated_smoke.yaml @ONLY)
+    configure_file(tiled_strip_seam_viz_smoke.yaml.in
+        ${CMAKE_CURRENT_BINARY_DIR}/tiled_strip_seam_viz_generated_smoke.yaml @ONLY)
 endif()
