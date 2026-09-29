@@ -24,6 +24,9 @@ flowchart LR
 The solid paths are required data and control flows. Dashed dump and
 visualization branches are enabled by application configuration. The reader's
 typed `stream_boundary` is joined to the aperture manager on the same tick.
+The stager places the *next* collection's geometry, range spacing, and
+frequency on the closing batch. Backprojection forms the closing image using
+the current values, then installs the next values after `EmitAndReset`.
 
 ## Build and offline fixture
 
@@ -35,8 +38,8 @@ cmake --build build --target independent_images generate_cphd_fixture
 ctest --test-dir build -R '^Sar_independent_images_(smoke|viz)$' --output-on-failure
 ```
 
-CTest generates the CPHD fixture in C++, then checks 2 images of
-5 × 5 pixels and runs a headless Holoviz path. These runs check graph wiring,
+CTest generates two CPHD fixtures in C++ with distinct IARP geometries, then
+checks 2 images of 5 × 5 pixels and runs a headless Holoviz path. These runs check graph wiring,
 count, dimensions, and successful execution; they do not establish focus on
 real collections.
 

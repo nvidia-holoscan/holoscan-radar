@@ -39,6 +39,12 @@ boundary on its final slice. This replaces the source branch's arbitrary
 aperture emit and reset rules. An app that builds its own pulse source must
 publish the scalar on each batch.
 
+For a CPHD FX collection, `sample_axis` represents each batch with its first
+pulse's `SC0` and `SCSS`. Per-vector values may have a recorded-grid ramp:
+the reader accepts values within `1e-5` relative to the batch's first value
+and rejects a larger frequency step. This is the existing SAR reader decision
+recorded in its operator notes, now enforced by the HSDK 5 implementation.
+
 The sanctioned SAR descriptor outputs are `CPHDReaderOp.coordinate_frame`,
 `SARRangeCompressionOp.range_window_out`, `ApertureManagerOp.sample_geometry_out`,
 and `BackprojectionOp.sample_geometry_out`. They are config-plane values; data

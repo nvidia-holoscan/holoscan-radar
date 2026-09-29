@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>  // NOLINT(build/c++17)
+#include <stdexcept>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -28,7 +29,8 @@ inline void write_be32(std::ofstream& out, float value) {
 }
 
 // Standalone C++ CPHD 1.x fixture; CI needs no Python or external collection.
-inline fs::path make_fixture(const fs::path& path) {
+inline fs::path make_fixture(const fs::path& path, double sc0_per_pulse = 0.0,
+                             double scss_per_pulse = 0.0, double iarp_x = 6378000.0) {
   constexpr int64_t kPulses = 5;
   constexpr int64_t kSamples = 8;
   constexpr int64_t kXmlOffset = 1024;
@@ -36,6 +38,13 @@ inline fs::path make_fixture(const fs::path& path) {
   constexpr int64_t kSignalOffset = 8192;
   std::string xml =
       R"(<CPHD><Data><SignalArrayFormat>CF8</SignalArrayFormat><NumBytesPVP>104</NumBytesPVP><Channel><Identifier>test</Identifier><NumVectors>5</NumVectors><NumSamples>8</NumSamples><SignalArrayByteOffset>0</SignalArrayByteOffset><PVPArrayByteOffset>0</PVPArrayByteOffset></Channel></Data><Global><DomainType>FX</DomainType><SGN>-1</SGN></Global><SceneCoordinates><IARP><ECF><X>6378000</X><Y>0</Y><Z>0</Z></ECF></IARP><ReferenceSurface><Planar><uIAX><X>0</X><Y>1</Y><Z>0</Z></uIAX><uIAY><X>0</X><Y>0</Y><Z>1</Z></uIAY></Planar></ReferenceSurface><ImageArea><X1Y1><X>-10</X><Y>-10</Y></X1Y1><X2Y2><X>10</X><Y>10</Y></X2Y2></ImageArea></SceneCoordinates><ReferenceGeometry><Monostatic><GrazeAngle>45</GrazeAngle><SlantRange>1000</SlantRange><AzimuthAngle>0</AzimuthAngle></Monostatic></ReferenceGeometry><Channel><Parameters><FxC>9004000000</FxC><FxBW>8000000</FxBW><TOASaved>0.0000001</TOASaved></Parameters></Channel><Antenna><AntPattern><GainZero>20</GainZero></AntPattern></Antenna><PVP>)";
+  if (iarp_x != 6378000.0) {
+    const std::string original = "<IARP><ECF><X>6378000</X>";
+    const auto pos = xml.find(original);
+    if (pos == std::string::npos)
+      throw std::runtime_error("CPHD fixture: IARP element not found");
+    xml.replace(pos, original.size(), "<IARP><ECF><X>" + std::to_string(iarp_x) + "</X>");
+  }
   const std::array<std::pair<const char*, int>, 7> fields{{{"TxTime", 0},
                                                            {"TxPos", 1},
                                                            {"RcvPos", 4},
@@ -62,9 +71,10 @@ inline fs::path make_fixture(const fs::path& path) {
   out.write(xml.data(), static_cast<std::streamsize>(xml.size()));
   out.seekp(kPvpOffset);
   for (int64_t pulse = 0; pulse < kPulses; ++pulse) {
-    for (double value : {pulse * 0.01, 6378000.0, static_cast<double>(pulse), 1000.0, 6378000.0,
-                         static_cast<double>(pulse), 1000.0, 6378000.0,
-                         static_cast<double>(pulse * 100), 0.0, 9.0e9, 1.0e6, 1.0}) {
+    for (double value :
+         {pulse * 0.01, 6378000.0, static_cast<double>(pulse), 1000.0, 6378000.0,
+          static_cast<double>(pulse), 1000.0, 6378000.0, static_cast<double>(pulse * 100), 0.0,
+          9.0e9 + pulse * sc0_per_pulse, 1.0e6 + pulse * scss_per_pulse, 1.0}) {
       write_be64(out, value);
     }
   }

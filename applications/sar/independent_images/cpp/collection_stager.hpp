@@ -9,8 +9,9 @@
 #include "radar_app/sar/staging_detail.hpp"
 
 namespace holoscan::radar::app::sar {
-// The boundary describes the current batch. Publish the current collection's
-// geometry before the data trigger, then advance to the next collection.
+// The boundary describes the current batch. Stage the next collection's
+// geometry and frequency on its closing tick, alongside EmitAndReset; the
+// backprojector applies those overrides after forming the closing image.
 class CollectionBoundaryStagerOp : public Operator<> {
  public:
   CollectionBoundaryStagerOp(std::vector<SampleGeometry> geometries, std::vector<double> spacings,
@@ -46,10 +47,11 @@ class CollectionBoundaryStagerOp : public Operator<> {
     HOLOSCAN_TRY(auto profiles, receive_tensor(range_profiles, "CollectionBoundaryStagerOp"));
     HOLOSCAN_TRY(auto boundary, stream_boundary.receive_data());
     const auto time = EmitOptions{.capture_time = context.activation_time()};
-    HOLOSCAN_RETURN_IF_ERROR(detail::emit_geometry(sample_geometry, context, geometries_[index_],
-                                                   context.activation_time()));
-    HOLOSCAN_RETURN_IF_ERROR(range_bin_spacing.emit(spacings_[index_], time));
-    HOLOSCAN_RETURN_IF_ERROR(reference_frequency.emit(frequencies_[index_], time));
+    const std::size_t staged_index = boundary == 1U ? (index_ + 1U) % geometries_.size() : index_;
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_geometry(
+        sample_geometry, context, geometries_[staged_index], context.activation_time()));
+    HOLOSCAN_RETURN_IF_ERROR(range_bin_spacing.emit(spacings_[staged_index], time));
+    HOLOSCAN_RETURN_IF_ERROR(reference_frequency.emit(frequencies_[staged_index], time));
     HOLOSCAN_RETURN_IF_ERROR(range_profiles_out.emit(std::move(profiles), time));
     if (boundary != 0U)
       index_ = (index_ + 1U) % geometries_.size();

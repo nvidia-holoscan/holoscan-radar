@@ -27,6 +27,7 @@ endif()
 
 if(HOLOSCAN_RADAR_BUILD_TESTING)
     set(SAR_FIXTURE "${PROJECT_BINARY_DIR}/tests/cpp/generated_sar_smoke.cphd")
+    set(SAR_FIXTURE_SHIFTED "${PROJECT_BINARY_DIR}/tests/cpp/generated_sar_smoke_shifted.cphd")
     configure_file(independent_images_smoke.yaml.in
         ${CMAKE_CURRENT_BINARY_DIR}/independent_images_generated_smoke.yaml @ONLY)
     configure_file(independent_images_viz_smoke.yaml.in

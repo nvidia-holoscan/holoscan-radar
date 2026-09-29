@@ -97,10 +97,14 @@ expected<TensorOutputLoan, Error> prepare_frame(Output<WireCoordinateFrame>& out
 }
 
 void check_sample_axis(const std::vector<double>& values, const char* name) {
-  for (size_t i = 1; i < values.size(); ++i) {
+  // Umbra SNAPSHOT PVPs have a small recorded-grid ramp within a batch. A
+  // relative 1e-5 bound admits that residual while rejecting a frequency step.
+  for (size_t i = 0; i < values.size(); ++i) {
     const double scale = std::max(std::abs(values[0]), std::abs(values[i]));
-    if (!std::isfinite(values[i]) || std::abs(values[i] - values[0]) > 1e-10 * scale) {
-      throw std::runtime_error(std::string(kWho) + ": " + name + " varies across a pulse batch");
+    if (!std::isfinite(values[i]) || std::abs(values[i] - values[0]) > 1e-5 * scale) {
+      throw std::runtime_error(std::string(kWho) + ": " + name + " varies across a pulse batch (" +
+                               std::to_string(values[0]) + " vs " + std::to_string(values[i]) +
+                               ")");
     }
   }
 }

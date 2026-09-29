@@ -82,8 +82,10 @@ last batch; it does not emit a separate empty EOS tick.
 
 The configured frame must be ECEF. The reader rejects missing paths, an empty
 file selection, invalid channel or pulse bounds, missing required PVP fields,
-a varying `SC0` or `SCSS` within one batch, malformed CPHD metadata, and
-sample or pulse extents beyond its `MaxTensorExtents`. It warns once per file
+a frequency step exceeding `1e-5` relative to the batch's first `SC0` or
+`SCSS` value, malformed CPHD metadata, and sample or pulse extents beyond its
+`MaxTensorExtents`. Smaller recorded-grid ramps are accepted; `sample_axis`
+uses the first pulse's values for that batch. It warns once per file
 when non-finite phase-centre coordinates pass through. Optional outputs are latched: an unwired first emit is absorbed, then
 subsequent work for that output is skipped.
 

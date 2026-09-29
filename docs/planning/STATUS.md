@@ -114,6 +114,23 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## SAR HSDK 5 port
 
+- **2026-09-29 — CPHD recorded-grid ramp accepted in HSDK 5:** The reader's
+  `SC0`/`SCSS` per-batch check now uses the SAR notes' `1e-5` relative bound
+  instead of `1e-10`. All six downloaded Umbra SNAPSHOT PVP blocks were checked
+  at the shipped 1,024-pulse batch size; their largest relative drift was
+  `3.8e-9` for `SC0` and `1.4e-7` for `SCSS`. A C++ fixture asserts a small
+  ramp succeeds and a genuine frequency step fails. A full-pulse, six-collection
+  `independent_images` run formed six 32×32 images from downloaded CPHDs.
+  Full-resolution image quality and interactive display remain unvalidated.
+
+- **2026-09-29 — Independent collection geometry staged at the seam:** The
+  collection stager now sends the next collection's geometry, range spacing,
+  and reference frequency on the closing batch. `BackprojectionOp` forms that
+  image with the old values and installs the new values after `EmitAndReset`.
+  The generated two-collection smoke now uses distinct IARP geometry, and its
+  headless visualization path also passes. The six-collection real-data run
+  completed with one image per collection.
+
 - **2026-09-29 — SAR visualization drops stale frames:** The shared SAR Graph
   driver uses `kDropOldest` on formed-image to raster and raster to Holoviz
   connections for all five apps, matching the FMCW display policy. Image

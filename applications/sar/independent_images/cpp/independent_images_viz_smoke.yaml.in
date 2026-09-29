@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 cphd:
-  path: [@SAR_FIXTURE@, @SAR_FIXTURE@]
+  path: [@SAR_FIXTURE@, @SAR_FIXTURE_SHIFTED@]
 lattice:
   counts: [5, 5]
   spacing: [1, 1]

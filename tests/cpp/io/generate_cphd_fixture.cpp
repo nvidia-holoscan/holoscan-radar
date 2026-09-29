@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <exception>
+#include <filesystem>  // NOLINT(build/c++17)
 #include <iostream>
+#include <string>
 
 #include "io/cphd_fixture.hpp"  // NOLINT(build/include_subdir)
 
@@ -14,6 +16,8 @@ int main(int argc, char** argv) {
   try {
     const auto path = holoscan::radar::testing::cphd_fixture::make_fixture(argv[1]);
     holoscan::radar::testing::cphd_fixture::write_truth(path);
+    const auto shifted = path.parent_path() / (path.stem().string() + "_shifted.cphd");
+    holoscan::radar::testing::cphd_fixture::make_fixture(shifted, 0.0, 0.0, 6378100.0);
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
