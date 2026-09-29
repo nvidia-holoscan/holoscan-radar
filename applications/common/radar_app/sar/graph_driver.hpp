@@ -148,6 +148,12 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     }
 #endif
     if (visualize) {
+      // Visualization is best-effort: discard stale images when rendering falls behind
+      // instead of backpressuring formation, reporting, or an optional tensor dump.
+      const holoscan::ConnectionOptions raster_queue{
+          .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 4U};
+      const holoscan::ConnectionOptions display_queue{
+          .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 8U};
       const auto& viz_geometry = cfg.scroll                       ? cfg.scroll_parent
                                  : cfg.parent_geometry.is_valid() ? cfg.parent_geometry
                                                                   : cfg.sample_geometry;
@@ -183,8 +189,8 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
         auto sink = graph.op<app::sar::SarImageSchemaSinkOp>("viz_sink");
         application.add(viz).add(sink);
         bind_outputs(options, "holoviz", {"output"});
-        graph.add_flow(*formed, raster->image, queue);
-        graph.add_flow(raster->frame, viz->image_layer_input(0), queue);
+        graph.add_flow(*formed, raster->image, raster_queue);
+        graph.add_flow(raster->frame, viz->image_layer_input(0), display_queue);
         graph.add_flow(viz->output(), sink->frame, queue);
       } else {
         auto viz = graph.op<holoscan::visualization::HolovizOp>(
@@ -192,8 +198,8 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
             holoscan::visualization::WindowSinkDesc{
                 .title = "SAR formation", .width = width, .height = height});
         graph.partition("visualization").add(viz);
-        graph.add_flow(*formed, raster->image, queue);
-        graph.add_flow(raster->frame, viz->image_layer_input(0), queue);
+        graph.add_flow(*formed, raster->image, raster_queue);
+        graph.add_flow(raster->frame, viz->image_layer_input(0), display_queue);
       }
     }
 #else

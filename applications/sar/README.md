@@ -34,6 +34,10 @@ the exact collection, geometry, output, and display prerequisites. The
 contracts. The [current HSDK 5 SAR contract](../../docs/planning/SAR/OPERATOR_API.md)
 takes precedence over older planning material.
 
+Visualization is best-effort: if rendering falls behind, both SAR display
+connections discard older frames and show newer images. Formation, image
+reporting, and optional tensor dumping keep their normal delivery policy.
+
 The former `applications/sar_formation/` path and `sar_formation` executable
 were replaced by these five entries. There is no compatibility launcher.
 Run `ctest --test-dir build -R '^Sar_' --output-on-failure` for generated CPHD

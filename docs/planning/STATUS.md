@@ -114,6 +114,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## SAR HSDK 5 port
 
+- **2026-09-29 — SAR visualization drops stale frames:** The shared SAR Graph
+  driver uses `kDropOldest` on formed-image to raster and raster to Holoviz
+  connections for all five apps, matching the FMCW display policy. Image
+  reporting, optional tensor dumping, and the headless schema sink retain
+  their existing queues. Synthetic GPU smoke and headless visualization
+  checks pass; sustained interactive X11 lag remains unvalidated.
+
 - **2026-09-29 — SAR host CLI data flow and strip display:** all five app guides
   give commands from download to `holoscan run`. Downloads go under the host
   `data/sar/` tree, which `--docker-opts` binds to the shipped YAML's
