@@ -54,11 +54,13 @@ app:
         model: monostatic_free_space
         reference_range: 100.0
     targets:
-        - range: 35.0
+        # Keep the near-profile target above 20 m throughout the 25 s run.
+        # The amplitude approximately preserves its received strength at startup.
+        - range: 50.0
           azimuth: 0.15
           elevation: 0.10
-          velocity: [-4.0, -0.6, -0.4]
-          amplitude: 0.01
+          velocity: [-1.0, -0.15, -0.1]
+          amplitude: 0.02
         - range: 80.0
           azimuth: -0.10
           elevation: -0.12
