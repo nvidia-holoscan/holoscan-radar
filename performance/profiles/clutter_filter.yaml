@@ -1,19 +1,31 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-version: 1
+version: 2
 operator: clutter_filter
+axes: [chirps, range_bins]
 profiles:
   small: {shape: [16, 128]}
   medium: {shape: [64, 512]}
   large: {shape: [128, 1024]}
 live_ports: [method, doppler_window]
+recipe:
+  operator_type: radar.ClutterFilterOp.float
+  inputs:
+    - {port: range_profiles, shape: [channels, chirps, range_bins], omit_if_one: [channels], dtype: complex64, memory: device, generator: iq_cube}
+  fixtures: {channels: 1}
+  constructor: {bounds_policy: clutter_filter_bounds}
+  params: {method: mean_subtraction, doppler_window: {type: none}}
+  outputs: {timed: range_profiles_out, drain: [], unwired: []}
+  live:
+    method: {physical_port: method, codec: enum}
+    doppler_window: {physical_port: doppler_window, codec: window_spec}
 cases:
-  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {method: mean_subtraction, doppler_window: none}}
-  - {id: single-delay-medium, profile: medium, scopes: [limited], parameters: {method: single_delay, doppler_window: none}}
-  - {id: double-delay-medium, profile: medium, scopes: [limited], parameters: {method: double_delay, doppler_window: none}}
-  - {id: passthrough-medium, profile: medium, scopes: [limited], parameters: {method: none, doppler_window: none}}
-  - {id: "method-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {method: mean_subtraction, doppler_window: none}, override: {port: method, value: single_delay}}
-  - {id: "window-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {method: mean_subtraction, doppler_window: none}, override: {port: doppler_window, value: hamming}}
-  - {id: four-channels-medium, profile: medium, scopes: [moderate], parameters: {method: mean_subtraction, doppler_window: none, channels: 4}}
-  - {id: hann-medium, profile: medium, scopes: [moderate], parameters: {method: mean_subtraction, doppler_window: hann}}
-  - {id: sixteen-channels-large, profile: large, scopes: [thorough], parameters: {method: mean_subtraction, doppler_window: none, channels: 16}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
+  - {id: single-delay-medium, profile: medium, scopes: [limited], parameters: {method: single_delay}}
+  - {id: double-delay-medium, profile: medium, scopes: [limited], parameters: {method: double_delay}}
+  - {id: passthrough-medium, profile: medium, scopes: [limited], parameters: {method: none}}
+  - {id: "method-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: method, value: single_delay}}
+  - {id: "window-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: doppler_window, value: {type: hamming}}}
+  - {id: four-channels-medium, profile: medium, scopes: [moderate], parameters: {}, fixture: {channels: 4}}
+  - {id: hann-medium, profile: medium, scopes: [moderate], parameters: {doppler_window: {type: hann}}}
+  - {id: sixteen-channels-large, profile: large, scopes: [thorough], parameters: {}, fixture: {channels: 16}}

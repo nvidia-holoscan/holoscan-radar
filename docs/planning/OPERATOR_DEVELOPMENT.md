@@ -736,19 +736,18 @@ The shared C++ driver validates every YAML case before scope filtering and
 owns process warmup, source publication, Graph execution, sampling, and report
 buckets. Version-2 suites declare a fixed registered operator recipe with named
 axes, ports, tensor generators, canonical Params, extents, outputs, and live
-port mappings with payload codecs; version-1 suites remain supported for unmigrated operators. The
+port mappings with payload codecs; all 26 in-tree suites now use version 2, while the loader retains version-1 compatibility. The
 pinned HSDK 5 authoring registry constructs the operator and resolves named
 ports; typed flow thunks and authored Tensor constraints are checked before
 execution. For a standard operator with direct extents and built-in generators,
 scalar or sequence Params, and registered scalar or host-vector live payloads, use
 `radar_add_yaml_perf` with no operator-owned C++ file. Contract-specific
 descriptors, related inputs, bounds, codecs, units, and postprocessing belong in
-a typed `perf_<operator>.cpp` adapter. Pilot adapters share YAML case state, typed input staging,
+a typed `perf_<operator>.cpp` adapter. Typed adapters share YAML case state, typed input staging,
 baseline/live Graph calls, on-demand live codec dispatch, cached-transition
 warmup checks, common payload builders, and throughput-rate conversion; keep these mechanics in the driver.
 Read profile axes directly from the recipe and validate YAML choices by the
-operator's constraints, rather than duplicating the curated case values in C++. Pilot examples are DDM power fold, SnapshotGather,
-Beamscan, FMCW range, and CFAR. Add a Minimal GPU smoke and focused live
+operator's constraints, rather than duplicating the curated case values in C++. Examples include DDM power fold, SnapshotGather, Beamscan, FMCW range, CFAR, the five angle estimators, and the six-input MultiSourceExpansion fixture. Add a Minimal GPU smoke and focused live
 smokes through `performance/cpp/CMakeLists.txt`. `--validate` and
 `--list-cases` validate unselected cases without Graph authoring; an explicit
 `{profile}` family does not create a Cartesian product.

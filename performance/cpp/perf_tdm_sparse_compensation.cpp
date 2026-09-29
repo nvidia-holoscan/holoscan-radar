@@ -1,256 +1,105 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Detection-count characterization for sparse TDM compensation.
-
-#include <cuda_runtime_api.h>
-
-#include <algorithm>
 #include <cstdint>
-#include <set>
-#include <memory>
 #include <stdexcept>
 #include <string>
-#include <tuple>
-#include <utility>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
-
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_op.hpp"
-#include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
-#include "radar_common/descriptors/max_tensor_extents.hpp"
-#include "radar_common/tensor/dlpack_buffer.hpp"
-#include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/perf_driver.hpp"
-#include "utils/perf_graph.hpp"
-#include "utils/perf_report.hpp"
-#include "utils/perf_recipe.hpp"
-#include "utils/perf_runner.hpp"
-#include "utils/tensor_factory.hpp"
+#include "utils/perf_sparse_mimo.hpp"
+#include "utils/perf_yaml_codecs.hpp"
+#include "utils/perf_yaml_pilot.hpp"
 
 namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Precision = float;
-constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
+using Op = hr::TDMSparseCompensationOp<float>;
+struct Scenario : perf::RecipeScenario {};
 
-struct SizeSpec {
-  std::string id;
-  int64_t tx;
-  int64_t rx;
-  int64_t doppler;
-  int64_t range;
-  int64_t detections;
-  std::string role;
-};
-
-struct Scenario {
-  std::string id;
-  std::string size_id;
-  SizeSpec size;
-  std::string live_port;
-  double pri{1.0e-3};
-  double changed_pri{1.1e-3};
-  int64_t window_doppler{0};
-  int64_t window_range{0};
-  int64_t changed_doppler{1};
-  int64_t changed_range{1};
-  hr::OverlapPolicy policy{hr::OverlapPolicy::kKeepAll};
-};
-
-hr::FMCWWaveformDescriptor waveform(double pri = 1.0e-3) {
-  hr::FMCWWaveformSpec spec;
-  spec.carrier_frequency = 77.0e9;
-  spec.bandwidth = 1.0e9;
-  spec.chirp_duration = 40.0e-6;
-  spec.sample_rate = 20.0e6;
-  spec.chirp_repetition_interval = pri;
-  return hr::FMCWWaveformDescriptor(spec);
+hr::TDMSparseCompensationParams parameters(const Scenario& scen) {
+  hr::TDMSparseCompensationParams params;
+  params.waveform = perf::recipe_fmcw_waveform(scen.params["waveform"]);
+  params.tx_positions = perf::recipe_linear_positions(
+      scen.axis("tx"), scen.params["tx_positions"]["spacing"].as<double>(), 0);
+  params.rx_positions = perf::recipe_linear_positions(
+      scen.axis("rx"), scen.params["rx_positions"]["spacing"].as<double>(), 0);
+  params.overlap_policy =
+      perf::recipe_overlap_policy(scen.params["overlap_policy"].as<std::string>());
+  const auto window = perf::sparse_window(scen.params["snapshot_window"]);
+  params.snapshot_window = {window[0], window[1]};
+  return params;
 }
 
-std::vector<double> ula_positions(int64_t count, double spacing) {
-  std::vector<double> result(static_cast<std::size_t>(count * 3), 0.0);
-  for (int64_t index = 0; index < count; ++index) {
-    result[static_cast<std::size_t>(index * 3)] = spacing * static_cast<double>(index);
-  }
-  return result;
+perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
+  const auto params = parameters(scen);
+  const auto extents = perf::sparse_mimo_extents(scen);
+  return perf::run_recipe_selected_case<Op, 2>(
+      scen, plan, extents, params, [&](const std::string& codec) -> perf::TimingCollector {
+        if (codec != "sparse_window")
+          throw std::invalid_argument("unsupported sparse TDM live codec: " + codec);
+        const auto window = perf::sparse_window(scen.live_value);
+        const hr::TDMSparseWindowOverride value{.doppler = window[0], .range = window[1]};
+        return perf::run_recipe_live_case<Op, 2>(scen, plan, extents, params, value, value);
+      });
 }
 
-std::shared_ptr<holoscan::Tensor> make_detections(int64_t count, int64_t doppler, int64_t range) {
-  std::vector<int64_t> host(static_cast<std::size_t>(count * 2));
-  for (int64_t index = 0; index < count; ++index) {
-    const int64_t cell = (index * 997) % (doppler * range);
-    host[static_cast<std::size_t>(index * 2)] = cell / range;
-    host[static_cast<std::size_t>(index * 2 + 1)] = cell % range;
-  }
-  auto result = hr::make_device_tensor({count, 2}, kInt64Dtype);
-  if (!host.empty()) {
-    auto pointer = result->mutable_data();
-    if (!pointer || cudaMemcpy(*pointer, host.data(), host.size() * sizeof(int64_t),
-                               cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error("detection-index H2D failed");
-    }
-  }
-  return result;
-}
-
-perf::TimingCollector run_graph(const Scenario& scenario, const perf::RunPlan& plan) {
-  const auto& size = scenario.size;
-  auto rd = perf::make_iq_cube_device<Precision>({size.tx, size.rx, size.doppler, size.range});
-  auto idx = make_detections(size.detections, size.doppler, size.range);
-  const auto configure = [&](holoscan::Graph& graph, const auto& source,
-                             holoscan::CompileOptions& options, auto connect) {
-    hr::MaxTensorExtents extents;
-    extents.max_tx = size.tx;
-    extents.max_rx = size.rx;
-    extents.max_virtual_channels = size.tx * size.rx;
-    extents.max_doppler_bins = size.doppler;
-    extents.max_range_bins = size.range;
-    extents.max_detections = size.detections;
-    extents.max_snapshots = std::max<int64_t>(
-        (2 * scenario.window_doppler + 1) * (2 * scenario.window_range + 1),
-        scenario.live_port == "snapshot_window"
-            ? (2 * scenario.changed_doppler + 1) * (2 * scenario.changed_range + 1)
-            : 1);
-    auto op = graph.op<hr::TDMSparseCompensationOp<Precision>>("sparse", extents);
-    hr::TDMSparseCompensationParams params;
-    params.waveform = waveform(scenario.pri);
-    params.tx_positions = ula_positions(size.tx, 0.02);
-    params.rx_positions = ula_positions(size.rx, 0.002);
-    params.overlap_policy = scenario.policy;
-    params.snapshot_window = {scenario.window_doppler, scenario.window_range};
-    op.set_params(std::move(params));
-    const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-    graph.add_flow(source->out_a, op->rd_maps, queue);
-    graph.add_flow(source->out_b, op->detection_idx, queue);
-    connect(graph, source, op, queue);
-    perf::PerfRecipeOutputs outputs(graph, options, "sparse");
-    outputs.timed(op->snapshot, "snapshot");
-    outputs.drain(op->is_valid, "is_valid");
-    outputs.drain(op->array_geometry, "array_geometry");
-    outputs.finish(source, op);
-  };
-  if (scenario.live_port.empty()) {
-    return perf::run_data_recipe(
-        std::array{std::move(rd), std::move(idx)}, plan, "tdm-sparse-compensation-perf",
-        [&](auto& graph, const auto& source, auto& options) {
-          configure(graph, source, options, [](auto&, const auto&, const auto&, const auto&) {});
-        });
-  }
-  const auto cases = std::make_tuple(
-      perf::live_option("waveform",
-                        [&] {
-                          return perf::live_case(
-                              "waveform", hr::to_wire(waveform(scenario.pri)),
-                              hr::to_wire(waveform(scenario.changed_pri)),
-                              [](auto& graph, const auto& source, const auto& op, const auto& q) {
-                                graph.add_flow(source->override_out, op->waveform_in, q);
-                              });
-                        }),
-      perf::live_option("snapshot_window", [&] {
-        return perf::live_case("snapshot_window",
-                               hr::TDMSparseWindowOverride{.doppler = scenario.window_doppler,
-                                                           .range = scenario.window_range},
-                               hr::TDMSparseWindowOverride{.doppler = scenario.changed_doppler,
-                                                           .range = scenario.changed_range},
-                               [](auto& graph, const auto& source, const auto& op, const auto& q) {
-                                 graph.add_flow(source->override_out, op->snapshot_window_in, q);
-                               });
-      }));
-  return perf::dispatch_live_case(scenario.live_port, cases, [&](const auto& selected) {
-    return perf::run_selected_live_recipe(std::array{std::move(rd), std::move(idx)}, plan,
-                                          "tdm-sparse-compensation-perf", selected, configure);
-  });
-}
-
-perf::ResultRow base_row(const Scenario& scenario) {
-  const auto& size = scenario.size;
+perf::ResultRow base_row(const Scenario& scen) {
   perf::ResultRow row;
   row.op_name = "TDMSparseCompensationOp";
   row.variant = "sparse_tdm";
-  row.live_port = scenario.live_port;
-  perf::set_input_and_trailing_map_shape(row, {size.tx, size.rx, size.doppler, size.range});
-  row.out_batch = size.detections;
-  row.k = size.tx * size.rx;
+  row.live_port = scen.live_port;
+  perf::set_input_and_trailing_map_shape(row,
+                                         perf::recipe_shape(scen.recipe.inputs.at(0), scen.values));
+  row.out_batch = scen.axis("detections");
+  row.k = scen.axis("tx") * scen.axis("rx");
   row.notes = "end-to-end Graph latency; cells/s is detections/s";
   return row;
 }
 
-void decorate_row(perf::ResultRow& row, const Scenario& scenario) {
-  if (row.latency.median_ms > 0.0) {
-    row.cells_per_second =
-        static_cast<double>(scenario.size.detections) / (row.latency.median_ms / 1000.0);
-  }
+void decorate_row(perf::ResultRow& row, const Scenario& scen) {
+  perf::set_recipe_throughput(row, static_cast<double>(scen.axis("detections")));
 }
 
 struct Traits : perf::PerfDriverDefaults {
   using Scenario = ::Scenario;
-
   static const char* tool_name() { return "perf_tdm_sparse_compensation"; }
   static const char* tool_description() {
     return "Sparse TDM compensation detection-count characterization";
   }
-
   static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
-    if (shape.size() != 5)
-      throw std::invalid_argument("TDMSparseCompensation profile rank mismatch");
-    return {id, shape, shape[0] * shape[1] * shape[2] * shape[3], id};
+    return perf::recipe_size_def(id, shape, 5, 4);
   }
-  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
-    if (shape.size() != 5 || shape[0] < 2 || shape[4] < 1)
+  static void validate_suite(const perf::ProfileSuite& suite) {
+    (void)perf::validate_pilot_suite<Op>(
+        suite, "radar.TDMSparseCompensationOp.float", "sparse_mimo_bounds",
+        {{"rd_maps", {"tx", "rx", "doppler", "range"}, "complex64", "device", "iq_cube", {}},
+         {"detection_idx", {"detections", "two"}, "int64", "device", "in_bounds_rd_indices", {}}},
+        {"snapshot",
+         {"is_valid", "array_geometry"},
+         {},
+         4U,
+         "",
+         {{"array_geometry", "array_geometry"}}},
+        {{"waveform", "waveform"}, {"snapshot_window", "snapshot_window"}},
+        {{"waveform", "waveform_descriptor"}, {"snapshot_window", "sparse_window"}});
+  }
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape,
+                             const perf::ProfileSuite& suite) {
+    auto scen = perf::pilot_scenario<Scenario>(suite, c, shape, 5);
+    if (scen.axis("tx") < 2 || scen.axis("detections") < 1)
       throw std::invalid_argument("TDMSparseCompensation invalid profile shape");
-    perf::require_keys(c.parameters, {"snapshot_window", "overlap_policy", "pri"}, "parameters");
-    if (!c.parameters["snapshot_window"] || !c.parameters["overlap_policy"])
-      throw std::invalid_argument("TDMSparseCompensation missing parameter");
-    const auto window = c.parameters["snapshot_window"];
-    if (!window.IsSequence() || window.size() != 2)
-      throw std::invalid_argument("TDMSparseCompensation window must have two extents");
-    const auto policy = c.parameters["overlap_policy"].as<std::string>();
-    hr::OverlapPolicy overlap;
-    if (policy == "keep_all")
-      overlap = hr::OverlapPolicy::kKeepAll;
-    else if (policy == "dedup")
-      overlap = hr::OverlapPolicy::kDedup;
-    else if (policy == "average")
-      overlap = hr::OverlapPolicy::kAverage;
-    else
-      throw std::invalid_argument("TDMSparseCompensation invalid overlap policy");
-    SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], shape[4], c.profile};
-    Scenario scenario{c.id, c.profile, size};
-    scenario.policy = overlap;
-    if (c.parameters["pri"])
-      scenario.pri = c.parameters["pri"].as<double>();
-    if (scenario.pri <= 40.0e-6)
-      throw std::invalid_argument("TDMSparseCompensation PRI too short");
-    scenario.window_doppler = window[0].as<int64_t>();
-    scenario.window_range = window[1].as<int64_t>();
-    if (scenario.window_doppler < 0 || scenario.window_range < 0 || scenario.window_doppler > 2 ||
-        scenario.window_range > 2)
-      throw std::invalid_argument("TDMSparseCompensation window out of range");
-    if (c.override_value) {
-      scenario.live_port = (*c.override_value)["port"].as<std::string>();
-      if (scenario.live_port == "waveform") {
-        scenario.changed_pri = (*c.override_value)["value"].as<double>();
-        if (scenario.changed_pri <= 40.0e-6)
-          throw std::invalid_argument("TDMSparseCompensation invalid waveform PRI");
-      } else if (scenario.live_port == "snapshot_window") {
-        const auto changed = (*c.override_value)["value"];
-        if (!changed.IsSequence() || changed.size() != 2)
-          throw std::invalid_argument("TDMSparseCompensation invalid changed window");
-        scenario.changed_doppler = changed[0].as<int64_t>();
-        scenario.changed_range = changed[1].as<int64_t>();
-        if (scenario.changed_doppler < 0 || scenario.changed_range < 0 ||
-            scenario.changed_doppler > 2 || scenario.changed_range > 2)
-          throw std::invalid_argument("TDMSparseCompensation changed window out of range");
-      } else {
-        throw std::invalid_argument("unknown TDMSparseCompensation live port");
-      }
-    }
-    return scenario;
+    perf::require_recipe_params(scen.params, {"waveform", "tx_positions", "rx_positions",
+                                              "overlap_policy", "snapshot_window"});
+    (void)parameters(scen);
+    (void)perf::sparse_mimo_extents(scen);
+    if (scen.live_port == "waveform")
+      (void)perf::recipe_fmcw_waveform(scen.params["waveform"],
+                                       scen.live_value["pri_seconds"].as<double>());
+    return scen;
   }
 };
 

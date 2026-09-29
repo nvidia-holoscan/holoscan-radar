@@ -1,19 +1,34 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-version: 1
+version: 2
 operator: cluster_dbscan
+axes: [points, features, clusters]
 profiles:
   small: {shape: [256, 2, 8]}
   medium: {shape: [1024, 3, 32]}
   large: {shape: [2048, 5, 64]}
 live_ports: [epsilon, min_points, max_clusters]
+recipe:
+  operator_type: radar.ClusterDBSCANOp.float
+  inputs:
+    - {port: points, shape: [points, features], dtype: float32, memory: device, generator: cluster_blobs}
+  constructor: {extents: {max_points: points, max_features: features, max_clusters: clusters}}
+  params:
+    epsilon: [0.5]
+    min_points: {factory: scaled_axis, axis: features, scale: 2}
+    max_clusters: 0
+  outputs: {timed: labels, drain: [sizes], unwired: []}
+  live:
+    epsilon: {physical_port: epsilon, codec: host_float64_vector}
+    min_points: {physical_port: min_points, codec: int64}
+    max_clusters: {physical_port: max_clusters, codec: int64}
 cases:
-  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {epsilon: 0.5}}
-  - {id: wider-epsilon-medium, profile: medium, scopes: [limited], parameters: {epsilon: 0.8}}
-  - {id: dense-core-medium, profile: medium, scopes: [limited], parameters: {epsilon: 0.5, min_points: 12}}
-  - {id: cluster-cap-medium, profile: medium, scopes: [limited], parameters: {epsilon: 0.5, max_clusters: 16}}
-  - {id: "epsilon-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {epsilon: 0.5}, override: {port: epsilon, value: 0.8}}
-  - {id: "min-points-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {epsilon: 0.5}, override: {port: min_points, value: 8}}
-  - {id: "max-clusters-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {epsilon: 0.5}, override: {port: max_clusters, value: 4}}
-  - {id: wide-core-medium, profile: medium, scopes: [moderate], parameters: {epsilon: 0.8, min_points: 12}}
-  - {id: tight-cap-large, profile: large, scopes: [thorough], parameters: {epsilon: 0.5, min_points: 12, max_clusters: 8}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
+  - {id: wider-epsilon-medium, profile: medium, scopes: [limited], parameters: {epsilon: [0.8]}}
+  - {id: dense-core-medium, profile: medium, scopes: [limited], parameters: {min_points: 12}}
+  - {id: cluster-cap-medium, profile: medium, scopes: [limited], parameters: {max_clusters: 16}}
+  - {id: "epsilon-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: epsilon, value: [0.8]}}
+  - {id: "min-points-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: min_points, value: 8}}
+  - {id: "max-clusters-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: max_clusters, value: 4}}
+  - {id: wide-core-medium, profile: medium, scopes: [moderate], parameters: {epsilon: [0.8], min_points: 12}}
+  - {id: tight-cap-large, profile: large, scopes: [thorough], parameters: {min_points: 12, max_clusters: 8}}

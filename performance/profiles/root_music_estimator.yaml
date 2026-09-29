@@ -1,19 +1,173 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-version: 1
+version: 2
 operator: root_music_estimator
 profiles:
-  small: {shape: [4, 64, 16]}
-  medium: {shape: [8, 128, 32]}
-  large: {shape: [16, 256, 48]}
-live_ports: [array_geometry, spatial_smoothing, num_sources, source_count_pfa, max_sources]
+  small:
+    shape:
+    - 4
+    - 64
+    - 16
+  medium:
+    shape:
+    - 8
+    - 128
+    - 32
+  large:
+    shape:
+    - 16
+    - 256
+    - 48
+live_ports:
+- array_geometry
+- spatial_smoothing
+- num_sources
+- source_count_pfa
+- max_sources
 cases:
-  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {num_sources: auto}}
-  - {id: parameter-medium, profile: medium, scopes: [limited], parameters: {num_sources: 2}}
-  - {id: parameter-large, profile: large, scopes: [moderate], parameters: {num_sources: 2}}
-  - {id: "array-geometry-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {num_sources: auto}, override: {port: array_geometry, value: "spacing_045"}}
-  - {id: "spatial-smoothing-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {num_sources: auto}, override: {port: spatial_smoothing, value: "two"}}
-  - {id: "num-sources-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {num_sources: auto}, override: {port: num_sources, value: "2"}}
-  - {id: "source-count-pfa-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {num_sources: auto}, override: {port: source_count_pfa, value: "0.001"}}
-  - {id: "max-sources-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {num_sources: auto}, override: {port: max_sources, value: "3"}}
-  - {id: transition-medium, profile: medium, scopes: [thorough], parameters: {num_sources: 2}, override: {port: array_geometry, value: spacing_045}}
+- id: baseline-{profile}
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - minimal
+  parameters: {}
+- id: parameter-medium
+  profile: medium
+  scopes:
+  - limited
+  parameters:
+    num_sources: 2
+- id: parameter-large
+  profile: large
+  scopes:
+  - moderate
+  parameters:
+    num_sources: 2
+- id: array-geometry-{profile}
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - overrides
+  - moderate
+  parameters: {}
+  override:
+    port: array_geometry
+    value:
+      spacing_wavelengths: 0.45
+- id: spatial-smoothing-{profile}
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - overrides
+  parameters: {}
+  override:
+    port: spatial_smoothing
+    value:
+    - 2
+- id: num-sources-{profile}
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - overrides
+  - moderate
+  parameters: {}
+  override:
+    port: num_sources
+    value: 2
+- id: source-count-pfa-{profile}
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - overrides
+  parameters: {}
+  override:
+    port: source_count_pfa
+    value: 0.001
+- id: max-sources-{profile}
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - overrides
+  parameters: {}
+  override:
+    port: max_sources
+    value: 3
+- id: transition-medium
+  profile: medium
+  scopes:
+  - thorough
+  parameters:
+    num_sources: 2
+  override:
+    port: array_geometry
+    value:
+      spacing_wavelengths: 0.45
+axes:
+- channels
+- detections
+- snapshots
+recipe:
+  operator_type: radar.RootMUSICEstimatorOp.float
+  inputs:
+  - port: snapshot
+    shape:
+    - detections
+    - channels
+    - snapshots
+    dtype: complex64
+    memory: device
+    generator: iq_cube
+  fixtures:
+    max_sources_bound: 4
+  constructor:
+    extents:
+      max_items: detections
+      max_channels: channels
+      max_sources: max_sources_bound
+  params:
+    array_geometry:
+      factory: ula_geometry
+      spacing_wavelengths: 0.5
+      wavelength: 1.0
+    angle_convention:
+      preset: radar_boresight
+    num_sources: -1
+    source_count_pfa: 0.01
+    max_sources: 4
+    spatial_smoothing: []
+  outputs:
+    timed: aoa_estimates
+    drain:
+    - doa_multi
+    - source_count
+    - eigenvalues
+    unwired: []
+    queue_depth: 8
+  live:
+    array_geometry:
+      physical_port: array_geometry
+      codec: ula_geometry_patch
+    spatial_smoothing:
+      physical_port: spatial_smoothing
+      codec: spatial_smoothing
+    num_sources:
+      physical_port: num_sources
+      codec: int64
+    source_count_pfa:
+      physical_port: source_count_pfa
+      codec: double
+    max_sources:
+      physical_port: max_sources
+      codec: int64

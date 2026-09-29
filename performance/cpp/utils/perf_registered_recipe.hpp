@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <map>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -75,6 +76,7 @@ inline void validate_authored_input(const holoscan::PortRecord& port,
   if (repr.dtype) {
     const auto expected = declared.dtype == "complex64" ? DLDataType{kDLComplex, 64, 1}
                           : declared.dtype == "float32" ? DLDataType{kDLFloat, 32, 1}
+                          : declared.dtype == "int32"   ? DLDataType{kDLInt, 32, 1}
                                                         : DLDataType{kDLInt, 64, 1};
     if (repr.dtype->code != expected.code || repr.dtype->bits != expected.bits ||
         repr.dtype->lanes != expected.lanes)
@@ -87,7 +89,12 @@ struct RegisteredOutputRecipe {
   std::vector<std::string> drain;
   std::vector<std::string> unwired;
   unsigned int queue_depth{4U};
+  std::string timed_pair;
+  std::map<std::string, std::string> drain_codecs;
 };
+
+template <typename Value>
+void ensure_recipe_live_payload();
 
 inline void wire_registered_outputs(holoscan::Graph& graph, holoscan::CompileOptions& options,
                                     const OpaqueOperator& op, std::string_view op_name,
@@ -95,20 +102,41 @@ inline void wire_registered_outputs(holoscan::Graph& graph, holoscan::CompileOpt
                                     std::vector<OpaqueOperator>* members) {
   const holoscan::ConnectionOptions queue{.queue_depth = recipe.queue_depth};
   const auto records = op.ports();
-  const auto& timed = recipe_port(records, recipe.timed, holoscan::PortDirection::kOutput);
-  (void)timed;
-  auto terminal = graph.op<PerfTerminalSinkOp>(recipe.timed + "_perf_sink");
-  auto terminal_ref = OpaqueOperator::from_handle(terminal);
-  add_registered_flow(graph, op, recipe.timed, terminal_ref, "in", queue);
-  bind_tensor_out(options, std::string(op_name).c_str(), recipe.timed.c_str());
-  members->push_back(terminal_ref);
+  (void)recipe_port(records, recipe.timed, holoscan::PortDirection::kOutput);
+  if (recipe.timed_pair.empty()) {
+    auto terminal = graph.op<PerfTerminalSinkOp>(recipe.timed + "_perf_sink");
+    auto terminal_ref = OpaqueOperator::from_handle(terminal);
+    add_registered_flow(graph, op, recipe.timed, terminal_ref, "in", queue);
+    bind_tensor_out(options, std::string(op_name).c_str(), recipe.timed.c_str());
+    members->push_back(terminal_ref);
+  } else {
+    (void)recipe_port(records, recipe.timed_pair, holoscan::PortDirection::kOutput);
+    auto terminal = graph.op<PerfDualTerminalSinkOp>("paired_perf_sink");
+    auto terminal_ref = OpaqueOperator::from_handle(terminal);
+    add_registered_flow(graph, op, recipe.timed, terminal_ref, "in0", queue);
+    add_registered_flow(graph, op, recipe.timed_pair, terminal_ref, "in1", queue);
+    bind_tensor_out(options, std::string(op_name).c_str(), recipe.timed.c_str());
+    bind_tensor_out(options, std::string(op_name).c_str(), recipe.timed_pair.c_str());
+    members->push_back(terminal_ref);
+  }
   for (const auto& name : recipe.drain) {
     (void)recipe_port(records, name, holoscan::PortDirection::kOutput);
-    auto sink = graph.op<PerfNullSinkOp>(name + "_perf_drain");
-    auto sink_ref = OpaqueOperator::from_handle(sink);
-    add_registered_flow(graph, op, name, sink_ref, "in", queue);
-    bind_tensor_out(options, std::string(op_name).c_str(), name.c_str());
-    members->push_back(sink_ref);
+    const auto codec = recipe.drain_codecs.find(name);
+    if (codec == recipe.drain_codecs.end()) {
+      auto sink = graph.op<PerfNullSinkOp>(name + "_perf_drain");
+      auto sink_ref = OpaqueOperator::from_handle(sink);
+      add_registered_flow(graph, op, name, sink_ref, "in", queue);
+      bind_tensor_out(options, std::string(op_name).c_str(), name.c_str());
+      members->push_back(sink_ref);
+    } else if (codec->second == "array_geometry") {
+      ensure_recipe_live_payload<ArrayGeometry>();
+      auto sink = graph.op<PerfPayloadSinkOp<WireArrayGeometry>>(name + "_perf_drain");
+      auto sink_ref = OpaqueOperator::from_handle(sink);
+      add_registered_flow(graph, op, name, sink_ref, "in", queue);
+      members->push_back(sink_ref);
+    } else {
+      throw std::invalid_argument("unknown recipe drain codec: " + codec->second);
+    }
   }
   for (const auto& name : recipe.unwired) {
     (void)recipe_port(records, name, holoscan::PortDirection::kOutput);
@@ -130,7 +158,8 @@ TimingCollector run_registered_recipe_core(
     std::string_view registry_name, const MaxTensorExtents& extents,
     const typename Op::Params& params, const std::array<std::string, N>& data_ports,
     const RegisteredOutputRecipe& outputs, SourceFactory source_factory, std::string_view live_port,
-    LiveConnect live_connect, std::span<const RegisteredInputContract> input_contracts) {
+    LiveConnect live_connect, std::span<const RegisteredInputContract> input_contracts,
+    PerfPublishMode publication) {
   constexpr auto source_ports = PerfDefaultSource<N>::ports;
   std::string graph_name = std::string(registry_name) + "-perf";
   return run_typed_recipe(
@@ -157,7 +186,8 @@ TimingCollector run_registered_recipe_core(
         wire_registered_outputs(graph, options, op, "op", outputs, &members);
         auto partition = graph.partition("perf");
         OpaqueOperator::partition_add(partition, std::span<const OpaqueOperator>(members));
-      });
+      },
+      publication);
 }
 
 template <typename Op, std::size_t N>
@@ -167,13 +197,15 @@ TimingCollector run_registered_recipe(std::array<std::shared_ptr<holoscan::Tenso
                                       const typename Op::Params& params,
                                       const std::array<std::string, N>& data_ports,
                                       const RegisteredOutputRecipe& outputs,
-                                      std::span<const RegisteredInputContract> contracts = {}) {
+                                      std::span<const RegisteredInputContract> contracts = {},
+                                      PerfPublishMode publication = PerfPublishMode::kCopy) {
   return run_registered_recipe_core<Op>(
       std::move(inputs), plan, registry_name, extents, params, data_ports, outputs,
       [](holoscan::Graph& graph) {
         return graph.op<typename PerfDefaultSource<N>::Op>("src");
       },
-      {}, [](auto&, const auto&, const auto&, const auto&, auto, const auto&) {}, contracts);
+      {}, [](auto&, const auto&, const auto&, const auto&, auto, const auto&) {}, contracts,
+      publication);
 }
 
 template <typename Value>
@@ -194,12 +226,15 @@ void ensure_recipe_live_payload() {
 }
 
 template <typename Op, std::size_t N, typename Value>
-TimingCollector run_registered_live_recipe(
-    std::array<std::shared_ptr<holoscan::Tensor>, N> inputs, const RunPlan& plan,
-    std::string_view registry_name, const MaxTensorExtents& extents,
-    const typename Op::Params& params, const std::array<std::string, N>& data_ports,
-    const RegisteredOutputRecipe& outputs, const RegisteredLiveRecipe<Value>& live,
-    std::span<const RegisteredInputContract> contracts = {}) {
+TimingCollector run_registered_live_recipe(std::array<std::shared_ptr<holoscan::Tensor>, N> inputs,
+                                           const RunPlan& plan, std::string_view registry_name,
+                                           const MaxTensorExtents& extents,
+                                           const typename Op::Params& params,
+                                           const std::array<std::string, N>& data_ports,
+                                           const RegisteredOutputRecipe& outputs,
+                                           const RegisteredLiveRecipe<Value>& live,
+                                           std::span<const RegisteredInputContract> contracts = {},
+                                           PerfPublishMode publication = PerfPublishMode::kCopy) {
   ensure_recipe_live_payload<Value>();
   if (!plan.has_override() || plan.override_at >= plan.total_frames)
     throw std::invalid_argument("performance recipe requires one changed frame");
@@ -213,7 +248,7 @@ TimingCollector run_registered_live_recipe(
       [](auto& graph, const auto&, const auto& src, const auto& op, auto port, const auto& q) {
         add_registered_flow(graph, src, "override_out", op, port, q);
       },
-      contracts);
+      contracts, publication);
 }
 
 template <typename Op, std::size_t N, typename Value, typename Connect>
@@ -222,7 +257,8 @@ TimingCollector run_registered_live_recipe_with_connector(
     std::string_view registry_name, const MaxTensorExtents& extents,
     const typename Op::Params& params, const std::array<std::string, N>& data_ports,
     const RegisteredOutputRecipe& outputs, const RegisteredLiveRecipe<Value>& live, Connect connect,
-    std::span<const RegisteredInputContract> contracts = {}) {
+    std::span<const RegisteredInputContract> contracts = {},
+    PerfPublishMode publication = PerfPublishMode::kCopy) {
   if (!plan.has_override() || plan.override_at >= plan.total_frames)
     throw std::invalid_argument("performance recipe requires one changed frame");
   return run_registered_recipe_core<Op>(
@@ -235,7 +271,7 @@ TimingCollector run_registered_live_recipe_with_connector(
       [&](auto& graph, const auto& source, const auto&, const auto& op, auto, const auto& q) {
         connect(graph, source, PerfRegisteredOperator<Op>::typed_handle_for_flow(op), q);
       },
-      contracts);
+      contracts, publication);
 }
 
 }  // namespace holoscan::radar::perf

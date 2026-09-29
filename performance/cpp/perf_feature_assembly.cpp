@@ -1,175 +1,72 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Performance characterization for FeatureAssemblyOp — sweeps detection count
-// and map size. Measurement tool only: no timing assertions.
-//
-// Typed recipe runner times the physical
-// {range, velocity} pack with exact-aligned axis inputs. No [live] parameters.
-
-#include <cuda_runtime_api.h>
-
 #include <algorithm>
 #include <cstdint>
-#include <cstdlib>
 #include <stdexcept>
-#include <iostream>
-#include <memory>
-#include <sstream>
 #include <string>
-#include <utility>
+#include <string_view>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
-
 #include "detection/feature_assembly_op/feature_assembly_op.hpp"
-#include "radar_common/descriptors/max_tensor_extents.hpp"
-#include "radar_common/tensor/dlpack_buffer.hpp"
-#include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/perf_driver.hpp"
-#include "utils/perf_graph.hpp"
-#include "utils/perf_platform.hpp"
-#include "utils/perf_report.hpp"
-#include "utils/perf_recipe.hpp"
-#include "utils/perf_runner.hpp"
-#include "utils/tensor_factory.hpp"
+#include "utils/perf_yaml_pilot.hpp"
 
 namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
 
+namespace holoscan::radar::perf {
+
+template <>
+struct PerfOperatorFactory<FeatureAssemblyOp<float>> {
+  inline static thread_local std::vector<AssemblyFeature> features;
+  static holoscan::OperatorHandle<FeatureAssemblyOp<float>> create(
+      holoscan::Graph& graph, std::string_view name, const MaxTensorExtents& extents) {
+    return graph.op<FeatureAssemblyOp<float>>(name, extents, features);
+  }
+};
+
+}  // namespace holoscan::radar::perf
+
 namespace {
 
-using PerfPrecision = float;
+using Op = hr::FeatureAssemblyOp<float>;
+struct Scenario : perf::RecipeScenario {};
 
-constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
-
-struct SizeSpec {
-  std::string id;
-  int64_t doppler;
-  int64_t range;
-  std::string role;
-};
-
-struct FeatScenario {
-  std::string id;
-  std::string size_id;
-  int64_t num_detections{0};
-  int64_t doppler{0};
-  int64_t range{0};
-};
-
-std::vector<hr::AssemblyFeature> pack_features() {
+std::vector<hr::AssemblyFeature> constructor_features(const Scenario& scen) {
+  const auto features = scen.recipe.constructor["features"];
+  if (!features.IsSequence() || features.size() != 2 || features[0].as<std::string>() != "range" ||
+      features[1].as<std::string>() != "velocity")
+    throw std::invalid_argument("FeatureAssembly recipe requires [range, velocity]");
   return {hr::AssemblyFeature::kRange, hr::AssemblyFeature::kVelocity};
 }
 
-template <typename T>
-std::shared_ptr<holoscan::Tensor> make_device_from_host(const std::vector<T>& host,
-                                                        const std::vector<int64_t>& shape,
-                                                        DLDataType dtype) {
-  auto tensor = hr::make_device_tensor(shape, dtype);
-  if (!host.empty()) {
-    auto mut = tensor->mutable_data();
-    if (!mut) {
-      throw std::runtime_error("perf_feature_assembly: tensor not writable");
-    }
-    if (cudaMemcpy(mut.value(), host.data(), sizeof(T) * host.size(), cudaMemcpyHostToDevice) !=
-        cudaSuccess) {
-      throw std::runtime_error("perf_feature_assembly: cudaMemcpy H2D failed");
-    }
-  }
-  return tensor;
+perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
+  hr::MaxTensorExtents extents;
+  extents.max_points = std::max<int64_t>(scen.axis("detections"), 1);
+  extents.max_features = 2;
+  perf::PerfOperatorFactory<Op>::features = constructor_features(scen);
+  return perf::run_recipe_case<Op, 3>(scen, plan, extents, Op::Params{});
 }
 
-std::shared_ptr<holoscan::Tensor> make_detection_idx(int64_t num_detections, int64_t doppler,
-                                                     int64_t range) {
-  std::vector<int64_t> host(static_cast<size_t>(std::max<int64_t>(num_detections, 0) * 2), 0);
-  const int64_t cells = std::max<int64_t>(doppler * range, 1);
-  for (int64_t i = 0; i < num_detections; ++i) {
-    const int64_t cell = (i * 997) % cells;
-    host[static_cast<size_t>(i * 2)] = cell / range;
-    host[static_cast<size_t>(i * 2 + 1)] = cell % range;
-  }
-  return make_device_from_host(host, {num_detections, 2}, kInt64Dtype);
-}
-
-perf::TimingCollector run_graph(const FeatScenario& scen, const perf::RunPlan& plan) {
-  auto idx_t = make_detection_idx(scen.num_detections, scen.doppler, scen.range);
-  std::vector<PerfPrecision> range_host(static_cast<std::size_t>(scen.range));
-  std::vector<PerfPrecision> velocity_host(static_cast<std::size_t>(scen.doppler));
-  for (int64_t i = 0; i < scen.range; ++i) {
-    range_host[static_cast<std::size_t>(i)] = static_cast<PerfPrecision>(i);
-  }
-  for (int64_t i = 0; i < scen.doppler; ++i) {
-    velocity_host[static_cast<std::size_t>(i)] = static_cast<PerfPrecision>(i);
-  }
-  auto range_t = make_device_from_host(range_host, {scen.range}, hr::real_dtype<PerfPrecision>());
-  auto velocity_t =
-      make_device_from_host(velocity_host, {scen.doppler}, hr::real_dtype<PerfPrecision>());
-  return perf::run_data_recipe(
-      std::array{std::move(idx_t), std::move(range_t), std::move(velocity_t)}, plan,
-      "feat-asm-perf",
-      [&](holoscan::Graph& graph, const auto& src, holoscan::CompileOptions& options) {
-        hr::MaxTensorExtents extents;
-        extents.max_points = std::max<int64_t>(scen.num_detections, 1);
-        extents.max_features = static_cast<int64_t>(pack_features().size());
-        auto features = pack_features();
-        auto op =
-            graph.op<hr::FeatureAssemblyOp<PerfPrecision>>("feat", extents, std::move(features));
-
-        const holoscan::ConnectionOptions q{.queue_depth = 4U};
-
-        graph.add_flow(src->out_a, op->detection_idx, q);
-        graph.add_flow(src->out_b, op->range_bins, q);
-        graph.add_flow(src->out_c, op->velocity_bins, q);
-        perf::PerfRecipeOutputs outputs(graph, options, "feat");
-        outputs.timed(op->points, "points");
-        outputs.finish(src, op);
-      });
-}
-
-void fill_throughput(perf::ResultRow* row, const FeatScenario& scen, double median_ms) {
-  if (median_ms <= 0.0) {
-    return;
-  }
-  const double sec = median_ms / 1000.0;
-  const double n = static_cast<double>(scen.num_detections);
-  row->cells_per_second = n / sec;
-
-  const double tsz = sizeof(PerfPrecision);
-  const double idx_bytes = n * 2.0 * static_cast<double>(sizeof(int64_t));
-  const double axis_bytes = static_cast<double>(scen.doppler + scen.range) * tsz;
-  const int64_t num_features = static_cast<int64_t>(pack_features().size());
-  const double points_bytes = n * static_cast<double>(num_features) * tsz;
-  row->estimated_effective_gbps = (idx_bytes + axis_bytes + points_bytes) / sec / 1e9;
-}
-
-perf::ResultRow base_row(const FeatScenario& scen) {
+perf::ResultRow base_row(const Scenario& scen) {
   perf::ResultRow row;
   row.op_name = "FeatureAssemblyOp";
   row.variant = "physical_range_velocity";
-  row.map_shape = {scen.doppler, scen.range};
-  row.input_shape = {scen.num_detections, 2};
-  row.out_batch = scen.num_detections;
-  row.k = static_cast<int64_t>(pack_features().size());
+  row.map_shape = {scen.axis("doppler"), scen.axis("range")};
+  row.input_shape = {scen.axis("detections"), 2};
+  row.out_batch = scen.axis("detections");
+  row.k = 2;
   row.notes = "join=exact_aligned_axes";
   return row;
 }
 
-FeatScenario make_scenario(const SizeSpec& s, int64_t num_detections) {
-  FeatScenario sc;
-  sc.size_id = s.id;
-  sc.doppler = s.doppler;
-  sc.range = s.range;
-  sc.num_detections = num_detections;
-  std::ostringstream id;
-  id << "feat_asm_physical_" << s.id << "_n" << num_detections << "_compute";
-  sc.id = id.str();
-  return sc;
-}
-
-void decorate_row(perf::ResultRow& row, const FeatScenario& scen) {
-  fill_throughput(&row, scen, row.latency.median_ms);
+void decorate_row(perf::ResultRow& row, const Scenario& scen) {
+  const double count = static_cast<double>(scen.axis("detections"));
+  const double bytes =
+      count * (2.0 * sizeof(int64_t) + 2.0 * sizeof(float)) +
+      static_cast<double>(scen.axis("doppler") + scen.axis("range")) * sizeof(float);
+  perf::set_recipe_throughput(row, count, std::nullopt, bytes);
   row.notes =
       "bins-only (range+velocity) — score/aoa optional ports "
       "omitted from this Graph benchmark (covered by stage tests); "
@@ -177,40 +74,36 @@ void decorate_row(perf::ResultRow& row, const FeatScenario& scen) {
       "steady state; cells/s is detections/s";
 }
 
-struct FeatTraits : perf::PerfDriverDefaults {
-  using Scenario = FeatScenario;
-
+struct Traits : perf::PerfDriverDefaults {
+  using Scenario = ::Scenario;
   static const char* tool_name() { return "perf_feature_assembly"; }
   static const char* tool_description() {
-    return "FeatureAssemblyOp performance characterization "
-           "(HSDK 5 Graph)";
+    return "FeatureAssemblyOp performance characterization (HSDK 5 Graph)";
   }
-
   static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
-    if (shape.size() != 2)
-      throw std::invalid_argument("feature_assembly profile rank mismatch");
-    return {id, shape, shape[0] * shape[1], id};
+    return perf::recipe_size_def(id, shape, 2, 2);
   }
-
-  static FeatScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
-    if (shape.size() != 2)
-      throw std::invalid_argument("feature_assembly profile rank mismatch");
-    perf::require_keys(c.parameters, {"detections"}, "parameters");
-    if (c.override_value.has_value())
-      throw std::invalid_argument("FeatureAssembly has no live input");
-    const int64_t count = c.parameters["detections"].as<int64_t>();
-    if (count < 0 || count > 65536)
+  static void validate_suite(const perf::ProfileSuite& suite) {
+    (void)perf::validate_pilot_suite<Op>(
+        suite, "radar.FeatureAssemblyOp.float", "feature_assembly_bounds",
+        {{"detection_idx", {"detections", "two"}, "int64", "device", "in_bounds_rd_indices", {}},
+         {"range_bins", {"range"}, "float32", "device", "axis_ramp", {}},
+         {"velocity_bins", {"doppler"}, "float32", "device", "axis_ramp", {}}},
+        {"points", {}, {}, 4U}, {}, {});
+  }
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape,
+                             const perf::ProfileSuite& suite) {
+    auto scen = perf::pilot_scenario<Scenario>(suite, c, shape, 2);
+    if (scen.axis("detections") > 65536)
       throw std::invalid_argument("FeatureAssembly detections out of range");
-    const SizeSpec size{c.profile, shape[0], shape[1], c.profile};
-    auto scenario = make_scenario(size, count);
-    scenario.id = c.id;
-    scenario.size_id = c.profile;
-    return scenario;
+    perf::require_recipe_params(scen.params, {});
+    (void)constructor_features(scen);
+    return scen;
   }
 };
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<FeatTraits>(argc, argv);
+  return perf::perf_main<Traits>(argc, argv);
 }

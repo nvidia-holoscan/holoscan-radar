@@ -82,6 +82,8 @@ TEST(PerfProfiles, EveryMigratedSuiteHasThreeBaselinesAndBoundedThorough) {
     const auto suite = perf::load_profile_suite(
         std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / (std::string(name) + ".yaml"),
         name);
+    EXPECT_EQ(suite.version, 2);
+    EXPECT_NO_THROW((void)perf::parse_yaml_recipe(suite));
     EXPECT_EQ(suite.select("minimal").size(), 3U);
     EXPECT_GE(suite.select("limited").size(), 3U);
     EXPECT_LE(suite.select("thorough").size(), 64U);
@@ -251,9 +253,11 @@ TEST(PerfProfiles, LimitedIncludesEveryCfarBackend) {
       std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_dense_demultiplex.yaml",
       "ddm_dense_demultiplex");
   std::set<std::string> codes;
-  for (const auto& c : ddm.select("limited"))
-    codes.insert(c.parameters["code"].as<std::string>());
-  EXPECT_EQ(codes, (std::set<std::string>{"linear", "nonlinear"}));
+  for (const auto& c : ddm.select("limited")) {
+    const auto params = perf::merge_recipe_map(ddm.recipe["params"], c.parameters);
+    codes.insert(params["ddm_code"]["factory"].as<std::string>());
+  }
+  EXPECT_EQ(codes, (std::set<std::string>{"linear_exact_ddm_code", "nonlinear_phase_code"}));
 }
 
 TEST(PerfProfiles, VersionTwoRecipesKeepCuratedCasesAndNamedInputs) {
@@ -273,11 +277,11 @@ TEST(PerfProfiles, VersionTwoRecipesKeepCuratedCasesAndNamedInputs) {
         EXPECT_FALSE(perf::recipe_shape(input, values).empty());
     }
   }
-  const auto legacy = perf::load_profile_suite(
+  const auto clutter = perf::load_profile_suite(
       std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml",
       "clutter_filter");
-  EXPECT_EQ(legacy.version, 1);
-  EXPECT_THROW(perf::parse_yaml_recipe(legacy), std::invalid_argument);
+  EXPECT_EQ(clutter.version, 2);
+  EXPECT_NO_THROW((void)perf::parse_yaml_recipe(clutter));
 }
 
 TEST(PerfProfiles, GenericYamlScalarParamsMaterializeThroughHsdkSchema) {
@@ -530,6 +534,55 @@ TEST(PerfProfiles, SharedAdapterOwnsSizeAndReportIdentity) {
   EXPECT_THROW(
       perf::detail::run_adapter_case<AdapterFixtureTraits>(missing_live, settings, &report),
       std::invalid_argument);
+}
+
+TEST(PerfProfiles, SchemaV2KeepsNestedDescriptorFieldsWhenCasesOverrideOneField) {
+  const auto suite = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "tdm_dense_compensation.yaml",
+      "tdm_dense_compensation");
+  const auto& changed = suite.cases[3];
+  const auto merged = perf::merge_recipe_map(suite.recipe["params"], changed.parameters);
+  const auto waveform = merged["waveform"];
+  EXPECT_EQ(waveform["factory"].as<std::string>(), "valid_fmcw_waveform");
+  EXPECT_DOUBLE_EQ(waveform["pri_seconds"].as<double>(), 0.00003);
+  EXPECT_DOUBLE_EQ(waveform["carrier_frequency"].as<double>(), 77.0e9);
+  EXPECT_NO_THROW((void)perf::recipe_fmcw_waveform(waveform));
+}
+
+TEST(PerfProfiles, SchemaV2DeclaresPairedAndDescriptorOutputs) {
+  const auto reduction = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "detection_reduction.yaml",
+      "detection_reduction");
+  const auto reduction_recipe = perf::parse_yaml_recipe(reduction);
+  EXPECT_EQ(reduction_recipe.inputs.size(), 3U);
+  EXPECT_EQ(reduction_recipe.outputs.timed, "rep_idx");
+  EXPECT_EQ(reduction_recipe.outputs.timed_pair, "reduced_points");
+
+  const auto sparse = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_sparse_demultiplex.yaml",
+      "ddm_sparse_demultiplex");
+  const auto sparse_recipe = perf::parse_yaml_recipe(sparse);
+  EXPECT_EQ(sparse_recipe.outputs.drain_codecs.at("array_geometry"), "array_geometry");
+  EXPECT_EQ(sparse_recipe.inputs[1].index_doppler_divisor, "tx");
+}
+
+TEST(PerfProfiles, SchemaV2RoundsSixInputFixtureAndKeepsEmptyDetectionCase) {
+  const auto expansion = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "multi_source_expansion.yaml",
+      "multi_source_expansion");
+  const auto baseline = perf::recipe_values(expansion, expansion.cases[0]);
+  EXPECT_EQ(baseline.at("selected"), 8);
+  const auto full = perf::recipe_values(expansion, expansion.cases.back());
+  EXPECT_EQ(full.at("selected"), 16384);
+  EXPECT_EQ(perf::parse_yaml_recipe(expansion).inputs.size(), 6U);
+
+  const auto feature = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "feature_assembly.yaml",
+      "feature_assembly");
+  const auto empty = perf::recipe_values(feature, feature.cases[5]);
+  EXPECT_EQ(empty.at("detections"), 0);
+  const auto recipe = perf::parse_yaml_recipe(feature);
+  EXPECT_EQ(perf::recipe_shape(recipe.inputs[0], empty), (std::vector<int64_t>{0, 2}));
 }
 
 }  // namespace

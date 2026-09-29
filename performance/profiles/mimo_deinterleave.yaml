@@ -1,11 +1,20 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-version: 1
+version: 2
 operator: mimo_deinterleave
+axes: [tx, rx, chirps_per_tx, samples]
 profiles:
   small: {shape: [2, 4, 8, 64]}
   medium: {shape: [4, 16, 32, 256]}
   large: {shape: [8, 32, 64, 512]}
 live_ports: []
+recipe:
+  operator_type: radar.MIMODeinterleaveOp.float
+  derived_axes: {slow_time: {product: [tx, chirps_per_tx]}}
+  inputs:
+    - {port: adc_cube, shape: [rx, slow_time, samples], dtype: complex64, memory: device, generator: iq_cube}
+  constructor: {extents: {max_tx: tx, max_rx: rx, max_chirps: chirps_per_tx, max_samples_per_chirp: samples}}
+  params: {tx_schedule: {factory: round_robin}}
+  outputs: {timed: adc_cube_out, drain: [], unwired: []}
 cases:
-  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {tx_schedule: round_robin}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}

@@ -1,19 +1,33 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-version: 1
+version: 2
 operator: doppler_notch
+axes: [doppler, range]
 profiles:
   small: {shape: [32, 128]}
   medium: {shape: [128, 512]}
   large: {shape: [256, 2048]}
 live_ports: [center_velocity, stop_half_width, transition_width]
+recipe:
+  operator_type: radar.DopplerNotchOp.float
+  inputs:
+    - {port: velocity_bins, shape: [doppler], dtype: float32, memory: device, generator: power_map}
+    - {port: rd_maps, shape: [tx, rx, doppler, range], omit_if_one: [tx, rx], dtype: complex64, memory: device, generator: iq_cube}
+  fixtures: {tx: 1, rx: 1}
+  constructor: {bounds_policy: doppler_notch_bounds}
+  params: {center_velocity: 0.0, stop_half_width: 0.5, transition_width: 0.0, cyclic_velocity_axis: true}
+  outputs: {timed: rd_maps_out, drain: [], unwired: []}
+  live:
+    center_velocity: {physical_port: center_velocity, codec: double}
+    stop_half_width: {physical_port: stop_half_width, codec: double}
+    transition_width: {physical_port: transition_width, codec: double}
 cases:
-  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {transition: hard, mimo: false}}
-  - {id: cosine-medium, profile: medium, scopes: [limited], parameters: {transition: cosine, mimo: false}}
-  - {id: mimo-medium, profile: medium, scopes: [limited], parameters: {transition: hard, mimo: true}}
-  - {id: noncyclic-medium, profile: medium, scopes: [limited], parameters: {transition: hard, mimo: false, cyclic: false}}
-  - {id: "center-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {transition: hard, mimo: false}, override: {port: center_velocity, value: 1.0}}
-  - {id: "stop-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {transition: hard, mimo: false}, override: {port: stop_half_width, value: 1.0}}
-  - {id: "transition-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {transition: hard, mimo: false}, override: {port: transition_width, value: 1.0}}
-  - {id: cosine-mimo-medium, profile: medium, scopes: [moderate], parameters: {transition: cosine, mimo: true}}
-  - {id: noncyclic-mimo-large, profile: large, scopes: [thorough], parameters: {transition: cosine, mimo: true, cyclic: false}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
+  - {id: cosine-medium, profile: medium, scopes: [limited], parameters: {transition_width: 1.0}}
+  - {id: mimo-medium, profile: medium, scopes: [limited], parameters: {}, fixture: {tx: 4, rx: 4}}
+  - {id: noncyclic-medium, profile: medium, scopes: [limited], parameters: {cyclic_velocity_axis: false}}
+  - {id: "center-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: center_velocity, value: 1.0}}
+  - {id: "stop-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: stop_half_width, value: 1.0}}
+  - {id: "transition-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: transition_width, value: 1.0}}
+  - {id: cosine-mimo-medium, profile: medium, scopes: [moderate], parameters: {transition_width: 1.0}, fixture: {tx: 4, rx: 4}}
+  - {id: noncyclic-mimo-large, profile: large, scopes: [thorough], parameters: {transition_width: 1.0, cyclic_velocity_axis: false}, fixture: {tx: 4, rx: 4}}

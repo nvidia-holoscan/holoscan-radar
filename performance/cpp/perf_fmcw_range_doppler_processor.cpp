@@ -1,82 +1,41 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Performance characterization for FMCWRangeDopplerProcessorOp — fused
-// range + optional inline clutter + Doppler in one graph node.  Sweeps
-// the (chirps x samples) size ladder, the inline clutter stage (off /
-// mean subtraction), and a multi-channel batch.
-//
-// Profiles each live input in isolation as a one-frame Exact override.
-// Measurement only; no timing assertions.
-//
-// This tool characterizes the fused operator as an individual Graph node.
-// See docs/planning/OPERATOR_DEVELOPMENT.md.
-
 #include <algorithm>
 #include <complex>
 #include <cstdint>
-#include <cstdlib>
-#include <set>
 #include <stdexcept>
-#include <iostream>
-#include <memory>
-#include <sstream>
 #include <string>
-#include <tuple>
-#include <utility>
+#include <string_view>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
-
 #include "fmcw/fmcw_range_doppler_processor_op/fmcw_range_doppler_processor_op.hpp"
-#include "radar_common/descriptors/enums.hpp"
-#include "radar_common/descriptors/max_tensor_extents.hpp"
-#include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
-#include "radar_common/descriptors/window_spec.hpp"
 #include "utils/perf_driver.hpp"
-#include "utils/perf_graph.hpp"
-#include "utils/perf_platform.hpp"
-#include "utils/perf_report.hpp"
-#include "utils/perf_recipe.hpp"
-#include "utils/perf_runner.hpp"
-#include "utils/tensor_factory.hpp"
+#include "utils/perf_yaml_codecs.hpp"
+#include "utils/perf_yaml_pilot.hpp"
 
 namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using PerfPrecision = float;  // v1 characterizes single precision (complex64).
+using Op = hr::FMCWRangeDopplerProcessorOp<float>;
+struct Scenario : perf::RecipeScenario {};
 
-struct SizeSpec {
-  std::string id;
-  int64_t num_chirps;
-  int64_t samples_per_chirp;
-  std::string role;
-};
+hr::ClutterFilterMethod clutter(std::string_view value) {
+  if (value == "none")
+    return hr::ClutterFilterMethod::kNone;
+  if (value == "mean_subtraction")
+    return hr::ClutterFilterMethod::kMeanSubtraction;
+  if (value == "single_delay")
+    return hr::ClutterFilterMethod::kSingleDelay;
+  if (value == "double_delay")
+    return hr::ClutterFilterMethod::kDoubleDelay;
+  throw std::invalid_argument("unknown fused clutter filter");
+}
 
-struct FusedScenario {
-  std::string id;
-  std::string size_id;
-  int64_t num_chirps{0};
-  int64_t samples_per_chirp{0};
-  int64_t channels{1};
-  hr::ClutterFilterMethod clutter{hr::ClutterFilterMethod::kNone};
-  hr::WindowType doppler_window{hr::WindowType::kNone};
-  hr::WindowType range_window{hr::WindowType::kNone};
-  bool apply_dechirp{false};
-  bool center_zero{true};
-  hr::FftNorm fft_norm{hr::FftNorm::kBackward};
-  int64_t nfft_range{0};
-  int64_t nfft_doppler{0};
-  double pri{25.0e-6};
-  std::string live_port;
-  std::string override_value;
-};
-
-std::string clutter_tag(hr::ClutterFilterMethod m) {
-  switch (m) {
+std::string clutter_tag(hr::ClutterFilterMethod value) {
+  switch (value) {
     case hr::ClutterFilterMethod::kNone:
       return "noclt";
     case hr::ClutterFilterMethod::kMeanSubtraction:
@@ -89,320 +48,158 @@ std::string clutter_tag(hr::ClutterFilterMethod m) {
   return "unk";
 }
 
-hr::FMCWWaveformDescriptor make_waveform(double pri = 25.0e-6) {
-  hr::FMCWWaveformSpec spec;
-  spec.carrier_frequency = 77.0e9;
-  spec.bandwidth = 150.0e6;
-  spec.chirp_duration = 20.0e-6;
-  spec.sample_rate = 12.8e6;
-  spec.chirp_repetition_interval = pri;
-  return hr::FMCWWaveformDescriptor(spec);
+hr::FMCWRangeDopplerProcessorParams parameters(const Scenario& scen) {
+  hr::FMCWRangeDopplerProcessorParams params;
+  params.waveform = perf::recipe_fmcw_waveform(scen.params["waveform"]);
+  params.clutter_filter = clutter(scen.params["clutter_filter"].as<std::string>());
+  params.range_window = perf::recipe_window(
+      perf::recipe_window_type(scen.params["range_window"]["type"].as<std::string>()));
+  params.doppler_window = perf::recipe_window(
+      perf::recipe_window_type(scen.params["doppler_window"]["type"].as<std::string>()));
+  params.apply_dechirp = scen.params["apply_dechirp"].as<bool>();
+  params.fft_norm = perf::recipe_fft_norm(scen.params["fft_norm"].as<std::string>());
+  params.center_zero_doppler = scen.params["center_zero_doppler"].as<bool>();
+  params.nfft_range = scen.params["nfft_range"].as<int64_t>();
+  params.nfft_doppler = scen.params["nfft_doppler"].as<int64_t>();
+  return params;
 }
 
-std::vector<int64_t> cube_shape(const FusedScenario& scen) {
-  if (scen.channels > 1) {
-    return {scen.channels, scen.num_chirps, scen.samples_per_chirp};
-  }
-  return {scen.num_chirps, scen.samples_per_chirp};
-}
-
-// -------------------------------------------------------------------
-// Graph: adc_cube source → fused op → terminal (rd_maps) + null
-// (range_bins, velocity_bins).  Both axis outputs are always emitted
-// here because a valid waveform is set.
-// -------------------------------------------------------------------
-hr::FftNorm norm_of(const std::string& value) {
-  if (value == "backward")
-    return hr::FftNorm::kBackward;
-  if (value == "ortho")
-    return hr::FftNorm::kOrtho;
-  if (value == "forward")
-    return hr::FftNorm::kForward;
-  throw std::invalid_argument("unknown FFT normalization: " + value);
-}
-hr::WindowType window_type_of(const std::string& value) {
-  if (value == "none")
-    return hr::WindowType::kNone;
-  if (value == "hann")
-    return hr::WindowType::kHann;
-  if (value == "hamming")
-    return hr::WindowType::kHamming;
-  throw std::invalid_argument("unknown fused window: " + value);
-}
-hr::ClutterFilterMethod clutter_of(const std::string& value) {
-  if (value == "none")
-    return hr::ClutterFilterMethod::kNone;
-  if (value == "mean_subtraction")
-    return hr::ClutterFilterMethod::kMeanSubtraction;
-  if (value == "single_delay")
-    return hr::ClutterFilterMethod::kSingleDelay;
-  if (value == "double_delay")
-    return hr::ClutterFilterMethod::kDoubleDelay;
-  throw std::invalid_argument("unknown fused clutter mode: " + value);
-}
-
-perf::TimingCollector run_graph(const FusedScenario& scen, const perf::RunPlan& plan) {
-  auto cube = perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen));
-  const auto configure = [&](holoscan::Graph& graph, const auto& src,
-                             holoscan::CompileOptions& options, auto connect) {
-    hr::MaxTensorExtents extents;
-    extents.max_chirps =
-        std::max<int64_t>(scen.live_port == "nfft_doppler" ? scen.num_chirps * 2 : scen.num_chirps,
-                          scen.nfft_doppler);
+hr::MaxTensorExtents bounds(const Scenario& scen,
+                            const hr::FMCWRangeDopplerProcessorParams& params) {
+  hr::MaxTensorExtents extents;
+  extents.max_chirps = std::max<int64_t>(scen.axis("chirps"), params.nfft_doppler);
+  extents.max_range_bins = std::max<int64_t>(scen.axis("samples"), params.nfft_range);
+  if (scen.live_port == "nfft_doppler")
+    extents.max_chirps = std::max<int64_t>(
+        *extents.max_chirps,
+        perf::scaled_recipe_axis(scen.live_value, scen.axis("chirps"), "nfft_doppler"));
+  if (scen.live_port == "nfft_range")
     extents.max_range_bins = std::max<int64_t>(
-        scen.live_port == "nfft_range" ? scen.samples_per_chirp * 2 : scen.samples_per_chirp,
-        scen.nfft_range);
-    if (scen.channels > 1)
-      extents.max_rx = scen.channels;
-    auto op = graph.op<hr::FMCWRangeDopplerProcessorOp<PerfPrecision>>("fused", extents);
-    hr::FMCWRangeDopplerProcessorParams params;
-    params.waveform = make_waveform(scen.pri);
-    params.clutter_filter = scen.clutter;
-    params.range_window.type = scen.range_window;
-    params.doppler_window.type = scen.doppler_window;
-    params.apply_dechirp = scen.apply_dechirp;
-    params.fft_norm = scen.fft_norm;
-    params.center_zero_doppler = scen.center_zero;
-    params.nfft_range = scen.nfft_range;
-    params.nfft_doppler = scen.nfft_doppler;
-    op.set_params(std::move(params));
-    const holoscan::ConnectionOptions q{.queue_depth = 4U};
-    graph.add_flow(src->out, op->adc_cube, q);
-    connect(graph, src, op, q);
-    perf::PerfRecipeOutputs outputs(graph, options, "fused");
-    outputs.timed(op->rd_maps, "rd_maps");
-    outputs.drain(op->range_bins, "range_bins");
-    outputs.drain(op->velocity_bins, "velocity_bins");
-    outputs.finish(src, op);
-  };
-  if (scen.live_port.empty()) {
-    return perf::run_data_recipe(std::array{std::move(cube)}, plan, "rdproc-perf",
-                                 [&](auto& graph, const auto& src, auto& options) {
-                                   configure(graph, src, options,
-                                             [](auto&, const auto&, const auto&, const auto&) {});
-                                 });
-  }
-  const auto cases = std::make_tuple(
-      perf::live_option("range_window",
-                        [&] {
-                          return perf::live_case(
-                              "range_window", hr::WindowSpec{.type = scen.range_window},
-                              hr::WindowSpec{.type = window_type_of(scen.override_value)},
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->range_window_in, q);
-                              });
-                        }),
-      perf::live_option("doppler_window",
-                        [&] {
-                          return perf::live_case(
-                              "doppler_window", hr::WindowSpec{.type = scen.doppler_window},
-                              hr::WindowSpec{.type = window_type_of(scen.override_value)},
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->doppler_window_in, q);
-                              });
-                        }),
-      perf::live_option("apply_dechirp",
-                        [&] {
-                          return perf::live_case(
-                              "apply_dechirp", scen.apply_dechirp, scen.override_value == "true",
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->apply_dechirp_in, q);
-                              });
-                        }),
-      perf::live_option("clutter_filter",
-                        [&] {
-                          return perf::live_case(
-                              "clutter_filter", scen.clutter, clutter_of(scen.override_value),
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->clutter_filter_in, q);
-                              });
-                        }),
-      perf::live_option("waveform",
-                        [&] {
-                          return perf::live_case(
-                              "waveform", hr::to_wire(make_waveform(scen.pri)),
-                              hr::to_wire(make_waveform(std::stod(scen.override_value))),
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->waveform_in, q);
-                              });
-                        }),
-      perf::live_option("fft_norm",
-                        [&] {
-                          return perf::live_case(
-                              "fft_norm", scen.fft_norm, norm_of(scen.override_value),
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->fft_norm_in, q);
-                              });
-                        }),
-      perf::live_option("center_zero_doppler",
-                        [&] {
-                          return perf::live_case(
-                              "center_zero_doppler", scen.center_zero,
-                              scen.override_value == "true",
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->center_zero_doppler_in, q);
-                              });
-                        }),
-      perf::live_option("nfft_range",
-                        [&] {
-                          return perf::live_case(
-                              "nfft_range", scen.nfft_range, int64_t{2 * scen.samples_per_chirp},
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->nfft_range_in, q);
-                              });
-                        }),
-      perf::live_option("nfft_doppler", [&] {
-        return perf::live_case("nfft_doppler", scen.nfft_doppler, int64_t{2 * scen.num_chirps},
-                               [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                 graph.add_flow(src->override_out, op->nfft_doppler_in, q);
-                               });
-      }));
-  return perf::dispatch_live_case(scen.live_port, cases, [&](const auto& selected) {
-    return perf::run_selected_live_recipe(std::array{std::move(cube)}, plan, "rdproc-perf",
-                                          selected, configure);
-  });
+        *extents.max_range_bins,
+        perf::scaled_recipe_axis(scen.live_value, scen.axis("samples"), "nfft_range"));
+  if (scen.axis("channels") > 1)
+    extents.max_rx = scen.axis("channels");
+  return extents;
 }
 
-void fill_throughput(perf::ResultRow* row, const FusedScenario& scen, double median_ms) {
-  if (median_ms <= 0.0) {
-    return;
-  }
-  const double sec = median_ms / 1000.0;
-  const double batch = static_cast<double>(scen.channels);
-  const double chirps = static_cast<double>(scen.num_chirps);
-  const double n = static_cast<double>(scen.samples_per_chirp);
-  row->cells_per_second = batch * chirps * n / sec;  // complex rd-map cells/s
-  row->slices_per_second = batch / sec;              // full cubes/s
-
-  const double csz = sizeof(std::complex<PerfPrecision>);
-  const double in_bytes = batch * chirps * n * csz;
-  const double out_bytes = batch * chirps * n * csz + (chirps + n) * sizeof(PerfPrecision);
-  row->estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9;
+perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
+  const auto params = parameters(scen);
+  const auto extents = bounds(scen, params);
+  return perf::run_recipe_selected_case<Op, 1>(
+      scen, plan, extents, params, [&](const std::string& codec) -> perf::TimingCollector {
+        if (codec == "clutter_enum") {
+          const auto value = clutter(scen.live_value.as<std::string>());
+          return perf::run_recipe_live_case_with_connector<Op, 1>(
+              scen, plan, extents, params, value, value,
+              [](auto& graph, const auto& source, const auto& op, const auto& queue) {
+                graph.add_flow(source->override_out, op->clutter_filter_in, queue);
+              });
+        }
+        if (codec == "fft_norm_enum") {
+          const auto value = perf::recipe_fft_norm(scen.live_value.as<std::string>());
+          return perf::run_recipe_live_case_with_connector<Op, 1>(
+              scen, plan, extents, params, value, value,
+              [](auto& graph, const auto& source, const auto& op, const auto& queue) {
+                graph.add_flow(source->override_out, op->fft_norm_in, queue);
+              });
+        }
+        throw std::invalid_argument("unknown fused range–Doppler live codec: " + codec);
+      });
 }
 
-perf::ResultRow base_row(const FusedScenario& scen) {
+perf::ResultRow base_row(const Scenario& scen) {
   perf::ResultRow row;
   row.op_name = "FMCWRangeDopplerProcessorOp";
-  row.variant = clutter_tag(scen.clutter) + "_" + std::string(hr::to_string(scen.doppler_window));
-  perf::set_input_and_trailing_map_shape(row, cube_shape(scen));
-  row.out_batch = scen.channels;
-  row.k = scen.samples_per_chirp;
+  row.variant = clutter_tag(clutter(scen.params["clutter_filter"].as<std::string>())) + "_" +
+                std::string(hr::to_string(perf::recipe_window_type(
+                    scen.params["doppler_window"]["type"].as<std::string>())));
+  perf::set_input_and_trailing_map_shape(row,
+                                         perf::recipe_shape(scen.recipe.inputs.at(0), scen.values));
+  row.out_batch = scen.axis("channels");
+  row.k = scen.axis("samples");
   row.live_port = scen.live_port;
   return row;
 }
 
-FusedScenario make_scenario(hr::ClutterFilterMethod clutter, const SizeSpec& s,
-                            int64_t channels = 1,
-                            hr::WindowType doppler_window = hr::WindowType::kNone) {
-  FusedScenario sc;
-  sc.size_id = s.id;
-  sc.num_chirps = s.num_chirps;
-  sc.samples_per_chirp = s.samples_per_chirp;
-  sc.channels = channels;
-  sc.clutter = clutter;
-  sc.doppler_window = doppler_window;
-  std::ostringstream id;
-  id << "rdproc_" << clutter_tag(clutter) << "_" << hr::to_string(doppler_window) << "_" << s.id;
-  if (channels > 1) {
-    id << "_ch" << channels;
-  }
-  id << "_compute";
-  sc.id = id.str();
-  return sc;
-}
-
-// -------------------------------------------------------------------
-// Traits: the operator-specific surface used by the shared driver.
-// -------------------------------------------------------------------
-void decorate_row(perf::ResultRow& row, const FusedScenario& scen) {
-  fill_throughput(&row, scen, row.latency.median_ms);
+void decorate_row(perf::ResultRow& row, const Scenario& scen) {
+  const double batch = static_cast<double>(scen.axis("channels"));
+  const double chirps = static_cast<double>(scen.axis("chirps"));
+  const double samples = static_cast<double>(scen.axis("samples"));
+  const double cells = batch * chirps * samples;
+  const double bytes =
+      2.0 * cells * sizeof(std::complex<float>) + (chirps + samples) * sizeof(float);
+  perf::set_recipe_throughput(row, cells, batch, bytes);
   row.notes = "end-to-end Graph latency; cells/s is complex RD-map cells/s";
   if (!scen.live_port.empty())
     row.notes += "; one-frame " + scen.live_port + " change";
 }
 
-struct FusedTraits : perf::PerfDriverDefaults {
-  using Scenario = FusedScenario;
-
+struct Traits : perf::PerfDriverDefaults {
+  using Scenario = ::Scenario;
   static const char* tool_name() { return "perf_fmcw_range_doppler_processor"; }
   static const char* tool_description() {
-    return "FMCWRangeDopplerProcessorOp (fused) "
-           "performance characterization "
-           "(HSDK 5 Graph)";
+    return "FMCWRangeDopplerProcessorOp (fused) performance characterization (HSDK 5 Graph)";
   }
-
   static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
-    if (shape.size() != 2)
-      throw std::invalid_argument("FMCWRangeDoppler profile rank mismatch");
-    return {id, shape, shape[0] * shape[1], id};
+    return perf::recipe_size_def(id, shape, 2, 2);
   }
-  static FusedScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
-    if (shape.size() != 2 || shape[0] < 4 || shape[1] < 2)
+  static void validate_suite(const perf::ProfileSuite& suite) {
+    (void)perf::validate_pilot_suite<Op>(suite, "radar.FMCWRangeDopplerProcessorOp.float",
+                                         "fused_fft_bounds",
+                                         {{"adc_cube",
+                                           {"channels", "chirps", "samples"},
+                                           "complex64",
+                                           "device",
+                                           "iq_cube",
+                                           {"channels"}}},
+                                         {"rd_maps", {"range_bins", "velocity_bins"}, {}, 4U},
+                                         {{"range_window", "range_window"},
+                                          {"doppler_window", "doppler_window"},
+                                          {"apply_dechirp", "apply_dechirp"},
+                                          {"clutter_filter", "clutter_filter"},
+                                          {"waveform", "waveform"},
+                                          {"fft_norm", "fft_norm"},
+                                          {"center_zero_doppler", "center_zero_doppler"},
+                                          {"nfft_range", "nfft_range"},
+                                          {"nfft_doppler", "nfft_doppler"}},
+                                         {{"range_window", "window_spec"},
+                                          {"doppler_window", "window_spec"},
+                                          {"apply_dechirp", "bool"},
+                                          {"clutter_filter", "clutter_enum"},
+                                          {"waveform", "waveform_descriptor"},
+                                          {"fft_norm", "fft_norm_enum"},
+                                          {"center_zero_doppler", "bool"},
+                                          {"nfft_range", "scaled_axis"},
+                                          {"nfft_doppler", "scaled_axis"}});
+  }
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape,
+                             const perf::ProfileSuite& suite) {
+    auto scen = perf::pilot_scenario<Scenario>(suite, c, shape, 2);
+    if (scen.axis("chirps") < 4 || scen.axis("samples") < 2 || scen.axis("channels") < 1)
       throw std::invalid_argument("FMCWRangeDoppler invalid profile shape");
-    perf::require_keys(
-        c.parameters,
-        {"clutter_filter", "range_window", "doppler_window", "apply_dechirp", "fft_norm",
-         "center_zero_doppler", "nfft_range", "nfft_doppler", "pri", "channels"},
-        "parameters");
-    for (const char* key : {"clutter_filter", "range_window", "doppler_window", "fft_norm"}) {
-      if (!c.parameters[key])
-        throw std::invalid_argument("FMCWRangeDoppler missing parameter");
-    }
-    const SizeSpec size{c.profile, shape[0], shape[1], c.profile};
-    auto scenario =
-        make_scenario(clutter_of(c.parameters["clutter_filter"].as<std::string>()), size);
-    scenario.id = c.id;
-    scenario.size_id = c.profile;
-    scenario.range_window = window_type_of(c.parameters["range_window"].as<std::string>());
-    scenario.doppler_window = window_type_of(c.parameters["doppler_window"].as<std::string>());
-    scenario.fft_norm = norm_of(c.parameters["fft_norm"].as<std::string>());
-    if (c.parameters["apply_dechirp"])
-      scenario.apply_dechirp = c.parameters["apply_dechirp"].as<bool>();
-    if (c.parameters["center_zero_doppler"])
-      scenario.center_zero = c.parameters["center_zero_doppler"].as<bool>();
-    if (c.parameters["channels"])
-      scenario.channels = c.parameters["channels"].as<int64_t>();
-    if (c.parameters["nfft_range"])
-      scenario.nfft_range = c.parameters["nfft_range"].as<int64_t>();
-    if (c.parameters["nfft_doppler"])
-      scenario.nfft_doppler = c.parameters["nfft_doppler"].as<int64_t>();
-    if (c.parameters["pri"])
-      scenario.pri = c.parameters["pri"].as<double>();
-    if (scenario.channels <= 0 || scenario.pri <= 20.0e-6 ||
-        (scenario.nfft_range != 0 && scenario.nfft_range < shape[1]) ||
-        (scenario.nfft_doppler != 0 && scenario.nfft_doppler < shape[0] - 2) ||
-        scenario.nfft_range > 2 * shape[1] || scenario.nfft_doppler > 2 * shape[0])
-      throw std::invalid_argument("FMCWRangeDoppler incompatible parameters");
-    if (c.override_value) {
-      scenario.live_port = (*c.override_value)["port"].as<std::string>();
-      scenario.override_value = (*c.override_value)["value"].as<std::string>();
-      const auto& port = scenario.live_port;
-      const auto& value = scenario.override_value;
-      if (port == "range_window" || port == "doppler_window") {
-        (void)window_type_of(value);
-      } else if (port == "clutter_filter") {
-        (void)clutter_of(value);
-      } else if (port == "fft_norm") {
-        (void)norm_of(value);
-      } else if (port == "apply_dechirp" || port == "center_zero_doppler") {
-        if (value != "true" && value != "false")
-          throw std::invalid_argument("invalid fused bool override");
-      } else if (port == "waveform") {
-        if (std::stod(value) <= 20.0e-6)
-          throw std::invalid_argument("invalid fused waveform PRI");
-      } else if (port == "nfft_range" || port == "nfft_doppler") {
-        if (value != "double")
-          throw std::invalid_argument("fused nfft override must be double");
-      } else {
-        throw std::invalid_argument("unknown fused live port");
-      }
-    }
-    return scenario;
+    perf::require_recipe_params(scen.params, {"waveform", "clutter_filter", "range_window",
+                                              "doppler_window", "apply_dechirp", "fft_norm",
+                                              "center_zero_doppler", "nfft_range", "nfft_doppler"});
+    const auto params = parameters(scen);
+    if ((params.nfft_range != 0 && params.nfft_range < scen.axis("samples")) ||
+        (params.nfft_doppler != 0 && params.nfft_doppler < scen.axis("chirps") - 2) ||
+        params.nfft_range > 2 * scen.axis("samples") ||
+        params.nfft_doppler > 2 * scen.axis("chirps"))
+      throw std::invalid_argument("FMCWRangeDoppler incompatible FFT lengths");
+    (void)bounds(scen, params);
+    if (scen.live_port == "waveform")
+      (void)perf::recipe_fmcw_waveform(scen.params["waveform"],
+                                       scen.live_value["pri_seconds"].as<double>());
+    if (scen.live_port == "clutter_filter")
+      (void)clutter(scen.live_value.as<std::string>());
+    if (scen.live_port == "fft_norm")
+      (void)perf::recipe_fft_norm(scen.live_value.as<std::string>());
+    return scen;
   }
 };
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<FusedTraits>(argc, argv);
+  return perf::perf_main<Traits>(argc, argv);
 }

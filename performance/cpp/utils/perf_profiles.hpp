@@ -144,7 +144,7 @@ inline ProfileSuite load_profile_suite(const std::filesystem::path& path,
     result.recipe = root["recipe"];
     require_keys(result.recipe,
                  {"operator_type", "inputs", "constructor", "params", "outputs", "live", "fixtures",
-                  "extension"},
+                  "extension", "derived_axes", "publication"},
                  "recipe");
     for (const char* key : {"operator_type", "inputs", "constructor", "params", "outputs"}) {
       if (!result.recipe[key])
@@ -302,6 +302,7 @@ struct SelectedScenario {
   Scenario scenario;
   std::string live_port;
   bool cached{false};
+  const ProfileSuite* suite{nullptr};
 };
 
 template <typename Scenario, typename Parse>
@@ -323,7 +324,7 @@ std::vector<SelectedScenario<Scenario>> select_validated_scenarios(
             c.override_value ? (*c.override_value)["port"].as<std::string>() : std::string{};
         const bool cached = c.override_value && (*c.override_value)["cache"] &&
                             (*c.override_value)["cache"].as<std::string>() == "cached";
-        result.push_back({std::move(scenario), port, cached});
+        result.push_back({std::move(scenario), port, cached, &suite});
       }
     } catch (const std::exception& e) {
       throw std::invalid_argument("case '" + c.id + "' at line " + std::to_string(c.source_line) +

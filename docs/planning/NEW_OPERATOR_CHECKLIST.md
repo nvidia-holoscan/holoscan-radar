@@ -235,9 +235,9 @@ in Jira.
       `ctest -L performance`); skim cold vs steady for per-tick alloc / D2H /
       host-scan red flags before calling the operator performance-ready.
 
-See `performance/README.md` for the YAML-only path and pilot results. The five
-pilot `performance/cpp/perf_*.cpp` adapters show when typed semantics remain
-necessary.
+See `performance/README.md` for the YAML-only path and the 26-operator migration results.
+Use the typed `performance/cpp/perf_*.cpp` adapters as examples only when a
+contract-specific fixture, descriptor, enum, sizing policy, or metric is needed.
 
 ---
 

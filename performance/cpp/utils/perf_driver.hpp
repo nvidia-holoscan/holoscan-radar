@@ -270,7 +270,13 @@ void run_adapter_case(const SelectedScenario<typename Traits::Scenario>& selecte
   measure_scenario(
       settings, !selected.live_port.empty(),
       [&](int /*repeat*/, const RunPlan& plan) {
-        return run_graph(scenario, plan);
+        if constexpr (requires { run_graph(scenario, plan, *selected.suite); }) {
+          if (!selected.suite)
+            throw std::invalid_argument("selected recipe suite is missing");
+          return run_graph(scenario, plan, *selected.suite);
+        } else {
+          return run_graph(scenario, plan);
+        }
       },
       std::move(row), report,
       [&](ResultRow& compute) {

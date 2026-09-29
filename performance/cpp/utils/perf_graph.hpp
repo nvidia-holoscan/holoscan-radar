@@ -101,10 +101,10 @@ struct PerfFrameBank {
   }
 
   static std::size_t staged_span(const std::shared_ptr<holoscan::Tensor>& frame) {
-    if (frame == nullptr || frame->nbytes() <= 0) {
+    if (frame == nullptr || frame->nbytes() < 0) {
       throw std::runtime_error("PerfFrameBank: source frame must be staged before compile()");
     }
-    return static_cast<std::size_t>(frame->nbytes());
+    return std::max<std::size_t>(1U, static_cast<std::size_t>(frame->nbytes()));
   }
 
   static inline std::mutex mutex;
@@ -159,7 +159,8 @@ inline holoscan::expected<void, holoscan::Error> emit_device_copy(
     return holoscan::make_unexpected(std::move(writer).error());
   }
   cudaStream_t stream = context.cuda_stream().get();
-  if (cudaMemcpyAsync(writer->data(), frame->data(), writer->byte_size(), cudaMemcpyDeviceToDevice,
+  if (writer->byte_size() != 0 &&
+      cudaMemcpyAsync(writer->data(), frame->data(), writer->byte_size(), cudaMemcpyDeviceToDevice,
                       stream) != cudaSuccess) {
     return holoscan::make_unexpected(
         holoscan::Error{holoscan::ErrorCode::kFailure, "PerfDataSourceOp: cudaMemcpyAsync failed"});

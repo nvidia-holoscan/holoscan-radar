@@ -29,11 +29,13 @@ Schema version 2 adds named axes and one fixed recipe to the existing explicit
 case list. The recipe names input ports, shapes, dtype, device placement,
 generators, canonical Params, constructor extents or a named sizing policy,
 outputs, and live ports with physical names and typed payload codecs. The
-shared pilot runner stages and connects only the live port named by a selected
-case; a scaled-axis codec declares its source axis in the recipe. It is a single-operator declaration,
-not a general Graph wiring language. Case IDs, scope tags, order, and
-`{profile}` expansion retain their version-1 behavior. The other 21 drivers
-continue to load version-1 suites.
+shared runner stages and connects only the live port named by a selected case;
+a scaled-axis codec declares its source axis in the recipe. A bounded
+`derived_axes` rule supports products and rounded percentages for related
+fixtures. Recipes remain single-operator declarations rather than a general
+Graph wiring language. Case IDs, scope tags, order, and `{profile}` expansion
+retain their earlier behavior. All 26 in-tree C++ suites use schema version 2;
+the loader still accepts version 1 for compatibility.
 
 ### Adding a C++ operator
 
@@ -54,7 +56,7 @@ continue to load version-1 suites.
    source publication, Graph assembly, timing, and report buckets stay shared.
    Add the operator to `HOLOSCAN_RADAR_PERF_TARGETS` for its Minimal GPU smoke.
 
-The five pilot tools keep typed adapters in their `perf_*.cpp` files for their
+The original five pilot tools keep typed adapters in their `perf_*.cpp` files for their
 contract-specific parts:
 DDM power fold's DDM descriptor and divisibility, SnapshotGather's related
 indices and window, Beamscan's geometry/grid descriptors, FMCW range's FFT
@@ -63,24 +65,22 @@ calibration summary. Their executable names and CLI flags remain unchanged.
 The current HSDK registry cannot register local enum live payloads as external
 topics; the Beamscan and FMCW adapters use a typed flow connector for them.
 
-### Pilot size and new-operator walkthrough
+### Adapter size and new-operator walkthrough
 
-The five original adapter files totaled 1,543 lines. After consolidating the
-pilot mechanics, the five `perf_*.cpp` adapters total 1,114 lines
-(429 fewer, about 28%). The shared pilot helper is 274 lines; registry,
-recipe, and YAML validation infrastructure is additional. Shared code now owns
-case identity and value merging, typed input staging, baseline and live Graph
-calls, cached-transition warmup checks, common payload builders, and rate
-conversion. A further pass reads named YAML axes directly and validates
-window, waveform, geometry, and live values by their constraints instead of
-repeating the exact curated case values in C++. The remaining per-operator
-C++ constructs contract-valid Params and derived bounds, validates relationships
-among fields, supplies the local enum and semantic live payloads, and provides
-operator-specific report fields. Beamscan now declares its direct pool bounds
-in YAML. SnapshotGather enum Params still need typed conversion: the pinned
-HSDK 5 parameter materializer rejects a YAML string for `doppler_edge`. These five operators have unusual semantic needs, so the new
-YAML-only path is the better guide for a standard operator than their adapter
-sizes alone.
+The original five pilot adapters fell from 1,543 to 1,114 lines in the first
+stage. Migrating the other 21 reduced their combined adapters from 5,839 to
+2,278 lines (3,561 fewer, about 61%). The shared registry, recipe, fixture,
+and angle helpers are additional code. The remaining custom code constructs
+contract-valid Params and data, validates cross-field rules, computes derived
+bounds, and supplies operator-specific throughput units. Shared code owns case identity and value merging, staged input publication,
+Graph assembly, on-demand live dispatch, cached-transition warmup, paired
+timestamps, and rate conversion. The typed adapters read named YAML axes and
+validate constraints instead of duplicating case IDs or size ladders.
+SnapshotGather enum Params still need typed conversion: the pinned HSDK 5
+parameter materializer rejects a YAML string for `doppler_edge`. FeatureAssembly
+needs a typed constructor hook for its fixed feature list; MultiSourceExpansion
+keeps a related six-input fixture builder. A standard operator with registered
+components follows the YAML-only path regardless of these exceptional adapters.
 
 To assess a new standard operator: use its locked
 contract to choose three profiles; declare one fixed recipe with direct bounds
@@ -92,7 +92,7 @@ buildable HSDK 5 binding.
 
 ## YAML profiles and scopes
 
-Migrated tools read `performance/profiles/<operator>.yaml` automatically
+All C++ tools read `performance/profiles/<operator>.yaml` automatically
 from the executable's source checkout, even when that checkout is mounted at a
 different path from its build. No YAML path flag is needed. Each suite names
 small, medium, and large shapes and explicitly lists parameter and one-frame

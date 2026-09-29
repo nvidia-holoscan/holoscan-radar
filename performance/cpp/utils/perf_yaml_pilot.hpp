@@ -174,7 +174,24 @@ TimingCollector run_recipe_case(const RecipeScenario& scenario, const RunPlan& p
   auto inputs = recipe_inputs<N>(scenario);
   return run_registered_recipe<Op>(std::move(inputs.tensors), plan, scenario.recipe.operator_type,
                                    extents, params, inputs.ports, scenario.recipe.outputs,
-                                   recipe_input_contracts(scenario.recipe, scenario.values));
+                                   recipe_input_contracts(scenario.recipe, scenario.values),
+                                   scenario.recipe.publication);
+}
+
+template <typename Op, std::size_t N>
+TimingCollector run_recipe_staged_case(
+    const RecipeScenario& scenario, const RunPlan& plan, const MaxTensorExtents& extents,
+    const typename Op::Params& params,
+    std::array<std::shared_ptr<holoscan::Tensor>, N> staged_inputs) {
+  if (!scenario.live_port.empty() || scenario.recipe.inputs.size() != N)
+    throw std::invalid_argument("staged recipe input count or live selection mismatch");
+  std::array<std::string, N> ports;
+  for (std::size_t i = 0; i < N; ++i)
+    ports[i] = scenario.recipe.inputs[i].port;
+  return run_registered_recipe<Op>(std::move(staged_inputs), plan, scenario.recipe.operator_type,
+                                   extents, params, ports, scenario.recipe.outputs,
+                                   recipe_input_contracts(scenario.recipe, scenario.values),
+                                   scenario.recipe.publication);
 }
 
 template <typename Op, std::size_t N, typename Value>
@@ -190,7 +207,8 @@ TimingCollector run_recipe_live_case(const RecipeScenario& scenario, const RunPl
                                   std::move(initial), std::move(changed), scenario.cached_override};
   return run_registered_live_recipe<Op>(
       std::move(inputs.tensors), plan, scenario.recipe.operator_type, extents, params, inputs.ports,
-      scenario.recipe.outputs, live, recipe_input_contracts(scenario.recipe, scenario.values));
+      scenario.recipe.outputs, live, recipe_input_contracts(scenario.recipe, scenario.values),
+      scenario.recipe.publication);
 }
 
 template <typename Op, std::size_t N, typename Value, typename Connector>
@@ -206,7 +224,7 @@ TimingCollector run_recipe_live_case_with_connector(
   return run_registered_live_recipe_with_connector<Op>(
       std::move(inputs.tensors), plan, scenario.recipe.operator_type, extents, params, inputs.ports,
       scenario.recipe.outputs, live, connector,
-      recipe_input_contracts(scenario.recipe, scenario.values));
+      recipe_input_contracts(scenario.recipe, scenario.values), scenario.recipe.publication);
 }
 
 // The YAML codec selects the typed payload; the registered runner resolves the
@@ -245,6 +263,17 @@ TimingCollector run_recipe_selected_case(const RecipeScenario& scenario, const R
   if (codec == "cfar_cell_window") {
     const auto pair = recipe_pair<int64_t>(value, scenario.live_port);
     return emit(CfarCellWindowOverride{pair[0], pair[1]});
+  }
+  if (codec == "spatial_smoothing") {
+    const auto sizes = value.as<std::vector<int64_t>>();
+    if (sizes.empty() || sizes.size() > 2)
+      throw std::invalid_argument("spatial_smoothing needs one or two extents");
+    SpatialSmoothingOverride payload{};
+    payload.count = static_cast<int64_t>(sizes.size());
+    payload.first = sizes[0];
+    if (sizes.size() == 2)
+      payload.second = sizes[1];
+    return emit(payload);
   }
   if (codec == "host_int64_vector")
     return emit(value.as<std::vector<int64_t>>());

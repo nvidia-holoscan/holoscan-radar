@@ -6,6 +6,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <cstdint>
+#include <cstddef>
 #include <cmath>
 #include <map>
 #include <optional>
@@ -21,6 +22,26 @@
 #include "utils/perf_profiles.hpp"
 
 namespace holoscan::radar::perf {
+
+inline OverlapPolicy recipe_overlap_policy(std::string_view value) {
+  if (value == "dedup")
+    return OverlapPolicy::kDedup;
+  if (value == "average")
+    return OverlapPolicy::kAverage;
+  if (value == "keep_all")
+    return OverlapPolicy::kKeepAll;
+  throw std::invalid_argument("unknown recipe overlap policy: " + std::string(value));
+}
+
+inline std::vector<double> recipe_linear_positions(int64_t count, double spacing,
+                                                   std::size_t coordinate) {
+  if (count <= 0 || !std::isfinite(spacing) || spacing <= 0.0 || coordinate >= 3)
+    throw std::invalid_argument("linear positions need positive count, spacing, and axis < 3");
+  std::vector<double> out(static_cast<std::size_t>(count * 3), 0.0);
+  for (int64_t i = 0; i < count; ++i)
+    out[static_cast<std::size_t>(i * 3) + coordinate] = static_cast<double>(i) * spacing;
+  return out;
+}
 
 inline WindowType recipe_window_type(std::string_view value) {
   if (value == "none")

@@ -1,260 +1,100 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// RankOneResidualScreenOp performance characterization. Sweeps item, channel,
-// look, and selection counts; every run includes one Exact live geometry
-// override. Measurement only: no timing thresholds.
-
-#include <cuda/std/complex>
-#include <cuda_runtime_api.h>
-
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
-#include <set>
-#include <iostream>
-#include <memory>
-#include <sstream>
+#include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
-
 #include "angle_estimation/rank_one_residual_screen_op/rank_one_residual_screen_op.hpp"
-#include "radar_common/descriptors/array_geometry.hpp"
-#include "radar_common/descriptors/max_tensor_extents.hpp"
-#include "radar_common/tensor/dlpack_buffer.hpp"
-#include "radar_common/tensor/tensor_utils.hpp"
-#include "radar_schemas/array_geometry_bridge.hpp"
 #include "utils/perf_driver.hpp"
-#include "utils/perf_graph.hpp"
-#include "utils/perf_report.hpp"
-#include "utils/perf_recipe.hpp"
-#include "utils/perf_runner.hpp"
+#include "utils/perf_yaml_codecs.hpp"
+#include "utils/perf_yaml_pilot.hpp"
 
 namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using PerfPrecision = float;
+using Op = hr::RankOneResidualScreenOp<float>;
+struct Scenario : perf::RecipeScenario {};
 
-struct SizeSpec {
-  std::string id;
-  int64_t items;
-  int64_t channels;
-  int64_t looks;
-  std::string role;
-};
-
-struct ScreenScenario {
-  std::string id;
-  std::string size_id;
-  int64_t items{0};
-  int64_t channels{0};
-  int64_t looks{0};
-  double selection_fraction{0.25};
-  bool live_geometry{false};
-  double changed_spacing{0.49};
-};
-
-template <typename Element>
-std::shared_ptr<holoscan::Tensor> upload(const std::vector<Element>& host,
-                                         const std::vector<int64_t>& shape, DLDataType dtype) {
-  auto tensor = hr::make_device_tensor(shape, dtype);
-  if (!host.empty()) {
-    auto writable = tensor->mutable_data();
-    if (!writable || cudaMemcpy(writable.value(), host.data(), host.size() * sizeof(Element),
-                                cudaMemcpyHostToDevice) != cudaSuccess) {
-      throw std::runtime_error("perf_rank_one_residual_screen: input upload failed");
-    }
-  }
-  return tensor;
+hr::RankOneResidualScreenParams parameters(const Scenario& scen) {
+  hr::RankOneResidualScreenParams params;
+  params.array_geometry =
+      perf::recipe_ula_geometry(scen.params["array_geometry"], scen.axis("channels"));
+  params.residual_threshold = scen.params["residual_threshold"].as<double>();
+  return params;
 }
 
-hr::ArrayGeometry make_geometry(int64_t channels, double spacing) {
-  hr::ArrayGeometry geometry;
-  geometry.wavelength = 1.0;
-  geometry.geometry_type = hr::ArrayGeometryType::kUla;
-  geometry.element_positions.reserve(static_cast<size_t>(channels * 3));
-  for (int64_t channel = 0; channel < channels; ++channel) {
-    geometry.element_positions.insert(geometry.element_positions.end(),
-                                      {0.0, spacing * static_cast<double>(channel), 0.0});
-  }
-  return geometry;
+perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
+  return perf::run_recipe_selected_case<Op, 2>(
+      scen, plan, perf::direct_recipe_extents(scen.recipe, scen.values), parameters(scen));
 }
 
-std::vector<cuda::std::complex<PerfPrecision>> steering(int64_t channels, double spacing,
-                                                        double azimuth) {
-  std::vector<cuda::std::complex<PerfPrecision>> result(static_cast<size_t>(channels));
-  for (int64_t channel = 0; channel < channels; ++channel) {
-    const double phase = 2.0 * M_PI * spacing * static_cast<double>(channel) * std::sin(azimuth);
-    result[static_cast<size_t>(channel)] = {static_cast<PerfPrecision>(std::cos(phase)),
-                                            static_cast<PerfPrecision>(std::sin(phase))};
-  }
-  return result;
-}
-
-std::shared_ptr<holoscan::Tensor> make_snapshots(const ScreenScenario& scenario) {
-  const auto primary = steering(scenario.channels, 0.5, 0.0);
-  const auto secondary = steering(scenario.channels, 0.5, 0.25);
-  const int64_t selected = static_cast<int64_t>(
-      std::llround(scenario.selection_fraction * static_cast<double>(scenario.items)));
-  std::vector<cuda::std::complex<PerfPrecision>> host(
-      static_cast<size_t>(scenario.items * scenario.channels * scenario.looks));
-  for (int64_t item = 0; item < scenario.items; ++item) {
-    for (int64_t channel = 0; channel < scenario.channels; ++channel) {
-      const auto value = item < selected ? primary[static_cast<size_t>(channel)] +
-                                               secondary[static_cast<size_t>(channel)]
-                                         : primary[static_cast<size_t>(channel)];
-      for (int64_t look = 0; look < scenario.looks; ++look) {
-        host[static_cast<size_t>((item * scenario.channels + channel) * scenario.looks + look)] =
-            value;
-      }
-    }
-  }
-  return upload(host, {scenario.items, scenario.channels, scenario.looks},
-                hr::complex_dtype<PerfPrecision>());
-}
-
-std::shared_ptr<holoscan::Tensor> make_baseline(const ScreenScenario& scenario) {
-  return upload(
-      std::vector<PerfPrecision>(static_cast<size_t>(scenario.items * 2), PerfPrecision{0}),
-      {scenario.items, 2}, hr::real_dtype<PerfPrecision>());
-}
-
-perf::TimingCollector run_graph(const ScreenScenario& scenario, const perf::RunPlan& plan) {
-  auto snapshot = make_snapshots(scenario);
-  auto baseline = make_baseline(scenario);
-  const auto geometry = make_geometry(scenario.channels, 0.5);
-  const auto configure = [&](holoscan::Graph& graph, const auto& source,
-                             holoscan::CompileOptions& options, auto connect) {
-    hr::MaxTensorExtents extents;
-    extents.max_items = scenario.items;
-    extents.max_channels = scenario.channels;
-    extents.max_snapshots = scenario.looks;
-    auto screen = graph.op<hr::RankOneResidualScreenOp<PerfPrecision>>("screen", extents);
-    hr::RankOneResidualScreenParams params;
-    params.array_geometry = geometry;
-    params.residual_threshold = 0.03;
-    screen.set_params(std::move(params));
-
-    const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-    graph.add_flow(source->out_a, screen->snapshot, queue);
-    graph.add_flow(source->out_b, screen->baseline_aoa, queue);
-    connect(graph, source, screen, queue);
-    perf::PerfRecipeOutputs outputs(graph, options, "screen");
-    outputs.timed(screen->snapshot_out, "snapshot_out");
-    outputs.drain(screen->selected_idx, "selected_idx");
-    outputs.drain(screen->is_valid_out, "is_valid_out");
-    outputs.drain(screen->residual_score, "residual_score");
-    outputs.drain(screen->selection_mask, "selection_mask");
-    outputs.finish(source, screen);
-  };
-  if (scenario.live_geometry) {
-    const auto changed_geometry = make_geometry(scenario.channels, scenario.changed_spacing);
-    const auto selected =
-        perf::live_case("array_geometry", hr::to_wire(geometry), hr::to_wire(changed_geometry),
-                        [](auto& graph, const auto& source, const auto& screen, const auto& queue) {
-                          graph.add_flow(source->override_out, screen->array_geometry, queue);
-                        });
-    return perf::run_selected_live_recipe(std::array{std::move(snapshot), std::move(baseline)},
-                                          plan, "rank-one-residual-screen-perf", selected,
-                                          configure);
-  }
-  return perf::run_data_recipe(
-      std::array{std::move(snapshot), std::move(baseline)}, plan, "rank-one-residual-screen-perf",
-      [&](auto& graph, const auto& source, auto& options) {
-        configure(graph, source, options, [](auto&, const auto&, const auto&, const auto&) {});
-      });
-}
-
-ScreenScenario make_scenario(const SizeSpec& size, double fraction) {
-  ScreenScenario scenario;
-  scenario.size_id = size.id;
-  scenario.items = size.items;
-  scenario.channels = size.channels;
-  scenario.looks = size.looks;
-  scenario.selection_fraction = fraction;
-  std::ostringstream id;
-  id << "rank1_" << size.id << "_n" << size.items << "_c" << size.channels << "_l" << size.looks
-     << "_sel" << static_cast<int>(fraction * 100.0);
-  scenario.id = id.str();
-  return scenario;
-}
-
-perf::ResultRow base_row(const ScreenScenario& scenario) {
+perf::ResultRow base_row(const Scenario& scen) {
   perf::ResultRow row;
   row.op_name = "RankOneResidualScreenOp";
   row.variant = "normalized_projection";
-  row.input_shape = {scenario.items, scenario.channels, scenario.looks};
-  row.out_batch = static_cast<int64_t>(std::llround(scenario.selection_fraction * scenario.items));
-  row.k = scenario.channels;
-  row.live_port = scenario.live_geometry ? "array_geometry" : "";
+  row.input_shape = perf::recipe_shape(scen.recipe.inputs.at(0), scen.values);
+  row.out_batch = static_cast<int64_t>(std::llround(
+      static_cast<double>(scen.axis("selection_percent") * scen.axis("items")) / 100.0));
+  row.k = scen.axis("channels");
+  row.live_port = scen.live_port;
   row.notes = "all outputs drained";
   return row;
 }
 
-void fill_throughput(perf::ResultRow* row, const ScreenScenario& scenario, double median_ms) {
-  if (median_ms <= 0.0) {
-    return;
-  }
-  const double seconds = median_ms / 1000.0;
-  row->cells_per_second =
-      static_cast<double>(scenario.items * scenario.channels * scenario.looks) / seconds;
-  row->slices_per_second = static_cast<double>(scenario.items) / seconds;
-}
-
-void decorate_row(perf::ResultRow& row, const ScreenScenario& scenario) {
-  fill_throughput(&row, scenario, row.latency.median_ms);
+void decorate_row(perf::ResultRow& row, const Scenario& scen) {
+  const auto values = static_cast<double>(scen.axis("items")) *
+                      static_cast<double>(scen.axis("channels")) *
+                      static_cast<double>(scen.axis("looks"));
+  perf::set_recipe_throughput(row, values, static_cast<double>(scen.axis("items")));
   row.notes = "end-to-end Graph latency; cells/s is complex snapshot values/s";
-  if (scenario.live_geometry)
+  if (!scen.live_port.empty())
     row.notes += "; one-frame geometry change";
 }
 
-struct ScreenTraits : perf::PerfDriverDefaults {
-  using Scenario = ScreenScenario;
-
+struct Traits : perf::PerfDriverDefaults {
+  using Scenario = ::Scenario;
   static const char* tool_name() { return "perf_rank_one_residual_screen"; }
   static const char* tool_description() {
     return "RankOneResidualScreenOp HSDK 5 Graph characterization";
   }
-
   static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
-    if (shape.size() != 3)
-      throw std::invalid_argument("RankOneResidualScreen profile rank mismatch");
-    return {id, shape, shape[0] * shape[1] * shape[2], id};
+    return perf::recipe_size_def(id, shape, 3, 3);
   }
-  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
-    if (shape.size() != 3 || shape[0] < 1 || shape[1] < 2 || shape[2] < 1)
-      throw std::invalid_argument("RankOneResidualScreen invalid profile shape");
-    perf::require_keys(c.parameters, {"selection_fraction"}, "parameters");
-    if (!c.parameters["selection_fraction"])
-      throw std::invalid_argument("RankOneResidualScreen needs selection_fraction");
-    const double fraction = c.parameters["selection_fraction"].as<double>();
-    if (fraction < 0.0 || fraction > 1.0)
-      throw std::invalid_argument("RankOneResidualScreen invalid selection fraction");
-    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
-    auto scenario = make_scenario(size, fraction);
-    scenario.id = c.id;
-    scenario.size_id = c.profile;
-    if (c.override_value) {
-      if ((*c.override_value)["port"].as<std::string>() != "array_geometry")
-        throw std::invalid_argument("RankOneResidualScreen only geometry is live");
-      scenario.changed_spacing = (*c.override_value)["value"].as<double>();
-      if (scenario.changed_spacing <= 0.0)
-        throw std::invalid_argument("RankOneResidualScreen invalid geometry spacing");
-      scenario.live_geometry = true;
+  static void validate_suite(const perf::ProfileSuite& suite) {
+    (void)perf::validate_pilot_suite<Op>(
+        suite, "radar.RankOneResidualScreenOp.float", "",
+        {{"snapshot", {"items", "channels", "looks"}, "complex64", "device", "rank_one_mix", {}},
+         {"baseline_aoa", {"items", "two"}, "float32", "device", "zero_float", {}}},
+        {"snapshot_out",
+         {"selected_idx", "is_valid_out", "residual_score", "selection_mask"},
+         {},
+         4U},
+        {{"array_geometry", "array_geometry"}}, {{"array_geometry", "ula_geometry_patch"}});
+  }
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape,
+                             const perf::ProfileSuite& suite) {
+    auto scen = perf::pilot_scenario<Scenario>(suite, c, shape, 3);
+    if (scen.axis("items") < 1 || scen.axis("channels") < 2 || scen.axis("looks") < 1 ||
+        scen.axis("selection_percent") > 100)
+      throw std::invalid_argument("RankOneResidualScreen invalid profile or fixture");
+    perf::require_recipe_params(scen.params, {"array_geometry", "residual_threshold"});
+    (void)parameters(scen);
+    if (!scen.live_port.empty()) {
+      auto patch = YAML::Clone(scen.params["array_geometry"]);
+      patch["spacing_wavelengths"] = scen.live_value["spacing_wavelengths"];
+      (void)perf::recipe_ula_geometry(patch, scen.axis("channels"));
     }
-    return scenario;
+    return scen;
   }
 };
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  return perf::perf_main<ScreenTraits>(argc, argv);
+  return perf::perf_main<Traits>(argc, argv);
 }

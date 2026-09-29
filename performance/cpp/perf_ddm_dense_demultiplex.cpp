@@ -1,237 +1,125 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Performance characterization for DDMDenseDemultiplexOp.
-// Measurement only; no timing assertions.
-
-#include <complex>
-#include <algorithm>
-#include <stdexcept>
 #include <cmath>
+#include <complex>
 #include <cstdint>
-#include <cstdlib>
-#include <iostream>
-#include <memory>
-#include <sstream>
+#include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
-
 #include "fmcw/ddm_dense_demultiplex_op/ddm_dense_demultiplex_op.hpp"
-#include "radar_common/descriptors/ddm_code_descriptor.hpp"
-#include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
-#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "utils/perf_driver.hpp"
-#include "utils/perf_graph.hpp"
-#include "utils/perf_platform.hpp"
-#include "utils/perf_report.hpp"
-#include "utils/perf_recipe.hpp"
-#include "utils/perf_runner.hpp"
-#include "utils/tensor_factory.hpp"
+#include "utils/perf_yaml_pilot.hpp"
 
 namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using PerfPrecision = float;
+using Op = hr::DDMDenseDemultiplexOp<float>;
+struct Scenario : perf::RecipeScenario {};
 
-constexpr double kDefaultPri = 25.0e-6;
-
-struct SizeSpec {
-  std::string id;
-  int64_t num_tx;
-  int64_t num_rx;
-  int64_t num_doppler;
-  int64_t num_range_bins;
-  std::string role;
-};
-
-struct CompensationScenario {
-  std::string id;
-  std::string size_id;
-  std::string variant{"tdm"};  // tdm | ddm | ddm_nl
-  int64_t num_tx{0};
-  int64_t num_rx{0};
-  int64_t num_doppler{0};
-  int64_t num_range_bins{0};
-  bool non_linear_ddm{false};
-  bool velocity_axis{false};
-};
-
-hr::FMCWWaveformDescriptor make_waveform(double pri) {
-  hr::FMCWWaveformSpec spec;
-  spec.carrier_frequency = 77.0e9;
-  spec.bandwidth = 150.0e6;
-  spec.chirp_duration = 20.0e-6;
-  spec.sample_rate = 12.8e6;
-  spec.chirp_repetition_interval = pri;
-  return hr::FMCWWaveformDescriptor(spec);
-}
-
-hr::DDMCodeDescriptor make_ddm_code(int64_t num_tx) {
-  hr::DDMCodeDescriptor code;
-  code.num_tx = num_tx;
-  code.doppler_offsets.resize(static_cast<size_t>(num_tx));
-  for (int64_t m = 0; m < num_tx; ++m) {
-    code.doppler_offsets[static_cast<size_t>(m)] =
-        static_cast<double>(m) / static_cast<double>(num_tx);
-  }
-  code.guard_bands = 0;
-  return code;
-}
-
-hr::DDMCodeDescriptor make_ddm_nl_code(int64_t num_tx, int64_t num_doppler) {
-  hr::DDMCodeDescriptor code;
-  code.num_tx = num_tx;
-  code.guard_bands = 0;
-  code.phase_codes.resize(static_cast<size_t>(num_tx * num_doppler));
-  for (int64_t m = 0; m < num_tx; ++m) {
-    for (int64_t k = 0; k < num_doppler; ++k) {
-      const double phase = std::sin(0.7 * static_cast<double>(k) + static_cast<double>(m)) * 2.0;
-      code.phase_codes[static_cast<size_t>(m * num_doppler + k)] =
-          std::complex<double>(std::cos(phase), std::sin(phase));
+hr::DDMCodeDescriptor code(const Scenario& scen) {
+  const auto tx = scen.axis("tx");
+  const auto doppler = scen.axis("doppler");
+  const auto factory = scen.params["ddm_code"]["factory"].as<std::string>();
+  hr::DDMCodeDescriptor result;
+  result.num_tx = tx;
+  result.guard_bands = 0;
+  if (factory == "linear_exact_ddm_code") {
+    for (int64_t i = 0; i < tx; ++i)
+      result.doppler_offsets.push_back(static_cast<double>(i) / static_cast<double>(tx));
+  } else if (factory == "nonlinear_phase_code") {
+    result.phase_codes.resize(static_cast<std::size_t>(tx * doppler));
+    for (int64_t m = 0; m < tx; ++m) {
+      for (int64_t k = 0; k < doppler; ++k) {
+        const double phase = std::sin(0.7 * static_cast<double>(k) + static_cast<double>(m)) * 2.0;
+        result.phase_codes[static_cast<std::size_t>(m * doppler + k)] =
+            std::complex<double>(std::cos(phase), std::sin(phase));
+      }
     }
+  } else {
+    throw std::invalid_argument("unknown DDM dense code factory: " + factory);
   }
-  return code;
+  return result;
 }
 
-std::vector<int64_t> input_shape(const CompensationScenario& scen) {
-  return {scen.num_rx, scen.num_doppler, scen.num_range_bins};
-}
-
-perf::TimingCollector run_graph(const CompensationScenario& scen, const perf::RunPlan& plan) {
-  auto cube = perf::make_iq_cube_device<PerfPrecision>(input_shape(scen));
-  const auto configure = [&](holoscan::Graph& graph, const auto& source,
-                             holoscan::CompileOptions& options) {
-    hr::MaxTensorExtents extents;
-    extents.max_tx = scen.num_tx;
-    extents.max_rx = scen.num_rx;
-    extents.max_doppler_bins = scen.num_doppler;
-    extents.max_range_bins = scen.num_range_bins;
-    auto op = graph.op<hr::DDMDenseDemultiplexOp<PerfPrecision>>("compensation", extents);
-    hr::DDMDenseDemultiplexParams params;
-    params.ddm_code = scen.non_linear_ddm ? make_ddm_nl_code(scen.num_tx, scen.num_doppler)
-                                          : make_ddm_code(scen.num_tx);
-    op.set_params(std::move(params));
-    const holoscan::ConnectionOptions q{.queue_depth = 4U};
-    if constexpr (requires { source->out_a; }) {
-      graph.add_flow(source->out_a, op->velocity_bins, q);
-      graph.add_flow(source->out_b, op->rd_maps, q);
-    } else {
-      graph.add_flow(source->out, op->rd_maps, q);
-    }
-    perf::PerfRecipeOutputs outputs(graph, options, "compensation");
-    outputs.timed(op->rd_maps_out, "rd_maps_out");
-    if (scen.velocity_axis)
-      outputs.drain(op->velocity_bins_out, "velocity_bins_out");
-    else
-      outputs.unwired(op->velocity_bins_out, "velocity_bins_out");
-    outputs.finish(source, op);
-  };
-  if (scen.velocity_axis) {
-    auto axis = perf::make_power_map_device<PerfPrecision>({scen.num_doppler});
-    return perf::run_data_recipe(std::array{std::move(axis), std::move(cube)}, plan,
-                                 "compensation-perf", configure);
+perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
+  auto active = scen;
+  const bool axis = scen.axis("velocity_axis") != 0;
+  if (!axis) {
+    active.recipe.inputs.erase(active.recipe.inputs.begin());
+    active.recipe.outputs.drain.clear();
+    active.recipe.outputs.unwired = {"velocity_bins_out"};
   }
-  return perf::run_data_recipe(std::array{std::move(cube)}, plan, "compensation-perf", configure);
+  hr::DDMDenseDemultiplexParams params;
+  params.ddm_code = code(scen);
+  const auto extents = perf::direct_recipe_extents(scen.recipe, scen.values);
+  if (axis)
+    return perf::run_recipe_case<Op, 2>(active, plan, extents, params);
+  return perf::run_recipe_case<Op, 1>(active, plan, extents, params);
 }
 
-void fill_throughput(perf::ResultRow* row, const CompensationScenario& scen, double median_ms) {
-  if (median_ms <= 0.0) {
-    return;
-  }
-  const double sec = median_ms / 1000.0;
-  const double tx_factor = 1.0;
-  const double elems = tx_factor * static_cast<double>(scen.num_rx) *
-                       static_cast<double>(scen.num_doppler) *
-                       static_cast<double>(scen.num_range_bins);
-  row->cells_per_second = elems / sec;
-  const double csz = sizeof(std::complex<PerfPrecision>);
-  const double bytes = elems * csz;
-  row->estimated_effective_gbps = 2.0 * bytes / sec / 1e9;
-}
-
-perf::ResultRow base_row(const CompensationScenario& scen) {
+perf::ResultRow base_row(const Scenario& scen) {
   perf::ResultRow row;
   row.op_name = "DDMDenseDemultiplexOp";
-  row.variant = scen.variant + (scen.velocity_axis ? "_axis" : "");
-  row.input_shape = input_shape(scen);
-  row.k = scen.num_doppler;
-  // This scenario measures the Params-selected waveform configuration.
+  row.variant =
+      (scen.params["ddm_code"]["factory"].as<std::string>() == "nonlinear_phase_code" ? "ddm_nl"
+                                                                                      : "ddm") +
+      std::string(scen.axis("velocity_axis") ? "_axis" : "");
+  row.input_shape = perf::recipe_shape(scen.recipe.inputs.at(1), scen.values);
+  row.k = scen.axis("doppler");
   row.notes = "live_override=not_measured";
   return row;
 }
 
-CompensationScenario make_scenario(const SizeSpec& size, bool non_linear = false,
-                                   bool velocity_axis = false) {
-  CompensationScenario scenario;
-  scenario.size_id = size.id;
-  scenario.variant = non_linear ? "ddm_nl" : "ddm";
-  scenario.num_tx = size.num_tx;
-  scenario.num_rx = size.num_rx;
-  scenario.num_doppler = size.num_doppler;
-  scenario.num_range_bins = size.num_range_bins;
-  scenario.non_linear_ddm = non_linear;
-  scenario.velocity_axis = velocity_axis;
-  scenario.id =
-      "ddm_dense_demultiplex_" + scenario.variant + "_" + size.id + (velocity_axis ? "_axis" : "");
-  return scenario;
+void decorate_row(perf::ResultRow& row, const Scenario& scen) {
+  const double elems = static_cast<double>(scen.axis("rx")) *
+                       static_cast<double>(scen.axis("doppler")) *
+                       static_cast<double>(scen.axis("range"));
+  perf::set_recipe_throughput(row, elems, std::nullopt, 2.0 * elems * sizeof(std::complex<float>));
+  row.notes =
+      scen.params["ddm_code"]["factory"].as<std::string>() == "nonlinear_phase_code"
+          ? "DDM nonlinear phase-code correlation; cold_ms includes weights and FFT setup; output "
+            "keeps the full Doppler axis"
+          : "DDM linear per-band gather; cold_ms includes the initial demultiplex table build";
+  row.notes += scen.axis("velocity_axis") ? "; velocity_axis=wired" : "; velocity_axis=absent";
 }
 
-void decorate_row(perf::ResultRow& row, const CompensationScenario& scen) {
-  fill_throughput(&row, scen, row.latency.median_ms);
-  if (scen.non_linear_ddm) {
-    row.notes =
-        "DDM nonlinear phase-code correlation; cold_ms includes weights "
-        "and FFT setup; output keeps the full Doppler axis";
-  } else {
-    row.notes =
-        "DDM linear per-band gather; cold_ms includes the initial "
-        "demultiplex table build";
-  }
-  row.notes += scen.velocity_axis ? "; velocity_axis=wired" : "; velocity_axis=absent";
-}
-
-struct CompensationTraits : perf::PerfDriverDefaults {
-  using Scenario = CompensationScenario;
-
+struct Traits : perf::PerfDriverDefaults {
+  using Scenario = ::Scenario;
   static const char* tool_name() { return "perf_ddm_dense_demultiplex"; }
   static const char* tool_description() {
-    return "DDMDenseDemultiplexOp performance "
-           "characterization (HSDK 5 Graph)";
+    return "DDMDenseDemultiplexOp performance characterization (HSDK 5 Graph)";
   }
-
   static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
-    if (shape.size() != 4)
-      throw std::invalid_argument("DDMDenseDemultiplex profile rank mismatch");
-    return {id, shape, shape[0] * shape[1] * shape[2] * shape[3], id};
+    return perf::recipe_size_def(id, shape, 4, 4);
   }
-
-  static CompensationScenario parse_case(const perf::ProfileCase& c,
-                                         const std::vector<int64_t>& shape) {
-    if (shape.size() != 4 || shape[0] < 2 || shape[2] % shape[0] != 0)
-      throw std::invalid_argument("DDMDenseDemultiplex invalid profile shape");
-    perf::require_keys(c.parameters, {"code", "velocity_axis"}, "parameters");
-    if (!c.parameters["code"] || !c.parameters["velocity_axis"] || c.override_value)
-      throw std::invalid_argument("DDMDenseDemultiplex case needs static code and axis mode");
-    const auto code = c.parameters["code"].as<std::string>();
-    if (code != "linear" && code != "nonlinear")
-      throw std::invalid_argument("DDMDenseDemultiplex code must be linear or nonlinear");
-    const bool axis = c.parameters["velocity_axis"].as<bool>();
-    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], c.profile};
-    auto scenario = make_scenario(size, code == "nonlinear", axis);
-    scenario.id = c.id;
-    scenario.size_id = c.profile;
-    return scenario;
+  static void validate_suite(const perf::ProfileSuite& suite) {
+    (void)perf::validate_pilot_suite<Op>(
+        suite, "radar.DDMDenseDemultiplexOp.float", "",
+        {{"velocity_bins", {"doppler"}, "float32", "device", "power_map", {}},
+         {"rd_maps", {"rx", "doppler", "range"}, "complex64", "device", "iq_cube", {}}},
+        {"rd_maps_out", {"velocity_bins_out"}, {}, 4U}, {}, {});
+  }
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape,
+                             const perf::ProfileSuite& suite) {
+    auto scen = perf::pilot_scenario<Scenario>(suite, c, shape, 4);
+    if (scen.axis("tx") < 2 || scen.axis("doppler") % scen.axis("tx") != 0 ||
+        scen.axis("velocity_axis") > 1)
+      throw std::invalid_argument("DDMDenseDemultiplex invalid profile or axis fixture");
+    perf::require_recipe_params(scen.params, {"ddm_code"});
+    if (!scen.recipe.extension["optional_velocity_axis"] ||
+        scen.recipe.extension["optional_velocity_axis"].as<std::string>() != "velocity_axis")
+      throw std::invalid_argument("DDM dense recipe needs optional velocity axis declaration");
+    (void)code(scen);
+    return scen;
   }
 };
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<CompensationTraits>(argc, argv);
+  return perf::perf_main<Traits>(argc, argv);
 }

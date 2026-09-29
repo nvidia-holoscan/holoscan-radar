@@ -6,9 +6,14 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <cmath>
+#include <complex>
+#include <functional>
+#include <numeric>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -34,6 +39,7 @@ struct RecipeInput {
   std::string memory;
   std::string generator;
   std::vector<std::string> omit_if_one;
+  std::string index_doppler_divisor;
 };
 
 struct YamlRecipe {
@@ -42,6 +48,9 @@ struct YamlRecipe {
   YAML::Node constructor;
   YAML::Node params;
   YAML::Node fixtures;
+  YAML::Node derived_axes;
+  YAML::Node extension;
+  PerfPublishMode publication{PerfPublishMode::kCopy};
   RegisteredOutputRecipe outputs;
   std::map<std::string, std::string> live_ports;
   std::map<std::string, std::string> live_codecs;
@@ -68,12 +77,21 @@ inline YamlRecipe parse_yaml_recipe(const ProfileSuite& suite) {
   const auto root = suite.recipe;
   require_keys(root,
                {"operator_type", "inputs", "constructor", "params", "fixtures", "outputs", "live",
-                "extension"},
+                "extension", "derived_axes", "publication"},
                "recipe");
   YamlRecipe result;
   result.operator_type = root["operator_type"].as<std::string>();
   if (result.operator_type.empty())
     throw std::invalid_argument("recipe operator_type is empty");
+  if (root["publication"]) {
+    const auto mode = root["publication"].as<std::string>();
+    if (mode == "copy")
+      result.publication = PerfPublishMode::kCopy;
+    else if (mode == "fill_in_place")
+      result.publication = PerfPublishMode::kFillInPlace;
+    else
+      throw std::invalid_argument("unknown recipe publication mode: " + mode);
+  }
   const auto declared_inputs = root["inputs"];
   if (!declared_inputs.IsSequence() || declared_inputs.size() == 0 ||
       (declared_inputs.size() != 1 && declared_inputs.size() != 2 && declared_inputs.size() != 3 &&
@@ -81,8 +99,10 @@ inline YamlRecipe parse_yaml_recipe(const ProfileSuite& suite) {
     throw std::invalid_argument("recipe inputs require one, two, three, or six data ports");
   std::set<std::string> input_names;
   for (const auto& node : declared_inputs) {
-    require_keys(node, {"port", "shape", "dtype", "memory", "generator", "omit_if_one"},
-                 "recipe input");
+    require_keys(
+        node,
+        {"port", "shape", "dtype", "memory", "generator", "omit_if_one", "index_doppler_divisor"},
+        "recipe input");
     for (const char* key : {"port", "shape", "dtype", "memory", "generator"})
       if (!node[key])
         throw std::invalid_argument("recipe input missing " + std::string(key));
@@ -94,17 +114,33 @@ inline YamlRecipe parse_yaml_recipe(const ProfileSuite& suite) {
     input.generator = node["generator"].as<std::string>();
     if (node["omit_if_one"])
       input.omit_if_one = recipe_strings(node["omit_if_one"], "recipe omit_if_one");
+    if (node["index_doppler_divisor"])
+      input.index_doppler_divisor = node["index_doppler_divisor"].as<std::string>();
+    if (!input.index_doppler_divisor.empty() && input.generator != "in_bounds_rd_indices")
+      throw std::invalid_argument("index_doppler_divisor requires detection index generator");
     if (!input_names.insert(input.port).second)
       throw std::invalid_argument("duplicate recipe input port: " + input.port);
     if (input.memory != "device")
       throw std::invalid_argument("recipe data input must use device memory: " + input.port);
-    if (input.dtype != "complex64" && input.dtype != "float32" && input.dtype != "int64")
+    if (input.dtype != "complex64" && input.dtype != "float32" && input.dtype != "int64" &&
+        input.dtype != "int32")
       throw std::invalid_argument("unsupported recipe dtype: " + input.dtype);
     if (input.generator != "iq_cube" && input.generator != "power_map" &&
-        input.generator != "in_bounds_rd_indices")
+        input.generator != "in_bounds_rd_indices" && input.generator != "cluster_blobs" &&
+        input.generator != "rank_one_mix" && input.generator != "zero_float" &&
+        input.generator != "cluster_labels" && input.generator != "reduction_indices" &&
+        input.generator != "reduction_points" && input.generator != "axis_ramp" &&
+        input.generator != "typed")
       throw std::invalid_argument("unknown recipe generator: " + input.generator);
     if ((input.generator == "iq_cube" && input.dtype != "complex64") ||
         (input.generator == "power_map" && input.dtype != "float32") ||
+        (input.generator == "cluster_blobs" && input.dtype != "float32") ||
+        (input.generator == "rank_one_mix" && input.dtype != "complex64") ||
+        (input.generator == "zero_float" && input.dtype != "float32") ||
+        (input.generator == "cluster_labels" && input.dtype != "int64") ||
+        (input.generator == "reduction_indices" && input.dtype != "int64") ||
+        (input.generator == "reduction_points" && input.dtype != "float32") ||
+        (input.generator == "axis_ramp" && input.dtype != "float32") ||
         (input.generator == "in_bounds_rd_indices" && input.dtype != "int64"))
       throw std::invalid_argument("recipe generator/dtype mismatch: " + input.port);
     for (const auto& axis : input.omit_if_one)
@@ -113,7 +149,7 @@ inline YamlRecipe parse_yaml_recipe(const ProfileSuite& suite) {
     result.inputs.push_back(std::move(input));
   }
   result.constructor = root["constructor"];
-  require_keys(result.constructor, {"extents", "bounds_policy"}, "recipe constructor");
+  require_keys(result.constructor, {"extents", "bounds_policy", "features"}, "recipe constructor");
   if (static_cast<bool>(result.constructor["extents"]) ==
       static_cast<bool>(result.constructor["bounds_policy"]))
     throw std::invalid_argument("recipe constructor needs extents or bounds_policy");
@@ -125,11 +161,41 @@ inline YamlRecipe parse_yaml_recipe(const ProfileSuite& suite) {
     if (!result.fixtures.IsMap())
       throw std::invalid_argument("recipe fixtures must be a map");
   }
+  if (root["extension"]) {
+    result.extension = root["extension"];
+    if (!result.extension.IsMap())
+      throw std::invalid_argument("recipe extension must be a map");
+  }
+  if (root["derived_axes"]) {
+    result.derived_axes = root["derived_axes"];
+    if (!result.derived_axes.IsMap())
+      throw std::invalid_argument("recipe derived_axes must be a map");
+    for (const auto& item : result.derived_axes) {
+      const auto name = item.first.as<std::string>();
+      if (name.empty())
+        throw std::invalid_argument("recipe derived axis name is empty");
+      require_keys(item.second, {"product", "rounded_percent"}, "recipe derived axis");
+      if (static_cast<bool>(item.second["product"]) ==
+          static_cast<bool>(item.second["rounded_percent"]))
+        throw std::invalid_argument("recipe derived axis needs one sizing rule: " + name);
+      if (item.second["product"]) {
+        (void)recipe_strings(item.second["product"], "recipe derived product");
+      } else {
+        require_keys(item.second["rounded_percent"], {"axis", "percent", "minimum"},
+                     "recipe rounded_percent");
+        if (!item.second["rounded_percent"]["axis"] || !item.second["rounded_percent"]["percent"])
+          throw std::invalid_argument("rounded_percent needs axis and percent");
+      }
+    }
+  }
   const auto output = root["outputs"];
-  require_keys(output, {"timed", "drain", "unwired", "queue_depth"}, "recipe outputs");
+  require_keys(output, {"timed", "timed_pair", "drain", "drain_codecs", "unwired", "queue_depth"},
+               "recipe outputs");
   if (!output["timed"])
     throw std::invalid_argument("recipe outputs requires timed");
   result.outputs.timed = output["timed"].as<std::string>();
+  if (output["timed_pair"])
+    result.outputs.timed_pair = output["timed_pair"].as<std::string>();
   if (output["queue_depth"]) {
     result.outputs.queue_depth = output["queue_depth"].as<unsigned int>();
     if (result.outputs.queue_depth == 0)
@@ -137,9 +203,25 @@ inline YamlRecipe parse_yaml_recipe(const ProfileSuite& suite) {
   }
   if (output["drain"])
     result.outputs.drain = recipe_strings(output["drain"], "recipe drained outputs");
+  if (output["drain_codecs"]) {
+    const auto codecs = output["drain_codecs"];
+    if (!codecs.IsMap())
+      throw std::invalid_argument("recipe drain_codecs must be a map");
+    for (const auto& item : codecs) {
+      const auto port = item.first.as<std::string>();
+      const auto codec = item.second.as<std::string>();
+      if (std::find(result.outputs.drain.begin(), result.outputs.drain.end(), port) ==
+              result.outputs.drain.end() ||
+          codec != "array_geometry")
+        throw std::invalid_argument("unsupported recipe drain codec: " + port);
+      result.outputs.drain_codecs.emplace(port, codec);
+    }
+  }
   if (output["unwired"])
     result.outputs.unwired = recipe_strings(output["unwired"], "recipe unwired outputs");
   std::set<std::string> output_names{result.outputs.timed};
+  if (!result.outputs.timed_pair.empty() && !output_names.insert(result.outputs.timed_pair).second)
+    throw std::invalid_argument("duplicate recipe timed output");
   for (const auto& name : result.outputs.drain)
     if (!output_names.insert(name).second)
       throw std::invalid_argument("duplicate recipe output: " + name);
@@ -185,14 +267,17 @@ inline void validate_recipe_manifest(const YamlRecipe& recipe,
         recipe.inputs[i].omit_if_one != expected_inputs[i].omit_if_one ||
         recipe.inputs[i].dtype != expected_inputs[i].dtype ||
         recipe.inputs[i].memory != expected_inputs[i].memory ||
-        recipe.inputs[i].generator != expected_inputs[i].generator)
+        recipe.inputs[i].generator != expected_inputs[i].generator ||
+        recipe.inputs[i].index_doppler_divisor != expected_inputs[i].index_doppler_divisor)
       throw std::invalid_argument("recipe data input disagrees with locked contract: " +
                                   recipe.inputs[i].port);
   }
   if (recipe.outputs.timed != expected_outputs.timed ||
       recipe.outputs.drain != expected_outputs.drain ||
       recipe.outputs.unwired != expected_outputs.unwired ||
-      recipe.outputs.queue_depth != expected_outputs.queue_depth)
+      recipe.outputs.queue_depth != expected_outputs.queue_depth ||
+      recipe.outputs.timed_pair != expected_outputs.timed_pair ||
+      recipe.outputs.drain_codecs != expected_outputs.drain_codecs)
     throw std::invalid_argument("recipe output activation disagrees with locked contract");
   if (recipe.live_ports != expected_live)
     throw std::invalid_argument("recipe live port mapping disagrees with locked contract");
@@ -201,9 +286,22 @@ inline void validate_recipe_manifest(const YamlRecipe& recipe,
 inline YAML::Node merge_recipe_map(const YAML::Node& base, const YAML::Node& change) {
   if (!base.IsMap() || !change.IsMap())
     throw std::invalid_argument("recipe values must be maps");
-  auto result = YAML::Clone(base);
-  for (const auto& item : change)
-    result[item.first.as<std::string>()] = item.second;
+  YAML::Node result(YAML::NodeType::Map);
+  for (const auto& item : base) {
+    const auto name = item.first.as<std::string>();
+    const auto replacement = change[name];
+    if (!replacement)
+      result[name] = YAML::Clone(item.second);
+    else if (item.second.IsMap() && replacement.IsMap())
+      result[name] = merge_recipe_map(item.second, replacement);
+    else
+      result[name] = YAML::Clone(replacement);
+  }
+  for (const auto& item : change) {
+    const auto name = item.first.as<std::string>();
+    if (!base[name])
+      result[name] = YAML::Clone(item.second);
+  }
   return result;
 }
 
@@ -223,9 +321,40 @@ inline std::map<std::string, int64_t> recipe_values(const ProfileSuite& suite,
       result[name] = item.second.as<int64_t>();
     }
   }
+  const auto derived = suite.recipe["derived_axes"];
+  if (derived) {
+    for (const auto& item : derived) {
+      const auto name = item.first.as<std::string>();
+      if (result.contains(name))
+        throw std::invalid_argument("duplicate recipe derived axis: " + name);
+      if (item.second["product"]) {
+        int64_t product = 1;
+        for (const auto& term : item.second["product"]) {
+          const auto axis = term.as<std::string>();
+          const auto found = result.find(axis);
+          if (found == result.end() || found->second <= 0 ||
+              product > std::numeric_limits<int64_t>::max() / found->second)
+            throw std::invalid_argument("invalid recipe derived product: " + name);
+          product *= found->second;
+        }
+        result.emplace(name, product);
+      } else {
+        const auto rule = item.second["rounded_percent"];
+        const auto axis = rule["axis"].as<std::string>();
+        const auto percent_name = rule["percent"].as<std::string>();
+        const auto count = result.at(axis);
+        const auto percent = result.at(percent_name);
+        const auto minimum = rule["minimum"] ? rule["minimum"].as<int64_t>() : 0;
+        if (percent < 0 || percent > 100 || count < 0 ||
+            count > (std::numeric_limits<int64_t>::max() - 50) / std::max<int64_t>(percent, 1))
+          throw std::invalid_argument("invalid recipe rounded percent: " + name);
+        result.emplace(name, std::max<int64_t>(minimum, (count * percent + 50) / 100));
+      }
+    }
+  }
   for (const auto& [name, value] : result)
-    if (value <= 0)
-      throw std::invalid_argument("nonpositive recipe axis or fixture: " + name);
+    if (value < 0)
+      throw std::invalid_argument("negative recipe axis or fixture: " + name);
   return result;
 }
 
@@ -260,10 +389,130 @@ inline std::shared_ptr<holoscan::Tensor> generate_recipe_input(
     return make_iq_cube_device<float>(shape);
   if (input.generator == "power_map" && input.dtype == "float32")
     return make_power_map_device<float>(shape);
+  if (input.generator == "axis_ramp" && input.dtype == "float32") {
+    if (shape.size() != 1)
+      throw std::invalid_argument("axis_ramp requires one dimension");
+    std::vector<float> host(static_cast<size_t>(shape[0]));
+    for (int64_t i = 0; i < shape[0]; ++i)
+      host[static_cast<size_t>(i)] = static_cast<float>(i);
+    auto tensor = make_device_tensor(shape, DLDataType{kDLFloat, 32, 1});
+    auto data = tensor->mutable_data();
+    if (!host.empty() &&
+        (!data || cudaMemcpy(data.value(), host.data(), sizeof(float) * host.size(),
+                             cudaMemcpyHostToDevice) != cudaSuccess))
+      throw std::runtime_error("cannot stage axis ramp");
+    return tensor;
+  }
+  if (input.generator == "cluster_labels" && input.dtype == "int64") {
+    if (shape.size() != 1 || !values.contains("clusters"))
+      throw std::invalid_argument("cluster_labels requires [points] and clusters axis");
+    std::vector<int64_t> host(static_cast<size_t>(shape[0]));
+    for (int64_t i = 0; i < shape[0]; ++i)
+      host[static_cast<size_t>(i)] = i % 8 == 0 ? -1 : i % values.at("clusters");
+    auto tensor = make_device_tensor(shape, DLDataType{kDLInt, 64, 1});
+    auto data = tensor->mutable_data();
+    if (!data || cudaMemcpy(data.value(), host.data(), sizeof(int64_t) * host.size(),
+                            cudaMemcpyHostToDevice) != cudaSuccess)
+      throw std::runtime_error("cannot stage cluster labels");
+    return tensor;
+  }
+  if (input.generator == "reduction_indices" && input.dtype == "int64") {
+    if (shape.size() != 2 || shape[1] != 2)
+      throw std::invalid_argument("reduction_indices requires [points, 2]");
+    std::vector<int64_t> host(static_cast<size_t>(shape[0] * 2));
+    for (int64_t i = 0; i < shape[0]; ++i) {
+      host[static_cast<size_t>(i * 2)] = i % 1024;
+      host[static_cast<size_t>(i * 2 + 1)] = (i * 3) % 2048;
+    }
+    auto tensor = make_device_tensor(shape, DLDataType{kDLInt, 64, 1});
+    auto data = tensor->mutable_data();
+    if (!data || cudaMemcpy(data.value(), host.data(), sizeof(int64_t) * host.size(),
+                            cudaMemcpyHostToDevice) != cudaSuccess)
+      throw std::runtime_error("cannot stage reduction indices");
+    return tensor;
+  }
+  if (input.generator == "reduction_points" && input.dtype == "float32") {
+    if (shape.size() != 2)
+      throw std::invalid_argument("reduction_points requires [points, features]");
+    std::vector<float> host(static_cast<size_t>(shape[0] * shape[1]));
+    for (int64_t i = 0; i < shape[0]; ++i)
+      for (int64_t f = 0; f < shape[1]; ++f)
+        host[static_cast<size_t>(i * shape[1] + f)] =
+            static_cast<float>((i * 17 + f * 3) % 100) * 0.01F;
+    auto tensor = make_device_tensor(shape, DLDataType{kDLFloat, 32, 1});
+    auto data = tensor->mutable_data();
+    if (!data || cudaMemcpy(data.value(), host.data(), sizeof(float) * host.size(),
+                            cudaMemcpyHostToDevice) != cudaSuccess)
+      throw std::runtime_error("cannot stage reduction points");
+    return tensor;
+  }
+  if (input.generator == "zero_float" && input.dtype == "float32") {
+    const auto count =
+        std::accumulate(shape.begin(), shape.end(), int64_t{1}, std::multiplies<int64_t>{});
+    std::vector<float> host(static_cast<size_t>(count), 0.0F);
+    auto tensor = make_device_tensor(shape, DLDataType{kDLFloat, 32, 1});
+    auto data = tensor->mutable_data();
+    if (!data || cudaMemcpy(data.value(), host.data(), sizeof(float) * host.size(),
+                            cudaMemcpyHostToDevice) != cudaSuccess)
+      throw std::runtime_error("cannot stage zero float input");
+    return tensor;
+  }
+  if (input.generator == "rank_one_mix" && input.dtype == "complex64") {
+    if (shape.size() != 3 || !values.contains("selection_percent"))
+      throw std::invalid_argument(
+          "rank_one_mix requires [items, channels, looks] and selection_percent");
+    const auto selected = static_cast<int64_t>(
+        std::llround(static_cast<double>(shape[0] * values.at("selection_percent")) / 100.0));
+    std::vector<std::complex<float>> host(static_cast<size_t>(shape[0] * shape[1] * shape[2]));
+    for (int64_t item = 0; item < shape[0]; ++item) {
+      for (int64_t channel = 0; channel < shape[1]; ++channel) {
+        const double phase =
+            2.0 * 3.14159265358979323846 * 0.5 * static_cast<double>(channel) * std::sin(0.25);
+        const auto secondary = std::complex<float>(static_cast<float>(std::cos(phase)),
+                                                   static_cast<float>(std::sin(phase)));
+        const auto value =
+            std::complex<float>(1.0F, 0.0F) + (item < selected ? secondary : std::complex<float>{});
+        for (int64_t look = 0; look < shape[2]; ++look)
+          host[static_cast<size_t>((item * shape[1] + channel) * shape[2] + look)] = value;
+      }
+    }
+    auto tensor = make_device_tensor(shape, DLDataType{kDLComplex, 64, 1});
+    auto data = tensor->mutable_data();
+    if (!data || cudaMemcpy(data.value(), host.data(), sizeof(std::complex<float>) * host.size(),
+                            cudaMemcpyHostToDevice) != cudaSuccess)
+      throw std::runtime_error("cannot stage rank-one snapshot input");
+    return tensor;
+  }
+  if (input.generator == "cluster_blobs" && input.dtype == "float32") {
+    if (shape.size() != 2 || !values.contains("clusters"))
+      throw std::invalid_argument("cluster_blobs requires [points, features] and clusters axis");
+    const auto clusters = values.at("clusters");
+    std::vector<float> host(static_cast<size_t>(shape[0] * shape[1]));
+    for (int64_t i = 0; i < shape[0]; ++i) {
+      for (int64_t f = 0; f < shape[1]; ++f) {
+        const double base = f == 0 ? static_cast<double>(i % clusters) * 100.0 : 0.0;
+        const double jitter = static_cast<double>(((i * 131 + f * 17) % 21) - 10) / 100.0;
+        host[static_cast<size_t>(i * shape[1] + f)] = static_cast<float>(base + jitter);
+      }
+    }
+    auto tensor = make_device_tensor(shape, DLDataType{kDLFloat, 32, 1});
+    auto data = tensor->mutable_data();
+    if (!data || cudaMemcpy(data.value(), host.data(), sizeof(float) * host.size(),
+                            cudaMemcpyHostToDevice) != cudaSuccess)
+      throw std::runtime_error("cannot stage cluster blob points");
+    return tensor;
+  }
   if (input.generator == "in_bounds_rd_indices" && input.dtype == "int64") {
     if (shape.size() != 2 || shape[1] != 2)
       throw std::invalid_argument("in_bounds_rd_indices requires [detections, 2]");
-    const auto doppler = values.at("doppler");
+    auto doppler = values.at("doppler");
+    if (!input.index_doppler_divisor.empty()) {
+      const auto divisor = values.at(input.index_doppler_divisor);
+      if (divisor <= 0 || doppler % divisor != 0)
+        throw std::invalid_argument("detection Doppler axis is not divisible by " +
+                                    input.index_doppler_divisor);
+      doppler /= divisor;
+    }
     const auto range = values.at("range");
     std::vector<int64_t> host(static_cast<size_t>(shape[0] * 2));
     for (int64_t i = 0; i < shape[0]; ++i) {
@@ -273,8 +522,9 @@ inline std::shared_ptr<holoscan::Tensor> generate_recipe_input(
     }
     auto tensor = make_device_tensor(shape, DLDataType{kDLInt, 64, 1});
     auto data = tensor->mutable_data();
-    if (!data || cudaMemcpy(data.value(), host.data(), sizeof(int64_t) * host.size(),
-                            cudaMemcpyHostToDevice) != cudaSuccess)
+    if (!host.empty() &&
+        (!data || cudaMemcpy(data.value(), host.data(), sizeof(int64_t) * host.size(),
+                             cudaMemcpyHostToDevice) != cudaSuccess))
       throw std::runtime_error("cannot stage in-bounds detection indices");
     return tensor;
   }
@@ -347,11 +597,22 @@ inline void validate_recipe_case(const ProfileSuite& suite, const ProfileCase& p
   const auto values = recipe_values(suite, profile_case);
   for (const auto& input : recipe.inputs) {
     const auto shape = recipe_shape(input, values);
+    for (const auto extent : shape)
+      if (extent < 0)
+        throw std::invalid_argument("negative recipe input shape at " + input.port);
+    if (input.generator == "typed")
+      continue;
     if (input.generator == "in_bounds_rd_indices" &&
         (shape.size() != 2 || shape[1] != 2 || !values.contains("doppler") ||
          !values.contains("range")))
       throw std::invalid_argument(
           "in_bounds_rd_indices requires [detections, 2] and doppler/range axes");
+    if (!input.index_doppler_divisor.empty()) {
+      const auto divisor = values.at(input.index_doppler_divisor);
+      if (divisor <= 0 || values.at("doppler") % divisor != 0)
+        throw std::invalid_argument("detection Doppler axis is not divisible by " +
+                                    input.index_doppler_divisor);
+    }
   }
   if (recipe.constructor["extents"])
     (void)direct_recipe_extents(recipe, values);

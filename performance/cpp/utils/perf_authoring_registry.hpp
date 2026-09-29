@@ -18,6 +18,14 @@
 
 namespace holoscan::radar::perf {
 
+template <typename Op>
+struct PerfOperatorFactory {
+  static holoscan::OperatorHandle<Op> create(holoscan::Graph& graph, std::string_view name,
+                                             const MaxTensorExtents& extents) {
+    return graph.op<Op>(name, extents);
+  }
+};
+
 // HSDK's automatic registration requires a default constructor. Radar operators
 // capture pool bounds in their constructor, so the performance authoring scope
 // provides those bounds for one synchronous Graph declaration.
@@ -52,7 +60,7 @@ struct PerfRegisteredOperator : holoscan::authoring::ManualOperatorRegistrationT
                           const Materialized* materialized) {
     if (!extents || !parameters)
       throw std::logic_error("performance operator authoring scope is missing");
-    auto handle = graph.op<Op>(name, *extents);
+    auto handle = PerfOperatorFactory<Op>::create(graph, name, *extents);
     handle.set_params(materialized ? *static_cast<const Params*>(materialized->data())
                                    : *parameters);
     return Base::make_operator_ref(handle);

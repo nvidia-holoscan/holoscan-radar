@@ -1,302 +1,157 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Performance characterization for DetectionReductionOp — group-by-label
-// reduction over (labels, detection_idx, points). Sweeps detection counts,
-// cluster counts, and representative policies. Measurement tool only: no
-// timing assertions.
-//
-//  Typed recipe Graph run with three aligned inputs (labels /
-// detection_idx / points co-emitted on the same OnClock tick). Mid-session
-// [live] representative / feature_weights / score_method overrides share
-// the same one-frame Exact source timing path as other adapters.
-
-#include <cuda_runtime_api.h>
-
-#include <algorithm>
-#include <array>
 #include <cstdint>
-#include <mutex>
-#include <cstdlib>
-#include <set>
-#include <iostream>
-#include <memory>
-#include <sstream>
+#include <stdexcept>
 #include <string>
-#include <tuple>
-#include <utility>
+#include <string_view>
 #include <vector>
 
-#include <holoscan/core/connection_options.hpp>
-#include <holoscan/core/graph.hpp>
-#include <holoscan/core/tensor_output_loan.hpp>
-
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
-#include "radar_common/descriptors/max_tensor_extents.hpp"
-#include "radar_common/tensor/dlpack_buffer.hpp"
-#include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/perf_driver.hpp"
-#include "utils/perf_graph.hpp"
-#include "utils/perf_payloads.hpp"
-#include "utils/perf_platform.hpp"
-#include "utils/perf_report.hpp"
-#include "utils/perf_recipe.hpp"
-#include "utils/perf_runner.hpp"
-#include "utils/tensor_factory.hpp"
+#include "utils/perf_yaml_pilot.hpp"
 
 namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using PerfPrecision = float;
+using Op = hr::DetectionReductionOp<float>;
+struct Scenario : perf::RecipeScenario {};
 
-constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
-
-struct SizeSpec {
-  std::string id;
-  int64_t num_points;
-  int64_t num_clusters;
-  int64_t num_features;
-  std::string role;
-};
-
-struct RedScenario {
-  std::string id;
-  std::string size_id;
-  hr::RepresentativePolicy policy{hr::RepresentativePolicy::kPeak};
-  hr::ScoreMethod score_method{hr::ScoreMethod::kWeightedSum};
-  int64_t num_points{0};
-  int64_t num_clusters{0};
-  int64_t num_features{2};
-  std::string live_port;
-  std::vector<double> weights;
-};
-
-std::string policy_tag(hr::RepresentativePolicy p) {
-  return std::string(hr::to_string(p));
+hr::RepresentativePolicy policy(std::string_view name) {
+  if (name == "peak")
+    return hr::RepresentativePolicy::kPeak;
+  if (name == "first")
+    return hr::RepresentativePolicy::kFirst;
+  if (name == "medoid")
+    return hr::RepresentativePolicy::kMedoid;
+  if (name == "weighted_mean")
+    return hr::RepresentativePolicy::kWeightedMean;
+  throw std::invalid_argument("unknown DetectionReduction representative policy");
 }
 
-template <typename T>
-std::shared_ptr<holoscan::Tensor> make_device_from_host(const std::vector<T>& host,
-                                                        const std::vector<int64_t>& shape,
-                                                        DLDataType dtype) {
-  auto tensor = hr::make_device_tensor(shape, dtype);
-  if (!host.empty()) {
-    auto mut = tensor->mutable_data();
-    if (!mut) {
-      throw std::runtime_error("perf_detection_reduction: tensor not writable");
-    }
-    if (cudaMemcpy(mut.value(), host.data(), sizeof(T) * host.size(), cudaMemcpyHostToDevice) !=
-        cudaSuccess) {
-      throw std::runtime_error("perf_detection_reduction: cudaMemcpy H2D failed");
-    }
-  }
-  return tensor;
+hr::ScoreMethod score(std::string_view name) {
+  if (name == "weighted_sum")
+    return hr::ScoreMethod::kWeightedSum;
+  if (name == "weighted_l2")
+    return hr::ScoreMethod::kWeightedL2;
+  if (name == "weighted_max")
+    return hr::ScoreMethod::kWeightedMax;
+  throw std::invalid_argument("unknown DetectionReduction score method");
 }
 
-std::shared_ptr<holoscan::Tensor> make_labels(int64_t num_points, int64_t num_clusters) {
-  std::vector<int64_t> host(static_cast<size_t>(std::max<int64_t>(num_points, 0)));
-  const int64_t nclus = std::max<int64_t>(num_clusters, 1);
-  for (int64_t i = 0; i < num_points; ++i) {
-    host[static_cast<size_t>(i)] = (i % 8 == 0) ? -1 : (i % nclus);
-  }
-  return make_device_from_host(host, {num_points}, kInt64Dtype);
+hr::DetectionReductionParams parameters(const Scenario& scen) {
+  hr::DetectionReductionParams params;
+  params.representative = policy(scen.params["representative"].as<std::string>());
+  params.score_method = score(scen.params["score_method"].as<std::string>());
+  const auto weights = scen.params["feature_weights"];
+  if (weights["factory"].as<std::string>() != "ones" ||
+      weights["count"].as<std::string>() != "features")
+    throw std::invalid_argument("DetectionReduction feature_weights needs ones(features)");
+  params.feature_weights.assign(static_cast<std::size_t>(scen.axis("features")), 1.0);
+  return params;
 }
 
-std::shared_ptr<holoscan::Tensor> make_detection_idx(int64_t num_points) {
-  std::vector<int64_t> host(static_cast<size_t>(std::max<int64_t>(num_points, 0) * 2));
-  for (int64_t i = 0; i < num_points; ++i) {
-    host[static_cast<size_t>(i * 2)] = i % 1024;
-    host[static_cast<size_t>(i * 2 + 1)] = (i * 3) % 2048;
-  }
-  return make_device_from_host(host, {num_points, 2}, kInt64Dtype);
+perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
+  const auto extents = perf::direct_recipe_extents(scen.recipe, scen.values);
+  const auto params = parameters(scen);
+  return perf::run_recipe_selected_case<Op, 3>(
+      scen, plan, extents, params, [&](const std::string& codec) -> perf::TimingCollector {
+        if (codec == "representative_policy") {
+          const auto value = policy(scen.live_value.as<std::string>());
+          return perf::run_recipe_live_case_with_connector<Op, 3>(
+              scen, plan, extents, params, value, value,
+              [](auto& graph, const auto& source, const auto& op, const auto& queue) {
+                graph.add_flow(source->override_out, op->representative, queue);
+              });
+        }
+        if (codec == "score_method") {
+          const auto value = score(scen.live_value.as<std::string>());
+          return perf::run_recipe_live_case_with_connector<Op, 3>(
+              scen, plan, extents, params, value, value,
+              [](auto& graph, const auto& source, const auto& op, const auto& queue) {
+                graph.add_flow(source->override_out, op->score_method, queue);
+              });
+        }
+        if (codec == "first_double") {
+          auto weights = params.feature_weights;
+          weights[0] = 2.0;
+          return perf::run_recipe_live_case<Op, 3>(scen, plan, extents, params, weights, weights);
+        }
+        throw std::invalid_argument("unknown DetectionReduction live codec: " + codec);
+      });
 }
 
-template <typename T>
-std::shared_ptr<holoscan::Tensor> make_points(int64_t num_points, int64_t num_features) {
-  std::vector<T> host(
-      static_cast<size_t>(std::max<int64_t>(num_points, 0) * std::max<int64_t>(num_features, 0)));
-  for (int64_t i = 0; i < num_points; ++i) {
-    for (int64_t f = 0; f < num_features; ++f) {
-      host[static_cast<size_t>(i * num_features + f)] =
-          static_cast<T>((i * 17 + f * 3) % 100) * static_cast<T>(0.01);
-    }
-  }
-  return make_device_from_host(host, {num_points, num_features}, hr::real_dtype<T>());
-}
-
-perf::TimingCollector run_graph(const RedScenario& scen, const perf::RunPlan& plan) {
-  auto labels_t = make_labels(scen.num_points, scen.num_clusters);
-  auto idx_t = make_detection_idx(scen.num_points);
-  auto points_t = make_points<PerfPrecision>(scen.num_points, scen.num_features);
-  const auto configure = [&](holoscan::Graph& graph, const auto& src,
-                             holoscan::CompileOptions& options, auto connect) {
-    hr::MaxTensorExtents extents;
-    extents.max_clusters = std::max<int64_t>(scen.num_clusters, 1);
-    extents.max_points = std::max<int64_t>(scen.num_points, 1);
-    extents.max_features = scen.num_features;
-    hr::DetectionReductionParams params;
-    params.representative = scen.policy;
-    params.score_method = scen.score_method;
-    params.feature_weights = scen.weights;
-    auto op = graph.op<hr::DetectionReductionOp<PerfPrecision>>("reduction", extents);
-    op.set_params(std::move(params));
-
-    const holoscan::ConnectionOptions q{.queue_depth = 4U};
-
-    graph.add_flow(src->out_a, op->labels, q);
-    graph.add_flow(src->out_b, op->detection_idx, q);
-    graph.add_flow(src->out_c, op->points, q);
-    connect(graph, src, op, q);
-    perf::PerfRecipeOutputs outputs(graph, options, "reduction");
-    outputs.timed_pair(op->rep_idx, "rep_idx", op->reduced_points, "reduced_points");
-    outputs.finish(src, op);
-  };
-  if (scen.live_port.empty()) {
-    return perf::run_data_recipe(
-        std::array{std::move(labels_t), std::move(idx_t), std::move(points_t)}, plan,
-        "reduction-perf", [&](auto& graph, const auto& src, auto& options) {
-          configure(graph, src, options, [](auto&, const auto&, const auto&, const auto&) {});
-        });
-  }
-  const auto cases = std::make_tuple(
-      perf::live_option("representative",
-                        [&] {
-                          return perf::selected_live_case(
-                              "representative", hr::RepresentativePolicy::kMedoid,
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->representative, q);
-                              });
-                        }),
-      perf::live_option("score_method",
-                        [&] {
-                          return perf::selected_live_case(
-                              "score_method", hr::ScoreMethod::kWeightedL2,
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->score_method, q);
-                              });
-                        }),
-      perf::live_option("feature_weights", [&] {
-        std::vector<double> changed(static_cast<size_t>(scen.num_features), 1.0);
-        changed[0] = 2.0;
-        return perf::selected_live_case(
-            "feature_weights", std::move(changed),
-            [](auto& graph, const auto& src, const auto& op, const auto& q) {
-              graph.add_flow(src->override_out, op->feature_weights, q);
-            });
-      }));
-  return perf::dispatch_live_case(scen.live_port, cases, [&](const auto& selected) {
-    return perf::run_selected_live_recipe(
-        std::array{std::move(labels_t), std::move(idx_t), std::move(points_t)}, plan,
-        "reduction-perf", selected, configure);
-  });
-}
-
-void fill_throughput(perf::ResultRow* row, const RedScenario& scen, double median_ms) {
-  if (median_ms <= 0.0) {
-    return;
-  }
-  const double sec = median_ms / 1000.0;
-  const double n = static_cast<double>(scen.num_points);
-  row->cells_per_second = n / sec;
-  row->slices_per_second = static_cast<double>(std::max<int64_t>(scen.num_clusters, 1)) / sec;
-
-  const double tsz = sizeof(PerfPrecision);
-  const double labels_bytes = n * static_cast<double>(sizeof(int64_t));
-  const double idx_bytes = n * 2.0 * static_cast<double>(sizeof(int64_t));
-  const double points_bytes = n * static_cast<double>(scen.num_features) * tsz;
-  const double rep_bytes =
-      static_cast<double>(scen.num_clusters) * 2.0 * static_cast<double>(sizeof(int64_t));
-  const double reduced_bytes = static_cast<double>(scen.num_clusters * scen.num_features) * tsz;
-  row->estimated_effective_gbps =
-      (labels_bytes + idx_bytes + points_bytes + rep_bytes + reduced_bytes) / sec / 1e9;
-}
-
-perf::ResultRow base_row(const RedScenario& scen) {
+perf::ResultRow base_row(const Scenario& scen) {
   perf::ResultRow row;
   row.op_name = "DetectionReductionOp";
-  row.variant = policy_tag(scen.policy);
-  row.map_shape = {scen.num_points, scen.num_features};
-  row.input_shape = {scen.num_points, 2};
-  row.out_batch = scen.num_clusters;
-  row.k = scen.num_features;
+  row.variant = std::string(hr::to_string(policy(scen.params["representative"].as<std::string>())));
+  row.map_shape = {scen.axis("points"), scen.axis("features")};
+  row.input_shape = {scen.axis("points"), 2};
+  row.out_batch = scen.axis("clusters");
+  row.k = scen.axis("features");
   row.live_port = scen.live_port;
   return row;
 }
 
-RedScenario make_scenario(hr::RepresentativePolicy policy, const SizeSpec& s) {
-  RedScenario sc;
-  sc.policy = policy;
-  sc.size_id = s.id;
-  sc.num_points = s.num_points;
-  sc.num_clusters = s.num_clusters;
-  sc.num_features = s.num_features;
-  sc.weights.assign(static_cast<size_t>(s.num_features), 1.0);
-  std::ostringstream id;
-  id << "red_" << policy_tag(sc.policy) << "_" << s.id << "_n" << s.num_points << "_compute";
-  sc.id = id.str();
-  return sc;
+void decorate_row(perf::ResultRow& row, const Scenario& scen) {
+  const double points = static_cast<double>(scen.axis("points"));
+  const double clusters = static_cast<double>(scen.axis("clusters"));
+  const double features = static_cast<double>(scen.axis("features"));
+  const double bytes = points * (3.0 * sizeof(int64_t) + features * sizeof(float)) +
+                       clusters * (2.0 * sizeof(int64_t) + features * sizeof(float));
+  perf::set_recipe_throughput(row, points, clusters, bytes);
+  row.notes = row.live_port.empty()
+                  ? "default parameters; no live override"
+                  : "cold_ms is first-frame latency; override_ms is one changed frame for " +
+                        scen.live_port + "; cells/s is points/s";
 }
 
-void decorate_row(perf::ResultRow& row, const RedScenario& scen) {
-  fill_throughput(&row, scen, row.latency.median_ms);
-  row.notes = "cold_ms is first-frame latency; override_ms is one changed frame for " +
-              scen.live_port + "; cells/s is points/s";
-  if (row.live_port.empty())
-    row.notes = "default parameters; no live override";
-}
-
-struct RedTraits : perf::PerfDriverDefaults {
-  using Scenario = RedScenario;
-
+struct Traits : perf::PerfDriverDefaults {
+  using Scenario = ::Scenario;
   static const char* tool_name() { return "perf_detection_reduction"; }
   static const char* tool_description() {
-    return "DetectionReductionOp performance characterization "
-           "(HSDK 5 Graph)";
+    return "DetectionReductionOp performance characterization (HSDK 5 Graph)";
   }
-
   static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
-    if (shape.size() != 3)
-      throw std::invalid_argument("DetectionReduction profile rank mismatch");
-    return {id, shape, shape[0], id};
+    return perf::recipe_size_def(id, shape, 3, 1);
   }
-  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
-    if (shape.size() != 3 || shape[0] < 1 || shape[1] < 1 || shape[1] > shape[0] || shape[2] < 1)
-      throw std::invalid_argument("DetectionReduction invalid shape");
-    perf::require_keys(c.parameters, {"representative", "score_method"}, "parameters");
-    const auto policy = c.parameters["representative"].as<std::string>();
-    const auto method = c.parameters["score_method"].as<std::string>();
-    if (policy != "peak" && policy != "medoid" && policy != "first" && policy != "weighted_mean")
-      throw std::invalid_argument("DetectionReduction invalid policy");
-    if (method != "weighted_sum" && method != "weighted_l2" && method != "weighted_max")
-      throw std::invalid_argument("DetectionReduction invalid score method");
-    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], c.profile};
-    const auto parsed_policy = policy == "first"           ? hr::RepresentativePolicy::kFirst
-                               : policy == "medoid"        ? hr::RepresentativePolicy::kMedoid
-                               : policy == "weighted_mean" ? hr::RepresentativePolicy::kWeightedMean
-                                                           : hr::RepresentativePolicy::kPeak;
-    auto scenario = make_scenario(parsed_policy, size);
-    scenario.id = c.id;
-    scenario.score_method = method == "weighted_l2"    ? hr::ScoreMethod::kWeightedL2
-                            : method == "weighted_max" ? hr::ScoreMethod::kWeightedMax
-                                                       : hr::ScoreMethod::kWeightedSum;
-    if (c.override_value) {
-      scenario.live_port = (*c.override_value)["port"].as<std::string>();
-      const auto value = (*c.override_value)["value"].as<std::string>();
-      if ((scenario.live_port == "representative" && value != "medoid") ||
-          (scenario.live_port == "score_method" && value != "weighted_l2") ||
-          (scenario.live_port == "feature_weights" && value != "first_double") ||
-          (scenario.live_port != "representative" && scenario.live_port != "score_method" &&
-           scenario.live_port != "feature_weights"))
-        throw std::invalid_argument("DetectionReduction invalid override");
-    }
-    return scenario;
+  static void validate_suite(const perf::ProfileSuite& suite) {
+    (void)perf::validate_pilot_suite<Op>(
+        suite, "radar.DetectionReductionOp.float", "",
+        {{"labels", {"points"}, "int64", "device", "cluster_labels", {}},
+         {"detection_idx", {"points", "two"}, "int64", "device", "reduction_indices", {}},
+         {"points", {"points", "features"}, "float32", "device", "reduction_points", {}}},
+        {"rep_idx", {}, {}, 4U, "reduced_points"},
+        {{"representative", "representative"},
+         {"score_method", "score_method"},
+         {"feature_weights", "feature_weights"}},
+        {{"representative", "representative_policy"},
+         {"score_method", "score_method"},
+         {"feature_weights", "first_double"}});
+  }
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape,
+                             const perf::ProfileSuite& suite) {
+    auto scen = perf::pilot_scenario<Scenario>(suite, c, shape, 3);
+    if (scen.axis("points") < 1 || scen.axis("clusters") < 1 ||
+        scen.axis("clusters") > scen.axis("points") || scen.axis("features") < 1)
+      throw std::invalid_argument("DetectionReduction invalid profile shape");
+    perf::require_recipe_params(scen.params, {"representative", "score_method", "feature_weights"});
+    (void)parameters(scen);
+    if (scen.live_port == "representative")
+      (void)policy(scen.live_value.as<std::string>());
+    else if (scen.live_port == "score_method")
+      (void)score(scen.live_value.as<std::string>());
+    else if (scen.live_port == "feature_weights" &&
+             scen.live_value.as<std::string>() != "first_double")
+      throw std::invalid_argument("unknown DetectionReduction weights fixture");
+    return scen;
   }
 };
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<RedTraits>(argc, argv);
+  return perf::perf_main<Traits>(argc, argv);
 }
