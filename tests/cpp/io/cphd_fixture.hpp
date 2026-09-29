@@ -30,7 +30,8 @@ inline void write_be32(std::ofstream& out, float value) {
 
 // Standalone C++ CPHD 1.x fixture; CI needs no Python or external collection.
 inline fs::path make_fixture(const fs::path& path, double sc0_per_pulse = 0.0,
-                             double scss_per_pulse = 0.0, double iarp_x = 6378000.0) {
+                             double scss_per_pulse = 0.0, double iarp_x = 6378000.0,
+                             bool wide_swath = false) {
   constexpr int64_t kPulses = 5;
   constexpr int64_t kSamples = 8;
   constexpr int64_t kXmlOffset = 1024;
@@ -38,6 +39,13 @@ inline fs::path make_fixture(const fs::path& path, double sc0_per_pulse = 0.0,
   constexpr int64_t kSignalOffset = 8192;
   std::string xml =
       R"(<CPHD><Data><SignalArrayFormat>CF8</SignalArrayFormat><NumBytesPVP>104</NumBytesPVP><Channel><Identifier>test</Identifier><NumVectors>5</NumVectors><NumSamples>8</NumSamples><SignalArrayByteOffset>0</SignalArrayByteOffset><PVPArrayByteOffset>0</PVPArrayByteOffset></Channel></Data><Global><DomainType>FX</DomainType><SGN>-1</SGN></Global><SceneCoordinates><IARP><ECF><X>6378000</X><Y>0</Y><Z>0</Z></ECF></IARP><ReferenceSurface><Planar><uIAX><X>0</X><Y>1</Y><Z>0</Z></uIAX><uIAY><X>0</X><Y>0</Y><Z>1</Z></uIAY></Planar></ReferenceSurface><ImageArea><X1Y1><X>-10</X><Y>-10</Y></X1Y1><X2Y2><X>10</X><Y>10</Y></X2Y2></ImageArea></SceneCoordinates><ReferenceGeometry><Monostatic><GrazeAngle>45</GrazeAngle><SlantRange>1000</SlantRange><AzimuthAngle>0</AzimuthAngle></Monostatic></ReferenceGeometry><Channel><Parameters><FxC>9004000000</FxC><FxBW>8000000</FxBW><TOASaved>0.0000001</TOASaved></Parameters></Channel><Antenna><AntPattern><GainZero>20</GainZero></AntPattern></Antenna><PVP>)";
+  if (wide_swath) {
+    const std::string original = "<TOASaved>0.0000001</TOASaved>";
+    const auto pos = xml.find(original);
+    if (pos == std::string::npos)
+      throw std::runtime_error("CPHD fixture: TOASaved element not found");
+    xml.replace(pos, original.size(), "<TOASaved>0.0000010</TOASaved>");
+  }
   if (iarp_x != 6378000.0) {
     const std::string original = "<IARP><ECF><X>6378000</X>";
     const auto pos = xml.find(original);

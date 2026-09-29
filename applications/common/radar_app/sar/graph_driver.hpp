@@ -159,8 +159,10 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
                                                                   : cfg.sample_geometry;
       // Scroll along-track v horizontally so its long mosaic fits a landscape display.
       const bool transpose_display_axes = cfg.scroll;
+      const int64_t raster_max_v = std::max(viz_geometry.num_v(), *extents.max_image_v);
+      const int64_t raster_max_u = std::max(viz_geometry.num_u(), *extents.max_image_u);
       auto raster = graph.op<app::sar::SarImageVizOp>(
-          "sar_image_viz", viz_geometry.num_v(), viz_geometry.num_u(), cfg.visualize_size,
+          "sar_image_viz", raster_max_v, raster_max_u, cfg.visualize_size,
           cfg.headless ? 0.0 : cfg.visualize_hold_s, transpose_display_axes);
       application.add(raster);
       bind_outputs(options, "sar_image_viz", {"frame"});

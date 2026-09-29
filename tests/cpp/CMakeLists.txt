@@ -375,6 +375,17 @@ foreach(index RANGE 0 4)
     endif()
 endforeach()
 
+if(TARGET independent_images)
+    set(independent_dir "${PROJECT_BINARY_DIR}/applications/sar/independent_images/cpp")
+    add_test(NAME Sar_independent_images_varying_viz
+        COMMAND ${CMAKE_COMMAND}
+            -DSAR_EXECUTABLE=$<TARGET_FILE:independent_images>
+            -DSAR_CONFIG=${independent_dir}/independent_images_varying_viz_generated_smoke.yaml
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_varying_viz.cmake)
+    set_tests_properties(Sar_independent_images_varying_viz PROPERTIES
+        FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+endif()
+
 if(TARGET spotlight)
     set(spotlight_dir "${PROJECT_BINARY_DIR}/applications/sar/spotlight/cpp")
     add_test(NAME Sar_spotlight_dump

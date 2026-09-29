@@ -76,7 +76,10 @@ One complex image is reported per collection boundary, with geometry and frequen
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.
 `visualize_size` bounds the display raster; it does not change formation
-resolution. `visualize_hold_s` only keeps a finite positive duration after
+resolution. The raster accepts the largest image extent derived from the full
+collection list, so later images may be larger than the first. The headless
+smoke includes a 1 × 1 image followed by an 8 × 8 image. `visualize_hold_s`
+only keeps a finite positive duration after
 an emit; indefinite hold and interactive X11 validation remain open.
 `dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
 and `output.max_files` to control its files.

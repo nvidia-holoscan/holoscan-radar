@@ -114,6 +114,14 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## SAR HSDK 5 port
 
+- **2026-09-29 — SAR display accepts changing image dimensions:** The shared
+  Graph driver sizes `SarImageVizOp` input bounds from both the maximum
+  configured collection extents and the display/mosaic geometry. A generated headless regression
+  forms and displays 1×1 then 8×8 independent images. On downloaded Umbra
+  CPHDs, full-pulse 5715×5715 and 7463×7463 images both completed through
+  headless Holoviz. Interactive X11 presentation and visual image-quality
+  inspection remain open.
+
 - **2026-09-29 — CPHD recorded-grid ramp accepted in HSDK 5:** The reader's
   `SC0`/`SCSS` per-batch check now uses the SAR notes' `1e-5` relative bound
   instead of `1e-10`. All six downloaded Umbra SNAPSHOT PVP blocks were checked
