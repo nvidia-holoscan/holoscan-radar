@@ -1,6 +1,8 @@
-# Tiled Strip SAR application
+# Tiled strip SAR
 
-A tile stager supplies each tile lattice. The manager can apply a taper, and the mosaic places the finished tiles into the parent strip.
+The tile stager supplies a lattice per tile. The aperture manager stamps a Taylor pulse taper; reset backprojection forms each tile and a mosaic places it in the parent strip.
+
+## Graph
 
 ```mermaid
 flowchart LR
@@ -19,22 +21,52 @@ flowchart LR
     Raster --> Viz[HolovizOp]
 ```
 
-Build and run in the pinned HSDK 5 GPU image:
+The solid paths are required data and control flows. Dashed dump and
+visualization branches are enabled by application configuration. The reader's
+typed `stream_boundary` is joined to the aperture manager on the same tick.
+
+## Build and offline fixture
+
+Build in the pinned HSDK 5 GPU image with Python application bindings disabled:
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=OFF -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=OFF -DAPP_tiled_strip=ON
-cmake --build build --target tiled_strip
-./build/applications/sar/tiled_strip/cpp/tiled_strip tiled_strip.yaml /path/to/collection.cphd
+cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=ON
+cmake --build build --target tiled_strip generate_cphd_fixture
+ctest --test-dir build -R '^Sar_tiled_strip_(smoke|viz)$' --output-on-failure
 ```
 
-The default [`tiled_strip.yaml`](config/tiled_strip.yaml) ships beside the executable.
-The first argument may be a YAML path or a CPHD path; a second CPHD path
-replaces the YAML `cphd.path`. `visualize: true` opens Holoviz when a usable
-X11 display exists. `headless: true` renders offscreen. `dump: true` writes
-complex `.npy` images through TensorDumpOp.
+CTest generates the CPHD fixture in C++, then checks 5 images of
+15 × 6 pixels and runs a headless Holoviz path. These runs check graph wiring,
+count, dimensions, and successful execution; they do not establish focus on
+real collections.
 
-CTest generates one CPHD fixture in C++ and checks image counts and dimensions
-for this executable and its headless visualization path. Real collection and
-interactive display validation remain open in the untracked root `OPEN_ITEMS.md`.
-The six reusable SAR operators are documented under [`operators/sar/`](../../../operators/sar/README.md)
-and the CPHD reader under [`operators/io/`](../../../operators/io/README.md).
+## Real collection preset
+
+The preset uses the Capella Imperial Valley collection at `/tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd`. Download it with `python3 tools/sar_data/pull_cphd.py --app tiled_strip`; inspect the manifest first with `--list`. The YAML selects 159,050 pulses, divides them into ten 15,905-pulse tiles, and uses a 4096-pixel cap on each tile. The CPHD is about 3.45 GiB.
+
+The shipped [`tiled_strip.yaml`](config/tiled_strip.yaml) is copied beside the
+executable by CMake. It is a **real-data preset**. The default invocation is:
+
+```bash
+./build/applications/sar/tiled_strip/cpp/tiled_strip
+```
+
+Pass an explicit YAML path as the first argument. For this topology,
+a CPHD path may replace `cphd.path` directly, or follow a YAML path as the second argument.
+
+## Output and display
+
+Each completed tile produces an image; the mosaic places emitted tiles into a parent canvas. The fixture reports five 15 × 6 mosaic images. Optional dump writes that parent complex mosaic; Holoviz displays its raster. The present visualization does not apply the YAML comment's proposed u-axis crop; this gap is tracked in the untracked root `OPEN_ITEMS.md`.
+
+`visualize: true` requests Holoviz when its HSDK 5 component and a usable
+X11 display are available. `headless: true` uses an offscreen CUDA sink.
+`visualize_size` bounds the display raster; it does not change formation
+resolution. `visualize_hold_s` only keeps a finite positive duration after
+an emit; indefinite hold and interactive X11 validation remain open.
+`dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
+and `output.max_files` to control its files.
+
+See [SAR data preparation](../../../tools/sar_data/README.md),
+[SAR operator references](../../../operators/sar/README.md),
+[CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
+[current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).

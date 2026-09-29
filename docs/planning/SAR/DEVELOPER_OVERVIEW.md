@@ -4,17 +4,22 @@
 
 Onboarding for someone who will **implement or extend** this SAR stack: expert at software and Holoscan-style graphs, comfortable with basic SAR ideas (range, Doppler, synthetic aperture, complex imagery), **not** expected to know collection-mode jargon or which product names map to which pipeline knobs.
 
-**Nothing described here is built yet.** This is a proposed design under review. Claims about what the API “supports” are design claims, not reports on working code.
+**Status (HSDK 5, 2026-09-29):** Six SAR and I/O operators and five
+[standalone C++ apps](../../../applications/sar/README.md) are implemented.
+The historical design discussion below describes a broader proposed stack;
+SICD writers, autofocus, product stages, and modes beyond five are deferred.
+Use the [current HSDK 5 contract](OPERATOR_API.md#hsdk-5-ccuda-port-contract-2026-09-28)
+and the app entry points for implemented behavior.
 
 It is a derivative of [WORKFLOWS.md](WORKFLOWS.md) (modes + wiring) with contracts from [OPERATOR_API.md](OPERATOR_API.md). Where this disagrees with those, **they win**. Regenerate from the prompt in WORKFLOWS.md → *Appendix*, do not hand-patch. The sibling [PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) is the same scope stripped of software detail for external SAR reviewers.
 
-**Read next after this:** [OPERATOR_API.md](OPERATOR_API.md) (the contracts in full — a proposal pending **R1**, not locked text, unlike the FMCW contract one level up), [SIGPROC_PLAN.md](SIGPROC_PLAN.md) (build order), [TESTING.md](TESTING.md), [../NEW_OPERATOR_CHECKLIST.md](../NEW_OPERATOR_CHECKLIST.md), [../OPERATOR_DEVELOPMENT.md](../OPERATOR_DEVELOPMENT.md).
+**Read next after this:** [OPERATOR_API.md](OPERATOR_API.md) (its opening HSDK 5 section is the current contract; the imported design below is historical), [SIGPROC_PLAN.md](SIGPROC_PLAN.md) (build order), [TESTING.md](TESTING.md), [../NEW_OPERATOR_CHECKLIST.md](../NEW_OPERATOR_CHECKLIST.md), [../OPERATOR_DEVELOPMENT.md](../OPERATOR_DEVELOPMENT.md).
 
 ---
 
 ## What we are building
 
-A Holoscan **operator library** for monostatic, single-pol, **time-domain backprojection** SAR. Pulses stream in; complex images stream out. Wave one reads **CPHD** phase history and writes **SICD** (plus dumps). Later waves add live-radar ingress branches and display products (multilook / geocode).
+A Holoscan **operator library** for monostatic, single-pol, **time-domain backprojection** SAR. Pulses stream in; complex images stream out. The implemented wave reads **CPHD** phase history and emits complex tensors, with optional NumPy dumps and Holoviz. The historical product plan below included SICD writing and later live-radar ingress and display products (multilook / geocode).
 
 | In scope (wave one+) | Out of scope / deferred |
 | --- | --- |
@@ -23,13 +28,13 @@ A Holoscan **operator library** for monostatic, single-pol, **time-domain backpr
 | Optional PGA autofocus with hard constraints | Polarimetry, InSAR, SAR detection as first-class products |
 | CPHD → range profiles → image → SICD | Fused “one operator does everything” pipelines |
 
-**Design invariants that matter when coding** (full list in repo `AGENTS.md` / OPERATOR_API): plain tensors on data ports; compile-time single/double precision; leading batch axes opaque; `[live]` overrides only where marked; no inventing new shared descriptor types without a contract change.
+**Historical design invariants (consult the current contract before coding)** (full list in repo `AGENTS.md` / OPERATOR_API): plain tensors on data ports; compile-time single/double precision; named axes with no opaque leading batch; `[live]` overrides only where marked; no inventing new shared descriptor types without a contract change.
 
 ---
 
-## Mental model: one graph, modes are configuration
+## Historical design model: one graph, modes are configuration
 
-There is **one** operator chain. Collection “modes” (spotlight, video SAR, strip, …) are **not** separate pipelines. They differ by:
+The original design described **one** operator chain and treated collection modes as configuration. The implementation now has five separate graph entry points sharing the same library operators. In that original model, modes differed by:
 
 1. Whether consecutive images **share pulses** (needs retention + signed-weight eviction).
 2. Whether the **scene lattice** stays fixed, **steps** per tile, or **scrolls** with the platform.
@@ -47,7 +52,7 @@ flowchart TD
   READ -->|"positions, reference_position"| AC
   AC -->|"range_profiles, weight, control"| BP["BackprojectionOp"]
   GEOM(("sample geometry")) -.-> AC
-  BP --> SLC(["SLC → SICDWriterOp"])
+  BP --> SLC(["complex image; SICD writer deferred"])
   class AC,GEOM opt
 ```
 
@@ -73,7 +78,7 @@ Use this when reading mode names in WORKFLOWS or talking to radar folks.
 | **Tomographic / 3D** | Stack of height planes | **N** instances, one lattice per height; same pulses |
 | **Range compression** | Fast-time matched filter → range profile | `SARRangeCompressionOp` |
 | **Phase history** | Compensated deramped signal (CPHD’s native form) | Convergence point of all ingress branches |
-| **SLC** | Single-look complex image | Primary output; `SICDWriterOp` |
+| **SLC** | Single-look complex image | Complex image tensor now; `SICDWriterOp` deferred |
 | **DEM / ground grid** | Map or terrain sample locations | Usual `sample_points` / `sample_geometry` for the product |
 | **Radar-geometry / conjugate grid** | Lattice whose along-track axis is Fourier-related to pulse time | Required for PGA estimation; not the default product |
 | **Autofocus / PGA** | Estimate leftover per-pulse phase from a formed image | Optional; see *Autofocus* below — **off by default** |
@@ -107,7 +112,7 @@ Orientation only — contracts are in OPERATOR_API.
 
 Forgetting to wire `positions` / `reference_position` around range compression is the classic bug: shapes still look fine.
 
-**After the image.** Wave-one writers: `SICDWriterOp`, `CPHDWriterOp`, `TensorDumpOp`. Later: `MultilookOp`, `GeocodeOp`, `SIDDWriterOp`.
+**After the image.** Only `TensorDumpOp` is implemented. Historical planned writers: `SICDWriterOp`, `CPHDWriterOp`. Later: `MultilookOp`, `GeocodeOp`, `SIDDWriterOp`.
 
 Port-level diagrams: WORKFLOWS Figures 1–5.
 
@@ -217,7 +222,7 @@ PGA discards constant/linear phase (image shift). Conjugacy is **declared** (`az
 
 No `MotionCompensationOp` for straight-track phase (backprojection uses measured trajectory). No bistatic ports. No first-wave frequency-domain formation. No mosaicking / look-combination / SAR CFAR in this modality’s wave one. Detection lessons from FMCW do **not** carry over to SAR clutter statistics.
 
-Team-blocked items that affect implementation: contract acceptance itself (**R1**) and the scope of the metadata key namespace (**R10** — whether `holoscan.radar.stream_boundary` sits module-wide or under a `sar` tier). Everything else you would have found here is decided: the control-message payload as **D23**, the end-of-stream announcement as **D22**, and the metadata plane as **D21**, which declined it. See [TEAM_BLOCKED.md](TEAM_BLOCKED.md); [../SDK_QUESTIONS.md](../SDK_QUESTIONS.md) now holds one upstream design question rather than anything blocking.
+Team-blocked items that affect implementation: contract acceptance itself (**R1**) and the scope of the metadata key namespace (**R10** — whether `holoscan.radar.stream_boundary` sits module-wide or under a `sar` tier). Everything else you would have found here is decided: the control-message payload as **D23**, the end-of-stream announcement as **D22**, and the metadata plane as **D21**, which declined it. See [TEAM_BLOCKED.md](TEAM_BLOCKED.md); `SDK_QUESTIONS.md` (retired source-branch note) now holds one upstream design question rather than anything blocking.
 
 ---
 

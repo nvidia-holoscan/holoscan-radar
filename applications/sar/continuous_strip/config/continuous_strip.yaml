@@ -7,26 +7,26 @@
 # (no tile seams, no cross-range taper). Pull first (~3.45 GiB);
 # the app never reaches the network.
 #
-#   python3 tools/sar_sim/pull_cphd.py --mode 4 \
+#   python3 tools/sar_data/pull_cphd.py --app continuous_strip \
 #     --dest /tmp/sar/imperial
-#   ./build/applications/sar/cpp/continuous_strip continuous_strip.yaml
+#   ./build/applications/sar/continuous_strip/cpp/continuous_strip
 #
 # Lattice follows the SRP chord (not the IARP tangent plane).
 # lattice.max_side is the scrolling window depth along v, not a
 # coarsening cap; parent u is the IFFT swath at native GSD.
 # Geometry goes to BackprojectionOp (geometry_change: scroll);
 # the manager is cadence only (emit_and_continue, no weight).
-# pulses_per_tick 1024 (reader batch). emit_interval 256: compose
-# hands that to ScrollGeometryStagerOp as the slice size so one
+# pulses_per_tick 1024 (reader batch). emit_interval 256:
+# the graph driver gives the stager that slice size, so one
 # reader cube becomes four manager/BP ticks (window from each
 # slice's last SRP). 159050 / 1024 leaves a 330-pulse final
 # reader batch (256+74 after slicing). playback_rate 0.5.
-# nfft_pad: next_fast. loop wraps until SIGINT; wrap restages
+# nfft_pad: next_fast. loop continues until the process is stopped; wrap restages
 # the opening window with emit-and-reset. Holoviz is the parent
 # strip (same landscape fit as mode 3), not the scrolling chip:
-# ScrollMosaicOp blits each window into the parent. Holoviz
-# crops parent u to the always-formable band so the walking
-# range-window sawtooth is off-screen; dump stays the union.
+# SarMosaicOp blits each window into the parent. Holoviz
+# currently shows the full parent union. The planned u-axis
+# crop is not wired; dump also writes the full union.
 # visualize_size is the no-DISPLAY fallback; with X11 the
 # Holoviz window fills the work area on the long axis (full
 # desktop width for this strip).

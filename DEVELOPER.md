@@ -21,6 +21,8 @@ holoscan-radar/
 │   │       ├── sim/                #   analytic point-target simulator (STL only)
 │   │       ├── tensor/             #   tensor/DLPack/MatX plumbing
 │   │       └── sdk/                #   Holoscan-integration glue
+│   ├── sar/                        # SAR formation operators
+│   ├── io/                         # CPHD reader and tensor dump
 │   └── fmcw/                       # FMCW signal-processing group
 │       └── <operator_name>/
 │           ├── <operator_name>.hpp / .cu   # Operator + stage kernel
@@ -28,6 +30,12 @@ holoscan-radar/
 │           └── metadata.json       # Operator-level metadata
 ├── applications/
 │   ├── common/radar_app/            # Shared Graph/config/report/dashboard support
+│   ├── sar/                        # Five standalone C++ formation apps
+│   │   ├── spotlight/
+│   │   ├── video_sar/
+│   │   ├── tiled_strip/
+│   │   ├── continuous_strip/
+│   │   └── independent_images/
 │   └── fmcw/
 │       ├── siso/
 │       ├── simo/
@@ -35,6 +43,7 @@ holoscan-radar/
 │       ├── mimo_tdm/
 │       ├── multi_waveform/
 │       └── mimo_ddm/
+├── tools/sar_data/               # Optional CPHD download/subset CLIs
 ├── python/holoscan/radar/
 │   └── __init__.py                 # Placeholder (bindings deferred)
 └── tests/
@@ -116,6 +125,20 @@ Run C++ tests:
 ```bash
 ctest --test-dir build --output-on-failure -LE performance
 ```
+
+Run all five SAR fixture and headless visualization paths without public data:
+
+```bash
+ctest --test-dir build -R '^Sar_.*_(smoke|viz)$' --output-on-failure
+```
+
+For individual SAR build gates use `-DBUILD_ALL=OFF -DAPP_spotlight=ON`
+(or `APP_video_sar`, `APP_tiled_strip`, `APP_continuous_strip`,
+`APP_independent_images`). See the [SAR app index](applications/sar/README.md)
+for mode-specific graphs, [data preparation](tools/sar_data/README.md) for
+optional public collections, and the [HSDK 5 SAR contract](docs/planning/SAR/OPERATOR_API.md).
+The fixture is generated in C++; Python is required only for optional data
+preparation. Public-collection focus and interactive X11 are still unverified.
 
 Run Python tests:
 

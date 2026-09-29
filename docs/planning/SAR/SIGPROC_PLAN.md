@@ -1,16 +1,22 @@
 # Holoscan Radar Module — SAR Build Plan
 
+> **HSDK 5 status (2026-09-29):** The first six SAR/I/O operators and five
+> [standalone apps](../../../applications/sar/README.md) are implemented.
+> This source-branch build order and mode-numbered demo plan is historical.
+> Use the [current contract](OPERATOR_API.md) and app guides for shipped
+> behavior; the remaining operators in this document are deferred.
+
 ## Purpose
 
 What lands in the first SAR wave, in what order, where the code goes, and what it runs on. The contract lives in [OPERATOR_API.md](OPERATOR_API.md) and the chains in [WORKFLOWS.md](WORKFLOWS.md); the data is in [INPUT_DATA.md](INPUT_DATA.md); the assertions are in [TESTING.md](TESTING.md). This document is the sequencing and the application.
 
 There is no FMCW analogue of this file — the FMCW wave tracked its build order in [STATUS.md](../STATUS.md) → *Up next*. SAR gets a dedicated one because the wave has a genuine dependency structure and a scope boundary worth writing down once, rather than re-deriving from a claims table.
 
-## Status: accepted, implementing
+## Historical source-branch status: accepted, implementing
 
 **The contract was accepted on 2026-08-07 and the gate that held back operator code is lifted.** R1 is closed; build against the phases below.
 
-Two conditions came with acceptance and apply to everything here. Revising the contract as implementation teaches us things is expected, but **every revision is approved by the developer in the chat session before it is made** — SAR-scoped ones included — then tagged in place and logged in [OPERATOR_API.md](OPERATOR_API.md) → *Contract changes since approval*. A revision reaching **beyond SAR** clears the same gate, is declared as beyond-SAR when asked, and gets a row in the module-wide [TEAM_BLOCKED.md](../TEAM_BLOCKED.md). If a phase below turns out to need a contract change, that is a stop-and-ask, not a thing to reconcile afterwards.
+Two conditions came with acceptance and apply to everything here. Revising the contract as implementation teaches us things is expected, but **every revision is approved by the developer in the chat session before it is made** — SAR-scoped ones included — then tagged in place and logged in [OPERATOR_API.md](OPERATOR_API.md) → *Contract changes since approval*. A revision reaching **beyond SAR** clears the same gate, is declared as beyond-SAR when asked, and gets a row in the module-wide [SAR TEAM_BLOCKED.md](TEAM_BLOCKED.md). If a phase below turns out to need a contract change, that is a stop-and-ask, not a thing to reconcile afterwards.
 
 **One open item, and it lands early.** R10 (the metadata key namespace) survived acceptance because it is a decision about FMCW taken in a SAR document, and it may not be resolved in code. It is on the critical path: `CPHDReaderOp` writes the `stream_boundary` key in phase 1 and the app-owned control operator reads it in phase 2, which is how mode 1 knows the collection has ended. Until the team answers, use the SAR tier — `holoscan.radar.sar.stream_boundary` — behind a single named constant, which keeps either answer a one-line change and commits FMCW to nothing. Note that [OPERATOR_API.md](OPERATOR_API.md) still spells the key at the module level, since that is what D22 proposed and R10 has not ruled; the constant carries the interim value rather than the document being edited to match.
 
@@ -166,7 +172,7 @@ The Capella half of that coverage — every `CI4` and every `AmpSF` path — rid
 
 The current HSDK 5 implementation uses [five standalone SAR applications](../../../applications/sar/README.md), each with its own graph and descriptive YAML. The design discussion below records the earlier single-executable plan.
 
-**Historical application plan (superseded 2026-09-28).** The initial plan specified one executable, `applications/sar_formation/`, with a YAML per shipped mode — the [`fmcw_mimo`](../../../applications/fmcw_mimo/) pattern rather than an executable per mode. Modes 1–5 are three chain configurations of one spine, so separate executables would be the same `compose()` copied five times with different parameters.
+**Historical application plan (superseded 2026-09-28).** The initial plan specified one executable, `applications/sar_formation/`, with a YAML per shipped mode — the [MIMO DDM](../../../applications/fmcw/mimo_ddm/README.md) pattern rather than an executable per mode. Modes 1–5 are three chain configurations of one spine, so separate executables would be the same `compose()` copied five times with different parameters.
 
 *This supersedes the earlier `applications/sar_backprojection/` naming.* The app forms images in several modes; only one of them is a plain spotlight backprojection.
 

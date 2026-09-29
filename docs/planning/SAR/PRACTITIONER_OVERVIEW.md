@@ -4,7 +4,15 @@
 
 What this SAR processor forms, what you have to hand it, what comes out, and where it stops. It assumes you know SAR and assumes nothing about the software framework underneath: where that framework shows through, it is described as behaviour rather than as API, and no interface detail appears anywhere below.
 
-**Nothing described here is built yet.** This is a proposed design under review, so every "supports" is a claim about the design rather than a report on working code. Read it as a scope statement you are being asked to find the holes in.
+**Status (HSDK 5, 2026-09-29):** The first five image-formation modes are
+implemented as [standalone C++ applications](../../../applications/sar/README.md)
+with CPHD ingress, range compression, aperture management, and backprojection.
+They emit complex images and can display or dump them. SICD writing,
+multilook, geocoding, autofocus, and later modes remain design scope only.
+The discussion below preserves the original proposed product vision; a
+"supports" claim there does not mean the feature is shipped. Use the
+[current operator contract](OPERATOR_API.md) and individual app guides for
+working behavior.
 
 It is a shortened, re-aimed version of [WORKFLOWS.md](WORKFLOWS.md), which carries the same material plus the software contract; where the two disagree, that one is correct.
 
@@ -15,8 +23,8 @@ It is a shortened, re-aimed version of [WORKFLOWS.md](WORKFLOWS.md), which carri
 - **Time-domain backprojection, and only that.** No PFA, range-Doppler, chirp scaling or omega-k.
 - **Monostatic, single-polarization.**
 - **Streaming.** Pulses arrive continuously and images come out while collection continues. The processor is not handed a finished collection and asked to form it; nothing anywhere assumes the whole aperture is in memory.
-- **Phase history in, complex image out.** CPHD is the input format; the single-look complex image is the primary product, written as SICD.
-- **It forms onto arbitrary sample positions.** You can give it a uniform lattice, or a position per pixel. A DEM-conformal or map-projected grid is therefore formed *directly*, at the geometry you want, rather than formed in radar geometry and resampled afterwards. Geocoding is available but optional, and skipping it costs you one interpolation loss you would otherwise pay.
+- **Phase history in, complex image out.** CPHD is the input format; the single-look complex image is the primary product, available as a tensor or diagnostic NumPy dump in the implementation; SICD writing is planned.
+- **It forms onto arbitrary sample positions.** You can give it a uniform lattice, or a position per pixel. A DEM-conformal or map-projected grid is therefore formed *directly*, at the geometry you want, rather than formed in radar geometry and resampled afterwards. The proposed geocoding stage is optional in this design, and and skipping it costs you one interpolation loss you would otherwise pay.
 
 Airborne and spaceborne are not different modes. They differ in navigation quality, in range scale, and therefore in which internal arithmetic is required — all of which are settings. Autofocus is a separate opt-in (off by default); see *What you get, and what it costs*.
 
@@ -34,7 +42,7 @@ flowchart TD
   AM --> BP["image formation<br>(backprojection)"]
   NAV(("per-pulse phase-centre<br>positions")) --> AM
   GEOM(("image sample geometry<br>(typically ground / DEM)")) --> AM
-  BP --> SLC(["SLC image → SICD"])
+  BP --> SLC(["complex image; SICD writer deferred"])
   SLC --> ML["multilook"]
   ML --> GC["geocode"]
   GC --> PROD(["detected product"])
@@ -47,9 +55,9 @@ flowchart TD
 
 **Circles are yours to supply; dashed boxes are optional.** Two of the circles matter a great deal and are covered under *What you supply* below.
 
-**Two products come out.** The SLC image is the primary one, phase intact. The multilooked, optionally geocoded image is the display-ready secondary one.
+**Historical product goal:** the phase-preserving complex image is primary, with a future multilooked/geocoded secondary product. The implemented apps emit the complex image and an optional display raster.
 
-**Aperture management is a stage in its own right, and that is what makes the modes below one pipeline.** Which pulses belong to the image currently forming, and when an image comes out, are decided ahead of formation rather than inside it, so formation sums what it is handed and holds no opinion about where an aperture begins or ends. Every mode below is this pipeline with that one stage configured differently, rather than a family of processors.
+**Aperture management is a stage in its own right, and that is what makes the modes below one pipeline.** Which pulses belong to the image currently forming, and when an image comes out, are decided ahead of formation rather than inside it, so formation sums what it is handed and holds no opinion about where an aperture begins or ends. The implemented first five modes use five standalone graph entry points sharing these library stages.
 
 It is also where a change of scene is timed. You push a new sample geometry whenever it suits you and it takes effect at the next aperture boundary, never part-way through an image, so re-tasking never has to be aligned against an emit by hand.
 

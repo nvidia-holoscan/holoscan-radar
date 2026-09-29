@@ -261,6 +261,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
     const auto t0 = std::chrono::steady_clock::now();
     const std::string& who = op_name<T>();
 
+    // Join this pulse block with same-tick controls and geometry overrides.
     HOLOSCAN_TRY(auto profiles_value, receive_tensor(range_profiles, who));
     HOLOSCAN_TRY(auto positions_value, receive_tensor(positions, who));
     HOLOSCAN_TRY(auto reference_value, receive_tensor(reference_position, who));
@@ -337,6 +338,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
     effective_interpolation_ = interpolation_override.value_or(params().interpolation);
     require_linear(effective_interpolation_, who);
 
+    // Validate the named pulse and image axes before touching the accumulator.
     classify_input_dtype<T>(*profiles, "range_profiles",
                             /*allow_real=*/false);
     require_dtype(*positions, real_dtype<T>(), "positions", who);
@@ -771,6 +773,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       retained_weight_ = std::move(weight);
     }
 
+    // Synchronize only at an image boundary, when downstream reads the result.
     if (emitted) {
       if (cudaStreamSynchronize(stream) != cudaSuccess) {
         throw std::runtime_error(who + ": emit stream sync failed");

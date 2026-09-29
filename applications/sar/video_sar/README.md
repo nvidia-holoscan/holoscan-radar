@@ -1,6 +1,8 @@
-# Video Sar SAR application
+# Video SAR
 
-A retained pulse window emits at a configured cadence. The manager sends signed eviction weights and backprojection continues the image across frames.
+A retained pulse window emits repeatedly. Signed weights subtract evicted pulses from the continuing backprojection accumulator; the collection seam resets it.
+
+## Graph
 
 ```mermaid
 flowchart LR
@@ -16,22 +18,52 @@ flowchart LR
     Raster --> Viz[HolovizOp]
 ```
 
-Build and run in the pinned HSDK 5 GPU image:
+The solid paths are required data and control flows. Dashed dump and
+visualization branches are enabled by application configuration. The reader's
+typed `stream_boundary` is joined to the aperture manager on the same tick.
+
+## Build and offline fixture
+
+Build in the pinned HSDK 5 GPU image with Python application bindings disabled:
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=OFF -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=OFF -DAPP_video_sar=ON
-cmake --build build --target video_sar
-./build/applications/sar/video_sar/cpp/video_sar video_sar.yaml /path/to/collection.cphd
+cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=ON
+cmake --build build --target video_sar generate_cphd_fixture
+ctest --test-dir build -R '^Sar_video_sar_(smoke|viz)$' --output-on-failure
 ```
 
-The default [`video_sar.yaml`](config/video_sar.yaml) ships beside the executable.
-The first argument may be a YAML path or a CPHD path; a second CPHD path
-replaces the YAML `cphd.path`. `visualize: true` opens Holoviz when a usable
-X11 display exists. `headless: true` renders offscreen. `dump: true` writes
-complex `.npy` images through TensorDumpOp.
+CTest generates the CPHD fixture in C++, then checks 5 images of
+5 × 5 pixels and runs a headless Holoviz path. These runs check graph wiring,
+count, dimensions, and successful execution; they do not establish focus on
+real collections.
 
-CTest generates one CPHD fixture in C++ and checks image counts and dimensions
-for this executable and its headless visualization path. Real collection and
-interactive display validation remain open in the untracked root `OPEN_ITEMS.md`.
-The six reusable SAR operators are documented under [`operators/sar/`](../../../operators/sar/README.md)
-and the CPHD reader under [`operators/io/`](../../../operators/io/README.md).
+## Real collection preset
+
+The Houston preset expects `/tmp/sar/mode02_houston_1p0m.cphd`. Install the optional data-tool requirements and run `python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml -o /tmp/sar` from the repository root. The recipe fetches the full dwell and central 16,753-sample FX subband; the output is about 27 GiB. The YAML retains 8262 pulses, emits every 4096, and forms a grid capped at 6144 pixels per side. Disk and GPU memory requirements are substantial.
+
+The shipped [`video_sar.yaml`](config/video_sar.yaml) is copied beside the
+executable by CMake. It is a **real-data preset**. The default invocation is:
+
+```bash
+./build/applications/sar/video_sar/cpp/video_sar
+```
+
+Pass an explicit YAML path as the first argument. For this topology,
+a CPHD path may replace `cphd.path` directly, or follow a YAML path as the second argument.
+
+## Output and display
+
+Each emission reports a complex image; the fixture produces five frames. A dump writes each formed image, whereas optional Holoviz shows a log-magnitude raster. `playback_rate: 1` paces by CPHD transmit time; it does not guarantee real-time formation. The reader must deliver the boundary on the final batch for the reset.
+
+`visualize: true` requests Holoviz when its HSDK 5 component and a usable
+X11 display are available. `headless: true` uses an offscreen CUDA sink.
+`visualize_size` bounds the display raster; it does not change formation
+resolution. `visualize_hold_s` only keeps a finite positive duration after
+an emit; indefinite hold and interactive X11 validation remain open.
+`dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
+and `output.max_files` to control its files.
+
+See [SAR data preparation](../../../tools/sar_data/README.md),
+[SAR operator references](../../../operators/sar/README.md),
+[CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
+[current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).

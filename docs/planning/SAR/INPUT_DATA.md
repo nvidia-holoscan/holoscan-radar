@@ -4,7 +4,14 @@
 
 What data the SAR wave's tests and demos run on, where it comes from, and what it costs to obtain. The contract lives in [OPERATOR_API.md](OPERATOR_API.md), the chains in [WORKFLOWS.md](WORKFLOWS.md), the assertions in [TESTING.md](TESTING.md), and the sequencing in [SIGPROC_PLAN.md](SIGPROC_PLAN.md); this document is the data those depend on.
 
-**Proposed alongside the in-review SAR contract.** Nothing here resolves a team-blocked item — the open rows stay in [TEAM_BLOCKED.md](TEAM_BLOCKED.md). Where this document and [TESTING.md](TESTING.md) disagreed on simulator ownership or fixture policy, the decisions below are the later ones; TESTING.md was amended to match on 2026-08-06, so the two now agree.
+**Status (HSDK 5, 2026-09-29):** The C++ suite generates its small CPHD
+fixture offline. Optional [data preparation tools](../../../tools/sar_data/README.md)
+now provide descriptive manifests and the Houston subset recipe for the
+shipped five-app real-data presets. Public collections and interactive X11
+have not been validated on this worktree. The source-branch planning and data
+surveys below remain historical; use each [app guide](../../../applications/sar/README.md)
+for current commands. Team-blocked questions remain open in
+[TEAM_BLOCKED.md](TEAM_BLOCKED.md). Where this document and [TESTING.md](TESTING.md) disagreed on simulator ownership or fixture policy, the decisions below are the later ones; TESTING.md was amended to match on 2026-08-06, so the two now agree.
 
 ## Two sources, two jobs
 
@@ -36,7 +43,7 @@ All are credential-free: a plain HTTPS or `aws s3 --no-sign-request` pull, no ac
 | 1, spotlight image | Umbra, Hartsfield-Jackson Atlanta — the scene the MatX `sar_bp` example uses | 28.59 GiB | pinned, header verified |
 | 2, video SAR | Umbra, downtown Houston | 110 GiB | pinned, **fully validated** — see below |
 | 3, tiled strip | Capella stripmap, Imperial Valley CA — ~15.77 s dwell, CI4 with `AmpSF` (same file as mode 4) | 3.452 GiB | pinned, header verified 2026-08-30 |
-| 4, continuous strip | Capella stripmap, Imperial Valley CA — same collect as mode 3; `mode04.yaml` scrolls a 4096-row window | 3.452 GiB | pinned, header verified 2026-08-30 |
+| 4, continuous strip | Capella stripmap, Imperial Valley CA — same collect as mode 3; `continuous_strip.yaml` scrolls a 4096-row window | 3.452 GiB | pinned, header verified 2026-08-30 |
 | 5, independent images | six unique-IARP Umbra CPHDs (see below). Capella is **not** required | ~10.5 GiB | **settled 2026-08-25** |
 
 The two Capella pins carry weight beyond their modes: they are the only `CI4` collections here, and the only ones with `AmpSF` present, so they are what covers the reader's integer-sample and per-vector-scale paths. They also split CPHD minor version (1.0.1 vs 1.1.0) and are `SGN` +1 with travelling `SRPPos` (`SRPFixed=false`). Both Umbra collections are `CF8` without `AmpSF`, `SGN` −1, frozen SRP.
@@ -81,11 +88,11 @@ sar-data/tasks/Buenos Aires, ARG/a7a03ef5-6bb6-4f85-aceb-638685a9b3e7/2023-02-08
 sar-data/tasks/Intel Ohio One/95d6685e-a4af-4a87-ba0b-b4a43e636e81/2023-10-11-02-20-47_UMBRA-05/2023-10-11-02-20-47_UMBRA-05_CPHD.cphd
 ```
 
-**A committed pull script ships with the demo.** The app still reads only local files; the user runs the script first. It lives with the app (`applications/sar_formation/pull_cphd.py`), takes `--mode 5` (this manifest; default), or `--mode 3` / `--mode 4` (Imperial Valley, shared dest). Downloads over HTTPS / `aws s3 --no-sign-request`, skips files already present, and **on mode 5 refuses the set if two IARPs collide** (read from each file's XML, not from the folder name; collision is ECEF distance < 1 km).
+**A committed pull script ships with the demo.** The app still reads only local files; the user runs the script first. It lives under `tools/sar_data/pull_cphd.py`, takes `--app independent_images` (this manifest), or `--app tiled_strip` / `--app continuous_strip` (Imperial Valley, shared dest). Downloads over HTTPS / `aws s3 --no-sign-request`, skips files already present, and **on mode 5 refuses the set if two IARPs collide** (read from each file's XML, not from the folder name; collision is ECEF distance < 1 km).
 
 **CI** stays generated: a handful of small simulator CPHDs with different IARPs and different target layouts. No CI job pulls public data.
 
-**The visual checkpoint is Holoviz per collection.** Mode 5 `loop`s, so Holoviz replaces the last emit as each image forms (`visualize_hold_s: -1` keeps the window until SIGINT). `dump: true` writes `.npy` (off by default); `output.max_files` caps a looping dump.
+**The visual checkpoint is Holoviz per collection.** Mode 5 `loop`s, so Holoviz replaces the last emit as each image forms (`visualize_hold_s: -1` was the source-branch hold request; indefinite post-run hold is not yet implemented in the HSDK 5 app). `dump: true` writes `.npy` (off by default); `output.max_files` caps a looping dump.
 
 ## Mode 2 — the Houston collect, full dwell
 
@@ -109,7 +116,7 @@ The 110 GiB signal block is never downloaded whole. Resolution is set by a **con
 | pulse window | 2,020 vectors — 0.226 s | 0.214 deg of aspect, **4.09 m cross range** |
 | image grid | 2048 x 2048 at 2.5 m, anchored at the IARP | 5.12 km, 1.6x oversampled |
 
-The 4.09 m pin above used a 2048² / 2.5 m / 5.12 km grid. **The shipped `mode02.yaml` is a local subband of the same full dwell at ~1.0 m ground-range GSD** (`tools/sar_sim/recipes/mode02_houston_1p0m.yaml`, 16753 samples, ~27 GiB) on a 6.8 km IARP-centred ENU square (`lattice.counts: 6800`, `spacing: 1.0`), formed at `lattice.max_side: 6144` (~1.11 m GSD). Lower `max_side` on a slower GPU (same km, coarser pixels). Aperture 8262 pulses is `2020 × 4.09 / 1.0`. The 0.5 m subset (`mode02_houston_0p5m.cphd`, 33505 samples, 13600², `max_aperture_pulses: 16524`) missed collect time by ~4× on the demo GPU and is kept on disk, not in the live YAML.
+The 4.09 m pin above used a 2048² / 2.5 m / 5.12 km grid. **The shipped `video_sar.yaml` is a local subband of the same full dwell at ~1.0 m ground-range GSD** (`tools/sar_data/recipes/houston_1m.yaml`, 16753 samples, ~27 GiB) on a 6.8 km IARP-centred ENU square (`lattice.counts: 6800`, `spacing: 1.0`), formed at `lattice.max_side: 6144` (~1.11 m GSD). Lower `max_side` on a slower GPU (same km, coarser pixels). Aperture 8262 pulses is `2020 × 4.09 / 1.0`. The 0.5 m subset (`mode02_houston_0p5m.cphd`, 33505 samples, 13600², `max_aperture_pulses: 16524`) missed collect time by ~4× on the demo GPU and is kept on disk, not in the live YAML.
 
 A subband is phase-consistent as a lower-bandwidth collect provided the centre frequency and bandwidth are derived from the **actual sample grid** (`SC0 + (i0 + (n-1)/2) * SCSS`, `n * SCSS`) rather than from the global `FxBand`, which on this collect implies a sample spacing 0.06% off the true `SCSS`.
 
@@ -157,21 +164,21 @@ data/2024/11/29/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602/CAPELLA_C14
 
 Credential-free: `aws s3 cp --no-sign-request` or HTTPS GET. 3,706,536,768 bytes (3.452 GiB). `CPHD/1.1.0`, `CI4`, FX, `SGN` +1, `AmpSF` present, `STRIPMAP` / VV / right-looking. 159,051 vectors × 5,760 samples. TxTime dwell **15.766 s** at 10,088.1 Hz PRF. IARP 32.8423°N, 115.5275°W (HAE 10 m) — Imperial Valley, California. Graze 73.11 deg, slant 616.8 km, FxC 9.650 GHz, bandwidth 200 MHz. `SC0` 9,550,000,277.42 Hz and `SCSS` 34,722.221 Hz both constant. `SRPFixed=false`: SRP travels 103.8 km (platform 113.8 km at 7,217 m/s). Ground-range swath ≈ 10.3 km (TOASaved); the formed cross-track is the IFFT window (~14.8 km). Fields and canals; a ~10:1 strip. `nvec` only divides evenly by 3; the demo drops one vector (`pulse_range: [0, 159050)`) for ten ~10.4 km along-track tiles.
 
-The demo pulls the file whole (no subsetter): `python3 applications/sar_formation/pull_cphd.py --mode 3 --dest /tmp/sar/imperial`. `--mode 4` is the same key and dest. Tiles are along-track ROIs of a parent lattice that follows the SRP chord (along-track on `v`); every tile forms the parent's full cross-track so joins line up. `lattice.max_side` caps each tile's along-track axis, not `u`; `TileMosaicOp` holds finished squares. Taylor `range_window` / `aperture_window`; `weight` wired. Palmdale/Rosamond is not this YAML.
+The demo pulls the file whole (no subsetter): `python3 tools/sar_data/pull_cphd.py --app tiled_strip --dest /tmp/sar/imperial`. `--app continuous_strip` is the same key and dest. Tiles are along-track ROIs of a parent lattice that follows the SRP chord (along-track on `v`); every tile forms the parent's full cross-track so joins line up. `lattice.max_side` caps each tile's along-track axis, not `u`; `SarMosaicOp` holds finished squares. Taylor `range_window` / `aperture_window`; `weight` wired. Palmdale/Rosamond is not this YAML.
 
 ## Mode 4 — Imperial Valley stripmap (continuous strip)
 
-Same file as mode 3. `mode04.yaml` sets `geometry_change = scroll` on a
+Same file as mode 3. `continuous_strip.yaml` sets `geometry_change = scroll` on a
 parent-width window `lattice.max_side` deep along `v` (buffer depth, not
-a coarsening cap). `ScrollMosaicOp` blits each window into the parent so
+a coarsening cap). `SarMosaicOp` blits each window into the parent so
 Holoviz is the strip (same landscape fit as mode 3). `weight` is
 unconnected (untapered ~−13 dB). `emit_interval_pulses: 256` with
 `pulses_per_tick: 1024` — the app stager slices each reader cube so
-formation sees the interval. Pull: `python3 applications/sar_formation/pull_cphd.py --mode 4 --dest /tmp/sar/imperial`.
+formation sees the interval. Pull: `python3 tools/sar_data/pull_cphd.py --app continuous_strip --dest /tmp/sar/imperial`.
 
 ## Palmdale / Rosamond — optional CPHD 1.0.1 spare
 
-Not `mode03.yaml`. Same bucket, key:
+Not the shipped `tiled_strip.yaml`. Same bucket, key:
 
 ```text
 data/2021/7/27/CAPELLA_C02_SM_CPHD_HH_20210727210317_20210727210321/CAPELLA_C02_SM_CPHD_HH_20210727210317_20210727210321.cphd

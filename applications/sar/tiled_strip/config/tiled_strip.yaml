@@ -7,9 +7,9 @@
 # Holoviz is the strip, not the last chip. Pull first (~3.45 GiB);
 # the app never reaches the network.
 #
-#   python3 tools/sar_sim/pull_cphd.py --mode 3 \
+#   python3 tools/sar_data/pull_cphd.py --app tiled_strip \
 #     --dest /tmp/sar/imperial
-#   ./build/applications/sar/cpp/tiled_strip tiled_strip.yaml
+#   ./build/applications/sar/tiled_strip/cpp/tiled_strip
 #
 # nvec 159051 does not divide by 10; pulse_range drops the last
 # vector so ten tiles of 15905 pulses (~10.4 km along-track).
@@ -23,13 +23,10 @@
 # (aperture_window is illegal when max > 0). Taylor on range and
 # azimuth; weight wired. pulses_per_tick 3181 divides the tile
 # (five ticks). playback_rate 0.5 so each square sits ~3 s.
-# nfft_pad: next_fast. loop wraps until SIGINT; wrap restages
-# tile 0 and clears the mosaic. Holoviz crops parent u to the
-# always-formable band so the walking range-window sawtooth is
-# off-screen; dump stays the union. visualize_size is the
-# no-DISPLAY fallback; with X11 the Holoviz window fills the
-# work area on the long axis (full desktop width for this
-# strip).
+# nfft_pad: next_fast. The loop repeats until stopped; wrap
+# restages tile 0 and clears the mosaic. A display u-crop was
+# planned but is not wired; Holoviz and dump show the full
+# parent union. visualize_size bounds the raster in pixels.
 
 cphd:
   path: /tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd

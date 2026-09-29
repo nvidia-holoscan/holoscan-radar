@@ -62,6 +62,7 @@ expected<void, Error> PhaseCorrectionOp<T>::compute(ExecutionContext& context) {
   if (sense != PhaseCorrectionSense::kSubtract && sense != PhaseCorrectionSense::kAdd) {
     return fail_invalid(std::string(kOpName) + ": sense must be subtract or add");
   }
+  // Exact-join profiles and their per-pulse phase for this tick.
   HOLOSCAN_TRY(auto profiles, receive_tensor(range_profiles_in, kOpName));
   HOLOSCAN_TRY(auto phase, receive_tensor(phase_correction, kOpName));
   try {
@@ -88,6 +89,7 @@ expected<void, Error> PhaseCorrectionOp<T>::compute(ExecutionContext& context) {
     return make_unexpected(
         Error{ErrorCode::kNotSupported, std::string(kOpName) + ": no CUDA compute stream"});
   }
+  // Apply the declared add/subtract sign across every range bin of each pulse.
   HOLOSCAN_TRY(emit_device_tensor(range_profiles_out, context, shape, profiles.dtype(),
                                   [&](void* destination, std::size_t) -> expected<void, Error> {
                                     try {

@@ -7,6 +7,7 @@
 # Download once (28.59 GiB), then form. The app never reaches the
 # network; pulse_range seeks the 1° closest-approach frame.
 #
+#   mkdir -p /tmp/sar
 #   curl -L -o /tmp/sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd \
 #     https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com/sar-data/task-data/0f1231be-26d3-4b98-96ab-f675a5375c14/2026-02-20-03-03-38_UMBRA-07/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd
 #
@@ -69,7 +70,7 @@ backprojection:
 
 # Live Holoviz window of the formed image (greyscale log-magnitude,
 # 99.8th / 25th percentile with a 30 dB floor, same as the offline
-# PNG). Requires a GUI host; with no display the app warns and runs
+# PNG). Requires a GUI host; with no usable X11 display the app warns and runs
 # without the window.
 # visualize_size is the window (px); the LUT box-averages Atlanta's
 # 8192² image to that. visualize_hold_s keeps the window up after the

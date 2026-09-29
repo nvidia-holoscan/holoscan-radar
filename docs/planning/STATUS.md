@@ -114,6 +114,22 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## SAR HSDK 5 port
 
+- **2026-09-29 — SAR user-facing guides and local data preparation (deustice):**
+  added a SAR route through the root, developer, application-support, app, and
+  six operator guides. The app guides now name their standalone executable,
+  generated-fixture smoke, real CPHD path, and output behavior. Imported SAR
+  design notes are prominently marked historical; the opening HSDK 5 SAR
+  contract remains authoritative. Ported the source branch's CPHD downloader
+  and Houston subsetter to `tools/sar_data/` as optional Python preparation
+  CLIs, with descriptive `--app` choices and a recipe that writes the current
+  video YAML path. The C++ applications and operator contracts are unchanged.
+  All three downloader manifests matched shipped YAML paths without fetching
+  collections. The subsetter created a 3-pulse, 4-sample local CPHD from the
+  C++ fixture; the C++ spotlight reader formed a 5x5 image from it. The full
+  C++/CUDA build passed in the pinned HSDK 5 GPU image with Python disabled,
+  and 1030/1030 non-performance CTest cases passed. Real-collection focus and
+  interactive X11 validation remain open in the untracked root `OPEN_ITEMS.md`.
+
 - **2026-09-28 — standalone SAR apps:** split the five SAR graphs into `spotlight`,
   `video_sar`, `tiled_strip`, `continuous_strip`, and `independent_images`. Each
   has an `APP_<name>` gate, YAML, metadata, README, and fixture smoke. The

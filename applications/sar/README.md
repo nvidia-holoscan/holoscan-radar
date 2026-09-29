@@ -14,6 +14,24 @@ and CUDA visualization live in `applications/common/radar_app/sar/`.
 | [continuous_strip](continuous_strip/README.md) | 4 | Batch slicing, scroll geometry, and mosaic |
 | [independent_images](independent_images/README.md) | 5 | Per-collection geometry, spacing, and frequency |
 
+## Choose a run path
+
+For immediate offline validation, configure and build with testing enabled,
+then run `ctest --test-dir build -R '^Sar_.*_(smoke|viz)$' --output-on-failure`.
+CTest generates one CPHD fixture in C++, invokes all five applications, and
+checks output image counts and dimensions as well as headless visualization.
+This is a wiring and numerical smoke, not validation of image quality on a
+real collection.
+
+The shipped YAML files are **real-data presets**. Download or subset the CPHD
+files at the documented paths using [optional data preparation tools](../../tools/sar_data/README.md),
+then run the executable with its copied default YAML. Read each app guide for
+the exact collection, geometry, output, and display prerequisites. The
+[CPHD reader](../../operators/io/cphd_reader_op/README.md) and
+[SAR operator references](../../operators/sar/README.md) describe the library
+contracts. The [current HSDK 5 SAR contract](../../docs/planning/SAR/OPERATOR_API.md)
+takes precedence over older planning material.
+
 The former `applications/sar_formation/` path and `sar_formation` executable
 were replaced by these five entries. There is no compatibility launcher.
 Run `ctest --test-dir build -R '^Sar_' --output-on-failure` for generated CPHD

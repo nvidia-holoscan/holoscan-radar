@@ -82,6 +82,7 @@ expected<void, Error> TensorDumpOp::compute(ExecutionContext& context) {
         Error{ErrorCode::kInvalidArgument, "TensorDumpOp: every_n must be >= 1"});
   }
   HOLOSCAN_TRY(auto input, receive_tensor(tensor, kOpName));
+  // Gate disk work by input tick before copying any device bytes.
   if (index % every_n != 0) {
     return {};
   }
@@ -110,6 +111,7 @@ expected<void, Error> TensorDumpOp::compute(ExecutionContext& context) {
     }
     last_parent_ = parent.string();
   }
+  // Synchronous host staging makes the dump a diagnostic sink, not a hot-path stage.
   const size_t nbytes = input.nbytes();
   const auto t0 = std::chrono::steady_clock::now();
   host_.resize(nbytes);

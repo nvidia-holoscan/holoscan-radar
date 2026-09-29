@@ -1,6 +1,8 @@
-# Independent Images SAR application
+# Independent SAR images
 
-The collection stager supplies geometry, range spacing, and reference frequency for each collection. Every collection resets the image.
+The collection stager supplies a new lattice, range spacing, and first fast-time sample frequency for each CPHD. Each collection boundary emits and resets its image.
+
+## Graph
 
 ```mermaid
 flowchart LR
@@ -19,22 +21,52 @@ flowchart LR
     Raster --> Viz[HolovizOp]
 ```
 
-Build and run in the pinned HSDK 5 GPU image:
+The solid paths are required data and control flows. Dashed dump and
+visualization branches are enabled by application configuration. The reader's
+typed `stream_boundary` is joined to the aperture manager on the same tick.
+
+## Build and offline fixture
+
+Build in the pinned HSDK 5 GPU image with Python application bindings disabled:
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=OFF -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=OFF -DAPP_independent_images=ON
-cmake --build build --target independent_images
-./build/applications/sar/independent_images/cpp/independent_images independent_images.yaml
+cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=ON
+cmake --build build --target independent_images generate_cphd_fixture
+ctest --test-dir build -R '^Sar_independent_images_(smoke|viz)$' --output-on-failure
 ```
 
-The default [`independent_images.yaml`](config/independent_images.yaml) ships beside the executable.
-Pass a YAML file whose `cphd.path` lists at least two local collections; the
-single-CPHD CLI override is rejected by this workflow. `visualize: true` opens
-Holoviz when a usable X11 display exists. `headless: true` renders offscreen.
-`dump: true` writes complex `.npy` images through TensorDumpOp.
+CTest generates the CPHD fixture in C++, then checks 2 images of
+5 × 5 pixels and runs a headless Holoviz path. These runs check graph wiring,
+count, dimensions, and successful execution; they do not establish focus on
+real collections.
 
-CTest generates one CPHD fixture in C++ and checks image counts and dimensions
-for this executable and its headless visualization path. Real collection and
-interactive display validation remain open in the untracked root `OPEN_ITEMS.md`.
-The six reusable SAR operators are documented under [`operators/sar/`](../../../operators/sar/README.md)
-and the CPHD reader under [`operators/io/`](../../../operators/io/README.md).
+## Real collection preset
+
+The preset rotates six distinct Umbra SNAPSHOT CPHDs under `/tmp/sar/mode5/`. Run `python3 tools/sar_data/pull_cphd.py --app independent_images --list` to inspect their paths, then omit `--list` to download about 10.5 GiB total. It derives an IARP-centred ENU grid per file and chooses a common padded FFT length. The ordered `cphd.path` list and `pixel_scale` list correspond by index. A single-CPHD CLI override is rejected because the topology requires multiple collections.
+
+The shipped [`independent_images.yaml`](config/independent_images.yaml) is copied beside the
+executable by CMake. It is a **real-data preset**. The default invocation is:
+
+```bash
+./build/applications/sar/independent_images/cpp/independent_images
+```
+
+Pass an explicit YAML path as the first argument. For this topology,
+the application requires the YAML collection list and rejects a single-CPHD override.
+
+## Output and display
+
+One complex image is reported per collection boundary, with geometry and frequency restaged for the next file. The fixture uses two local collections and reports two 5 × 5 images. Optional dump writes each image; Holoviz shows the current raster. Collection names are parsed but are not currently shown in the report or display; see the untracked root `OPEN_ITEMS.md`.
+
+`visualize: true` requests Holoviz when its HSDK 5 component and a usable
+X11 display are available. `headless: true` uses an offscreen CUDA sink.
+`visualize_size` bounds the display raster; it does not change formation
+resolution. `visualize_hold_s` only keeps a finite positive duration after
+an emit; indefinite hold and interactive X11 validation remain open.
+`dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
+and `output.max_files` to control its files.
+
+See [SAR data preparation](../../../tools/sar_data/README.md),
+[SAR operator references](../../../operators/sar/README.md),
+[CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
+[current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).

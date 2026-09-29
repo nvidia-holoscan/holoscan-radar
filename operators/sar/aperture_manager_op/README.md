@@ -6,8 +6,8 @@ Manage pulse membership, retention, emit cadence and collection-boundary flush.
 
 ## Responsibilities
 
-- Apply the public SAR operator contract and report invalid shapes or configurations.
-- Preserve capture-time alignment and output the documented tensor or descriptor payloads.
+- Track aperture membership and emit cadence across pulse batches and collection seams.
+- Publish aligned pulse groups, signed eviction weights, staged geometry, and formation control.
 
 ## When to use
 
@@ -15,14 +15,27 @@ Use between range compression and backprojection when apertures span ticks or ne
 
 ## Ports
 
+`T=float` means complex64/float32; `T=double` means complex128/float64.
+The four required inputs join with `Exact{}` at the same capture time.
+Optional `[live]` inputs also use same-tick `Exact{}`/`SafeDefault{}`.
+
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
 | --- | --- | --- | --- | --- | --- |
-| In | range_profiles | complex T | (num_pulses,num_range_bins) | required | Incoming profiles |
-| In | positions, reference_position | real T | (num_pulses,3) | required | Pulse geometry |
-| In | stream_boundary | uint8 | scalar | required Exact | Collection seam |
-| In | sample_geometry, sample_points, control, evict | descriptor / Tensor | named axes | optional [live] | Geometry and app control |
-| Out | range_profiles_out, positions_out, reference_position_out | complex / real T | matching pulse axes | every tick | Managed pulse block |
-| Out | weight, sample_geometry_out, sample_points_out, control_out | real T / descriptor / uint8 | named axes | optional by wire | Weights, geometry and control |
+| In | `range_profiles` | complex `T` | `(num_pulses,num_range_bins)` | Required, aligned | Pulse data |
+| In | `positions` | real `T` | `(num_pulses,3)` | Required, aligned | Antenna phase-centre coordinates |
+| In | `reference_position` | real `T` | `(num_pulses,3)` | Required, aligned | Per-pulse scene reference point |
+| In | `stream_boundary` | `uint8` | scalar | Required, aligned | `0`, `1`, or `2` |
+| In | `sample_geometry` | `SampleGeometry` descriptor | descriptor | Optional `[live]` | staged lattice |
+| In | `sample_points` | real `T` | `(num_v,num_u,3)` | Optional `[live]` | staged points |
+| In | `control` | `uint8` Tensor | `(1)` | Optional `[live]` | formation request |
+| In | `evict` | `uint32` Tensor | scalar | Optional `[live]` | pulse count |
+| Out | `range_profiles_out` | complex `T` | `(num_output_pulses,num_range_bins)` | Managed additions/departures or replay | Phase-rotated profiles |
+| Out | `positions_out` | real `T` | `(num_output_pulses,3)` | Aligned with output profiles | Managed antenna positions |
+| Out | `reference_position_out` | real `T` | `(num_output_pulses,3)` | Aligned with output profiles | Managed scene reference points |
+| Out | `weight` | real `T` | `(num_output_pulses)` | Optional, latched | signed contribution |
+| Out | `sample_geometry_out` | `SampleGeometry` descriptor | descriptor | Optional, latched | staged geometry |
+| Out | `sample_points_out` | real `T` | `(num_v,num_u,3)` | Optional, latched | staged points |
+| Out | `control_out` | `uint8` Tensor | `(1)` | Optional, latched | only on emit |
 
 ## Construction
 
@@ -30,6 +43,8 @@ Use between range compression and backprojection when apertures span ticks or ne
 | --- | --- | --- | --- |
 | Operator | `ApertureManagerOp` | Add to an HSDK 5 Graph | Own the named ports and Params |
 | Tensor pool | `MaxTensorExtents` | Capture at `graph.op()` | Bound fat output tensors before arm |
+
+Set `max_pulses` for the **largest managed output batch**, including arrivals plus evictions or a retained replay, and `max_range_bins` for the profiles. The bound is captured at `graph.op()` before arm.
 
 ## Parameters
 
@@ -40,5 +55,50 @@ Use between range compression and backprojection when apertures span ticks or ne
 | `emit_mode` | `ApertureEmitMode` | continue | Static | Continue, reset, or reform |
 | `aperture_window` | `WindowSpec` | rectangular | Static | Pulse weights for an aperture |
 
-The full shapes, defaults, numerical conventions, and open decisions are in
-[SAR OPERATOR_API.md](../../../docs/planning/SAR/OPERATOR_API.md).
+## Membership and emit rules
+
+The required `range_profiles`, `positions`, `reference_position`, and
+`stream_boundary` join at the same capture time. `stream_boundary` is the
+reader's scalar `0` (none), `1` (collection boundary), or `2` (end of
+stream). A nonzero boundary forces the closing aperture to emit and reset.
+An explicit `control` value or `emit_interval_pulses` can also request an
+image; the manager emits `control_out` only on an emit tick. Backprojection
+uses that signal to publish an image.
+
+With `max_aperture_pulses: 0`, incoming pulses pass through without retention.
+A positive capacity retains pulse groups. In `continue` mode, admission of a
+new group can evict old pulses; the output batch contains the new pulses
+followed by evictions. The optional `weight` is `+1` for additions and `-1`
+for evictions, so a continuing backprojector can remove their contribution.
+`reset` closes the aperture after emission. `reform` replays its retained
+aperture at emission, optionally with the configured aperture window.
+An explicit `evict` input requests a pulse count to evict; a count above
+occupancy is rejected. A tick-local `sample_geometry` or `sample_points`
+may be staged and passed through to connected outputs.
+
+`sample_geometry`, `sample_points`, `control`, and `evict` are optional
+same-tick `[live]` inputs; a missing tick uses the static/default behavior.
+The descriptor and points outputs are latched after an unwired first
+emit, avoiding later dedicated output work. The output
+pulse tensors can be larger than the incoming batch when eviction or replay
+is enabled; size `MaxTensorExtents.max_pulses` for that output bound.
+
+## Validation and use
+
+The input pulse axes must agree, with `(num_pulses, num_range_bins)` profiles
+and `(num_pulses, 3)` positions and references. Tensors must be contiguous,
+CUDA accessible, and match the template precision. The manager rejects an
+unknown boundary/control value, a batch larger than retention capacity,
+invalid capacity/cadence, `reform` without retention, and output pulse counts
+above the pool bound. Example for one image at each collection seam:
+
+```yaml
+aperture_manager:
+  max_aperture_pulses: 0
+  emit_interval_pulses: 0
+  emit_mode: reset
+```
+
+The C++ tests cover partial final batches, collection and EOS boundaries,
+retention, explicit evictions, signed weights, and reset/reform behavior.
+The locked contract is [SAR OPERATOR_API.md](../../../docs/planning/SAR/OPERATOR_API.md).

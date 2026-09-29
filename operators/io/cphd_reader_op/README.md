@@ -6,8 +6,8 @@ Read one selected CPHD channel and emit device phase history with its pulse geom
 
 ## Responsibilities
 
-- Apply the public SAR operator contract and report invalid shapes or configurations.
-- Preserve capture-time alignment and output the documented tensor or descriptor payloads.
+- Decode one selected CPHD channel, PVP geometry, and optional diagnostics into device tensors.
+- Stamp every pulse batch with a typed, capture-time-aligned collection boundary.
 
 ## When to use
 
@@ -15,13 +15,19 @@ Use this source for recorded monostatic CPHD collections. It decodes selected pu
 
 ## Ports
 
+There are no input ports: this is a clock-triggered source. `T=float` means
+complex64/float32; `T=double` means complex128/float64.
+
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
 | --- | --- | --- | --- | --- | --- |
-| Out | phase_history | complex T | (num_pulses,num_samples) | every batch | Decoded samples |
-| Out | positions, reference_position | real T | (num_pulses,3) | every batch | APC and SRP |
-| Out | sample_axis, pulse_times, velocities | real T / float64 | named axes | optional | Diagnostics |
-| Out | coordinate_frame | descriptor | scalar | optional | Declared frame |
-| Out | stream_boundary | uint8 | scalar | every batch | none / collection / EOS |
+| Out | `phase_history` | complex `T` | `(num_pulses,num_samples)` | Every batch | required data |
+| Out | `positions` | real `T` | `(num_pulses,3)` | Every batch | antenna phase centre |
+| Out | `reference_position` | real `T` | `(num_pulses,3)` | Every batch | per-pulse SRP |
+| Out | `sample_axis` | real `T` | `(num_samples)` | Optional, latched | frequency samples |
+| Out | `pulse_times` | float64 | `(num_pulses)` | Optional, latched | transmit times |
+| Out | `velocities` | real `T` | `(num_pulses,3)` | Optional, latched | only when both Tx/Rx velocities exist |
+| Out | `coordinate_frame` | `CoordinateFrame` descriptor | descriptor | Optional, latched | configured ECEF frame |
+| Out | `stream_boundary` | `uint8` | scalar | Every batch | `0` none, `1` collection, `2` EOS |
 
 ## Construction
 
@@ -29,6 +35,8 @@ Use this source for recorded monostatic CPHD collections. It decodes selected pu
 | --- | --- | --- | --- |
 | Operator | `CPHDReaderOp` | Add to an HSDK 5 Graph | Own the named ports and Params |
 | Tensor pool | `MaxTensorExtents` | Capture at `graph.op()` | Bound fat output tensors before arm |
+
+`max_pulses` and `max_samples_per_pulse` must cover the largest selected reader batch and channel. The Graph captures these bounds before arm; it does not resize the output pool from later file headers.
 
 ## Parameters
 
@@ -43,5 +51,56 @@ Use this source for recorded monostatic CPHD collections. It decodes selected pu
 | `playback_rate` | `double` | 0 | Static | Pace by TxTime |
 | `duty_cycle` | `double` | 1 | Static | Gap between collections |
 
-The full shapes, defaults, numerical conventions, and open decisions are in
-[SAR OPERATOR_API.md](../../../docs/planning/SAR/OPERATOR_API.md).
+## Decode and timing
+
+`path` accepts a file, directory, or ordered list; directory entries are sorted
+by filename. The reader validates all file headers before emitting any data.
+`pulse_range` is a half-open `[first, last)` selection applied per file.
+`channel` selects one CPHD channel. `pulses_per_tick` bounds each emitted batch;
+the last batch may be shorter. With `loop: true`, the ordered file list repeats.
+A positive `playback_rate` paces collection time relative to wall time;
+`duty_cycle` adds an inter-collection gap.
+
+The CPHD PVP fields `TxTime`, `TxPos`, `RcvPos`, `SRPPos`, `SC0`, and `SCSS`
+are required. The antenna phase centre is `(TxPos + RcvPos) / 2`; the
+reference position is `SRPPos`. `sample_axis[i] = SC0 + i * SCSS` when that
+output is connected. `pulse_times` remains float64 even for a `float` reader.
+`velocities` emits only if both transmit and receive velocity fields exist.
+The optional coordinate-frame output carries the configured ECEF declaration.
+All tensors are device tensors; each template instance fixes complex and real
+precision together.
+
+`stream_boundary` is emitted on **every** batch at the batch's capture time:
+`0` means more pulses in the collection, `1` closes a collection followed by
+another file or loop iteration, and `2` closes the final collection. Connect
+it to `ApertureManagerOp.stream_boundary` with the same batch's profiles and
+geometry. If an app splits a batch, put the original boundary on its last
+slice and `0` on earlier slices. The reader requests Graph stop after the
+last batch; it does not emit a separate empty EOS tick.
+
+## Validation and failure cases
+
+The configured frame must be ECEF. The reader rejects missing paths, an empty
+file selection, invalid channel or pulse bounds, missing required PVP fields,
+a varying `SC0` or `SCSS` within one batch, malformed CPHD metadata, and
+sample or pulse extents beyond its `MaxTensorExtents`. It warns once per file
+when non-finite phase-centre coordinates pass through. Optional outputs are latched: an unwired first emit is absorbed, then
+subsequent work for that output is skipped.
+
+## Use and verification
+
+A SAR app config supplies the operator block directly; for example:
+
+```yaml
+cphd_reader:
+  coordinate_frame: ecef
+  pulses_per_tick: 1024
+  pulse_range: [0, 4096]
+```
+
+The application owns `cphd.path` and passes it to the reader. For a small
+offline file, `ctest --test-dir build -R '^Sar_.*_smoke$' --output-on-failure`
+uses the C++ fixture generator. The CPHD reader C++ tests cover decoding,
+selection, boundaries, and malformed inputs. Real-collection validation is
+tracked in the root untracked `OPEN_ITEMS.md`; see
+[SAR data preparation](../../../tools/sar_data/README.md).

@@ -146,6 +146,7 @@ expected<void, Error> SARRangeCompressionOp<T>::compute(ExecutionContext& contex
     return fail_invalid(std::string(kOpName) +
                         ": phase_history must be (num_pulses, num_samples) within bounds");
   }
+  // Resolve this tick's optional overrides, then size the centred IFFT output.
   HOLOSCAN_TRY(auto cfg, resolve_stage_config(range_window_in, waveform_in, fft_norm_in, nfft_in,
                                               propagation_speed_in,
                                               context.params<SARRangeCompressionParams>()));
@@ -179,6 +180,7 @@ expected<void, Error> SARRangeCompressionOp<T>::compute(ExecutionContext& contex
                               return {};
                             }));
 
+  // Physical range bins and the applied window are computed only for wired taps.
   if (cfg.waveform.has_value() && range_bins_out_.active()) {
     HOLOSCAN_TRY(
         auto bins_loan,

@@ -1,15 +1,15 @@
 # Atlanta vs NVRadar — forced matches
 
-Walk-back list for the mode-1 Umbra Atlanta demo against NVRadar's
+Historical source-branch walk-back list for the mode-1 Umbra Atlanta demo against NVRadar's
 `spaceborne-spotlight-sar` example (same CPHD, same lut-vec kernel).
-When the images finally agree, revert these **one at a time** and
-re-form. That is what tells us which match was load-bearing.
+This is a record of source-branch parity experiments, not an HSDK 5
+runbook. The HSDK 5 app has not been validated on the real Atlanta file. That is what tells us which match was load-bearing.
 
 NVRadar tree is `/tmp/nvradar` and is not in this repo. Their
 converter + example: `examples/synthetic-aperture-radar/spaceborne-spotlight-sar/`.
 
 Do not treat this file as a contract. The SAR contract is
-[`docs/planning/SAR/OPERATOR_API.md`](../../docs/planning/SAR/OPERATOR_API.md).
+[`docs/planning/SAR/OPERATOR_API.md`](../../../docs/planning/SAR/OPERATOR_API.md).
 Nothing here authorizes changing it.
 
 ## Still on (walk these back)
@@ -57,8 +57,8 @@ Nothing here authorizes changing it.
    `vph` still pairs with `SC0`; leaving `nvradar_vph_path` set would
    be the inconsistent pair. Re-enable only with `f_ref = SC0`.
    File is not in git.
-   **Undo (to restore their vph):** uncomment `nvradar_vph_path` and
-   set `reference_frequency` back to `SC0`.
+   **Historical experiment (not wired in the HSDK 5 app):** the source branch
+   could set `nvradar_vph_path` and restore `reference_frequency` to `SC0`.
 
 Items 1–2 did **not** clear the ghost. Item 3 did not move the peak.
 Item 4 same peak `(3437, 4726)`, mag 728.6 → 729.0, mean |Δ| 0.087.

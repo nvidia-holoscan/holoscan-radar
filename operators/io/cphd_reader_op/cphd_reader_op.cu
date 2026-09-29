@@ -218,6 +218,7 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
       if (spans_.size() > 32U)
         spans_.erase(spans_.begin());
     }
+    // Decode one bounded CPHD batch and derive the pulse geometry from its PVPs.
     auto pvp = file_->read_pvp_block(p.channel, first, count);
     std::vector<std::complex<T>> history(static_cast<size_t>(count * info.num_samples));
     file_->read_signal_into<T>(p.channel, first, count, history.data(), &pvp);
@@ -272,6 +273,7 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
       }
     }
 
+    // Upload the required tensors before publishing any batch output.
     HOLOSCAN_TRY(auto history_loan, upload(phase_history, context, history,
                                            {count, info.num_samples}, complex_dtype<T>()));
     HOLOSCAN_TRY(auto positions_loan, upload(positions, context, apc, {count, 3}, real_dtype<T>()));
@@ -302,6 +304,7 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
     HOLOSCAN_RETURN_IF_ERROR(emit_prepared_tensor(positions, context, std::move(positions_loan)));
     HOLOSCAN_RETURN_IF_ERROR(
         emit_prepared_tensor(reference_position, context, std::move(reference_loan)));
+    // Stamp the closing boundary on this batch, including the last partial batch.
     const auto boundary =
         final ? (follows ? SarStreamBoundary::kCollectionBoundary : SarStreamBoundary::kEndOfStream)
               : SarStreamBoundary::kNone;

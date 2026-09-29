@@ -4,8 +4,8 @@
 # Mode-5 demo: rotate six unique-IARP Umbra SNAPSHOT CPHDs (INPUT_DATA.md).
 # Pull first (~10.5 GiB); the app never reaches the network.
 #
-#   python3 tools/sar_sim/pull_cphd.py --dest /tmp/sar/mode5
-#   ./build/applications/sar/cpp/independent_images independent_images.yaml
+#   python3 tools/sar_data/pull_cphd.py --app independent_images
+#   ./build/applications/sar/independent_images/cpp/independent_images
 #
 # Each collection gets an IARP-centred east-north square inscribed
 # in that file's ground-range x ground-azimuth support, sampled at
@@ -20,7 +20,7 @@
 # range_compression.nfft is static (one length for the rotate);
 # load_config derives each file's dr from that same length.
 # nfft_pad: next_fast fills it (5-smooth >= max CPHD samples).
-# loop wraps until SIGINT.
+# the loop repeats until the process is stopped.
 # playback_rate 1 = collect-time pacing (sleep collect − wall;
 # skip sleep while behind). 0 = unconstrained.
 # duty_cycle 1 = no gap; <1 sleeps T_c*(1/D-1) between collections.
@@ -68,7 +68,7 @@ cphd_reader:
   duty_cycle: 1
 
 # App-owned. Smallest 5-smooth FFT length covering every collect
-# (numpy.fft.next_fast_len). compose() passes it as Arg("nfft")
+# (numpy.fft.next_fast_len). the Graph driver passes it as a parameter
 # so the operator and dr stay one static length. Omit for native
 # N (mode 1). Mutually exclusive with range_compression.nfft.
 nfft_pad: next_fast

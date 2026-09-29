@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Data-preparation only; SAR C++ applications have no Python runtime dependency.
+lxml>=6.1
+numpy>=1.24
+pyyaml>=6.0
+sarkit>=1.10

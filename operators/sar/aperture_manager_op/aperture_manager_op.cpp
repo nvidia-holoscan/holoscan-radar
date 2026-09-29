@@ -236,6 +236,7 @@ expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
   if (points_tensor)
     pending_points_ = std::make_shared<Tensor>(std::move(*points_tensor));
 
+  // Update aperture membership before deciding whether this tick closes it.
   const bool reform = p.emit_mode == ApertureEmitMode::kReform;
   const bool pre_reset = request && pre_resets(*request) && !reform;
   if (pre_reset) {
@@ -282,6 +283,7 @@ expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
   else if (request)
     output_control = *request;
 
+  // Build additions followed by signed departures, or replay the retained aperture.
   keep_.clear();
   keep_.insert(keep_.end(), {incoming.profiles, incoming.positions, incoming.reference});
   std::vector<PulseGroup> output_groups;
@@ -359,6 +361,7 @@ expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
     HOLOSCAN_RETURN_IF_ERROR(
         emit_prepared_tensor(range_profiles_out, context, std::move(*profile_loan_out)));
   }
+  // A collection seam closes the aperture after its final output is published.
   if (end_aperture) {
     dropped_ += buffer_.occupancy();
     buffer_.clear();
