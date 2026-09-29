@@ -114,6 +114,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## SAR HSDK 5 port
 
+- **2026-09-29 — Five SAR GUI applications visually checked:** The developer
+  ran `spotlight`, `video_sar`, `tiled_strip`, `continuous_strip`, and
+  `independent_images` with the GUI and reported that all five look good.
+  This closes the outstanding interactive X11 presentation check for the
+  current app presets. It does not validate every backprojection backend,
+  radiometric calibration, or the deferred SAR features below.
+
 - **2026-09-29 — Tiled strip seam and landscape display fixed:** The tile
   stager sends the next lattice with each closing tile's `EmitAndReset`, and
   `BackprojectionOp.sample_geometry_out` now describes the tile just formed
