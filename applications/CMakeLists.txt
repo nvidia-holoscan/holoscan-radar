@@ -101,3 +101,5 @@ holoscan_radar_add_application(mimo_ddm
         detection_reduction_op
         cluster_dbscan_op
 )
+
+add_subdirectory(sar)

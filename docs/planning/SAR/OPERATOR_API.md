@@ -1,0 +1,1083 @@
+# Holoscan Radar Module — SAR Operator API Lockdown
+
+## HSDK 5 C++/CUDA port contract (2026-09-28)
+
+This section is the **current implementation contract** for the six ported
+operators. The source branch's detailed design below remains as algorithm and
+future-operator reference. Its HSDK 4 transport statements, proposed/acceptance
+labels, opaque `...` axes, sticky overrides, and metadata stream boundary are
+historical and do not override this section. R1 was accepted on 2026-08-07;
+R10 remains a team-review item for the retired metadata namespace.
+
+`T = float` uses complex64/float32 and `T = double` uses
+complex128/float64. A template instance has one fixed precision. All data
+ports exchange plain HSDK 5 `Tensor` values; named axes are inferred on each
+tick. There is no implicit batch axis. `MaxTensorExtents` is captured at
+`graph.op()` for every operator with fat tensor outputs. `[live]` ports are
+declared unconditionally, join with `Exact{}` and `SafeDefault{}`, use Params
+for a missing tick, and never latch an earlier override. Optional outputs are
+latched so unwired outputs cause no work. The HSDK 5 Graph requires distinct
+input and output names within an operator.
+
+### Implemented operator ports
+
+| Operator | Inputs | Outputs |
+| --- | --- | --- |
+| `CPHDReaderOp<T>` | source | `phase_history`: complex T `(num_pulses,num_samples)`; `positions`, `reference_position`, optional `velocities`: real T `(num_pulses,3)`; optional `sample_axis`: real T `(num_samples)`; optional `pulse_times`: float64 `(num_pulses)`; optional `coordinate_frame`: descriptor; `stream_boundary`: uint8 scalar every batch |
+| `SARRangeCompressionOp<T>` | `phase_history`: complex T `(num_pulses,num_samples)`; `[live]` `range_window`, `waveform`, `fft_norm`, `nfft`, `propagation_speed` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; optional `range_bins`: real T `(num_range_bins)`; optional `range_window_out`: descriptor |
+| `ApertureManagerOp<T>` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; `positions`, `reference_position`: real T `(num_pulses,3)`; `stream_boundary`: uint8 scalar; optional `[live]` `sample_geometry`, `sample_points`, `control`, `evict` | `range_profiles_out`, `positions_out`, `reference_position_out`: matching pulse tensors; optional `weight`: real T `(num_output_pulses)`; optional `sample_geometry_out`: descriptor; optional `sample_points_out`: real T `(num_v,num_u,3)`; `control_out`: uint8 `(1)` |
+| `BackprojectionOp<T>` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; `positions`, `reference_position`: real T `(num_pulses,3)`; optional `[live]` `control`, `range_bins`, `sample_points`, `weight`, `initial_image`, `sample_geometry`, `range_bin_spacing`, `range_bin_origin`, `reference_frequency`, `interpolation` | `image`: complex T `(num_v,num_u)` on an emit; optional `sample_geometry_out`: descriptor on an emit |
+| `PhaseCorrectionOp<T>` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; `phase_correction`: real T `(num_pulses)` | `range_profiles_out`: complex T `(num_pulses,num_range_bins)` |
+| `TensorDumpOp` | `tensor`: any dtype/rank; optional `[live]` `every_n`: int64 scalar | sink, no outputs |
+
+`CPHDReaderOp` publishes `stream_boundary` on **every** pulse batch: `0 = none`,
+`1 = collection_boundary`, `2 = end_of_stream`. It is stamped with that batch's
+capture time and joined by the manager as a **required** fourth aligned input.
+A stage that splits a batch emits `none` on its earlier slices and the source
+boundary on its final slice. This replaces the source branch's arbitrary
+`holoscan.radar.sar.stream_boundary` metadata key. It preserves the closing
+aperture emit and reset rules. An app that builds its own pulse source must
+publish the scalar on each batch.
+
+For a CPHD FX collection, `sample_axis` represents each batch with its first
+pulse's `SC0` and `SCSS`. Per-vector values may have a recorded-grid ramp:
+the reader accepts values within `1e-5` relative to the batch's first value
+and rejects a larger frequency step. This is the existing SAR reader decision
+recorded in its operator notes, now enforced by the HSDK 5 implementation.
+
+The sanctioned SAR descriptor outputs are `CPHDReaderOp.coordinate_frame`,
+`SARRangeCompressionOp.range_window_out`, `ApertureManagerOp.sample_geometry_out`,
+and `BackprojectionOp.sample_geometry_out`. They are config-plane values; data
+ports remain plain tensors. On an `emit_and_reset` tick carrying the next
+lattice, `BackprojectionOp.sample_geometry_out` describes the image formed on
+the current lattice; the next lattice becomes effective only after that emit.
+The SAR descriptors are `CoordinateFrame`,
+`SampleGeometry`, and `LFMWaveformDescriptor`.
+
+### Implemented parameter names and defaults
+
+| Operator | Params |
+| --- | --- |
+| `CPHDReaderOp` | `path` required; `coordinate_frame` required; `pulses_per_tick` required; `channel=0`; `pulse_range=[]`; `loop=false`; `playback_rate=0`; `duty_cycle=1` |
+| `SARRangeCompressionOp` | `[live] range_window=rectangular`; `[live] waveform=unset`; `[live] fft_norm=backward`; `[live] nfft=observed num_samples`; `[live] propagation_speed=299792458 m/s` |
+| `ApertureManagerOp` | `max_aperture_pulses=0`; `emit_interval_pulses=0`; `emit_mode=continue`; `aperture_window=rectangular`; all static |
+| `BackprojectionOp` | `coordinate_frame` required; `sample_geometry` required unless sample points are supplied; `[live] range_bin_spacing=unset`, `range_bin_origin=unset`, `reference_frequency` must be set to first fast-time sample frequency, `interpolation=linear`; static `backend=nvradar_block_anchored_expanded_throughput_phase_lut_vec`, `geometry_change=reset` |
+| `PhaseCorrectionOp` | static `sense` required (`add` or `subtract`) |
+| `TensorDumpOp` | static `path` required, `format=npy`, `max_files=unlimited`; `[live] every_n=1` |
+
+`initial_image`, `nearest` and `sinc` are declared but currently rejected by
+`BackprojectionOp`. `matx_taylor_fast` also remains rejected until the pinned
+MatX exposes it. These are deferred capabilities, not silently supported ones.
+The branch's range-compression normalization default remains implemented as
+`backward`; whether that is the right radiometric default is still open (I5).
+
+### Public contract changes in this port
+
+| Change | Reason |
+| --- | --- |
+| Typed per-batch `stream_boundary` output and required manager input replace message metadata | HSDK 5 same-tick graph join and explicit collection flush |
+| Named axes replace opaque leading batch; fat outputs capture `MaxTensorExtents` | HSDK 5 tensor-pool sizing and module conventions |
+| `[live]` overrides are per tick, `Exact{}`/`SafeDefault{}`; no sticky value | Matches main-5x temporal contract |
+| Output names `range_window_out`, `sample_geometry_out`, `range_profiles_out` | HSDK 5 unique input/output names |
+| `CoordinateFrame`, `SampleGeometry`, and `LFMWaveformDescriptor` use HSDK 5 schema-backed wire values | Shared descriptor policy |
+
+## Historical SAR design reference
+
+The remainder of this imported document describes the source branch's
+algorithm choices and deferred operators. Where its transport, acceptance, or
+implementation-status prose differs from the HSDK 5 section above, the HSDK 5
+section is authoritative. Do not use the historical prose to infer a new
+runtime contract.
+
+## Purpose
+
+A **SAR-focused** operator API lockdown, the analogue of the FMCW [OPERATOR_API.md](../OPERATOR_API.md) one level up. Scope is derived from [WORKFLOWS.md](WORKFLOWS.md): the operators here are exactly those its single chain requires — ingress, range compression, an optional aperture manager, formation, and the optional product stages — plus the standard-format I/O operators that chain taps. Each operator is specified by its **Inputs / Outputs / Parameters / Algorithm / Notes**.
+
+Design conventions carry over unchanged: plain-tensor data ports (bridge with small explicit add-on operators, never shared record types); rank-agnostic batching, with leading axes treated as opaque batch dims and shapes inferred from the tensors each tick; industry-standard operator names; MatX implementation accepting tensors in any CUDA-accessible memory space (device, managed, pinned host — pageable-host input is rejected) and producing device memory.
+
+Two conventions are **extended** and are specified here rather than assumed: precision (below) and cross-tick accumulation (§ *Cross-tick accumulation*).
+
+**Precision (all operators).** Every operator supports both **single** (`complex64` / `float32`) and **double** (`complex128` / `float64`) precision floating-point I/O. Precision is fixed at compile time by the operator's template instantiation — neither a runtime parameter nor inferred from the data — and an instance's inputs and outputs match that precision. The per-operator dtype labels list both forms. SAR adds a second, **orthogonal** axis on `BackprojectionOp` alone: the internal arithmetic strategy for the range computation, which is not a binary and is not the same question as the I/O dtype. See `BackprojectionOp.backend`.
+
+**Nothing here is locked yet, so nothing is tagged as proposed.** This document is a proposal in its entirety, and R1 — indexed in [TEAM_BLOCKED.md](TEAM_BLOCKED.md) — *is* the question of accepting it. That inverts the FMCW [OPERATOR_API.md](../OPERATOR_API.md) one level up, where the surrounding text is accepted lockdown and a **[PROPOSED]** tag marks the exceptions to it; tagging individual passages here would imply the untagged remainder is settled, which is the opposite of true. Once R1 accepts this contract, later amendments take the FMCW convention. Which questions are still genuinely open is a separate matter from acceptance: § *Open items* enumerates them by class, and the team-blocked ones are R1 itself and the metadata key namespace (R10).
+
+---
+
+## Coordinate conventions
+
+FMCW's cross-domain hazard is the azimuth/elevation parameterization. SAR's is the **Cartesian frame itself** — a different problem, which is why `AngleConvention` does not address it and a second descriptor is proposed.
+
+The backprojection kernel computes, for every (pulse, sample point) pair, the norm of a position difference. That is invariant under rigid transforms, so the kernel is inherently frame-free: it returns an equally plausible answer whether positions and sample points are in ECEF, a local ENU frame, or scene-local metres — provided both are in the **same** frame. Nothing in the data distinguishes the frames; every value is metres and order-of-magnitude reasonable.
+
+A frame mismatch therefore neither throws nor produces noise. It produces a defocused or geometrically displaced image, which is indistinguishable at first inspection from a poor collection, an autofocus failure, or a navigation error.
+
+### Module stance
+
+- **One declared Cartesian frame, right-handed, metres.** Phase-center positions, sample points, and any DEM-derived geometry are all expressed in it.
+- **The frame is explicit at the API boundary** via a shared `CoordinateFrame` descriptor (see *Supporting data structures*), a **required parameter with no default** on every operator that consumes or emits positions or sample geometry. Never silently inherited — the same rule and rationale as `AngleConvention`.
+- **It is a label, not a transform.** Operators do not convert between frames. The descriptor lets a reader reject a file whose declared frame disagrees, lets the writers record what the geometry means, and everywhere else makes the frame an explicit, inspectable declaration rather than an assumption. Frame-to-frame conversion is the caller's job, done upstream with standard geodesy.
+- **The formation kernels ignore it.** Only boundary validation, `GeocodeOp`, and the writers read it.
+
+### Frame landscape
+
+| Frame | Origin | Axes | Typical use | Caveat |
+| :--- | :--- | :--- | :--- | :--- |
+| **ECEF** | Earth centre | Earth-fixed | spaceborne; CPHD/SICD native | rotates — positions must be at their own pulse times |
+| **ENU** | geodetic anchor | East / North / Up | airborne; scene-local processing | flat-Earth error grows with scene extent |
+| **NED** | geodetic anchor | North / East / Down | aerospace navigation | `+z` down; the sign trap FMCW's aerospace preset also carries |
+| **scene-local** | scene reference point | caller-defined | simulation, unit tests | no geodetic meaning; writers cannot geolocate |
+
+### High-risk silent mismatches the descriptor is aimed at
+
+None of these is mechanically rejectable in the general case. The one place a real check exists is a reader comparing its `coordinate_frame` against the frame its *file* declares, which catches the first two when the geometry comes from CPHD. Everywhere else the descriptor's contribution is that the assumption is *written down at every boundary*, so a mismatch is findable by reading the configuration rather than only by looking at the image — see the compatibility rule under *Supporting data structures* for exactly which checks exist and which do not.
+
+- **ENU/NED z-sign flip:** `+z` up versus down places the platform below the scene, or inverts terrain height. Identical in kind to the FMCW aerospace-preset hazard.
+- **ECEF versus local:** positions read from a CPHD file are ECEF; sample points built by a test fixture or a scene-planning tool are usually local. Both are metres, so the mismatch surfaces only as image quality.
+- **Geodetic versus geocentric latitude** in `origin_llh`, which displaces a local-frame origin by up to ~20 km at mid-latitudes.
+- **Phase-center versus platform-reference point:** not a frame error, but the same failure signature, which is why the `positions` port pins it explicitly.
+
+---
+
+## Workflows
+
+Abbreviated from [WORKFLOWS.md](WORKFLOWS.md); see that doc for the full rationale and the port-level diagrams. `→` is a port connection, `[...]` is optional.
+
+Modes in scope: the nine image-formation modes [WORKFLOWS.md](WORKFLOWS.md) → *Image-formation modes* enumerates, which reduce to one graph — `ApertureManagerOp` optional in all of them — and two accumulator behaviours, resetting at an aperture boundary or scrolling with a translating lattice. What drives the design is streaming rather than any one mode. Monostatic, single-pol, time-domain backprojection only; PFA, range-Doppler, chirp scaling and omega-k are named and deferred, and bistatic geometry is foreclosed by the `positions` port's shape.
+
+```text
+CPHD file
+  → CPHDReaderOp           → phase_history   (num_pulses, num_samples)
+                           + positions       (num_pulses, 3)
+                           + reference_position (num_pulses, 3)
+  → SARRangeCompressionOp  → range_profiles (num_pulses, num_range_bins)
+  → [ApertureManagerOp]    → range_profiles + weight + control  [retains pulses]
+  → BackprojectionOp       → image          (num_v, num_u)      [accumulating]
+  → [MultilookOp]          → multilook
+  → [GeocodeOp]            → product
+```
+
+Autofocus is **off on this spine** — the default for the usual ground / DEM product. When opted in on that product (WORKFLOWS Figure 2): the aperture source retains the aperture and replays it once (`ApertureManagerOp` with `emit_mode = reform` and `max_aperture_pulses > 0`, or an app-owned equivalent); a conjugate-grid auxiliary `BackprojectionOp` forms from that replay; `AutofocusOp` estimates; `PhaseCorrectionOp` applies the estimate to the same replayed pulses; the product `BackprojectionOp` forms the DEM image — all on the replay tick, in graph dependency order. Figure 3 places `AutofocusOp` after formation only when the product itself is already conjugate. See `ApertureManagerOp` → *Notes* (*Autofocus on a ground / DEM product*) and `AutofocusOp` → *Notes* (D20).
+
+Three ingress forms converge at **phase history**: recorded or live deramped data (via `RVPRemovalOp` + `BandEqualizationOp`), CPHD (directly), and direct-sampled pulses (via `RangeReferenceMultiplyOp`). Everything downstream of that node is shared.
+
+Two chain inputs are **application responsibilities** with no library operator: per-pulse phase-center positions (the reader supplies them on the CPHD path; the application derives them from navigation on a live platform) and the image sample geometry.
+
+---
+
+## Operator inventory
+
+The operators the SAR workflows require, grouped by function — a one-line map, and each name links to its full contract under *Operator APIs*. Build order and per-operator risk are in [SIGPROC_PLAN.md](SIGPROC_PLAN.md), deliberately not here: this document states the contract, not the plan.
+
+The grouping below is **functional, and does not match the directory layout.** `SIGPROC_PLAN.md` assigns each operator its CMake group, where both readers join the writers in `operators/io/` — they are ingress by function but carry the same XML and NITF dependencies those `OP_<name>` gates exist to contain.
+
+### Ingress
+
+- **[CPHDReaderOp](#cphdreaderop)** — reads a CPHD collection into phase history plus the per-pulse geometry that rides with it. Core, not an optional tap: it is the ingress the simulator and real collections both use.
+- **[CRSDReaderOp](#crsdreaderop)** — the raw-side counterpart, for recorded uncompensated captures.
+- A **live radar** source is app-supplied and sensor-specific — no library operator, following the FMCW `custom_ops.hpp` pattern. Its front end emits *either* deramped signal data or direct-sampled pulses; that choice selects the branch and is a property of the sensor, not a separate source.
+
+### Signal-processing core
+
+- **[SARRangeCompressionOp](#sarrangecompressionop)** — range compression: windowed, optionally zero-padded FFT along fast-time; phase history → range profiles. The stage every branch reaches.
+- **[RVPRemovalOp](#deramped-branch-entry-stages)** — deramped branch: removes the residual video phase term deramp-on-receive leaves behind, and undoes deramp reference bookkeeping.
+- **[BandEqualizationOp](#deramped-branch-entry-stages)** — deramped branch: corrects amplitude and phase taper across the band, producing phase history proper.
+- **[RangeReferenceMultiplyOp](#rangereferencemultiplyop-direct-sampled-branch)** — direct-sampled branch: FFT along fast-time and multiply by the conjugate chirp-replica spectrum, the *range reference function*. Emits **phase history**, so the shared range compression supplies the inverse transform; a branch-entry stage symmetric with `RVPRemovalOp`, not a peer of range compression.
+- **[PhaseCorrectionOp](#phasecorrectionop)** — applies a per-pulse phase to range profiles. Optional, stateless; the stage that carries an autofocus estimate into a formation on a different geometry (D20).
+
+### Image formation
+
+- **[ApertureManagerOp](#aperturemanagerop)** — decides **when an image comes out** and says so on `control`; also holds pulses, decides aperture membership, and emits them with signed weights. Runs no kernel and holds no image. **The operator is optional in every mode; driving `control` is not** — an image comes out only when something raises it, so some operator does this in every graph and this is the one we ship. Worth reaching for where retention would otherwise be written twice.
+- **[BackprojectionOp](#backprojectionop)** — time-domain image formation. Accumulating across ticks; consumes weighted range profiles, per-pulse phase-center positions, and sample geometry; emits the complex image when `control` tells it to, never on its own judgment. Owns an accumulator, not an aperture.
+- **[AutofocusOp](#autofocusop)** — estimates residual phase correction. A separate, omittable stage — **off by default** — not a mode inside image formation. On a ground / DEM product its estimate reaches formation through `PhaseCorrectionOp` (WORKFLOWS Figure 2); it corrects in-image only when the product is itself conjugate (Figure 3).
+
+### Products
+
+- **[MultilookOp](#multilookop)** — incoherent averaging of adjacent looks, trading resolution for speckle reduction.
+- **[GeocodeOp](#geocodeop)** — resamples to a map grid. Optional in a backprojection chain, since formation can target DEM-derived map points directly.
+
+### Standard-format I/O
+
+Library-provided sources and sinks at chain boundaries, **never inline stages**. Housed in their own `operators/io/` group so the XML and NITF dependencies sit behind their own `OP_<name>` gates.
+
+- **[CPHDWriterOp](#cphdwriterop)** — records phase history at the shared node. Paired with the reader, it gives a round-trip test.
+- **[CRSDWriterOp](#crsdwriterop-and-siddwriterop)** — records uncompensated signal data near ingress.
+- **[SICDWriterOp](#sicdwriterop)** — writes the SLC image as a sensor-independent complex product.
+- **[SIDDWriterOp](#crsdwriterop-and-siddwriterop)** — writes the multilooked or geocoded detected product. Not gated behind target detection: SIDD's "detected" means *amplitude* detection.
+- **[TensorDumpOp](#tensordumpop)** — a generic tensor dump at any port boundary.
+
+Seventeen operators in total: two ingress, five signal-processing, three image-formation, two products, five standard-format sinks — the functional split, not the directory one.
+
+### Two deliberate non-operators
+
+Both of `BackprojectionOp`'s non-pulse inputs are the application's to produce — a pattern rather than two coincidences, since each is specific to the deployment in a way a library operator could only guess at.
+
+- **Phase-center positions.** No `PhaseCenterTrajectoryOp`, and specifically no `MotionCompensationOp` — see [WORKFLOWS.md](WORKFLOWS.md) → *What "motion compensation" means here* for why only one of the three senses of that term survives, and why it is not a library stage. The obligation this creates falls on the `positions` port specification.
+- **Sample geometry.** Grid mode is ordinary parameters; explicit points are a plain tensor on an optional port. Neither warrants a source operator.
+
+### Explicitly out of scope for this SAR pass
+
+Frequency-domain image formation (PFA, range-Doppler, chirp scaling, omega-k); interferometry and coherent change detection; polarimetry; multi-channel GMTI; bistatic geometry; SAR detection. Each is deferred on **merit** — a distinct capability with its own contract surface — except bistatic geometry, which the `positions` port's shape forecloses. See [WORKFLOWS.md](WORKFLOWS.md) → *Deferred*, *Foreclosed* and *Downstream of formation* for the per-item rationale, including the clutter-model argument against reusing `CFARDetectorOp`.
+
+**One deferral is a gap in formation rather than a capability alongside it**, and is worth naming here because nothing in the operator list shows it: the **tapered seam-free strip** — continuous, unjoined, and cross-range weighted. Modes 3 and 4 each reach for it and give up a different half, and the two parameters are exactly that trade: `emit_mode = reform` buys the taper and pays in seams, `geometry_change = scroll` buys the seamlessness and pays the taper.
+Closing it needs a taper referenced to each pixel's own illumination interval rather than to a pulse's slot in a shared aperture, which is an addition to this contract and not a change to it — deferred because the information that taper needs has no settled place in the interface, not because the result is in doubt. See `BackprojectionOp` → *Scrolling accumulation*.
+
+**ScanSAR/TOPS and circular collection are *in* scope**, as [WORKFLOWS.md](WORKFLOWS.md) modes 6 and 8, and were listed here before that document's mode inventory settled. Neither needs anything new from formation: a wide swath is one formation instance per sub-swath with other sub-swaths' bursts admitted at zero weight, and a circular collect is a spotlight on a circular trajectory. What is absent for them is **downstream** — sub-swath mosaicking and antenna-pattern compensation — plus, for circular, the caveat that a 360° aperture's point-spread function is not separable, so the resolution and sidelobe assertions in [TESTING.md](TESTING.md) do not describe it.
+
+---
+
+## Cross-tick accumulation
+
+A **new module-wide convention**, alongside the `[live]` override convention. The module has no stateful operators today; SAR forces the question, and it is written generally rather than as a backprojection special case. Three operators here are accumulating: `ApertureManagerOp` (pulses), `BackprojectionOp` (an image) and `CPHDWriterOp` (a collection).
+
+An **accumulating operator** integrates across ticks and emits less often than it consumes. The convention:
+
+- **Accumulation is declared in the contract.** An operator that accumulates says so, names its accumulated quantity, and states its reset semantics. Statefulness is never something a caller discovers from behaviour.
+- **Emit and reset are independent axes, and a reset additionally has a *phase*.** Whether an operator emits and whether it clears are separate choices; so is whether the clear happens before or after the tick's own data. One of the three is fixed globally: **emission is always evaluated after the tick's data is accumulated**, so an emitted result always includes the data that arrived on the tick that asked for it. There is no configuration that wants otherwise, and fixing it leaves the reset's phase as the only distinguishing axis — which makes the vocabulary a grid rather than a list, tabulated after this list.
+- **A geometry change travels with the reset that admits it, and takes effect in the same phase.** The phase is not a detail: installing a new lattice *before* a closing aperture's final pulses are accumulated would resize the accumulator out from under the image about to be emitted. Partial sums are bound to the geometry they were accumulated into, so a `[live]` override changing that geometry invalidates them — and the accumulating operator is not the thing that decides when to discard them. Whoever owns reset therefore emits the change and the reset **together, on one tick**. An accumulating operator receiving one without the other errors; it does not buffer the change, because holding pending configuration is how policy leaks back into the kernel's owner. See *Who owns reset*.
+- **The emitted buffer is not the accumulator.** An accumulator that keeps mutating cannot be handed downstream, so the emit path copies or double-buffers. This interacts directly with [operators/OPEN_ITEMS.md](../../../operators/OPEN_ITEMS.md) § 1 on output-buffer reuse.
+- **Reset is observable and callable.** A caller must be able to reset deliberately, not only as a side effect of emitting.
+- **Termination flushes, but not from `stop()`.** A finite input — a file — otherwise loses its tail. The obvious implementation is not available: Holoscan's `Operator::stop()` takes no arguments and has no `OutputContext`, so nothing can be emitted from it. The flush is therefore driven by an **end-of-stream announcement**, which the one operator that knows the stream ended has to make. That is the same announcement as a CPHD file boundary and an application-initiated scene change, which is why all three are served by one `control` path rather than three mechanisms. How the announcement reaches whoever drives that path is § *Stream boundary announcement*.
+- **An accumulating operator that stops while still holding unemitted data says so.** `stop()` cannot emit, but it can *warn*, and this is the one check that catches a lost tail whatever its cause — an announcement nobody translated, a control producer positioned where it could not hear one, an application that declined to handle it. None of those are visible to build-time validation, because whether a source is finite is not visible in the graph.
+
+**The four control values, by the phase of their reset:**
+
+| Control value | Reset | Emits | The tick's data belongs to |
+| :--- | :--- | :--- | :--- |
+| *emit-and-continue* | none | yes | the continuing aperture |
+| *emit-and-reset* | after the emit | yes | the aperture being closed |
+| *reset-without-emit* | before accumulation | no | the new aperture |
+| *reset-then-emit* | before accumulation | yes | the aperture being re-formed |
+
+The fourth value is not an addition for one use case: it is the cell that completes the grid, resetting early *and* emitting. It is what a **re-form** needs — clear, accumulate a replayed aperture, emit — and re-forming is how any weighting that depends on final aperture membership is applied exactly. Which pulses the tick carries differs by value, and that is inherent rather than incidental: a boundary either closes with an image or without one.
+
+### Who owns reset
+
+**Exactly one operator decides when an accumulator resets, and it is never the accumulator itself.** An accumulating operator resets when told to, and at no other time.
+
+The rule exists because splitting that authority corrupts silently. An earlier draft had `BackprojectionOp` reset itself whenever a `[live]` geometry override arrived, while `ApertureManagerOp` — the only operator that knows which pulses are in the aperture — kept emitting `−1` evictions for pulses whose contributions the reset had just discarded. Every subsequent image was wrong by the sum of those phantom subtractions, with no error and no warning. Any design in which two operators can each independently invalidate shared state has this failure, so the convention forbids the shape rather than patching the instance.
+
+Three consequences:
+
+- **Configuration reaches an accumulating operator through whatever drives its resets**, not around it. That is what lets a configuration change and the reset it requires be emitted together, by one producer, on one tick — and it is why the accumulating operator can treat their separation as an error rather than a case to handle.
+- **A reset is a full stop, not a partial one.** Every operator holding state tied to the accumulated quantity clears it — the manager drops its retained pulses *without* emitting evictions for them, because those pulses are not leaving an aperture; the aperture has ceased to exist. Eviction and retention-drop look similar and behave oppositely, which is the bug this sentence exists to prevent.
+- **Anything that knows an aperture must end says so rather than acting locally**, and it reaches formation on the control path: an application changing scene, or a stream boundary a source found. One announcement, one owner deciding what to do about it. A source does not drive `control` itself — it announces on the metadata plane and the control owner translates, per *Stream boundary announcement*.
+- **A multi-operator chain on one reform tick is the same assumption, extended.** WORKFLOWS Figure 2 runs auxiliary formation → autofocus → phase correction → product formation against a single aperture replay. That requires Holoscan to honour DAG order within the tick so each stage sees the upstream outputs of that replay before the next stage runs — not a second control handshake and not state held inside `PhaseCorrectionOp` across ticks. If that delivery property fails, Figure 2 is not implementable on top of these operators; see `ApertureManagerOp` → *Autofocus on a ground / DEM product*.
+
+### Stream boundary announcement
+
+Resolves R7 as **D22**. *Who owns reset* requires that anything knowing an aperture must end says so, and the accumulation convention's termination flush depends on it. Only a source knows where a stream's boundaries fall, and no source can reasonably drive formation-control vocabulary at a consumer several stages away. So a finite source **announces the boundary as message metadata**, and whoever drives `control` translates that announcement into the control message the convention already defines. The control path stays the mechanism; this is only how the news reaches the operator that owns it.
+
+**Why metadata rather than a port.** An announcement has to stay glued to the data it describes, and a `control` edge wired straight from the reader to formation cannot manage it. The port would have to be non-blocking, since a boundary exists on one tick out of thousands, so the flag can sit in the queue while formation is still working on a batch from two hops back — and formation flushes early. Emitting a message every tick fixes that by making the port blocking, and then each tick consumes one message from each queue in FIFO order, but only while every intervening stage is strictly 1:1. `ApertureManagerOp` is not, because it retains pulses and emits on its own cadence.
+
+Metadata rides *on* the message, so it survives any number of hops and any coalescing stage with no wiring and no alignment logic. Forwarding is automatic: `receive()` populates the operator's dictionary and `emit()` sends it.
+
+**Two kinds, because the response differs.** *End of stream* means no more pulses are coming and the graph is about to stop. *Collection boundary* means a new collection follows — new geometry, new reference point, in general a new scene — so the translating operator must pair the reset it issues with the new geometry on one tick, per *A geometry change travels with the reset that admits it*.
+
+**Who consumes it, and the one requirement that falls on an application.** Whoever drives `control` does: `ApertureManagerOp` where one is in the graph, an application-owned operator where none is. Metadata arrives only through `receive()`, so **an operator hears the announcement only if at least one of its inputs is fed, directly or transitively, by the sensor source.** In practice any operator making emit decisions already is — a cadence needs a pulse count, an angle-bounded window needs positions, and invariant 4 says those come from the tensors rather than from configuration. An operator positioned where it cannot hear the announcement will not flush the final aperture, and that consequence is the application's; the `stop()` warning above is what makes it visible rather than silent.
+
+**Key namespace.** The SDK reserves no prefixes and predefines no keys, so the scheme is this module's to set. It mirrors the C++ namespace `holoscan::radar` and the Python package, dot-separated: `holoscan.radar.<key>` for module-wide keys, with `holoscan.radar.sar.<key>` and `holoscan.radar.fmcw.<key>` reserved for modality-specific ones. Whether this key and the tiers belong at the module level as written, or under `sar` with promotion when a second modality needs them, is **R10** — it is proposed at the module level because the accumulation convention it serves is module-wide and a finite FMCW source has the same tail-loss problem, but it commits a modality whose owners have not weighed in, and a key prefix is a public composition surface.
+
+| Key | Type | Written by | Read by | Lifetime |
+| :--- | :--- | :--- | :--- | :--- |
+| `holoscan.radar.stream_boundary` | uint8, enum {end_of_stream, collection_boundary} | a finite source — `CPHDReaderOp`, `CRSDReaderOp`, an application-owned live sensor | whoever drives `control` | the tick it describes |
+
+The enum is named in `radar_common` so C++ and Python agree, on the same `uint8_t` encoding the `control` port uses for its four values.
+
+**Rules, which bound the plane rather than describing it.** The plane exists for this one key, and these are what keep it from growing into the descriptive plane R5 declines (see *Standard-Format I/O Operators*):
+
+1. **Transient signals only.** A key that *describes* rather than *announces* does not belong here; static facts are parameters, or ride the optional override ports.
+2. **One writer per key**, and an operator **overwrites a key it defines, never one it merely carries.** Carrying takes no action, forwarding being automatic.
+3. **Read nothing and write nothing outside the prefix**, so neither this module nor a library composed with it can break the other by renaming.
+4. **A consumer that merges several ports from one producer sets its own `metadata_policy` to `kUpdate`.** Mechanically forced, not chosen: a producer holds one dictionary for all its outputs, so a consumer taking several ports from it merges identical content repeatedly — `BackprojectionOp` takes five or six from the manager — and the SDK default `kRaise` fires on a key being *present*, not on values disagreeing. **This is operator-level, not application-level.** `Operator::metadata_policy` takes precedence over the fragment default, so the operator that needs `kUpdate` configures itself. Nor is enabling metadata a requirement: it is on by default (`kDefaultMetadataEnabled = true`).
+
+**What is left for the application is a hazard, not a requirement.** An intervening operator that has metadata *explicitly* disabled drops the announcement silently, and since the default is enabled, that means a foreign operator opting out rather than an application forgetting to opt in. `BackprojectionOp`'s `stop()`-time warning for unemitted pulses is what makes the consequence visible.
+
+The SDK's console and async data loggers already serialize the metadata dictionary, so the key appears in logs without extra work — which is worth knowing, because `kUpdate` leaves the merged dictionary carrying no record of which operator wrote what.
+
+### Build-time wiring validation
+
+An operator can enumerate which of its own input ports have an incoming edge, before any data flows: `Component::fragment()` gives the `Fragment*`, `Fragment::graph()` gives the `OperatorFlowGraph`, and `get_previous_nodes()` with `get_port_map()` yields the source-to-destination port mapping for each predecessor. Union those and you have the connected set.
+
+**An operator whose correctness depends on an optional port being wired validates that at initialization and refuses to start, naming the missing connection.** The alternative is failing on the first geometry change, potentially hours into a collection, or — for an unconnected `control` — producing no output at all and leaving the caller to work out why. A helper for this belongs in `radar_common/sdk/` beside `override_param.hpp` rather than in each operator; the one wrinkle is that `Operator` is not `enable_shared_from_this`, so an operator finds itself by name among `get_nodes()`.
+
+Two limits, stated so the check is not over-trusted. It detects that an edge **exists**, not that it is the **right** edge — wiring `CPHDReaderOp.sample_axis` where `range_bins` belongs is shape-legal and would pass, because something is connected. And its behaviour across fragment boundaries in a distributed graph is unverified, since a predecessor may not appear in the local fragment's graph; that needs checking before the convention is written as unconditional.
+
+**The check asks whether a port is wired, never who wired it**, and that boundary is deliberate rather than incidental. `get_previous_nodes()` does expose the predecessor, so an operator *could* reject anything but a named upstream type — and must not. It would contradict the peer model these contracts are written against (operators exchange messages; none owns another), break every legitimate intermediary such as a debug passthrough or an app-owned shim, and reintroduce by the back door the producer-consumer coupling that invariant 1's plain-tensor ports exist to prevent. It would also be exactly the check that fails across a fragment boundary.
+
+So wherever this document says a port "wires to" some operator, that is guidance about the ordinary graph and not a requirement: `BackprojectionOp` requires *a* control source rather than a particular one, and its `weight` accepts any producer satisfying the port's contract. Enforcement belongs on values and shapes — and on a port being connected or unconnected, which is what `geometry_change = scroll` uses.
+
+### How the application supplies the emit decision
+
+The **shape** of the mechanism is now settled: `ApertureManagerOp` owns the decision and expresses it as a non-blocking `control` port into `BackprojectionOp`. That is the second of the three options surveyed below, chosen because it reuses the existing `[live]` override machinery (`add_override_port` in `radar_common/sdk/override_param.hpp`), introduces no new concepts, and behaves identically from Python and C++. An application wanting a different rule replaces the manager rather than reconfiguring the formation operator.
+
+**The payload is now settled too, as D23 (was R2): the four values and nothing else.** An aperture identifier, a sequence number and a reason code were all considered and none earns its place. R2's stake was whether a writer could label its product without a metadata plane; with D21 declining the plane, `SICDWriterOp` labels from the emitted-image counter it already keeps. Formation's behaviour is fully determined by the four values; the geometry a reset admits is paired with it structurally rather than named in the payload; and the *reason* an aperture ends is needed by whoever translates a boundary into one of these values — where D22 puts it — not by the operator obeying it.
+
+The one case argued against this was attributing images to their source file in a multi-file collection, which is dropped as hypothetical rather than designed for.
+
+The two alternatives are recorded so they are not re-derived:
+
+- A **closed `emit_policy` enum** on the formation operator — pulse count, integration angle subtended, along-track aperture length, target cross-range resolution, external trigger. All but the last are derivable from the trajectory, and cross-range resolution is the term users state requirements in. It was the only YAML-expressible option, which is a real advantage, but it puts aperture policy inside the operator that owns the kernel — exactly the coupling the manager split removes. The manager's own parameters recover the YAML-expressibility without the coupling.
+- A **`std::function` parameter** invoked inside `compute()`. Mechanically confirmed: `spec.param<T>()` constrains nothing, the setter's YAML branch is `if constexpr`-guarded, and `FeatureAssemblyOp` already hand-registers a setter for a native-only parameter type. Costs: invisible to `from_config()`, will not survive a distributed deployment, and a bare lambda fails to bind because `Arg` stores the exact static type.
+
+Ruled out, recorded so they are not re-derived: `set_dynamic_flows` controls *routing*, not whether `compute()` does the work, so the expensive part still runs; `BooleanCondition` and `async_condition` gate whether the operator ticks at all, which inverts the intent of accumulating every tick and emitting occasionally.
+
+**`BackprojectionOp` publishes no aperture state, and that is now a decision rather than an open question (D14).** A manager deciding from externally observable state — pulse count, geometry, elapsed angle — needs nothing from inside the formation operator, and an application owning eviction through `evict` knows the aperture's occupancy by construction. What an output port would add is state genuinely internal to formation, such as partial-image sharpness; nothing in scope needs it, so the port is not specified and the question reopens only if a rule requires it.
+
+---
+
+## Operator APIs
+
+Per-operator **Inputs**, **Outputs**, and **Parameters**. Every port carries a dtype + shape; every parameter carries a `Default:` (required shown as `Default: none (required)`) and is tagged **[live]** or **Static**. Each port lists both precision forms; an instance uses one, fixed by its template instantiation. Leading `...` axes are opaque, preserved batch dims.
+
+**Per-axis vector parameters are given in tensor-shape order** — slowest-varying axis first, matching the axis order of the tensor they describe. This is the FMCW convention (`guard_cells` and `training_cells` are `(doppler, range)` against a `(num_doppler, num_range_bins)` plane), and it is restated here because SAR's grids invite the opposite reading: an image is indexed `(v, u)`, so `SampleGeometry.counts` is `(num_v, num_u)` even though the axes are *named* `u` and `v`. The same rule makes `GeocodeOp`'s output parameters `(northing, easting)` and `MultilookOp.looks` `(v, u)`.
+
+**Two distinct fast-time axes exist, and only one of them is `range_bins`.** `CPHDReaderOp.sample_axis` describes the *stored* samples — frequency or time of arrival, depending on the file's domain — while `range_bins` (emitted by `SARRangeCompressionOp`, consumed by `BackprojectionOp`) is the *compressed* range axis in metres. They carry separate names because their lengths coincide whenever `nfft` is unset, so wiring the reader's axis into `BackprojectionOp` would otherwise be shape-legal and would surface only as a displaced or defocused image — the same silent-failure class `CoordinateFrame` exists to close. Nothing in the contract converts between them: the reader's axis is metadata for the writers, and the range axis is produced by compression.
+
+**`LFMWaveformDescriptor` names a proposed type.** It appears below as the waveform descriptor on every operator that needs a chirp. It is a **new** type rather than a renamed `FMCWWaveformDescriptor` (D24), so it adds to the descriptor set without touching landed FMCW code; adding it is part of R1 and is not accepted — see *Supporting data structures*. Parameter entries name the proposed type rather than tagging each occurrence, so a reader should treat every `LFMWaveformDescriptor` mention as carrying that proposal.
+
+**Parameter override convention.** Unchanged from the FMCW doc: parameters are build-time configuration; a **[live]** parameter may additionally be overridden in-flight via a same-named non-blocking input port; overrides are **sticky**; output shapes are re-inferred downstream, so a shape-changing override is legal; a costly override warns once per new configuration and caches prior ones; genuinely structural parameters are **Static** and vary only by instantiating separate operators.
+
+SAR adds two rules. **A [live] override that changes an accumulating operator's output geometry forces a reset** (see *Cross-tick accumulation*). And **where an override port is wired *and* its parameter was set, the port wins and a disagreement warns once** — the case being a caller who adopts one of D21's descriptor edges and leaves the mirrored parameter behind, where silence would leave it unclear which value the operator used.
+
+### Ingress Operators
+
+#### CPHDReaderOp
+
+Reads a CPHD collection and emits phase history together with the per-pulse geometry stored alongside it. A source operator: no data inputs.
+
+- **Out:** `phase_history` — complex64 / complex128, `(num_pulses, num_samples)`. `num_pulses = pulses_per_tick`, except on the final tick where it is the remainder.
+- **Out:** `positions` — float32 / float64, `(num_pulses, 3)`. Per-pulse Aperture Reference Point positions in `coordinate_frame`. CPHD stores these natively, which is why this path needs no trajectory computation.
+- **Out:** `reference_position` — float32 / float64, `(num_pulses, 3)`. Per-pulse position of the point the phase history is referenced against — the CPHD Stabilization Reference Point — in `coordinate_frame`, passed through unconverted. **This is the canonical definition of the module's reference point**; every downstream port carrying that name means this quantity. The per-pulse **reference range** is the distance from the phase centre to it, derived rather than transported; range axes are expressed as offsets relative to that derived range. A position rather than a distance because one of the two viable precision strategies needs the point itself — see `BackprojectionOp`.
+- **Out:** `sample_axis` (optional) — float32 / float64, `(num_samples,)`. The file's fast-time sample axis: frequency (Hz) for an FX-domain collection, time of arrival (s) for a TOA-domain collection, per the domain the file declares. Emitted for the writers and for diagnostics. **Deliberately not named `range_bins`** — it is not a range axis and is not interchangeable with the port of that name (see the note on the two fast-time axes above).
+- **Out:** `pulse_times` (optional) — float64, `(num_pulses,)`. Seconds from the collection epoch, always double regardless of the instantiated precision, since single precision cannot hold a collection-relative timestamp to useful accuracy.
+- **Out:** `velocities` (optional) — float32 / float64, `(num_pulses, 3)`. Per-pulse phase-center velocity, where the file carries it.
+- **Out:** `coordinate_frame` (optional) — CoordinateFrame. The frame this operator validated against the file, for wiring into a downstream consumer's same-named `[live]` override instead of mirroring it by hand. A descriptor output rather than a tensor, and one of the three optional override edges D21 provides — see *Standard-Format I/O Operators*. Emitted once at the first tick of each collection, the override being sticky.
+
+**Parameters:**
+
+- `path` — string or string vector. A single CPHD file, a directory of them, or an explicit ordered list. A directory is enumerated in lexicographic order; an explicit list is read in the order given, which is the form to use when lexicographic order is not collection order. Static. Default: none (required).
+- `coordinate_frame` — CoordinateFrame. The frame the emitted positions are expressed in. Where the file declares a frame, a disagreement is an **error**, not a silent reinterpretation. Static. Default: none (required).
+- `pulses_per_tick` — int. Batch size along the pulse axis; sets the granularity at which the accumulating formation stage sees the aperture. Static. Default: none (required).
+- `channel` — int. Which CPHD channel to read, for multi-channel collections. One channel per instance is deliberate — see Notes. Static. Default: 0.
+- `pulse_range` (optional) — int, `(2,)`. Half-open `[first, last)` pulse range to read, for processing a subset of a long collection. Applies **per file**, since each file is its own collection. Static. Default: none (whole collection).
+- `loop` **[CONTRACT CHANGE 2026-08-26]** — bool. After the last file, wrap to the first rather than ending the stream. Every seam — including last→first — is `collection_boundary`; `end_of_stream` is never stamped. The graph runs until SIGINT (or an application-owned stop). Static. Default: **false** (today's termination).
+- `playback_rate` **[CONTRACT CHANGE 2026-08-26]** — float, ≥ 0. Pace pulse emission against collect time. **`0`** (default) emits as fast as compute allows. **`1`** is collect time. **[CONTRACT CHANGE 2026-08-28]** Sleep is global slack: (TxTime span of pulses read so far) / rate − wall since the collection's first tick. Positive (ahead) sleeps; negative (behind) does not — catch up at GPU speed, never slower than the GPU. **`2`** is twice as fast, **`0.5`** half speed — video-playback convention. Static.
+- `duty_cycle` **[CONTRACT CHANGE 2026-08-26]** — float, in `(0, 1]`. Collection-platform duty cycle: after a collection, when another follows (next file, or wrap when `loop` is true), sleep `T_c · (1/D − 1)` of **radar** collect time, where `T_c` is the `TxTime` span of the pulses actually read. **`1`** (default) is no gap. With `playback_rate > 0` the sleep is divided by that rate so the whole timeline scales; with `playback_rate = 0` the gap is unscaled platform wall time. Not applied after the last file when `loop` is false (nothing follows). A value outside `(0, 1]` is an error. Static.
+
+**Algorithm:**
+
+1. At `start()`, open the file, parse the XML metadata, and validate the declared frame against `coordinate_frame`.
+2. Per tick, read the next `pulses_per_tick` pulses of the selected channel, apply the file's per-pulse amplitude scale factors, and upload to device memory.
+3. Emit the pulse block with its geometry.
+
+**Notes:**
+
+- *Termination.* Unless `loop` is true, the operator emits until the selected pulse range of the last file is exhausted, then signals end-of-stream and stops the graph. With `loop`, that last seam is a `collection_boundary` and the first file opens again. The **final batch of each file may be short** (`num_pulses < pulses_per_tick`), so every downstream operator must infer the pulse count from the tensor rather than the parameter. A short final batch is also what makes the accumulation convention's *termination flushes* rule load-bearing: without it, the tail of the aperture is silently dropped.
+- *This reader is the boundary announcer (D22, was R7).* It is the only stage that knows where a stream's boundaries fall, so it **stamps `holoscan.radar.stream_boundary` on the messages of the batch that ends a collection** — `collection_boundary` where another file follows (including a `loop` wrap), `end_of_stream` on the last when `loop` is false. It declares no `control` output: that vocabulary belongs to whoever manages the aperture. The current HSDK 5 implementation uses an explicit typed boundary port; see the authoritative port contract above.
+- *The announcement must arrive with the final batch, not after it.* A boundary discovered only once the next file's first pulses have been read is too late — those pulses would already have been accumulated into the closing aperture. So the reader looks ahead by one batch and stamps the key on the batch that *is* the collection's last, which it can do because a CPHD header carries the pulse count.
+- *A file boundary is a collection boundary.* With a multi-file `path`, advancing to the next file starts a new collection — new geometry, new reference point, and in general a new scene. The accumulating formation stage must therefore flush and reset at that seam rather than integrating pulses from two collections into one image. That makes `collection_boundary` the harder of the two kinds for its consumer: the reset it triggers admits a new geometry, and per *A geometry change travels with the reset that admits it* the two must reach formation on one tick. The reader supplies neither the geometry nor the reset — it reports the seam, and the control owner pairs them.
+- *One channel per instance, deliberately.* CPHD 1.x makes `Data/Channels` a required list in which each channel carries its own `TxPol`/`RcvPol`, `TxAPCId`/`RcvAPCId`, and `NumVectors`/`NumSamples`. Because per-channel pulse and sample counts may differ, channels do not stack into one rectangular tensor, so emitting them on a leading batch axis fails in the general case rather than in a corner. Polarimetry — the main reason to want several channels at once — is already out of scope. A collection whose channels *are* homogeneous is served by instantiating N readers against the same file, which costs a parameter each and keeps the port shapes honest.
+- *Ingest uploads.* As the first operator in the chain it reads host memory and produces device memory, which is the sanctioned exception to the module's CUDA-accessible-input rule (the same role the FMCW apps' ADC sources play).
+- *Round-trip.* Pairing with `CPHDWriterOp` gives a read-write-compare test that validates field interpretation without an independent implementation to diff against.
+
+---
+
+#### CRSDReaderOp
+
+Reads recorded uncompensated signal data, feeding the deramped branch. Same shape of contract as `CPHDReaderOp` — `path`, `coordinate_frame`, `pulses_per_tick`, `channel`, `loop`, `playback_rate`, `duty_cycle`, the same termination semantics — differing in its output:
+
+- **Out:** `signal_data` — complex64 / complex128, `(num_pulses, num_samples)`. Deramped, uncompensated returns. **Not** phase history: it still carries residual video phase and deramp reference bookkeeping, so it must pass through `RVPRemovalOp` and `BandEqualizationOp` first. This one port name is pinned now because [WORKFLOWS.md](WORKFLOWS.md) wires it in the later-wave diagrams.
+
+The remaining ports — the per-pulse geometry and the deramp reference record the branch needs — are deferred with the branch (see *Open items*, I2).
+
+*Why this is a separate operator rather than a `format` flag on `CPHDReaderOp`.* Invariant 5 makes a format selector exactly the kind of structural parameter that varies by instantiation rather than by value. The two also feed different chains: CRSD output must pass through `RVPRemovalOp` and `BandEqualizationOp` before it reaches the phase-history node, while CPHD output arrives there directly. A shared operator with a flag would have one output port meaning two different things.
+
+### Signal-Processing Operators
+
+#### SARRangeCompressionOp
+
+- **In:** `phase_history` — complex64 / complex128, `(..., num_pulses, num_samples)`. Compression along the last (fast-time) axis. Phase history is the **frequency-domain** form, so compression here is an **inverse** transform — the opposite direction from FMCW's `FMCWRangeProcessorOp`, whose dechirped input is already a time-domain beat signal.
+- **Out:** `range_profiles` — complex64 / complex128, `(..., num_pulses, num_range_bins)`. `num_range_bins = num_samples`, growing to `nfft` when set. The samples are **complex baseband** versus differential range: an `ifftshift` puts stored sample `N/2` at IFFT DC before the transform, so the tensor is the compressed envelope rather than that envelope times a Nyquist carrier. The range axis is **centred**: a range-axis `fftshift` puts zero differential range at bin `N/2` for `N = num_range_bins`, so bins below it are nearer than the reference point and bins above it are farther, and bin index increases with range across the whole array. See *Notes* for why both shifts are required and why they are not a matched pair.
+- **Out:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`. Per-bin range (m) relative to the derived reference range, uniform, spanning `−(N/2)·Δr` through `+(N/2 − 1)·Δr`. Wire it into `BackprojectionOp.range_bins` to keep the two stages' range axes consistent by construction; emitted only when `waveform` is available.
+- **Out:** `range_window` (optional) — WindowSpec. The window this stage actually applied, for wiring into `SICDWriterOp.range_window` rather than mirroring it by hand. A descriptor output, and one of the three optional override edges D21 provides. Emitted whenever the window changes, including once at the first tick.
+
+**Parameters:**
+
+- `range_window` **[live]** — WindowSpec, coherent-gain normalized. Window applied along fast-time before the transform; the dominant control on impulse-response sidelobes, and so on what a bright scatterer does to its neighbours. An unseen window rebuilds its coefficients and warns once; prior windows are cached. Default: none (rectangular — best resolution, ~−13 dB sidelobes).
+- `waveform` **[live]** — `LFMWaveformDescriptor`. Source for the `range_bins` axis. Default: none (required when `range_bins` is used; unused otherwise).
+- `fft_norm` **[live]** — enum {backward, ortho, forward}. Which transform direction carries the `1/N` factor, on the NumPy/MatX convention: `backward` scales the inverse, `forward` scales the forward, `ortho` splits it as `1/sqrt(N)` each way. **Because this stage's transform is the inverse one, `backward` applies the `1/N` here** — the same spelling that leaves the FMCW range stage's output unscaled. The default is therefore a radiometric choice rather than a spelling detail, and it is not settled: see *Open items*, I5. Default: backward.
+- `nfft` **[live]** — int, ≥ `num_samples`. Fast-time transform length; larger zero-pads the **spectral edges** (the middle of the rotated row) for a finer interpolated range grid over the same span, and is the escape hatch for a large-prime `num_samples`. The output bin count follows it (downstream infers). An unseen length builds a new plan and warns; seen lengths reuse the MatX plan cache. Default: none (= `num_samples`, exact N-point).
+- `propagation_speed` **[live]** — float. Wave speed for the frequency → range conversion (`range_bins` only). Default: speed of light ≈ 2.998e8 m/s.
+
+**Algorithm:**
+
+1. Apply `range_window` along fast-time.
+2. **[CONTRACT CHANGE 2026-08-24]** `ifftshift` along fast-time, so stored sample `N/2` is IFFT bin 0. `phase_history` stays native CPHD FX (sample 0 is `SC0`); this rotate is the range transform's convention, not a change to the file or the reader.
+3. When `nfft` is set, zero-pad the **middle** of the rotated row (the spectral edges). Padding the end of native FX would extend one RF edge rather than interpolate the same baseband pulse.
+4. Inverse-transform along fast-time under `fft_norm`, taking phase history to range profiles.
+5. `fftshift` the range axis, placing zero differential range at bin `N/2`.
+6. Derive `range_bins` from `waveform` bandwidth, `nfft`, and `propagation_speed`, on the same centred convention.
+
+**Notes:**
+
+- *This is the digital stage, and hardware does not make it redundant.* Analog deramp-on-receive is bandwidth reduction, not compression; the transform stays digital and downstream, which is why CPHD phase history is stored pre-transform.
+- *Window choice is a product decision, not a tuning knob.* It sets the impulse response the SICD product records and the resolution/sidelobe trade a downstream analyst sees, so it is one of the few parameters whose value belongs in the collection's metadata.
+- *The two shifts are not a matched pair on one axis.* **[CONTRACT CHANGE 2026-08-24]** The trailing `fftshift` is an output-port rule: where zero differential range sits, so a later interpolator can treat the axis as linear. The leading `ifftshift` is an input-to-transform rule: which FX sample is IFFT DC, and therefore which carrier `BackprojectionOp.reference_frequency` must restore. CPHD FX is stored unshifted (sample 0 is `SC0`, not the band centre), so the leading shift is a processing convention this stage imposes, not something the input port already implies. IFFT-as-stored would leak the file's FX layout through `range_profiles` as a Nyquist modulation on an otherwise identical magnitude envelope.
+- *The centred range axis is a correctness requirement, not a presentation choice.* An unshifted inverse transform puts zero differential range at bin 0 and wraps negative differential ranges to the top of the array. Read as a linearly increasing range axis — which is what `BackprojectionOp` does — every sample nearer than the reference then computes a negative bin index and is dropped by the bounds check, while its data sits unread at the far end. The CPHD SRP normally sits at scene centre, so that would be roughly half the swath contributing nothing.
+- *Centring is also what makes a plain bounds check the right out-of-range policy.* It puts the transform's circular seam at the array edges, far from the scene, so discarding out-of-range bins discards nothing real. Both reference implementations centre, for this reason.
+- *`N/2`, not `(N − 1)/2`.* The two spellings differ by half a bin for even `N`, and a half-bin range offset is a phase error a magnitude-only test will not catch. `N/2` is what an `fftshift` actually produces, so it is the value that keeps this stage and `BackprojectionOp` consistent by construction; a backend kernel that bakes in `(N − 1)/2` owes a half-bin compensation at the seam. The same spelling sets IFFT DC at stored sample `N/2` and `reference_frequency` at `SC0 + (N/2)·SCSS`, not at `FxC` / `(N − 1)/2`. Signed `SCSS` is already handled: the rule is that sample, not a band minimum or a centre derived some other way.
+
+---
+
+#### RangeReferenceMultiplyOp (direct-sampled branch)
+
+**[CONTRACT CHANGE 2026-08-07]** Renamed from `RangeMatchedFilterOp`, closing I3. Ports, parameters and algorithm are unchanged — see *Notes*.
+
+- **In:** `pulses` — complex64 / complex128, `(..., num_pulses, num_samples)`. Direct-sampled returns at full bandwidth.
+- **Out:** `phase_history` — complex64 / complex128, `(..., num_pulses, nfft)`. The matched-filtered spectrum, feeding the shared phase-history node. Its length is the **transform** length, not the input sample count: this operator emits a frequency-domain product without inverting, so it has no time-domain support to crop to (see Notes).
+
+**Parameters:**
+
+- `waveform` **[live]** — `LFMWaveformDescriptor`. Supplies the transmitted chirp from which the replica spectrum is synthesized. Default: none (required unless `replica` is given).
+- `replica` **[live]** — complex vector, `(replica_length,)`. An explicit measured replica, overriding the synthesized one; the measured form matters when the transmitter is non-ideal. Default: none (synthesize from `waveform`).
+- `nfft` **[live]** — int. Transform length for the multiply, ≥ `num_samples + replica_length − 1` to avoid circular wrap. It sets the output length, so downstream re-infers when it changes. Default: none (next fast length above that bound).
+
+**Algorithm:** transform along fast-time, multiply by the conjugate replica spectrum, and emit without inverting — the shared range compression supplies the inverse transform.
+
+**Notes:**
+
+- *There is deliberately no `same`/`valid` output mode, and its absence follows from the split.* Those crops select from a time-domain correlation, which this operator never forms: it emits the un-inverted product, whose length is `nfft`. The fully-overlapped-support crop therefore belongs on the **range** axis after `SARRangeCompressionOp` inverts — where the wrap-guard bins the `nfft` bound introduces are also the bins to discard. Whether that crop becomes an explicit parameter on range compression or stays the caller's slice is deferred (see *Open items*, I4).
+- *The apparent round trip is deliberate.* Direct-sampled pulses are time-domain, get matched-filtered into frequency-domain phase history, and are then transformed back to the range domain downstream. The alternative — a fused direct-sample-to-range-profile operator — saves one buffer and forfeits the standard-format interchange point at the phase-history node. The buffer is the cheaper of the two.
+- *The name says what the stage multiplies by, because no standard term names the stage itself.* The literature's term for the conjugate chirp spectrum is the **range reference function** (or range reference signal) — consistent across the ASF training processor, the ERS MATLAB processors, and the FPGA range-Doppler implementations — and "reference function multiplication" is how those sources describe this step. The stage in isolation has no name of its own, because outside a split pipeline nobody stops here.
+- *Its predecessor `RangeMatchedFilterOp` was withdrawn for being a standard term used with a non-standard scope*, which is worse than a coined one: it looks familiar and misleads. **Range-matched filtering** in the literature includes the inverse transform — an FPGA range-Doppler paper states the three RDA steps as range-matched filtering, RCMC and azimuth-matched filtering, with the range IFFT inside the first — so the old name denoted this operator *plus* `SARRangeCompressionOp`, and a reader would rightly have expected range-compressed output. Invariant 7 turned out to be neutral rather than binding here, since there was no industry term to adopt. The known residual is that the name mentions the multiply but not the forward FFT this stage also performs.
+- *`SARRangeCompressionOp` keeps its name and should not be read as the other half of a split term.* On the CPHD path — the only ingress in wave one — the data is already deramped phase history, so range compression genuinely is the transform alone, and the name is exact where it is used.
+
+#### PhaseCorrectionOp
+
+Applies a per-pulse phase correction to range profiles ahead of **product** formation. The
+second half of D20's autofocus split: `AutofocusOp` estimates on a conjugate
+geometry, this applies the result so a formation on any geometry sees corrected pulses.
+
+- **In:** `range_profiles` — complex64 / complex128, `(num_pulses, num_range_bins)`. On the Figure 2 path, the aperture replay from `ApertureManagerOp` (or the app-owned aperture source) — the same pulse set the auxiliary formation just consumed.
+- **In:** `phase_correction` — float32 / float64, `(num_pulses)`. Radians, matching the pulse axis above. **Required** (blocking): this operator does not run until both inputs are present on the tick. Ordinarily driven by `AutofocusOp.phase_correction` on the same scheduler tick as the aperture replay (see `ApertureManagerOp` → *Autofocus on a ground / DEM product*); an application with an external phase model drives it directly.
+- **Out:** `range_profiles_out` — complex64 / complex128, same shape as the input.
+
+**Parameters:**
+
+- `sense` — enum {subtract, add}. Whether the correction is removed from the data (`subtract`, multiplying by `exp(−iφ)`) or impressed onto it (`add`, `exp(+iφ)`). **Static** and **required with no default**: both are one sign apart, neither is checkable from the values, and guessing wrong doubles the error instead of removing it — the same reasoning that makes `azimuth_axis` required. `add` exists because injecting a known error is how [TESTING.md](TESTING.md) builds its ground truth. Default: none (required).
+
+**Algorithm:** broadcast the per-pulse phase across the range axis and multiply. Stateless, in-place-able, one pass.
+
+**Notes:**
+
+- *Why this is an operator and not a widening of `BackprojectionOp.weight`.* A per-pulse correction is dimensionally a complex weight, so the alternative was making `weight` complex and letting the manager or the application carry the phase there. Rejected: `weight` is real and **signed**, and D6, D7 and D15 all reason about it that way — `+1` admits, `−1` evicts, intermediate values taper, and the taper is applied by pre-scaling profiles outside an unweighted kernel. Making it complex would put an eviction and a phase correction in one number, where a sign error is a silent mis-eviction rather than a type error. A separate multiply keeps both meanings legible at the cost of one stateless stage.
+- *Why not leave it to the application, as trajectory and scene geometry are left under D13.* Those are excluded because a library operator could only guess at deployment-specific conventions. This one has no convention to guess: the correction's units, its indexing and its sign are all fixed by this contract, and `sense` names the only choice. It is also the stage that makes autofocus usable on the geometries this module exists to form on, so leaving it out would ship the D20 resolution with its second half missing.
+- *Where it sits on the Figure 2 path: after the aperture source, before the product formation.* It consumes the retained aperture's replay and `AutofocusOp.phase_correction`, and feeds the product `BackprojectionOp`. It does **not** sit on the hot path between range compression and the manager: mid-aperture ticks have no estimate yet, and a pass-through manager (`max_aperture_pulses = 0`) has nothing left to correct after AF runs. A per-pulse phase still commutes with a fast-time transform, so placing it after range compression remains correct; the aperture boundary is the sequencing constraint, not the DSP one.
+- *Both inputs must co-arrive on the replay tick.* `phase_correction` is not optional and is not buffered across ticks. The graph edge `AutofocusOp → PhaseCorrectionOp` is what orders estimation before correction; see the same-tick assumption under `ApertureManagerOp`.
+
+### Deramped-branch entry stages
+
+`RVPRemovalOp` removes the residual video phase term that deramp-on-receive leaves behind and undoes any deramp reference bookkeeping — the per-pulse range-bin-to-absolute-range mapping a tracking reference point introduces. `BandEqualizationOp` corrects amplitude and phase taper across the band. Together they turn deramped signal data into phase history.
+
+Full contracts are deferred with the branch (see *Open items*, I2). Both are **evidence-gated**: real raw data is what pins the sign and reference conventions, and getting those wrong is undetectable from synthetic data generated under the same assumptions.
+
+### Image-Formation Operators
+
+#### BackprojectionOp
+
+Time-domain image formation. **Accumulating across ticks** — see *Cross-tick accumulation*.
+
+- **In:** `range_profiles` — complex64 / complex128, `(..., num_pulses, num_range_bins)`.
+- **In:** `positions` — float32 / float64, `(..., num_pulses, 3)`. Per-pulse antenna phase-center positions. **The specification of this port is load-bearing**: no library operator computes these (see *Two deliberate non-operators*), so the contract is the only thing standing between an application and a plausibly-degraded image. It pins:
+  - **Frame** — the one declared by `coordinate_frame`; the same frame as `sample_points`.
+  - **Units** — metres.
+  - **Ordering** — row `i` corresponds to pulse `i` of `range_profiles`, with matching leading batch axes.
+  - **Instant** — the phase centre at the pulse's **transmit** instant, under the stop-and-hop assumption. Receive instants or midpoints introduce a systematic along-track shift.
+  - **Point** — the *antenna phase centre*, not the IMU and not the platform centre of mass. Lever-arm correction is the caller's.
+- **In:** `reference_position` — float32 / float64, `(..., num_pulses, 3)`. Per-pulse reference **point** in `coordinate_frame`, as defined by `CPHDReaderOp.reference_position` and carried through unchanged — range compression does not transform it. The operator derives the per-pulse reference *range* from it, once per pulse rather than per pixel, and anchors the range axis to that derived range. Bin zero is *not* the derived reference range under the default centred axis: the active range axis (the `range_bins` port, or `range_bin_spacing` / `range_bin_origin`) supplies bin offsets relative to it. A position rather than a distance because one of the two precision strategies cannot be reconstructed from a distance — see *Notes*.
+- **In:** `range_bins` (optional) — float32 / float64, `(num_range_bins,)`. The **compressed** range axis from `SARRangeCompressionOp`, in metres — not `CPHDReaderOp.sample_axis`, whose length can coincide with it. When connected it **supersedes** `range_bin_spacing` and `range_bin_origin`, which are read from its first element and uniform step; this is the wiring that keeps the two stages' range axes consistent without the caller mirroring `nfft`. The port is an **explicit-axis convenience, not a non-uniform capability**: the axis is reduced to a scalar spacing and origin in one pass, and a non-uniform axis is an error.
+- **In:** `sample_points` (optional) — float32 / float64, `(num_v, num_u, 3)`. Explicit sample locations in `coordinate_frame`, as a **2D lattice** of 3D points — the same rank as the image, one position per pixel. **Connecting this port is what selects explicit-lattice mode**; leaving it unconnected selects the uniform lattice described by `sample_geometry`. Connecting both is an error, detected at initialization. **No leading batch axes**: the geometry is shared across the batch. Configuration that happens to need a tensor, and subject to the same co-arrival rule as `sample_geometry`. The lattice is unconstrained in *where* the points sit but carries a locality precondition when a Taylor variant is selected — see *Notes*.
+  - Under `geometry_change = scroll`, every message after the first carries only the rows entering the leading edge — `(k, num_u, 3)` with `k < num_v` — and `k` is the translation. See *Scrolling accumulation*.
+- **In:** `weight` (optional) — float32 / float64, `(..., num_pulses)`. Per-pulse signed weight applied to each pulse's contribution: `+1` accumulates, `−1` **evicts** by subtracting a contribution previously added, `0` skips, and intermediate values taper. This is the whole of the operator's aperture vocabulary — there is no separate eviction mechanism, because eviction is accumulation with the opposite sign. Default when unconnected: `+1` for every pulse.
+- **In:** `control` — uint8, `(1,)`. One of *emit-and-continue*, *emit-and-reset*, *reset-without-emit*, or *reset-then-emit*; see *Cross-tick accumulation* for which phase each one's reset lands in. **Connection is required; delivery is not** — the port is non-blocking, so most ticks carry no message and the operator simply accumulates. An unconnected `control` describes a graph that can never emit an image, which is rejected at initialization rather than discovered by watching for output that never comes (see *Build-time wiring validation*). **The message carries the four values and nothing else (D23, was R2)** — no aperture identifier, no sequence number, no reason code; see *How the application supplies the emit decision*.
+- **In:** `initial_image` (optional) — complex64 / complex128, matching the output shape. Seeds the accumulator, so a caller can resume or composite. **Consumed on the tick it arrives, before that tick's pulses are accumulated**, and it *replaces* the accumulator contents rather than adding to them. The expected use is one message per aperture, so an arrival mid-aperture discards the partial sums accumulated so far and warns. Unlike a geometry change, it is **not** staged: seeding is an explicit act by whoever sent it, at the moment they sent it. A shape disagreeing with the active sample geometry is an error, not a resize.
+- **Out:** `image` — complex64 / complex128, `(..., num_v, num_u)` in **both** sample-geometry modes. Leading batch axes are **preserved**, one independent accumulator per batch element (see Notes). Emitted **only** when a control message says so — never per tick, and never on a schedule of its own.
+- **Out:** `sample_geometry` (optional) — SampleGeometry. The lattice the emitted image was formed on, co-emitted with each `image`, for wiring into `SICDWriterOp.sample_geometry` or `GeocodeOp.input_sample_geometry` rather than mirroring it by hand. A descriptor output, and the highest-consequence of the three optional override edges D21 provides: `GeocodeOp` derives every output sample's input index from this, so a mirrored disagreement silently misplaces the product. Emitted in grid mode only — in points mode the lattice is a tensor that no descriptor can express, and the caller wires `sample_points` onward or mirrors as before.
+
+**Parameters:**
+
+- `coordinate_frame` — CoordinateFrame. Static — it fixes the meaning of every position in the graph. Default: none (required).
+- `sample_geometry` **[live]** — SampleGeometry. The uniform image lattice: origin, both axes, spacing, and counts, as **one atomic value** (see *Supporting data structures* for why bundling these is a correctness requirement rather than a tidiness one). Ignored when `sample_points` is connected. An override **must arrive on the same tick as a resetting control message**, and is an error otherwise — see *Notes*. Under `geometry_change = scroll` a pure translation is the one exception, because it is the one change that does not invalidate what has been accumulated. Default: none (required when `sample_points` is unconnected).
+- `range_bin_spacing` **[live]** — float. Metres per range bin in `range_profiles`. Ignored when the `range_bins` port is connected. Default: none (required when that port is unconnected).
+- `range_bin_origin` **[live]** — float. Range (m) of bin zero relative to the derived reference range. Ignored when `range_bins` is connected. Setting it explicitly is what a range-cropped window needs, where bin zero is the crop's near edge. Default: **centred**, resolved per tick as `−⌊N/2⌋ · range_bin_spacing` from the observed bin count, matching `SARRangeCompressionOp`'s centred output. The default is computed rather than constant because `N` is not known until the tensor arrives.
+- `reference_frequency` **[live]** — float. **[CONTRACT CHANGE 2026-08-24]** Transmit frequency (Hz) of the sample `SARRangeCompressionOp` treated as IFFT DC — stored sample `N/2`, `SC0 + (N/2)·SCSS` on a CPHD collection — the carrier the range transform factored out, and the one formation must cancel. Not `SC0` (sample 0), not `FxC` / `(N − 1)/2`, and not a band minimum: `SCSS` is signed, so the rule is that sample rather than either extreme. The value is a **parameter** (this operator already carries it); range compression does not emit it. Changing it mid-aperture makes earlier and later contributions incoherent, the same footgun the range-axis scalars carry and on the same invariant-5 terms. Default: none (required).
+- `interpolation` **[live]** — enum {nearest, linear, sinc}. Range-profile interpolation at the computed range. **Only `linear` is implemented in this wave**; `nearest` and `sinc` are named in the contract so the enum does not have to grow later, and are **rejected with an error** rather than silently falling back — see *Notes* and STATUS.md → Roadmap. Default: linear.
+- `backend` — **[CONTRACT CHANGE 2026-08-22]** flattened enum of legal kernel combinations, prefixed so a MatX wrap and an NVRadar copy cannot share a spelling. Static (selects the kernel). Default: `nvradar_block_anchored_expanded_throughput_phase_lut_vec`. No silent alias for the old `{fp32, mixed, float_float, taylor}` spellings. A named value not yet in the binary errors at init by that name. Closes I6. The planar-only `…_vec_z0` sibling is opt-in.
+  - **MatX family** (wrap `matx::experimental::sar_bp` by reference): `matx_double`, `matx_double_phase_lut`, `matx_mixed`, `matx_mixed_phase_lut`, `matx_float_float` (LUT required), `matx_float`, `matx_float_phase_lut`, `matx_taylor_fast` (errors at init until the bundled header exposes `TaylorFast`).
+  - **NVRadar family** (copied CUDA kernels; no NVRadar in the build; `cupy` excluded). Naive / HQ: `nvradar_cuda_fp32`, `nvradar_cuda_fp32_hq`, `nvradar_cuda_fp32_hq_fast`, `nvradar_fp64_reference`.
+  - Block-anchored: `nvradar_block_anchored`, `nvradar_block_anchored_fp64_trajectory`, `nvradar_block_anchored_refined_throughput`, `nvradar_block_anchored_refined_quality`, `nvradar_block_anchored_expanded_throughput`, `nvradar_block_anchored_expanded_quality`.
+  - Block-anchored + LUT: `nvradar_block_anchored_phase_lut`, `nvradar_block_anchored_refined_quality_phase_lut`, `nvradar_block_anchored_expanded_throughput_phase_lut`, `nvradar_block_anchored_expanded_throughput_phase_lut_vec`, `nvradar_block_anchored_expanded_throughput_phase_lut_vec_z0`, `nvradar_block_anchored_expanded_quality_phase_lut`, `nvradar_block_anchored_phase_lut_legacy`, `nvradar_block_anchored_fp64_trajectory_phase_lut`.
+  - The name was `precision_mode` until 2026-08-06; it selects a strategy of which precision is one consequence, so it is now `backend`.
+- `geometry_change` — enum {reset, scroll}. What an incoming sample geometry *means*: under `reset` it invalidates every partial sum, so it must arrive with a resetting control message; under `scroll` a pure translation along `v` instead advances a scrolling accumulator, preserving the partial sums of every pixel still in view. `scroll` works in either geometry mode, and rejects a connected `weight` — see *Scrolling accumulation*. Static — it selects the accumulator's structure, not a per-tick behaviour. Default: reset. `geometry_update` was the alternative spelling and reads as though it named a rate.
+
+**There is deliberately no `emit_policy`, `reset_policy`, or aperture-retention parameter, and this operator never resets itself.** Retention, the emit decision, and the timing of every configuration change belong to the formation manager (below); this operator holds an accumulator, not an aperture, and applies whatever it is told when it is told. See *Notes* for why the split, and *Running without a manager* for what happens when there is none.
+
+**It is a pure accumulator with an explicit command interface.** It accumulates what it is fed, and emits, clears, or does both **only** when a control message says so. There is no per-tick emission, no implicit clearing, and no mode in which it decides for itself — which is what makes "when does an image come out" a property of the graph rather than a behaviour hidden inside a kernel operator.
+
+**Running without a manager.** Nothing requires the control messages to come from `ApertureManagerOp`. An application that does not need retention wires a control source of its own: a small operator in `custom_ops.hpp`, or its own live-sensor source where it has one. Not `CPHDReaderOp`, which declares no `control` output by design (D22) — it announces boundaries on the metadata plane and leaves the vocabulary to whoever owns the aperture, so an app-owned control operator must be fed by the source in order to hear it. The accumulator cannot tell the difference and does not try to.
+
+What makes the manager worth wiring in is a **sliding window**, because eviction needs the aperture's pulses retained, and that retention is the manager's substance — an application can build it, but not out of operators it already has.
+
+##### Scrolling accumulation
+
+This is how the **continuous strip** of [WORKFLOWS.md](WORKFLOWS.md) → *Image-formation modes* is produced, and it is the whole of what `geometry_change = scroll` means.
+
+**A strip is one product, not a sequence of frames, and forming it as frames is what creates seams.** Tiles are disjoint in pixels but overlap in pulses by a synthetic aperture length, so a tile boundary discards exactly the pulses the next tile's leading edge wants and those pixels form under-integrated. Every mitigation within the tiled model — replaying a retained tail across the step, having the reader re-emit a range of pulses — pays to re-present pulses that the previous aperture already formed.
+
+Scrolling stops resetting instead: the lattice **translates** and the accumulator translates with it, so each pixel accumulates continuously from the moment it enters the beam until it leaves. No pulse is formed twice, nothing is retained, and there is no boundary at which resolution degrades. The seam does not arise rather than being repaired, which is why this is the mechanism and those mitigations were rejected (D18).
+
+**The scrolled axis is `v`, the image's outer axis, and that is a contract requirement rather than a convention.** A scrolling accumulator is a ring buffer, and a ring has a wrap point; if that wrap lands inside a CUDA block, the block's pixels are no longer a compact region of space and every kernel here assumes they are. Scrolling along the outer axis makes each side of the wrap a **contiguous slab of whole rows**, so the operator issues two launches with different base pointers and the wrap falls *between* them, where no block can straddle it.
+
+That works unmodified on both reference backends: MatX's `sar_bp` takes arbitrary rectangular regions, and the portable CUDA C kernels index flat row-major from a base pointer, so a slab of rows is simply a pointer offset and a smaller height. Scrolling along `u` instead would make each side a set of strided columns, which the portable kernels cannot express at all, and would leave the wrap inside the launch. Fixing the axis is what makes the split unconditional — no alignment condition, no block size in the contract, no configuration that silently degrades.
+
+The cost is a labelling requirement: **`SampleGeometry.axis_v` is the along-track direction** in this mode. A caller building its lattice from scratch pays nothing, and the layout is the one to want anyway, since keeping range on the fast axis gives smoothly varying range-bin lookups across a warp. A caller whose lattice comes from a fixed external layout with along-track fastest — a DEM raster, say — transposes before handing it over, and `SICDWriterOp` transposes once per product because SICD puts azimuth on the fast axis. Lifting the restriction later is a kernel change rather than a contract change.
+
+**What the operator does with a translation.** It advances the ring by the translation's whole number of rows, zeros the rows entering the leading edge, and leaves every other row's partial sums untouched. It accumulates the tick's pulses over the whole window in two launches. On emit it copies the buffer out in logical order into a fresh `(..., num_v, num_u)` tensor, so the image handed downstream is an ordinary contiguous image and the writers see nothing new.
+
+In points mode the lattice is a ring as well, rotated in lockstep, with the entering rows written where the retiring ones were. The two launches then take matching slabs of image and lattice at the same row offsets, which is why admitting explicit lattices costs a second ring buffer and nothing else. The kernel is untouched throughout: every part of scrolling is scaffolding around a call whose signature does not change.
+
+**The split launch needs a test that fails if someone merges it.** Nothing in the code says why there are two launches, so a later optimizer sees a redundant call and removes it — after which the wrap can land inside a block and distort the pixels there, on a geometry-dependent schedule that no seam-free test run would catch. The guard is a point target placed at the wrap position, formed against a reference image and asserted at the same tolerance as any other; it fails immediately if the launches are merged. It is a required assertion — see [TESTING.md](TESTING.md) → *BackprojectionOp*.
+
+**What it rejects, and where.** In grid mode a geometry arriving without a reset must be a **pure translation along `v` by a whole number of pixels** — axes, spacing and counts unchanged, no `u` component, no fractional row. Anything else is a re-registration wearing a translation's clothes, and it errors rather than mis-registering the strip. In points mode most of that rule falls out of the message's shape, and what remains is checked: `num_u` must match, and `k ≥ num_v` errors naming a reset, since advancing past the whole buffer retains nothing and is a re-registration however it is spelled.
+
+The `weight` port must be **unconnected**, checked at initialization: unit weights are the only ones scrolling admits, since eviction is meaningless when pixels leave by scrolling out, and a cross-range taper cannot be carried on this port at all — in a strip a pulse sits at a different point in the illumination interval of every row it touches, so the weighting is a function of *(pulse, pixel)* and no per-pulse vector expresses it. **A scrolled strip therefore cannot taper**, and carries the unweighted ~−13 dB cross-range sidelobes.
+
+**That is not D15's reason, and the difference is what makes the tapered strip an addition rather than a contradiction.** D15 defers weights because an aperture's final membership is unknown until it ends, so the pulses must be replayed. A strip pixel's interval is fixed by geometry and known as each pulse arrives, so a strip taper is exactly computable at accumulation time and needs no boundary, no retention and no replay.
+What it needs is the along-track aperture length — and under squint the pointing — evaluated per pixel inside the kernel, which is collection-geometry knowledge this operator is otherwise kept clear of, and which would also end the property that weights are applied by pre-scaling the profiles outside an unweighted, reference-compatible kernel. Those are the reasons the tapered seam-free strip is deferred on **where that information belongs** rather than on feasibility. See [WORKFLOWS.md](WORKFLOWS.md) → *Deferred*. A caller wanting a tapered strip runs the tiled model with `emit_mode = reform` and accepts its seams; the two are alternatives, not settings.
+
+**Every product has an under-integrated leading margin, and the operator neither hides nor crops it.** Rows near the leading edge have not yet seen the pulses still to come, and `BackprojectionOp` cannot know which those are — "how much aperture does this row still owe" needs the beamwidth and the collection geometry, which is exactly the knowledge the manager split keeps out of formation. Making it crop would drag that model back across the boundary.
+
+**That repair has a precondition, and it is the one way to configure this mode wrong and still get a plausible strip.** `num_v` must be deep enough that a row stays in the window for its whole illumination interval — the buffer has to lead the beam by at least the dwell. Where it does not, rows scroll off still owing pulses, and *no* later product repairs them, because the partial sum left with the row. Formation cannot check this: it would need the beamwidth and the collection geometry, which is the same knowledge that stops it cropping the margin. So buffer depth is an application responsibility of exactly the kind the scroll rate is, and getting it wrong costs azimuth resolution uniformly across the strip rather than failing.
+
+Given that depth, what falls out is better than a validity mask: where the emit cadence is shorter than the buffer, consecutive products **overlap**, a row that was under-integrated in one product is complete in the next because it stayed in the window and kept accumulating, and the rule for a consumer is *prefer the later product where they overlap*. Nothing is lost and nothing needs masking. The residual is that a writer handed such a product directly puts an under-integrated edge into a SICD and nothing objects; that is documented rather than prevented, on invariant 5's tolerance for flagged footguns.
+
+**The manager has nothing left to do here, which is a result rather than an exclusion.** Scroll mode retains nothing, evicts nothing and re-forms nothing, and a taper is refused, so every job `ApertureManagerOp` is uniquely able to do is void. Geometry goes straight from the application to this operator, which is consistent rather than special-cased: geometry is routed through the manager so that a change and the reset it requires arrive together, and a translation requires no reset.
+
+Nothing *forbids* one in the graph, and the contract should not be read as though it did — with `max_aperture_pulses = 0` and its `weight` output left unconnected, a manager here is a pulse pass-through that emits `control` on an `emit_interval_pulses` cadence, which is a reasonable way to ask for a strip section every `N` pulses. It is then doing a job a reader or an app-owned operator does equally well, which is the same position it occupies in every other configuration that shares no pulses between images.
+
+**Both geometry modes scroll, and the explicit lattice matters more here than anywhere else.** A `SampleGeometry` describes a plane, so a grid-mode strip is a planar strip — and a strip is the product most likely to run for hundreds of kilometres across varied terrain, which is exactly where a DEM-conformal lattice earns its place. Excluding it would foreclose the mode's best case. What differs between them is only how a translation is expressed:
+
+- **Grid mode.** The descriptor is small and atomic, so a translation is a new `SampleGeometry` whose origin has moved by a whole number of `spacing` along `axis_v`, everything else unchanged. The operator diffs it and derives the row count.
+- **Points mode.** After the opening full `(..., num_v, num_u, 3)` lattice, `sample_points` carries **only the entering rows** — `(..., k, num_u, 3)` — and `k` *is* the translation. Nothing more is needed, and re-sending the whole lattice to move a few rows is not the mechanism. The rows that stay are the rows the operator already holds, so their positions are unchanged **by construction rather than by assertion**, which is the property that matters for the accumulator.
+
+**Neither mode can check the advance against the platform's motion, and the grid-mode diff should not be mistaken for doing so.** Diffing a descriptor proves a change is *expressible* as a scroll, which protects the accumulator's invariant — a retained pixel's partial sum is still that pixel's. It says nothing about whether the application advanced by the right number of rows. An app that scrolls faster or slower than the platform flies smears the whole strip, in either mode, and no check inside formation can see it: the operator knows neither the beamwidth nor the ground. That exposure is the same class as the `positions` port's conventions and belongs to the application for the same reason — which is also why the incremental form gives up nothing real.
+
+**The end of a strip has a trailing margin that never completes.** The last rows keep owing pulses that will not arrive, so a collection ends with a choice between emitting them under-integrated and truncating the strip. This was R7's tail-loss question in another costume and takes D22's answer: the boundary announcement reaches whoever drives `control`, the resulting emit produces the strip **including** its under-integrated trailing rows, and truncating them is the consumer's decision. Formation does not filter them, for the same reason it does not filter the leading margin while the strip is filling — it cannot know how many pulses a row was owed without interpreting the collection geometry, which is deliberately not its job. It does not change the shape of this mode.
+
+**Algorithm:**
+
+0. **Pre-phase.** Where the control message's reset is a pre-reset (*reset-without-emit*, *reset-then-emit*), clear the accumulator, then apply any geometry that reset admits, then `initial_image`. Because all of these arrive in one `compute()`, the order they were *sent* in never matters. Under `geometry_change = scroll` a geometry arriving *without* a reset is applied here too, as a window advance rather than a clear — see *Scrolling accumulation*.
+1. Obtain the sample lattice: with `sample_points` connected it *is* that tensor; otherwise it is generated once from `sample_geometry` via a `radar_common` host helper. Both reach one kernel path with the same 2D shape.
+2. Derive the per-pulse reference range from `reference_position` in double precision — once per pulse, not per pixel.
+3. Where `weight` is not identically `+1`, scale the range profiles into scratch by their per-pulse weight; otherwise pass them through untouched.
+4. For each sample point and each pulse in the batch, compute the differential range between the phase-center position and the point under `backend`.
+5. Convert to a fractional range-bin index using the active range axis, and interpolate the complex range profile there per `interpolation`.
+6. Multiply by the matched phase term for that range, formed from `reference_frequency`, and accumulate into the image.
+7. **Post-phase.** Where the message emits, copy out of the accumulator and emit — so the image includes this tick's pulses. Then, where the reset is a post-reset (*emit-and-reset*), clear the accumulator and apply any geometry that reset admits.
+
+**Notes:**
+
+- *It warns at `stop()` if it is still holding an unemitted image.* Accumulated pulses that no control message ever claimed are a lost tail, and this is the only place the loss is detectable: `stop()` cannot emit (see *Cross-tick accumulation*), and build-time validation cannot help because whether a source is finite is invisible in the graph. It catches every cause at once — a boundary nobody translated, a control producer positioned where it could not hear the announcement, an application that chose not to handle one. The warning names the pulse count, since an off-by-a-batch tail and a whole aperture lost look identical otherwise.
+- *It sets its own `metadata_policy` to `kUpdate`, and is the only operator here that needs to.* It takes five or six ports from `ApertureManagerOp`, and one dictionary per producer means the SDK's default `kRaise` throws on the second `receive()` — on the key being present, not on any disagreement. `Operator::metadata_policy` takes precedence over the fragment default, so this is settled inside the operator and never asks anything of the application.
+- *Batch semantics.* Leading axes are preserved as independent images, each with its own accumulator — the rank-agnostic reading of invariant 4, and what a caller wants for independent sub-collections. To integrate **across** a leading axis instead, flatten it into the pulse axis upstream; the operator will not guess which is meant. Accumulator memory scales with the batch, so a wide batch of large images is a real footprint.
+- *A batch is a batch of **collections**, not of **scenes**, because the geometry carries no leading axis.* Leading axes on the data give independent accumulators that all form against the one lattice, which is what a caller processing several sub-collections wants. A tomographic volume wants the opposite — one pulse stream, `N` height planes — and cannot be spelled this way, since the `N` planes have `N` lattices and one port to put them on. It is `N` instances today.
+- *The change that would collapse those instances is additive, and is deferred rather than rejected (D19).* Letting `sample_points` carry a leading axis the *data* does not, so the output batch is the outer product of the two, leaves one instance issuing the `N` kernel calls it already issues host-side for a batch — identical compute and accumulator memory to `N` instances, in one node with one output tensor. Grid mode has no equivalent spelling, `SampleGeometry` being one atomic descriptor.
+- *Precision is not a binary, and that is the substantive departure from invariant 3.* The right mode is platform-dependent, not a speed/accuracy preference. The third-order Taylor term is an airborne requirement rather than an optimization. Plain FP32 is decorrelated from truth at spaceborne ranges — the range magnitude is large enough that single precision cannot resolve a wavelength-scale phase difference — while often being adequate at a few kilometres.
+- *The parameter names a backend strategy, not just a precision, which is why it is no longer called `precision_mode`.* Precision is one consequence among throughput, memory, and *admissibility* — some variants are valid only for planar scenes — so the old name claimed too little of what it selects. Renamed 2026-08-06, resolving the naming half of I6 and leaving the value set open. The residual risk in `backend` is that it reads, in a GPU library, as though it might select a compute device; it does not — invariant 8 makes a CUDA GPU a hard dependency and there is no device choice to make.
+- *The interface is one flattened enum of legal combinations.* **[CONTRACT CHANGE 2026-08-22]** An invalid pairing is unrepresentable rather than validated. Orthogonal-looking flags that are not actually free — an accuracy-limiting phase lookup table, for instance — are folded into a value rather than exposed as a toggle. Prefixes (`matx_*`, `nvradar_*`) keep the two implementation families from sharing a spelling. See `backend` for the closed value set (I6).
+- *The operator warns when the selected strategy cannot resolve the geometry.* Single precision resolves range to about `R / 2^24` — roughly 4.2 cm at 700 km, which exceeds an X-band wavelength, against 0.6 mm at 10 km. That is a closed-form check needing no calibration, and it converts a silently plausible image into a visible complaint, consistent with invariant 5's tolerance for reasonable footguns provided they are flagged. It **warns rather than rejects**, because a quick-look or magnitude-only caller may legitimately not care.
+- *Why the reference crosses as a position rather than a distance.* Two numerical strategies exist for the differential range and they need different inputs. One **spends precision**: form `‖x − a‖` in double and subtract the reference range. The other **reformulates** so the cancelling subtraction never happens, computing `(‖x − m‖² + 2·(x − m)·(m − a)) / (‖x − a‖ + R₀)` — algebraically the same quantity, but `‖x − a‖ − R₀` destroys most of its significant digits when both are kilometres and the answer is metres.
+- *A scalar reference would foreclose that second strategy.* Both terms of the reformulated numerator use the reference as a **point**, and neither is reconstructible from a distance. Accepting only a distance would rule out that whole kernel family — the one that makes single precision viable at long range — so the port carries the position and the operator derives the range, at a cost of one double-precision `sqrt` per pulse.
+- *The phase reference is the frequency of whichever sample the range transform treated as IFFT DC.* **[CONTRACT CHANGE 2026-08-24]** The phase term at the interpolated range is proportional to `f_ref · ΔR`, where `f_ref` is the carrier the range transform factored out. `SARRangeCompressionOp` `ifftshift`s native FX so stored sample `N/2` is IFFT bin 0, so `f_ref` is `SC0 + (N/2)·SCSS` on a CPHD collection, supplied on this operator's `reference_frequency` **parameter**.
+- *That is a rule rather than a band position:* rotating the frequency axis before transforming is what moves the reference off sample 0. Pairing the rotate with `SC0`, or skipping the rotate and passing the `N/2` sample, are the two inconsistent combinations — both yield a complex image and differ from the consistent pair only in phase, so nothing complains, which is why the pairing is pinned here and asserted in [TESTING.md](TESTING.md).
+- *Until 2026-08-24 this stage did not rotate, and `f_ref` was sample 0 (`SC0`).* **[CONTRACT CHANGE 2026-08-11, revised 2026-08-24]** The 2026-08-11 correction replaced an unimplementable "waveform centre frequency" with the upstream rule, and rejected pairing a centre reference with an **unrotated** transform. That rejection stands. What changed is the transform: range compression now rotates, so the consistent value is the `N/2` sample, not `SC0`.
+- *The 2026-08-11 note's real point is kept:* the wrong pairing still produces a plausible complex image. Pairing the *current* transform with `SC0` (or the old transform with the `N/2` sample) advances a full cycle per `c/B` of differential range, about 0.5 m at 600 MHz. A pixel's range moves by many metres across an aperture, so the pulses decorrelate rather than blur.
+- *Linear interpolation is the wave-one scope, and the reason is empirical rather than expedient.* The reference implementation this operator wraps spans roughly 48 tuned kernel variants covering a full precision-versus-throughput campaign, and every one of them interpolates with two taps — no sinc, cubic or spline anywhere. The optimization effort went into phase accuracy instead, which is where the error actually lives.
+- *Two taps suffice because the interpolation is phase-controlled.* The baseband envelope is interpolated while the carrier phase is applied separately from the exact computed range, so a two-tap envelope error never becomes a phase error. `SARRangeCompressionOp.nfft` then buys impulse-response quality by oversampling the range profile, which is the conventional place to pay for it — adding taps to the interpolator is the expensive way to fix a problem oversampling fixes upstream. `nearest` and `sinc` stay named-and-rejected on the L12 precedent, so implementing either later is a behavior change on a value that previously errored, not a contract break.
+- *Why retention lives in a separate operator.* An accumulator and an aperture are different things, and fusing them made one operator own a pulse buffer, a membership policy, an emit policy, and a kernel. Split out, the manager decides *which* pulses are in the aperture and when an image comes out, expressing both as a per-pulse weight plus a control message; this operator only sums what it is handed. The manager is then testable with no GPU, no image and no kernel — which is where the off-by-one bugs actually live — and this operator's kernel seam reduces to `backproject(accumulator, profiles, geometry)`, which is the signature both reference implementations already have.
+- *Reset has exactly one owner, and it is not this operator.* An earlier draft had formation reset itself whenever a `[live]` geometry override landed. That silently corrupts a sliding window: formation zeroes the accumulator while the manager, which is the only thing that knows aperture membership, keeps emitting `−1` evictions for pulses whose `+1` contributions no longer exist, and every subsequent image is wrong by the sum of those phantom subtractions. Nothing errors and nothing warns — the image just looks slightly defocused. Staging geometry and resetting only when told is what closes that, and it is why the manager, not the app, is the thing that pushes configuration.
+- *A geometry change without a reset is an error, not something to defer.* Every geometry change invalidates the partial sums already accumulated, and this operator has no authority to decide when to discard them. The producer's contract is to emit the change and the reset **together**; receiving one without the other means the producer is not honouring it, so the operator errors and names the missing control message. An earlier draft had it hold the change until a reset eventually arrived, which is worse twice over: it puts a pending-configuration state machine inside the operator that owns the kernel, and a change that never gets a reset then goes unnoticed while the caller receives plausible images of the wrong scene.
+- *The one exception proves that rule rather than weakening it.* `geometry_change = scroll` is the sole case where the premise fails: a pure translation leaves every pixel still in view holding sums that remain correct for it, so there is nothing to invalidate and no reset to require. The rule is about invalidation rather than about geometry, and the exception is exactly the change that does not invalidate.
+- *This operator therefore holds no pending configuration at all.* Everything it is told, it applies within the tick it is told. Arrival order stops mattering not because changes are buffered but because the whole control-plane update reaches it from one producer in one `compute()`, where the precedence above resolves it. The implementation assumption worth verifying is exactly that: that a pair of messages emitted from one operator on one tick is delivered to a downstream operator in one `compute()`.
+- *The weight is applied outside the kernel, deliberately.* Scaling the range profiles by a per-pulse weight before the kernel is mathematically identical to weighting inside it, and it keeps the kernel unweighted and therefore reference-compatible. That scaling pass is also where the manager's separate pulse groups are gathered into one contiguous scratch buffer, so the gather costs nothing beyond a pass that already happens. When every weight is `+1` the pass is skipped entirely and the profiles are used in place.
+- *Sliding windows are exact in exact arithmetic, and only nearly exact in floating point.* Backprojection is linear in pulses, so evicting a pulse — accumulating it at weight `−1` — removes precisely the contribution adding it deposited. What does **not** follow, and what an earlier draft of this contract asserted, is that there is no drift to bound: repeated add-then-subtract on a finite-precision accumulator random-walks as roughly `sqrt(N)·eps`, reaching near −80 dB after a million ticks. That sits inside the SET band these precision modes exist to defend, so a long-running sliding window wants a periodic re-form for **numerical** reasons even though it needs none for algebraic ones.
+- *Aperture (azimuth) weighting reaches this operator only through `weight`, and that is deliberate.* There is no `azimuth_window` parameter here: the taper is a function of a pulse's slot within the aperture, which this operator cannot know because it holds an accumulator rather than an aperture. Whoever owns membership computes the shape and emits the resulting per-pulse values — `ApertureManagerOp.aperture_window` where a manager owns it, the application directly where it does not — and this operator applies whatever arrives, which keeps the kernel unweighted and reference-compatible.
+- *Applying a taper to an incrementally-slid window is not approximated — it is refused, and the alternative is exact.* Because the weight is applied at accumulation time, the accumulator holds a weighted sum rather than the pulses, so changing a pulse's weight afterwards means re-accumulating it. A fixed taper over a moving window changes every retained pulse's weight every tick, which costs `N` pulse-formations per tick and leaves incremental accumulation buying nothing. So a tapered aperture re-forms (`emit_mode = reform`, replaying the retained set at the boundary) and an incrementally-slid aperture is unweighted, with the ~−13 dB sidelobes that implies. This closed R6: the question was which approximation to accept, and the answer is none.
+- *Geometry is not inferred from an input tensor*, the departure from invariant 4's second clause: the output shape comes from the caller's sample geometry. Legal here because that geometry is declared — a descriptor, or an explicit lattice on a port — and because a change to either is staged and applied at a reset boundary rather than taking effect silently mid-aperture. It is never a hidden assumption.
+- *The 2D lattice is the native interface, and `SampleGeometry` generates one.* Every formation runs against a `(num_v, num_u, 3)` lattice; the descriptor is a convenience that produces a uniform one. What remains first-class is that the lattice's positions are **arbitrary** — DEM-derived map points are formed onto directly rather than resampled into place, which is what makes `GeocodeOp` optional. An earlier draft had this inverted, calling a flat point list native and the grid materialized. The shape that matters is 2D, because the kernels' premise is that a compact tile of pixels corresponds to a compact region of space.
+- *Explicit lattices therefore carry a locality precondition, and it is checked rather than merely asserted.* A 2D shape does not by itself imply spatial locality: a caller may scatter positions arbitrarily within the array. The Taylor variants expand the range about a per-block reference, so their error grows with the spatial extent of a block's pixels, bounded by roughly `D³/(2·R₀²)` at second order for a block of diameter `D` at reference range `R₀`. When such a variant is selected the operator computes the worst-case block diameter and warns. A uniform lattice needs no pass at all, having block extent `16 × spacing` by construction; an explicit lattice needs one reduction over the geometry, and only when it changes, which is already a reset boundary.
+- *What the locality check does and does not do.* It **warns, never rejects**, per invariant 5's tolerance for reasonable footguns, once per geometry configuration at the reset boundary. It quotes the second-order bound and `λ/16`, so the message names the threshold instead of saying the geometry may be degraded. It never auto-selects a kernel, since silently upgrading would make one configuration produce different images on different geometry — the failure mode the interpolation deferral already rejected.
+- *The locality threshold is λ/16.* **[CONTRACT CHANGE 2026-08-22]** Taylor backends — every `nvradar_block_anchored*` value and `matx_taylor_fast` — warn when the second-order bound `D³/(2 R₀²)` exceeds `λ/16`, with `λ = c / reference_frequency` and `c = 299792458`. Uniform lattice: `D = 16 · hypot(spacing_v, spacing_u)`. Points mode: one reduction over the lattice. `R₀` is the smallest per-pulse `‖positions − reference_position‖`. The classical cut is accepted even though it rarely fires on realistic geometry; it is not an SER-against-floor threshold. The check validates the *numerical* precondition only: a locally-coherent lattice that is wrong some other way — mislabelled axes, a frame mismatch — still passes, the same boundary the positions-port assertions occupy. Closes I7.
+- *Backend seam.* Two references exist and the seam is designed for both: `matx::experimental::sar_bp`, whose interface already covers arbitrary sample lattices, initial-image accumulation, and a comparable arithmetic matrix, and a set of tuned portable CUDA C kernels. The realistic path is porting a selected few of the latter rather than depending on the former, since the accuracy campaign that produced them is the value; MatX is additionally in an experimental namespace with an API subject to change. Either way the operator wraps the kernel rather than exposing it.
+- *Batch axes are the operator's promise, not the kernel's.* The MatX entry point asserts rank 2 on both the image and the range profiles, so it cannot see a leading batch axis at all. That is a wrapping problem rather than a contract problem: invariant 4 is honoured by slicing the batch host-side and issuing one kernel call per element, which is correct, and costs a loop of launches on a modality that is throughput- rather than latency-bound. The alternative — letting the reference's rank restriction become the module's contract — would make SAR the one operator group where leading axes are not opaque.
+
+---
+
+#### ApertureManagerOp
+
+A new operator, and part of R1. It **manages the formation stage**, and its three jobs are not co-equal. **Telling formation when an image comes out is the one that happens in every graph** — `BackprojectionOp` never decides that itself, so something has to drive its `control`, and this is the operator we ship to do it. Deciding which pulses are in the aperture, and when a configuration change takes effect, sit around that as convenience: dispensable in a way the emit decision is not, which *Optional by design* below makes precise.
+
+Named for the job rather than for video SAR, since it equally serves sparse apertures, quality-based pulse dropping, and angle-bounded windows. **Accumulating across ticks** in that it retains pulses, but it holds no image, runs no kernel, and touches no GPU memory beyond passing tensor handles along.
+
+*Management here means messages, not ownership.* Holoscan operators are peers in a graph; this one cannot hold a reference to `BackprojectionOp` or construct one. Everything below is a protocol between two independent operators, and the contract is written as one.
+
+**Optional by design, and more completely so than it first looks — the operator, never the emit decision.** `BackprojectionOp` requires *a* control source, not *this* control source, and its `weight` port likewise accepts whatever drives it. **No graph is impossible without this operator** — an application can retain profiles and re-emit them at weight `−1` from an operator of its own, so the question is never possibility but what replication costs.
+
+What makes it worth reaching for is **a pulse belonging to more than one image** — which is eviction, and nothing else. A sliding window is the whole of it: the ring, the signed-weight subtraction, the retire-before-admit ordering that makes "oldest" unambiguous, and capacity overflow as an error are intricate and easy to get subtly wrong, and they are what this operator is for.
+
+Everything else it offers, an application that owns its own apertures already does. A cadence is a counter. Releasing a geometry at a boundary needs only knowing where the boundary is, which such an application does by construction. A taper across a block whose length it chose is a window it can compute itself, then drive on `weight`. Even `reform` is not an exception, because it sends each pulse exactly once (algorithm step 5a): it is buffer-until-the-boundary, weight over final membership, emit — so the operator saves an application from writing a small buffering operator, rather than offering it something otherwise unreachable.
+
+Such an application wires control from a small operator of its own — fed by the source, so it hears the boundary announcement — computes its own per-pulse weights, and leaves this one out of the graph. That is the right shape for a single image per collection, an image per file, disjoint blocks, and a scrolling strip. Nothing is given up by doing so, tapering included; what is taken on is the reachability requirement, which this operator satisfies by construction since its own inputs are the pulses.
+
+- **In:** `range_profiles` — complex64 / complex128, `(..., num_pulses, num_range_bins)`.
+- **In:** `positions` — float32 / float64, `(..., num_pulses, 3)`.
+- **In:** `reference_position` — float32 / float64, `(..., num_pulses, 3)`.
+- **In:** `sample_geometry` **[live]** (optional) — SampleGeometry. A new image lattice from the application. Not interpreted: it is held and forwarded at the next aperture boundary.
+- **In:** `sample_points` (optional) — float32 / float64, `(num_v, num_u, 3)`. An explicit lattice, treated the same way.
+- **In:** `control` (optional) — uint8, `(1,)`, non-blocking. A request from *anything upstream that knows an aperture must end, or that an image is wanted now* — typically the application changing scene, or wanting an image mid-aperture. A stream boundary needs no request: it arrives as metadata and step 7 acts on it. Same four-value vocabulary as the output port. **A request is honoured, not evaluated:** the manager's only discretion is mechanical — dropping retention, forwarding staged geometry, passing the reset downstream. The variant comes from the sender, which alone knows whether a partial aperture is worth an image: the three resetting values end the aperture on the tick they arrive, while *emit-and-continue* asks for an image from the aperture in flight and leaves it running.
+- **In:** `evict` (optional) — uint32, `(1,)`, non-blocking. How many of the oldest retained pulses to retire this tick. **Connecting this port transfers eviction authority to the application:** the manager then never retires a pulse on its own. The count applies to the buffer *before* the tick's pulses are admitted, so "oldest" always means what the sender saw on earlier ticks and the count never races the admissions. This exists because an aperture defined by angle subtended rather than pulse count has a length that varies with ground speed — the application knows that length, and the manager could only compute it by interpreting geometry it deliberately does not interpret.
+- **Out:** `range_profiles` — complex64 / complex128, `(..., num_emitted, num_range_bins)`. The tick's newly admitted pulses followed by the pulses leaving the aperture, as **one batch**. `num_emitted` varies per tick and is inferred downstream.
+- **Out:** `positions`, `reference_position` — the matching per-pulse geometry in the same order, `(..., num_emitted, 3)` each. Departing pulses carry the geometry they were admitted with, which is what makes their subtraction exact.
+- **Out:** `weight` — float32 / float64, `(..., num_emitted)`. `+1` for an admitted pulse, `−1` for a departing one, and the `aperture_window` taper value where one is configured. Wires to `BackprojectionOp.weight`.
+- **Out:** `sample_geometry`, `sample_points` — the staged geometry, forwarded on the tick the aperture ends. Wires to the same-named inputs on `BackprojectionOp`.
+- **Out:** `control` — uint8, `(1,)`. Emitted on the ticks an image should come out, or an aperture should end. Wires to `BackprojectionOp.control`.
+
+**Parameters:**
+
+- `max_aperture_pulses` — int, ≥ 0. Capacity of the retention buffer, in pulses. **`0` means no retention at all** — always, with no wiring-dependent reading — giving a growing or block aperture. A non-zero capacity is allocated once at initialization, so nothing grows on the hot path. When `evict` is unconnected this is also the aperture *length*: the manager retires the oldest pulse once the buffer is full, at weight `−1`, which is the trailing-N sliding window. When `evict` is connected it is only an upper *bound*, and reaching it without an evict command is an error. Static. Default: 0.
+- `emit_interval_pulses` — int, ≥ 0. Emit after this many pulses have been admitted since the last emit. **`0` means never emit on a count** — the aperture ends only on an upstream `control` request or at end of stream. That is the spelling for a collection whose length is genuinely not known in advance: an adaptive dwell, an operator-terminated stare, a collect that may be preempted. A single image over a collection of *known* length is better spelled `N`, which is the usual case — a planned spotlight has its dwell commanded to meet a resolution, and CPHD carries the pulse count in its header — and that spelling is what makes a taper free (see *Notes*). Static. Default: 0.
+- `emit_mode` — enum {continue, reset, reform}. Which control message accompanies an emit. *continue* sends *emit-and-continue* and keeps the downstream accumulator running; *reset* sends *emit-and-reset* and clears it after the image; *reform* replays the whole retained aperture at the boundary with final weights and sends *reset-then-emit*, forming the image from scratch. **`reform` requires `max_aperture_pulses > 0`** — with no retention there is nothing to replay, so the combination is rejected at initialization rather than emitting an empty image. Structural, so it is Static per invariant 5. Default: continue.
+- `aperture_window` — WindowSpec. Cross-range (azimuth) taper applied across the aperture, emitted on `weight`. Reuses the existing descriptor and the same spelling as `SARRangeCompressionOp.range_window`, on the other axis. A taper is a function of a pulse's slot within its aperture, so it is computable by whoever owns membership — this operator where it owns it, and **the application directly where the application owns it**: an app handing over whole apertures knows every slot and drives `BackprojectionOp.weight` itself, with no manager in the graph. Static. Default: none (rectangular, all weights `+1`).
+  - It exists here so a caller who would rather configure than write an operator does not have to, and because `reform` needs the window where the retained pulses are. Legal only where the weights are computable — see *Notes*.
+
+**Algorithm:**
+
+1. Where `evict` is connected and a count arrived, retire that many of the oldest retained pulses. This precedes admission, which is what makes "oldest" unambiguous.
+2. Admit the tick's pulses, retaining their profile and geometry handles **only where something can retire them** — that is, where `max_aperture_pulses` is non-zero. With no retention the operator is a pass-through that adds weights and control; holding pulses nothing will ever retire would grow without bound across a collection.
+3. Where `evict` is unconnected and the buffer is full, select the oldest pulses to leave, one per pulse admitted. Where `evict` *is* connected and admission would exceed capacity, fail — see the note below on why this is an error rather than a drop.
+4. Emit the admitted and departing pulses as one batch, with `+1` and `−1` weights respectively.
+5. Where the admitted count since the last emit has reached `emit_interval_pulses`, or an upstream `control` request arrived, end the aperture: emit a `control` message, and forward any staged geometry on the same tick.
+5a. Under `emit_mode = reform`, an ending aperture is emitted differently: replay the **entire** retained set as one batch, weighted by `aperture_window` over the now-final membership, with *reset-then-emit*. Steps 3 and 4 send no pulses at all between boundaries under this mode, because anything accumulated incrementally would be discarded by the replay's reset.
+6. On any control message that resets, **drop retention without emitting evictions** — the pulses are not leaving an aperture, the aperture has ceased to exist — and begin admitting afresh.
+7. Where the tick's metadata carries `holoscan.radar.stream_boundary`, end the aperture as though a `control` request had asked for it: emit the image (by step 5 or 5a as configured), reset, and — for `collection_boundary` — forward the staged geometry on the same tick. This is the one thing the operator decides for itself, and it does so because the announcement is addressed to whoever drives `control`, which is this operator when it is in the graph. An explicit request on the `control` **input** is honoured identically, so an application that would rather translate the announcement itself may.
+
+**Notes:**
+
+- *The `control` input is for an application's own cadence, not for end of stream (D22).* Nothing lets this operator observe that its upstream has stopped producing — `Operator::stop()` has no `OutputContext`, and a source that ceases to tick is indistinguishable from one that is slow — so end of stream has to be *announced* by the one operator that knows. It is, on the metadata plane, and this operator reads it directly (algorithm step 7), so a file-backed collection no longer needs a `control` edge wired just to avoid discarding its final partial aperture. What the input remains for is a decision only the application can make: emitting an image mid-aperture, or ending one for a reason the data does not show, such as a commanded scene change.
+- *Six configurations, one operator, and all but one of them is a YAML edit.* No wiring change, no different kernel, no second operator type — which was the original requirement, and is what formation-owned emit and reset policies could not deliver without a kernel matrix. Only the application-chosen sliding window needs an operator of the application's own, and it needs one because only the application knows the count it supplies on `evict`. The rows that once also wanted a `control` edge no longer do: what they wanted it for was end of stream, which D22 now announces on the metadata plane and step 7 reads directly.
+
+| Behaviour | `max_aperture_pulses` | `emit_interval_pulses` | `emit_mode` | App ports |
+| :--- | :--- | :--- | :--- | :--- |
+| One image over the collection | 0 | 0 | reset | — |
+| Disjoint block apertures | 0 | N | reset | — |
+| Growing aperture, progressive images | 0 | N | continue | — |
+| Sliding window, fixed length | N | < N | continue | — |
+| Sliding window, application-chosen length | ≥ longest | 0 | continue | `evict`, `control` |
+| **Ground/DEM product with PGA (Figure 2)** | **≥ aperture length** | N, or 0 | **`reform`** | — |
+
+`emit_mode = reform` is otherwise a modifier rather than a behaviour: it overlays any retaining row, replacing that row's emit with a tapered replay. On the three rows with `max_aperture_pulses = 0` it is rejected, so tapering — **and Figure 2 autofocus** — means giving them a capacity. The Figure 2 row is spelled out because the AF-off spotlight spelling (`max_aperture_pulses = 0`) cannot feed a corrected second pass: there is nothing left to replay after `AutofocusOp` runs. See *Autofocus on a ground / DEM product* below.
+
+- *A request says when and whether; `emit_mode` says how.* The sender chooses whether the aperture ends and whether an image is wanted, but not how that image is formed — so a request ending a `reform`-configured aperture is served by the step 5a replay and goes downstream as *reset-then-emit*, whatever value asked for it. Honouring the request verbatim would emit from an accumulator that mode deliberately leaves empty, making it a black image rather than an untapered one. The same split is why *emit-and-continue* remains meaningful under `reform`: the manager replays with taper weights and resets the accumulator, while its own retention — the aperture — survives untouched.
+- *Tapering is free only where the aperture's length is known at admission; otherwise it costs a re-form, which is what `emit_mode = reform` exists for.* A taper is a function of a pulse's slot within the aperture, so it can be stamped at admission only when final membership is known — a block aperture with `emit_interval_pulses = N` and no retention. **A single image over a collection qualifies whenever its length is known**, which is the ordinary case rather than the exception, and it is spelled by giving `N` rather than `0`.
+- What does not qualify is an aperture that ends on a condition instead of a count: an adaptive or preemptible collect, a growing aperture, and an application-evicted one all learn `N` only when the aperture ends, while a sliding window knows `N` but moves every slot each tick. Those are served by deferring the weights to the boundary and replaying, which is exactly `reform`. Setting `aperture_window` outside the stamped and re-formed configurations is rejected at initialization rather than silently tapering against the wrong membership.
+- *A stamped taper against a collection that comes up short is weighted by a truncated window, and nothing objects.* With `emit_interval_pulses = N`, weights are computed for `N` slots as pulses arrive; if the stream ends at `N' < N`, the end-of-stream flush emits an image carrying only the window's first `N'` coefficients. The symptom is degraded sidelobes and a step at the aperture edge — plausible-looking, and the same shape of exposure as a `positions` convention error. The operator cannot prevent it, since a short collection is indistinguishable from one still in progress, but it **warns at the flush** where an `aperture_window` was stamped and the count fell short, naming both counts. A caller who needs the taper to be right re-forms instead.
+- *Deferring the weights to the boundary means keeping the pulses, so a taper costs retention.* `reform` replays the retained set, and with `max_aperture_pulses = 0` there is nothing to replay. A sliding or application-evicted aperture already carries the capacity. For a collection-length or growing aperture it is the price of the taper — memory proportional to the aperture rather than to the image — and the reason those two run with no retention at all when left unweighted.
+- *A tapered sliding window and incremental accumulation are mutually pointless, and that is a property of the mathematics rather than of this design.* Applying a fixed taper shape to a moving window means every retained pulse's correct weight changes each tick, so an exact update costs `N` pulse-formations per tick against the two that add-and-subtract exists to achieve. At that price incremental accumulation has bought nothing, which is why the contract offers re-forming instead of an approximation: whichever of the two you want, the other stops paying for itself. An incrementally-slid aperture is therefore **unweighted**, and its ~−13 dB cross-range sidelobes are an honest description rather than a placeholder.
+- *A replay is one batch on one tick, not chunks across several.* Spreading it would let the three original control values express a re-form — reset, chunks, then emit — and was rejected because it leaves formation observably half-re-formed across ticks, where any stray emit produces a fraction of an image. One tick keeps the re-form atomic, at the cost of a bursty tick that does `max_aperture_pulses` pulse-formations while its neighbours do none. Acceptable for a throughput-bound modality, and the same total work either way.
+- *Collection mode is **not** one of those axes.* A fixed scene and a stepping one differ in whether the sample lattice is held or advanced, which the application owns and this operator only sequences. Every row above is available to both — a fixed scene with a sliding window is **video SAR**, and it is the case the whole signed-weight design exists to serve, so nothing here should read as though a bounded aperture were a property of a dwelling collection. The one mode outside this table is the continuous strip, which has no aperture, so no row describes it and a manager there is reduced to the cadence a counter supplies.
+- *Splitting this into one operator per use case was considered and rejected.* Retention is the only structural difference between the rows — a block aperture has no ring buffer at all — so separate types would make the invalid parameter regions below unrepresentable rather than validated, which is the argument we accepted for the arithmetic-strategy enum. It was rejected to stay with the `cfar_variant` precedent, where a structural choice is a static parameter on one operator type rather than a family of types. The two things the split was meant to buy — a simple implementation and a good template for a custom policy — are bought instead by the internal layering and the worked example described below.
+- *Invalid parameter regions are validated at build time, since they cannot be made unrepresentable.* `emit_interval_pulses ≥ max_aperture_pulses` with manager-owned eviction warns: consecutive images then share no pulses, so the caller has paid for retention and eviction to obtain disjoint blocks that `max_aperture_pulses = 0` produces for less. Connecting `evict` with `max_aperture_pulses = 0` is an error rather than a warning — it asks the manager to retire pulses from a buffer that does not exist. That is the same crossover as the incremental-versus-re-forming note below.
+- *Two policies, two built-in rules, two ports — but they combine differently, and the difference is not arbitrary.* This operator decides only which pulses leave and when images come out. Each has a built-in rule for applications that want one (`max_aperture_pulses`, `emit_interval_pulses`) and an upstream port for applications that own the decision (`evict`, `control`). `control` *coexists* with its built-in, because a cadence and an exceptional flush do not compete — a file boundary interrupts the cadence rather than contesting it. `evict` *replaces* its built-in, because eviction is a continuous authority over retained state rather than a discrete event, and two owners of one buffer would put the application back to predicting what the manager decided.
+- *Why a count of departing pulses rather than a live aperture length.* Making `max_aperture_pulses` a `[live]` parameter was the smaller change and was rejected: it leaves the manager owning the rule, so the application must work out which length retires the pulses it meant to retire — shadowing the manager's buffer to do it, and disagreeing with it by one at exactly the boundary where it matters. Sending the count instead makes the application's model exact by construction: retained is everything it admitted minus everything it asked to retire, with nothing to predict.
+- *Reaching capacity under application-owned eviction is an error, not a silent drop.* Dropping the oldest pulse would keep the graph running and leave the aperture quietly different from what the application believes it holds — the same class of failure as the phantom-subtraction bug above, arriving as a mild defocus rather than a message. Failing on the tick the application's logic went wrong is worth more than continuing.
+- *Non-FIFO eviction is what still needs a replacement.* Retiring a pulse from the *middle* of the aperture — a corrupted one, say — needs an index list rather than a count, and is deferred until something asks for it. Rules that change only *when* a pulse leaves or an image comes out are expressible through these two ports.
+- *Dropping retention is a different code path from evicting, and conflating them is the bug to watch for.* Eviction subtracts a contribution that is still in the accumulator. A reset means the accumulator no longer holds those contributions at all, so emitting `−1` for them would subtract phantoms. The two look similar and behave oppositely, which is why [TESTING.md](TESTING.md) asserts on the emitted weights across a reset rather than only on the image.
+- *This is why `max_aperture_pulses > 0` with `emit_mode = reset` is now coherent.* Under the earlier draft that combination was legal and always wrong, because formation cleared while the manager kept evicting. With retention dropped at each reset, it simply means overlapping-free block apertures.
+- *Configuration flows through the manager, and that is the whole reason it also owns reset.* Geometry is held, not interpreted, and released at an aperture boundary. Routing it here rather than letting the application push it straight at formation is what keeps the "when does this take effect" decision in one operator instead of two — and it means a `SampleGeometry` update and the reset it requires are emitted together, by one producer, on one tick.
+- *One message per tick covering both additions and evictions*, so their relative ordering is a non-question rather than a rule someone must remember.
+- *Why one batch rather than separate add and evict groups.* Separate groups would let the manager re-emit retained tensor handles with no copy at all — genuinely zero-copy whenever eviction granularity matches admission granularity, since the departing group is then an unmodified original tensor — at the cost of doubling the pulse-data ports on both operators. Concatenating instead costs one extra pass over `2 × pulses_per_tick` profiles: order tens of megabytes against a formation pass costing pixels × pulses, so a fraction of a percent of the tick. The simpler port contract is worth that fraction for a modality that is throughput- rather than latency-bound.
+- *That trade is recorded because an earlier draft justified it wrongly*, claiming the concatenation was absorbed by the weight-scaling pass `BackprojectionOp` already performs. It is an additional pass, not an absorbed one; the conclusion survives on the measured fraction, not on that argument.
+- *Testable with no GPU, no image, and no formation operator.* This is the main argument for the split: aperture bookkeeping is where the off-by-one bugs live, and here they can be caught by asserting on emitted weights and pulse identities alone.
+- *The manager is a role, not a mandatory stage.* Any operator with a `control` output can fill it, and for some applications an operator of their own is the better answer. What we ship is a reusable default implementation of the role — one that, since D22, also translates the boundary announcement, which is the part an application-owned replacement is most likely to forget.
+- *Named for the aperture's lifecycle, which is the one concept its four jobs derive from.* Membership is the aperture's extent, emission is when it ends, reset authority follows from ending it, and geometry staging rides that boundary — so a transformation-style name in the house pattern (`ApertureAssemblyOp`, after `VirtualArrayAssemblyOp` and `FeatureAssemblyOp`) would have described only the first. The cost of "Manager" is that it names a role rather than a transformation, so the ports cannot be guessed from it; that was judged the lesser loss, and it applied equally to the `ApertureControllerOp` this replaces. The name is deliberately **algorithm-neutral**: a future frequency-domain formation operator sits downstream of this same stage.
+- *Invariant 7 did not decide that, and should not be read as having done so.* It bites where the literature has a term and we would coin our own — and no literature term names a stage owning aperture membership and emission timing. I3 is the instructive comparison: there the literature's term (*range-matched filtering*) existed but covered a wider span than the operator, so invariant 7 neither supplied a name nor endorsed the one we had. `CPIAssemblyOp` was the one industry-vocabulary candidate, since *coherent processing interval* names exactly this pulse set, and it was rejected for reading as pulse-Doppler where SAR practitioners say "aperture". Anything built on "Scheduler" was rejected outright for colliding with Holoscan's own scheduler concept.
+- *`BackprojectionOp` keeps its name, which is the weaker half of the decision.* It names an algorithm accurately while no longer describing what the operator does, which is accumulate what it is handed. `BackprojectionAccumulatorOp` was the alternative and was rejected for burying the one term every SAR practitioner already knows behind a mechanism word.
+- *The extension point is the port contract, not a base class.* An application needing a different retention *structure* writes its own operator against these ports. Rules stated in the terms users actually use — angle subtended, quality-gated, externally triggered — do not need one: they are a count on `evict` and a message on `control`. There are no protected virtuals, no pybind trampolines, and no compatibility owed on internal layout.
+- *Two layers, so a replacement writes only the policy.* The mechanical part — batching admitted and departing pulses with their weights, forwarding geometry and control, flushing at end of stream — is a plain `radar_common` class with no Holoscan dependency, held by the operator. What is left in the operator is the membership and emission decision, which is the part a custom manager actually wants to change. This is the same layering as kernel / accumulator / operator on the formation side, and it is what keeps a bespoke manager a short file rather than a fork.
+- *The shipped operator is also the worked example.* Rather than a second operator type demonstrating the pattern, the documentation walks through this one and shows what a replacement changes — which keeps one implementation to maintain and one to read.
+- *Only a pulse count is offered as a **built-in**, and that is a scope choice worth naming.* The surveyed policies included integration angle subtended, along-track aperture length, and target cross-range resolution — the terms users actually state requirements in. All three are computable from the `positions` this operator already holds, so their absence is a first-wave convenience decision rather than a capability limit: an application states them today through `evict` and `control`, and the natural place to absorb them later is here.
+- *Memory, and why the bound is required rather than inferred.* Retention pins `max_aperture_pulses` range profiles for the life of the aperture — 4096 pulses at 8192 bins in complex64 is about 256 MiB — which for a long sliding window is the dominant allocation in the chain. Naming it is what lets the ring be allocated once at initialization instead of grown mid-collection, and under application-owned eviction it is sized for the *longest* aperture the application will ask for: the slowest ground speed it will fly, which is the memory that must be budgeted anyway.
+- *Incremental update does not always beat re-forming, and the crossover is worth knowing.* Because the aperture's pulses are retained anyway, forming from scratch at each emit is always available: it costs `max_aperture_pulses` pulse-formations per emit, against roughly `2 × emit_interval_pulses` for the incremental add-and-subtract. Incremental therefore wins only for heavily overlapped apertures — `2 × emit_interval_pulses < max_aperture_pulses` — which is the video-SAR regime. At modest overlap it is slower *and* carries the floating-point drift described under `BackprojectionOp`.
+- **Autofocus on a ground / DEM product (WORKFLOWS Figure 2) is a supported configuration of this operator, with hard requirements.** PGA needs the whole aperture before it can estimate, and the product needs those same pulses again after correction. The shipped spelling is:
+  1. **`max_aperture_pulses > 0`** sized for the aperture (or an upper bound when length is learned only at the end).
+  2. **`emit_mode = reform`**, so steps 3–4 send no pulses between boundaries and step 5a replays the **entire** retained set once, with *reset-then-emit*.
+  3. Graph wiring on that replay tick: `range_profiles` / `positions` / `reference_position` / `weight` / `control` fan out to the **auxiliary** `BackprojectionOp` and (via `PhaseCorrectionOp` for profiles) to the **product** `BackprojectionOp`; `AutofocusOp` sits on the auxiliary image and drives `PhaseCorrectionOp.phase_correction`.
+  4. **Same-tick dependency order.** The reform replay is one batch on one tick. Holoscan must execute `auxiliary BackprojectionOp → AutofocusOp → PhaseCorrectionOp → product BackprojectionOp` in that order within the tick so `PhaseCorrectionOp` receives both the replayed profiles and the estimate before the product accumulates. This is the same class of assumption as co-delivery of a geometry/reset pair from one producer (see *Cross-tick accumulation* → *Who owns reset*): one producer, one tick, downstream DAG order. It is **not** a multi-tick handshake and not a control-path feedback loop into this manager.
+  5. **Dual geometry.** This operator has one geometry forward path. Wire `sample_geometry` / `sample_points` **only to the product** `BackprojectionOp`, so product-lattice changes still co-arrive with the reset. The auxiliary conjugate lattice is configured on the auxiliary instance alone (`sample_geometry` parameter or its own `sample_points` port) and never through this operator — two lattices cannot share one staging slot.
+  6. **What is refused.** `emit_mode = continue` (incremental sliding) and `BackprojectionOp.geometry_change = scroll` are not Figure 2 configurations: there is no whole-aperture replay to estimate from and correct. An application that owns aperture buffering without this operator must still present the full aperture once, then again corrected — the same protocol, different host.
+  7. **Memory.** Figure 2 pays the reform retention cost (profiles × aperture length) even when no taper is configured; that is the price of having pulses left to correct after AF. The AF-off spotlight row (`max_aperture_pulses = 0`) remains the default when autofocus is omitted.
+
+---
+
+#### AutofocusOp
+
+Estimates a residual phase correction along the azimuth-conjugate axis, and applies it in-image only when that image is the product. A separate, omittable stage — **absent from the default spine**: the usual product is ground / DEM backprojection without autofocus. Airborne residual phase is the usual reason to opt in (WORKFLOWS Figure 2); spaceborne collections with good ephemeris generally stay on Figure 1.
+
+- **In:** `image` — complex64 / complex128, `(..., num_v, num_u)`. The formed SLC image.
+- **Out:** `image` — complex64 / complex128, same shape. The corrected image.
+- **Out:** `phase_correction` (optional) — float32 / float64, `(..., num_pulses)`. The estimated residual phase, **indexed by pulse**, which is the domain the error physically lives in. Emitted separately so it is composable, testable in isolation, recordable by `SICDWriterOp` in the product's own metadata fields — on the input port of that name, not the message metadata plane — and, the reason the indexing matters, applicable to a *different* formation than the one it was estimated from. See *Notes*.
+- **Out:** `sharpness` (optional) — float32 / float64, `(..., num_iterations + 1)`. The focus metric before each iteration and after the last, so a caller can see whether the estimate converged rather than inferring it from the image.
+
+**Parameters:**
+
+- `algorithm` — enum {pga}. Phase gradient autofocus. Static (selects the kernel). Wave one's only estimator — a constrained opt-in for the algorithm slot, not the module's default product path. See [WORKFLOWS.md](WORKFLOWS.md) → *Autofocus algorithms*. Default: pga (sole value; the *stage* defaults to absent).
+- `azimuth_axis` — enum {u, v}. Which image axis is the azimuth (slow-time-conjugate) axis. **Static** and **required with no default**: PGA is meaningless on the wrong axis, and unlike a frame mismatch this one is not even dimensionally checkable, so it is never inferred. Naming an axis here is also **the assertion that the image is on a conjugate geometry at all** — the D20 precondition — which is why no separate parameter declares it. Default: none (required).
+- `num_iterations` **[live]** — int. Refinement iterations. Default: 4.
+- `window_fraction` **[live]** — float in `(0, 1]`. Fraction of the azimuth extent retained in the first window; shrinks geometrically across iterations. Default: 0.5.
+- `min_scatterers` **[live]** — int. Minimum strong scatterers required. Below it the estimate is not trustworthy: the operator passes the image through unchanged, emits a zero `phase_correction`, and warns. Default: 16.
+- `max_correction` **[live]** — float (radians). Ceiling on the peak-to-peak estimated correction; exceeding it indicates a failed estimate rather than a badly defocused image, so the operator passes through and warns. Default: none (uncapped).
+
+**Algorithm (PGA):**
+
+1. Select the brightest scatterer per range bin, requiring at least `min_scatterers` above the local background.
+2. Circularly shift each selected scatterer to the azimuth centre, removing its linear phase.
+3. Apply a window of the current `window_fraction` about the centre.
+4. Transform along `azimuth_axis` to the conjugate domain and estimate the phase gradient across azimuth samples (the linear-unbiased-estimator form).
+5. Integrate the gradient to a phase, apply its conjugate, and shrink the window for the next iteration.
+6. Accumulate the per-iteration corrections into `phase_correction`.
+
+**Notes:**
+
+- **The grid-conjugacy question is closed as D20: estimate on a conjugate grid, correct the pulses, form the product wherever you like.** PGA assumes the image's azimuth axis is the Fourier conjugate of slow-time, which holds for a polar or range-Doppler grid and does **not** hold for an image backprojected onto an arbitrary ground grid or DEM. The resolution separates the two things that assumption was constraining at once. What PGA *estimates* is bound to a conjugate geometry, and this operator estimates from nothing else. What it *produces* is a per-pulse phase, which is bound to nothing — so it applies to a formation on any geometry, through `PhaseCorrectionOp` ahead of `BackprojectionOp`.
+- *The precondition is declared, not checked, and that is a limit worth stating plainly.* This operator receives an `image` and nothing else; whether a lattice is conjugate to slow-time is a fact about the geometry and the aperture, not about the pixels, so there is no tensor here to test it against. Requiring `azimuth_axis` is the assertion, and a caller who declares it wrongly gets the silent-plausible failure the rest of this contract works to close — a correction that is not obviously wrong. That is the residual hazard D20 accepts, and it is why [TESTING.md](TESTING.md) carries the assertion on the estimate rather than on a rejection.
+- *The error is per-pulse; only the estimator is per-geometry, and conflating the two is what made this look unresolvable.* A residual phase error comes from trajectory error, clock error or atmospheric path delay: one number per pulse, common to the scene under PGA's isoplanatic assumption. Azimuth is merely where the estimator can see it — a slow-time error appears along the conjugate axis as a blur PGA can invert. Publishing the estimate in azimuth bins therefore encoded the estimator's coordinate system in the port, and it was that encoding, not the physics, that made a correction non-transferable between geometries.
+- *There is no unknown azimuth-to-pulse mapping, which an earlier draft gave as the reason not to index by pulse.* On any geometry where PGA is legal the two axes are related by the conjugacy that makes it legal: one azimuth bin per pulse in the simple case, a known transform-length resampling where the grid was padded or decimated. The mapping is unknown only on geometries where there is no estimate to map, because the estimator was refused.
+- **The recommended pattern when autofocus is opted in on a ground / DEM product is an auxiliary estimation image over a retained, replayed aperture.** It costs a few percent of formation plus aperture-sized retention. Configure `ApertureManagerOp` with `max_aperture_pulses > 0` and `emit_mode = reform` (or an app-owned source that presents the full aperture once for estimation and again corrected). On the reform tick: form a small conjugate-grid image from the replay for estimation only; take `phase_correction`; apply it through `PhaseCorrectionOp` to the same replay; form the product once on the DEM or ground lattice (WORKFLOWS Figure 2).
+- *Auxiliary sizing and the AF-off spotlight spelling.* PGA needs the full azimuth extent (that carries the error) but only range bins with strong scatterers — so the auxiliary can be a few hundred range bins against a product's thousands. `max_aperture_pulses = 0` cannot do this: nothing left to replay after the estimate. Re-forming the *product* alone (no auxiliary lattice) doubles product formation cost. Same-tick ordering and dual-geometry wiring: see `ApertureManagerOp` → *Autofocus on a ground / DEM product*.
+- *What this asks of the application is a second geometry, and that is the honest cost.* Constructing a lattice whose azimuth axis is conjugate to the aperture's sampling is collection knowledge — angular extent, centre, slant plane. It is derivable from the `positions` the application already supplies under D13, but it is more than handing over a DEM, and an application unwilling to build one should omit autofocus rather than reach for it. That lattice is set on the **auxiliary** `BackprojectionOp` only; product geometry still stages through the manager when one is used.
+- **Autofocus costs absolute geolocation, on every route, and that bites hardest here.** A PGA estimate is ambiguous up to a linear and a constant phase term — an image shift — and the algorithm removes those terms rather than recovering them, which is why [TESTING.md](TESTING.md) asserts recovery only up to them. So autofocusing a product formed directly onto a DEM trades away part of the geolocation accuracy that motivated forming onto the DEM. Not caused by the auxiliary pattern and not fixed by avoiding it; it is a property of the algorithm, and it is the strongest argument for the spaceborne no-autofocus default being a first-class product rather than a hedge.
+- *The in-image path is a footnote for radar-geometry products (WORKFLOWS Figure 3).* PGA applies its correction in the image between iterations regardless, so emitting the corrected `image` is free, and where the product **is** the conjugate grid that image is the finished answer — no `PhaseCorrectionOp`, no second formation. That is not this module's usual DEM path; only a conjugate-grid product uses it.
+- *An explicit lattice is not rejected on rank, and never was the constraint.* It is `(num_v, num_u, 3)` against an image of `(..., num_v, num_u)`, so `azimuth_axis` has axes to name. What governs is whether the named axis is conjugate to slow-time, which is a property of the geometry rather than of the mode — so the guard applies identically in both geometry modes, and a points-mode lattice that *is* conjugate is a legal thing to estimate from.
+
+### Product Operators
+
+#### MultilookOp
+
+Incoherent averaging of adjacent looks. Trades resolution for radiometric quality: a single-look image is dominated by speckle, which is coherent interference rather than noise and does not average down within one look.
+
+- **In:** `image` — complex64 / complex128, `(..., num_v, num_u)`.
+- **Out:** `multilook` — float32 / float64, `(..., num_v_out, num_u_out)`. Real-valued intensity; phase is gone by construction, which is why this is a product stage and not an image-formation one. `num_v_out = floor(num_v / looks_v)`, likewise `u`.
+
+**Parameters:**
+
+- `looks` **[live]** — int, `(2,)`, each ≥ 1. Averaging factor along `(v, u)`. Speckle standard deviation falls roughly as `1/sqrt(looks_v · looks_u)`. Default: none (required).
+- `remainder` — enum {truncate, error}. What to do when a dimension is not divisible by its look count: `truncate` drops the ragged final block, `error` rejects. Static. Default: truncate.
+- `output_scale` **[live]** — enum {linear, amplitude, db}. Mean intensity, its square root, or decibels. Default: linear.
+- `db_floor` **[live]** — float. Clamp applied before the log when `output_scale = db`, so that zero-valued samples do not produce `-inf`. Default: −100.
+
+**Algorithm:** form `|image|²`, average over non-overlapping `looks_v × looks_u` blocks, handle the ragged edge per `remainder`, and convert per `output_scale`.
+
+**Notes:**
+
+- *Mean-preserving.* Averaging intensity (not amplitude) keeps the estimator unbiased in radiometry, which is what makes the output comparable across look counts.
+
+---
+
+#### GeocodeOp
+
+Resamples to a map grid. **Optional in a backprojection chain** — see the note below.
+
+- **In:** `multilook` — float32 / float64, `(..., num_v, num_u)`.
+- **In:** `dem` (optional) — float32 / float64, `(num_dem_lat, num_dem_lon)`. Terrain heights on the output grid, or on a grid described by `dem_geotransform`.
+- **Out:** `product` — float32 / float64, `(..., num_northing, num_easting)`. Resampled to the output grid; samples with no input coverage are filled with `no_data_value`.
+
+**Parameters:**
+
+- `coordinate_frame` **[live]** — CoordinateFrame. The input geometry's frame; `origin_llh` is required on it here, since a `scene_local` frame without a geodetic anchor cannot be geolocated. Default: none (required unless the override port is wired, e.g. from `CPHDReaderOp.coordinate_frame`).
+- `input_sample_geometry` **[live]** — SampleGeometry. The formation geometry the input was produced on, as the same shared descriptor `BackprojectionOp` takes. Default: none (required unless the override port is wired). *A mirror of the formation stage's configuration, or — wired from `BackprojectionOp.sample_geometry` — the thing itself. This is the mirror worth wiring: every output sample's input index is derived from it (Algorithm step 3), so a disagreement misplaces the whole product while producing a perfectly well-formed raster.*
+- `projection` — string. Output projection as an EPSG code or PROJ string. **Must be a projected CRS with metre units**, and a geographic CRS is rejected at build. `output_origin` and `output_spacing` are defined in metres, so degrees would be read as metres and displace the product by orders of magnitude while producing a perfectly well-formed file. Static. Default: none (required).
+- `output_origin` — float, `(2,)`. `(northing, easting)` of the output sample `(0, 0)` in `projection`. Static. Default: none (required).
+- `output_spacing` — float, `(2,)`. Metres per output sample, `(northing, easting)`. Static. Default: none (required).
+- `output_counts` — int, `(2,)`. `(num_northing, num_easting)`, matching the output shape. Static. Default: none (required).
+- `interpolation` **[live]** — enum {nearest, bilinear}. Default: bilinear.
+- `no_data_value` **[live]** — float. Fill for output samples outside the input footprint. Default: NaN.
+- `dem_geotransform` (optional) — float, `(6,)`. Affine mapping from `dem` indices to projected coordinates, when the DEM is not already on the output grid. Static. Default: none (DEM assumed co-registered with the output grid).
+
+**Algorithm:**
+
+1. For each output sample, form its projected `(northing, easting)` from `output_origin` and `output_spacing`, and its height from `dem` (via `dem_geotransform` where the DEM is not co-registered) or from the reference surface where no DEM is supplied.
+2. Convert that projected, heighted point into `coordinate_frame` using `origin_llh` and `ellipsoid` — the one place in the chain that performs a geodetic conversion.
+3. Project it onto the input formation grid using the `input_grid_*` mirror, giving a fractional `(v, u)` input index.
+4. Interpolate the input per `interpolation`; samples whose index falls outside the input extent take `no_data_value`.
+
+**Notes:**
+
+- *Optional, unlike in a frequency-domain chain.* Frequency-domain formation produces an image in radar geometry and resamples afterwards, which makes geocoding mandatory. Backprojection has no such constraint: it forms onto whatever sample points it is given, so DEM-derived points on a projected grid yield a geocoded image **directly**, with no resampling stage and no second interpolation loss. This operator serves the caller who wants a radar-geometry SLC *and* a map product from one formation pass.
+- *Without a DEM*, geocoding assumes a reference surface and misplaces terrain by an amount that grows with relief and with shallower incidence.
+- *The input geometry is now a shared descriptor; the output map grid is still parameters.* The trigger this note previously set — promote once a second consumer appears — fired when the formation manager arrived, so `input_sample_geometry` is a `SampleGeometry` like `BackprojectionOp`'s and the mirroring wart is retired. The **output** map grid stays operator-local: it describes a projected raster, not a formation lattice, and it still has exactly one consumer.
+
+### Standard-Format I/O Operators
+
+Sinks and sources at chain boundaries, never inline. Each is optional; the chain is complete without any of them. All accept both precision instantiations and write the format's native sample representation, which is selected per writer rather than following the instantiated precision — a `complex128` graph may still write 16-bit integer CPHD samples.
+
+**These writers are what forced R5, and D21 resolves it by declining a metadata plane.** A writer must describe processing it did not perform, so it carries mirrored parameters — the frame, the formation geometry, the windows — and each mirror is a place where a caller can silently disagree with the upstream stage. A per-message metadata plane carrying those facts ambiently is **not in scope**: it would put a second, invisible transport alongside the data plane for the benefit of the chain's optional taps, and the disagreement it prevents is one visible in the application's own configuration. So the mirrors stay the ordinary path and the hazard is **accepted** under invariant 5's "allow reasonable footguns and warn where relevant", rather than designed out.
+
+What is offered instead is an escape hatch for a caller who wants agreement by construction, using the `[live]` override mechanism already in the contract rather than a new one. Three facts gain a descriptor output on the stage that owns them, wirable into the consumer's same-named override port: `CPHDReaderOp.coordinate_frame`, `SARRangeCompressionOp.range_window`, and `BackprojectionOp.sample_geometry`. Each was chosen for a failure it prevents rather than for symmetry — see the note under `SICDWriterOp`. This generalizes what `SARRangeCompressionOp.range_bins` already does for the range axis, so the optional-edge-supersedes-parameter shape is now the module's general answer to cross-stage agreement rather than one operator's local trick.
+
+---
+
+#### CPHDWriterOp
+
+**Accumulating** (see *Cross-tick accumulation*): a CPHD collection spans many pulse batches, so the writer buffers pulses and writes one file per collection rather than one per tick.
+
+- **In:** `phase_history` — complex64 / complex128, `(..., num_pulses, num_samples)`.
+- **In:** `positions` — float32 / float64, `(..., num_pulses, 3)`.
+- **In:** `reference_position` — float32 / float64, `(..., num_pulses, 3)`.
+- **In:** `sample_axis` (optional) — float32 / float64, `(num_samples,)`. The fast-time sample axis to record, as emitted by `CPHDReaderOp.sample_axis` — frequency (Hz) under `sample_domain = fx`, time of arrival (s) under `toa`. Wire it from the reader for a faithful round trip.
+- **In:** `pulse_times` (optional) — float64, `(..., num_pulses)`. Always double, matching the reader's port, regardless of the instantiated precision.
+- **In:** `velocities` (optional) — float32 / float64, `(..., num_pulses, 3)`.
+- No outputs — a sink.
+
+**Parameters:**
+
+- `path` — string. Output file path, or a pattern containing `{index}` when `max_pulses_per_file` is set. Static. Default: none (required).
+- `coordinate_frame` **[live]** — CoordinateFrame, with `origin_llh` required. Declares what the recorded geometry means. Default: none (required unless the override port is wired, e.g. from `CPHDReaderOp.coordinate_frame`).
+- `waveform` — `LFMWaveformDescriptor`. Supplies the collection-level fields CPHD requires and the tensors do not carry. Static. Default: none (required).
+- `sample_type` — enum {cf32, ci16, ci8}. CPHD sample representation. `ci16` with per-vector scale factors is the common recorded form and roughly halves file size against `cf32`. Static. Default: cf32.
+- `sample_domain` — enum {fx, toa}. The fast-time domain the stored samples are in, written to CPHD's declared domain type: `fx` is frequency, `toa` is time of arrival. The `sample_axis` input, where connected, must agree with it — Hz for `fx`, seconds for `toa` — and because a units disagreement is not detectable from the values, the domain is **declared rather than inferred**. Static. Default: fx.
+- `max_pulses_per_file` (optional) — int. Roll to a new file after this many pulses, for collections too long for one file. Static. Default: none (single file).
+
+**Algorithm:**
+
+1. At `start()`, open the file and reserve the header region; the XML cannot be written yet because the pulse count is not known until the collection ends.
+2. Per tick, convert the pulse block to `sample_type` (deriving per-vector scale factors for the integer forms), copy it to host memory, and append it to the signal-array region. Accumulate the per-pulse geometry in host memory.
+3. Roll to the next `{index}` file when `max_pulses_per_file` is reached, finalizing the current one.
+4. At `stop()`, write the per-pulse geometry arrays and the XML header for the pulses actually received, then close.
+
+**Notes:**
+
+- *Buffering cost is real.* Phase history for a long collection does not fit in device memory, so the writer stages to host memory and appends to the file incrementally, keeping only the XML header pending until close.
+- *Flush on stop.* Per the accumulation convention, `stop()` finalizes the header and closes the file. A crash mid-collection leaves an unfinalized file, which is the accepted failure mode.
+- *The stored domain has to round-trip, which is why `sample_axis` and `sample_domain` are here.* `CPHDReaderOp` reports the domain its file declares; without the matching pair on this side, a read-write-compare cycle silently rewrites an FX-domain collection as a TOA-domain one, or the reverse. Since round-tripping against the reader is this writer's only stated validation strategy (see `CPHDReaderOp` → Notes), the omission would have invalidated the test rather than merely dropping a metadata field.
+
+---
+
+#### SICDWriterOp
+
+One file per emitted image — the image is the product, so there is nothing to accumulate.
+
+- **In:** `image` — complex64 / complex128, `(..., num_v, num_u)`.
+- **In:** `phase_correction` (optional) — float32 / float64, `(..., num_pulses)`. Recorded where autofocus ran. Per pulse, matching `AutofocusOp`'s output (D20), so what is recorded is the correction applied to the collection rather than a resampling of it onto this product's azimuth axis.
+- No outputs — a sink.
+
+**Parameters:**
+
+- `path` — string. Output path pattern; `{index}` is substituted with the emitted-image counter. Static. Default: none (required).
+- `coordinate_frame` **[live]** — CoordinateFrame, with `origin_llh` required. Default: none (required unless the override port is wired, e.g. from `CPHDReaderOp.coordinate_frame`).
+- `sample_geometry` **[live]** — SampleGeometry. The formation geometry, needed for SICD's grid and geolocation fields. A mirror of `BackprojectionOp`'s configuration — now as one shared descriptor rather than four loose parameters, and wirable from `BackprojectionOp.sample_geometry` to make it the thing itself. Default: none (required unless the override port is wired).
+- `waveform` — `LFMWaveformDescriptor`. Source for the collection and radiometric fields. Static. Default: none (required).
+- `range_window` **[live]** — WindowSpec. The weighting applied upstream, which SICD records as the range impulse-response description. A mirror of `SARRangeCompressionOp.range_window`, wirable from that operator's same-named output. Default: none (rectangular, or the override port where wired).
+- `azimuth_window` — WindowSpec. The cross-range weighting applied upstream, recorded as the azimuth impulse-response description. A read-only mirror of whatever owned aperture membership — `ApertureManagerOp.aperture_window` where a manager did, the window the application computed and drove on `BackprojectionOp.weight` where it did — and subject to the same mirroring caveat as the other two. Static. Default: none (rectangular).
+- `sample_type` — enum {cf32, ci16, amp8phs8}. SICD pixel representation. Static. Default: cf32.
+
+**Algorithm:**
+
+1. Per emitted image, derive SICD's grid and geolocation fields from the `grid_*` mirror and `coordinate_frame`, and its collection and radiometric fields from `waveform`.
+2. Derive each axis's impulse-response description from its window: `Grid/Row` from `range_window`, `Grid/Col` from `azimuth_window`, populating `WgtType` from the window's name and parameters, `WgtFunct` from its sampled values, and `ImpRespWid` as the consequence of the two.
+3. Convert the image to `sample_type`, wrap it in the NITF container with the XML metadata, and write to the `{index}`-substituted path. One file per image, so there is no accumulation and nothing pending at `stop()`.
+
+**Notes:**
+
+- *Not every formation geometry is describable, and the undescribable ones are rejected.* SICD's grid metadata describes a **uniform planar** grid: an origin, two axis vectors, and a constant spacing along each. A formation geometry that is not one cannot be recorded faithfully, so this writer rejects it at build rather than emitting a product whose metadata disagrees with its own pixels. The case that matters is an explicitly-supplied sample geometry that is warped or DEM-conformal — a legitimate and deliberately first-class `BackprojectionOp` configuration (forming straight onto map points is the whole argument for `GeocodeOp` being optional), and simply not a thing SICD can express. Uniformity is the test.
+- *Mirrored configuration, and which mirrors are worth an edge (D21).* `coordinate_frame`, `sample_geometry`, `range_window` and `azimuth_window` exist because the operator must describe processing it did not perform, and each is a place where a caller can silently disagree with the upstream stage. R5 asked whether a metadata plane should carry them; D21 declines it and makes three of them wirable instead, sorted by what a disagreement actually costs.
+- `sample_geometry` and `coordinate_frame` earn an edge: a wrong grid or frame misplaces the product while the file stays well-formed, and the frame is otherwise unverifiable anywhere (see `CoordinateFrame`). `range_window` earns one more weakly — it sets the recorded impulse-response width, so a mismatch is a wrong claim about the product rather than wrong pixels.
+- **`waveform` does not**, being collection-level configuration the application holds in one place and hands to two operators, contradicting no processing decision, so a port there would be surface without a failure behind it. **`azimuth_window` cannot**: where the application drives `BackprojectionOp.weight` directly no upstream stage holds a `WindowSpec` at all, and per the note below `WgtType` wants the window's *name*, which no vector of floats carries. That one is irreducible in any design, metadata plane included.
+- *A rectangular `azimuth_window` is a claim, not a blank.* SICD makes `WgtType` and `WgtFunct` optional but `ImpRespWid` required, and the impulse response width is a consequence of the weighting — so a product carrying a width with no window description asserts a uniform aperture and its ~−13 dB sidelobes to any tool that reads it. That is the correct description of an incrementally-slid aperture and the wrong one for a re-formed tapered aperture, which is why the mirror exists rather than the field being left out.
+- *This is also the argument for the taper being a parameter rather than only a data port.* A per-pulse weight vector could carry the same numbers, but `WgtType` wants the window's **name** and parameters, which no vector of floats can supply. A data-plane-only taper could never populate these fields however the plumbing were arranged.
+- *NITF container.* SICD and SIDD are NITF-wrapped, so this operator brings that dependency into the `io` group.
+
+---
+
+#### TensorDumpOp
+
+- **In:** `tensor` — any dtype, any shape.
+- No outputs — a sink.
+
+**Parameters:**
+
+- `path` — string. Output path pattern; `{index}` is substituted with the tick counter. Static. Default: none (required).
+- `format` — enum {npy, raw}. `npy` carries shape and dtype and is directly readable from the Python tests; `raw` is bytes only. Static. Default: npy.
+- `every_n` **[live]** — int, ≥ 1. Write only every nth message, for long runs. Zero and negative values are **rejected**, not silently coerced to 1: a zero here reads as "write nothing", which is what `max_files = 0` would mean, and guessing between the two is worse than an error. Default: 1.
+- `max_files` (optional) — int. Stop writing after this many files and warn once. Static. Default: none (unlimited).
+
+**Algorithm:** on every `every_n`th message, copy the tensor to host memory and write it to the `{index}`-substituted path, emitting the shape and dtype header for `npy`. Stop writing once `max_files` is reached, warning once.
+
+**Notes:**
+
+- *Deliberately untyped.* It accepts any dtype and any rank because its purpose is inspecting a port whose contract is under construction — constraining it would defeat that. It is the one operator in the module with no dtype pairing.
+- *Not a product writer.* `npy` is chosen so the Python tests can read a dump directly; it carries no geometry, no frame, and no collection metadata, so it is a debugging tap rather than an interchange format.
+
+---
+
+#### CRSDWriterOp and SIDDWriterOp
+
+`CRSDWriterOp` records uncompensated signal data near ingress; `SIDDWriterOp` records the detected (amplitude) product after multilook or geocode. Their contracts follow `CPHDWriterOp` and `SICDWriterOp` respectively — accumulating pulse sink and per-product sink — and are deferred with the seams they attach to, neither of which exists in wave one. See *Open items*, I2.
+
+---
+
+## Supporting data structures
+
+[AGENTS.md](../../../AGENTS.md) invariant 2 locks **exactly six** shared config-plane descriptor types: `ArrayGeometry`, `AngleConvention`, `WindowSpec`, `FMCWWaveformDescriptor`, `DDMCodeDescriptor`, `TXSchedule`. SAR reuses `WindowSpec` unchanged and needs **three** additions — `CoordinateFrame`, `SampleGeometry` and `LFMWaveformDescriptor` — taking the count to **nine**. It renames nothing: D24 withdrew the earlier `FMCWWaveformDescriptor` → `LFMWaveformDescriptor` rename, so no landed FMCW code changes. The additions need review as contract changes (R1), as does the same invariant's other half: D21 adds three optional descriptor-carrying *output* ports where it sanctions one.
+
+All six exist today in `operators/common/radar_common/descriptors/`, and the FMCW [OPERATOR_API.md](../OPERATOR_API.md) → *Supporting data structures* documents the same six. One prospective seventh is worth naming because it would move the bound independently of SAR: `ESPRITEstimatorOp` — specified in the FMCW contract, not yet landed — takes a `subarray_spec` parameter describing a shift-invariant sub-array pair, and nothing yet settles whether that becomes a shared descriptor type or stays an operator-local parameter. Invariant 2 states a **bound**, not an inventory, so the count SAR's addition applies to is whichever is locked when R1 is decided.
+
+### CoordinateFrame (new)
+
+Declares the Cartesian frame that positions and sample geometry are expressed in. A **standalone, required parameter with no default** on every operator that consumes or emits positions or sample geometry — Static where the operator declares what its own inputs mean (`CPHDReaderOp`, `BackprojectionOp`), and `[live]` where it merely records another stage's frame, so D21's optional edge from `CPHDReaderOp.coordinate_frame` can supply it instead (`GeocodeOp`, the writers). Applied only as a boundary declaration — the formation kernels never read it. Immutable value type, validated once at construction, following the `FMCWWaveformDescriptor` pattern.
+
+- `frame` — enum {ecef, enu, ned, scene_local}. The frame family. Default: none (required).
+- `origin_llh` (optional) — float, `(3,)`. Geodetic anchor as (latitude °, longitude °, height m above the ellipsoid) for the local frames. **Geodetic, not geocentric, latitude.** Required by `GeocodeOp` and every writer; ignored by the formation kernels. A `scene_local` frame without one has no geodetic meaning — legal for simulation and unit tests, rejected by the writers.
+- `epoch` (optional) — float64, seconds since a stated reference. The time reference the frame is realized at; meaningful for `ecef` over long apertures, where the frame rotates relative to inertial space. Compared only for `ecef` — see the compatibility rule below.
+- `ellipsoid` — enum {wgs84}. The reference ellipsoid `origin_llh` is expressed against. Default: wgs84.
+
+Two frames are **compatible** when `frame`, `origin_llh`, `ellipsoid`, and — for `frame = ecef`, where either side sets it — `epoch` all match. Scoping `epoch` to `ecef` is deliberate: comparing it unconditionally would reject perfectly valid local and `scene_local` configurations, where the field carries no meaning and is routinely left unset on one side.
+
+**Where that comparison can actually happen is narrower than it first appears, and the contract should not promise more.** `coordinate_frame` is a *single* parameter per operator, and `positions` and `sample_points` are plain tensors carrying no frame identity (invariant 1). An operator therefore has no *second* frame to compare its parameter against, and there is no in-operator mismatch for it to reject. Two checks are real:
+
+- **A reader validates against its file.** `CPHDReaderOp` and `CRSDReaderOp` compare `coordinate_frame` against the frame the file declares and error on disagreement. This is a genuine build-time check precisely because the file supplies the second frame.
+- **Cross-operator agreement is the application's responsibility, and D21 makes part of it checkable.** That `BackprojectionOp`, `GeocodeOp` and `SICDWriterOp` were all configured with the same frame cannot be checked by any of them from its own parameter alone. This was the concrete instance R5 cited, and D21's answer is an optional edge rather than a metadata plane: `CPHDReaderOp.coordinate_frame` wired into a consumer's `[live]` override gives that consumer the *second* frame it was missing, so the disagreement becomes an error at the first message rather than a defocused image.
+- Two limits on that are worth stating rather than leaving to be discovered. It is opt-in, so an application that mirrors by hand is exactly where it was. And it reaches the description consumers only — `BackprojectionOp.coordinate_frame` stays Static, because it declares what its own input positions mean rather than describing another stage's work, so *its* agreement with the reader remains unchecked. Where no edge is wired, the descriptor's value is unchanged: the frame is *stated* at every boundary rather than assumed, which makes a mismatch findable by inspection instead of only by looking at the image.
+
+Rationale for a new type rather than a field on an existing one: it is required by operators sharing no other descriptor (`BackprojectionOp` and `GeocodeOp` have almost nothing else in common), and it is exactly the `AngleConvention` pattern — a required, no-default, boundary-only declaration guarding a silent-failure mode.
+
+### SampleGeometry (new)
+
+Describes **where in space each image pixel sits**: a uniform lattice given by an origin, two axes, a spacing and a count. A `[live]` parameter on `BackprojectionOp`, forwarded by the formation manager where one is in the graph, emitted by `BackprojectionOp` alongside each image, and taken by `GeocodeOp` and `SICDWriterOp` — as a mirrored parameter, or wired from that output where the caller wants agreement by construction (D21). Immutable value type, validated once at construction, YAML-constructible through the `YAML::convert<>` path in `radar_common/sdk/yaml_converters.hpp` like every other descriptor.
+
+- `origin` — float, `(3,)`. Position of sample `(0, 0)` in the declared `CoordinateFrame`. Default: none (required).
+- `axis_u`, `axis_v` — float, `(3,)` each. Vectors along the two lattice axes. They need not be axis-aligned or horizontal, which is what lets a caller form onto a slant plane or a tilted facet, and they need not be orthogonal — a sheared lattice is legal. **Unit vectors.** A caller may pass any non-zero vector and construction normalizes it; a zero-length axis is an error. All the metric scale lives in `spacing`, so that sample `(i, j)` sits at `origin + i·spacing[0]·v̂ + j·spacing[1]·û` — stated because `BackprojectionOp` and `SICDWriterOp` must agree on it pixel for pixel. This is also SICD's own convention, where `Row`/`Col` unit vectors carry direction and spacing carries length. Default: none (required).
+- `spacing` — float, `(2,)`. Metres per sample, `(v, u)` in shape order. Default: none (required).
+- `counts` — int, `(2,)`. `(num_v, num_u)`, which is the image shape. Default: none (required).
+
+**Why this is a descriptor rather than five parameters, and why that is a correctness argument.** As five independent `[live]` override ports, a caller moving to a differently-sized scene sends five messages, and nothing guarantees they arrive on the same tick. Formation can then reset several times for one logical change, or — worse — form pulses against a new origin with an old extent. Bundling makes the update **atomic by construction**, which no amount of care at five separate ports can achieve. The tidiness is a side benefit; the atomicity is the reason.
+
+**The promotion criterion was set in advance and has been met.** `SICDWriterOp` mirrors the formation geometry so it can populate SICD's grid fields, and the contract recorded that duplication as an accepted wart with an explicit trigger: *if a second consumer ever appears, that duplication is the trigger to promote both to a shared grid descriptor.* The formation manager is that second consumer, so the promotion happens by the stated rule rather than by preference.
+
+**Explicit lattices stay a tensor, and that is deliberate.** A DEM-conformal lattice is `(num_v, num_u, 3)` and can reach hundreds of megabytes, which is not something a config-plane value type should carry — `ArrayGeometry` holds a few hundred element positions, not sixteen million pixels. So `BackprojectionOp.sample_points` remains an optional tensor port, and **which mode is active is inferred from whether that port is connected** rather than from a parameter. That inference is sound because an operator can enumerate its own connected input ports from the fragment graph at initialization; see *Build-time wiring validation*.
+
+**Precedent.** This is the `ArrayGeometry` pattern, second instance: a bundled geometry descriptor carried as a `[live]` parameter, and emitted from one operator into another's same-named override port exactly as `VirtualArrayAssemblyOp.array_geometry` already does. Not a new mechanism — the same one, applied to the image lattice instead of the antenna.
+
+### LFMWaveformDescriptor (new)
+
+SAR needs the transmitted chirp for the range axis, the matched-filter replica, and the writers' collection fields. `FMCWWaveformDescriptor` already carries precisely the right fields — carrier frequency, bandwidth or slope, duration, sample rate, pulse repetition interval, and an optional measured reference — because FMCW and SAR both transmit **linear-FM chirps**. The type is FMCW only in its name.
+
+**`LFMWaveformDescriptor` is a new type carrying those same fields, and `FMCWWaveformDescriptor` is left untouched** (**D24**). An earlier draft proposed renaming the FMCW type and sharing one; that is withdrawn. The reason is scope rather than taste: `FMCWWaveformDescriptor` is exported from `holoscan.radar`'s `__all__` and named in 57 non-doc files, so the rename is a breaking change to the shipped FMCW public API — carried out to satisfy a SAR contract, on a modality whose owners are not the ones proposing it. Adding a type is additive and reaches nothing outside SAR. The count therefore goes to **nine** rather than eight, and that cost is accepted deliberately.
+
+**The two types are intended to converge, and the field names are what keep that cheap.** `LFMWaveformDescriptor` mirrors `FMCWWaveformDescriptor` field for field — `carrier_frequency`, `bandwidth` / `chirp_slope`, `chirp_duration`, `sample_rate`, `chirp_repetition_interval`, optional `reference_samples`, derived `wavelength()` — with the same validation and the same immutable-value-type construction.
+
+Naming SAR's fields in SAR's vocabulary (`pulse_duration`, `replica_samples`) would make the two textually different while semantically identical, turning the eventual merge into a second migration. Because the new type already carries the name the merged type should have, merging later is **one** sweep: migrate FMCW's call sites onto it and delete the old type — the same 57-file change, deferred rather than doubled.
+
+Two fields read differently between the modalities, in comments only. `chirp_repetition_interval` is the pulse repetition interval — for SAR the inter-pulse time along the aperture, where the FMCW doc describes per-TX effective spacing for MIMO. And `reference_samples` is FMCW's measured *dechirp* reference and SAR's measured matched-filter *replica*: the same array, consumed by different stages.
+
+**The accepted cost is drift, and it is not self-announcing.** A field added to one type — an up/down sweep flag, a chirp shape — will not appear in the other, and nothing fails to compile to say so. Both types should carry a comment naming the other and stating the intent to converge, so the divergence is at least visible to whoever adds the field.
+
+### What stays out
+
+- **Platform trajectory is data-plane**, not a descriptor: per-pulse and scaling with the batch, which is the definition of data.
+- **Sample geometry is parameters** (grid) or a plain tensor (points).
+- **The output map grid is `GeocodeOp` parameters.** The *input* geometry mirrored by `GeocodeOp` and `SICDWriterOp` has been promoted to the shared `SampleGeometry` descriptor, which is what that duplication was waiting on. The output map grid is a different thing — a projected raster rather than a formation lattice — with one consumer, so it stays operator-local.
+
+---
+
+## Contract changes against the locked invariants
+
+Each is an explicit change to the invariants in [AGENTS.md](../../../AGENTS.md). Collectively they were R1, **accepted 2026-08-07** — so this section is now the record of what acceptance covered rather than a review request. Changes made *after* that date are logged in the next section, not here.
+
+- **Invariant 2, bounded descriptors.** Six becomes **nine** — `CoordinateFrame`, `SampleGeometry` and `LFMWaveformDescriptor`. Purely additive: D24 withdrew the rename that would have touched landed FMCW code, accepting a ninth type and a duplicated field set in exchange for the SAR contract reaching nothing outside SAR. See *Supporting data structures*.
+- **Invariant 2, descriptor-carrying output ports.** The invariant sanctions exactly one — `VirtualArrayAssemblyOp.array_geometry` — and D21 adds **three**: `CPHDReaderOp.coordinate_frame`, `SARRangeCompressionOp.range_window`, `BackprojectionOp.sample_geometry`. All optional, all the same mechanism as the sanctioned one, and each is the alternative to the metadata plane R5 asked for rather than an addition to it. Worth reviewing as a set, because it changes a one-off exception into a general pattern for cross-stage agreement. See *Standard-Format I/O Operators*.
+- **A metadata plane, deliberately minimal.** The module had none. D22 adds one key — `holoscan.radar.stream_boundary` — and a namespace whose scope is R10. It imposes **nothing on the application**: metadata is enabled by default, and `kUpdate` is set per-operator by the one consumer that merges several ports from a single producer. Reviewable as the narrowest possible version of what R5 asked for and D21 declined: an announcement plane, not a descriptive one. See *Stream boundary announcement*.
+- **Invariant 3, precision by template instantiation.** Unchanged for I/O dtype. Extended by `BackprojectionOp.backend`, an orthogonal internal-arithmetic selection with no FMCW analogue, because the right choice is platform-dependent rather than a preference.
+- **Invariant 4, rank-agnostic batching.** Leading axes stay opaque and preserved, so the first clause holds. The second — infer shapes from the tensors each tick — does not: `BackprojectionOp` takes its output shape from the caller's declared sample geometry. Legal because that geometry is declared rather than assumed, and shape-changing overrides still force downstream re-inference.
+- **Invariant 5, `[live]` overrides.** Adds one rule: a live override that changes an accumulating operator's output geometry forces a reset — with the single exception of a pure translation under `geometry_change = scroll`, which is the one such change that invalidates nothing. Adds a second: where an override port and its parameter are both supplied, the port wins and a disagreement warns once — see *Parameter override convention*. Static-structural here: `backend`, `geometry_change`, `algorithm`, `azimuth_axis`, `remainder`, `emit_mode`, every writer's format parameter, and `coordinate_frame` on the operators that declare what their own inputs mean. The writers' and `GeocodeOp`'s frame and geometry mirrors are `[live]` instead, which is what makes D21's optional edges possible.
+- **A new convention.** Cross-tick accumulation — the module had none, and SAR cannot be specified without one.
+- **A new operator with no FMCW analogue.** `ApertureManagerOp` exists to keep retention and emission policy out of the operator that owns the kernel. It is called out here because it is the one place this contract adds a stage whose job is *control* rather than signal processing, and because a reviewer should agree that the split is worth a stage on the spine of the chain — optional in every mode, and load-bearing in one.
+
+---
+
+## Contract changes since approval
+
+The contract was accepted on 2026-08-07 with implementation to follow, and revising it as implementation teaches us things is expected — that was part of the same decision. **Every such revision is approved by the developer, in the chat session, before it is made.** Proposing is routine; landing one unasked is not, and that holds for SAR-scoped changes as much as for the rest. This section is the running log of what was approved, so a reviewer sees every post-approval change without diffing the branch.
+
+**Ask before editing.** The proposal states what the change is, exactly which ports, parameters, shapes or conventions move, why the contract as written does not work, what it breaks, and the alternative rejected — offered as a decision to take or decline. Code that assumes an unapproved change does not get written either: the moment implementation reveals the need is the moment to stop and ask.
+
+**Two tiers, because they carry different blast radius. Both need approval; the second needs more than approval.**
+
+| Tier | What it covers | What it requires |
+| :--- | :--- | :--- |
+| **SAR-scoped** | Anything inside `docs/planning/SAR/` and `operators/sar/` — ports, shapes, parameter names and defaults, algorithms, the SAR-only descriptors | Developer approval in chat **before the edit**; then tag in place and log here |
+| **Beyond SAR** | The [AGENTS.md](../../../AGENTS.md) invariants, the shared descriptor set, `operators/common/` / `radar_common`, the `holoscan.radar` public Python API, FMCW code, the metadata key namespace, build defaults another group inherits | All of the above, **said plainly to be beyond SAR when asking**, marked in the document for reviewers, and given a row in the module-wide [TEAM_BLOCKED.md](../TEAM_BLOCKED.md) so FMCW owners see it |
+
+**Not a contract change, and not gated:** typos, broken links, clearer prose, or a fix making the text match what the contract already says. The gate covers the *interface and behaviour* — port names, shapes, dtypes, parameters, defaults, `[live]` tags, algorithms, conventions.
+
+**The tag, written at the point of change** so a reader of the contract meets it in context rather than only in this log:
+
+- `**[CONTRACT CHANGE 2026-mm-dd]**` — SAR-scoped.
+- `**[CONTRACT CHANGE — BEYOND SAR, 2026-mm-dd]**` — reaches outside SAR.
+
+Where both a SAR-scoped and a beyond-SAR option would solve the same problem, **take the SAR-scoped one** unless there is a stated reason not to. D24 is the worked example: renaming `FMCWWaveformDescriptor` and adding `LFMWaveformDescriptor` both gave SAR a waveform type, and the additive one was chosen precisely because it reached nothing outside SAR.
+
+Rename a parameter or move a port and the same gate applies — the contract being accepted makes changes *deliberate*, not *rare*.
+
+### Log
+
+| Date | Change | Tier | Approved by |
+| :--- | :--- | :--- | :--- |
+| 2026-08-07 | `RangeMatchedFilterOp` → **`RangeReferenceMultiplyOp`**, closing I3. Name only — ports, parameters and algorithm unchanged. The old name was a standard term (*range-matched filtering*) whose standard scope includes the inverse transform, so it named this operator plus `SARRangeCompressionOp`. Docs only; the operator is a later wave and has no code. | SAR-scoped | developer, in session |
+| 2026-08-11 | **`BackprojectionOp.reference_frequency` added**, and the phase reference corrected from the waveform's centre frequency to the frequency of the first fast-time sample. Two coupled defects: step 6 needed a frequency the operator had no way to obtain, `waveform` being a parameter on four other operators and not this one; and the centre paired with an unrotated transform is a combination no implementation uses. Restated as the upstream rule rather than a band position. Docs only — the operator has no code. Also corrects the matching required assertion in [TESTING.md](TESTING.md). | SAR-scoped | developer, in session |
+| 2026-08-22 | **`BackprojectionOp.backend` value set closed (I6).** The four names `{fp32, mixed, float_float, taylor}` under-specified two implementation families. Replaced by a prefixed flattened enum: eight `matx_*` wraps of `matx::experimental::sar_bp` and eighteen `nvradar_*` copied CUDA kernels. Default is `nvradar_block_anchored_refined_throughput`. No silent alias for the old spellings. `matx_taylor_fast` errors until the bundled header exposes `TaylorFast`. `cupy` is excluded. | SAR-scoped | developer, in session |
+| 2026-08-22 | **Locality warning threshold closed as λ/16 (I7).** Taylor backends warn (never reject) when `D³/(2 R₀²)` exceeds `λ/16`. Uniform lattice uses `D = 16 · hypot(spacing_v, spacing_u)`. Accepted that this rarely fires on realistic geometry. | SAR-scoped | developer, in session |
+| 2026-08-22 | **`BackprojectionOp.backend` default** is `nvradar_block_anchored_expanded_throughput_phase_lut_vec` (fastest general NVRadar copy). `…_vec_z0` stays opt-in: it ignores `z`. | SAR-scoped | developer, in session |
+| 2026-08-24 | **`SARRangeCompressionOp` `ifftshift`s native FX before the IFFT** so `range_profiles` is complex baseband (IFFT DC = stored sample `N/2`). `nfft` pads the middle of the rotated row. `BackprojectionOp.reference_frequency` is that sample's frequency (`SC0 + (N/2)·SCSS`), still a parameter — no new RC ports. Revises the 2026-08-11 pairing (unrotated + sample 0). `phase_history` stays CPHD-native. Also [TESTING.md](TESTING.md) / [WORKFLOWS.md](WORKFLOWS.md). | SAR-scoped | developer, in session |
+| 2026-08-26 | **`CPHDReaderOp` `loop` / `playback_rate` / `duty_cycle`.** Three static parameters (defaults `false` / `0` / `1`). `loop` wraps last→first as `collection_boundary`. `playback_rate` 1 = collect-time pacing (video convention). `duty_cycle` sleeps `T_c·(1/D−1)` between collections. `CRSDReaderOp` takes the same three when it exists. Also [TESTING.md](TESTING.md). | SAR-scoped | developer, in session |
+| 2026-08-28 | **`CPHDReaderOp.playback_rate` catch-up.** Sleep is `collect / rate − wall` since the collection start, not per-tick "at least this batch's `TxTime`". Behind skips sleep until on time. Also [TESTING.md](TESTING.md). | SAR-scoped | developer, in session |
+
+Two changes landed on 2026-08-06, immediately **before** approval, and are recorded in [STATUS.md](../STATUS.md) rather than here: D24 (`LFMWaveformDescriptor` added instead of renaming the FMCW type) and the `precision_mode` → `backend` rename. They are part of what was approved.
+
+---
+
+## Open items
+
+Every unresolved question in this document, in the two classes [TEAM_BLOCKED.md](TEAM_BLOCKED.md) uses. Nothing here may be resolved in code.
+
+**Team-blocked** — need a decision before the contract is accepted:
+
+- **R1 — contract acceptance**, including the invariant amendments above.
+- **R10 — the scope of the metadata key namespace.** `holoscan.radar.stream_boundary` is proposed at the module level rather than under a `sar` tier, because the accumulation convention it serves is module-wide and a finite FMCW source has the same tail-loss problem. That commits a modality whose owners have not weighed in, and a key prefix is a public composition surface once anything reads it. Raised by D22; see *Stream boundary announcement* → *Key namespace*.
+
+**Settled since the first draft**, recorded here because the questions were prominent and readers will look for them: **D21** declines a per-message metadata plane for descriptive facts and offers three optional descriptor override edges instead (was R5 — see *Standard-Format I/O Operators*); **D22** puts the stream-boundary announcement on the metadata plane, written by the source and translated by whoever drives `control` (was R7 — see *Stream boundary announcement*); **D23** fixes the control message at the four values and nothing else (was R2 — see *How the application supplies the emit decision*). Detail and rationale are in [TEAM_BLOCKED.md](TEAM_BLOCKED.md).
+
+**D24** is not an ex-R item but a proposal revised before review: the `FMCWWaveformDescriptor` rename is withdrawn in favour of a new `LFMWaveformDescriptor`, taking the descriptor count to nine and leaving landed FMCW code untouched. See *LFMWaveformDescriptor*.
+
+**Implementation-time** — settled by writing the code, not by a team decision:
+
+- **I1 — `matx::experimental::sar_bp` release status.** Experimental namespace, API subject to change, and absent from the MatX the Holoscan SDK bundles here. Confirm before depending on it; do not bump MatX in this wave. **Measured 2026-08-12, then paused by the team** until the Holoscan 5.0 conversion lands on `main` — 5.0 moves the MatX pin itself, so the question arrives with that conversion rather than as a separate decision. What the measurement established, recorded so it is not re-run:
+  - **The SDK is not the obstacle, and never was.** Holoscan has no dependency on MatX at all: `libholoscan.so` exports zero MatX symbols, and the only SDK header naming it (`holoscan/utils/matx_allocator.hpp`) includes no MatX header — it is duck-typed to MatX's allocator interface — is unreachable from `holoscan.hpp`, and is unused here. The bundled copy under `include/3rdparty/matx` is a convenience drop, so the pin is this module's alone to move: a single `-DMATX_DIR=` redirects every target, with no CMake edit, no vendoring, and no per-target include shadowing.
+  - **The obstacle is the language standard, not API drift.** MatX 1.0.0 declares `target_compile_features(matx INTERFACE cxx_std_20 $<BUILD_INTERFACE:cuda_std_20>)`, and this module pins C++17. Building at 17 produced 800 errors, every one inside MatX's own headers (`concept` and `requires` undefined, `std::format` and `std::source_location` missing) and none in module code. Note the `BUILD_INTERFACE` guard on the CUDA half: that requirement is *not* exported to consumers, so `.cu` files stay at the consumer's `CMAKE_CUDA_STANDARD` and have to be bumped deliberately.
+  - **At C++20 the module builds and passes.** Zero errors across the tree, the only warnings pre-existing LTO link messages, and 566 of 567 `ctest -L unit` tests passing — the single failure a zero-length `.so` truncated by a host reboot, which relinked clean. The Python suite was not re-run before the pause, and is the one unverified surface. `mvdr_stage.hpp`'s reach into `matx::detail` (the eig/inv cache clearing and the `GetAllocMap` drain) is the module's only use of MatX internals and the expected casualty of a major bump; it survived unchanged. A full build took 6m02s, but no clean C++17 baseline was taken, so no slowdown factor is claimed.
+  - **The payoff is partial either way.** At the MatX commit Holoscan 5.0 pins (`968ca84`, version 1.0.0) `sar_bp` is still inside `namespace experimental` — only `SarBpComputeType` and `SarBpParams` sit directly in `matx::` — so the API-stability half of this item does not close with the bump. Its compute types are `Double`, `Mixed`, `FloatFloat`, and `Float`, with no `TaylorFast`. I6's Taylor values are the copied `nvradar_block_anchored*` kernels; `matx_taylor_fast` errors at init until a later pin exposes the enumerator.
+- **I2 — the deferred branches' full port lists:** `CRSDReaderOp`, `RVPRemovalOp`, `BandEqualizationOp`, `CRSDWriterOp`, `SIDDWriterOp`. Evidence-gated on real raw data and on the seams existing.
+- **I3 — CLOSED 2026-08-07.** The direct-sampled branch-entry operator is **`RangeReferenceMultiplyOp`**, renamed from `RangeMatchedFilterOp`. The old name was not merely unsettled but wrong by industry usage: *range-matched filtering* includes the inverse transform, so it named this operator plus `SARRangeCompressionOp`. No standard term names the truncated stage, so invariant 7 was neutral; the new name is built from the standard term for the operand, the **range reference function**. See the operator's *Notes*. Review documents predating the change keep the old name ([PRACTITIONER_CRITIQUE.md](PRACTITIONER_CRITIQUE.md), [PRACTITIONER_ASSESSMENT.md](PRACTITIONER_ASSESSMENT.md)); this item carries the mapping. Retained as closed so it is not reopened.
+- **I4 — CLOSED.** Where the fully-overlapped-support crop lives on the direct-sampled branch. The optional `range_bins` port already carries the compressed range axis explicitly, which is a superset of an immutable spacing/origin pair, so a caller crops by supplying the axis they want rather than by a crop parameter. Retained here as a closed item so it is not reopened.
+- **I6 — CLOSED 2026-08-22.** The value set for `BackprojectionOp.backend` is the prefixed flattened enum on the parameter (eight `matx_*`, eighteen `nvradar_*`). Default `nvradar_block_anchored_expanded_throughput_phase_lut_vec` (changed the same day; the I6 row recorded the earlier Taylor default). The naming half closed on 2026-08-06 (`precision_mode` → `backend`). Review documents predating either change keep the old names; this item carries the mapping. Retained as closed so it is not reopened.
+- **I7 — CLOSED 2026-08-22.** The locality warning threshold is **λ/16**: Taylor backends warn, never reject, when `D³/(2 R₀²)` exceeds `λ/16`. The SER-against-floor alternative was declined. Retained as closed so it is not reopened.
+- **I5 — the range-compression normalization default.** With the transform direction now stated as inverse, `fft_norm = backward` means this stage applies the `1/N`, which scales absolute amplitude and so reaches SICD's radiometric fields. Confirm the default against the SICD convention and against what an independent reader expects, rather than inheriting FMCW's spelling for a transform running the other way. **Still open.** Detail migrated 2026-08-10 to the operator's [OPEN_ITEMS.md](../../../operators/sar/sar_range_compression_op/OPEN_ITEMS.md) item 1. The code implements the stated default, which does not settle it; the scaling is now pinned by a test against the analytic amplitude for all three values, so answering this later is a one-line change.

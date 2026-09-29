@@ -1,6 +1,6 @@
 # Holoscan Radar
 
-GPU-accelerated FMCW radar signal-processing operators for NVIDIA Holoscan.
+GPU-accelerated FMCW and SAR signal-processing operators for NVIDIA Holoscan.
 Operators are implemented in C++/CUDA on MatX and compose through typed ports,
 without pipeline-specific glue between processing stages.
 
@@ -34,6 +34,18 @@ holoscan run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
 The `--run-args=siso_smoke.yaml` example runs two headless frames. Omit that
 flag to use the SISO executable's default `siso.yaml` configuration.
 
+For an offline SAR smoke run, configure testing and run the generated-fixture
+CTest cases. The five shipped SAR YAML files are real-collection presets and
+require local CPHD data before direct execution:
+
+```bash
+ctest --test-dir build -R '^Sar_.*_(smoke|viz)$' --output-on-failure
+```
+
+Start with the [SAR application index](applications/sar/README.md), then the
+[CPHD preparation guide](tools/sar_data/README.md) for real data. The C++
+fixture checks graph execution; it does not validate focus on public collects.
+
 ## Operator groups
 
 | Group | Operators and role |
@@ -42,6 +54,8 @@ flag to use the SISO executable's default `siso.yaml` configuration.
 | [Detection](operators/detection/README.md) | CFAR, feature assembly, cluster reduction, selective multi-source expansion |
 | [Angle estimation](operators/angle_estimation/README.md) | Snapshot gathering, array selection, Beamscan, MVDR, MUSIC, Root-MUSIC, ESPRIT, and dense beamforming |
 | [Clustering](operators/clustering/README.md) | DBSCAN over caller-selected detection features |
+| [SAR](operators/sar/README.md) | Range compression, aperture management, backprojection, and phase correction |
+| [SAR I/O](operators/io/README.md) | CPHD decoding and diagnostic tensor dumps |
 
 Every public operator README starts with the same compact reference: purpose,
 responsibilities, selection guidance, ports, construction requirements, and
@@ -49,7 +63,7 @@ parameters. Precision is fixed per instance (`float` or `double`), and GPU
 execution is required.
 
 Shared descriptors and tensor conventions are documented in
-[`operators/common/README.md`](operators/common/README.md). The complete operator API reference is [`docs/planning/OPERATOR_API.md`](docs/planning/OPERATOR_API.md).
+[`operators/common/README.md`](operators/common/README.md). The FMCW operator API reference is [`docs/planning/OPERATOR_API.md`](docs/planning/OPERATOR_API.md); the current HSDK 5 SAR contract is [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md).
 
 ## Example applications
 
@@ -62,6 +76,11 @@ Shared descriptors and tensor conventions are documented in
 | [MIMO DDM](applications/fmcw/mimo_ddm/README.md) | Linear or nonlinear dense DDM demultiplexing |
 | [Multi-waveform](applications/fmcw/multi_waveform/README.md) | Coherent switching between FMCW profiles |
 | [Adaptive AoA](applications/fmcw/adaptive_aoa/README.md) | Route likely multi-source cells to a super-resolution estimator |
+| [SAR spotlight](applications/sar/spotlight/README.md) | One reset image from one collection |
+| [SAR video](applications/sar/video_sar/README.md) | Retained pulse window and repeated images |
+| [SAR tiled strip](applications/sar/tiled_strip/README.md) | Tile formation and parent mosaic |
+| [SAR continuous strip](applications/sar/continuous_strip/README.md) | Scrolling lattice and parent mosaic |
+| [SAR independent images](applications/sar/independent_images/README.md) | One restaged image per collection |
 
 Application READMEs include the exact graph and runnable commands. Shared graph
 driving, simulation sources, reporting, and visualization support lives in
@@ -84,7 +103,7 @@ cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j"$(nproc)"
 ```
 
-Python bindings are temporarily unavailable because the current SDK source
+Python operator bindings are temporarily unavailable because the current SDK source
 image does not export the binding component they require. See
 [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 

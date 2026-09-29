@@ -20,6 +20,10 @@ namespace holoscan::radar {
 // No opaque leading-batch field: multi-item throughput is an app concern.
 struct MaxTensorExtents {
   std::optional<std::int64_t> max_samples_per_chirp;
+  std::optional<std::int64_t> max_samples_per_pulse;
+  std::optional<std::int64_t> max_pulses;
+  std::optional<std::int64_t> max_image_u;
+  std::optional<std::int64_t> max_image_v;
   std::optional<std::int64_t> max_chirps;
   std::optional<std::int64_t> max_range_bins;
   std::optional<std::int64_t> max_doppler_bins;

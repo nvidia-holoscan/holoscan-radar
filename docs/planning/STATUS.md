@@ -112,6 +112,125 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 - **2026-08-31** — **An unconsumed optional output no longer kills the tick.** Nothing exposes an output's wiring to the operator, so it cannot tell "computable" from "wanted", and its emit to an unwired port fails. Wrapping that in `HOLOSCAN_TRY` propagated the failure out of `compute()` and failed the whole activation, so a graph that merely declined an optional output produced nothing and said nothing. First fix, since generalized by the 2026-09-01 entry: discard the result at the five conditional outputs; the failure is confined to that call and siblings still deliver (measured, 32 ticks). The emit helpers gained `[[nodiscard]]`, laundered away from `Output::emit` until now, so a forgotten check is a build error.
 - **2026-08-23** — **Mixed HSDK 5 `[live]` payload policy ratified (L18):** shared owning descriptors use generated `holoscan::radar::wire` descriptor-Tensor schemas; bounded fixed-layout tuples use ChannelPod; variable-length scalar vectors use rank-1 pageable-host `Input<Tensor>` with ctor-captured bounds. Logical Params/YAML types remain unchanged. The FMCW window/waveform schema path and SnapshotGather tuple are landed; other ports are implementation follow-up. Schema identity/evolution, EA generator workarounds, and the C++-only wire-object limitation remain locked in [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md).
 
+## SAR HSDK 5 port
+
+- **2026-09-29 — Five SAR GUI applications visually checked:** The developer
+  ran `spotlight`, `video_sar`, `tiled_strip`, `continuous_strip`, and
+  `independent_images` with the GUI and reported that all five look good.
+  This closes the outstanding interactive X11 presentation check for the
+  current app presets. It does not validate every backprojection backend,
+  radiometric calibration, or the deferred SAR features below.
+
+- **2026-09-29 — Tiled strip seam and landscape display fixed:** The tile
+  stager sends the next lattice with each closing tile's `EmitAndReset`, and
+  `BackprojectionOp.sample_geometry_out` now describes the tile just formed
+  even when a new lattice is staged. The mosaic therefore joins the correct
+  image and geometry. Tiled strip transposes only the Holoviz raster/window,
+  placing its long `v` axis horizontally; formation and dumps retain `(v,u)`.
+  A two-tick-per-tile headless fixture and a finite ten-tile Capella run with
+  512-pixel tile caps both pass. Full-resolution image quality and interactive
+  X11 presentation remain open.
+
+- **2026-09-29 — Video SAR retention releases upstream Tensor pools:** The
+  manager now copies retained pulse groups into manager-owned CUDA storage.
+  It no longer holds CPHD reader and range-compression output-pool slots for
+  the lifetime of the sliding aperture. A bounded 12,288-pulse Houston 1.0 m
+  run reproduced `kResourceExhausted` after two images before the fix, even
+  at 64×64 without visualization. After the fix, both 64×64 and shipped
+  6144×6144 runs completed three images. A generated 20-pulse CI regression
+  now checks five images across a ten-pulse retention window. Sustained looped
+  interactive display remains unvalidated.
+
+- **2026-09-29 — SAR display accepts changing image dimensions:** The shared
+  Graph driver sizes `SarImageVizOp` input bounds from both the maximum
+  configured collection extents and the display/mosaic geometry. A generated headless regression
+  forms and displays 1×1 then 8×8 independent images. On downloaded Umbra
+  CPHDs, full-pulse 5715×5715 and 7463×7463 images both completed through
+  headless Holoviz. Interactive X11 presentation and visual image-quality
+  inspection remain open.
+
+- **2026-09-29 — CPHD recorded-grid ramp accepted in HSDK 5:** The reader's
+  `SC0`/`SCSS` per-batch check now uses the SAR notes' `1e-5` relative bound
+  instead of `1e-10`. All six downloaded Umbra SNAPSHOT PVP blocks were checked
+  at the shipped 1,024-pulse batch size; their largest relative drift was
+  `3.8e-9` for `SC0` and `1.4e-7` for `SCSS`. A C++ fixture asserts a small
+  ramp succeeds and a genuine frequency step fails. A full-pulse, six-collection
+  `independent_images` run formed six 32×32 images from downloaded CPHDs.
+  Full-resolution image quality and interactive display remain unvalidated.
+
+- **2026-09-29 — Independent collection geometry staged at the seam:** The
+  collection stager now sends the next collection's geometry, range spacing,
+  and reference frequency on the closing batch. `BackprojectionOp` forms that
+  image with the old values and installs the new values after `EmitAndReset`.
+  The generated two-collection smoke now uses distinct IARP geometry, and its
+  headless visualization path also passes. The six-collection real-data run
+  completed with one image per collection.
+
+- **2026-09-29 — SAR visualization drops stale frames:** The shared SAR Graph
+  driver uses `kDropOldest` on formed-image to raster and raster to Holoviz
+  connections for all five apps, matching the FMCW display policy. Image
+  reporting, optional tensor dumping, and the headless schema sink retain
+  their existing queues. Synthetic GPU smoke and headless visualization
+  checks pass; sustained interactive X11 lag remains unvalidated.
+
+- **2026-09-29 — SAR host CLI data flow and strip display:** all five app guides
+  give commands from download to `holoscan run`. Downloads go under the host
+  `data/sar/` tree, which `--docker-opts` binds to the shipped YAML's
+  `/tmp/sar` path inside the container. Continuous strip now places its
+  along-track `v` axis horizontally in the Holoviz raster and window; formed
+  images and dumps keep their original axes. Downloader manifests, all five
+  CLI dry runs, and the bind-mounted CPHD path were checked. The pinned HSDK 5
+  GPU build and 11/11 focused SAR fixture, smoke, and headless viz tests passed.
+  Real-data image quality and interactive display validation remain open.
+
+- **2026-09-29 — SAR user-facing guides and local data preparation (deustice):**
+  added a SAR route through the root, developer, application-support, app, and
+  six operator guides. The app guides now name their standalone executable,
+  generated-fixture smoke, real CPHD path, and output behavior. Imported SAR
+  design notes are prominently marked historical; the opening HSDK 5 SAR
+  contract remains authoritative. Ported the source branch's CPHD downloader
+  and Houston subsetter to `tools/sar_data/` as optional Python preparation
+  CLIs, with descriptive `--app` choices and a recipe that writes the current
+  video YAML path. The C++ applications and operator contracts are unchanged.
+  All three downloader manifests matched shipped YAML paths without fetching
+  collections. The subsetter created a 3-pulse, 4-sample local CPHD from the
+  C++ fixture; the C++ spotlight reader formed a 5x5 image from it. The full
+  C++/CUDA build passed in the pinned HSDK 5 GPU image with Python disabled,
+  and 1030/1030 non-performance CTest cases passed. Real-collection focus and
+  interactive X11 validation remain open in the [SAR open-items roll-up](SAR/OPEN_ITEMS.md).
+
+- **2026-09-28 — standalone SAR apps:** split the five SAR graphs into `spotlight`,
+  `video_sar`, `tiled_strip`, `continuous_strip`, and `independent_images`. Each
+  has an `APP_<name>` gate, YAML, metadata, README, and fixture smoke. The
+  former `sar_formation` command and mode-numbered app YAMLs are removed.
+  Shared SAR Graph driving and visualization live under `radar_app/sar/`;
+  library operator contracts are unchanged. A generated CPHD fixture gave
+  identical complex image tensors for every old/new pair (1, 5, 5, 5, and 2
+  images; maximum absolute difference 0). The app split also fixes a
+  `TensorDumpOp` shape-view lifetime bug exposed by that comparison. The
+  complete C++ build passed in the pinned HSDK 5 GPU image with Python off;
+  1024/1024 non-performance tests passed before the final focused additions,
+  then 17/17 SAR fixture, visualization, topology, and dump checks passed.
+  All five apps also built through their individual `APP_<name>` gates.
+  Repository-wide pinned pre-commit checks passed. Interactive X11 and
+  real-collection validation remain open in the [SAR open-items roll-up](SAR/OPEN_ITEMS.md).
+
+- **2026-09-28 — implemented and validating (deustice):** port the SAR C++/CUDA stack
+  from `origin/dpc/sar-plan` in `deustice/sar-hsdk5`, based on `main-5x`.
+  This includes the six implemented library operators and five standalone
+  `applications/sar/` workflows. Python and performance code are deferred. The SAR contract gains
+  an explicit per-tick reader `stream_boundary` scalar because HSDK 5 has no
+  arbitrary message-metadata key. Unresolved SAR questions are collected in a
+  [SAR open-items roll-up](SAR/OPEN_ITEMS.md). The six operators, five app modes,
+  C++ fixture generator, C++ operator tests, and headless Holoviz smoke path
+  build in the pinned HSDK 5 GPU image. The non-performance C++ suite passed
+  1018/1018 tests, including synthetic mode 1–5 and headless Holoviz smoke;
+  the repository-wide pinned pre-commit suite passed. Final focused reruns
+  cover test-harness corrections added after that full run. Public CPHD
+  collection validation remains open. HSDK 5 visualization uses the
+  source-branch percentile window and finite GUI hold; compass, timeline,
+  crop, and indefinite display hold remain open in the [SAR open-items roll-up](SAR/OPEN_ITEMS.md).
+
 ## In flight / claims
 
 | Work | Owner | Branch | Status |

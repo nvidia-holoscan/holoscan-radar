@@ -14,7 +14,7 @@ from HSDK 4.x code.
 
 Read before starting non-trivial work, in this precedence order:
 
-1. [`docs/planning/OPERATOR_API.md`](docs/planning/OPERATOR_API.md) — **the locked contract**: every operator's inputs/outputs/parameters, shapes, dtype pairs, and defaults, plus the shared supporting data structures. If we discover a conflict, bug, or unexpected design corner, consult with the developer before changing.
+1. [`docs/planning/OPERATOR_API.md`](docs/planning/OPERATOR_API.md) and [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md) — **the locked modality contracts**: every operator's inputs/outputs/parameters, shapes, dtype pairs, and defaults, plus the shared supporting data structures. If we discover a conflict, bug, or unexpected design corner, consult with the developer before changing.
 2. [`docs/planning/WORKFLOWS.md`](docs/planning/WORKFLOWS.md) — scope: the SISO / SIMO / MIMO-TDM / MIMO-DDM operator chains, with port-level wiring diagrams.
 3. [`docs/planning/TESTING.md`](docs/planning/TESTING.md) — what tests must assert; the analytic point-target simulator requirements.
 4. [`docs/planning/CREATE_A_MODULE.md`](docs/planning/CREATE_A_MODULE.md) — how the Holoscan Module scaffolding (build, packaging, bindings) works.
@@ -36,7 +36,8 @@ Rules that follow from "lockdown":
 ## Design invariants (do not violate)
 
 1. **Plain-tensor data ports.** Operators exchange plain tensors on the data plane — never bespoke record/message types (e.g. no "detection" struct: CFAR emits `detection_idx`, `detection_score`, `noise_estimate` as separate tensors). Where producers and consumers need bridging, that is an explicit small add-on operator (`SnapshotGatherOp`, `FeatureAssemblyOp`, `DetectionReductionOp`), not a shared message type.
-2. **Shared descriptors are bounded.** Exactly seven shared config-plane types exist: `ArrayGeometry`, `ShiftInvariantSubarrayPair`, `AngleConvention`, `WindowSpec`, `FMCWWaveformDescriptor`, `DDMCodeDescriptor`, `TXSchedule`. They are parameters, and ride input ports only as `[live]` overrides. The sanctioned descriptor *output* ports are runtime-computed geometry boundaries: `VirtualArrayAssemblyOp.array_geometry`, `TDMSparseCompensationOp.array_geometry`, `DDMSparseDemultiplexOp.array_geometry`, and `SubarraySelectionOp.array_geometry`. Do not add new shared types or new descriptor-carrying ports without a contract change to `OPERATOR_API.md`. Separately, `MaxTensorExtents` is a **ctor-capture sizing type** for HSDK 5 Tensor pools (not a descriptor, never a Tensor port) — see [`operators/common/README.md`](operators/common/README.md#maxtensorextents).
+2. **Shared descriptors are bounded.** Exactly ten shared config-plane types exist: `ArrayGeometry`, `ShiftInvariantSubarrayPair`, `AngleConvention`, `WindowSpec`, `FMCWWaveformDescriptor`, `DDMCodeDescriptor`, `TXSchedule`, `CoordinateFrame`, `SampleGeometry`, `LFMWaveformDescriptor`. They are parameters, and ride input ports only as `[live]` overrides. The sanctioned descriptor *output* ports are `VirtualArrayAssemblyOp.array_geometry`, `TDMSparseCompensationOp.array_geometry`, `DDMSparseDemultiplexOp.array_geometry`, `SubarraySelectionOp.array_geometry`,
+   `CPHDReaderOp.coordinate_frame`, `SARRangeCompressionOp.range_window_out`, `ApertureManagerOp.sample_geometry_out`, and `BackprojectionOp.sample_geometry_out`. Do not add new shared types or descriptor-carrying ports without a contract change to the relevant modality `OPERATOR_API.md`. Separately, `MaxTensorExtents` is a **ctor-capture sizing type** for HSDK 5 Tensor pools (not a descriptor, never a Tensor port) — see [`operators/common/README.md`](operators/common/README.md#maxtensorextents).
 3. **Precision by compile-time template instantiation** (single + double). Never a runtime dtype flag, never inferred from data; an instance's inputs and outputs match its templated precision.
 4. **Named trailing axes; no opaque leading batch.** Operate on the contract's named axes; infer those extents from the tensors each tick rather than taking them as parameters. Do **not** treat an open-ended leading `...` as an opaque module batch axis — multi-item throughput is an application concern (loop / fan-out). Named leading axes that are part of the contract (e.g. `N_rx`, `M_tx`, `num_az`/`num_el`) remain. Downstream never assumes fixed shapes for those named axes — that is what makes shape-changing `[live]` overrides legal. Fat Tensor outputs take `MaxTensorExtents` at `graph.op()` so pools can be sized before arm.
 5. **`[live]` override convention.** Parameters are build-time config by default.
@@ -58,7 +59,7 @@ Rules that follow from "lockdown":
 7. **Industry-standard operator names** over internal schemes.
 8. **A CUDA-capable NVIDIA GPU is a hard dependency** — for the operators, the apps, and the C++ test suite (decided 2026-07-10). Do not add CPU fallback compute paths, skip-if-no-GPU test guards, or GPU-optional build modes; the only host-only code is deliberately host-only by design (the analytic simulator, window generation).
 
-**Scope guardrail:** this wave is FMCW SISO/SIMO/MIMO-TDM/MIMO-DDM only. Do not add Pulse-Doppler, SAR, or PVA operators; CDM/BPM is deferred to a future wave; FDM and PMCW are excluded outright.
+**Scope guardrail:** FMCW SISO/SIMO/MIMO-TDM/MIMO-DDM and the SAR image-formation port are in scope. SAR contracts and workflows live in `docs/planning/SAR/`; do not add Pulse-Doppler or PVA operators; CDM/BPM is deferred to a future wave; FDM and PMCW are excluded outright.
 
 ## Repo map
 
@@ -69,6 +70,8 @@ Rules that follow from "lockdown":
 | `operators/` | Operator libraries, one dir per group, gated by `add_holohub_operator()` / `OP_<name>` CMake options |
 | `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
 | `operators/fmcw/` | FMCW signal processing and MIMO marshaling |
+| `operators/sar/`, `operators/io/` | SAR formation, CPHD ingress, and tensor dump operators |
+| `applications/sar/` | Five standalone SAR workflows with C++ fixture smoke tests |
 | `applications/fmcw/simo/` | Detect-then-beamform SIMO workflow |
 | `applications/fmcw/siso/` | Baseline SISO range-Doppler workflow |
 | `applications/fmcw/dense_beamforming/` | Dense beamform-then-detect SIMO workflow |

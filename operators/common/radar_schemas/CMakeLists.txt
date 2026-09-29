@@ -42,6 +42,26 @@ holoscan_add_flatbuffer_schema(
     MAX_SERIALIZED_SIZE 1024
 )
 
+holoscan_add_flatbuffer_schema(
+    TARGET radar_coordinate_frame_schema
+    SCHEMA coordinate_frame.fbs
+    INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_DIR "${RADAR_SCHEMAS_GENERATED_DIR}"
+    BFBS_EMBED
+    TRAITS_HEADER coordinate_frame_schema_traits.hpp
+    MAX_SERIALIZED_SIZE 512
+)
+
+holoscan_add_flatbuffer_schema(
+    TARGET radar_sample_geometry_schema
+    SCHEMA sample_geometry.fbs
+    INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_DIR "${RADAR_SCHEMAS_GENERATED_DIR}"
+    BFBS_EMBED
+    TRAITS_HEADER sample_geometry_schema_traits.hpp
+    MAX_SERIALIZED_SIZE 512
+)
+
 function(radar_normalize_schema_traits SCHEMA_TARGET TRAITS_FILE)
     set(_stamp "${TRAITS_FILE}.normalized")
     add_custom_command(
@@ -68,13 +88,25 @@ radar_normalize_schema_traits(
     radar_fmcw_waveform_schema
     "${RADAR_SCHEMAS_GENERATED_DIR}/fmcw_waveform_schema_traits.hpp")
 
+radar_normalize_schema_traits(
+    radar_coordinate_frame_schema
+    "${RADAR_SCHEMAS_GENERATED_DIR}/coordinate_frame_schema_traits.hpp")
+
+radar_normalize_schema_traits(
+    radar_sample_geometry_schema
+    "${RADAR_SCHEMAS_GENERATED_DIR}/sample_geometry_schema_traits.hpp")
+
 add_library(radar_schemas INTERFACE)
 add_library(holoscan::radar_schemas ALIAS radar_schemas)
 add_dependencies(radar_schemas
+    radar_sample_geometry_schema
+    radar_sample_geometry_schema_normalized
     radar_array_geometry_schema
+    radar_coordinate_frame_schema
     radar_window_spec_schema
     radar_fmcw_waveform_schema
     radar_array_geometry_schema_normalized
+    radar_coordinate_frame_schema_normalized
     radar_window_spec_schema_normalized
     radar_fmcw_waveform_schema_normalized)
 
@@ -111,5 +143,8 @@ install(FILES
     array_geometry_bridge.hpp
     window_spec_bridge.hpp
     fmcw_waveform_bridge.hpp
+    lfm_waveform_bridge.hpp
+    coordinate_frame_bridge.hpp
+    sample_geometry_bridge.hpp
     DESTINATION
         "${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/radar_schemas")

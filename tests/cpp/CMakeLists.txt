@@ -63,7 +63,7 @@ radar_add_test(common/test_sdk yaml-cpp holoscan::config_io)
 radar_add_test(common/test_max_tensor_extents yaml-cpp)
 radar_add_test(utils/test_perf_profiles yaml-cpp)
 radar_add_test(utils/test_perf_runner)
-radar_add_test(utils/test_perf_yaml_standard radar_perf_utils holoscan::doppler_notch_op)
+radar_add_test(utils/test_perf_yaml_standard yaml-cpp holoscan::doppler_notch_op)
 target_include_directories(test_perf_yaml_standard PRIVATE
     ${PROJECT_SOURCE_DIR}/performance/harness/cpp
     ${PROJECT_SOURCE_DIR}/operators)
@@ -73,7 +73,17 @@ target_include_directories(test_perf_profiles PRIVATE
     ${PROJECT_SOURCE_DIR}/operators)
 target_compile_definitions(test_perf_profiles PRIVATE
     HOLOSCAN_RADAR_PERF_OPERATOR_ROOT="${PROJECT_SOURCE_DIR}/performance/operators")
+target_compile_definitions(test_perf_yaml_standard PRIVATE
+    HOLOSCAN_RADAR_PERF_OPERATOR_ROOT="${PROJECT_SOURCE_DIR}/performance/operators")
 radar_add_test(common/test_sim)
+radar_add_test(sar/test_phase_correction holoscan::phase_correction_op)
+radar_add_test(sar/test_aperture_manager holoscan::aperture_manager_op)
+radar_add_test(sar/test_backprojection holoscan::backprojection_op)
+radar_add_test(sar/test_sar_range_compression holoscan::sar_range_compression_op)
+radar_add_test(io/test_tensor_dump holoscan::tensor_dump_op)
+radar_add_test(io/test_cphd_reader holoscan::cphd_reader_op)
+add_executable(generate_cphd_fixture io/generate_cphd_fixture.cpp)
+target_include_directories(generate_cphd_fixture PRIVATE ${PROJECT_SOURCE_DIR}/tests/cpp)
 radar_add_test(common/test_sim_gpu holoscan::radar_common_simulator)
 radar_add_test(common/test_tensor)
 radar_add_test(common/test_virtual_array)
@@ -314,4 +324,102 @@ target_include_directories(test_fmcw_simo_report PRIVATE
 
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     radar_add_test(app/test_fmcw_dashboard holoscan::fmcw_dashboard)
+endif()
+
+set(SAR_SMOKE_DIR "${PROJECT_BINARY_DIR}/tests/cpp")
+set(SAR_APP_NAMES spotlight video_sar tiled_strip continuous_strip independent_images)
+set(SAR_COUNTS 1 5 5 5 2)
+set(SAR_DIMS "5x5" "5x5" "15x6" "15x6" "5x5")
+if(TARGET spotlight OR TARGET video_sar OR TARGET tiled_strip OR
+        TARGET continuous_strip OR TARGET independent_images)
+    add_test(NAME SarFixture
+        COMMAND $<TARGET_FILE:generate_cphd_fixture>
+            "${SAR_SMOKE_DIR}/generated_sar_smoke.cphd")
+    set_tests_properties(SarFixture PROPERTIES FIXTURES_SETUP sar_cphd)
+endif()
+foreach(index RANGE 0 4)
+    list(GET SAR_APP_NAMES ${index} name)
+    list(GET SAR_COUNTS ${index} count)
+    list(GET SAR_DIMS ${index} dims)
+    if(TARGET ${name})
+        set(config_dir "${PROJECT_BINARY_DIR}/applications/sar/${name}/cpp")
+        foreach(variant smoke viz)
+            if(variant STREQUAL "viz")
+                set(config "${config_dir}/${name}_viz_generated_smoke.yaml")
+            else()
+                set(config "${config_dir}/${name}_generated_smoke.yaml")
+            endif()
+            add_test(NAME Sar_${name}_${variant}
+                COMMAND ${CMAKE_COMMAND}
+                    -DSAR_EXECUTABLE=$<TARGET_FILE:${name}>
+                    -DSAR_CONFIG=${config}
+                    -DSAR_COUNT=${count}
+                    -DSAR_DIMS=${dims}
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_smoke.cmake)
+            set_tests_properties(Sar_${name}_${variant} PROPERTIES
+                FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+        endforeach()
+        math(EXPR next_index "(${index} + 1) % 5")
+        list(GET SAR_APP_NAMES ${next_index} wrong_name)
+        set(wrong_config
+            "${PROJECT_BINARY_DIR}/applications/sar/${wrong_name}/cpp/${wrong_name}_generated_smoke.yaml")
+        if(TARGET ${wrong_name})
+            add_test(NAME Sar_${name}_rejects_other_topology
+                COMMAND ${CMAKE_COMMAND}
+                    -DSAR_EXECUTABLE=$<TARGET_FILE:${name}>
+                    -DSAR_CONFIG=${wrong_config}
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_reject.cmake)
+            set_tests_properties(Sar_${name}_rejects_other_topology PROPERTIES
+                FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+        endif()
+    endif()
+endforeach()
+
+if(TARGET video_sar)
+    set(video_dir "${PROJECT_BINARY_DIR}/applications/sar/video_sar/cpp")
+    add_test(NAME Sar_video_sar_retention
+        COMMAND ${CMAKE_COMMAND}
+            -DSAR_EXECUTABLE=$<TARGET_FILE:video_sar>
+            -DSAR_CONFIG=${video_dir}/video_sar_retention_generated_smoke.yaml
+            -DSAR_COUNT=5
+            -DSAR_DIMS=5x5
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_smoke.cmake)
+    set_tests_properties(Sar_video_sar_retention PROPERTIES
+        FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+endif()
+
+if(TARGET tiled_strip)
+    set(tiled_dir "${PROJECT_BINARY_DIR}/applications/sar/tiled_strip/cpp")
+    add_test(NAME Sar_tiled_strip_seam_viz
+        COMMAND ${CMAKE_COMMAND}
+            -DSAR_EXECUTABLE=$<TARGET_FILE:tiled_strip>
+            -DSAR_CONFIG=${tiled_dir}/tiled_strip_seam_viz_generated_smoke.yaml
+            -DSAR_COUNT=2
+            -DSAR_DIMS=11x6
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_smoke.cmake)
+    set_tests_properties(Sar_tiled_strip_seam_viz PROPERTIES
+        FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+endif()
+
+if(TARGET independent_images)
+    set(independent_dir "${PROJECT_BINARY_DIR}/applications/sar/independent_images/cpp")
+    add_test(NAME Sar_independent_images_varying_viz
+        COMMAND ${CMAKE_COMMAND}
+            -DSAR_EXECUTABLE=$<TARGET_FILE:independent_images>
+            -DSAR_CONFIG=${independent_dir}/independent_images_varying_viz_generated_smoke.yaml
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_varying_viz.cmake)
+    set_tests_properties(Sar_independent_images_varying_viz PROPERTIES
+        FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+endif()
+
+if(TARGET spotlight)
+    set(spotlight_dir "${PROJECT_BINARY_DIR}/applications/sar/spotlight/cpp")
+    add_test(NAME Sar_spotlight_dump
+        COMMAND ${CMAKE_COMMAND}
+            -DSAR_EXECUTABLE=$<TARGET_FILE:spotlight>
+            -DSAR_CONFIG=${spotlight_dir}/spotlight_dump_generated_smoke.yaml
+            -DSAR_DUMP_PATH=${spotlight_dir}/spotlight_dump_0.npy
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_dump.cmake)
+    set_tests_properties(Sar_spotlight_dump PROPERTIES
+        FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
 endif()
