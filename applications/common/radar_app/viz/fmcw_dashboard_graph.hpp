@@ -18,13 +18,12 @@
 #include <holoscan/core/domain/tensor.hpp>
 #include <holoscan/core/graph.hpp>
 #include <holoscan/core/port.hpp>
-#include <holoscan/operators/holoviz/holoviz_op.hpp>
-#include <holoviz/layer_desc.hpp>
-#include <holoviz/sink_desc.hpp>
+#include <holoscan/visualization/holoviz_op.hpp>
 
 #include "radar_app/app/angle_presentation.hpp"
 #include "radar_app/app/visualization_config.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
+#include "radar_app/viz/rgba_image_bridge_op.hpp"
 #include "radar_common/sim/scene.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
 
@@ -143,12 +142,12 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
       .device = holoscan::DeviceId{0},
   });
 
-  ::holoviz::LayerStack layers;
-  layers.add_image_layer(
-      "image",
-      ::holoviz::ImageLayerDesc{.format = ::holoviz::ImageFormat::kR8G8B8A8Unorm,
-                                .max_width = static_cast<std::uint32_t>(config.window_width),
-                                .max_height = static_cast<std::uint32_t>(config.window_height)});
+  holoscan::visualization::LayerStack layers;
+  layers.add_image_layer("image",
+                         holoscan::visualization::ImageLayerDesc{
+                             .format = holoscan::visualization::ImageFormat::kR8G8B8A8Unorm,
+                             .max_width = static_cast<std::uint32_t>(config.window_width),
+                             .max_height = static_cast<std::uint32_t>(config.window_height)});
 
   const auto display_period = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::duration<double>{1.0 / config.display_rate_hz});
@@ -156,15 +155,20 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
       std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>{
           std::max(static_cast<double>(max_profile_gap_frames + 1U) * frame_period,
                    2.0 / config.display_rate_hz)});
-  auto holoviz = graph.op<holoscan::holoviz::HolovizOp>(
+  auto image_bridge =
+      graph.op<RgbaImageBridgeOp>("dashboard_image", static_cast<std::int32_t>(config.window_width),
+                                  static_cast<std::int32_t>(config.window_height));
+  auto holoviz = graph.op<holoscan::visualization::HolovizOp>(
       "holoviz", std::move(layers),
-      ::holoviz::WindowSinkDesc{.title = config.window_title + " - " + std::move(workflow_title),
-                                .width = static_cast<std::uint32_t>(config.window_width),
-                                .height = static_cast<std::uint32_t>(config.window_height)},
-      display_period, max_input_age);
+      holoscan::visualization::WindowSinkDesc{
+          .title = config.window_title + " - " + std::move(workflow_title),
+          .width = static_cast<std::uint32_t>(config.window_width),
+          .height = static_cast<std::uint32_t>(config.window_height)},
+      holoscan::visualization::ClockTrigger{display_period}, max_input_age);
 
   // Keep the independently clock-driven display in its own partition.
   application.add(display);
+  application.add(image_bridge);
   graph.partition("visualization").add(holoviz);
 
   // Visualization is best-effort: discard stale frames instead of
@@ -190,7 +194,8 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
     const holoscan::ConnectionOptions waveform_queue{.queue_depth = max_profile_gap_frames + 2U};
     graph.add_flow(inputs.waveform, display->waveform_in, waveform_queue);
   }
-  graph.add_flow(display->rgba, holoviz->layer_input(0), display_queue);
+  graph.add_flow(display->rgba, image_bridge->rgba, display_queue);
+  graph.add_flow(image_bridge->image, holoviz->image_layer_input(0), display_queue);
 }
 
 }  // namespace holoscan::radar::app::viz

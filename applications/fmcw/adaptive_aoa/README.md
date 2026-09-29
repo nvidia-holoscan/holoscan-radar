@@ -30,6 +30,7 @@ flowchart LR
     Features --> Dashboard
     Range --> Dashboard
     Doppler --> Dashboard
+    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
 ```
 
 There is deliberately no clustering or detection reduction. CFAR emits one

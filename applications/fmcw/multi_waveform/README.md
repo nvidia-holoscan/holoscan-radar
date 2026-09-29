@@ -27,6 +27,7 @@ flowchart LR
   COMP --> ANGLE["BeamscanEstimatorOp"] --> TAIL["features / clusters / report"]
   WAVEFORM -->|Exact| RANGE
   TAIL --> DASHBOARD["FmcwDashboardOp"]
+  DASHBOARD --> IMAGE["RgbaImageBridgeOp"] --> HOLOVIZ["HSDK 5 HolovizOp"]
   WAVEFORM -->|Exact profile identity| DASHBOARD
 
   WAVEFORM -->|Exact| DOPPLER

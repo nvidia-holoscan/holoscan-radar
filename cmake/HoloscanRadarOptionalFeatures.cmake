@@ -6,15 +6,19 @@
 
 include(CheckCXXSourceCompiles)
 
-# The main-5x SDK exports the Graph-native Holoviz operator as one target.
+# HSDK 5 packages visualization separately from the core Graph SDK. Look in
+# the same installation as the selected holoscan package, even when the CLI
+# also mounts a neighboring SDK checkout into the container.
+find_package(holoscan-visualization QUIET CONFIG
+    PATHS "${holoscan_DIR}" NO_DEFAULT_PATH)
 set(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ FALSE)
-if(TARGET holoscan::operators::holoviz)
+if(TARGET holoscan::visualization::op_holoviz)
     get_target_property(_HOLOSCAN_RADAR_HSDK5_HOLOVIZ_INCLUDE_DIRS
-        holoscan::operators::holoviz INTERFACE_INCLUDE_DIRECTORIES)
+        holoscan::visualization::op_holoviz INTERFACE_INCLUDE_DIRECTORIES)
     foreach(_HOLOSCAN_RADAR_INCLUDE_DIR
             IN LISTS _HOLOSCAN_RADAR_HSDK5_HOLOVIZ_INCLUDE_DIRS)
         if(EXISTS
-           "${_HOLOSCAN_RADAR_INCLUDE_DIR}/holoscan/operators/holoviz/holoviz_op.hpp")
+           "${_HOLOSCAN_RADAR_INCLUDE_DIR}/holoscan/visualization/holoviz_op.hpp")
             set(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ TRUE)
             break()
         endif()
@@ -24,11 +28,11 @@ if(TARGET holoscan::operators::holoviz)
 endif()
 
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
-    message(STATUS "HSDK 5 Holoviz: found (Graph-native SIMO display enabled)")
+    message(STATUS "HSDK 5 Holoviz: found (Graph-native dashboard enabled)")
 else()
     message(STATUS
-        "HSDK 5 Holoviz: not found (holoscan::operators::holoviz); "
-        "Graph-native SIMO display disabled")
+        "HSDK 5 Holoviz: not found (holoscan::visualization::op_holoviz); "
+        "Graph-native dashboard disabled")
 endif()
 
 # X11 is used only to probe whether the HSDK 5 dashboard can open a display.

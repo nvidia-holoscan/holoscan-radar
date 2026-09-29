@@ -10,6 +10,11 @@ flowchart LR
     CFAR --> Comp --> Beamscan[Beamscan estimator] --> Features[Feature assembly]
     CFAR --> Features --> Cluster[DBSCAN] --> Reduce[Detection reduction] --> Report[Cluster report]
     Features --> Cluster
+    CFAR --> Dashboard[FmcwDashboardOp]
+    Features --> Dashboard
+    Range --> Dashboard
+    Doppler --> Dashboard
+    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
 ```
 
 The physical source PRI is divided across TX slots. The downstream waveform uses the per-TX effective PRI, equal to `num_tx` times the physical inter-chirp spacing.

@@ -4,20 +4,80 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <deque>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 #include <vector>
+
+#include <holoscan/core/compile.hpp>
+#include <holoscan/core/graph.hpp>
+#include <holoscan/time/realtime_clock.hpp>
+#include <holoscan/visualization/holoviz_op.hpp>
 
 #include "radar_app/app/angle_presentation.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
+#include "radar_app/viz/rgba_image_bridge_op.hpp"
 
 namespace {
 
 namespace viz = holoscan::radar::app::viz;
 namespace radar = holoscan::radar;
+
+class RgbaGraphSourceOp final : public holoscan::Operator<> {
+ public:
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.output(rgba).produces_tensor(holoscan::TensorOutputSpec{
+        .representation =
+            holoscan::TensorRepresentation{
+                .memory_kind = holoscan::MemoryKind::kCudaDevice,
+                .dtype = DLDataType{kDLUInt, 8U, 1U},
+                .rank = 3U,
+                .strides = holoscan::TensorStridePolicy::kContiguousOnly,
+            },
+        .bounds = holoscan::TensorBounds{.max_rank = 3U, .max_byte_span = 16U},
+    });
+  }
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = std::chrono::milliseconds{10}});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext&) override {
+    return {};
+  }
+
+  holoscan::Output<holoscan::Tensor> rgba{"rgba"};
+};
+
+TEST(FmcwDashboardTest, ConnectsRgbaTensorToHsdk5HolovizImageLayer) {
+  holoscan::Graph graph{"dashboard-image-bridge-test"};
+  auto source = graph.op<RgbaGraphSourceOp>("source");
+  auto bridge = graph.op<viz::RgbaImageBridgeOp>("bridge", 2, 2);
+  holoscan::visualization::LayerStack layers;
+  layers.add_image_layer("image",
+                         holoscan::visualization::ImageLayerDesc{
+                             .format = holoscan::visualization::ImageFormat::kR8G8B8A8Unorm,
+                             .max_width = 2U,
+                             .max_height = 2U});
+  auto sink = graph.op<holoscan::visualization::HolovizOp>(
+      "holoviz", std::move(layers),
+      holoscan::visualization::WindowSinkDesc{.title = "test", .width = 2U, .height = 2U});
+  graph.partition("application").add(source).add(bridge);
+  graph.partition("visualization").add(sink);
+  graph.add_flow(source->rgba, bridge->rgba);
+  graph.add_flow(bridge->image, sink->image_layer_input(0));
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  const holoscan::ExecutionPlan plan = holoscan::compile(graph, holoscan::CompileOptions{});
+  EXPECT_TRUE(plan.ok()) << plan.json();
+}
 
 TEST(AnglePresentationTest, ConvertsDirectionCosinesToPhysicalAngles) {
   holoscan::radar::AngleConvention convention;

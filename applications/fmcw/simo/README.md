@@ -10,6 +10,11 @@ flowchart LR
     CFAR --> Gather --> Beamscan[Beamscan estimator] --> Features[Feature assembly]
     CFAR --> Features --> Cluster[DBSCAN] --> Reduce[Detection reduction] --> Report[Cluster report]
     Features --> Cluster
+    CFAR --> Dashboard[FmcwDashboardOp]
+    Features --> Dashboard
+    Range --> Dashboard
+    Doppler --> Dashboard
+    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
 ```
 
 ## Build and run

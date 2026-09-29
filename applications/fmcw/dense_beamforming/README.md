@@ -10,6 +10,11 @@ flowchart LR
     Range --> Features
     Doppler --> Features
     Beamform --> Features
+    CFAR --> Dashboard[FmcwDashboardOp]
+    Features --> Dashboard
+    Range --> Dashboard
+    Doppler --> Dashboard
+    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
 ```
 
 ## Build and run
