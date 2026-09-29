@@ -1,0 +1,13 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#include "@PERF_OPERATOR_HEADER@"
+#include "utils/perf_yaml_standard.hpp"
+
+struct PerfYamlTool : holoscan::radar::perf::YamlStandardTraits<@PERF_OPERATOR_TYPE@> {
+  static const char* tool_name() { return "perf_@PERF_OPERATOR_NAME@"; }
+};
+
+int main(int argc, char** argv) {
+  return holoscan::radar::perf::perf_main<PerfYamlTool>(argc, argv);
+}

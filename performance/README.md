@@ -14,80 +14,87 @@ sidebands, but it captures bounded output snapshots with extra copies and does
 not expose paired per-frame timestamps. The performance runner keeps the Graph
 wiring and records source and synchronized sink times directly.
 
-## C++ adapter boundary
+## C++ recipe boundary
 
-The common driver validates and converts every YAML case before scope selection.
-It owns process warmup, independent Graph runs, sampling, and report rows. The
-typed recipe runner stages one, two, three, or six data tensors, creates the
-source, binds device outputs, assembles one partition, and captures paired
-source/synchronized-sink timestamps. `PerfRecipeOutputs` connects the timed
-output or aligned timed pair, drains the other outputs, and declares placement
-for optional unwired Tensor outputs. The same typed data-port source serves
-baseline and selected-live cases. An adapter builds valid tensors and Params, connects the operator's typed data ports, and names
-its outputs. Live adapters declare one selected value and its typed destination
-port; the shared source emits it on one frame and the runner checks emission
-and Params reversion. The adapter retains contract-specific value conversion
-and throughput units.
+The common driver loads and validates **every** case before scope selection. It
+owns process warmup, independent Graph runs, sampling, and schema-v3 reports.
+The registered recipe runner stages one, two, three, or six data tensors,
+constructs the operator through the pinned HSDK 5 authoring registry, resolves
+named ports, wires the source and timed/drained sinks, and records paired
+source/synchronized-sink timestamps. The recipe declares deliberately unwired
+outputs, too. HSDK port records check direction, payload identity, and authored
+Tensor rank, dtype, and memory constraints during Graph construction.
+
+Schema version 2 adds named axes and one fixed recipe to the existing explicit
+case list. The recipe names input ports, shapes, dtype, device placement,
+generators, canonical Params, constructor extents or a named sizing policy,
+outputs, and live ports with physical names and typed payload codecs. The
+shared pilot runner stages and connects only the live port named by a selected
+case; a scaled-axis codec declares its source axis in the recipe. It is a single-operator declaration,
+not a general Graph wiring language. Case IDs, scope tags, order, and
+`{profile}` expansion retain their version-1 behavior. The other 21 drivers
+continue to load version-1 suites.
 
 ### Adding a C++ operator
 
-1. Define `performance/profiles/<operator>.yaml` with three sizes and curated
-   scope cases. Name every documented live port in its manifest. Use an explicit
-   case family such as `id: "baseline-{profile}", profiles: [small, medium, large]`
-   when the parameters and scope tags are identical across sizes. Expansion
-   follows that list in order; it never combines independent parameter axes.
-2. Add `performance/cpp/perf_<operator>.cpp`. Its typed adapter defines a
-   `Scenario`, `parse_case`, `size_def`, `run_graph`, and `base_row`. In
-   `run_graph`, call `run_data_recipe` for defaults or declare `live_option`
-   and `selected_live_case` entries for overrides, then call
-   `run_selected_live_recipe`. Use `PerfRecipeOutputs` for timed and drained
-   outputs. Add `decorate_row` only for throughput units or notes, and
-   `validate_run_settings` only for special constraints such as a cached
-   transition needing a warmup frame. The shared driver supplies CLI, run
-   planning, sampling, and report rows.
-3. Add the operator name once to `HOLOSCAN_RADAR_PERF_TARGETS` in
-   `performance/cpp/CMakeLists.txt`. That list registers its target and Minimal
-   GPU smoke. Add a focused Overrides smoke when its live payload has a new
-   representation or timing behavior.
+1. Create `performance/profiles/<operator>.yaml` with three valid sizes, a
+   version-2 recipe, and curated cases. Declare every documented live port and
+   cover it alone at each size in Overrides. Run `--validate` and `--list-cases`;
+   both validate unselected cases without authoring a Graph.
+2. For direct `MaxTensorExtents`, built-in tensor generators, canonical scalar
+   or sequence Params, and registered scalar or host-vector live payloads, add the name and
+   operator type to `performance/cpp/CMakeLists.txt` with `radar_add_yaml_perf`.
+   The generated entry point uses `YamlStandardTraits`; no operator-owned
+   C++ source is needed. `test_perf_yaml_standard` exercises this path with a
+   real two-input operator and a one-frame scalar live case.
+3. If the locked contract needs a descriptor builder, related-input fixture,
+   cross-field check, derived bounds, payload codec, throughput unit, or
+   report postprocessing, put the typed adapter in `performance/cpp/perf_<operator>.cpp`.
+   That file owns only those semantics;
+   source publication, Graph assembly, timing, and report buckets stay shared.
+   Add the operator to `HOLOSCAN_RADAR_PERF_TARGETS` for its Minimal GPU smoke.
 
-`perf_ddm_power_fold.cpp` is a small no-live example; an angle estimator shows
-selected descriptor, host-vector, and scalar live cases. Keep valid input
-generation, typed HSDK data connections, `MaxTensorExtents`, and
-operator-specific scale calculations in the adapter. The shared payload codecs
-emit geometry, windows, double/int64 host vectors, smoothing, waveform, and
-scalar sidebands. The unit-test harness remains suitable for correctness
-checks; its bounded output snapshots add copies and lack the paired timestamps
-used here.
+The five pilot tools keep typed adapters in their `perf_*.cpp` files for their
+contract-specific parts:
+DDM power fold's DDM descriptor and divisibility, SnapshotGather's related
+indices and window, Beamscan's geometry/grid descriptors, FMCW range's FFT
+bounds and cached/unseen transitions, and CFAR's variant-dependent limits and
+calibration summary. Their executable names and CLI flags remain unchanged.
+The current HSDK registry cannot register local enum live payloads as external
+topics; the Beamscan and FMCW adapters use a typed flow connector for them.
 
-### Onboarding trial: DDM power fold
+### Pilot size and new-operator walkthrough
 
-All 26 current C++ operators already have performance drivers. To check the
-new-operator path, the smallest existing driver, `perf_ddm_power_fold.cpp`, was
-used as a fresh-adapter walkthrough. The required work is:
+The five original adapter files totaled 1,543 lines. After consolidating the
+pilot mechanics, the five `perf_*.cpp` adapters total 1,114 lines
+(429 fewer, about 28%). The shared pilot helper is 274 lines; registry,
+recipe, and YAML validation infrastructure is additional. Shared code now owns
+case identity and value merging, typed input staging, baseline and live Graph
+calls, cached-transition warmup checks, common payload builders, and rate
+conversion. A further pass reads named YAML axes directly and validates
+window, waveform, geometry, and live values by their constraints instead of
+repeating the exact curated case values in C++. The remaining per-operator
+C++ constructs contract-valid Params and derived bounds, validates relationships
+among fields, supplies the local enum and semantic live payloads, and provides
+operator-specific report fields. Beamscan now declares its direct pool bounds
+in YAML. SnapshotGather enum Params still need typed conversion: the pinned
+HSDK 5 parameter materializer rejects a YAML string for `doppler_edge`. These five operators have unusual semantic needs, so the new
+YAML-only path is the better guide for a standard operator than their adapter
+sizes alone.
 
-1. Choose three valid input shapes and curated cases in the YAML suite. The
-   shared loader supplies size selection and case IDs; `--validate` checks
-   every case before any Graph work.
-2. Decode one typed scenario and reject contract-invalid parameters. For this
-   operator the rank-4 shape and Doppler divisibility by TX count are specific
-   to its locked API.
-3. Stage a valid input tensor, create `DDMPowerFoldOp<float>` with its
-   `MaxTensorExtents` and descriptor, connect the named data port, and declare
-   the timed output. The recipe runner creates the source and sink.
-4. Describe input/output scale in `base_row`, then register one CMake target
-   name. `--list-cases` checks ordering; the generated Minimal smoke checks
-   Graph execution and a complete report without a speed threshold.
-
-The no-live adapter remains mostly descriptor and shape construction,
-operator creation, named data wiring, and scale calculation. A live adapter
-adds one typed case per YAML live port; the shared selected-live source owns
-payload pools and one-frame emission. `PerfRecipeOutputs` owns sink creation,
-output placement, and partition membership. No adapter implements a source
-`compute()` loop or a sampling loop.
+To assess a new standard operator: use its locked
+contract to choose three profiles; declare one fixed recipe with direct bounds
+and built-in generators; author explicit cases; register its HSDK operator type
+through `radar_add_yaml_perf`; run validation, Minimal, and relevant Overrides
+smokes. Add a `perf_*.cpp` adapter only when a declared component cannot encode
+a valid contract value or sizing rule. Python runtime parity still awaits a
+buildable HSDK 5 binding.
 
 ## YAML profiles and scopes
 
-Migrated tools read `performance/profiles/<operator>.yaml`. Each suite names
+Migrated tools read `performance/profiles/<operator>.yaml` automatically
+from the executable's source checkout, even when that checkout is mounted at a
+different path from its build. No YAML path flag is needed. Each suite names
 small, medium, and large shapes and explicitly lists parameter and one-frame
 `[live]` cases. Tags select cases without generating a Cartesian product.
 `minimal` includes default cases at every size; `limited` adds important

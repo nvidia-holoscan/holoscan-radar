@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <mutex>
 #include <set>
@@ -43,6 +44,8 @@
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_recipe.hpp"
+#include "utils/perf_registered_recipe.hpp"
+#include "utils/perf_yaml_pilot.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/perf_stats.hpp"
 #include "utils/tensor_factory.hpp"
@@ -50,26 +53,16 @@
 namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
 
-namespace {
+namespace perf_cfar_detector_adapter {
 
 using PerfPrecision = float;
 
 struct Footprint {
-  std::string name;
   std::vector<int64_t> guard;
   std::vector<int64_t> training;
 };
 
-struct SizeSpec {
-  std::string id;
-  int64_t doppler;
-  int64_t range;
-  std::string role;
-};
-
-struct CfarScenario {
-  std::string id;
-  std::string size_id;
+struct CfarScenario : perf::RecipeScenario {
   hr::CfarVariant variant;
   std::vector<int64_t> input_shape;
   Footprint footprint;
@@ -81,19 +74,8 @@ struct CfarScenario {
   std::vector<double> alpha_lut;
   hr::CfarPeakMode peak_mode{hr::CfarPeakMode::kNone};
   std::vector<int64_t> peak_radius{1};
-  std::string live_port;
   double threshold_scale{1.0};
 };
-
-Footprint footprint_small() {
-  return {"small", {1, 1}, {2, 2}};
-}
-Footprint footprint_mid() {
-  return {"mid", {2, 2}, {4, 4}};
-}
-Footprint footprint_large() {
-  return {"large", {2, 2}, {8, 8}};
-}
 
 int64_t interior_training(const Footprint& fp) {
   const int64_t hd = fp.guard[0] + fp.training[0];
@@ -149,153 +131,66 @@ std::vector<double> precompute_alpha_lut(const CfarScenario& scen) {
 
 perf::TimingCollector run_graph(const CfarScenario& scenario, const perf::RunPlan& plan) {
   CfarScenario prepared = scenario;
-  if (prepared.use_alpha_lut && prepared.alpha_lut.empty()) {
+  if (prepared.use_alpha_lut && prepared.alpha_lut.empty())
     prepared.alpha_lut = precompute_alpha_lut(prepared);
+  const auto& scen = prepared;
+  hr::MaxTensorExtents extents;
+  extents.max_doppler_bins = scen.input_shape[scen.input_shape.size() - 2];
+  extents.max_range_bins = scen.input_shape[scen.input_shape.size() - 1];
+  int64_t out_batch = 1, k = 1;
+  batch_and_k(scen.input_shape, scen.nci_axes, &out_batch, &k);
+  if (scen.input_shape.size() == 3U) {
+    extents.max_rx = scen.input_shape[0];
+  } else if (scen.input_shape.size() == 4U) {
+    extents.max_tx = scen.input_shape[0];
+    extents.max_rx = scen.input_shape[1];
   }
-  const CfarScenario& scen = prepared;
-  auto input = perf::make_power_map_device<PerfPrecision>(scen.input_shape);
-  using BaseOp = hr::CFARDetectorOp<PerfPrecision>;
-  const auto configure = [&](holoscan::Graph& graph, const auto& src,
-                             holoscan::CompileOptions& options, auto connect) {
-    hr::MaxTensorExtents extents;
-    extents.max_doppler_bins = scen.input_shape[scen.input_shape.size() - 2];
-    extents.max_range_bins = scen.input_shape[scen.input_shape.size() - 1];
-    int64_t out_batch = 1, k = 1;
-    batch_and_k(scen.input_shape, scen.nci_axes, &out_batch, &k);
-    // Input leading rank (before NCI) must be admitted even when NCI
-    // collapses it to a single plane (out_batch == 1).
-    if (scen.input_shape.size() == 3U) {
-      extents.max_rx = scen.input_shape[0];
-    } else if (scen.input_shape.size() == 4U) {
-      extents.max_tx = scen.input_shape[0];
-      extents.max_rx = scen.input_shape[1];
-    }
-    extents.max_detections =
-        out_batch * extents.max_doppler_bins.value() * extents.max_range_bins.value();
-    auto op = graph.op<BaseOp>("cfar", extents);
-    hr::CFARParams params;
-    params.cfar_variant = scen.variant;
-    params.guard_cells = scen.footprint.guard;
-    params.training_cells = scen.footprint.training;
-    params.pfa = scen.pfa;
-    params.threshold_scale = scen.threshold_scale;
-    params.nci_axes = scen.nci_axes;
-    params.os_rank = scen.os_rank;
-    params.max_detections = 0;
-    params.alpha_lut = scen.alpha_lut;
-    params.peak_mode = scen.peak_mode;
-    params.peak_radius = scen.peak_radius;
-    op.set_params(std::move(params));
-
-    const holoscan::ConnectionOptions q{.queue_depth = 4U};
-
-    graph.add_flow(src->out, op->rd_maps, q);
-    connect(graph, src, op, q);
-    perf::PerfRecipeOutputs outputs(graph, options, "cfar");
-    outputs.timed(op->detection_idx, "detection_idx");
-    outputs.drain(op->detection_mask, "detection_mask");
-    outputs.drain(op->detection_score, "detection_score");
-    outputs.drain(op->noise_estimate, "noise_estimate");
-    outputs.drain(op->cfar_power, "cfar_power");
-    outputs.finish(src, op);
-  };
-  if (scen.live_port.empty()) {
-    return perf::run_data_recipe(std::array{std::move(input)}, plan, "cfar-perf",
-                                 [&](auto& graph, const auto& src, auto& options) {
-                                   configure(graph, src, options,
-                                             [](auto&, const auto&, const auto&, const auto&) {});
-                                 });
-  }
-  const auto cases = std::make_tuple(
-      perf::live_option("os_rank",
-                        [&] {
-                          return perf::selected_live_case(
-                              "os_rank", int64_t{scen.os_rank > 0 ? scen.os_rank - 1 : 0},
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->os_rank, q);
-                              });
-                        }),
-      perf::live_option("guard_cells",
-                        [&] {
-                          return perf::selected_live_case(
-                              "guard_cells", hr::CfarCellWindowOverride{0, 0},
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->guard_cells, q);
-                              });
-                        }),
-      perf::live_option("training_cells",
-                        [&] {
-                          return perf::selected_live_case(
-                              "training_cells", hr::CfarCellWindowOverride{3, 3},
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->training_cells, q);
-                              });
-                        }),
-      perf::live_option("pfa",
-                        [&] {
-                          return perf::selected_live_case(
-                              "pfa", 1e-3,
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->pfa, q);
-                              });
-                        }),
-      perf::live_option("alpha_lut",
-                        [&] {
-                          auto changed = precompute_alpha_lut(scen);
-                          for (auto& value : changed)
-                            if (value > 0.0)
-                              value *= 1.1;
-                          return perf::selected_live_case(
-                              "alpha_lut", std::move(changed),
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->alpha_lut, q);
-                              });
-                        }),
-      perf::live_option("threshold_scale",
-                        [&] {
-                          return perf::selected_live_case(
-                              "threshold_scale", 1.1,
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->threshold_scale, q);
-                              });
-                        }),
-      perf::live_option("nci_axes",
-                        [&] {
-                          return perf::selected_live_case(
-                              "nci_axes", std::vector<int64_t>{0},
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->nci_axes, q);
-                              });
-                        }),
-      perf::live_option("max_detections", [&] {
-        return perf::selected_live_case(
-            "max_detections", int64_t{100},
-            [](auto& graph, const auto& src, const auto& op, const auto& q) {
-              graph.add_flow(src->override_out, op->max_detections, q);
-            });
-      }));
-  return perf::dispatch_live_case(scen.live_port, cases, [&](const auto& selected) {
-    return perf::run_selected_live_recipe(std::array{std::move(input)}, plan, "cfar-perf", selected,
-                                          configure);
-  });
+  extents.max_detections =
+      out_batch * extents.max_doppler_bins.value() * extents.max_range_bins.value();
+  hr::CFARParams params;
+  params.cfar_variant = scen.variant;
+  params.guard_cells = scen.footprint.guard;
+  params.training_cells = scen.footprint.training;
+  params.pfa = scen.pfa;
+  params.threshold_scale = scen.threshold_scale;
+  params.nci_axes = scen.nci_axes;
+  params.os_rank = scen.os_rank;
+  params.max_detections = 0;
+  params.alpha_lut = scen.alpha_lut;
+  params.peak_mode = scen.peak_mode;
+  params.peak_radius = scen.peak_radius;
+  using Op = hr::CFARDetectorOp<PerfPrecision>;
+  return perf::run_recipe_selected_case<Op, 1>(
+      scen, plan, extents, params, [&](const std::string& codec) -> perf::TimingCollector {
+        const auto emit = [&](const auto& changed) {
+          return perf::run_recipe_live_case<Op, 1>(scen, plan, extents, params, changed, changed);
+        };
+        if (codec == "rank_decrement")
+          return emit(
+              std::max<int64_t>(0, scen.os_rank - scen.live_value["decrement"].as<int64_t>()));
+        if (codec == "scaled_alpha_lut") {
+          auto changed = precompute_alpha_lut(scen);
+          const auto factor = scen.live_value["factor"].as<double>();
+          for (auto& alpha : changed)
+            if (alpha > 0.0)
+              alpha *= factor;
+          return emit(changed);
+        }
+        throw std::invalid_argument("unsupported CFAR live codec: " + codec);
+      });
 }
 
-void fill_throughput(perf::ResultRow* row, double median_ms) {
-  if (median_ms <= 0.0) {
-    return;
-  }
-  const double sec = median_ms / 1000.0;
+void fill_throughput(perf::ResultRow* row) {
   const int64_t D = row->map_shape[0];
   const int64_t R = row->map_shape[1];
   const double cells =
       static_cast<double>(row->out_batch) * static_cast<double>(D) * static_cast<double>(R);
-  row->cells_per_second = cells / sec;
-  row->slices_per_second = static_cast<double>(row->out_batch) / sec;
 
   const double tsz = sizeof(PerfPrecision);
   const double in_bytes = cells * static_cast<double>(row->k) * tsz;
   const double out_bytes = cells * (2.0 * tsz + 1.0);
-  row->estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9;
+  perf::set_recipe_throughput(*row, cells, static_cast<double>(row->out_batch),
+                              in_bytes + out_bytes);
 }
 
 perf::ResultRow base_row(const CfarScenario& scen) {
@@ -315,34 +210,6 @@ perf::ResultRow base_row(const CfarScenario& scen) {
 }
 
 // --- typed scenario construction from YAML cases ---
-
-std::vector<int64_t> plane_shape(const SizeSpec& s) {
-  return {s.doppler, s.range};
-}
-
-CfarScenario make_compute_scenario(hr::CfarVariant v, const SizeSpec& s, const Footprint& fp,
-                                   int64_t out_batch) {
-  CfarScenario sc;
-  sc.variant = v;
-  sc.size_id = s.id;
-  sc.footprint = fp;
-  if (out_batch > 1) {
-    sc.input_shape = {out_batch, s.doppler, s.range};
-  } else {
-    sc.input_shape = plane_shape(s);
-  }
-  if (v == hr::CfarVariant::kOS) {
-    sc.os_rank = (interior_training(fp) * 3) / 4;
-  }
-  std::ostringstream id;
-  id << "cfar_" << variant_tag(v) << "_" << s.id << "_" << fp.name;
-  if (out_batch > 1) {
-    id << "_b" << out_batch;
-  }
-  id << "_k1_compute";
-  sc.id = id.str();
-  return sc;
-}
 
 struct CalibrationPairSpec {
   std::string slow_id;
@@ -399,7 +266,7 @@ void build_alpha_calibration_summary(perf::PerfReport* report) {
 }
 
 void decorate_row(perf::ResultRow& row, const CfarScenario& scen) {
-  fill_throughput(&row, row.latency.median_ms);
+  fill_throughput(&row);
   if (scen.use_alpha_lut) {
     row.notes = "cold_ms includes initial alpha_lut H2D; override_ms is the changed frame for " +
                 scen.live_port;
@@ -427,54 +294,131 @@ struct CfarTraits : perf::PerfDriverDefaults {
   }
 
   static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
-    if (shape.size() != 2)
-      throw std::invalid_argument("CFAR profile rank mismatch");
-    return {id, shape, shape[0] * shape[1], id};
+    return perf::recipe_size_def(id, shape, 2, 2);
   }
-  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
-    if (shape.size() != 2 || shape[0] < 16 || shape[1] < 16)
+  static void validate_suite(const perf::ProfileSuite& suite) {
+    const auto recipe = perf::validate_pilot_suite<hr::CFARDetectorOp<PerfPrecision>>(
+        suite, "radar.CFARDetectorOp.float", "cfar_bounds",
+        {{"rd_maps",
+          {"channels", "doppler", "range"},
+          "float32",
+          "device",
+          "power_map",
+          {"channels"}}},
+        {"detection_idx",
+         {"detection_mask", "detection_score", "noise_estimate", "cfar_power"},
+         {},
+         4U},
+        {{"os_rank", "os_rank"},
+         {"guard_cells", "guard_cells"},
+         {"training_cells", "training_cells"},
+         {"pfa", "pfa"},
+         {"alpha_lut", "alpha_lut"},
+         {"threshold_scale", "threshold_scale"},
+         {"nci_axes", "nci_axes"},
+         {"max_detections", "max_detections"}},
+        {{"os_rank", "rank_decrement"},
+         {"guard_cells", "cfar_cell_window"},
+         {"training_cells", "cfar_cell_window"},
+         {"pfa", "double"},
+         {"alpha_lut", "scaled_alpha_lut"},
+         {"threshold_scale", "double"},
+         {"nci_axes", "host_int64_vector"},
+         {"max_detections", "int64"}});
+    std::set<std::string> backends;
+    for (const auto& c : suite.select("limited")) {
+      const auto params = perf::merge_recipe_map(recipe.params, c.parameters);
+      backends.insert(params["cfar_variant"].as<std::string>());
+    }
+    if (backends != std::set<std::string>{"CA", "GO", "SO", "OS"})
+      throw std::invalid_argument("CFAR Limited must cover CA, GO, SO, and OS backends");
+  }
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape,
+                             const perf::ProfileSuite& suite) {
+    auto scenario = perf::pilot_scenario<CfarScenario>(suite, c, shape, 2);
+    if (shape[0] < 16 || shape[1] < 16)
       throw std::invalid_argument("CFAR invalid shape");
-    perf::require_keys(c.parameters,
-                       {"variant", "footprint", "channels", "pfa", "peak_mode", "threshold_scale"},
-                       "parameters");
-    const auto variant = c.parameters["variant"].as<std::string>();
-    const auto footprint = c.parameters["footprint"].as<std::string>();
-    const auto channels = c.parameters["channels"].as<int64_t>();
-    const auto peak = c.parameters["peak_mode"].as<std::string>();
+    const auto& params = scenario.params;
+    perf::require_recipe_params(
+        params,
+        {"cfar_variant", "guard_cells", "training_cells", "pfa", "peak_mode", "threshold_scale",
+         "os_rank", "nci_axes", "alpha_lut", "max_detections"},
+        {"cfar_variant", "guard_cells", "training_cells", "pfa", "peak_mode", "threshold_scale"});
+    const auto variant = params["cfar_variant"].as<std::string>();
+    const auto channels = scenario.values.at("channels");
+    const auto peak = params["peak_mode"].as<std::string>();
+    const auto guard_pair = perf::recipe_pair<int64_t>(params["guard_cells"], "guard_cells");
+    const auto training_pair =
+        perf::recipe_pair<int64_t>(params["training_cells"], "training_cells");
+    const std::vector<int64_t> guard(guard_pair.begin(), guard_pair.end());
+    const std::vector<int64_t> training(training_pair.begin(), training_pair.end());
     if ((variant != "CA" && variant != "GO" && variant != "SO" && variant != "OS") ||
-        (footprint != "small" && footprint != "mid" && footprint != "large") ||
-        (channels != 1 && channels != 4) || (peak != "none" && peak != "range_doppler"))
+        (peak != "none" && peak != "range_doppler"))
       throw std::invalid_argument("CFAR invalid parameter choice");
     const auto v = variant == "GO"   ? hr::CfarVariant::kGO
                    : variant == "SO" ? hr::CfarVariant::kSO
                    : variant == "OS" ? hr::CfarVariant::kOS
                                      : hr::CfarVariant::kCA;
-    const auto fp = footprint == "mid"     ? footprint_mid()
-                    : footprint == "large" ? footprint_large()
-                                           : footprint_small();
-    const SizeSpec size{c.profile, shape[0], shape[1], c.profile};
-    auto scenario = make_compute_scenario(v, size, fp, channels);
-    if (channels == 4)
-      scenario.input_shape = {channels, shape[0], shape[1]};
-    scenario.id = c.id;
-    scenario.pfa = c.parameters["pfa"].as<double>();
-    scenario.threshold_scale = c.parameters["threshold_scale"].as<double>();
+    const Footprint fp{guard, training};
+    for (std::size_t axis = 0; axis < 2; ++axis)
+      if (guard[axis] < 0 || training[axis] <= 0 || guard[axis] > shape[axis] ||
+          training[axis] > shape[axis] || 2 * (guard[axis] + training[axis]) + 1 > shape[axis])
+        throw std::invalid_argument("CFAR footprint exceeds profile plane");
+    scenario.variant = v;
+    scenario.footprint = fp;
+    scenario.input_shape =
+        channels > 1 ? std::vector<int64_t>{channels, shape[0], shape[1]} : shape;
+    scenario.pfa = params["pfa"].as<double>();
+    scenario.threshold_scale = params["threshold_scale"].as<double>();
     scenario.peak_mode =
         peak == "range_doppler" ? hr::CfarPeakMode::kRangeDoppler : hr::CfarPeakMode::kNone;
-    if (scenario.pfa <= 0.0 || scenario.pfa >= 1.0 || scenario.threshold_scale <= 0.0)
+    if (v == hr::CfarVariant::kOS) {
+      const auto rank = params["os_rank"];
+      if (!rank || rank["factory"].as<std::string>() != "three_quarter_training_rank")
+        throw std::invalid_argument("OS CFAR needs a valid rank factory");
+      scenario.os_rank = (interior_training(fp) * 3) / 4;
+    }
+    if (!std::isfinite(scenario.pfa) || scenario.pfa <= 0.0 || scenario.pfa >= 1.0 ||
+        !std::isfinite(scenario.threshold_scale) || scenario.threshold_scale <= 0.0)
       throw std::invalid_argument("CFAR invalid pfa or threshold scale");
-    if (c.override_value) {
-      scenario.live_port = (*c.override_value)["port"].as<std::string>();
-      const auto value = (*c.override_value)["value"].as<std::string>();
-      const std::map<std::string, std::string> allowed = {
-          {"os_rank", "lower"},    {"guard_cells", "zero"},  {"training_cells", "three"},
-          {"pfa", "0.001"},        {"alpha_lut", "scaled"},  {"threshold_scale", "1.1"},
-          {"nci_axes", "channel"}, {"max_detections", "100"}};
-      if (allowed.at(scenario.live_port) != value ||
-          (scenario.live_port == "os_rank" && v != hr::CfarVariant::kOS) ||
-          (scenario.live_port == "nci_axes" && channels != 4) ||
-          (scenario.live_port == "alpha_lut" && v != hr::CfarVariant::kCA))
-        throw std::invalid_argument("CFAR incompatible live override");
+    if (scenario.live_port == "os_rank") {
+      const auto decrement = scenario.live_value["decrement"].as<int64_t>();
+      if (v != hr::CfarVariant::kOS || decrement < 0 || decrement >= scenario.os_rank)
+        throw std::invalid_argument("CFAR invalid live OS rank");
+    } else if (scenario.live_port == "guard_cells" || scenario.live_port == "training_cells") {
+      const auto pair = perf::recipe_pair<int64_t>(scenario.live_value, scenario.live_port);
+      const auto& other = scenario.live_port == "guard_cells" ? training_pair : guard_pair;
+      for (std::size_t axis = 0; axis < 2; ++axis) {
+        const auto g = scenario.live_port == "guard_cells" ? pair[axis] : other[axis];
+        const auto t = scenario.live_port == "training_cells" ? pair[axis] : other[axis];
+        if (g < 0 || t <= 0 || g > shape[axis] || t > shape[axis] || 2 * (g + t) + 1 > shape[axis])
+          throw std::invalid_argument("CFAR live footprint exceeds profile plane");
+      }
+    } else if (scenario.live_port == "pfa") {
+      const auto value = scenario.live_value.as<double>();
+      if (!std::isfinite(value) || value <= 0.0 || value >= 1.0)
+        throw std::invalid_argument("CFAR live pfa must be between zero and one");
+    } else if (scenario.live_port == "alpha_lut") {
+      const auto factor = scenario.live_value["factor"].as<double>();
+      if (scenario.live_value["factory"].as<std::string>() != "scaled_alpha_lut" ||
+          !std::isfinite(factor) || factor <= 0.0)
+        throw std::invalid_argument("CFAR invalid live alpha LUT factory or factor");
+    } else if (scenario.live_port == "threshold_scale") {
+      const auto value = scenario.live_value.as<double>();
+      if (!std::isfinite(value) || value <= 0.0)
+        throw std::invalid_argument("CFAR live threshold scale must be positive");
+    } else if (scenario.live_port == "nci_axes") {
+      const auto axes = scenario.live_value.as<std::vector<int64_t>>();
+      if (axes.size() > (channels > 1 ? 1U : 0U) ||
+          std::any_of(axes.begin(), axes.end(), [](int64_t axis) {
+            return axis != 0;
+          }))
+        throw std::invalid_argument("CFAR live NCI axes must name a leading input axis");
+    } else if (scenario.live_port == "max_detections") {
+      if (scenario.live_value.as<int64_t>() <= 0)
+        throw std::invalid_argument("CFAR live detection cap must be positive");
+    } else if (!scenario.live_port.empty()) {
+      throw std::invalid_argument("unknown CFAR live port");
     }
     return scenario;
   }
@@ -484,8 +428,8 @@ struct CfarTraits : perf::PerfDriverDefaults {
   }
 };
 
-}  // namespace
+}  // namespace perf_cfar_detector_adapter
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<CfarTraits>(argc, argv);
+  return holoscan::radar::perf::perf_main<perf_cfar_detector_adapter::CfarTraits>(argc, argv);
 }

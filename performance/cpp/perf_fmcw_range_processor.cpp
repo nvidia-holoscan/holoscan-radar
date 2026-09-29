@@ -1,15 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Performance characterization for FMCWRangeProcessorOp — windowed FFT along
-// fast-time. Sweeps the (chirps x samples) size ladder, the range window
-// (rectangular / Hann), and a multi-channel batch.
-//
-// This driver measures Params-selected range_window configurations; it does not
-// report mid-session live-override latency. Measurement tool only: no timing
-// assertions.
-// See docs/planning/OPERATOR_DEVELOPMENT.md.
+// Typed range-FFT semantics for the shared YAML recipe driver.
 
+#include <algorithm>
 #include <complex>
 #include <cstdint>
 #include <cstdlib>
@@ -17,6 +11,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <memory>
+#include <map>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -36,37 +31,24 @@
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_recipe.hpp"
+#include "utils/perf_registered_recipe.hpp"
+#include "utils/perf_yaml_codecs.hpp"
+#include "utils/perf_yaml_pilot.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
 namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
 
-namespace {
+namespace perf_fmcw_range_processor_adapter {
 
 using PerfPrecision = float;  // v1 characterizes single precision (complex64).
 
-struct SizeSpec {
-  std::string id;
-  int64_t num_chirps;
-  int64_t samples_per_chirp;  // fast-time FFT length (natural nfft)
-  std::string role;
-};
-
-struct RangeScenario {
-  std::string id;
-  std::string size_id;
-  int64_t num_chirps{0};
-  int64_t samples_per_chirp{0};
-  int64_t channels{1};  // leading batch axis (e.g. rx elements)
+struct RangeScenario : perf::RecipeScenario {
   hr::WindowType window{hr::WindowType::kNone};
   bool apply_dechirp{false};
   hr::FftNorm fft_norm{hr::FftNorm::kBackward};
   int64_t nfft{0};
-  double pri{25.0e-6};
-  std::string live_port;
-  std::string override_value;
-  bool cached_override{false};
 };
 
 // FFT-friendly powers of two so cuFFT takes its fast path; the ladder spans a
@@ -76,193 +58,61 @@ std::string window_tag(hr::WindowType w) {
   return w == hr::WindowType::kHann ? "hann" : "rect";
 }
 
-hr::WindowSpec window_of(hr::WindowType type) {
-  hr::WindowSpec w;
-  w.type = type;
-  return w;
-}
-
-// A fixed, valid waveform descriptor so range_bins is emitted every tick. The
-// exact values do not affect timing; they only need to pass descriptor
-// validation (all finite and > 0, bandwidth defined).
-hr::FMCWWaveformDescriptor make_waveform(double pri = 25.0e-6) {
-  hr::FMCWWaveformSpec spec;
-  spec.carrier_frequency = 77.0e9;
-  spec.bandwidth = 150.0e6;
-  spec.chirp_duration = 20.0e-6;
-  spec.sample_rate = 12.8e6;
-  spec.chirp_repetition_interval = pri;
-  return hr::FMCWWaveformDescriptor(spec);
-}
-
-std::vector<int64_t> cube_shape(const RangeScenario& scen) {
-  if (scen.channels > 1) {
-    return {scen.channels, scen.num_chirps, scen.samples_per_chirp};
-  }
-  return {scen.num_chirps, scen.samples_per_chirp};
-}
-
-// ---------------------------------------------------------------------------
-// Graph: adc_cube source -> range op -> terminal (profiles) + null (bins).
-// range_bins is always emitted here because we set a valid waveform.
-// ---------------------------------------------------------------------------
-hr::FftNorm norm_of(const std::string& value) {
-  if (value == "backward")
-    return hr::FftNorm::kBackward;
-  if (value == "ortho")
-    return hr::FftNorm::kOrtho;
-  if (value == "forward")
-    return hr::FftNorm::kForward;
-  throw std::invalid_argument("unknown FFT normalization: " + value);
-}
-
-hr::WindowType window_type_of(const std::string& value) {
-  if (value == "none")
-    return hr::WindowType::kNone;
-  if (value == "hann")
-    return hr::WindowType::kHann;
-  if (value == "hamming")
-    return hr::WindowType::kHamming;
-  throw std::invalid_argument("unknown range window: " + value);
-}
-
 perf::TimingCollector run_graph(const RangeScenario& scen, const perf::RunPlan& plan) {
-  auto cube = perf::make_iq_cube_device<PerfPrecision>(cube_shape(scen));
-  const auto configure = [&](holoscan::Graph& graph, const auto& src,
-                             holoscan::CompileOptions& options, auto connect) {
-    hr::MaxTensorExtents extents;
-    extents.max_chirps = scen.num_chirps;
-    extents.max_range_bins = std::max<int64_t>(
-        scen.live_port == "nfft" ? scen.samples_per_chirp * 2 : scen.samples_per_chirp, scen.nfft);
-    if (scen.channels > 1)
-      extents.max_rx = scen.channels;
-    auto op = graph.op<hr::FMCWRangeProcessorOp<PerfPrecision>>("range", extents);
-    hr::FMCWRangeProcessorParams params;
-    params.waveform = make_waveform(scen.pri);
-    params.range_window = window_of(scen.window);
-    params.apply_dechirp = scen.apply_dechirp;
-    params.fft_norm = scen.fft_norm;
-    params.nfft = scen.nfft;
-    op.set_params(std::move(params));
-    const holoscan::ConnectionOptions q{.queue_depth = 4U};
-    graph.add_flow(src->out, op->adc_cube, q);
-    connect(graph, src, op, q);
-    perf::PerfRecipeOutputs outputs(graph, options, "range");
-    outputs.timed(op->range_profiles, "range_profiles");
-    outputs.drain(op->range_bins, "range_bins");
-    outputs.finish(src, op);
-  };
-  if (scen.live_port.empty()) {
-    return perf::run_data_recipe(std::array{std::move(cube)}, plan, "range-perf",
-                                 [&](auto& graph, const auto& src, auto& options) {
-                                   configure(graph, src, options,
-                                             [](auto&, const auto&, const auto&, const auto&) {});
-                                 });
-  }
-  const auto cases = std::make_tuple(
-      perf::live_option("range_window",
-                        [&] {
-                          return perf::live_case(
-                              "range_window", window_of(scen.window),
-                              window_of(window_type_of(scen.override_value)),
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->range_window_in, q);
-                              });
-                        }),
-      perf::live_option("apply_dechirp",
-                        [&] {
-                          return perf::live_case(
-                              "apply_dechirp", scen.apply_dechirp, scen.override_value == "true",
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->apply_dechirp_in, q);
-                              });
-                        }),
-      perf::live_option("waveform",
-                        [&] {
-                          return perf::live_case(
-                              "waveform", hr::to_wire(make_waveform(scen.pri)),
-                              hr::to_wire(make_waveform(std::stod(scen.override_value))),
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->waveform_in, q);
-                              });
-                        }),
-      perf::live_option("fft_norm",
-                        [&] {
-                          return perf::live_case(
-                              "fft_norm", scen.fft_norm, norm_of(scen.override_value),
-                              [](auto& graph, const auto& src, const auto& op, const auto& q) {
-                                graph.add_flow(src->override_out, op->fft_norm_in, q);
-                              });
-                        }),
-      perf::live_option("nfft", [&] {
-        return perf::live_case(
-            "nfft", scen.nfft, int64_t{2 * scen.samples_per_chirp},
-            [](auto& graph, const auto& src, const auto& op, const auto& q) {
-              graph.add_flow(src->override_out, op->nfft_in, q);
-            },
-            scen.cached_override);
-      }));
-  return perf::dispatch_live_case(scen.live_port, cases, [&](const auto& selected) {
-    return perf::run_selected_live_recipe(std::array{std::move(cube)}, plan, "range-perf", selected,
-                                          configure);
-  });
+  hr::MaxTensorExtents extents;
+  extents.max_chirps = scen.axis("chirps");
+  const auto changed_nfft =
+      scen.live_port == "nfft"
+          ? perf::scaled_recipe_axis(scen.live_value, scen.axis("samples"), "nfft")
+          : scen.axis("samples");
+  extents.max_range_bins = std::max({scen.axis("samples"), scen.nfft, changed_nfft});
+  if (scen.axis("channels") > 1)
+    extents.max_rx = scen.axis("channels");
+  hr::FMCWRangeProcessorParams params;
+  params.waveform = perf::recipe_fmcw_waveform(scen.params["waveform"]);
+  params.range_window = perf::recipe_window(scen.window);
+  params.apply_dechirp = scen.apply_dechirp;
+  params.fft_norm = scen.fft_norm;
+  params.nfft = scen.nfft;
+  using Op = hr::FMCWRangeProcessorOp<PerfPrecision>;
+  return perf::run_recipe_selected_case<Op, 1>(
+      scen, plan, extents, params, [&](const std::string& codec) -> perf::TimingCollector {
+        if (codec != "enum" || scen.live_port != "fft_norm")
+          throw std::invalid_argument("unsupported range FFT live codec: " + codec);
+        const auto changed = perf::recipe_fft_norm(scen.live_value.as<std::string>());
+        return perf::run_recipe_live_case_with_connector<Op, 1>(
+            scen, plan, extents, params, changed, changed,
+            [](auto& graph, const auto& source, const auto& op, const auto& queue) {
+              graph.add_flow(source->override_out, op->fft_norm_in, queue);
+            });
+      });
 }
 
-void fill_throughput(perf::ResultRow* row, const RangeScenario& scen, double median_ms) {
-  if (median_ms <= 0.0) {
-    return;
-  }
-  const double sec = median_ms / 1000.0;
-  const double batch = static_cast<double>(scen.channels);
-  const double chirps = static_cast<double>(scen.num_chirps);
-  const double n = static_cast<double>(scen.samples_per_chirp);
-  row->cells_per_second = batch * chirps * n / sec;
-  row->slices_per_second = batch * chirps / sec;
+void fill_throughput(perf::ResultRow* row, const RangeScenario& scen) {
+  const double batch = static_cast<double>(scen.axis("channels"));
+  const double chirps = static_cast<double>(scen.axis("chirps"));
+  const double n = static_cast<double>(scen.axis("samples"));
 
   const double csz = sizeof(std::complex<PerfPrecision>);
   const double in_bytes = batch * chirps * n * csz;
   const double out_bytes = batch * chirps * n * csz + n * sizeof(PerfPrecision);
-  row->estimated_effective_gbps = (in_bytes + out_bytes) / sec / 1e9;
+  perf::set_recipe_throughput(*row, batch * chirps * n, batch * chirps, in_bytes + out_bytes);
 }
 
 perf::ResultRow base_row(const RangeScenario& scen) {
   perf::ResultRow row;
   row.op_name = "FMCWRangeProcessorOp";
   row.variant = window_tag(scen.window);
-  perf::set_input_and_trailing_map_shape(row, cube_shape(scen));
-  row.out_batch = scen.channels;
-  row.k = scen.samples_per_chirp;
+  perf::set_input_and_trailing_map_shape(row,
+                                         perf::recipe_shape(scen.recipe.inputs.at(0), scen.values));
+  row.out_batch = scen.axis("channels");
+  row.k = scen.axis("samples");
   row.live_port = scen.live_port;
   return row;
 }
 
-RangeScenario make_scenario(hr::WindowType window, const SizeSpec& s, int64_t channels = 1) {
-  RangeScenario sc;
-  sc.size_id = s.id;
-  sc.num_chirps = s.num_chirps;
-  sc.samples_per_chirp = s.samples_per_chirp;
-  sc.channels = channels;
-  sc.window = window;
-  std::ostringstream id;
-  id << "range_" << window_tag(window) << "_" << s.id;
-  if (channels > 1) {
-    id << "_ch" << channels;
-  }
-  id << "_compute";
-  sc.id = id.str();
-  return sc;
-}
-
-// ---------------------------------------------------------------------------
-// Traits: the operator-specific surface the shared driver plugs into.
-// ---------------------------------------------------------------------------
-void validate_run_settings(const RangeScenario& scen, const perf::RunSettings& rs) {
-  if (scen.cached_override && rs.warmup_frames < 1)
-    throw std::invalid_argument("cached transition requires at least one warmup frame");
-}
-
 void decorate_row(perf::ResultRow& row, const RangeScenario& scen) {
-  fill_throughput(&row, scen, row.latency.median_ms);
+  fill_throughput(&row, scen);
   row.notes =
       "cold_ms is first-frame latency including initial "
       "window/FFT plan build; median/p90 are post-warmup "
@@ -280,67 +130,70 @@ struct RangeTraits : perf::PerfDriverDefaults {
   }
 
   static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
-    if (shape.size() != 2)
-      throw std::invalid_argument("FMCWRange profile rank mismatch");
-    return {id, shape, shape[0] * shape[1], id};
+    return perf::recipe_size_def(id, shape, 2, 2);
   }
-  static RangeScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
-    if (shape.size() != 2 || shape[1] < 2)
+  static void validate_suite(const perf::ProfileSuite& suite) {
+    (void)perf::validate_pilot_suite<hr::FMCWRangeProcessorOp<PerfPrecision>>(
+        suite, "radar.FMCWRangeProcessorOp.float", "range_fft_bounds",
+        {{"adc_cube",
+          {"channels", "chirps", "samples"},
+          "complex64",
+          "device",
+          "iq_cube",
+          {"channels"}}},
+        {"range_profiles", {"range_bins"}, {}, 4U},
+        {{"range_window", "range_window"},
+         {"apply_dechirp", "apply_dechirp"},
+         {"waveform", "waveform"},
+         {"fft_norm", "fft_norm"},
+         {"nfft", "nfft"}},
+        {{"range_window", "window_spec"},
+         {"apply_dechirp", "bool"},
+         {"waveform", "waveform_descriptor"},
+         {"fft_norm", "enum"},
+         {"nfft", "scaled_axis"}});
+  }
+  static RangeScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape,
+                                  const perf::ProfileSuite& suite) {
+    auto scenario = perf::pilot_scenario<RangeScenario>(suite, c, shape, 2);
+    if (shape[1] < 2)
       throw std::invalid_argument("FMCWRange invalid profile shape");
-    perf::require_keys(c.parameters,
-                       {"range_window", "apply_dechirp", "fft_norm", "nfft", "pri", "channels"},
-                       "parameters");
-    if (!c.parameters["range_window"] || !c.parameters["fft_norm"])
-      throw std::invalid_argument("FMCWRange needs window and FFT norm");
-    const auto window = window_type_of(c.parameters["range_window"].as<std::string>());
-    const SizeSpec size{c.profile, shape[0], shape[1], c.profile};
-    auto scenario = make_scenario(window, size);
-    scenario.id = c.id;
-    scenario.size_id = c.profile;
-    scenario.fft_norm = norm_of(c.parameters["fft_norm"].as<std::string>());
-    if (c.parameters["apply_dechirp"])
-      scenario.apply_dechirp = c.parameters["apply_dechirp"].as<bool>();
-    if (c.parameters["channels"])
-      scenario.channels = c.parameters["channels"].as<int64_t>();
-    if (c.parameters["nfft"])
-      scenario.nfft = c.parameters["nfft"].as<int64_t>();
-    if (c.parameters["pri"])
-      scenario.pri = c.parameters["pri"].as<double>();
-    if (scenario.channels <= 0 || (scenario.nfft != 0 && scenario.nfft < shape[1]) ||
-        scenario.nfft > 2 * shape[1] || scenario.pri <= 20.0e-6)
-      throw std::invalid_argument("FMCWRange incompatible parameters");
+    const auto& params = scenario.params;
+    perf::require_recipe_params(params,
+                                {"range_window", "apply_dechirp", "fft_norm", "nfft", "waveform"});
+    const auto window = perf::recipe_window_type(params["range_window"]["type"].as<std::string>());
+    scenario.window = window;
+    scenario.fft_norm = perf::recipe_fft_norm(params["fft_norm"].as<std::string>());
+    scenario.apply_dechirp = params["apply_dechirp"].as<bool>();
+    scenario.nfft = params["nfft"].as<int64_t>();
+    (void)perf::recipe_fmcw_waveform(params["waveform"]);
+    if (scenario.nfft != 0 && scenario.nfft < shape[1])
+      throw std::invalid_argument("FMCWRange nfft cannot be shorter than input samples");
     if (c.override_value) {
-      scenario.live_port = (*c.override_value)["port"].as<std::string>();
-      scenario.override_value = (*c.override_value)["value"].as<std::string>();
-      if ((*c.override_value)["cache"]) {
-        const auto cache = (*c.override_value)["cache"].as<std::string>();
-        if (scenario.live_port != "nfft")
-          throw std::invalid_argument("cached transition only applies to nfft");
-        scenario.cached_override = cache == "cached";
-      }
+      const auto value = scenario.live_value;
       if (scenario.live_port == "range_window") {
-        (void)window_type_of(scenario.override_value);
+        (void)perf::recipe_window_type(value["type"].as<std::string>());
       } else if (scenario.live_port == "apply_dechirp") {
-        if (scenario.override_value != "true" && scenario.override_value != "false")
-          throw std::invalid_argument("invalid apply_dechirp override");
+        (void)value.as<bool>();
       } else if (scenario.live_port == "waveform") {
-        if (std::stod(scenario.override_value) <= 20.0e-6)
-          throw std::invalid_argument("invalid waveform PRI override");
+        (void)perf::recipe_fmcw_waveform(params["waveform"], value["pri_seconds"].as<double>());
       } else if (scenario.live_port == "fft_norm") {
-        (void)norm_of(scenario.override_value);
+        (void)perf::recipe_fft_norm(value.as<std::string>());
       } else if (scenario.live_port == "nfft") {
-        if (scenario.override_value != "double")
-          throw std::invalid_argument("nfft override must be double");
+        (void)perf::scaled_recipe_axis(value, scenario.axis("samples"), "nfft");
       } else {
         throw std::invalid_argument("unknown FMCWRange live port");
       }
+      if ((*c.override_value)["cache"] && scenario.live_port != "nfft")
+        throw std::invalid_argument("cached transition only applies to nfft");
     }
     return scenario;
   }
 };
 
-}  // namespace
+}  // namespace perf_fmcw_range_processor_adapter
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<RangeTraits>(argc, argv);
+  return holoscan::radar::perf::perf_main<perf_fmcw_range_processor_adapter::RangeTraits>(argc,
+                                                                                          argv);
 }

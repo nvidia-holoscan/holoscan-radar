@@ -47,8 +47,8 @@ throws or remains deferred in the Jira backlog.
 - [ ] **Tests** — `tests/cpp/<group>/test_<operator>.cpp` covers `TESTING.md`
       unit checks; all output ports wired in harness tests; float/double +
       error paths where applicable.
-- [ ] **Performance** — `performance/cpp/perf_<operator>.cpp` harness + CMake
-      smoke test when a hot path exists (see **Performance** below).
+- [ ] **Performance** — a YAML suite plus CMake smoke registration, with a
+      typed `perf_<operator>.cpp` adapter only for contract-specific semantics (see **Performance** below).
 - [ ] **`ctest -L unit`** and **`pre-commit run --all-files`** pass.
 - [ ] **Performance** — `performance/cpp/perf_<operator>` consumer when the
       operator is GPU/hot-path; **includes inline `[live]` override
@@ -202,20 +202,19 @@ Measurement harness (not pass/fail thresholds). See
 characterization. Skip only if the operator has no GPU/hot path yet; say so
 in Jira.
 
-- [ ] **Performance adapter + YAML suite** — `performance/cpp/perf_<operator>.cpp`
-      defines typed `Scenario`, `parse_case`, `size_def`, `run_graph`, and
-      `base_row` hooks for the shared driver. In `run_graph`, use
-      `run_data_recipe` or `run_selected_live_recipe`; declare timed and
-      drained outputs with `PerfRecipeOutputs`. The recipe runner stages inputs,
-      creates sources and sinks, assembles the Graph partition, and returns
-      paired timestamps. Add `decorate_row` only for throughput units or notes. `performance/profiles/<operator>.yaml` names
-      small, medium, and large profiles and curated cases for all five scopes.
-      Limited includes every backend; Overrides covers every `[live]` input
-      alone at all three sizes. Use an explicit `{profile}` family only when
-      cases share parameters and tags across named sizes. No implicit Cartesian
-      product. Run `--validate` and `--list-cases` before GPU profiling.
-- [ ] Wire **every output port** (terminal sink on the primary sparse/dense
-      result; null sinks on the rest) so the operator ticks.
+- [ ] **Performance YAML suite** — add three sizes, a version-2 fixed
+      recipe, and curated cases in `performance/profiles/<operator>.yaml`.
+      Declare named input axes, generator/dtype/device placement, canonical
+      Params, extents or a named bounds policy, outputs, and live mappings.
+      Use `radar_add_yaml_perf` in `performance/cpp/CMakeLists.txt` when direct
+      bounds and registered scalar/sequence Params and live codecs suffice.
+      Otherwise put typed semantic code in `perf_<operator>.cpp`; keep
+      source, Graph assembly, timing, and report buckets in shared code.
+      Limited covers every backend; Overrides covers every `[live]` input
+      alone at all three sizes. No implicit Cartesian product. Run
+      `--validate` and `--list-cases` before GPU profiling.
+- [ ] **Output declaration** — time the primary output, drain outputs needed
+      to keep the operator ticking, and name deliberately unwired outputs.
 - [ ] **Process warmup** — the shared driver runs a discarded small-profile
       graph session before the measured matrix so scenario #1 `cold_ms` is not
       inflated by CUDA/Holoscan first-touch.
@@ -225,8 +224,7 @@ in Jira.
 - [ ] **`[live]` overrides in the harness** — if the operator has any live
       params, the YAML Overrides scope must isolate each `[live]` port at
       each size and report the one changed frame per independent run. Declare
-      one typed `live_option` per YAML port and connect its selected source
-      output to the operator input. Exercise any `[live]` fast paths (named slow/fast pairs if applicable); do not
+      typed adapter code only when a live codec needs contract-specific conversion. Exercise any `[live]` fast paths (named slow/fast pairs if applicable); do not
       claim a fast path while timing only the slow one. See `OPERATOR_DEVELOPMENT.md` → Performance
       characterization → Required coverage.
 - [ ] **CMake** — add the name once to `HOLOSCAN_RADAR_PERF_TARGETS` in
@@ -237,11 +235,9 @@ in Jira.
       `ctest -L performance`); skim cold vs steady for per-tick alloc / D2H /
       host-scan red flags before calling the operator performance-ready.
 
-Simple exemplar: `performance/cpp/perf_ddm_power_fold.cpp` and
-`performance/profiles/ddm_power_fold.yaml`. The `performance/README.md`
-onboarding trial walks through its remaining typed code. Use an angle
-estimator as the multi-port live-payload example; CFAR and DetectionReduction
-show double/int64 host-vector payloads.
+See `performance/README.md` for the YAML-only path and pilot results. The five
+pilot `performance/cpp/perf_*.cpp` adapters show when typed semantics remain
+necessary.
 
 ---
 

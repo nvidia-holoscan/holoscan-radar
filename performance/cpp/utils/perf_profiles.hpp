@@ -11,6 +11,7 @@
 #include <array>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <initializer_list>
+#include <map>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -64,12 +65,16 @@ struct ProfileCase {
   std::string profile;
   std::vector<std::string> scopes;
   YAML::Node parameters;
+  YAML::Node fixture;
   std::optional<YAML::Node> override_value;
   int source_line{0};
 };
 
 struct ProfileSuite {
+  int version{1};
   std::array<std::vector<int64_t>, 3> shapes;
+  std::vector<std::string> axes;
+  YAML::Node recipe;
   std::vector<std::string> live_ports;
   std::vector<ProfileCase> cases;
 
@@ -78,6 +83,16 @@ struct ProfileSuite {
       if (kProfiles[i] == profile)
         return shapes[i];
     throw std::invalid_argument("unknown profile: " + std::string(profile));
+  }
+
+  [[nodiscard]] std::map<std::string, int64_t> axes_for(std::string_view profile) const {
+    const auto& shape = shape_for(profile);
+    if (axes.size() != shape.size())
+      throw std::invalid_argument("profile axes and shape have different lengths");
+    std::map<std::string, int64_t> result;
+    for (size_t i = 0; i < axes.size(); ++i)
+      result.emplace(axes[i], shape[i]);
+    return result;
   }
 
   [[nodiscard]] std::vector<ProfileCase> select(std::string_view scope) const {
@@ -101,15 +116,43 @@ struct ProfileSuite {
 inline ProfileSuite load_profile_suite(const std::filesystem::path& path,
                                        const std::string& expected_operator) {
   const YAML::Node root = YAML::LoadFile(path.string());
-  require_keys(root, {"version", "operator", "profiles", "live_ports", "cases"}, "suite");
+  require_keys(root, {"version", "operator", "axes", "recipe", "profiles", "live_ports", "cases"},
+               "suite");
   for (const char* key : {"version", "operator", "profiles", "live_ports", "cases"}) {
     if (!root[key])
       throw std::invalid_argument("suite missing required key: " + std::string(key));
   }
-  if (root["version"].as<int>() != 1 || root["operator"].as<std::string>() != expected_operator) {
+  const int version = root["version"].as<int>();
+  if ((version != 1 && version != 2) || root["operator"].as<std::string>() != expected_operator) {
     throw std::invalid_argument("profile suite version or operator mismatch: " + path.string());
   }
   ProfileSuite result;
+  result.version = version;
+  if (version == 2) {
+    if (!root["axes"] || !root["recipe"])
+      throw std::invalid_argument("version 2 suite requires axes and recipe");
+    const auto axes = root["axes"];
+    if (!axes.IsSequence() || axes.size() == 0)
+      throw std::invalid_argument("axes must be a nonempty sequence");
+    std::set<std::string> seen_axes;
+    for (const auto& axis : axes) {
+      const auto name = axis.as<std::string>();
+      if (name.empty() || !seen_axes.insert(name).second)
+        throw std::invalid_argument("empty or duplicate profile axis: " + name);
+      result.axes.push_back(name);
+    }
+    result.recipe = root["recipe"];
+    require_keys(result.recipe,
+                 {"operator_type", "inputs", "constructor", "params", "outputs", "live", "fixtures",
+                  "extension"},
+                 "recipe");
+    for (const char* key : {"operator_type", "inputs", "constructor", "params", "outputs"}) {
+      if (!result.recipe[key])
+        throw std::invalid_argument("recipe missing required key: " + std::string(key));
+    }
+  } else if (root["axes"] || root["recipe"]) {
+    throw std::invalid_argument("version 1 suite cannot declare axes or recipe");
+  }
   const auto profiles = root["profiles"];
   require_keys(profiles, {"small", "medium", "large"}, "profiles");
   for (size_t i = 0; i < kProfiles.size(); ++i) {
@@ -127,6 +170,8 @@ inline ProfileSuite load_profile_suite(const std::filesystem::path& path,
         throw std::invalid_argument("profile extents must be positive");
       result.shapes[i].push_back(value);
     }
+    if (version == 2 && result.shapes[i].size() != result.axes.size())
+      throw std::invalid_argument("profile shape rank differs from axes");
   }
   const YAML::Node lives = root["live_ports"];
   if (!lives.IsSequence())
@@ -145,7 +190,13 @@ inline ProfileSuite load_profile_suite(const std::filesystem::path& path,
     throw std::invalid_argument("cases must be a sequence");
   std::set<std::string> ids;
   for (const auto& item : cases) {
-    require_keys(item, {"id", "profile", "profiles", "scopes", "parameters", "override"}, "case");
+    if (version == 2) {
+      require_keys(item,
+                   {"id", "profile", "profiles", "scopes", "parameters", "fixture", "override"},
+                   "case");
+    } else {
+      require_keys(item, {"id", "profile", "profiles", "scopes", "parameters", "override"}, "case");
+    }
     for (const char* key : {"id", "scopes", "parameters"}) {
       if (!item[key])
         throw std::invalid_argument("case missing required key: " + std::string(key));
@@ -171,6 +222,11 @@ inline ProfileSuite load_profile_suite(const std::filesystem::path& path,
       c.scopes.push_back(name);
     }
     c.parameters = item["parameters"];
+    if (item["fixture"]) {
+      c.fixture = item["fixture"];
+      if (!c.fixture.IsMap())
+        throw std::invalid_argument("case fixture must be a map");
+    }
     if (!c.parameters.IsMap())
       throw std::invalid_argument("case parameters must be a map");
     if (item["override"]) {

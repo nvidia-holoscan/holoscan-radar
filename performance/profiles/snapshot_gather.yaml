@@ -1,15 +1,26 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-version: 1
+version: 2
 operator: snapshot_gather
+axes: [channels, doppler, range, detections]
 profiles:
   small: {shape: [4, 64, 256, 64]}
   medium: {shape: [16, 256, 512, 1024]}
   large: {shape: [32, 512, 1024, 4096]}
 live_ports: [snapshot_window]
+recipe:
+  operator_type: radar.SnapshotGatherOp.float
+  inputs:
+    - {port: rd_maps, shape: [channels, doppler, range], dtype: complex64, memory: device, generator: iq_cube}
+    - {port: detection_idx, shape: [detections, two], dtype: int64, memory: device, generator: in_bounds_rd_indices}
+  fixtures: {two: 2}
+  constructor: {bounds_policy: snapshot_gather_bounds}
+  params: {snapshot_window: [1, 1], doppler_edge: wrap, range_edge: shift}
+  outputs: {timed: snapshot, drain: [is_valid], unwired: []}
+  live: {snapshot_window: {physical_port: snapshot_window, codec: snapshot_window}}
 cases:
-  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {window: [1, 1]}}
-  - {id: point-medium, profile: medium, scopes: [limited], parameters: {window: [0, 0]}}
-  - {id: wide-medium, profile: medium, scopes: [limited], parameters: {window: [2, 2]}}
-  - {id: "window-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {window: [0, 0]}, override: {port: snapshot_window, value: [1, 1]}}
-  - {id: wide-window-medium, profile: medium, scopes: [thorough], parameters: {window: [1, 1]}, override: {port: snapshot_window, value: [2, 2]}}
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
+  - {id: point-medium, profile: medium, scopes: [limited], parameters: {snapshot_window: [0, 0]}}
+  - {id: wide-medium, profile: medium, scopes: [limited], parameters: {snapshot_window: [2, 2]}}
+  - {id: "window-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {snapshot_window: [0, 0]}, override: {port: snapshot_window, value: [1, 1]}}
+  - {id: wide-window-medium, profile: medium, scopes: [thorough], parameters: {}, override: {port: snapshot_window, value: [2, 2]}}

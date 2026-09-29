@@ -18,6 +18,7 @@
 #include <set>
 #include <iostream>
 #include <memory>
+#include <map>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -36,46 +37,39 @@
 #include "utils/perf_platform.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_recipe.hpp"
+#include "utils/perf_registered_recipe.hpp"
+#include "utils/perf_yaml_pilot.hpp"
+#include "utils/perf_yaml_codecs.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
 namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
 
-namespace {
+namespace perf_snapshot_gather_adapter {
 
 using PerfPrecision = float;
 
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
-
-struct SizeSpec {
-  std::string id;
-  int64_t channels;
-  int64_t doppler;
-  int64_t range;
-  int64_t detections;
-  std::string role;
-};
 
 struct Window {
   int64_t wd{0};
   int64_t wr{0};
 };
 
-struct SnapScenario {
-  std::string id;
-  std::string size_id;
-  int64_t channels{0};
-  int64_t doppler{0};
-  int64_t range{0};
-  int64_t detections{0};
+struct SnapScenario : perf::RecipeScenario {
   Window window;
-  bool live_window{false};
   Window override_window;
 };
 
 int64_t snapshots_for(const Window& w) {
   return (2 * w.wd + 1) * (2 * w.wr + 1);
+}
+
+void validate_window(const Window& window, const perf::RecipeScenario& scenario) {
+  if (window.wd < 0 || window.wr < 0 || window.wd > (scenario.axis("doppler") - 1) / 2 ||
+      window.wr > (scenario.axis("range") - 1) / 2)
+    throw std::invalid_argument("SnapshotGather window exceeds profile plane");
 }
 
 std::string window_tag(const Window& w) {
@@ -84,136 +78,55 @@ std::string window_tag(const Window& w) {
   return os.str();
 }
 
-template <typename T>
-std::shared_ptr<holoscan::Tensor> make_device_from_host(const std::vector<T>& host,
-                                                        const std::vector<int64_t>& shape,
-                                                        DLDataType dtype) {
-  auto tensor = hr::make_device_tensor(shape, dtype);
-  if (!host.empty()) {
-    auto mut = tensor->mutable_data();
-    if (!mut) {
-      throw std::runtime_error("perf_snapshot_gather: tensor not writable");
-    }
-    if (cudaMemcpy(mut.value(), host.data(), sizeof(T) * host.size(), cudaMemcpyHostToDevice) !=
-        cudaSuccess) {
-      throw std::runtime_error("perf_snapshot_gather: cudaMemcpy H2D failed");
-    }
-  }
-  return tensor;
-}
-
-template <typename T>
-std::shared_ptr<holoscan::Tensor> make_rd_maps(int64_t channels, int64_t doppler, int64_t range) {
-  return perf::make_iq_cube_device<T>({channels, doppler, range});
-}
-
-std::shared_ptr<holoscan::Tensor> make_detection_idx(int64_t detections, int64_t doppler,
-                                                     int64_t range) {
-  std::vector<int64_t> host(static_cast<size_t>(std::max<int64_t>(detections, 0) * 2), 0);
-  const int64_t cells = std::max<int64_t>(doppler * range, 1);
-  for (int64_t i = 0; i < detections; ++i) {
-    const int64_t cell = (i * 997) % cells;
-    host[static_cast<size_t>(i * 2)] = cell / range;
-    host[static_cast<size_t>(i * 2 + 1)] = cell % range;
-  }
-  return make_device_from_host(host, {detections, 2}, kInt64Dtype);
-}
-
 perf::TimingCollector run_graph(const SnapScenario& scen, const perf::RunPlan& plan) {
-  auto rd = make_rd_maps<PerfPrecision>(scen.channels, scen.doppler, scen.range);
-  auto idx = make_detection_idx(scen.detections, scen.doppler, scen.range);
-  using BaseOp = hr::SnapshotGatherOp<PerfPrecision>;
-  const auto configure = [&](holoscan::Graph& graph, const auto& src,
-                             holoscan::CompileOptions& options, auto connect) {
-    hr::MaxTensorExtents extents;
-    extents.max_detections = scen.detections;
-    extents.max_channels = scen.channels;
-    extents.max_snapshots = std::max(snapshots_for(scen.window),
-                                     scen.live_window ? snapshots_for(scen.override_window) : 1);
-    auto op = graph.op<BaseOp>("gather", extents);
-    hr::SnapshotGatherParams params;
-    params.snapshot_window = {scen.window.wd, scen.window.wr};
-    params.doppler_edge = hr::SnapshotEdgeMode::kWrap;
-    params.range_edge = hr::SnapshotEdgeMode::kShift;
-    op.set_params(std::move(params));
-    const holoscan::ConnectionOptions q{.queue_depth = 4U};
-    graph.add_flow(src->out_a, op->rd_maps, q);
-    graph.add_flow(src->out_b, op->detection_idx, q);
-    connect(graph, src, op, q);
-    perf::PerfRecipeOutputs outputs(graph, options, "gather");
-    outputs.timed(op->snapshot, "snapshot");
-    outputs.drain(op->is_valid, "is_valid");
-    outputs.finish(src, op);
-  };
-  if (scen.live_window) {
-    const auto selected = perf::live_case(
-        "snapshot_window",
-        hr::SnapshotWindowOverride{.doppler = scen.window.wd, .range = scen.window.wr},
-        hr::SnapshotWindowOverride{.doppler = scen.override_window.wd,
-                                   .range = scen.override_window.wr},
-        [](auto& graph, const auto& src, const auto& op, const auto& q) {
-          graph.add_flow(src->override_out, op->snapshot_window, q);
-        });
-    return perf::run_selected_live_recipe(std::array{std::move(rd), std::move(idx)}, plan,
-                                          "snapshot-perf", selected, configure);
-  }
-  return perf::run_data_recipe(std::array{std::move(rd), std::move(idx)}, plan, "snapshot-perf",
-                               [&](auto& graph, const auto& src, auto& options) {
-                                 configure(graph, src, options,
-                                           [](auto&, const auto&, const auto&, const auto&) {});
-                               });
+  hr::MaxTensorExtents extents;
+  extents.max_detections = scen.axis("detections");
+  extents.max_channels = scen.axis("channels");
+  extents.max_snapshots = std::max(
+      snapshots_for(scen.window), scen.live_port.empty() ? 1 : snapshots_for(scen.override_window));
+  hr::SnapshotGatherParams params;
+  params.snapshot_window = {scen.window.wd, scen.window.wr};
+  params.doppler_edge = perf::recipe_snapshot_edge(scen.params["doppler_edge"].as<std::string>());
+  params.range_edge = perf::recipe_snapshot_edge(scen.params["range_edge"].as<std::string>());
+  using Op = hr::SnapshotGatherOp<PerfPrecision>;
+  return perf::run_recipe_selected_case<Op, 2>(
+      scen, plan, extents, params, [&](const std::string& codec) -> perf::TimingCollector {
+        if (codec != "snapshot_window")
+          throw std::invalid_argument("unsupported SnapshotGather live codec: " + codec);
+        const hr::SnapshotWindowOverride changed{.doppler = scen.override_window.wd,
+                                                 .range = scen.override_window.wr};
+        return perf::run_recipe_live_case<Op, 2>(scen, plan, extents, params, changed, changed);
+      });
 }
 
-void fill_throughput(perf::ResultRow* row, const SnapScenario& scen, double median_ms) {
-  if (median_ms <= 0.0) {
-    return;
-  }
-  const double sec = median_ms / 1000.0;
-  const double n = static_cast<double>(scen.detections);
+void fill_throughput(perf::ResultRow* row, const SnapScenario& scen) {
+  const double n = static_cast<double>(scen.axis("detections"));
   const double snaps = static_cast<double>(snapshots_for(scen.window));
-  const double gathered = n * static_cast<double>(scen.channels) * snaps;
-
-  row->cells_per_second = n / sec;
-  row->slices_per_second = n * snaps / sec;
+  const double gathered = n * static_cast<double>(scen.axis("channels")) * snaps;
 
   const double complex_sz = 2.0 * static_cast<double>(sizeof(PerfPrecision));
   const double idx_bytes = n * 2.0 * static_cast<double>(sizeof(int64_t));
   const double valid_bytes = n * snaps;
-  row->estimated_effective_gbps =
-      (2.0 * gathered * complex_sz + valid_bytes + idx_bytes) / sec / 1e9;
+  perf::set_recipe_throughput(*row, n, n * snaps,
+                              2.0 * gathered * complex_sz + valid_bytes + idx_bytes);
 }
 
 perf::ResultRow base_row(const SnapScenario& scen) {
   perf::ResultRow row;
   row.op_name = "SnapshotGatherOp";
   row.variant = window_tag(scen.window);
-  row.map_shape = {scen.doppler, scen.range};
-  row.input_shape = {scen.detections, 2};
-  row.out_batch = scen.detections;
-  row.k = scen.channels;
-  row.live_port = scen.live_window ? "snapshot_window" : "";
+  row.map_shape = {scen.axis("doppler"), scen.axis("range")};
+  row.input_shape = {scen.axis("detections"), 2};
+  row.out_batch = scen.axis("detections");
+  row.k = scen.axis("channels");
+  row.live_port = scen.live_port;
   return row;
 }
 
-SnapScenario make_scenario(const SizeSpec& s, Window w) {
-  SnapScenario sc;
-  sc.size_id = s.id;
-  sc.channels = s.channels;
-  sc.doppler = s.doppler;
-  sc.range = s.range;
-  sc.detections = s.detections;
-  sc.window = w;
-  std::ostringstream id;
-  id << "snap_gather_" << s.id << "_c" << s.channels << "_n" << s.detections << "_"
-     << window_tag(w);
-  sc.id = id.str();
-  return sc;
-}
-
 void decorate_row(perf::ResultRow& row, const SnapScenario& scen) {
-  fill_throughput(&row, scen, row.latency.median_ms);
+  fill_throughput(&row, scen);
   row.notes = "end-to-end Graph latency; cells/s is detections/s";
-  if (scen.live_window)
+  if (!scen.live_port.empty())
     row.notes += "; one-frame snapshot_window change";
 }
 
@@ -227,43 +140,40 @@ struct SnapTraits : perf::PerfDriverDefaults {
   }
 
   static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
-    if (shape.size() != 4)
-      throw std::invalid_argument("SnapshotGather profile rank mismatch");
-    return {id, shape, shape[0] * shape[1] * shape[2], id};
+    return perf::recipe_size_def(id, shape, 4, 3);
   }
 
-  static SnapScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
-    if (shape.size() != 4 || shape[3] < 1)
-      throw std::invalid_argument("SnapshotGather invalid profile shape");
-    perf::require_keys(c.parameters, {"window"}, "parameters");
-    const auto window = c.parameters["window"];
-    if (!window || !window.IsSequence() || window.size() != 2)
-      throw std::invalid_argument("SnapshotGather window must have two extents");
-    const Window w{window[0].as<int64_t>(), window[1].as<int64_t>()};
-    if (w.wd < 0 || w.wr < 0 || w.wd > 2 || w.wr > 2)
-      throw std::invalid_argument("SnapshotGather window out of range");
-    const SizeSpec size{c.profile, shape[0], shape[1], shape[2], shape[3], c.profile};
-    auto scenario = make_scenario(size, w);
-    scenario.id = c.id;
-    scenario.size_id = c.profile;
+  static void validate_suite(const perf::ProfileSuite& suite) {
+    (void)perf::validate_pilot_suite<hr::SnapshotGatherOp<PerfPrecision>>(
+        suite, "radar.SnapshotGatherOp.float", "snapshot_gather_bounds",
+        {{"rd_maps", {"channels", "doppler", "range"}, "complex64", "device", "iq_cube", {}},
+         {"detection_idx", {"detections", "two"}, "int64", "device", "in_bounds_rd_indices", {}}},
+        {"snapshot", {"is_valid"}, {}, 4U}, {{"snapshot_window", "snapshot_window"}},
+        {{"snapshot_window", "snapshot_window"}});
+  }
+  static SnapScenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape,
+                                 const perf::ProfileSuite& suite) {
+    auto scenario = perf::pilot_scenario<SnapScenario>(suite, c, shape, 4);
+    const auto& params = scenario.params;
+    perf::require_recipe_params(params, {"snapshot_window", "doppler_edge", "range_edge"});
+    const auto window = perf::recipe_pair<int64_t>(params["snapshot_window"], "snapshot_window");
+    (void)perf::recipe_snapshot_edge(params["doppler_edge"].as<std::string>());
+    (void)perf::recipe_snapshot_edge(params["range_edge"].as<std::string>());
+    const Window w{window[0], window[1]};
+    validate_window(w, scenario);
+    scenario.window = w;
     if (c.override_value) {
-      if ((*c.override_value)["port"].as<std::string>() != "snapshot_window")
-        throw std::invalid_argument("SnapshotGather only snapshot_window is live");
-      const auto changed = (*c.override_value)["value"];
-      if (!changed.IsSequence() || changed.size() != 2)
-        throw std::invalid_argument("SnapshotGather override window needs two extents");
-      scenario.override_window = {changed[0].as<int64_t>(), changed[1].as<int64_t>()};
-      if (scenario.override_window.wd < 0 || scenario.override_window.wr < 0 ||
-          scenario.override_window.wd > 2 || scenario.override_window.wr > 2)
-        throw std::invalid_argument("SnapshotGather override window out of range");
-      scenario.live_window = true;
+      const auto changed =
+          perf::recipe_pair<int64_t>(scenario.live_value, "snapshot_window override");
+      scenario.override_window = {changed[0], changed[1]};
+      validate_window(scenario.override_window, scenario);
     }
     return scenario;
   }
 };
 
-}  // namespace
+}  // namespace perf_snapshot_gather_adapter
 
 int main(int argc, char** argv) {
-  return holoscan::radar::perf::perf_main<SnapTraits>(argc, argv);
+  return holoscan::radar::perf::perf_main<perf_snapshot_gather_adapter::SnapTraits>(argc, argv);
 }

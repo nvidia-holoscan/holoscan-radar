@@ -182,12 +182,32 @@ inline void default_log_level() {
   }
 }
 
+inline std::filesystem::path profile_suite_path(std::string_view tool_name) {
+  const auto filename = std::string(tool_name.substr(5)) + ".yaml";
+  // Build trees are often bind-mounted at a different path on the host. Look
+  // upward from the executable so the adjacent source checkout wins.
+  std::error_code error;
+  const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
+  if (!error) {
+    for (auto root = executable.parent_path(); !root.empty(); root = root.parent_path()) {
+      const auto candidate = root / "performance" / "profiles" / filename;
+      if (std::filesystem::is_regular_file(candidate, error))
+        return candidate;
+      if (root == root.parent_path())
+        break;
+    }
+  }
+  return std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / filename;
+}
+
 template <typename Traits>
-ProfileSuite load_adapter_suite() {
+ProfileSuite load_adapter_suite(const std::filesystem::path& path) {
   const std::string operator_name = std::string(Traits::tool_name()).substr(5);
-  const auto path =
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / (operator_name + ".yaml");
-  return load_profile_suite(path, operator_name);
+  auto suite = load_profile_suite(path, operator_name);
+  if constexpr (requires { Traits::validate_suite(suite); }) {
+    Traits::validate_suite(suite);
+  }
+  return suite;
 }
 
 template <typename Traits>
@@ -195,8 +215,14 @@ std::vector<SelectedScenario<typename Traits::Scenario>> select_scenarios(const 
                                                                           const Options& opt) {
   return select_validated_scenarios<typename Traits::Scenario>(
       suite, opt.scope, opt.sizes_all ? std::vector<std::string>{} : opt.sizes,
-      [](const ProfileCase& c, const std::vector<int64_t>& shape) {
-        auto scenario = Traits::parse_case(c, shape);
+      [&suite](const ProfileCase& c, const std::vector<int64_t>& shape) {
+        auto scenario = [&] {
+          if constexpr (requires { Traits::parse_case(c, shape, suite); }) {
+            return Traits::parse_case(c, shape, suite);
+          } else {
+            return Traits::parse_case(c, shape);
+          }
+        }();
         const std::string port =
             c.override_value ? (*c.override_value)["port"].as<std::string>() : std::string{};
         if (base_row(scenario).live_port != port)
@@ -336,14 +362,12 @@ int perf_main(int argc, char** argv) {
   }
   ProfileSuite suite;
   std::vector<SelectedScenario<typename Traits::Scenario>> scenarios;
+  const auto profile_path = detail::profile_suite_path(Traits::tool_name());
   try {
-    suite = detail::load_adapter_suite<Traits>();
+    suite = detail::load_adapter_suite<Traits>(profile_path);
     scenarios = detail::select_scenarios<Traits>(suite, opt);
   } catch (const std::exception& e) {
-    const std::string operator_name = std::string(Traits::tool_name()).substr(5);
-    const auto path =
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / (operator_name + ".yaml");
-    std::cerr << "error: " << path << ": " << e.what() << "\n";
+    std::cerr << "error: " << profile_path << ": " << e.what() << "\n";
     return 2;
   }
   if (opt.validate_only || opt.list_cases) {
@@ -381,8 +405,13 @@ int perf_main(int argc, char** argv) {
     warm.repeats = 1;
     PerfReport discarded;
     const auto baseline = select_validated_scenarios<typename Traits::Scenario>(
-        suite, "minimal", {"small"}, [](const ProfileCase& c, const std::vector<int64_t>& shape) {
-          return Traits::parse_case(c, shape);
+        suite, "minimal", {"small"},
+        [&suite](const ProfileCase& c, const std::vector<int64_t>& shape) {
+          if constexpr (requires { Traits::parse_case(c, shape, suite); }) {
+            return Traits::parse_case(c, shape, suite);
+          } else {
+            return Traits::parse_case(c, shape);
+          }
         });
     detail::run_adapter_case<Traits>(baseline.front(), warm, &discarded);
   });

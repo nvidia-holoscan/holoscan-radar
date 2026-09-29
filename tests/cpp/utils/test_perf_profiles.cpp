@@ -3,8 +3,11 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
+#include <limits>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <fstream>
 #include <set>
@@ -15,6 +18,11 @@
 
 #include "utils/perf_driver.hpp"
 #include "utils/perf_profiles.hpp"
+#include "utils/perf_yaml_recipe.hpp"
+#include "utils/perf_yaml_pilot.hpp"
+#include "utils/perf_yaml_codecs.hpp"
+#include "utils/perf_yaml_standard.hpp"
+#include "fmcw/doppler_notch_op/doppler_notch_op.hpp"
 
 namespace {
 
@@ -133,6 +141,51 @@ TEST(PerfProfiles, AdapterValidatesUnselectedCasesBeforeFiltering) {
                std::invalid_argument);
 }
 
+TEST(PerfProfiles, PilotCaseReadsYamlAxesAndRejectsMalformedValues) {
+  const auto suite = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_power_fold.yaml",
+      "ddm_power_fold");
+  const auto& first = suite.cases.front();
+  const auto shape = suite.shape_for(first.profile);
+  perf::RecipeScenario scenario;
+  scenario.values = suite.axes_for(first.profile);
+  EXPECT_EQ(scenario.axis("tx"), shape[0]);
+  EXPECT_EQ(scenario.axis("doppler"), shape[2]);
+  EXPECT_THROW(perf::pilot_scenario<perf::RecipeScenario>(suite, first, shape, 3),
+               std::invalid_argument);
+
+  const auto params = YAML::Load("{nfft: 0}");
+  EXPECT_THROW(perf::require_recipe_params(params, {"nfft", "waveform"}), std::invalid_argument);
+  EXPECT_EQ(perf::recipe_pair<int64_t>(YAML::Load("[1, 2]"), "window")[1], 2);
+  EXPECT_THROW((void)perf::recipe_pair<int64_t>(YAML::Load("[1]"), "window"),
+               std::invalid_argument);
+  EXPECT_EQ(perf::scaled_recipe_axis(YAML::Load("{scale: 3}"), 128, "nfft"), 384);
+  EXPECT_THROW(perf::scaled_recipe_axis(YAML::Load("{scale: 0}"), 128, "nfft"),
+               std::invalid_argument);
+  EXPECT_THROW(perf::scaled_recipe_axis(YAML::Load("{scale: 3}"),
+                                        std::numeric_limits<int64_t>::max(), "nfft"),
+               std::invalid_argument);
+}
+
+TEST(PerfProfiles, SharedPilotCodecsValidateSemanticValues) {
+  const auto range_suite = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "fmcw_range_processor.yaml",
+      "fmcw_range_processor");
+  const auto waveform = range_suite.recipe["params"]["waveform"];
+  EXPECT_NO_THROW((void)perf::recipe_fmcw_waveform(waveform));
+  EXPECT_THROW((void)perf::recipe_fmcw_waveform(waveform, 1.0e-6), std::invalid_argument);
+
+  const auto beam_suite = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "beamscan_estimator.yaml",
+      "beamscan_estimator");
+  auto geometry = YAML::Clone(beam_suite.recipe["params"]["array_geometry"]);
+  EXPECT_NO_THROW((void)perf::recipe_ula_geometry(geometry, 4));
+  geometry["spacing_wavelengths"] = -0.1;
+  EXPECT_THROW((void)perf::recipe_ula_geometry(geometry, 4), std::invalid_argument);
+  EXPECT_EQ(perf::recipe_snapshot_edge("clamp"), holoscan::radar::SnapshotEdgeMode::kClamp);
+  EXPECT_THROW(perf::recipe_snapshot_edge("unknown"), std::invalid_argument);
+}
+
 TEST(PerfProfiles, LivePortManifestMatchesLockedContractForMigratedOperators) {
   const std::vector<std::pair<std::string, std::set<std::string>>> expected = {
       {"clutter_filter", {"method", "doppler_window"}},
@@ -188,8 +241,10 @@ TEST(PerfProfiles, LimitedIncludesEveryCfarBackend) {
       std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "cfar_detector.yaml",
       "cfar_detector");
   std::set<std::string> backends;
-  for (const auto& c : suite.select("limited"))
-    backends.insert(c.parameters["variant"].as<std::string>());
+  for (const auto& c : suite.select("limited")) {
+    const auto params = perf::merge_recipe_map(suite.recipe["params"], c.parameters);
+    backends.insert(params["cfar_variant"].as<std::string>());
+  }
   EXPECT_EQ(backends, (std::set<std::string>{"CA", "GO", "SO", "OS"}));
 
   const auto ddm = perf::load_profile_suite(
@@ -199,6 +254,105 @@ TEST(PerfProfiles, LimitedIncludesEveryCfarBackend) {
   for (const auto& c : ddm.select("limited"))
     codes.insert(c.parameters["code"].as<std::string>());
   EXPECT_EQ(codes, (std::set<std::string>{"linear", "nonlinear"}));
+}
+
+TEST(PerfProfiles, VersionTwoRecipesKeepCuratedCasesAndNamedInputs) {
+  for (const char* name : {"ddm_power_fold", "snapshot_gather", "beamscan_estimator",
+                           "fmcw_range_processor", "cfar_detector"}) {
+    SCOPED_TRACE(name);
+    const auto suite = perf::load_profile_suite(
+        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / (std::string(name) + ".yaml"),
+        name);
+    ASSERT_EQ(suite.version, 2);
+    const auto recipe = perf::parse_yaml_recipe(suite);
+    EXPECT_FALSE(recipe.operator_type.empty());
+    EXPECT_EQ(suite.select("minimal").size(), 3U);
+    for (const auto& c : suite.cases) {
+      const auto values = perf::recipe_values(suite, c);
+      for (const auto& input : recipe.inputs)
+        EXPECT_FALSE(perf::recipe_shape(input, values).empty());
+    }
+  }
+  const auto legacy = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml",
+      "clutter_filter");
+  EXPECT_EQ(legacy.version, 1);
+  EXPECT_THROW(perf::parse_yaml_recipe(legacy), std::invalid_argument);
+}
+
+TEST(PerfProfiles, GenericYamlScalarParamsMaterializeThroughHsdkSchema) {
+  using Params = holoscan::radar::DopplerNotchParams;
+  const auto values = YAML::Load("{center_velocity: 1.25, cyclic_velocity_axis: false}");
+  const auto* schema = holoscan::param_schema_descriptor<Params>();
+  ASSERT_NE(schema, nullptr);
+  const perf::YamlParameterAssignments assignments(*schema, values);
+  auto materialized = holoscan::authoring::materialize_parameters(
+      holoscan::param_type_descriptor<Params>(), schema, assignments.values());
+  ASSERT_TRUE(materialized) << materialized.error().message;
+  const auto* params = static_cast<const Params*>(materialized->data());
+  EXPECT_DOUBLE_EQ(params->center_velocity, 1.25);
+  EXPECT_FALSE(params->cyclic_velocity_axis);
+}
+
+TEST(PerfProfiles, VersionTwoRecipeRejectsUnknownGeneratorAndAxis) {
+  auto suite = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_power_fold.yaml",
+      "ddm_power_fold");
+  suite.recipe = YAML::Clone(suite.recipe);
+  suite.recipe["inputs"][0]["generator"] = "unregistered_generator";
+  EXPECT_THROW(perf::parse_yaml_recipe(suite), std::invalid_argument);
+  suite.recipe["inputs"][0]["generator"] = "iq_cube";
+  suite.recipe["inputs"][0]["shape"][0] = "unknown_axis";
+  const auto recipe = perf::parse_yaml_recipe(suite);
+  EXPECT_THROW(perf::recipe_shape(recipe.inputs[0], suite.axes_for("small")),
+               std::invalid_argument);
+}
+
+TEST(PerfProfiles, VersionTwoRecipeRejectsPortPayloadAndRelatedInputMismatch) {
+  auto suite = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "snapshot_gather.yaml",
+      "snapshot_gather");
+  auto recipe = perf::parse_yaml_recipe(suite);
+  const auto inputs = recipe.inputs;
+  const auto outputs = recipe.outputs;
+  const auto live = recipe.live_ports;
+  recipe.inputs[0].port = "wrong_port";
+  EXPECT_THROW(perf::validate_recipe_manifest(recipe, inputs, outputs, live),
+               std::invalid_argument);
+  recipe.inputs = inputs;
+  recipe.inputs[0].dtype = "float32";
+  EXPECT_THROW(perf::validate_recipe_manifest(recipe, inputs, outputs, live),
+               std::invalid_argument);
+  recipe.inputs = inputs;
+  recipe.inputs[0].shape = {"range", "doppler", "channels"};
+  EXPECT_THROW(perf::validate_recipe_manifest(recipe, inputs, outputs, live),
+               std::invalid_argument);
+  suite.recipe = YAML::Clone(suite.recipe);
+  suite.recipe["fixtures"]["two"] = 3;
+  EXPECT_THROW(perf::validate_recipe_case(suite, suite.cases.front()), std::invalid_argument);
+}
+
+TEST(PerfProfiles, PilotLiveCodecDeclarationsAreValidatedBeforeSelection) {
+  auto suite = perf::load_profile_suite(
+      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "fmcw_range_processor.yaml",
+      "fmcw_range_processor");
+  auto recipe = perf::parse_yaml_recipe(suite);
+  EXPECT_EQ(recipe.live_codecs.at("nfft"), "scaled_axis");
+  EXPECT_EQ(recipe.live_axes.at("nfft"), "samples");
+  const auto cached = std::find_if(suite.cases.begin(), suite.cases.end(), [](const auto& c) {
+    return c.id == "nfft-cached-medium";
+  });
+  ASSERT_NE(cached, suite.cases.end());
+  EXPECT_NO_THROW(perf::validate_recipe_live_axis(recipe, "nfft", suite.axes_for(cached->profile)));
+
+  suite.recipe = YAML::Clone(suite.recipe);
+  suite.recipe["live"]["nfft"]["axis"] = "missing_axis";
+  recipe = perf::parse_yaml_recipe(suite);
+  EXPECT_THROW(perf::validate_recipe_live_axis(recipe, "nfft", suite.axes_for(cached->profile)),
+               std::invalid_argument);
+  suite.recipe["live"]["nfft"]["axis"] = "samples";
+  suite.recipe["live"]["nfft"]["codec"] = YAML::Node();
+  EXPECT_THROW(perf::parse_yaml_recipe(suite), std::invalid_argument);
 }
 
 TEST(PerfProfiles, FftPlanCasesDistinguishUnseenAndCached) {

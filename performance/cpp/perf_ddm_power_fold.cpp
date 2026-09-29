@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -16,27 +17,18 @@
 #include "utils/perf_graph.hpp"
 #include "utils/perf_profiles.hpp"
 #include "utils/perf_recipe.hpp"
+#include "utils/perf_registered_recipe.hpp"
+#include "utils/perf_yaml_recipe.hpp"
+#include "utils/perf_yaml_pilot.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
 #include "utils/tensor_factory.hpp"
 
 namespace hr = holoscan::radar;
 namespace perf = holoscan::radar::perf;
-namespace {
+namespace perf_ddm_power_fold_adapter {
 
-struct SizeSpec {
-  std::string id;
-  int64_t tx;
-  int64_t rx;
-  int64_t doppler;
-  int64_t range;
-  std::string role;
-};
-struct Scenario {
-  std::string id;
-  std::string size_id;
-  SizeSpec size;
-};
+struct Scenario : perf::RecipeScenario {};
 
 hr::DDMCodeDescriptor code(int64_t tx) {
   hr::DDMCodeDescriptor result;
@@ -48,23 +40,9 @@ hr::DDMCodeDescriptor code(int64_t tx) {
 }
 
 perf::TimingCollector run_graph(const Scenario& scenario, const perf::RunPlan& plan) {
-  const auto& size = scenario.size;
-  auto input = perf::make_iq_cube_device<float>({size.rx, size.doppler, size.range});
-  return perf::run_data_recipe(
-      std::array{std::move(input)}, plan, "ddm-power-fold-perf",
-      [&](holoscan::Graph& graph, const auto& source, holoscan::CompileOptions& options) {
-        hr::MaxTensorExtents extents;
-        extents.max_rx = size.rx;
-        extents.max_doppler_bins = size.doppler;
-        extents.max_range_bins = size.range;
-        auto op = graph.op<hr::DDMPowerFoldOp<float>>("fold", extents);
-        op.set_params(hr::DDMPowerFoldParams{.ddm_code = code(size.tx)});
-        const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-        graph.add_flow(source->out, op->rd_maps, queue);
-        perf::PerfRecipeOutputs outputs(graph, options, "fold");
-        outputs.timed(op->power_map, "power_map");
-        outputs.finish(source, op);
-      });
+  const auto extents = perf::direct_recipe_extents(scenario.recipe, scenario.values);
+  const hr::DDMPowerFoldParams params{.ddm_code = code(scenario.axis("tx"))};
+  return perf::run_recipe_case<hr::DDMPowerFoldOp<float>, 1>(scenario, plan, extents, params);
 }
 
 perf::ResultRow base_row(const Scenario& scenario) {
@@ -72,21 +50,19 @@ perf::ResultRow base_row(const Scenario& scenario) {
   row.op_name = "DDMPowerFoldOp";
   row.variant = "linear_exact";
   perf::set_input_and_trailing_map_shape(
-      row, {scenario.size.rx, scenario.size.doppler, scenario.size.range});
-  row.k = scenario.size.tx * scenario.size.rx;
+      row, {scenario.axis("rx"), scenario.axis("doppler"), scenario.axis("range")});
+  row.k = scenario.axis("tx") * scenario.axis("rx");
   row.notes = "reads N_rx*D*R; emits honest folded (D/M)*R extent";
   return row;
 }
 
 void decorate_row(perf::ResultRow& row, const Scenario& scenario) {
-  if (row.latency.median_ms > 0.0) {
-    row.cells_per_second = static_cast<double>(scenario.size.doppler * scenario.size.range) /
-                           (row.latency.median_ms / 1000.0);
-  }
+  perf::set_recipe_throughput(
+      row, static_cast<double>(scenario.axis("doppler") * scenario.axis("range")));
 }
 
 struct Traits : perf::PerfDriverDefaults {
-  using Scenario = ::Scenario;
+  using Scenario = perf_ddm_power_fold_adapter::Scenario;
   static const char* tool_name() { return "perf_ddm_power_fold"; }
   static const char* tool_description() { return "Sparse DDM power-fold characterization"; }
 
@@ -95,23 +71,34 @@ struct Traits : perf::PerfDriverDefaults {
       throw std::invalid_argument("profile shape rank mismatch");
     return {id, {shape[2], shape[3]}, shape[2] * shape[3], id};
   }
-  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
-    perf::require_keys(c.parameters, {"ddm_code"}, "parameters");
-    if (c.parameters["ddm_code"].as<std::string>() != "linear" || c.override_value.has_value()) {
-      throw std::invalid_argument("DDMPowerFold supports only linear code and no live override");
-    }
-
-    if (shape.size() != 4)
-      throw std::invalid_argument("DDMPowerFold profile must be rank 4");
-    if (shape[2] % shape[0] != 0) {
-      throw std::invalid_argument("DDMPowerFold Doppler size must be divisible by TX count");
-    }
-    return {c.id, c.profile, {c.profile, shape[0], shape[1], shape[2], shape[3], c.profile}};
+  static void validate_suite(const perf::ProfileSuite& suite) {
+    (void)perf::validate_pilot_suite<hr::DDMPowerFoldOp<float>>(
+        suite, "radar.DDMPowerFoldOp.float", "",
+        {{"rd_maps", {"rx", "doppler", "range"}, "complex64", "device", "iq_cube", {}}},
+        {"power_map", {}, {}, 4U}, {});
+  }
+  static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape,
+                             const perf::ProfileSuite& suite) {
+    auto scenario = perf::pilot_scenario<Scenario>(suite, c, shape, 4);
+    if (shape[2] % shape[0] != 0 || c.override_value)
+      throw std::invalid_argument("DDM power fold needs divisible rank-4 dimensions and no live");
+    const auto& recipe = scenario.recipe;
+    const auto bounds = perf::direct_recipe_extents(recipe, scenario.values);
+    if (!bounds.max_rx || *bounds.max_rx < shape[1] || !bounds.max_doppler_bins ||
+        *bounds.max_doppler_bins < shape[2] || !bounds.max_range_bins ||
+        *bounds.max_range_bins < shape[3])
+      throw std::invalid_argument("DDM power fold constructor extents do not cover input");
+    perf::require_keys(recipe.params["ddm_code"], {"factory"}, "ddm_code");
+    if (recipe.params["ddm_code"]["factory"].as<std::string>() != "linear_exact_ddm_code")
+      throw std::invalid_argument("DDM power fold needs a linear exact-bin code");
+    if (!c.parameters.IsMap() || c.parameters.size() != 0)
+      throw std::invalid_argument("DDM power fold has no per-case Params changes");
+    return scenario;
   }
 };
 
-}  // namespace
+}  // namespace perf_ddm_power_fold_adapter
 
 int main(int argc, char** argv) {
-  return perf::perf_main<Traits>(argc, argv);
+  return perf::perf_main<perf_ddm_power_fold_adapter::Traits>(argc, argv);
 }

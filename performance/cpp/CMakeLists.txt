@@ -59,6 +59,25 @@ function(radar_add_perf NAME)
         ${_op_target})
 endfunction()
 
+# Standard no-live recipes with direct extents and built-in fixtures can use
+# this registration instead of an operator-owned perf_*.cpp source file.
+# Example: radar_add_yaml_perf(name holoscan::name_op "group/name_op/name_op.hpp"
+#                              "holoscan::radar::NameOp<float>")
+function(radar_add_yaml_perf NAME OP_TARGET OP_HEADER OP_TYPE)
+    if(NOT TARGET ${OP_TARGET})
+        message(STATUS "Skipping perf_${NAME} (missing ${OP_TARGET})")
+        return()
+    endif()
+    set(PERF_OPERATOR_NAME ${NAME})
+    set(PERF_OPERATOR_HEADER ${OP_HEADER})
+    set(PERF_OPERATOR_TYPE ${OP_TYPE})
+    set(_generated ${CMAKE_CURRENT_BINARY_DIR}/generated/perf_${NAME}.cpp)
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/utils/perf_yaml_main.cpp.in
+                   ${_generated} @ONLY)
+    add_executable(perf_${NAME} ${_generated})
+    target_link_libraries(perf_${NAME} PRIVATE radar_perf_utils ${OP_TARGET})
+endfunction()
+
 foreach(_perf_name IN LISTS HOLOSCAN_RADAR_PERF_TARGETS)
     radar_add_perf(${_perf_name} holoscan::${_perf_name}_op)
 endforeach()
