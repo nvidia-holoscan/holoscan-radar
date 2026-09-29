@@ -12,7 +12,7 @@ scan-grid size. The size ladder inlines a mid-session ``az_coordinates`` overrid
 the default/full matrices add an xs scenario covering every functionally
 distinct live path together. Measurement tool only: no timing assertions.
 
-Scenario matrix mirrors ``performance/cpp/perf_music_estimator.cpp``.
+Scenario matrix mirrors ``performance/operators/angle_estimation/music_estimator/adapter.cpp``.
 ``num_sources`` is fixed (=1) across the matrix — see that file's docstring
 for why.
 """

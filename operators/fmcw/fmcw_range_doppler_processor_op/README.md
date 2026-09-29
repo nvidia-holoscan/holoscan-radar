@@ -99,7 +99,7 @@ The fused `rd_maps` follow the split-chain numerical contract. The shared stages
 
 **Steady.** Cached coefficients reused; each tick loans `rd_maps` (and the two axes when a waveform is set), writes `profiles`, and enqueues clutter-into-Doppler. Versus the split chain this saves one full-cube write+read, one kernel launch, and one async alloc/free per tick **plus** the graph-level cost of the extra split nodes. The FFTs still dominate. Do **not** decide keep/kill from a sum of the three per-operator harnesses — use `perf_fmcw_split_vs_fused`.
 
-Harness: `performance/cpp/perf_fmcw_range_doppler_processor.cpp` times this node alone (Python mirror exists but is not built in the current build). Axes: size ladder `{xs, sm, md, lg, xl}`; clutter `{none, mean_subtraction}` (default) / `--full` adds `single_delay` across the ladder and channel batches `{4, 16}` on `md`/`lg`. Default matrix: none `{xs, md, lg, xl}` plus mean-sub/`md` and none/`md`/4 channels. End-to-end comparison: `performance/cpp/perf_fmcw_split_vs_fused`. No measured numbers are recorded in-tree.
+Harness: `performance/operators/fmcw/fmcw_range_doppler_processor/adapter.cpp` times this node alone (Python mirror exists but is not built in the current build). Axes: size ladder `{xs, sm, md, lg, xl}`; clutter `{none, mean_subtraction}` (default) / `--full` adds `single_delay` across the ladder and channel batches `{4, 16}` on `md`/`lg`. Default matrix: none `{xs, md, lg, xl}` plus mean-sub/`md` and none/`md`/4 channels. End-to-end comparison: `performance/cpp/perf_fmcw_split_vs_fused`. No measured numbers are recorded in-tree.
 
 ```bash
 ctest --test-dir build -R perf_fmcw_range_doppler_processor_smoke

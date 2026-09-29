@@ -14,6 +14,15 @@ sidebands, but it captures bounded output snapshots with extra copies and does
 not expose paired per-frame timestamps. The performance runner keeps the Graph
 wiring and records source and synchronized sink times directly.
 
+## Layout
+
+Each operator's YAML recipe and optional typed C++ adapter live together under
+`performance/operators/<group>/<operator>/`. The group matches `operators/` and
+`tests/cpp/`; the shared C++ runner lives under `performance/harness/cpp/utils/`.
+`performance/CMakeLists.txt` is the explicit registration point. Executables
+still appear at `build/performance/cpp/perf_<operator>`; Python tools remain in
+`performance/python/` until their runtime migration.
+
 ## C++ recipe boundary
 
 The common driver loads and validates **every** case before scope selection. It
@@ -39,24 +48,24 @@ the loader still accepts version 1 for compatibility.
 
 ### Adding a C++ operator
 
-1. Create `performance/profiles/<operator>.yaml` with three valid sizes, a
-   version-2 recipe, and curated cases. Declare every documented live port and
+1. Create `performance/operators/<group>/<operator>/recipe.yaml` with three
+   valid sizes, a version-2 recipe, and curated cases. Declare every documented live port and
    cover it alone at each size in Overrides. Run `--validate` and `--list-cases`;
    both validate unselected cases without authoring a Graph.
 2. For direct `MaxTensorExtents`, built-in tensor generators, canonical scalar
-   or sequence Params, and registered scalar or host-vector live payloads, add the name and
-   operator type to `performance/cpp/CMakeLists.txt` with `radar_add_yaml_perf`.
+   or sequence Params, and registered scalar or host-vector live payloads, register the group/name and
+   operator type in `performance/CMakeLists.txt` with `radar_add_yaml_perf`.
    The generated entry point uses `YamlStandardTraits`; no operator-owned
    C++ source is needed. `test_perf_yaml_standard` exercises this path with a
    real two-input operator and a one-frame scalar live case.
 3. If the locked contract needs a descriptor builder, related-input fixture,
    cross-field check, derived bounds, payload codec, throughput unit, or
-   report postprocessing, put the typed adapter in `performance/cpp/perf_<operator>.cpp`.
-   That file owns only those semantics;
+   report postprocessing, put `adapter.cpp` beside the recipe. That file owns only those semantics;
    source publication, Graph assembly, timing, and report buckets stay shared.
-   Add the operator to `HOLOSCAN_RADAR_PERF_TARGETS` for its Minimal GPU smoke.
+   Add its `group/name` to `HOLOSCAN_RADAR_PERF_OPERATORS`; CMake registers
+   the executable and Minimal GPU smoke.
 
-The original five pilot tools keep typed adapters in their `perf_*.cpp` files for their
+The original five pilot tools keep typed adapters beside their recipes for their
 contract-specific parts:
 DDM power fold's DDM descriptor and divisibility, SnapshotGather's related
 indices and window, Beamscan's geometry/grid descriptors, FMCW range's FFT
@@ -86,14 +95,14 @@ To assess a new standard operator: use its locked
 contract to choose three profiles; declare one fixed recipe with direct bounds
 and built-in generators; author explicit cases; register its HSDK operator type
 through `radar_add_yaml_perf`; run validation, Minimal, and relevant Overrides
-smokes. Add a `perf_*.cpp` adapter only when a declared component cannot encode
+smokes. Add an `adapter.cpp` only when a declared component cannot encode
 a valid contract value or sizing rule. Python runtime parity still awaits a
 buildable HSDK 5 binding.
 
 ## YAML profiles and scopes
 
-All C++ tools read `performance/profiles/<operator>.yaml` automatically
-from the executable's source checkout, even when that checkout is mounted at a
+All C++ tools read their colocated `recipe.yaml` automatically from the
+executable's source checkout, even when that checkout is mounted at a
 different path from its build. No YAML path flag is needed. Each suite names
 small, medium, and large shapes and explicitly lists parameter and one-frame
 `[live]` cases. Tags select cases without generating a Cartesian product.

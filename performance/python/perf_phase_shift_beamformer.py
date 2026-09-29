@@ -9,7 +9,7 @@ scan-grid size, and RD extent, and inlines a mid-session ``[live]``
 ``az_coordinates`` override (finer grid -> steering-weight rebuild). Measurement
 tool only: no timing assertions.
 
-Scenario matrix mirrors ``performance/cpp/perf_phase_shift_beamformer.cpp``.
+Scenario matrix mirrors ``performance/operators/angle_estimation/phase_shift_beamformer/adapter.cpp``.
 """
 
 from __future__ import annotations

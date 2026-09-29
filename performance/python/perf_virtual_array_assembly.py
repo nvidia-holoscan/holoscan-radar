@@ -4,7 +4,7 @@
 """Performance characterization for VirtualArrayAssemblyOp (Python).
 
 Measurement tool only: no timing assertions. Mirrors
-``performance/cpp/perf_virtual_array_assembly.cpp``: flatten separated
+``performance/operators/fmcw/virtual_array_assembly/adapter.cpp``: flatten separated
 (tx, rx) RD maps into a virtual channel axis and emit runtime
 ``array_geometry``, sweeping (M_tx, N_rx, num_doppler, num_range_bins), a
 leading batch axis, and inlining a mid-session ``[live]`` wavelength

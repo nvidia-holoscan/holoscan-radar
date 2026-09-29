@@ -4,7 +4,7 @@
 """Performance characterization for MIMODeinterleaveOp (Python).
 
 Measurement tool only: no timing assertions. Mirrors
-``performance/cpp/perf_mimo_deinterleave.cpp``: TDM slow-time gather into an
+``performance/operators/fmcw/mimo_deinterleave/adapter.cpp``: TDM slow-time gather into an
 explicit TX axis, sweeping (M_tx, N_rx, L, samples) and a leading batch axis.
 No ``[live]`` parameters.
 """

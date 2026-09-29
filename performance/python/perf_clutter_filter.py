@@ -4,7 +4,7 @@
 """Performance characterization for ClutterFilterOp (Python).
 
 Measurement tool only: no timing assertions. Scenario matrices mirror
-``performance/cpp/perf_clutter_filter.cpp`` (default / --full / --sizes).
+``performance/operators/fmcw/clutter_filter/adapter.cpp`` (default / --full / --sizes).
 
 Sweeps the (chirps x range_bins) size ladder, the suppression method, and a
 multi-channel batch. Every compute run inlines a mid-session [live] method

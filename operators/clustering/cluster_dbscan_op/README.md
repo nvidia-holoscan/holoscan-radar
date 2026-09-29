@@ -115,7 +115,7 @@ Empty `points` → `labels` and `sizes` both shape `(0,)`.
 
 **Live rebuilds.** `min_points` / `max_clusters` are free. A new effective `(epsilon, num_features)` pair rebuilds and uploads `1/ε²`; an unchanged pair reuses the cached device vector. Every epsilon value still selects a new neighbor graph computation for that tick.
 
-Harness: `performance/cpp/perf_cluster_dbscan.cpp` (Graph). Axes: `(N, F)` ladder `xs`…`xl5` (256×2 through 8192×5; well-separated blobs). It measures the production Exact `min_points` override; `epsilon` and `max_clusters` overrides are not timed. Both outputs are wired, so timings include `sizes` publication. No measured numbers are recorded in-repo.
+Harness: `performance/operators/clustering/cluster_dbscan/adapter.cpp` (Graph). Axes: `(N, F)` ladder `xs`…`xl5` (256×2 through 8192×5; well-separated blobs). It measures the production Exact `min_points` override; `epsilon` and `max_clusters` overrides are not timed. Both outputs are wired, so timings include `sizes` publication. No measured numbers are recorded in-repo.
 
 ```bash
 ctest --test-dir build -R perf_cluster_dbscan_smoke

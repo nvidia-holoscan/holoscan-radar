@@ -124,7 +124,7 @@ Thin operator over the public `radar_common/reduce/` group-by-label primitive (`
 
 **Live rebuilds.** `representative` / `score_method` are free policy switches (no cached kernel). A `feature_weights` override re-uploads the weight vector on the tick it arrives.
 
-Harness: `performance/cpp/perf_detection_reduction.cpp` (Graph triple-in, both outputs consumed). Axes: detection count, cluster count, policy {first, peak, medoid, weighted_mean}. Live-override timing is not measured. No measured numbers are recorded in-repo.
+Harness: `performance/operators/detection/detection_reduction/adapter.cpp` (Graph triple-in, both outputs consumed). Axes: detection count, cluster count, policy {first, peak, medoid, weighted_mean}. Live-override timing is not measured. No measured numbers are recorded in-repo.
 
 ```bash
 ctest --test-dir build -R perf_detection_reduction_smoke

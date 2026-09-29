@@ -4,7 +4,7 @@
 """Performance characterization for FMCWRangeDopplerProcessorOp (Python).
 
 Measurement tool only: no timing assertions. Scenario matrices mirror
-``performance/cpp/perf_fmcw_range_doppler_processor.cpp`` (default / --full /
+``performance/operators/fmcw/fmcw_range_doppler_processor/adapter.cpp`` (default / --full /
 --sizes).
 
 Sweeps the (chirps x samples) size ladder, the inline clutter stage (off /

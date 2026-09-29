@@ -4,7 +4,7 @@
 """Performance characterization for FeatureAssemblyOp (Python).
 
 Measurement tool only: no timing assertions. Mirrors
-``performance/cpp/perf_feature_assembly.cpp``: sweeps detection count,
+``performance/operators/detection/feature_assembly/adapter.cpp``: sweeps detection count,
 score-map size, and feature packs (bins / +score / full clustering columns).
 FeatureAssemblyOp has no [live] override ports, so this tool has neither a
 process-warmup hook nor inline override measurement.
@@ -412,7 +412,7 @@ def main() -> int:
         tool_name="perf_feature_assembly",
         description=(
             "FeatureAssemblyOp performance characterization (Python). "
-            "Mirrors performance/cpp/perf_feature_assembly.cpp."
+            "Mirrors performance/operators/detection/feature_assembly/adapter.cpp."
         ),
         size_ladder_defs=SIZE_LADDER,
         build_full_matrix=build_full_matrix,

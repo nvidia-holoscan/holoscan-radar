@@ -4,7 +4,7 @@
 """Performance characterization for FMCWRangeProcessorOp (Python).
 
 Measurement tool only: no timing assertions. Scenario matrices mirror
-``performance/cpp/perf_fmcw_range_processor.cpp`` (default / --full / --sizes).
+``performance/operators/fmcw/fmcw_range_processor/adapter.cpp`` (default / --full / --sizes).
 
 Sweeps the (chirps x samples) size ladder, the range window (rectangular /
 Hann), and a multi-channel batch. Every compute run inlines a mid-session

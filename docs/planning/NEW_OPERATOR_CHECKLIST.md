@@ -48,7 +48,7 @@ throws or remains deferred in the Jira backlog.
       unit checks; all output ports wired in harness tests; float/double +
       error paths where applicable.
 - [ ] **Performance** — a YAML suite plus CMake smoke registration, with a
-      typed `perf_<operator>.cpp` adapter only for contract-specific semantics (see **Performance** below).
+      typed `adapter.cpp` beside the recipe only for contract-specific semantics (see **Performance** below).
 - [ ] **`ctest -L unit`** and **`pre-commit run --all-files`** pass.
 - [ ] **Performance** — `performance/cpp/perf_<operator>` consumer when the
       operator is GPU/hot-path; **includes inline `[live]` override
@@ -203,12 +203,12 @@ characterization. Skip only if the operator has no GPU/hot path yet; say so
 in Jira.
 
 - [ ] **Performance YAML suite** — add three sizes, a version-2 fixed
-      recipe, and curated cases in `performance/profiles/<operator>.yaml`.
+      recipe, and curated cases in `performance/operators/<group>/<operator>/recipe.yaml`.
       Declare named input axes, generator/dtype/device placement, canonical
       Params, extents or a named bounds policy, outputs, and live mappings.
-      Use `radar_add_yaml_perf` in `performance/cpp/CMakeLists.txt` when direct
+      Use `radar_add_yaml_perf` in `performance/CMakeLists.txt` when direct
       bounds and registered scalar/sequence Params and live codecs suffice.
-      Otherwise put typed semantic code in `perf_<operator>.cpp`; keep
+      Otherwise put typed semantic code in the adjacent `adapter.cpp`; keep
       source, Graph assembly, timing, and report buckets in shared code.
       Limited covers every backend; Overrides covers every `[live]` input
       alone at all three sizes. No implicit Cartesian product. Run
@@ -227,8 +227,8 @@ in Jira.
       typed adapter code only when a live codec needs contract-specific conversion. Exercise any `[live]` fast paths (named slow/fast pairs if applicable); do not
       claim a fast path while timing only the slow one. See `OPERATOR_DEVELOPMENT.md` → Performance
       characterization → Required coverage.
-- [ ] **CMake** — add the name once to `HOLOSCAN_RADAR_PERF_TARGETS` in
-      **`performance/cpp/CMakeLists.txt`**. That registers the executable and
+- [ ] **CMake** — add `group/name` once to `HOLOSCAN_RADAR_PERF_OPERATORS` in
+      **`performance/CMakeLists.txt`**. That registers the executable and
       Minimal GPU smoke. Add a focused Overrides smoke for a new live payload
       representation or timing behavior.
 - [ ] Smoke passes: `ctest --test-dir build -R perf_<operator>_smoke` (or via
@@ -236,7 +236,7 @@ in Jira.
       host-scan red flags before calling the operator performance-ready.
 
 See `performance/README.md` for the YAML-only path and the 26-operator migration results.
-Use the typed `performance/cpp/perf_*.cpp` adapters as examples only when a
+Use the colocated `performance/operators/<group>/<operator>/adapter.cpp` files as examples only when a
 contract-specific fixture, descriptor, enum, sizing policy, or metric is needed.
 
 ---

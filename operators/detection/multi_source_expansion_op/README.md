@@ -107,7 +107,7 @@ Rejected combinations and messages include:
 
 Planning is `O(num_items + num_selected × source_count)` and scatter is `O(num_output × num_index_columns)`. One synchronization validates and exact-sizes the output.
 
-`performance/cpp/perf_multi_source_expansion.cpp` sweeps original rows, selected fraction, sources per selected row, and index width while draining both outputs and reporting warmup, setup/cold, and steady timing.
+`performance/operators/detection/multi_source_expansion/adapter.cpp` sweeps original rows, selected fraction, sources per selected row, and index width while draining both outputs and reporting warmup, setup/cold, and steady timing.
 
 ```bash
 ctest --test-dir build-perf-check -R perf_multi_source_expansion_smoke

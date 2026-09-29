@@ -110,7 +110,7 @@ Rejected combinations and the operator's own messages:
 
 Cold / first unseen steering key: device weight/grid build (same weight helper as PhaseShift). Steady: cache hit + `X · Wᶜ` GEMM + reduce kernel + optional blanking. `peak_interpolation` does not rebuild the artifact; a grid / geometry / taper override does.
 
-Harness: `performance/cpp/perf_beamscan_estimator.cpp` (Graph). Size ladder `xs`…`xl` (channels × detections × scan grid). Every selected size runs five isolated inline-override scenarios and reports `override_ms` / `override_delta_ms` for geometry, azimuth grid, elevation grid, taper, and interpolation. Optional `is_valid` is omitted from performance runs. No reference results are checked in; run:
+Harness: `performance/operators/angle_estimation/beamscan_estimator/adapter.cpp` (Graph). Size ladder `xs`…`xl` (channels × detections × scan grid). Every selected size runs five isolated inline-override scenarios and reports `override_ms` / `override_delta_ms` for geometry, azimuth grid, elevation grid, taper, and interpolation. Optional `is_valid` is omitted from performance runs. No reference results are checked in; run:
 
 ```bash
 ctest --test-dir build -R perf_beamscan_estimator_smoke

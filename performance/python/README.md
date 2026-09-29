@@ -1,7 +1,7 @@
 # Python performance harness
 
-Measurement-only Holoscan operator benchmarks mirroring
-[`performance/cpp/`](../cpp/). These scripts compose tiny
+Measurement-only Holoscan operator benchmarks corresponding to the C++
+[`performance/operators/`](../operators/) suites. These scripts compose tiny
 source → operator → sink graphs, time end-to-end frame latency with a device
 sync at the terminal sink, and print a unified text report (optional JSON via
 `--output`).
@@ -106,5 +106,5 @@ Default CLI (no flags): `--warmup 5`, `--measured 20`, `--repeats 1`,
 
 ## Notes
 
-- No timing assertions — use for characterization and regression tracking, not CI pass/fail gates (see C++ `performance/cpp/CMakeLists.txt` smoke tests for the binary harness).
+- No timing assertions — use for characterization and regression tracking, not CI pass/fail gates (see C++ `performance/CMakeLists.txt` smoke tests for the binary harness).
 - Latencies are valid only on the machine/GPU they were captured on.

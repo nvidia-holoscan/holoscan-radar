@@ -10,7 +10,7 @@ and scan-grid size, and inlines a mid-session ``[live]`` ``az_coordinates``
 override (finer grid -> steering rebuild). Measurement tool only: no timing
 assertions.
 
-Scenario matrix mirrors ``performance/cpp/perf_mvdr_estimator.cpp``.
+Scenario matrix mirrors ``performance/operators/angle_estimation/mvdr_estimator/adapter.cpp``.
 """
 
 from __future__ import annotations

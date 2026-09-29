@@ -4,7 +4,7 @@
 """Performance characterization for ClusterDBSCANOp (Python).
 
 Measurement tool only: no timing assertions. Mirrors
-``performance/cpp/perf_cluster_dbscan.cpp``: brute-force O(N²·F) DBSCAN over
+``performance/operators/clustering/cluster_dbscan/adapter.cpp``: brute-force O(N²·F) DBSCAN over
 a (num_points, num_features) feature matrix. Every compute run inlines a
 mid-session [live] override (epsilon / min_points / max_clusters). The
 workload is compact, well-separated blobs so the connected-components loop
@@ -357,7 +357,7 @@ def main() -> int:
         tool_name="perf_cluster_dbscan",
         description=(
             "ClusterDBSCANOp performance characterization (Python). "
-            "Mirrors performance/cpp/perf_cluster_dbscan.cpp."
+            "Mirrors performance/operators/clustering/cluster_dbscan/adapter.cpp."
         ),
         size_ladder_defs=SIZE_LADDER,
         build_full_matrix=build_full_matrix,

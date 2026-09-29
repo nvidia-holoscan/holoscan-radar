@@ -10,7 +10,7 @@ detection count, and snapshot window, and inlines a mid-session ``[live]``
 the output re-shapes and the gather re-plans). Measurement tool only: no
 timing assertions.
 
-Scenario matrix mirrors ``performance/cpp/perf_snapshot_gather.cpp``.
+Scenario matrix mirrors ``performance/operators/angle_estimation/snapshot_gather/adapter.cpp``.
 """
 
 from __future__ import annotations

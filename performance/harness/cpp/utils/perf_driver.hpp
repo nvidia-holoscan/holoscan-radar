@@ -6,7 +6,8 @@
 // keeps only contract-specific case parsing, typed Graph wiring, and result
 // annotations. One YAML suite is loaded and validated before scope filtering.
 //
-// A new perf_<operator>.cpp defines a Scenario with `id` and `size_id`, plus:
+// A typed operators/<group>/<operator>/adapter.cpp defines a Scenario with `id` and `size_id`,
+// plus:
 //   Scenario parse_case(ProfileCase, shape);  // as Traits::parse_case
 //   SizeDef size_def(profile_id, shape);      // as Traits::size_def
 //   TimingCollector run_graph(scenario, RunPlan);
@@ -183,21 +184,22 @@ inline void default_log_level() {
 }
 
 inline std::filesystem::path profile_suite_path(std::string_view tool_name) {
-  const auto filename = std::string(tool_name.substr(5)) + ".yaml";
+  const auto operator_name = tool_name.substr(5);
   // Build trees are often bind-mounted at a different path on the host. Look
   // upward from the executable so the adjacent source checkout wins.
   std::error_code error;
   const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
   if (!error) {
     for (auto root = executable.parent_path(); !root.empty(); root = root.parent_path()) {
-      const auto candidate = root / "performance" / "profiles" / filename;
-      if (std::filesystem::is_regular_file(candidate, error))
+      const auto candidate =
+          find_operator_recipe(root / "performance" / "operators", operator_name);
+      if (!candidate.empty())
         return candidate;
       if (root == root.parent_path())
         break;
     }
   }
-  return std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / filename;
+  return operator_recipe_path(HOLOSCAN_RADAR_PERF_OPERATOR_ROOT, operator_name);
 }
 
 template <typename Traits>
@@ -368,12 +370,14 @@ int perf_main(int argc, char** argv) {
   }
   ProfileSuite suite;
   std::vector<SelectedScenario<typename Traits::Scenario>> scenarios;
-  const auto profile_path = detail::profile_suite_path(Traits::tool_name());
+  std::filesystem::path profile_path;
   try {
+    profile_path = detail::profile_suite_path(Traits::tool_name());
     suite = detail::load_adapter_suite<Traits>(profile_path);
     scenarios = detail::select_scenarios<Traits>(suite, opt);
   } catch (const std::exception& e) {
-    std::cerr << "error: " << profile_path << ": " << e.what() << "\n";
+    std::cerr << "error: " << (profile_path.empty() ? Traits::tool_name() : profile_path.string())
+              << ": " << e.what() << "\n";
     return 2;
   }
   if (opt.validate_only || opt.list_cases) {

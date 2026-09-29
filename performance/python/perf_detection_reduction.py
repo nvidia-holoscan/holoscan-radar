@@ -4,7 +4,7 @@
 """Performance characterization for DetectionReductionOp (Python).
 
 Measurement tool only: no timing assertions. Mirrors
-``performance/cpp/perf_detection_reduction.cpp``: group-by-label reduction
+``performance/operators/detection/detection_reduction/adapter.cpp``: group-by-label reduction
 over (labels, detection_idx, points). Every compute run inlines a mid-session
 [live] override (representative / feature_weights / score_method).
 """
@@ -434,7 +434,7 @@ def main() -> int:
         tool_name="perf_detection_reduction",
         description=(
             "DetectionReductionOp performance characterization (Python). "
-            "Mirrors performance/cpp/perf_detection_reduction.cpp."
+            "Mirrors performance/operators/detection/detection_reduction/adapter.cpp."
         ),
         size_ladder_defs=SIZE_LADDER,
         build_full_matrix=build_full_matrix,

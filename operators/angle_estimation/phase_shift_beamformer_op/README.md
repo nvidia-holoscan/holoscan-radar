@@ -111,7 +111,7 @@ Dense-cube memory is an accepted caller-owned trade-off, but each named extent i
 
 Cold / first unseen steering key: host taper + per-beam `boundary_to_canonical`, H2D scratch, the weight kernel, and device-grid materialization; then the GEMM. Steady with grid outputs wired: cache hit + one broadcast `matx::matmul` (cuBLAS) + two small D2D grid copies. The key covers the complete `AngleConvention` (including custom signed axes and elevation reference), wavelength, positions, both grids, and window key, so an override costs one artifact rebuild on the tick it arrives.
 
-Harness: `performance/cpp/perf_phase_shift_beamformer.cpp`. Size ladder `xs`…`xl` (channels × `num_az` × `num_el` × RD extent). Every selected size runs four isolated inline-override scenarios: `array_geometry`, `az_coordinates`, `el_coordinates`, and `array_taper`. The source co-emits the complete live bundle before the triggering `rd_maps`; one value changes mid-session, and the report records `override_ms` / `override_delta_ms` against pre-override steady state. No reference results are checked in; run:
+Harness: `performance/operators/angle_estimation/phase_shift_beamformer/adapter.cpp`. Size ladder `xs`…`xl` (channels × `num_az` × `num_el` × RD extent). Every selected size runs four isolated inline-override scenarios: `array_geometry`, `az_coordinates`, `el_coordinates`, and `array_taper`. The source co-emits the complete live bundle before the triggering `rd_maps`; one value changes mid-session, and the report records `override_ms` / `override_delta_ms` against pre-override steady state. No reference results are checked in; run:
 
 ```bash
 ctest --test-dir build -R perf_phase_shift_beamformer_smoke

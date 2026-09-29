@@ -743,12 +743,12 @@ execution. For a standard operator with direct extents and built-in generators,
 scalar or sequence Params, and registered scalar or host-vector live payloads, use
 `radar_add_yaml_perf` with no operator-owned C++ file. Contract-specific
 descriptors, related inputs, bounds, codecs, units, and postprocessing belong in
-a typed `perf_<operator>.cpp` adapter. Typed adapters share YAML case state, typed input staging,
+a typed `adapter.cpp` beside the recipe. Typed adapters share YAML case state, typed input staging,
 baseline/live Graph calls, on-demand live codec dispatch, cached-transition
 warmup checks, common payload builders, and throughput-rate conversion; keep these mechanics in the driver.
 Read profile axes directly from the recipe and validate YAML choices by the
 operator's constraints, rather than duplicating the curated case values in C++. Examples include DDM power fold, SnapshotGather, Beamscan, FMCW range, CFAR, the five angle estimators, and the six-input MultiSourceExpansion fixture. Add a Minimal GPU smoke and focused live
-smokes through `performance/cpp/CMakeLists.txt`. `--validate` and
+smokes through `performance/CMakeLists.txt`. `--validate` and
 `--list-cases` validate unselected cases without Graph authoring; an explicit
 `{profile}` family does not create a Cartesian product.
 
@@ -867,7 +867,7 @@ Exemplar code to read (patterns, not copy-paste requirements):
   `operators/detection/cfar_detector_op/`
 - Device compaction — `cfar_compact.cuh`
 - Slow vs fast calibration — `alpha_lut` live override + warn-once on `pfa` MC
-- Perf harness consumer — `performance/cpp/perf_cfar_detector.cpp`
+- Perf harness consumer — `performance/operators/detection/cfar_detector/adapter.cpp`
 - Open-item style — [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309)
 
 ---

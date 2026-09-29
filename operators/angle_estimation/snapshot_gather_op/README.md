@@ -107,7 +107,7 @@ Rejected combinations and the operator's own messages:
 
 Constructor-created state reuses the leading-dimension vector, batch-linear table, and one-int error flag. With constructor extents the tables never allocate on the hot path; the non-pooled path grows the batch-linear table only when a larger detection count arrives. Each non-empty tick H2D-copies the used leading extents and host-syncs the validation flag. A `[live] snapshot_window` change rebuilds no cached artifact; it only changes gather and output extents.
 
-Harness: `performance/cpp/perf_snapshot_gather.cpp` (Graph dual-input runner). Size ladder `xs`…`xl` (channels × RD map × detection count) and windows `{0,0}`, `{1,1}`, `{2,2}`. It records cold, steady, and inline Exact `snapshot_window` override timing. No measured numbers are recorded in-repo for this operator; run the harness:
+Harness: `performance/operators/angle_estimation/snapshot_gather/adapter.cpp` (Graph dual-input runner). Size ladder `xs`…`xl` (channels × RD map × detection count) and windows `{0,0}`, `{1,1}`, `{2,2}`. It records cold, steady, and inline Exact `snapshot_window` override timing. No measured numbers are recorded in-repo for this operator; run the harness:
 
 ```bash
 ctest --test-dir build -R perf_snapshot_gather_smoke

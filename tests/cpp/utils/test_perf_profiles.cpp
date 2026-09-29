@@ -14,6 +14,7 @@
 #include <vector>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "utils/perf_driver.hpp"
@@ -28,8 +29,20 @@ namespace {
 
 namespace perf = holoscan::radar::perf;
 
+std::filesystem::path profile_path(std::string_view name) {
+  return perf::operator_recipe_path(HOLOSCAN_RADAR_PERF_OPERATOR_ROOT, name);
+}
+
+TEST(PerfProfiles, FindsColocatedRecipeByOperatorName) {
+  const auto recipe = profile_path("cfar_detector");
+  EXPECT_EQ(recipe.filename(), "recipe.yaml");
+  EXPECT_EQ(recipe.parent_path().filename(), "cfar_detector");
+  EXPECT_EQ(recipe.parent_path().parent_path().filename(), "detection");
+  EXPECT_THROW(profile_path("missing_operator"), std::invalid_argument);
+}
+
 TEST(PerfProfiles, SelectsCuratedClutterScopes) {
-  const auto path = std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml";
+  const auto path = profile_path("clutter_filter");
   const auto suite = perf::load_profile_suite(path, "clutter_filter");
   EXPECT_EQ(suite.select("minimal").size(), 3U);
   EXPECT_EQ(suite.select("limited").size(), 6U);
@@ -79,9 +92,7 @@ TEST(PerfProfiles, EveryMigratedSuiteHasThreeBaselinesAndBoundedThorough) {
                                 "cfar_detector"};
   for (const char* name : names) {
     SCOPED_TRACE(name);
-    const auto suite = perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / (std::string(name) + ".yaml"),
-        name);
+    const auto suite = perf::load_profile_suite(profile_path(name), name);
     EXPECT_EQ(suite.version, 2);
     EXPECT_NO_THROW((void)perf::parse_yaml_recipe(suite));
     EXPECT_EQ(suite.select("minimal").size(), 3U);
@@ -105,9 +116,7 @@ TEST(PerfProfiles, AdapterValidatesUnselectedCasesBeforeFiltering) {
     std::string id;
     std::string size_id;
   };
-  const auto suite = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml",
-      "clutter_filter");
+  const auto suite = perf::load_profile_suite(profile_path("clutter_filter"), "clutter_filter");
   auto invalid = [](const perf::ProfileCase& c, const std::vector<int64_t>& shape) {
     EXPECT_EQ(shape.size(), 2U);
     if (c.id == "sixteen-channels-large")
@@ -144,9 +153,7 @@ TEST(PerfProfiles, AdapterValidatesUnselectedCasesBeforeFiltering) {
 }
 
 TEST(PerfProfiles, PilotCaseReadsYamlAxesAndRejectsMalformedValues) {
-  const auto suite = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_power_fold.yaml",
-      "ddm_power_fold");
+  const auto suite = perf::load_profile_suite(profile_path("ddm_power_fold"), "ddm_power_fold");
   const auto& first = suite.cases.front();
   const auto shape = suite.shape_for(first.profile);
   perf::RecipeScenario scenario;
@@ -170,16 +177,14 @@ TEST(PerfProfiles, PilotCaseReadsYamlAxesAndRejectsMalformedValues) {
 }
 
 TEST(PerfProfiles, SharedPilotCodecsValidateSemanticValues) {
-  const auto range_suite = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "fmcw_range_processor.yaml",
-      "fmcw_range_processor");
+  const auto range_suite =
+      perf::load_profile_suite(profile_path("fmcw_range_processor"), "fmcw_range_processor");
   const auto waveform = range_suite.recipe["params"]["waveform"];
   EXPECT_NO_THROW((void)perf::recipe_fmcw_waveform(waveform));
   EXPECT_THROW((void)perf::recipe_fmcw_waveform(waveform, 1.0e-6), std::invalid_argument);
 
-  const auto beam_suite = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "beamscan_estimator.yaml",
-      "beamscan_estimator");
+  const auto beam_suite =
+      perf::load_profile_suite(profile_path("beamscan_estimator"), "beamscan_estimator");
   auto geometry = YAML::Clone(beam_suite.recipe["params"]["array_geometry"]);
   EXPECT_NO_THROW((void)perf::recipe_ula_geometry(geometry, 4));
   geometry["spacing_wavelengths"] = -0.1;
@@ -232,16 +237,13 @@ TEST(PerfProfiles, LivePortManifestMatchesLockedContractForMigratedOperators) {
   };
   for (const auto& [name, ports] : expected) {
     SCOPED_TRACE(name);
-    const auto suite = perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / (name + ".yaml"), name);
+    const auto suite = perf::load_profile_suite(profile_path(name), name);
     EXPECT_EQ(std::set<std::string>(suite.live_ports.begin(), suite.live_ports.end()), ports);
   }
 }
 
 TEST(PerfProfiles, LimitedIncludesEveryCfarBackend) {
-  const auto suite = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "cfar_detector.yaml",
-      "cfar_detector");
+  const auto suite = perf::load_profile_suite(profile_path("cfar_detector"), "cfar_detector");
   std::set<std::string> backends;
   for (const auto& c : suite.select("limited")) {
     const auto params = perf::merge_recipe_map(suite.recipe["params"], c.parameters);
@@ -249,9 +251,8 @@ TEST(PerfProfiles, LimitedIncludesEveryCfarBackend) {
   }
   EXPECT_EQ(backends, (std::set<std::string>{"CA", "GO", "SO", "OS"}));
 
-  const auto ddm = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_dense_demultiplex.yaml",
-      "ddm_dense_demultiplex");
+  const auto ddm =
+      perf::load_profile_suite(profile_path("ddm_dense_demultiplex"), "ddm_dense_demultiplex");
   std::set<std::string> codes;
   for (const auto& c : ddm.select("limited")) {
     const auto params = perf::merge_recipe_map(ddm.recipe["params"], c.parameters);
@@ -264,9 +265,7 @@ TEST(PerfProfiles, VersionTwoRecipesKeepCuratedCasesAndNamedInputs) {
   for (const char* name : {"ddm_power_fold", "snapshot_gather", "beamscan_estimator",
                            "fmcw_range_processor", "cfar_detector"}) {
     SCOPED_TRACE(name);
-    const auto suite = perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / (std::string(name) + ".yaml"),
-        name);
+    const auto suite = perf::load_profile_suite(profile_path(name), name);
     ASSERT_EQ(suite.version, 2);
     const auto recipe = perf::parse_yaml_recipe(suite);
     EXPECT_FALSE(recipe.operator_type.empty());
@@ -277,9 +276,7 @@ TEST(PerfProfiles, VersionTwoRecipesKeepCuratedCasesAndNamedInputs) {
         EXPECT_FALSE(perf::recipe_shape(input, values).empty());
     }
   }
-  const auto clutter = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml",
-      "clutter_filter");
+  const auto clutter = perf::load_profile_suite(profile_path("clutter_filter"), "clutter_filter");
   EXPECT_EQ(clutter.version, 2);
   EXPECT_NO_THROW((void)perf::parse_yaml_recipe(clutter));
 }
@@ -299,9 +296,7 @@ TEST(PerfProfiles, GenericYamlScalarParamsMaterializeThroughHsdkSchema) {
 }
 
 TEST(PerfProfiles, VersionTwoRecipeRejectsUnknownGeneratorAndAxis) {
-  auto suite = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_power_fold.yaml",
-      "ddm_power_fold");
+  auto suite = perf::load_profile_suite(profile_path("ddm_power_fold"), "ddm_power_fold");
   suite.recipe = YAML::Clone(suite.recipe);
   suite.recipe["inputs"][0]["generator"] = "unregistered_generator";
   EXPECT_THROW(perf::parse_yaml_recipe(suite), std::invalid_argument);
@@ -313,9 +308,7 @@ TEST(PerfProfiles, VersionTwoRecipeRejectsUnknownGeneratorAndAxis) {
 }
 
 TEST(PerfProfiles, VersionTwoRecipeRejectsPortPayloadAndRelatedInputMismatch) {
-  auto suite = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "snapshot_gather.yaml",
-      "snapshot_gather");
+  auto suite = perf::load_profile_suite(profile_path("snapshot_gather"), "snapshot_gather");
   auto recipe = perf::parse_yaml_recipe(suite);
   const auto inputs = recipe.inputs;
   const auto outputs = recipe.outputs;
@@ -337,9 +330,8 @@ TEST(PerfProfiles, VersionTwoRecipeRejectsPortPayloadAndRelatedInputMismatch) {
 }
 
 TEST(PerfProfiles, PilotLiveCodecDeclarationsAreValidatedBeforeSelection) {
-  auto suite = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "fmcw_range_processor.yaml",
-      "fmcw_range_processor");
+  auto suite =
+      perf::load_profile_suite(profile_path("fmcw_range_processor"), "fmcw_range_processor");
   auto recipe = perf::parse_yaml_recipe(suite);
   EXPECT_EQ(recipe.live_codecs.at("nfft"), "scaled_axis");
   EXPECT_EQ(recipe.live_axes.at("nfft"), "samples");
@@ -362,9 +354,7 @@ TEST(PerfProfiles, PilotLiveCodecDeclarationsAreValidatedBeforeSelection) {
 TEST(PerfProfiles, FftPlanCasesDistinguishUnseenAndCached) {
   for (const char* name : {"fmcw_range_processor", "fmcw_doppler_processor"}) {
     SCOPED_TRACE(name);
-    const auto suite = perf::load_profile_suite(
-        std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / (std::string(name) + ".yaml"),
-        name);
+    const auto suite = perf::load_profile_suite(profile_path(name), name);
     std::set<std::string> cache_modes;
     for (const auto& c : suite.select("thorough")) {
       if (c.profile == "medium" && c.override_value &&
@@ -507,9 +497,7 @@ void decorate_row(perf::ResultRow& row, const AdapterFixtureScenario&) {
 }
 
 TEST(PerfProfiles, SharedAdapterOwnsSizeAndReportIdentity) {
-  const auto suite = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "clutter_filter.yaml",
-      "clutter_filter");
+  const auto suite = perf::load_profile_suite(profile_path("clutter_filter"), "clutter_filter");
   const AdapterFixtureScenario scenario{"fixture-live", "small", true};
   const perf::SelectedScenario<AdapterFixtureScenario> selected{scenario, "method"};
   perf::PerfReport report;
@@ -537,9 +525,8 @@ TEST(PerfProfiles, SharedAdapterOwnsSizeAndReportIdentity) {
 }
 
 TEST(PerfProfiles, SchemaV2KeepsNestedDescriptorFieldsWhenCasesOverrideOneField) {
-  const auto suite = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "tdm_dense_compensation.yaml",
-      "tdm_dense_compensation");
+  const auto suite =
+      perf::load_profile_suite(profile_path("tdm_dense_compensation"), "tdm_dense_compensation");
   const auto& changed = suite.cases[3];
   const auto merged = perf::merge_recipe_map(suite.recipe["params"], changed.parameters);
   const auto waveform = merged["waveform"];
@@ -550,35 +537,31 @@ TEST(PerfProfiles, SchemaV2KeepsNestedDescriptorFieldsWhenCasesOverrideOneField)
 }
 
 TEST(PerfProfiles, SchemaV2DeclaresPairedAndDescriptorOutputs) {
-  const auto reduction = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "detection_reduction.yaml",
-      "detection_reduction");
+  const auto reduction =
+      perf::load_profile_suite(profile_path("detection_reduction"), "detection_reduction");
   const auto reduction_recipe = perf::parse_yaml_recipe(reduction);
   EXPECT_EQ(reduction_recipe.inputs.size(), 3U);
   EXPECT_EQ(reduction_recipe.outputs.timed, "rep_idx");
   EXPECT_EQ(reduction_recipe.outputs.timed_pair, "reduced_points");
 
-  const auto sparse = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "ddm_sparse_demultiplex.yaml",
-      "ddm_sparse_demultiplex");
+  const auto sparse =
+      perf::load_profile_suite(profile_path("ddm_sparse_demultiplex"), "ddm_sparse_demultiplex");
   const auto sparse_recipe = perf::parse_yaml_recipe(sparse);
   EXPECT_EQ(sparse_recipe.outputs.drain_codecs.at("array_geometry"), "array_geometry");
   EXPECT_EQ(sparse_recipe.inputs[1].index_doppler_divisor, "tx");
 }
 
 TEST(PerfProfiles, SchemaV2RoundsSixInputFixtureAndKeepsEmptyDetectionCase) {
-  const auto expansion = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "multi_source_expansion.yaml",
-      "multi_source_expansion");
+  const auto expansion =
+      perf::load_profile_suite(profile_path("multi_source_expansion"), "multi_source_expansion");
   const auto baseline = perf::recipe_values(expansion, expansion.cases[0]);
   EXPECT_EQ(baseline.at("selected"), 8);
   const auto full = perf::recipe_values(expansion, expansion.cases.back());
   EXPECT_EQ(full.at("selected"), 16384);
   EXPECT_EQ(perf::parse_yaml_recipe(expansion).inputs.size(), 6U);
 
-  const auto feature = perf::load_profile_suite(
-      std::filesystem::path(HOLOSCAN_RADAR_PERF_PROFILE_DIR) / "feature_assembly.yaml",
-      "feature_assembly");
+  const auto feature =
+      perf::load_profile_suite(profile_path("feature_assembly"), "feature_assembly");
   const auto empty = perf::recipe_values(feature, feature.cases[5]);
   EXPECT_EQ(empty.at("detections"), 0);
   const auto recipe = perf::parse_yaml_recipe(feature);

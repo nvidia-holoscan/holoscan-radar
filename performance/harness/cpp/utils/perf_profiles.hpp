@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -41,6 +42,38 @@ inline bool known_profile(std::string_view profile) {
       return true;
   }
   return false;
+}
+
+// Recipes live beside optional typed adapters. Resolve by operator name so
+// one source checkout can be mounted at a different path in a GPU container.
+// A duplicate name across groups is ambiguous and must be fixed explicitly.
+inline std::filesystem::path find_operator_recipe(const std::filesystem::path& root,
+                                                  std::string_view operator_name) {
+  std::error_code error;
+  if (!std::filesystem::is_directory(root, error))
+    return {};
+  std::filesystem::path found;
+  for (const auto& group : std::filesystem::directory_iterator(root)) {
+    if (!group.is_directory())
+      continue;
+    const auto candidate = group.path() / std::string(operator_name) / "recipe.yaml";
+    if (!std::filesystem::is_regular_file(candidate, error))
+      continue;
+    if (!found.empty())
+      throw std::invalid_argument("duplicate performance recipe for " + std::string(operator_name) +
+                                  ": " + found.string() + " and " + candidate.string());
+    found = candidate;
+  }
+  return found;
+}
+
+inline std::filesystem::path operator_recipe_path(const std::filesystem::path& root,
+                                                  std::string_view operator_name) {
+  const auto path = find_operator_recipe(root, operator_name);
+  if (path.empty())
+    throw std::invalid_argument("performance recipe not found for " + std::string(operator_name) +
+                                " under " + root.string());
+  return path;
 }
 
 inline void require_keys(const YAML::Node& map, std::initializer_list<std::string_view> allowed,

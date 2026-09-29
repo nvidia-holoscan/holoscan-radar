@@ -14,7 +14,7 @@ mid-session bundle of ``[live]`` overrides:
 auto/EFT), ``source_count_pfa``, ``max_sources``, and ``spatial_smoothing``
 (``[2]`` on the ULA). Measurement tool only: no timing assertions.
 
-Scenario matrix mirrors ``performance/cpp/perf_root_music_estimator.cpp``.
+Scenario matrix mirrors ``performance/operators/angle_estimation/root_music_estimator/adapter.cpp``.
 ``num_sources`` is fixed (=1) across the steady matrix — see that file's
 docstring for why.
 """

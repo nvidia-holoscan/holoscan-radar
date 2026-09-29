@@ -6,7 +6,7 @@
 Measurement tool only: no timing assertions.
 
 Scenario matrices intentionally mirror
-``performance/cpp/perf_cfar_detector.cpp`` (default / --full / --sizes).
+``performance/operators/detection/cfar_detector/adapter.cpp`` (default / --full / --sizes).
 C++/Python matrix synchronization is tracked by CLARAHOLOS-3419.
 
 Default CLI matches C++ (default matrix, not ``--full``): mid/large GO/SO/OS

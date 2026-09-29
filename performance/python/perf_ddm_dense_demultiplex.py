@@ -4,7 +4,7 @@
 """Performance characterization for DDMDenseDemultiplexOp (Python).
 
 Measurement tool only: no timing assertions. Mirrors
-``performance/cpp/perf_ddm_dense_demultiplex.cpp``: TDM per-Doppler
+``performance/operators/fmcw/ddm_dense_demultiplex/adapter.cpp``: TDM per-Doppler
 inter-TX phase correction on separated RD maps, sweeping (M_tx, N_rx,
 num_doppler, num_range_bins), a leading batch axis, and inlining a
 mid-session ``[live]`` waveform override so correction-table rebuild cost is

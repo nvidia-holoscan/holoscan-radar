@@ -86,7 +86,7 @@ Invariants: leading named axes are processed independently (collapsed to a batch
 
 **Steady.** Cached coefficients are reused; each tick loans `range_profiles` (and `range_bins` when a waveform is set) and enqueues the FFT. `[live]` `nfft` to an unseen length builds a new MatX plan. `[live]` `apply_dechirp` / `range_window` / `waveform` rebuild the premultiplier or window taps on an unseen key. `fft_norm` and the parameter-only `propagation_speed` do not invalidate those caches.
 
-Harness: `performance/cpp/perf_fmcw_range_processor.cpp` (Python mirror exists but is not built in the current build). Axes: size ladder `{xs, sm, md, lg, xl}` = `(16×128) … (256×2048)` chirps × samples; window `{rect, hann}`; optional channel batch (`md` × 4). Default matrix: rect `{xs, md, lg, xl}` plus hann/`md` and rect/`md`/4 channels. `--full` crosses windows × sizes and adds channel batches on `md`/`lg`. No measured numbers are recorded in-tree; run the harness for timings.
+Harness: `performance/operators/fmcw/fmcw_range_processor/adapter.cpp` (Python mirror exists but is not built in the current build). Axes: size ladder `{xs, sm, md, lg, xl}` = `(16×128) … (256×2048)` chirps × samples; window `{rect, hann}`; optional channel batch (`md` × 4). Default matrix: rect `{xs, md, lg, xl}` plus hann/`md` and rect/`md`/4 channels. `--full` crosses windows × sizes and adds channel batches on `md`/`lg`. No measured numbers are recorded in-tree; run the harness for timings.
 
 ```bash
 ctest --test-dir build -R perf_fmcw_range_processor_smoke

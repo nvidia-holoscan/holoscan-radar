@@ -93,7 +93,7 @@ Rejected combinations and messages include:
 
 Steady work is `O(num_items × num_channels × num_snapshots)` plus a linear selection scan and copies proportional to `num_selected`. A new geometry pays one position upload. Exact-size compaction incurs one synchronization per activation.
 
-`performance/cpp/perf_rank_one_residual_screen.cpp` sweeps item, channel, snapshot, selection fraction, and live geometry while draining every output and reporting process warmup, setup/cold, and steady timing.
+`performance/operators/angle_estimation/rank_one_residual_screen/adapter.cpp` sweeps item, channel, snapshot, selection fraction, and live geometry while draining every output and reporting process warmup, setup/cold, and steady timing.
 
 ```bash
 ctest --test-dir build-perf-check -R perf_rank_one_residual_screen_smoke

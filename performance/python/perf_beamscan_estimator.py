@@ -8,7 +8,7 @@ count, channel count, and scan-grid size, and inlines a mid-session
 ``[live]`` ``az_coordinates`` override (finer grid -> steering-weight rebuild).
 Measurement tool only: no timing assertions.
 
-Scenario matrix mirrors ``performance/cpp/perf_beamscan_estimator.cpp``.
+Scenario matrix mirrors ``performance/operators/angle_estimation/beamscan_estimator/adapter.cpp``.
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@
 """Performance characterization for FMCWDopplerProcessorOp (Python).
 
 Measurement tool only: no timing assertions. Scenario matrices mirror
-``performance/cpp/perf_fmcw_doppler_processor.cpp`` (default / --full /
+``performance/operators/fmcw/fmcw_doppler_processor/adapter.cpp`` (default / --full /
 --sizes).
 
 Sweeps the (chirps x range_bins) size ladder, the Doppler window
