@@ -16,15 +16,18 @@ then run these commands on the host. The CLI performs the project build and
 application run in the named development container:
 
 ```bash
-./.devcontainer/build-hsdk5-ea-image.sh
-./.devcontainer/build-hsdk5-ea-image.sh --print-pin
-holoscan build-container --base-img <reported-image> --img holoscan-radar-dev:hsdk5
+./.devcontainer/build-hsdk5-ea-image.sh \
+  --pin 79dc6cb48e5b571b6f0a6daf2b5dbc783de01b76
+holoscan build-container --base-img holoscan-radar-hsdk5-ea:79dc6cb \
+  --img holoscan-radar-dev:hsdk5
 holoscan build siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
-  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan
 holoscan run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
   --run-args=siso_smoke.yaml
 ```
 

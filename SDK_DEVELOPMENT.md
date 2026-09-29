@@ -50,10 +50,12 @@ the named development image:
 
 ```bash
 holoscan build-container --base-img <reported-image> --img holoscan-radar-dev:hsdk5
-holoscan build holoscan-radar --language cpp --img holoscan-radar-dev:hsdk5 --no-docker-build
+holoscan build holoscan-radar --language cpp --img holoscan-radar-dev:hsdk5 \
+  --no-docker-build --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan
 holoscan run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
   --run-args=siso_smoke.yaml
 holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build
 ```
