@@ -27,4 +27,4 @@ cost whenever a tick is dumped. `every_n` is an optional same-tick override;
 The public contract is in
 [SAR OPERATOR_API.md](../../docs/planning/SAR/OPERATOR_API.md).
 Unresolved implementation and validation questions are collected in the
-untracked top-level `OPEN_ITEMS.md` and the historical per-operator notes.
+[SAR open-items roll-up](../../docs/planning/SAR/OPEN_ITEMS.md) and the historical per-operator notes.

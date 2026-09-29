@@ -104,5 +104,5 @@ The application owns `cphd.path` and passes it to the reader. For a small
 offline file, `ctest --test-dir build -R '^Sar_.*_smoke$' --output-on-failure`
 uses the C++ fixture generator. The CPHD reader C++ tests cover decoding,
 selection, boundaries, and malformed inputs. Real-collection validation is
-tracked in the root untracked `OPEN_ITEMS.md`; see
+tracked in the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md); see
 [SAR data preparation](../../../tools/sar_data/README.md).

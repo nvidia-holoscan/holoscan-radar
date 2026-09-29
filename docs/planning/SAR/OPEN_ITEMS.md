@@ -1,0 +1,50 @@
+# SAR HSDK 5 port: open items
+
+This tracked roll-up collects unresolved SAR-specific items inherited from
+`origin/dpc/sar-plan` and findings from the HSDK 5 port. It is not a contract
+decision or a substitute for team review. Detailed and historical notes remain
+under each operator's `OPEN_ITEMS.md` and in the SAR planning documents.
+
+| Item | Status | Provenance |
+| --- | --- | --- |
+| R10: decide whether a future boundary metadata namespace is module-wide or SAR-scoped. The HSDK 5 port uses a typed port, so no metadata key is emitted; the namespace decision has not been silently closed. | Team review, superseded for this port | `docs/planning/SAR/TEAM_BLOCKED.md` R10; SAR `OPERATOR_API.md` open items |
+| I5: decide whether inverse-FFT `fft_norm=backward` is the right radiometric default for future SICD products. Current code implements the existing default. | Team review | `docs/planning/SAR/OPERATOR_API.md` I5; `operators/sar/sar_range_compression_op/OPEN_ITEMS.md` §1 |
+| Verify MatX `sar_bp` status and even-length origin/phase behavior against a future pinned MatX; `matx_taylor_fast` remains rejected. | SDK/algorithm follow-up | SAR `OPERATOR_API.md` I1; `operators/sar/backprojection_op/OPEN_ITEMS.md` §§3–4 |
+| Obtain OSRB disposition for NVRadar-derived CUDA backprojection kernels. | External review | `operators/sar/backprojection_op/OPEN_ITEMS.md` §1 |
+| `BackprojectionOp.initial_image`, `nearest`, and `sinc` remain declared but rejected; prioritize only with a concrete user. | Deferred capability | `operators/sar/backprojection_op/OPEN_ITEMS.md` §§5–6 |
+| Review HSDK 5 backprojection backend parity and precision across all NVRadar and MatX variants. Synthetic tests exercise only selected variants. | Validation | `operators/sar/backprojection_op/OPEN_ITEMS.md` §§2–4; this port |
+| Add image-level reform equivalence and more coalescing/splitter boundary tests. The old metadata-disabled test case must be recast for the required typed boundary port. | Test follow-up | `operators/sar/aperture_manager_op/OPEN_ITEMS.md` §3; this port |
+| Compare focus from midpoint, `TxPos`, and `RcvPos` aperture positions on a real Umbra scene; the reader currently emits the Tx/Rx midpoint, and the contract does not specify which convention is intended. | Contract clarification / real-data validation | `operators/io/cphd_reader_op/OPEN_ITEMS.md` §1 |
+| Independently validate CPHD channel selection, `SGN=+1`, prefixed XML, CI2/CI4/CF8 scaling, FX/TOA, and malformed real collections in the HSDK 5 binary. The source branch's survey is historical evidence, not evidence for this build. | Validation | `operators/io/cphd_reader_op/OPEN_ITEMS.md` §§1, 3, 5, 8–9 |
+| Recheck CPHD `FxBand`/`SCSS` range spacing on a real off-centre target. | Validation | `operators/sar/sar_range_compression_op/OPEN_ITEMS.md` §2 |
+| Decide whether range-axis output should cache device storage without unsafe reuse; retest small-batch allocation and prime FFT costs after HSDK 5 pooling. | Performance deferred | `operators/sar/sar_range_compression_op/OPEN_ITEMS.md` §§3–6; `operators/io/cphd_reader_op/OPEN_ITEMS.md` §6 |
+| Recheck costly `[live]` override warning policy for range windows, `nfft`, and waveform under per-tick HSDK 5 semantics. | Behavior review | `operators/sar/sar_range_compression_op/OPEN_ITEMS.md` §§7–8; this port |
+| Assess whether `TensorDumpOp` should remain an untemplated sink under the module-wide precision invariant. | Team review | `operators/io/tensor_dump_op/OPEN_ITEMS.md` §1; `docs/planning/TEAM_BLOCKED.md` |
+| Tensor dump synchronous file I/O and pageable staging cost; `{index}` tick numbering, overwrite warning, unsupported NumPy dtypes, and CUDA-accessible input restriction should be reconfirmed with callers. | Deferred optimization/behavior review | `operators/io/tensor_dump_op/OPEN_ITEMS.md` §§2–6 |
+| Implement the source branch's display fidelity: compass/chevron, timeline and lag HUD, crop, and indefinite display hold/close handling. Positive finite `visualize_hold_s` is implemented. The HSDK 5 raster now uses a GPU 99.8th/25th percentile window capped at 30 dB; all five standalone headless smokes pass. | App follow-up | `applications/sar/README.md`; `applications/sar_formation/README.md` on `origin/dpc/sar-plan`; this port |
+| Complete real-collection validation of focus, geometry, amplitude, and seams across modes 1–5. GUI presentation was visually checked; numerical image quality and radiometry remain open. CI uses generated C++ fixtures. | Real-collection validation, partially exercised | `docs/planning/SAR/INPUT_DATA.md`; `applications/sar/spotlight/NVRADAR_PARITY.md`; see validation evidence below |
+| Decide whether demo recipe grids should be declared by each recipe or derived from collection geometry, so recipes stay portable across collections. | Data/recipe follow-up | `docs/planning/SAR/INPUT_DATA.md` open question 1 |
+| Set a measured reflector cap and runtime budget for image-derived simulator scenes. | Data/recipe follow-up | `docs/planning/SAR/INPUT_DATA.md` open question 2 |
+| Fixture cross-platform stability remains unproven. Assert analytic properties and avoid bitwise file checksums. | Test policy | `docs/planning/SAR/INPUT_DATA.md` open questions; this port |
+| Later-wave SAR operators remain deferred: CRSD ingress, deramped/direct-sampled branches, autofocus, multilook, geocoding, and CPHD/CRSD/SICD/SIDD product writers. Modes 6–9 are API-level concepts, not built applications here. | Deferred scope | `docs/planning/SAR/OPERATOR_API.md` I2; `docs/planning/SAR/WORKFLOWS.md`; `docs/planning/SAR/SIGPROC_PLAN.md` |
+| Python operator bindings, application implementations, Python tests, and the SAR performance harness remain deferred. Optional data-preparation CLIs are the user-approved exception. | Explicitly deferred | User's implementation plan; source-branch `OPEN_ITEMS.md` and `performance/` |
+| Validate interactive X11 rendering and image interpretation for each standalone SAR executable. Headless Holoviz fixture tests pass for all five; the developer ran all five GUI apps and reported that they look good on 2026-09-29. | Validated by developer for current presets | Standalone SAR app split, 2026-09-28; developer report, 2026-09-29 |
+| Data-preparation CLIs are the sole Python exception to the C++/CUDA port: `tools/sar_data/pull_cphd.py` and `subset_cphd.py` now ship with an optional requirements file. They are not imported by applications or CTest. | Implemented for preparation; validate real collections separately | User-approved 2026-09-29 documentation/data-tools plan; `origin/dpc/sar-plan` utilities |
+| `cphd.names` is parsed and checked, but the names do not reach image reports or visualization. The shipped independent-images guide identifies this gap. | App follow-up | `applications/common/radar_app/sar/config.hpp` `scene_names`; config audit 2026-09-29 |
+| Strip `viz_crop_u0`/`viz_crop_nu` are derived but unused. Holoviz currently shows the full mosaic, despite the source-branch planned crop. | App follow-up | `applications/common/radar_app/sar/config.hpp` tiling derivation; `applications/common/radar_app/sar/graph_driver.hpp`; config audit 2026-09-29 |
+| `nvradar_vph_path` is parsed but never consumed; a commented spotlight parity recipe references it. Do not claim the HSDK 5 app applies an external VPH file. | App/diagnostic follow-up | `applications/common/radar_app/sar/config.hpp`; `applications/sar/spotlight/NVRADAR_PARITY.md`; config audit 2026-09-29 |
+| `show_playback_lag` is computed but never read; the source-branch lag HUD has not been ported. | Visualization follow-up | `applications/common/radar_app/sar/config.hpp`; config audit 2026-09-29 |
+| `visualize_hold_s < 0` is accepted but the driver passes it to a raster that only handles finite positive holds; indefinite post-run display hold remains unimplemented. | Visualization follow-up | `applications/common/radar_app/sar/graph_driver.hpp`; config audit 2026-09-29 |
+| `sidecar_path` and stored `collection_physics` are populated during configuration but have no runtime consumer. Sidecar contents and collection physics do affect lattice/frequency derivation while loading, so removing the stored fields is a cleanup task only. | Code cleanup | `applications/common/radar_app/sar/config.hpp` assignment/use audit 2026-09-29 |
+
+## Real-collection validation evidence
+
+On 2026-09-29, `independent_images` formed six 32×32 images from all pulses
+of six downloaded Umbra collections after reader-ramp and seam-staging fixes.
+The first two collections also completed at 5715×5715 and 7463×7463
+through headless Holoviz after display-bound sizing was corrected. A finite
+ten-tile Capella run formed ten 5121×6029 mosaics through headless Holoviz
+with 512-pixel tile caps after tile-seam and geometry-sideband fixes. The
+developer visually checked all five GUI applications on 2026-09-29 and
+reported that they look good. Full-resolution numerical image-quality and
+radiometric validation remain open.

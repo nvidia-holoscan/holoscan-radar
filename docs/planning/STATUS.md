@@ -197,7 +197,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   C++ fixture; the C++ spotlight reader formed a 5x5 image from it. The full
   C++/CUDA build passed in the pinned HSDK 5 GPU image with Python disabled,
   and 1030/1030 non-performance CTest cases passed. Real-collection focus and
-  interactive X11 validation remain open in the untracked root `OPEN_ITEMS.md`.
+  interactive X11 validation remain open in the [SAR open-items roll-up](SAR/OPEN_ITEMS.md).
 
 - **2026-09-28 â€” standalone SAR apps:** split the five SAR graphs into `spotlight`,
   `video_sar`, `tiled_strip`, `continuous_strip`, and `independent_images`. Each
@@ -213,7 +213,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   then 17/17 SAR fixture, visualization, topology, and dump checks passed.
   All five apps also built through their individual `APP_<name>` gates.
   Repository-wide pinned pre-commit checks passed. Interactive X11 and
-  real-collection validation remain open in local `OPEN_ITEMS.md`.
+  real-collection validation remain open in the [SAR open-items roll-up](SAR/OPEN_ITEMS.md).
 
 - **2026-09-28 â€” implemented and validating (deustice):** port the SAR C++/CUDA stack
   from `origin/dpc/sar-plan` in `deustice/sar-hsdk5`, based on `main-5x`.
@@ -221,7 +221,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   `applications/sar/` workflows. Python and performance code are deferred. The SAR contract gains
   an explicit per-tick reader `stream_boundary` scalar because HSDK 5 has no
   arbitrary message-metadata key. Unresolved SAR questions are collected in a
-  local untracked top-level `OPEN_ITEMS.md`. The six operators, five app modes,
+  [SAR open-items roll-up](SAR/OPEN_ITEMS.md). The six operators, five app modes,
   C++ fixture generator, C++ operator tests, and headless Holoviz smoke path
   build in the pinned HSDK 5 GPU image. The non-performance C++ suite passed
   1018/1018 tests, including synthetic mode 1â€“5 and headless Holoviz smoke;
@@ -229,7 +229,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   cover test-harness corrections added after that full run. Public CPHD
   collection validation remains open. HSDK 5 visualization uses the
   source-branch percentile window and finite GUI hold; compass, timeline,
-  crop, and indefinite display hold remain open in local `OPEN_ITEMS.md`.
+  crop, and indefinite display hold remain open in the [SAR open-items roll-up](SAR/OPEN_ITEMS.md).
 
 ## In flight / claims
 

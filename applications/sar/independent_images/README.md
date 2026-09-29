@@ -71,7 +71,7 @@ the application requires the YAML collection list and rejects a single-CPHD over
 
 ## Output and display
 
-One complex image is reported per collection boundary, with geometry and frequency restaged for the next file. The fixture uses two local collections and reports two 5 × 5 images. Optional dump writes each image; Holoviz shows the current raster. Collection names are parsed but are not currently shown in the report or display; see the untracked root `OPEN_ITEMS.md`.
+One complex image is reported per collection boundary, with geometry and frequency restaged for the next file. The fixture uses two local collections and reports two 5 × 5 images. Optional dump writes each image; Holoviz shows the current raster. Collection names are parsed but are not currently shown in the report or display; see the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md).
 
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.

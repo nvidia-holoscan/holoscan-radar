@@ -42,5 +42,6 @@ The former `applications/sar_formation/` path and `sar_formation` executable
 were replaced by these five entries. There is no compatibility launcher.
 Run `ctest --test-dir build -R '^Sar_' --output-on-failure` for generated CPHD
 smokes and headless visualization. The CPHD fixture is generated once by C++.
-See [SAR input data](../../docs/planning/SAR/INPUT_DATA.md) for optional real
+See the [SAR open-items roll-up](../../docs/planning/SAR/OPEN_ITEMS.md) for
+tracked follow-ups and [SAR input data](../../docs/planning/SAR/INPUT_DATA.md) for optional real
 collections and [SDK development](../../SDK_DEVELOPMENT.md) for the pinned image.

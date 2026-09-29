@@ -100,7 +100,7 @@ rejected. The operator validates positive reference frequency and range
 spacing, uniform `range_bins`, matching pulse/position axes, sample-points
 shape `(num_v,num_u,3)`, and image bounds. A missing geometry or CUDA stream
 is an error. Numerical backend and radiometric parity questions remain in
-the local untracked `OPEN_ITEMS.md`.
+the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md).
 
 ## Use and verification
 
