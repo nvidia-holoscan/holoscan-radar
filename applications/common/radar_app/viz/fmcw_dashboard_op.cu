@@ -869,6 +869,7 @@ void FmcwDashboardOp::setup(holoscan::OperatorSpec& spec) {
       .memory_kind = MemoryKind::kCudaDevice,
       .dtype = kRgba8,
       .rank = 3U,
+      .strides = TensorStridePolicy::kContiguousOnly,
   };
   spec.input(cfar_power).queue_depth(2U).expects_tensor(tensor_input(kPower));
   spec.input(detection_idx).queue_depth(2U).expects_tensor(tensor_input(kDevice));

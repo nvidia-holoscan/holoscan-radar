@@ -158,6 +158,11 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
   auto image_bridge =
       graph.op<RgbaImageBridgeOp>("dashboard_image", static_cast<std::int32_t>(config.window_width),
                                   static_cast<std::int32_t>(config.window_height));
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "dashboard_image",
+      .output_port = "image",
+      .device = holoscan::DeviceId{0},
+  });
   auto holoviz = graph.op<holoscan::visualization::HolovizOp>(
       "holoviz", std::move(layers),
       holoscan::visualization::WindowSinkDesc{

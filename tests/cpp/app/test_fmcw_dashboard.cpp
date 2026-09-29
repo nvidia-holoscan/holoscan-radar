@@ -75,7 +75,10 @@ TEST(FmcwDashboardTest, ConnectsRgbaTensorToHsdk5HolovizImageLayer) {
   graph.add_flow(bridge->image, sink->image_layer_input(0));
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
-  const holoscan::ExecutionPlan plan = holoscan::compile(graph, holoscan::CompileOptions{});
+  holoscan::CompileOptions options;
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "bridge", .output_port = "image", .device = holoscan::DeviceId{0}});
+  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
   EXPECT_TRUE(plan.ok()) << plan.json();
 }
 
