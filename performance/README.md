@@ -20,8 +20,8 @@ Each operator's YAML recipe and optional typed C++ adapter live together under
 `performance/operators/<group>/<operator>/`. The group matches `operators/` and
 `tests/cpp/`; the shared C++ runner lives under `performance/harness/cpp/utils/`.
 `performance/CMakeLists.txt` is the explicit registration point. Executables
-still appear at `build/performance/cpp/perf_<operator>`; Python tools remain in
-`performance/python/` until their runtime migration.
+still appear at `build/performance/cpp/perf_<operator>`. The C++ YAML suites are
+the maintained operator performance assessments.
 
 ## C++ recipe boundary
 
@@ -96,8 +96,7 @@ contract to choose three profiles; declare one fixed recipe with direct bounds
 and built-in generators; author explicit cases; register its HSDK operator type
 through `radar_add_yaml_perf`; run validation, Minimal, and relevant Overrides
 smokes. Add an `adapter.cpp` only when a declared component cannot encode
-a valid contract value or sizing rule. Python runtime parity still awaits a
-buildable HSDK 5 binding.
+a valid contract value or sizing rule.
 
 ## YAML profiles and scopes
 
@@ -141,6 +140,15 @@ Example in the pinned HSDK 5 GPU container:
 scope, steady sample count, changed live port, achieved frames/s, and source
 cadence; old schema-version-2 readers must be updated.
 
-All 26 C++ operator tools use these YAML suites. The Python operator tools still
-use their existing scenario matrices; runtime parity awaits a buildable HSDK 5
-Python binding in the pinned development image.
+All 26 C++ operator tools use these YAML suites. The legacy Python operator
+performance tools were removed because their separate scenario matrices could
+not run against the pinned HSDK 5 image, which does not build the Python
+bindings. The production Python package and its tests are separate from this
+harness. A future Python Graph measurement tool should consume the same recipes
+when bindings become available.
+
+The retired Python matrices included two performance paths not yet represented
+by the current C++ recipes: CFAR full-axis peak suppression on a rank-four
+input and FeatureAssembly's score/AoA feature packs. C++ unit tests cover those
+operator behaviors, but the YAML performance suites do not time them. Adding
+them requires extending the respective typed recipe fixtures and adapters.
