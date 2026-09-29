@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+operator: feature_assembly
+axes: [doppler, range]
+profiles:
+  small: {shape: [64, 256]}
+  medium: {shape: [256, 512]}
+  large: {shape: [1024, 2048]}
+live_ports: []
+recipe:
+  operator_type: radar.FeatureAssemblyOp.float
+  inputs:
+    - {port: detection_idx, shape: [detections, two], dtype: int64, memory: device, generator: in_bounds_rd_indices}
+    - {port: range_bins, shape: [range], dtype: float32, memory: device, generator: axis_ramp}
+    - {port: velocity_bins, shape: [doppler], dtype: float32, memory: device, generator: axis_ramp}
+  fixtures: {detections: 64, two: 2, features: 2}
+  constructor: {bounds_policy: feature_assembly_bounds, features: [range, velocity]}
+  params: {}
+  outputs: {timed: points, drain: [], unwired: []}
+cases:
+  - {id: baseline-small, profile: small, scopes: [minimal], parameters: {}, fixture: {detections: 64}}
+  - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {}, fixture: {detections: 1024}}
+  - {id: baseline-large, profile: large, scopes: [minimal], parameters: {}, fixture: {detections: 16384}}
+  - {id: sparse-medium, profile: medium, scopes: [limited], parameters: {}, fixture: {detections: 64}}
+  - {id: dense-medium, profile: medium, scopes: [limited], parameters: {}, fixture: {detections: 4096}}
+  - {id: empty-medium, profile: medium, scopes: [moderate], parameters: {}, fixture: {detections: 0}}
+  - {id: dense-large, profile: large, scopes: [moderate], parameters: {}, fixture: {detections: 65536}}
+  - {id: empty-small, profile: small, scopes: [thorough], parameters: {}, fixture: {detections: 0}}
+  - {id: dense-small, profile: small, scopes: [thorough], parameters: {}, fixture: {detections: 4096}}

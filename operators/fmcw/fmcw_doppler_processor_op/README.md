@@ -81,7 +81,7 @@ Invariants: leading named axes are processed independently (collapsed to a batch
 
 **Steady.** Cached window taps are reused; each tick loans `rd_maps` (and `velocity_bins` when a waveform is set) and enqueues the permute + FFT + optional shift. `[live]` `nfft` to an unseen length builds a new MatX plan. `[live]` `doppler_window` rebuilds taps on an unseen key. `center_zero_doppler` and `fft_norm` do not invalidate those caches.
 
-Harness: `performance/cpp/perf_fmcw_doppler_processor.cpp` (Python mirror exists but is not built in the current build). Axes: size ladder `{xs, sm, md, lg, xl}` = `(16×128) … (256×2048)` chirps × range bins; window `{rect, hann}`; optional channel batch (`md` × 4). Default matrix: rect `{xs, md, lg, xl}` plus hann/`md` and rect/`md`/4 channels. `--full` crosses windows × sizes and adds channel batches on `md`/`lg`. No measured numbers are recorded in-tree; run the harness for timings.
+Harness: `performance/operators/fmcw/fmcw_doppler_processor/recipe.yaml` defines small, medium, and large chirps × range bins profiles, curated parameter cases, and one-frame `[live]` transitions, including cached and unseen FFT lengths. Its colocated `adapter.cpp` supplies contract-specific values. No measured numbers are recorded in-tree; run the harness for timings.
 
 ```bash
 ctest --test-dir build -R perf_fmcw_doppler_processor_smoke

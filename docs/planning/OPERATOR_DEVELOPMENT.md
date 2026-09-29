@@ -720,20 +720,37 @@ operator has any — not only build-time `Arg` variants. Match the CFAR pattern:
 - Inline a mid-session override in the **same** graph run as steady-state
   compute (do not require a separate scenario loop just to touch the override
   port).
-- Report `override_ms` / `override_delta_ms` on the compute row (peak latency
-  over a short post-override window vs pre-override median).
-- Cover each functionally distinct live param at least once in the default or
-  `--full` matrix (cheap value flips and any costly rebuild paths). Claiming
-  a fast path (`alpha_lut`, cached plans, …) while only timing the slow path
-  is a harness bug.
+- Report `override_ms` / `override_delta_ms` on the compute row (median of one
+  changed frame per independent run versus the pre-override steady median).
+- In the YAML `overrides` scope, cover every `[live]` input alone at small,
+  medium, and large sizes. `thorough` includes this coverage; `moderate` may
+  focus on the most important live inputs. Claiming a fast path (`alpha_lut`,
+  cached plans, …) while only timing the slow path is a harness bug.
 
-**Process warmup (required).** Before the measured scenario loop, run one
-discarded graph session (`perf_process_warmup.hpp`) so CUDA context init and
+**Process warmup (required).** The common C++ driver runs one discarded
+small-profile graph session before the measured cases so CUDA context init and
 Holoscan's first Application tick are not billed to scenario #1's `cold_ms`.
-Optionally prime each distinct kernel path the matrix will hit (e.g. each
-policy / variant) so first-touch JIT does not land on a measured row either.
 `--warmup` frames inside a scenario are separate: they exclude early frames
 *within* a run from the steady median, and do not replace process warmup.
+The shared C++ driver validates every YAML case before scope filtering and
+owns process warmup, source publication, Graph execution, sampling, and report
+buckets. Version-2 suites declare a fixed registered operator recipe with named
+axes, ports, tensor generators, canonical Params, extents, outputs, and live
+port mappings with payload codecs; all 26 in-tree suites now use version 2, while the loader retains version-1 compatibility. The
+pinned HSDK 5 authoring registry constructs the operator and resolves named
+ports; typed flow thunks and authored Tensor constraints are checked before
+execution. For a standard operator with direct extents and built-in generators,
+scalar or sequence Params, and registered scalar or host-vector live payloads, use
+`radar_add_yaml_perf` with no operator-owned C++ file. Contract-specific
+descriptors, related inputs, bounds, codecs, units, and postprocessing belong in
+a typed `adapter.cpp` beside the recipe. Typed adapters share YAML case state, typed input staging,
+baseline/live Graph calls, on-demand live codec dispatch, cached-transition
+warmup checks, common payload builders, and throughput-rate conversion; keep these mechanics in the driver.
+Read profile axes directly from the recipe and validate YAML choices by the
+operator's constraints, rather than duplicating the curated case values in C++. Examples include DDM power fold, SnapshotGather, Beamscan, FMCW range, CFAR, the five angle estimators, and the six-input MultiSourceExpansion fixture. Add a Minimal GPU smoke and focused live
+smokes through `performance/CMakeLists.txt`. `--validate` and
+`--list-cases` validate unselected cases without Graph authoring; an explicit
+`{profile}` family does not create a Cartesian product.
 
 Operators with no `[live]` parameters are exempt from the override rule; note
 that in the consumer header comment. Process warmup still applies.
@@ -744,7 +761,9 @@ that in the consumer header comment. Process warmup still applies.
 - **Setup / instantiate** time vs **compute** time.
 - **Cold** (first timed frame after config) vs **median / p90** steady.
 - Live-override cost (`override_ms` / `override_delta_ms`) as above.
-- Size ladder up to moderate real application shapes, not only micro sizes.
+- Small, medium, and large application-relevant input/output profiles.
+- Achieved steady frames/s and observed source cadence alongside latency and
+  scale-normalized throughput. Both are source-to-terminal Graph measurements.
 
 ### How to diagnose a slow scenario
 
@@ -848,7 +867,7 @@ Exemplar code to read (patterns, not copy-paste requirements):
   `operators/detection/cfar_detector_op/`
 - Device compaction — `cfar_compact.cuh`
 - Slow vs fast calibration — `alpha_lut` live override + warn-once on `pfa` MC
-- Perf harness consumer — `performance/cpp/perf_cfar_detector.cpp`
+- Perf harness consumer — `performance/operators/detection/cfar_detector/adapter.cpp`
 - Open-item style — [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309)
 
 ---

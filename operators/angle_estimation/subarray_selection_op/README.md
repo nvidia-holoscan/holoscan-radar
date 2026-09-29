@@ -109,7 +109,7 @@ Rejected combinations and the operator's own messages (selection-helper messages
 
 Cold / first new configuration: host `build_subarray_selection` + H2D of an `int32` channel-index table of length `L`, plus the INFO log when selection is non-identity. Steady: one S1 gather (`P = 1`, no forward-backward) or a D2D pass-through, plus host wire preparation while geometry remains consumed. The replace-in-place cache key uses exact `ArrayGeometry`, explicit-index vector, and `min_subarray_size` equality.
 
-`performance/cpp/perf_subarray_selection.cpp` reports cold and steady Graph timings over an item/channel/snapshot ladder on a holey ULA. Cold includes plan construction and the index-table upload; steady includes gather plus schema-aware geometry publication. The smoke has no timing threshold.
+`performance/operators/angle_estimation/subarray_selection/adapter.cpp` reports cold and steady Graph timings over an item/channel/snapshot ladder on a holey ULA. Cold includes plan construction and the index-table upload; steady includes gather plus schema-aware geometry publication. The smoke has no timing threshold.
 
 ## Usage
 

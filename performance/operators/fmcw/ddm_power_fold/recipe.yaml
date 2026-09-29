@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+operator: ddm_power_fold
+axes: [tx, rx, doppler, range]
+profiles:
+  small: {shape: [2, 4, 64, 256]}
+  medium: {shape: [4, 8, 256, 512]}
+  large: {shape: [4, 16, 512, 1024]}
+live_ports: []
+recipe:
+  operator_type: radar.DDMPowerFoldOp.float
+  inputs:
+    - {port: rd_maps, shape: [rx, doppler, range], dtype: complex64, memory: device, generator: iq_cube}
+  constructor: {extents: {max_rx: rx, max_doppler_bins: doppler, max_range_bins: range}}
+  params: {ddm_code: {factory: linear_exact_ddm_code}}
+  outputs: {timed: power_map, drain: [], unwired: []}
+  live: {}
+cases:
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}

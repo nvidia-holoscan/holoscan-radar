@@ -253,7 +253,7 @@ set a device error flag; the host maps it after a stream sync **before**
 
 No `[live]` overrides. `features` cannot change mid-stream.
 
-Harness: `performance/cpp/perf_feature_assembly.cpp`. Axes: map-size ladder (`xs`…`xlw`) × detection-count. The driver times the physical `{range, velocity}` pack with aligned axis inputs; score / AoA / dense paths are unit-tested. No measured numbers are recorded in-repo.
+Harness: `performance/operators/detection/feature_assembly/adapter.cpp`. Axes: map-size ladder (`xs`…`xlw`) × detection-count. The driver times the physical `{range, velocity}` pack with aligned axis inputs; score / AoA / dense paths are unit-tested. No measured numbers are recorded in-repo.
 
 ```bash
 ctest --test-dir build -R perf_feature_assembly_smoke

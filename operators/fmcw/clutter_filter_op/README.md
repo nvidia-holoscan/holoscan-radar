@@ -78,7 +78,7 @@ All math lives in `clutter_stage.hpp` (`with_clutter_expr`). `compute()` is a th
 
 **Cold / steady.** The weighted kernel caches generated projection taps. Its first configured window and later unseen overrides incur generation/upload; seen windows reuse cached taps. `doppler_window: none` retains the current uniform reduction. Delay cancellers remain slices plus an elementwise combo and ignore the window. Each tick loans `range_profiles_out`; a `[live]` `method` change can change `num_chirps_out`.
 
-Harness: `performance/cpp/perf_clutter_filter.cpp`. Axes: size ladder `{xs, sm, md, lg, xl}` = `(16×128) … (256×2048)` chirps × range bins; method `{msub, sdel, ddel}`; optional channel batch. Default matrix: msub `{xs, md, lg, xl}` plus sdel/ddel on `md` and msub/`md`/4 channels. `--full` crosses methods × sizes and adds channel batches on `md`/`lg`. Every compute run inlines a mid-session `[live] method` flip and reports `override_ms` / `override_delta_ms`. No measured numbers are recorded in-tree.
+Harness: `performance/operators/fmcw/clutter_filter/adapter.cpp`. Axes: size ladder `{xs, sm, md, lg, xl}` = `(16×128) … (256×2048)` chirps × range bins; method `{msub, sdel, ddel}`; optional channel batch. Default matrix: msub `{xs, md, lg, xl}` plus sdel/ddel on `md` and msub/`md`/4 channels. `--full` crosses methods × sizes and adds channel batches on `md`/`lg`. Every compute run inlines a mid-session `[live] method` flip and reports `override_ms` / `override_delta_ms`. No measured numbers are recorded in-tree.
 
 ```bash
 ctest --test-dir build -R perf_clutter_filter_smoke

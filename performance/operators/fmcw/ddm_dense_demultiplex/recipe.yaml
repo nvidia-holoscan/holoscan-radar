@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+operator: ddm_dense_demultiplex
+axes: [tx, rx, doppler, range]
+profiles:
+  small: {shape: [2, 4, 32, 128]}
+  medium: {shape: [4, 16, 128, 512]}
+  large: {shape: [8, 32, 256, 1024]}
+live_ports: []
+recipe:
+  operator_type: radar.DDMDenseDemultiplexOp.float
+  inputs:
+    - {port: velocity_bins, shape: [doppler], dtype: float32, memory: device, generator: power_map}
+    - {port: rd_maps, shape: [rx, doppler, range], dtype: complex64, memory: device, generator: iq_cube}
+  fixtures: {velocity_axis: 0}
+  constructor: {extents: {max_tx: tx, max_rx: rx, max_doppler_bins: doppler, max_range_bins: range}}
+  params:
+    ddm_code: {factory: linear_exact_ddm_code}
+  outputs: {timed: rd_maps_out, drain: [velocity_bins_out], unwired: []}
+  extension: {optional_velocity_axis: velocity_axis}
+cases:
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
+  - {id: nonlinear-medium, profile: medium, scopes: [limited], parameters: {ddm_code: {factory: nonlinear_phase_code}}}
+  - {id: linear-axis-medium, profile: medium, scopes: [limited], parameters: {}, fixture: {velocity_axis: 1}}
+  - {id: nonlinear-axis-medium, profile: medium, scopes: [moderate], parameters: {ddm_code: {factory: nonlinear_phase_code}}, fixture: {velocity_axis: 1}}
+  - {id: nonlinear-small, profile: small, scopes: [thorough], parameters: {ddm_code: {factory: nonlinear_phase_code}}}
+  - {id: nonlinear-large, profile: large, scopes: [thorough], parameters: {ddm_code: {factory: nonlinear_phase_code}}}
