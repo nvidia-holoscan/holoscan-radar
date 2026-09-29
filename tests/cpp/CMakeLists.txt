@@ -375,6 +375,19 @@ foreach(index RANGE 0 4)
     endif()
 endforeach()
 
+if(TARGET video_sar)
+    set(video_dir "${PROJECT_BINARY_DIR}/applications/sar/video_sar/cpp")
+    add_test(NAME Sar_video_sar_retention
+        COMMAND ${CMAKE_COMMAND}
+            -DSAR_EXECUTABLE=$<TARGET_FILE:video_sar>
+            -DSAR_CONFIG=${video_dir}/video_sar_retention_generated_smoke.yaml
+            -DSAR_COUNT=5
+            -DSAR_DIMS=5x5
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_smoke.cmake)
+    set_tests_properties(Sar_video_sar_retention PROPERTIES
+        FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+endif()
+
 if(TARGET tiled_strip)
     set(tiled_dir "${PROJECT_BINARY_DIR}/applications/sar/tiled_strip/cpp")
     add_test(NAME Sar_tiled_strip_seam_viz

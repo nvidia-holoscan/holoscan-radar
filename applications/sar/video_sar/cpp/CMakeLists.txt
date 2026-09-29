@@ -27,6 +27,9 @@ endif()
 
 if(HOLOSCAN_RADAR_BUILD_TESTING)
     set(SAR_FIXTURE "${PROJECT_BINARY_DIR}/tests/cpp/generated_sar_smoke.cphd")
+    set(SAR_FIXTURE_LONG "${PROJECT_BINARY_DIR}/tests/cpp/generated_sar_smoke_long.cphd")
+    configure_file(video_sar_retention_smoke.yaml.in
+        ${CMAKE_CURRENT_BINARY_DIR}/video_sar_retention_generated_smoke.yaml @ONLY)
     configure_file(video_sar_smoke.yaml.in
         ${CMAKE_CURRENT_BINARY_DIR}/video_sar_generated_smoke.yaml @ONLY)
     configure_file(video_sar_viz_smoke.yaml.in

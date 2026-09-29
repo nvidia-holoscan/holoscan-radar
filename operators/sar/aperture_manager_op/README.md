@@ -66,8 +66,10 @@ image; the manager emits `control_out` only on an emit tick. Backprojection
 uses that signal to publish an image.
 
 With `max_aperture_pulses: 0`, incoming pulses pass through without retention.
-A positive capacity retains pulse groups. In `continue` mode, admission of a
-new group can evict old pulses; the output batch contains the new pulses
+A positive capacity retains pulse groups in manager-owned CUDA storage,
+releasing the upstream reader and range-compression pool slots after each
+tick. In `continue` mode, admission of a new group can evict old pulses;
+the output batch contains the new pulses
 followed by evictions. The optional `weight` is `+1` for additions and `-1`
 for evictions, so a continuing backprojector can remove their contribution.
 `reset` closes the aperture after emission. `reform` replays its retained
@@ -101,4 +103,6 @@ aperture_manager:
 
 The C++ tests cover partial final batches, collection and EOS boundaries,
 retention, explicit evictions, signed weights, and reset/reform behavior.
+A generated 20-pulse video app smoke exercises retention beyond the upstream
+Tensor-pool depth and checks five emitted images.
 The locked contract is [SAR OPERATOR_API.md](../../../docs/planning/SAR/OPERATOR_API.md).

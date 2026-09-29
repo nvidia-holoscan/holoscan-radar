@@ -124,6 +124,16 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   512-pixel tile caps both pass. Full-resolution image quality and interactive
   X11 presentation remain open.
 
+- **2026-09-29 — Video SAR retention releases upstream Tensor pools:** The
+  manager now copies retained pulse groups into manager-owned CUDA storage.
+  It no longer holds CPHD reader and range-compression output-pool slots for
+  the lifetime of the sliding aperture. A bounded 12,288-pulse Houston 1.0 m
+  run reproduced `kResourceExhausted` after two images before the fix, even
+  at 64×64 without visualization. After the fix, both 64×64 and shipped
+  6144×6144 runs completed three images. A generated 20-pulse CI regression
+  now checks five images across a ten-pulse retention window. Sustained looped
+  interactive display remains unvalidated.
+
 - **2026-09-29 — SAR display accepts changing image dimensions:** The shared
   Graph driver sizes `SarImageVizOp` input bounds from both the maximum
   configured collection extents and the display/mosaic geometry. A generated headless regression

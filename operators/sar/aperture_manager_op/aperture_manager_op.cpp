@@ -73,6 +73,21 @@ expected<TensorOutputLoan, Error> prepare_copy(Output<Tensor>& output, Execution
       });
 }
 
+// Retained pulses must own their storage. Keeping received Tensor handles
+// would hold reader and range-compression output-pool slots for the whole
+// sliding aperture, eventually exhausting those finite pools.
+PulseGroup copy_for_retention(const PulseGroup& source, cudaStream_t stream) {
+  PulseGroup copy;
+  copy.profiles = make_device_tensor(source.profiles->shape(), source.profiles->dtype());
+  copy.positions = make_device_tensor(source.positions->shape(), source.positions->dtype());
+  copy.reference = make_device_tensor(source.reference->shape(), source.reference->dtype());
+  copy.count = source.count;
+  copy_pulse_rows(*source.profiles, source.first, *copy.profiles, 0, source.count, stream, kWho);
+  copy_pulse_rows(*source.positions, source.first, *copy.positions, 0, source.count, stream, kWho);
+  copy_pulse_rows(*source.reference, source.first, *copy.reference, 0, source.count, stream, kWho);
+  return copy;
+}
+
 template <typename T>
 expected<TensorOutputLoan, Error> prepare_values(Output<Tensor>& output, ExecutionContext& context,
                                                  const std::vector<T>& values, DLDataType dtype) {
@@ -179,6 +194,7 @@ void ApertureManagerOp<T>::start() {
 
 template <typename T>
 expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
+  keep_.clear();
   HOLOSCAN_TRY(auto raw_profiles, receive_tensor(range_profiles, kWho));
   HOLOSCAN_TRY(auto raw_positions, receive_tensor(positions, kWho));
   HOLOSCAN_TRY(auto raw_reference, receive_tensor(reference_position, kWho));
@@ -265,8 +281,15 @@ expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
   PulseGroup incoming{std::make_shared<Tensor>(std::move(raw_profiles)),
                       std::make_shared<Tensor>(std::move(raw_positions)),
                       std::make_shared<Tensor>(std::move(raw_reference)), 0, np};
-  if (p.max_aperture_pulses > 0)
-    buffer_.admit(incoming);
+  if (p.max_aperture_pulses > 0) {
+    auto retained = copy_for_retention(incoming, stream);
+    // Release the received pool-backed tensors only after their asynchronous
+    // copies have completed.
+    if (cudaStreamSynchronize(stream) != cudaSuccess)
+      return make_unexpected(
+          Error{ErrorCode::kFailure, "ApertureManagerOp: retention sync failed"});
+    buffer_.admit(std::move(retained));
+  }
   const int64_t slot0 = slot_;
   admitted_ += np;
   admitted_since_emit_ += np;
@@ -284,7 +307,6 @@ expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
     output_control = *request;
 
   // Build additions followed by signed departures, or replay the retained aperture.
-  keep_.clear();
   keep_.insert(keep_.end(), {incoming.profiles, incoming.positions, incoming.reference});
   std::vector<PulseGroup> output_groups;
   if (reform) {

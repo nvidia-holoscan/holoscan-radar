@@ -18,6 +18,9 @@ int main(int argc, char** argv) {
     holoscan::radar::testing::cphd_fixture::write_truth(path);
     const auto shifted = path.parent_path() / (path.stem().string() + "_shifted.cphd");
     holoscan::radar::testing::cphd_fixture::make_fixture(shifted, 0.0, 0.0, 6378100.0);
+    const auto long_stream = path.parent_path() / (path.stem().string() + "_long.cphd");
+    holoscan::radar::testing::cphd_fixture::make_fixture(long_stream, 0.0, 0.0, 6378000.0, false,
+                                                         20);
     const auto wide = path.parent_path() / (path.stem().string() + "_wide.cphd");
     holoscan::radar::testing::cphd_fixture::make_fixture(wide, 0.0, 0.0, 6378200.0, true);
     return 0;
