@@ -9,10 +9,9 @@ distributing this Holoscan Module.
 
 ```text
 holoscan-radar/
-├── holohub                         # CLI wrapper (delegates to holoscan-cli)
+├── pyproject.toml                  # CLI, CTest, and wheel configuration
 ├── Dockerfile                      # Development container image
 ├── CMakeLists.txt                  # Root CMake — orchestrates operators/applications/tests
-├── pyproject.toml                  # Python packaging metadata (scikit-build-core)
 ├── metadata.json                   # Module-level metadata (schema: urn:holohub:module:v2)
 ├── operators/
 │   ├── common/                     # Shared radar_common library
@@ -45,31 +44,67 @@ holoscan-radar/
 
 ---
 
-## `holohub` wrapper commands
+## Holoscan CLI
 
-The `holohub` script at the module root wraps the `holoscan-cli` package with module-specific
-defaults. On first run it installs `holoscan-cli` via pip if it isn't already importable
-(internet required); subsequent runs reuse the installed copy.
+The development-only `cli` and `test` groups in [`pyproject.toml`](pyproject.toml)
+pin the Holoscan CLI and Python CTest dependencies. With Python 3.11+ available,
+install them from the repository root using uv:
+
+```bash
+uv sync
+source .venv/bin/activate
+holoscan version
+```
+
+The project pins the CLI to NVIDIA's package index for uv. `uv sync` installs
+only these development tools; it does not compile the radar wheel. The groups
+are not part of the published wheel. With pip 25.1+, the equivalent setup is:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade 'pip>=25.1'
+python -m pip install --extra-index-url https://pypi.nvidia.com --group cli --group test
+holoscan version
+```
+
+The development Dockerfile installs the same groups. Run the CLI from the
+repository root on the host, or pass `holoscan --project-root <path>` before the
+command. First build the HSDK 5 image from [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md),
+then build one named development image:
+
+```bash
+holoscan build-container --base-img <reported-image> --img holoscan-radar-dev:hsdk5
+```
+
+The following host commands reuse that image. The CLI starts a container for
+each command; no interactive container shell is required. Keep the same `--img`
+value throughout because the CLI otherwise derives a different image name for
+each project. The CLI auto-detects a sibling `../holoscan-sdk` checkout and
+mounts its local installation ahead of the SDK baked into the image. The
+`holoscan_DIR` configure argument below selects the validated image SDK even
+when that sibling checkout exists.
 
 | Command | What it does |
 | --- | --- |
-| `./holohub run-container` | Build and start the development container |
-| `./holohub build simo` | Configure and build the example pipeline inside the container |
-| `./holohub run simo` | Configure, build, and run the example pipeline inside the container |
-| `./holohub test` | Configure, build, and run the test suite inside the container |
-| `./holohub install --dev` | Install a `.pth` hook so `import holoscan.radar` works in any shell |
-| `./holohub package holoscan-radar` | Build a native Debian package with Holoscan Radar operators |
-| `./holohub package holoscan-radar --pkg-generator=WHEEL` | Build a native Python 3.12 package with Holoscan Radar operators |
+| `holoscan build holoscan-radar --language cpp --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan` | Build the C++ module in the container |
+| `holoscan build simo --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-DBUILD_ALL=OFF --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan` | Build SIMO and its dependencies in the container |
+| `holoscan run simo --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-DBUILD_ALL=OFF --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan` | Build and run SIMO in the container |
+| `holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build` | Build and run the test suite in the container |
+| `holoscan package holoscan-radar --img holoscan-radar-dev:hsdk5 --no-docker-build` | Build the Debian package in the container |
+| `holoscan run-container --img holoscan-radar-dev:hsdk5 --no-docker-build` | Open an interactive container shell when needed |
 
-Set `HOLOSCAN_CLI_INSTALL_ARGS` to override the pip install arguments. The
-wrapper forwards this value into Docker builds as the
-`HOLOSCAN_CLI_INSTALL_ARGS` build arg, so the development image installs the
-same CLI package spec as the host wrapper. Set `HOLOSCAN_CLI_SOURCE` to a local
-checkout for host-side CLI development.
+The focused app flags turn off `BUILD_ALL` and the test suite; without them,
+a standalone CMake build enables every app, operator, and test by default.
+`[tool.holoscan]` selects [`ci/container.ctest`](ci/container.ctest) for `holoscan test`.
+To try an unpublished CLI checkout, install it into the selected environment and
+run its `holoscan` command there.
 
 ---
 
-## Building without the wrapper
+## Building directly with CMake inside the container
+
+For manual debugging in an interactive development container:
 
 ```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
@@ -94,22 +129,25 @@ pytest tests/python/ -v
 
 ---
 
-## Running the full suite with `./holohub test`
+## Running the full suite with `holoscan test`
 
-`./holohub test` configures, builds, and tests inside the development container in one
-step — the containerized equivalent of the manual sequence above.
+From the host, `holoscan test` starts the named development image, configures
+and builds the module, and runs the suite in that container:
 
 ```bash
-./holohub test                    # build the image if needed, then configure/build/test
-./holohub test --no-docker-build  # reuse the existing image (faster)
-./holohub test --dryrun --verbose # print the commands without running them
+holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build
+holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build --dryrun --verbose
 ```
+
+If the development image has not been built yet, run the `build-container`
+command above first. The test command can also build it with
+`--base-img <reported-image>` instead of `--no-docker-build`.
 
 What it does, and where to change it:
 
-- Runs [`ci/container.ctest`](ci/container.ctest), this module's CTest driver. The wrapper
-  points `HOLOSCAN_CLI_CTEST_SCRIPT` at it; the driver bundled with `holoscan-cli` resolves
-  its source directory inside the pip install tree and cannot see this repo.
+- Runs [`ci/container.ctest`](ci/container.ctest), this module's CTest driver, selected
+  by `pyproject.toml`. The driver bundled with `holoscan-cli` resolves its source directory
+  inside the pip install tree and cannot see this repo.
 - Builds into **`build-test/`**, a dedicated tree. The driver wipes it on every run, which
   is why it is deliberately not your `build/` directory.
 - Runs every tier except `performance`, which has its own invocation. That includes the
@@ -131,7 +169,7 @@ Useful escapes:
 | `--no-xvfb` | Skip the default `xvfb-run -a` wrapper |
 | `--cmake-options OPT` | Append a CMake configure flag (repeatable) |
 | `--ctest-options OPT` | Append a raw ctest argument (repeatable) |
-| `--local` | Run on the host instead of in the container |
+| `--local` | Run natively in the current environment; omit it for host-invoked container execution |
 
 A note on `xvfb`: it satisfies the CLI's default wrapper but does **not** make Holoviz
 render headlessly — that needs Vulkan support. Application smoke runs keep visualization
@@ -159,8 +197,9 @@ produce different layouts.
 
 ## `pyproject.toml`
 
-`pyproject.toml` configures [scikit-build-core](https://scikit-build-core.readthedocs.io/) for
-wheel packaging. Key fields to update before publishing:
+`pyproject.toml` configures CLI tooling and CTest as well as
+[scikit-build-core](https://scikit-build-core.readthedocs.io/) wheel packaging.
+Key fields to update before publishing:
 
 | Field | Purpose |
 | --- | --- |

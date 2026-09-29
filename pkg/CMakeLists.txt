@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # add_holohub_package() handles the full cascade for both standalone
-# packaging (`./holohub package holoscan-radar --pkg-generator DEB`, which
-# sets -DPKG_holoscan_radar=ON via the HoloHub CLI) and in-tree
+# packaging (`holoscan package holoscan-radar --pkg-generator DEB`, which
+# sets -DPKG_holoscan_radar=ON via the Holoscan CLI) and in-tree
 # HoloHub-monorepo packaging once this module is fetched as an external
 # dependency:
 #

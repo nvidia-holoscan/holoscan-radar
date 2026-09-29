@@ -5,28 +5,34 @@ Operators are implemented in C++/CUDA on MatX and compose through typed ports,
 without pipeline-specific glue between processing stages.
 
 Holoscan Radar currently targets the HSDK 5 `main-5x` development branch. Build
-the local SDK image once before opening the dev container or using HoloHub; the
+the local SDK image once before opening the dev container or using the Holoscan CLI; the
 temporary source-build workflow and current packaging limitation are documented
 in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 
 ## Quick start
 
-```bash
-./.devcontainer/build-hsdk5-ea-image.sh
-./.devcontainer/build-hsdk5-ea-image.sh --print-pin
-./holohub run-container --base-img <reported-image>
-```
-
-Inside the container:
+Install the development CLI as described in [`DEVELOPER.md`](DEVELOPER.md#holoscan-cli),
+then run these commands on the host. The CLI performs the project build and
+application run in the named development container:
 
 ```bash
-cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
-cmake --build build -j"$(nproc)"
-./build/applications/fmcw/siso/cpp/siso
+./.devcontainer/build-hsdk5-ea-image.sh \
+  --pin 79dc6cb48e5b571b6f0a6daf2b5dbc783de01b76
+holoscan build-container --base-img holoscan-radar-hsdk5-ea:79dc6cb \
+  --img holoscan-radar-dev:hsdk5
+holoscan build siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --configure-args=-DBUILD_ALL=OFF \
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan
+holoscan run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --configure-args=-DBUILD_ALL=OFF \
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
+  --run-args=siso_smoke.yaml
 ```
 
-The SISO executable uses `applications/fmcw/siso/config/siso.yaml` by default.
-Pass the smoke configuration explicitly for a two-frame headless run.
+The `--run-args=siso_smoke.yaml` example runs two headless frames. Omit that
+flag to use the SISO executable's default `siso.yaml` configuration.
 
 ## Operator groups
 

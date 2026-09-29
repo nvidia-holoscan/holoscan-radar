@@ -9,6 +9,11 @@ flowchart LR
     Range --> Features
     Doppler --> Features
     CFAR --> Reduce
+    CFAR --> Dashboard[FmcwDashboardOp]
+    Features --> Dashboard
+    Range --> Dashboard
+    Doppler --> Dashboard
+    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
 ```
 
 The optional dashboard displays the range-Doppler heatmap and rolling range and velocity histories. SISO has no angle products, so the spatial and angle-history panels are omitted.

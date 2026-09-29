@@ -30,6 +30,7 @@ flowchart LR
     Features --> Dashboard
     Range --> Dashboard
     Doppler --> Dashboard
+    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
 ```
 
 There is deliberately no clustering or detection reduction. CFAR emits one
@@ -79,9 +80,10 @@ values must not be duplicated in operator YAML blocks.
 The normal scene places two targets in one range-Doppler cell at azimuths near
 `-0.10` and `+0.10` rad with common elevation, plus an isolated target in
 another cell. Their angular separation is below the conventional 8 by 4 array
-beamwidth. The normal preset enables relative monostatic free-space range loss
-with a 100 m reference. The smoke preset intentionally omits it and therefore
-uses the constant-amplitude analytic mode.
+beamwidth. The pair approaches at 2 m/s and remains about 30 m away at the
+end of the 25 s run. The normal preset enables relative monostatic free-space
+range loss with a 100 m reference. The smoke preset starts its close pair at
+22 m and intentionally uses the constant-amplitude analytic mode.
 
 The screen's `0.03` residual threshold is tuned for this demonstration. It is
 neither a calibrated multiplicity probability nor a production source-count

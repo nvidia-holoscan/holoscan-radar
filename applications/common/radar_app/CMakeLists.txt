@@ -36,7 +36,7 @@ if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
         holoscan::core
         holoscan::radar_app
         holoscan::radar_common
-        holoscan::operators::holoviz
+        holoscan::visualization::op_holoviz
         holoscan::radar_schemas
         CUDA::cudart)
 

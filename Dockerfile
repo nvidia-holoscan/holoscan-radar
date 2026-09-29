@@ -7,16 +7,17 @@
 #
 # Extends the Holoscan SDK image with the build tools needed to configure,
 # compile, and test the module from a live source mount. No source is copied
-# into the image; the project tree is bind-mounted by the holoscan-cli at
-# /workspace/holoscan-radar when the container is launched.
+# into the image apart from pyproject.toml for CLI dependency installation;
+# the project tree is bind-mounted when the container is launched.
 #
-# Build & run via the holoscan-cli wrapper (recommended):
-#   ./holohub run-container
+# Build & run via the Holoscan CLI:
+#   holoscan run-container --base-img <HSDK-5-image>
 #
 # Manual build (without the CLI):
-#   docker build -t holoscan-radar .
+#   docker build --build-arg BASE_IMAGE=<HSDK-5-image> -t holoscan-radar .
 
-# NGC publishes v4.3.0 as the cuda13 tag (no -dgpu variant at this version).
+# Supply the temporary HSDK 5 image with --base-img or --build-arg BASE_IMAGE.
+# The default remains the published SDK image until a public HSDK 5 image exists.
 ARG BASE_IMAGE=nvcr.io/nvidia/clara-holoscan/holoscan:v4.3.0-cuda13
 FROM ${BASE_IMAGE}
 
@@ -27,31 +28,31 @@ ARG DEBIAN_FRONTEND=noninteractive
 # free those ids and reassign them to `dev` — matching the typical host user and
 # keeping the bind-mounted source tree writable. Hosts whose user isn't 1000 are
 # handled at container-create time by `updateRemoteUserUID` (see .devcontainer/).
-# The default USER stays root so `./holohub run-container` and packaging are
+# The default USER stays root so `holoscan run-container` and packaging are
 # unaffected.
 ARG DEV_USER=dev
 ARG DEV_UID=1000
 ARG DEV_GID=1000
 
-# Install holoscan-cli developer tools
-ARG HOLOSCAN_CLI_INSTALL_ARGS="--pre --extra-index-url https://pypi.nvidia.com holoscan-cli>4.2.0"
-# Disable pathname expansion while preserving the documented whitespace-separated
-# pip argument override.
-RUN if ! python3 -m holoscan_cli --help 2>/dev/null | grep -qw build; then \
-        set -f; \
-        python3 -m pip install ${HOLOSCAN_CLI_INSTALL_ARGS} \
-    ; fi
+# Install the CLI and Python test dependencies declared by this module.
+# pip 25.1+ reads PEP 735 groups without building the radar wheel.
+COPY pyproject.toml /opt/holoscan-radar/pyproject.toml
+RUN python3 -m pip install --no-cache-dir --upgrade 'pip>=25.1' \
+    && python3 -m pip install --no-cache-dir \
+        --extra-index-url https://pypi.nvidia.com \
+        --group /opt/holoscan-radar/pyproject.toml:cli \
+        --group /opt/holoscan-radar/pyproject.toml:test
 
 # TODO: add module-specific runtime / build dependencies below.
 #
-# The last three serve `./holohub test` (ci/container.ctest):
+# The last three serve `holoscan test` (ci/container.ctest):
 #   ninja-build — the driver's CMake generator
 #   xvfb        — holoscan-cli wraps ctest in `xvfb-run -a` unless --no-xvfb.
 #                 This satisfies that wrapper; it does NOT make Holoviz work
 #                 headlessly (that needs Vulkan), so smoke runs keep
 #                 visualization disabled.
 #   ccache      — compiler cache; the driver wires it in via
-#                 CMAKE_<LANG>_COMPILER_LAUNCHER and the holohub wrapper points
+#                 CMAKE_<LANG>_COMPILER_LAUNCHER and the CTest driver points
 #                 CCACHE_DIR at the gitignored .cache/, so it survives the
 #                 build-test/ wipe.
 #   libyaml-cpp-dev — demo apps parse YAML configs with yaml-cpp. HSDK 4.x
@@ -72,9 +73,9 @@ RUN apt-get update \
         ccache \
     && rm -rf /var/lib/apt/lists/*
 
-# Python tooling: pytest-timeout for tests, build + scikit-build-core for
-# `./holohub package --pkg-generator WHEEL` (drives `python -m build`).
-RUN pip install --no-cache-dir pytest-timeout build scikit-build-core
+# Wheel packaging tooling: `holoscan package --pkg-generator WHEEL`
+# drives `python -m build`; its backend is declared in pyproject.toml.
+RUN pip install --no-cache-dir build scikit-build-core
 
 # Create the `dev` user with passwordless sudo at UID/GID ${DEV_UID}/${DEV_GID},
 # first freeing those ids if the base image assigned them to another account.

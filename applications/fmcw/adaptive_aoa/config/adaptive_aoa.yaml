@@ -50,17 +50,18 @@ app:
         model: monostatic_free_space
         reference_range: 100.0
     # The first pair intentionally shares one range-Doppler cell. Its angular
-    # separation is below the conventional 8x4 array beamwidth.
+    # separation is below the conventional 8x4 array beamwidth. Their
+    # 2 m/s approach keeps them about 30 m away at the end of the 25 s run.
     targets:
         - range: 80.0
           azimuth: -0.10
           elevation: 0.04
-          velocity: [-3.977, 0.399, -0.160]
+          velocity: [-1.9885, 0.1995, -0.080]
           amplitude: 0.8
         - range: 80.0
           azimuth: 0.10
           elevation: 0.04
-          velocity: [-3.977, -0.399, -0.160]
+          velocity: [-1.9885, -0.1995, -0.080]
           amplitude: 0.8
         - range: 125.0
           azimuth: 0.24

@@ -27,6 +27,7 @@ flowchart LR
   COMP --> ANGLE["BeamscanEstimatorOp"] --> TAIL["features / clusters / report"]
   WAVEFORM -->|Exact| RANGE
   TAIL --> DASHBOARD["FmcwDashboardOp"]
+  DASHBOARD --> IMAGE["RgbaImageBridgeOp"] --> HOLOVIZ["HSDK 5 HolovizOp"]
   WAVEFORM -->|Exact profile identity| DASHBOARD
 
   WAVEFORM -->|Exact| DOPPLER
@@ -52,7 +53,11 @@ uses 300 MHz over 20 us with 256 samples; `far` uses 150 MHz over 40 us with
 512 samples. YAML authors the physical on-wire PRI. The application derives
 the effective per-TX DSP PRI as `num_tx * physical_pri`.
 
-The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset intentionally omits it, uses the constant-amplitude analytic model, and emits a warning.
+The normal preset's incoming near-profile target starts at 50 m and remains
+above 20 m throughout the 25 s run. Its amplitude approximately preserves the initial
+received strength of the earlier 35 m scene under the 100 m reference range
+loss. The smoke preset intentionally omits range loss, uses the
+constant-amplitude analytic model, and emits a warning.
 
 The coordinator and backend interfaces live in shared `radar_app` support.
 Frame tokens never cross graph ports. Hardware backends can replace the
