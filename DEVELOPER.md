@@ -47,8 +47,18 @@ holoscan-radar/
 ## Holoscan CLI
 
 The development-only `cli` and `test` groups in [`pyproject.toml`](pyproject.toml)
-pin the Holoscan CLI and Python CTest dependencies. Install them into a Python
-3.11+ environment with pip 25.1+ (the groups are not part of the radar wheel):
+pin the Holoscan CLI and Python CTest dependencies. With Python 3.11+ available,
+install them from the repository root using uv:
+
+```bash
+uv sync
+source .venv/bin/activate
+holoscan version
+```
+
+The project pins the CLI to NVIDIA's package index for uv. `uv sync` installs
+only these development tools; it does not compile the radar wheel. The groups
+are not part of the published wheel. With pip 25.1+, the equivalent setup is:
 
 ```bash
 python3.12 -m venv .venv
