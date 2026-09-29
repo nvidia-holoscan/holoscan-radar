@@ -4,8 +4,9 @@
 # Mode-5 demo: rotate six unique-IARP Umbra SNAPSHOT CPHDs (INPUT_DATA.md).
 # Pull first (~10.5 GiB); the app never reaches the network.
 #
-#   python3 tools/sar_data/pull_cphd.py --app independent_images
-#   ./build/applications/sar/independent_images/cpp/independent_images
+#   python3 tools/sar_data/pull_cphd.py --app independent_images \
+#     --dest data/sar/mode5
+#   Mount data/sar at /tmp/sar for the host CLI run (see README.md).
 #
 # Each collection gets an IARP-centred east-north square inscribed
 # in that file's ground-range x ground-azimuth support, sampled at

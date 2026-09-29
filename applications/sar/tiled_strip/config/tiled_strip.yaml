@@ -8,8 +8,8 @@
 # the app never reaches the network.
 #
 #   python3 tools/sar_data/pull_cphd.py --app tiled_strip \
-#     --dest /tmp/sar/imperial
-#   ./build/applications/sar/tiled_strip/cpp/tiled_strip
+#     --dest data/sar/imperial
+#   Mount data/sar at /tmp/sar for the host CLI run (see README.md).
 #
 # nvec 159051 does not divide by 10; pulse_range drops the last
 # vector so ten tiles of 15905 pulses (~10.4 km along-track).

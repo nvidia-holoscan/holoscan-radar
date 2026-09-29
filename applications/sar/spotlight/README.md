@@ -39,14 +39,31 @@ real collections.
 
 ## Real collection preset
 
-The shipped Atlanta preset selects pulses `[91273, 102773)` from a 28.59 GiB Umbra CPHD, uses a fixed 8192 × 8192 ENU grid, and runs double-precision formation. Prepare `/tmp/sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd` with the exact `curl` command in [`spotlight.yaml`](config/spotlight.yaml). Create `/tmp/sar` before downloading. The CPHD must supply the PVP fields required by `CPHDReaderOp`; the preset assumes its reference position and sample spacing.
+The shipped Atlanta preset selects pulses `[91273, 102773)` from a 28.59 GiB Umbra CPHD, uses a fixed 8192 × 8192 ENU grid, and runs double-precision formation. Download the CPHD to the host `data/sar/` directory below; the CLI mounts it at the YAML's `/tmp/sar/` path in the container. The CPHD must supply the PVP fields required by `CPHDReaderOp`; the preset assumes its reference position and sample spacing.
 
-The shipped [`spotlight.yaml`](config/spotlight.yaml) is copied beside the
-executable by CMake. It is a **real-data preset**. The default invocation is:
+From the repository root, with the Holoscan CLI installed and the pinned
+`holoscan-radar-dev:hsdk5` image available, run:
 
 ```bash
-./build/applications/sar/spotlight/cpp/spotlight
+mkdir -p data/sar
+spotlight_cphd=data/sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd
+if [ ! -f "$spotlight_cphd" ]; then
+  curl --fail --location --continue-at - --output "$spotlight_cphd.part" \
+    'https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com/sar-data/task-data/0f1231be-26d3-4b98-96ab-f675a5375c14/2026-02-20-03-03-38_UMBRA-07/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd'
+  mv "$spotlight_cphd.part" "$spotlight_cphd"
+fi
+holoscan run spotlight \
+  --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --configure-args=-DBUILD_ALL=OFF \
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
+  --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
 ```
+
+The CLI mounts the host `data/sar/` directory read-only at `/tmp/sar` in the
+container, matching the shipped YAML. A host `/tmp/sar` directory or symlink
+is not visible in the container unless mounted. The shipped [`spotlight.yaml`](config/spotlight.yaml) is copied beside the
+executable by CMake and is the default real-data preset.
 
 Pass an explicit YAML path as the first argument. For this topology,
 a CPHD path may replace `cphd.path` directly, or follow a YAML path as the second argument.

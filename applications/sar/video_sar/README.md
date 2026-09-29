@@ -39,14 +39,28 @@ real collections.
 
 ## Real collection preset
 
-The Houston preset expects `/tmp/sar/mode02_houston_1p0m.cphd`. Install the optional data-tool requirements and run `python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml -o /tmp/sar` from the repository root. The recipe fetches the full dwell and central 16,753-sample FX subband; the output is about 27 GiB. The YAML retains 8262 pulses, emits every 4096, and forms a grid capped at 6144 pixels per side. Disk and GPU memory requirements are substantial.
+The Houston preset expects `/tmp/sar/mode02_houston_1p0m.cphd` inside the container. The commands below write the subset to the host `data/sar/` directory and mount that directory at `/tmp/sar`. The recipe fetches the full dwell and central 16,753-sample FX subband; the output is about 27 GiB. The YAML retains 8262 pulses, emits every 4096, and forms a grid capped at 6144 pixels per side. Disk and GPU memory requirements are substantial.
 
-The shipped [`video_sar.yaml`](config/video_sar.yaml) is copied beside the
-executable by CMake. It is a **real-data preset**. The default invocation is:
+From the repository root, with the Holoscan CLI installed and the pinned
+`holoscan-radar-dev:hsdk5` image available, run:
 
 ```bash
-./build/applications/sar/video_sar/cpp/video_sar
+python3 -m pip install -r tools/sar_data/requirements.txt
+mkdir -p data/sar
+python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
+  -o data/sar
+holoscan run video_sar \
+  --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --configure-args=-DBUILD_ALL=OFF \
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
+  --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
 ```
+
+The CLI mounts the host `data/sar/` directory read-only at `/tmp/sar` in the
+container, matching the shipped YAML. A host `/tmp/sar` directory or symlink
+is not visible in the container unless mounted. The shipped [`video_sar.yaml`](config/video_sar.yaml) is copied beside the
+executable by CMake and is the default real-data preset.
 
 Pass an explicit YAML path as the first argument. For this topology,
 a CPHD path may replace `cphd.path` directly, or follow a YAML path as the second argument.

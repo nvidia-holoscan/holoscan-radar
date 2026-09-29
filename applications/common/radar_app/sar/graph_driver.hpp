@@ -151,9 +151,11 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
       const auto& viz_geometry = cfg.scroll                       ? cfg.scroll_parent
                                  : cfg.parent_geometry.is_valid() ? cfg.parent_geometry
                                                                   : cfg.sample_geometry;
-      auto raster = graph.op<app::sar::SarImageVizOp>("sar_image_viz", viz_geometry.num_v(),
-                                                      viz_geometry.num_u(), cfg.visualize_size,
-                                                      cfg.headless ? 0.0 : cfg.visualize_hold_s);
+      // Scroll along-track v horizontally so its long mosaic fits a landscape display.
+      const bool transpose_display_axes = cfg.scroll;
+      auto raster = graph.op<app::sar::SarImageVizOp>(
+          "sar_image_viz", viz_geometry.num_v(), viz_geometry.num_u(), cfg.visualize_size,
+          cfg.headless ? 0.0 : cfg.visualize_hold_s, transpose_display_axes);
       application.add(raster);
       bind_outputs(options, "sar_image_viz", {"frame"});
       holoscan::visualization::LayerStack layers;
@@ -163,10 +165,14 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
                                  .max_width = static_cast<uint32_t>(cfg.visualize_size),
                                  .max_height = static_cast<uint32_t>(cfg.visualize_size)});
       const int64_t max_side = std::max(viz_geometry.num_v(), viz_geometry.num_u());
+      const int64_t horizontal_extent =
+          transpose_display_axes ? viz_geometry.num_v() : viz_geometry.num_u();
+      const int64_t vertical_extent =
+          transpose_display_axes ? viz_geometry.num_u() : viz_geometry.num_v();
       const auto width = static_cast<uint32_t>(
-          std::max<int64_t>(1, cfg.visualize_size * viz_geometry.num_u() / max_side));
+          std::max<int64_t>(1, cfg.visualize_size * horizontal_extent / max_side));
       const auto height = static_cast<uint32_t>(
-          std::max<int64_t>(1, cfg.visualize_size * viz_geometry.num_v() / max_side));
+          std::max<int64_t>(1, cfg.visualize_size * vertical_extent / max_side));
       if (cfg.headless) {
         auto viz = graph.op<holoscan::visualization::HolovizOp>(
             "holoviz", std::move(layers),

@@ -42,14 +42,26 @@ real collections.
 
 ## Real collection preset
 
-The preset rotates six distinct Umbra SNAPSHOT CPHDs under `/tmp/sar/mode5/`. Run `python3 tools/sar_data/pull_cphd.py --app independent_images --list` to inspect their paths, then omit `--list` to download about 10.5 GiB total. It derives an IARP-centred ENU grid per file and chooses a common padded FFT length. The ordered `cphd.path` list and `pixel_scale` list correspond by index. A single-CPHD CLI override is rejected because the topology requires multiple collections.
+The preset rotates six distinct Umbra SNAPSHOT CPHDs under `/tmp/sar/mode5/`. Run `python3 tools/sar_data/pull_cphd.py --app independent_images --list` to inspect their paths, then use the commands below to download about 10.5 GiB to the host `data/sar/mode5/` directory and mount it at `/tmp/sar`. It derives an IARP-centred ENU grid per file and chooses a common padded FFT length. The ordered `cphd.path` list and `pixel_scale` list correspond by index. A single-CPHD CLI override is rejected because the topology requires multiple collections.
 
-The shipped [`independent_images.yaml`](config/independent_images.yaml) is copied beside the
-executable by CMake. It is a **real-data preset**. The default invocation is:
+From the repository root, with the Holoscan CLI installed and the pinned
+`holoscan-radar-dev:hsdk5` image available, run:
 
 ```bash
-./build/applications/sar/independent_images/cpp/independent_images
+python3 tools/sar_data/pull_cphd.py --app independent_images \
+  --dest data/sar/mode5
+holoscan run independent_images \
+  --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --configure-args=-DBUILD_ALL=OFF \
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
+  --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
 ```
+
+The CLI mounts the host `data/sar/` directory read-only at `/tmp/sar` in the
+container, matching the shipped YAML. A host `/tmp/sar` directory or symlink
+is not visible in the container unless mounted. The shipped [`independent_images.yaml`](config/independent_images.yaml) is copied beside the
+executable by CMake and is the default real-data preset.
 
 Pass an explicit YAML path as the first argument. For this topology,
 the application requires the YAML collection list and rejects a single-CPHD override.

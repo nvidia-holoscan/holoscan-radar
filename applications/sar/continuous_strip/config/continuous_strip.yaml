@@ -8,8 +8,8 @@
 # the app never reaches the network.
 #
 #   python3 tools/sar_data/pull_cphd.py --app continuous_strip \
-#     --dest /tmp/sar/imperial
-#   ./build/applications/sar/continuous_strip/cpp/continuous_strip
+#     --dest data/sar/imperial
+#   Mount data/sar at /tmp/sar for the host CLI run (see README.md).
 #
 # Lattice follows the SRP chord (not the IARP tangent plane).
 # lattice.max_side is the scrolling window depth along v, not a
@@ -27,9 +27,9 @@
 # SarMosaicOp blits each window into the parent. Holoviz
 # currently shows the full parent union. The planned u-axis
 # crop is not wired; dump also writes the full union.
-# visualize_size is the no-DISPLAY fallback; with X11 the
-# Holoviz window fills the work area on the long axis (full
-# desktop width for this strip).
+# Holoviz transposes only the display axes: along-track v is
+# horizontal, so the long strip fits a landscape window.
+# visualize_size caps that long display axis in pixels.
 
 cphd:
   path: /tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd

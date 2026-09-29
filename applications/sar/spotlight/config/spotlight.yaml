@@ -7,9 +7,10 @@
 # Download once (28.59 GiB), then form. The app never reaches the
 # network; pulse_range seeks the 1° closest-approach frame.
 #
-#   mkdir -p /tmp/sar
-#   curl -L -o /tmp/sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd \
+#   mkdir -p data/sar
+#   curl -L -o data/sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd \
 #     https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com/sar-data/task-data/0f1231be-26d3-4b98-96ab-f675a5375c14/2026-02-20-03-03-38_UMBRA-07/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd
+#   Mount data/sar at /tmp/sar for the host CLI run (see README.md).
 #
 # Lattice is the NVRadar spaceborne Atlanta grid: 8192² IARP ENU,
 # z=0, 0.6992513927571693 m, ~5.73 km, row 0 = north / col 0 =

@@ -29,20 +29,25 @@ namespace holoscan::radar::app::sar {
 namespace {
 template <typename T>
 __global__ void sample_magnitude(const T* input, int64_t source_v, int64_t source_u, float* output,
-                                 int64_t height, int64_t width) {
+                                 int64_t height, int64_t width, bool transpose_axes) {
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= height * width)
     return;
   const int64_t y = i / width, x = i % width;
-  const int64_t y0 = y * source_v / height;
-  const int64_t y1 = max(y0 + 1, (y + 1) * source_v / height);
-  const int64_t x0 = x * source_u / width;
-  const int64_t x1 = max(x0 + 1, (x + 1) * source_u / width);
+  // The scrolling strip places along-track v on the horizontal display axis.
+  const int64_t display_v = transpose_axes ? x : y;
+  const int64_t display_u = transpose_axes ? y : x;
+  const int64_t display_v_extent = transpose_axes ? width : height;
+  const int64_t display_u_extent = transpose_axes ? height : width;
+  const int64_t v0 = display_v * source_v / display_v_extent;
+  const int64_t v1 = max(v0 + 1, (display_v + 1) * source_v / display_v_extent);
+  const int64_t u0 = display_u * source_u / display_u_extent;
+  const int64_t u1 = max(u0 + 1, (display_u + 1) * source_u / display_u_extent);
   double sum = 0.0;
   int64_t count = 0;
-  for (int64_t sy = y0; sy < y1; ++sy) {
-    for (int64_t sx = x0; sx < x1; ++sx) {
-      const T z = input[sy * source_u + sx];
+  for (int64_t sv = v0; sv < v1; ++sv) {
+    for (int64_t su = u0; su < u1; ++su) {
+      const T z = input[sv * source_u + su];
       const double magnitude = hypot(static_cast<double>(z.x), static_cast<double>(z.y));
       if (isfinite(magnitude) && magnitude > 0.0) {
         sum += magnitude;
@@ -67,8 +72,13 @@ __global__ void render_gray(const float* magnitude, std::uint8_t* output, int64_
 }
 }  // namespace
 
-SarImageVizOp::SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side, double hold_s)
-: max_v_(max_v), max_u_(max_u), display_side_(display_side), hold_s_(hold_s) {
+SarImageVizOp::SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side, double hold_s,
+                             bool transpose_axes)
+: max_v_(max_v),
+  max_u_(max_u),
+  display_side_(display_side),
+  hold_s_(hold_s),
+  transpose_axes_(transpose_axes) {
   if (max_v_ < 1 || max_u_ < 1 || display_side_ < 1)
     throw std::invalid_argument("SarImageVizOp: invalid image extents");
 }
@@ -108,19 +118,21 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
     return make_unexpected(
         Error{ErrorCode::kInvalidArgument, "SarImageVizOp: expected bounded complex image"});
   const int64_t longest = std::max(shape[0], shape[1]);
-  const int64_t height = std::max<int64_t>(1, shape[0] * display_side_ / longest);
-  const int64_t width = std::max<int64_t>(1, shape[1] * display_side_ / longest);
+  const int64_t source_height = transpose_axes_ ? shape[1] : shape[0];
+  const int64_t source_width = transpose_axes_ ? shape[0] : shape[1];
+  const int64_t height = std::max<int64_t>(1, source_height * display_side_ / longest);
+  const int64_t width = std::max<int64_t>(1, source_width * display_side_ / longest);
   const auto stream = context.cuda_stream().get();
   constexpr int kThreads = 256;
   const int64_t output_count = height * width;
   if (dtype.bits == 128U)
     sample_magnitude<<<(output_count + kThreads - 1) / kThreads, kThreads, 0, stream>>>(
         static_cast<const double2*>(input.data()), shape[0], shape[1], sampled_magnitude_, height,
-        width);
+        width, transpose_axes_);
   else
     sample_magnitude<<<(output_count + kThreads - 1) / kThreads, kThreads, 0, stream>>>(
         static_cast<const float2*>(input.data()), shape[0], shape[1], sampled_magnitude_, height,
-        width);
+        width, transpose_axes_);
   if (cudaPeekAtLastError() != cudaSuccess)
     return make_unexpected(Error{ErrorCode::kFailure, "SarImageVizOp: sample kernel failed"});
   float high = 0.0f, low = 0.0f;

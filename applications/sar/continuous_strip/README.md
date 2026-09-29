@@ -40,21 +40,33 @@ real collections.
 
 ## Real collection preset
 
-The preset uses the same Capella CPHD as tiled strip. Download it with `python3 tools/sar_data/pull_cphd.py --app continuous_strip`; the output path is `/tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd`. Reader batches contain up to 1024 pulses; the stager makes 256-pulse slices, including a shorter final slice at the collection seam. `geometry_change: scroll` requires the forward v-axis geometry supplied by this app.
+The preset uses the same Capella CPHD as tiled strip. Download it into the host `data/sar/imperial/` directory below. The CLI mounts that tree at `/tmp/sar`, where the preset expects `/tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd`. Reader batches contain up to 1024 pulses; the stager makes 256-pulse slices, including a shorter final slice at the collection seam. `geometry_change: scroll` requires the forward v-axis geometry supplied by this app.
 
-The shipped [`continuous_strip.yaml`](config/continuous_strip.yaml) is copied beside the
-executable by CMake. It is a **real-data preset**. The default invocation is:
+From the repository root, with the Holoscan CLI installed and the pinned
+`holoscan-radar-dev:hsdk5` image available, run:
 
 ```bash
-./build/applications/sar/continuous_strip/cpp/continuous_strip
+python3 tools/sar_data/pull_cphd.py --app continuous_strip \
+  --dest data/sar/imperial
+holoscan run continuous_strip \
+  --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --configure-args=-DBUILD_ALL=OFF \
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
+  --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
 ```
+
+The CLI mounts the host `data/sar/` directory read-only at `/tmp/sar` in the
+container, matching the shipped YAML. A host `/tmp/sar` directory or symlink
+is not visible in the container unless mounted. The shipped [`continuous_strip.yaml`](config/continuous_strip.yaml) is copied beside the
+executable by CMake and is the default real-data preset.
 
 Pass an explicit YAML path as the first argument. For this topology,
 a CPHD path may replace `cphd.path` directly, or follow a YAML path as the second argument.
 
 ## Output and display
 
-Each scroll emission reports an image; the mosaic places it into the parent complex strip. The fixture reports five 15 × 6 mosaic images. Optional dump writes the parent mosaic and Holoviz shows its raster. The proposed u-axis display crop is not wired and remains an open item.
+Each scroll emission reports an image; the mosaic places it into the parent complex strip. The fixture reports five 15 × 6 mosaic images. Optional dump writes the parent mosaic in its original `(v, u)` layout. The Holoviz raster transposes only the display axes, placing along-track `v` horizontally so the long strip fits a landscape window. The proposed u-axis display crop is not wired and remains an open item.
 
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.

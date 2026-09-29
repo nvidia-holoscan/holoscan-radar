@@ -114,6 +114,16 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## SAR HSDK 5 port
 
+- **2026-09-29 — SAR host CLI data flow and strip display:** all five app guides
+  give commands from download to `holoscan run`. Downloads go under the host
+  `data/sar/` tree, which `--docker-opts` binds to the shipped YAML's
+  `/tmp/sar` path inside the container. Continuous strip now places its
+  along-track `v` axis horizontally in the Holoviz raster and window; formed
+  images and dumps keep their original axes. Downloader manifests, all five
+  CLI dry runs, and the bind-mounted CPHD path were checked. The pinned HSDK 5
+  GPU build and 11/11 focused SAR fixture, smoke, and headless viz tests passed.
+  Real-data image quality and interactive display validation remain open.
+
 - **2026-09-29 — SAR user-facing guides and local data preparation (deustice):**
   added a SAR route through the root, developer, application-support, app, and
   six operator guides. The app guides now name their standalone executable,

@@ -24,8 +24,10 @@ This is a wiring and numerical smoke, not validation of image quality on a
 real collection.
 
 The shipped YAML files are **real-data presets**. Download or subset the CPHD
-files at the documented paths using [optional data preparation tools](../../tools/sar_data/README.md),
-then run the executable with its copied default YAML. Read each app guide for
+files in the host `data/sar/` directory using [optional data preparation tools](../../tools/sar_data/README.md),
+then run through the Holoscan CLI with `data/sar/` mounted at the YAML's
+`/tmp/sar` path inside the container. Each app guide gives a complete
+download-and-run command block. Read each app guide for
 the exact collection, geometry, output, and display prerequisites. The
 [CPHD reader](../../operators/io/cphd_reader_op/README.md) and
 [SAR operator references](../../operators/sar/README.md) describe the library
