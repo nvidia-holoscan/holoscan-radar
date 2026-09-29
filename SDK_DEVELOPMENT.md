@@ -68,9 +68,11 @@ that flag runs the build or application on the host instead of in the container.
 
 The `main-5x` SDK source currently does not export the Python binding target
 required by this module's pybind11 extensions. C++ operators, applications,
-tests, and performance tools are supported; `HOLOSCAN_RADAR_BUILD_PYTHON` is
-forced off until that SDK component is available. This is a build-surface
-limitation, not an operator contract difference.
+tests, and C++ performance tools are supported; `HOLOSCAN_RADAR_BUILD_PYTHON`
+is forced off until that SDK component is available. CMake does not register
+pytest while bindings are off, and the current image cannot produce a
+Python-enabled wheel. The Python package source remains in the repository.
+This is a build-surface limitation, not an operator contract difference.
 
 ## Removal
 

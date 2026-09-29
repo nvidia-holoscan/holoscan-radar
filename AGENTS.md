@@ -76,19 +76,20 @@ Rules that follow from "lockdown":
 | `applications/fmcw/siso/` | Baseline SISO range-Doppler workflow |
 | `applications/fmcw/dense_beamforming/` | Dense beamform-then-detect SIMO workflow |
 | `applications/fmcw/mimo_tdm/` | MIMO TDM workflow |
+| `applications/fmcw/adaptive_aoa/` | Multi-source screening and adaptive sparse angle estimation |
 | `applications/fmcw/multi_waveform/` | Alternating coherent FMCW waveform profiles over MIMO TDM |
 | `applications/fmcw/mimo_ddm/` | Linear and nonlinear MIMO DDM workflow |
 | `applications/common/radar_app/` | Shared Graph driver, source, report, and visualization support |
-| `performance/` | Measurement harness (C++ + Python) — cold vs steady, not pass/fail tests |
-| `python/holoscan/radar/` | Python package root; re-exports operators from per-operator pybind11 submodules |
-| `tests/cpp/`, `tests/python/` | GTest and pytest suites (Python: set `HOLOSCAN_RADAR_BUILD_DIR`) |
+| `performance/` | C++ YAML recipes, typed adapters, and measurement harness — diagnostic timing, not pass/fail thresholds |
+| `python/holoscan/radar/` | Python package source and operator exports; bindings are disabled by the current SDK image |
+| `tests/cpp/`, `tests/python/` | GTest suite; pytest suite registers only when Python bindings build |
 | `pkg/` | Debian/wheel packaging (`add_holohub_package`) |
 | `cmake/` | HoloHub CMake helpers (`HoloHubConfigHelpers.cmake`, `pybind11_add_holohub_module.cmake`) |
 | `metadata.json` | Module metadata (schema `urn:holohub:module:v2`); per-operator `metadata.json` under each operator dir |
 
 ## Building example applications
 
-The `applications/fmcw_*` examples follow a strict layering so each app's `.cpp`
+The `applications/fmcw/` examples follow a strict layering so each app's `.cpp`
 reads as the graph, not scaffolding. When adding or changing an app, keep code
 in the right layer:
 
@@ -104,7 +105,7 @@ in the right layer:
   bridges). Same-dir headers, included bare with `// NOLINT(build/include_subdir)`.
 - **Reusable, Holoscan-aware app helpers → `applications/common/radar_app/`**
   (see its source): the Graph driver, rank-agnostic `SimAdcSourceOp`, report
-  operators, and optional X11 visualization support. Header-only helpers are
+  operators, and optional HSDK 5 Holoviz visualization support. Header-only helpers are
   `inline` / in-class; each app keeps its own graph wiring.
 - **Pure model helpers → `operators/common/radar_common/`**: the analytic
   simulators and array builders (`sim/`), descriptors, DSP — no Holoscan / CUDA /
@@ -130,10 +131,9 @@ cmake --build build -j"$(nproc)"
 # C++ tests
 ctest --test-dir build --output-on-failure -LE performance
 
-# Python tests (conftest.py wires in the build tree; set HOLOSCAN_RADAR_BUILD_DIR
-# if your build dir is not ./build). An unimportable holoscan is a FAILURE, not a
-# skip — build and test in the container (GPU is a hard dependency).
-pytest tests/python/ -v
+# Python bindings and pytest registration are disabled by the current SDK
+# image; see SDK_DEVELOPMENT.md. When enabled, run in the GPU container with
+# HOLOSCAN_RADAR_BUILD_DIR set to the build tree.
 
 # Lint — CI runs exactly this on every PR; run it before pushing
 pre-commit run --all-files
@@ -153,7 +153,7 @@ Then use `holoscan build` / `run` / `test` with that `--img` and `--no-docker-bu
 - C++ namespace `holoscan::radar`; Python package `holoscan.radar`; operator classes CamelCase ending in `Op`; directories snake_case.
 - Include headers by their path from the include root (`#include "group/op/op.hpp"`), never bare — the one exception is a same-dir colocated app-private header (`config.hpp` / `custom_ops.hpp`), tagged `// NOLINT(build/include_subdir)`.
 - Commits: imperative subject, `Area: Summary` prefix style (e.g. `CI: Add linting workflow`, `Operators: ...`).
-- Branches: `<user>/<topic>` (e.g. `deustice/planning`). PRs target `main`; lint CI must pass; contract changes (see Docs first) get called out explicitly.
+- Branches: `<user>/<topic>` (e.g. `deustice/planning`). Current HSDK 5 PRs target `main-5x`; lint CI must pass; contract changes (see Docs first) get called out explicitly.
 
 ## Team workflow
 

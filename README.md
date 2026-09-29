@@ -104,8 +104,9 @@ cmake --build build -j"$(nproc)"
 ```
 
 Python operator bindings are temporarily unavailable because the current SDK source
-image does not export the binding component they require. See
-[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
+image does not export the binding component they require. The current CMake build
+therefore does not register the Python test suites, and a Python-enabled wheel
+cannot be built from this image. See [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 
 ## Testing
 
@@ -124,9 +125,10 @@ ctest --test-dir build --output-on-failure -L performance
 ./build/performance/cpp/perf_cfar_detector --full
 ```
 
-The performance binaries report cold, steady-state, and applicable live-update
-latencies. Results are meaningful only on the machine and GPU where they were
-captured.
+The 26 C++ performance binaries read colocated YAML recipes under
+`performance/operators/` and report setup, first-frame, steady-state, and
+applicable live-update latencies. Results are meaningful only on the machine
+and GPU where they were captured. See [performance/README.md](performance/README.md).
 
 ## Project references
 

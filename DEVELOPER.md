@@ -23,6 +23,9 @@ holoscan-radar/
 │   │       └── sdk/                #   Holoscan-integration glue
 │   ├── sar/                        # SAR formation operators
 │   ├── io/                         # CPHD reader and tensor dump
+│   ├── detection/                  # CFAR, feature assembly, and reduction
+│   ├── clustering/                 # DBSCAN
+│   ├── angle_estimation/           # Sparse estimators and dense beamforming
 │   └── fmcw/                       # FMCW signal-processing group
 │       └── <operator_name>/
 │           ├── <operator_name>.hpp / .cu   # Operator + stage kernel
@@ -41,14 +44,16 @@ holoscan-radar/
 │       ├── simo/
 │       ├── dense_beamforming/
 │       ├── mimo_tdm/
+│       ├── adaptive_aoa/
 │       ├── multi_waveform/
 │       └── mimo_ddm/
 ├── tools/sar_data/               # Optional CPHD download/subset CLIs
 ├── python/holoscan/radar/
-│   └── __init__.py                 # Placeholder (bindings deferred)
+│   └── __init__.py                 # Operator exports; compiled bindings currently disabled
+├── performance/                   # C++ YAML recipes, adapters, and shared runner
 └── tests/
-    ├── cpp/                        # GTest suite (+ utils/: harness, fixtures, bin model)
-    └── python/                     # pytest suite
+    ├── cpp/                        # GTest suite (+ utils/: fixtures and Graph helpers)
+    └── python/                     # pytest suite (requires compiled bindings)
 ```
 
 ---
@@ -138,16 +143,20 @@ For individual SAR build gates use `-DBUILD_ALL=OFF -DAPP_spotlight=ON`
 for mode-specific graphs, [data preparation](tools/sar_data/README.md) for
 optional public collections, and the [HSDK 5 SAR contract](docs/planning/SAR/OPERATOR_API.md).
 The fixture is generated in C++; Python is required only for optional data
-preparation. Public-collection focus and interactive X11 are still unverified.
+preparation. All five SAR GUI apps have been visually checked with their
+current presets. That check does not establish full-resolution image quality
+or validate every public collection and backprojection backend.
 
-Run Python tests:
+Python bindings are disabled in the current SDK image because it does not
+export the required binding target. Consequently, CMake does not register
+`pytest` or `pytest_statistical`; the direct pytest suite also requires
+compiled bindings and is not a current build gate. Once the SDK supplies the
+target and bindings are enabled, run the Python suite with:
 
 ```bash
-# Holoscan SDK must import first; conftest.py then prepends
-# build/python/lib/holoscan onto holoscan.__path__. Do not put
-# build/python/lib alone on PYTHONPATH — that shadows the SDK package.
-HOLOSCAN_RADAR_BUILD_DIR=build \
-pytest tests/python/ -v
+# conftest.py extends the installed SDK package with build-tree modules.
+# Do not put build/python/lib alone on PYTHONPATH: it shadows the SDK package.
+HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v
 ```
 
 ---
@@ -173,9 +182,10 @@ What it does, and where to change it:
   inside the pip install tree and cannot see this repo.
 - Builds into **`build-test/`**, a dedicated tree. The driver wipes it on every run, which
   is why it is deliberately not your `build/` directory.
-- Runs every tier except `performance`, which has its own invocation. That includes the
-  Monte Carlo `statistical` tests — they cost ~13 s against a ~207 s suite, so there is
-  nothing to gain by deferring them. Narrow to one tier with
+- Runs every registered C++ tier except `performance`, which has its own invocation.
+  That includes the Monte Carlo `statistical` tests. Python suites are registered
+  only when bindings are enabled; they are absent with the current SDK image.
+  Narrow to one tier with
   `--ctest-options='-DINCLUDE_LABELS=statistical'`, or widen the exclusion with
   `-DEXCLUDE_LABELS='performance|statistical'`.
 - The selection is **exclude-based on purpose**: an include list silently drops any label
@@ -194,9 +204,10 @@ Useful escapes:
 | `--ctest-options OPT` | Append a raw ctest argument (repeatable) |
 | `--local` | Run natively in the current environment; omit it for host-invoked container execution |
 
-A note on `xvfb`: it satisfies the CLI's default wrapper but does **not** make Holoviz
-render headlessly — that needs Vulkan support. Application smoke runs keep visualization
-disabled.
+A note on `xvfb`: it satisfies the CLI's default wrapper, but Holoviz also
+needs a working Vulkan/display stack. The ordinary FMCW smoke presets keep
+visualization disabled; the separate visualization-enabled SISO check has
+completed under Xvfb in the pinned environment.
 
 ---
 
@@ -232,7 +243,9 @@ Key fields to update before publishing:
 | `[project].authors` | Your name / organisation |
 | `[tool.scikit-build].cmake.args` | Extra CMake flags passed during `pip install` |
 
-Build a wheel:
+The current HSDK 5 image cannot build the Python extensions, so a
+Python-enabled wheel is not currently available. When the SDK exports the
+required binding target and the Python build is enabled, build one with:
 
 ```bash
 pip install build
