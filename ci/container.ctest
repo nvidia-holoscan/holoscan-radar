@@ -23,6 +23,12 @@
 #                          repository-wide build (the primary path here)
 #   TAG                    Image tag / branch identifier (default: "latest")
 #   CTEST_SITE             CDash site name (default: "SITE_NA")
+#   CTEST_BUILD_NAME       Exact dashboard build name; when omitted, compose
+#                          one from BUILD_NAME_PREFIX / PLATFORM_NAME / TAG
+#   RADAR_CDASH_BUILD_NAME Jenkins/CDash build-name override, applied just
+#                          before ctest_start (reserved -D names can be reset)
+#   CTEST_BUILD_FLAGS      Optional flags for ctest_build, e.g. "-j24"
+#   CTEST_NIGHTLY_START_TIME  Nightly dashboard boundary (default: 06:00 UTC)
 #   PLATFORM_NAME          Platform portion of the build name (default: "linux")
 #   BUILD_NAME_PREFIX      Leading token in the CTest build name
 #   CONFIGURE_OPTIONS      Semicolon-separated list of extra cmake -D flags
@@ -156,6 +162,29 @@ else()
     set(_label_args EXCLUDE_LABEL "${EXCLUDE_LABELS}")
 endif()
 
+function(submit_results)
+    if(NOT CTEST_SUBMIT_URL)
+        return()
+    endif()
+
+    ctest_submit(
+        PARTS ${ARGN}
+        RETURN_VALUE submit_result
+        CAPTURE_CMAKE_ERROR submit_error
+        RETRY_COUNT 2
+        RETRY_DELAY 5)
+    if(submit_result OR submit_error)
+        message(WARNING
+            "CDash submission failed (result=${submit_result}, "
+            "cmake_error=${submit_error}); preserving the CI result")
+    endif()
+endfunction()
+
+# Assign the Jenkins override after the local default has been established.
+if(RADAR_CDASH_BUILD_NAME)
+    set(CTEST_BUILD_NAME "${RADAR_CDASH_BUILD_NAME}")
+endif()
+
 ctest_start(${DASHBOARD_MODEL})
 
 # Check configure and build explicitly so a failure in either reports itself.
@@ -170,11 +199,17 @@ ctest_start(${DASHBOARD_MODEL})
 # and a broken configure or build is the latter.
 ctest_configure(OPTIONS "${configure_options}" RETURN_VALUE configure_result)
 if(configure_result)
+    submit_results(Configure Done)
     message(FATAL_ERROR "Configure failed with return value: ${configure_result}")
 endif()
 
-ctest_build(RETURN_VALUE build_result)
+set(_build_args RETURN_VALUE build_result)
+if(CTEST_BUILD_FLAGS)
+    list(APPEND _build_args FLAGS "${CTEST_BUILD_FLAGS}")
+endif()
+ctest_build(${_build_args})
 if(build_result)
+    submit_results(Configure Build Done)
     message(FATAL_ERROR "Build failed with return value: ${build_result}")
 endif()
 
@@ -183,14 +218,31 @@ ctest_test(
     ${_label_args}
     OUTPUT_JUNIT "${CTEST_BINARY_DIRECTORY}/test-results.xml")
 
-if(CTEST_SUBMIT_URL)
-    ctest_submit()
+# A successful empty suite is not coverage. CTest's script mode can return
+# zero for an empty selection; require a non-empty JUnit report explicitly.
+set(_junit_path "${CTEST_BINARY_DIRECTORY}/test-results.xml")
+if(NOT EXISTS "${_junit_path}")
+    submit_results(Configure Build Test Done)
+    message(FATAL_ERROR "CTest did not produce a JUnit report")
 endif()
+file(READ "${_junit_path}" _junit_xml)
+string(REGEX MATCH "tests=\"([0-9]+)\"" _junit_tests "${_junit_xml}")
+set(_test_count "${CMAKE_MATCH_1}")
+if(NOT _junit_tests OR _test_count EQUAL 0)
+    submit_results(Configure Build Test Done)
+    message(FATAL_ERROR "CTest selected zero tests; refusing empty coverage")
+endif()
+message(STATUS "CTest coverage: ${_test_count} tests in the JUnit report")
+
+submit_results(Configure Build Test)
 
 if(test_result)
     if(DEFINED TEST_FAILURES_FILE)
         file(WRITE "${TEST_FAILURES_FILE}" "${test_result}")
     else()
+        submit_results(Done)
         message(FATAL_ERROR "Tests failed with return value: ${test_result}")
     endif()
 endif()
+
+submit_results(Done)
