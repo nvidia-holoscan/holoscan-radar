@@ -266,4 +266,4 @@ CLI and script list.
 
 Apache-2.0 — see [LICENSE](LICENSE).
 
-<!-- No-op CI baseline for main. -->
+Temporary CI validation note: this branch exercises the `main` pipeline.
