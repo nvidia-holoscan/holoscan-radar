@@ -141,4 +141,4 @@ and GPU where they were captured. See [performance/README.md](performance/README
 
 Apache-2.0; see [`LICENSE`](LICENSE).
 
-<!-- No-op CI baseline for main-5x. -->
+Temporary CI validation note: this branch exercises the `main-5x` pipeline.
