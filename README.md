@@ -140,3 +140,5 @@ and GPU where they were captured. See [performance/README.md](performance/README
 ## License
 
 Apache-2.0; see [`LICENSE`](LICENSE).
+
+<!-- No-op CI baseline for main-5x. -->
