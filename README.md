@@ -265,3 +265,5 @@ CLI and script list.
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
+
+<!-- No-op CI baseline for main. -->
