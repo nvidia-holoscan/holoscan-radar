@@ -9,7 +9,7 @@ distributing this Holoscan Module.
 
 ```text
 holoscan-radar/
-├── holohub                         # CLI wrapper (delegates to holoscan-cli)
+├── holohub                         # Optional wrapper: runs the CLI from a managed venv
 ├── requirements-cli.txt            # Pinned holoscan-cli for host, image, and lint
 ├── Dockerfile                      # Development container image
 ├── CMakeLists.txt                  # Root CMake — orchestrates operators/applications/tests
@@ -60,14 +60,14 @@ commands.
 | `holoscan package holoscan-radar` | Build a native Debian package with Holoscan Radar operators |
 | `holoscan package holoscan-radar --pkg-generator=WHEEL` | Build a native Python 3.12 package with Holoscan Radar operators |
 
-The wrapper runs `pip install -r requirements-cli.txt` on each host invocation,
-using the active venv, `HOLOSCAN_CLI_PYTHON_BIN` (legacy: `HOLOHUB_PYTHON_BIN`), or
-a managed venv at `~/.local/share/holoscan-radar/cli-venv` (`HOLOSCAN_CLI_VENV`
-overrides it). The managed venv stays separate from HoloHub's, which pins a
-different CLI, and is created with `python3`, or the newest `python3.1x` when
-`python3` is older than 3.11. `HOLOSCAN_CLI_INSTALL_ARGS` adds pip options on the
-host and during Docker builds; change the CLI version in the requirements file and
-rebuild the image. Set `HOLOSCAN_CLI_SOURCE` for host-side CLI source development.
+`./holohub` only picks the interpreter: `HOLOSCAN_CLI_PYTHON_BIN` if set, else the
+active venv or `python3` (as in the development image) when it already has CLI 5,
+else a managed venv at `~/.local/share/holoscan-radar/cli-venv` (`HOLOSCAN_CLI_VENV`
+overrides it). It creates that venv with Python 3.11+, separate from HoloHub's, and
+reinstalls the CLI only when `requirements-cli.txt` changes; it never installs into
+other environments. Use pip's own settings, such as `PIP_EXTRA_INDEX_URL`, for other
+package indexes, and an editable install in your venv for CLI development. After
+changing the pin, rebuild the image.
 
 CLI 5 automatically uses a built SDK under `./holoscan-sdk` or `../holoscan-sdk`,
 reported as `local SDK` in the effective configuration. Container commands mount it

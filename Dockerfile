@@ -33,13 +33,10 @@ ARG DEV_USER=dev
 ARG DEV_UID=1000
 ARG DEV_GID=1000
 
-# Install the same CLI and optional dependencies as the host wrapper.
+# Install the pinned CLI, as host environments do from requirements-cli.txt.
 COPY requirements-cli.txt /tmp/requirements-cli.txt
-ARG HOLOSCAN_CLI_INSTALL_ARGS=""
-# Preserve whitespace-separated pip options without pathname expansion.
-RUN set -f; \
-    PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir \
-        ${HOLOSCAN_CLI_INSTALL_ARGS} -r /tmp/requirements-cli.txt
+RUN PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir \
+        -r /tmp/requirements-cli.txt
 
 # TODO: add module-specific runtime / build dependencies below.
 #
