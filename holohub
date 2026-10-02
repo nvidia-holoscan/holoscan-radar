@@ -5,6 +5,7 @@
 # Holoscan Radar CLI wrapper.
 # Delegates to the standalone `holoscan-cli` package with module-specific
 # defaults in pyproject.toml and a pinned prerelease from NVIDIA PyPI.
+# Holoscan CLI 5 requires Python 3.11 or newer.
 #
 # Usage:
 #   ./holohub run-container
@@ -34,7 +35,8 @@ CLI_REQUIREMENTS="${SCRIPT_DIR}/requirements-cli.txt"
 read -r -a CLI_INSTALL_ARGS <<< "${HOLOSCAN_CLI_INSTALL_ARGS}"
 CLI_VENV_EXPLICIT="${HOLOSCAN_CLI_VENV:+1}"
 if [[ -z "${HOLOSCAN_CLI_VENV:-}" && -n "${XDG_DATA_HOME:-}${HOME:-}" ]]; then
-    HOLOSCAN_CLI_VENV="${XDG_DATA_HOME:-${HOME}/.local/share}/holoscan-cli/venv"
+    # Separate from HoloHub's holoscan-cli/venv, which pins a different CLI.
+    HOLOSCAN_CLI_VENV="${XDG_DATA_HOME:-${HOME}/.local/share}/holoscan-radar/cli-venv"
 fi
 export HOLOSCAN_CLI_VENV="${HOLOSCAN_CLI_VENV:-}"
 
@@ -45,6 +47,10 @@ fi
 _cli_ok() {
     "$1" -c 'import holoscan_cli.project_context, cookiecutter, jsonschema, referencing' 2>/dev/null
 }
+# holoscan-cli 5 declares Requires-Python >=3.11.
+_python_ok() {
+    "$1" -c 'import sys; sys.exit(sys.version_info < (3, 11))' >/dev/null 2>&1
+}
 _is_container() {
     [[ -f /.dockerenv || -f /run/.containerenv || -f /run/systemd/container ]] ||
         grep -Eq '(docker|containerd|kubepods|podman|buildkit)' /proc/1/cgroup 2>/dev/null
@@ -54,12 +60,26 @@ _managed_venv_ready() {
         "${HOLOSCAN_CLI_VENV}/bin/python" -m pip --version >/dev/null 2>&1
 }
 _use_managed_venv() {
+    local base_python="" candidate
     if [[ -z "${HOLOSCAN_CLI_VENV}" ]]; then
         echo "[holoscan-radar] Set HOME, XDG_DATA_HOME, or HOLOSCAN_CLI_VENV." >&2
         exit 1
     fi
-    if ! python3 -m venv "${HOLOSCAN_CLI_VENV}"; then
-        echo "[holoscan-radar] Could not create ${HOLOSCAN_CLI_VENV}; install python3-venv." >&2
+    # Prefer python3, then the newest versioned interpreter (e.g. on Ubuntu 22.04).
+    for candidate in python3 python3.14 python3.13 python3.12 python3.11; do
+        if command -v "${candidate}" >/dev/null && _python_ok "${candidate}"; then
+            base_python="${candidate}"
+            break
+        fi
+    done
+    if [[ -z "${base_python}" ]]; then
+        echo "[holoscan-radar] Holoscan CLI 5 requires Python 3.11+; install it or" \
+             "set HOLOSCAN_CLI_PYTHON_BIN." >&2
+        exit 1
+    fi
+    if ! "${base_python}" -m venv "${HOLOSCAN_CLI_VENV}"; then
+        echo "[holoscan-radar] Could not create ${HOLOSCAN_CLI_VENV};" \
+             "install ${base_python}-venv." >&2
         exit 1
     fi
     PYTHON_BIN="${HOLOSCAN_CLI_VENV}/bin/python"
@@ -89,6 +109,21 @@ elif _is_container; then
     exit 1
 else
     _use_managed_venv
+fi
+
+# Resolve the interpreter once: the CLI and system-language lint hooks reuse
+# this path after the CLI changes directory, so it must be absolute.
+PYTHON_PATH="$(type -P "${PYTHON_BIN}" || true)"
+if [[ -z "${PYTHON_PATH}" ]]; then
+    echo "[holoscan-radar] Python interpreter not found: ${PYTHON_BIN}" \
+         "(check HOLOSCAN_CLI_PYTHON_BIN or your active venv)." >&2
+    exit 1
+fi
+PYTHON_BIN="$(cd "$(dirname "${PYTHON_PATH}")" && pwd)/$(basename "${PYTHON_PATH}")"
+if ! _python_ok "${PYTHON_BIN}"; then
+    echo "[holoscan-radar] Holoscan CLI 5 requires Python 3.11+, which ${PYTHON_BIN}" \
+         "does not provide; set HOLOSCAN_CLI_PYTHON_BIN to a newer interpreter or venv." >&2
+    exit 1
 fi
 
 if [[ "${CLI_INSTALL_REQUIRED}" == true ]] &&
@@ -129,7 +164,6 @@ export HOLOSCAN_CLI_DEFAULT_DOCKER_BUILD_ARGS="${HOLOSCAN_CLI_DEFAULT_DOCKER_BUI
 
 # Keep subprocesses launched by the CLI (including system-language pre-commit
 # hooks) on the interpreter that bootstrapped Holoscan CLI.
-PYTHON_BIN="$(command -v "${PYTHON_BIN}")"
 export HOLOSCAN_CLI_PYTHON_BIN="${PYTHON_BIN}"
 export PATH="${PYTHON_BIN%/*}:${PATH}"
 

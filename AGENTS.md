@@ -110,7 +110,9 @@ ctest --test-dir build --output-on-failure -LE performance
 # skip — build and test in the container (GPU is a hard dependency).
 pytest tests/python/ -v
 
-# Lint — CI runs exactly this on every PR; run it before pushing
+# Lint — CI runs exactly this on every PR; run it before pushing. The lint
+# requirements pin pre-commit plus the CLI that the metadata hook imports.
+python -m pip install -r utilities/requirements.lint.txt
 pre-commit run --all-files
 ```
 

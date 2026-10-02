@@ -10,8 +10,8 @@
 # into the image; the project tree is bind-mounted by the holoscan-cli at
 # /workspace/holoscan-radar when the container is launched.
 #
-# Build & run via the holoscan-cli wrapper (recommended):
-#   ./holohub run-container
+# Build & run via the Holoscan CLI (or the ./holohub wrapper):
+#   holoscan run-container
 #
 # Manual build (without the CLI):
 #   docker build -t holoscan-radar .
@@ -50,9 +50,8 @@ RUN set -f; \
 #                 headlessly (that needs Vulkan), so smoke runs keep
 #                 visualization disabled.
 #   ccache      — compiler cache; the driver wires it in via
-#                 CMAKE_<LANG>_COMPILER_LAUNCHER and the holohub wrapper points
-#                 CCACHE_DIR at the gitignored .cache/, so it survives the
-#                 build-test/ wipe.
+#                 CMAKE_<LANG>_COMPILER_LAUNCHER and points CCACHE_DIR at the
+#                 gitignored .cache/, so it survives the build-test/ wipe.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         libgtest-dev \

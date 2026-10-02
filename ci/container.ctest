@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# CTest driver for `./holohub test` — the module test entrypoint.
+# CTest driver for `holoscan test` — the module test entrypoint.
 #
 # Selected by tool.holoscan.ctest-script in pyproject.toml. The relative path
 # resolves from the module root, both locally and inside the container.
 #
-# Invoke via the wrapper (recommended):
-#   ./holohub test
+# Invoke via the Holoscan CLI (or the ./holohub wrapper):
+#   holoscan test
 #
 # Or directly:
 #   ctest -S ci/container.ctest -VV

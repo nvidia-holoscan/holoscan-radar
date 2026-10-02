@@ -10,6 +10,7 @@ distributing this Holoscan Module.
 ```text
 holoscan-radar/
 ├── holohub                         # CLI wrapper (delegates to holoscan-cli)
+├── requirements-cli.txt            # Pinned holoscan-cli for host, image, and lint
 ├── Dockerfile                      # Development container image
 ├── CMakeLists.txt                  # Root CMake — orchestrates operators/applications/tests
 ├── pyproject.toml                  # Python packaging metadata (scikit-build-core)
@@ -43,10 +44,11 @@ holoscan-radar/
 
 ## CLI commands
 
-Install with `python -m pip install -r requirements-cli.txt`, then run `holoscan`
-from the module root. CLI 5 reads naming, CUDA, and CTest defaults from
-`pyproject.toml`, and module metadata from `metadata.json`. The existing
-`./holohub` wrapper also supports these commands.
+The CLI requires Python 3.11 or newer. Install it into a virtual environment with
+`python -m pip install -r requirements-cli.txt`, then run `holoscan` from the module
+root. CLI 5 reads naming, CUDA, and CTest defaults from `pyproject.toml`, and module
+metadata from `metadata.json`. The existing `./holohub` wrapper also supports these
+commands.
 
 | Command | What it does |
 | --- | --- |
@@ -60,14 +62,19 @@ from the module root. CLI 5 reads naming, CUDA, and CTest defaults from
 
 The wrapper runs `pip install -r requirements-cli.txt` on each host invocation,
 using the active venv, `HOLOSCAN_CLI_PYTHON_BIN` (legacy: `HOLOHUB_PYTHON_BIN`), or
-a managed venv at `~/.local/share/holoscan-cli/venv` (`HOLOSCAN_CLI_VENV` overrides
-it). `HOLOSCAN_CLI_INSTALL_ARGS` adds pip options on the host and during Docker
-builds; change the CLI version in the requirements file and rebuild the image.
-Set `HOLOSCAN_CLI_SOURCE` for host-side CLI source development.
+a managed venv at `~/.local/share/holoscan-radar/cli-venv` (`HOLOSCAN_CLI_VENV`
+overrides it). The managed venv stays separate from HoloHub's, which pins a
+different CLI, and is created with `python3`, or the newest `python3.1x` when
+`python3` is older than 3.11. `HOLOSCAN_CLI_INSTALL_ARGS` adds pip options on the
+host and during Docker builds; change the CLI version in the requirements file and
+rebuild the image. Set `HOLOSCAN_CLI_SOURCE` for host-side CLI source development.
 
-CLI 5 automatically discovers nearby SDK installations; select a completed
-installation explicitly with `--local-sdk-root` or `HOLOSCAN_SDK_ROOT` when needed.
-Build and test commands pass the selected SDK to CMake automatically.
+CLI 5 automatically uses a built SDK under `./holoscan-sdk` or `../holoscan-sdk`,
+reported as `local SDK` in the effective configuration. Container commands mount it
+at `/workspace/holoscan-sdk` ahead of the image's SDK, and build and test commands
+pass it to CMake. Select an installation explicitly with `--local-sdk-root` or
+`HOLOSCAN_SDK_ROOT`; to test against the image's SDK, use a checkout without a
+sibling `holoscan-sdk`.
 
 ---
 

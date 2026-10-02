@@ -89,7 +89,9 @@ repos:
     hooks:
       - id: holoscan-metadata-validate
         name: validate metadata.json files against schemas
-        entry: python .github/workflows/scripts/validate_metadata.py
+        # Needs the pinned CLI: `holoscan lint` and ./holohub export
+        # HOLOSCAN_CLI_PYTHON_BIN; plain `pre-commit run` falls back to python3.
+        entry: bash -c 'exec "${HOLOSCAN_CLI_PYTHON_BIN:-python3}" .github/workflows/scripts/validate_metadata.py "$@"' --
         language: system
         files: '(^|/)metadata\.json$'
         exclude: '^(build|\.local|_CPack_Packages)/'
