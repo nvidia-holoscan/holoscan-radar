@@ -58,3 +58,7 @@
   ```
 
 Link to DCO: <https://developercertificate.org/>
+
+## Releases
+
+See [RELEASING.md](RELEASING.md) for branches, versioning, backports, and the release process.
