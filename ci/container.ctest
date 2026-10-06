@@ -1,19 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# CTest driver for `./holohub test` — the module test entrypoint.
+# CTest driver for `holoscan test` — the module test entrypoint.
 #
-# Why this file exists: the driver bundled with holoscan-cli
-# (holoscan_cli/testing/container.ctest) derives CTEST_SOURCE_DIRECTORY from
-# its own location, which resolves inside the pip install tree
-# (.../site-packages), not this repo. A bare `./holohub test` therefore never
-# sees the module. The `holohub` wrapper points HOLOSCAN_CLI_CTEST_SCRIPT at
-# this file instead; the CLI renders it as a literal `ctest -S <path>`, and a
-# relative path resolves because the container's working directory is the
-# repo root.
+# Selected by tool.holoscan.ctest-script in pyproject.toml. The relative path
+# resolves from the module root, both locally and inside the container.
 #
-# Invoke via the wrapper (recommended):
-#   ./holohub test
+# Invoke via the Holoscan CLI (or the ./holohub wrapper):
+#   holoscan test
 #
 # Or directly:
 #   ctest -S ci/container.ctest -VV
@@ -63,8 +57,7 @@ if(NOT TAG)
     set(TAG latest)
 endif()
 
-# The repo root is the parent of ci/ — unlike the stock driver, which lands in
-# site-packages.
+# Keep direct `ctest -S ci/container.ctest` invocations rooted at this module.
 get_filename_component(CTEST_SOURCE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/.."
                        ABSOLUTE)
 

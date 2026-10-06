@@ -9,7 +9,8 @@ distributing this Holoscan Module.
 
 ```text
 holoscan-radar/
-├── holohub                         # CLI wrapper (delegates to holoscan-cli)
+├── holohub                         # Optional wrapper: runs the CLI from a managed venv
+├── requirements-cli.txt            # Pinned holoscan-cli for host, image, and lint
 ├── Dockerfile                      # Development container image
 ├── CMakeLists.txt                  # Root CMake — orchestrates operators/applications/tests
 ├── pyproject.toml                  # Python packaging metadata (scikit-build-core)
@@ -41,27 +42,39 @@ holoscan-radar/
 
 ---
 
-## `holohub` wrapper commands
+## CLI commands
 
-The `holohub` script at the module root wraps the `holoscan-cli` package with module-specific
-defaults. On first run it installs `holoscan-cli` via pip if it isn't already importable
-(internet required); subsequent runs reuse the installed copy.
+The CLI requires Python 3.11 or newer. Install it into a virtual environment with
+`python -m pip install -r requirements-cli.txt`, then run `holoscan` from the module
+root. CLI 5 reads naming, CUDA, and CTest defaults from `pyproject.toml`, and module
+metadata from `metadata.json`. The existing `./holohub` wrapper also supports these
+commands.
 
 | Command | What it does |
 | --- | --- |
-| `./holohub run-container` | Build and start the development container |
-| `./holohub build fmcw_siso` | Configure and build the example pipeline inside the container |
-| `./holohub run fmcw_siso` | Configure, build, and run the example pipeline inside the container |
-| `./holohub test` | Configure, build, and run the test suite inside the container |
-| `./holohub install --dev` | Install a `.pth` hook so `import holoscan.radar` works in any shell |
-| `./holohub package holoscan-radar` | Build a native Debian package with Holoscan Radar operators |
-| `./holohub package holoscan-radar --pkg-generator=WHEEL` | Build a native Python 3.12 package with Holoscan Radar operators |
+| `holoscan run-container` | Build and start the development container |
+| `holoscan build fmcw_siso` | Configure and build the example pipeline inside the container |
+| `holoscan run fmcw_siso` | Configure, build, and run the example pipeline inside the container |
+| `holoscan test` | Configure, build, and run the test suite inside the container |
+| `holoscan install --dev` | Install a `.pth` hook so `import holoscan.radar` works in any shell |
+| `holoscan package holoscan-radar` | Build a native Debian package with Holoscan Radar operators |
+| `holoscan package holoscan-radar --pkg-generator=WHEEL` | Build a native Python 3.12 package with Holoscan Radar operators |
 
-Set `HOLOSCAN_CLI_INSTALL_ARGS` to override the pip install arguments. The
-wrapper forwards this value into Docker builds as the
-`HOLOSCAN_CLI_INSTALL_ARGS` build arg, so the development image installs the
-same CLI package spec as the host wrapper. Set `HOLOSCAN_CLI_SOURCE` to a local
-checkout for host-side CLI development.
+`./holohub` only picks the interpreter: `HOLOSCAN_CLI_PYTHON_BIN` if set, else
+`python3` (an activated venv or the development image) when it already has CLI 5,
+else a managed venv at `~/.local/share/holoscan-radar/cli-venv` (`HOLOSCAN_CLI_VENV`
+overrides it). It creates that venv with Python 3.11+, separate from HoloHub's, and
+reinstalls the CLI only when `requirements-cli.txt` changes; it never installs into
+other environments. Use pip's own settings, such as `PIP_EXTRA_INDEX_URL`, for other
+package indexes, and an editable install in your venv for CLI development. After
+changing the pin, rebuild the image.
+
+CLI 5 automatically uses a built SDK under `./holoscan-sdk` or `../holoscan-sdk`,
+reported as `local SDK` in the effective configuration. Container commands mount it
+at `/workspace/holoscan-sdk` ahead of the image's SDK, and build and test commands
+pass it to CMake. Select an installation explicitly with `--local-sdk-root` or
+`HOLOSCAN_SDK_ROOT`; to test against the image's SDK, use a checkout without a
+sibling `holoscan-sdk`.
 
 ---
 
@@ -103,9 +116,7 @@ step — the containerized equivalent of the manual sequence above.
 
 What it does, and where to change it:
 
-- Runs [`ci/container.ctest`](ci/container.ctest), this module's CTest driver. The wrapper
-  points `HOLOSCAN_CLI_CTEST_SCRIPT` at it; the driver bundled with `holoscan-cli` resolves
-  its source directory inside the pip install tree and cannot see this repo.
+- Runs [`ci/container.ctest`](ci/container.ctest), selected by `pyproject.toml`.
 - Builds into **`build-test/`**, a dedicated tree. The driver wipes it on every run, which
   is why it is deliberately not your `build/` directory.
 - Runs every tier except `performance`, which has its own invocation. That includes the

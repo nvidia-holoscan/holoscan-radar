@@ -109,6 +109,18 @@ class ValidateMetadataTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not UTF-8"):
             validate_metadata.read_metadata_file(path, self.repo_root)
 
+    def test_skips_virtual_environments(self):
+        for name in (".venv", "venv"):
+            template = self.repo_root / name / "templates" / "{{cookiecutter.name}}"
+            template.mkdir(parents=True)
+            (template / "metadata.json").write_text("{{ cookiecutter }}")
+        (self.repo_root / "metadata.json").write_text("{}")
+
+        self.assertEqual(
+            list(validate_metadata.iter_metadata_files(self.repo_root)),
+            [self.repo_root / "metadata.json"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

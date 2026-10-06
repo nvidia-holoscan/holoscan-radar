@@ -5,12 +5,12 @@ add_subdirectory(cpp)
 
 find_program(BASH_EXECUTABLE bash REQUIRED)
 add_test(
-    NAME holohub_install_args
+    NAME holohub_wrapper
     COMMAND "${BASH_EXECUTABLE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_holohub_install_args.sh"
+        "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_holohub_wrapper.sh"
         "${PROJECT_SOURCE_DIR}/holohub"
 )
-set_tests_properties(holohub_install_args PROPERTIES LABELS "unit")
+set_tests_properties(holohub_wrapper PROPERTIES LABELS "unit")
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 

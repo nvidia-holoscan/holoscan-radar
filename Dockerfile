@@ -10,8 +10,8 @@
 # into the image; the project tree is bind-mounted by the holoscan-cli at
 # /workspace/holoscan-radar when the container is launched.
 #
-# Build & run via the holoscan-cli wrapper (recommended):
-#   ./holohub run-container
+# Build & run via the Holoscan CLI (or the ./holohub wrapper):
+#   holoscan run-container
 #
 # Manual build (without the CLI):
 #   docker build -t holoscan-radar .
@@ -33,14 +33,10 @@ ARG DEV_USER=dev
 ARG DEV_UID=1000
 ARG DEV_GID=1000
 
-# Install holoscan-cli developer tools
-ARG HOLOSCAN_CLI_INSTALL_ARGS="--pre --extra-index-url https://pypi.nvidia.com holoscan-cli>4.2.0"
-# Disable pathname expansion while preserving the documented whitespace-separated
-# pip argument override.
-RUN if ! python3 -m holoscan_cli --help 2>/dev/null | grep -qw build; then \
-        set -f; \
-        python3 -m pip install ${HOLOSCAN_CLI_INSTALL_ARGS} \
-    ; fi
+# Install the pinned CLI, as host environments do from requirements-cli.txt.
+COPY requirements-cli.txt /tmp/requirements-cli.txt
+RUN PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir \
+        -r /tmp/requirements-cli.txt
 
 # TODO: add module-specific runtime / build dependencies below.
 #
@@ -51,9 +47,8 @@ RUN if ! python3 -m holoscan_cli --help 2>/dev/null | grep -qw build; then \
 #                 headlessly (that needs Vulkan), so smoke runs keep
 #                 visualization disabled.
 #   ccache      — compiler cache; the driver wires it in via
-#                 CMAKE_<LANG>_COMPILER_LAUNCHER and the holohub wrapper points
-#                 CCACHE_DIR at the gitignored .cache/, so it survives the
-#                 build-test/ wipe.
+#                 CMAKE_<LANG>_COMPILER_LAUNCHER and points CCACHE_DIR at the
+#                 gitignored .cache/, so it survives the build-test/ wipe.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         libgtest-dev \
