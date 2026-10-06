@@ -60,8 +60,8 @@ commands.
 | `holoscan package holoscan-radar` | Build a native Debian package with Holoscan Radar operators |
 | `holoscan package holoscan-radar --pkg-generator=WHEEL` | Build a native Python 3.12 package with Holoscan Radar operators |
 
-`./holohub` only picks the interpreter: `HOLOSCAN_CLI_PYTHON_BIN` if set, else the
-active venv or `python3` (as in the development image) when it already has CLI 5,
+`./holohub` only picks the interpreter: `HOLOSCAN_CLI_PYTHON_BIN` if set, else
+`python3` (an activated venv or the development image) when it already has CLI 5,
 else a managed venv at `~/.local/share/holoscan-radar/cli-venv` (`HOLOSCAN_CLI_VENV`
 overrides it). It creates that venv with Python 3.11+, separate from HoloHub's, and
 reinstalls the CLI only when `requirements-cli.txt` changes; it never installs into

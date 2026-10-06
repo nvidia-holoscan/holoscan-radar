@@ -7,7 +7,7 @@
 # with requirements-cli.txt installed is equivalent. This script only picks the
 # interpreter, in order:
 #   1. HOLOSCAN_CLI_PYTHON_BIN, which must already have the CLI;
-#   2. the active venv, or python3 (e.g. the development image), if it has the CLI;
+#   2. python3 (an activated venv or the development image), if it has the CLI;
 #   3. a managed venv (HOLOSCAN_CLI_VENV, default
 #      ~/.local/share/holoscan-radar/cli-venv), installed from
 #      requirements-cli.txt. Holoscan CLI 5 requires Python 3.11+.
@@ -19,10 +19,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REQUIREMENTS="${SCRIPT_DIR}/requirements-cli.txt"
-export HOLOSCAN_CLI_ROOT="${HOLOSCAN_CLI_ROOT:-${SCRIPT_DIR}}"
-export HOLOSCAN_CLI_CMD_NAME="${HOLOSCAN_CLI_CMD_NAME:-${BASH_SOURCE[0]}}"
+REQUIREMENTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/requirements-cli.txt"
 
 _fail() {
     echo "[holoscan-radar] $*" >&2
@@ -37,8 +34,6 @@ if [[ -n "${HOLOSCAN_CLI_PYTHON_BIN:-}" ]]; then
     PYTHON_BIN="${HOLOSCAN_CLI_PYTHON_BIN}"
     _has_cli "${PYTHON_BIN}" || _fail "${PYTHON_BIN} lacks Holoscan CLI 5;" \
         "run '${PYTHON_BIN} -m pip install -r ${REQUIREMENTS}' (Python 3.11+)."
-elif [[ -n "${VIRTUAL_ENV:-}" ]] && _has_cli "${VIRTUAL_ENV}/bin/python"; then
-    PYTHON_BIN="${VIRTUAL_ENV}/bin/python"
 elif _has_cli python3; then
     PYTHON_BIN=python3
 else
@@ -67,10 +62,4 @@ else
     PYTHON_BIN="${VENV}/bin/python"
 fi
 
-# CLI subprocesses (lint hooks, packaging) reuse this interpreter, also after the
-# CLI changes directory, so export an absolute path and put it first on PATH.
-PYTHON_PATH="$(type -P "${PYTHON_BIN}")" || _fail "Python interpreter not found: ${PYTHON_BIN}"
-PYTHON_BIN="$(cd "$(dirname "${PYTHON_PATH}")" && pwd)/$(basename "${PYTHON_PATH}")"
-export HOLOSCAN_CLI_PYTHON_BIN="${PYTHON_BIN}"
-export PATH="${PYTHON_BIN%/*}:${PATH}"
 exec "${PYTHON_BIN}" -m holoscan_cli "$@"
