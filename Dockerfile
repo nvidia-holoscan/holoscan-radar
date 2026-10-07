@@ -58,12 +58,15 @@ RUN python3 -m pip install --no-cache-dir --upgrade 'pip>=25.1' \
 #   libyaml-cpp-dev — demo apps parse YAML configs with yaml-cpp. HSDK 4.x
 #                 exported it from the SDK install; HSDK 5 keeps yaml-cpp
 #                 private to config_io, so the apps need the system package.
+#   libtinyxml2-dev — CPHDReaderOp parses CPHD XML metadata; the HSDK 5
+#                 development image no longer supplies this dependency.
 #   openssh-client — git-over-SSH and host tooling (dotfiles clone, remotes);
 #                 the runtime base image does not ship ssh.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         libgtest-dev \
         libyaml-cpp-dev \
+        libtinyxml2-dev \
         openssh-client \
         clang-format \
         pybind11-dev \
