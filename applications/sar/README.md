@@ -38,6 +38,17 @@ takes precedence over older planning material.
 Visualization is best-effort: if rendering falls behind, both SAR display
 connections discard older frames and show newer images. Formation, image
 reporting, and optional tensor dumping keep their normal delivery policy.
+The paced CPHD reader, range/manager, and backprojection run in separate
+partitions with dedicated `ThreadPlacement` lanes so collect-vs-wall lag is
+the live playback clock (TxTime versus now), not GPU time on the controller.
+Looping presets (`loop: true`) stop with Ctrl-C in the launch terminal; the
+shared Graph driver owns SIGINT/SIGTERM so host `holoscan run` does not need
+`docker kill`. One in-flight backprojection may finish before the process exits.
+When Holoviz is enabled, the formed-image window composites the source-branch
+on-image HUD (scene name, formed size, backprojection rate, last-pulse latency,
+paced collect-vs-wall lag, and APC look chevron) as text and
+geometry layers. A second `SAR timeline` window is a 20 s scrolling Gantt of
+collection dwells, image-emit ticks with last-pulse latency labels, and a 1 Hz lag HUD.
 
 The former `applications/sar_formation/` path and `sar_formation` executable
 were replaced by these five entries. There is no compatibility launcher.

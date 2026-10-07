@@ -267,8 +267,11 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   the repository-wide pinned pre-commit suite passed. Final focused reruns
   cover test-harness corrections added after that full run. Public CPHD
   collection validation remains open. HSDK 5 visualization uses the
-  source-branch percentile window and finite GUI hold; compass, timeline,
-  crop, and indefinite display hold remain open in the [SAR open-items roll-up](SAR/OPEN_ITEMS.md).
+  source-branch percentile window, finite GUI hold, and the on-image HUD
+  (scene name, formed size, BP rate, last-pulse latency, paced collect-vs-wall
+  lag, APC look chevron) plus a second `SAR timeline` Gantt window (20 s dwell
+  bars, per-tick last-pulse latency labels, 1 Hz lag HUD). Strip crop and
+  indefinite display hold remain open in the [SAR open-items roll-up](SAR/OPEN_ITEMS.md).
 
 ## In flight / claims
 
@@ -283,6 +286,9 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 | CTest dashboard naming and coverage reporting | tbirdsong | `tbirdsong/5x/ctest-main-5x` | implemented — exact Jenkins build names, build flags, failure submissions, and non-empty JUnit coverage; five host contract checks pass. GitHub PR #47; live GPU and Jenkins reporting validation in progress |
 | Python FMCW CLI application entry points and colocated graph sources | Codex | current workspace | **done:** seven `--language python` app manifests and colocated graph sources; SISO host CLI GPU smoke, eight Python GPU presets, eight visualization compile checks, clean-wheel imports, and pinned all-file lint passed. |
 | HSDK 5 FMCW Python provider and seven Graph applications | Codex | current workspace | **ready for review:** 52 registry types and seven workflows qualified on SDK pin `49b8e0b`; Python, wheel, visualization, and FMCW C++ parity checks pass. SAR/IO remains out of scope. |
+| Restore SAR on-image Holoviz HUD (chevron/lag) | current workspace | `dpc/main-5x-catchup` | **implemented and visually checked** for modes 1–5. Live `FormationHud` mailbox; lag is collect TxTime vs `now`. Compass inset dropped (normalized coords squash it on a landscape strip). Source/ingest/formation partitions bind dedicated `ThreadPlacement` lanes so the reader keeps the playback clock. Strip crop and indefinite hold remain. |
+| Restore SAR Gantt timeline window | current workspace | `dpc/main-5x-catchup` | **implemented and visually checked** for modes 1–5. Second Holoviz window (`SAR timeline`) is the 20 s scrolling Gantt (dwell bars, duty-cycle quiet, image-emit ticks with per-tick last-pulse latency labels, 1 Hz lag HUD on the platform lane). Windowed path only; headless smokes unchanged. |
+| Make host `holoscan run` SAR demos interruptible | current workspace | `dpc/main-5x-catchup` | **implemented:** SAR Graph driver binds an early `ManagedShutdownSignals` domain so Ctrl-C / `docker stop` SIGTERM cooperatively stop looping presets; CPHD playback and viz-hold sleeps honor cancellation. One in-flight backprojection can still delay exit. Exercised during the mode 1–5 GUI walkthrough. |
 | Developer-guide accuracy pass | Codex | current workspace | **complete:** README, DEVELOPER, SDK_DEVELOPMENT, and AGENTS now reflect seven FMCW apps, C++ YAML performance recipes, the disabled Python bindings and pytest registration, and validated SAR GUI presets; pinned documentation hooks pass |
 | Performance harness YAML refactor | deustice | `deustice/perf-refactor` | **Layout complete:** all 26 schema-v2 recipes and typed adapters are paired under `performance/operators/<group>/<operator>/`; shared C++ code lives under `performance/harness/cpp/`. One explicit CMake registry preserves executable names and `build/performance/cpp/` output. The pinned HSDK 5 build, 26 Minimal GPU smokes, 20 focused Overrides/cache smokes, and 30 harness tests pass. YAML case content and measurement behavior are unchanged. The unbuildable legacy Python performance matrix was removed; C++ performance coverage still lacks CFAR rank-four full-axis peak suppression and FeatureAssembly score/AoA packs. Future Python Graph profiling awaits buildable HSDK 5 bindings. |
 | Direct Holoscan CLI workflow and HSDK 5 Holoviz integration | Codex | `codex/holoscan-cli-direct` | **ready for review:** host CLI build/run/test integration, top-level Python dependencies, and CTest script; dashboard now finds and links the separate HSDK 5 visualization package and bridges RGBA Tensor to ImageT at Holoviz. All C++ targets build in the pinned image; focused Holoviz Graph admission test and lint pass. Window rendering still needs a display-equipped run. |

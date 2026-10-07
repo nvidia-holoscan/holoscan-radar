@@ -127,8 +127,8 @@ struct AppConfig : radar::app::CommonRunConfig {
   bool wire_weight{false};
   // Collect-vs-wall lag timeline HUD. Retention (mode 2) and
   // paced strips (mode 3 mosaic / mode 4 scroll). Modes 1 and
-  // 5 omit it. Display still gates on playback_status().paced
-  // so an unpaced YAML stays blank.
+  // 5 omit it. Display still gates on HUD playback.paced so
+  // an unpaced YAML stays blank.
   bool show_playback_lag{false};
   // Holoviz window: longest side (px) for square collects, and
   // the no-DISPLAY fallback for a parent strip. A parent strip
@@ -315,36 +315,6 @@ inline std::optional<std::array<double, 2>> apc_raster_uv(std::array<double, 3> 
     return std::nullopt;
   }
   return std::array<double, 2>{ru, rv};
-}
-
-// True ENU of an APC relative to the lattice centre. Compass
-// inset; does not assume the lattice axes are east/south.
-// `to_scene_enu` means `apc_xyz` is already scene ENU.
-inline std::optional<std::array<double, 2>> apc_compass_enu(
-    std::array<double, 3> apc_xyz, const radar::SampleGeometry& geom, bool to_scene_enu,
-    const std::array<double, 3>& enu_origin) {
-  if (!geom.is_valid()) {
-    return std::nullopt;
-  }
-  apc_xyz = rotate_apc_to_scene(apc_xyz, to_scene_enu, enu_origin);
-  const auto c = lattice_centre(geom);
-  const double d0 = apc_xyz[0] - c[0];
-  const double d1 = apc_xyz[1] - c[1];
-  const double d2 = apc_xyz[2] - c[2];
-  double east = d0;
-  double north = d1;
-  if (!to_scene_enu) {
-    const auto R = ecef_to_enu_rotation(c);
-    east = R[0] * d0 + R[1] * d1 + R[2] * d2;
-    north = R[3] * d0 + R[4] * d1 + R[5] * d2;
-  }
-  if (!std::isfinite(east) || !std::isfinite(north)) {
-    return std::nullopt;
-  }
-  if (east * east + north * north < 1.0) {
-    return std::nullopt;
-  }
-  return std::array<double, 2>{east, north};
 }
 
 // Pixel-centre lattice covering the IA rectangle [x1, x2] × [y1, y2]

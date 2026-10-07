@@ -21,6 +21,7 @@ flowchart LR
 The solid paths are required data and control flows. Dashed dump and
 visualization branches are enabled by application configuration. The reader's
 typed `stream_boundary` is joined to the aperture manager on the same tick.
+The paced reader, range/manager, and backprojection are separate Graph partitions with dedicated `ThreadPlacement` lanes so collect-vs-wall lag is the live playback clock, not formation GPU time on the controller.
 
 ## Build and offline fixture
 
@@ -60,12 +61,17 @@ container, matching the shipped YAML. A host `/tmp/sar` directory or symlink
 is not visible in the container unless mounted. The shipped [`video_sar.yaml`](config/video_sar.yaml) is copied beside the
 executable by CMake and is the default real-data preset.
 
+This preset loops. Stop it with Ctrl-C in the **launch terminal** (click that
+terminal if the Holoviz window has focus). The CLI maps Ctrl-C to SIGTERM in
+the container; the app requests a cooperative graph stop and exits. One
+in-flight backprojection may finish first. `docker kill` is not required.
+
 Pass an explicit YAML path as the first argument. For this topology,
 a CPHD path may replace `cphd.path` directly, or follow a YAML path as the second argument.
 
 ## Output and display
 
-Each emission reports a complex image; the fixture produces five frames. A dump writes each formed image, whereas optional Holoviz shows a log-magnitude raster. `playback_rate: 1` paces by CPHD transmit time; it does not guarantee real-time formation. The reader must deliver the boundary on the final batch for the reset.
+Each emission reports a complex image; the fixture produces five frames. A dump writes each formed image, whereas optional Holoviz shows a log-magnitude raster with the source-branch on-image HUD (scene name, formed size, BP rate, last-pulse latency, paced collect-vs-wall lag, APC look chevron) and a second `SAR timeline` Gantt window (20 s dwell bars, image-emit ticks with last-pulse latency labels, 1 Hz lag HUD). `playback_rate: 1` paces the reader by CPHD transmit time (sleep when ahead of collect; no sleep when behind). The lag HUD is that slack polled live (`now` versus collect), as on the HSDK 4 demo. Real-time images are still not guaranteed. The reader must deliver the boundary on the final batch for the reset.
 
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.

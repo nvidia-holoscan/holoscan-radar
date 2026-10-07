@@ -24,6 +24,7 @@ flowchart LR
 The solid paths are required data and control flows. Dashed dump and
 visualization branches are enabled by application configuration. The reader's
 typed `stream_boundary` is joined to the aperture manager on the same tick.
+The paced reader, range/manager, and backprojection are separate Graph partitions with dedicated `ThreadPlacement` lanes so collect-vs-wall lag is the live playback clock, not formation GPU time on the controller.
 The stager places the *next* collection's geometry, range spacing, and
 frequency on the closing batch. Backprojection forms the closing image using
 the current values, then installs the next values after `EmitAndReset`.
@@ -69,7 +70,7 @@ the application requires the YAML collection list and rejects a single-CPHD over
 
 ## Output and display
 
-One complex image is reported per collection boundary, with geometry and frequency restaged for the next file. The fixture uses two local collections and reports two 5 × 5 images. Optional dump writes each image; Holoviz shows the current raster. Collection names are parsed but are not currently shown in the report or display; see the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md).
+One complex image is reported per collection boundary, with geometry and frequency restaged for the next file. The fixture uses two local collections and reports two 5 × 5 images. Optional dump writes each image; Holoviz shows the current raster with the active collection name on the on-image HUD. `SarImageReportOp` logs index, HxW, and the formed image's collect/wall/behind latched at backprojection emit. Scene names are still omitted from that log; see the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md).
 
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.

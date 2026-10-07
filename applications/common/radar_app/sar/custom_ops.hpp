@@ -20,6 +20,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/logger/logger.hpp>
 
+#include "radar_common/sar/formation_hud.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
@@ -52,7 +53,9 @@ struct ImageCount {
 
 class SarImageReportOp : public holoscan::Operator<> {
  public:
-  explicit SarImageReportOp(std::shared_ptr<ImageCount> count) : count_(std::move(count)) {}
+  explicit SarImageReportOp(std::shared_ptr<ImageCount> count,
+                            std::shared_ptr<FormationHud> hud = {})
+  : count_(std::move(count)), hud_(std::move(hud)) {}
   void setup(OperatorSpec& spec) override { spec.input(image).queue_depth(4U); }
   [[nodiscard]] Contract contract() const override {
     Contract result;
@@ -67,12 +70,24 @@ class SarImageReportOp : public holoscan::Operator<> {
           Error{ErrorCode::kInvalidArgument, "SarImageReportOp: expected (num_v,num_u)"});
     }
     const auto index = count_->count.fetch_add(1) + 1;
-    HOLOSCAN_LOG_INFO("SAR: image {} formed, {}x{}", index, shape[0], shape[1]);
+    if (hud_) {
+      const auto& pb = hud_->snapshot().bp.playback;
+      if (pb.valid) {
+        HOLOSCAN_LOG_INFO(
+            "SAR: image {} formed, {}x{}  collect={:.3f}s wall={:.3f}s behind={:.3f}s", index,
+            shape[0], shape[1], pb.collect_s, pb.wall_s, pb.behind_s);
+      } else {
+        HOLOSCAN_LOG_INFO("SAR: image {} formed, {}x{}", index, shape[0], shape[1]);
+      }
+    } else {
+      HOLOSCAN_LOG_INFO("SAR: image {} formed, {}x{}", index, shape[0], shape[1]);
+    }
     return {};
   }
   Input<Tensor> image{"image"};
 
  private:
   std::shared_ptr<ImageCount> count_;
+  std::shared_ptr<FormationHud> hud_{};
 };
 }  // namespace holoscan::radar::app::sar

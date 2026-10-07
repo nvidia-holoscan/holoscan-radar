@@ -17,13 +17,18 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/errors.hpp>
 #include <holoscan/core/expected_macros.hpp>
+#include <holoscan/core/sample.hpp>
+#include <holoscan/logger/logger.hpp>
 
+#include "io/cphd_reader_op/cphd_cf8_decode.hpp"
 #include "io/cphd_reader_op/cphd_file.hpp"
+#include "radar_common/sdk/cooperative_sleep.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -66,15 +71,16 @@ std::vector<std::string> resolve_paths(const CollectionPaths& source) {
 template <typename Element>
 expected<TensorOutputLoan, Error> upload(Output<Tensor>& output, ExecutionContext& context,
                                          const std::vector<Element>& values,
-                                         const std::vector<int64_t>& shape, DLDataType dtype) {
+                                         const std::vector<int64_t>& shape, DLDataType dtype,
+                                         cudaStream_t stream) {
   return prepare_device_tensor(
       output, context, shape, dtype, [&](void* dst, std::size_t bytes) -> expected<void, Error> {
         if (bytes != values.size() * sizeof(Element)) {
           return make_unexpected(
               Error{ErrorCode::kInvalidArgument, "CPHDReaderOp: upload shape and data differ"});
         }
-        if (cudaMemcpyAsync(dst, values.data(), bytes, cudaMemcpyHostToDevice,
-                            context.cuda_stream().get()) != cudaSuccess) {
+        if (cudaMemcpyAsync(dst, values.data(), bytes, cudaMemcpyHostToDevice, stream) !=
+            cudaSuccess) {
           return make_unexpected(Error{ErrorCode::kFailure, "CPHDReaderOp: H2D upload failed"});
         }
         return {};
@@ -96,6 +102,97 @@ expected<TensorOutputLoan, Error> prepare_frame(Output<WireCoordinateFrame>& out
   return std::move(*loan);
 }
 
+expected<void, Error> cuda_ok(cudaError_t status, const char* what) {
+  if (status != cudaSuccess) {
+    return make_unexpected(Error{ErrorCode::kFailure, std::string("CPHDReaderOp: ") + what});
+  }
+  return {};
+}
+
+template <typename T>
+expected<void, Error> fill_history(void* dst, std::size_t bytes, std::size_t nsamp,
+                                   int64_t num_samples, bool cf8, const char* pinned,
+                                   void* device_cf8, double* device_amp,
+                                   const std::vector<double>& amp, cudaStream_t stream) {
+  const std::size_t out_bytes = nsamp * sizeof(std::complex<T>);
+  if (bytes != out_bytes) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, "CPHDReaderOp: phase_history shape and data differ"});
+  }
+  const double* d_amp = nullptr;
+  if (!amp.empty()) {
+    HOLOSCAN_TRY(cuda_ok(cudaMemcpyAsync(device_amp, amp.data(), amp.size() * sizeof(double),
+                                         cudaMemcpyHostToDevice, stream),
+                         "AmpSF H2D failed"));
+    d_amp = device_amp;
+  }
+  if (!cf8) {
+    return cuda_ok(cudaMemcpyAsync(dst, pinned, out_bytes, cudaMemcpyHostToDevice, stream),
+                   "H2D upload failed");
+  }
+  const std::size_t stored = nsamp * 8U;
+  if constexpr (std::is_same_v<T, float>) {
+    (void)device_cf8;
+    HOLOSCAN_TRY(cuda_ok(cudaMemcpyAsync(dst, pinned, stored, cudaMemcpyHostToDevice, stream),
+                         "CF8 H2D failed"));
+    return cuda_ok(cphd_decode_cf8_f32(dst, dst, nsamp, num_samples, d_amp, stream),
+                   "CF8 decode failed");
+  } else {
+    if (device_cf8 == nullptr) {
+      return make_unexpected(
+          Error{ErrorCode::kFailure, "CPHDReaderOp: device CF8 scratch is not armed"});
+    }
+    HOLOSCAN_TRY(
+        cuda_ok(cudaMemcpyAsync(device_cf8, pinned, stored, cudaMemcpyHostToDevice, stream),
+                "CF8 H2D failed"));
+    return cuda_ok(cphd_decode_cf8_f64(device_cf8, dst, nsamp, num_samples, d_amp, stream),
+                   "CF8 decode failed");
+  }
+}
+
+bool is_transient_pool_error(ErrorCode code) {
+  return code == ErrorCode::kResourceExhausted || code == ErrorCode::kBackpressured;
+}
+
+expected<void, Error> sync_ingest(cudaStream_t h2d, cudaEvent_t h2d_done, cudaStream_t compute) {
+  if (cudaEventRecord(h2d_done, h2d) != cudaSuccess) {
+    return make_unexpected(Error{ErrorCode::kFailure, "CPHDReaderOp: H2D event record failed"});
+  }
+  if (compute != nullptr && cudaStreamWaitEvent(compute, h2d_done, 0) != cudaSuccess) {
+    return make_unexpected(Error{ErrorCode::kFailure, "CPHDReaderOp: H2D stream wait failed"});
+  }
+  if (cudaStreamSynchronize(h2d) != cudaSuccess) {
+    return make_unexpected(Error{ErrorCode::kFailure, "CPHDReaderOp: H2D sync failed"});
+  }
+  return {};
+}
+
+template <typename Fn>
+auto retry_pool(ExecutionContext& context, const char* what, Fn&& fn) -> decltype(fn()) {
+  bool warned = false;
+  for (;;) {
+    auto result = fn();
+    if (result)
+      return result;
+    const Error err = result.error();
+    if (!is_transient_pool_error(err.code) || context.cancellation().stop_requested()) {
+      std::size_t free_b = 0, total_b = 0;
+      (void)cudaMemGetInfo(&free_b, &total_b);
+      HOLOSCAN_LOG_ERROR("CPHDReaderOp: {} failed ({}); GPU mem {:.0f}/{:.0f} MiB free", what,
+                         holoscan::runtime_error_message(err),
+                         static_cast<double>(free_b) / (1024.0 * 1024.0),
+                         static_cast<double>(total_b) / (1024.0 * 1024.0));
+      return result;
+    }
+    if (!warned) {
+      HOLOSCAN_LOG_WARN("CPHDReaderOp: {} waiting for tensor pool/queue ({})", what,
+                        holoscan::error_code_name(err.code));
+      warned = true;
+    }
+    cooperative_sleep(context, 0.01);
+  }
+}
+
 void check_sample_axis(const std::vector<double>& values, const char* name) {
   // Umbra SNAPSHOT PVPs have a small recorded-grid ramp within a batch. A
   // relative 1e-5 bound admits that residual while rejecting a frequency step.
@@ -111,12 +208,35 @@ void check_sample_axis(const std::vector<double>& values, const char* name) {
 }  // namespace
 
 template <typename T>
-CPHDReaderOp<T>::CPHDReaderOp(const MaxTensorExtents& extents) : extents_(extents) {
+CPHDReaderOp<T>::CPHDReaderOp(const MaxTensorExtents& extents, std::shared_ptr<FormationHud> hud)
+: extents_(extents), hud_(std::move(hud)) {
   require_extent(extents.max_pulses, "max_pulses", kWho);
   require_extent(extents.max_samples_per_pulse, "max_samples_per_pulse", kWho);
 }
+
 template <typename T>
-CPHDReaderOp<T>::~CPHDReaderOp() = default;
+CPHDReaderOp<T>::~CPHDReaderOp() {
+  if (h2d_done_ != 0) {
+    cudaEventDestroy(reinterpret_cast<cudaEvent_t>(h2d_done_));
+    h2d_done_ = 0;
+  }
+  if (h2d_stream_ != 0) {
+    cudaStreamDestroy(reinterpret_cast<cudaStream_t>(h2d_stream_));
+    h2d_stream_ = 0;
+  }
+  if (pinned_signal_ != 0) {
+    cudaFreeHost(reinterpret_cast<void*>(pinned_signal_));
+    pinned_signal_ = 0;
+  }
+  if (device_cf8_ != 0) {
+    cudaFree(reinterpret_cast<void*>(device_cf8_));
+    device_cf8_ = 0;
+  }
+  if (device_amp_ != 0) {
+    cudaFree(reinterpret_cast<void*>(device_amp_));
+    device_amp_ = 0;
+  }
+}
 
 template <typename T>
 void CPHDReaderOp<T>::setup(OperatorSpec& spec) {
@@ -153,6 +273,12 @@ Contract CPHDReaderOp<T>::contract() const {
 }
 
 template <typename T>
+void CPHDReaderOp<T>::publish_hud() {
+  if (hud_)
+    hud_->publish_reader(spans_, playback_, last_apc_, last_packet_at_);
+}
+
+template <typename T>
 void CPHDReaderOp<T>::open_file() {
   const auto& p = params();
   file_ = std::make_unique<cphd::CphdFile>(files_[file_index_]);
@@ -173,6 +299,9 @@ void CPHDReaderOp<T>::open_file() {
   }
   next_pulse_ = first_pulse_;
   nonfinite_warned_ = false;
+  collection_t_min_ = 0.0;
+  collection_t_max_ = 0.0;
+  collection_time_valid_ = false;
 }
 
 template <typename T>
@@ -193,20 +322,68 @@ void CPHDReaderOp<T>::start() {
   }
   file_index_ = 0;
   open_file();
+  cudaStream_t stream{};
+  if (cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) != cudaSuccess) {
+    throw std::runtime_error("CPHDReaderOp: failed to create H2D stream");
+  }
+  h2d_stream_ = reinterpret_cast<std::uintptr_t>(stream);
+  cudaEvent_t done{};
+  if (cudaEventCreateWithFlags(&done, cudaEventDisableTiming) != cudaSuccess) {
+    throw std::runtime_error("CPHDReaderOp: failed to create H2D event");
+  }
+  h2d_done_ = reinterpret_cast<std::uintptr_t>(done);
+  // Size to one tick, not max_pulses: the shared SAR extents also cover the
+  // retained aperture, which must not inflate pinned ingest to gigabytes.
+  const auto pulses = static_cast<std::size_t>(p.pulses_per_tick);
+  const auto samples = static_cast<std::size_t>(*extents_.max_samples_per_pulse);
+  pinned_signal_bytes_ = pulses * samples * sizeof(std::complex<T>);
+  void* pinned = nullptr;
+  if (cudaMallocHost(&pinned, pinned_signal_bytes_) != cudaSuccess) {
+    throw std::runtime_error("CPHDReaderOp: failed to allocate pinned ingest buffer");
+  }
+  pinned_signal_ = reinterpret_cast<std::uintptr_t>(pinned);
+  if constexpr (std::is_same_v<T, double>) {
+    void* scratch = nullptr;
+    if (cudaMalloc(&scratch, pulses * samples * 8U) != cudaSuccess) {
+      throw std::runtime_error("CPHDReaderOp: failed to allocate device CF8 scratch");
+    }
+    device_cf8_ = reinterpret_cast<std::uintptr_t>(scratch);
+  }
+  void* amp = nullptr;
+  if (cudaMalloc(&amp, pulses * sizeof(double)) != cudaSuccess) {
+    throw std::runtime_error("CPHDReaderOp: failed to allocate device AmpSF buffer");
+  }
+  device_amp_ = reinterpret_cast<std::uintptr_t>(amp);
 }
 
 template <typename T>
 expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
+  if (context.cancellation().stop_requested()) {
+    context.request_stop();
+    return {};
+  }
   if (stopped_) {
+    // The last batch already carried D22. HSDK request_stop does not drain
+    // queued samples, so stopping on this 1 µs OnClock tick aborts the
+    // in-flight EmitAndReset before BackprojectionOp can emit. Park until
+    // the app or SIGINT cancels the run.
+    while (!context.cancellation().stop_requested())
+      cooperative_sleep(context, 1.0);
     context.request_stop();
     return {};
   }
   try {
     if (pending_cooldown_s_ > 0.0) {
       spans_.back().quiet_start = std::chrono::steady_clock::now();
-      std::this_thread::sleep_for(std::chrono::duration<double>(pending_cooldown_s_));
+      publish_hud();
+      cooperative_sleep(context, pending_cooldown_s_);
       spans_.back().quiet_end = std::chrono::steady_clock::now();
       pending_cooldown_s_ = 0.0;
+      publish_hud();
+      if (context.cancellation().stop_requested()) {
+        context.request_stop();
+        return {};
+      }
     }
     const auto& p = params();
     const auto tick_start = std::chrono::steady_clock::now();
@@ -224,8 +401,46 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
     }
     // Decode one bounded CPHD batch and derive the pulse geometry from its PVPs.
     auto pvp = file_->read_pvp_block(p.channel, first, count);
-    std::vector<std::complex<T>> history(static_cast<size_t>(count * info.num_samples));
-    file_->read_signal_into<T>(p.channel, first, count, history.data(), &pvp);
+    const auto times = pvp.field("TxTime", 1);
+    // Umbra files can put NaN on a handful of TxTime/TxPos words (one surveyed
+    // file had 32 of 4844). Front/back of the batch is not a span: a NaN on
+    // vector 0 poisons collect time for the rest of the file, skips pace
+    // sleep, and shrinks the Gantt dwell. Skip non-finite samples, matching
+    // the HSDK 4 reader.
+    for (double t : times) {
+      if (!std::isfinite(t))
+        continue;
+      if (!collection_time_valid_) {
+        collection_t_min_ = t;
+        collection_t_max_ = t;
+        collection_time_valid_ = true;
+      } else {
+        collection_t_min_ = std::min(collection_t_min_, t);
+        collection_t_max_ = std::max(collection_t_max_, t);
+      }
+    }
+    const double collect_s = collection_time_valid_ ? collection_t_max_ - collection_t_min_ : 0.0;
+    const double collect_span = (collect_s > 0.0 && std::isfinite(collect_s)) ? collect_s : 0.0;
+    // Publish collect as soon as TxTime is known so the HUD is live during
+    // ingest rather than still showing the previous tick's collect.
+    auto publish_playback = [&](bool live) {
+      const auto now = std::chrono::steady_clock::now();
+      const double wall_s = std::chrono::duration<double>(now - collection_wall_start_).count();
+      const double slack_s = p.playback_rate > 0.0 && collect_span > 0.0
+                                 ? collect_span / p.playback_rate - wall_s
+                                 : 0.0;
+      playback_ = {.valid = true,
+                   .paced = p.playback_rate > 0.0,
+                   .live = live,
+                   .collect_s = collect_span,
+                   .wall_s = wall_s,
+                   .behind_s = p.playback_rate > 0.0 ? -slack_s : wall_s - collect_span,
+                   .last_slack_s = slack_s,
+                   .rate = p.playback_rate,
+                   .wall_origin = collection_wall_start_};
+      publish_hud();
+    };
+    publish_playback(!final);
     const auto tx = pvp.field("TxPos", 3);
     const auto rx = pvp.field("RcvPos", 3);
     const auto srp = pvp.field("SRPPos", 3);
@@ -263,10 +478,6 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
     for (int64_t i = 0; i < info.num_samples; ++i) {
       axis[static_cast<size_t>(i)] = static_cast<T>(sc0[0] + i * scss[0]);
     }
-    const auto times = pvp.field("TxTime", 1);
-    if (first == first_pulse_)
-      collection_first_time_ = times.front();
-    collection_last_time_ = times.back();
     std::vector<T> vel;
     if (pvp.has("TxVel") && pvp.has("RcvVel")) {
       const auto tx_vel = pvp.field("TxVel", 3);
@@ -277,74 +488,153 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
       }
     }
 
-    // Upload the required tensors before publishing any batch output.
-    HOLOSCAN_TRY(auto history_loan, upload(phase_history, context, history,
-                                           {count, info.num_samples}, complex_dtype<T>()));
-    HOLOSCAN_TRY(auto positions_loan, upload(positions, context, apc, {count, 3}, real_dtype<T>()));
-    HOLOSCAN_TRY(auto reference_loan,
-                 upload(reference_position, context, reference, {count, 3}, real_dtype<T>()));
-    if (cudaStreamSynchronize(context.cuda_stream().get()) != cudaSuccess) {
-      return make_unexpected(Error{ErrorCode::kFailure, "CPHDReaderOp: H2D sync failed"});
+    char* const pinned = reinterpret_cast<char*>(pinned_signal_);
+    if (pinned == nullptr) {
+      return make_unexpected(
+          Error{ErrorCode::kFailure, "CPHDReaderOp: pinned ingest buffer is not armed"});
     }
+    const std::size_t nsamp = static_cast<std::size_t>(count * info.num_samples);
+    const bool cf8 = file_->sample_format() == cphd::SampleFormat::kCF8;
+    std::vector<double> amp;
+    if (cf8 && file_->has_amp_sf())
+      amp = file_->amplitude_scale(&pvp, count);
+    const auto signal_begin = std::chrono::steady_clock::now();
+    if (cf8) {
+      file_->read_signal_bytes(p.channel, first, count, pinned, pinned_signal_bytes_);
+    } else {
+      file_->read_signal_into<T>(p.channel, first, count,
+                                 reinterpret_cast<std::complex<T>*>(pinned), &pvp);
+    }
+    const auto signal_at = std::chrono::steady_clock::now();
+    const auto h2d = reinterpret_cast<cudaStream_t>(h2d_stream_);
+    const auto h2d_done = reinterpret_cast<cudaEvent_t>(h2d_done_);
+    if (h2d == nullptr || h2d_done == nullptr) {
+      return make_unexpected(Error{ErrorCode::kFailure, "CPHDReaderOp: H2D stream is not armed"});
+    }
+
+    // CF8: H2D stored bytes and decode on the device. Integer formats H2D the
+    // host-decoded samples. Private stream so a compute-stream sync cannot
+    // wait for formation kernels already recorded there.
+    auto prepare_history = [&] {
+      return prepare_device_tensor(
+          phase_history, context, std::vector<int64_t>{count, info.num_samples}, complex_dtype<T>(),
+          [&](void* dst, std::size_t bytes) {
+            return fill_history<T>(dst, bytes, nsamp, info.num_samples, cf8, pinned,
+                                   reinterpret_cast<void*>(device_cf8_),
+                                   reinterpret_cast<double*>(device_amp_), amp, h2d);
+          });
+    };
+    auto prepare_positions = [&] {
+      return upload(positions, context, apc, {count, 3}, real_dtype<T>(), h2d);
+    };
+    auto prepare_reference = [&] {
+      return upload(reference_position, context, reference, {count, 3}, real_dtype<T>(), h2d);
+    };
+    std::optional<TensorOutputLoan> history_loan;
+    std::optional<TensorOutputLoan> positions_loan;
+    std::optional<TensorOutputLoan> reference_loan;
+    HOLOSCAN_TRY(auto history_prepared, retry_pool(context, "phase_history", prepare_history));
+    history_loan.emplace(std::move(history_prepared));
+    HOLOSCAN_TRY(auto positions_prepared, retry_pool(context, "positions", prepare_positions));
+    positions_loan.emplace(std::move(positions_prepared));
+    HOLOSCAN_TRY(auto reference_prepared,
+                 retry_pool(context, "reference_position", prepare_reference));
+    reference_loan.emplace(std::move(reference_prepared));
+    std::optional<TensorOutputLoan> axis_loan;
+    std::optional<TensorOutputLoan> times_loan;
+    std::optional<TensorOutputLoan> vel_loan;
     if (axis_out_.active()) {
       HOLOSCAN_TRY(auto loan,
-                   upload(sample_axis, context, axis, {info.num_samples}, real_dtype<T>()));
-      axis_out_.emit(sample_axis, context, std::move(loan), "CPHDReaderOp.sample_axis");
+                   upload(sample_axis, context, axis, {info.num_samples}, real_dtype<T>(), h2d));
+      axis_loan.emplace(std::move(loan));
     }
     if (times_out_.active()) {
-      HOLOSCAN_TRY(auto loan, upload(pulse_times, context, times, {count}, real_dtype<double>()));
-      times_out_.emit(pulse_times, context, std::move(loan), "CPHDReaderOp.pulse_times");
+      HOLOSCAN_TRY(auto loan,
+                   upload(pulse_times, context, times, {count}, real_dtype<double>(), h2d));
+      times_loan.emplace(std::move(loan));
     }
     if (velocities_out_.active() && !vel.empty()) {
-      HOLOSCAN_TRY(auto loan, upload(velocities, context, vel, {count, 3}, real_dtype<T>()));
-      velocities_out_.emit(velocities, context, std::move(loan), "CPHDReaderOp.velocities");
+      HOLOSCAN_TRY(auto loan, upload(velocities, context, vel, {count, 3}, real_dtype<T>(), h2d));
+      vel_loan.emplace(std::move(loan));
+    }
+    const cudaStream_t compute = context.cuda_stream().get();
+    HOLOSCAN_RETURN_IF_ERROR(sync_ingest(h2d, h2d_done, compute));
+    const auto uploaded_at = std::chrono::steady_clock::now();
+    // Stamp before emit so a parallel BP emit-tick snapshot sees this batch,
+    // not the previous collect. Re-stamp after emit (packet is in the graph).
+    last_packet_at_ = uploaded_at;
+    publish_hud();
+    if (axis_loan) {
+      axis_out_.emit(sample_axis, context, std::move(*axis_loan), "CPHDReaderOp.sample_axis");
+    }
+    if (times_loan) {
+      times_out_.emit(pulse_times, context, std::move(*times_loan), "CPHDReaderOp.pulse_times");
+    }
+    if (vel_loan) {
+      velocities_out_.emit(velocities, context, std::move(*vel_loan), "CPHDReaderOp.velocities");
     }
     if (frame_out_.active()) {
       HOLOSCAN_TRY(auto loan, prepare_frame(coordinate_frame, p.coordinate_frame));
       frame_out_.emit_schema_tensor(coordinate_frame, context, std::move(loan),
                                     to_wire(p.coordinate_frame), "CPHDReaderOp.coordinate_frame");
     }
-    HOLOSCAN_RETURN_IF_ERROR(emit_prepared_tensor(phase_history, context, std::move(history_loan)));
-    HOLOSCAN_RETURN_IF_ERROR(emit_prepared_tensor(positions, context, std::move(positions_loan)));
+    // Tensor emit consumes the loan on every outcome, including kBackpressured.
+    // Re-prepare on a transient failure so a full downstream queue waits instead
+    // of ending the run.
+    auto publish_tensor = [&](Output<Tensor>& port, std::optional<TensorOutputLoan>& held,
+                              auto&& prepare, const char* what) -> expected<void, Error> {
+      return retry_pool(context, what, [&]() -> expected<void, Error> {
+        if (!held) {
+          HOLOSCAN_TRY(auto loan, prepare());
+          HOLOSCAN_RETURN_IF_ERROR(sync_ingest(h2d, h2d_done, compute));
+          held.emplace(std::move(loan));
+        }
+        TensorOutputLoan outgoing = std::move(*held);
+        held.reset();
+        return emit_prepared_tensor(port, context, std::move(outgoing));
+      });
+    };
     HOLOSCAN_RETURN_IF_ERROR(
-        emit_prepared_tensor(reference_position, context, std::move(reference_loan)));
+        publish_tensor(phase_history, history_loan, prepare_history, "phase_history"));
+    HOLOSCAN_RETURN_IF_ERROR(
+        publish_tensor(positions, positions_loan, prepare_positions, "positions"));
+    HOLOSCAN_RETURN_IF_ERROR(publish_tensor(reference_position, reference_loan, prepare_reference,
+                                            "reference_position"));
     // Stamp the closing boundary on this batch, including the last partial batch.
     const auto boundary =
         final ? (follows ? SarStreamBoundary::kCollectionBoundary : SarStreamBoundary::kEndOfStream)
               : SarStreamBoundary::kNone;
-    HOLOSCAN_RETURN_IF_ERROR(stream_boundary.emit(
-        static_cast<uint8_t>(boundary), EmitOptions{.capture_time = context.activation_time()}));
+    const EmitOptions boundary_opts{.capture_time = context.activation_time()};
+    HOLOSCAN_RETURN_IF_ERROR(retry_pool(context, "stream_boundary", [&] {
+      return stream_boundary.emit(static_cast<uint8_t>(boundary), boundary_opts);
+    }));
     last_packet_at_ = std::chrono::steady_clock::now();
-    const double collect_s = collection_last_time_ - collection_first_time_;
-    double wall_s =
-        std::chrono::duration<double>(*last_packet_at_ - collection_wall_start_).count();
-    double slack_s = p.playback_rate > 0.0 ? collect_s / p.playback_rate - wall_s : 0.0;
-    playback_ = {.valid = true,
-                 .paced = p.playback_rate > 0.0,
-                 .collect_s = collect_s,
-                 .wall_s = wall_s,
-                 .behind_s = -slack_s,
-                 .last_slack_s = slack_s};
+    publish_playback(!final);
+    HOLOSCAN_LOG_INFO(
+        "CPHDReaderOp: pulses {}-{} collect={:.3f}s wall={:.3f}s signal={:.3f}s decode={:.3f}s "
+        "emit={:.3f}s slack={:.3f}s",
+        first, first + count - 1, collect_span, playback_.wall_s,
+        std::chrono::duration<double>(signal_at - signal_begin).count(),
+        std::chrono::duration<double>(uploaded_at - signal_at).count(),
+        std::chrono::duration<double>(last_packet_at_.value() - uploaded_at).count(),
+        playback_.last_slack_s);
+    const double slack_s = playback_.last_slack_s;
     if (slack_s > 0.0) {
-      std::this_thread::sleep_for(std::chrono::duration<double>(slack_s));
-      wall_s =
-          std::chrono::duration<double>(std::chrono::steady_clock::now() - collection_wall_start_)
-              .count();
-      playback_.wall_s = wall_s;
-      playback_.behind_s = collect_s / p.playback_rate - wall_s;
+      cooperative_sleep(context, slack_s);
+      publish_playback(!final);
     }
     next_pulse_ += count;
     if (final) {
       spans_.back().dwell_end = std::chrono::steady_clock::now();
       if (follows) {
-        const double duration = collection_last_time_ - collection_first_time_;
-        pending_cooldown_s_ = duration * (1.0 / p.duty_cycle - 1.0);
+        pending_cooldown_s_ = collect_span * (1.0 / p.duty_cycle - 1.0);
         file_index_ = file_index_ + 1U == files_.size() ? 0U : file_index_ + 1U;
         open_file();
       } else {
         stopped_ = true;
       }
     }
+    publish_hud();
     return {};
   } catch (const std::exception& error) {
     return make_unexpected(Error{ErrorCode::kFailure, error.what()});

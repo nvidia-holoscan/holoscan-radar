@@ -139,6 +139,14 @@ TEST(CphdReaderOp, EmitsEachBatchAndTypedEndBoundary) {
   ASSERT_EQ(outputs.size(), 3U);
   EXPECT_EQ(outputs[0].shape(), (std::vector<int64_t>{2, 8}));
   EXPECT_EQ(outputs[2].shape(), (std::vector<int64_t>{1, 8}));
+  const auto expected_signal = CphdFile(path.string()).read_signal(0, 0, 2);
+  const auto host = holoscan::radar::testing::to_host(outputs[0]);
+  ASSERT_EQ(host.size(), static_cast<int64_t>(expected_signal.size()));
+  const auto* samples = host.as<std::complex<float>>();
+  for (std::size_t i = 0; i < expected_signal.size(); ++i) {
+    EXPECT_NEAR(samples[i].real(), expected_signal[i].real(), 1e-5F) << i;
+    EXPECT_NEAR(samples[i].imag(), expected_signal[i].imag(), 1e-5F) << i;
+  }
   fs::remove(path);
 }
 TEST(CphdReaderOp, MarksFinalBatchOfEachCollection) {
@@ -183,6 +191,16 @@ TEST(CphdReaderOp, MarksFinalBatchOfEachCollection) {
   const std::vector<uint8_t> expected{0U, 0U, 1U, 0U, 0U, 2U};
   for (std::size_t i = 0; i < expected.size(); ++i)
     EXPECT_EQ(boundaries[i].data, expected[i]) << "batch " << i;
+  const auto outputs = result.snapshots<holoscan::Tensor>("phase_history");
+  ASSERT_EQ(outputs.size(), 6U);
+  const auto expected_signal = CphdFile(first.string()).read_signal(0, 0, 2);
+  const auto host = holoscan::radar::testing::to_host(outputs[0]);
+  ASSERT_EQ(host.size(), static_cast<int64_t>(expected_signal.size()));
+  const auto* samples = host.as<std::complex<double>>();
+  for (std::size_t i = 0; i < expected_signal.size(); ++i) {
+    EXPECT_NEAR(samples[i].real(), expected_signal[i].real(), 1e-5) << i;
+    EXPECT_NEAR(samples[i].imag(), expected_signal[i].imag(), 1e-5) << i;
+  }
   fs::remove(first);
   fs::remove(second);
 }

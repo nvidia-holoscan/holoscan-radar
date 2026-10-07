@@ -56,11 +56,14 @@ python3 tools/sar_data/pull_cphd.py --app tiled_strip --list
 ```
 
 On the **host**, download the Capella Imperial Valley CPHD used by both strip
-apps, or the six Umbra collections used by independent images:
+apps, or the six Umbra collections used by independent images. `--app all`
+downloads both sets. With `--dest data/sar` it writes `data/sar/imperial/` and
+`data/sar/mode5/`. Each transfer prints byte progress, rate, and an ETA on stderr.
 
 ```bash
 python3 tools/sar_data/pull_cphd.py --app tiled_strip --dest data/sar/imperial
 python3 tools/sar_data/pull_cphd.py --app independent_images --dest data/sar/mode5
+python3 tools/sar_data/pull_cphd.py --app all --dest data/sar
 ```
 
 `--app continuous_strip` selects the same Capella key and default directory as
