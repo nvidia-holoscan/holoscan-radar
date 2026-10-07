@@ -105,7 +105,9 @@ void SARRangeCompressionOp<T>::setup(OperatorSpec& spec) {
       .memory_kind = MemoryKind::kCudaDevice, .dtype = std::nullopt, .rank = std::nullopt};
   constexpr TensorRepresentation host_window{
       .memory_kind = MemoryKind::kHost, .dtype = DLDataType{kDLFloat, 64U, 1U}, .rank = 1U};
-  spec.input(phase_history).queue_depth(2U).expects_tensor(tensor_input(device));
+  spec.input(phase_history)
+      .queue_depth(4U)
+      .expects_tensor(tensor_input(device));  // match SAR graph queues
   spec.output(range_profiles).produces_tensor(pooled_tensor_output(device, 2U, max_byte_span_));
   spec.output(range_bins).produces_tensor(pooled_tensor_output(device, 1U, bins_byte_span_));
   spec.output(range_window_out)

@@ -16,6 +16,7 @@ Tiled and continuous strip share the Imperial Valley Capella collection.
 
 python3 tools/sar_data/pull_cphd.py --app tiled_strip
 python3 tools/sar_data/pull_cphd.py --app independent_images
+python3 tools/sar_data/pull_cphd.py --app all --dest data/sar
 """
 
 from __future__ import annotations
@@ -25,9 +26,12 @@ import math
 import shutil
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 
 UMBRA_BUCKET = "umbra-open-data-catalog"
@@ -111,6 +115,20 @@ APPS: dict[str, tuple[str, str, list[tuple[str, str]], str, bool]] = {
 # cluster is ~10 km west; 1 km catches a duplicate of one collect).
 IARP_COLLISION_M = 1000.0
 HTTPS_TIMEOUT_S = 60.0
+CHUNK_BYTES = 1024 * 1024
+PROGRESS_INTERVAL_S = 0.25
+
+
+@dataclass(frozen=True)
+class PullJob:
+    """One CPHD object and the directory it should land in."""
+
+    scene: str
+    key: str
+    bucket: str
+    https_prefix: str
+    dest_dir: Path
+    check_iarp: bool
 
 
 def local_name(tag: str) -> str:
@@ -203,6 +221,113 @@ def https_url(https_prefix: str, key: str) -> str:
     return https_prefix + urllib.parse.quote(key, safe="/")
 
 
+def format_bytes(num_bytes: float) -> str:
+    size = float(num_bytes)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if size < 1024.0 or unit == "TiB":
+            if unit == "B":
+                return f"{int(size)} B"
+            return f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} TiB"
+
+
+def format_duration(seconds: float) -> str:
+    whole = int(max(0.0, seconds))
+    hours, rem = divmod(whole, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def jobs_for(app: str, dest: Path | None) -> list[PullJob]:
+    """Collections for one app, or every pinned collection when app is ``all``.
+
+    Strip apps share Imperial Valley, so ``all`` downloads that object once.
+    ``--dest`` for ``all`` is the parent of each preset directory
+    (``imperial``, ``mode5``), matching a ``data/sar`` bind mount.
+    """
+    selected = ["tiled_strip", "independent_images"] if app == "all" else [app]
+    jobs: list[PullJob] = []
+    seen: set[tuple[str, str, Path]] = set()
+    for name in selected:
+        bucket, https_prefix, collects, dest_default, check_iarp = APPS[name]
+        if dest is None:
+            dest_dir = Path(dest_default)
+        elif app == "all":
+            dest_dir = dest / Path(dest_default).name
+        else:
+            dest_dir = dest
+        for scene, key in collects:
+            identity = (bucket, key, dest_dir)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            jobs.append(
+                PullJob(
+                    scene=scene,
+                    key=key,
+                    bucket=bucket,
+                    https_prefix=https_prefix,
+                    dest_dir=dest_dir,
+                    check_iarp=check_iarp,
+                )
+            )
+    return jobs
+
+
+class DownloadProgress:
+    """Single-line byte progress with rate and, when the size is known, ETA."""
+
+    def __init__(self, label: str, total: int | None) -> None:
+        self.label = label
+        self.total = total if total and total > 0 else None
+        self.done = 0
+        self.started = time.monotonic()
+        self.last_draw = 0.0
+        self.tty = sys.stderr.isatty()
+
+    def add(self, num_bytes: int) -> None:
+        self.done += num_bytes
+        self._draw(final=False)
+
+    def set(self, num_bytes: int) -> None:
+        self.done = num_bytes
+        self._draw(final=False)
+
+    def finish(self) -> None:
+        self._draw(final=True)
+
+    def abort(self) -> None:
+        if self.tty:
+            print(file=sys.stderr)
+
+    def _draw(self, final: bool) -> None:
+        now = time.monotonic()
+        interval = PROGRESS_INTERVAL_S if self.tty else 2.0
+        if not final and now - self.last_draw < interval:
+            return
+        self.last_draw = now
+        elapsed = max(now - self.started, 1e-6)
+        rate = self.done / elapsed
+        line = f"{self.label}  {format_bytes(self.done)}"
+        if self.total is not None:
+            pct = 100.0 * self.done / self.total
+            line += f" / {format_bytes(self.total)}  {pct:5.1f}%"
+        line += f"  {format_bytes(rate)}/s"
+        if final:
+            line += f"  in {format_duration(elapsed)}"
+        elif self.total is not None and rate > 0.0 and self.done < self.total:
+            remaining = (self.total - self.done) / rate
+            line += f"  ETA {format_duration(remaining)}"
+        if self.tty:
+            end = "\n" if final else ""
+            print(f"\r{line}\033[K", end=end, file=sys.stderr, flush=True)
+        elif final or now - self.started >= interval:
+            print(line, file=sys.stderr, flush=True)
+
+
 def cphd_readable(path: Path) -> bool:
     try:
         read_cphd_xml(path)
@@ -211,67 +336,132 @@ def cphd_readable(path: Path) -> bool:
         return False
 
 
-def download_https(url: str, dest: Path) -> None:
+def content_length(headers: object) -> int | None:
+    raw = getattr(headers, "get", lambda _key: None)("Content-Length")
+    if raw is None:
+        return None
+    try:
+        size = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return size if size > 0 else None
+
+
+def https_size(url: str) -> int | None:
+    request = urllib.request.Request(url, method="HEAD")
+    try:
+        with urllib.request.urlopen(request, timeout=HTTPS_TIMEOUT_S) as response:
+            return content_length(response.headers)
+    except (OSError, urllib.error.URLError, ValueError):
+        return None
+
+
+def aws_size(bucket: str, key: str) -> int | None:
+    try:
+        completed = subprocess.run(
+            [
+                "aws",
+                "s3api",
+                "head-object",
+                "--bucket",
+                bucket,
+                "--key",
+                key,
+                "--no-sign-request",
+                "--query",
+                "ContentLength",
+                "--output",
+                "text",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        size = int(completed.stdout.strip())
+    except (subprocess.CalledProcessError, OSError, ValueError):
+        return None
+    return size if size > 0 else None
+
+
+def partial_path(dest: Path) -> Path:
+    return dest.with_suffix(dest.suffix + ".part")
+
+
+def download_https(url: str, dest: Path, progress: DownloadProgress) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    partial = dest.with_suffix(dest.suffix + ".part")
+    partial = partial_path(dest)
     if partial.exists():
         partial.unlink()
-    print(f"GET {url}")
     try:
         with (
             urllib.request.urlopen(url, timeout=HTTPS_TIMEOUT_S) as response,
             partial.open("wb") as out,
         ):
-            shutil.copyfileobj(response, out)
+            if progress.total is None:
+                progress.total = content_length(response.headers)
+            while True:
+                block = response.read(CHUNK_BYTES)
+                if not block:
+                    break
+                out.write(block)
+                progress.add(len(block))
         partial.replace(dest)
+        progress.finish()
     except BaseException:
+        progress.abort()
         if partial.exists():
             partial.unlink()
         raise
 
 
-def download_aws(bucket: str, key: str, dest: Path) -> None:
+def download_aws(bucket: str, key: str, dest: Path, progress: DownloadProgress) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    partial = dest.with_suffix(dest.suffix + ".part")
+    partial = partial_path(dest)
     if partial.exists():
         partial.unlink()
     uri = f"s3://{bucket}/{key}"
-    print(f"aws s3 cp {uri}")
     try:
-        subprocess.run(
-            ["aws", "s3", "cp", uri, str(partial), "--no-sign-request"],
-            check=True,
+        proc = subprocess.Popen(
+            ["aws", "s3", "cp", uri, str(partial), "--no-sign-request", "--no-progress"],
+            stdout=subprocess.DEVNULL,
         )
+        while proc.poll() is None:
+            if partial.exists():
+                progress.set(partial.stat().st_size)
+            time.sleep(PROGRESS_INTERVAL_S)
+        if partial.exists():
+            progress.set(partial.stat().st_size)
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, proc.args)
         partial.replace(dest)
+        progress.finish()
     except BaseException:
+        progress.abort()
         if partial.exists():
             partial.unlink()
         raise
 
 
-def pull_one(
-    scene: str,
-    key: str,
-    dest_dir: Path,
-    force: bool,
-    bucket: str,
-    https_prefix: str,
-) -> Path:
-    dest = dest_dir / Path(key).name
+def pull_one(job: PullJob, force: bool, index: int, count: int) -> Path:
+    dest = job.dest_dir / Path(job.key).name
+    label = f"[{index}/{count}] {job.scene}"
     if dest.is_file() and not force:
         if cphd_readable(dest):
-            print(f"skip {scene}: {dest.name} already present")
+            print(f"skip {label}: {dest.name} already present")
             return dest
-        print(f"re-pull {scene}: existing file is unreadable")
-    print(f"pull {scene} -> {dest}")
+        print(f"re-pull {label}: existing file is unreadable")
+    print(f"pull {label} -> {dest}")
     aws = shutil.which("aws")
     if aws is not None:
         try:
-            download_aws(bucket, key, dest)
+            progress = DownloadProgress(label, aws_size(job.bucket, job.key))
+            download_aws(job.bucket, job.key, dest, progress)
             return dest
         except (subprocess.CalledProcessError, OSError) as exc:
-            print(f"aws s3 failed ({exc}); falling back to HTTPS")
-    download_https(https_url(https_prefix, key), dest)
+            print(f"aws s3 failed ({exc}); falling back to HTTPS", file=sys.stderr)
+    url = https_url(job.https_prefix, job.key)
+    progress = DownloadProgress(label, https_size(url))
+    download_https(url, dest, progress)
     return dest
 
 
@@ -295,12 +485,21 @@ def refuse_colliding_iarps(files: list[tuple[str, Path]]) -> None:
                 )
 
 
+def report_positions(files: list[tuple[str, Path]]) -> None:
+    for scene, path in files:
+        llh = iarp_llh(path)
+        if llh is None:
+            print(f"  {scene}: {path.name}")
+        else:
+            print(f"  {scene}: IARP {llh[0]:.4f}°, {llh[1]:.4f}°  HAE {llh[2]:.1f} m")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--app",
-        choices=sorted(APPS),
-        help="SAR application whose public collections should be downloaded",
+        choices=[*sorted(APPS), "all"],
+        help="SAR application to download, or 'all' for every pinned collection",
     )
     parser.add_argument(
         "--list",
@@ -311,7 +510,10 @@ def main() -> int:
         "--dest",
         type=Path,
         default=None,
-        help="directory to write CPHD files into (default: app preset path)",
+        help=(
+            "directory to write CPHD files into (default: app preset path). "
+            "With --app all, this is the parent of each preset directory."
+        ),
     )
     parser.add_argument(
         "--force",
@@ -321,34 +523,29 @@ def main() -> int:
     args = parser.parse_args()
     if args.app is None:
         parser.error("--app is required")
-    bucket, https_prefix, collects, dest_default, check_iarp = APPS[args.app]
-    dest_dir: Path = args.dest if args.dest is not None else Path(dest_default)
+    jobs = jobs_for(args.app, args.dest)
     if args.list:
-        for scene, key in collects:
-            print(f"{scene}: {https_url(https_prefix, key)} -> {dest_dir / Path(key).name}")
+        for job in jobs:
+            url = https_url(job.https_prefix, job.key)
+            print(f"{job.scene}: {url} -> {job.dest_dir / Path(job.key).name}")
         return 0
-    dest_dir.mkdir(parents=True, exist_ok=True)
 
-    pulled: list[tuple[str, Path]] = []
-    for scene, key in collects:
-        pulled.append(
-            (
-                scene,
-                pull_one(scene, key, dest_dir, args.force, bucket, https_prefix),
-            )
-        )
+    for job in jobs:
+        job.dest_dir.mkdir(parents=True, exist_ok=True)
 
-    if check_iarp:
+    pulled: list[tuple[PullJob, Path]] = []
+    count = len(jobs)
+    for index, job in enumerate(jobs, start=1):
+        pulled.append((job, pull_one(job, args.force, index, count)))
+
+    iarp_files = [(job.scene, path) for job, path in pulled if job.check_iarp]
+    if iarp_files:
         print("checking IARPs (must be unique)…")
-        refuse_colliding_iarps(pulled)
-    else:
-        for scene, path in pulled:
-            llh = iarp_llh(path)
-            if llh is None:
-                print(f"  {scene}: {path.name}")
-            else:
-                print(f"  {scene}: IARP {llh[0]:.4f}°, {llh[1]:.4f}°  " f"HAE {llh[2]:.1f} m")
-    print(f"{args.app} collection set ready in {dest_dir}")
+        refuse_colliding_iarps(iarp_files)
+    report_positions([(job.scene, path) for job, path in pulled if not job.check_iarp])
+
+    dests = ", ".join(str(path) for path in dict.fromkeys(job.dest_dir for job in jobs))
+    print(f"{args.app} collection set ready in {dests}")
     return 0
 
 

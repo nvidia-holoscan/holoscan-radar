@@ -5,6 +5,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -25,6 +26,7 @@
 #include "io/cphd_reader_op/collection_paths.hpp"
 #include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
+#include "radar_common/sar/formation_hud.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_schemas/coordinate_frame_bridge.hpp"
 
@@ -61,46 +63,18 @@ HOLOSCAN_PARAM_SCHEMA(CphdReaderParams,
                       holoscan::field<&CphdReaderParams::playback_rate>("playback_rate"),
                       holoscan::field<&CphdReaderParams::duty_cycle>("duty_cycle"));
 
-struct CollectionSpan {
-  int file_index{0};
-  std::chrono::steady_clock::time_point dwell_start{};
-  std::optional<std::chrono::steady_clock::time_point> dwell_end;
-  std::optional<std::chrono::steady_clock::time_point> quiet_start;
-  std::optional<std::chrono::steady_clock::time_point> quiet_end;
-};
-struct PlaybackStatus {
-  bool valid{false};
-  bool paced{false};
-  double collect_s{0.0};
-  double wall_s{0.0};
-  double behind_s{0.0};
-  double last_slack_s{0.0};
-};
-struct LastMeanApc {
-  bool valid{false};
-  int64_t file_index{0};
-  std::array<double, 3> ecef{};
-};
-
 template <typename T>
 class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
 
  public:
-  explicit CPHDReaderOp(const MaxTensorExtents& extents);
+  explicit CPHDReaderOp(const MaxTensorExtents& extents, std::shared_ptr<FormationHud> hud = {});
   ~CPHDReaderOp() override;
 
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
   void start() override;
   [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
-
-  std::optional<std::chrono::steady_clock::time_point> last_packet_at() const {
-    return last_packet_at_;
-  }
-  std::vector<CollectionSpan> timeline_spans() const { return spans_; }
-  PlaybackStatus playback_status() const { return playback_; }
-  LastMeanApc last_mean_apc() const { return last_apc_; }
 
   Output<Tensor> phase_history{"phase_history"};
   Output<Tensor> positions{"positions"};
@@ -113,7 +87,9 @@ class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
 
  private:
   void open_file();
+  void publish_hud();
   MaxTensorExtents extents_;
+  std::shared_ptr<FormationHud> hud_{};
   std::vector<std::string> files_;
   std::unique_ptr<cphd::CphdFile> file_;
   size_t file_index_{0};
@@ -121,13 +97,26 @@ class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
   bool stopped_{false};
   bool nonfinite_warned_{false};
   double pending_cooldown_s_{0.0};
-  double collection_first_time_{0.0}, collection_last_time_{0.0};
+  double collection_t_min_{0.0};
+  double collection_t_max_{0.0};
+  bool collection_time_valid_{false};
   std::chrono::steady_clock::time_point collection_wall_start_{};
   std::optional<std::chrono::steady_clock::time_point> last_packet_at_;
   std::vector<CollectionSpan> spans_;
   PlaybackStatus playback_{};
   LastMeanApc last_apc_{};
   LatchedOutput axis_out_, times_out_, velocities_out_, frame_out_;
+  // Private H2D stream. Synchronizing the runtime compute stream after upload
+  // waits for every kernel already recorded on that stream — including
+  // backprojection if the compiler fused ingest onto the formation stream.
+  std::uintptr_t h2d_stream_{0};
+  std::uintptr_t h2d_done_{0};
+  // Reused CF8 ingest: pinned stored-bytes (or host-decoded integer samples),
+  // a device CF8 scratch for the double widen, and per-pulse AmpSF.
+  std::uintptr_t pinned_signal_{0};
+  std::uintptr_t device_cf8_{0};
+  std::uintptr_t device_amp_{0};
+  std::size_t pinned_signal_bytes_{0};
 };
 
 extern template class CPHDReaderOp<float>;

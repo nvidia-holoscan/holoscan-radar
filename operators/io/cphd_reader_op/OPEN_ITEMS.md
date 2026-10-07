@@ -207,7 +207,10 @@ existing pinned scratch, H2Ds 8 bytes/sample, and byte-swaps / widens /
 applies AmpSF on the device (`cphd_cf8_decode.cu`). Float CF8 decodes
 in-place on the output tensor; double H2Ds into a reused device CF8
 buffer. Integer formats still use `read_signal_into`. `CphdFile`'s host
-widen remains for tests and tools. No contract change.
+widen remains for tests and tools. No contract change. The HSDK 5
+operator `compute()` had fallen back to host `read_signal_into` (Houston
+1.0 m: ~0.16 s/tick decode vs ~0.12 s collect); it uses this GPU path
+again.
 
 *Paid 2026-08-28.* Houston 1.0 m / 0.5 m ingest is **one outstanding
 sequential read**, not H2D and not ifstream buffering. Isolated cold

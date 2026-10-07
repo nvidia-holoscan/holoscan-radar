@@ -19,7 +19,7 @@
 # Scene is counts × spacing (6.8 km IARP-centred ENU). Aperture
 # 8262 is 2020 * 4.09 / 1.0 (the 4.09 m window scaled). No
 # aperture_window: a sliding window is unweighted (~−13 dB).
-# the loop repeats until the process is stopped. The wrap is collection_boundary
+# the loop repeats until SIGINT/SIGTERM (Ctrl-C in the launch terminal). The wrap is collection_boundary
 # (emit-and-reset): same IARP, but 22 deg of aspect between
 # the last pulses and the first, so the window cannot
 # straddle it.
@@ -66,8 +66,9 @@ backprojection:
 
 visualize: true
 # Holoviz window (px), not formation cost. LUT box-averages
-# the formed lattice to this. If the planned timeline HUD says
-# "behind", lower lattice.max_side, not this.
+# the formed lattice to this. Lag HUD is live collect vs wall
+# (same as the HSDK 4 demo). If it stays behind, lower
+# lattice.max_side.
 visualize_size: 1024
 skip_display_check: false
 headless: false

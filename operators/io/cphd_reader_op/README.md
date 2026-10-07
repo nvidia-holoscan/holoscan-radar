@@ -59,7 +59,19 @@ by filename. The reader validates all file headers before emitting any data.
 `channel` selects one CPHD channel. `pulses_per_tick` bounds each emitted batch;
 the last batch may be shorter. With `loop: true`, the ordered file list repeats.
 A positive `playback_rate` paces collection time relative to wall time;
-`duty_cycle` adds an inter-collection gap.
+`duty_cycle` adds an inter-collection gap. Collect time is the finite `TxTime`
+span (non-finite PVP samples are skipped; some Umbra vectors store NaN there).
+Playback slack and duty-cycle quiet sleeps return early when the run requests
+cooperative stop. Required
+tensor emits retry on `kBackpressured` / `kResourceExhausted`: HSDK 5
+`QueuePolicy::kBlocking` does not park `OnClock` until the consumer has room,
+and a failed `emit(TensorOutputLoan)` consumes the loan, so the reader waits
+and re-prepares instead of ending the run. The wait returns on cooperative
+stop. The lag HUD
+is live collect versus wall (`TxTime` span versus now since the collection
+start), matching the HSDK 4 `playback_status()` poll. Pace sleep uses that
+same slack (no sleep while behind). Apps put the reader and backprojection in
+separate Graph partitions so formation cannot steal the playback clock.
 
 The CPHD PVP fields `TxTime`, `TxPos`, `RcvPos`, `SRPPos`, `SC0`, and `SCSS`
 are required. The antenna phase centre is `(TxPos + RcvPos) / 2`; the
@@ -68,15 +80,20 @@ output is connected. `pulse_times` remains float64 even for a `float` reader.
 `velocities` emits only if both transmit and receive velocity fields exist.
 The optional coordinate-frame output carries the configured ECEF declaration.
 All tensors are device tensors; each template instance fixes complex and real
-precision together.
+precision together. CF8 collections read stored bytes into reused pinned
+scratch, H2D 8 bytes/sample, and byte-swap / widen / apply AmpSF on the
+device; integer formats still decode on the host through `read_signal_into`.
 
 `stream_boundary` is emitted on **every** batch at the batch's capture time:
 `0` means more pulses in the collection, `1` closes a collection followed by
 another file or loop iteration, and `2` closes the final collection. Connect
 it to `ApertureManagerOp.stream_boundary` with the same batch's profiles and
 geometry. If an app splits a batch, put the original boundary on its last
-slice and `0` on earlier slices. The reader requests Graph stop after the
-last batch; it does not emit a separate empty EOS tick.
+slice and `0` on earlier slices. After the last batch the reader stops
+producing and parks this OnClock worker; it does not emit a separate empty EOS
+tick. HSDK `request_stop` does not drain queued samples, so requesting stop on
+the next 1 µs tick aborts the in-flight D22 `EmitAndReset`. Finite (non-loop)
+SAR apps request session stop after the formed image and `visualize_hold_s`.
 
 ## Validation and failure cases
 

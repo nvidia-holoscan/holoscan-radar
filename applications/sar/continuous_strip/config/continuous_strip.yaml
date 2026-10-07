@@ -20,7 +20,7 @@
 # the graph driver gives the stager that slice size, so one
 # reader cube becomes four manager/BP ticks (window from each
 # slice's last SRP). 159050 / 1024 leaves a 330-pulse final
-# reader batch (256+74 after slicing). playback_rate 0.5.
+# reader batch (256+74 after slicing). playback_rate 1 paces to collect time.
 # nfft_pad: next_fast. loop continues until the process is stopped; wrap restages
 # the opening window with emit-and-reset. Holoviz is the parent
 # strip (same landscape fit as mode 3), not the scrolling chip:
@@ -46,7 +46,7 @@ cphd_reader:
   pulse_range: [0, 159050]
   pulses_per_tick: 1024
   loop: true
-  playback_rate: 0.5
+  playback_rate: 1
   duty_cycle: 1
 
 nfft_pad: next_fast

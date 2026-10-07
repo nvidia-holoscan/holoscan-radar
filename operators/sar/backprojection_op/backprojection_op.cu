@@ -176,7 +176,9 @@ void copy_sample_points_lattice(detail::BackprojectionState<T>& state,
 }  // namespace
 
 template <typename T>
-BackprojectionOp<T>::BackprojectionOp(const MaxTensorExtents& extents) : extents_(extents) {
+BackprojectionOp<T>::BackprojectionOp(const MaxTensorExtents& extents,
+                                      std::shared_ptr<FormationHud> hud)
+: extents_(extents), hud_(std::move(hud)) {
   require_extent(extents.max_pulses, "max_pulses", "BackprojectionOp");
   require_extent(extents.max_range_bins, "max_range_bins", "BackprojectionOp");
   require_extent(extents.max_image_v, "max_image_v", "BackprojectionOp");
@@ -258,7 +260,6 @@ void BackprojectionOp<T>::start() {
 template <typename T>
 expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
   try {
-    const auto t0 = std::chrono::steady_clock::now();
     const std::string& who = op_name<T>();
 
     // Join this pulse block with same-tick controls and geometry overrides.
@@ -295,6 +296,15 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
     std::optional<FormationControl> control_value;
     if (control_tensor)
       control_value = read_control(*control_tensor, who);
+    // Latch the reader's last packet now: this tick's pulses are in hand, and
+    // the live mailbox moves into the next collect while this emit is on GPU.
+    std::optional<std::chrono::steady_clock::time_point> tick_last_packet;
+    PlaybackStatus tick_playback{};
+    if (hud_) {
+      const auto snap = hud_->snapshot();
+      tick_last_packet = snap.last_packet_at;
+      tick_playback = snap.last_batch_playback;
+    }
     const bool stage_after = control_value && *control_value == FormationControl::kEmitAndReset;
     HOLOSCAN_TRY(auto geometry_override_wire, receive_optional_value(sample_geometry));
     SampleGeometry new_geometry = params().sample_geometry;
@@ -469,6 +479,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       }
       unemitted_pulses_ = 0;
       aperture_compute_s_ = 0.0;
+      state_->discard_tick_gpu_timing();
     }
 
     const int64_t num_bins = cube.cols;
@@ -655,6 +666,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       }
     }
 
+    state_->record_tick_gpu_start(stream);
     const double pc_partial = 4.0 * kPi * effective_frequency_ / kSpeedOfLight;
     const int64_t pulse_stride = num_pulses * 3;
     const int64_t profile_stride = num_pulses * num_bins * 2;
@@ -776,14 +788,16 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       retained_weight_ = std::move(weight);
     }
 
+    state_->record_tick_gpu_stop(stream);
+
     // Synchronize only at an image boundary, when downstream reads the result.
     if (emitted) {
       if (cudaStreamSynchronize(stream) != cudaSuccess) {
         throw std::runtime_error(who + ": emit stream sync failed");
       }
+      aperture_compute_s_ = state_->take_tick_gpu_s();
     }
     const auto now = std::chrono::steady_clock::now();
-    aperture_compute_s_ += std::chrono::duration<double>(now - t0).count();
     if (emitted) {
       // Timing is published before the image port so EventBased
       // downstream host code (the overlay) reads this emit, not the
@@ -797,6 +811,18 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
           std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
       last_image_emit_ns_.store(ns, std::memory_order_relaxed);
       last_image_emit_valid_.store(true, std::memory_order_release);
+      if (hud_) {
+        hud_->publish_bp(FormationHudBp{
+            .compute_s = aperture_compute_s_,
+            .pulses = emitted_pulses,
+            .pixels = emitted_pixels,
+            .num_v = num_v,
+            .num_u = num_u,
+            .emit_at = now,
+            .last_packet_at = tick_last_packet,
+            .playback = tick_playback,
+        });
+      }
       HOLOSCAN_RETURN_IF_ERROR(emit_prepared_tensor(image, context, std::move(*image_loan)));
       if (!sample_points_connected_ && emitted_geometry->is_valid()) {
         if (geometry_output_.active()) {

@@ -22,6 +22,7 @@ flowchart LR
 The solid paths are required data and control flows. Dashed dump and
 visualization branches are enabled by application configuration. The reader's
 typed `stream_boundary` is joined to the aperture manager on the same tick.
+The paced reader, range/manager, and backprojection are separate Graph partitions with dedicated `ThreadPlacement` lanes so collect-vs-wall lag is the live playback clock, not formation GPU time on the controller.
 
 ## Build and offline fixture
 
@@ -66,7 +67,7 @@ a CPHD path may replace `cphd.path` directly, or follow a YAML path as the secon
 
 ## Output and display
 
-Each scroll emission reports an image; the mosaic places it into the parent complex strip. The fixture reports five 15 × 6 mosaic images. Optional dump writes the parent mosaic in its original `(v, u)` layout. The Holoviz raster transposes only the display axes, placing along-track `v` horizontally so the long strip fits a landscape window. The proposed u-axis display crop is not wired and remains an open item.
+Each scroll emission reports an image; the mosaic places it into the parent complex strip. The fixture reports five 15 × 6 mosaic images. Optional dump writes the parent mosaic in its original `(v, u)` layout. The Holoviz raster transposes only the display axes, placing along-track `v` horizontally so the long strip fits a landscape window, and composites the source-branch on-image HUD. The proposed u-axis display crop is not wired and remains an open item.
 
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.

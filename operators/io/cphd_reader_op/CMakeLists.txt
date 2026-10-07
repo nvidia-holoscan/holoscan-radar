@@ -21,6 +21,7 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
 add_library(cphd_reader_op
+    cphd_cf8_decode.cu
     cphd_file.cpp
     cphd_reader_op.cu)
 add_library(holoscan::cphd_reader_op ALIAS cphd_reader_op)

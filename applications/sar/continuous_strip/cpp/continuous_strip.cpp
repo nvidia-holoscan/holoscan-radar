@@ -14,7 +14,7 @@ int main(int argc, char** argv) {
   return run_sar_graph_app(
       argc, argv, "continuous_strip", load_config,
       [](auto& graph, auto& options, const auto& queue, const auto& cfg, auto& reader, auto& range,
-         auto& manager, auto& bp, auto& application,
+         auto& manager, auto& bp, auto& /*source*/, auto& application, auto& formation,
          const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {
         const int64_t slice =
             cfg.emit_interval_pulses > 0 && cfg.reader_pulses_per_tick > cfg.emit_interval_pulses
@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
         graph.add_flow(manager->control_out, bp->control, queue);
         auto mosaic = graph.template op<app::sar::SarMosaicOp>("sar_mosaic", cfg.scroll_parent,
                                                                cfg.reader_loop);
-        application.add(mosaic);
+        formation.add(mosaic);
         bind_outputs(options, "sar_mosaic", {"image_out"});
         graph.add_flow(bp->image, mosaic->image, queue);
         graph.add_flow(bp->sample_geometry_out, mosaic->sample_geometry, queue);

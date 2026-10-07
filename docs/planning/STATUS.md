@@ -228,13 +228,19 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   the repository-wide pinned pre-commit suite passed. Final focused reruns
   cover test-harness corrections added after that full run. Public CPHD
   collection validation remains open. HSDK 5 visualization uses the
-  source-branch percentile window and finite GUI hold; compass, timeline,
-  crop, and indefinite display hold remain open in the [SAR open-items roll-up](SAR/OPEN_ITEMS.md).
+  source-branch percentile window, finite GUI hold, and the on-image HUD
+  (scene name, formed size, BP rate, last-pulse latency, paced collect-vs-wall
+  lag, APC look chevron) plus a second `SAR timeline` Gantt window (20 s dwell
+  bars, per-tick last-pulse latency labels, 1 Hz lag HUD). Strip crop and
+  indefinite display hold remain open in the [SAR open-items roll-up](SAR/OPEN_ITEMS.md).
 
 ## In flight / claims
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| Restore SAR on-image Holoviz HUD (chevron/lag) | current workspace | `dpc/main-5x-catchup` | **implemented and visually checked** for modes 1–5. Live `FormationHud` mailbox; lag is collect TxTime vs `now`. Compass inset dropped (normalized coords squash it on a landscape strip). Source/ingest/formation partitions bind dedicated `ThreadPlacement` lanes so the reader keeps the playback clock. Strip crop and indefinite hold remain. |
+| Restore SAR Gantt timeline window | current workspace | `dpc/main-5x-catchup` | **implemented and visually checked** for modes 1–5. Second Holoviz window (`SAR timeline`) is the 20 s scrolling Gantt (dwell bars, duty-cycle quiet, image-emit ticks with per-tick last-pulse latency labels, 1 Hz lag HUD on the platform lane). Windowed path only; headless smokes unchanged. |
+| Make host `holoscan run` SAR demos interruptible | current workspace | `dpc/main-5x-catchup` | **implemented:** SAR Graph driver binds an early `ManagedShutdownSignals` domain so Ctrl-C / `docker stop` SIGTERM cooperatively stop looping presets; CPHD playback and viz-hold sleeps honor cancellation. One in-flight backprojection can still delay exit. Exercised during the mode 1–5 GUI walkthrough. |
 | Developer-guide accuracy pass | Codex | current workspace | **complete:** README, DEVELOPER, SDK_DEVELOPMENT, and AGENTS now reflect seven FMCW apps, C++ YAML performance recipes, the disabled Python bindings and pytest registration, and validated SAR GUI presets; pinned documentation hooks pass |
 | Performance harness YAML refactor | deustice | `deustice/perf-refactor` | **Layout complete:** all 26 schema-v2 recipes and typed adapters are paired under `performance/operators/<group>/<operator>/`; shared C++ code lives under `performance/harness/cpp/`. One explicit CMake registry preserves executable names and `build/performance/cpp/` output. The pinned HSDK 5 build, 26 Minimal GPU smokes, 20 focused Overrides/cache smokes, and 30 harness tests pass. YAML case content and measurement behavior are unchanged. The unbuildable legacy Python performance matrix was removed; C++ performance coverage still lacks CFAR rank-four full-axis peak suppression and FeatureAssembly score/AoA packs. Future Python Graph profiling awaits buildable HSDK 5 bindings. |
 | Direct Holoscan CLI workflow and HSDK 5 Holoviz integration | Codex | `codex/holoscan-cli-direct` | **ready for review:** host CLI build/run/test integration, top-level Python dependencies, and CTest script; dashboard now finds and links the separate HSDK 5 visualization package and bridges RGBA Tensor to ImageT at Holoviz. All C++ targets build in the pinned image; focused Holoviz Graph admission test and lint pass. Window rendering still needs a display-equipped run. |

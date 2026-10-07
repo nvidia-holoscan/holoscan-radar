@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
   return run_sar_graph_app(
       argc, argv, "tiled_strip", load_config,
       [](auto& graph, auto& options, const auto& queue, const auto& cfg, auto& reader, auto& range,
-         auto& manager, auto& bp, auto& application,
+         auto& manager, auto& bp, auto& source, auto& application, auto& formation,
          const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {
         auto stager = graph.template op<app::sar::TileGeometryStagerOp>(
             "tile_stager", cfg.tile_geometries, cfg.tile_pulses);
@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
           auto enu = graph.template op<app::sar::EcefToSceneEnuOp>(
               "ecef_to_enu", cfg.enu_origin_ecef, cfg.quantize_phase_center_f32,
               cfg.reader_pulses_per_tick);
-          application.add(enu);
+          source.add(enu);
           bind_outputs(options, "ecef_to_enu", {"positions_out", "reference_position_out"});
           graph.add_flow(reader->positions, enu->positions, queue);
           graph.add_flow(reader->reference_position, enu->reference_position, queue);
@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
           graph.add_flow(manager->weight, bp->weight, queue);
         auto mosaic = graph.template op<app::sar::SarMosaicOp>("sar_mosaic", cfg.parent_geometry,
                                                                cfg.reader_loop);
-        application.add(mosaic);
+        formation.add(mosaic);
         bind_outputs(options, "sar_mosaic", {"image_out"});
         graph.add_flow(bp->image, mosaic->image, queue);
         graph.add_flow(bp->sample_geometry_out, mosaic->sample_geometry, queue);
