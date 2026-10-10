@@ -166,21 +166,6 @@ expected<void, Error> SARRangeCompressionOp<T>::compute(ExecutionContext& contex
   }
   const std::vector<int64_t> out_shape{shape[0], bins};
   const bool warn_on_rebuild = !range_window_in.is_missing() || !nfft_in.is_missing();
-  HOLOSCAN_TRY(
-      auto profiles_loan,
-      prepare_device_tensor(range_profiles, context, out_shape, complex_dtype<T>(),
-                            [&](void* dst, std::size_t) -> expected<void, Error> {
-                              try {
-                                detail::run_range_compression<T>(cfg, *state_, input.data(), 1,
-                                                                 shape[0], shape[1], dst, bins,
-                                                                 warn_on_rebuild, stream);
-                              } catch (const std::invalid_argument& e) {
-                                return fail_invalid(e.what());
-                              } catch (const std::exception& e) {
-                                return make_unexpected(Error{ErrorCode::kFailure, e.what()});
-                              }
-                              return {};
-                            }));
 
   // Physical range bins and the applied window are computed only for wired taps.
   if (cfg.waveform.has_value() && range_bins_out_.active()) {
@@ -205,7 +190,23 @@ expected<void, Error> SARRangeCompressionOp<T>::compute(ExecutionContext& contex
                                          to_wire(cfg.window),
                                          "SARRangeCompressionOp.range_window_out");
   }
-  HOLOSCAN_TRY(emit_prepared_tensor(range_profiles, context, std::move(profiles_loan)));
+  HOLOSCAN_TRY(emit_required_tensor(
+      range_profiles, context, "SARRangeCompressionOp.range_profiles",
+      context.params<SARRangeCompressionParams>().wait_for_downstream, [&] {
+        return prepare_device_tensor(
+            range_profiles, context, out_shape, complex_dtype<T>(),
+            [&](void* dst, std::size_t) -> expected<void, Error> {
+              try {
+                detail::run_range_compression<T>(cfg, *state_, input.data(), 1, shape[0], shape[1],
+                                                 dst, bins, warn_on_rebuild, stream);
+              } catch (const std::invalid_argument& e) {
+                return fail_invalid(e.what());
+              } catch (const std::exception& e) {
+                return make_unexpected(Error{ErrorCode::kFailure, e.what()});
+              }
+              return {};
+            });
+      }));
   retained_input_ = std::move(input);
   return {};
 }

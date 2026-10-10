@@ -87,9 +87,18 @@ inline radar::MaxTensorExtents make_extents(const AppConfig& cfg,
   extents.max_image_u = max_u;
   return extents;
 }
+
+// Operator Error text stays as-is. When the run fails because a required emit
+// could not land, append the calling demo's teaching paragraph.
+inline bool mentions_full_queue(const std::string& text) {
+  return text.find("wait_for_downstream") != std::string::npos ||
+         text.find("output queue is full") != std::string::npos ||
+         text.find("no free tensor buffer") != std::string::npos;
+}
+
 template <typename LoadConfig, typename BuildGraph>
 int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_config,
-                      BuildGraph build_graph) {
+                      BuildGraph build_graph, const char* failure_hint = nullptr) {
   try {
     // Own SIGINT/SIGTERM before Holoviz or the runtime start threads. Host
     // `holoscan run` maps Ctrl-C to `docker stop` (SIGTERM); without this
@@ -212,6 +221,7 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
         d.pixels = snap.bp.pixels;
         d.bp_num_v = snap.bp.num_v;
         d.bp_num_u = snap.bp.num_u;
+        d.rate_line = snap.rate_line;
         d.emit_at = snap.bp.emit_at;
         d.last_packet_at =
             snap.bp.last_packet_at.has_value() ? snap.bp.last_packet_at : snap.last_packet_at;
@@ -219,7 +229,7 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
           d.playback_valid = snap.playback.valid;
           d.playback_paced = snap.playback.paced;
           d.playback_behind_s = snap.playback.behind_s;
-          d.playback_collect_s = snap.playback.collect_s;
+          d.playback_target_s = snap.playback.target_s();
           d.playback_wall_s = snap.playback.wall_s;
         }
         if (snap.bp.emit_at.has_value() && d.last_packet_at.has_value()) {
@@ -461,10 +471,18 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     if (session.termination() == holoscan::RunTermination::kFailed ||
         !session.diagnostics().empty()) {
       std::string error = "SAR graph run diagnostics:";
-      for (const auto& diagnostic : session.diagnostics())
-        error += " [" + holoscan::format_diagnostic(diagnostic, plan.graph()) + "]";
+      bool full_queue = false;
+      for (const auto& diagnostic : session.diagnostics()) {
+        const std::string formatted = holoscan::format_diagnostic(diagnostic, plan.graph());
+        error += " [" + formatted + "]";
+        full_queue = full_queue || mentions_full_queue(formatted);
+      }
       if (session.diagnostics().empty())
         error += " [failed with no diagnostics]";
+      if (full_queue && failure_hint != nullptr && failure_hint[0] != '\0') {
+        error += "\nNote: ";
+        error += failure_hint;
+      }
       throw std::runtime_error(error);
     }
     const auto images = counter->count.load();

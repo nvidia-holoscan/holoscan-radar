@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -34,7 +35,8 @@ namespace holoscan::radar::app::sar {
 // needs to guess which image a geometry describes.
 class SarMosaicOp : public Operator<> {
  public:
-  SarMosaicOp(SampleGeometry parent, bool loop) : parent_(std::move(parent)), loop_(loop) {
+  SarMosaicOp(SampleGeometry parent, bool loop, std::shared_ptr<QueueWaitPolicy> queue_wait = {})
+  : parent_(std::move(parent)), loop_(loop), queue_wait_(std::move(queue_wait)) {
     if (!parent_.is_valid())
       throw std::invalid_argument("SarMosaicOp: invalid parent geometry");
   }
@@ -114,18 +116,20 @@ class SarMosaicOp : public Operator<> {
             static_cast<std::size_t>(shape[0]), cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
       return make_unexpected(Error{ErrorCode::kFailure, "SarMosaicOp: blit failed"});
     }
-    HOLOSCAN_TRY(auto loan, prepare_device_tensor(
-                                image_out, context, std::vector<int64_t>{pv, pu}, dtype,
-                                [&](void* output, std::size_t size) -> expected<void, Error> {
-                                  if (size != bytes || cudaMemcpyAsync(output, canvas_, bytes,
-                                                                       cudaMemcpyDeviceToDevice,
-                                                                       stream) != cudaSuccess)
-                                    return make_unexpected(Error{
-                                        ErrorCode::kFailure, "SarMosaicOp: parent copy failed"});
-                                  return {};
-                                }));
     last_v0_ = v0;
-    return emit_prepared_tensor(image_out, context, std::move(loan));
+    return emit_required_tensor(
+        image_out, context, "SarMosaicOp.image_out", wait_queues(queue_wait_), [&] {
+          return prepare_device_tensor(
+              image_out, context, std::vector<int64_t>{pv, pu}, dtype,
+              [&](void* output, std::size_t size) -> expected<void, Error> {
+                if (size != bytes ||
+                    cudaMemcpyAsync(output, canvas_, bytes, cudaMemcpyDeviceToDevice, stream) !=
+                        cudaSuccess)
+                  return make_unexpected(
+                      Error{ErrorCode::kFailure, "SarMosaicOp: parent copy failed"});
+                return {};
+              });
+        });
   }
   Input<Tensor> image{"image"};
   Input<WireSampleGeometry> sample_geometry{"sample_geometry"};
@@ -134,6 +138,7 @@ class SarMosaicOp : public Operator<> {
  private:
   SampleGeometry parent_;
   bool loop_{false};
+  std::shared_ptr<QueueWaitPolicy> queue_wait_{};
   void* canvas_{nullptr};
   DLDataType dtype_{};
   int64_t last_v0_{-1};

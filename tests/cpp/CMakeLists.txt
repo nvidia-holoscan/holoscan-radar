@@ -60,6 +60,7 @@ radar_add_test(common/test_wire_descriptors holoscan::radar_schemas)
 # no longer re-exports yaml-cpp.
 find_package(yaml-cpp REQUIRED)
 radar_add_test(common/test_sdk yaml-cpp holoscan::config_io)
+radar_add_test(common/test_emit_required)
 radar_add_test(common/test_max_tensor_extents yaml-cpp)
 radar_add_test(utils/test_perf_profiles yaml-cpp)
 radar_add_test(utils/test_perf_runner)

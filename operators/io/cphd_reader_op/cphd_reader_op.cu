@@ -43,6 +43,10 @@ constexpr TensorRepresentation kDevice{
 constexpr TensorRepresentation kFrameHost{.memory_kind = MemoryKind::kHost,
                                           .dtype = DLDataType{kDLFloat, 64U, 1U},
                                           .rank = 1U};  // NOLINT(whitespace/indent_namespace)
+// Match the Gantt lag-band entry/exit so the console and HUD agree.
+constexpr double kBehindWarnEnterS = 0.2;
+constexpr double kBehindWarnExitS = 0.05;
+constexpr auto kBehindWarnPeriod = std::chrono::seconds{1};
 
 std::vector<std::string> resolve_paths(const CollectionPaths& source) {
   std::vector<std::string> result;
@@ -168,29 +172,21 @@ expected<void, Error> sync_ingest(cudaStream_t h2d, cudaEvent_t h2d_done, cudaSt
 }
 
 template <typename Fn>
-auto retry_pool(ExecutionContext& context, const char* what, Fn&& fn) -> decltype(fn()) {
-  bool warned = false;
-  for (;;) {
-    auto result = fn();
-    if (result)
-      return result;
-    const Error err = result.error();
-    if (!is_transient_pool_error(err.code) || context.cancellation().stop_requested()) {
-      std::size_t free_b = 0, total_b = 0;
-      (void)cudaMemGetInfo(&free_b, &total_b);
-      HOLOSCAN_LOG_ERROR("CPHDReaderOp: {} failed ({}); GPU mem {:.0f}/{:.0f} MiB free", what,
-                         holoscan::runtime_error_message(err),
-                         static_cast<double>(free_b) / (1024.0 * 1024.0),
-                         static_cast<double>(total_b) / (1024.0 * 1024.0));
-      return result;
-    }
-    if (!warned) {
-      HOLOSCAN_LOG_WARN("CPHDReaderOp: {} waiting for tensor pool/queue ({})", what,
-                        holoscan::error_code_name(err.code));
-      warned = true;
-    }
-    cooperative_sleep(context, 0.01);
+auto retry_pool(ExecutionContext& context, const char* what, bool wait, Fn&& fn) -> decltype(fn()) {
+  const std::string label = std::string("CPHDReaderOp.") + what;
+  auto result = emit_required_result(context, label, wait, std::forward<Fn>(fn));
+  if (result)
+    return result;
+  const Error err = result.error();
+  if (!is_transient_pool_error(err.code) || context.cancellation().stop_requested()) {
+    std::size_t free_b = 0, total_b = 0;
+    (void)cudaMemGetInfo(&free_b, &total_b);
+    HOLOSCAN_LOG_ERROR("CPHDReaderOp: {} failed ({}); GPU mem {:.0f}/{:.0f} MiB free", what,
+                       holoscan::runtime_error_message(err),
+                       static_cast<double>(free_b) / (1024.0 * 1024.0),
+                       static_cast<double>(total_b) / (1024.0 * 1024.0));
   }
+  return result;
 }
 
 void check_sample_axis(const std::vector<double>& values, const char* name) {
@@ -279,6 +275,28 @@ void CPHDReaderOp<T>::publish_hud() {
 }
 
 template <typename T>
+void CPHDReaderOp<T>::maybe_warn_behind() {
+  if (!playback_.paced || !playback_.valid || !std::isfinite(playback_.behind_s))
+    return;
+  if (playback_.behind_s >= kBehindWarnEnterS) {
+    behind_episode_ = true;
+  } else if (playback_.behind_s <= kBehindWarnExitS) {
+    behind_episode_ = false;
+    last_behind_warn_at_.reset();
+    return;
+  }
+  if (!behind_episode_)
+    return;
+  const auto now = std::chrono::steady_clock::now();
+  if (last_behind_warn_at_.has_value() && now - *last_behind_warn_at_ < kBehindWarnPeriod)
+    return;
+  last_behind_warn_at_ = now;
+  HOLOSCAN_LOG_WARN(
+      "CPHDReaderOp: playback +{:.1f}s behind (target={:.3f}s wall={:.3f}s rate={:.3g})",
+      playback_.behind_s, playback_.target_s(), playback_.wall_s, playback_.rate);
+}
+
+template <typename T>
 void CPHDReaderOp<T>::open_file() {
   const auto& p = params();
   file_ = std::make_unique<cphd::CphdFile>(files_[file_index_]);
@@ -299,6 +317,8 @@ void CPHDReaderOp<T>::open_file() {
   }
   next_pulse_ = first_pulse_;
   nonfinite_warned_ = false;
+  behind_episode_ = false;
+  last_behind_warn_at_.reset();
   collection_t_min_ = 0.0;
   collection_t_max_ = 0.0;
   collection_time_valid_ = false;
@@ -386,6 +406,7 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
       }
     }
     const auto& p = params();
+    const bool wait = p.wait_for_downstream;
     const auto tick_start = std::chrono::steady_clock::now();
     const auto& info = file_->channel(p.channel);
     const int64_t count = std::min(p.pulses_per_tick, last_pulse_ - next_pulse_);
@@ -439,6 +460,7 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
                    .rate = p.playback_rate,
                    .wall_origin = collection_wall_start_};
       publish_hud();
+      maybe_warn_behind();
     };
     publish_playback(!final);
     const auto tx = pvp.field("TxPos", 3);
@@ -533,12 +555,14 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
     std::optional<TensorOutputLoan> history_loan;
     std::optional<TensorOutputLoan> positions_loan;
     std::optional<TensorOutputLoan> reference_loan;
-    HOLOSCAN_TRY(auto history_prepared, retry_pool(context, "phase_history", prepare_history));
+    HOLOSCAN_TRY(auto history_prepared,
+                 retry_pool(context, "phase_history", wait, prepare_history));
     history_loan.emplace(std::move(history_prepared));
-    HOLOSCAN_TRY(auto positions_prepared, retry_pool(context, "positions", prepare_positions));
+    HOLOSCAN_TRY(auto positions_prepared,
+                 retry_pool(context, "positions", wait, prepare_positions));
     positions_loan.emplace(std::move(positions_prepared));
     HOLOSCAN_TRY(auto reference_prepared,
-                 retry_pool(context, "reference_position", prepare_reference));
+                 retry_pool(context, "reference_position", wait, prepare_reference));
     reference_loan.emplace(std::move(reference_prepared));
     std::optional<TensorOutputLoan> axis_loan;
     std::optional<TensorOutputLoan> times_loan;
@@ -579,11 +603,10 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
                                     to_wire(p.coordinate_frame), "CPHDReaderOp.coordinate_frame");
     }
     // Tensor emit consumes the loan on every outcome, including kBackpressured.
-    // Re-prepare on a transient failure so a full downstream queue waits instead
-    // of ending the run.
+    // wait_for_downstream re-prepares and retries; omit the Param to fail-fast.
     auto publish_tensor = [&](Output<Tensor>& port, std::optional<TensorOutputLoan>& held,
                               auto&& prepare, const char* what) -> expected<void, Error> {
-      return retry_pool(context, what, [&]() -> expected<void, Error> {
+      return retry_pool(context, what, wait, [&]() -> expected<void, Error> {
         if (!held) {
           HOLOSCAN_TRY(auto loan, prepare());
           HOLOSCAN_RETURN_IF_ERROR(sync_ingest(h2d, h2d_done, compute));
@@ -605,12 +628,12 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
         final ? (follows ? SarStreamBoundary::kCollectionBoundary : SarStreamBoundary::kEndOfStream)
               : SarStreamBoundary::kNone;
     const EmitOptions boundary_opts{.capture_time = context.activation_time()};
-    HOLOSCAN_RETURN_IF_ERROR(retry_pool(context, "stream_boundary", [&] {
+    HOLOSCAN_RETURN_IF_ERROR(retry_pool(context, "stream_boundary", wait, [&] {
       return stream_boundary.emit(static_cast<uint8_t>(boundary), boundary_opts);
     }));
     last_packet_at_ = std::chrono::steady_clock::now();
     publish_playback(!final);
-    HOLOSCAN_LOG_INFO(
+    HOLOSCAN_LOG_DEBUG(
         "CPHDReaderOp: pulses {}-{} collect={:.3f}s wall={:.3f}s signal={:.3f}s decode={:.3f}s "
         "emit={:.3f}s slack={:.3f}s",
         first, first + count - 1, collect_span, playback_.wall_s,

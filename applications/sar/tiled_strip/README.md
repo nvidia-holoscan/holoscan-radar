@@ -25,6 +25,7 @@ The solid paths are required data and control flows. Dashed dump and
 visualization branches are enabled by application configuration. The reader's
 typed `stream_boundary` is joined to the aperture manager on the same tick.
 The paced reader, range/manager, and backprojection are separate Graph partitions with dedicated `ThreadPlacement` lanes so collect-vs-wall lag is the live playback clock, not formation GPU time on the controller.
+This demo omits `wait_for_downstream` (fail-fast). A queue-full abort prints the same teaching paragraph as the other SAR demos that omit the key.
 The tile stager sends the next lattice on a tile's closing batch, alongside
 `EmitAndReset`. Backprojection forms the closing tile on its current lattice,
 then installs the next one. Its geometry output describes the emitted tile so

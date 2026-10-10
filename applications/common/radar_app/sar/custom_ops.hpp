@@ -4,8 +4,10 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -20,6 +22,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/logger/logger.hpp>
 
+#include "radar_app/sar/hud_format.hpp"
 #include "radar_common/sar/formation_hud.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 
@@ -70,24 +73,44 @@ class SarImageReportOp : public holoscan::Operator<> {
           Error{ErrorCode::kInvalidArgument, "SarImageReportOp: expected (num_v,num_u)"});
     }
     const auto index = count_->count.fetch_add(1) + 1;
-    if (hud_) {
-      const auto& pb = hud_->snapshot().bp.playback;
-      if (pb.valid) {
-        HOLOSCAN_LOG_INFO(
-            "SAR: image {} formed, {}x{}  collect={:.3f}s wall={:.3f}s behind={:.3f}s", index,
-            shape[0], shape[1], pb.collect_s, pb.wall_s, pb.behind_s);
-      } else {
-        HOLOSCAN_LOG_INFO("SAR: image {} formed, {}x{}", index, shape[0], shape[1]);
-      }
-    } else {
-      HOLOSCAN_LOG_INFO("SAR: image {} formed, {}x{}", index, shape[0], shape[1]);
+    log_formed(index, shape[0], shape[1], /*info=*/false);
+    const auto now = std::chrono::steady_clock::now();
+    if (!last_info_at_.has_value() || now - *last_info_at_ >= kHeartbeatPeriod) {
+      log_formed(index, shape[0], shape[1], /*info=*/true);
+      last_info_at_ = now;
     }
     return {};
   }
   Input<Tensor> image{"image"};
 
  private:
+  static constexpr auto kHeartbeatPeriod = std::chrono::seconds(1);
+
+  void log_formed(int64_t index, int64_t num_v, int64_t num_u, bool info) const {
+    std::string extra;
+    if (hud_) {
+      const auto snap = hud_->snapshot();
+      const auto& bp = snap.bp;
+      const auto& pb = bp.playback;
+      extra =
+          format_bp_rate_line(bp.compute_s, bp.pulses, bp.pixels, bp.num_v, bp.num_u, num_v, num_u);
+      if (info && !extra.empty())
+        hud_->publish_rate_line(extra);
+      if (!extra.empty())
+        extra = "  " + extra;
+      if (pb.valid) {
+        extra += "  " + format_lag_line(pb.behind_s, pb.target_s(), pb.wall_s);
+      }
+    }
+    if (info) {
+      HOLOSCAN_LOG_INFO("SAR: image {} formed, {}x{}{}", index, num_v, num_u, extra);
+    } else {
+      HOLOSCAN_LOG_DEBUG("SAR: image {} formed, {}x{}{}", index, num_v, num_u, extra);
+    }
+  }
+
   std::shared_ptr<ImageCount> count_;
   std::shared_ptr<FormationHud> hud_{};
+  std::optional<std::chrono::steady_clock::time_point> last_info_at_{};
 };
 }  // namespace holoscan::radar::app::sar

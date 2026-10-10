@@ -24,6 +24,8 @@ visualization branches are enabled by application configuration. The reader's
 typed `stream_boundary` is joined to the aperture manager on the same tick.
 The paced reader, range/manager, and backprojection are separate Graph partitions with dedicated `ThreadPlacement` lanes so collect-vs-wall lag is the live playback clock, not formation GPU time on the controller.
 
+This demo opts in to `wait_for_downstream: true` on the CPHD reader, range compression, aperture manager, and backprojection, and on the app-owned scroll stager and mosaic: when those output queues fill, they wait and re-prepare instead of aborting. Other SAR demos omit the key and stay fail-fast. Raise `cphd_reader.playback_rate` above 1 to overload the GPU without a slower machine. The console keeps behind and queue-wait as WARN; per-slice timers are DEBUG. Progress is a 1 Hz `SAR: image N formed` INFO line. Use `HOLOSCAN_LOG_LEVEL=DEBUG` for every slice. A queue-full abort here is unexpected; the Graph driver then prints a continuous_strip-specific hint that the YAML in use is missing those keys.
+
 ## Build and offline fixture
 
 For this targeted fixture test, first open the devcontainer or run

@@ -73,6 +73,8 @@ a CPHD path may replace `cphd.path` directly, or follow a YAML path as the secon
 
 Each emission reports a complex image; the fixture produces five frames. A dump writes each formed image, whereas optional Holoviz shows a log-magnitude raster with the source-branch on-image HUD (scene name, formed size, BP rate, last-pulse latency, paced collect-vs-wall lag, APC look chevron) and a second `SAR timeline` Gantt window (20 s dwell bars, image-emit ticks with last-pulse latency labels, 1 Hz lag HUD). `playback_rate: 1` paces the reader by CPHD transmit time (sleep when ahead of collect; no sleep when behind). The lag HUD is that slack polled live (`now` versus collect), as on the HSDK 4 demo. Real-time images are still not guaranteed. The reader must deliver the boundary on the final batch for the reset.
 
+This demo omits `wait_for_downstream`, so a producer whose output queue is full aborts the run. After the operator Error, the Graph driver prints the same fail-fast teaching paragraph as the other SAR demos that omit the key.
+
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.
 `visualize_size` bounds the display raster; it does not change formation

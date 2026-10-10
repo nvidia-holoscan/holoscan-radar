@@ -54,6 +54,7 @@ Set `max_pulses` for the **largest managed output batch**, including arrivals pl
 | `emit_interval_pulses` | `int64` | 0 | Static | Automatic emit cadence |
 | `emit_mode` | `ApertureEmitMode` | continue | Static | Continue, reset, or reform |
 | `aperture_window` | `WindowSpec` | rectangular | Static | Pulse weights for an aperture |
+| `wait_for_downstream` | `bool` | false | Static | Required emits wait on full queues |
 
 ## Membership and emit rules
 
@@ -77,6 +78,10 @@ aperture at emission, optionally with the configured aperture window.
 An explicit `evict` input requests a pulse count to evict; a count above
 occupancy is rejected. A tick-local `sample_geometry` or `sample_points`
 may be staged and passed through to connected outputs.
+`wait_for_downstream: true` waits on the required `range_profiles_out`,
+`positions_out`, and `reference_position_out` emits instead of failing
+`compute()` when those output queues are full. Descriptor, points, control,
+and weight outputs stay latched.
 
 `sample_geometry`, `sample_points`, `control`, and `evict` are optional
 same-tick `[live]` inputs; a missing tick uses the static/default behavior.

@@ -17,6 +17,8 @@
 
 #include <holoscan/visualization/holoviz_op.hpp>
 
+#include "radar_app/sar/hud_format.hpp"
+
 namespace holoscan::radar::app::sar {
 
 // Host HUD sampled beside the formed-image raster. Matches the source-branch
@@ -34,12 +36,13 @@ struct FormationDiag {
   bool playback_valid{false};
   bool playback_paced{false};
   double playback_behind_s{0.0};
-  double playback_collect_s{0.0};
+  double playback_target_s{0.0};
   double playback_wall_s{0.0};
   bool apc_valid{false};
   double raster_u{0.0};
   double raster_v{0.0};
   std::optional<double> form_latency_s;
+  std::string rate_line;
 };
 
 struct OverlayConfig {
@@ -55,61 +58,6 @@ inline constexpr std::size_t kHudRowBytes = kTextRunHeaderBytes + kHudChars;
 inline constexpr std::uint32_t kHudMaxGlyphs = kHudRuns * kHudChars;
 inline constexpr std::uint32_t kHudMaxLines = 48U;
 inline constexpr std::size_t kHudLineFloats = 4U;
-
-inline std::string format_seconds(double seconds) {
-  if (!std::isfinite(seconds) || seconds < 0.0)
-    return "0ms";
-  if (seconds < 1.0) {
-    return std::to_string(static_cast<int>(std::llround(seconds * 1000.0))) + "ms";
-  }
-  const int scaled = static_cast<int>(std::llround(seconds * 10.0));
-  return std::to_string(scaled / 10) + "." + std::to_string(scaled % 10) + "s";
-}
-
-inline std::string format_lag_line(double behind_s, double collect_s = 0.0, double wall_s = 0.0) {
-  if (!std::isfinite(behind_s))
-    return {};
-  const std::string clocks = "  " + format_seconds(collect_s) + "c/" + format_seconds(wall_s) + "w";
-  if (std::abs(behind_s) < 0.05)
-    return "on time" + clocks;
-  if (behind_s > 0.0) {
-    const int scaled = static_cast<int>(std::llround(behind_s * 10.0));
-    return "+" + std::to_string(scaled / 10) + "." + std::to_string(scaled % 10) + "s behind" +
-           clocks;
-  }
-  return format_seconds(-behind_s) + " ahead" + clocks;
-}
-
-inline std::string format_form_latency(double seconds) {
-  if (!std::isfinite(seconds) || seconds < 0.0)
-    return {};
-  return format_seconds(seconds) + " after last pulse";
-}
-
-inline std::string format_sci(double value) {
-  if (!std::isfinite(value) || value <= 0.0)
-    return "0";
-  int exp = static_cast<int>(std::floor(std::log10(value)));
-  double mantissa = value / std::pow(10.0, static_cast<double>(exp));
-  int scaled = static_cast<int>(std::llround(mantissa * 100.0));
-  if (scaled >= 1000) {
-    scaled = 100;
-    ++exp;
-  }
-  const int whole = scaled / 100;
-  const int frac = scaled % 100;
-  std::string out = std::to_string(whole) + ".";
-  if (frac < 10)
-    out += '0';
-  out += std::to_string(frac);
-  out += 'e';
-  if (exp < 0) {
-    out += '-';
-    exp = -exp;
-  }
-  out += std::to_string(exp);
-  return out;
-}
 
 // Packed 0xAABBGGRR (Holoviz text-layer colour).
 constexpr std::uint32_t hud_rgba(std::uint32_t r, std::uint32_t g, std::uint32_t b,
@@ -225,7 +173,7 @@ inline void write_hud_rows(std::uint8_t* rows, const std::vector<std::string>& l
   }
   if (show_lag && diag.playback_valid && diag.playback_paced) {
     const std::string lag =
-        format_lag_line(diag.playback_behind_s, diag.playback_collect_s, diag.playback_wall_s);
+        format_lag_line(diag.playback_behind_s, diag.playback_target_s, diag.playback_wall_s);
     const auto color = diag.playback_behind_s > 0.2 ? hud_rgba(255, 96, 80) : hud_rgba(80, 200, 80);
     write_hud_run(rows + 4U * kHudRowBytes,
                   TextRunHeader{.x = 0.02F, .y = 0.94F, .size_px = 16.0F, .color = color}, lag);

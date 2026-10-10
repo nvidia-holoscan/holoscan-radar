@@ -181,27 +181,23 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
     banner.push_back(size);
   }
   ++overlay_index_;
-  std::string rate_line;
-  if (diag.bp_compute_s > 0.0 && diag.pulses > 0 && diag.pixels > 0) {
-    const double rate =
-        static_cast<double>(diag.pixels) * static_cast<double>(diag.pulses) / diag.bp_compute_s;
-    rate_line = format_seconds(diag.bp_compute_s) + "  " + format_sci(rate) + " px*pls/s";
-    if (diag.bp_num_v > 0 && diag.bp_num_u > 0 &&
-        (diag.bp_num_v != shape[0] || diag.bp_num_u != shape[1])) {
-      rate_line =
-          std::to_string(diag.bp_num_v) + "x" + std::to_string(diag.bp_num_u) + "  " + rate_line;
+  if (!diag.rate_line.empty()) {
+    banner.push_back(diag.rate_line);
+  } else {
+    const std::string rate_line =
+        format_bp_rate_line(diag.bp_compute_s, diag.pulses, diag.pixels, diag.bp_num_v,
+                            diag.bp_num_u, shape[0], shape[1]);
+    const auto overlay_now = std::chrono::steady_clock::now();
+    if (!rate_line.empty() &&
+        (!have_overlay_rate_ ||
+         std::chrono::duration<double>(overlay_now - overlay_rate_at_).count() >= 1.0)) {
+      overlay_rate_at_ = overlay_now;
+      have_overlay_rate_ = true;
+      held_rate_line_ = rate_line;
     }
+    if (!held_rate_line_.empty())
+      banner.push_back(held_rate_line_);
   }
-  const auto overlay_now = std::chrono::steady_clock::now();
-  if (!rate_line.empty() &&
-      (!have_overlay_rate_ ||
-       std::chrono::duration<double>(overlay_now - overlay_rate_at_).count() >= 1.0)) {
-    overlay_rate_at_ = overlay_now;
-    have_overlay_rate_ = true;
-    held_rate_line_ = rate_line;
-  }
-  if (!held_rate_line_.empty())
-    banner.push_back(held_rate_line_);
   if (diag.form_latency_s.has_value()) {
     const auto latency = format_form_latency(*diag.form_latency_s);
     if (!latency.empty())
@@ -256,7 +252,7 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
   descriptor.encoding = schema::ImageEncoding_RGBA8;
   descriptor.color_space = schema::ColorSpace_UNSPECIFIED;
   HOLOSCAN_RETURN_IF_ERROR(frame.emit_tensor(std::move(*loan), descriptor, options));
-  HOLOSCAN_LOG_INFO("SarImageVizOp: {}x{} -> {}x{} display", shape[0], shape[1], height, width);
+  HOLOSCAN_LOG_DEBUG("SarImageVizOp: {}x{} -> {}x{} display", shape[0], shape[1], height, width);
   return {};
 }
 }  // namespace holoscan::radar::app::sar

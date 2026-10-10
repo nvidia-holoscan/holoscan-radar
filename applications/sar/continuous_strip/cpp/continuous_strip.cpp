@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <memory>
+
 #include <holoscan/core/graph.hpp>
 #include "radar_app/sar/graph_driver.hpp"
 #include "config.hpp"  // NOLINT(build/include_subdir)
@@ -9,6 +11,15 @@
 #include "scroll_op.hpp"  // NOLINT(build/include_subdir)
 
 namespace app = holoscan::radar::app;
+
+constexpr const char* kQueueFullHint =
+    "continuous_strip is supposed to wait on a full queue "
+    "(wait_for_downstream: true on cphd_reader, range_compression, "
+    "aperture_manager, backprojection, and the app YAML key for the scroll "
+    "stager and mosaic). A queue-full abort means those keys are missing in "
+    "the YAML that actually ran — holoscan run copies config into the build "
+    "tree. Edit applications/sar/continuous_strip/config/continuous_strip.yaml "
+    "and rebuild, or pass that path as the first argument.";
 
 int main(int argc, char** argv) {
   return run_sar_graph_app(
@@ -20,9 +31,12 @@ int main(int argc, char** argv) {
             cfg.emit_interval_pulses > 0 && cfg.reader_pulses_per_tick > cfg.emit_interval_pulses
                 ? cfg.emit_interval_pulses
                 : cfg.reader_pulses_per_tick;
+        auto queue_wait = std::make_shared<holoscan::radar::QueueWaitPolicy>();
+        queue_wait->wait = cfg.wait_for_downstream;
         auto scroll = graph.template op<app::sar::ScrollGeometryStagerOp>(
             "scroll_stager", cfg.scroll_parent, cfg.sample_geometry, cfg.scroll_anchor,
-            cfg.reader_loop, slice, cfg.reader_pulses_per_tick, *extents.max_range_bins);
+            cfg.reader_loop, slice, cfg.reader_pulses_per_tick, *extents.max_range_bins,
+            queue_wait);
         application.add(scroll);
         bind_outputs(options, "scroll_stager",
                      {"range_profiles_out", "positions_out", "reference_position_out"});
@@ -40,11 +54,12 @@ int main(int argc, char** argv) {
         graph.add_flow(manager->reference_position_out, bp->reference_position, queue);
         graph.add_flow(manager->control_out, bp->control, queue);
         auto mosaic = graph.template op<app::sar::SarMosaicOp>("sar_mosaic", cfg.scroll_parent,
-                                                               cfg.reader_loop);
+                                                               cfg.reader_loop, queue_wait);
         formation.add(mosaic);
         bind_outputs(options, "sar_mosaic", {"image_out"});
         graph.add_flow(bp->image, mosaic->image, queue);
         graph.add_flow(bp->sample_geometry_out, mosaic->sample_geometry, queue);
         return &mosaic->image_out;
-      });
+      },
+      kQueueFullHint);
 }

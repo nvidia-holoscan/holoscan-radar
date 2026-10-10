@@ -90,17 +90,21 @@ expected<void, Error> PhaseCorrectionOp<T>::compute(ExecutionContext& context) {
         Error{ErrorCode::kNotSupported, std::string(kOpName) + ": no CUDA compute stream"});
   }
   // Apply the declared add/subtract sign across every range bin of each pulse.
-  HOLOSCAN_TRY(emit_device_tensor(range_profiles_out, context, shape, profiles.dtype(),
-                                  [&](void* destination, std::size_t) -> expected<void, Error> {
-                                    try {
-                                      detail::run_phase_correction<T>(
-                                          sense, profiles.data(), phase.data(), 1, shape[0],
-                                          shape[1], destination, stream, kOpName);
-                                    } catch (const std::exception& e) {
-                                      return make_unexpected(Error{ErrorCode::kFailure, e.what()});
-                                    }
-                                    return {};
-                                  }));
+  HOLOSCAN_TRY(emit_required_tensor(
+      range_profiles_out, context, "PhaseCorrectionOp.range_profiles_out",
+      context.params<PhaseCorrectionParams>().wait_for_downstream, [&] {
+        return prepare_device_tensor(
+            range_profiles_out, context, shape, profiles.dtype(),
+            [&](void* destination, std::size_t) -> expected<void, Error> {
+              try {
+                detail::run_phase_correction<T>(sense, profiles.data(), phase.data(), 1, shape[0],
+                                                shape[1], destination, stream, kOpName);
+              } catch (const std::exception& e) {
+                return make_unexpected(Error{ErrorCode::kFailure, e.what()});
+              }
+              return {};
+            });
+      }));
   retained_profiles_ = std::move(profiles);
   retained_phase_ = std::move(phase);
   return {};

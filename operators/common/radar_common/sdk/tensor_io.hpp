@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -23,6 +24,8 @@
 #include <holoscan/core/tensor_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 #include <holoscan/logger/logger.hpp>
+
+#include "radar_common/sdk/cooperative_sleep.hpp"
 
 namespace holoscan::radar {
 
@@ -249,6 +252,107 @@ inline std::size_t tensor_byte_span(std::span<const int64_t> shape, DLDataType d
     throw std::invalid_argument("tensor_byte_span: invalid or overflowing shape");
   }
   return static_cast<std::size_t>(count) * bytes_per_element;
+}
+
+// App-owned operators capture this at the graph ctor. Library SAR operators
+// read the optional static Param `wait_for_downstream` (default false)
+// instead — see docs/planning/SAR/OPERATOR_API.md. FMCW has not added that
+// Param yet; copy the SAR spelling and emit_required_tensor when they do.
+// Default false keeps fail-fast demos. A failed Tensor emit consumes the
+// loan, so wait retries must re-prepare, not re-emit.
+struct QueueWaitPolicy {
+  bool wait{false};
+};
+
+inline bool wait_queues(const std::shared_ptr<QueueWaitPolicy>& policy) {
+  return policy && policy->wait;
+}
+
+template <typename Fn>
+auto retry_transient(ExecutionContext& context, std::string_view what, Fn&& fn) -> decltype(fn()) {
+  bool warned = false;
+  for (;;) {
+    auto result = fn();
+    if (result)
+      return result;
+    const Error err = result.error();
+    if ((err.code != ErrorCode::kResourceExhausted && err.code != ErrorCode::kBackpressured) ||
+        context.cancellation().stop_requested()) {
+      return result;
+    }
+    if (!warned) {
+      HOLOSCAN_LOG_WARN("{}: waiting for tensor pool/queue due to pipeline backpressure ({})", what,
+                        holoscan::error_code_name(err.code));
+      warned = true;
+    }
+    cooperative_sleep(context, 0.01);
+  }
+}
+
+// Fail-fast (wait false): keep the SDK code, replace the message so a
+// RUNTIME_OPERATOR_CALLBACK_FAILED names the port and points at
+// wait_for_downstream. Log it too: the runtime wrapper can bury the Error.
+inline Error explain_fail_fast_emit(std::string_view what, ErrorCode code) {
+  const char* detail = code == ErrorCode::kBackpressured
+                           ? "next stage is behind; output queue is full"
+                           : "no free tensor buffer";
+  return Error{code, std::string(what) + ": " + detail +
+                         ". The run is stopping. Set wait_for_downstream: true to wait "
+                         "instead of aborting."};
+}
+
+template <typename Fn>
+auto emit_required_result(ExecutionContext& context, std::string_view what, bool wait,
+                          Fn&& once) -> decltype(once()) {
+  if (wait)
+    return retry_transient(context, what, std::forward<Fn>(once));
+  auto result = once();
+  if (result)
+    return result;
+  const ErrorCode code = result.error().code;
+  if (code != ErrorCode::kResourceExhausted && code != ErrorCode::kBackpressured)
+    return result;
+  Error explained = explain_fail_fast_emit(what, code);
+  HOLOSCAN_LOG_ERROR("{}", holoscan::runtime_error_message(explained));
+  return make_unexpected(std::move(explained));
+}
+
+template <typename PrepareFn>
+[[nodiscard]] expected<void, Error> emit_required_tensor(Output<Tensor>& port,
+                                                         ExecutionContext& context,
+                                                         std::string_view what, bool wait,
+                                                         PrepareFn&& prepare,
+                                                         std::optional<EmitOptions> options = {}) {
+  auto once = [&]() -> expected<void, Error> {
+    HOLOSCAN_TRY(auto loan, prepare());
+    const EmitOptions opts =
+        options.value_or(EmitOptions{.capture_time = context.activation_time()});
+    return port.emit(std::move(loan), opts);
+  };
+  return emit_required_result(context, what, wait, once);
+}
+
+template <typename Payload, typename PrepareFn>
+[[nodiscard]] expected<void, Error> emit_required_schema_tensor(
+    Output<Payload>& port, ExecutionContext& context, std::string_view what, bool wait,
+    Payload payload, PrepareFn&& prepare, std::optional<EmitOptions> options = {}) {
+  auto once = [&]() -> expected<void, Error> {
+    HOLOSCAN_TRY(auto loan, prepare());
+    const EmitOptions opts =
+        options.value_or(EmitOptions{.capture_time = context.activation_time()});
+    return port.emit_tensor(std::move(loan), payload, opts);
+  };
+  return emit_required_result(context, what, wait, once);
+}
+
+template <typename Port, typename Value>
+[[nodiscard]] expected<void, Error> emit_required_value(Port& port, ExecutionContext& context,
+                                                        std::string_view what, bool wait,
+                                                        Value value, EmitOptions options) {
+  auto once = [&]() -> expected<void, Error> {
+    return port.emit(value, options);
+  };
+  return emit_required_result(context, what, wait, once);
 }
 
 }  // namespace holoscan::radar

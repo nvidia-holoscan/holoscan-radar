@@ -48,6 +48,7 @@ cphd_reader:
   loop: true
   playback_rate: 1
   duty_cycle: 1
+  wait_for_downstream: true
 
 nfft_pad: next_fast
 
@@ -55,16 +56,23 @@ aperture_manager:
   max_aperture_pulses: 0
   emit_interval_pulses: 256
   emit_mode: continue
+  wait_for_downstream: true
 
 range_compression:
   range_window: taylor
+  wait_for_downstream: true
 
 backprojection:
   coordinate_frame: ecef
   geometry_change: scroll
+  wait_for_downstream: true
 
 visualize: true
 visualize_size: 1400
 skip_display_check: false
 headless: false
 visualize_hold_s: -1
+# App-owned scroll/mosaic wait on full kBlocking queues. Library
+# reader and formation operators opt in via wait_for_downstream on
+# their blocks.
+wait_for_downstream: true

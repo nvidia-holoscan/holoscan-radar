@@ -50,6 +50,7 @@ complex64/float32; `T=double` means complex128/float64.
 | `loop` | `bool` | false | Static | Repeat the file list |
 | `playback_rate` | `double` | 0 | Static | Pace by TxTime |
 | `duty_cycle` | `double` | 1 | Static | Gap between collections |
+| `wait_for_downstream` | `bool` | false | Static | Required emits wait on full queues |
 
 ## Decode and timing
 
@@ -62,15 +63,21 @@ A positive `playback_rate` paces collection time relative to wall time;
 `duty_cycle` adds an inter-collection gap. Collect time is the finite `TxTime`
 span (non-finite PVP samples are skipped; some Umbra vectors store NaN there).
 Playback slack and duty-cycle quiet sleeps return early when the run requests
-cooperative stop. Required
-tensor emits retry on `kBackpressured` / `kResourceExhausted`: HSDK 5
-`QueuePolicy::kBlocking` does not park `OnClock` until the consumer has room,
-and a failed `emit(TensorOutputLoan)` consumes the loan, so the reader waits
-and re-prepares instead of ending the run. The wait returns on cooperative
-stop. The lag HUD
-is live collect versus wall (`TxTime` span versus now since the collection
-start), matching the HSDK 4 `playback_status()` poll. Pace sleep uses that
-same slack (no sleep while behind). Apps put the reader and backprojection in
+cooperative stop. `wait_for_downstream: true` retries required Tensor
+emits on `kBackpressured` / `kResourceExhausted` through the shared helper:
+HSDK 5 `QueuePolicy::kBlocking` does not park `OnClock` until the consumer
+has room, and a failed `emit(TensorOutputLoan)` consumes the loan, so the
+reader waits and re-prepares. Omit the key (default false) to fail-fast with
+the shared explanation. The wait returns on cooperative stop. The lag HUD
+is live target versus wall (`TxTime` span / `playback_rate` versus now since
+the collection start), matching the HSDK 4 `playback_status()` poll. Pace
+sleep uses that same slack (no sleep while behind). A paced reader
+(`playback_rate > 0`) also WARNs at most once per second while behind by
+0.2 s or more (the Gantt lag-band entry), and stops once behind is back to
+0.05 s. The WARN prints `target` (paced transmit time) and wall so behind is
+`wall − target`. Unpaced `playback_rate: 0` does not warn. Per-batch
+collect/wall/`signal`/`decode`/`emit`/`slack` timing is DEBUG
+(`HOLOSCAN_LOG_LEVEL=DEBUG`). Apps put the reader and backprojection in
 separate Graph partitions so formation cannot steal the playback clock.
 
 The CPHD PVP fields `TxTime`, `TxPos`, `RcvPos`, `SRPPos`, `SC0`, and `SCSS`

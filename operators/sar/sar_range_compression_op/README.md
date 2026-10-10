@@ -49,6 +49,7 @@ Set `max_pulses`, `max_samples_per_pulse`, and `max_range_bins` for the largest 
 | `fft_norm` | `FftNorm` | backward | [live] | Inverse FFT scaling |
 | `nfft` | `int64` | observed samples | [live] | Zero-padded transform length |
 | `propagation_speed` | `double` | 299792458 m/s | [live] | Frequency-to-range scale |
+| `wait_for_downstream` | `bool` | false | Static | Required emits wait on full queues |
 
 ## Transform and axis conventions
 
@@ -67,8 +68,10 @@ differential-range axis from waveform sample spacing and
 `propagation_speed`. The descriptor output `range_window_out` reports the
 applied window when connected. An unwired optional output is latched after
 its first declined emit, avoiding later dedicated output work. The main `range_profiles` tensor emits
-on every input tick. Each `[live]` port uses same-tick `Exact{}` with Params
-as the safe default; no earlier override persists.
+on every input tick. `wait_for_downstream: true` waits on that required emit
+instead of failing `compute()` when the output queue is full. Each `[live]`
+port uses same-tick `Exact{}` with Params as the safe default; no earlier
+override persists.
 
 ## Validation and use
 

@@ -20,6 +20,7 @@
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/max_byte_span.hpp"
 #include <holoscan/core/expected_macros.hpp>
+#include <holoscan/logger/logger.hpp>
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "sar/backprojection_op/backprojection_stage.hpp"
@@ -727,7 +728,6 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
     bool emitted = false;
     int64_t emitted_pulses = 0;
     int64_t emitted_pixels = 0;
-    std::optional<TensorOutputLoan> image_loan;
     std::optional<SampleGeometry> emitted_geometry;
     if (control_value.has_value() && is_emit(*control_value)) {
       // Keep the lattice of this image before EmitAndReset installs the next one.
@@ -735,32 +735,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       emitted = true;
       emitted_pulses = unemitted_pulses_;
       emitted_pixels = num_v * num_u;
-      HOLOSCAN_TRY(
-          auto loan,
-          prepare_device_tensor(
-              image, context, std::vector<int64_t>{num_v, num_u}, complex_dtype<T>(),
-              [&](void* dst, std::size_t) -> expected<void, Error> {
-                if (detail::backend_is_matx(backend_value_)) {
-#if __has_include("matx/kernels/sar_bp.cuh")
-                  detail::emit_matx_accum(*state_, static_cast<T*>(dst), 1, num_v, num_u, stream);
-#endif
-                } else {
-                  detail::emit_accum(*state_, static_cast<T*>(dst), 1, num_v, num_u, stream);
-                }
-                return {};
-              }));
-      image_loan.emplace(std::move(loan));
       unemitted_pulses_ = 0;
-    }
-
-    if (control_value.has_value() && *control_value == FormationControl::kEmitAndReset) {
-      if (detail::backend_is_matx(backend_value_)) {
-#if __has_include("matx/kernels/sar_bp.cuh")
-        detail::reset_matx_accum(*state_, stream);
-#endif
-      } else {
-        detail::reset_accum(*state_, stream);
-      }
     }
 
     if (apply_after) {
@@ -823,7 +798,37 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
             .playback = tick_playback,
         });
       }
-      HOLOSCAN_RETURN_IF_ERROR(emit_prepared_tensor(image, context, std::move(*image_loan)));
+      // Copy after GPU work is synced, and reset only after a successful
+      // image emit: a failed Tensor emit consumes the loan, so a wait retry
+      // must still see the formed accum.
+      HOLOSCAN_RETURN_IF_ERROR(emit_required_tensor(
+          image, context, "BackprojectionOp.image", params().wait_for_downstream, [&] {
+            return prepare_device_tensor(
+                image, context, std::vector<int64_t>{num_v, num_u}, complex_dtype<T>(),
+                [&](void* dst, std::size_t) -> expected<void, Error> {
+                  if (detail::backend_is_matx(backend_value_)) {
+#if __has_include("matx/kernels/sar_bp.cuh")
+                    detail::emit_matx_accum(*state_, static_cast<T*>(dst), 1, num_v, num_u, stream);
+#endif
+                  } else {
+                    detail::emit_accum(*state_, static_cast<T*>(dst), 1, num_v, num_u, stream);
+                  }
+                  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+                    return make_unexpected(
+                        Error{ErrorCode::kFailure, who + ": image copy sync failed"});
+                  }
+                  return {};
+                });
+          }));
+      if (control_value.has_value() && *control_value == FormationControl::kEmitAndReset) {
+        if (detail::backend_is_matx(backend_value_)) {
+#if __has_include("matx/kernels/sar_bp.cuh")
+          detail::reset_matx_accum(*state_, stream);
+#endif
+        } else {
+          detail::reset_accum(*state_, stream);
+        }
+      }
       if (!sample_points_connected_ && emitted_geometry->is_valid()) {
         if (geometry_output_.active()) {
           const auto packed = pack_sample_geometry(*emitted_geometry);
@@ -845,8 +850,8 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
                               ? static_cast<double>(emitted_pixels) *
                                     static_cast<double>(emitted_pulses) / aperture_compute_s_
                               : 0.0;
-      HOLOSCAN_LOG_INFO("{}: {}x{} in {:.3f} s ({:.3e} px*pls/s, {} pulses)", who, num_v, num_u,
-                        aperture_compute_s_, rate, emitted_pulses);
+      HOLOSCAN_LOG_DEBUG("{}: {}x{} in {:.3f} s ({:.3e} px*pls/s, {} pulses)", who, num_v, num_u,
+                         aperture_compute_s_, rate, emitted_pulses);
       aperture_compute_s_ = 0.0;
     }
     return {};

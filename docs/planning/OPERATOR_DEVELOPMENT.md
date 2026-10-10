@@ -149,6 +149,7 @@ the plan builder and validate there.
 | Need | Header |
 | --- | --- |
 | Single-entry `TensorMap` receive/emit | `radar_common/sdk/tensor_io.hpp` |
+| Required emit wait-or-fail | `emit_required_tensor` / `retry_transient` in `tensor_io.hpp` |
 | Exact `[live]` resolve | `radar_common/sdk/override_param.hpp` |
 | Warn-once artifact cache | `radar_common/sdk/config_cache.hpp` |
 | Arg setters for custom types | `radar_common/sdk/arg_setters.hpp` |
@@ -284,6 +285,18 @@ transient fault costs one frame rather than the run.
 `emit_prepared_tensor` and `emit_device_tensor` carry `[[nodiscard]]` like the
 `Output::emit` they wrap, so forgetting to handle the result is a build error
 and the `(void)` reads as the deliberate choice it is.
+
+Required library emits are fail-fast by default (`emit_required_tensor` with
+wait false). A failed Tensor emit consumes the loan, so a wait retry must
+re-prepare. SAR formation producers take an optional static Param
+`wait_for_downstream` (default false, not `[live]`, Params schema version 2)
+that switches required emits to that helper. Do not capture wait in a library
+constructor. `CPHDReaderOp` takes the same Param (default false). App-owned
+operators may capture `QueueWaitPolicy` from app YAML. FMCW has not added the
+Param yet: copy the SAR spelling, emit through `emit_required_tensor`, and
+bump the Params schema. Do not use `kDropOldest` on a formation data path.
+Continuous strip opts in on reader, range-compression, aperture-manager, and
+backprojection YAML plus the app-owned scroll/mosaic flag.
 
 ### Sample time propagation and aligned joins
 
@@ -580,8 +593,9 @@ it: no leak, no backwards steps, and the operator chooses which sample matters
 
 Structural enums that select a kernel (`cfar_variant`, multiplexing scheme,
 `angle_convention`) stay **static** — callers instantiate another operator.
-Footguns that are "reasonable" (live `pfa`, live window size) are allowed with
-warn-once + cache.
+`wait_for_downstream` is static too: it selects fail-fast vs retry for the
+run, not a per-tick encoding. Footguns that are "reasonable" (live `pfa`,
+live window size) are allowed with warn-once + cache.
 
 ### When the contract says "cheap" but reality is not
 

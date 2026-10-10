@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -26,10 +27,11 @@ struct CollectionSpan {
   std::optional<std::chrono::steady_clock::time_point> quiet_end;
 };
 
-// Collect time vs wall. `behind_s` > 0 means wall is ahead of radar time
-// (falling behind). While `live`, snapshot() recomputes wall from now() so a
-// 100 ms timeline poll during pace-sleep sees current slack, matching the
-// HSDK 4 `playback_status()` poll of the live reader.
+// Collect time vs wall. `collect_s` is the unscaled TxTime span (rate 1).
+// `target_s()` is that span at `playback_rate`; `behind_s` is wall minus
+// target (falling behind when > 0). While `live`, snapshot() recomputes
+// wall from now() so a 100 ms timeline poll during pace-sleep sees current
+// slack, matching the HSDK 4 `playback_status()` poll of the live reader.
 struct PlaybackStatus {
   bool valid{false};
   bool paced{false};
@@ -40,6 +42,12 @@ struct PlaybackStatus {
   double last_slack_s{0.0};
   double rate{0.0};
   std::chrono::steady_clock::time_point wall_origin{};
+
+  [[nodiscard]] double target_s() const {
+    if (paced && rate > 0.0)
+      return collect_s / rate;
+    return collect_s;
+  }
 };
 
 struct LastMeanApc {
@@ -71,6 +79,11 @@ struct FormationHudSnapshot {
   LastMeanApc apc{};
   std::optional<std::chrono::steady_clock::time_point> last_packet_at;
   FormationHudBp bp{};
+  // Last INFO heartbeat rate line from SarImageReportOp. The HUD draws this
+  // instead of live-polling `bp` after the LUT: visualization is drop-oldest
+  // on another partition, so a live poll can read a later BP emit than the
+  // console just logged.
+  std::string rate_line;
 };
 
 class FormationHud {
@@ -93,6 +106,11 @@ class FormationHud {
     bp_ = bp;
   }
 
+  void publish_rate_line(std::string line) {
+    const std::lock_guard lock(mu_);
+    rate_line_ = std::move(line);
+  }
+
   [[nodiscard]] FormationHudSnapshot snapshot() const {
     const std::lock_guard lock(mu_);
     FormationHudSnapshot snap{.spans = spans_,
@@ -100,17 +118,13 @@ class FormationHud {
                               .last_batch_playback = last_batch_playback_,
                               .apc = apc_,
                               .last_packet_at = last_packet_at_,
-                              .bp = bp_};
+                              .bp = bp_,
+                              .rate_line = rate_line_};
     if (snap.playback.valid && snap.playback.live) {
       const auto now = std::chrono::steady_clock::now();
       snap.playback.wall_s =
           std::max(0.0, std::chrono::duration<double>(now - snap.playback.wall_origin).count());
-      if (snap.playback.paced && snap.playback.rate > 0.0) {
-        snap.playback.behind_s =
-            snap.playback.wall_s - snap.playback.collect_s / snap.playback.rate;
-      } else {
-        snap.playback.behind_s = snap.playback.wall_s - snap.playback.collect_s;
-      }
+      snap.playback.behind_s = snap.playback.wall_s - snap.playback.target_s();
     }
     return snap;
   }
@@ -123,6 +137,7 @@ class FormationHud {
   LastMeanApc apc_{};
   std::optional<std::chrono::steady_clock::time_point> last_packet_at_;
   FormationHudBp bp_{};
+  std::string rate_line_;
 };
 
 }  // namespace holoscan::radar

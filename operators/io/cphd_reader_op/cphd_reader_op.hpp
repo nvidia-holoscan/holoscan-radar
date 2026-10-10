@@ -50,18 +50,22 @@ struct CphdReaderParams {
   bool loop{false};
   double playback_rate{0.0};
   double duty_cycle{1.0};
+  bool wait_for_downstream{false};
 };
 
-HOLOSCAN_PARAM_SCHEMA(CphdReaderParams,
-                      holoscan::param_schema("com.nvidia.holoscan.radar.CphdReaderParams", 1),
-                      holoscan::field<&CphdReaderParams::path>("path"),
-                      holoscan::field<&CphdReaderParams::coordinate_frame>("coordinate_frame"),
-                      holoscan::field<&CphdReaderParams::pulses_per_tick>("pulses_per_tick"),
-                      holoscan::field<&CphdReaderParams::channel>("channel"),
-                      holoscan::field<&CphdReaderParams::pulse_range>("pulse_range"),
-                      holoscan::field<&CphdReaderParams::loop>("loop"),
-                      holoscan::field<&CphdReaderParams::playback_rate>("playback_rate"),
-                      holoscan::field<&CphdReaderParams::duty_cycle>("duty_cycle"));
+HOLOSCAN_PARAM_SCHEMA(
+    CphdReaderParams, holoscan::param_schema("com.nvidia.holoscan.radar.CphdReaderParams", 2),
+    holoscan::field<&CphdReaderParams::path>("path"),
+    holoscan::field<&CphdReaderParams::coordinate_frame>("coordinate_frame"),
+    holoscan::field<&CphdReaderParams::pulses_per_tick>("pulses_per_tick"),
+    holoscan::field<&CphdReaderParams::channel>("channel"),
+    holoscan::field<&CphdReaderParams::pulse_range>("pulse_range"),
+    holoscan::field<&CphdReaderParams::loop>("loop"),
+    holoscan::field<&CphdReaderParams::playback_rate>("playback_rate"),
+    holoscan::field<&CphdReaderParams::duty_cycle>("duty_cycle"),
+    holoscan::field<&CphdReaderParams::wait_for_downstream>("wait_for_downstream")
+        .description("When true, required Tensor emits wait on kBackpressured / "
+                     "kResourceExhausted instead of failing compute(). Static. Default false."));
 
 template <typename T>
 class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
@@ -88,6 +92,7 @@ class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
  private:
   void open_file();
   void publish_hud();
+  void maybe_warn_behind();
   MaxTensorExtents extents_;
   std::shared_ptr<FormationHud> hud_{};
   std::vector<std::string> files_;
@@ -104,6 +109,8 @@ class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
   std::optional<std::chrono::steady_clock::time_point> last_packet_at_;
   std::vector<CollectionSpan> spans_;
   PlaybackStatus playback_{};
+  bool behind_episode_{false};
+  std::optional<std::chrono::steady_clock::time_point> last_behind_warn_at_{};
   LastMeanApc last_apc_{};
   LatchedOutput axis_out_, times_out_, velocities_out_, frame_out_;
   // Private H2D stream. Synchronizing the runtime compute stream after upload
