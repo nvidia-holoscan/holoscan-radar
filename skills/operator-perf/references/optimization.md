@@ -22,8 +22,8 @@ cannot express valid baseline behavior. Snapshot copies never enter timing.
 Audit verification coverage against the candidate's affected surface: both
 precisions; all outputs/descriptors; optional wiring; empty/boundary inputs;
 multi-frame ownership; live match/miss and shape changes; cached/unseen
-transitions; invalid-input behavior. Initial bundled fixtures cover only
-ClutterFilter and FMCWRangeProcessor subsets. Extend native fixtures and
+transitions; invalid-input behavior. Bundled fixtures cover ClutterFilter and
+expanded split/fused FMCW range-stage subsets. Extend native fixtures and
 analytic tests for uncovered behavior before accepting a dependent candidate.
 Do not build a second radar-owned single-operator Graph harness.
 

@@ -191,9 +191,13 @@ python3 -m unittest discover -s performance/optimization/tests -v
 With performance and testing enabled, `radar_verify_operator` is a separate
 HSDK 5 executable using native testing
 fixtures and bounded snapshots; it never adds capture copies to the timed
-runner. Initial native fixtures cover ClutterFilter and FMCWRangeProcessor,
+runner. Native fixtures cover ClutterFilter, FMCWRangeProcessor and the fused
+FMCWRangeDopplerProcessor shared-stage consumer,
 both precisions, recipe profile sizes, live match/miss, and range optional
-outputs. Snapshots export observed output sequence, capture time, clock,
+outputs. Expanded range-stage cases exercise Hann windows, padding, dechirp,
+real-IF, four named channels, and live window/waveform match-then-miss. This is
+range-stage coverage, not exhaustive Doppler, boundary/error or cache-revisit
+coverage. Snapshots export observed output sequence, capture time, clock,
 representation, bytes, and stable SDK diagnostics; runtime logs are retained
 for separate warning/error review. GPU qualification against SDK `main-5x`
 revision `5fed2c24acf5b0bc1e538deeaae311efd8d256e1` passed 28 cases with exact

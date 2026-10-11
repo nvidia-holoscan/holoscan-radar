@@ -21,13 +21,15 @@ target_compile_definitions(radar_perf_utils INTERFACE
 # Output verification is deliberately separate from the timed Graph runner.
 # The native SDK fixture provides bounded owning snapshots, not timing samples.
 if(HOLOSCAN_RADAR_BUILD_TESTING AND TARGET holoscan::clutter_filter_op
-        AND TARGET holoscan::fmcw_range_processor_op)
+        AND TARGET holoscan::fmcw_range_processor_op
+        AND TARGET holoscan::fmcw_range_doppler_processor_op)
     find_package(GTest REQUIRED)
     add_executable(radar_verify_operator optimization/verify_operator.cpp)
     target_include_directories(radar_verify_operator PRIVATE ${PROJECT_SOURCE_DIR}/tests/cpp)
     target_link_libraries(radar_verify_operator PRIVATE
         radar_perf_utils holoscan::testing GTest::gtest
-        holoscan::clutter_filter_op holoscan::fmcw_range_processor_op)
+        holoscan::clutter_filter_op holoscan::fmcw_range_processor_op
+        holoscan::fmcw_range_doppler_processor_op)
     set_target_properties(radar_verify_operator PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/verification")
 endif()

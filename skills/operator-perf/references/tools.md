@@ -150,6 +150,8 @@ precisions, multiple frames, a live match/miss, and range optional-output modes:
   performance/operators/fmcw/clutter_filter/recipe.yaml /absolute/snapshots.json
 ./build/performance/verification/radar_verify_operator fmcw_range_processor \
   performance/operators/fmcw/fmcw_range_processor/recipe.yaml /absolute/range.json
+./build/performance/verification/radar_verify_operator fmcw_range_doppler_processor \
+  performance/operators/fmcw/fmcw_range_doppler_processor/recipe.yaml /absolute/fused.json
 ```
 
 The exporter records actual output sample sequence, capture time, and clock
@@ -180,11 +182,14 @@ source-bound `capture` workflow below for optimization sessions.
 qualification expands both precisions and compares exact identities, not magic
 case counts. Extend it alongside native fixtures, or pass `--inventory PATH`
 to `qualify_native.py`. The current inventory has ClutterFilter baseline/live
-mean-subtraction and range baseline/live-nfft/optional-output cases. It does
-**not** cover fused range-Doppler, live windows/waveforms, real-IF, dechirp,
-cached transitions or boundary/error cases. Proving-ground fixture extensions
-must be reviewed and integrated before dependent candidates; prior session
-artifacts are not evidence for the current checkout.
+mean-subtraction and split/fused range-stage baseline, Hann window, padding,
+dechirp, real-IF, four-channel, live nfft/window/waveform match-then-miss, and
+wired/unwired/suppressed optional-axis cases. There are 12 ClutterFilter cases
+and 48 cases per range-stage operator across both precisions. Cached/unseen
+configuration revisits, boundary/error cases, other live ports, and broader
+Doppler behavior still require additional coverage. Prior session artifacts
+are not evidence for the current checkout. Build all three operator targets
+to enable the bundled native verifier.
 
 Snapshot schema 1 contains `byte_order: little`, `fixture_id`, and `cases`.
 It also identifies `operator` and `source_id`. Use `capture --build PATH --out

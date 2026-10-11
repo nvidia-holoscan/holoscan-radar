@@ -19,6 +19,10 @@ def require(condition, message):
         raise AssertionError(message)
 
 
+AXIS_PORTS = ("range_bins", "velocity_bins")
+STAGE_OPERATORS = ("fmcw_range_processor", "fmcw_range_doppler_processor")
+
+
 def check_inventory(export, inventory):
     op = export["operator"]
     expected = {(case, precision) for case in inventory[op] for precision in ("float", "double")}
@@ -29,7 +33,7 @@ def check_inventory(export, inventory):
         require(not case["coverage_gaps"], "incomplete native capture")
         require(case["termination"] == "stopped", "fixture termination changed")
         for port, output in case["outputs"].items():
-            suppressed = port == "range_bins" and case["id"] == "optional-suppressed"
+            suppressed = port in AXIS_PORTS and case["id"] == "optional-suppressed"
             emissions = output["emissions"]
             count = 3 if output["wired"] and not suppressed else 0
             require(len(emissions) == count, f"unexpected emission count: {case['id']}/{port}")
@@ -40,16 +44,21 @@ def check_inventory(export, inventory):
                 require(emission["memory_kind"] == "device", "output placement changed")
                 bits = "64" if case["precision"] == "float" else "128"
                 dtype = "complex" + bits
-                if port == "range_bins":
+                if port in AXIS_PORTS:
                     dtype = "float32" if case["precision"] == "float" else "float64"
                 require(emission["dtype"] == dtype, "output precision changed")
                 tensor_bytes(emission)
             if not emissions:
                 continue
             shapes = [emission["shape"] for emission in emissions]
-            if op == "fmcw_range_processor" and "live-match-miss" in case["id"]:
+            if op in STAGE_OPERATORS and "live-match-miss" in case["id"]:
                 require(shapes[0] == shapes[2], "live override latched on miss")
-                require(shapes[1][-1] == shapes[0][-1] * 2, "live FFT shape not applied")
+                if port != "velocity_bins":
+                    require(shapes[1][-1] == shapes[0][-1] * 2, "live FFT shape not applied")
+            if op in STAGE_OPERATORS and port == "range_bins" and "live-waveform" in case["id"]:
+                axes = [tensor_bytes(emission) for emission in emissions]
+                require(axes[0] == axes[2], "live waveform latched on miss")
+                require(axes[0] != axes[1], "live waveform range axis not applied")
             if op == "clutter_filter":
                 # Passthrough on the first frame and after the one-tick live match.
                 for frame in (0, 2):
