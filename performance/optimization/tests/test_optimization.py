@@ -4,8 +4,11 @@
 """Observable host-tool invariants; synthetic data never counts as GPU evidence."""
 
 import base64
+import contextlib
 import copy
+import io
 import os
+import sqlite3
 import struct
 import sys
 import tempfile
@@ -17,7 +20,9 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from artifacts import checkpoint, digest, file_state, read_json, restore, write_json
+from diagnostics import phase_breakdown, preflight
 from equivalence import compare_snapshots
+from qualify_native import check_inventory
 from radar_perf import (
     DEFAULTS,
     GATES,
@@ -29,8 +34,9 @@ from radar_perf import (
     profile_artifact,
     render_report,
     stop_reason,
+    timing_comparison,
 )
-from timing import compare_pairs, run_pairs
+from timing import compare_pairs, median_interval, run_pairs
 
 
 def snapshots(value=1.0):
@@ -72,7 +78,8 @@ def config():
             "operator": "test",
             "editable_scope": ["operators/test"],
             "policies": {"out": {"float": {"mode": "exact"}, "double": {"mode": "exact"}}},
-            "pairs": 2,
+            "pairs": 10,
+            "timing_precisions": {"test": ["float"], "consumer": ["float"]},
             "verification_cases": {"test": ["baseline"]},
             "sampling": {"scope": "overrides", "warmup": 5, "frames": 50, "repeats": 3},
         }
@@ -147,17 +154,27 @@ class OptimizationToolsTest(unittest.TestCase):
             for side in ("before", "after")
         }
         pairs = []
-        for pair in range(2):
+        for pair in range(10):
             record = {}
             for side, value in (("before", before), ("after", after)):
-                latency = value[pair] if isinstance(value, list) else value
+                latency = value[pair % len(value)] if isinstance(value, list) else value
                 path = self.json_file(f"{pair}-{side}.json", perf_report(latency, side))
                 record[side] = {"path": path, "sha256": digest(path)}
             pairs.append(record)
         return builds | {"pairs": pairs, "sampling": config()["sampling"]}
 
     def compare(self, index):
-        return compare_pairs(index, expected_pairs=2)
+        return compare_pairs(index)
+
+    def calibration_index(self, index, prefix="aa"):
+        aa = copy.deepcopy(index)
+        aa["after"] = copy.deepcopy(aa["before"])
+        for number, pair in enumerate(aa["pairs"]):
+            for side in ("before", "after"):
+                original = read_json(index["pairs"][number]["before"]["path"])
+                path = self.json_file(f"{prefix}-{number}-{side}.json", original)
+                pair[side] = {"path": path, "sha256": digest(path)}
+        return aa
 
     def test_exact_outputs_and_each_precision(self):
         policies = config()["policies"]
@@ -265,7 +282,7 @@ class OptimizationToolsTest(unittest.TestCase):
     def test_pair_budget_and_confirmed_sampling(self):
         index = self.timing_index()
         with self.assertRaisesRegex(ValueError, "budget"):
-            compare_pairs(index)
+            compare_pairs(index, expected_pairs=2)
         index["sampling"]["frames"] = 3
         with self.assertRaisesRegex(ValueError, "sampling"):
             self.compare(index)
@@ -293,6 +310,8 @@ class OptimizationToolsTest(unittest.TestCase):
             checkpoint(self.root, ["link"])
 
     def test_confirmation_and_limit_integrity(self):
+        self.assertEqual(DEFAULTS["max_candidates"], 20)
+        self.assertEqual(DEFAULTS["max_unsuccessful"], 3)
         path = self.json_file("session.json", session())
         self.assertEqual(load_session(path)["config"]["max_candidates"], DEFAULTS["max_candidates"])
         data = read_json(path)
@@ -301,10 +320,16 @@ class OptimizationToolsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "confirmation"):
             load_session(path)
         data = session()
-        data["candidates"] = [{"kept": False}, {"kept": False}]
+        data["candidates"] = [{"kept": False}] * 3
         self.assertEqual(stop_reason(data), "consecutive unsuccessful limit")
+        data["candidates"] = [{"kept": False}, {"kept": False}]
+        self.assertIsNone(stop_reason(data))
+        data["candidates"] = [{"kept": True}] * 20
+        self.assertEqual(stop_reason(data), "candidate limit")
 
     def test_unrelated_gates_cannot_certify_candidate(self):
+        state = session()
+        self.valid_candidate(state)
         gate = self.json_file("old.json", {"passed": True, "evidence": "unrelated"})
         record = {
             "id": "one",
@@ -317,7 +342,7 @@ class OptimizationToolsTest(unittest.TestCase):
             "gates": {name: gate for name in GATES},
         }
         with self.assertRaisesRegex(ValueError, "another candidate"):
-            add_candidate(session(), record)
+            add_candidate(state, record)
 
     def test_cli_reports_preexisting_bug_without_stopping_independent_work(self):
         state = self.json_file("session.json", session())
@@ -333,7 +358,8 @@ class OptimizationToolsTest(unittest.TestCase):
                 "evidence": "baseline log",
             },
         )
-        self.assertEqual(main(["bug", "--session", state, "--record", bug]), 0)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["bug", "--session", state, "--record", bug]), 0)
         self.assertIsNone(stop_reason(read_json(state)))
         self.assertEqual(main(["finish", "--session", state, "--reason", "dry"]), 0)
         report = render_report(read_json(state))
@@ -363,12 +389,26 @@ class OptimizationToolsTest(unittest.TestCase):
                 read_json(path)
 
     def valid_candidate(self, state, candidate_id="one"):
+        plan = {
+            "id": candidate_id,
+            "mechanism": "reduce redundant launch",
+            "before_source_id": "before",
+            "target_cases": ["baseline"],
+            "expected_gain_pct": 10.0,
+        }
+        plan_path = self.json_file(candidate_id + "-plan.json", plan)
+        state.setdefault("plans", {})[candidate_id] = {
+            "path": plan_path,
+            "sha256": digest(plan_path),
+            "declared_at": time.time(),
+        }
         context = {
             "candidate_id": candidate_id,
             "confirmed_config_sha256": state["confirmed_config_sha256"],
             "before_source_id": "before",
             "after_source_id": "after",
             "affected_operators": ["test"],
+            "candidate_plan_sha256": digest(plan_path),
         }
         prefix = candidate_id + "-"
         context_path = self.json_file(prefix + "context.json", context)
@@ -396,7 +436,11 @@ class OptimizationToolsTest(unittest.TestCase):
             ),
             0,
         )
-        pairs = self.json_file(prefix + "pairs.json", self.timing_index())
+        index = self.timing_index()
+        pairs = self.json_file(prefix + "pairs.json", index)
+        calibration = self.json_file(
+            prefix + "calibration.json", self.calibration_index(index, prefix)
+        )
         settings = self.json_file(prefix + "config.json", state["config"])
         speed = str(self.root / (prefix + "speed.json"))
         self.assertEqual(
@@ -405,6 +449,10 @@ class OptimizationToolsTest(unittest.TestCase):
                     "compare-timing",
                     "--pairs",
                     pairs,
+                    "--calibration",
+                    calibration,
+                    "--plan",
+                    plan_path,
                     "--config",
                     settings,
                     "--context",
@@ -501,7 +549,7 @@ class OptimizationToolsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exhausted"):
             add_candidate(state, record | {"id": "another"})
         state = session()
-        for index in range(2):
+        for index in range(3):
             record = self.valid_candidate(state, f"rejected-{index}")
             gate = read_json(record["gates"]["tests"])
             gate["passed"] = False
@@ -515,10 +563,13 @@ class OptimizationToolsTest(unittest.TestCase):
         order = []
         for side in ("before", "after"):
             manifests[side].update(
-                command=["perf-test", side], artifacts={artifact: digest(artifact)}
+                command=["perf-test", side],
+                artifacts={artifact: digest(artifact)},
+                cwd=str(self.root),
             )
 
         def run(argv, **kwargs):
+            self.assertEqual(kwargs["cwd"], str(self.root))
             side = argv[1]
             order.append(side)
             output = argv[argv.index("--output") + 1]
@@ -534,7 +585,7 @@ class OptimizationToolsTest(unittest.TestCase):
                 sampling=config()["sampling"],
             )
         self.assertEqual(order, ["before", "after", "after", "before"])
-        self.assertTrue(self.compare(result)["passed"])
+        self.assertFalse(compare_pairs(result, expected_pairs=2)["passed"])
         with self.assertRaises(FileExistsError):
             run_pairs(manifests["before"], manifests["after"], self.root / "runs", pairs=2)
 
@@ -549,15 +600,14 @@ class OptimizationToolsTest(unittest.TestCase):
     def test_consumer_only_needs_no_regression(self):
         index = self.timing_index(after=10.0)
         self.assertFalse(self.compare(index)["passed"])
-        self.assertTrue(compare_pairs(index, expected_pairs=2, require_improvement=False)["passed"])
+        self.assertTrue(compare_pairs(index, require_improvement=False)["passed"])
         index = self.timing_index(after=12.0)
-        self.assertFalse(
-            compare_pairs(index, expected_pairs=2, require_improvement=False)["passed"]
-        )
+        self.assertFalse(compare_pairs(index, require_improvement=False)["passed"])
 
     def test_aggregate_accepts_complete_shared_consumer_evidence(self):
         state = session()
         state["config"]["consumer_policies"] = {"consumer": state["config"]["policies"]}
+        state["config"]["target_cases"] = ["baseline"]
         state["config"]["verification_cases"]["consumer"] = ["baseline"]
         state["confirmed_config_sha256"] = config_hash(state["config"])
         record = self.valid_candidate(state)
@@ -602,9 +652,13 @@ class OptimizationToolsTest(unittest.TestCase):
             for side in ("before", "after"):
                 report = perf_report(10.0, side)
                 report["results"][0]["operator"] = "consumer"
+                report["results"][0]["scenario_id"] = "consumer-only"
                 path = self.json_file(f"consumer-{pair_number}-{side}.json", report)
                 pair[side] = {"path": path, "sha256": digest(path)}
         pairs = self.json_file("consumer-pairs.json", index)
+        calibration = self.json_file(
+            "consumer-aa.json", self.calibration_index(index, "consumer-aa")
+        )
         settings = self.json_file("shared-config.json", state["config"])
         speed = str(self.root / "consumer-speed.json")
         self.assertEqual(
@@ -613,6 +667,10 @@ class OptimizationToolsTest(unittest.TestCase):
                     "compare-timing",
                     "--pairs",
                     pairs,
+                    "--calibration",
+                    calibration,
+                    "--plan",
+                    state["plans"]["one"]["path"],
                     "--config",
                     settings,
                     "--context",
@@ -644,6 +702,156 @@ class OptimizationToolsTest(unittest.TestCase):
             )
             record["gates"][kind] = out
         self.assertTrue(add_candidate(state, record)["kept"])
+
+    def test_familywise_intervals_and_practical_gain(self):
+        self.assertEqual(median_interval([20.0] * 10, 136), [None, None])
+        self.assertEqual(median_interval([20.0] * 16, 136), [20.0, 20.0])
+        index = self.timing_index()
+        self.assertFalse(compare_pairs(index, min_effect_pct=25.0)["passed"])
+        value = compare_pairs(index, family_multiplier=100)
+        self.assertFalse(value["passed"])
+        self.assertGreater(value["minimum_resolvable_pairs"], 10)
+        self.assertTrue(all(r["verdict"] == "inconclusive" for r in value["results"]))
+        # Alternating zero-centered noise must not establish a directional effect.
+        index = self.timing_index(after=[9.9, 10.1])
+        self.assertFalse(compare_pairs(index)["passed"])
+
+    def test_calibration_blocks_bimodality_bias_and_stale_provenance(self):
+        index = self.timing_index(before=[10.0, 20.0], after=[8.0, 16.0])
+        aa = self.calibration_index(index)
+        result = timing_comparison(config(), index, aa)
+        self.assertEqual(result["status"], "validation_blocked")
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["calibration"]["results"][1]["aa_max_delta_pct"], 0)
+        aa["before"]["source_id"] = "old"
+        with self.assertRaisesRegex(ValueError, "stale calibration"):
+            timing_comparison(config(), index, aa)
+        index = self.timing_index()
+        aa = self.calibration_index(index, "biased")
+        for pair in aa["pairs"]:
+            report = read_json(pair["after"]["path"])
+            report["results"][0]["median_ms"] = 8.0
+            write_json(pair["after"]["path"], report)
+            pair["after"]["sha256"] = digest(pair["after"]["path"])
+        generous = config() | {"max_aa_delta_pct": 100.0, "max_baseline_spread_pct": 100.0}
+        self.assertFalse(timing_comparison(generous, index, aa)["passed"])
+
+    def test_calibration_hash_and_precision_coverage(self):
+        index = self.timing_index()
+        aa = self.calibration_index(index)
+        settings = config() | {"timing_precisions": {}}
+        with self.assertRaisesRegex(ValueError, "precision coverage"):
+            timing_comparison(settings, index, aa)
+        Path(aa["pairs"][0]["before"]["path"]).write_text("{}")
+        with self.assertRaisesRegex(ValueError, "changed after measurement"):
+            timing_comparison(config(), index, aa)
+
+    def test_predeclared_plan_is_immutable_and_cannot_change_targets(self):
+        state = session()
+        record = self.valid_candidate(state)
+        path = state["plans"]["one"]["path"]
+        plan = read_json(path)
+        plan["target_cases"] = ["cherry-picked"]
+        write_json(path, plan)
+        with self.assertRaisesRegex(ValueError, "unchanged predeclared"):
+            add_candidate(state, record)
+
+    def test_plan_command_checks_baseline_and_refuses_redeclaration(self):
+        state = session()
+        state["config"]["target_cases"] = ["baseline"]
+        state["confirmed_config_sha256"] = config_hash(state["config"])
+        state_path = self.json_file("plan-session.json", state)
+        plan_path = self.json_file(
+            "declaration.json",
+            {
+                "id": "one",
+                "before_source_id": "before",
+                "mechanism": "fewer launches",
+                "target_cases": ["baseline"],
+                "expected_gain_pct": 5.0,
+            },
+        )
+        argv = ["plan", "--session", state_path, "--record", plan_path, "--root", str(self.root)]
+        with patch("radar_perf.fingerprint", return_value="edited"):
+            with self.assertRaisesRegex(ValueError, "before editing"):
+                main(argv)
+        with patch("radar_perf.fingerprint", return_value="before"):
+            self.assertEqual(main(argv), 0)
+            with self.assertRaisesRegex(ValueError, "already declared"):
+                main(argv)
+        self.assertEqual(read_json(state_path)["plans"]["one"]["sha256"], digest(plan_path))
+
+    def test_underpowered_consumer_cannot_pass_regression_protection(self):
+        index = self.timing_index(after=10.0)
+        result = compare_pairs(index, require_improvement=False, family_multiplier=100)
+        self.assertFalse(result["passed"])
+        self.assertTrue(result["insufficient_pair_budget"])
+        state = session()
+        record = self.valid_candidate(state, "missing-plan")
+        state["plans"] = {}
+        with self.assertRaisesRegex(ValueError, "predeclared plan"):
+            add_candidate(state, record)
+
+    def test_blocked_measurement_is_not_a_failure_streak(self):
+        state = session()
+        state["candidates"] = [
+            {"kept": False},
+            {"kept": False},
+            {"kept": False, "outcome": "validation_blocked"},
+        ]
+        self.assertIsNone(stop_reason(state))
+        state["candidates"].append({"kept": False})
+        self.assertEqual(stop_reason(state), "consecutive unsuccessful limit")
+
+    def test_native_inventory_checks_ids_not_counts(self):
+        inventory = {"test": ["baseline"]}
+        export = snapshots()
+        for case in export["cases"]:
+            case["termination"] = "stopped"
+            case["outputs"] = {}
+        check_inventory(export, inventory)
+        export["cases"][0]["id"] = "wrong-case-same-count"
+        with self.assertRaisesRegex(AssertionError, "inventory changed"):
+            check_inventory(export, inventory)
+
+    def test_scoped_sqlite_phases_clip_and_union_cuda_calls(self):
+        path = self.root / "capture.sqlite"
+        with sqlite3.connect(path) as db:
+            db.executescript(
+                "CREATE TABLE StringIds(id INTEGER, value TEXT);"
+                "INSERT INTO StringIds VALUES(1, 'op:compute'), (2, 'cudaMallocAsync');"
+                "CREATE TABLE NVTX_EVENTS(start INTEGER, end INTEGER, text TEXT,"
+                "textId INTEGER, globalTid INTEGER);"
+                "INSERT INTO NVTX_EVENTS VALUES(1000, 11000, NULL, 1, 7);"
+                "INSERT INTO NVTX_EVENTS VALUES(6000, NULL, 'op.fft', NULL, 7);"
+                "CREATE TABLE CUPTI_ACTIVITY_KIND_RUNTIME(start INTEGER, end INTEGER,"
+                "nameId INTEGER, globalTid INTEGER);"
+                "INSERT INTO CUPTI_ACTIVITY_KIND_RUNTIME VALUES(0, 4000, 2, 7);"
+                "INSERT INTO CUPTI_ACTIVITY_KIND_RUNTIME VALUES(2000, 6000, 2, 7);"
+                "INSERT INTO CUPTI_ACTIVITY_KIND_RUNTIME VALUES(6000, 10000, 2, 99);"
+            )
+        started = path.stat().st_mtime - 1
+        result = phase_breakdown(path, started, "source")
+        self.assertEqual(result["compute_median_us"], 10)
+        self.assertEqual(result["cuda_api_union_median_us"], 5)
+        self.assertEqual(result["outside_cuda_api_median_us"], 5)
+        self.assertEqual(result["phases"]["start -> op.fft"]["median_us"], 5)
+        with self.assertRaisesRegex(ValueError, "stale"):
+            phase_breakdown(path, started + 10, "source")
+        with sqlite3.connect(path) as db:
+            db.execute("INSERT INTO NVTX_EVENTS VALUES(1000, 11000, NULL, 1, 8)")
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            phase_breakdown(path, started, "source")
+        self.assertEqual(phase_breakdown(path, started, "source", global_tid=7)["frames"], 1)
+
+    def test_environment_preflight_reports_missing_tools_without_provisioning(self):
+        with (
+            patch("diagnostics.shutil.which", return_value=None),
+            patch("diagnostics.subprocess.run") as runner,
+        ):
+            result = preflight()
+        runner.assert_not_called()
+        self.assertIn("ncu unavailable", result["limitations"])
 
 
 if __name__ == "__main__":

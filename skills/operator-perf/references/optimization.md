@@ -27,11 +27,21 @@ ClutterFilter and FMCWRangeProcessor subsets. Extend native fixtures and
 analytic tests for uncovered behavior before accepting a dependent candidate.
 Do not build a second radar-owned single-operator Graph harness.
 
+Extend fixtures and record the STATUS claim **before** freezing the intended
+starting state, creating manifests and initializing the session. Both baseline
+and candidate use identical fixture/recipe code. A preparatory commit is not
+required or authorized by this workflow. STATUS edits also change repository
+fingerprints: keep subsequent coordination notes in ignored session artifacts
+until final validation, then record the final reviewed source state separately.
+
 ## Candidate Loop
 
 1. Select one actionable finding against the current best. Identify transitive
    consumers of every edited shared helper, kernel, or header, including tests,
    applications, SAR, and other operators. Add their validation to the matrix.
+   Before editing, register `plan`: mechanism, baseline source, target cases
+   chosen from the confirmed allowable set, and expected percentage gain. Bind
+   its hash into every gate context; do not select targets after seeing results.
 2. Checkpoint explicitly listed files with `checkpoint`. Add new paths before
    creating them. Apply the smallest candidate preserving behavior and contract.
 3. Build and run relevant correctness tests, native output comparisons, and
@@ -39,7 +49,9 @@ Do not build a second radar-owned single-operator Graph harness.
    output/timestamp coverage is a failed gate, not an exception.
 4. Run `measure` using distinct source/build manifests and the same immutable
    recipe and sampling settings. It alternates A/B order and writes raw reports.
-   `compare-timing` uses paired medians and a reproducible 95% bootstrap interval.
+   Supply current-best A/A raw pairs to `compare-timing`. Descriptive paired
+   medians/bootstrap intervals accompany exact Bonferroni familywise intervals
+   used for decisions. Confirm practical gain thresholds before measurements.
    Confirm the target cases and protect all measured cases by default. Reject
    regressions in setup/cold/live timing where these are protected objectives.
 5. Record the candidate with evidence for contract, coverage, tests,
@@ -50,8 +62,11 @@ Do not build a second radar-owned single-operator Graph harness.
    prior run; stale exports cannot establish convergence. Update current best.
    Stop on the confirmed attempt/dry/time/target limit or an empty queue.
 
-Single-fix mode attempts one candidate. Iterative mode defaults to five attempts
-and two consecutive unsuccessful candidates; no-win/inconclusive trials count.
+Single-fix mode attempts one candidate. Iterative mode defaults to 20 candidate
+turns and three consecutive failures; no-win/inconclusive trials count.
+Each attempted candidate is one turn, irrespective of chat/tool messages.
+Blocked validation is reported separately and does not increment the failure
+streak, but an attempted blocked candidate still consumes the 20-turn budget.
 Do not spend extra trials outside the confirmed budget. Session checkpoints do
 not authorize commits. Session state records stop decisions but the agent owns
 the optimization loop and code changes.
@@ -64,6 +79,14 @@ Alert the user immediately through the agent's normal conversation interface.
 Continue only candidates independent of those
 cases; keep failing cases visible. Do not alter baseline snapshots, relax rules,
 or repair a discovered bug as part of performance work.
+
+Distinguish suspected operator correctness bugs from measurement limitations.
+Do not automatically drop affected cases. For measurement-only limitations,
+the user may confirm a new, explicitly reduced session scope before fresh
+measurements, retaining the omitted cases as visible coverage gaps and making
+only scoped performance claims. Correctness/contract/equivalence coverage for
+an affected candidate is never optional. Do not retroactively accept a failed
+candidate by switching objectives, thresholds or exclusions.
 
 At completion or interruption, run `finish` with a concrete stop reason, then
 `report`. Include remaining findings and coverage gaps, every unresolved bug,

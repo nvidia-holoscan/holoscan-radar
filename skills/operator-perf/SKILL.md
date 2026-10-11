@@ -49,11 +49,17 @@ to make a candidate pass.
 
 Before editing, propose and obtain confirmation of the concrete session:
 operator, comparison rules for **each port and precision**, cases, objective,
-protected cases, editable scope, and limits. Defaults: five candidates, two
+protected cases, editable scope, and limits. Defaults: 20 candidate turns, three
 consecutive unsuccessful candidates, all three sizes, steady latency, ten
 alternating A/B pairs. Wall-time and target limits are optional. All defaults
 are configurable. Existing confirmation remains valid until scope or policy
 changes. Assessment does not need an editing-session confirmation.
+
+A turn means one attempted candidate, not one chat message or tool call.
+Calibrate each baseline/metric with repeated A/A runs before editing. Timing
+precision coverage is separate from output equivalence. A noisy calibration
+blocks affected validation; it does not justify accepting differences. Follow
+the reference's familywise gates and report insufficient measurement power.
 
 Suspected bugs are exceptional findings, not optimization opportunities. Alert
 the user promptly, reproduce on the original baseline where possible, and

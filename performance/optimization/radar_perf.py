@@ -24,12 +24,12 @@ from artifacts import (
     write_json,
 )
 from equivalence import compare_snapshots, validate_policy
-from timing import METRICS, compare_pairs, run_pairs, verify_build
+from timing import METRICS, compare_pairs, compatible, run_pairs, verify_build
 
 DEFAULTS = {
     "mode": "optimize",
-    "max_candidates": 5,
-    "max_unsuccessful": 2,
+    "max_candidates": 20,
+    "max_unsuccessful": 3,
     "wall_time_s": None,
     "target_ms": None,
     "pairs": 10,
@@ -38,6 +38,10 @@ DEFAULTS = {
     "consumer_policies": {},
     "consumer_targets": {},
     "verification_cases": {},
+    "timing_precisions": {},
+    "min_effect_pct": 0.0,
+    "max_aa_delta_pct": 5.0,
+    "max_baseline_spread_pct": 10.0,
     "protected_metrics": ["median_ms", "cold_ms", "setup_ms", "override_ms"],
     "sampling": {
         "scope": "overrides",
@@ -63,6 +67,12 @@ def normalize_config(config):
         value = result[name]
         if value is not None:
             finite(value, name, positive=True)
+    for name in ("min_effect_pct", "max_aa_delta_pct", "max_baseline_spread_pct"):
+        if finite(result[name], name) < 0:
+            raise ValueError(f"negative measurement threshold: {name}")
+    for precisions in result["timing_precisions"].values():
+        if not precisions or set(precisions) - {"float", "double"}:
+            raise ValueError("timing precisions must explicitly name float and/or double")
     for port, precisions in result["policies"].items():
         if set(precisions) != {"float", "double"}:
             raise ValueError(f"{port}: propose separate float and double policies")
@@ -106,13 +116,93 @@ def stop_reason(session):
     for candidate in reversed(candidates):
         if candidate["kept"]:
             break
+        if candidate.get("outcome") == "validation_blocked":
+            continue
         dry += 1
     if dry >= config["max_unsuccessful"]:
         return "consecutive unsuccessful limit"
     return None
 
 
-def comparison_evidence(value, config, context):
+def validate_plan(plan, config):
+    if not all(plan.get(key) for key in ("id", "mechanism", "before_source_id", "target_cases")):
+        raise ValueError("plan requires id, mechanism, baseline source, and target cases")
+    if (
+        not isinstance(plan["target_cases"], list)
+        or not all(isinstance(case, str) and case for case in plan["target_cases"])
+        or len(set(plan["target_cases"])) != len(plan["target_cases"])
+    ):
+        raise ValueError("plan target cases must be unique nonempty strings")
+    finite(plan.get("expected_gain_pct"), "expected_gain_pct", positive=True)
+    if config["target_cases"] and set(plan["target_cases"]) - set(config["target_cases"]):
+        raise ValueError("candidate targets are outside the confirmed allowable set")
+
+
+def timing_comparison(config, pairs, calibration, plan=None, calibrate=False):
+    """One policy path for CLI, acceptance replay, and cumulative reporting."""
+    operator = pairs["before"]["operator"]
+    primary = operator == config["operator"]
+    if not primary and operator not in config["consumer_policies"]:
+        raise ValueError("timing operator is not a confirmed consumer")
+    targets = config["target_cases"] if primary else config["consumer_targets"].get(operator, [])
+    if plan is not None:
+        validate_plan(plan, config)
+        if plan["before_source_id"] != pairs["before"]["source_id"]:
+            raise ValueError("candidate plan baseline source mismatch")
+        if primary:
+            targets = plan["target_cases"]
+    options = dict(
+        metric=config["objective"],
+        targets=targets,
+        protected_metrics=config["protected_metrics"],
+        expected_pairs=config["pairs"],
+        expected_sampling=config["sampling"],
+        require_improvement=primary,
+        required_precisions=config["timing_precisions"].get(operator, ["float", "double"]),
+        min_effect_pct=config["min_effect_pct"],
+        max_aa_delta_pct=config["max_aa_delta_pct"],
+        max_baseline_spread_pct=config["max_baseline_spread_pct"],
+        family_multiplier=1 + len(config["consumer_policies"]),
+    )
+    if calibrate:
+        return compare_pairs(pairs, **options, calibration=True)
+    if calibration is None:
+        raise ValueError("speed gate requires baseline-versus-baseline calibration")
+    compatible(pairs["before"], calibration["before"])
+    if any(
+        calibration[side]["source_id"] != pairs["before"]["source_id"]
+        or calibration[side]["git_commit"] != pairs["before"]["git_commit"]
+        for side in ("before", "after")
+    ):
+        raise ValueError("stale calibration baseline provenance")
+    calibrated = compare_pairs(calibration, **options, calibration=True)
+    actual = compare_pairs(pairs, **options)
+    for index in (pairs, calibration):
+        first = read_json(index["pairs"][0]["before"]["path"])
+        if index is pairs:
+            platform = first["platform"]
+            baseline_rows = first["results"]
+        elif first["platform"] != platform:
+            raise ValueError("calibration hardware differs from candidate measurement")
+        elif [
+            {k: row.get(k) for k in ("variant", "input_shape", "map_shape", "live_port")}
+            for row in first["results"]
+        ] != [
+            {k: row.get(k) for k in ("variant", "input_shape", "map_shape", "live_port")}
+            for row in baseline_rows
+        ]:
+            raise ValueError("calibration case configuration differs from baseline")
+    if [(r["case"], r["metric"]) for r in actual["results"]] != [
+        (r["case"], r["metric"]) for r in calibrated["results"]
+    ]:
+        raise ValueError("calibration case/metric inventory differs from candidate measurement")
+    actual["calibration"] = calibrated
+    if not calibrated["passed"]:
+        actual.update(passed=False, status="validation_blocked")
+    return actual
+
+
+def comparison_evidence(value, config, context, plan=None):
     name = value["kind"]
     if value.get("context") != context or name not in {"equivalence", "speed"}:
         raise ValueError("comparison belongs to another candidate/configuration/source")
@@ -127,7 +217,7 @@ def comparison_evidence(value, config, context):
             child = read_json(artifact["path"])
             if child.get("kind") != name or not child.get("passed"):
                 raise ValueError("consumer comparison does not pass")
-            covered, measured, hit_target = comparison_evidence(child, config, context)
+            covered, measured, hit_target = comparison_evidence(child, config, context, plan)
             operators |= covered
             cases |= measured
             target_reached = target_reached or hit_target
@@ -159,8 +249,10 @@ def comparison_evidence(value, config, context):
         if not inventory or set(actual["case_ids"]) != set(inventory):
             raise ValueError("verification cases differ from confirmed complete inventory")
     else:
-        if set(inputs) != {"pairs"}:
-            raise ValueError("speed gate requires paired timing artifact")
+        if set(inputs) != {"pairs", "calibration", "plan"}:
+            raise ValueError("speed gate requires paired timing, calibration, and plan artifacts")
+        if read_json(inputs["plan"]["path"]) != plan:
+            raise ValueError("speed plan differs from predeclared candidate")
         pairs = read_json(inputs["pairs"]["path"])
         if any(
             pairs[side]["source_id"] != context[field]
@@ -168,20 +260,7 @@ def comparison_evidence(value, config, context):
         ):
             raise ValueError("speed gate source identity mismatch")
         operator = pairs["before"]["operator"]
-        targets = (
-            config["target_cases"]
-            if operator == config["operator"]
-            else config["consumer_targets"].get(operator, [])
-        )
-        actual = compare_pairs(
-            pairs,
-            config["objective"],
-            targets,
-            config["protected_metrics"],
-            config["pairs"],
-            config["sampling"],
-            require_improvement=operator == config["operator"],
-        )
+        actual = timing_comparison(config, pairs, read_json(inputs["calibration"]["path"]), plan)
     if not actual["passed"]:
         raise ValueError(f"{name} gate evidence does not pass")
     target_reached = False
@@ -189,8 +268,7 @@ def comparison_evidence(value, config, context):
         objective_rows = [
             row
             for row in actual["results"]
-            if row["metric"] == "median_ms"
-            and (not config["target_cases"] or row["case"][1] in config["target_cases"])
+            if row["metric"] == "median_ms" and row["case"][1] in plan["target_cases"]
         ]
         target_reached = bool(objective_rows) and all(
             row["after_median"] <= config["target_ms"] for row in objective_rows
@@ -215,6 +293,13 @@ def add_candidate(session, record):
     current_best = session.get("current_best_source_id")
     if current_best and record["before_source_id"] != current_best:
         raise ValueError("candidate baseline differs from the current best source")
+    declaration = session.get("plans", {}).get(record["id"])
+    if not declaration or digest(declaration["path"]) != declaration["sha256"]:
+        raise ValueError("candidate requires an unchanged predeclared plan")
+    plan = read_json(declaration["path"])
+    validate_plan(plan, session["config"])
+    if plan["before_source_id"] != record["before_source_id"]:
+        raise ValueError("candidate differs from predeclared baseline")
     gates = record.get("gates", {})
     if set(gates) != set(GATES):
         raise ValueError("candidate requires all five gate artifacts")
@@ -229,6 +314,7 @@ def add_candidate(session, record):
             "before_source_id": record["before_source_id"],
             "after_source_id": record["after_source_id"],
             "affected_operators": record["affected_operators"],
+            "candidate_plan_sha256": declaration["sha256"],
         }
         if value.get("kind") != name or value.get("context") != expected_context:
             raise ValueError(f"{name} gate belongs to another candidate/configuration/source")
@@ -244,7 +330,7 @@ def add_candidate(session, record):
             raise ValueError(f"{name} evidence must cover every affected consumer")
         if value["passed"] and name in {"equivalence", "speed"}:
             operators, cases, hit_target = comparison_evidence(
-                value, session["config"], expected_context
+                value, session["config"], expected_context, plan
             )
             if operators != set(record["affected_operators"]):
                 raise ValueError(f"{name} gate lacks affected consumer evidence")
@@ -254,6 +340,7 @@ def add_candidate(session, record):
             "path": str(Path(path).resolve()),
             "sha256": digest(path),
             "passed": value["passed"],
+            "status": value.get("status"),
         }
     record = record | {
         "gates": evidence,
@@ -266,6 +353,16 @@ def add_candidate(session, record):
         ):
             record["kept"] = False
             record["blocked_by_bug"] = bug["title"]
+    record["outcome"] = (
+        "kept"
+        if record["kept"]
+        else (
+            "validation_blocked"
+            if record.get("blocked_by_bug")
+            or any(g.get("status") == "validation_blocked" for g in evidence.values())
+            else "rejected"
+        )
+    )
     session["candidates"].append(record)
     session.setdefault("original_source_id", record["before_source_id"])
     session["current_best_source_id"] = (
@@ -292,7 +389,19 @@ def profile_artifact(capture, tables, started_at, source_id):
         summaries.append({"path": str(path.resolve()), "sha256": digest(path), "rows": rows})
         for row in rows:
             name = next((row[key] for key in name_keys if key in row), "") or ""
-            if any(api in name for api in ("cudaMalloc", "cudaFree", "cudaMemcpy", "Synchronize")):
+            if any(
+                api in name
+                for api in (
+                    "cudaMalloc",
+                    "cudaFree",
+                    "cudaMemcpy",
+                    "Synchronize",
+                    "cudaLaunch",
+                    "cudaGraphLaunch",
+                    "cudaFuncSet",
+                    "cudaStreamCreate",
+                )
+            ):
                 findings.append(
                     {
                         "name": name,
@@ -341,7 +450,7 @@ def render_report(session):
     if not session["candidates"]:
         lines.append("No candidates attempted.")
     for candidate in session["candidates"]:
-        decision = "kept" if candidate["kept"] else "rejected"
+        decision = candidate.get("outcome", "kept" if candidate["kept"] else "rejected")
         lines += [
             f"- {candidate['id']}: **{decision}**. {candidate['summary']}",
             f"  Affected operators: {', '.join(candidate['affected_operators'])}.",
@@ -352,6 +461,12 @@ def render_report(session):
             + ".",
         ]
     lines += ["", "## Coverage And Remaining Findings", ""]
+    for operator, precisions in session["config"].get("timing_precisions", {}).items():
+        missing = {"float", "double"} - set(precisions)
+        if missing:
+            lines.append(
+                f"- `{operator}`: timing does not protect {', '.join(sorted(missing))} precision."
+            )
     lines += [f"- {item}" for item in session["coverage_gaps"] + session["remaining_findings"]] or [
         "None recorded."
     ]
@@ -361,14 +476,15 @@ def render_report(session):
         lines += [
             "Compared final retained state against the original baseline.",
             "",
-            "| Case | Metric | Improvement (%) | 95% Interval (%) | Verdict |",
+            "| Case | Metric | Improvement (%) | Familywise 95% Interval (%) | Verdict |",
             "| --- | --- | --- | --- | --- |",
         ]
         for row in timing["results"]:
-            lo, hi = row["ci95_pct"]
+            lo, hi = row["familywise_ci95_pct"]
+            interval = "unresolved pair budget" if lo is None else f"{lo:.3f}, {hi:.3f}"
             lines.append(
                 f"| {' / '.join(row['case'])} | {row['metric']} | "
-                f"{row['improvement_pct']:.3f} | {lo:.3f}, {hi:.3f} | {row['verdict']} |"
+                f"{row['improvement_pct']:.3f} | {interval} | {row['verdict']} |"
             )
     else:
         lines.append(
@@ -432,22 +548,31 @@ def parser():
     compare.add_argument("--config", required=True)
     compare.add_argument("--out", required=True)
     compare.add_argument("--context", required=True)
+    compare.add_argument("--calibration", required=True)
+    compare.add_argument("--plan", required=True)
+    calibrate = commands.add_parser("calibrate")
+    calibrate.add_argument("--pairs", required=True)
+    calibrate.add_argument("--config", required=True)
+    calibrate.add_argument("--out", required=True)
     profile = commands.add_parser("profile")
     profile.add_argument("--capture", required=True)
     profile.add_argument("--tables", nargs="+", required=True)
     profile.add_argument("--started-at", type=float, required=True)
     profile.add_argument("--source-id", required=True)
     profile.add_argument("--out", required=True)
-    for name in ("candidate", "bug"):
+    for name in ("candidate", "bug", "plan"):
         command = commands.add_parser(name)
         command.add_argument("--session", required=True)
         command.add_argument("--record", required=True)
+        if name == "plan":
+            command.add_argument("--root", required=True)
     finish = commands.add_parser("finish")
     finish.add_argument("--session", required=True)
     finish.add_argument("--reason", required=True)
     finish.add_argument("--findings", nargs="*", default=[])
     finish.add_argument("--coverage-gaps", nargs="*", default=[])
     finish.add_argument("--cumulative-timing")
+    finish.add_argument("--calibration")
     report = commands.add_parser("report")
     report.add_argument("--session", required=True)
     report.add_argument("--out", required=True)
@@ -469,6 +594,7 @@ def main(argv=None):
         with path.with_suffix(".log").open("xb") as stream:
             subprocess.run(
                 build["command"] + [str(path)],
+                cwd=build["cwd"],
                 stdout=stream,
                 stderr=subprocess.STDOUT,
                 timeout=args.timeout_s,
@@ -485,14 +611,23 @@ def main(argv=None):
         context = read_json(args.context)
         checks = []
         passed = True
+        blocked = False
         for path in args.checks:
             value = read_json(path)
             if value.get("context") != context or value.get("kind") != args.kind:
                 raise ValueError("consumer gate context/kind mismatch")
             passed = passed and value["passed"]
+            blocked = blocked or value.get("status") == "validation_blocked"
             checks.append({"path": str(Path(path).resolve()), "sha256": digest(path)})
         write_json(
-            args.out, {"kind": args.kind, "context": context, "passed": passed, "checks": checks}
+            args.out,
+            {
+                "kind": args.kind,
+                "context": context,
+                "passed": passed,
+                "checks": checks,
+                "status": "validation_blocked" if blocked else "pass" if passed else "unsuccessful",
+            },
         )
         return 0 if passed else 1
     if command == "init":
@@ -568,21 +703,30 @@ def main(argv=None):
     elif command == "compare-timing":
         config = normalize_config(read_json(args.config))
         pairs = read_json(args.pairs)
-        value = compare_pairs(
-            pairs,
-            config["objective"],
-            config["target_cases"],
-            config["protected_metrics"],
-            config["pairs"],
-            config["sampling"],
-            require_improvement=pairs["before"]["operator"] == config["operator"],
-        )
+        plan = read_json(args.plan)
+        context = read_json(args.context)
+        if context.get("candidate_plan_sha256") != digest(args.plan):
+            raise ValueError("comparison context differs from candidate plan")
+        if context.get("candidate_id") != plan["id"]:
+            raise ValueError("comparison candidate differs from declared plan")
+        value = timing_comparison(config, pairs, read_json(args.calibration), plan)
         value.update(
             kind="speed",
-            context=read_json(args.context),
+            context=context,
             inputs={
-                "pairs": {"path": str(Path(args.pairs).resolve()), "sha256": digest(args.pairs)}
+                name: {"path": str(Path(path).resolve()), "sha256": digest(path)}
+                for name, path in (
+                    ("pairs", args.pairs),
+                    ("calibration", args.calibration),
+                    ("plan", args.plan),
+                )
             },
+        )
+        write_json(args.out, value)
+        return 0 if value["passed"] else 1
+    elif command == "calibrate":
+        value = timing_comparison(
+            normalize_config(read_json(args.config)), read_json(args.pairs), None, calibrate=True
         )
         write_json(args.out, value)
         return 0 if value["passed"] else 1
@@ -592,7 +736,27 @@ def main(argv=None):
         )
     else:
         session = load_session(args.session)
-        if command == "candidate":
+        if command == "plan":
+            plan = read_json(args.record)
+            validate_plan(plan, session["config"])
+            if fingerprint(args.root) != plan["before_source_id"]:
+                raise ValueError("declare the plan on the baseline checkout before editing")
+            if session.get("stop_reason") or stop_reason(session):
+                raise ValueError("session budget exhausted")
+            if (
+                session.get("current_best_source_id", plan["before_source_id"])
+                != plan["before_source_id"]
+            ):
+                raise ValueError("plan baseline is not current best")
+            plans = session.setdefault("plans", {})
+            if plan["id"] in plans:
+                raise ValueError("candidate plan already declared")
+            plans[plan["id"]] = {
+                "path": str(Path(args.record).resolve()),
+                "sha256": digest(args.record),
+                "declared_at": time.time(),
+            }
+        elif command == "candidate":
             record = add_candidate(session, read_json(args.record))
             print(f"{record['id']}: {'kept' if record['kept'] else 'rejected'}")
         elif command == "bug":
@@ -627,13 +791,10 @@ def main(argv=None):
                         "cumulative evidence is not original baseline versus retained state"
                     )
                 config = session["config"]
-                session["cumulative_timing"] = compare_pairs(
-                    pairs,
-                    config["objective"],
-                    config["target_cases"],
-                    config["protected_metrics"],
-                    config["pairs"],
-                    config["sampling"],
+                if not args.calibration:
+                    raise ValueError("cumulative timing requires original-baseline calibration")
+                session["cumulative_timing"] = timing_comparison(
+                    config, pairs, read_json(args.calibration)
                 )
         elif command == "report":
             Path(args.out).write_text(render_report(session), encoding="utf-8")

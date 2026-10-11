@@ -1,0 +1,13 @@
+{
+  "clutter_filter": [
+    "small-baseline", "small-live-match-miss",
+    "medium-baseline", "medium-live-match-miss",
+    "large-baseline", "large-live-match-miss"
+  ],
+  "fmcw_range_processor": [
+    "small-baseline", "small-live-match-miss",
+    "medium-baseline", "medium-live-match-miss",
+    "large-baseline", "large-live-match-miss",
+    "optional-unwired", "optional-suppressed"
+  ]
+}

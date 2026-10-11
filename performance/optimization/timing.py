@@ -3,6 +3,7 @@
 
 """Unprofiled alternating A/B runs and deterministic paired bootstrap gates."""
 
+import math
 import random
 import statistics
 import subprocess
@@ -23,6 +24,7 @@ def verify_build(build):
         "recipe_sha256",
         "sdk_image",
         "build_settings",
+        "cwd",
     ):
         if not build.get(field):
             raise ValueError(f"build manifest missing {field}")
@@ -33,6 +35,8 @@ def verify_build(build):
             raise ValueError(f"stale build artifact: {path}")
     if not build.get("command") or not all(isinstance(x, str) for x in build["command"]):
         raise ValueError("command must be a nonempty argv list (no shell string)")
+    if not Path(build["cwd"]).is_absolute() or not Path(build["cwd"]).is_dir():
+        raise ValueError("build cwd must be an existing absolute directory")
 
 
 def report_rows(report, build):
@@ -108,7 +112,12 @@ def run_pairs(before, after, output, pairs=10, timeout_s=600, sampling=None, wal
                 raise ValueError("paired measurement wall-time limit exhausted")
             with path.with_suffix(".log").open("wb") as stream:
                 subprocess.run(
-                    argv, stdout=stream, stderr=subprocess.STDOUT, timeout=remaining, check=True
+                    argv,
+                    cwd=build["cwd"],
+                    stdout=stream,
+                    stderr=subprocess.STDOUT,
+                    timeout=remaining,
+                    check=True,
                 )
             report = read_json(path)
             report_rows(report, build)
@@ -124,6 +133,24 @@ def bootstrap(deltas, seed=1729, samples=10000):
     return [trials[int(0.025 * (samples - 1))], trials[int(0.975 * (samples - 1))]]
 
 
+def median_interval(deltas, family_size):
+    """Exact sign/order-statistic interval with Bonferroni familywise 95% coverage.
+
+    None bounds mean the pair budget cannot resolve this family. Independent
+    paired runs are required; dependence between cases does not defeat Bonferroni.
+    """
+    n = len(deltas)
+    tail = 0.025 / family_size
+    eligible = [
+        k for k in range(n // 2) if sum(math.comb(n, j) for j in range(k + 1)) / 2**n <= tail
+    ]
+    if not eligible:
+        return [None, None]
+    ordered = sorted(deltas)
+    k = max(eligible)
+    return [ordered[k], ordered[n - k - 1]]
+
+
 def compare_pairs(
     index,
     metric="median_ms",
@@ -132,6 +159,12 @@ def compare_pairs(
     expected_pairs=10,
     expected_sampling=None,
     require_improvement=True,
+    min_effect_pct=0.0,
+    required_precisions=None,
+    calibration=False,
+    max_aa_delta_pct=5.0,
+    max_baseline_spread_pct=10.0,
+    family_multiplier=1,
 ):
     if metric not in METRICS or len(index["pairs"]) < 2:
         raise ValueError("invalid objective metric or incomplete paired run")
@@ -141,7 +174,8 @@ def compare_pairs(
     if index["sampling"] != sampling:
         raise ValueError("paired-run sampling differs from confirmed configuration")
     compatible(index["before"], index["after"])
-    protected_metrics = protected_metrics or ["median_ms", "cold_ms", "setup_ms", "override_ms"]
+    if protected_metrics is None:
+        protected_metrics = ["median_ms", "cold_ms", "setup_ms", "override_ms"]
     if any(m not in METRICS for m in protected_metrics):
         raise ValueError("unknown protected metric")
     keys, rows, settings, platform = None, [], None, None
@@ -180,7 +214,7 @@ def compare_pairs(
         rows.append(sides)
     results = []
     for key in sorted(keys):
-        for measure in set(protected_metrics) | {metric}:
+        for measure in sorted(set(protected_metrics) | {metric}):
             observations = [[side[key].get(measure) for side in pair] for pair in rows]
             if all(a is None and b is None for a, b in observations):
                 continue
@@ -204,6 +238,27 @@ def compare_pairs(
                     ),
                 }
             )
+    if type(family_multiplier) is not int or family_multiplier < 1:
+        raise ValueError("invalid family multiplier")
+    family_size = len(results) * family_multiplier
+    for result in results:
+        key = tuple(result["case"])
+        measure = result["metric"]
+        observations = [[side[key].get(measure) for side in pair] for pair in rows]
+        direction = -1 if measure == "achieved_frames_per_second" else 1
+        deltas = [direction * 100 * (a - b) / a for a, b in observations]
+        lo, hi = median_interval(deltas, family_size)
+        result["familywise_ci95_pct"] = [lo, hi]
+        result["verdict"] = (
+            "improved"
+            if lo is not None and lo > min_effect_pct
+            else "regressed" if hi is not None and hi < 0 else "inconclusive"
+        )
+        values = [value for pair in observations for value in pair]
+        result["aa_max_delta_pct"] = max(abs(value) for value in deltas)
+        result["baseline_spread_pct"] = (
+            100 * (max(values) - min(values)) / statistics.median(values)
+        )
     target_set = set(targets or [])
     present = {r["case"][1] for r in results if r["metric"] == metric}
     if target_set - present:
@@ -215,6 +270,13 @@ def compare_pairs(
     ]
     if not objective:
         raise ValueError("no measurable objective cases")
+    if required_precisions:
+        for case, measure in {(r["case"][1], r["metric"]) for r in results}:
+            observed = {
+                r["case"][2] for r in results if r["case"][1] == case and r["metric"] == measure
+            }
+            if set(required_precisions) - observed:
+                raise ValueError(f"performance precision coverage missing: {case}/{measure}")
     # Every confirmed target must improve; every measured case is protected.
     passed = (
         not require_improvement or all(r["verdict"] == "improved" for r in objective)
@@ -222,8 +284,29 @@ def compare_pairs(
         r["verdict"] == "regressed" and r["metric"] in set(protected_metrics) | {metric}
         for r in results
     )
+    insufficient = any(r["familywise_ci95_pct"][0] is None for r in results)
+    passed = passed and not insufficient
+    blocked = []
+    if calibration:
+        if index["before"]["source_id"] != index["after"]["source_id"]:
+            raise ValueError("calibration must compare the same source state")
+        blocked = [
+            {"case": r["case"], "metric": r["metric"]}
+            for r in results
+            if r["aa_max_delta_pct"] > max_aa_delta_pct
+            or r["baseline_spread_pct"] > max_baseline_spread_pct
+            or r["verdict"] in {"improved", "regressed"}
+        ]
+        passed = not blocked
     return {
         "passed": passed,
+        "status": "validation_blocked" if blocked else "pass" if passed else "unsuccessful",
+        "blocked_cases": blocked,
+        "family_size": family_size,
+        "insufficient_pair_budget": insufficient,
+        "minimum_resolvable_pairs": math.ceil(math.log2(40 * family_size)),
+        "method": "Bonferroni exact paired-median intervals; bootstrap intervals descriptive",
+        "precision_coverage": sorted({key[2] for key in keys}),
         "pairs": len(rows),
         "metric": metric,
         "results": results,

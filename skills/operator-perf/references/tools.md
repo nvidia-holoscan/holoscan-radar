@@ -29,13 +29,17 @@ the example is not permission to optimize or select exact numerical rules:
       "double": {"mode": "exact"}
     }
   },
-  "max_candidates": 5,
-  "max_unsuccessful": 2,
+  "max_candidates": 20,
+  "max_unsuccessful": 3,
   "wall_time_s": null,
   "target_ms": null,
   "pairs": 10,
   "objective": "median_ms",
   "target_cases": ["baseline-small", "baseline-medium", "baseline-large"],
+  "timing_precisions": {},
+  "min_effect_pct": 0.0,
+  "max_aa_delta_pct": 5.0,
+  "max_baseline_spread_pct": 10.0,
   "verification_cases": {
     "clutter_filter": ["small-baseline", "small-live-match-miss", "medium-baseline", "medium-live-match-miss", "large-baseline", "large-live-match-miss"]
   },
@@ -69,7 +73,10 @@ Build manifests for A and B each require `operator` (stem), `operator_class`
 `git_commit` (matching report provenance), `recipe_sha256`, `sdk_image` (immutable
 identity), `build_settings` (nonempty object), `artifacts` (absolute file paths
 to SHA256 for executable and runtime libraries), and `command` (argv prefix
-invoking the matching perf executable). Include CUDA/compiler/MatX identity in
+invoking the matching perf executable), plus `cwd` (existing absolute source
+checkout directory). Docker wrappers also require an explicit container
+`--workdir`; host cwd alone does not establish in-container git provenance.
+Include CUDA/compiler/MatX identity in
 build settings. Preserve separate complete builds, and validate manifest hashes
 after building, before capturing the baseline. `measure` checks hashes before
 each launch and writes reports and logs without overwriting prior runs.
@@ -81,8 +88,9 @@ python3 performance/optimization/radar_perf.py measure \
 ```
 
 The default objective is lower `median_ms`; `achieved_frames_per_second` is
-higher-is-better. Confirmed target cases must all improve. An empty target list
-protects and targets every case with that metric. All measured cases are checked
+higher-is-better. Session target cases define the allowable candidate targets;
+each predeclared candidate subset must all improve. Empty session targets allow
+any measured objective case. All measured cases are checked
 for regressions in the protected metrics. The agent enforces optional absolute
 target and wall-time limits before launching further work; `candidate` also
 checks attempt, dry, and elapsed budgets.
@@ -90,6 +98,46 @@ Passing `--session` also bounds paired measurements by the remaining confirmed
 session time; without it, the configured wall-time bounds that invocation.
 Additional shared-code consumers must show no regression; they need not improve.
 The selected operator still must improve on its confirmed target cases.
+
+`timing_precisions` maps operator stems to required timing precisions, defaulting
+to both float and double. An explicitly confirmed `["float"]` allows a recipe
+that times float only, but does not claim double-performance protection. Missing
+required precision for any available case/metric is invalid evidence.
+
+Before edits, run `measure` with the same baseline manifest for both sides:
+
+```bash
+python3 performance/optimization/radar_perf.py calibrate \
+  --pairs /absolute/aa-run/pairs.json --config /absolute/config.json \
+  --out /absolute/calibration-review.json
+```
+
+Speed gates consume the **raw A/A pairs**, not this review summary. Calibration
+is recomputed at acceptance and must match the current-best source, SDK/image,
+recipe, hardware, sampling and complete case/metric inventory. Hashes bind all
+raw reports. Directional A/A findings or exceeded delta/spread thresholds block
+validation; do not call the suspected cause a confirmed SDK defect.
+
+Decisions use distribution-free paired-median order-statistic intervals with
+Bonferroni adjustment over every measured metric/case and the number of
+confirmed operators. This gives conservative familywise 95% coverage under
+independent, stationary paired runs; correlated cases do not require independence.
+Reproducible 10,000-resample bootstrap 95% intervals remain descriptive.
+An objective's adjusted lower bound must exceed the confirmed `min_effect_pct`;
+any protected adjusted upper bound below zero rejects the candidate. No minimum
+gain threshold excuses statistically supported regressions.
+
+Ten pairs remain the initial default, not a promise of adequate power. If the
+family cannot resolve an interval, its bounds are `null` and the verdict is
+inconclusive. `minimum_resolvable_pairs = ceil(log2(40 * family_size))` is only
+the minimum to obtain finite bounds, not a power calculation. Propose a larger
+confirmed budget before further measurements; never cherry-pick repeat batches
+until one passes. Calibration spread/delta thresholds and practical gain must
+be selected before candidate results; no automatic tolerance widening occurs.
+
+`insufficient_pair_budget` flags unresolved intervals even on a stable A/A run;
+propose a larger budget before editing. A speed gate with any unresolved
+protected interval cannot pass, including a consumer-only gate.
 
 ## Native Verification
 
@@ -121,12 +169,22 @@ ctest --test-dir build/holoscan-radar -R '^radar_perf_native_verification$' \
   --output-on-failure
 ```
 
-It repeats all 28 cases across both precisions and three sizes, checks observed
+It repeats the reviewed inventory across both precisions and three sizes, checks observed
 coordinates and live fallback, covers wired/suppressed/unwired range outputs,
 and rejects injected value and temporal mismatches. Each invocation preserves
 fresh artifacts in `performance/verification/qualification/run-*` under the
 build tree. Qualification is not a candidate acceptance artifact; use the
 source-bound `capture` workflow below for optimization sessions.
+
+`performance/optimization/fixture_inventory.json` lists case IDs by operator;
+qualification expands both precisions and compares exact identities, not magic
+case counts. Extend it alongside native fixtures, or pass `--inventory PATH`
+to `qualify_native.py`. The current inventory has ClutterFilter baseline/live
+mean-subtraction and range baseline/live-nfft/optional-output cases. It does
+**not** cover fused range-Doppler, live windows/waveforms, real-IF, dechirp,
+cached transitions or boundary/error cases. Proving-ground fixture extensions
+must be reviewed and integrated before dependent candidates; prior session
+artifacts are not evidence for the current checkout.
 
 Snapshot schema 1 contains `byte_order: little`, `fixture_id`, and `cases`.
 It also identifies `operator` and `source_id`. Use `capture --build PATH --out
@@ -155,7 +213,8 @@ boolean `passed`, and an identical `context`:
   "confirmed_config_sha256": "the hash stored in session.json",
   "before_source_id": "current-best source fingerprint",
   "after_source_id": "candidate source fingerprint",
-  "affected_operators": ["clutter_filter"]
+  "affected_operators": ["clutter_filter"],
+  "candidate_plan_sha256": "hash of the predeclared plan artifact"
 }
 ```
 
@@ -165,6 +224,13 @@ inventory, actual test commands/status/logs, and every affected consumer.
 Comparisons include input paths/hashes and are recomputed during acceptance.
 Failed/unrun gates can be recorded with `passed: false` and an explanation.
 
+Register a plan before editing with `plan --session PATH --record PATH --root
+CHECKOUT`. Its JSON contains `id`, `before_source_id`, `mechanism`, nonempty
+`target_cases`, and positive `expected_gain_pct`. The helper checks the checkout
+fingerprint, current best, confirmed target set, and stores the artifact hash.
+Include `candidate_plan_sha256` in every gate context. Declarations are immutable;
+changed mechanisms or targets require a new candidate declaration before edits.
+
 ```bash
 python3 performance/optimization/radar_perf.py compare-outputs \
   --before /absolute/baseline.json --after /absolute/candidate.json \
@@ -172,6 +238,7 @@ python3 performance/optimization/radar_perf.py compare-outputs \
   --out /absolute/equivalence.json
 python3 performance/optimization/radar_perf.py compare-timing \
   --pairs /absolute/ab-run/pairs.json --config /absolute/config.json \
+  --calibration /absolute/aa-run/pairs.json --plan /absolute/candidate-plan.json \
   --context /absolute/context.json --out /absolute/speed.json
 ```
 
@@ -181,7 +248,9 @@ missing evidence. Keep failed artifacts and do not reinterpret exit 2 as success
 Candidate records have `id`, `summary`, `files`, `cases`, `affected_operators`,
 `before_source_id`, `after_source_id`, and `gates`, mapping each gate name to its
 JSON path. Review/test gates must also list `operators` matching every affected
-consumer. Shared comparisons use `aggregate --kind equivalence|speed --context
+consumer. `cases` declares affected behavioral case IDs, not objective targets
+or permission to omit measured cases; acceptance unions it with actual gate
+inventories when checking bug conflicts. Shared comparisons use `aggregate --kind equivalence|speed --context
 PATH --checks PATH... --out PATH` to combine independently verified consumer
 results. Acceptance rechecks the children and requires every affected operator.
 Confirm each extra operator's `consumer_policies`, `consumer_targets`, and
@@ -212,6 +281,18 @@ undo edits outside the listed set; audit the full diff before/after each candida
 --out PATH` records fresh nonempty Nsight artifacts and identifies CUDA API rows
 for inspection. It does not prove that those rows recur in steady frames.
 
+```bash
+python3 performance/optimization/diagnostics.py preflight --out /absolute/environment.json
+python3 performance/optimization/diagnostics.py phases \
+  --sqlite /absolute/capture.sqlite --started-at UNIX_SECONDS \
+  --source-id SOURCE --warmup 5 --out /absolute/phases.json
+```
+
+Phase exports must be fresh and scoped to one operator/case. Select `--global-tid`
+if needed; unsupported schemas or missing NVTX/runtime evidence fail explicitly.
+Output is attribution only, never acceptance timing. Temporary `op.*` marks
+are optional and must be removed before acceptance runs.
+
 `bug --session PATH --record PATH` appends a bug with `title`, `expected`,
 `observed`, `baseline_reproduction`, `affected_cases`, `blocks_validation`, and
 `evidence`. Report it to the user immediately. Keep findings unresolved in this
@@ -226,5 +307,6 @@ python3 performance/optimization/radar_perf.py report --session /absolute/sessio
 ```
 
 Final-versus-original evidence must use a separate clean paired measurement;
+also supply `finish --calibration /absolute/original-aa/pairs.json`.
 do not multiply intermediate percentages. Reports preserve suspected bugs first
 and explicitly identify absent cumulative evidence.

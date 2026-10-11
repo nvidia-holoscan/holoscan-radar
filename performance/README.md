@@ -166,6 +166,19 @@ suspected bugs without silently fixing them. Shared changes require validation
 of all affected consumers. Timing remains diagnostic in CTest; optimization
 acceptance is a separate confirmed session decision.
 
+The default loop is at most **20 attempted candidate turns**, stopping after
+**three consecutive unsuccessful candidates** (including inconclusive timing).
+Calibration-blocked validation is reported separately. Before edits, calibrate
+each current-best build against itself, declare candidate targets/mechanism,
+and confirm practical gain and timing precision coverage. Default protection
+requires both precisions; explicitly scoped float-only timing cannot establish
+double-performance protection. Acceptance uses conservative familywise paired
+median intervals; descriptive bootstrap intervals alone do not decide a gate.
+Ten initial pairs may lack power for a large matrix; confirm a larger budget
+before rerunning, rather than accepting a favorable repeat. See the tool
+interface for the updated plan, calibration, manifest `cwd`, and diagnostics
+commands. Existing sessions need fresh confirmation/evidence for the new gates.
+
 The host-side tools under `performance/optimization/` use Python's standard
 library and do not require the disabled radar Python bindings. See the
 [tool interface](../skills/operator-perf/references/tools.md) for session,

@@ -19,10 +19,12 @@ def require(condition, message):
         raise AssertionError(message)
 
 
-def check_inventory(export):
+def check_inventory(export, inventory):
     op = export["operator"]
-    expected = 12 if op == "clutter_filter" else 16
-    require(len(export["cases"]) == expected, "native case inventory changed")
+    expected = {(case, precision) for case in inventory[op] for precision in ("float", "double")}
+    actual = [(case["id"], case["precision"]) for case in export["cases"]]
+    require(len(actual) == len(set(actual)), "duplicate native case")
+    require(set(actual) == expected, "native case inventory changed")
     for case in export["cases"]:
         require(not case["coverage_gaps"], "incomplete native capture")
         require(case["termination"] == "stopped", "fixture termination changed")
@@ -73,12 +75,12 @@ def check_inventory(export):
                     )
 
 
-def qualify(executable, root, output):
+def qualify(executable, root, output, inventory):
     output = output / f"run-{time.time_ns()}"
     output.mkdir(parents=True)
     source_id = fingerprint(root)
     results = []
-    for op in ("clutter_filter", "fmcw_range_processor"):
+    for op in inventory:
         recipe = root / "performance" / "operators" / "fmcw" / op / "recipe.yaml"
         exports = []
         for run in range(2):
@@ -90,11 +92,12 @@ def qualify(executable, root, output):
                     stderr=subprocess.STDOUT,
                     check=True,
                     timeout=180,
+                    cwd=root,
                 )
             export = read_json(path)
             export["source_id"] = source_id
             write_json(path, export)
-            check_inventory(export)
+            check_inventory(export, inventory)
             exports.append(export)
         policies = {
             port: {precision: {"mode": "exact"} for precision in ("float", "double")}
@@ -125,7 +128,7 @@ def qualify(executable, root, output):
     write_json(output / "qualification.json", report)
     print(
         f"GPU qualification passed: {sum(item['cases'] for item in results)} cases, "
-        "repeat equivalence and four injected mismatch rejections"
+        f"repeat equivalence and {2 * len(results)} injected mismatch rejections"
     )
     print(f"Artifacts: {output}")
 
@@ -135,5 +138,13 @@ if __name__ == "__main__":
     parser.add_argument("executable", type=Path)
     parser.add_argument("root", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument(
+        "--inventory", type=Path, default=Path(__file__).with_name("fixture_inventory.json")
+    )
     args = parser.parse_args()
-    qualify(args.executable.resolve(), args.root.resolve(), args.output.resolve())
+    qualify(
+        args.executable.resolve(),
+        args.root.resolve(),
+        args.output.resolve(),
+        read_json(args.inventory),
+    )
