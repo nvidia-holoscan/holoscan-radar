@@ -11,5 +11,5 @@ holohub_configure_deb(
     VERSION     "${PROJECT_VERSION}"
     VENDOR      "NVIDIA"
     CONTACT     "jjomier@nvidia.com"
-    DEPENDS     "holoscan (>= 4.3.0)"
+    DEPENDS     "holoscan (>= 5.0.0)"
 )
