@@ -200,8 +200,8 @@ range-stage coverage, not exhaustive Doppler, boundary/error or cache-revisit
 coverage. Snapshots export observed output sequence, capture time, clock,
 representation, bytes, and stable SDK diagnostics; runtime logs are retained
 for separate warning/error review. GPU qualification against SDK `main-5x`
-revision `5fed2c24acf5b0bc1e538deeaae311efd8d256e1` passed 28 cases with exact
-repeat equivalence and four deliberate value/temporal mismatch rejections.
+revision `5fed2c24acf5b0bc1e538deeaae311efd8d256e1` passed 108 cases with exact
+repeat equivalence and six deliberate value/temporal mismatch rejections.
 Additional affected behavior and operators require fixture coverage before
 optimization can be accepted. No CPU operator fallback is provided.
 
