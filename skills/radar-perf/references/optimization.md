@@ -60,7 +60,8 @@ the optimization loop and code changes.
 
 Use `bug` to persist a suspected bug immediately, with baseline reproduction,
 evidence, expected/observed behavior, and the cases whose validation it blocks.
-Alert the user in commentary. Continue only candidates independent of those
+Alert the user immediately through the agent's normal conversation interface.
+Continue only candidates independent of those
 cases; keep failing cases visible. Do not alter baseline snapshots, relax rules,
 or repair a discovered bug as part of performance work.
 

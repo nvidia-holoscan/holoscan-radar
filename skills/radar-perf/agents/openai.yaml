@@ -1,8 +1,0 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-interface:
-  display_name: "Radar Performance"
-  short_description: "Profile and optimize radar operators with behavior gates"
-  default_prompt: "Use $radar-perf to optimize an operator after confirming its output policies and session limits."
-policy:
-  allow_implicit_invocation: true

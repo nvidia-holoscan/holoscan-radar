@@ -9,6 +9,15 @@ Use this repository's maintained performance recipes and locked contracts.
 PR #20's `perf-analyze`, `perf-optimize`, and `perf-autotune` motivated this
 workflow; their HSDK 4 commands and retired agent harness are not dependencies.
 
+## Agent Compatibility
+
+These instructions and Python/C++ tools are model- and agent-independent.
+No provider API, model choice, agent runtime, or special messaging channel is
+required. Any coding agent with repository read/edit and shell access can
+follow this workflow. Native skill discovery depends on the agent; otherwise,
+read this file directly and follow its relative reference links. Repository
+coordination and user confirmation remain required regardless of agent.
+
 ## Choose The Mode
 
 - **Assess:** measure, profile, and recommend. No permanent production edits.

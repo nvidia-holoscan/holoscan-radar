@@ -198,7 +198,17 @@ The GPU-required test preserves fresh snapshots, logs, and its report under
 qualifies the fixture implementation, not a performance optimization candidate.
 Use the source-bound build manifests and `capture` command for session evidence.
 
-To make the skill discoverable, link this checkout's `skills/radar-perf` into
-your Codex skills directory (normally `~/.codex/skills/radar-perf`) or copy that
-folder there. The tool paths resolve from the active repository checkout.
-Installation outside this repository is not performed automatically.
+The skill and helpers are model- and coding-agent-independent: they use
+Markdown instructions, standard Python, Git, and the repository's native GPU
+toolchain, without provider APIs or an agent-specific runtime. Agents with
+skill discovery can link or copy `skills/radar-perf` into their supported skill
+location. For agents without discovery, start with this instruction:
+
+```text
+Read skills/radar-perf/SKILL.md and follow its linked references for this task.
+```
+
+Run from this checkout, or give the agent the absolute path to `SKILL.md`.
+Tool paths resolve from the active repository, not the installed skill folder.
+No provider-specific metadata is required. Installation outside this repository
+is not performed automatically.
