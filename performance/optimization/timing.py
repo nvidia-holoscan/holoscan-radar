@@ -1,0 +1,232 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Unprofiled alternating A/B runs and deterministic paired bootstrap gates."""
+
+import random
+import statistics
+import subprocess
+import time
+from pathlib import Path
+
+from artifacts import digest, finite, read_json, write_json
+
+METRICS = {"median_ms", "cold_ms", "setup_ms", "override_ms", "achieved_frames_per_second"}
+
+
+def verify_build(build):
+    for field in (
+        "operator",
+        "operator_class",
+        "source_id",
+        "git_commit",
+        "recipe_sha256",
+        "sdk_image",
+        "build_settings",
+    ):
+        if not build.get(field):
+            raise ValueError(f"build manifest missing {field}")
+    if not build.get("artifacts"):
+        raise ValueError("build manifest must hash executable and runtime dependencies")
+    for path, expected in build["artifacts"].items():
+        if digest(path) != expected:
+            raise ValueError(f"stale build artifact: {path}")
+    if not build.get("command") or not all(isinstance(x, str) for x in build["command"]):
+        raise ValueError("command must be a nonempty argv list (no shell string)")
+
+
+def report_rows(report, build):
+    if report.get("schema_version") != 3:
+        raise ValueError("expected performance report schema 3")
+    if report.get("provenance", {}).get("git_commit") != build["git_commit"]:
+        raise ValueError("report commit does not match build manifest")
+    settings = report["run_settings"]
+    for name, minimum in (("warmup_frames", 0), ("measured_frames", 2), ("repeats", 1)):
+        if type(settings.get(name)) is not int or settings[name] < minimum:
+            raise ValueError(f"invalid report sampling: {name}")
+    if (
+        settings.get("stopped_early")
+        or settings.get("scenarios_completed", 0) <= 0
+        or settings["scenarios_completed"] != settings["scenarios_planned"]
+    ):
+        raise ValueError("incomplete performance report")
+    result = {}
+    for row in report["results"]:
+        if row["operator"] != build["operator_class"]:
+            raise ValueError("report operator differs from build identity")
+        if row.get("status") != "ok":
+            raise ValueError(f"failed/unmeasured scenario: {row.get('scenario_id')}")
+        key = (row["operator"], row["scenario_id"], row["precision"], row["size_id"], row["bucket"])
+        if key in result:
+            raise ValueError(f"duplicate performance row: {key}")
+        for metric in METRICS:
+            if row.get(metric) is not None:
+                finite(row[metric], metric, positive=True)
+        result[key] = row
+    if not result:
+        raise ValueError("empty performance report")
+    return result
+
+
+def compatible(a, b):
+    for field in ("operator", "operator_class", "recipe_sha256", "sdk_image", "build_settings"):
+        if a[field] != b[field]:
+            raise ValueError(f"A/B {field} mismatch")
+
+
+def run_pairs(before, after, output, pairs=10, timeout_s=600, sampling=None, wall_time_s=None):
+    if pairs < 2 or timeout_s <= 0:
+        raise ValueError("need at least two pairs and a positive process timeout")
+    compatible(before, after)
+    deadline = (
+        None
+        if wall_time_s is None
+        else time.monotonic() + finite(wall_time_s, "wall_time_s", positive=True)
+    )
+    sampling = sampling or {"scope": "overrides", "warmup": 5, "frames": 50, "repeats": 3}
+    if set(sampling) - {"scope", "warmup", "frames", "repeats", "sizes"}:
+        raise ValueError("unsupported sampling option")
+    output = Path(output).resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    index = {"before": before, "after": after, "pairs": [], "sampling": sampling}
+    write_json(output / "pairs.json", index)
+    for pair in range(pairs):
+        records = {}
+        order = ("before", "after") if pair % 2 == 0 else ("after", "before")
+        for side in order:
+            build = index[side]
+            verify_build(build)
+            path = output / f"{pair:02d}-{side}.json"
+            argv = list(build["command"])
+            for name, value in sampling.items():
+                argv.extend(["--" + name, str(value)])
+            argv.extend(["--quiet", "--output", str(path)])
+            remaining = (
+                timeout_s if deadline is None else min(timeout_s, deadline - time.monotonic())
+            )
+            if remaining <= 0:
+                raise ValueError("paired measurement wall-time limit exhausted")
+            with path.with_suffix(".log").open("wb") as stream:
+                subprocess.run(
+                    argv, stdout=stream, stderr=subprocess.STDOUT, timeout=remaining, check=True
+                )
+            report = read_json(path)
+            report_rows(report, build)
+            records[side] = {"path": str(path), "sha256": digest(path)}
+        index["pairs"].append(records)
+        write_json(output / "pairs.json", index)
+    return index
+
+
+def bootstrap(deltas, seed=1729, samples=10000):
+    rng = random.Random(seed)
+    trials = sorted(statistics.median(rng.choices(deltas, k=len(deltas))) for _ in range(samples))
+    return [trials[int(0.025 * (samples - 1))], trials[int(0.975 * (samples - 1))]]
+
+
+def compare_pairs(
+    index,
+    metric="median_ms",
+    targets=None,
+    protected_metrics=None,
+    expected_pairs=10,
+    expected_sampling=None,
+    require_improvement=True,
+):
+    if metric not in METRICS or len(index["pairs"]) < 2:
+        raise ValueError("invalid objective metric or incomplete paired run")
+    if len(index["pairs"]) != expected_pairs:
+        raise ValueError("pair count differs from confirmed measurement budget")
+    sampling = expected_sampling or index["sampling"]
+    if index["sampling"] != sampling:
+        raise ValueError("paired-run sampling differs from confirmed configuration")
+    compatible(index["before"], index["after"])
+    protected_metrics = protected_metrics or ["median_ms", "cold_ms", "setup_ms", "override_ms"]
+    if any(m not in METRICS for m in protected_metrics):
+        raise ValueError("unknown protected metric")
+    keys, rows, settings, platform = None, [], None, None
+    for pair in index["pairs"]:
+        sides = []
+        for side in ("before", "after"):
+            artifact = pair[side]
+            if digest(artifact["path"]) != artifact["sha256"]:
+                raise ValueError("raw timing report changed after measurement")
+            report = read_json(artifact["path"])
+            current = report_rows(report, index[side])
+            for option, field in (
+                ("warmup", "warmup_frames"),
+                ("frames", "measured_frames"),
+                ("repeats", "repeats"),
+                ("scope", "scope"),
+            ):
+                if report["run_settings"][field] != sampling[option]:
+                    raise ValueError(f"report differs from confirmed sampling: {option}")
+            if "sizes" in sampling and {r["size_id"] for r in current.values()} != set(
+                sampling["sizes"].split(",")
+            ):
+                raise ValueError("report differs from confirmed size profiles")
+            if settings is None:
+                settings, platform = report["run_settings"], report["platform"]
+                keys = current.keys()
+            if report["run_settings"] != settings or report["platform"] != platform:
+                raise ValueError("platform or sampling changed across paired runs")
+            if current.keys() != keys:
+                raise ValueError("performance case set changed")
+            sides.append(current)
+        for key in keys:
+            for name in ("variant", "input_shape", "map_shape", "live_port"):
+                if sides[0][key].get(name) != sides[1][key].get(name):
+                    raise ValueError(f"case configuration changed: {key}/{name}")
+        rows.append(sides)
+    results = []
+    for key in sorted(keys):
+        for measure in set(protected_metrics) | {metric}:
+            observations = [[side[key].get(measure) for side in pair] for pair in rows]
+            if all(a is None and b is None for a, b in observations):
+                continue
+            if any(a is None or b is None for a, b in observations):
+                raise ValueError(f"missing metric: {key}/{measure}")
+            direction = -1 if measure == "achieved_frames_per_second" else 1
+            deltas = [direction * 100 * (a - b) / a for a, b in observations]
+            interval = bootstrap(deltas)
+            results.append(
+                {
+                    "case": list(key),
+                    "metric": measure,
+                    "improvement_pct": statistics.median(deltas),
+                    "before_median": statistics.median(a for a, _ in observations),
+                    "after_median": statistics.median(b for _, b in observations),
+                    "ci95_pct": interval,
+                    "verdict": (
+                        "improved"
+                        if interval[0] > 0
+                        else "regressed" if interval[1] < 0 else "inconclusive"
+                    ),
+                }
+            )
+    target_set = set(targets or [])
+    present = {r["case"][1] for r in results if r["metric"] == metric}
+    if target_set - present:
+        raise ValueError("objective case missing or objective metric unavailable")
+    objective = [
+        r
+        for r in results
+        if r["metric"] == metric and (not target_set or r["case"][1] in target_set)
+    ]
+    if not objective:
+        raise ValueError("no measurable objective cases")
+    # Every confirmed target must improve; every measured case is protected.
+    passed = (
+        not require_improvement or all(r["verdict"] == "improved" for r in objective)
+    ) and not any(
+        r["verdict"] == "regressed" and r["metric"] in set(protected_metrics) | {metric}
+        for r in results
+    )
+    return {
+        "passed": passed,
+        "pairs": len(rows),
+        "metric": metric,
+        "results": results,
+        "operators": [index["before"]["operator"]],
+        "case_ids": sorted({key[1] for key in keys}),
+    }

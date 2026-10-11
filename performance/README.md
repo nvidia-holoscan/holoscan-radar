@@ -155,3 +155,50 @@ by the current C++ recipes: CFAR full-axis peak suppression on a rank-four
 input and FeatureAssembly's score/AoA feature packs. C++ unit tests cover those
 operator behaviors, but the YAML performance suites do not time them. Adding
 them requires extending the respective typed recipe fixtures and adapters.
+
+## Automated optimization
+
+The repository [radar-perf skill](../skills/radar-perf/SKILL.md) provides
+assessment, single-candidate fixes, and bounded iterative optimization.
+It preserves locked contracts and behavior, confirms numerical policies per
+output and precision, compares clean alternating A/B measurements, and reports
+suspected bugs without silently fixing them. Shared changes require validation
+of all affected consumers. Timing remains diagnostic in CTest; optimization
+acceptance is a separate confirmed session decision.
+
+The host-side tools under `performance/optimization/` use Python's standard
+library and do not require the disabled radar Python bindings. See the
+[tool interface](../skills/radar-perf/references/tools.md) for session,
+comparison, checkpoint, profiler, and report commands. Run their checks with:
+
+```bash
+python3 -m unittest discover -s performance/optimization/tests -v
+```
+
+With performance and testing enabled, `radar_verify_operator` is a separate
+HSDK 5 executable using native testing
+fixtures and bounded snapshots; it never adds capture copies to the timed
+runner. Initial native fixtures cover ClutterFilter and FMCWRangeProcessor,
+both precisions, recipe profile sizes, live match/miss, and range optional
+outputs. Snapshots export observed output sequence, capture time, clock,
+representation, bytes, and stable SDK diagnostics; runtime logs are retained
+for separate warning/error review. GPU qualification against SDK `main-5x`
+revision `5fed2c24acf5b0bc1e538deeaae311efd8d256e1` passed 28 cases with exact
+repeat equivalence and four deliberate value/temporal mismatch rejections.
+Additional affected behavior and operators require fixture coverage before
+optimization can be accepted. No CPU operator fallback is provided.
+
+```bash
+ctest --test-dir build/holoscan-radar -R '^radar_perf_native_verification$' \
+  --output-on-failure
+```
+
+The GPU-required test preserves fresh snapshots, logs, and its report under
+`build/holoscan-radar/performance/verification/qualification/run-*`. This
+qualifies the fixture implementation, not a performance optimization candidate.
+Use the source-bound build manifests and `capture` command for session evidence.
+
+To make the skill discoverable, link this checkout's `skills/radar-perf` into
+your Codex skills directory (normally `~/.codex/skills/radar-perf`) or copy that
+folder there. The tool paths resolve from the active repository checkout.
+Installation outside this repository is not performed automatically.

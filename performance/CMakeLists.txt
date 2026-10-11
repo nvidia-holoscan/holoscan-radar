@@ -18,6 +18,20 @@ target_link_libraries(radar_perf_utils INTERFACE
 target_compile_definitions(radar_perf_utils INTERFACE
     HOLOSCAN_RADAR_PERF_OPERATOR_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/operators")
 
+# Output verification is deliberately separate from the timed Graph runner.
+# The native SDK fixture provides bounded owning snapshots, not timing samples.
+if(HOLOSCAN_RADAR_BUILD_TESTING AND TARGET holoscan::clutter_filter_op
+        AND TARGET holoscan::fmcw_range_processor_op)
+    find_package(GTest REQUIRED)
+    add_executable(radar_verify_operator optimization/verify_operator.cpp)
+    target_include_directories(radar_verify_operator PRIVATE ${PROJECT_SOURCE_DIR}/tests/cpp)
+    target_link_libraries(radar_verify_operator PRIVATE
+        radar_perf_utils holoscan::testing GTest::gtest
+        holoscan::clutter_filter_op holoscan::fmcw_range_processor_op)
+    set_target_properties(radar_verify_operator PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/verification")
+endif()
+
 # One explicit entry per operator; keep this in the same group as the
 # production operator. The executable name and build/performance/cpp output
 # location stay stable regardless of source organization.
@@ -102,6 +116,19 @@ endfunction()
 
 # Minimal smoke for every operator. Timing values remain informational.
 if(HOLOSCAN_RADAR_BUILD_TESTING)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME radar_perf_host_tools
+        COMMAND ${Python3_EXECUTABLE} -m unittest discover
+            -s ${CMAKE_CURRENT_SOURCE_DIR}/optimization/tests -v)
+    set_tests_properties(radar_perf_host_tools PROPERTIES LABELS "tooling")
+    if(TARGET radar_verify_operator)
+        add_test(NAME radar_perf_native_verification
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/optimization/qualify_native.py
+                $<TARGET_FILE:radar_verify_operator> ${PROJECT_SOURCE_DIR}
+                ${CMAKE_CURRENT_BINARY_DIR}/verification/qualification)
+        set_tests_properties(radar_perf_native_verification PROPERTIES LABELS "verification"
+            TIMEOUT 720 RUN_SERIAL TRUE)
+    endif()
     foreach(_perf_name IN LISTS HOLOSCAN_RADAR_PERF_TARGETS)
         if(TARGET perf_${_perf_name})
             add_test(NAME perf_${_perf_name}_smoke
