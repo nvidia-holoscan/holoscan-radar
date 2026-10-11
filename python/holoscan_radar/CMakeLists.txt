@@ -67,23 +67,18 @@ configure_file(py.typed "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/py.typed" 
 configure_file(__init__.pyi "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/__init__.pyi" COPYONLY)
 install(TARGETS holoscan_radar_python LIBRARY DESTINATION holoscan_radar)
 install(FILES __init__.py __init__.pyi py.typed DESTINATION holoscan_radar)
-configure_file(applications/__init__.py
-    "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/__init__.py" COPYONLY)
-configure_file(applications/dashboard.py
-    "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/dashboard.py" COPYONLY)
-configure_file(applications/multi_waveform.py
-    "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/multi_waveform.py" COPYONLY)
-configure_file(applications/adaptive_aoa.py
-    "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/adaptive_aoa.py" COPYONLY)
-configure_file(applications/mimo_ddm.py
-    "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/mimo_ddm.py" COPYONLY)
-configure_file(applications/mimo_tdm.py
-    "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/mimo_tdm.py" COPYONLY)
-configure_file(applications/dense_beamforming.py
-    "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/dense_beamforming.py" COPYONLY)
-configure_file(applications/simo.py
-    "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/simo.py" COPYONLY)
-configure_file(applications/siso.py
-    "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/siso.py" COPYONLY)
-install(DIRECTORY applications/ DESTINATION holoscan_radar/applications
-    FILES_MATCHING PATTERN "*.py")
+# App graphs live beside their C++ counterparts. Stage them under the installed
+# holoscan_radar package so source builds and wheels expose the same imports.
+foreach(_radar_app IN ITEMS siso simo dense_beamforming mimo_tdm mimo_ddm adaptive_aoa multi_waveform)
+    set(_radar_app_source
+        "${PROJECT_SOURCE_DIR}/applications/fmcw/${_radar_app}/python/${_radar_app}.py")
+    configure_file("${_radar_app_source}"
+        "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/${_radar_app}.py" COPYONLY)
+    install(FILES "${_radar_app_source}" DESTINATION holoscan_radar/applications)
+endforeach()
+install(FILES applications/__init__.py applications/fmcw_dashboard.py applications/cli.py
+    DESTINATION holoscan_radar/applications)
+foreach(_radar_helper IN ITEMS __init__.py fmcw_dashboard.py cli.py)
+    configure_file("applications/${_radar_helper}"
+        "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/${_radar_helper}" COPYONLY)
+endforeach()

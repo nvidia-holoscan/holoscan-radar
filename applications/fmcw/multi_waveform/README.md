@@ -79,7 +79,15 @@ Simulator-backed sources default `app.scene_visibility` to `front_half_space`, w
 
 The HSDK 5 Python provider uses the same C++ YAML loader, operator ports,
 device bindings, report sink, and optional dashboard as this C++ application.
-Run from the repository root after building or installing the Python wheel:
+From the repository root, the host CLI builds and runs the colocated
+`python/` graph with the pinned development image:
+
+```bash
+holoscan run multi_waveform --language python --img holoscan-radar-dev:hsdk5 \
+  --no-docker-build --run-args=multi_waveform_smoke.yaml
+```
+
+After building or installing the Python wheel, call the graph directly:
 
 ```python
 from holoscan.radar.applications.multi_waveform import build_graph
@@ -90,4 +98,4 @@ workflow.run()
 
 `build_graph()` returns a `BuiltGraph`; call `.run()` to stop the Graph after
 the configured report frame count. The canonical import path is
-`holoscan_radar.applications.`multi_waveform`.
+`holoscan_radar.applications.multi_waveform`.

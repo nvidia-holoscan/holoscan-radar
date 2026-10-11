@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Coordinated multi-waveform MIMO TDM Graph."""
+"""MIMO TDM Graph using the C++ application config loader."""
 
 from pathlib import Path
 
@@ -18,25 +18,22 @@ from holoscan_radar import (
     TDMSparseCompensationOpF32,
     _radar,
 )
-from holoscan_radar.applications.dashboard import add_dashboard
+from holoscan_radar.applications.fmcw_dashboard import add_dashboard
 from holoscan_radar.applications.siso import BuiltGraph
 
 import holoscan as hs
 
 
 def build_graph(config: str | Path) -> BuiltGraph:
-    """Compose the coordinated TX/RX graph with resolved native configuration."""
+    """Compose the shipped TDM graph with resolved native YAML configuration."""
 
     path = str(Path(config).resolve())
-    cfg = _radar._load_multi(path)
-    graph = hs.Graph("multi_waveform")
+    cfg = _radar._load_tdm(path)
+    graph = hs.Graph("mimo_tdm")
     options = hs.CompileOptions()
     extents = cfg["extents"]
-    for section in ("range_processor", "doppler_processor", "tdm_sparse_compensation"):
-        cfg[section]["waveform"] = cfg["initial_waveform"]
 
-    tx = graph.op("holoscan.radar._app.MultiTx", "waveform_source", path=path)
-    source = graph.op("holoscan.radar._app.MultiRx", "adc_source", path=path)
+    source = graph.op("holoscan.radar._app.TdmSource", "adc_source", path=path)
     deinterleave = MIMODeinterleaveOpF32(
         graph, "mimo_deinterleave", extents=extents, **cfg["mimo_deinterleave"]
     )
@@ -61,11 +58,10 @@ def build_graph(config: str | Path) -> BuiltGraph:
     reduction = DetectionReductionOpF32(
         graph, "detection_reduction", extents=extents, **cfg["detection_reduction"]
     )
-    report = graph.op("holoscan.radar._app.MultiReport", "cluster_report", path=path)
-    graph.partition("transmit").add(tx)
-    graph.partition("receive").add(source)
-    application = graph.partition("processing")
+    report = graph.op("holoscan.radar._app.TdmReport", "cluster_report", path=path)
+    application = graph.partition("application")
     application.add(
+        source,
         deinterleave,
         range_op,
         clutter,
@@ -78,23 +74,18 @@ def build_graph(config: str | Path) -> BuiltGraph:
         reduction,
         report,
     )
-    waveform_depth = cfg["max_frames_in_flight"] + 1
-    # Publish each waveform before its matching ADC cube reaches the Exact joins.
-    graph.add_flow(tx.waveform, range_op.waveform, queue_depth=waveform_depth)
-    graph.add_flow(tx.waveform, doppler.waveform, queue_depth=waveform_depth)
-    graph.add_flow(tx.waveform, compensation.waveform, queue_depth=waveform_depth)
     # Deinterleave TDM ADC samples and form per-channel Doppler maps.
     graph.add_flow(source.adc_cube, deinterleave.adc_cube, queue_depth=4)
     graph.add_flow(deinterleave.adc_cube_out, range_op.adc_cube, queue_depth=4)
     graph.add_flow(range_op.range_profiles, clutter.range_profiles, queue_depth=4)
     graph.add_flow(clutter.range_profiles_out, doppler.range_profiles, queue_depth=4)
 
-    # Detect on folded power and compensate selected coherent snapshots.
+    # Detect on folded TX/RX power and compensate selected snapshots.
     graph.add_flow(doppler.rd_maps, cfar.rd_maps, queue_depth=4)
     graph.add_flow(doppler.rd_maps, compensation.rd_maps, queue_depth=4)
     graph.add_flow(cfar.detection_idx, compensation.detection_idx, queue_depth=4)
 
-    # Estimate angle with tick-coherent virtual-array geometry.
+    # Estimate angle using the corrected, tick-coherent virtual array.
     graph.add_flow(compensation.snapshot, beamscan.snapshot, queue_depth=4)
     graph.add_flow(compensation.is_valid, beamscan.is_valid, queue_depth=4)
     graph.add_flow(compensation.array_geometry, beamscan.array_geometry, queue_depth=4)
@@ -154,8 +145,8 @@ def build_graph(config: str | Path) -> BuiltGraph:
             options,
             cfg,
             path,
-            "Multi",
-            "Multi-Waveform",
+            "Tdm",
+            "MIMO TDM",
             {
                 "cfar_power": cfar.cfar_power,
                 "detection_idx": cfar.detection_idx,
@@ -165,11 +156,8 @@ def build_graph(config: str | Path) -> BuiltGraph:
                 "labels": cluster.labels,
                 "sizes": cluster.sizes,
                 "reduced_points": reduction.reduced_points,
-                "waveform": tx.waveform,
             },
             clustered=True,
-            profiled=True,
-            profile_gap=cfg["visualization_profile_max_gap_frames"],
         )
     graph.set_default_clock(graph.add_clock(hs.RealtimeClock, "clock"))
     return BuiltGraph(graph, options, cfg["num_frames"])

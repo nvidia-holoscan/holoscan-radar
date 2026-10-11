@@ -1,59 +1,80 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Linear and nonlinear MIMO DDM Graph using the C++ config loader."""
+"""SISO range-Doppler Graph matching the C++ SISO workflow."""
 
+from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic, sleep
 
 from holoscan_radar import (
-    BeamscanEstimatorOpF32,
     CFARDetectorOpF32,
     ClusterDBSCANOpF32,
-    DDMDenseDemultiplexOpF32,
+    ClutterFilterOpF32,
     DetectionReductionOpF32,
-    DopplerNotchOpF32,
     FeatureAssemblyOpF32,
     FMCWDopplerProcessorOpF32,
     FMCWRangeProcessorOpF32,
-    SnapshotGatherOpF32,
-    VirtualArrayAssemblyOpF32,
     _radar,
 )
-from holoscan_radar.applications.dashboard import add_dashboard
-from holoscan_radar.applications.siso import BuiltGraph
+from holoscan_radar.applications.fmcw_dashboard import add_dashboard
 
 import holoscan as hs
 
 
+@dataclass(frozen=True)
+class BuiltGraph:
+    graph: hs.Graph
+    options: hs.CompileOptions
+    num_frames: int
+
+    def run(self) -> hs.RunSession:
+        """Run until all report frames arrive, then stop clock-driven nodes."""
+
+        _radar._reset_app_frames(self.num_frames)
+        plan = hs.compile(self.graph, self.options)
+        if not plan.ok:
+            raise RuntimeError(f"Graph compile failed: {plan.json()}")
+        session = hs.run_async(plan)
+        seen = 0
+        last_progress = monotonic()
+        try:
+            while _radar._app_frames_captured() < self.num_frames:
+                count = _radar._app_frames_captured()
+                if count != seen:
+                    seen = count
+                    last_progress = monotonic()
+                if session.diagnostics:
+                    raise RuntimeError(f"Graph diagnostics: {session.diagnostics}")
+                if monotonic() - last_progress >= 120:
+                    raise TimeoutError(f"Graph stalled after {seen}/{self.num_frames} frames")
+                sleep(0.05)
+        finally:
+            session.request_stop()
+            session.wait()
+        if session.diagnostics:
+            raise RuntimeError(f"Graph diagnostics: {session.diagnostics}")
+        return session
+
+
 def build_graph(config: str | Path) -> BuiltGraph:
-    """Compose a MIMO DDM graph from a validated linear or nonlinear preset."""
+    """Load the shipped YAML through the C++ loader and compose its SISO Graph."""
 
     path = str(Path(config).resolve())
-    cfg = _radar._load_ddm(path)
-    graph = hs.Graph("mimo_ddm")
+    cfg = _radar._load_siso(path)
+    graph = hs.Graph("siso")
     options = hs.CompileOptions()
     extents = cfg["extents"]
-    source = graph.op("holoscan.radar._app.DdmSource", "adc_source", path=path)
+
+    source = graph.op("holoscan.radar._app.SisoSource", "adc_source", path=path)
     range_op = FMCWRangeProcessorOpF32(
         graph, "range_processor", extents=extents, **cfg["range_processor"]
     )
+    clutter = ClutterFilterOpF32(graph, "clutter_filter", extents=extents, **cfg["clutter_filter"])
     doppler = FMCWDopplerProcessorOpF32(
         graph, "doppler_processor", extents=extents, **cfg["doppler_processor"]
     )
-    demux = DDMDenseDemultiplexOpF32(
-        graph, "ddm_dense_demultiplex", extents=extents, **cfg["ddm_dense_demultiplex"]
-    )
-    notch = DopplerNotchOpF32(graph, "doppler_notch", extents=extents, **cfg["doppler_notch"])
-    vaa = VirtualArrayAssemblyOpF32(
-        graph, "virtual_array_assembly", extents=extents, **cfg["virtual_array_assembly"]
-    )
     cfar = CFARDetectorOpF32(graph, "cfar_detector", extents=extents, **cfg["cfar_detector"])
-    gather = SnapshotGatherOpF32(
-        graph, "snapshot_gather", extents=extents, **cfg["snapshot_gather"]
-    )
-    beamscan = BeamscanEstimatorOpF32(
-        graph, "beamscan_estimator", extents=extents, **cfg["beamscan_estimator"]
-    )
     features = FeatureAssemblyOpF32(
         graph, "feature_assembly", extents=extents, features=cfg["feature_assembly"]["features"]
     )
@@ -61,68 +82,41 @@ def build_graph(config: str | Path) -> BuiltGraph:
     reduction = DetectionReductionOpF32(
         graph, "detection_reduction", extents=extents, **cfg["detection_reduction"]
     )
-    report = graph.op("holoscan.radar._app.DdmReport", "cluster_report", path=path)
+    report = graph.op("holoscan.radar._app.SisoReport", "cluster_report", path=path)
+
     application = graph.partition("application")
-    application.add(
-        source,
-        range_op,
-        doppler,
-        demux,
-        notch,
-        vaa,
-        cfar,
-        gather,
-        beamscan,
-        features,
-        cluster,
-        reduction,
-        report,
-    )
-    # Range/Doppler process, demultiplex TX codes, and assemble the virtual array.
+    application.add(source, range_op, clutter, doppler, cfar, features, cluster, reduction, report)
+    # FMCW front end: ADC cube to range-Doppler map to detections.
     graph.add_flow(source.adc_cube, range_op.adc_cube, queue_depth=4)
-    graph.add_flow(range_op.range_profiles, doppler.range_profiles, queue_depth=4)
-    graph.add_flow(doppler.velocity_bins, demux.velocity_bins, queue_depth=4)
-    graph.add_flow(doppler.rd_maps, demux.rd_maps, queue_depth=4)
-    graph.add_flow(demux.rd_maps_out, notch.rd_maps, queue_depth=4)
-    graph.add_flow(demux.velocity_bins_out, notch.velocity_bins, queue_depth=4)
-    graph.add_flow(notch.rd_maps_out, vaa.rd_maps, queue_depth=4)
+    graph.add_flow(range_op.range_profiles, clutter.range_profiles, queue_depth=4)
+    graph.add_flow(clutter.range_profiles_out, doppler.range_profiles, queue_depth=4)
+    graph.add_flow(doppler.rd_maps, cfar.rd_maps, queue_depth=4)
 
-    # Detect first, then gather coherent snapshots and geometry for angle.
-    graph.add_flow(vaa.rd_maps_out, cfar.rd_maps, queue_depth=4)
-    graph.add_flow(vaa.rd_maps_out, gather.rd_maps, queue_depth=4)
-    graph.add_flow(cfar.detection_idx, gather.detection_idx, queue_depth=4)
-    graph.add_flow(gather.snapshot, beamscan.snapshot, queue_depth=4)
-    graph.add_flow(gather.is_valid, beamscan.is_valid, queue_depth=4)
-    graph.add_flow(vaa.array_geometry, beamscan.array_geometry, queue_depth=4)
-
-    # Resolve detections against the post-demultiplex velocity axis.
+    # Resolve detected bins against the physical range and velocity axes.
     graph.add_flow(cfar.detection_idx, features.detection_idx, queue_depth=4)
     graph.add_flow(range_op.range_bins, features.range_bins, queue_depth=4)
-    graph.add_flow(demux.velocity_bins_out, features.velocity_bins, queue_depth=4)
-    graph.add_flow(beamscan.aoa_estimates, features.aoa_estimates, queue_depth=4)
-    graph.add_flow(cfar.detection_score, features.detection_score, queue_depth=4)
+    graph.add_flow(doppler.velocity_bins, features.velocity_bins, queue_depth=4)
 
-    # Cluster on range-Doppler bins and reduce with the score column.
+    # Cluster complete feature rows and select one result per cluster.
     graph.add_flow(features.points, cluster.points, queue_depth=4)
     graph.add_flow(cluster.labels, reduction.labels, queue_depth=4)
     graph.add_flow(cfar.detection_idx, reduction.detection_idx, queue_depth=4)
     graph.add_flow(features.points, reduction.points, queue_depth=4)
 
-    # Report clusters against their physical coordinate axes.
+    # Report clusters with the same physical coordinate axes.
     graph.add_flow(features.points, report.points, queue_depth=4)
     graph.add_flow(cluster.labels, report.labels, queue_depth=4)
     graph.add_flow(cluster.sizes, report.sizes, queue_depth=4)
     graph.add_flow(reduction.rep_idx, report.detection_idx, queue_depth=4)
     graph.add_flow(reduction.reduced_points, report.reduced_points, queue_depth=4)
     graph.add_flow(range_op.range_bins, report.range_bins, queue_depth=4)
-    graph.add_flow(demux.velocity_bins_out, report.velocity_bins, queue_depth=4)
+    graph.add_flow(doppler.velocity_bins, report.velocity_bins, queue_depth=4)
+
     outputs = {
         "adc_source": ("adc_cube",),
         "range_processor": ("range_profiles", "range_bins"),
+        "clutter_filter": ("range_profiles_out",),
         "doppler_processor": ("rd_maps", "velocity_bins"),
-        "ddm_dense_demultiplex": ("velocity_bins_out", "rd_maps_out"),
-        "doppler_notch": ("rd_maps_out",),
-        "virtual_array_assembly": ("rd_maps_out",),
         "cfar_detector": (
             "detection_mask",
             "detection_score",
@@ -130,8 +124,6 @@ def build_graph(config: str | Path) -> BuiltGraph:
             "detection_idx",
             "cfar_power",
         ),
-        "snapshot_gather": ("snapshot", "is_valid"),
-        "beamscan_estimator": ("aoa_estimates", "angle_spectrum"),
         "feature_assembly": ("points",),
         "cluster_dbscan": ("labels", "sizes"),
         "detection_reduction": ("rep_idx", "reduced_points"),
@@ -150,14 +142,14 @@ def build_graph(config: str | Path) -> BuiltGraph:
             options,
             cfg,
             path,
-            "Ddm",
-            "MIMO DDM",
+            "Siso",
+            "SISO",
             {
                 "cfar_power": cfar.cfar_power,
                 "detection_idx": cfar.detection_idx,
                 "points": features.points,
                 "range_bins": range_op.range_bins,
-                "velocity_bins": demux.velocity_bins_out,
+                "velocity_bins": doppler.velocity_bins,
                 "labels": cluster.labels,
                 "sizes": cluster.sizes,
                 "reduced_points": reduction.reduced_points,
