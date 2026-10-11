@@ -1,9 +1,9 @@
 ---
-name: radar-perf
+name: operator-perf
 description: Assess and optimize holoscan-radar operator performance using the HSDK 5 harness, with confirmed per-output equivalence policies and gated single-fix or bounded iterative optimization. Use for profiling, bottleneck analysis, or operator tuning in this repository.
 ---
 
-# Radar Performance
+# Operator Performance
 
 Use this repository's maintained performance recipes and locked contracts.
 PR #20's `perf-analyze`, `perf-optimize`, and `perf-autotune` motivated this

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-side CLI for radar-perf. No automatic production edits or issue filing."""
+"""Host-side CLI for operator-perf. No automatic production edits or issue filing."""
 
 import argparse
 import csv

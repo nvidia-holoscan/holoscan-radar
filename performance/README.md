@@ -158,7 +158,7 @@ them requires extending the respective typed recipe fixtures and adapters.
 
 ## Automated optimization
 
-The repository [radar-perf skill](../skills/radar-perf/SKILL.md) provides
+The repository [operator-perf skill](../skills/operator-perf/SKILL.md) provides
 assessment, single-candidate fixes, and bounded iterative optimization.
 It preserves locked contracts and behavior, confirms numerical policies per
 output and precision, compares clean alternating A/B measurements, and reports
@@ -168,7 +168,7 @@ acceptance is a separate confirmed session decision.
 
 The host-side tools under `performance/optimization/` use Python's standard
 library and do not require the disabled radar Python bindings. See the
-[tool interface](../skills/radar-perf/references/tools.md) for session,
+[tool interface](../skills/operator-perf/references/tools.md) for session,
 comparison, checkpoint, profiler, and report commands. Run their checks with:
 
 ```bash
@@ -201,11 +201,11 @@ Use the source-bound build manifests and `capture` command for session evidence.
 The skill and helpers are model- and coding-agent-independent: they use
 Markdown instructions, standard Python, Git, and the repository's native GPU
 toolchain, without provider APIs or an agent-specific runtime. Agents with
-skill discovery can link or copy `skills/radar-perf` into their supported skill
+skill discovery can link or copy `skills/operator-perf` into their supported skill
 location. For agents without discovery, start with this instruction:
 
 ```text
-Read skills/radar-perf/SKILL.md and follow its linked references for this task.
+Read skills/operator-perf/SKILL.md and follow its linked references for this task.
 ```
 
 Run from this checkout, or give the agent the absolute path to `SKILL.md`.
