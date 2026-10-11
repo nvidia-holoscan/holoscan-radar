@@ -68,11 +68,10 @@ __device__ inline int64_t resolve_axis_index(int64_t center, int64_t offset, int
   return idx;
 }
 
-__global__ void batch_linear_kernel(const int64_t* __restrict__ detection_idx,
-                                    int64_t num_detections, int64_t idx_cols, int64_t n_preserved,
-                                    const int64_t* __restrict__ leading_dims, int64_t num_doppler,
-                                    int64_t num_range, int64_t* __restrict__ batch_linear,
-                                    int* __restrict__ error_flag) {
+static __global__ void batch_linear_kernel(
+    const int64_t* __restrict__ detection_idx, int64_t num_detections, int64_t idx_cols,
+    int64_t n_preserved, const int64_t* __restrict__ leading_dims, int64_t num_doppler,
+    int64_t num_range, int64_t* __restrict__ batch_linear, int* __restrict__ error_flag) {
   const int64_t row = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (row >= num_detections) {
     return;
@@ -98,7 +97,7 @@ __global__ void batch_linear_kernel(const int64_t* __restrict__ detection_idx,
 }
 
 template <typename T>
-__global__ void gather_snapshots_kernel(
+static __global__ void gather_snapshots_kernel(
     const cuda::std::complex<T>* __restrict__ rd_maps, const int64_t* __restrict__ detection_idx,
     int64_t num_detections, int64_t idx_cols, int64_t n_preserved,
     const int64_t* __restrict__ batch_linear, int64_t num_channels, int64_t num_doppler,

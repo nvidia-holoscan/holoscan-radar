@@ -46,3 +46,22 @@ These headless presets run two frames. For the visual normal presets, use
 `--run-args=mimo_ddm_nonlinear.yaml` (nonlinear) on a host with a display.
 
 Simulator-backed sources default `app.scene_visibility` to `front_half_space`, with radar-local `+x` as boresight. Select `frustum` with explicit horizontal/vertical FOVs in radians, or `all` to restore isotropic target synthesis. This binary coverage gate is separate from relative range loss and does not model antenna gain.
+
+## Python Graph
+
+The HSDK 5 Python provider uses the same C++ YAML loader, operator ports,
+device bindings, report sink, and optional dashboard as this C++ application.
+Run from the repository root after building or installing the Python wheel:
+
+```python
+from holoscan.radar.applications.mimo_ddm import build_graph
+
+workflow = build_graph("applications/fmcw/mimo_ddm/config/mimo_ddm_linear_smoke.yaml")
+workflow.run()
+workflow = build_graph("applications/fmcw/mimo_ddm/config/mimo_ddm_nonlinear_smoke.yaml")
+workflow.run()
+```
+
+`build_graph()` returns a `BuiltGraph`; call `.run()` to stop the Graph after
+the configured report frame count. The canonical import path is
+`holoscan_radar.applications.`mimo_ddm`.

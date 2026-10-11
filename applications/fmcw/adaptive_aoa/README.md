@@ -99,3 +99,20 @@ Simulator-backed sources default `app.scene_visibility` to
 explicit horizontal and vertical FOVs in radians, or `all` to restore
 isotropic target synthesis. This binary coverage gate is separate from
 relative range loss and does not model antenna gain.
+
+## Python Graph
+
+The HSDK 5 Python provider uses the same C++ YAML loader, operator ports,
+device bindings, report sink, and optional dashboard as this C++ application.
+Run from the repository root after building or installing the Python wheel:
+
+```python
+from holoscan.radar.applications.adaptive_aoa import build_graph
+
+workflow = build_graph("applications/fmcw/adaptive_aoa/config/adaptive_aoa_smoke.yaml")
+workflow.run()
+```
+
+`build_graph()` returns a `BuiltGraph`; call `.run()` to stop the Graph after
+the configured report frame count. The canonical import path is
+`holoscan_radar.applications.`adaptive_aoa`.

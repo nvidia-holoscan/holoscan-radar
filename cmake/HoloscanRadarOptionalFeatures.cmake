@@ -55,17 +55,25 @@ else()
     message(STATUS "X11: not found (dashboard display probing disabled)")
 endif()
 
-# The current main-5x image does not export the Python binding target. Force
-# the option off so stale CMake caches cannot select an unbuildable surface;
-# see SDK_DEVELOPMENT.md.
-set(HOLOSCAN_RADAR_BUILD_PYTHON FALSE CACHE BOOL
-    "Build holoscan.radar Python bindings (SDK component unavailable)" FORCE)
+# HSDK 5 exposes Python as an installed package, rather than a CMake pybind11
+# target. Require the Core and Visualization modules from the selected SDK root.
+option(HOLOSCAN_RADAR_BUILD_PYTHON "Build the HSDK 5 holoscan.radar provider" OFF)
 if(HOLOSCAN_RADAR_BUILD_PYTHON)
-    message(STATUS "Python bindings: enabled")
+    find_package(Python3 3.12 EXACT REQUIRED COMPONENTS Interpreter Development.Module)
+    set(HOLOSCAN_RADAR_SDK_PYTHON_SITE "${holoscan_DIR}/../../python3.12/site-packages")
+    cmake_path(NORMAL_PATH HOLOSCAN_RADAR_SDK_PYTHON_SITE)
+    foreach(_radar_module IN ITEMS holoscan/_core.abi3.so
+            holoscan_visualization/_visualization.abi3.so)
+        if(NOT EXISTS "${HOLOSCAN_RADAR_SDK_PYTHON_SITE}/${_radar_module}")
+            message(FATAL_ERROR
+                "HOLOSCAN_RADAR_BUILD_PYTHON requires HSDK 5 Python Core and "
+                "Visualization at ${HOLOSCAN_RADAR_SDK_PYTHON_SITE}; missing ${_radar_module}")
+        endif()
+    endforeach()
+    unset(_radar_module)
+    message(STATUS "HSDK 5 Python Core and Visualization: found")
 else()
-    message(STATUS
-        "Python bindings disabled "
-        "(HOLOSCAN_RADAR_BUILD_PYTHON=OFF)")
+    message(STATUS "Python bindings disabled (HOLOSCAN_RADAR_BUILD_PYTHON=OFF)")
 endif()
 
 # Public operator target names, shared with package configuration.

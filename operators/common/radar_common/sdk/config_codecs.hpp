@@ -22,6 +22,9 @@
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/lfm_waveform_descriptor.hpp"
 #include "radar_common/descriptors/sample_geometry.hpp"
+#include "radar_common/descriptors/tx_schedule.hpp"
+#include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
+#include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
 
@@ -568,6 +571,115 @@ struct ConfigCodec<radar::ArrayGeometry> {
 };
 
 template <>
+struct ConfigCodec<radar::TXSchedule> : ObjectCodec<radar::TXSchedule> {
+  static constexpr auto fields =
+      std::make_tuple(defaulted_object_field("num_tx", &radar::TXSchedule::num_tx),
+                      defaulted_object_field("tx_order", &radar::TXSchedule::tx_order),
+                      defaulted_object_field("chirp_tx_index", &radar::TXSchedule::chirp_tx_index));
+};
+
+struct DdmCodeFields {
+  int64_t num_tx{0};
+  std::vector<double> phase_codes{};
+  std::vector<double> doppler_offsets{};
+  int64_t guard_bands{0};
+};
+
+template <>
+struct ConfigCodec<DdmCodeFields> : ObjectCodec<DdmCodeFields> {
+  static constexpr auto fields =
+      std::make_tuple(defaulted_object_field("num_tx", &DdmCodeFields::num_tx),
+                      defaulted_object_field("phase_codes", &DdmCodeFields::phase_codes),
+                      defaulted_object_field("doppler_offsets", &DdmCodeFields::doppler_offsets),
+                      defaulted_object_field("guard_bands", &DdmCodeFields::guard_bands));
+};
+
+template <>
+struct ConfigCodec<radar::DDMCodeDescriptor> {
+  static ConfigResult<radar::DDMCodeDescriptor> decode(ConfigView view,
+                                                       const DecodeOptions& options,
+                                                       DecodeContext& context) {
+    auto fields = ConfigCodec<DdmCodeFields>::decode(std::move(view), options, context);
+    if (!fields) {
+      return tl::make_unexpected(fields.error());
+    }
+    if (fields->phase_codes.size() % 2U != 0U) {
+      return tl::make_unexpected(ConfigError::make(
+          ConfigErrorCode::kUnsupportedValue,
+          "phase_codes must contain interleaved real/imaginary pairs", context.path()));
+    }
+    radar::DDMCodeDescriptor result;
+    result.num_tx = fields->num_tx;
+    result.doppler_offsets = std::move(fields->doppler_offsets);
+    result.guard_bands = fields->guard_bands;
+    result.phase_codes.reserve(fields->phase_codes.size() / 2U);
+    for (std::size_t i = 0; i < fields->phase_codes.size(); i += 2U) {
+      result.phase_codes.emplace_back(fields->phase_codes[i], fields->phase_codes[i + 1U]);
+    }
+    try {
+      result.validate();
+    } catch (const std::invalid_argument& error) {
+      return tl::make_unexpected(
+          ConfigError::make(ConfigErrorCode::kUnsupportedValue, error.what(), context.path()));
+    }
+    return result;
+  }
+
+  static ConfigResult<ConfigValue> encode(const radar::DDMCodeDescriptor& value,
+                                          const EncodeOptions& options, EncodeContext& context) {
+    DdmCodeFields fields;
+    fields.num_tx = value.num_tx;
+    fields.doppler_offsets = value.doppler_offsets;
+    fields.guard_bands = value.guard_bands;
+    fields.phase_codes.reserve(value.phase_codes.size() * 2U);
+    for (const std::complex<double>& sample : value.phase_codes) {
+      fields.phase_codes.push_back(sample.real());
+      fields.phase_codes.push_back(sample.imag());
+    }
+    return ConfigCodec<DdmCodeFields>::encode(fields, options, context);
+  }
+};
+
+inline constexpr radar::OverlapPolicy kOverlapPolicies[] = {
+    radar::OverlapPolicy::kDedup,
+    radar::OverlapPolicy::kAverage,
+    radar::OverlapPolicy::kKeepAll,
+};
+
+template <>
+struct ConfigCodec<radar::OverlapPolicy>
+: radar::config_detail::CanonicalEnumCodec<radar::OverlapPolicy, kOverlapPolicies> {};  // NOLINT
+
+template <>
+struct ConfigCodec<radar::ShiftInvariantSubarrayPair> {
+  static constexpr auto fields =
+      std::make_tuple(defaulted_object_field("reference_indices",
+                                             &radar::ShiftInvariantSubarrayPair::reference_indices),
+                      defaulted_object_field("shifted_indices",
+                                             &radar::ShiftInvariantSubarrayPair::shifted_indices));
+  static ConfigResult<radar::ShiftInvariantSubarrayPair> decode(ConfigView view,
+                                                                const DecodeOptions& options,
+                                                                DecodeContext& context) {
+    auto result =
+        ObjectCodec<radar::ShiftInvariantSubarrayPair>::decode(std::move(view), options, context);
+    if (!result) {
+      return tl::make_unexpected(result.error());
+    }
+    try {
+      result->validate();
+      return result;
+    } catch (const std::invalid_argument& error) {
+      return tl::make_unexpected(
+          ConfigError::make(ConfigErrorCode::kUnsupportedValue, error.what(), context.path()));
+    }
+  }
+  static ConfigResult<ConfigValue> encode(const radar::ShiftInvariantSubarrayPair& value,
+                                          const EncodeOptions& options, EncodeContext& context) {
+    return ObjectCodec<radar::ShiftInvariantSubarrayPair>::encode(value, options, context);
+  }
+};
+
+template <>
 struct ConfigCodec<radar::AngleConvention> : ObjectCodec<radar::AngleConvention> {
   static constexpr auto fields = std::make_tuple(
       defaulted_object_field("preset", &radar::AngleConvention::preset),
@@ -612,6 +724,19 @@ struct ParamStorageTraits<radar::SignedAxis> : radar::config_detail::SignedAxisS
 template <>
 struct ParamStorageTraits<radar::ElevationReference> : radar::config_detail::ElevationStorage {
 };  // NOLINT(whitespace/indent_namespace)
+template <>
+struct ParamStorageTraits<radar::TXSchedule>
+: radar::config_detail::PortableParamStorageTraits<radar::TXSchedule> {};  // NOLINT
+template <>
+struct ParamStorageTraits<radar::DDMCodeDescriptor>
+: radar::config_detail::PortableParamStorageTraits<radar::DDMCodeDescriptor> {};  // NOLINT
+template <>
+struct ParamStorageTraits<radar::OverlapPolicy>
+: radar::config_detail::PortableParamStorageTraits<radar::OverlapPolicy> {};  // NOLINT
+
+template <>
+struct ParamStorageTraits<radar::ShiftInvariantSubarrayPair>
+: radar::config_detail::PortableParamStorageTraits<radar::ShiftInvariantSubarrayPair> {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::PhaseCorrectionSense> : radar::config_detail::PhaseSenseStorage {
 };  // NOLINT

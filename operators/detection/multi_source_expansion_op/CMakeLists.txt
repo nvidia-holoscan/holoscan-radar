@@ -16,6 +16,3 @@ install(EXPORT holoscan_multi_source_expansion_op_targets
 include(GNUInstallDirs)
 install(FILES multi_source_expansion_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/detection)
-if(HOLOSCAN_RADAR_BUILD_PYTHON)
-    add_subdirectory(python)
-endif()

@@ -68,7 +68,6 @@ RUN apt-get update \
         libtinyxml2-dev \
         openssh-client \
         clang-format \
-        pybind11-dev \
         sudo \
         ninja-build \
         xvfb \
@@ -77,7 +76,7 @@ RUN apt-get update \
 
 # Wheel packaging tooling: `./holoscan-radar package --pkg-generator WHEEL`
 # drives `python -m build`; its backend is declared in pyproject.toml.
-RUN pip install --no-cache-dir build scikit-build-core
+RUN pip install --no-cache-dir build scikit-build-core nanobind==3.0.1
 
 # Create the `dev` user with passwordless sudo at UID/GID ${DEV_UID}/${DEV_GID},
 # first freeing those ids if the base image assigned them to another account.

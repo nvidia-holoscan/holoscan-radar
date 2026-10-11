@@ -249,9 +249,9 @@ contract-specific fixture, descriptor, enum, sizing policy, or metric is needed.
       [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309), naming the source directory.
 - [ ] PR description notes **contract changes** explicitly if `OPERATOR_API.md`
       changed.
-- [ ] Python bindings — add/update them when the SDK binding component is
-      available; until then, keep the limitation documented only in
-      [`SDK_DEVELOPMENT.md`](../../SDK_DEVELOPMENT.md).
+- [ ] FMCW Python provider — register both precision types under stable
+      `holoscan.radar.*` names, update the `holoscan_radar` facade and Graph tests,
+      and verify the clean wheel import. SAR/IO Python bindings are outside this wave.
 
 ---
 

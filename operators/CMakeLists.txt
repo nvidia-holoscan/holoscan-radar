@@ -1,11 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Python3 + pybind11 are pulled in (find_package + FetchContent) by
-# pybind11_add_holohub_module, which the operator's own python/CMakeLists.txt
-# includes when cpp == 'cpp'. No find_package needed
-# here at the aggregate operators/ level.
-
 # operators/ is organized per functional group:
 #   common/           — shared radar_common library (descriptors, windows, utils)
 #   detection/        — detection operators (CFAR)
@@ -34,21 +29,8 @@ add_subdirectory(clustering)
 # Angle-estimation operators (one add_holohub_operator() per operator inside).
 add_subdirectory(angle_estimation)
 
-# radar_app report Python bindings are deferred here because applications/
-# is configured before operators/, and pybind needs radar_common.
+# One HSDK 5 provider owns all FMCW operator registrations.
 if(HOLOSCAN_RADAR_BUILD_PYTHON)
-    add_subdirectory(
-        ${PROJECT_SOURCE_DIR}/applications/common/radar_app/python
-        ${CMAKE_BINARY_DIR}/applications/common/radar_app/python)
-
-    # Install the aggregate __init__.py alongside each operator's built module.
-    configure_file(
-        ${PROJECT_SOURCE_DIR}/python/holoscan/radar/__init__.py
-        ${HOLOSCAN_RADAR_PYTHON_PKG_DIR}/__init__.py COPYONLY)
-
-    # Relative DESTINATION — interpreted as <CMAKE_INSTALL_PREFIX>/holoscan/<mod>
-    # in plain `cmake --install` (set --prefix to ${Python3_SITEARCH}), and as
-    # <wheel-root>/holoscan/<mod> when scikit-build-core builds the wheel.
-    install(DIRECTORY ${HOLOSCAN_RADAR_PYTHON_PKG_DIR}
-        DESTINATION holoscan)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/python/holoscan_radar
+                     ${CMAKE_BINARY_DIR}/python/holoscan_radar)
 endif()
