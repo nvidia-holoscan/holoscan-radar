@@ -464,10 +464,25 @@ struct AdapterFixtureScenario {
 
 struct AdapterFixtureTraits {
   using Scenario = AdapterFixtureScenario;
+  static const char* tool_name() { return "perf_fixture"; }
+  static const char* tool_description() { return "fixture"; }
   static perf::SizeDef size_def(const std::string& id, const std::vector<int64_t>& shape) {
     return {id, shape, shape[0] * shape[1], id};
   }
 };
+
+TEST(PerfProfiles, ParsesExactCaseFilterAndReverseOrder) {
+  perf::Options options;
+  std::string program = "perf_fixture";
+  std::string flag = "--cases";
+  std::string ids = "baseline-small,baseline-medium";
+  std::string reverse = "--reverse-order";
+  std::vector<char*> argv{program.data(), flag.data(), ids.data(), reverse.data()};
+  EXPECT_TRUE(perf::detail::parse_args<AdapterFixtureTraits>(static_cast<int>(argv.size()),
+                                                             argv.data(), &options));
+  EXPECT_EQ(options.cases, (std::vector<std::string>{"baseline-small", "baseline-medium"}));
+  EXPECT_TRUE(options.reverse_order);
+}
 
 perf::ResultRow base_row(const AdapterFixtureScenario& scenario) {
   perf::ResultRow row;
@@ -511,6 +526,8 @@ TEST(PerfProfiles, SharedAdapterOwnsSizeAndReportIdentity) {
   settings.measured_frames = 3;
   settings.repeats = 2;
   perf::detail::run_adapter_case<AdapterFixtureTraits>(selected, settings, &report);
+  ASSERT_FALSE(report.results.empty());
+  EXPECT_EQ(report.results.back().override_context, "first_changed_configuration_after_baseline");
   ASSERT_EQ(report.results.size(), 2U);
   EXPECT_EQ(report.results[0].scenario_id, scenario.id);
   EXPECT_EQ(report.results[1].size_id, scenario.size_id);

@@ -33,13 +33,20 @@ the example is not permission to optimize or select exact numerical rules:
   "max_unsuccessful": 3,
   "wall_time_s": null,
   "target_ms": null,
-  "pairs": 10,
+  "measurement_policy_version": 2,
+  "pairs": 20,
   "objective": "median_ms",
   "target_cases": ["baseline-small", "baseline-medium", "baseline-large"],
   "timing_precisions": {},
   "min_effect_pct": 0.0,
   "max_aa_delta_pct": 5.0,
   "max_baseline_spread_pct": 10.0,
+  "metric_policies": {
+    "cold_ms": {"max_aa_p90_delta_pct": 20.0, "max_baseline_iqr_pct": 30.0},
+    "setup_ms": {"max_aa_p90_delta_pct": 15.0, "max_baseline_iqr_pct": 25.0},
+    "override_ms": {"max_aa_p90_delta_pct": 25.0, "max_baseline_iqr_pct": 40.0}
+  },
+  "clock_configuration": null,
   "verification_cases": {
     "clutter_filter": ["small-baseline", "small-live-match-miss", "medium-baseline", "medium-live-match-miss", "large-baseline", "large-live-match-miss"]
   },
@@ -49,7 +56,8 @@ the example is not permission to optimize or select exact numerical rules:
     "sizes": "small,medium,large",
     "warmup": 5,
     "frames": 50,
-    "repeats": 3
+    "repeats": 3,
+    "process_mode": "isolated"
   }
 }
 ```
@@ -127,13 +135,50 @@ An objective's adjusted lower bound must exceed the confirmed `min_effect_pct`;
 any protected adjusted upper bound below zero rejects the candidate. No minimum
 gain threshold excuses statistically supported regressions.
 
-Ten pairs remain the initial default, not a promise of adequate power. If the
+Twenty pairs are the initial proposal, not a promise of adequate power. If the
 family cannot resolve an interval, its bounds are `null` and the verdict is
 inconclusive. `minimum_resolvable_pairs = ceil(log2(40 * family_size))` is only
 the minimum to obtain finite bounds, not a power calculation. Propose a larger
 confirmed budget before further measurements; never cherry-pick repeat batches
 until one passes. Calibration spread/delta thresholds and practical gain must
 be selected before candidate results; no automatic tolerance widening occurs.
+
+Before confirming the session, obtain a baseline preview report and run:
+
+```bash
+python3 performance/optimization/radar_perf.py budget \
+  --report /absolute/baseline-preview.json --config /absolute/proposed-config.json \
+  --out /absolute/budget-proposal.json
+```
+
+Run this for each affected operator's complete matrix and propose the largest
+budget. It counts actual available metrics and the confirmed operator family,
+and recommends at least third-order confidence bounds. It does not estimate
+power for an arbitrary expected effect; inspect A/A evidence and expected gains
+before confirmation. `measurement_policy_version: 2` distinguishes these
+semantics. Old sessions cannot accept new candidates under changed rules.
+
+`metric_policies` sets `max_aa_p90_delta_pct`, `max_baseline_iqr_pct` and optional
+`min_effect_pct` separately for each metric. The legacy-named global fields
+`max_aa_delta_pct`/`max_baseline_spread_pct` supply **P90/IQR** defaults only in
+version 2; they no longer gate on extrema. Cold/setup/override proposed defaults
+are examples to confirm, not permission to increase thresholds after results.
+Extremes and stall counts remain diagnostics, and all observations enter the
+familywise comparison. Minimum gain never waives a supported regression.
+
+`sampling.process_mode: isolated` discovers matching case lists on both builds,
+then launches one fresh process per case/repeat with `--cases ID --repeats 1`.
+It retains every child report and recomputes aggregates during acceptance.
+Scalar metrics are medians of repeat report metrics; `max_ms` is the worst
+repeat maximum, not a median. This is not pooled per-frame percentile inference.
+`cases: "id-a,id-b"` optionally selects an explicit confirmed subset. Bulk mode
+is available only as a confirmed measurement context; run position probes first.
+
+Clocks are read outside timed runs and recorded in pair indexes. An optional
+`clock_configuration` object binds the preflight's sysfs governor/bound map.
+Changing that map during a run, or between calibration and A/B, invalidates
+evidence. Empty telemetry is unknown; use platform-specific read-only evidence
+to confirm unsupported controls. No helper modifies clocks or power settings.
 
 `insufficient_pair_budget` flags unresolved intervals even on a stable A/A run;
 propose a larger budget before editing. A speed gate with any unresolved
@@ -290,13 +335,23 @@ for inspection. It does not prove that those rows recur in steady frames.
 python3 performance/optimization/diagnostics.py preflight --out /absolute/environment.json
 python3 performance/optimization/diagnostics.py phases \
   --sqlite /absolute/capture.sqlite --started-at UNIX_SECONDS \
-  --source-id SOURCE --warmup 5 --out /absolute/phases.json
+  --source-id SOURCE --case CASE_ID --repeat 0 --warmup 5 \
+  --timed-output PORT --out /absolute/phases.json
 ```
 
 Phase exports must be fresh and scoped to one operator/case. Select `--global-tid`
 if needed; unsupported schemas or missing NVTX/runtime evidence fail explicitly.
 Output is attribution only, never acceptance timing. Temporary `op.*` marks
 are optional and must be removed before acceptance runs.
+
+Use the explicit harness session labels, not thread/YAML-order guesses. The
+`after_timed_emit_median_us` field is CPU-side attribution, not evidence that
+the tail is outside the sink's CUDA dependency chain. `capture` owns `<out>.log`;
+do not redirect its own stdout/stderr to that same path or append to old captures.
+
+See [workspace safety](workspace.md) for scratch restore receipts and relocated
+archive audits. Gate template/manifest generation and a one-command candidate
+runner remain future conveniences; hand-written evidence still requires review.
 
 `bug --session PATH --record PATH` appends a bug with `title`, `expected`,
 `observed`, `baseline_reproduction`, `affected_cases`, `blocks_validation`, and

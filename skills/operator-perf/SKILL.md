@@ -32,6 +32,26 @@ Read [tool interface](references/tools.md) when preparing configuration,
 verification, or reports. Resolve repository paths from the checkout, not from
 the skill's installation path.
 
+## Workspace Layout
+
+Keep every spin-off inside the repository checkout, under the git-ignored
+`.worktrees/` directory, grouped by tool, operator, and session:
+
+```text
+.worktrees/operator-perf/<operator>/session-<N>/
+  original/    detached worktree at the baseline commit
+  best/        detached worktree holding the current best
+  candidate/   worktree on the session branch, where edits happen
+  artifacts/   session JSON, manifests, snapshots, gates, reports, scripts
+```
+
+`<operator>` is the recipe's operator name (for example `fmcw_range_processor`)
+and `<N>` increments per session for that operator. Create worktrees with
+`git worktree add`, never as sibling directories or copies outside the checkout.
+Tell the user the session directory and branch when the session starts and in
+every milestone update. Recorded artifacts embed absolute paths and are
+hash-bound by the session ledger, so do not move or rewrite them mid-session.
+
 ## Invariants
 
 Read the applicable FMCW/SAR `OPERATOR_API.md`, relevant tests and workflows,
@@ -50,8 +70,10 @@ to make a candidate pass.
 Before editing, propose and obtain confirmation of the concrete session:
 operator, comparison rules for **each port and precision**, cases, objective,
 protected cases, editable scope, and limits. Defaults: 20 candidate turns, three
-consecutive unsuccessful candidates, all three sizes, steady latency, ten
-alternating A/B pairs. Wall-time and target limits are optional. All defaults
+consecutive unsuccessful candidates, all three sizes, steady latency, 20
+alternating A/B pairs with isolated case/repeat processes. Before confirmation,
+use the selected matrix to propose an adequate budget; 20 is not a power
+guarantee. Wall-time and target limits are optional. All defaults
 are configurable. Existing confirmation remains valid until scope or policy
 changes. Assessment does not need an editing-session confirmation.
 
@@ -60,6 +82,20 @@ Calibrate each baseline/metric with repeated A/A runs before editing. Timing
 precision coverage is separate from output equivalence. A noisy calibration
 blocks affected validation; it does not justify accepting differences. Follow
 the reference's familywise gates and report insufficient measurement power.
+Confirm metric-specific calibration policies and the intended clock/power
+environment. Clock changes need separate authorization; never silently lock
+clocks or substitute a controlled-clock benchmark for deployment behavior.
+
+On a failed gate, do not retroactively change exclusions, objectives, numerical
+rules, initialization semantics or thresholds to accept that candidate. A new
+confirmed policy requires a fresh session and baseline. A significant first-use
+regression remains relevant even when its immediate code path is unchanged.
+
+Use [workspace safety](references/workspace.md) for scratch profiling and moved
+archives. Never restore instrumentation with Git checkout/reset: checkpoint the
+current best, verify its fingerprint after restore, and rebuild every touched
+target before final gates. A moved archive needs an audited path map, not edits
+to its hash-bound JSON.
 
 Suspected bugs are exceptional findings, not optimization opportunities. Alert
 the user promptly, reproduce on the original baseline where possible, and

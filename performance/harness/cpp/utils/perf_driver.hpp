@@ -36,6 +36,8 @@
 #include <utility>
 #include <vector>
 
+#include <holoscan/profiler/nvtx3.hpp>
+
 #include "utils/perf_app.hpp"
 #include "utils/perf_platform.hpp"
 #include "utils/perf_profiles.hpp"
@@ -61,6 +63,8 @@ struct Options {
   bool list_cases{false};
   std::string scope{"limited"};
   std::vector<std::string> sizes;  // empty = tier default
+  std::vector<std::string> cases;
+  bool reverse_order{false};
   bool sizes_all{false};
   double stop_after_s{0.0};  // 0 = disabled; per-scenario wall-clock cap
   RunSettings rs;
@@ -97,6 +101,8 @@ void print_help() {
             << "  --scope NAME      minimal|limited|overrides|moderate|thorough\n"
             << "  --sizes all       Use all YAML size profiles\n"
             << "  --sizes a,b,c     Limit to named YAML profiles\n"
+            << "  --cases a,b,c     Select exact expanded scenario IDs\n"
+            << "  --reverse-order   Reverse selected scenario order for position probes\n"
             << "  --full            Alias for --scope thorough\n"
             << "  --stop-after-s S  Stop after first scenario whose wall time "
                "exceeds S seconds\n"
@@ -147,6 +153,12 @@ bool parse_args(int argc, char** argv, Options* opt) {
         std::cerr << "error: --stop-after-s must be positive\n";
         return false;
       }
+    } else if (a == "--cases") {
+      opt->cases = split_csv(next("--cases"));
+      if (opt->cases.empty())
+        return false;
+    } else if (a == "--reverse-order") {
+      opt->reverse_order = true;
     } else if (a == "--sizes") {
       const std::string v = next("--sizes");
       if (v == "all") {
@@ -215,7 +227,7 @@ ProfileSuite load_adapter_suite(const std::filesystem::path& path) {
 template <typename Traits>
 std::vector<SelectedScenario<typename Traits::Scenario>> select_scenarios(const ProfileSuite& suite,
                                                                           const Options& opt) {
-  return select_validated_scenarios<typename Traits::Scenario>(
+  auto selected = select_validated_scenarios<typename Traits::Scenario>(
       suite, opt.scope, opt.sizes_all ? std::vector<std::string>{} : opt.sizes,
       [&suite](const ProfileCase& c, const std::vector<int64_t>& shape) {
         auto scenario = [&] {
@@ -231,6 +243,20 @@ std::vector<SelectedScenario<typename Traits::Scenario>> select_scenarios(const 
           throw std::invalid_argument("adapter live port disagrees with YAML");
         return scenario;
       });
+  if (!opt.cases.empty()) {
+    for (const auto& id : opt.cases) {
+      if (std::none_of(selected.begin(), selected.end(), [&](const auto& entry) {
+            return entry.scenario.id == id;
+          }))
+        throw std::invalid_argument("unknown/unselected scenario ID: " + id);
+    }
+    std::erase_if(selected, [&](const auto& entry) {
+      return std::find(opt.cases.begin(), opt.cases.end(), entry.scenario.id) == opt.cases.end();
+    });
+  }
+  if (opt.reverse_order)
+    std::reverse(selected.begin(), selected.end());
+  return selected;
 }
 
 // The YAML suite owns the size ladder. Each adapter only translates one shape
@@ -258,7 +284,8 @@ void record_exercised_sizes(
 // live-frame plan, and both report rows for every operator.
 template <typename Traits>
 void run_adapter_case(const SelectedScenario<typename Traits::Scenario>& selected,
-                      const RunSettings& settings, PerfReport* report) {
+                      const RunSettings& settings, PerfReport* report,
+                      bool process_warmup = false) {
   const auto& scenario = selected.scenario;
   if constexpr (requires { validate_run_settings(scenario, settings); }) {
     validate_run_settings(scenario, settings);
@@ -269,9 +296,20 @@ void run_adapter_case(const SelectedScenario<typename Traits::Scenario>& selecte
   if (row.live_port != selected.live_port)
     throw std::invalid_argument("adapter live port disagrees with YAML case: " + scenario.id);
   row.live_port = selected.live_port;
+  if (!selected.live_port.empty()) {
+    row.override_context =
+        selected.cached ? "cached_configuration" : "first_changed_configuration_after_baseline";
+  }
   measure_scenario(
       settings, !selected.live_port.empty(),
-      [&](int /*repeat*/, const RunPlan& plan) {
+      [&](int repeat, const RunPlan& plan) {
+        const std::string label =
+            std::string(process_warmup ? "radar-perf:warmup:" : "radar-perf:case:") + scenario.id +
+            ":repeat=" + std::to_string(repeat);
+        nvtxRangePushA(label.c_str());
+        struct PopRange {
+          ~PopRange() { nvtxRangePop(); }
+        } pop_range;
         if constexpr (requires { run_graph(scenario, plan, *selected.suite); }) {
           if (!selected.suite)
             throw std::invalid_argument("selected recipe suite is missing");
@@ -403,6 +441,8 @@ int perf_main(int argc, char** argv) {
   report.platform = capture_platform();
   report.run_settings = opt.rs;
   report.run_settings.scope = opt.scope;
+  report.run_settings.selected_cases = opt.cases;
+  report.run_settings.case_order = opt.reverse_order ? "reverse" : "forward";
   report.run_settings.stop_after_s = opt.stop_after_s;
   report.run_settings.scenarios_planned = static_cast<int>(scenarios.size());
 
@@ -423,7 +463,7 @@ int perf_main(int argc, char** argv) {
             return Traits::parse_case(c, shape);
           }
         });
-    detail::run_adapter_case<Traits>(baseline.front(), warm, &discarded);
+    detail::run_adapter_case<Traits>(baseline.front(), warm, &discarded, true);
   });
   try {
     detail::run_all_scenarios<Traits>(scenarios, opt, &report);

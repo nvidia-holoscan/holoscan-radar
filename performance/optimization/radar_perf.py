@@ -4,6 +4,7 @@
 """Host-side CLI for operator-perf. No automatic production edits or issue filing."""
 
 import argparse
+import copy
 import csv
 import datetime
 import hashlib
@@ -24,15 +25,16 @@ from artifacts import (
     write_json,
 )
 from equivalence import compare_snapshots, validate_policy
-from timing import METRICS, compare_pairs, compatible, run_pairs, verify_build
+from timing import METRICS, budget_proposal, compare_pairs, compatible, run_pairs, verify_build
 
 DEFAULTS = {
     "mode": "optimize",
+    "measurement_policy_version": 2,
     "max_candidates": 20,
     "max_unsuccessful": 3,
     "wall_time_s": None,
     "target_ms": None,
-    "pairs": 10,
+    "pairs": 20,
     "objective": "median_ms",
     "target_cases": [],
     "consumer_policies": {},
@@ -42,6 +44,12 @@ DEFAULTS = {
     "min_effect_pct": 0.0,
     "max_aa_delta_pct": 5.0,
     "max_baseline_spread_pct": 10.0,
+    "metric_policies": {
+        "cold_ms": {"max_aa_p90_delta_pct": 20.0, "max_baseline_iqr_pct": 30.0},
+        "setup_ms": {"max_aa_p90_delta_pct": 15.0, "max_baseline_iqr_pct": 25.0},
+        "override_ms": {"max_aa_p90_delta_pct": 25.0, "max_baseline_iqr_pct": 40.0},
+    },
+    "clock_configuration": None,
     "protected_metrics": ["median_ms", "cold_ms", "setup_ms", "override_ms"],
     "sampling": {
         "scope": "overrides",
@@ -49,13 +57,19 @@ DEFAULTS = {
         "warmup": 5,
         "frames": 50,
         "repeats": 3,
+        "process_mode": "isolated",
     },
 }
 GATES = ("contract", "coverage", "tests", "equivalence", "speed")
 
 
 def normalize_config(config):
-    result = DEFAULTS | config
+    result = copy.deepcopy(DEFAULTS) | config
+    result["metric_policies"] = copy.deepcopy(DEFAULTS["metric_policies"]) | config.get(
+        "metric_policies", {}
+    )
+    if result["measurement_policy_version"] != 2:
+        raise ValueError("measurement policy changed; create a freshly confirmed session")
     if not result.get("operator") or not result.get("policies") or not result.get("editable_scope"):
         raise ValueError("operator, policies, and editable_scope are required")
     if result["mode"] not in {"assess", "fix", "optimize"} or result["objective"] not in METRICS:
@@ -73,6 +87,24 @@ def normalize_config(config):
     for precisions in result["timing_precisions"].values():
         if not precisions or set(precisions) - {"float", "double"}:
             raise ValueError("timing precisions must explicitly name float and/or double")
+    allowed_policy = {"max_aa_p90_delta_pct", "max_baseline_iqr_pct", "min_effect_pct"}
+    for metric, policy in result["metric_policies"].items():
+        if metric not in METRICS or not isinstance(policy, dict) or set(policy) - allowed_policy:
+            raise ValueError("invalid per-metric measurement policy")
+        for name, value in policy.items():
+            if finite(value, name) < 0:
+                raise ValueError("measurement policy thresholds cannot be negative")
+    if result["sampling"].get("process_mode", "bulk") not in {"bulk", "isolated"}:
+        raise ValueError("unknown process mode")
+    for name, minimum in (("warmup", 0), ("frames", 2), ("repeats", 1)):
+        if type(result["sampling"].get(name)) is not int or result["sampling"][name] < minimum:
+            raise ValueError("invalid sampling budget: " + name)
+    clocks = result["clock_configuration"]
+    if clocks is not None and (
+        not isinstance(clocks, dict)
+        or not all(isinstance(key, str) and isinstance(value, str) for key, value in clocks.items())
+    ):
+        raise ValueError("clock configuration must be a sysfs string map or null")
     for port, precisions in result["policies"].items():
         if set(precisions) != {"float", "double"}:
             raise ValueError(f"{port}: propose separate float and double policies")
@@ -163,12 +195,20 @@ def timing_comparison(config, pairs, calibration, plan=None, calibrate=False):
         max_aa_delta_pct=config["max_aa_delta_pct"],
         max_baseline_spread_pct=config["max_baseline_spread_pct"],
         family_multiplier=1 + len(config["consumer_policies"]),
+        metric_policies=config.get("metric_policies", {}),
+        expected_clock_configuration=config.get("clock_configuration"),
     )
     if calibrate:
         return compare_pairs(pairs, **options, calibration=True)
     if calibration is None:
         raise ValueError("speed gate requires baseline-versus-baseline calibration")
     compatible(pairs["before"], calibration["before"])
+    if pairs.get("clocks", {}).get("expected_configuration") != calibration.get("clocks", {}).get(
+        "expected_configuration"
+    ):
+        raise ValueError(
+            "calibration clock/governor configuration differs from candidate measurement"
+        )
     if any(
         calibration[side]["source_id"] != pairs["before"]["source_id"]
         or calibration[side]["git_commit"] != pairs["before"]["git_commit"]
@@ -185,10 +225,16 @@ def timing_comparison(config, pairs, calibration, plan=None, calibrate=False):
         elif first["platform"] != platform:
             raise ValueError("calibration hardware differs from candidate measurement")
         elif [
-            {k: row.get(k) for k in ("variant", "input_shape", "map_shape", "live_port")}
+            {
+                k: row.get(k)
+                for k in ("variant", "input_shape", "map_shape", "live_port", "override_context")
+            }
             for row in first["results"]
         ] != [
-            {k: row.get(k) for k in ("variant", "input_shape", "map_shape", "live_port")}
+            {
+                k: row.get(k)
+                for k in ("variant", "input_shape", "map_shape", "live_port", "override_context")
+            }
             for row in baseline_rows
         ]:
             raise ValueError("calibration case configuration differs from baseline")
@@ -277,6 +323,8 @@ def comparison_evidence(value, config, context, plan=None):
 
 
 def add_candidate(session, record):
+    if session["config"].get("measurement_policy_version") != 2:
+        raise ValueError("archived policy; start a freshly confirmed session before optimization")
     if session.get("stop_reason") or stop_reason(session):
         raise ValueError("session stopped or budget exhausted")
     if session["config"]["mode"] == "assess":
@@ -511,6 +559,10 @@ def parser():
     init.add_argument("--config", required=True)
     init.add_argument("--confirmed", action="store_true")
     init.add_argument("--out", required=True)
+    budget = commands.add_parser("budget")
+    budget.add_argument("--report", required=True)
+    budget.add_argument("--config", required=True)
+    budget.add_argument("--out", required=True)
     source = commands.add_parser("fingerprint")
     source.add_argument("--root", default=".")
     capture = commands.add_parser("capture")
@@ -582,6 +634,16 @@ def parser():
 def main(argv=None):
     args = parser().parse_args(argv)
     command = args.command
+    if command == "budget":
+        config = normalize_config(read_json(args.config))
+        value = budget_proposal(
+            read_json(args.report),
+            config["protected_metrics"],
+            config["objective"],
+            1 + len(config["consumer_policies"]),
+        )
+        write_json(args.out, value)
+        return 0
     if command == "fingerprint":
         print(fingerprint(args.root))
         return 0
@@ -699,12 +761,15 @@ def main(argv=None):
             args.timeout_s,
             config["sampling"],
             wall_time_s=remaining,
+            expected_clock_configuration=config.get("clock_configuration"),
         )
     elif command == "compare-timing":
         config = normalize_config(read_json(args.config))
         pairs = read_json(args.pairs)
         plan = read_json(args.plan)
         context = read_json(args.context)
+        if context.get("confirmed_config_sha256") != config_hash(config):
+            raise ValueError("comparison configuration differs from confirmed context")
         if context.get("candidate_plan_sha256") != digest(args.plan):
             raise ValueError("comparison context differs from candidate plan")
         if context.get("candidate_id") != plan["id"]:

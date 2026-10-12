@@ -36,7 +36,8 @@ from radar_perf import (
     stop_reason,
     timing_comparison,
 )
-from timing import compare_pairs, median_interval, run_pairs
+from timing import budget_proposal, compare_pairs, median_interval, run_pairs
+from workspace import audit_archive, scratch_begin, scratch_restore, verify_scratch_rebuild
 
 
 def snapshots(value=1.0):
@@ -257,7 +258,7 @@ class OptimizationToolsTest(unittest.TestCase):
         self.assertFalse(self.compare(self.timing_index(after=[8.0, 12.0]))["passed"])
 
     def test_stale_commit_changed_hash_and_case_set(self):
-        for mutation in ("commit", "hash", "cases", "platform", "sampling", "missing"):
+        for mutation in ("commit", "hash", "cases", "platform", "sampling", "missing", "context"):
             index = self.timing_index()
             path = index["pairs"][0]["after"]["path"]
             report = read_json(path)
@@ -271,6 +272,8 @@ class OptimizationToolsTest(unittest.TestCase):
                 report["run_settings"]["measured_frames"] = 3
             elif mutation == "missing":
                 report["results"][0]["median_ms"] = None
+            elif mutation == "context":
+                report["results"][0]["override_context"] = "cached_configuration"
             else:
                 report["results"][0]["median_ms"] = 1.0
             write_json(path, report)
@@ -852,6 +855,162 @@ class OptimizationToolsTest(unittest.TestCase):
             result = preflight()
         runner.assert_not_called()
         self.assertIn("ncu unavailable", result["limitations"])
+
+    def test_robust_calibration_retains_extreme_stalls(self):
+        index = self.timing_index(before=[100.0] + [10.0] * 9, after=[100.0] + [10.0] * 9)
+        index["after"] = copy.deepcopy(index["before"])
+        for pair in index["pairs"]:
+            pair["after"] = copy.deepcopy(pair["before"])
+        value = compare_pairs(index, calibration=True)
+        self.assertTrue(value["passed"])
+        steady = next(r for r in value["results"] if r["metric"] == "median_ms")
+        self.assertEqual(steady["baseline_iqr_pct"], 0)
+        self.assertEqual(steady["stall_count"], 2)
+        self.assertGreater(steady["baseline_spread_pct"], 500)
+
+    def test_metric_specific_calibration_and_budget(self):
+        index = self.timing_index(before=[10.0, 20.0])
+        aa = self.calibration_index(index)
+        self.assertFalse(compare_pairs(aa, calibration=True)["passed"])
+        self.assertTrue(
+            compare_pairs(
+                aa, calibration=True, metric_policies={"median_ms": {"max_baseline_iqr_pct": 100.0}}
+            )["passed"]
+        )
+        proposal = budget_proposal(perf_report(10), ["median_ms", "cold_ms"], "median_ms", 100)
+        self.assertEqual(proposal["family_size"], 200)
+        self.assertGreaterEqual(proposal["proposed_pairs"], 20)
+        self.assertGreater(proposal["proposed_pairs"], proposal["minimum_resolvable_pairs"])
+        incomplete = perf_report(10)
+        incomplete["run_settings"]["stopped_early"] = True
+        with self.assertRaisesRegex(ValueError, "complete successful"):
+            budget_proposal(incomplete, ["median_ms"], "median_ms")
+
+    def test_isolated_runner_replays_raw_repeat_reports(self):
+        builds = self.timing_index()
+        for side in ("before", "after"):
+            builds[side].update(
+                command=["fake", side],
+                cwd=str(self.root),
+                artifacts={str(Path(__file__)): digest(__file__)},
+            )
+        calls = []
+
+        def run(argv, **kwargs):
+            if "--list-cases" in argv:
+                return type("Completed", (), {"stdout": "baseline\tsmall\n"})()
+            calls.append(argv)
+            self.assertEqual(argv[argv.index("--repeats") + 1], "1")
+            self.assertEqual(argv[argv.index("--cases") + 1], "baseline")
+            report = perf_report(10 if argv[1] == "before" else 8, argv[1])
+            report["run_settings"]["repeats"] = 1
+            write_json(argv[argv.index("--output") + 1], report)
+
+        sampling = config()["sampling"] | {"process_mode": "isolated", "repeats": 2}
+        with patch("timing.subprocess.run", side_effect=run):
+            result = run_pairs(
+                builds["before"],
+                builds["after"],
+                self.root / "isolated",
+                pairs=2,
+                sampling=sampling,
+            )
+        self.assertEqual(len(calls), 8)
+        compare_pairs(result, expected_pairs=2)
+        aggregate = read_json(result["pairs"][0]["before"]["path"])
+        child = aggregate["isolation"]["children"][0]["path"]
+        write_json(child, {})
+        with self.assertRaisesRegex(ValueError, "isolated raw report changed"):
+            compare_pairs(result, expected_pairs=2)
+
+    def test_clock_configuration_changes_block_comparison(self):
+        index = self.timing_index()
+        index["clocks"] = {
+            "expected_configuration": {"governor": "fixed"},
+            "snapshots": [{"configuration": {"governor": "dynamic"}}],
+        }
+        with self.assertRaisesRegex(ValueError, "clock/governor"):
+            compare_pairs(index)
+        with self.assertRaisesRegex(ValueError, "confirmed clock"):
+            compare_pairs(self.timing_index(), expected_clock_configuration={"governor": "fixed"})
+
+    def test_archive_mapping_preserves_hash_bound_json(self):
+        moved = self.root / "moved"
+        moved.mkdir()
+        child = moved / "gate.json"
+        write_json(child, {"evidence": "retained"})
+        old = str(self.root / "old")
+        ledger = self.json_file(
+            "archive.json", {"gate": {"path": old + "/gate.json", "sha256": digest(child)}}
+        )
+        identity = digest(ledger)
+        self.assertFalse(audit_archive(ledger, {})["passed"])
+        self.assertTrue(audit_archive(ledger, {old: str(moved)})["passed"])
+        self.assertEqual(digest(ledger), identity)
+        child.write_text("changed")
+        self.assertFalse(audit_archive(ledger, {old: str(moved)})["passed"])
+
+    def test_scratch_restore_preserves_best_and_requires_rebuild(self):
+        source = self.root / "operator.cpp"
+        source.write_text("accepted work")
+        target = self.root / "program"
+        target.write_bytes(b"build")
+        best = digest(source)
+        with patch("workspace.fingerprint", side_effect=lambda root: digest(source)):
+            saved = scratch_begin(self.root, ["operator.cpp"], [str(target)], best)
+            source.write_text("accepted work plus instrumentation")
+            sealed = {"root": saved["root"], "states": file_state(self.root, ["operator.cpp"])}
+            receipt = scratch_restore(saved, sealed)
+            self.assertEqual(source.read_text(), "accepted work")
+            manifest = self.timing_index()["before"] | {
+                "source_id": best,
+                "cwd": str(self.root),
+                "command": ["fake"],
+                "artifacts": {str(target): digest(target)},
+            }
+            with self.assertRaisesRegex(ValueError, "not rebuilt"):
+                verify_scratch_rebuild(receipt, [manifest])
+            os.utime(target, (receipt["restored_at"] + 1, receipt["restored_at"] + 1))
+            self.assertTrue(verify_scratch_rebuild(receipt, [manifest])["passed"])
+
+    def test_explicit_phase_session_labels_remove_warmup_ambiguity(self):
+        path = self.root / "sessions.sqlite"
+        with sqlite3.connect(path) as db:
+            db.executescript(
+                "CREATE TABLE StringIds(id INTEGER,value TEXT);"
+                "INSERT INTO StringIds VALUES(1,'op:compute'),(2,'cudaLaunchKernel');"
+                "CREATE TABLE NVTX_EVENTS(start INTEGER,end INTEGER,text TEXT,textId INTEGER,globalTid INTEGER);"
+                "INSERT INTO NVTX_EVENTS VALUES(0,100,NULL,1,7),(200,300,NULL,1,8);"
+                "INSERT INTO NVTX_EVENTS VALUES(150,350,'radar-perf:case:baseline:repeat=0',NULL,1);"
+                "INSERT INTO NVTX_EVENTS VALUES(250,NULL,'out:emit',NULL,8);"
+                "CREATE TABLE CUPTI_ACTIVITY_KIND_RUNTIME(start INTEGER,end INTEGER,nameId INTEGER,globalTid INTEGER);"
+                "INSERT INTO CUPTI_ACTIVITY_KIND_RUNTIME VALUES(210,220,2,8);"
+            )
+        result = phase_breakdown(
+            path, path.stat().st_mtime - 1, "source", case_id="baseline", timed_output="out"
+        )
+        self.assertEqual(result["frames"], 1)
+        self.assertEqual(result["after_timed_emit_median_us"], 0.05)
+        with self.assertRaisesRegex(ValueError, "session label"):
+            phase_breakdown(path, path.stat().st_mtime - 1, "source", case_id="unknown")
+
+    def test_old_policy_cannot_accept_new_candidate(self):
+        state = session()
+        state["config"].pop("measurement_policy_version")
+        with self.assertRaisesRegex(ValueError, "freshly confirmed"):
+            add_candidate(state, {})
+
+    def test_directional_calibration_not_hidden_by_gain_threshold(self):
+        index = self.timing_index()
+        index["after"]["source_id"] = index["before"]["source_id"]
+        result = compare_pairs(
+            index,
+            calibration=True,
+            min_effect_pct=90,
+            max_aa_delta_pct=100,
+            max_baseline_spread_pct=100,
+        )
+        self.assertFalse(result["passed"])
 
 
 if __name__ == "__main__":

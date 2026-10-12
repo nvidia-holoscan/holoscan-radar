@@ -8,7 +8,8 @@ descriptor content are exact. Floating rules are exact or confirmed explicit
 absolute/relative tolerances with evidence from analytic tests. Confirm the
 configuration and limits before edits. Record confirmation through `init`.
 
-Default to a dedicated worktree with the intended starting state. If the user
+Default to a dedicated worktree with the intended starting state, placed in the
+session directory described in SKILL.md's Workspace Layout. If the user
 has uncommitted relevant work, preserve and reproduce it there before taking
 the baseline. Do not stash, reset, or discard their work. Keep original and
 current-best builds separately, including their runtime libraries; merely
@@ -70,6 +71,23 @@ streak, but an attempted blocked candidate still consumes the 20-turn budget.
 Do not spend extra trials outside the confirmed budget. Session checkpoints do
 not authorize commits. Session state records stop decisions but the agent owns
 the optimization loop and code changes.
+
+After each assessment/candidate, announce the session path and distinguish
+estimated gain from measured casewise gain, confidence intervals, absolute
+latency and protected regressions. Report cumulative current-best versus
+original results for all affected operators when measured; do not extrapolate
+them from intermediate percentages. Keep unresolved bugs prominent.
+
+For temporary profiling, follow [workspace safety](workspace.md). Restore the
+current best and verify rebuild receipts before rerunning gates. An applicable
+existing session claim can be reused; do not edit STATUS every candidate or
+exclude locked documentation from provenance. Keep ongoing notes in artifacts.
+
+Record the baseline test failing set. No-new-failures is supporting evidence,
+not a blanket correctness waiver: a pre-existing failure that undermines the
+affected contract, output or temporal checks blocks that candidate. Explain
+unrelated SDK/environment failures and repeat suspected flakes on both builds;
+do not silently treat a rerun as proof the original failure was irrelevant.
 
 ## Bugs And Completion
 

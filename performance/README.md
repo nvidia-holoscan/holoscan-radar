@@ -174,10 +174,20 @@ and confirm practical gain and timing precision coverage. Default protection
 requires both precisions; explicitly scoped float-only timing cannot establish
 double-performance protection. Acceptance uses conservative familywise paired
 median intervals; descriptive bootstrap intervals alone do not decide a gate.
-Ten initial pairs may lack power for a large matrix; confirm a larger budget
+Twenty proposed pairs may lack power for a large matrix; use the baseline
+matrix's `budget` proposal and confirm adequate sampling
 before rerunning, rather than accepting a favorable repeat. See the tool
 interface for the updated plan, calibration, manifest `cwd`, and diagnostics
 commands. Existing sessions need fresh confirmation/evidence for the new gates.
+
+Version-2 measurement policies use isolated case/repeat processes by default,
+robust P90/IQR calibration with metric-specific thresholds, and recorded clock
+configuration. Extreme stalls remain visible; optional p90/p99/max protection
+is explicit. Shared `--cases` and `--reverse-order` flags enable baseline
+position probes, while NVTX session labels support explicit case/repeat phase
+attribution. `workspace.py` protects current-best scratch restores and audits
+relocated archives without rewriting hash-bound records. These changes require
+fresh baselines; they do not retroactively accept previously rejected work.
 
 The host-side tools under `performance/optimization/` use Python's standard
 library and do not require the disabled radar Python bindings. See the
