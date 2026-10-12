@@ -7,6 +7,9 @@
 # different versions of the same tool. .github/workflows/check_lint.yml now
 # installs from this file too, so both agree by construction.
 #
-# Only pre-commit itself is pinned here. Each hook pins its own version in
-# .pre-commit-config.yaml; keep them there, not in this file.
+# The metadata hook imports the CLI. Keep this pin aligned with the
+# pyproject.toml cli dependency group; rc1 is on NVIDIA's package index.
+--extra-index-url https://pypi.nvidia.com
+holoscan-cli[create]==5.0.0rc1
+# Other hooks pin their versions in .pre-commit-config.yaml.
 pre-commit==4.5.1

@@ -57,7 +57,8 @@ holoscan run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
   --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
   --run-args=siso_smoke.yaml
-holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build
+holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --cmake-options=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan
 ```
 
 `holoscan run-container --img holoscan-radar-dev:hsdk5 --no-docker-build`

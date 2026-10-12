@@ -28,7 +28,7 @@ import stat
 import sys
 from pathlib import Path
 
-_EXCLUDE_DIRS = {".git", ".local", ".cache", ".venv", "_CPack_Packages"}
+_EXCLUDE_DIRS = {".git", ".local", ".cache", ".venv", "venv", "_CPack_Packages"}
 _MAX_METADATA_BYTES = 512 * 1024
 
 

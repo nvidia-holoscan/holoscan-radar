@@ -135,7 +135,9 @@ ctest --test-dir build --output-on-failure -LE performance
 # image; see SDK_DEVELOPMENT.md. When enabled, run in the GPU container with
 # HOLOSCAN_RADAR_BUILD_DIR set to the build tree.
 
-# Lint — CI runs exactly this on every PR; run it before pushing
+# Lint — CI runs exactly this on every PR; run it before pushing. The lint
+# requirements pin pre-commit plus the CLI that the metadata hook imports.
+python -m pip install -r utilities/requirements.lint.txt
 pre-commit run --all-files
 ```
 
