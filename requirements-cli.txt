@@ -2,4 +2,4 @@
 # SPDX-License-Identifier: Apache-2.0
 # Update this pin deliberately and rebuild the development image.
 --extra-index-url https://pypi.nvidia.com
-holoscan-cli[create]==5.0.0a2
+holoscan-cli[create]==5.0.0rc1
