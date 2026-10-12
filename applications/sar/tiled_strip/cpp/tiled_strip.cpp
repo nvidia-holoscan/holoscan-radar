@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
         auto stager = graph.template op<app::sar::TileGeometryStagerOp>(
             "tile_stager", cfg.tile_geometries, cfg.tile_pulses);
         application.add(stager);
+        bind_outputs(options, "tile_stager", {"range_profiles_out"});
         graph.add_flow(range->range_profiles, stager->range_profiles, queue);
         graph.add_flow(reader->stream_boundary, stager->stream_boundary, queue);
         graph.add_flow(stager->range_profiles_out, manager->range_profiles, queue);

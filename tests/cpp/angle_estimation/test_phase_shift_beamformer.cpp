@@ -241,7 +241,28 @@ holoscan::testing::TestResult run_live_beamformer_graph(
     std::vector<LiveBeamformerTick> ticks, PhaseShiftBeamformerParams params,
     std::optional<holoscan::radar::MaxTensorExtents> extents = std::nullopt) {
   using Op = PhaseShiftBeamformerOp<double>;
-  const auto sized = extents.value_or(holoscan::radar::testing::default_test_extents());
+  const auto sized = [&] {
+    if (extents)
+      return *extents;
+    std::size_t max_az = params.az_coordinates.size();
+    std::size_t max_el = params.el_coordinates.size();
+    std::size_t max_doppler = 1U;
+    std::size_t max_range = 1U;
+    for (const auto& tick : ticks) {
+      if (tick.az)
+        max_az = std::max(max_az, tick.az->size());
+      if (tick.el)
+        max_el = std::max(max_el, tick.el->size());
+      const auto& shape = tick.rd_maps->shape();
+      if (shape.size() > 1U) {
+        max_doppler = std::max(max_doppler, static_cast<std::size_t>(shape[1]));
+      }
+      if (shape.size() > 2U) {
+        max_range = std::max(max_range, static_cast<std::size_t>(shape[2]));
+      }
+    }
+    return holoscan::radar::testing::extents_for_scan_grid(max_az, max_el, max_doppler, max_range);
+  }();
   auto fixture = holoscan::testing::create_operator_test<Op>(sized);
   fixture.set_params(std::move(params));
   for (std::size_t index = 0; index < ticks.size(); ++index) {
@@ -844,8 +865,7 @@ TEST(PhaseShiftBeamformerOpTest, LiveOverridesRejectMalformedAndBounds) {
   EXPECT_TRUE(beamformer_frames(malformed, "rda_cube").empty());
   EXPECT_FALSE(malformed.diagnostics().empty());
 
-  auto extents = holoscan::radar::testing::default_test_extents();
-  extents.max_az = 2;
+  auto extents = holoscan::radar::testing::extents_for_scan_grid(2U, 1U, 1U, 1U);
   const auto bounded = run_live_beamformer_graph(
       {{rd, std::nullopt, std::vector<double>{-0.1, 0.0, 0.1}}}, std::move(params), extents);
   ASSERT_FALSE(bounded.ok());

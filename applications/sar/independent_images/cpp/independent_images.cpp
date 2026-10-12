@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
             "collection_stager", cfg.collection_geometries, cfg.collection_spacings,
             cfg.collection_frequencies);
         application.add(stager);
+        bind_outputs(options, "collection_stager", {"range_profiles_out"});
         graph.add_flow(range->range_profiles, stager->range_profiles, queue);
         graph.add_flow(reader->stream_boundary, stager->stream_boundary, queue);
         graph.add_flow(stager->range_profiles_out, manager->range_profiles, queue);

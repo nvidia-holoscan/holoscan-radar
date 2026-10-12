@@ -77,6 +77,8 @@ TEST(FmcwDashboardTest, ConnectsRgbaTensorToHsdk5HolovizImageLayer) {
 
   holoscan::CompileOptions options;
   options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "source", .output_port = "rgba", .device = holoscan::DeviceId{0}});
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = "bridge", .output_port = "image", .device = holoscan::DeviceId{0}});
   const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
   EXPECT_TRUE(plan.ok()) << plan.json();
