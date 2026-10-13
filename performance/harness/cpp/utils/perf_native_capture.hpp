@@ -15,6 +15,7 @@
 #include <optional>
 #include <ostream>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -46,6 +47,7 @@ struct NativeCaptureState {
   inline static std::ostream* stream{nullptr};
   inline static std::string case_id;
   inline static bool first{true};
+  inline static std::vector<std::string> semantic_parameters;
 };
 
 inline std::string snapshot_base64(const std::vector<std::byte>& bytes) {
@@ -231,6 +233,9 @@ TimingCollector capture_native_recipe(
   // data each frame to expose stale output reuse; indices and masks stay valid.
   std::size_t waveform_frames = 0U;
   std::size_t mask_frames = 0U;
+  std::ostringstream semantic;
+  if (!NativeCaptureState::semantic_parameters.empty())
+    semantic << ",\"semantic_inputs\":[";
   for (std::size_t frame = 0; frame < frames; ++frame) {
     std::array<holoscan::Tensor, N> staged_inputs;
     for (std::size_t i = 0; i < N; ++i) {
@@ -267,6 +272,24 @@ TimingCollector capture_native_recipe(
         }
       }
     }
+    if (!NativeCaptureState::semantic_parameters.empty()) {
+      semantic << (frame ? "," : "")
+               << "{\"parameters\":" << NativeCaptureState::semantic_parameters.at(frame)
+               << ",\"inputs\":{";
+      for (std::size_t i = 0; i < N; ++i) {
+        std::vector<std::byte> bytes(static_cast<std::size_t>(staged_inputs[i].nbytes()));
+        if (!bytes.empty() && cudaMemcpy(bytes.data(), staged_inputs[i].data(), bytes.size(),
+                                         cudaMemcpyDeviceToHost) != cudaSuccess)
+          throw std::runtime_error("cannot capture semantic input");
+        const auto dtype = staged_inputs[i].dtype();
+        semantic << (i ? "," : "") << '\"' << detail::json_escape(ports[i])
+                 << "\":{\"shape\":" << detail::shape_json(staged_inputs[i].shape())
+                 << ",\"dtype\":\"" << (dtype.code == kDLFloat ? "float" : "int")
+                 << static_cast<unsigned>(dtype.bits) << "\",\"data_base64\":\""
+                 << snapshot_base64(bytes) << "\"}";
+      }
+      semantic << "}}";
+    }
     holoscan::testing::TestFrame staged;
     for (std::size_t i = 0; i < N; ++i) {
       auto entry =
@@ -291,6 +314,8 @@ TimingCollector capture_native_recipe(
     }
     fixture.push_frame(staged);
   }
+  if (!NativeCaptureState::semantic_parameters.empty())
+    semantic << "]";
   auto running = fixture.run_async({.expect_stop = true});
   for (const auto& port : wired) {
     std::size_t expected = frames;
@@ -327,7 +352,7 @@ TimingCollector capture_native_recipe(
         << detail::json_escape(diagnostic.required) << "\",\"provided\":\""
         << detail::json_escape(diagnostic.provided) << "\"}";
   }
-  out << "],\"coverage_gaps\":[],\"outputs\":{";
+  out << "]" << semantic.str() << ",\"coverage_gaps\":[],\"outputs\":{";
   bool first = true;
   for (const auto& port : records) {
     if (port.direction != holoscan::PortDirection::kOutput)

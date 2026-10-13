@@ -8,6 +8,7 @@ import math
 import struct
 
 from artifacts import finite
+from detection_reduction import VERSION, compare_case
 
 DTYPES = {
     "float32": ("f", 4),
@@ -22,6 +23,10 @@ DTYPES = {
 
 
 def validate_policy(policy):
+    if policy.get("mode") == VERSION:
+        if set(policy) != {"mode", "rationale"} or not policy.get("rationale"):
+            raise ValueError("semantic policy requires rationale; bounds are not configurable")
+        return
     if policy.get("mode") not in {"exact", "tolerance"}:
         raise ValueError("policy mode must be exact or tolerance")
     if policy["mode"] == "tolerance":
@@ -75,6 +80,13 @@ def compare_emission(before, after, policy):
     return None
 
 
+def compare_semantic_emission(before, after, allow_values):
+    """Reuse the exact metadata gate after joint input-derived value checks."""
+    if allow_values:
+        after = after | {"data_base64": before["data_base64"]}
+    return compare_emission(before, after, {"mode": "exact"})
+
+
 def compare_snapshots(before, after, policies):
     for export in (before, after):
         if export.get("schema_version") != 1 or export.get("byte_order") != "little":
@@ -108,6 +120,7 @@ def compare_snapshots(before, after, policies):
     if set(left) != expected_pairs:
         raise ValueError("each verification case requires both precisions")
     failures = []
+    semantic_receipts = []
     for key, case in left.items():
         other = right[key]
         if case.get("coverage_gaps") or other.get("coverage_gaps"):
@@ -122,6 +135,23 @@ def compare_snapshots(before, after, policies):
             raise ValueError(
                 "verification must declare every policy output, including unwired ports"
             )
+        semantic = any(
+            policies.get(port, {}).get(key[1], {}).get("mode") == VERSION for port in policies
+        )
+        joint = {}
+        if semantic:
+            if before["operator"] != "detection_reduction" or set(policies) != {
+                "rep_idx",
+                "reduced_points",
+            }:
+                raise ValueError("semantic policy is limited to DetectionReduction")
+            if any(policies[port][key[1]]["mode"] != VERSION for port in policies):
+                raise ValueError("both coupled ports require the same semantic policy")
+            joint = compare_case(case, other, key[1])
+            if joint.get("reason"):
+                failures.append({"case": key, **joint})
+            else:
+                semantic_receipts.append({"case": key, **joint})
         for port, output in case["outputs"].items():
             policy = policies.get(port, {}).get(key[1])
             if policy is None:
@@ -138,14 +168,31 @@ def compare_snapshots(before, after, policies):
                 reason = next(
                     (
                         issue
-                        for a, b in zip(output["emissions"], candidate["emissions"])
-                        if (issue := compare_emission(a, b, policy))
+                        for frame, (a, b) in enumerate(
+                            zip(output["emissions"], candidate["emissions"])
+                        )
+                        if (
+                            issue := (
+                                compare_semantic_emission(
+                                    a,
+                                    b,
+                                    not joint.get("reason")
+                                    and case["semantic_inputs"][frame]["parameters"][
+                                        "representative"
+                                    ]
+                                    != "peak",
+                                )
+                                if semantic
+                                else compare_emission(a, b, policy)
+                            )
+                        )
                     ),
                     None,
                 )
             if reason:
                 failures.append({"case": key, "port": port, "reason": reason})
     return {
+        **({"semantic_receipts": semantic_receipts} if semantic_receipts else {}),
         "passed": not failures,
         "cases": len(left),
         "failures": failures,
