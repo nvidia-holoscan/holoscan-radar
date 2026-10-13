@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Angle-estimation operators (see README.md in this directory). Each operator
-# is gated on its own OP_<name> option (defaulting to ${BUILD_ALL}).
-add_holohub_operator(snapshot_gather_op)
-add_holohub_operator(subarray_selection_op)
-add_holohub_operator(beamscan_estimator_op)
-add_holohub_operator(mvdr_estimator_op)
-add_holohub_operator(music_estimator_op)
-add_holohub_operator(root_music_estimator_op)
-add_holohub_operator(esprit_estimator_op)
-add_holohub_operator(phase_shift_beamformer_op)
+# Angle-estimation operators (see README.md in this directory).
+holoscan_radar_add_operator(snapshot_gather_op)
+holoscan_radar_add_operator(subarray_selection_op)
+holoscan_radar_add_operator(beamscan_estimator_op)
+holoscan_radar_add_operator(rank_one_residual_screen_op)
+holoscan_radar_add_operator(mvdr_estimator_op)
+holoscan_radar_add_operator(music_estimator_op)
+holoscan_radar_add_operator(root_music_estimator_op)
+holoscan_radar_add_operator(esprit_estimator_op)
+holoscan_radar_add_operator(phase_shift_beamformer_op)

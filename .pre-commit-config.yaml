@@ -70,6 +70,14 @@ repos:
           - --exclude-file=codespell.txt
           - --skip=*.onnx,*.min.js,*.min.js.map,*/Contrastive_learning_Notebook.ipynb,./data/
 
+  # C++/CUDA: clang-format
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.8
+    hooks:
+      - id: clang-format
+        types: [text]
+        files: '\.(cpp|hpp|cu|cuh)$'
+
   # C++: cpplint
   - repo: https://github.com/cpplint/cpplint
     rev: 2.0.2
@@ -87,11 +95,17 @@ repos:
 
   - repo: local
     hooks:
+      - id: operator-readme-structure
+        name: check operator README structure
+        entry: python3 .github/workflows/scripts/check_operator_readmes.py
+        language: system
+        pass_filenames: false
+        files: >-
+          ^(operators/[^/]+/[^/]+_op/(README\.md|metadata\.json)|docs/planning/(OPERATOR_DEVELOPMENT|NEW_OPERATOR_CHECKLIST)\.md|\.github/workflows/scripts/check_operator_readmes\.py)$
       - id: holoscan-metadata-validate
         name: validate metadata.json files against schemas
-        # Needs the pinned CLI: `holoscan lint` (also via ./holohub) exports
-        # HOLOSCAN_CLI_PYTHON_BIN; plain `pre-commit run` falls back to python3.
-        entry: bash -c 'exec "${HOLOSCAN_CLI_PYTHON_BIN:-python3}" .github/workflows/scripts/validate_metadata.py "$@"' --
+        # The lint requirements install the same CLI pin as the cli group.
+        entry: python .github/workflows/scripts/validate_metadata.py
         language: system
         files: '(^|/)metadata\.json$'
         exclude: '^(build|\.local|_CPack_Packages)/'

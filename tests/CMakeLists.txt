@@ -3,14 +3,16 @@
 
 add_subdirectory(cpp)
 
-find_program(BASH_EXECUTABLE bash REQUIRED)
-add_test(
-    NAME holohub_wrapper
-    COMMAND "${BASH_EXECUTABLE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_holohub_wrapper.sh"
-        "${PROJECT_SOURCE_DIR}/holohub"
-)
-set_tests_properties(holohub_wrapper PROPERTIES LABELS "unit")
+# The pytest suites exercise the Python bindings, so they only
+# make sense when those are built. Registering them unconditionally made a
+# bare `ctest` fail when no operator bindings are available (no operator bindings to import) and forced
+# every caller to remember `-E pytest`.
+if(NOT HOLOSCAN_RADAR_BUILD_PYTHON)
+    message(STATUS
+        "Skipping pytest suites "
+        "(HOLOSCAN_RADAR_BUILD_PYTHON=OFF)")
+    return()
+endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 

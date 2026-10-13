@@ -1,6 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-# Lint toolchain pins shared by CI and `holoscan lint --install-dependencies`.
+# Lint toolchain pin — single source of truth for every path that lints.
 #
 # holoscan-cli looks for this exact path (utilities/requirements.lint.txt) in
 # `holoscan lint --install-dependencies`; without it the CLI installs bare
@@ -9,7 +7,9 @@
 # different versions of the same tool. .github/workflows/check_lint.yml now
 # installs from this file too, so both agree by construction.
 #
-# Metadata validation uses the same CLI as the wrapper and development image.
--r ../requirements-cli.txt
+# The metadata hook imports the CLI. Keep this pin aligned with the
+# pyproject.toml cli dependency group; rc1 is on NVIDIA's package index.
+--extra-index-url https://pypi.nvidia.com
+holoscan-cli[create]==5.0.0rc1
 # Other hooks pin their versions in .pre-commit-config.yaml.
 pre-commit==4.5.1

@@ -2,44 +2,64 @@
 
 GPU radar signal-processing operator library for the NVIDIA Holoscan SDK: Holoscan operators implemented in C++/CUDA on [MatX](https://github.com/NVIDIA/MatX), composed into pipelines purely by port connections — no glue code between operators.
 
-**Current phase: FMCW implementation.** The operator contracts (ports, shapes, dtypes, parameters) are fully specified in `docs/planning/`; implementation lands against them. The signal-processing group (`operators/fmcw/`: range, clutter, Doppler, fused range-Doppler) and the shared `operators/common/` library are implemented; detection, clustering, angle estimation, and MIMO marshaling are next.
+**Current phase: HSDK 5 development.** Operator contracts are fully specified
+in `docs/planning/`, and all public C++ operators and example applications use
+the HSDK 5 Graph and Tensor APIs. The temporary local SDK-image workflow and
+its one remaining packaging limitation are documented in
+[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md). Use the pinned `main-5x` SDK source
+for APIs not yet covered by public documentation; do not infer HSDK 5 behavior
+from HSDK 4.x code.
 
 ## Source of truth
 
 Read before starting non-trivial work, in this precedence order:
 
-1. [`docs/planning/OPERATOR_API.md`](docs/planning/OPERATOR_API.md) — **the locked contract**: every operator's inputs/outputs/parameters, shapes, dtype pairs, and defaults, plus the shared supporting data structures. If we discover a conflict, bug, or unexpected design corner, consult with the developer before changing.
+1. [`docs/planning/OPERATOR_API.md`](docs/planning/OPERATOR_API.md) and [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md) — **the locked modality contracts**: every operator's inputs/outputs/parameters, shapes, dtype pairs, and defaults, plus the shared supporting data structures. If we discover a conflict, bug, or unexpected design corner, consult with the developer before changing.
 2. [`docs/planning/WORKFLOWS.md`](docs/planning/WORKFLOWS.md) — scope: the SISO / SIMO / MIMO-TDM / MIMO-DDM operator chains, with port-level wiring diagrams.
 3. [`docs/planning/TESTING.md`](docs/planning/TESTING.md) — what tests must assert; the analytic point-target simulator requirements.
 4. [`docs/planning/CREATE_A_MODULE.md`](docs/planning/CREATE_A_MODULE.md) — how the Holoscan Module scaffolding (build, packaging, bindings) works.
 5. [`docs/planning/NEW_OPERATOR_CHECKLIST.md`](docs/planning/NEW_OPERATOR_CHECKLIST.md) — landing gate; verify before claiming an operator (or variant slice) done.
 6. [`docs/planning/OPERATOR_DEVELOPMENT.md`](docs/planning/OPERATOR_DEVELOPMENT.md) — how to implement well: hot-path discipline, diagnosis, `[live]`/calibration pitfalls, tests, and performance characterization (lessons from landed operators).
-7. [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md) — index of items blocked on a team decision (detail in each operator’s `OPEN_ITEMS.md`).
+7. [`docs/planning/TEMPORAL_CONTRACTS.md`](docs/planning/TEMPORAL_CONTRACTS.md) — how the data plane joins the config plane: the measured selector/trigger behavior, the coherence design (shared transmit-time stamp + `Exact{}`), and what was rejected. Read before changing any `contract()`.
+8. [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309) — the single backlog for deferred product, algorithm, performance, and tooling work.
+9. [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md) — the temporary local SDK-image workflow and current SDK packaging limitation.
 
 Rules that follow from "lockdown":
 
 - **Docs first.** Code must match `OPERATOR_API.md` exactly — port names, shapes, dtype pairs, parameter names/defaults, `[live]` tags. To change an interface, change the doc (in the same PR at minimum), call it out as a contract change in the PR description, and get it reviewed as such. Never deviate silently in code.
-- **Do not silently resolve documented open items.** Team-blocked questions are
-  indexed in [`docs/planning/TEAM_BLOCKED.md`](docs/planning/TEAM_BLOCKED.md)
-  (detail in each operator’s `OPEN_ITEMS.md`). Known highlights: the covariance
-  estimators' multi-snapshot / spatial-smoothing input form; where the source
-  count comes from (fixed vs. MDL/AIC vs. CFAR-cluster); ULA/subarray selection
-  for Root-MUSIC/ESPRIT on non-uniform virtual arrays. Surface these for a team
-  decision instead of picking an answer in code.
+- **Do not silently resolve documented open items.** Deferred work and unresolved
+  design questions are tracked on [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309).
+  Surface contract questions for team review instead of picking an answer in
+  code, and update Jira when an item is added or resolved.
 - **Checklist + development guidance.** Follow `NEW_OPERATOR_CHECKLIST.md` as the done gate; use `OPERATOR_DEVELOPMENT.md` when designing `compute()`, live overrides, tests, or chasing performance.
 
 ## Design invariants (do not violate)
 
 1. **Plain-tensor data ports.** Operators exchange plain tensors on the data plane — never bespoke record/message types (e.g. no "detection" struct: CFAR emits `detection_idx`, `detection_score`, `noise_estimate` as separate tensors). Where producers and consumers need bridging, that is an explicit small add-on operator (`SnapshotGatherOp`, `FeatureAssemblyOp`, `DetectionReductionOp`), not a shared message type.
-2. **Shared descriptors are bounded.** Exactly seven shared config-plane types exist: `ArrayGeometry`, `ShiftInvariantSubarrayPair`, `AngleConvention`, `WindowSpec`, `FMCWWaveformDescriptor`, `DDMCodeDescriptor`, `TXSchedule`. They are parameters, and ride input ports only as `[live]` overrides; the single sanctioned descriptor *output* port is `VirtualArrayAssemblyOp.array_geometry` (runtime-computed virtual geometry). Do not add new shared types or new descriptor-carrying ports without a contract change to `OPERATOR_API.md`.
+2. **Shared descriptors are bounded.** Exactly ten shared config-plane types exist: `ArrayGeometry`, `ShiftInvariantSubarrayPair`, `AngleConvention`, `WindowSpec`, `FMCWWaveformDescriptor`, `DDMCodeDescriptor`, `TXSchedule`, `CoordinateFrame`, `SampleGeometry`, `LFMWaveformDescriptor`. They are parameters, and ride input ports only as `[live]` overrides. The sanctioned descriptor *output* ports are `VirtualArrayAssemblyOp.array_geometry`, `TDMSparseCompensationOp.array_geometry`, `DDMSparseDemultiplexOp.array_geometry`, `SubarraySelectionOp.array_geometry`,
+   `CPHDReaderOp.coordinate_frame`, `SARRangeCompressionOp.range_window_out`, `ApertureManagerOp.sample_geometry_out`, and `BackprojectionOp.sample_geometry_out`. Do not add new shared types or descriptor-carrying ports without a contract change to the relevant modality `OPERATOR_API.md`. Separately, `MaxTensorExtents` is a **ctor-capture sizing type** for HSDK 5 Tensor pools (not a descriptor, never a Tensor port) — see [`operators/common/README.md`](operators/common/README.md#maxtensorextents).
 3. **Precision by compile-time template instantiation** (single + double). Never a runtime dtype flag, never inferred from data; an instance's inputs and outputs match its templated precision.
-4. **Rank-agnostic batching.** Operate on the meaningful trailing axes; treat leading `...` axes as opaque batch dims; infer shapes from the tensors each tick rather than taking them as parameters. Downstream never assumes fixed shapes — that is what makes shape-changing `[live]` overrides legal.
-5. **`[live]` override convention.** Parameters are build-time config by default; a `[live]` parameter may additionally be overridden in-flight via a same-named non-blocking input port. Costly overrides (FFT plans, window coefficients, CFAR kernels) warn once per new configuration and cache prior ones. Structural parameters (e.g. `cfar_variant`, `angle_convention`, `multiplexing_scheme`) stay static — instantiate separate operators to vary them. Philosophy: don't over-constrain a caller who knows what they're doing; allow reasonable footguns and warn where relevant.
-6. **Convention-free kernels, explicit angle boundary.** Kernels only dot direction vectors with element positions in the fixed canonical array-local frame. `AngleConvention` is a **required parameter with no default** on every operator that consumes or emits angles; it is applied only as a boundary relabeling. `direction_cosine` (u, v) is the convention-free escape hatch.
+4. **Named trailing axes; no opaque leading batch.** Operate on the contract's named axes; infer those extents from the tensors each tick rather than taking them as parameters. Do **not** treat an open-ended leading `...` as an opaque module batch axis — multi-item throughput is an application concern (loop / fan-out). Named leading axes that are part of the contract (e.g. `N_rx`, `M_tx`, `num_az`/`num_el`) remain. Downstream never assumes fixed shapes for those named axes — that is what makes shape-changing `[live]` overrides legal. Fat Tensor outputs take `MaxTensorExtents` at `graph.op()` so pools can be sized before arm.
+5. **`[live]` override convention.** Parameters are build-time config by default.
+   A value qualifies as `[live]` only when it describes the tensor for this tick
+   and an upstream producer can stamp the matching value onto that tick; making
+   an encoding or marshaling parameter live at the consumer alone creates
+   silent data/config desynchronization. A `[live]` parameter may additionally
+   be overridden in-flight via a same-named input port. Every `[live]` port
+   joins the data trigger with `Exact{}` and `on_missing SafeDefault{}`,
+   declared unconditionally — wiring the port enables it. A match is the
+   effective value for that tick only, a miss takes Params, and no latch is
+   kept. Costly overrides (FFT plans, window coefficients, CFAR kernels) warn
+   once per new configuration and cache prior ones. Structural parameters
+   (e.g. `cfar_variant`, `angle_convention`, `multiplexing_scheme`) stay
+   static — instantiate separate operators to vary them. Philosophy: don't
+   over-constrain a caller who knows what they're doing; allow reasonable
+   footguns and warn where relevant.
+6. **Convention-free kernels, explicit angle boundary.** Kernels only dot direction vectors with element positions in the fixed canonical array-local frame. `AngleConvention` defaults to `radar_boresight` on every operator that consumes or emits angles; callers select another convention explicitly when needed. It is applied only as a boundary relabeling. `direction_cosine` (u, v) is the convention-free escape hatch.
 7. **Industry-standard operator names** over internal schemes.
 8. **A CUDA-capable NVIDIA GPU is a hard dependency** — for the operators, the apps, and the C++ test suite (decided 2026-07-10). Do not add CPU fallback compute paths, skip-if-no-GPU test guards, or GPU-optional build modes; the only host-only code is deliberately host-only by design (the analytic simulator, window generation).
 
-**Scope guardrail:** this wave is FMCW SISO/SIMO/MIMO-TDM/MIMO-DDM only. Do not add Pulse-Doppler, SAR, or PVA operators; CDM/BPM is deferred to a future wave; FDM and PMCW are excluded outright.
+**Scope guardrail:** FMCW SISO/SIMO/MIMO-TDM/MIMO-DDM and the SAR image-formation port are in scope. SAR contracts and workflows live in `docs/planning/SAR/`; do not add Pulse-Doppler or PVA operators; CDM/BPM is deferred to a future wave; FDM and PMCW are excluded outright.
 
 ## Repo map
 
@@ -49,38 +69,44 @@ Rules that follow from "lockdown":
 | `docs/planning/OPERATOR_DEVELOPMENT.md` | Agent/human guidance for implementing operators (hot path, diagnosis, perf) |
 | `operators/` | Operator libraries, one dir per group, gated by `add_holohub_operator()` / `OP_<name>` CMake options |
 | `operators/common/` | Shared `radar_common` library: descriptors, window generation, point-target simulator, config cache, tensor/MatX utilities |
-| `operators/fmcw/` | FMCW signal-processing operators (+ future MIMO marshaling) |
-| `applications/fmcw_siso/` | Example SISO FMCW pipeline (C++ + Python Holoviz) |
-| `applications/fmcw_simo/` | Sparse SIMO angle-then-cluster demo (C++ + Python) |
-| `applications/fmcw_mimo/` | MIMO TDM/DDM demo (C++ + Python) |
-| `applications/fmcw_dense_simo/` | Dense SIMO beamformer demo (C++ + Python) |
-| `applications/common/radar_app/` | Shared report + Holoviz viz operators (C++ header + Python bindings) |
-| `performance/` | Measurement harness (C++ + Python) — cold vs steady, not pass/fail tests |
-| `python/holoscan/radar/` | Python package root; re-exports operators from per-operator pybind11 submodules |
-| `tests/cpp/`, `tests/python/` | GTest and pytest suites (Python: set `HOLOSCAN_RADAR_BUILD_DIR`) |
+| `operators/fmcw/` | FMCW signal processing and MIMO marshaling |
+| `operators/sar/`, `operators/io/` | SAR formation, CPHD ingress, and tensor dump operators |
+| `applications/sar/` | Five standalone SAR workflows with C++ fixture smoke tests |
+| `applications/fmcw/simo/` | Detect-then-beamform SIMO workflow |
+| `applications/fmcw/siso/` | Baseline SISO range-Doppler workflow |
+| `applications/fmcw/dense_beamforming/` | Dense beamform-then-detect SIMO workflow |
+| `applications/fmcw/mimo_tdm/` | MIMO TDM workflow |
+| `applications/fmcw/adaptive_aoa/` | Multi-source screening and adaptive sparse angle estimation |
+| `applications/fmcw/multi_waveform/` | Alternating coherent FMCW waveform profiles over MIMO TDM |
+| `applications/fmcw/mimo_ddm/` | Linear and nonlinear MIMO DDM workflow |
+| `applications/common/radar_app/` | Shared Graph driver, source, report, and visualization support |
+| `performance/` | C++ YAML recipes, typed adapters, and measurement harness — diagnostic timing, not pass/fail thresholds |
+| `python/holoscan/radar/` | Python package source and operator exports; bindings are disabled by the current SDK image |
+| `tests/cpp/`, `tests/python/` | GTest suite; pytest suite registers only when Python bindings build |
 | `pkg/` | Debian/wheel packaging (`add_holohub_package`) |
 | `cmake/` | HoloHub CMake helpers (`HoloHubConfigHelpers.cmake`, `pybind11_add_holohub_module.cmake`) |
 | `metadata.json` | Module metadata (schema `urn:holohub:module:v2`); per-operator `metadata.json` under each operator dir |
 
 ## Building example applications
 
-The `applications/fmcw_*` examples follow a strict layering so each app's `.cpp`
+The `applications/fmcw/` examples follow a strict layering so each app's `.cpp`
 reads as the graph, not scaffolding. When adding or changing an app, keep code
 in the right layer:
 
-- **App `.cpp` = the graph.** `compose()` (operators + `add_flow`) plus a
-  one-line `main` that calls `radar_app`'s `run_fmcw_app<App>()`. Nothing else
-  belongs here.
+- **App `.cpp` = the graph.** `main()` calls
+  `radar_app`'s `run_fmcw_graph_app()` with the graph-building lambda
+  (operators, connections, and device placement). Nothing else belongs here.
+- **Application README = the visual graph.** Include a Mermaid `flowchart LR`
+  diagram for each executable workflow, with branches and joins that match the
+  graph entry point. Update it whenever operators or connections change.
 - **App-owned code is colocated** in the app's `cpp/` dir: `config.hpp`
   (`AppConfig : app::CommonRunConfig` + `load_config`) and `custom_ops.hpp`
   (operators specific to one app — e.g. the MIMO ADC sources, the dense-path
   bridges). Same-dir headers, included bare with `// NOLINT(build/include_subdir)`.
 - **Reusable, Holoscan-aware app helpers → `applications/common/radar_app/`**
-  (see its README): the report/viz operators and the `app/` scaffolding
-  (`CommonRunConfig` + `parse_*`, `run_fmcw_app`, the rank-agnostic
-  `SimAdcSourceOp`, the `HolovizLayout` builder). Header-only (`inline` /
-  in-class); it is not a wrapper around `HolovizOp` — the app keeps its own
-  `add_flow` wiring, `radar_app` supplies data + operators + a factory.
+  (see its source): the Graph driver, rank-agnostic `SimAdcSourceOp`, report
+  operators, and optional HSDK 5 Holoviz visualization support. Header-only helpers are
+  `inline` / in-class; each app keeps its own graph wiring.
 - **Pure model helpers → `operators/common/radar_common/`**: the analytic
   simulators and array builders (`sim/`), descriptors, DSP — no Holoscan / CUDA /
   Holoviz. `point_target_sim.hpp` stays minimal-dependency (STL only); the MIMO
@@ -97,18 +123,17 @@ axis or geometry grid is allowed, but must be commented as a read-only mirror.
 See [`DEVELOPER.md`](DEVELOPER.md) for detail. Quick reference:
 
 ```bash
-# Configure + build (requires Holoscan SDK >= 4.3.0 discoverable via find_package;
-# `pip install holoscan` gives a CPU-capable config, or use `./holohub run-container`)
+# Configure + build in the HSDK 5 devcontainer. find_package(holoscan) must
+# resolve the pinned 5.x SDK; this branch has no HSDK 4.x compatibility layer.
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j"$(nproc)"
 
 # C++ tests
 ctest --test-dir build --output-on-failure -LE performance
 
-# Python tests (conftest.py wires in the build tree; set HOLOSCAN_RADAR_BUILD_DIR
-# if your build dir is not ./build). An unimportable holoscan is a FAILURE, not a
-# skip — build and test in the container (GPU is a hard dependency).
-pytest tests/python/ -v
+# Python bindings and pytest registration are disabled by the current SDK
+# image; see SDK_DEVELOPMENT.md. When enabled, run in the GPU container with
+# HOLOSCAN_RADAR_BUILD_DIR set to the build tree.
 
 # Lint — CI runs exactly this on every PR; run it before pushing. The lint
 # requirements pin pre-commit plus the CLI that the metadata hook imports.
@@ -116,21 +141,22 @@ python -m pip install -r utilities/requirements.lint.txt
 pre-commit run --all-files
 ```
 
-The lint stack (`.pre-commit-config.yaml`): ruff + isort + black (Python), cpplint (C++), cmakelint, markdownlint, codespell, `metadata.json` schema validation, and NVIDIA SPDX copyright headers on all code/CMake/YAML/Docker files (`check_copyright.py`; markdown is exempt). Every new source file needs the two-line SPDX header — copy it from any existing file of the same type. cpplint enforces 80-column lines and include-what-you-use (add the direct `#include` for every type you name, e.g. `<string>` for `std::string`); run it before pushing, not after CI fails.
+The lint stack (`.pre-commit-config.yaml`): ruff + isort + black (Python), clang-format + cpplint (C++/CUDA), cmakelint, markdownlint, codespell, `metadata.json` schema validation, and NVIDIA SPDX copyright headers on all code/CMake/YAML/Docker files (`check_copyright.py`; markdown is exempt). Every new source file needs the two-line SPDX header — copy it from any existing file of the same type. clang-format 18.1.8 owns source layout with a 100-column limit; run `pre-commit run clang-format --files <changed C++/CUDA files>` and do not manually wrap new code at 80 columns. cpplint enforces the same ceiling plus include-what-you-use (add the direct `#include` for every type you name, e.g. `<string>` for `std::string`); run both before committing, not after CI fails.
 
 **markdownlint caps line length at 800** (`MD013`, incl. table rows + headings; no table exemption and table cells can't wrap, so keep dense one-line `STATUS.md` rows / contract bullets under 800 by tightening prose — and keep dense one-line prose paragraphs under 800 too, this line included). Other markdownlint rules that bite: fenced code blocks need a language (use ` ```text ` for diagrams / log excerpts, `MD040`), and a table's delimiter row must use the same padded pipe style as its data rows (`| --- |`, not `|---|`, `MD060`).
 
-**Iterate with `pre-commit run <hook-id> --files <changed>`, not a system-installed tool.** The hooks pin exact versions (e.g. `black==26.5.1`, `cpplint==2.0.2`), and a different local version re-flags already-clean files or formats differently than CI — the pre-commit run is the only authoritative check.
+**Iterate with `pre-commit run <hook-id> --files <changed>`, not a system-installed tool.** The hooks pin exact versions (e.g. `black==26.5.1`, `clang-format==18.1.8`, `cpplint==2.0.2`), and a different local version re-flags already-clean files or formats differently than CI — the pre-commit run is the only authoritative check. Before every commit, run the applicable pinned hooks with `pre-commit run --files <changed files>` and require them to pass; re-stage files rewritten by a hook before committing. Before pushing or handing work off, run `pre-commit run --all-files` and require the complete suite to pass.
 
-**Verifying a change.** The analytic simulators (`radar_common/sim/`) are the ground-truth "tautology guard" — assert operator/pipeline output against them, and add sim self-checks (`tests/cpp/common/test_sim.cpp`) when you add or change a signal model. For a behavior-preserving refactor, diff an app's deterministic log output before/after — but exclude the per-cluster representative (`rep_*`) fields: they are non-deterministic run-to-run (a GPU medoid tie-break; see `operators/detection/detection_reduction_op/OPEN_ITEMS.md` item 6), so a naive diff shows false churn. Build and run in the Holoscan container (`./holohub run-container`).
+**Verifying a change.** The analytic simulators (`radar_common/sim/`) are the ground-truth "tautology guard" — assert operator/pipeline output against them, and add sim self-checks (`tests/cpp/common/test_sim.cpp`) when you add or change a signal model. For a behavior-preserving refactor, diff an app's deterministic log output before/after — but exclude the per-cluster representative (`rep_*`) fields: floating-point medoid centroid accumulation can perturb near-ties (see `operators/detection/detection_reduction_op/README.md`), so a naive diff may show false churn. Build and run from the host through the Holoscan CLI: build a named image with `holoscan build-container --base-img <HSDK-5-image> --img holoscan-radar-dev:hsdk5`.
+Then use `holoscan build` / `run` / `test` with that `--img` and `--no-docker-build`.
 
 ## Conventions
 
 - C++ namespace `holoscan::radar`; Python package `holoscan.radar`; operator classes CamelCase ending in `Op`; directories snake_case.
 - Include headers by their path from the include root (`#include "group/op/op.hpp"`), never bare — the one exception is a same-dir colocated app-private header (`config.hpp` / `custom_ops.hpp`), tagged `// NOLINT(build/include_subdir)`.
 - Commits: imperative subject, `Area: Summary` prefix style (e.g. `CI: Add linting workflow`, `Operators: ...`).
-- Branches: `<user>/<topic>` (e.g. `deustice/planning`). PRs target `main`; lint CI must pass; contract changes (see Docs first) get called out explicitly.
+- Branches: `<user>/<topic>` (e.g. `deustice/planning`). Current HSDK 5 PRs target `main-5x`; lint CI must pass; contract changes (see Docs first) get called out explicitly.
 
 ## Team workflow
 
-There is no external issue tracker: **`docs/planning/` is the work queue** and [`docs/planning/STATUS.md`](docs/planning/STATUS.md) is the coordination point. Before starting non-trivial work: read the relevant planning doc sections, then check `STATUS.md` for what is claimed/in flight and record what you pick up. When work lands (or a team decision is made), update `STATUS.md` in the same PR.
+[Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309) is the work queue, and [`docs/planning/STATUS.md`](docs/planning/STATUS.md) is the in-repository coordination and decision record. Before starting non-trivial work: read the relevant planning doc sections, then check `STATUS.md` for what is claimed/in flight and record what you pick up. When work lands (or a team decision is made), update `STATUS.md` in the same PR.

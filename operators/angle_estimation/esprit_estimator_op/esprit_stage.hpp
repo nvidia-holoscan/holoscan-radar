@@ -27,22 +27,18 @@ __device__ inline T esprit_norm_squared(cuda::std::complex<T> value) {
 }
 
 template <typename T>
-__device__ inline cuda::std::complex<T> esprit_conj(
-    cuda::std::complex<T> value) {
+__device__ inline cuda::std::complex<T> esprit_conj(cuda::std::complex<T> value) {
   return {value.real(), -value.imag()};
 }
 
 template <typename T>
-__device__ bool esprit_qr_eigenvalues(cuda::std::complex<T>* matrix,
-                                      cuda::std::complex<T>* q,
+__device__ bool esprit_qr_eigenvalues(cuda::std::complex<T>* matrix, cuda::std::complex<T>* q,
                                       cuda::std::complex<T>* r, int64_t d) {
   if (d <= 1) {
     return true;
   }
-  const T floor = std::is_same_v<T, float> ? static_cast<T>(1e-12)
-                                           : static_cast<T>(1e-24);
-  const T tolerance = std::is_same_v<T, float> ? static_cast<T>(2e-5)
-                                               : static_cast<T>(1e-11);
+  const T floor = std::is_same_v<T, float> ? static_cast<T>(1e-12) : static_cast<T>(1e-24);
+  const T tolerance = std::is_same_v<T, float> ? static_cast<T>(2e-5) : static_cast<T>(1e-11);
   constexpr int kMaxIterations = 192;
 
   for (int iteration = 0; iteration < kMaxIterations; ++iteration) {
@@ -59,14 +55,12 @@ __device__ bool esprit_qr_eigenvalues(cuda::std::complex<T>* matrix,
     for (int64_t col = 0; col < d; ++col) {
       for (int64_t row = 0; row < d; ++row) {
         q[row * d + col] =
-            matrix[row * d + col] -
-            (row == col ? shift : cuda::std::complex<T>{T{0}, T{0}});
+            matrix[row * d + col] - (row == col ? shift : cuda::std::complex<T>{T{0}, T{0}});
       }
       for (int64_t prior = 0; prior < col; ++prior) {
         cuda::std::complex<T> projection{T{0}, T{0}};
         for (int64_t row = 0; row < d; ++row) {
-          projection += esprit_conj(q[row * d + prior]) *
-                        q[row * d + col];
+          projection += esprit_conj(q[row * d + prior]) * q[row * d + col];
         }
         r[prior * d + col] = projection;
         for (int64_t row = 0; row < d; ++row) {
@@ -82,14 +76,12 @@ __device__ bool esprit_qr_eigenvalues(cuda::std::complex<T>* matrix,
         bool completed = false;
         for (int64_t candidate = 0; candidate < d && !completed; ++candidate) {
           for (int64_t row = 0; row < d; ++row) {
-            q[row * d + col] =
-                {row == candidate ? T{1} : T{0}, T{0}};
+            q[row * d + col] = {row == candidate ? T{1} : T{0}, T{0}};
           }
           for (int64_t prior = 0; prior < col; ++prior) {
             cuda::std::complex<T> projection{T{0}, T{0}};
             for (int64_t row = 0; row < d; ++row) {
-              projection += esprit_conj(q[row * d + prior]) *
-                            q[row * d + col];
+              projection += esprit_conj(q[row * d + prior]) * q[row * d + col];
             }
             for (int64_t row = 0; row < d; ++row) {
               q[row * d + col] -= q[row * d + prior] * projection;
@@ -152,12 +144,12 @@ __device__ bool esprit_qr_eigenvalues(cuda::std::complex<T>* matrix,
 // Es_ref^H Es_ref -> gram (d x d) and Es_ref^H Es_shift -> cross (d x d), where
 // the signal subspace is the last d eigenvectors (columns signal_first..).
 template <typename T>
-__device__ inline void esprit_build_gram_cross(
-    const cuda::std::complex<T>* __restrict__ evec,
-    const int32_t* __restrict__ reference_indices,
-    const int32_t* __restrict__ shifted_indices, int64_t pair_size, int64_t d,
-    int64_t signal_first, int64_t channels, cuda::std::complex<T>* gram,
-    cuda::std::complex<T>* cross) {
+__device__ inline void esprit_build_gram_cross(const cuda::std::complex<T>* __restrict__ evec,
+                                               const int32_t* __restrict__ reference_indices,
+                                               const int32_t* __restrict__ shifted_indices,
+                                               int64_t pair_size, int64_t d, int64_t signal_first,
+                                               int64_t channels, cuda::std::complex<T>* gram,
+                                               cuda::std::complex<T>* cross) {
   for (int64_t row = 0; row < d; ++row) {
     for (int64_t col = 0; col < d; ++col) {
       cuda::std::complex<T> g{T{0}, T{0}};
@@ -166,10 +158,8 @@ __device__ inline void esprit_build_gram_cross(
         const int64_t reference = reference_indices[pr];
         const int64_t shifted = shifted_indices[pr];
         const auto left = evec[reference * channels + signal_first + row];
-        g += esprit_conj(left) *
-             evec[reference * channels + signal_first + col];
-        c += esprit_conj(left) *
-             evec[shifted * channels + signal_first + col];
+        g += esprit_conj(left) * evec[reference * channels + signal_first + col];
+        c += esprit_conj(left) * evec[shifted * channels + signal_first + col];
       }
       gram[row * d + col] = g;
       cross[row * d + col] = c;
@@ -180,10 +170,9 @@ __device__ inline void esprit_build_gram_cross(
 // Gaussian elimination with partial pivoting: solve a * x = b in place
 // (b <- x). Returns false if a is numerically singular.
 template <typename T>
-__device__ inline bool esprit_lu_solve(cuda::std::complex<T>* a,
-                                       cuda::std::complex<T>* b, int64_t d) {
-  const T pivot_floor = std::is_same_v<T, float> ? static_cast<T>(1e-10)
-                                                 : static_cast<T>(1e-20);
+__device__ inline bool esprit_lu_solve(cuda::std::complex<T>* a, cuda::std::complex<T>* b,
+                                       int64_t d) {
+  const T pivot_floor = std::is_same_v<T, float> ? static_cast<T>(1e-10) : static_cast<T>(1e-20);
   for (int64_t pivot = 0; pivot < d; ++pivot) {
     int64_t best = pivot;
     T best_norm = esprit_norm_squared(a[pivot * d + pivot]);
@@ -231,10 +220,8 @@ __device__ inline bool esprit_lu_solve(cuda::std::complex<T>* a,
 // `r`, and `tmp` are d x d scratch. Mirrors esprit_qr_eigenvalues but also
 // forms z (init identity, z <- z * Q_k each iteration).
 template <typename T>
-__device__ bool esprit_schur_vectors(cuda::std::complex<T>* matrix,
-                                     cuda::std::complex<T>* z,
-                                     cuda::std::complex<T>* q,
-                                     cuda::std::complex<T>* r,
+__device__ bool esprit_schur_vectors(cuda::std::complex<T>* matrix, cuda::std::complex<T>* z,
+                                     cuda::std::complex<T>* q, cuda::std::complex<T>* r,
                                      cuda::std::complex<T>* tmp, int64_t d) {
   for (int64_t index = 0; index < d * d; ++index) {
     z[index] = {T{0}, T{0}};
@@ -245,10 +232,8 @@ __device__ bool esprit_schur_vectors(cuda::std::complex<T>* matrix,
   if (d <= 1) {
     return true;
   }
-  const T floor = std::is_same_v<T, float> ? static_cast<T>(1e-12)
-                                           : static_cast<T>(1e-24);
-  const T tolerance = std::is_same_v<T, float> ? static_cast<T>(2e-5)
-                                               : static_cast<T>(1e-11);
+  const T floor = std::is_same_v<T, float> ? static_cast<T>(1e-12) : static_cast<T>(1e-24);
+  const T tolerance = std::is_same_v<T, float> ? static_cast<T>(2e-5) : static_cast<T>(1e-11);
   constexpr int kMaxIterations = 192;
 
   for (int iteration = 0; iteration < kMaxIterations; ++iteration) {
@@ -265,8 +250,7 @@ __device__ bool esprit_schur_vectors(cuda::std::complex<T>* matrix,
     for (int64_t col = 0; col < d; ++col) {
       for (int64_t row = 0; row < d; ++row) {
         q[row * d + col] =
-            matrix[row * d + col] -
-            (row == col ? shift : cuda::std::complex<T>{T{0}, T{0}});
+            matrix[row * d + col] - (row == col ? shift : cuda::std::complex<T>{T{0}, T{0}});
       }
       for (int64_t prior = 0; prior < col; ++prior) {
         cuda::std::complex<T> projection{T{0}, T{0}};
@@ -362,23 +346,16 @@ __device__ bool esprit_schur_vectors(cuda::std::complex<T>* matrix,
 // then to boundary angles through the aperture-axis frame.
 template <typename T>
 __global__ void esprit_solve_2d_kernel(
-    const cuda::std::complex<T>* __restrict__ eigenvectors,
-    const int32_t* __restrict__ model_order,
-    const int64_t* __restrict__ valid_counts,
-    const int32_t* __restrict__ y_reference,
-    const int32_t* __restrict__ y_shifted, int64_t y_pairs,
-    const int32_t* __restrict__ z_reference,
-    const int32_t* __restrict__ z_shifted, int64_t z_pairs, int64_t num_items,
-    int64_t channels, int64_t max_model, int64_t workspace_dim, T ky_spacing,
-    T kz_spacing, T yax_x, T yax_y, T yax_z, T zax_x, T zax_y, T zax_z,
-    T nrm_x, T nrm_y, T nrm_z, DeviceAngleConvention<T> convention,
-    cuda::std::complex<T>* __restrict__ psi_y_ws,
-    cuda::std::complex<T>* __restrict__ psi_z_ws,
-    cuda::std::complex<T>* __restrict__ z_ws,
-    cuda::std::complex<T>* __restrict__ q_ws,
-    cuda::std::complex<T>* __restrict__ r_ws,
-    cuda::std::complex<T>* __restrict__ tmp_ws, T* __restrict__ aoa,
-    T* __restrict__ doa_multi, int64_t max_sources,
+    const cuda::std::complex<T>* __restrict__ eigenvectors, const int32_t* __restrict__ model_order,
+    const int64_t* __restrict__ valid_counts, const int32_t* __restrict__ y_reference,
+    const int32_t* __restrict__ y_shifted, int64_t y_pairs, const int32_t* __restrict__ z_reference,
+    const int32_t* __restrict__ z_shifted, int64_t z_pairs, int64_t num_items, int64_t channels,
+    int64_t max_model, int64_t workspace_dim, T ky_spacing, T kz_spacing, T yax_x, T yax_y, T yax_z,
+    T zax_x, T zax_y, T zax_z, T nrm_x, T nrm_y, T nrm_z, DeviceAngleConvention<T> convention,
+    cuda::std::complex<T>* __restrict__ psi_y_ws, cuda::std::complex<T>* __restrict__ psi_z_ws,
+    cuda::std::complex<T>* __restrict__ z_ws, cuda::std::complex<T>* __restrict__ q_ws,
+    cuda::std::complex<T>* __restrict__ r_ws, cuda::std::complex<T>* __restrict__ tmp_ws,
+    T* __restrict__ aoa, T* __restrict__ doa_multi, int64_t max_sources,
     int32_t* __restrict__ source_count) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (threadIdx.x != 0 || item >= num_items) {
@@ -415,15 +392,13 @@ __global__ void esprit_solve_2d_kernel(
 
   // Psi_y = (Es_ref^H Es_ref)^-1 (Es_ref^H Es_shift): gram in q, cross in
   // psi_y.
-  esprit_build_gram_cross<T>(eigenvectors + item * channels * channels,
-                             y_reference, y_shifted, y_pairs, d, signal_first,
-                             channels, q, psi_y);
+  esprit_build_gram_cross<T>(eigenvectors + item * channels * channels, y_reference, y_shifted,
+                             y_pairs, d, signal_first, channels, q, psi_y);
   if (!esprit_lu_solve<T>(q, psi_y, d)) {
     return;
   }
-  esprit_build_gram_cross<T>(eigenvectors + item * channels * channels,
-                             z_reference, z_shifted, z_pairs, d, signal_first,
-                             channels, q, psi_z);
+  esprit_build_gram_cross<T>(eigenvectors + item * channels * channels, z_reference, z_shifted,
+                             z_pairs, d, signal_first, channels, q, psi_z);
   if (!esprit_lu_solve<T>(q, psi_z, d)) {
     return;
   }
@@ -477,19 +452,15 @@ __global__ void esprit_solve_2d_kernel(
 
 template <typename T>
 __global__ void esprit_solve_kernel(
-    const cuda::std::complex<T>* __restrict__ eigenvectors,
-    const int32_t* __restrict__ model_order,
-    const int64_t* __restrict__ valid_counts,
-    const int32_t* __restrict__ reference_indices,
-    const int32_t* __restrict__ shifted_indices, int64_t num_items,
-    int64_t channels, int64_t pair_size, int64_t workspace_dim,
-    T wave_number_spacing, T axis_x, T axis_y, T axis_z, T broadside_x,
-    T broadside_y, T broadside_z, DeviceAngleConvention<T> convention,
+    const cuda::std::complex<T>* __restrict__ eigenvectors, const int32_t* __restrict__ model_order,
+    const int64_t* __restrict__ valid_counts, const int32_t* __restrict__ reference_indices,
+    const int32_t* __restrict__ shifted_indices, int64_t num_items, int64_t channels,
+    int64_t pair_size, int64_t workspace_dim, T wave_number_spacing, T axis_x, T axis_y, T axis_z,
+    T broadside_x, T broadside_y, T broadside_z, DeviceAngleConvention<T> convention,
     cuda::std::complex<T>* __restrict__ matrix_workspace,
     cuda::std::complex<T>* __restrict__ q_workspace,
-    cuda::std::complex<T>* __restrict__ r_workspace, T* __restrict__ aoa,
-    T* __restrict__ doa_multi, int64_t max_sources,
-    int32_t* __restrict__ source_count) {
+    cuda::std::complex<T>* __restrict__ r_workspace, T* __restrict__ aoa, T* __restrict__ doa_multi,
+    int64_t max_sources, int32_t* __restrict__ source_count) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (threadIdx.x != 0 || item >= num_items) {
     return;
@@ -527,20 +498,16 @@ __global__ void esprit_solve_kernel(
       for (int64_t pair_row = 0; pair_row < pair_size; ++pair_row) {
         const int64_t reference = reference_indices[pair_row];
         const int64_t shifted = shifted_indices[pair_row];
-        const auto left =
-            evec[reference * channels + signal_first + row];
-        gram += esprit_conj(left) *
-                evec[reference * channels + signal_first + col];
-        cross += esprit_conj(left) *
-                 evec[shifted * channels + signal_first + col];
+        const auto left = evec[reference * channels + signal_first + row];
+        gram += esprit_conj(left) * evec[reference * channels + signal_first + col];
+        cross += esprit_conj(left) * evec[shifted * channels + signal_first + col];
       }
       q[row * d + col] = gram;
       matrix[row * d + col] = cross;
     }
   }
 
-  const T pivot_floor = std::is_same_v<T, float> ? static_cast<T>(1e-10)
-                                                 : static_cast<T>(1e-20);
+  const T pivot_floor = std::is_same_v<T, float> ? static_cast<T>(1e-10) : static_cast<T>(1e-20);
   for (int64_t pivot = 0; pivot < d; ++pivot) {
     int64_t best = pivot;
     T best_norm = esprit_norm_squared(q[pivot * d + pivot]);
@@ -605,8 +572,7 @@ __global__ void esprit_solve_kernel(
       }
       const T phase = atan2(root.imag(), root.real());
       const T score = fabs(T{1} - magnitude);
-      if (score < best_score ||
-          (score == best_score && phase < best_phase)) {
+      if (score < best_score || (score == best_score && phase < best_phase)) {
         best = candidate;
         best_score = score;
         best_phase = phase;
@@ -639,57 +605,48 @@ __global__ void esprit_solve_kernel(
 
 template <typename T>
 inline void run_esprit_stage(
-    const cuda::std::complex<T>* snapshots, const unsigned char* mask,
-    int64_t num_items, int64_t channels, int64_t num_snapshots,
-    int64_t fixed_num_sources, double pfa, int64_t model_order_cap,
-    const int32_t* reference_indices, const int32_t* shifted_indices,
-    int64_t pair_size, int64_t workspace_dim, T wave_number_spacing, T axis_x,
-    T axis_y, T axis_z, T broadside_x, T broadside_y, T broadside_z,
-    DeviceAngleConvention<T> convention,
-    cuda::std::complex<T>* covariance,
-    cuda::std::complex<T>* eigenvectors, int64_t* valid_counts,
-    int32_t* model_order, T* eigenvalues,
-    cuda::std::complex<T>* matrix_workspace,
-    cuda::std::complex<T>* q_workspace,
-    cuda::std::complex<T>* r_workspace, T* aoa, T* doa_multi,
+    const cuda::std::complex<T>* snapshots, const unsigned char* mask, int64_t num_items,
+    int64_t channels, int64_t num_snapshots, int64_t fixed_num_sources, double pfa,
+    int64_t model_order_cap, const int32_t* reference_indices, const int32_t* shifted_indices,
+    int64_t pair_size, int64_t workspace_dim, T wave_number_spacing, T axis_x, T axis_y, T axis_z,
+    T broadside_x, T broadside_y, T broadside_z, DeviceAngleConvention<T> convention,
+    cuda::std::complex<T>* covariance, cuda::std::complex<T>* eigenvectors, int64_t* valid_counts,
+    int32_t* model_order, T* eigenvalues, cuda::std::complex<T>* matrix_workspace,
+    cuda::std::complex<T>* q_workspace, cuda::std::complex<T>* r_workspace, T* aoa, T* doa_multi,
     int64_t max_sources, int32_t* source_count, cudaStream_t stream) {
   if (num_items <= 0 || channels < 2) {
     return;
   }
   constexpr int block = 256;
   const int grid = static_cast<int>(num_items);
-  music_covariance_kernel<T><<<grid, block, 0, stream>>>(
-      snapshots, mask, num_items, channels, num_snapshots, covariance,
-      valid_counts);
+  music_covariance_kernel<T><<<grid, block, 0, stream>>>(snapshots, mask, num_items, channels,
+                                                         num_snapshots, covariance, valid_counts);
 
-  auto covariance_view = matx::make_tensor<cuda::std::complex<T>, 3>(
-      covariance, {num_items, channels, channels});
-  auto eigenvector_view = matx::make_tensor<cuda::std::complex<T>, 3>(
-      eigenvectors, {num_items, channels, channels});
-  auto eigenvalue_view =
-      matx::make_tensor<T, 2>(eigenvalues, {num_items, channels});
+  auto covariance_view =
+      matx::make_tensor<cuda::std::complex<T>, 3>(covariance, {num_items, channels, channels});
+  auto eigenvector_view =
+      matx::make_tensor<cuda::std::complex<T>, 3>(eigenvectors, {num_items, channels, channels});
+  auto eigenvalue_view = matx::make_tensor<T, 2>(eigenvalues, {num_items, channels});
   matx::cudaExecutor eig_exec{stream};
   (matx::mtie(eigenvector_view, eigenvalue_view) =
        matx::eig(covariance_view, matx::EigenMode::VECTOR))
       .run(eig_exec);
 
   if (fixed_num_sources < 0) {
-    run_source_count_device<T>(eigenvalues, valid_counts, num_items, channels,
-                               pfa, model_order_cap, model_order, stream);
+    run_source_count_device<T>(eigenvalues, valid_counts, num_items, channels, pfa, model_order_cap,
+                               model_order, stream);
   } else {
     constexpr int fill_block = 128;
-    const int fill_grid =
-        static_cast<int>((num_items + fill_block - 1) / fill_block);
+    const int fill_grid = static_cast<int>((num_items + fill_block - 1) / fill_block);
     fill_model_order_kernel<<<fill_grid, fill_block, 0, stream>>>(
         model_order, num_items, static_cast<int32_t>(fixed_num_sources));
   }
 
   esprit_solve_kernel<T><<<grid, 1, 0, stream>>>(
-      eigenvectors, model_order, valid_counts, reference_indices,
-      shifted_indices, num_items, channels, pair_size, workspace_dim,
-      wave_number_spacing, axis_x, axis_y, axis_z, broadside_x, broadside_y,
-      broadside_z, convention, matrix_workspace, q_workspace, r_workspace,
-      aoa, doa_multi, max_sources, source_count);
+      eigenvectors, model_order, valid_counts, reference_indices, shifted_indices, num_items,
+      channels, pair_size, workspace_dim, wave_number_spacing, axis_x, axis_y, axis_z, broadside_x,
+      broadside_y, broadside_z, convention, matrix_workspace, q_workspace, r_workspace, aoa,
+      doa_multi, max_sources, source_count);
 
   mark_music_eig_cache_live();
   clear_music_matx_caches();
@@ -703,57 +660,50 @@ inline void run_esprit_stage(
 // Schur vectors, and QR scratch.
 template <typename T>
 inline void run_esprit_2d_stage(
-    const cuda::std::complex<T>* snapshots, const unsigned char* mask,
-    int64_t num_items, int64_t channels, int64_t num_snapshots,
-    int64_t fixed_num_sources, double pfa, int64_t model_order_cap,
-    const int32_t* y_reference, const int32_t* y_shifted, int64_t y_pairs,
-    const int32_t* z_reference, const int32_t* z_shifted, int64_t z_pairs,
-    int64_t workspace_dim, T ky_spacing, T kz_spacing, T yax_x, T yax_y,
-    T yax_z, T zax_x, T zax_y, T zax_z, T nrm_x, T nrm_y, T nrm_z,
-    DeviceAngleConvention<T> convention, cuda::std::complex<T>* covariance,
-    cuda::std::complex<T>* eigenvectors, int64_t* valid_counts,
-    int32_t* model_order, T* eigenvalues, cuda::std::complex<T>* psi_y_ws,
-    cuda::std::complex<T>* psi_z_ws, cuda::std::complex<T>* z_ws,
-    cuda::std::complex<T>* q_ws, cuda::std::complex<T>* r_ws,
-    cuda::std::complex<T>* tmp_ws, T* aoa, T* doa_multi, int64_t max_sources,
-    int32_t* source_count, cudaStream_t stream) {
+    const cuda::std::complex<T>* snapshots, const unsigned char* mask, int64_t num_items,
+    int64_t channels, int64_t num_snapshots, int64_t fixed_num_sources, double pfa,
+    int64_t model_order_cap, const int32_t* y_reference, const int32_t* y_shifted, int64_t y_pairs,
+    const int32_t* z_reference, const int32_t* z_shifted, int64_t z_pairs, int64_t workspace_dim,
+    T ky_spacing, T kz_spacing, T yax_x, T yax_y, T yax_z, T zax_x, T zax_y, T zax_z, T nrm_x,
+    T nrm_y, T nrm_z, DeviceAngleConvention<T> convention, cuda::std::complex<T>* covariance,
+    cuda::std::complex<T>* eigenvectors, int64_t* valid_counts, int32_t* model_order,
+    T* eigenvalues, cuda::std::complex<T>* psi_y_ws, cuda::std::complex<T>* psi_z_ws,
+    cuda::std::complex<T>* z_ws, cuda::std::complex<T>* q_ws, cuda::std::complex<T>* r_ws,
+    cuda::std::complex<T>* tmp_ws, T* aoa, T* doa_multi, int64_t max_sources, int32_t* source_count,
+    cudaStream_t stream) {
   if (num_items <= 0 || channels < 4) {
     return;
   }
   constexpr int block = 256;
   const int grid = static_cast<int>(num_items);
-  music_covariance_kernel<T><<<grid, block, 0, stream>>>(
-      snapshots, mask, num_items, channels, num_snapshots, covariance,
-      valid_counts);
+  music_covariance_kernel<T><<<grid, block, 0, stream>>>(snapshots, mask, num_items, channels,
+                                                         num_snapshots, covariance, valid_counts);
 
-  auto covariance_view = matx::make_tensor<cuda::std::complex<T>, 3>(
-      covariance, {num_items, channels, channels});
-  auto eigenvector_view = matx::make_tensor<cuda::std::complex<T>, 3>(
-      eigenvectors, {num_items, channels, channels});
-  auto eigenvalue_view =
-      matx::make_tensor<T, 2>(eigenvalues, {num_items, channels});
+  auto covariance_view =
+      matx::make_tensor<cuda::std::complex<T>, 3>(covariance, {num_items, channels, channels});
+  auto eigenvector_view =
+      matx::make_tensor<cuda::std::complex<T>, 3>(eigenvectors, {num_items, channels, channels});
+  auto eigenvalue_view = matx::make_tensor<T, 2>(eigenvalues, {num_items, channels});
   matx::cudaExecutor eig_exec{stream};
   (matx::mtie(eigenvector_view, eigenvalue_view) =
        matx::eig(covariance_view, matx::EigenMode::VECTOR))
       .run(eig_exec);
 
   if (fixed_num_sources < 0) {
-    run_source_count_device<T>(eigenvalues, valid_counts, num_items, channels,
-                               pfa, model_order_cap, model_order, stream);
+    run_source_count_device<T>(eigenvalues, valid_counts, num_items, channels, pfa, model_order_cap,
+                               model_order, stream);
   } else {
     constexpr int fill_block = 128;
-    const int fill_grid =
-        static_cast<int>((num_items + fill_block - 1) / fill_block);
+    const int fill_grid = static_cast<int>((num_items + fill_block - 1) / fill_block);
     fill_model_order_kernel<<<fill_grid, fill_block, 0, stream>>>(
         model_order, num_items, static_cast<int32_t>(fixed_num_sources));
   }
 
   esprit_solve_2d_kernel<T><<<grid, 1, 0, stream>>>(
-      eigenvectors, model_order, valid_counts, y_reference, y_shifted, y_pairs,
-      z_reference, z_shifted, z_pairs, num_items, channels, model_order_cap,
-      workspace_dim, ky_spacing, kz_spacing, yax_x, yax_y, yax_z, zax_x, zax_y,
-      zax_z, nrm_x, nrm_y, nrm_z, convention, psi_y_ws, psi_z_ws, z_ws, q_ws,
-      r_ws, tmp_ws, aoa, doa_multi, max_sources, source_count);
+      eigenvectors, model_order, valid_counts, y_reference, y_shifted, y_pairs, z_reference,
+      z_shifted, z_pairs, num_items, channels, model_order_cap, workspace_dim, ky_spacing,
+      kz_spacing, yax_x, yax_y, yax_z, zax_x, zax_y, zax_z, nrm_x, nrm_y, nrm_z, convention,
+      psi_y_ws, psi_z_ws, z_ws, q_ws, r_ws, tmp_ws, aoa, doa_multi, max_sources, source_count);
 
   mark_music_eig_cache_live();
   clear_music_matx_caches();

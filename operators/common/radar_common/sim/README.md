@@ -7,8 +7,8 @@ runs on the GPU (MatX); an independent CPU implementation under `tests/` is the
 analytic ground truth it is validated against.
 
 It is a closed-form signal model, **not** an EM solver: each target's
-contribution (far-field two-way delay → beat frequency → slow-time carrier
-phase) is summed over `(rx, slot, fast-time sample)`.
+contribution (far-field two-way delay → CRI residual beat → analog IF magnitude →
+slow-time carrier phase) is summed over `(rx, slot, fast-time sample)`.
 
 ## Files
 
@@ -75,7 +75,9 @@ Link: `target_link_libraries(<you> PRIVATE holoscan::radar_common_simulator)`
 | `tx_positions` | `vector<Vec3>` | TX element positions, m, array frame. Single-TX path needs exactly 1. |
 | `rx_positions` | `vector<Vec3>` | RX element positions, m, array frame. |
 | `propagation_speed` | `double` | m/s (defaults to c). |
-| `snr_db` | `optional<double>` | Noise SNR in dB vs. a unit-amplitude target; unset = noise-free. |
+| `analog_if` | `AnalogIfConfig` | Sampling mode and magnitude-only analog IF response; defaults to filtered complex-IQ. |
+| `range_loss` | `RangeLossConfig` | Optional relative monostatic free-space loss; defaults to constant amplitude. |
+| `snr_db` | `optional<double>` | Noise SNR in dB vs. a unit-amplitude target at the reference range; unset = noise-free. |
 | `seed` | `uint64_t` | Noise RNG seed. |
 | `dechirped` | `bool` | `true` = dechirped IF cube (normal); `false` = pre-mixer cube. |
 
@@ -84,6 +86,9 @@ Link: `target_link_libraries(<you> PRIVATE holoscan::radar_common_simulator)`
 - **`SimWaveform`** — `carrier_frequency` (Hz), `bandwidth` (Hz) **or** derive
   from `chirp_duration`, `sample_rate` (Hz), `chirp_repetition_interval` (s,
   PRI). Helpers: `slope()`, `wavelength()`. `Vec3 = std::array<double,3>`.
+- **`AnalogIfConfig`** — `sampling_mode` (`kComplexIq` gives a positive-beat boundary of `sample_rate`; `kReal` gives `sample_rate/2`), `response` (`kRaisedCosine` or explicit unfiltered `kNone`), and pass/stop fractions. The default is unity through 90% of the boundary and a raised-cosine transition to zero at 100%. `SimResult` records the selected mode; `to_real_if()` rejects results not synthesized as `kReal`.
+- **`RangeLossConfig`** — `kNone` preserves the target's constant complex ADC-voltage coefficient. `kMonostaticFreeSpace` interprets it at `reference_range` and applies voltage gain `g(R) = (reference_range/R)^2`, so received power scales as `R^-4`. Gain uses the full physical center range before CRI folding and is updated once per chirp under stop-and-hop. A 100 m target one 25 µs CRI farther away at 3847.405725 m is about 63.4 dB weaker in power before IF loss and noise. The simulator default remains `kNone`; application loading warns when that model is selected or implied. Normal application presets explicitly select free-space loss at 100 m, while smoke presets intentionally retain constant amplitude.
+- **`SceneVisibility`** — application sources, not the solvers, use `front_half_space` by default with radar-local boresight `+x`. `frustum` adds rectangular horizontal/vertical FOV bounds; `all` restores isotropic synthesis. `visible_scene()` copies every scene field and filters only `targets`, so range loss continues to use full physical range for retained targets.
 
 ### Solvers — `simulator.hpp`
 
@@ -112,7 +117,9 @@ row-major `(num_tx, slow_time)` matrix of the per-`(tx, slot)` excitation:
 | DDM (phase-coded) | `num_chirps` | the arbitrary unit-magnitude `(tx, k)` code |
 
 (Single-TX is just `num_tx == 1` with unit weights — the two entry points share
-one kernel internally.)
+one kernel internally.) Both entry points apply the analog IF response to the
+dechirped beat before honoring `SimScene::dechirped`; when it is `false`, the
+filtered result is multiplied by the reference chirp to produce pre-mixer IQ.
 
 ### Additive — `simulator.hpp`
 
@@ -143,15 +150,12 @@ element counts + spacing (in wavelengths).
 
 ## Conventions (must match the operators)
 
-- **Dechirped sample:** `s(k,t) = A·exp(+j·2π·f_b(k)·t − j·2π·f_c·τ_k)` with beat
-  `f_b(k) = slope·τ_k`, so a forward FFT along fast-time peaks at the positive
-  beat frequency (bin 0 = zero range).
+- **Dechirped sample:** for `τ_k = q·CRI + δ`, `s(k,t) = g(R_k)·H(slope·δ)·A·exp(+j·2π·slope·δ·t − j·2π·f_c·τ_k)`. A forward FFT therefore reports the CRI-folded apparent range; full physical range controls `g`, and full delay remains in carrier/spatial phase.
 - **Doppler:** the slow-time phase `−2π·f_c·τ_k` advances by `2π·f_d·PRI` per
   chirp with `f_d = −2·v_r/λ`; radial velocity `v_r` positive = receding.
 - **Reference chirp:** `r(t) = exp(+j·π·slope·t²)`; pre-mixer = `s·r`, dechirp =
   multiply by `conj(r)`.
-- Far-field plane wave, monostatic, stop-and-hop (target frozen within a chirp,
-  advances between chirps), single-slope sweeps, ideal hardware.
+- Far-field plane wave, monostatic, stop-and-hop (target frozen within a chirp, advances between chirps), single-slope sweeps, and a cyclic waveform/excitation sequence. The optional range law is relative rather than an absolute radar equation: TX power, wavelength, antenna gain, RCS, receiver gain, and fixed losses remain absorbed into target amplitude. The IF response is magnitude-only; finite chirp/idle overlap and cross-profile history are not modeled.
 
 ## Extension points
 

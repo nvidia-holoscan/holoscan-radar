@@ -27,31 +27,25 @@ inline double beat_frequency(double range_m, double slope, double c) {
 // Range represented by an unshifted range-FFT bin (bin 0 = zero range):
 // range(i) = c * (i * fs / nfft) / (2 * slope). This mirrors the locked
 // definition of the operators' range_bins output.
-inline double range_of_bin(int64_t bin, double slope, double sample_rate,
-                           int64_t nfft, double c) {
-  const double f = static_cast<double>(bin) * sample_rate /
-                   static_cast<double>(nfft);
+inline double range_of_bin(int64_t bin, double slope, double sample_rate, int64_t nfft, double c) {
+  const double f = static_cast<double>(bin) * sample_rate / static_cast<double>(nfft);
   return c * f / (2.0 * slope);
 }
 
 // The (rounded) bin a target at `range_m` lands in.
-inline int64_t expected_range_bin(double range_m, double slope,
-                                  double sample_rate, int64_t nfft,
+inline int64_t expected_range_bin(double range_m, double slope, double sample_rate, int64_t nfft,
                                   double c) {
   const double f_b = beat_frequency(range_m, slope, c);
-  return static_cast<int64_t>(std::llround(f_b * static_cast<double>(nfft) /
-                                           sample_rate));
+  return static_cast<int64_t>(std::llround(f_b * static_cast<double>(nfft) / sample_rate));
 }
 
 // The full expected range axis for num_bins bins (complex IF → num_bins =
 // nfft; real IF → num_bins = nfft/2 + 1; both use the same per-bin rule).
-inline std::vector<double> expected_range_axis(int64_t num_bins, double slope,
-                                               double sample_rate,
+inline std::vector<double> expected_range_axis(int64_t num_bins, double slope, double sample_rate,
                                                int64_t nfft, double c) {
   std::vector<double> axis(static_cast<size_t>(num_bins));
   for (int64_t i = 0; i < num_bins; ++i) {
-    axis[static_cast<size_t>(i)] = range_of_bin(i, slope, sample_rate, nfft,
-                                                c);
+    axis[static_cast<size_t>(i)] = range_of_bin(i, slope, sample_rate, nfft, c);
   }
   return axis;
 }
@@ -66,8 +60,7 @@ inline double doppler_frequency(double radial_velocity, double wavelength) {
 
 // The Doppler-FFT bin index (0..num_doppler-1) a Doppler frequency lands
 // in, on the unshifted axis (DC at bin 0), folding aliases into range.
-inline int64_t unshifted_doppler_bin(double f_d, double pri,
-                                     int64_t num_doppler) {
+inline int64_t unshifted_doppler_bin(double f_d, double pri, int64_t num_doppler) {
   const double n = static_cast<double>(num_doppler);
   double bin = std::round(f_d * pri * n);
   bin = std::fmod(bin, n);
@@ -86,23 +79,18 @@ inline int64_t fftshift_position(int64_t unshifted_bin, int64_t n) {
 
 // The bin a target at radial velocity v_r lands in, matching the
 // operators' center_zero_doppler handling.
-inline int64_t expected_doppler_bin(double radial_velocity,
-                                    double wavelength, double pri,
-                                    int64_t num_doppler,
-                                    bool center_zero_doppler) {
+inline int64_t expected_doppler_bin(double radial_velocity, double wavelength, double pri,
+                                    int64_t num_doppler, bool center_zero_doppler) {
   const double f_d = doppler_frequency(radial_velocity, wavelength);
   const int64_t unshifted = unshifted_doppler_bin(f_d, pri, num_doppler);
-  return center_zero_doppler ? fftshift_position(unshifted, num_doppler)
-                             : unshifted;
+  return center_zero_doppler ? fftshift_position(unshifted, num_doppler) : unshifted;
 }
 
 // The expected velocity axis (m/s per Doppler bin), mirroring the locked
 // definition of the operators' velocity_bins output: per-bin Doppler
 // frequency on the (possibly centered) axis, then v = -f_d * lambda / 2.
-inline std::vector<double> expected_velocity_axis(int64_t num_doppler,
-                                                  double wavelength,
-                                                  double pri,
-                                                  bool center_zero_doppler) {
+inline std::vector<double> expected_velocity_axis(int64_t num_doppler, double wavelength,
+                                                  double pri, bool center_zero_doppler) {
   std::vector<double> axis(static_cast<size_t>(num_doppler));
   const double prf = 1.0 / pri;
   for (int64_t i = 0; i < num_doppler; ++i) {
@@ -114,8 +102,7 @@ inline std::vector<double> expected_velocity_axis(int64_t num_doppler,
       // (i - n/2) mod n.
       idx = (i - num_doppler / 2 + num_doppler) % num_doppler;
     }
-    double f = static_cast<double>(idx) / static_cast<double>(num_doppler) *
-               prf;
+    double f = static_cast<double>(idx) / static_cast<double>(num_doppler) * prf;
     if (f >= prf / 2.0) {
       f -= prf;
     }

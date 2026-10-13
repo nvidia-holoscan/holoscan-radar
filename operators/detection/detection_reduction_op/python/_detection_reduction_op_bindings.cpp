@@ -13,6 +13,7 @@
 #include <holoscan/core/operator_spec.hpp>
 
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
@@ -28,13 +29,19 @@ class PyDetectionReductionOp : public DetectionReductionOp<T, NoCustomScore> {
  public:
   using DetectionReductionOp<T, NoCustomScore>::DetectionReductionOp;
 
-  PyDetectionReductionOp(
-      Fragment* fragment, const py::args& args,
-      RepresentativePolicy representative = RepresentativePolicy::kPeak,
-      ScoreMethod score_method = ScoreMethod::kWeightedSum,
-      const std::vector<double>& feature_weights = {},
-      const std::string& name = "detection_reduction")
-      : DetectionReductionOp<T, NoCustomScore>() {
+  PyDetectionReductionOp(Fragment* fragment, const py::args& args,
+                         RepresentativePolicy representative = RepresentativePolicy::kPeak,
+                         ScoreMethod score_method = ScoreMethod::kWeightedSum,
+                         const std::vector<double>& feature_weights = {},
+                         int64_t max_clusters = 256, int64_t max_points = 8192,
+                         int64_t max_features = 64, const std::string& name = "detection_reduction")
+  : DetectionReductionOp<T, NoCustomScore>([&] {
+      MaxTensorExtents extents;
+      extents.max_clusters = max_clusters;
+      extents.max_points = max_points;
+      extents.max_features = max_features;
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -53,21 +60,22 @@ void bind_detection_reduction(py::module_& m, const char* class_name) {
 
   py::class_<Op, PyOp, Operator, std::shared_ptr<Op>>(
       m, class_name,
-      "Reduces each cluster to one representative detection cell.\n\n"
+      "Reduces each cluster to a real representative cell and optional "
+      "reduced feature row.\n\n"
       "Parameters\n----------\n"
       "fragment : holoscan.core.Fragment\n"
       "representative : RepresentativePolicy, optional\n"
       "score_method : ScoreMethod, optional\n"
       "feature_weights : list[float], optional\n"
+      "max_clusters, max_points, max_features : int, optional\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&, RepresentativePolicy,
-                    ScoreMethod, const std::vector<double>&,
-                    const std::string&>(),
-           py::arg("fragment"),
-           py::arg("representative") = RepresentativePolicy::kPeak,
+      .def(py::init<Fragment*, const py::args&, RepresentativePolicy, ScoreMethod,
+                    const std::vector<double>&, int64_t, int64_t, int64_t, const std::string&>(),
+           py::arg("fragment"), py::arg("representative") = RepresentativePolicy::kPeak,
            py::arg("score_method") = ScoreMethod::kWeightedSum,
            py::arg("feature_weights") = std::vector<double>{},
-           py::arg("name") = "detection_reduction")
+           py::arg("max_clusters") = int64_t{256}, py::arg("max_points") = int64_t{8192},
+           py::arg("max_features") = int64_t{64}, py::arg("name") = "detection_reduction")
       .def("setup", &Op::setup, py::arg("spec"));
 }
 
@@ -78,8 +86,6 @@ void bind_detection_reduction(py::module_& m, const char* class_name) {
 PYBIND11_MODULE(_detection_reduction_op, m) {
   holoscan::radar::ensure_radar_arg_setters();
   m.doc() = "DetectionReductionOp Python bindings (NoCustomScore)";
-  holoscan::radar::bind_detection_reduction<float>(
-      m, "DetectionReductionOpF32");
-  holoscan::radar::bind_detection_reduction<double>(
-      m, "DetectionReductionOpF64");
+  holoscan::radar::bind_detection_reduction<float>(m, "DetectionReductionOpF32");
+  holoscan::radar::bind_detection_reduction<double>(m, "DetectionReductionOpF64");
 }

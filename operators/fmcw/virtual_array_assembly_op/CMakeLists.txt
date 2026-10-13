@@ -14,6 +14,7 @@ target_link_libraries(virtual_array_assembly_op
     PUBLIC
         holoscan::core
         holoscan::radar_common
+        holoscan::radar_schemas
     PRIVATE
         matx::matx)
 
@@ -34,4 +35,6 @@ install(FILES virtual_array_assembly_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw
 )
 
-add_subdirectory(python)
+if(HOLOSCAN_RADAR_BUILD_PYTHON)
+    add_subdirectory(python)
+endif()

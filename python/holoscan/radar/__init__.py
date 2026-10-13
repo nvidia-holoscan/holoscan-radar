@@ -43,7 +43,7 @@ from .beamscan_estimator_op import BeamscanEstimatorOpF64
 from .cfar_detector_op import CFARDetectorOpF32  # noqa: F401
 from .cfar_detector_op import (
     CFARDetectorOpF64,
-    CfarPeakNeighborhood,
+    CfarPeakMode,
     CfarVariant,
     build_ca_alpha_lut,
     build_go_alpha_lut,
@@ -62,22 +62,10 @@ from .esprit_estimator_op import (  # noqa: F401
 )
 from .feature_assembly_op import AssemblyFeature  # noqa: F401
 from .feature_assembly_op import FeatureAssemblyOpF32, FeatureAssemblyOpF64
-from .fmcw_doppler_processor_op import (  # noqa: F401
-    FMCWDopplerProcessorOpF32,
-    FMCWDopplerProcessorOpF64,
+from .multi_source_expansion_op import (  # noqa: F401
+    MultiSourceExpansionOpF32,
+    MultiSourceExpansionOpF64,
 )
-from .fmcw_range_doppler_processor_op import (  # noqa: F401
-    FMCWRangeDopplerProcessorOpF32,
-    FMCWRangeDopplerProcessorOpF64,
-)
-from .fmcw_range_processor_op import FMCWRangeProcessorOpF32  # noqa: F401
-from .fmcw_range_processor_op import FMCWRangeProcessorOpF64
-from .mimo_coherent_compensation_op import (  # noqa: F401
-    MIMOCoherentCompensationOpF32,
-    MIMOCoherentCompensationOpF64,
-)
-from .mimo_deinterleave_op import MIMODeinterleaveOpF32  # noqa: F401
-from .mimo_deinterleave_op import MIMODeinterleaveOpF64
 from .music_estimator_op import MUSICEstimatorOpF32  # noqa: F401
 from .music_estimator_op import (
     MUSICEstimatorOpF64,
@@ -90,30 +78,120 @@ from .phase_shift_beamformer_op import (  # noqa: F401
     PhaseShiftBeamformerOpF64,
 )
 from .radar_app import CadenceMeter  # noqa: F401
-from .radar_app import (
-    BoresightViewOp,
-    ClusterOverlayOp,
-    ClusterReportOp,
-    DetectionReportOp,
-    NullSinkOp,
-    PanelRect,
-    RdAngleMaxOp,
-    RdChannelSliceOp,
-    RdMapToImageOp,
-    RollingPlotOp,
-    cluster_palette,
-    gui_available,
-    make_turbo_lut,
+from .radar_app import DetectionReportMode, DetectionReportOp, NullSinkOp
+from .rank_one_residual_screen_op import (  # noqa: F401
+    RankOneResidualScreenOpF32,
+    RankOneResidualScreenOpF64,
 )
 from .root_music_estimator_op import (  # noqa: F401
     RootMUSICEstimatorOpF32,
     RootMUSICEstimatorOpF64,
 )
 from .snapshot_gather_op import SnapshotGatherOpF32, SnapshotGatherOpF64  # noqa: F401
-from .virtual_array_assembly_op import (  # noqa: F401
-    VirtualArrayAssemblyOpF32,
-    VirtualArrayAssemblyOpF64,
-)
+
+#  The FMCW range/Doppler/fused-RD and MIMO marshaling operators
+# are not on the HSDK 5 port allow-list, so their extension modules are absent
+# from an EA build. Import each optionally — one missing module must not take
+# down `import holoscan.radar` for the operators that did port. Missing names
+# are None, as in the Holoviz block below.
+try:
+    from .fmcw_doppler_processor_op import (  # noqa: F401
+        FMCWDopplerProcessorOpF32,
+        FMCWDopplerProcessorOpF64,
+    )
+except ImportError:  # pragma: no cover - optional extension not built
+    FMCWDopplerProcessorOpF32 = None  # type: ignore[misc, assignment]
+    FMCWDopplerProcessorOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .fmcw_range_doppler_processor_op import (  # noqa: F401
+        FMCWRangeDopplerProcessorOpF32,
+        FMCWRangeDopplerProcessorOpF64,
+    )
+except ImportError:  # pragma: no cover - optional extension not built
+    FMCWRangeDopplerProcessorOpF32 = None  # type: ignore[misc, assignment]
+    FMCWRangeDopplerProcessorOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .fmcw_range_processor_op import (  # noqa: F401
+        FMCWRangeProcessorOpF32,
+        FMCWRangeProcessorOpF64,
+    )
+except ImportError:  # pragma: no cover - optional extension not built
+    FMCWRangeProcessorOpF32 = None  # type: ignore[misc, assignment]
+    FMCWRangeProcessorOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .tdm_dense_compensation_op import (  # noqa: F401
+        TDMDenseCompensationOpF32,
+        TDMDenseCompensationOpF64,
+    )
+except ImportError:  # pragma: no cover - optional extension not built
+    TDMDenseCompensationOpF32 = None  # type: ignore[misc, assignment]
+    TDMDenseCompensationOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .ddm_dense_demultiplex_op import (  # noqa: F401
+        DDMDenseDemultiplexOpF32,
+        DDMDenseDemultiplexOpF64,
+    )
+except ImportError:  # pragma: no cover - optional extension not built
+    DDMDenseDemultiplexOpF32 = None  # type: ignore[misc, assignment]
+    DDMDenseDemultiplexOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .doppler_notch_op import (  # noqa: F401
+        DopplerNotchOpF32,
+        DopplerNotchOpF64,
+    )
+except ImportError:  # pragma: no cover - optional extension not built
+    DopplerNotchOpF32 = None  # type: ignore[misc, assignment]
+    DopplerNotchOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .ddm_power_fold_op import (  # noqa: F401
+        DDMPowerFoldOpF32,
+        DDMPowerFoldOpF64,
+    )
+except ImportError:  # pragma: no cover - optional extension not built
+    DDMPowerFoldOpF32 = None  # type: ignore[misc, assignment]
+    DDMPowerFoldOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .ddm_sparse_demultiplex_op import (  # noqa: F401
+        DDMSparseDemultiplexOpF32,
+        DDMSparseDemultiplexOpF64,
+    )
+except ImportError:  # pragma: no cover - optional extension not built
+    DDMSparseDemultiplexOpF32 = None  # type: ignore[misc, assignment]
+    DDMSparseDemultiplexOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .mimo_deinterleave_op import (  # noqa: F401
+        MIMODeinterleaveOpF32,
+        MIMODeinterleaveOpF64,
+    )
+except ImportError:  # pragma: no cover - optional extension not built
+    MIMODeinterleaveOpF32 = None  # type: ignore[misc, assignment]
+    MIMODeinterleaveOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .virtual_array_assembly_op import (  # noqa: F401
+        VirtualArrayAssemblyOpF32,
+        VirtualArrayAssemblyOpF64,
+    )
+except ImportError:  # pragma: no cover - optional extension not built
+    VirtualArrayAssemblyOpF32 = None  # type: ignore[misc, assignment]
+    VirtualArrayAssemblyOpF64 = None  # type: ignore[misc, assignment]
+
+try:
+    from .tdm_sparse_compensation_op import (  # noqa: F401
+        TDMSparseCompensationOpF32,
+        TDMSparseCompensationOpF64,
+    )
+except ImportError:  # pragma: no cover - optional extension not built
+    TDMSparseCompensationOpF32 = None  # type: ignore[misc, assignment]
+    TDMSparseCompensationOpF64 = None  # type: ignore[misc, assignment]
 
 # Convenience aliases: bare name → single precision (matches C++ demo apps).
 BeamscanEstimatorOp = BeamscanEstimatorOpF32
@@ -125,14 +203,21 @@ FeatureAssemblyOp = FeatureAssemblyOpF32
 FMCWDopplerProcessorOp = FMCWDopplerProcessorOpF32
 FMCWRangeDopplerProcessorOp = FMCWRangeDopplerProcessorOpF32
 FMCWRangeProcessorOp = FMCWRangeProcessorOpF32
-MIMOCoherentCompensationOp = MIMOCoherentCompensationOpF32
+TDMDenseCompensationOp = TDMDenseCompensationOpF32
+DDMDenseDemultiplexOp = DDMDenseDemultiplexOpF32
+DopplerNotchOp = DopplerNotchOpF32
+DDMPowerFoldOp = DDMPowerFoldOpF32
+DDMSparseDemultiplexOp = DDMSparseDemultiplexOpF32
 MIMODeinterleaveOp = MIMODeinterleaveOpF32
 MUSICEstimatorOp = MUSICEstimatorOpF32
 MVDREstimatorOp = MVDREstimatorOpF32
+RankOneResidualScreenOp = RankOneResidualScreenOpF32
+MultiSourceExpansionOp = MultiSourceExpansionOpF32
 PhaseShiftBeamformerOp = PhaseShiftBeamformerOpF32
 RootMUSICEstimatorOp = RootMUSICEstimatorOpF32
 ESPRITEstimatorOp = ESPRITEstimatorOpF32
 SnapshotGatherOp = SnapshotGatherOpF32
+TDMSparseCompensationOp = TDMSparseCompensationOpF32
 VirtualArrayAssemblyOp = VirtualArrayAssemblyOpF32
 
 __all__ = [
@@ -149,18 +234,15 @@ __all__ = [
     "BeamscanEstimatorOp",
     "BeamscanEstimatorOpF32",
     "BeamscanEstimatorOpF64",
-    "BoresightViewOp",
     "CFARDetectorOp",
     "CFARDetectorOpF32",
     "CFARDetectorOpF64",
     "CadenceMeter",
-    "CfarPeakNeighborhood",
+    "CfarPeakMode",
     "CfarVariant",
     "ClusterDBSCANOp",
     "ClusterDBSCANOpF32",
     "ClusterDBSCANOpF64",
-    "ClusterOverlayOp",
-    "ClusterReportOp",
     "ClutterFilterMethod",
     "ClutterFilterOp",
     "ClutterFilterOpF32",
@@ -170,6 +252,7 @@ __all__ = [
     "DetectionReductionOpF32",
     "DetectionReductionOpF64",
     "DetectionReportOp",
+    "DetectionReportMode",
     "ElevationReference",
     "FMCWDopplerProcessorOp",
     "FMCWDopplerProcessorOpF32",
@@ -186,9 +269,18 @@ __all__ = [
     "FeatureAssemblyOpF32",
     "FeatureAssemblyOpF64",
     "FftNorm",
-    "MIMOCoherentCompensationOp",
-    "MIMOCoherentCompensationOpF32",
-    "MIMOCoherentCompensationOpF64",
+    "DDMDenseDemultiplexOp",
+    "DDMDenseDemultiplexOpF32",
+    "DDMDenseDemultiplexOpF64",
+    "DDMPowerFoldOp",
+    "DDMPowerFoldOpF32",
+    "DDMPowerFoldOpF64",
+    "DDMSparseDemultiplexOp",
+    "DDMSparseDemultiplexOpF32",
+    "DDMSparseDemultiplexOpF64",
+    "TDMDenseCompensationOp",
+    "TDMDenseCompensationOpF32",
+    "TDMDenseCompensationOpF64",
     "MIMODeinterleaveOp",
     "MIMODeinterleaveOpF32",
     "MIMODeinterleaveOpF64",
@@ -198,20 +290,22 @@ __all__ = [
     "MVDREstimatorOp",
     "MVDREstimatorOpF32",
     "MVDREstimatorOpF64",
+    "RankOneResidualScreenOp",
+    "RankOneResidualScreenOpF32",
+    "RankOneResidualScreenOpF64",
+    "MultiSourceExpansionOp",
+    "MultiSourceExpansionOpF32",
+    "MultiSourceExpansionOpF64",
     "retire_matx_solver_caches",
     "retire_music_matx_caches",
     "install_matx_cache_atexit",
     "MultiplexingScheme",
     "NullSinkOp",
     "OverlapPolicy",
-    "PanelRect",
     "PeakInterpolation",
     "PhaseShiftBeamformerOp",
     "PhaseShiftBeamformerOpF32",
     "PhaseShiftBeamformerOpF64",
-    "RdAngleMaxOp",
-    "RdChannelSliceOp",
-    "RdMapToImageOp",
     "RepresentativePolicy",
     "RootMUSICEstimatorOp",
     "RootMUSICEstimatorOpF32",
@@ -219,7 +313,6 @@ __all__ = [
     "ESPRITEstimatorOp",
     "ESPRITEstimatorOpF32",
     "ESPRITEstimatorOpF64",
-    "RollingPlotOp",
     "ScoreMethod",
     "ShiftInvariantSubarrayPair",
     "SignedAxis",
@@ -227,6 +320,9 @@ __all__ = [
     "SnapshotGatherOp",
     "SnapshotGatherOpF32",
     "SnapshotGatherOpF64",
+    "TDMSparseCompensationOp",
+    "TDMSparseCompensationOpF32",
+    "TDMSparseCompensationOpF64",
     "TXSchedule",
     "VirtualArrayAssemblyOp",
     "VirtualArrayAssemblyOpF32",
@@ -239,10 +335,7 @@ __all__ = [
     "build_go_alpha_lut",
     "build_so_alpha_lut",
     "build_os_alpha_lut",
-    "cluster_palette",
-    "gui_available",
     "make_device_tensor",
-    "make_turbo_lut",
 ]
 
 _matx_atexit_installed = False

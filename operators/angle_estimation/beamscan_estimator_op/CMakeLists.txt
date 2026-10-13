@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-add_library(beamscan_estimator_op
-    beamscan_estimator_op.cu
-    is_valid_mask.cpp)
+add_library(beamscan_estimator_op beamscan_estimator_op.cu)
 add_library(holoscan::beamscan_estimator_op ALIAS beamscan_estimator_op)
 
 target_include_directories(beamscan_estimator_op PUBLIC
@@ -15,6 +13,7 @@ target_link_libraries(beamscan_estimator_op
         holoscan::core
         holoscan::radar_common
         holoscan::radar_common_steering
+        holoscan::radar_schemas
     PRIVATE
         matx::matx)
 
@@ -35,4 +34,6 @@ install(FILES beamscan_estimator_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/angle_estimation
 )
 
-add_subdirectory(python)
+if(HOLOSCAN_RADAR_BUILD_PYTHON)
+    add_subdirectory(python)
+endif()

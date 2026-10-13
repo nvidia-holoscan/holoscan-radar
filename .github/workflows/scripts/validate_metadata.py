@@ -28,9 +28,7 @@ import stat
 import sys
 from pathlib import Path
 
-# Virtual environments may hold the pinned holoscan-cli, whose wheel ships
-# unrendered template metadata.json files that match no schema.
-_EXCLUDE_DIRS = {".git", ".local", ".cache", "_CPack_Packages", ".venv", "venv"}
+_EXCLUDE_DIRS = {".git", ".local", ".cache", ".venv", "venv", "_CPack_Packages"}
 _MAX_METADATA_BYTES = 512 * 1024
 
 

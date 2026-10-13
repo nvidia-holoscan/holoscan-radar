@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+operator: fmcw_doppler_processor
+axes: [chirps, range_bins]
+profiles:
+  small: {shape: [16, 128]}
+  medium: {shape: [64, 512]}
+  large: {shape: [128, 1024]}
+live_ports: [doppler_window, center_zero_doppler, waveform, fft_norm, nfft]
+recipe:
+  operator_type: radar.FMCWDopplerProcessorOp.float
+  inputs:
+    - {port: range_profiles, shape: [channels, chirps, range_bins], omit_if_one: [channels], dtype: complex64, memory: device, generator: iq_cube}
+  fixtures: {channels: 1}
+  constructor: {bounds_policy: doppler_fft_bounds}
+  params:
+    waveform: {factory: valid_fmcw_waveform, carrier_frequency: 77000000000, bandwidth: 150000000, chirp_duration: 0.000020, sample_rate: 12800000, pri_seconds: 0.000025}
+    doppler_window: {type: none}
+    center_zero_doppler: true
+    fft_norm: backward
+    nfft: 0
+  outputs: {timed: rd_maps, drain: [velocity_bins], unwired: []}
+  live:
+    doppler_window: {physical_port: doppler_window, codec: window_spec}
+    center_zero_doppler: {physical_port: center_zero_doppler, codec: bool}
+    waveform: {physical_port: waveform, codec: waveform_descriptor}
+    fft_norm: {physical_port: fft_norm, codec: fft_norm_enum}
+    nfft: {physical_port: nfft, codec: scaled_axis, axis: chirps}
+cases:
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
+  - {id: hann-medium, profile: medium, scopes: [limited], parameters: {doppler_window: {type: hann}}}
+  - {id: four-channels-medium, profile: medium, scopes: [limited], parameters: {}, fixture: {channels: 4}}
+  - {id: padded-medium, profile: medium, scopes: [limited], parameters: {nfft: 128}}
+  - {id: "window-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: doppler_window, value: {type: hann}}}
+  - {id: "shift-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: center_zero_doppler, value: false}}
+  - {id: "waveform-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: waveform, value: {pri_seconds: 0.00003}}}
+  - {id: "norm-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: fft_norm, value: ortho}}
+  - {id: "nfft-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: nfft, value: {scale: 2}, cache: unseen}}
+  - {id: ortho-hann-medium, profile: medium, scopes: [moderate], parameters: {doppler_window: {type: hann}, fft_norm: ortho}}
+  - {id: hamming-window-medium, profile: medium, scopes: [thorough], parameters: {doppler_window: {type: hann}, fft_norm: ortho}, override: {port: doppler_window, value: {type: hamming}}}
+  - {id: nfft-cached-medium, profile: medium, scopes: [thorough], parameters: {}, override: {port: nfft, value: {scale: 2}, cache: cached}}

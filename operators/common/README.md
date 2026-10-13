@@ -1,69 +1,89 @@
-# radar_common
+# `radar_common`
 
-Shared library for the radar operator groups: the module's config-plane
-vocabulary, host-side signal math, tensor plumbing, and Holoscan-integration
-glue. Everything lives in the `holoscan::radar` namespace and is included as
-`radar_common/<layer>/<header>.hpp`.
+Shared types and utilities used by every Holoscan Radar operator. The library
+contains configuration descriptors, host-side DSP and simulation helpers,
+tensor/SDK adapters, and reusable reductions in the `holoscan::radar`
+namespace.
 
-## Layout (by dependency layer)
+## Layout
 
-Each folder depends only on the layers above it:
+| Folder | User-facing role |
+| --- | --- |
+| `descriptors/` | Shared descriptors, parameter enums, wire conversions, and `MaxTensorExtents` |
+| `dsp/` | Host-side window, taper, grid, and source-count helpers |
+| `sim/` | Independent analytic SISO/SIMO/TDM/DDM signal models and array builders |
+| `tensor/` | DLPack, CUDA, and MatX tensor utilities |
+| `sdk/` | Typed Holoscan Tensor I/O, live-override, output, and configuration-cache helpers |
+| `reduce/` | Reusable GPU group-by-label reductions |
 
-| Folder | Contents | Depends on |
-| --- | --- | --- |
-| `radar_common/descriptors/` | Shared config-plane types (`WindowSpec`, `FMCWWaveformDescriptor`, …) and the contract enums (`WindowType`, `FftNorm`, `ClutterFilterMethod`) | STL only |
-| `radar_common/dsp/` | Host-side signal math (window/taper generation) | descriptors |
-| `radar_common/sim/` | Analytic FMCW signal simulators — single-TX `point_target_sim.hpp` (multi-RX `SimScene`) and MIMO TDM/DDM `mimo_sim.hpp` — plus antenna-array geometry builders `array_builders.hpp` (input synthesis for applications; analytic ground truth for tests) | descriptors |
-| `radar_common/tensor/` | Rank-agnostic batching, DLPack device buffers, MatX view/upload helpers | holoscan::Tensor, CUDA |
-| `radar_common/sdk/` | Operator-authoring glue: parameter override ports, warn-once config cache, argument-setter registration | holoscan core |
-| `radar_common/reduce/` | Public group-by-label CUDA primitives (headers + `radar_common_reduce` lib) | CUDA, descriptors/enums |
+`tensor/matx_utils.hpp` is CUDA-translation-unit-only. Consumers of the compiled
+reduction kernels should link `holoscan::radar_common_reduce` rather than
+compiling `group_by_label.cu` again.
 
-`tensor/matx_utils.hpp` includes `<matx.h>` and must only be included from
-CUDA translation units (`.cu` files and the stage headers they include).
+## Shared descriptor types
 
-`reduce/group_by_label.hpp` declares host launch wrappers; non-template
-kernels are compiled once into `holoscan::radar_common_reduce`. Link that
-target rather than recompiling `group_by_label.cu` in a second library
-(ODR). Template custom-peak launches live in the header (`__CUDACC__`).
+The public configuration plane has seven descriptors:
 
-## Module conventions
+- `ArrayGeometry`
+- `ShiftInvariantSubarrayPair`
+- `AngleConvention`
+- `WindowSpec`
+- `FMCWWaveformDescriptor`
+- `DDMCodeDescriptor`
+- `TXSchedule`
 
-These conventions apply to every operator in the module and are implemented
-by this library:
+They are ordinary parameters and may also use same-named live input ports where
+an operator documents a live override. `MaxTensorExtents` is different: it is a
+constructor sizing object used to bound tensor pools before graph activation;
+it never travels on a port.
 
-- **Precision by template instantiation.** Operators are
-  `template <typename T>` with `T` ∈ {`float`, `double`}; an instance's
-  inputs and outputs match its precision (complex64/float32 or
-  complex128/float64). Never a runtime dtype flag. The descriptor structs
-  themselves are precision-agnostic (`double` scalars); operators cast when
-  building device-side artifacts.
-- **Plain-tensor data ports.** Ports carry a single-entry
-  `holoscan::TensorMap`; the port name is the contract, the map key is
-  accepted leniently. No bespoke message types — the shared descriptor
-  structs are parameters, riding input ports only as overrides.
-- **Rank-agnostic batching.** Operators act on the trailing axes and treat
-  leading `...` axes as opaque batch dimensions (`tensor/tensor_utils.hpp`:
-  `collapse_batch` / `full_rank_shape`). Shapes are inferred from the
-  tensors each tick, so shape-changing overrides are legal — downstream
-  re-infers. Inputs must be compact row-major in this wave.
-- **Overridable ("live") parameters.** An overridable parameter may be
-  changed in-flight via a same-named non-blocking input port
-  (`sdk/override_param.hpp`). Overrides are **sticky**: the parameter seeds
-  the initial effective value and an arriving override remains effective
-  until the next override. Vector-typed overrides are received via the
-  `std::any` port path because Holoscan's `receive<std::vector<T>>()` treats
-  a same-named `Parameter` as a legacy receivers list. Where an override
-  incurs a genuine cost (FFT plan, window coefficients), the operator warns
-  once per new configuration and caches prior ones (`sdk/config_cache.hpp`)
-  so alternating values do not thrash; the initial parameter-driven build is
-  silent.
-- **Custom parameter types need registered argument setters.** Holoscan's
-  `ArgumentSetter` only knows built-in types. Every operator therefore
-  calls `holoscan::radar::ensure_radar_arg_setters()`
-  (`sdk/arg_setters.hpp`) from an `initialize()` override, which registers
-  the SDK's default setter for each shared descriptor type. Both native
-  C++ Args and YAML-sourced Args (`from_config()`) work; the YAML side
-  decodes through the `YAML::convert<T>` specializations in
-  `sdk/yaml_converters.hpp`, using the canonical spellings from
-  `descriptors/enums.hpp` (e.g. `method: mean_subtraction`,
-  `range_window: hann` or a full `WindowSpec` map).
+## `MaxTensorExtents`
+
+Fat-output operators capture `MaxTensorExtents` at construction so HSDK 5 can
+size Tensor pools before `arm()`. The field list in
+`radar_common/descriptors/max_tensor_extents.hpp` is the public sizing surface;
+each operator README Construction table identifies the fields that operator
+requires. Applications may construct the value directly or decode the same
+`max_*` keys with `MaxTensorExtentsFromYaml` from
+`radar_common/sdk/max_tensor_extents_yaml.hpp`.
+
+The values are maxima for the graph lifetime, not fixed per-tick shapes.
+Operators continue to infer named extents from each input and accept shape
+changes within the captured bounds. An absent required field, a non-positive
+value, or a tick exceeding a bound fails closed. There is deliberately no
+opaque leading-batch extent; application-level loop or fan-out owns multi-item
+throughput.
+
+Size every field from the real application or test scenario. Pool dimensions
+multiply, so generous unrelated defaults can request many GiB; on unified-
+memory systems that can exhaust host RAM and make the machine unavailable.
+Keep concurrent GPU test jobs low enough that their combined pools fit physical
+memory.
+
+## Operator conventions
+
+- Precision is selected by the C++ template (`float` or `double`), never by a
+  runtime flag. Real and complex ports use the matching precision.
+- Data ports carry plain `holoscan::Tensor` values. Descriptor sidebands use
+  their documented wire-schema types; the public logical type remains the
+  descriptor named in the parameter table.
+- Inputs use the contract's named axes. Operators infer their extents each tick
+  but do not accept arbitrary opaque leading batch axes unless the individual
+  operator explicitly documents them.
+- Input and output names are unique within an operator. Shape-preserving
+  operators therefore commonly use an `_out` suffix on the output.
+- A `[live]` parameter may be replaced for one tick through its same-named
+  optional input. The side input joins the data trigger with `Exact{}`; a miss
+  uses the configured parameter and never latches the prior override.
+- Expensive configuration changes may build and cache FFT plans, steering
+  weights, lookup tables, or window coefficients. Repeated keys reuse cached
+  artifacts.
+- Optional outputs use either `always` or `latched` behavior as stated in the
+  port table. An `always` output attempts publication every tick; a `latched`
+  output stops doing dedicated work after the runtime reports it unwired.
+- GPU work runs on the activation's CUDA stream. Inputs may be retained after
+  `compute()` returns when asynchronous kernels still read them.
+
+The locked interface definitions are in
+[`OPERATOR_API.md`](../../docs/planning/OPERATOR_API.md), while each operator
+README gives the compact user-facing port, construction, and parameter tables.

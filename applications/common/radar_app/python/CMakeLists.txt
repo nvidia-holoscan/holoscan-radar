@@ -15,7 +15,6 @@ pybind11_add_holohub_module(
 
 target_link_libraries(radar_app_python PRIVATE
     holoscan::radar_app
-    holoscan::viz
     CUDA::cudart
 )
 

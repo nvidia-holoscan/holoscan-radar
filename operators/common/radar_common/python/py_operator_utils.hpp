@@ -25,8 +25,7 @@ namespace holoscan::radar::python {
 //
 // Takes a raw Operator* — calling shared_from_this() inside the constructor
 // doesn't work because the object isn't yet owned by a shared_ptr.
-inline void add_conditions_and_resources(holoscan::Operator* op,
-                                         const py::args& args) {
+inline void add_conditions_and_resources(holoscan::Operator* op, const py::args& args) {
   for (const auto& item : args) {
     auto obj = py::cast<py::object>(item);
     if (py::isinstance<holoscan::Condition>(obj)) {
@@ -48,8 +47,7 @@ inline void add_conditions_and_resources(holoscan::Operator* op,
     HOLOSCAN_LOG_WARN(
         "Operator '{}': positional arg of type '{}' is not a Condition, "
         "Resource, Arg, or ArgList — add_arg skipped.",
-        op->name(),
-        py::str(obj.get_type()).cast<std::string>());
+        op->name(), py::str(obj.get_type()).cast<std::string>());
   }
 }
 

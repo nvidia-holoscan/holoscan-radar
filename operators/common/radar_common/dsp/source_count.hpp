@@ -70,8 +70,7 @@ namespace holoscan::radar {
 // back to 1 and warns" contract clause — callers know K and must apply that
 // fallback (and the warning) themselves before calling this on a full-rank
 // covariance's eigenvalues.
-int64_t eft_source_count(const std::vector<double>& eigenvalues_ascending,
-                         int64_t num_snapshots, double pfa,
-                         int64_t max_sources);
+int64_t eft_source_count(const std::vector<double>& eigenvalues_ascending, int64_t num_snapshots,
+                         double pfa, int64_t max_sources);
 
 }  // namespace holoscan::radar

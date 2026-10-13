@@ -9,11 +9,9 @@ distributing this Holoscan Module.
 
 ```text
 holoscan-radar/
-├── holohub                         # Optional wrapper: runs the CLI from a managed venv
-├── requirements-cli.txt            # Pinned holoscan-cli for host, image, and lint
+├── pyproject.toml                  # CLI, CTest, and wheel configuration
 ├── Dockerfile                      # Development container image
 ├── CMakeLists.txt                  # Root CMake — orchestrates operators/applications/tests
-├── pyproject.toml                  # Python packaging metadata (scikit-build-core)
 ├── metadata.json                   # Module-level metadata (schema: urn:holohub:module:v2)
 ├── operators/
 │   ├── common/                     # Shared radar_common library
@@ -23,62 +21,104 @@ holoscan-radar/
 │   │       ├── sim/                #   analytic point-target simulator (STL only)
 │   │       ├── tensor/             #   tensor/DLPack/MatX plumbing
 │   │       └── sdk/                #   Holoscan-integration glue
+│   ├── sar/                        # SAR formation operators
+│   ├── io/                         # CPHD reader and tensor dump
+│   ├── detection/                  # CFAR, feature assembly, and reduction
+│   ├── clustering/                 # DBSCAN
+│   ├── angle_estimation/           # Sparse estimators and dense beamforming
 │   └── fmcw/                       # FMCW signal-processing group
 │       └── <operator_name>/
 │           ├── <operator_name>.hpp / .cu   # Operator + stage kernel
 │           ├── <operator_name>_stage.hpp   # (stage header name varies)
 │           └── metadata.json       # Operator-level metadata
 ├── applications/
-│   └── fmcw_siso/
-│       └── cpp/
-│           ├── fmcw_siso.cpp        # Example SISO FMCW pipeline
-│           └── metadata.json        # Application-level metadata
+│   ├── common/radar_app/            # Shared Graph/config/report/dashboard support
+│   ├── sar/                        # Five standalone C++ formation apps
+│   │   ├── spotlight/
+│   │   ├── video_sar/
+│   │   ├── tiled_strip/
+│   │   ├── continuous_strip/
+│   │   └── independent_images/
+│   └── fmcw/
+│       ├── siso/
+│       ├── simo/
+│       ├── dense_beamforming/
+│       ├── mimo_tdm/
+│       ├── adaptive_aoa/
+│       ├── multi_waveform/
+│       └── mimo_ddm/
+├── tools/sar_data/               # Optional CPHD download/subset CLIs
 ├── python/holoscan/radar/
-│   └── __init__.py                 # Placeholder (bindings deferred)
+│   └── __init__.py                 # Operator exports; compiled bindings currently disabled
+├── performance/                   # C++ YAML recipes, adapters, and shared runner
 └── tests/
-    ├── cpp/                        # GTest suite (+ utils/: harness, fixtures, bin model)
-    └── python/                     # pytest suite
+    ├── cpp/                        # GTest suite (+ utils/: fixtures and Graph helpers)
+    └── python/                     # pytest suite (requires compiled bindings)
 ```
 
 ---
 
-## CLI commands
+## Holoscan CLI
 
-The CLI requires Python 3.11 or newer. Install it into a virtual environment with
-`python -m pip install -r requirements-cli.txt`, then run `holoscan` from the module
-root. CLI 5 reads naming, CUDA, and CTest defaults from `pyproject.toml`, and module
-metadata from `metadata.json`. The existing `./holohub` wrapper also supports these
-commands.
+The development-only `cli` and `test` groups in [`pyproject.toml`](pyproject.toml)
+pin the Holoscan CLI and Python CTest dependencies. With Python 3.11+ available,
+install them from the repository root using uv:
+
+```bash
+uv sync
+source .venv/bin/activate
+holoscan version
+```
+
+The project pins the CLI to NVIDIA's package index for uv. `uv sync` installs
+only these development tools; it does not compile the radar wheel. The groups
+are not part of the published wheel. With pip 25.1+, the equivalent setup is:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade 'pip>=25.1'
+python -m pip install --extra-index-url https://pypi.nvidia.com --group cli --group test
+holoscan version
+```
+
+The development Dockerfile installs the same groups. Run the CLI from the
+repository root on the host, or pass `holoscan --project-root <path>` before the
+command. First build the HSDK 5 image from [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md),
+then build one named development image:
+
+```bash
+holoscan build-container --base-img <reported-image> --img holoscan-radar-dev:hsdk5
+```
+
+The following host commands reuse that image. The CLI starts a container for
+each command; no interactive container shell is required. Keep the same `--img`
+value throughout because the CLI otherwise derives a different image name for
+each project. The CLI auto-detects a sibling `../holoscan-sdk` checkout and
+mounts its local installation ahead of the SDK baked into the image. The
+`holoscan_DIR` configure argument below selects the validated image SDK even
+when that sibling checkout exists.
 
 | Command | What it does |
 | --- | --- |
-| `holoscan run-container` | Build and start the development container |
-| `holoscan build fmcw_siso` | Configure and build the example pipeline inside the container |
-| `holoscan run fmcw_siso` | Configure, build, and run the example pipeline inside the container |
-| `holoscan test` | Configure, build, and run the test suite inside the container |
-| `holoscan install --dev` | Install a `.pth` hook so `import holoscan.radar` works in any shell |
-| `holoscan package holoscan-radar` | Build a native Debian package with Holoscan Radar operators |
-| `holoscan package holoscan-radar --pkg-generator=WHEEL` | Build a native Python 3.12 package with Holoscan Radar operators |
+| `holoscan build holoscan-radar --language cpp --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan` | Build the C++ module in the container |
+| `holoscan build simo --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-DBUILD_ALL=OFF --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan` | Build SIMO and its dependencies in the container |
+| `holoscan run simo --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-DBUILD_ALL=OFF --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan` | Build and run SIMO in the container |
+| `holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build --cmake-options=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan` | Build and run the test suite in the container |
+| `holoscan package holoscan-radar --img holoscan-radar-dev:hsdk5 --no-docker-build` | Build the Debian package in the container |
+| `holoscan run-container --img holoscan-radar-dev:hsdk5 --no-docker-build` | Open an interactive container shell when needed |
 
-`./holohub` only picks the interpreter: `HOLOSCAN_CLI_PYTHON_BIN` if set, else
-`python3` (an activated venv or the development image) when it already has CLI 5,
-else a managed venv at `~/.local/share/holoscan-radar/cli-venv` (`HOLOSCAN_CLI_VENV`
-overrides it). It creates that venv with Python 3.11+, separate from HoloHub's, and
-reinstalls the CLI only when `requirements-cli.txt` changes; it never installs into
-other environments. Use pip's own settings, such as `PIP_EXTRA_INDEX_URL`, for other
-package indexes, and an editable install in your venv for CLI development. After
-changing the pin, rebuild the image.
-
-CLI 5 automatically uses a built SDK under `./holoscan-sdk` or `../holoscan-sdk`,
-reported as `local SDK` in the effective configuration. Container commands mount it
-at `/workspace/holoscan-sdk` ahead of the image's SDK, and build and test commands
-pass it to CMake. Select an installation explicitly with `--local-sdk-root` or
-`HOLOSCAN_SDK_ROOT`; to test against the image's SDK, use a checkout without a
-sibling `holoscan-sdk`.
+The focused app flags turn off `BUILD_ALL` and the test suite; without them,
+a standalone CMake build enables every app, operator, and test by default.
+`[tool.holoscan]` selects [`ci/container.ctest`](ci/container.ctest) for `holoscan test`.
+To try an unpublished CLI checkout, install it into the selected environment and
+run its `holoscan` command there.
 
 ---
 
-## Building without the wrapper
+## Building directly with CMake inside the container
+
+For manual debugging in an interactive development container:
 
 ```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
@@ -91,37 +131,66 @@ Run C++ tests:
 ctest --test-dir build --output-on-failure -LE performance
 ```
 
-Run Python tests:
+Run all five SAR fixture and headless visualization paths without public data:
 
 ```bash
-# Holoscan SDK must import first; conftest.py then prepends
-# build/python/lib/holoscan onto holoscan.__path__. Do not put
-# build/python/lib alone on PYTHONPATH — that shadows the SDK package.
-HOLOSCAN_RADAR_BUILD_DIR=build \
-pytest tests/python/ -v
+ctest --test-dir build -R '^Sar_.*_(smoke|viz)$' --output-on-failure
+```
+
+For individual SAR build gates use `-DBUILD_ALL=OFF -DAPP_spotlight=ON`
+(or `APP_video_sar`, `APP_tiled_strip`, `APP_continuous_strip`,
+`APP_independent_images`). See the [SAR app index](applications/sar/README.md)
+for mode-specific graphs, [data preparation](tools/sar_data/README.md) for
+optional public collections, and the [HSDK 5 SAR contract](docs/planning/SAR/OPERATOR_API.md).
+The fixture is generated in C++; Python is required only for optional data
+preparation. All five SAR GUI apps have been visually checked with their
+current presets. That check does not establish full-resolution image quality
+or validate every public collection and backprojection backend.
+
+Python bindings are disabled in the current SDK image because it does not
+export the required binding target. Consequently, CMake does not register
+`pytest` or `pytest_statistical`; the direct pytest suite also requires
+compiled bindings and is not a current build gate. Once the SDK supplies the
+target and bindings are enabled, run the Python suite with:
+
+```bash
+# conftest.py extends the installed SDK package with build-tree modules.
+# Do not put build/python/lib alone on PYTHONPATH: it shadows the SDK package.
+HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v
 ```
 
 ---
 
-## Running the full suite with `./holohub test`
+## Running the full suite with `holoscan test`
 
-`./holohub test` configures, builds, and tests inside the development container in one
-step — the containerized equivalent of the manual sequence above.
+From the host, `holoscan test` starts the named development image, configures
+and builds the module, and runs the suite in that container:
 
 ```bash
-./holohub test                    # build the image if needed, then configure/build/test
-./holohub test --no-docker-build  # reuse the existing image (faster)
-./holohub test --dryrun --verbose # print the commands without running them
+holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --cmake-options=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan
+holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --cmake-options=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
+  --dryrun --verbose
 ```
+
+If the development image has not been built yet, run the `build-container`
+command above first. The test command can also build it with
+`--base-img <reported-image>` instead of `--no-docker-build`. The
+`--cmake-options` override selects the validated image SDK when the CLI
+also finds an older sibling `holoscan-sdk` installation.
 
 What it does, and where to change it:
 
-- Runs [`ci/container.ctest`](ci/container.ctest), selected by `pyproject.toml`.
+- Runs [`ci/container.ctest`](ci/container.ctest), this module's CTest driver, selected
+  by `pyproject.toml`. The driver bundled with `holoscan-cli` resolves its source directory
+  inside the pip install tree and cannot see this repo.
 - Builds into **`build-test/`**, a dedicated tree. The driver wipes it on every run, which
   is why it is deliberately not your `build/` directory.
-- Runs every tier except `performance`, which has its own invocation. That includes the
-  Monte Carlo `statistical` tests — they cost ~13 s against a ~207 s suite, so there is
-  nothing to gain by deferring them. Narrow to one tier with
+- Runs every registered C++ tier except `performance`, which has its own invocation.
+  That includes the Monte Carlo `statistical` tests. Python suites are registered
+  only when bindings are enabled; they are absent with the current SDK image.
+  Narrow to one tier with
   `--ctest-options='-DINCLUDE_LABELS=statistical'`, or widen the exclusion with
   `-DEXCLUDE_LABELS='performance|statistical'`.
 - The selection is **exclude-based on purpose**: an include list silently drops any label
@@ -138,18 +207,38 @@ Useful escapes:
 | `--no-xvfb` | Skip the default `xvfb-run -a` wrapper |
 | `--cmake-options OPT` | Append a CMake configure flag (repeatable) |
 | `--ctest-options OPT` | Append a raw ctest argument (repeatable) |
-| `--local` | Run on the host instead of in the container |
+| `--local` | Run natively in the current environment; omit it for host-invoked container execution |
 
-A note on `xvfb`: it satisfies the CLI's default wrapper but does **not** make Holoviz
-render headlessly — that needs Vulkan support. Application smoke runs keep visualization
-disabled.
+A note on `xvfb`: it satisfies the CLI's default wrapper, but Holoviz also
+needs a working Vulkan/display stack. The ordinary FMCW smoke presets keep
+visualization disabled; the separate visualization-enabled SISO check has
+completed under Xvfb in the pinned environment.
+
+---
+
+## Formatting and lint
+
+C++ and CUDA formatting is defined by `.clang-format` and pinned to clang-format 18.1.8
+through pre-commit. The policy uses a 100-column limit. Run the authoritative formatter and
+then the complete CI-equivalent lint suite with:
+
+```bash
+pre-commit run clang-format --all-files
+pre-commit run --all-files
+```
+
+The formatting hook rewrites tracked `.cpp`, `.hpp`, `.cu`, and `.cuh` files. Commit any
+resulting changes before pushing; CI runs the complete command and fails when formatting would
+change a file. Use the pinned hook instead of a system-installed formatter because releases can
+produce different layouts.
 
 ---
 
 ## `pyproject.toml`
 
-`pyproject.toml` configures [scikit-build-core](https://scikit-build-core.readthedocs.io/) for
-wheel packaging. Key fields to update before publishing:
+`pyproject.toml` configures CLI tooling and CTest as well as
+[scikit-build-core](https://scikit-build-core.readthedocs.io/) wheel packaging.
+Key fields to update before publishing:
 
 | Field | Purpose |
 | --- | --- |
@@ -159,7 +248,9 @@ wheel packaging. Key fields to update before publishing:
 | `[project].authors` | Your name / organisation |
 | `[tool.scikit-build].cmake.args` | Extra CMake flags passed during `pip install` |
 
-Build a wheel:
+The current HSDK 5 image cannot build the Python extensions, so a
+Python-enabled wheel is not currently available. When the SDK exports the
+required binding target and the Python build is enabled, build one with:
 
 ```bash
 pip install build

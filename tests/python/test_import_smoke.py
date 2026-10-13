@@ -25,7 +25,11 @@ def test_import_all_operators_and_descriptors():
         "PhaseShiftBeamformerOp",
         "MVDREstimatorOp",
         "MIMODeinterleaveOp",
-        "MIMOCoherentCompensationOp",
+        "TDMDenseCompensationOp",
+        "DDMDenseDemultiplexOp",
+        "DDMPowerFoldOp",
+        "DDMSparseDemultiplexOp",
+        "TDMSparseCompensationOp",
         "VirtualArrayAssemblyOp",
         "CfarVariant",
         "AssemblyFeature",
@@ -37,26 +41,12 @@ def test_import_all_operators_and_descriptors():
         "DDMCodeDescriptor",
         "NullSinkOp",
         "DetectionReportOp",
-        "ClusterReportOp",
-        "RdMapToImageOp",
-        "ClusterOverlayOp",
-        "RollingPlotOp",
-        "BoresightViewOp",
-        "RdChannelSliceOp",
-        "gui_available",
-        "make_turbo_lut",
-        "cluster_palette",
+        "DetectionReportMode",
     ):
         assert hasattr(r, name), name
         if name.endswith("Op") and name not in (
             "NullSinkOp",
             "DetectionReportOp",
-            "ClusterReportOp",
-            "RdMapToImageOp",
-            "ClusterOverlayOp",
-            "RollingPlotOp",
-            "BoresightViewOp",
-            "RdChannelSliceOp",
         ):
             assert getattr(r, name) is getattr(r, f"{name}F32")
             assert getattr(r, f"{name}F64") is not getattr(r, f"{name}F32")

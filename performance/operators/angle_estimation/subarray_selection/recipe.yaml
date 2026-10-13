@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+operator: subarray_selection
+axes: [items, channels, snapshots]
+profiles:
+  small: {shape: [64, 4, 2]}
+  medium: {shape: [256, 8, 4]}
+  large: {shape: [1024, 16, 8]}
+live_ports: [array_geometry, subarray]
+recipe:
+  operator_type: radar.SubarraySelectionOp.float
+  inputs:
+    - {port: snapshot, shape: [items, channels, snapshots], dtype: complex64, memory: device, generator: iq_cube}
+  constructor: {extents: {max_items: items, max_subarray_channels: channels, max_snapshots: snapshots}}
+  params:
+    array_geometry: {factory: holey_ula, wavelength: 1.0}
+    min_subarray_size: 2
+  outputs: {timed: snapshot_out, drain: [array_geometry], drain_codecs: {array_geometry: array_geometry}, unwired: [is_valid_out]}
+  live:
+    array_geometry: {physical_port: array_geometry_in, codec: holey_ula_patch}
+    subarray: {physical_port: subarray, codec: contiguous_subarray}
+cases:
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
+  - {id: minimum-medium, profile: medium, scopes: [limited], parameters: {min_subarray_size: 4}}
+  - {id: "array_geometry-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: array_geometry, value: {wavelength: 0.9}}}
+  - {id: "subarray-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: subarray, value: contiguous}}
+  - {id: min-geometry-medium, profile: medium, scopes: [thorough], parameters: {min_subarray_size: 4}, override: {port: array_geometry, value: {wavelength: 0.9}}}

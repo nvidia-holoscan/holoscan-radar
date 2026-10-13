@@ -11,6 +11,7 @@
 add_library(radar_common STATIC
     radar_common/tensor/tensor_utils.cpp
     radar_common/dsp/window.cpp
+    radar_common/dsp/ddm_code_generators.cpp
     radar_common/dsp/angle_convention.cpp
     radar_common/dsp/steering_weights.cpp
     radar_common/dsp/spatial_smoothing.cpp
@@ -18,6 +19,7 @@ add_library(radar_common STATIC
     radar_common/dsp/planar_aperture.cpp
     radar_common/dsp/subarray_selection.cpp
     radar_common/dsp/source_count.cpp
+    radar_common/dsp/virtual_array.cpp
     radar_common/descriptors/tx_schedule.cpp
     radar_common/descriptors/ddm_code_descriptor.cpp
 )
@@ -38,7 +40,7 @@ target_link_libraries(radar_common
         holoscan::core
 )
 
-target_compile_features(radar_common PUBLIC cxx_std_17)
+target_compile_features(radar_common PUBLIC cxx_std_20)
 set_property(TARGET radar_common PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS radar_common
@@ -54,6 +56,43 @@ install(DIRECTORY radar_common
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar
     FILES_MATCHING PATTERN "*.hpp"
 )
+
+# CUDA TDM/DDM coherent-compensation stages shared by the dense MIMO operator,
+# sparse TDM operator, tests, and application planning helpers. The host-only
+# radar_common target remains CUDA-free; this target owns the kernels and
+# per-instance cuFFT scratch.
+add_library(radar_common_mimo_compensation STATIC
+    radar_common/dsp/mimo_coherent_compensation_stage.cu)
+add_library(holoscan::radar_common_mimo_compensation ALIAS
+    radar_common_mimo_compensation)
+
+target_include_directories(radar_common_mimo_compensation
+    PUBLIC
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators/common>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar>
+)
+
+target_link_libraries(radar_common_mimo_compensation
+    PUBLIC
+        holoscan::radar_common
+    PRIVATE
+        CUDA::cufft
+)
+
+set_property(TARGET radar_common_mimo_compensation
+    PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+install(TARGETS radar_common_mimo_compensation
+    EXPORT holoscan_radar_common_mimo_compensation_targets
+)
+
+install(EXPORT holoscan_radar_common_mimo_compensation_targets
+    NAMESPACE holoscan::
+    DESTINATION lib/cmake/holoscan_radar
+)
+
+# Generated wire schemas and descriptor bridges depend on radar_common.
+add_subdirectory(radar_schemas)
 
 # CUDA group-by-label reduction primitives (public library surface for the
 # DetectionReductionOp contract and any future consumer). Host-only
@@ -146,7 +185,9 @@ install(EXPORT holoscan_radar_common_simulator_targets
 )
 
 # Python bindings for shared descriptors / enums (holoscan.radar.radar_common).
-add_subdirectory(python)
+if(HOLOSCAN_RADAR_BUILD_PYTHON)
+    add_subdirectory(python)
+endif()
 
 # CUDA spatial-smoothing gather (shared by the covariance angle estimators).
 # Materializes sub-array "looks" from the host-planned index tables; the host

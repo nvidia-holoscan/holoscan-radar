@@ -32,12 +32,11 @@ namespace holoscan::radar {
 // `ss_snapshot` is (num_items, subarray_size, M). All work is enqueued on
 // `stream`; no synchronization.
 template <typename T>
-void run_spatial_smoothing_gather(
-    const cuda::std::complex<T>* snapshot, const unsigned char* mask,
-    int64_t num_items, int64_t num_channels, int64_t num_snapshots,
-    const int32_t* subarray_index, const int32_t* fb_flip,
-    int64_t num_subarrays, int64_t subarray_size, bool forward_backward,
-    cuda::std::complex<T>* ss_snapshot, unsigned char* ss_mask,
-    cudaStream_t stream);
+void run_spatial_smoothing_gather(const cuda::std::complex<T>* snapshot, const unsigned char* mask,
+                                  int64_t num_items, int64_t num_channels, int64_t num_snapshots,
+                                  const int32_t* subarray_index, const int32_t* fb_flip,
+                                  int64_t num_subarrays, int64_t subarray_size,
+                                  bool forward_backward, cuda::std::complex<T>* ss_snapshot,
+                                  unsigned char* ss_mask, cudaStream_t stream);
 
 }  // namespace holoscan::radar

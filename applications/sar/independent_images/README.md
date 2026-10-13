@@ -1,0 +1,90 @@
+# Independent SAR images
+
+The collection stager supplies a new lattice, range spacing, and first fast-time sample frequency for each CPHD. Each collection boundary emits and resets its image.
+
+## Graph
+
+```mermaid
+flowchart LR
+    R[CPHDReaderOp: collection list] --> RC[SARRangeCompressionOp]
+    R -- positions / reference --> E[Optional ECEF to scene ENU]
+    R -- boundary --> C[CollectionBoundaryStagerOp]
+    R -- boundary --> A[ApertureManagerOp]
+    RC -- profiles --> C
+    C -- profiles / geometry --> A
+    C -- spacing / frequency --> B[BackprojectionOp]
+    E --> A
+    A -- profiles / positions / control / geometry --> B
+    B --> Report[Image report]
+    B -. dump .-> Dump[TensorDumpOp]
+    B -. visualize .-> Raster[CUDA SAR raster]
+    Raster --> Viz[HolovizOp]
+```
+
+The solid paths are required data and control flows. Dashed dump and
+visualization branches are enabled by application configuration. The reader's
+typed `stream_boundary` is joined to the aperture manager on the same tick.
+The stager places the *next* collection's geometry, range spacing, and
+frequency on the closing batch. Backprojection forms the closing image using
+the current values, then installs the next values after `EmitAndReset`.
+
+## Build and offline fixture
+
+Build in the pinned HSDK 5 GPU image with Python application bindings disabled:
+
+```bash
+cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=ON
+cmake --build build --target independent_images generate_cphd_fixture
+ctest --test-dir build -R '^Sar_independent_images_(smoke|viz)$' --output-on-failure
+```
+
+CTest generates two CPHD fixtures in C++ with distinct IARP geometries, then
+checks 2 images of 5 × 5 pixels and runs a headless Holoviz path. These runs check graph wiring,
+count, dimensions, and successful execution; they do not establish focus on
+real collections.
+
+## Real collection preset
+
+The preset rotates six distinct Umbra SNAPSHOT CPHDs under `/tmp/sar/mode5/`. Run `python3 tools/sar_data/pull_cphd.py --app independent_images --list` to inspect their paths, then use the commands below to download about 10.5 GiB to the host `data/sar/mode5/` directory and mount it at `/tmp/sar`. It derives an IARP-centred ENU grid per file and chooses a common padded FFT length. The ordered `cphd.path` list and `pixel_scale` list correspond by index. A single-CPHD CLI override is rejected because the topology requires multiple collections.
+
+From the repository root, with the Holoscan CLI installed and the pinned
+`holoscan-radar-dev:hsdk5` image available, run:
+
+```bash
+python3 tools/sar_data/pull_cphd.py --app independent_images \
+  --dest data/sar/mode5
+holoscan run independent_images \
+  --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --configure-args=-DBUILD_ALL=OFF \
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
+  --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
+```
+
+The CLI mounts the host `data/sar/` directory read-only at `/tmp/sar` in the
+container, matching the shipped YAML. A host `/tmp/sar` directory or symlink
+is not visible in the container unless mounted. The shipped [`independent_images.yaml`](config/independent_images.yaml) is copied beside the
+executable by CMake and is the default real-data preset.
+
+Pass an explicit YAML path as the first argument. For this topology,
+the application requires the YAML collection list and rejects a single-CPHD override.
+
+## Output and display
+
+One complex image is reported per collection boundary, with geometry and frequency restaged for the next file. The fixture uses two local collections and reports two 5 × 5 images. Optional dump writes each image; Holoviz shows the current raster. Collection names are parsed but are not currently shown in the report or display; see the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md).
+
+`visualize: true` requests Holoviz when its HSDK 5 component and a usable
+X11 display are available. `headless: true` uses an offscreen CUDA sink.
+`visualize_size` bounds the display raster; it does not change formation
+resolution. The raster accepts the largest image extent derived from the full
+collection list, so later images may be larger than the first. The headless
+smoke includes a 1 × 1 image followed by an 8 × 8 image. `visualize_hold_s`
+only keeps a finite positive duration after
+an emit; indefinite hold and interactive X11 validation remain open.
+`dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
+and `output.max_files` to control its files.
+
+See [SAR data preparation](../../../tools/sar_data/README.md),
+[SAR operator references](../../../operators/sar/README.md),
+[CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
+[current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).

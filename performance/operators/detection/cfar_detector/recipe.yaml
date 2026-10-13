@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+operator: cfar_detector
+axes: [doppler, range]
+profiles:
+  small: {shape: [64, 256]}
+  medium: {shape: [128, 512]}
+  large: {shape: [256, 512]}
+live_ports: [os_rank, guard_cells, training_cells, pfa, alpha_lut, threshold_scale, nci_axes, max_detections]
+recipe:
+  operator_type: radar.CFARDetectorOp.float
+  inputs:
+    - {port: rd_maps, shape: [channels, doppler, range], omit_if_one: [channels], dtype: float32, memory: device, generator: power_map}
+  fixtures: {channels: 1}
+  constructor: {bounds_policy: cfar_bounds}
+  params: {cfar_variant: CA, guard_cells: [1, 1], training_cells: [2, 2], pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}
+  outputs: {timed: detection_idx, drain: [detection_mask, detection_score, noise_estimate, cfar_power], unwired: []}
+  live:
+    os_rank: {codec: rank_decrement, physical_port: os_rank}
+    guard_cells: {codec: cfar_cell_window, physical_port: guard_cells}
+    training_cells: {codec: cfar_cell_window, physical_port: training_cells}
+    pfa: {codec: double, physical_port: pfa}
+    alpha_lut: {codec: scaled_alpha_lut, physical_port: alpha_lut}
+    threshold_scale: {codec: double, physical_port: threshold_scale}
+    nci_axes: {codec: host_int64_vector, physical_port: nci_axes}
+    max_detections: {codec: int64, physical_port: max_detections}
+cases:
+  - {id: 'baseline-{profile}', profiles: [small, medium, large], scopes: [minimal], parameters: {}}
+  - {id: backend-go-medium, profile: medium, scopes: [limited], parameters: {cfar_variant: GO}}
+  - {id: backend-so-medium, profile: medium, scopes: [limited], parameters: {cfar_variant: SO}}
+  - {id: backend-os-medium, profile: medium, scopes: [limited], parameters: {cfar_variant: OS, os_rank: {factory: three_quarter_training_rank}}}
+  - {id: footprint-mid-medium, profile: medium, scopes: [limited], parameters: {guard_cells: [2, 2], training_cells: [4, 4]}}
+  - {id: peak-medium, profile: medium, scopes: [moderate], parameters: {peak_mode: range_doppler}}
+  - {id: 'os_rank-{profile}', profiles: [small, medium, large], scopes: [overrides], parameters: {cfar_variant: OS, os_rank: {factory: three_quarter_training_rank}}, override: {port: os_rank, value: {decrement: 1}}}
+  - {id: 'guard_cells-{profile}', profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: guard_cells, value: [0, 0]}}
+  - {id: 'training_cells-{profile}', profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: training_cells, value: [3, 3]}}
+  - {id: 'pfa-{profile}', profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: pfa, value: 0.001}}
+  - {id: 'alpha_lut-{profile}', profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: alpha_lut, value: {factory: scaled_alpha_lut, factor: 1.1}}}
+  - {id: 'threshold_scale-{profile}', profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: threshold_scale, value: 1.1}}
+  - {id: 'nci_axes-{profile}', profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: nci_axes, value: [0]}, fixture: {channels: 4}}
+  - {id: 'max_detections-{profile}', profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: max_detections, value: 100}}
+  - {id: footprint-pfa-medium, profile: medium, scopes: [thorough], parameters: {guard_cells: [2, 2], training_cells: [4, 4]}, override: {port: pfa, value: 0.001}}

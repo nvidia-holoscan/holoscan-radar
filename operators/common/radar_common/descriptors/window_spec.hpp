@@ -40,17 +40,12 @@ struct WindowSpec {
   bool coherent_gain_normalization{true};
 
   friend bool operator==(const WindowSpec& a, const WindowSpec& b) {
-    return a.type == b.type &&
-           a.sidelobe_attenuation_db == b.sidelobe_attenuation_db &&
-           a.kaiser_beta == b.kaiser_beta &&
-           a.taylor_nbar == b.taylor_nbar &&
-           a.tukey_alpha == b.tukey_alpha &&
-           a.coefficients == b.coefficients &&
+    return a.type == b.type && a.sidelobe_attenuation_db == b.sidelobe_attenuation_db &&
+           a.kaiser_beta == b.kaiser_beta && a.taylor_nbar == b.taylor_nbar &&
+           a.tukey_alpha == b.tukey_alpha && a.coefficients == b.coefficients &&
            a.coherent_gain_normalization == b.coherent_gain_normalization;
   }
-  friend bool operator!=(const WindowSpec& a, const WindowSpec& b) {
-    return !(a == b);
-  }
+  friend bool operator!=(const WindowSpec& a, const WindowSpec& b) { return !(a == b); }
 };
 
 }  // namespace holoscan::radar

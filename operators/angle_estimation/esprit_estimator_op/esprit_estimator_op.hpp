@@ -3,87 +3,148 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <type_traits>
-#include <unordered_set>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
+#include <holoscan/core/domain/dlpack.hpp>
+#include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/expected.hpp>
+#include <holoscan/core/operator.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/parameter.hpp>
+#include <holoscan/core/parameter_schema.hpp>
+#include <holoscan/core/port.hpp>
+#include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "angle_estimation/angle_boundary_device.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
 #include "radar_common/dsp/shift_invariant_subarray.hpp"
 #include "radar_common/dsp/spatial_smoothing.hpp"
+#include "radar_common/sdk/live_override_payloads.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 
 namespace holoscan::radar {
 
-// Gridless least-squares ESPRIT sparse-path DOA estimator. The covariance,
-// Hermitian eigendecomposition, and fixed/EFT source-count front-end match
-// MUSICEstimatorOp. The signal subspace is restricted to two corresponding
-// displaced subarrays; eigenvalue rotation gives continuous 1-D DOAs.
 template <typename T>
-class ESPRITEstimatorOp : public holoscan::Operator {
+struct ESPRITRuntimeState;
+
+// Gridless least-squares ESPRIT sparse-path DOA estimator. Contract reference:
+// docs/planning/OPERATOR_API.md → "ESPRITEstimatorOp".
+//
+// Covariance / Hermitian eig / fixed-or-EFT source count match MUSICEstimatorOp.
+// Signal subspace is restricted to two corresponding displaced subarrays;
+// eigenvalue rotation gives continuous 1-D DOAs (ULA) or dual-invariance 2-D
+// DOAs (filled URA, subarray_spec: auto).
+//
+// In:  snapshot       — complex64/complex128,
+//                       (num_items, num_channels, num_snapshots).
+// In:  is_valid       — optional bool/uint8, (num_items, num_snapshots).
+//                       Exact + SafeDefault admits an unwired port; publish a
+//                       mask before its snapshot.
+// Out: aoa_estimates  — float32/float64, (num_items, 2). Always emitted.
+// Out: doa_multi      — float32/float64, (num_items, max_sources, 2).
+//                       Always emitted (optional in OPERATOR_API.md).
+// Out: source_count   — int32, (num_items,). Always emitted.
+// Out: eigenvalues    — float32/float64,
+//                       (num_items, post-smoothing num_channels). Always
+//                       emitted. No angle_spectrum (gridless).
+//
+// Exact Input for all [live] parameters. subarray_spec, angle_convention, and forward_backward
+// stay Params-only (STATIC / not [live]).
+
+struct ESPRITParams {
+  ArrayGeometry array_geometry{};
+  AngleConvention angle_convention{};
+  // Negative → auto (per-item EFT); non-negative → fixed order. Default -1.
+  int64_t num_sources{-1};
+  double source_count_pfa{1e-2};
+  int64_t max_sources{4};
+  // Empty → off; [P] ULA; [P_az, P_el] URA.
+  std::vector<int64_t> spatial_smoothing{};
+  bool forward_backward{true};
+  // Static structural; empty vectors = auto.
+  ShiftInvariantSubarrayPair subarray_spec{};
+};
+
+HOLOSCAN_PARAM_SCHEMA(
+    ESPRITParams, holoscan::param_schema("com.nvidia.holoscan.radar.ESPRITParams", 1),
+    holoscan::field<&ESPRITParams::array_geometry>("array_geometry")
+        .description("Shift-invariant array positions and wavelength; num_elements "
+                     "must match snapshot channels"),
+    holoscan::field<&ESPRITParams::angle_convention>("angle_convention")
+        .description("Static AER labeling for the gridless DOA output "
+                     "(default radar_boresight; no live port)"),
+    holoscan::field<&ESPRITParams::num_sources>("num_sources")
+        .description("Signal-subspace dimension; negative selects per-item EFT auto"),
+    holoscan::field<&ESPRITParams::source_count_pfa>("source_count_pfa")
+        .description("EFT over-estimation probability for num_sources: auto"),
+    holoscan::field<&ESPRITParams::max_sources>("max_sources")
+        .description("doa_multi / source_count capacity and auto source-count cap"),
+    holoscan::field<&ESPRITParams::spatial_smoothing>("spatial_smoothing")
+        .description("Per-aperture-axis sub-array counts on a filled ULA/URA "
+                     "(empty = off)"),
+    holoscan::field<&ESPRITParams::forward_backward>("forward_backward")
+        .description("Include conjugate-reversed looks when spatial_smoothing is set"),
+    holoscan::field<&ESPRITParams::subarray_spec>("subarray_spec")
+        .description("Shift-invariant subarray pair; empty derives ULA/URA auto"));
+
+static_assert(holoscan::param_schema_availability<ESPRITParams>() ==
+                  holoscan::ParamSchemaAvailability::kDeclared,
+              "HOLOSCAN_PARAM_SCHEMA must be in ESPRITParams's namespace");
+
+template <typename T>
+class ESPRITEstimatorOp : public holoscan::Operator<ESPRITParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "ESPRITEstimatorOp supports float and double precision");
 
  public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(ESPRITEstimatorOp)
+  // Required: sizes the fat Tensor output pools at setup().
+  explicit ESPRITEstimatorOp(const MaxTensorExtents& extents);
 
-  ESPRITEstimatorOp() = default;
-
-  void initialize() override;
   void setup(OperatorSpec& spec) override;
-  void compute(InputContext& op_input, OutputContext& op_output,
-               ExecutionContext& context) override;
-  // Drain the MatX eig cache + global MemTracker once at graph stop, while CUDA
-  // is still valid (per-tick only clears the plan cache; see music_stage.hpp).
+  [[nodiscard]] Contract contract() const override;
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
+  // Drain MatX eig plan caches + global MemTracker once at graph stop, while
+  // CUDA is still valid. HSDK 5 still exposes OperatorBase::stop().
   void stop() override;
 
+  Input<Tensor> snapshot{"snapshot"};
+  // Optional same-tick mask; Exact + SafeDefault admits an unwired port.
+  Input<Tensor> is_valid{"is_valid"};
+  Output<Tensor> aoa_estimates{"aoa_estimates"};
+  Output<Tensor> doa_multi{"doa_multi"};
+  Output<Tensor> source_count{"source_count"};
+  Output<Tensor> eigenvalues{"eigenvalues"};
+  // [live] Exact overrides (OPERATOR_API.md).
+  Input<WireArrayGeometry> array_geometry{"array_geometry"};
+  Input<SpatialSmoothingOverride> spatial_smoothing{"spatial_smoothing"};
+  Input<int64_t> num_sources{"num_sources"};
+  Input<double> source_count_pfa{"source_count_pfa"};
+  Input<int64_t> max_sources{"max_sources"};
+
  private:
-  Parameter<ArrayGeometry> array_geometry_;
-  Parameter<AngleConvention> angle_convention_;
-  Parameter<int64_t> num_sources_;
-  Parameter<double> source_count_pfa_;
-  Parameter<int64_t> max_sources_;
-  Parameter<std::vector<int64_t>> spatial_smoothing_;
-  Parameter<bool> forward_backward_;
-  Parameter<ShiftInvariantSubarrayPair> subarray_spec_;
+  Tensor retained_snapshot_;
+  Tensor retained_is_valid_;
 
-  ArrayGeometry effective_geometry_{};
-  int64_t effective_num_sources_{-1};
-  double effective_pfa_{1e-2};
-  int64_t effective_max_sources_{4};
-  std::vector<int64_t> effective_smoothing_{};
-  bool effective_forward_backward_{true};
-  bool seeded_{false};
-  bool warned_rank_deficient_{false};
-  detail::DeviceAngleConvention<T> device_angle_convention_{};
+  std::shared_ptr<ESPRITRuntimeState<T>> state_;
 
-  SpatialSmoothingPlan smoothing_plan_{};
-  std::string smoothing_key_{};
-  std::string subarray_key_{};
-  ShiftInvariantSubarrayPlan subarray_plan_{};
-  std::unordered_set<std::string> seen_geometry_keys_{};
-  std::shared_ptr<holoscan::Tensor> d_subarray_index_{};
-  std::shared_ptr<holoscan::Tensor> d_fb_flip_{};
-  std::shared_ptr<holoscan::Tensor> d_reference_indices_{};
-  std::shared_ptr<holoscan::Tensor> d_shifted_indices_{};
-
-  // URA (2-D) dual-invariance path: the two orthogonal shift pairings uploaded
-  // to the device, keyed by geometry so they rebuild only when it changes.
-  std::string ura_key_{};
-  int64_t ura_ny_{0};
-  int64_t ura_nz_{0};
-  int64_t ura_y_pairs_{0};
-  int64_t ura_z_pairs_{0};
-  std::shared_ptr<holoscan::Tensor> d_y_reference_{};
-  std::shared_ptr<holoscan::Tensor> d_y_shifted_{};
-  std::shared_ptr<holoscan::Tensor> d_z_reference_{};
-  std::shared_ptr<holoscan::Tensor> d_z_shifted_{};
+  MaxTensorExtents extents_;
+  std::size_t aoa_max_byte_span_{0U};
+  std::size_t doa_max_byte_span_{0U};
+  std::size_t count_max_byte_span_{0U};
+  std::size_t eig_max_byte_span_{0U};
 };
+
+extern template class ESPRITEstimatorOp<float>;
+extern template class ESPRITEstimatorOp<double>;
 
 }  // namespace holoscan::radar

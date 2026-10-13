@@ -30,8 +30,7 @@ namespace holoscan::radar::sim {
 // (seed, snr_db) → a bit-identical realization; the same seed each call means a
 // static realization across frames unless the caller varies the seed.
 inline void add_thermal_noise(std::vector<std::complex<double>>& cube,
-                              const std::optional<double>& snr_db,
-                              uint64_t seed) {
+                              const std::optional<double>& snr_db, uint64_t seed) {
   if (!snr_db.has_value()) {
     return;
   }

@@ -8,209 +8,883 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/expected_macros.hpp>
+#include <holoscan/core/payload_options.hpp>
+#include <holoscan/logger/logger.hpp>
+
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_compact.cuh"
 #include "detection/cfar_detector_op/cfar_stage.hpp"
 #include "detection/cfar_detector_op/nci_plan.hpp"
-#include "radar_common/sdk/arg_setters.hpp"
+#include "radar_common/sdk/config_tensor.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
+#include "radar_common/tensor/extents_layout.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
-// YAML::convert for the operator-local CfarVariant enum, mirroring the shared
-// converters in radar_common/sdk/yaml_converters.hpp (reusing
-// detail::parse_enum) so ArgumentSetter::ensure_type<CfarVariant>() supports
-// from_config(). Kept in this TU because CfarVariant is cfar-local; common
-// must not depend on it.
-namespace YAML {
-template <>
-struct convert<holoscan::radar::CfarVariant> {
-  static Node encode(const holoscan::radar::CfarVariant& value) {
-    return Node(std::string(holoscan::radar::to_string(value)));
-  }
-  static bool decode(const Node& node, holoscan::radar::CfarVariant& value) {
-    if (!node.IsScalar()) {
-      return false;
-    }
-    static constexpr holoscan::radar::CfarVariant kAll[] = {
-        holoscan::radar::CfarVariant::kCA, holoscan::radar::CfarVariant::kGO,
-        holoscan::radar::CfarVariant::kSO, holoscan::radar::CfarVariant::kOS};
-    value = holoscan::radar::detail::parse_enum(node.as<std::string>(),
-                                                "CfarVariant", kAll);
-    return true;
-  }
-};
-
-template <>
-struct convert<holoscan::radar::CfarPeakNeighborhood> {
-  static Node encode(const holoscan::radar::CfarPeakNeighborhood& value) {
-    return Node(std::string(holoscan::radar::to_string(value)));
-  }
-  static bool decode(const Node& node,
-                     holoscan::radar::CfarPeakNeighborhood& value) {
-    if (!node.IsScalar()) {
-      return false;
-    }
-    static constexpr holoscan::radar::CfarPeakNeighborhood kAll[] = {
-        holoscan::radar::CfarPeakNeighborhood::kCross4,
-        holoscan::radar::CfarPeakNeighborhood::kSquare8};
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "CfarPeakNeighborhood", kAll);
-    return true;
-  }
-};
-}  // namespace YAML
-
 namespace holoscan::radar {
+
+namespace detail {
+
+struct CfarDetectorState {
+  struct DenseWorkspace {
+    std::shared_ptr<holoscan::Tensor> score;
+    std::shared_ptr<holoscan::Tensor> noise;
+    std::shared_ptr<holoscan::Tensor> mask;
+    std::shared_ptr<holoscan::Tensor> peak_mask;
+    std::shared_ptr<holoscan::Tensor> power;
+    std::shared_ptr<holoscan::Tensor> integrated_power;
+    int64_t batch_in{0};
+    int64_t out_batch{0};
+    int64_t num_doppler{0};
+    int64_t num_range{0};
+  };
+
+  double last_seen_pfa{-1.0};
+  bool pfa_seen{false};
+  std::shared_ptr<holoscan::Tensor> nci_table_dev{};
+  std::vector<int64_t> nci_table_host_cache{};
+  CfarAlphaLutKey alpha_lut_key{};
+  CfarAlphaLutKey pending_lut_key{};
+  bool pending_lut_active{false};
+  bool stale_lut_warned{false};
+  bool pfa_lut_slow_warned{false};
+  bool runtime_build_warned{false};
+  bool window_exceeds_map_warned{false};
+  bool using_external_alpha_lut{false};
+  bool pfa_ignored_while_alpha_lut_warned{false};
+  bool alpha_lut_cleared_pfa_active_warned{false};
+  bool external_alpha_lut_validated{false};
+  CfarVariant validated_external_variant{CfarVariant::kCA};
+  int64_t validated_external_fold{0};
+  int64_t validated_external_num_doppler{0};
+  int64_t validated_external_num_range{0};
+  int validated_external_guard_d{0};
+  int validated_external_guard_r{0};
+  int validated_external_train_d{0};
+  int validated_external_train_r{0};
+  std::vector<double> alpha_lut_host_cache{};
+  std::shared_ptr<holoscan::Tensor> alpha_lut_dev{};
+  DetectionIdxCompactState detection_idx_compact{};
+  DenseWorkspace dense_workspace[2]{};
+  int dense_workspace_idx{0};
+};
+
+}  // namespace detail
 
 namespace {
 
 constexpr const char* kOpName = "CFARDetectorOp";
-// detection_mask is emitted as uint8 (0/1), not kDLBool: HSDK 4.3's DLPack
-// message path cannot map kDLBool to a NumPy typestr, so a bool port throws
-// when a Python consumer wraps it. The buffer holds 0/1 bytes (written as bool
-// internally); uint8 is byte-identical, NumPy-visible, and every mask consumer
-// treats any nonzero byte as set.
+// detection_mask is emitted as uint8 (0/1), not kDLBool: byte-identical to the
+// 0/1 bytes kernels write; NumPy-visible.
 constexpr DLDataType kMaskDtype{kDLUInt, 8, 1};
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
+constexpr DLDataType kFloat64Dtype{kDLFloat, 64, 1};
+constexpr const char* kMissingOsRankMessage =
+    "CFARDetectorOp: os_rank is required for OS variant; "  // NOLINT(whitespace/indent_namespace)
+    "set a 0-based rank into the ascending-sorted "         // NOLINT(whitespace/indent_namespace)
+    "training cells";                                       // NOLINT(whitespace/indent_namespace)
 
-// GO/SO always calibrate alpha from Pfa via Monte Carlo; OS uses MC when K>1
-// (closed-form when K=1). Warn once so callers know to supply alpha_lut for
-// low-latency live updates.
+struct CfarStagePlan {
+  detail::CfarStageConfig stage;
+  detail::NciPlan nci;
+  bool input_is_complex;
+  int64_t effective_fold;
+  int64_t num_doppler;
+  int64_t num_range;
+  int guard_d;
+  int guard_r;
+  int train_d;
+  int train_r;
+  int key_num_doppler;
+  int key_num_range;
+  std::vector<int64_t> output_shape;
+};
+
+expected<void, Error> fail_invalid(const std::string& message) {
+  return make_unexpected(Error{ErrorCode::kInvalidArgument, message});
+}
+
+expected<void, Error> fail_runtime(const std::string& message) {
+  return make_unexpected(Error{ErrorCode::kFailure, message});
+}
+
+expected<void*, Error> writable_ptr(holoscan::Tensor& tensor, const char* what) {
+  auto mut = tensor.mutable_data();
+  if (!mut) {
+    return make_unexpected(
+        Error{ErrorCode::kFailure,
+              std::string(kOpName) + ": " + what + " is not writable: " + mut.error().message});
+  }
+  return *mut;
+}
+
+struct PreparedDenseWorkspace {
+  detail::CfarDetectorState::DenseWorkspace* tensors;
+  void* score;
+  void* noise;
+  void* mask;
+  void* peak_mask;
+  void* power;
+  void* integrated_power;
+};
+
+template <typename T>
+expected<PreparedDenseWorkspace, Error> prepare_dense_workspace(detail::CfarDetectorState& state,
+                                                                const CfarStagePlan& plan) {
+  state.dense_workspace_idx ^= 1;
+  auto& ws = state.dense_workspace[state.dense_workspace_idx];
+  const bool cache_hit = ws.score && ws.batch_in == plan.nci.batch_in &&
+                         ws.out_batch == plan.nci.out_batch && ws.num_doppler == plan.num_doppler &&
+                         ws.num_range == plan.num_range;
+  if (!cache_hit) {
+    try {
+      ws.score = make_device_tensor(plan.output_shape, real_dtype<T>());
+      ws.noise = make_device_tensor(plan.output_shape, real_dtype<T>());
+      ws.mask = make_device_tensor(plan.output_shape, kMaskDtype);
+      ws.peak_mask = make_device_tensor(plan.output_shape, kMaskDtype);
+      ws.power = make_device_tensor(
+          plan.nci.fold > 1
+              ? std::vector<int64_t>{plan.nci.batch_in, plan.num_doppler, plan.num_range}
+              : plan.output_shape,
+          real_dtype<T>());
+      ws.integrated_power = make_device_tensor(plan.output_shape, real_dtype<T>());
+    } catch (const std::exception& e) {
+      return make_unexpected(Error{ErrorCode::kFailure, e.what()});
+    }
+    ws.batch_in = plan.nci.batch_in;
+    ws.out_batch = plan.nci.out_batch;
+    ws.num_doppler = plan.num_doppler;
+    ws.num_range = plan.num_range;
+  }
+
+  HOLOSCAN_TRY(auto score, writable_ptr(*ws.score, "score"));
+  HOLOSCAN_TRY(auto noise, writable_ptr(*ws.noise, "noise"));
+  HOLOSCAN_TRY(auto mask, writable_ptr(*ws.mask, "mask"));
+  HOLOSCAN_TRY(auto peak_mask, writable_ptr(*ws.peak_mask, "peak_mask"));
+  HOLOSCAN_TRY(auto power, writable_ptr(*ws.power, "power"));
+  HOLOSCAN_TRY(auto integrated_power, writable_ptr(*ws.integrated_power, "integrated_power"));
+  return PreparedDenseWorkspace{.tensors = &ws,
+                                .score = score,
+                                .noise = noise,
+                                .mask = mask,
+                                .peak_mask = peak_mask,
+                                .power = power,
+                                .integrated_power = integrated_power};
+}
+
+expected<TensorOutputLoan, Error> prepare_detection_idx(
+    Output<Tensor>& output, ExecutionContext& context, const CfarStagePlan& plan,
+    const bool* detection_mask, detail::DetectionIdxCompactState& compact_state,
+    cudaStream_t stream) {
+  const int64_t plane = plan.num_doppler * plan.num_range;
+  const int64_t out_elems = plan.nci.out_batch * plane;
+  const int64_t idx_cols = 2 + plan.nci.n_preserved;
+  int64_t total_detections = 0;
+  try {
+    total_detections =
+        detail::count_mask_detections(detection_mask, out_elems, &compact_state, stream);
+  } catch (const std::exception& e) {
+    return make_unexpected(Error{ErrorCode::kFailure, e.what()});
+  }
+
+  const bool capped = plan.stage.max_detections > 0;
+  const int64_t num_detections =
+      capped ? std::min(total_detections, plan.stage.max_detections) : total_detections;
+  if (capped && total_detections > plan.stage.max_detections) {
+    HOLOSCAN_LOG_WARN(
+        "CFARDetectorOp: detections exceeded max_detections ({}); surplus "
+        "dropped",
+        plan.stage.max_detections);
+  }
+
+  const std::vector<int64_t> idx_shape = {num_detections, idx_cols};
+  auto loan = output.allocate_tensor(TensorLoanRequest{.shape = idx_shape, .dtype = kInt64Dtype});
+  if (!loan) {
+    return make_unexpected(std::move(loan).error());
+  }
+  auto writer = loan->write(context.cuda_stream());
+  if (!writer) {
+    return make_unexpected(std::move(writer).error());
+  }
+  int64_t* idx_ptr = static_cast<int64_t*>(writer->data());
+  try {
+    detail::compact_detection_idx(detection_mask, out_elems, plan.num_doppler, plan.num_range,
+                                  plan.nci.preserved_dims, num_detections, idx_ptr, &compact_state,
+                                  stream);
+  } catch (const std::exception& e) {
+    return make_unexpected(Error{ErrorCode::kFailure, e.what()});
+  }
+  auto committed = std::move(*writer).commit();
+  if (!committed) {
+    return make_unexpected(std::move(committed).error());
+  }
+  return std::move(*loan);
+}
+
 bool uses_slow_pfa_lut_calibration(CfarVariant variant, int64_t fold) {
   return variant == CfarVariant::kGO || variant == CfarVariant::kSO ||
          (variant == CfarVariant::kOS && fold > 1);
 }
 
-int64_t max_alpha_lut_index(CfarVariant variant, int num_doppler,
-                            int num_range, int guard_d, int guard_r,
-                            int train_d, int train_r) {
+int64_t max_alpha_lut_index(CfarVariant variant, int num_doppler, int num_range, int guard_d,
+                            int guard_r, int train_d, int train_r) {
   if (variant == CfarVariant::kGO || variant == CfarVariant::kSO) {
-    return detail::max_go_lut_index(num_doppler, num_range, guard_d, guard_r,
-                                    train_d, train_r);
+    return detail::max_go_lut_index(num_doppler, num_range, guard_d, guard_r, train_d, train_r);
   }
-  return detail::max_training_cell_count(num_doppler, num_range, guard_d,
-                                         guard_r, train_d, train_r);
+  return detail::max_training_cell_count(num_doppler, num_range, guard_d, guard_r, train_d,
+                                         train_r);
 }
 
-void validate_external_alpha_lut(CfarVariant variant, int64_t fold,
-                                 const std::vector<double>& lut,
-                                 int64_t max_lut_index) {
+expected<void, Error> validate_external_alpha_lut(CfarVariant variant, int64_t fold,
+                                                  const std::vector<double>& lut,
+                                                  int64_t max_lut_index, int num_doppler,
+                                                  int num_range, int guard_d, int guard_r,
+                                                  int train_d, int train_r) {
   if (max_lut_index <= 0) {
-    return;
+    return {};
   }
   if (lut.size() <= static_cast<size_t>(max_lut_index)) {
-    throw std::invalid_argument(
+    return fail_invalid(
         "CFARDetectorOp: alpha_lut length must exceed the maximum LUT index "
         "for the configured variant, footprint, and map size");
   }
-  // O(max_index) only — do not walk the map for reachability. Sparse offline
-  // tables (GO/SO always; OS when K>1) may leave unreachable slots at zero;
-  // the kernel treats alpha==0 as no detect. CA and OS K=1 are dense and
-  // require every slot in 1..max to be positive.
-  //
-  // Intentional footgun: for sparse variants we do not verify that reachable
-  // indices are positive. A caller-supplied table of all zeros (or zeros on
-  // used indices) validates and yields no detections; supply a correctly
-  // filled LUT (e.g. from build_*_alpha_lut).
   for (int64_t idx = 1; idx <= max_lut_index; ++idx) {
     const double alpha = lut[static_cast<size_t>(idx)];
     if (!std::isfinite(alpha) || alpha < 0.0) {
-      throw std::invalid_argument(
+      return fail_invalid(
           "CFARDetectorOp: alpha_lut entries for used indices must be finite "
           "and non-negative");
     }
   }
-  const bool sparse_ok = variant == CfarVariant::kGO ||
-                         variant == CfarVariant::kSO ||
-                         (variant == CfarVariant::kOS && fold > 1);
-  if (sparse_ok) {
-    return;
-  }
-  for (int64_t idx = 1; idx <= max_lut_index; ++idx) {
-    if (lut[static_cast<size_t>(idx)] <= 0.0) {
-      throw std::invalid_argument(
-          "CFARDetectorOp: alpha_lut entries for used indices must be finite "
-          "and positive");
+  std::vector<int64_t> required_indices;
+  if (variant == CfarVariant::kGO || variant == CfarVariant::kSO) {
+    required_indices = detail::reachable_go_lut_indices(num_doppler, num_range, guard_d, guard_r,
+                                                        train_d, train_r);
+  } else if (variant == CfarVariant::kOS && fold > 1) {
+    required_indices = detail::reachable_training_cell_counts(num_doppler, num_range, guard_d,
+                                                              guard_r, train_d, train_r);
+  } else {
+    required_indices.reserve(static_cast<size_t>(max_lut_index));
+    for (int64_t idx = 1; idx <= max_lut_index; ++idx) {
+      required_indices.push_back(idx);
     }
+  }
+  for (const int64_t idx : required_indices) {
+    if (lut[static_cast<size_t>(idx)] <= 0.0) {
+      return fail_invalid(
+          "CFARDetectorOp: alpha_lut entries for reachable indices must be "
+          "finite and positive");
+    }
+  }
+  return {};
+}
+
+expected<void, Error> require_pair(const std::vector<int64_t>& v, const char* name) {
+  if (v.size() != 2) {
+    return fail_invalid(std::string("CFARDetectorOp: '") + name +
+                        "' must have exactly 2 entries (doppler, range), got " +
+                        std::to_string(v.size()));
+  }
+  if (v[0] < 0 || v[1] < 0) {
+    return fail_invalid(std::string("CFARDetectorOp: '") + name + "' entries must be >= 0");
+  }
+  return {};
+}
+
+expected<void, Error> require_window_bounds(const std::vector<int64_t>& value, const char* name,
+                                            int64_t max_doppler, int64_t max_range) {
+  HOLOSCAN_TRY(require_pair(value, name));
+  if (value[0] > max_doppler || value[1] > max_range) {
+    return fail_invalid(std::string("CFARDetectorOp: '") + name +
+                        "' exceeds MaxTensorExtents map bounds");
+  }
+  return {};
+}
+
+// resolve_live_override_via for a bounded host-Tensor vector payload: read and
+// validate a matched sample, otherwise fall back to the Params seed.
+template <typename T>
+expected<std::vector<T>, Error> resolve_config_tensor_override(Input<Tensor>& port,
+                                                               const std::vector<T>& seed,
+                                                               DLDataType dtype, int64_t max_extent,
+                                                               const char* field) {
+  return resolve_live_override_via(port, seed, [&](const Tensor& value) {
+    return read_host_config_vector<T>(value, dtype, max_extent, field);
+  });
+}
+
+expected<TensorOutputLoan, Error> prepare_copy_device(Output<Tensor>& port,
+                                                      ExecutionContext& context,
+                                                      std::span<const int64_t> shape,
+                                                      DLDataType dtype, const void* src,
+                                                      cudaStream_t stream) {
+  return prepare_device_tensor(
+      port, context, shape, dtype, [&](void* dst, std::size_t bytes) -> expected<void, Error> {
+        if (bytes == 0) {
+          return {};
+        }
+        if (cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
+          return fail_runtime(std::string(kOpName) + ": output D2D copy failed on '" +
+                              std::string(port.name()) + "'");
+        }
+        return {};
+      });
+}
+
+expected<detail::CfarStageConfig, Error> resolve_params(
+    Input<int64_t>& os_rank, Input<CfarCellWindowOverride>& guard_cells,
+    Input<CfarCellWindowOverride>& training_cells, Input<double>& pfa, Input<Tensor>& alpha_lut,
+    Input<double>& threshold_scale, Input<Tensor>& nci_axes, Input<int64_t>& max_detections,
+    const CFARParams& pinned, std::size_t max_leading, int64_t max_alpha_lut_extent,
+    const MaxTensorExtents& extents) {
+  detail::CfarStageConfig stage;
+  stage.cfar_variant = pinned.cfar_variant;
+  HOLOSCAN_TRY(stage.os_rank, resolve_live_override(os_rank, pinned.os_rank));
+  HOLOSCAN_TRY(stage.guard_cells,
+               resolve_live_override_via(guard_cells, pinned.guard_cells,
+                                         [](const CfarCellWindowOverride& value) {
+                                           return from_wire(value);
+                                         }));
+  HOLOSCAN_TRY(stage.training_cells,
+               resolve_live_override_via(training_cells, pinned.training_cells,
+                                         [](const CfarCellWindowOverride& value) {
+                                           return from_wire(value);
+                                         }));
+  HOLOSCAN_TRY(stage.pfa, resolve_live_override(pfa, pinned.pfa));
+
+  int64_t alpha_lut_extent_bound = max_alpha_lut_extent;
+  if (stage.cfar_variant == CfarVariant::kOS) {
+    alpha_lut_extent_bound = static_cast<int64_t>(detail::kMaxOsTrainingCells) + 1;
+  } else if (stage.cfar_variant == CfarVariant::kGO || stage.cfar_variant == CfarVariant::kSO) {
+    alpha_lut_extent_bound = std::max(*extents.max_doppler_bins, *extents.max_range_bins) + 1;
+  }
+  HOLOSCAN_TRY(stage.alpha_lut,
+               resolve_config_tensor_override(alpha_lut, pinned.alpha_lut, kFloat64Dtype,
+                                              alpha_lut_extent_bound, "alpha_lut"));
+  HOLOSCAN_TRY(stage.threshold_scale,
+               resolve_live_override(threshold_scale, pinned.threshold_scale));
+  HOLOSCAN_TRY(stage.nci_axes,
+               resolve_config_tensor_override(nci_axes, pinned.nci_axes, kInt64Dtype,
+                                              static_cast<int64_t>(max_leading), "nci_axes"));
+  stage.preintegrated_looks = pinned.preintegrated_looks;
+  HOLOSCAN_TRY(stage.max_detections, resolve_live_override(max_detections, pinned.max_detections));
+  stage.blocking_alpha_lut_rebuild = pinned.blocking_alpha_lut_rebuild;
+  stage.peak_mode = pinned.peak_mode;
+  stage.peak_radius = pinned.peak_radius;
+  return stage;
+}
+
+expected<std::vector<int64_t>, Error> resolve_peak_radius(
+    CfarPeakMode mode, const std::vector<int64_t>& authored,
+    const std::vector<int64_t>& output_shape) {
+  if (authored.empty()) {
+    return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                 "CFARDetectorOp: peak_radius must contain at least one value"});
+  }
+  for (const int64_t radius : authored) {
+    if (radius < 0) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   "CFARDetectorOp: peak_radius values must be non-negative"});
+    }
+  }
+  if (mode == CfarPeakMode::kNone) {
+    return authored;
+  }
+
+  const std::size_t rank = output_shape.size();
+  std::vector<int64_t> resolved(rank, 0);
+  if (mode == CfarPeakMode::kRangeDoppler) {
+    if (authored.size() == 1U) {
+      resolved[rank - 2] = authored[0];
+      resolved[rank - 1] = authored[0];
+    } else if (authored.size() == 2U) {
+      resolved[rank - 2] = authored[0];
+      resolved[rank - 1] = authored[1];
+    } else {
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument,
+                "CFARDetectorOp: range_doppler peak_radius must have one value or "
+                "two values (doppler, range)"});
+    }
+  } else if (mode == CfarPeakMode::kAll) {
+    if (rank < 2U || rank > 4U) {
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument,
+                "CFARDetectorOp: all peak mode requires post-NCI output rank 2-4"});
+    }
+    if (authored.size() == 1U) {
+      std::fill(resolved.begin(), resolved.end(), authored[0]);
+    } else if (authored.size() == rank) {
+      resolved = authored;
+    } else {
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument,
+                "CFARDetectorOp: all peak_radius must have one value or one value "
+                "per post-NCI output axis"});
+    }
+  } else {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument, "CFARDetectorOp: unsupported peak_mode value"});
+  }
+
+  if (std::none_of(resolved.begin(), resolved.end(), [](int64_t radius) {
+        return radius > 0;
+      })) {
+    return make_unexpected(
+        Error{ErrorCode::kInvalidArgument,
+              "CFARDetectorOp: peak_radius must select at least one active axis"});
+  }
+  return resolved;
+}
+
+template <typename T>
+expected<CfarStagePlan, Error> build_cfar_stage_plan(detail::CfarStageConfig stage,
+                                                     const Tensor& input,
+                                                     const MaxTensorExtents& extents,
+                                                     std::size_t max_leading) {
+  try {
+    const InputPrecision precision = classify_input_dtype<T>(input, "rd_maps", /*allow_real=*/true);
+    require_cuda_accessible(input, "rd_maps", kOpName);
+    require_contiguous(input, "rd_maps", kOpName);
+
+    HOLOSCAN_TRY(require_window_bounds(stage.guard_cells, "guard_cells", *extents.max_doppler_bins,
+                                       *extents.max_range_bins));
+    HOLOSCAN_TRY(require_window_bounds(stage.training_cells, "training_cells",
+                                       *extents.max_doppler_bins, *extents.max_range_bins));
+
+    const std::size_t total_rank = input.shape().size();
+    if (total_rank < 2) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   "CFARDetectorOp: rd_maps must have at least 2 axes "
+                                   "(num_doppler, num_range)"});
+    }
+    const std::size_t leading_rank = total_rank - 2;
+    if (leading_rank > max_leading) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   unexpected_leading_message(kOpName, leading_rank, max_leading)});
+    }
+    const int64_t num_doppler = input.shape()[total_rank - 2];
+    const int64_t num_range = input.shape()[total_rank - 1];
+    if (num_doppler > *extents.max_doppler_bins) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   "CFARDetectorOp: input doppler_bins exceed MaxTensorExtents"});
+    }
+    if (num_range > *extents.max_range_bins) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   "CFARDetectorOp: input range_bins exceed MaxTensorExtents"});
+    }
+    const int64_t max_rx = extent_rx_or_channels(extents);
+    const int64_t max_channels = extents.max_channels.value_or(max_rx);
+    if (leading_rank == 1 && input.shape()[0] > max_channels) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   std::string(kOpName) +
+                                       ": input leading axis exceeds max_rx/max_channels from "
+                                       "MaxTensorExtents"});
+    }
+    if (leading_rank == 2 &&
+        (input.shape()[0] > extent_or_one(extents.max_tx) || input.shape()[1] > max_rx)) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   std::string(kOpName) +
+                                       ": input leading axes exceed max_tx and max_rx/max_channels "
+                                       "from MaxTensorExtents"});
+    }
+    if (extents.max_detections.has_value() && stage.max_detections > *extents.max_detections) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   "CFARDetectorOp: max_detections exceeds "
+                                   "MaxTensorExtents.max_detections"});
+    }
+
+    detail::NciPlan nci = detail::NciPlan::from_shape(input.shape(), stage.nci_axes, "rd_maps");
+    if (stage.preintegrated_looks <= 0) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   "CFARDetectorOp: preintegrated_looks must be positive"});
+    }
+    if (precision == InputPrecision::kComplex && stage.preintegrated_looks != 1) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   "CFARDetectorOp: preintegrated_looks applies only to real power "
+                                   "input"});
+    }
+    if (nci.fold > std::numeric_limits<int64_t>::max() / stage.preintegrated_looks) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   "CFARDetectorOp: effective integration fold overflows int64"});
+    }
+    const int64_t effective_fold = nci.fold * stage.preintegrated_looks;
+    const int guard_d = static_cast<int>(stage.guard_cells[0]);
+    const int guard_r = static_cast<int>(stage.guard_cells[1]);
+    const int train_d = static_cast<int>(stage.training_cells[0]);
+    const int train_r = static_cast<int>(stage.training_cells[1]);
+    if (stage.cfar_variant == CfarVariant::kOS) {
+      if (stage.os_rank == -1) {
+        HOLOSCAN_LOG_ERROR("{}", kMissingOsRankMessage);
+        return make_unexpected(Error{ErrorCode::kInvalidArgument, kMissingOsRankMessage});
+      }
+      if (stage.os_rank < -1) {
+        return make_unexpected(
+            Error{ErrorCode::kInvalidArgument,
+                  "CFARDetectorOp: os_rank must be non-negative for OS variant"});
+      }
+      const int64_t max_train = detail::max_training_cell_count(static_cast<int>(num_doppler),
+                                                                static_cast<int>(num_range),
+                                                                guard_d, guard_r, train_d, train_r);
+      if (max_train > detail::kMaxOsTrainingCells) {
+        return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                     "CFARDetectorOp: OS window footprint exceeds the supported "
+                                     "training-cell limit"});
+      }
+      if (stage.os_rank >= max_train) {
+        return make_unexpected(
+            Error{ErrorCode::kInvalidArgument,
+                  "CFARDetectorOp: os_rank must be less than the maximum training-"
+                  "cell count for the configured window footprint"});
+      }
+    }
+
+    const bool map_independent =
+        stage.cfar_variant == CfarVariant::kCA || stage.cfar_variant == CfarVariant::kOS;
+    const int win_d = 2 * (guard_d + train_d) + 1;
+    const int win_r = 2 * (guard_r + train_r) + 1;
+    const bool canonical = map_independent && num_doppler >= win_d && num_range >= win_r;
+    std::vector<int64_t> output_shape = nci.output_shape(num_doppler, num_range);
+    HOLOSCAN_TRY(stage.peak_radius,
+                 resolve_peak_radius(stage.peak_mode, stage.peak_radius, output_shape));
+    return CfarStagePlan{.stage = std::move(stage),
+                         .nci = std::move(nci),
+                         .input_is_complex = precision == InputPrecision::kComplex,
+                         .effective_fold = effective_fold,
+                         .num_doppler = num_doppler,
+                         .num_range = num_range,
+                         .guard_d = guard_d,
+                         .guard_r = guard_r,
+                         .train_d = train_d,
+                         .train_r = train_r,
+                         .key_num_doppler = canonical ? win_d : static_cast<int>(num_doppler),
+                         .key_num_range = canonical ? win_r : static_cast<int>(num_range),
+                         .output_shape = std::move(output_shape)};
+  } catch (const std::invalid_argument& e) {
+    return make_unexpected(Error{ErrorCode::kInvalidArgument, std::string(e.what())});
   }
 }
 
-void require_pair(const std::vector<int64_t>& v, const char* name) {
-  if (v.size() != 2) {
-    throw std::invalid_argument(
-        std::string("CFARDetectorOp: '") + name +
-        "' must have exactly 2 entries (doppler, range), got " +
-        std::to_string(v.size()));
+template <typename T>
+expected<void, Error> upload_alpha_lut(detail::CfarDetectorState& state,
+                                       const std::vector<double>& host_lut, cudaStream_t stream) {
+  std::vector<T> lut_t(host_lut.size());
+  for (size_t i = 0; i < host_lut.size(); ++i) {
+    lut_t[i] = static_cast<T>(host_lut[i]);
   }
-  if (v[0] < 0 || v[1] < 0) {
-    throw std::invalid_argument(std::string("CFARDetectorOp: '") + name +
-                                "' entries must be >= 0");
+  try {
+    state.alpha_lut_dev = make_device_tensor({static_cast<int64_t>(lut_t.size())}, real_dtype<T>());
+  } catch (const std::exception& e) {
+    return fail_runtime(e.what());
   }
+  HOLOSCAN_TRY(auto lut_mut, writable_ptr(*state.alpha_lut_dev, "alpha_lut"));
+  if (cudaMemcpyAsync(lut_mut, lut_t.data(), lut_t.size() * sizeof(T), cudaMemcpyHostToDevice,
+                      stream) != cudaSuccess) {
+    return fail_runtime("CFARDetectorOp: alpha LUT H2D copy failed");
+  }
+  return {};
+}
+
+template <typename T>
+expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const CfarStagePlan& plan,
+                                       cudaStream_t stream) {
+  const auto& stage = plan.stage;
+  const bool pfa_override_changed = state.pfa_seen && stage.pfa != state.last_seen_pfa;
+  state.last_seen_pfa = stage.pfa;
+  state.pfa_seen = true;
+
+  const bool map_independent =
+      stage.cfar_variant == CfarVariant::kCA || stage.cfar_variant == CfarVariant::kOS;
+  const int win_d = 2 * (plan.guard_d + plan.train_d) + 1;
+  const int win_r = 2 * (plan.guard_r + plan.train_r) + 1;
+  if (map_independent && (plan.key_num_doppler != win_d || plan.key_num_range != win_r) &&
+      !state.window_exceeds_map_warned) {
+    HOLOSCAN_LOG_WARN(
+        "CFARDetectorOp: CFAR window ({}x{}) exceeds the RD-map extent "
+        "({}x{}); building a map-specific alpha LUT with reduced-N edge "
+        "thresholds (the start-time pre-warmed table does not apply).",
+        win_d, win_r, plan.num_doppler, plan.num_range);
+    state.window_exceeds_map_warned = true;
+  }
+
+  const CfarAlphaLutKey lut_key{stage.cfar_variant, stage.pfa,    plan.effective_fold,
+                                stage.os_rank,      plan.guard_d, plan.guard_r,
+                                plan.train_d,       plan.train_r, plan.key_num_doppler,
+                                plan.key_num_range};
+  const bool had_external_alpha_lut = state.using_external_alpha_lut;
+  const bool has_external_alpha_lut = !stage.alpha_lut.empty();
+
+  if (had_external_alpha_lut && !has_external_alpha_lut) {
+    if (!state.alpha_lut_cleared_pfa_active_warned) {
+      HOLOSCAN_LOG_WARN(
+          "CFARDetectorOp: alpha_lut cleared; pfa-derived alpha calibration is "
+          "now active and may use the slow Monte Carlo path for GO, SO, or OS "
+          "with K > 1");
+      state.alpha_lut_cleared_pfa_active_warned = true;
+    }
+    state.using_external_alpha_lut = false;
+    state.alpha_lut_host_cache.clear();
+    state.alpha_lut_dev.reset();
+    state.alpha_lut_key = {};
+    state.pending_lut_key = {};
+    state.pending_lut_active = false;
+    state.stale_lut_warned = false;
+    state.external_alpha_lut_validated = false;
+  }
+
+  if (pfa_override_changed && has_external_alpha_lut && !state.pfa_ignored_while_alpha_lut_warned) {
+    HOLOSCAN_LOG_WARN(
+        "CFARDetectorOp: pfa override has no effect while alpha_lut is "
+        "supplied");
+    state.pfa_ignored_while_alpha_lut_warned = true;
+  }
+
+  if (has_external_alpha_lut) {
+    const bool lut_changed = stage.alpha_lut != state.alpha_lut_host_cache;
+    const bool geometry_changed = !state.external_alpha_lut_validated ||
+                                  state.validated_external_variant != stage.cfar_variant ||
+                                  state.validated_external_fold != plan.effective_fold ||
+                                  state.validated_external_num_doppler != plan.num_doppler ||
+                                  state.validated_external_num_range != plan.num_range ||
+                                  state.validated_external_guard_d != plan.guard_d ||
+                                  state.validated_external_guard_r != plan.guard_r ||
+                                  state.validated_external_train_d != plan.train_d ||
+                                  state.validated_external_train_r != plan.train_r;
+    if (lut_changed || geometry_changed) {
+      const int64_t max_lut_index = max_alpha_lut_index(
+          stage.cfar_variant, static_cast<int>(plan.num_doppler), static_cast<int>(plan.num_range),
+          plan.guard_d, plan.guard_r, plan.train_d, plan.train_r);
+      HOLOSCAN_TRY(validate_external_alpha_lut(
+          stage.cfar_variant, plan.effective_fold, stage.alpha_lut, max_lut_index,
+          static_cast<int>(plan.num_doppler), static_cast<int>(plan.num_range), plan.guard_d,
+          plan.guard_r, plan.train_d, plan.train_r));
+      state.external_alpha_lut_validated = true;
+      state.validated_external_variant = stage.cfar_variant;
+      state.validated_external_fold = plan.effective_fold;
+      state.validated_external_num_doppler = plan.num_doppler;
+      state.validated_external_num_range = plan.num_range;
+      state.validated_external_guard_d = plan.guard_d;
+      state.validated_external_guard_r = plan.guard_r;
+      state.validated_external_train_d = plan.train_d;
+      state.validated_external_train_r = plan.train_r;
+      if (lut_changed) {
+        state.alpha_lut_host_cache = stage.alpha_lut;
+        HOLOSCAN_TRY(upload_alpha_lut<T>(state, state.alpha_lut_host_cache, stream));
+      }
+    }
+    state.using_external_alpha_lut = true;
+  } else {
+    state.using_external_alpha_lut = false;
+    if (lut_key != state.alpha_lut_key) {
+      if (!(state.pending_lut_active && state.pending_lut_key == lut_key)) {
+        state.runtime_build_warned = false;
+        state.stale_lut_warned = false;
+      }
+      const auto adopt_ready_lut = [&](std::vector<double> lut) -> expected<void, Error> {
+        state.alpha_lut_host_cache = std::move(lut);
+        state.alpha_lut_key = lut_key;
+        state.pending_lut_key = {};
+        state.pending_lut_active = false;
+        state.stale_lut_warned = false;
+        return upload_alpha_lut<T>(state, state.alpha_lut_host_cache, stream);
+      };
+      const auto warn_slow_pfa_lut = [&]() {
+        if (state.pfa_lut_slow_warned ||
+            !uses_slow_pfa_lut_calibration(lut_key.variant, lut_key.fold)) {
+          return;
+        }
+        HOLOSCAN_LOG_WARN(
+            "CFARDetectorOp: deriving the alpha LUT from pfa for {} is the "
+            "slow calibration path (Monte Carlo LUT build); for low-latency "
+            "live updates supply a precomputed alpha_lut",
+            to_string(lut_key.variant));
+        state.pfa_lut_slow_warned = true;
+      };
+      const auto warn_runtime_rebuild = [&]() {
+        if (state.runtime_build_warned) {
+          return;
+        }
+        HOLOSCAN_LOG_WARN(
+            "CFARDetectorOp: calibrating the alpha LUT at runtime (the "
+            "configuration was not pre-warmed at start — e.g. a [live] "
+            "override, an NCI fold not covered by nci_fold, or a sub-window "
+            "map); this stalls the tick or serves a stale LUT while building.");
+        state.runtime_build_warned = true;
+      };
+      detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
+      if (snap.ready) {
+        HOLOSCAN_TRY(adopt_ready_lut(std::move(snap.lut)));
+      } else if (stage.blocking_alpha_lut_rebuild || state.alpha_lut_host_cache.empty()) {
+        warn_runtime_rebuild();
+        warn_slow_pfa_lut();
+        try {
+          HOLOSCAN_TRY(adopt_ready_lut(detail::get_cached_alpha_lut(lut_key)));
+        } catch (const std::exception& e) {
+          return fail_runtime(e.what());
+        }
+      } else {
+        warn_runtime_rebuild();
+        warn_slow_pfa_lut();
+        detail::ensure_alpha_lut_build(lut_key);
+        state.pending_lut_key = lut_key;
+        state.pending_lut_active = true;
+        if (!state.stale_lut_warned) {
+          HOLOSCAN_LOG_WARN(
+              "CFARDetectorOp: alpha LUT for the new configuration is still "
+              "calibrating; using the previous LUT for this tick");
+          state.stale_lut_warned = true;
+        }
+      }
+    } else if (state.pending_lut_active && state.pending_lut_key == lut_key) {
+      detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
+      if (snap.ready) {
+        state.alpha_lut_host_cache = std::move(snap.lut);
+        state.alpha_lut_key = lut_key;
+        state.pending_lut_key = {};
+        state.pending_lut_active = false;
+        state.stale_lut_warned = false;
+        HOLOSCAN_TRY(upload_alpha_lut<T>(state, state.alpha_lut_host_cache, stream));
+      }
+    }
+  }
+
+  if (!state.alpha_lut_dev) {
+    return fail_runtime("CFARDetectorOp: alpha LUT device buffer is unset");
+  }
+  return {};
+}
+
+expected<const int64_t*, Error> update_nci_table(detail::CfarDetectorState& state,
+                                                 const detail::NciPlan& plan, cudaStream_t stream) {
+  if (plan.fold <= 1) {
+    return nullptr;
+  }
+  if (plan.batch_in_table != state.nci_table_host_cache) {
+    try {
+      state.nci_table_dev =
+          make_device_tensor({static_cast<int64_t>(plan.batch_in_table.size())}, kInt64Dtype);
+    } catch (const std::exception& e) {
+      return make_unexpected(Error{ErrorCode::kFailure, e.what()});
+    }
+    HOLOSCAN_TRY(auto nci_mut, writable_ptr(*state.nci_table_dev, "nci_table"));
+    if (cudaMemcpyAsync(nci_mut, plan.batch_in_table.data(),
+                        plan.batch_in_table.size() * sizeof(int64_t), cudaMemcpyHostToDevice,
+                        stream) != cudaSuccess) {
+      return make_unexpected(
+          Error{ErrorCode::kFailure, "CFARDetectorOp: NCI table H2D copy failed"});
+    }
+    state.nci_table_host_cache = plan.batch_in_table;
+  }
+  return static_cast<const int64_t*>(state.nci_table_dev->data());
 }
 
 }  // namespace
 
 template <typename T>
-CFARDetectorOp<T>::~CFARDetectorOp() = default;
+CFARDetectorOp<T>::CFARDetectorOp(const MaxTensorExtents& extents) {
+  state_ = std::make_shared<detail::CfarDetectorState>();
+  const char* who = "CFARDetectorOp";
+  const std::int64_t max_doppler =
+      require_extent(extents.max_doppler_bins, "max_doppler_bins", who);
+  const std::int64_t max_range = require_extent(extents.max_range_bins, "max_range_bins", who);
+  extents_ = extents;
+
+  // Named leading axes: none, N_rx, or (M_tx, N_rx). Dense az/el instances
+  // use max_tx/max_rx as the documented max_az/max_el pool-sizing stand-in.
+  const std::size_t leading = named_tx_rx_leading_rank(extents);
+  max_leading_ = leading;
+  max_map_rank_ = static_cast<std::uint32_t>(2U + leading);
+  if (max_doppler > std::numeric_limits<int>::max() ||
+      max_range > std::numeric_limits<int>::max()) {
+    throw std::invalid_argument("CFARDetectorOp: map extents must fit int kernel dimensions");
+  }
+
+  std::int64_t max_tx = 1;
+  std::int64_t max_rx = 1;
+  require_tx_rx_pool_extents(extents, who, &max_tx, &max_rx);
+  const std::int64_t leading_product = max_tx * max_rx;
+  max_map_byte_span_ = byte_span_real_cube<T>({leading_product, max_doppler, max_range}, who);
+
+  const std::int64_t max_dets =
+      extents.max_detections.value_or(leading_product * max_doppler * max_range);
+  const std::int64_t idx_cols = 2 + static_cast<std::int64_t>(leading);
+  max_idx_byte_span_ =
+      byte_span_elems(product_extents({max_dets, idx_cols}, who), sizeof(std::int64_t), who);
+
+  const int64_t max_map_cells = product_extents({max_doppler, max_range}, who);
+  if (max_map_cells == std::numeric_limits<int64_t>::max()) {
+    throw std::invalid_argument("CFARDetectorOp: alpha_lut extent bound overflows int64");
+  }
+  max_alpha_lut_extent_ = max_map_cells + 1;
+}
 
 template <typename T>
-void CFARDetectorOp<T>::initialize() {
-  ensure_radar_arg_setters();
-  ArgumentSetter::ensure_type<CfarVariant>();
-  ArgumentSetter::ensure_type<CfarPeakNeighborhood>();
-  Operator::initialize();
-}
+CFARDetectorOp<T>::~CFARDetectorOp() = default;
 
 template <typename T>
 void CFARDetectorOp<T>::start() {
   // Pre-calibrate the alpha LUT at startup so the first tick doesn't stall on a
   // Monte Carlo build. Only the pfa-derived path needs calibration (an external
-  // alpha_lut is used as-is). The map dimensions are unknown here, so this is
-  // limited to CA and OS, whose LUTs are indexed by training-cell count (N) and
-  // are map-size-independent while the map is at least as large as the CFAR
-  // window: a synthetic window-sized map reproduces the identical table. GO and
-  // SO are indexed by the aliased go_lut_index and are genuinely map-dependent,
-  // so they cannot be pre-warmed without the RD-map shape; they calibrate on
-  // the first tick (compute() warns).
-  if (!alpha_lut_.get().empty()) {
-    return;  // external table: no calibration to pre-warm.
+  // alpha_lut is used as-is). GO/SO cannot be pre-warmed without the RD-map
+  // shape.
+  const CFARParams& pinned = params();
+  if (!pinned.alpha_lut.empty()) {
+    return;
   }
-  const CfarVariant variant = cfar_variant_.get();
+  const CfarVariant variant = pinned.cfar_variant;
   if (variant != CfarVariant::kCA && variant != CfarVariant::kOS) {
-    HOLOSCAN_LOG_INFO(
+    HOLOSCAN_LOG_WARN(
         "CFARDetectorOp: {} calibrates its alpha LUT on the first tick "
         "(go_lut_index tables are map-dependent and cannot be pre-warmed "
         "without the RD-map shape); supply alpha_lut to avoid a runtime build.",
         to_string(variant));
     return;
   }
-  const std::vector<int64_t> guard = guard_cells_.get();
-  const std::vector<int64_t> train = training_cells_.get();
+  if (variant == CfarVariant::kOS && pinned.os_rank < 0) {
+    // The tick planner reports the targeted required-parameter error. Avoid
+    // attempting a meaningless start-time calibration with the unset sentinel.
+    return;
+  }
+  const std::vector<int64_t>& guard = pinned.guard_cells;
+  const std::vector<int64_t>& train = pinned.training_cells;
   if (guard.size() != 2 || train.size() != 2) {
-    return;  // invalid/unset footprint: compute() will surface the error.
+    return;
   }
 
-  // Fold K: no nci_axes → K = 1; otherwise the fold is only known from the
-  // input leading-axis sizes at tick time, so require the nci_fold hint.
-  int64_t fold = 1;
-  if (!nci_axes_.get().empty()) {
-    const int64_t hint = nci_fold_hint_.get();
+  if (pinned.preintegrated_looks <= 0) {
+    HOLOSCAN_LOG_WARN(
+        "CFARDetectorOp: preintegrated_looks must be positive; deferring "
+        "validation to the first tick.");
+    return;
+  }
+  int64_t fold = pinned.preintegrated_looks;
+  if (!pinned.nci_axes.empty()) {
+    const int64_t hint = pinned.nci_fold;
     if (hint <= 0) {
-      HOLOSCAN_LOG_INFO(
+      HOLOSCAN_LOG_WARN(
           "CFARDetectorOp: nci_axes is set but nci_fold hint is unset; "
           "deferring alpha-LUT calibration to the first tick (set nci_fold to "
           "the integration fold K to pre-warm at start).");
       return;
     }
-    fold = hint;
+    if (hint > std::numeric_limits<int64_t>::max() / pinned.preintegrated_looks) {
+      HOLOSCAN_LOG_WARN(
+          "CFARDetectorOp: effective integration fold overflows int64; "
+          "deferring validation to the first tick.");
+      return;
+    }
+    fold *= hint;
   }
 
   const int gd = static_cast<int>(guard[0]);
@@ -220,16 +894,14 @@ void CFARDetectorOp<T>::start() {
   const int win_d = 2 * (gd + td) + 1;
   const int win_r = 2 * (gr + tr) + 1;
 
-  const AlphaLutKey warm_key{variant, pfa_.get(), fold,  os_rank_.get(), gd, gr,
-                             td,      tr,         win_d, win_r};
+  const CfarAlphaLutKey warm_key{variant, pinned.pfa, fold, pinned.os_rank, gd,
+                                 gr,      td,         tr,   win_d,          win_r};
   try {
-    // Blocking build into the process-wide cache; the first tick then finds it
-    // ready (poll) and only uploads — no runtime calibration, no warning.
     (void)detail::get_cached_alpha_lut(warm_key);
     HOLOSCAN_LOG_INFO(
         "CFARDetectorOp: pre-calibrated alpha LUT at start (variant={}, "
         "pfa={}, K={}).",
-        to_string(variant), pfa_.get(), fold);
+        to_string(variant), pinned.pfa, fold);
   } catch (const std::exception& e) {
     HOLOSCAN_LOG_WARN(
         "CFARDetectorOp: start-time alpha-LUT pre-calibration skipped ({}); "
@@ -240,511 +912,195 @@ void CFARDetectorOp<T>::start() {
 
 template <typename T>
 void CFARDetectorOp<T>::stop() {
-  // Wait for any background alpha-LUT build (non-blocking serve-stale path) to
-  // finish before Holoscan tears down the CUDA context. A GO/SO/OS build runs
-  // GPU Monte-Carlo kernels on a detached thread; without this drain those
-  // launches can hit a destroyed context and SEGFAULT in the driver. stop()
-  // runs after the last compute() and before teardown, so the context is still
-  // valid here. Blocks only if a build is still running at shutdown.
   detail::join_inflight_alpha_lut_builds();
 }
 
 template <typename T>
 void CFARDetectorOp<T>::setup(OperatorSpec& spec) {
-  spec.input<holoscan::TensorMap>("rd_maps");
-  spec.output<holoscan::TensorMap>("detection_mask");
-  spec.output<holoscan::TensorMap>("detection_score");
-  spec.output<holoscan::TensorMap>("noise_estimate");
-  spec.output<holoscan::TensorMap>("detection_idx");
-  // The exact surface the threshold is applied to: the post-NCI integrated
-  // power when nci_axes is non-empty, else the plain square-law power map.
-  // Emitted every tick (the workspace buffer, no copy) so consumers such as
-  // the demo apps' RD display can show what the detector actually saw rather
-  // than re-deriving it.
-  //
-  // kNone drops the default DownstreamReceptiveSchedulingTerm, which is what
-  // makes this port genuinely optional: with the default term an unconnected
-  // output stops the operator from ever ticking ("No receiver connected to
-  // transmitter ... The entity will never tick"), so adding a mandatory output
-  // would break every existing consumer that does not drain it.
-  spec.output<holoscan::TensorMap>("cfar_power")
-      .condition(holoscan::ConditionType::kNone);
-
-  spec.param(cfar_variant_, "cfar_variant", "CFAR variant",
-             "Noise-estimation rule {CA, GO, SO, OS}. Static: selects the "
-             "kernel; instantiate separate detectors to vary it.",
-             CfarVariant::kCA);
-  spec.param(os_rank_, "os_rank", "Order-statistic rank",
-             "Rank into the sorted training cells; used only for OS.",
-             int64_t{0});
-  spec.param(guard_cells_, "guard_cells", "Guard cells (doppler, range)",
-             "Guard extent each side of the CUT, excluded from the noise "
-             "estimate.",
-             std::vector<int64_t>{});
-  spec.param(training_cells_, "training_cells",
-             "Training cells (doppler, range)",
-             "Training/reference extent each side, for the noise estimate.",
-             std::vector<int64_t>{});
-  spec.param(pfa_, "pfa", "Probability of false alarm",
-             "Sets the per-variant threshold multiplier alpha when alpha_lut "
-             "is unset.",
-             1e-6);
-  spec.param(alpha_lut_, "alpha_lut", "Precomputed alpha LUT",
-             "Optional threshold multiplier table; when non-empty, used "
-             "directly and pfa is ignored for alpha calibration.",
-             std::vector<double>{});
-  spec.param(threshold_scale_, "threshold_scale", "Threshold scale",
-             "Empirical multiplier on top of the Pfa-derived threshold; "
-             "1.0 = pure CFAR.",
-             1.0);
-  spec.param(nci_axes_, "nci_axes", "Non-coherent integration axes",
-             "Leading-axis indices to non-coherently integrate before "
-             "thresholding.",
-             std::vector<int64_t>{});
-  spec.param(nci_fold_hint_, "nci_fold", "NCI fold hint (K)",
-             "Optional integration fold K = product of nci_axes sizes. Static. "
-             "Used only to pre-calibrate the alpha LUT at start() when "
-             "nci_axes is set (K is unknown until the first tick). <= 0 → "
-             "unset; ignored when nci_axes is empty.",
-             int64_t{0});
-  spec.param(max_detections_, "max_detections", "Max detections",
-             "Cap on emitted detections (<= 0 → uncapped).", int64_t{0});
-  spec.param(blocking_alpha_lut_rebuild_, "blocking_alpha_lut_rebuild",
-             "Blocking alpha LUT rebuild",
-             "When false, serve the previous LUT while a new one calibrates "
-             "after a [live] config change; when true, block compute() until "
-             "the new LUT is ready.",
-             false);
-  spec.param(peak_only_, "peak_only", "Peak grouping (one point per peak)",
-             "When true, collapse each contiguous above-threshold blob to its "
-             "local-maximum cell (non-maximum suppression) so detection_idx / "
-             "detection_mask carry one point per CFAR peak. Static. Off "
-             "(default) emits the raw candidate mask.",
-             false);
-  spec.param(peak_neighborhood_, "peak_neighborhood",
-             "Peak-grouping neighborhood",
-             "Neighborhood for the peak_only NMS test: {cross4, square8}. "
-             "cross4 = 2 range + 2 Doppler neighbors; square8 = full 8-cell. "
-             "Static; used only when peak_only is set.",
-             CfarPeakNeighborhood::kSquare8);
-
-  add_override_port<int64_t>(spec, "os_rank");
-  add_override_port<std::vector<int64_t>>(spec, "guard_cells");
-  add_override_port<std::vector<int64_t>>(spec, "training_cells");
-  add_override_port<double>(spec, "pfa");
-  add_override_port<std::vector<double>>(spec, "alpha_lut");
-  add_override_port<double>(spec, "threshold_scale");
-  add_override_port<std::vector<int64_t>>(spec, "nci_axes");
-  add_override_port<int64_t>(spec, "max_detections");
+  constexpr TensorRepresentation kDevice{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = std::nullopt,
+      .rank = std::nullopt,
+  };
+  const TensorRepresentation real_device{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = real_dtype<T>(),
+      .rank = std::nullopt,
+  };
+  constexpr TensorRepresentation kMaskDevice{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = kMaskDtype,
+      .rank = std::nullopt,
+  };
+  constexpr TensorRepresentation kIndexDevice{
+      .memory_kind = MemoryKind::kCudaDevice,
+      .dtype = kInt64Dtype,
+      .rank = 2U,
+  };
+  spec.input(rd_maps).queue_depth(2U).expects_tensor(tensor_input(kDevice));
+  const TensorBounds map_bounds{.max_rank = max_map_rank_, .max_byte_span = max_map_byte_span_};
+  // detection_mask is uint8 — map_bounds (real T) is a safe ceiling.
+  spec.output(detection_mask).produces_tensor(pooled_tensor_output(kMaskDevice, map_bounds));
+  spec.output(detection_score).produces_tensor(pooled_tensor_output(real_device, map_bounds));
+  spec.output(noise_estimate).produces_tensor(pooled_tensor_output(real_device, map_bounds));
+  spec.output(cfar_power).produces_tensor(pooled_tensor_output(real_device, map_bounds));
+  spec.output(detection_idx)
+      .produces_tensor(pooled_tensor_output(kIndexDevice, 2U, max_idx_byte_span_));
+  constexpr TensorRepresentation kHostInt64Vector{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = kInt64Dtype,
+      .rank = 1U,
+  };
+  constexpr TensorRepresentation kHostFloat64Vector{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = kFloat64Dtype,
+      .rank = 1U,
+  };
+  // [live] Exact overrides, Params order (schema and POD alike).
+  spec.input(os_rank).optional().queue_depth(2U);
+  spec.input(guard_cells).optional().queue_depth(2U);
+  spec.input(training_cells).optional().queue_depth(2U);
+  spec.input(pfa).optional().queue_depth(2U);
+  spec.input(alpha_lut).optional().queue_depth(2U).expects_tensor(tensor_input(kHostFloat64Vector));
+  spec.input(threshold_scale).optional().queue_depth(2U);
+  spec.input(nci_axes).optional().queue_depth(2U).expects_tensor(tensor_input(kHostInt64Vector));
+  spec.input(max_detections).optional().queue_depth(2U);
 }
 
 template <typename T>
-void CFARDetectorOp<T>::compute(InputContext& op_input,
-                                OutputContext& op_output,
-                                [[maybe_unused]] ExecutionContext& context) {
-  std::shared_ptr<holoscan::Tensor> input =
-      receive_single(op_input, "rd_maps", kOpName);
+Contract CFARDetectorOp<T>::contract() const {
+  Contract result;
+  result.trigger(OnEach{rd_maps});
+  add_live_override_to_contract(result, os_rank);
+  add_live_override_to_contract(result, guard_cells);
+  add_live_override_to_contract(result, training_cells);
+  add_live_override_to_contract(result, pfa);
+  add_live_override_to_contract(result, alpha_lut);
+  add_live_override_to_contract(result, threshold_scale);
+  add_live_override_to_contract(result, nci_axes);
+  add_live_override_to_contract(result, max_detections);
+  return result;
+}
 
-  if (!seeded_) {
-    effective_guard_cells_ = guard_cells_.get();
-    effective_training_cells_ = training_cells_.get();
-    effective_pfa_ = pfa_.get();
-    effective_alpha_lut_ = alpha_lut_.get();
-    effective_threshold_scale_ = threshold_scale_.get();
-    effective_os_rank_ = os_rank_.get();
-    effective_nci_axes_ = nci_axes_.get();
-    effective_max_detections_ = max_detections_.get();
-    seeded_ = true;
-  }
-  effective_guard_cells_ = resolve_override_param<std::vector<int64_t>>(
-      op_input, "guard_cells", effective_guard_cells_, nullptr);
-  effective_training_cells_ = resolve_override_param<std::vector<int64_t>>(
-      op_input, "training_cells", effective_training_cells_, nullptr);
-  bool pfa_override_changed = false;
-  effective_pfa_ = resolve_override_param<double>(op_input, "pfa",
-                                                  effective_pfa_,
-                                                  &pfa_override_changed);
-  effective_alpha_lut_ = resolve_override_param<std::vector<double>>(
-      op_input, "alpha_lut", effective_alpha_lut_, nullptr);
-  effective_threshold_scale_ = resolve_override_param<double>(
-      op_input, "threshold_scale", effective_threshold_scale_, nullptr);
-  effective_os_rank_ = resolve_override_param<int64_t>(
-      op_input, "os_rank", effective_os_rank_, nullptr);
-  effective_nci_axes_ = resolve_override_param<std::vector<int64_t>>(
-      op_input, "nci_axes", effective_nci_axes_, nullptr);
-  effective_max_detections_ = resolve_override_param<int64_t>(
-      op_input, "max_detections", effective_max_detections_, nullptr);
+template <typename T>
+expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
+  // Receive and validate inputs before deriving any tick-local state.
+  // Receive.
+  HOLOSCAN_TRY(auto input, receive_tensor(rd_maps, kOpName));
 
-  require_pair(effective_guard_cells_, "guard_cells");
-  require_pair(effective_training_cells_, "training_cells");
+  // Resolve this tick's Exact overrides over pinned Params.
+  // Resolve tick-local configuration; Exact misses revert to pinned Params.
+  const CFARParams& pinned = context.params<CFARParams>();
+  HOLOSCAN_TRY(auto stage, resolve_params(os_rank, guard_cells, training_cells, pfa, alpha_lut,
+                                          threshold_scale, nci_axes, max_detections, pinned,
+                                          max_leading_, max_alpha_lut_extent_, extents_));
 
-  const InputPrecision precision =
-      classify_input_dtype<T>(*input, "rd_maps", /*allow_real=*/true);
-  const bool input_is_complex = (precision == InputPrecision::kComplex);
-  require_cuda_accessible(*input, "rd_maps", kOpName);
-  require_contiguous(*input, "rd_maps", kOpName);
+  // Plan input admission, NCI, and output geometry.
+  // Build and validate the bounded execution plan for this input shape.
+  HOLOSCAN_TRY(auto plan,
+               build_cfar_stage_plan<T>(std::move(stage), input, extents_, max_leading_));
 
-  const detail::NciPlan plan =
-      detail::NciPlan::from_shape(input->shape(), effective_nci_axes_,
-                                  "rd_maps");
-  const int64_t num_doppler = input->shape()[input->shape().size() - 2];
-  const int64_t num_range = input->shape()[input->shape().size() - 1];
-  const std::vector<int64_t> output_shape =
-      plan.output_shape(num_doppler, num_range);
-
-  cudaStream_t stream = op_input.receive_cuda_stream("rd_maps");
-
-  // Reuse a ping-ponged dense workspace when the CFAR geometry is unchanged.
-  dense_workspace_idx_ ^= 1;
-  DenseWorkspace& ws = dense_workspace_[dense_workspace_idx_];
-  const bool ws_hit = ws.score && ws.batch_in == plan.batch_in &&
-                      ws.out_batch == plan.out_batch &&
-                      ws.num_doppler == num_doppler &&
-                      ws.num_range == num_range;
-  if (!ws_hit) {
-    ws.score = make_device_tensor(output_shape, real_dtype<T>());
-    ws.noise = make_device_tensor(output_shape, real_dtype<T>());
-    ws.mask = make_device_tensor(output_shape, kMaskDtype);
-    ws.peak_mask = make_device_tensor(output_shape, kMaskDtype);
-    // Both buffers are written flat as (batch, doppler, range), so the
-    // declared shape is free — give whichever one carries the emitted
-    // cfar_power the full-rank output_shape so the port matches
-    // detection_score. When fold == 1 the CFAR surface is `power` itself
-    // (out_batch == batch_in is enforced by run_cfar_stage); when fold > 1 it
-    // is `integrated_power`. Emitting the buffer directly keeps the port
-    // zero-copy either way.
-    ws.power = make_device_tensor(
-        plan.fold > 1
-            ? std::vector<int64_t>{plan.batch_in, num_doppler, num_range}
-            : output_shape,
-        real_dtype<T>());
-    ws.integrated_power = make_device_tensor(output_shape, real_dtype<T>());
-    ws.batch_in = plan.batch_in;
-    ws.out_batch = plan.out_batch;
-    ws.num_doppler = num_doppler;
-    ws.num_range = num_range;
-  }
-  auto& score = ws.score;
-  auto& noise = ws.noise;
-  auto& mask = ws.mask;
-  auto& peak_mask = ws.peak_mask;
-  auto& power = ws.power;
-  auto& integrated_power = ws.integrated_power;
-
-  const bool peak_only = peak_only_.get();
-  const bool peak_full8 =
-      peak_neighborhood_.get() == CfarPeakNeighborhood::kSquare8;
-
-  const int guard_d = static_cast<int>(effective_guard_cells_[0]);
-  const int guard_r = static_cast<int>(effective_guard_cells_[1]);
-  const int train_d = static_cast<int>(effective_training_cells_[0]);
-  const int train_r = static_cast<int>(effective_training_cells_[1]);
-
-  const CfarVariant variant = cfar_variant_.get();
-  if (variant == CfarVariant::kOS) {
-    if (effective_os_rank_ < 0) {
-      throw std::invalid_argument(
-          "CFARDetectorOp: os_rank must be non-negative for OS variant");
-    }
-    const int64_t max_train = detail::max_training_cell_count(
-        static_cast<int>(num_doppler), static_cast<int>(num_range), guard_d,
-        guard_r, train_d, train_r);
-    if (max_train > detail::kMaxOsTrainingCells) {
-      throw std::invalid_argument(
-          "CFARDetectorOp: OS window footprint exceeds the supported "
-          "training-cell limit");
-    }
-    if (effective_os_rank_ >= max_train) {
-      throw std::invalid_argument(
-          "CFARDetectorOp: os_rank must be less than the maximum training-"
-          "cell count for the configured window footprint");
-    }
+  // Select the runtime stream.
+  cudaStream_t stream = context.cuda_stream().get();
+  if (stream == nullptr) {
+    return make_unexpected(
+        Error{ErrorCode::kNotSupported, "CFARDetectorOp: no CUDA compute stream"});
   }
 
-  // CA and OS LUTs are indexed by training-cell count (N), which is
-  // map-size-independent while the map is at least as large as the CFAR window.
-  // Key those on a canonical window-sized geometry so every such map shares one
-  // cache entry (and the start-time pre-warm). GO and SO are indexed by the
-  // aliased go_lut_index and are genuinely map-dependent (a window-sized map
-  // yields different — and, at low pfa, non-convergent — calibration), so they
-  // keep the actual map dimensions and are not pre-warmed. A sub-window CA/OS
-  // map needs a map-specific table and forces a runtime rebuild — warned below.
-  const bool map_independent_variant =
-      variant == CfarVariant::kCA || variant == CfarVariant::kOS;
-  const int win_d = 2 * (guard_d + train_d) + 1;
-  const int win_r = 2 * (guard_r + train_r) + 1;
-  const bool use_canonical_dims =
-      map_independent_variant && num_doppler >= win_d && num_range >= win_r;
-  if (map_independent_variant && !use_canonical_dims &&
-      !window_exceeds_map_warned_) {
-    HOLOSCAN_LOG_WARN(
-        "CFARDetectorOp: CFAR window ({}x{}) exceeds the RD-map extent "
-        "({}x{}); building a map-specific alpha LUT with reduced-N edge "
-        "thresholds (the start-time pre-warmed table does not apply).",
-        win_d, win_r, num_doppler, num_range);
-    window_exceeds_map_warned_ = true;
-  }
-  const int key_num_doppler =
-      use_canonical_dims ? win_d : static_cast<int>(num_doppler);
-  const int key_num_range =
-      use_canonical_dims ? win_r : static_cast<int>(num_range);
+  // Prepare workspace and LUT/table caches, then run the stage.
+  detail::CfarDetectorState& state = *state_;
+  HOLOSCAN_TRY(auto workspace, prepare_dense_workspace<T>(state, plan));
 
-  AlphaLutKey lut_key{variant,
-                      effective_pfa_,
-                      plan.fold,
-                      effective_os_rank_,
-                      guard_d,
-                      guard_r,
-                      train_d,
-                      train_r,
-                      key_num_doppler,
-                      key_num_range};
+  HOLOSCAN_TRY(update_alpha_lut<T>(state, plan, stream));
+  HOLOSCAN_TRY(auto nci_table_dev_ptr, update_nci_table(state, plan.nci, stream));
 
-  auto upload_alpha_lut = [&](const std::vector<double>& host_lut) {
-    std::vector<T> lut_t(host_lut.size());
-    for (size_t i = 0; i < host_lut.size(); ++i) {
-      lut_t[i] = static_cast<T>(host_lut[i]);
-    }
-    alpha_lut_dev_ = make_device_tensor(
-        {static_cast<int64_t>(lut_t.size())}, real_dtype<T>());
-    if (cudaMemcpyAsync(alpha_lut_dev_->data(), lut_t.data(),
-                        lut_t.size() * sizeof(T), cudaMemcpyHostToDevice,
-                        stream) != cudaSuccess) {
-      throw std::runtime_error("CFARDetectorOp: alpha LUT H2D copy failed");
-    }
-  };
-
-  const bool had_external_alpha_lut = using_external_alpha_lut_;
-  const bool has_external_alpha_lut = !effective_alpha_lut_.empty();
-
-  if (had_external_alpha_lut && !has_external_alpha_lut) {
-    if (!alpha_lut_cleared_pfa_active_warned_) {
-      HOLOSCAN_LOG_WARN(
-          "CFARDetectorOp: alpha_lut cleared; pfa-derived alpha calibration is "
-          "now active and may use the slow Monte Carlo path for GO, SO, or OS "
-          "with K > 1");
-      alpha_lut_cleared_pfa_active_warned_ = true;
-    }
-    using_external_alpha_lut_ = false;
-    // Drop the external table from the host cache so the non-blocking stale
-    // path cannot keep applying it while pfa-derived calibration runs.
-    alpha_lut_host_cache_.clear();
-    alpha_lut_dev_.reset();
-    alpha_lut_key_ = {};
-    pending_lut_key_ = {};
-    pending_lut_active_ = false;
-    stale_lut_warned_ = false;
-    external_alpha_lut_validated_ = false;
+  // Run the CFAR stage.
+  try {
+    // Execute the device stage on the input runtime stream.
+    detail::run_cfar_stage<T>(
+        plan.stage, input.data(), plan.input_is_complex, plan.nci.batch_in, plan.nci.out_batch,
+        plan.num_doppler, plan.num_range, plan.output_shape, plan.nci.fold, nci_table_dev_ptr,
+        state.alpha_lut_dev->data(), static_cast<int64_t>(state.alpha_lut_host_cache.size()),
+        workspace.power, workspace.integrated_power, workspace.score, workspace.noise,
+        workspace.mask, plan.stage.peak_mode != CfarPeakMode::kNone ? workspace.peak_mask : nullptr,
+        stream);
+  } catch (const std::exception& e) {
+    return fail_runtime(e.what());
   }
 
-  if (pfa_override_changed && has_external_alpha_lut &&
-      !pfa_ignored_while_alpha_lut_warned_) {
-    HOLOSCAN_LOG_WARN(
-        "CFARDetectorOp: pfa override has no effect while alpha_lut is "
-        "supplied");
-    pfa_ignored_while_alpha_lut_warned_ = true;
+  // Get the detection mask from the workspace.
+  const void* det_mask_src = plan.stage.peak_mode != CfarPeakMode::kNone
+                                 ? workspace.tensors->peak_mask->data()
+                                 : workspace.tensors->mask->data();
+  const bool* det_mask = static_cast<const bool*>(det_mask_src);
+
+  // Every output is optional/latched. Prepare every still-active loan before
+  // any emit so a late fill failure cannot publish a partial output set.
+  // detection_idx additionally gates its count sync and compaction.
+  std::optional<TensorOutputLoan> idx_loan;
+  // Allocate exact-sized outputs before launching device work.
+  if (detection_idx_out_.active()) {
+    HOLOSCAN_TRY(auto loan, prepare_detection_idx(detection_idx, context, plan, det_mask,
+                                                  state.detection_idx_compact, stream));
+    idx_loan.emplace(std::move(loan));
   }
 
-  if (has_external_alpha_lut) {
-    // max_alpha_lut_index is closed-form for maps that fit the window (the
-    // common case); only needed to validate an externally supplied LUT.
-    // Re-validate only when the table or CFAR geometry/fold changes — not
-    // every tick.
-    const bool lut_changed = effective_alpha_lut_ != alpha_lut_host_cache_;
-    const bool geometry_changed =
-        !external_alpha_lut_validated_ ||
-        validated_external_variant_ != variant ||
-        validated_external_fold_ != plan.fold ||
-        validated_external_num_doppler_ != num_doppler ||
-        validated_external_num_range_ != num_range ||
-        validated_external_guard_d_ != guard_d ||
-        validated_external_guard_r_ != guard_r ||
-        validated_external_train_d_ != train_d ||
-        validated_external_train_r_ != train_r;
-    if (lut_changed || geometry_changed) {
-      const int64_t max_lut_index = max_alpha_lut_index(
-          variant, static_cast<int>(num_doppler), static_cast<int>(num_range),
-          guard_d, guard_r, train_d, train_r);
-      validate_external_alpha_lut(variant, plan.fold, effective_alpha_lut_,
-                                  max_lut_index);
-      external_alpha_lut_validated_ = true;
-      validated_external_variant_ = variant;
-      validated_external_fold_ = plan.fold;
-      validated_external_num_doppler_ = num_doppler;
-      validated_external_num_range_ = num_range;
-      validated_external_guard_d_ = guard_d;
-      validated_external_guard_r_ = guard_r;
-      validated_external_train_d_ = train_d;
-      validated_external_train_r_ = train_r;
-      if (lut_changed) {
-        alpha_lut_host_cache_ = effective_alpha_lut_;
-        upload_alpha_lut(alpha_lut_host_cache_);
-      }
-    }
-    using_external_alpha_lut_ = true;
-  } else {
-    using_external_alpha_lut_ = false;
-    const bool blocking_lut = blocking_alpha_lut_rebuild_.get();
-    if (lut_key != alpha_lut_key_) {
-      // Reset the warn-once flags only on a genuine key change — NOT on every
-      // tick while the same key's background build is still pending (the
-      // adopted key stays stale until the build completes, so this branch is
-      // re-entered each tick; resetting here would re-fire the runtime-rebuild
-      // warning every tick). Preserve the flags for an in-progress build; clear
-      // them when switching to a different pending key.
-      if (!(pending_lut_active_ && pending_lut_key_ == lut_key)) {
-        runtime_build_warned_ = false;
-        stale_lut_warned_ = false;
-      }
-      const auto adopt_ready_lut = [&](std::vector<double> lut) {
-        alpha_lut_host_cache_ = std::move(lut);
-        alpha_lut_key_ = lut_key;
-        pending_lut_key_ = {};
-        pending_lut_active_ = false;
-        stale_lut_warned_ = false;
-        upload_alpha_lut(alpha_lut_host_cache_);
-      };
-      const auto warn_slow_pfa_lut = [&]() {
-        if (pfa_lut_slow_warned_ ||
-            !uses_slow_pfa_lut_calibration(lut_key.variant, lut_key.fold)) {
-          return;
-        }
-        HOLOSCAN_LOG_WARN(
-            "CFARDetectorOp: deriving the alpha LUT from pfa for {} is the "
-            "slow calibration path (Monte Carlo LUT build); for low-latency "
-            "live updates supply a precomputed alpha_lut",
-            to_string(lut_key.variant));
-        pfa_lut_slow_warned_ = true;
-      };
-      // Fires whenever a build is forced during a tick (a runtime rebuild /
-      // stall) rather than served from the start-time warm cache — the signal
-      // the operator did not pre-calibrate this configuration.
-      const auto warn_runtime_rebuild = [&]() {
-        if (runtime_build_warned_) {
-          return;
-        }
-        HOLOSCAN_LOG_WARN(
-            "CFARDetectorOp: calibrating the alpha LUT at runtime (the "
-            "configuration was not pre-warmed at start — e.g. a [live] "
-            "override, an NCI fold not covered by nci_fold, or a sub-window "
-            "map); this stalls the tick or serves a stale LUT while building.");
-        runtime_build_warned_ = true;
-      };
-      // Poll first: a key pre-warmed at start() (or built on an earlier tick)
-      // is served with no calibration and no runtime-rebuild warning.
-      detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
-      if (snap.ready) {
-        adopt_ready_lut(std::move(snap.lut));
-      } else if (blocking_lut || alpha_lut_host_cache_.empty()) {
-        // Blocking mode, or the first materialization (no previous LUT to
-        // serve): build now and stall this tick.
-        warn_runtime_rebuild();
-        warn_slow_pfa_lut();
-        adopt_ready_lut(detail::get_cached_alpha_lut(lut_key));
-      } else {
-        // Non-blocking: serve the previous LUT this tick, build in background.
-        warn_runtime_rebuild();
-        warn_slow_pfa_lut();
-        detail::ensure_alpha_lut_build(lut_key);
-        pending_lut_key_ = lut_key;
-        pending_lut_active_ = true;
-        if (!stale_lut_warned_) {
-          HOLOSCAN_LOG_WARN(
-              "CFARDetectorOp: alpha LUT for the new configuration is still "
-              "calibrating; using the previous LUT for this tick");
-          stale_lut_warned_ = true;
-        }
-      }
-    } else if (pending_lut_active_ && pending_lut_key_ == lut_key) {
-      detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
-      if (snap.ready) {
-        alpha_lut_host_cache_ = std::move(snap.lut);
-        alpha_lut_key_ = lut_key;
-        pending_lut_key_ = {};
-        pending_lut_active_ = false;
-        stale_lut_warned_ = false;
-        upload_alpha_lut(alpha_lut_host_cache_);
-      }
-    }
+  // Prepare output loans. We do this prior to emitting to ensure that the
+  // loans are ready when the emit is called.
+  std::optional<TensorOutputLoan> power_loan;
+  std::optional<TensorOutputLoan> mask_loan;
+  std::optional<TensorOutputLoan> score_loan;
+  std::optional<TensorOutputLoan> noise_loan;
+  const void* power_src = plan.nci.fold > 1 ? workspace.tensors->integrated_power->data()
+                                            : workspace.tensors->power->data();
+  if (cfar_power_out_.active()) {
+    HOLOSCAN_TRY(auto loan, prepare_copy_device(cfar_power, context, plan.output_shape,
+                                                real_dtype<T>(), power_src, stream));
+    power_loan.emplace(std::move(loan));
+  }
+  if (detection_mask_out_.active()) {
+    HOLOSCAN_TRY(auto loan, prepare_copy_device(detection_mask, context, plan.output_shape,
+                                                kMaskDtype, det_mask_src, stream));
+    mask_loan.emplace(std::move(loan));
+  }
+  if (detection_score_out_.active()) {
+    HOLOSCAN_TRY(auto loan,
+                 prepare_copy_device(detection_score, context, plan.output_shape, real_dtype<T>(),
+                                     workspace.tensors->score->data(), stream));
+    score_loan.emplace(std::move(loan));
+  }
+  if (noise_estimate_out_.active()) {
+    HOLOSCAN_TRY(auto loan,
+                 prepare_copy_device(noise_estimate, context, plan.output_shape, real_dtype<T>(),
+                                     workspace.tensors->noise->data(), stream));
+    noise_loan.emplace(std::move(loan));
   }
 
-  // Upload the NCI lookup table only when the integration layout changes;
-  // otherwise reuse the cached device buffer (no per-tick alloc/free/upload).
-  const int64_t* nci_table_dev_ptr = nullptr;
-  if (plan.fold > 1) {
-    if (plan.batch_in_table != nci_table_host_cache_) {
-      nci_table_dev_ = make_device_tensor(
-          {static_cast<int64_t>(plan.batch_in_table.size())}, kInt64Dtype);
-      if (cudaMemcpyAsync(nci_table_dev_->data(), plan.batch_in_table.data(),
-                          plan.batch_in_table.size() * sizeof(int64_t),
-                          cudaMemcpyHostToDevice, stream) != cudaSuccess) {
-        throw std::runtime_error("CFARDetectorOp: NCI table H2D copy failed");
-      }
-      nci_table_host_cache_ = plan.batch_in_table;
-    }
-    nci_table_dev_ptr = static_cast<const int64_t*>(nci_table_dev_->data());
+  // Emit all active output loans.
+  if (idx_loan) {
+    // Publish coherent outputs in dependency order and retain borrowed inputs.
+    detection_idx_out_.emit(detection_idx, context, std::move(*idx_loan),
+                            "CFARDetectorOp.detection_idx");
+  }
+  if (power_loan) {
+    cfar_power_out_.emit(cfar_power, context, std::move(*power_loan), "CFARDetectorOp.cfar_power");
+  }
+  if (mask_loan) {
+    detection_mask_out_.emit(detection_mask, context, std::move(*mask_loan),
+                             "CFARDetectorOp.detection_mask");
+  }
+  if (score_loan) {
+    detection_score_out_.emit(detection_score, context, std::move(*score_loan),
+                              "CFARDetectorOp.detection_score");
+  }
+  if (noise_loan) {
+    noise_estimate_out_.emit(noise_estimate, context, std::move(*noise_loan),
+                             "CFARDetectorOp.noise_estimate");
   }
 
-  detail::run_cfar_stage<T>(
-      variant, input->data(), input_is_complex, plan.batch_in, plan.out_batch,
-      num_doppler, num_range, guard_d, guard_r, train_d, train_r,
-      effective_os_rank_, effective_threshold_scale_, plan.fold,
-      nci_table_dev_ptr, alpha_lut_dev_->data(),
-      static_cast<int64_t>(alpha_lut_host_cache_.size()), power->data(),
-      integrated_power->data(), score->data(), noise->data(), mask->data(),
-      peak_only, peak_full8, peak_only ? peak_mask->data() : nullptr, stream);
-
-  // With peak_only, downstream (count / compact / detection_mask) consumes the
-  // NMS-refined peak_mask; otherwise the raw candidate mask.
-  const auto& det_mask_tensor = peak_only ? peak_mask : mask;
-  const bool* det_mask = static_cast<const bool*>(det_mask_tensor->data());
-
-  const int64_t plane = num_doppler * num_range;
-  const int64_t out_elems = plan.out_batch * plane;
-  const int64_t idx_cols = 2 + plan.n_preserved;
-
-  if (!detection_idx_compact_) {
-    detection_idx_compact_ =
-        std::make_shared<detail::DetectionIdxCompactState>();
-  }
-  const int64_t total_detections = detail::count_mask_detections(
-      det_mask, out_elems, detection_idx_compact_.get(), stream);
-
-  const bool capped = effective_max_detections_ > 0;
-  const int64_t num_detections =
-      capped ? std::min(total_detections, effective_max_detections_)
-             : total_detections;
-  if (capped && total_detections > effective_max_detections_) {
-    HOLOSCAN_LOG_WARN(
-        "CFARDetectorOp: detections exceeded max_detections ({}); surplus "
-        "dropped",
-        effective_max_detections_);
-  }
-
-  auto detection_idx =
-      make_device_tensor({num_detections, idx_cols}, kInt64Dtype);
-  detail::compact_detection_idx(
-      det_mask, out_elems, num_doppler, num_range, plan.preserved_dims,
-      num_detections, static_cast<int64_t*>(detection_idx->data()),
-      detection_idx_compact_.get(), stream);
-
-  if (stream != cudaStreamDefault) {
-    op_output.set_cuda_stream(stream, "detection_mask");
-    op_output.set_cuda_stream(stream, "detection_score");
-    op_output.set_cuda_stream(stream, "noise_estimate");
-    op_output.set_cuda_stream(stream, "detection_idx");
-    op_output.set_cuda_stream(stream, "cfar_power");
-  }
-  // The thresholded surface: integrated_power when the NCI fold ran, else the
-  // raw square-law power map (see the workspace allocation above).
-  emit_single(op_output, "cfar_power",
-              plan.fold > 1 ? integrated_power : power);
-  emit_single(op_output, "detection_mask", det_mask_tensor);
-  emit_single(op_output, "detection_score", score);
-  emit_single(op_output, "noise_estimate", noise);
-  emit_single(op_output, "detection_idx", detection_idx);
-
+  // Retain the input until the next tick has enqueued.
   retained_input_ = std::move(input);
+  return {};
 }
 
 template class CFARDetectorOp<float>;

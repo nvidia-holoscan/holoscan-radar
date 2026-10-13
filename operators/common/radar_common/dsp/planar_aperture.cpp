@@ -24,22 +24,19 @@ std::array<double, 3> position(const ArrayGeometry& geometry, int64_t index) {
   };
 }
 
-std::array<double, 3> subtract(const std::array<double, 3>& a,
-                               const std::array<double, 3>& b) {
+std::array<double, 3> subtract(const std::array<double, 3>& a, const std::array<double, 3>& b) {
   return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
 }
 
 double norm(const std::array<double, 3>& value) {
-  return std::sqrt(value[0] * value[0] + value[1] * value[1] +
-                   value[2] * value[2]);
+  return std::sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
 }
 
 double dot(const std::array<double, 3>& a, const std::array<double, 3>& b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-std::array<double, 3> cross(const std::array<double, 3>& a,
-                            const std::array<double, 3>& b) {
+std::array<double, 3> cross(const std::array<double, 3>& a, const std::array<double, 3>& b) {
   return {
       a[1] * b[2] - a[2] * b[1],
       a[2] * b[0] - a[0] * b[2],
@@ -61,10 +58,10 @@ PlanarAperturePlan analyze_planar_aperture(const ArrayGeometry& geometry) {
   geometry.validate();
   PlanarAperturePlan plan;
 
-  const bool tagged_ura = geometry.geometry_type &&
-                          *geometry.geometry_type == ArrayGeometryType::kUra;
-  const bool tagged_line = geometry.geometry_type &&
-                           *geometry.geometry_type == ArrayGeometryType::kUla;
+  const bool tagged_ura =
+      geometry.geometry_type && *geometry.geometry_type == ArrayGeometryType::kUra;
+  const bool tagged_line =
+      geometry.geometry_type && *geometry.geometry_type == ArrayGeometryType::kUla;
   if (tagged_line) {
     return plan;  // is_ura = false; caller keeps its 1-D path.
   }
@@ -85,8 +82,7 @@ PlanarAperturePlan analyze_planar_aperture(const ArrayGeometry& geometry) {
   const double dy = norm(delta_y);
   if (!(dy > 0.0) || !std::isfinite(dy)) {
     if (tagged_ura) {
-      throw std::invalid_argument(
-          "analyze_planar_aperture: URA inner-axis pitch must be positive");
+      throw std::invalid_argument("analyze_planar_aperture: URA inner-axis pitch must be positive");
     }
     return plan;
   }
@@ -135,8 +131,7 @@ PlanarAperturePlan analyze_planar_aperture(const ArrayGeometry& geometry) {
   const double dz = norm(delta_z);
   if (!(dz > 0.0) || !std::isfinite(dz)) {
     if (tagged_ura) {
-      throw std::invalid_argument(
-          "analyze_planar_aperture: URA outer-axis pitch must be positive");
+      throw std::invalid_argument("analyze_planar_aperture: URA outer-axis pitch must be positive");
     }
     return plan;
   }
@@ -145,12 +140,9 @@ PlanarAperturePlan analyze_planar_aperture(const ArrayGeometry& geometry) {
   for (int64_t iz = 0; iz < nz; ++iz) {
     for (int64_t iy = 0; iy < ny; ++iy) {
       const std::array<double, 3> expected{
-          origin[0] + static_cast<double>(iy) * delta_y[0] +
-              static_cast<double>(iz) * delta_z[0],
-          origin[1] + static_cast<double>(iy) * delta_y[1] +
-              static_cast<double>(iz) * delta_z[1],
-          origin[2] + static_cast<double>(iy) * delta_y[2] +
-              static_cast<double>(iz) * delta_z[2],
+          origin[0] + static_cast<double>(iy) * delta_y[0] + static_cast<double>(iz) * delta_z[0],
+          origin[1] + static_cast<double>(iy) * delta_y[1] + static_cast<double>(iz) * delta_z[1],
+          origin[2] + static_cast<double>(iy) * delta_y[2] + static_cast<double>(iz) * delta_z[2],
       };
       const auto actual = position(geometry, iz * ny + iy);
       if (norm(subtract(actual, expected)) > tolerance) {
@@ -165,10 +157,8 @@ PlanarAperturePlan analyze_planar_aperture(const ArrayGeometry& geometry) {
     }
   }
 
-  std::array<double, 3> y_axis{delta_y[0] / dy, delta_y[1] / dy,
-                               delta_y[2] / dy};
-  std::array<double, 3> z_axis{delta_z[0] / dz, delta_z[1] / dz,
-                               delta_z[2] / dz};
+  std::array<double, 3> y_axis{delta_y[0] / dy, delta_y[1] / dy, delta_y[2] / dy};
+  std::array<double, 3> z_axis{delta_z[0] / dz, delta_z[1] / dz, delta_z[2] / dz};
   if (std::abs(dot(y_axis, z_axis)) > 1e-6) {
     if (tagged_ura) {
       throw std::invalid_argument(
@@ -188,6 +178,15 @@ PlanarAperturePlan analyze_planar_aperture(const ArrayGeometry& geometry) {
   plan.y_axis = y_axis;
   plan.z_axis = z_axis;
   plan.normal = cross(y_axis, z_axis);
+  // A planar aperture measures two transverse direction cosines but cannot
+  // distinguish the two normal hemispheres. Match the ULA embedding and radar
+  // convention by selecting the representative nearest canonical +x. Virtual
+  // assembly/dedup may swap which physical aperture axis is contiguous, so
+  // channel ordering must not silently flip this choice to the rear.
+  if (plan.normal[0] < 0.0) {
+    for (double& value : plan.normal)
+      value = -value;
+  }
   return plan;
 }
 

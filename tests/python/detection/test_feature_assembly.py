@@ -91,6 +91,20 @@ def test_AssemblesRawBinEscapeHatches():
     assert points[1, 1] == pytest.approx(2.0)
 
 
+def test_AssemblesRawDenseAngleBinIndices():
+    idx = np.array([[3, 2, 7, 5]], dtype=np.int64)
+    points = run_assembly(
+        idx,
+        [
+            AssemblyFeature.AZ_BIN,
+            AssemblyFeature.EL_BIN,
+            AssemblyFeature.DOPPLER_BIN,
+            AssemblyFeature.RANGE_BIN,
+        ],
+    )
+    np.testing.assert_array_equal(points, [[3.0, 2.0, 7.0, 5.0]])
+
+
 def test_LooksUpPhysicalRangeVelocityAndScore():
     k_d, k_r = 8, 16
     idx = np.array([2, 4], dtype=np.int64)
@@ -123,7 +137,11 @@ def test_AppendsAoaEstimates():
     aoa = np.array([[0.1, -0.2], [0.3, 0.4]], dtype=np.float64)
     points = run_assembly(
         idx,
-        [AssemblyFeature.DOPPLER_BIN, AssemblyFeature.AZ, AssemblyFeature.EL],
+        [
+            AssemblyFeature.DOPPLER_BIN,
+            AssemblyFeature.AZ_ESTIMATE,
+            AssemblyFeature.EL_ESTIMATE,
+        ],
         aoa_estimates=aoa,
     )
     assert points.shape == (2, 3)

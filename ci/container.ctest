@@ -1,16 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# CTest driver for `holoscan test` — the module test entrypoint.
+# CTest driver selected by [tool.holoscan] in the root pyproject.toml.
+# The bundled CLI driver lives in site-packages; this relative path resolves
+# from the repository root, including inside the development container.
 #
-# Selected by tool.holoscan.ctest-script in pyproject.toml. The relative path
-# resolves from the module root, both locally and inside the container.
-#
-# Invoke via the Holoscan CLI (or the ./holohub wrapper):
-#   holoscan test
-#
-# Or directly:
-#   ctest -S ci/container.ctest -VV
+# Invoke via the Holoscan CLI: holoscan test
+# Or directly: ctest -S ci/container.ctest -VV
 #
 # CTest -D variables (mirrors the stock driver so CLI flags keep working):
 #   APP / OP / PKG / EXT   Optional single-subproject selector; omit for a
@@ -57,7 +53,8 @@ if(NOT TAG)
     set(TAG latest)
 endif()
 
-# Keep direct `ctest -S ci/container.ctest` invocations rooted at this module.
+# The repo root is the parent of ci/ — unlike the stock driver, which lands in
+# site-packages.
 get_filename_component(CTEST_SOURCE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/.."
                        ABSOLUTE)
 
@@ -93,7 +90,7 @@ ctest_empty_binary_directory(${CTEST_BINARY_DIRECTORY})
 # Compiler-cache store. build-test/ is wiped on every run (above), so the cache
 # must live outside it; .cache/ is gitignored and sits in the bind-mounted tree,
 # so it survives both the wipe and container restarts. Set here rather than in
-# the holohub wrapper: this is a property of how *this driver* builds, and the
+# the CLI environment: this is a property of how *this driver* builds, and the
 # wrapper only carries defaults the CLI itself consumes.
 #
 # NOTE: holoscan-cli has first-class sccache support — HOLOSCAN_CLI_ENABLE_SCCACHE=true

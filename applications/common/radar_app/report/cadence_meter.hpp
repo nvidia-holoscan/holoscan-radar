@@ -53,8 +53,7 @@ class CadenceMeter {
     std::lock_guard<std::mutex> lock(mu_);
     ++source_ticks_;
     if (have_prev_emit_) {
-      const double inter =
-          std::chrono::duration<double>(now - prev_emit_).count();
+      const double inter = std::chrono::duration<double>(now - prev_emit_).count();
       max_inter_emit_s_ = std::max(max_inter_emit_s_, inter);
       const double budget = budget_s();
       if (inter > budget) {
@@ -76,8 +75,7 @@ class CadenceMeter {
     std::lock_guard<std::mutex> lock(mu_);
     ++sink_ticks_;
     if (emit_times_.empty()) {
-      HOLOSCAN_LOG_WARN(
-          "cadence: sink tick {} with no matching source emit", sink_ticks_);
+      HOLOSCAN_LOG_WARN("cadence: sink tick {} with no matching source emit", sink_ticks_);
       return;
     }
     const auto t0 = emit_times_.front();
@@ -94,24 +92,20 @@ class CadenceMeter {
           e2e * 1e3, budget * 1e3, sink_ticks_);
     }
     if (log_every > 0 && (sink_ticks_ % log_every) == 0) {
-      HOLOSCAN_LOG_INFO(
-          "cadence: frame {} e2e={:.1f} ms (period={:.1f} ms)", sink_ticks_,
-          e2e * 1e3, frame_period_s * 1e3);
+      HOLOSCAN_LOG_INFO("cadence: frame {} e2e={:.1f} ms (period={:.1f} ms)", sink_ticks_,
+                        e2e * 1e3, frame_period_s * 1e3);
     }
   }
 
   void log_summary() const {
     std::lock_guard<std::mutex> lock(mu_);
-    const double mean_e2e =
-        sink_ticks_ > 0 ? (sum_e2e_s_ / static_cast<double>(sink_ticks_))
-                        : 0.0;
+    const double mean_e2e = sink_ticks_ > 0 ? (sum_e2e_s_ / static_cast<double>(sink_ticks_)) : 0.0;
     HOLOSCAN_LOG_INFO(
         "cadence summary: source_emits={} sink_frames={} overdue_emits={} "
         "late_e2e={} max_inter={:.1f} ms max_e2e={:.1f} ms mean_e2e={:.1f} ms "
         "period={:.1f} ms slack={:.1f} ms",
-        source_ticks_, sink_ticks_, overdue_emits_, late_frames_,
-        max_inter_emit_s_ * 1e3, max_e2e_s_ * 1e3, mean_e2e * 1e3,
-        frame_period_s * 1e3, effective_slack_s() * 1e3);
+        source_ticks_, sink_ticks_, overdue_emits_, late_frames_, max_inter_emit_s_ * 1e3,
+        max_e2e_s_ * 1e3, mean_e2e * 1e3, frame_period_s * 1e3, effective_slack_s() * 1e3);
   }
 
   int64_t source_ticks() const {

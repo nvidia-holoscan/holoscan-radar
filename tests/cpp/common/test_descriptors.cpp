@@ -60,8 +60,7 @@ TEST(WaveformDescriptor, ConstructionRejectsIncompleteOrInconsistentSpecs) {
   for (auto field : {&holoscan::radar::FMCWWaveformSpec::carrier_frequency,
                      &holoscan::radar::FMCWWaveformSpec::chirp_duration,
                      &holoscan::radar::FMCWWaveformSpec::sample_rate,
-                     &holoscan::radar::FMCWWaveformSpec::
-                         chirp_repetition_interval}) {
+                     &holoscan::radar::FMCWWaveformSpec::chirp_repetition_interval}) {
     auto spec = test_waveform_spec();
     spec.*field = 0.0;
     EXPECT_THROW(FMCWWaveformDescriptor{spec}, std::invalid_argument);
@@ -71,22 +70,20 @@ TEST(WaveformDescriptor, ConstructionRejectsIncompleteOrInconsistentSpecs) {
 TEST(WaveformDescriptor, ConstructionRejectsNonFiniteValues) {
   // NaN compares false against every bound, so finiteness is enforced
   // explicitly; both spellings of the sweep and every scalar are covered.
-  for (double bad : {std::numeric_limits<double>::quiet_NaN(),
-                     std::numeric_limits<double>::infinity(),
-                     -std::numeric_limits<double>::infinity()}) {
+  for (double bad :
+       {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity()}) {
     for (auto field : {&holoscan::radar::FMCWWaveformSpec::carrier_frequency,
                        &holoscan::radar::FMCWWaveformSpec::chirp_duration,
                        &holoscan::radar::FMCWWaveformSpec::sample_rate,
-                       &holoscan::radar::FMCWWaveformSpec::
-                           chirp_repetition_interval}) {
+                       &holoscan::radar::FMCWWaveformSpec::chirp_repetition_interval}) {
       auto spec = test_waveform_spec();
       spec.*field = bad;
       EXPECT_THROW(FMCWWaveformDescriptor{spec}, std::invalid_argument);
     }
     auto bad_bandwidth = test_waveform_spec();
     bad_bandwidth.bandwidth = bad;
-    EXPECT_THROW(FMCWWaveformDescriptor{bad_bandwidth},
-                 std::invalid_argument);
+    EXPECT_THROW(FMCWWaveformDescriptor{bad_bandwidth}, std::invalid_argument);
     auto bad_slope = test_waveform_spec();
     bad_slope.bandwidth.reset();
     bad_slope.chirp_slope = bad;
@@ -148,8 +145,7 @@ ArrayGeometry make_test_ula(int64_t channels) {
   geom.geometry_type = ArrayGeometryType::kUla;
   for (int64_t channel = 0; channel < channels; ++channel) {
     geom.element_positions.insert(geom.element_positions.end(),
-                                  {0.0, 0.5 * static_cast<double>(channel),
-                                   0.0});
+                                  {0.0, 0.5 * static_cast<double>(channel), 0.0});
   }
   return geom;
 }
@@ -157,8 +153,7 @@ ArrayGeometry make_test_ula(int64_t channels) {
 TEST(ShiftInvariantSubarrayPlan, AutoDerivesMaximumOverlapUlaPair) {
   const auto geom = make_test_ula(6);
   const auto plan =
-      holoscan::radar::build_shift_invariant_subarray_plan(
-          geom, ShiftInvariantSubarrayPair{});
+      holoscan::radar::build_shift_invariant_subarray_plan(geom, ShiftInvariantSubarrayPair{});
   ASSERT_EQ(plan.pair.reference_indices.size(), 5u);
   ASSERT_EQ(plan.pair.shifted_indices.size(), 5u);
   EXPECT_EQ(plan.pair.reference_indices.front(), 0);
@@ -171,13 +166,11 @@ TEST(ShiftInvariantSubarrayPlan, RejectsParallelToBoresightUla) {
   geom.wavelength = 1.0;
   geom.geometry_type = ArrayGeometryType::kUla;
   for (int64_t channel = 0; channel < 4; ++channel) {
-    geom.element_positions.insert(
-        geom.element_positions.end(),
-        {0.5 * static_cast<double>(channel), 0.0, 0.0});
+    geom.element_positions.insert(geom.element_positions.end(),
+                                  {0.5 * static_cast<double>(channel), 0.0, 0.0});
   }
   EXPECT_THROW(
-      holoscan::radar::build_shift_invariant_subarray_plan(
-          geom, ShiftInvariantSubarrayPair{}),
+      holoscan::radar::build_shift_invariant_subarray_plan(geom, ShiftInvariantSubarrayPair{}),
       std::invalid_argument);
 }
 

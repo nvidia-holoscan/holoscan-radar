@@ -11,30 +11,49 @@
       }
     ],
     "license": "Apache-2.0",
-    "language": ["C++", "Python"],
+    "language": [
+      "C++",
+      "Python"
+    ],
     "namespace": {
       "cpp": "holoscan::radar",
       "python": "holoscan.radar"
     },
     "holoscan_sdk": {
       "minimum_required_version": "4.3.0",
-      "tested_versions": ["4.3.0"]
+      "tested_versions": [
+        "4.3.0"
+      ]
     },
-    "platforms": ["x86_64", "aarch64"],
-    "tags": ["Radar", "Signal Processing", "GPU", "Accelerated Computing", "FMCW", "Pulse-Doppler", "Synthetic Aperture Radar"],
+    "platforms": [
+      "x86_64",
+      "aarch64"
+    ],
+    "tags": [
+      "Radar",
+      "Signal Processing",
+      "GPU",
+      "Accelerated Computing",
+      "FMCW",
+      "Pulse-Doppler",
+      "Synthetic Aperture Radar"
+    ],
     "source_repository": "https://github.com/nvidia-holoscan/holoscan-radar",
     "operator_names": [
       "beamscan_estimator_op",
       "cfar_detector_op",
       "cluster_dbscan_op",
       "clutter_filter_op",
+      "ddm_dense_demultiplex_op",
+      "ddm_power_fold_op",
+      "ddm_sparse_demultiplex_op",
       "detection_reduction_op",
+      "doppler_notch_op",
       "esprit_estimator_op",
       "feature_assembly_op",
       "fmcw_doppler_processor_op",
       "fmcw_range_doppler_processor_op",
       "fmcw_range_processor_op",
-      "mimo_coherent_compensation_op",
       "mimo_deinterleave_op",
       "music_estimator_op",
       "mvdr_estimator_op",
@@ -42,6 +61,8 @@
       "root_music_estimator_op",
       "snapshot_gather_op",
       "subarray_selection_op",
+      "tdm_dense_compensation_op",
+      "tdm_sparse_compensation_op",
       "virtual_array_assembly_op"
     ],
     "dockerfile": "Dockerfile"

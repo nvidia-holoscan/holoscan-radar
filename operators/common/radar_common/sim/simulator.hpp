@@ -45,15 +45,15 @@ namespace holoscan::radar::sim {
 // thermal noise / additives are applied separately (additives.hpp). Requires
 // exactly one TX element (use the MIMO GPU path for multi-TX). All work is
 // enqueued on `stream`.
-std::shared_ptr<holoscan::Tensor> simulate_gpu(const SimScene& scene,
-                                               cudaStream_t stream);
+std::shared_ptr<holoscan::Tensor> simulate_gpu(const SimScene& scene, cudaStream_t stream);
 
 // Synthesize a MULTI-TX ADC cube on the device (MatX) and return it as a
 // complex<float> holoscan::Tensor of shape (num_rx, slow_time, samples) — the
 // device counterpart of the CPU mimo solvers (the tests-only reference),
 // unified into one weight-driven core. The multiplexing scheme is captured
 // entirely by `weights` (row-major (num_tx, slow_time) complex), the
-// per-(tx, slot) excitation:
+// periodically repeated per-(tx, slot) excitation. A return with ambiguity
+// order q uses the weight at modulo(slot - q, slow_time):
 //   - TDM: slow_time = num_tx * num_chirps; weight 1 on the slot's active TX,
 //          0 elsewhere.
 //   - DDM (coded): slow_time = num_chirps; weight exp(i*2*pi*offset_tx*k).
@@ -61,8 +61,8 @@ std::shared_ptr<holoscan::Tensor> simulate_gpu(const SimScene& scene,
 // num_tx = scene.tx_positions.size(); the slow-time step uses
 // scene.waveform.chirp_repetition_interval. Clean scatterer response only.
 std::shared_ptr<holoscan::Tensor> simulate_mimo_gpu(
-    const SimScene& scene, const std::vector<std::complex<double>>& weights,
-    int64_t slow_time, cudaStream_t stream);
+    const SimScene& scene, const std::vector<std::complex<double>>& weights, int64_t slow_time,
+    cudaStream_t stream);
 
 // I/Q additive (device): add seeded complex white Gaussian noise in place to a
 // complex<float> cube at `snr_db` relative to a unit-amplitude target — the
@@ -71,8 +71,7 @@ std::shared_ptr<holoscan::Tensor> simulate_mimo_gpu(
 // CPU additive's realization (device RNG);
 // statistically equivalent. Enqueued on
 // `stream`.
-void add_thermal_noise_gpu(holoscan::Tensor& cube,
-                           const std::optional<double>& snr_db, uint64_t seed,
-                           cudaStream_t stream);
+void add_thermal_noise_gpu(holoscan::Tensor& cube, const std::optional<double>& snr_db,
+                           uint64_t seed, cudaStream_t stream);
 
 }  // namespace holoscan::radar::sim

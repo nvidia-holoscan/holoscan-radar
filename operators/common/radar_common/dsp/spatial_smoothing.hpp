@@ -86,8 +86,8 @@ struct SpatialSmoothingPlan {
 // Throws std::invalid_argument if the geometry is not a filled, uniformly
 // spaced 1-D/2-D lattice (holey / non-uniform / >2-D aperture), if counts has
 // the wrong length, or if any count is < 1 or > its axis extent.
-SpatialSmoothingPlan build_spatial_smoothing_plan(
-    const ArrayGeometry& geometry, const std::vector<int64_t>& counts,
-    bool forward_backward);
+SpatialSmoothingPlan build_spatial_smoothing_plan(const ArrayGeometry& geometry,
+                                                  const std::vector<int64_t>& counts,
+                                                  bool forward_backward);
 
 }  // namespace holoscan::radar

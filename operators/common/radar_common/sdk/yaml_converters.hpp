@@ -36,8 +36,7 @@ namespace holoscan::radar::detail {
 // Parse an enum from its canonical spelling; `candidates` enumerates every
 // legal value. Throws naming the type and accepted spellings.
 template <typename Enum, size_t N>
-Enum parse_enum(const std::string& text, const char* type_name,
-                const Enum (&candidates)[N]) {
+Enum parse_enum(const std::string& text, const char* type_name, const Enum (&candidates)[N]) {
   for (Enum candidate : candidates) {
     if (text == to_string(candidate)) {
       return candidate;
@@ -48,17 +47,14 @@ Enum parse_enum(const std::string& text, const char* type_name,
     accepted += accepted.empty() ? "" : ", ";
     accepted += to_string(candidate);
   }
-  throw std::invalid_argument(std::string(type_name) + ": unknown value '" +
-                              text + "' (accepted: " + accepted + ")");
+  throw std::invalid_argument(std::string(type_name) + ": unknown value '" + text +
+                              "' (accepted: " + accepted + ")");
 }
 
 inline constexpr WindowType kAllWindowTypes[] = {
-    WindowType::kNone,      WindowType::kHann,
-    WindowType::kHamming,   WindowType::kBlackman,
-    WindowType::kBlackmanHarris, WindowType::kKaiser,
-    WindowType::kChebyshev, WindowType::kTaylor,
-    WindowType::kFlatTop,   WindowType::kTukey,
-    WindowType::kCustom,
+    WindowType::kNone,           WindowType::kHann,   WindowType::kHamming,   WindowType::kBlackman,
+    WindowType::kBlackmanHarris, WindowType::kKaiser, WindowType::kChebyshev, WindowType::kTaylor,
+    WindowType::kFlatTop,        WindowType::kTukey,  WindowType::kCustom,
 };
 
 inline constexpr FftNorm kAllFftNorms[] = {
@@ -84,6 +80,7 @@ inline constexpr RepresentativePolicy kAllRepresentativePolicies[] = {
     RepresentativePolicy::kPeak,
     RepresentativePolicy::kMedoid,
     RepresentativePolicy::kFirst,
+    RepresentativePolicy::kWeightedMean,
 };
 
 inline constexpr OverlapPolicy kAllOverlapPolicies[] = {
@@ -112,14 +109,10 @@ inline constexpr ArrayGeometryType kAllArrayGeometryTypes[] = {
 };
 
 inline constexpr AngleConventionPreset kAllAngleConventionPresets[] = {
-    AngleConventionPreset::kRadarBoresight,
-    AngleConventionPreset::kRosRep103,
-    AngleConventionPreset::kIso8855Flu,
-    AngleConventionPreset::kAerospaceNed,
-    AngleConventionPreset::kPhysicsSpherical,
-    AngleConventionPreset::kGeodeticEnu,
-    AngleConventionPreset::kGeodeticNed,
-    AngleConventionPreset::kDirectionCosine,
+    AngleConventionPreset::kRadarBoresight,   AngleConventionPreset::kRosRep103,
+    AngleConventionPreset::kIso8855Flu,       AngleConventionPreset::kAerospaceNed,
+    AngleConventionPreset::kPhysicsSpherical, AngleConventionPreset::kGeodeticEnu,
+    AngleConventionPreset::kGeodeticNed,      AngleConventionPreset::kDirectionCosine,
     AngleConventionPreset::kCustom,
 };
 
@@ -151,9 +144,8 @@ struct convert<holoscan::radar::WindowType> {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "WindowType",
-        holoscan::radar::detail::kAllWindowTypes);
+    value = holoscan::radar::detail::parse_enum(node.as<std::string>(), "WindowType",
+                                                holoscan::radar::detail::kAllWindowTypes);
     return true;
   }
 };
@@ -167,9 +159,8 @@ struct convert<holoscan::radar::FftNorm> {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "FftNorm",
-        holoscan::radar::detail::kAllFftNorms);
+    value = holoscan::radar::detail::parse_enum(node.as<std::string>(), "FftNorm",
+                                                holoscan::radar::detail::kAllFftNorms);
     return true;
   }
 };
@@ -179,14 +170,12 @@ struct convert<holoscan::radar::ClutterFilterMethod> {
   static Node encode(const holoscan::radar::ClutterFilterMethod& value) {
     return Node(std::string(holoscan::radar::to_string(value)));
   }
-  static bool decode(const Node& node,
-                     holoscan::radar::ClutterFilterMethod& value) {
+  static bool decode(const Node& node, holoscan::radar::ClutterFilterMethod& value) {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "ClutterFilterMethod",
-        holoscan::radar::detail::kAllClutterFilterMethods);
+    value = holoscan::radar::detail::parse_enum(node.as<std::string>(), "ClutterFilterMethod",
+                                                holoscan::radar::detail::kAllClutterFilterMethods);
     return true;
   }
 };
@@ -196,14 +185,12 @@ struct convert<holoscan::radar::SnapshotEdgeMode> {
   static Node encode(const holoscan::radar::SnapshotEdgeMode& value) {
     return Node(std::string(holoscan::radar::to_string(value)));
   }
-  static bool decode(const Node& node,
-                     holoscan::radar::SnapshotEdgeMode& value) {
+  static bool decode(const Node& node, holoscan::radar::SnapshotEdgeMode& value) {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "SnapshotEdgeMode",
-        holoscan::radar::detail::kAllSnapshotEdgeModes);
+    value = holoscan::radar::detail::parse_enum(node.as<std::string>(), "SnapshotEdgeMode",
+                                                holoscan::radar::detail::kAllSnapshotEdgeModes);
     return true;
   }
 };
@@ -213,14 +200,13 @@ struct convert<holoscan::radar::RepresentativePolicy> {
   static Node encode(const holoscan::radar::RepresentativePolicy& value) {
     return Node(std::string(holoscan::radar::to_string(value)));
   }
-  static bool decode(const Node& node,
-                     holoscan::radar::RepresentativePolicy& value) {
+  static bool decode(const Node& node, holoscan::radar::RepresentativePolicy& value) {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "RepresentativePolicy",
-        holoscan::radar::detail::kAllRepresentativePolicies);
+    value =
+        holoscan::radar::detail::parse_enum(node.as<std::string>(), "RepresentativePolicy",
+                                            holoscan::radar::detail::kAllRepresentativePolicies);
     return true;
   }
 };
@@ -234,9 +220,8 @@ struct convert<holoscan::radar::ScoreMethod> {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "ScoreMethod",
-        holoscan::radar::detail::kAllScoreMethods);
+    value = holoscan::radar::detail::parse_enum(node.as<std::string>(), "ScoreMethod",
+                                                holoscan::radar::detail::kAllScoreMethods);
     return true;
   }
 };
@@ -314,8 +299,7 @@ struct convert<holoscan::radar::FMCWWaveformDescriptor> {
     node["chirp_repetition_interval"] = wf.chirp_repetition_interval();
     return node;
   }
-  static bool decode(const Node& node,
-                     holoscan::radar::FMCWWaveformDescriptor& wf) {
+  static bool decode(const Node& node, holoscan::radar::FMCWWaveformDescriptor& wf) {
     if (!node.IsMap()) {
       return false;
     }
@@ -350,14 +334,12 @@ struct convert<holoscan::radar::ArrayGeometryType> {
   static Node encode(const holoscan::radar::ArrayGeometryType& value) {
     return Node(std::string(holoscan::radar::to_string(value)));
   }
-  static bool decode(const Node& node,
-                     holoscan::radar::ArrayGeometryType& value) {
+  static bool decode(const Node& node, holoscan::radar::ArrayGeometryType& value) {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "ArrayGeometryType",
-        holoscan::radar::detail::kAllArrayGeometryTypes);
+    value = holoscan::radar::detail::parse_enum(node.as<std::string>(), "ArrayGeometryType",
+                                                holoscan::radar::detail::kAllArrayGeometryTypes);
     return true;
   }
 };
@@ -367,14 +349,13 @@ struct convert<holoscan::radar::AngleConventionPreset> {
   static Node encode(const holoscan::radar::AngleConventionPreset& value) {
     return Node(std::string(holoscan::radar::to_string(value)));
   }
-  static bool decode(const Node& node,
-                     holoscan::radar::AngleConventionPreset& value) {
+  static bool decode(const Node& node, holoscan::radar::AngleConventionPreset& value) {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "AngleConventionPreset",
-        holoscan::radar::detail::kAllAngleConventionPresets);
+    value =
+        holoscan::radar::detail::parse_enum(node.as<std::string>(), "AngleConventionPreset",
+                                            holoscan::radar::detail::kAllAngleConventionPresets);
     return true;
   }
 };
@@ -388,9 +369,8 @@ struct convert<holoscan::radar::SignedAxis> {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "SignedAxis",
-        holoscan::radar::detail::kAllSignedAxes);
+    value = holoscan::radar::detail::parse_enum(node.as<std::string>(), "SignedAxis",
+                                                holoscan::radar::detail::kAllSignedAxes);
     return true;
   }
 };
@@ -400,14 +380,12 @@ struct convert<holoscan::radar::ElevationReference> {
   static Node encode(const holoscan::radar::ElevationReference& value) {
     return Node(std::string(holoscan::radar::to_string(value)));
   }
-  static bool decode(const Node& node,
-                     holoscan::radar::ElevationReference& value) {
+  static bool decode(const Node& node, holoscan::radar::ElevationReference& value) {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "ElevationReference",
-        holoscan::radar::detail::kAllElevationReferences);
+    value = holoscan::radar::detail::parse_enum(node.as<std::string>(), "ElevationReference",
+                                                holoscan::radar::detail::kAllElevationReferences);
     return true;
   }
 };
@@ -417,14 +395,12 @@ struct convert<holoscan::radar::PeakInterpolation> {
   static Node encode(const holoscan::radar::PeakInterpolation& value) {
     return Node(std::string(holoscan::radar::to_string(value)));
   }
-  static bool decode(const Node& node,
-                     holoscan::radar::PeakInterpolation& value) {
+  static bool decode(const Node& node, holoscan::radar::PeakInterpolation& value) {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "PeakInterpolation",
-        holoscan::radar::detail::kAllPeakInterpolations);
+    value = holoscan::radar::detail::parse_enum(node.as<std::string>(), "PeakInterpolation",
+                                                holoscan::radar::detail::kAllPeakInterpolations);
     return true;
   }
 };
@@ -438,9 +414,8 @@ struct convert<holoscan::radar::OverlapPolicy> {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "OverlapPolicy",
-        holoscan::radar::detail::kAllOverlapPolicies);
+    value = holoscan::radar::detail::parse_enum(node.as<std::string>(), "OverlapPolicy",
+                                                holoscan::radar::detail::kAllOverlapPolicies);
     return true;
   }
 };
@@ -450,14 +425,12 @@ struct convert<holoscan::radar::MultiplexingScheme> {
   static Node encode(const holoscan::radar::MultiplexingScheme& value) {
     return Node(std::string(holoscan::radar::to_string(value)));
   }
-  static bool decode(const Node& node,
-                     holoscan::radar::MultiplexingScheme& value) {
+  static bool decode(const Node& node, holoscan::radar::MultiplexingScheme& value) {
     if (!node.IsScalar()) {
       return false;
     }
-    value = holoscan::radar::detail::parse_enum(
-        node.as<std::string>(), "MultiplexingScheme",
-        holoscan::radar::detail::kAllMultiplexingSchemes);
+    value = holoscan::radar::detail::parse_enum(node.as<std::string>(), "MultiplexingScheme",
+                                                holoscan::radar::detail::kAllMultiplexingSchemes);
     return true;
   }
 };
@@ -481,8 +454,7 @@ struct convert<holoscan::radar::DDMCodeDescriptor> {
     node["guard_bands"] = code.guard_bands;
     return node;
   }
-  static bool decode(const Node& node,
-                     holoscan::radar::DDMCodeDescriptor& code) {
+  static bool decode(const Node& node, holoscan::radar::DDMCodeDescriptor& code) {
     if (!node.IsMap()) {
       return false;
     }
@@ -496,8 +468,7 @@ struct convert<holoscan::radar::DDMCodeDescriptor> {
       }
       code.phase_codes.reserve(codes.size() / 2);
       for (size_t i = 0; i + 1 < codes.size(); i += 2) {
-        code.phase_codes.emplace_back(codes[i].as<double>(),
-                                    codes[i + 1].as<double>());
+        code.phase_codes.emplace_back(codes[i].as<double>(), codes[i + 1].as<double>());
       }
     }
     if (const Node offsets = node["doppler_offsets"]) {
@@ -542,16 +513,13 @@ struct convert<holoscan::radar::ArrayGeometry> {
 
 template <>
 struct convert<holoscan::radar::ShiftInvariantSubarrayPair> {
-  static Node encode(
-      const holoscan::radar::ShiftInvariantSubarrayPair& pair) {
+  static Node encode(const holoscan::radar::ShiftInvariantSubarrayPair& pair) {
     Node node;
     node["reference_indices"] = pair.reference_indices;
     node["shifted_indices"] = pair.shifted_indices;
     return node;
   }
-  static bool decode(
-      const Node& node,
-      holoscan::radar::ShiftInvariantSubarrayPair& pair) {
+  static bool decode(const Node& node, holoscan::radar::ShiftInvariantSubarrayPair& pair) {
     if (!node.IsMap()) {
       return false;
     }

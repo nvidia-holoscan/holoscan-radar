@@ -34,7 +34,7 @@ So **SIMO** (Single Input, Multiple Output) is the standard radar and communicat
 
 **Out of scope (now):**
 
-- **CDM / BPM** (code-division / binary-phase multiplexing). Architecturally a small extension of the DDM path — the same "all TX on, per-chirp phase code, separate after the Doppler stage" flow — differing only in carrying an explicit orthogonal code matrix and demuxing by code correlation instead of reading Doppler bands. When added, it reuses `MIMOCoherentCompensationOp` (code-correlation mode) and the rest of the MIMO chain unchanged. Deliberately deferred to a future wave.
+- **CDM / BPM** (code-division / binary-phase multiplexing). Architecturally a small extension of the DDM path — the same "all TX on, per-chirp phase code, separate after the Doppler stage" flow — differing only in carrying an explicit orthogonal code matrix and demuxing by code correlation instead of reading Doppler bands. When added, it reuses `TDMDenseCompensationOp / DDMDenseDemultiplexOp` (code-correlation mode) and the rest of the MIMO chain unchanged. Deliberately deferred to a future wave.
 - **FDM** (frequency-division): different TX carrier frequencies put a frequency-dependent phase across the virtual aperture — out of scope.
 - **Fast-time / PMCW code division** (phase-coded waveform, correlation-based range compression): a different *waveform*, not FMCW, requiring a new range front-end. Explicitly excluded so the "CDM" label never smuggles it into scope.
 
@@ -50,7 +50,7 @@ These hold across every workflow (consistent with the operator API doc):
   - **Dense** — `PhaseShiftBeamformerOp` forms an angle for *every* RD cell → a Range-Doppler-Angle (RDA) cube → `CFARDetectorOp` runs on the cube.
   - **Sparse** — `CFARDetectorOp` detects first (non-coherently integrating the channel axis), then a per-detection channel **snapshot** is gathered (`SnapshotGatherOp`) and a sparse angle estimator (`BeamscanEstimatorOp` by default — see *Angle-estimation algorithms*) estimates one DOA per detection.
 - **Coherent compensation is an angle-path requirement, not a detection one.** Detection works on non-coherent power, so it does not need the TX phase alignment; beamforming does. In the MIMO chains the compensation therefore precedes the angle path; detection can run on the power either side of it.
-- **Signal-processing stages** may be run split (`FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp`) or fused (`FMCWRangeDopplerProcessorOp`); the chains below show the split form for clarity, and the fused operator is a drop-in where the intermediate range profiles are not needed. For MIMO, the fused operator is usable up to the point where a MIMO marshaling step must interpose (see each chain).
+- **Signal-processing stages** may be run split (`FMCWRangeProcessorOp → [ClutterFilterOp] → FMCWDopplerProcessorOp`) or fused (`FMCWRangeDopplerProcessorOp`); the chains below show the split form for clarity, and the fused operator is a drop-in where the intermediate range profiles are not needed. With `mean_subtraction`, the fused operator uses `doppler_window` for both the clutter projection and Doppler analysis; split chains must set the same window on the clutter and Doppler operators. For MIMO, the fused operator is usable up to the point where a MIMO marshaling step must interpose (see each chain).
 
 ---
 
@@ -70,8 +70,8 @@ They differ along three axes: **spectral (grid-scan) vs. gridless (parametric)**
 
 Consequences for the operator interfaces:
 
-- **Spectral vs. gridless.** Bartlett / MVDR / MUSIC scan the `az_angles` × `el_angles` grid and peak-pick, so they carry the scan-grid parameters and can emit an `angle_spectrum` (resolution capped by grid spacing unless interpolated). **Root-MUSIC and ESPRIT are gridless** — they solve for DOAs directly (polynomial roots / an eigenvalue rotation), so they have **no scan grid and no spectrum output**, avoiding grid quantization and the 2-D peak search; they emit DOAs (plus optional eigen/rank diagnostics).
-- **Covariance / snapshots.** Everything except Bartlett needs a spatial covariance `R = E[xxᴴ]`, hence **multiple snapshots** — from adjacent range-Doppler cells, sub-array averaging (spatial smoothing, which also de-correlates coherent multipath that would otherwise rank-deficient the covariance), or multiple frames. This is the multi-snapshot input the covariance estimators take (the shared 3-D `snapshot` contract in the operator API doc); `BeamscanEstimatorOp` alone is single-snapshot.
+- **Spectral vs. gridless.** Bartlett / MVDR / MUSIC scan the `az_coordinates` × `el_coordinates` grid and peak-pick, so they carry the scan-grid parameters and can emit an `angle_spectrum` (resolution capped by grid spacing unless interpolated). **Root-MUSIC and ESPRIT are gridless** — they solve for DOAs directly (polynomial roots / an eigenvalue rotation), so they have **no scan grid and no spectrum output**, avoiding grid quantization and the 2-D peak search; they emit DOAs (plus optional eigen/rank diagnostics).
+- **Covariance / snapshots.** Everything except Bartlett needs a spatial covariance `R = E[xxᴴ]`, hence **multiple snapshots** — from adjacent range-Doppler cells, sub-array averaging (spatial smoothing, which also de-correlates coherent multipath that would otherwise rank-deficient the covariance), or multiple frames. This is the multi-snapshot input the covariance estimators take (the shared 3-D `snapshot` contract in the operator API doc). `BeamscanEstimatorOp` also accepts multiple looks, but averages their independent Bartlett powers rather than forming a covariance.
 - **Source count.** The subspace methods (MUSIC / Root-MUSIC / ESPRIT) need the number of sources — fixed, estimated by MDL/AIC, or seeded from the CFAR/cluster count.
 - **Geometry constraint interacts with MIMO.** Root-MUSIC (ULA) and ESPRIT (shift-invariance) require *structured* arrays; the virtual array from `VirtualArrayAssemblyOp` is often non-uniform or holey, so those two may need a ULA/subarray-selection (or spatial-smoothing) step first, whereas Bartlett / MVDR / MUSIC accept arbitrary `element_positions`. Native 2-D az/el for the gridless pair also needs a 2-D-capable variant (e.g. Unitary / 2-D ESPRIT, or a separable URA).
 
@@ -83,12 +83,12 @@ All five share one **pluggable sparse-slot contract** (input `snapshot`, output 
 
 `ClusterDBSCANOp` groups detections in a feature space (range, velocity, angle). Because the detections are just points, it is **orthogonal to the antenna/multiplexing modality** — it does not fan out per workflow — and attaches to the detection/angle stage in one of two patterns:
 
-- **Angle-then-cluster (post-angle)** — estimate DOA for every detection, then cluster in the full `(range, velocity, az, el)` feature space. The default placement; available in every angle-bearing workflow and in **both** angle paths. In the **dense** path it is the *only* option, since angle is already formed on each cell before detection.
+- **Angle-then-cluster (post-angle)** — estimate DOA for every detection, then cluster in the full `(range, velocity, az, el)` feature space. The default clustering placement; available in every angle-bearing workflow and in **both** angle paths. In the **dense** path it is the only clustering placement, since angle is already formed on each cell before detection; clustering itself remains optional, and N-D CFAR peaks may be reported directly.
 - **Cluster-then-angle (pre-angle)** — **sparse path only**: cluster the CFAR detections in range-Doppler first, reduce each cluster to one representative (`DetectionReductionOp`), then estimate angle **once per representative** — saving snapshots / beamform calls when detections are dense (extended targets, multipath).
 
 SISO has no angle stage, so clustering there is simply an optional trailing stage over the range-Doppler detections.
 
-In every case `ClusterDBSCANOp` consumes a homogeneous float feature matrix (`ClusterDBSCANOp.points`) assembled from detection attributes by `FeatureAssemblyOp` (the bin→physical mapping + `detection_score` gather). The feature set, the representative-selection policy, and the snapshot gather are all locked operators now (`FeatureAssemblyOp`, `DetectionReductionOp`, `SnapshotGatherOp`); see the operator API doc.
+In every case `ClusterDBSCANOp` consumes a homogeneous float feature matrix (`ClusterDBSCANOp.points`) assembled from detection attributes by `FeatureAssemblyOp`. A zero per-axis `epsilon` excludes a pass-through column from the clustering metric, so one `[range, velocity, azimuth, elevation, detection_score]` matrix can feed both DBSCAN and score-weighted reduction. `DetectionReductionOp.reduced_points` exposes selected or synthetic per-cluster features while `rep_idx` remains a real cell for snapshot gathering. The feature set, representative policy, and snapshot gather are locked operators (`FeatureAssemblyOp`, `DetectionReductionOp`, `SnapshotGatherOp`); see the operator API doc.
 
 ---
 
@@ -98,10 +98,10 @@ Each workflow below is a **Mermaid flowchart**. Nodes are operators; each edge i
 
 Cross-cutting wiring facts (apply across the diagrams):
 
-- **Dense angle path:** `PhaseShiftBeamformerOp.rda_cube → CFARDetectorOp.rd_maps` — the RDA cube's `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps` input (the CFAR plane stays the last two axes).
+- **Dense angle path:** `PhaseShiftBeamformerOp.rda_cube → CFARDetectorOp.rd_maps` — the RDA cube's `(az, el)` axes ride as leading batch dims on CFAR's `rd_maps` input (the CFAR plane stays the last two axes). The beamformer's optional `az_grid` / `el_grid` outputs carry the effective per-tick axis values to `FeatureAssemblyOp`.
 - **Sparse angle path:** `SnapshotGatherOp` consumes **two** ports — the RD maps and CFAR's `detection_idx` — and emits `snapshot` (plus an optional `is_valid` mask when a `clamp` edge is used), feeding `⟨sparse angle estimator⟩`.
 - **`array_geometry`:** in SIMO it is a static parameter (physical RX positions). In MIMO it is computed at runtime — `VirtualArrayAssemblyOp.array_geometry → ⟨angle op⟩.array_geometry` (the `[live]` override input port).
-- **CFAR maps:** `detection_mask`, `detection_score`, `noise_estimate` are always emitted; the ones consumed downstream are `detection_idx` (drives the gather / reduction; sized to the detection count) and `detection_score` (the per-detection strength `FeatureAssemblyOp` folds into `points`).
+- **CFAR outputs:** all five are optional/latched, so applications wire only what they consume. The usual downstream pair is `detection_idx` (drives the gather / reduction; sized to the detection count) and `detection_score` (the per-detection strength `FeatureAssemblyOp` folds into `points`).
 
 ---
 
@@ -116,7 +116,7 @@ flowchart TD
   classDef opt stroke-dasharray:4 3
   ADC["ADC cube (num_chirps, samples)"] -->|"adc_cube"| RANGE["FMCWRangeProcessorOp"]
   RANGE -->|"range_profiles"| CLUT["ClutterFilterOp"]
-  CLUT -->|"range_profiles"| DOPP["FMCWDopplerProcessorOp"]
+  CLUT -->|"range_profiles_out"| DOPP["FMCWDopplerProcessorOp"]
   DOPP -->|"rd_maps (num_doppler, num_range)"| CFAR["CFARDetectorOp"]
   CFAR -->|"detection_idx + detection_score"| FEAT["FeatureAssemblyOp (bridge)"]
   FEAT -->|"points"| CLUS["ClusterDBSCANOp"]
@@ -139,32 +139,32 @@ flowchart TD
   classDef opt stroke-dasharray:4 3
   ADC["ADC cube (N_rx, num_chirps, samples)"] -->|"adc_cube"| RANGE["FMCWRangeProcessorOp"]
   RANGE -->|"range_profiles"| CLUT["ClutterFilterOp"]
-  CLUT -->|"range_profiles"| DOPP["FMCWDopplerProcessorOp"]
+  CLUT -->|"range_profiles_out"| DOPP["FMCWDopplerProcessorOp"]
   DOPP -->|"rd_maps (N_rx, num_doppler, num_range)"| ANGLE["angle path — dense or sparse (below)"]
   class CLUT opt
 ```
 
-**Dense angle path** (angle-then-cluster only — angle is formed before detection):
+**Dense angle path** (angle-then-detect; angle is formed before detection):
 
 ```mermaid
 flowchart TD
   classDef opt stroke-dasharray:4 3
   DOPP["FMCWDopplerProcessorOp"] -->|"rd_maps"| BEAM["PhaseShiftBeamformerOp"]
-  BEAM -->|"rda_cube → CFARDetectorOp.rd_maps (num_az, num_el, num_doppler, num_range)"| CFAR["CFARDetectorOp (on the RDA cube)"]
+  BEAM -->|"rda_cube → rd_maps (num_az, num_el, num_doppler, num_range)"| CFAR["CFARDetectorOp (peak_mode: all)"]
   CFAR -->|"detection_idx + detection_score"| FEAT["FeatureAssemblyOp (bridge)"]
-  FEAT -->|"points (range, vel, az, el, score)"| CLUS["ClusterDBSCANOp"]
-  class FEAT,CLUS opt
+  BEAM -.->|"az_grid / el_grid"| FEAT
+  FEAT -->|"points (range, vel, az, el, score)"| REPORT["Direct peak report / visualization"]
+  class FEAT opt
 ```
 
 > **Dense az/el assembly caveat (open).** On this path the `(az, el)` beam
 > indices arrive as the leading *preserved-batch* columns of CFAR's
 > `detection_idx` (`(az_bin, el_bin, doppler_bin, range_bin)`).
 > `FeatureAssemblyOp` maps those `(az_bin, el_bin)` columns through the beam grid
-> itself via the `az_bin` / `el_bin` feature tokens + optional
-> `az_angles` / `el_angles` grid inputs (settled — STATUS.md S4), so the direct
+> itself via the `az` / `el` feature tokens + optional
+> `az_grid` / `el_grid` inputs, so the direct
 > `CFAR → FeatureAssemblyOp` edge carries the dense path with no angle-lookup
-> adapter. (`fmcw_dense_simo`'s app-local `CubeAoaLookupOp` predates S4 and can
-> be dropped at leisure.)
+> adapter.
 
 **Sparse angle path — angle-then-cluster:**
 
@@ -178,7 +178,7 @@ flowchart TD
   SNAP -.->|"is_valid (optional)"| EST
   EST -->|"aoa_estimates"| FEAT["FeatureAssemblyOp (bridge)"]
   CFAR -->|"detection_idx + detection_score"| FEAT
-  FEAT -->|"points (range, vel, az, el)"| CLUS["ClusterDBSCANOp"]
+  FEAT -->|"points (range, vel, az, el, score)"| CLUS["ClusterDBSCANOp"]
   class FEAT,CLUS opt
 ```
 
@@ -207,20 +207,39 @@ The M TX fire in separate time slots, so their chirps are **interleaved along sl
 flowchart TD
   classDef opt stroke-dasharray:4 3
   ADC["ADC cube (N_rx, M·L, samples)"] -->|"adc_cube"| DEINT["MIMODeinterleaveOp"]
-  DEINT -->|"adc_cube (M_tx, N_rx, L, samples)"| RANGE["FMCWRangeProcessorOp"]
+  DEINT -->|"adc_cube_out (M_tx, N_rx, L, samples)"| RANGE["FMCWRangeProcessorOp"]
   RANGE -->|"range_profiles"| CLUT["ClutterFilterOp"]
-  CLUT -->|"range_profiles"| DOPP["FMCWDopplerProcessorOp"]
-  DOPP -->|"rd_maps (M_tx, N_rx, num_doppler, num_range)"| COMP["MIMOCoherentCompensationOp"]
-  COMP -->|"rd_maps"| VAA["VirtualArrayAssemblyOp"]
-  VAA -->|"rd_maps (num_virtual, num_doppler, num_range)"| ANGLE["angle path (dense or sparse) + CFARDetectorOp"]
-  VAA -->|"array_geometry → ⟨angle op⟩.array_geometry (override port)"| ANGLE
+  CLUT -->|"range_profiles_out"| DOPP["FMCWDopplerProcessorOp"]
+  DOPP -->|"rd_maps (M_tx, N_rx, num_doppler, num_range)"| COMP["TDMDenseCompensationOp"]
+  COMP -->|"rd_maps_out"| VAA["VirtualArrayAssemblyOp"]
+  VAA -->|"rd_maps_out (num_virtual, num_doppler, num_range)"| ANGLE["angle path (dense or sparse) + CFARDetectorOp"]
+  VAA -->|"array_geometry (WireArrayGeometry) → ⟨angle op⟩.array_geometry"| ANGLE
   class CLUT opt
 ```
 
 - **Why compensation:** each TX fires at a different time within the cycle, so a moving target accrues a Doppler-dependent phase *between* TX firings; the per-Doppler-bin correction removes it before the TX channels are combined into a coherent virtual array.
 - **Velocity:** the per-TX chirp spacing is `M·PRI`, so unambiguous velocity is reduced by `M`; the waveform descriptor's PRI must be the per-TX effective interval.
 - **Clustering:** attaches on the assembled virtual RD maps exactly as in SIMO (angle-then-cluster in either path, or cluster-then-angle in the sparse path). Nothing MIMO-specific.
-- The fused `FMCWRangeDopplerProcessorOp` may replace the range/Doppler pair *after* `MIMODeinterleaveOp`, but `MIMOCoherentCompensationOp` and `VirtualArrayAssemblyOp` still follow it.
+- The fused `FMCWRangeDopplerProcessorOp` may replace the range/Doppler pair *after* `MIMODeinterleaveOp`, but `TDMDenseCompensationOp` and `VirtualArrayAssemblyOp` still follow it.
+
+#### Sparse TDM detect-before-compensate
+
+Applications with sparse scenes may move TDM compensation and virtual assembly after CFAR. `TDMSparseCompensationOp` fuses the detection-indexed gather, per-cell TDM phase correction, and virtual-array assembly; it emits the estimator-ready snapshots and their coherent runtime geometry.
+
+```mermaid
+flowchart TD
+  DOPP["Uncompensated RD maps (M_tx, N_rx, D, R)"] -->|"rd_maps"| CFAR["CFARDetectorOp (nci_axes: [0, 1])"]
+  DOPP -->|"rd_maps"| SPARSE["TDMSparseCompensationOp"]
+  CFAR -->|"detection_idx"| SPARSE
+  FOLD_SOURCE["External fold observation"] -.->|"fold_idx k; default 0"| SPARSE
+  SPARSE -->|"snapshot (num_detections, num_virtual, num_snapshots)"| EST["⟨sparse angle estimator⟩"]
+  SPARSE -.->|"is_valid (optional)"| EST
+  SPARSE -->|"array_geometry (WireArrayGeometry)"| EST
+```
+
+TDM correction is a unit-magnitude phase rotation, so TX/RX non-coherent power is unchanged when channels remain independent. The pre-compensation detector is therefore equivalent to the dense-first detector for `keep_all` or an array without coincident virtual elements. It is not generally statistic-equivalent when the dense path uses `dedup` or coherent `average`, because virtual assembly then changes the channel set before CFAR. The sparse path intentionally trades full-cube compensation and assembly cost for work proportional to the detection count.
+
+The reduced per-TX Doppler axis does not identify which of the `M` velocity folds produced a detection. `TDMSparseCompensationOp.fold_idx` accepts that class from an external observation and removes its otherwise angle-biasing TX phase ramp; missing input means the principal class zero. This preserves spatial coherence but does not unfold the reported velocity. No current application supplies the sideband. Dense TDM remains principal-interval-only because one detection-row class cannot describe a full cube or separate multiple folds superposed in one cell.
 
 ### MIMO — DDM (M × N, Doppler-division)
 
@@ -231,31 +250,65 @@ flowchart TD
   classDef opt stroke-dasharray:4 3
   ADC["ADC cube (N_rx, num_chirps, samples)"] -->|"adc_cube"| RANGE["FMCWRangeProcessorOp"]
   RANGE -->|"range_profiles"| DOPP["FMCWDopplerProcessorOp"]
-  DOPP -->|"rd_maps (N_rx, num_doppler, num_range)"| COMP["MIMOCoherentCompensationOp"]
-  COMP -->|"rd_maps → ClutterFilterOp.range_profiles † (M_tx, N_rx, num_doppler_per_tx, num_range)"| CLUT["ClutterFilterOp (post-demux)"]
-  CLUT -->|"range_profiles"| VAA["VirtualArrayAssemblyOp"]
-  VAA -->|"rd_maps (num_virtual, num_doppler, num_range)"| ANGLE["angle path (dense or sparse) + CFARDetectorOp"]
-  VAA -->|"array_geometry → ⟨angle op⟩.array_geometry (override port)"| ANGLE
-  class CLUT opt
+  DOPP -->|"rd_maps (N_rx, num_doppler, num_range)"| COMP["DDMDenseDemultiplexOp"]
+  DOPP -->|"velocity_bins"| COMP
+  COMP -->|"rd_maps_out (M_tx, N_rx, num_doppler_per_tx, num_range)"| NOTCH["DopplerNotchOp"]
+  COMP -->|"velocity_bins_out"| NOTCH
+  NOTCH -->|"rd_maps_out"| VAA["VirtualArrayAssemblyOp"]
+  COMP -->|"velocity_bins_out (num_doppler_per_tx)"| AXIS["Feature/report velocity axis"]
+  VAA -->|"rd_maps_out (num_virtual, num_doppler, num_range)"| ANGLE["angle path (dense or sparse) + CFARDetectorOp"]
+  VAA -->|"array_geometry (WireArrayGeometry) → ⟨angle op⟩.array_geometry"| ANGLE
 ```
 
 - **No** `MIMODeinterleaveOp` (nothing is interleaved in slow-time).
-- **† Clutter placement:** the per-chirp TX codes ride on the raw chirps, so a slow-time clutter filter must run **after** demux (or before any TX coding) — a plain slow-time mean over coded chirps does not cleanly null stationary clutter. Hence `ClutterFilterOp` appears after `MIMOCoherentCompensationOp` here, unlike the TDM chain; its port is still named `range_profiles` but carries the demuxed block.
-- **Velocity:** the `[0, PRF)` Doppler span is shared across M bands, so unambiguous velocity is reduced by `M`; DDM needs guard bands / a band-assignment convention to keep the TX bands separable (handled in the compensation operator's `ddm_code`).
+- **Clutter suppression:** `DopplerNotchOp` applies an optional hard or raised-cosine physical-velocity stopband after dense demultiplexing. A plain slow-time mean over coded pre-demux chirps does not cleanly null stationary clutter, while routing post-demux RD maps through `ClutterFilterOp` subtracts a mean across Doppler bins and creates a range-aligned pedestal. The notch applies one gain to every TX/RX channel at each physical velocity, preserving channel phase.
+- **Velocity:** the `[0, PRF)` Doppler span is shared across M bands, so unambiguous velocity is reduced by `M`; DDM needs guard bands / a band-assignment convention to keep the TX bands separable (handled in the compensation operator's `ddm_code`). `FMCWDopplerProcessorOp.velocity_bins` is causally published before `rd_maps` and `DDMDenseDemultiplexOp` transforms that same-tick physical axis alongside the map: a centered reduced slice for linear M-band demux, or identity for nonlinear full-axis correlation.
 - **Clustering:** same as SIMO/TDM — attaches on the assembled virtual RD maps.
+
+#### Sparse DDM detect-before-demux
+
+Sparse DDM trades full-cube demultiplexing for a folded power detector and per-detection complex recovery. It supports linear integer-bin M-band codes only and intentionally omits clutter filtering in v1.
+
+```mermaid
+flowchart TD
+  DOPP["Pre-demux RD maps (N_rx, D, R)"] -->|"rd_maps"| FOLD["DDMPowerFoldOp"]
+  FOLD -->|"power_map (W, R)"| CFAR["CFARDetectorOp (preintegrated_looks: M·N_rx)"]
+  DOPP -->|"rd_maps"| SPARSE["DDMSparseDemultiplexOp"]
+  CFAR -->|"detection_idx (d_prime, r)"| SPARSE
+  FOLD_SOURCE["External fold observation"] -.->|"fold_idx k; default 0"| SPARSE
+  SPARSE -->|"snapshot (num_detections, num_virtual, num_snapshots)"| EST["sparse angle estimator"]
+  SPARSE -.->|"is_valid (optional)"| EST
+  SPARSE -->|"array_geometry (WireArrayGeometry)"| EST
+```
+
+`DDMPowerFoldOp` sums power over every TX band and RX channel, so CFAR receives a rank-2 real map and uses `preintegrated_looks = M·N_rx` under the independent-look model. Correlated channel noise or clutter residue lowers the effective degrees of freedom and requires empirical calibration. Discarding `G` bins from each width-`B` band creates blind fraction `G/B`; choose `G` from the slow-time window response.
+
+Power folding deliberately removes the velocity-fold identity. `DDMSparseDemultiplexOp.fold_idx` carries that identity separately and corrects the corresponding cyclic TX permutation. Missing `fold_idx` means zero, which is valid only in the principal reduced interval `[-PRF/(2M), PRF/(2M))`; wider coverage requires an external observation. An M+1 empty-band layout is a research item, not an already-defined resolver operator. The static `ddm_code` in v1 does not itself support frame-to-frame code rotation.
 
 ---
 
 ## Workflow comparison
 
-| Modality | TX × RX | `MIMODeinterleaveOp` | `MIMOCoherentCompensationOp` | `VirtualArrayAssemblyOp` | Angle path | Channel axis | Unambig. velocity |
-| :------- | :------ | :------------------- | :--------------------------- | :----------------------- | :--------- | :----------- | :---------------- |
-| SISO | 1 × 1 | — | — | — | none | — (`1`) | full |
-| SIMO | 1 × N | — | — | — | dense or sparse | physical RX (`N`) | full |
-| MIMO — TDM | M × N | ✔ (front-of-chain) | ✔ (per-Doppler-bin phase) | ✔ (`p_tx ⊕ p_rx`) | dense or sparse | virtual (`≤ M·N`) | ÷ M |
-| MIMO — DDM | M × N | — | ✔ (band demux + code removal) | ✔ (`p_tx ⊕ p_rx`) | dense or sparse | virtual (`≤ M·N`) | ÷ M |
+### Multi-waveform application
 
-The signal-processing core (`FMCWRangeProcessorOp` / `ClutterFilterOp` / `FMCWDopplerProcessorOp` or the fused operator), `CFARDetectorOp`, and the angle operators are common to every workflow with angle. The virtual-array assembly is identical across TDM and DDM — only the *TX-separation* step (`MIMODeinterleaveOp` + phase correction for TDM; band demux for DDM) differs.
+`multi_waveform` reuses the sparse TDM chain while alternating
+complete near/far CPIs. `FMCWTransmitSourceOp` owns profile selection and its
+TX backend; `CorrelatedMimoTdmAdcSourceOp` owns the RX backend. The sources
+tick independently and correlate through a bounded internal frame-token ledger.
+The TX-applied timestamp is copied onto both the per-frame waveform descriptor
+and ADC cube, allowing the existing range, Doppler, and sparse compensation
+`Exact{}` waveform inputs follow changing samples and physical repetition intervals.
+The physical on-wire PRI stays in the simulator/backend profile; the descriptor
+sent to DSP carries the effective per-TX TDM PRI.
+
+| Modality | TX × RX | De-interleave | Dense TX processing | Sparse TX processing | Virtual assembly | Unambig. velocity |
+| :------- | :------ | :------------ | :------------------ | :------------------- | :--------------- | :---------------- |
+| SISO | 1 × 1 | — | — | — | — | full |
+| SIMO | 1 × N | — | — | — | — | full |
+| MIMO — TDM | M × N | `MIMODeinterleaveOp` | `TDMDenseCompensationOp` | `TDMSparseCompensationOp` | standalone or sparse-fused | ÷ M |
+| MIMO — DDM | M × N | — | `DDMDenseDemultiplexOp` | `DDMPowerFoldOp` + `DDMSparseDemultiplexOp` | standalone or sparse-fused | ÷ M; sparse needs `fold_idx` outside principal interval |
+
+The range/Doppler processors, `CFARDetectorOp`, and the angle operators are common to every workflow with angle. `ClutterFilterOp` is part of the ordinary SISO/SIMO/TDM slow-time chain; dense DDM instead uses optional post-demux `DopplerNotchOp`. The virtual-array assembly is identical across TDM and DDM — only the *TX-separation* step (`MIMODeinterleaveOp` + phase correction for TDM; band demux for DDM) differs.
 
 Clustering is not a column because it is orthogonal to the modality: every angle-bearing row supports *angle-then-cluster*, and the sparse angle path additionally supports *cluster-then-angle* (see *Clustering placement*).
 
@@ -263,19 +316,30 @@ Clustering is not a column because it is orthogonal to the modality: every angle
 
 ## MIMO marshaling operators (roles)
 
-Three operators, one per responsibility, span TX separation through virtual-array assembly. Their full Inputs / Outputs / Parameters are locked in the operator API doc; their roles in the chain:
+The scheme-specific operators span TX separation through virtual-array assembly. Their full inputs, outputs, and parameters are locked in the operator API doc:
 
 - **`MIMODeinterleaveOp`** — TDM only, front of chain: splits the interleaved slow-time axis into an explicit TX axis (a strided reshape / gather per the `TXSchedule`). Pure data marshaling.
-- **`MIMOCoherentCompensationOp`** — the one genuine compute step. TDM: apply the per-Doppler-bin phase correction that compensates the inter-TX time offset. DDM: demux the Doppler sub-bands into an explicit TX axis, remove the per-chirp code phase, and align. Either way it emits a separated, phase-aligned `(tx, rx)` block; Doppler-ambiguity / ÷M handling lives here.
+- **`TDMDenseCompensationOp`** — apply the per-Doppler-bin phase correction that compensates the inter-TX time offset, indexed by firing slot from the same `tx_schedule` as deinterleave.
+- **`DDMDenseDemultiplexOp`** — demux Doppler sub-bands into an explicit TX axis, remove linear-code initial phase (or correlate nonlinear codes), and align.
+- **`TDMSparseCompensationOp`** — fuse detection-indexed TDM correction, snapshot gather, and virtual assembly.
+- **`DDMPowerFoldOp` + `DDMSparseDemultiplexOp`** — detect on folded pre-demux power, then recover only detected virtual snapshots using an explicit velocity-fold index.
 - **`VirtualArrayAssemblyOp`** — flatten the separated `(tx, rx)` block into a single virtual channel axis (`c = tx·N_rx + rx`) and emit the matching virtual `ArrayGeometry` (`p_virtual = p_tx + p_rx`, with an `overlap_policy` for coincident virtual elements, `num_virtual ≤ M·N`). Output feeds the angle operators.
 
 ---
 
 ## Notes & open items
 
+### Adaptive sparse-angle cascade
+
+The `adaptive_aoa` application adds a reusable selective-resolution pattern to
+the MIMO-TDM sparse path: multi-look Beamscan feeds
+`RankOneResidualScreenOp`; compacted flagged snapshots feed one configured
+multi-source estimator; `MultiSourceExpansionOp` merges resolved 1..N angles
+with the unflagged Beamscan rows before `FeatureAssemblyOp`. CFAR uses TX/RX
+NCI plus `range_doppler` peak selection and the application deliberately omits
+clustering. See [`applications/fmcw/adaptive_aoa/README.md`](../../applications/fmcw/adaptive_aoa/README.md).
+
 - **Bridges are locked, not handwaved.** The snapshot gather, feature assembly, and cluster reduction are the operators `SnapshotGatherOp`, `FeatureAssemblyOp`, and `DetectionReductionOp` (contracts in the operator API doc); their delivery models (mainstream ops / thin op over a shared reduction primitive) are settled there.
 - **Detection before or after virtual assembly:** detection uses non-coherent power, so it can run on the per-channel RD maps (with `nci_axes` over the channel set) or on the assembled cube; only the *angle* path requires the coherent compensation + virtual assembly. The chains show assembly first for a single clear ordering.
-- **Velocity ambiguity (TDM and DDM):** both reduce unambiguous velocity by `M`. Extended-velocity / disambiguation schemes (e.g. staggered PRI, band-overlap tricks) are out of scope for the first wave.
-- **CDM / BPM (future):** reuses this exact MIMO chain — `MIMOCoherentCompensationOp` gains a code-correlation demux mode (carrying an explicit orthogonal code matrix), while de-interleave (none) and virtual assembly are unchanged. Fast-time / PMCW code division remains excluded (different waveform).
-- **Sparse DDM detect-before-demux (future):** an alternate sparse MIMO–DDM recipe — CFAR on a **pre-demux** map (Rx NCI, optionally with a Doppler-alias “fold” average), then **per-detection** DDM recovery (unfold → gather each TX bin → code-phase weight → virtual snapshot → `BeamscanEstimatorOp`). Wave 1 keeps demux → [clutter] → VAA → CFAR → `SnapshotGatherOp`. The alternate path is a different detector (typically worse Pd @ fixed Pfa than demux-first + channel NCI) that trades detection performance for demux cost on sparse scenes; it is **not** a `MIMOCoherentCompensationOp` mode. Deferred detail: [`mimo_coherent_compensation_op/OPEN_ITEMS.md`](../../operators/fmcw/mimo_coherent_compensation_op/OPEN_ITEMS.md) §B.5.
-- **Covariance-estimator open items:** shared across `MVDR` / `MUSIC` / `RootMUSIC` / `ESPRIT` — the multi-snapshot / spatial-smoothing input form, the source-count source (fixed vs. MDL/AIC vs. CFAR-cluster), and — for the gridless pair — the ULA/subarray-selection step on non-uniform virtual arrays.
+- **Velocity ambiguity (TDM and DDM):** both reduce unambiguous velocity by `M`. Dense downstream sees that aliased per-TX Doppler axis. Sparse TDM and sparse DDM make the fold explicit through row-aligned `fold_idx`; resolution and physical-velocity unfolding remain separate future operators or external observations.
+- **CDM / BPM (future):** may reuse the dense DDM correlation machinery with a separate locked contract. Fast-time / PMCW code division remains excluded.

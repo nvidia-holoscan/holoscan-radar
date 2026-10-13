@@ -17,6 +17,7 @@ target_link_libraries(fmcw_range_doppler_processor_op
     PUBLIC
         holoscan::core
         holoscan::radar_common
+        holoscan::radar_schemas
     PRIVATE
         holoscan::fmcw_range_processor_op
         holoscan::clutter_filter_op
@@ -40,4 +41,6 @@ install(FILES fmcw_range_doppler_processor_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw
 )
 
-add_subdirectory(python)
+if(HOLOSCAN_RADAR_BUILD_PYTHON)
+    add_subdirectory(python)
+endif()

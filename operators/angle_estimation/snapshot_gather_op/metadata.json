@@ -9,16 +9,19 @@
             }
         ],
         "language": ["C++"],
-        "version": "0.1.0",
+        "version": "0.4.0",
         "changelog": {
+            "0.4.0": "Publish is_valid before snapshot for downstream Exact coherence",
+            "0.3.0": "Tick-shell cleanup, reusable workspace, complete coordinate validation",
+            "0.2.0": "HSDK 5 migration: Operator<Params>, typed Tensor ports, OnAligned contract",
             "0.1.0": "Initial Release"
         },
         "holoscan_sdk": {
-            "minimum_required_version": "4.3.0",
-            "tested_versions": ["4.3.0"]
+            "minimum_required_version": "5.0.0",
+            "tested_versions": ["5.0.0"]
         },
         "platforms": ["x86_64", "aarch64"],
-        "tags": ["Radar", "Angle", "Bridge", "GPU", "FMCW", "SIMO"],
+        "tags": ["Radar", "Angle", "Bridge", "GPU", "SIMO", "MIMO"],
         "ranking": 3,
         "requirements": {}
     }

@@ -58,13 +58,13 @@ inline void clear_music_eig_cache() {
 // Per-tick: clear the eig plan cache (keys are freed-at-return scratch
 // pointers) to bound growth — WITHOUT draining MatX's global MemTracker. The
 // global drain frees every MatX-tracked buffer in the process, including
-// sibling operators' cached cuFFT workspaces (FMCWRange/DopplerProcessorOp),
-// which they reuse next tick → out-of-bounds reads and corrupted output.
+// sibling operators' cached cuFFT workspaces (range/Doppler FFT
+// processors), which they reuse next tick → out-of-bounds reads and
+// corrupted output.
 // Leaves the live flag set so the teardown retire still drains. See
 // mvdr_stage.hpp for the identical split.
 inline void clear_music_matx_caches() {
-  const bool live =
-      music_eig_plans_live_flag().load(std::memory_order_relaxed);
+  const bool live = music_eig_plans_live_flag().load(std::memory_order_relaxed);
   if (!live) {
     return;
   }
@@ -76,8 +76,7 @@ inline void clear_music_matx_caches() {
 // still valid. Call once from the operator's stop() (and from Python atexit as
 // backup) — NOT per tick (see clear_music_matx_caches above).
 inline void retire_music_matx_caches() {
-  const bool live =
-      music_eig_plans_live_flag().exchange(false, std::memory_order_relaxed);
+  const bool live = music_eig_plans_live_flag().exchange(false, std::memory_order_relaxed);
   if (!live) {
     return;
   }
@@ -93,16 +92,16 @@ inline void retire_music_matx_caches() {
 // num_channels, row-major) over the valid snapshots. Identical to MVDR's
 // covariance_kernel (mvdr_stage.hpp) - duplicated rather than shared because
 // radar_common stays CUDA-free and per-operator kernels are not (yet) a
-// shared target; see OPEN_ITEMS.md if a third consumer wants to factor this
-// out. `mask` (num_items x num_snapshots, uint8/bool) selects valid slots;
+// shared target; factor this out if a third consumer appears. `mask`
+// (num_items x num_snapshots, uint8/bool) selects valid slots;
 // nullptr -> all valid. Empty items (K_i == 0) yield a zero matrix;
 // `k_counts[item]` records K_i.
 template <typename T>
-__global__ void music_covariance_kernel(
-    const cuda::std::complex<T>* __restrict__ x,
-    const unsigned char* __restrict__ mask, int64_t num_items,
-    int64_t num_channels, int64_t num_snapshots,
-    cuda::std::complex<T>* __restrict__ cov, int64_t* __restrict__ k_counts) {
+__global__ void music_covariance_kernel(const cuda::std::complex<T>* __restrict__ x,
+                                        const unsigned char* __restrict__ mask, int64_t num_items,
+                                        int64_t num_channels, int64_t num_snapshots,
+                                        cuda::std::complex<T>* __restrict__ cov,
+                                        int64_t* __restrict__ k_counts) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items) {
     return;
@@ -112,8 +111,7 @@ __global__ void music_covariance_kernel(
   if (threadIdx.x == 0) {
     int64_t count = 0;
     for (int64_t s = 0; s < num_snapshots; ++s) {
-      const bool valid =
-          mask == nullptr || mask[item * num_snapshots + s] != 0;
+      const bool valid = mask == nullptr || mask[item * num_snapshots + s] != 0;
       count += valid ? 1 : 0;
     }
     k_valid = count;
@@ -131,8 +129,7 @@ __global__ void music_covariance_kernel(
     const int64_t c2 = e % num_channels;
     cuda::std::complex<T> acc{T{0}, T{0}};
     for (int64_t s = 0; s < num_snapshots; ++s) {
-      const bool valid =
-          mask == nullptr || mask[item * num_snapshots + s] != 0;
+      const bool valid = mask == nullptr || mask[item * num_snapshots + s] != 0;
       if (!valid) {
         continue;
       }
@@ -153,11 +150,9 @@ __global__ void music_covariance_kernel(
 
 // Broadcasts a fixed model order into every item's slot (num_sources: fixed
 // mode - no per-item EFT decision needed).
-__global__ inline void fill_model_order_kernel(int32_t* __restrict__ out,
-                                               int64_t num_items,
+__global__ inline void fill_model_order_kernel(int32_t* __restrict__ out, int64_t num_items,
                                                int32_t value) {
-  const int64_t i =
-      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i < num_items) {
     out[i] = value;
   }
@@ -170,10 +165,9 @@ __global__ inline void fill_model_order_kernel(int32_t* __restrict__ out,
 // clamped to >= 0 defensively - callers validate model_order <=
 // num_channels - 1 upstream).
 template <typename T>
-__global__ void projector_kernel(
-    const cuda::std::complex<T>* __restrict__ evec,
-    const int32_t* __restrict__ model_order, int64_t num_items,
-    int64_t num_channels, cuda::std::complex<T>* __restrict__ proj) {
+__global__ void projector_kernel(const cuda::std::complex<T>* __restrict__ evec,
+                                 const int32_t* __restrict__ model_order, int64_t num_items,
+                                 int64_t num_channels, cuda::std::complex<T>* __restrict__ proj) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items) {
     return;
@@ -207,8 +201,7 @@ __global__ void projector_kernel(
 // spectrum is stored (num_az, num_el) per item; beams are el-major
 // (beam = ie*num_az + ia) matching the steering-manifold build.
 template <typename T>
-__device__ inline T& music_spectrum_at(T* spec, int64_t ia, int64_t ie,
-                                       int64_t num_el) {
+__device__ inline T& music_spectrum_at(T* spec, int64_t ia, int64_t ie, int64_t num_el) {
   return spec[ia * num_el + ie];
 }
 
@@ -226,16 +219,17 @@ __device__ inline T& music_spectrum_at(T* spec, int64_t ia, int64_t ie,
 // thousands of beams; staging it into shared moves that traffic off the L1TEX
 // load path. (MVDR's capon_reduce_kernel carries an older "shared was slower,
 // kernel is latency-bound" note from a different GPU - it does not hold here;
-// see OPEN_ITEMS.md.) The launch falls back to Staged=false when P_n does not
+// CLARAHOLOS-3398 tracks reevaluating the Capon path.) The launch falls back to
+// Staged=false when P_n does not
 // fit the shared-memory budget. The inner reduction over c2 is carried in
 // four independent accumulators so the FMAs pipeline.
 template <typename T, bool Staged>
-__global__ void music_reduce_kernel(
-    const cuda::std::complex<T>* __restrict__ proj,
-    const cuda::std::complex<T>* __restrict__ manifold, int64_t num_items,
-    int64_t num_channels, int64_t num_az, int64_t num_el,
-    const T* __restrict__ az_grid, const T* __restrict__ el_grid,
-    T* __restrict__ spectrum, T* __restrict__ aoa) {
+__global__ void music_reduce_kernel(const cuda::std::complex<T>* __restrict__ proj,
+                                    const cuda::std::complex<T>* __restrict__ manifold,
+                                    int64_t num_items, int64_t num_channels, int64_t num_az,
+                                    int64_t num_el, const T* __restrict__ az_grid,
+                                    const T* __restrict__ el_grid, T* __restrict__ spectrum,
+                                    T* __restrict__ aoa) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items) {
     return;
@@ -342,9 +336,9 @@ __global__ void music_reduce_kernel(
     if (tid < stride) {
       const T other_pow = red_pow[tid + stride];
       const int64_t other_idx = red_idx[tid + stride];
-      const bool take = other_pow > red_pow[tid] ||
-                        (other_pow == red_pow[tid] && other_idx >= 0 &&
-                         (red_idx[tid] < 0 || other_idx < red_idx[tid]));
+      const bool take =
+          other_pow > red_pow[tid] || (other_pow == red_pow[tid] && other_idx >= 0 &&
+                                       (red_idx[tid] < 0 || other_idx < red_idx[tid]));
       if (take) {
         red_pow[tid] = other_pow;
         red_idx[tid] = other_idx;
@@ -372,10 +366,8 @@ __global__ void music_reduce_kernel(
 
 // Strict 2-D local maximum - identical rule to MVDR's mvdr_is_local_max.
 template <typename T>
-__device__ inline bool music_is_local_max(const T* __restrict__ spec,
-                                          int64_t ia, int64_t ie,
-                                          int64_t num_az, int64_t num_el,
-                                          T p) {
+__device__ inline bool music_is_local_max(const T* __restrict__ spec, int64_t ia, int64_t ie,
+                                          int64_t num_az, int64_t num_el, T p) {
   if (ia > 0 && spec[(ia - 1) * num_el + ie] >= p) {
     return false;
   }
@@ -402,11 +394,12 @@ __device__ inline bool music_is_local_max(const T* __restrict__ spec,
 // Differs from MVDR's peak_extract_kernel only in the per-item target count
 // (MUSIC targets the resolved model order, not always max_sources).
 template <typename T>
-__global__ void music_peak_extract_kernel(
-    const T* __restrict__ spectrum, const int32_t* __restrict__ model_order,
-    int64_t num_items, int64_t num_az, int64_t num_el, int64_t max_sources,
-    const T* __restrict__ az_grid, const T* __restrict__ el_grid,
-    T* __restrict__ doa_multi, int32_t* __restrict__ source_count) {
+__global__ void music_peak_extract_kernel(const T* __restrict__ spectrum,
+                                          const int32_t* __restrict__ model_order,
+                                          int64_t num_items, int64_t num_az, int64_t num_el,
+                                          int64_t max_sources, const T* __restrict__ az_grid,
+                                          const T* __restrict__ el_grid, T* __restrict__ doa_multi,
+                                          int32_t* __restrict__ source_count) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items) {
     return;
@@ -419,8 +412,7 @@ __global__ void music_peak_extract_kernel(
 
   extern __shared__ __align__(16) unsigned char smem_pk[];
   auto* red_pow = reinterpret_cast<T*>(smem_pk);
-  auto* red_idx =
-      reinterpret_cast<int64_t*>(red_pow + static_cast<int64_t>(blockDim.x));
+  auto* red_idx = reinterpret_cast<int64_t*>(red_pow + static_cast<int64_t>(blockDim.x));
   int64_t* sel = red_idx + static_cast<int64_t>(blockDim.x);
 
   const int tid = static_cast<int>(threadIdx.x);
@@ -450,8 +442,7 @@ __global__ void music_peak_extract_kernel(
       if (taken) {
         continue;
       }
-      if (p > best_power ||
-          (p == best_power && (best_beam < 0 || beam < best_beam))) {
+      if (p > best_power || (p == best_power && (best_beam < 0 || beam < best_beam))) {
         best_power = p;
         best_beam = beam;
       }
@@ -464,9 +455,9 @@ __global__ void music_peak_extract_kernel(
       if (tid < stride) {
         const T other_pow = red_pow[tid + stride];
         const int64_t other_idx = red_idx[tid + stride];
-        const bool take = other_pow > red_pow[tid] ||
-                          (other_pow == red_pow[tid] && other_idx >= 0 &&
-                           (red_idx[tid] < 0 || other_idx < red_idx[tid]));
+        const bool take =
+            other_pow > red_pow[tid] || (other_pow == red_pow[tid] && other_idx >= 0 &&
+                                         (red_idx[tid] < 0 || other_idx < red_idx[tid]));
         if (take) {
           red_pow[tid] = other_pow;
           red_idx[tid] = other_idx;
@@ -491,30 +482,34 @@ __global__ void music_peak_extract_kernel(
     return;
   }
   const T nan = T{0} / T{0};
-  for (int64_t k = 0; k < max_sources; ++k) {
-    const int64_t base = (item * max_sources + k) * 2;
-    if (k < found && sel[k] >= 0) {
-      const int64_t ia = sel[k] % num_az;
-      const int64_t ie = sel[k] / num_az;
-      doa_multi[base] = az_grid[ia];
-      doa_multi[base + 1] = el_grid[ie];
-    } else {
-      doa_multi[base] = nan;
-      doa_multi[base + 1] = nan;
+  if (doa_multi != nullptr) {
+    for (int64_t k = 0; k < max_sources; ++k) {
+      const int64_t base = (item * max_sources + k) * 2;
+      if (k < found && sel[k] >= 0) {
+        const int64_t ia = sel[k] % num_az;
+        const int64_t ie = sel[k] / num_az;
+        doa_multi[base] = az_grid[ia];
+        doa_multi[base + 1] = el_grid[ie];
+      } else {
+        doa_multi[base] = nan;
+        doa_multi[base + 1] = nan;
+      }
     }
   }
-  source_count[item] = static_cast<int32_t>(found);
+  if (source_count != nullptr) {
+    source_count[item] = static_cast<int32_t>(found);
+  }
 }
 
 // One block per item. When K_i == 0 the covariance was empty: zero the MUSIC
 // spectrum and NaN-fill DOA outputs. Identical role to MVDR's
 // blank_empty_items_kernel.
 template <typename T>
-__global__ void music_blank_empty_items_kernel(
-    const int64_t* __restrict__ k_counts, int64_t num_items, int64_t num_az,
-    int64_t num_el, int64_t max_sources, T* __restrict__ spectrum,
-    T* __restrict__ aoa, T* __restrict__ doa_multi,
-    int32_t* __restrict__ source_count) {
+__global__ void music_blank_empty_items_kernel(const int64_t* __restrict__ k_counts,
+                                               int64_t num_items, int64_t num_az, int64_t num_el,
+                                               int64_t max_sources, T* __restrict__ spectrum,
+                                               T* __restrict__ aoa, T* __restrict__ doa_multi,
+                                               int32_t* __restrict__ source_count) {
   const int64_t item = static_cast<int64_t>(blockIdx.x);
   if (item >= num_items || k_counts[item] > 0) {
     return;
@@ -532,12 +527,16 @@ __global__ void music_blank_empty_items_kernel(
   const T nan = T{0} / T{0};
   aoa[item * 2] = nan;
   aoa[item * 2 + 1] = nan;
-  for (int64_t k = 0; k < max_sources; ++k) {
-    const int64_t base = (item * max_sources + k) * 2;
-    doa_multi[base] = nan;
-    doa_multi[base + 1] = nan;
+  if (doa_multi != nullptr) {
+    for (int64_t k = 0; k < max_sources; ++k) {
+      const int64_t base = (item * max_sources + k) * 2;
+      doa_multi[base] = nan;
+      doa_multi[base + 1] = nan;
+    }
   }
-  source_count[item] = 0;
+  if (source_count != nullptr) {
+    source_count[item] = 0;
+  }
 }
 
 // Run the full MUSIC estimate for one tick: covariance -> eig (VECTOR) ->
@@ -560,19 +559,14 @@ __global__ void music_blank_empty_items_kernel(
 //   doa_multi   — device ptr, [num_items, max_sources, 2] T.
 //   source_count — device ptr, [num_items] int32. Peaks found.
 template <typename T>
-inline void run_music_stage(const cuda::std::complex<T>* snapshots,
-                            const unsigned char* mask, int64_t num_items,
-                            int64_t num_channels, int64_t num_snapshots,
+inline void run_music_stage(const cuda::std::complex<T>* snapshots, const unsigned char* mask,
+                            int64_t num_items, int64_t num_channels, int64_t num_snapshots,
                             int64_t fixed_num_sources, double pfa,
-                            const cuda::std::complex<T>* manifold,
-                            int64_t num_az, int64_t num_el,
-                            const T* az_grid, const T* el_grid,
-                            int64_t max_sources,
-                            cuda::std::complex<T>* cov,
-                            cuda::std::complex<T>* evec,
-                            cuda::std::complex<T>* proj, int64_t* k_counts,
-                            int32_t* model_order, T* spectrum, T* aoa,
-                            T* eigenvalues, T* doa_multi,
+                            const cuda::std::complex<T>* manifold, int64_t num_az, int64_t num_el,
+                            const T* az_grid, const T* el_grid, int64_t max_sources,
+                            cuda::std::complex<T>* cov, cuda::std::complex<T>* evec,
+                            cuda::std::complex<T>* proj, int64_t* k_counts, int32_t* model_order,
+                            T* spectrum, T* aoa, T* eigenvalues, T* doa_multi,
                             int32_t* source_count, cudaStream_t stream) {
   if (num_items <= 0 || num_channels <= 0) {
     return;
@@ -584,35 +578,31 @@ inline void run_music_stage(const cuda::std::complex<T>* snapshots,
       snapshots, mask, num_items, num_channels, num_snapshots, cov, k_counts);
 
   {
-    auto cov_v = matx::make_tensor<cuda::std::complex<T>, 3>(
-        cov, {num_items, num_channels, num_channels});
-    auto evec_v = matx::make_tensor<cuda::std::complex<T>, 3>(
-        evec, {num_items, num_channels, num_channels});
-    auto eval_v =
-        matx::make_tensor<T, 2>(eigenvalues, {num_items, num_channels});
+    auto cov_v =
+        matx::make_tensor<cuda::std::complex<T>, 3>(cov, {num_items, num_channels, num_channels});
+    auto evec_v =
+        matx::make_tensor<cuda::std::complex<T>, 3>(evec, {num_items, num_channels, num_channels});
+    auto eval_v = matx::make_tensor<T, 2>(eigenvalues, {num_items, num_channels});
     matx::cudaExecutor eig_exec{stream};
-    (matx::mtie(evec_v, eval_v) = matx::eig(cov_v, matx::EigenMode::VECTOR))
-        .run(eig_exec);
+    (matx::mtie(evec_v, eval_v) = matx::eig(cov_v, matx::EigenMode::VECTOR)).run(eig_exec);
   }
 
   if (fixed_num_sources < 0) {
-    run_source_count_device<T>(eigenvalues, k_counts, num_items, num_channels,
-                               pfa, max_sources, model_order, stream);
+    run_source_count_device<T>(eigenvalues, k_counts, num_items, num_channels, pfa, max_sources,
+                               model_order, stream);
   } else {
     constexpr int fill_block = 128;
-    const int fill_grid =
-        static_cast<int>((num_items + fill_block - 1) / fill_block);
+    const int fill_grid = static_cast<int>((num_items + fill_block - 1) / fill_block);
     fill_model_order_kernel<<<fill_grid, fill_block, 0, stream>>>(
         model_order, num_items, static_cast<int32_t>(fixed_num_sources));
   }
 
   constexpr int proj_block = 256;
-  projector_kernel<T><<<grid, proj_block, 0, stream>>>(
-      evec, model_order, num_items, num_channels, proj);
+  projector_kernel<T>
+      <<<grid, proj_block, 0, stream>>>(evec, model_order, num_items, num_channels, proj);
 
   constexpr int reduce_block = 256;
-  const size_t red_smem =
-      static_cast<size_t>(reduce_block) * (sizeof(T) + sizeof(int64_t));
+  const size_t red_smem = static_cast<size_t>(reduce_block) * (sizeof(T) + sizeof(int64_t));
   // Staging P_n (num_channels^2 complex) in shared lifts the reduce kernel's
   // L1-bandwidth bottleneck (P_n is otherwise re-read from L1 for every beam;
   // ncu measured 72%->relieved memory throughput and -18.7% on xl). But the
@@ -623,9 +613,8 @@ inline void run_music_stage(const cuda::std::complex<T>* snapshots,
   // within the 48 KB default cap without an opt-in attribute) and (b) the grid
   // spanning >= one full occupancy wave, both queried at runtime so the gate
   // adapts to the GPU rather than hard-coding a size threshold.
-  const size_t pn_smem =
-      static_cast<size_t>(num_channels) * static_cast<size_t>(num_channels) *
-      sizeof(cuda::std::complex<T>);
+  const size_t pn_smem = static_cast<size_t>(num_channels) * static_cast<size_t>(num_channels) *
+                         sizeof(cuda::std::complex<T>);
   constexpr size_t kStagedSmemBudget = 40 * 1024;
   bool stage = pn_smem + red_smem <= kStagedSmemBudget;
   if (stage) {
@@ -637,36 +626,33 @@ inline void run_music_stage(const cuda::std::complex<T>* snapshots,
       return n > 0 ? n : 1;
     }();
     int blocks_per_sm = 0;
-    cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &blocks_per_sm, music_reduce_kernel<T, true>, reduce_block,
-        pn_smem + red_smem);
-    const int64_t full_wave =
-        static_cast<int64_t>(blocks_per_sm) * sm_count;
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, music_reduce_kernel<T, true>,
+                                                  reduce_block, pn_smem + red_smem);
+    const int64_t full_wave = static_cast<int64_t>(blocks_per_sm) * sm_count;
     stage = blocks_per_sm > 0 && num_items >= full_wave;
   }
   if (stage) {
-    music_reduce_kernel<T, true>
-        <<<grid, reduce_block, pn_smem + red_smem, stream>>>(
-            proj, manifold, num_items, num_channels, num_az, num_el, az_grid,
-            el_grid, spectrum, aoa);
+    music_reduce_kernel<T, true><<<grid, reduce_block, pn_smem + red_smem, stream>>>(
+        proj, manifold, num_items, num_channels, num_az, num_el, az_grid, el_grid, spectrum, aoa);
   } else {
     music_reduce_kernel<T, false><<<grid, reduce_block, red_smem, stream>>>(
-        proj, manifold, num_items, num_channels, num_az, num_el, az_grid,
-        el_grid, spectrum, aoa);
+        proj, manifold, num_items, num_channels, num_az, num_el, az_grid, el_grid, spectrum, aoa);
   }
 
-  constexpr int peak_block = 256;
-  const size_t peak_smem =
-      static_cast<size_t>(peak_block) * (sizeof(T) + sizeof(int64_t)) +
-      static_cast<size_t>(max_sources) * sizeof(int64_t);
-  music_peak_extract_kernel<T><<<grid, peak_block, peak_smem, stream>>>(
-      spectrum, model_order, num_items, num_az, num_el, max_sources, az_grid,
-      el_grid, doa_multi, source_count);
+  // doa_multi and source_count back latched optional ports and may be null;
+  // one pass writes both, so it runs unless both are null.
+  if (doa_multi != nullptr || source_count != nullptr) {
+    constexpr int peak_block = 256;
+    const size_t peak_smem = static_cast<size_t>(peak_block) * (sizeof(T) + sizeof(int64_t)) +
+                             static_cast<size_t>(max_sources) * sizeof(int64_t);
+    music_peak_extract_kernel<T><<<grid, peak_block, peak_smem, stream>>>(
+        spectrum, model_order, num_items, num_az, num_el, max_sources, az_grid, el_grid, doa_multi,
+        source_count);
+  }
 
   constexpr int blank_block = 256;
   music_blank_empty_items_kernel<T><<<grid, blank_block, 0, stream>>>(
-      k_counts, num_items, num_az, num_el, max_sources, spectrum, aoa,
-      doa_multi, source_count);
+      k_counts, num_items, num_az, num_el, max_sources, spectrum, aoa, doa_multi, source_count);
 
   mark_music_eig_cache_live();
   clear_music_matx_caches();

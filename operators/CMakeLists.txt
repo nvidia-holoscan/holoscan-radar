@@ -10,8 +10,8 @@
 #   common/           — shared radar_common library (descriptors, windows, utils)
 #   detection/        — detection operators (CFAR)
 #   fmcw/             — FMCW signal processing (+ future MIMO marshaling)
-#   clustering/       — (future) clustering operators
-#   angle_estimation/ — (future) angle estimation operators
+#   clustering/       — clustering operators (DBSCAN)
+#   angle_estimation/ — angle estimation operators (beamformers, subspace DOA)
 
 # The shared library is not gated: every operator group links against it.
 add_subdirectory(common)
@@ -20,6 +20,10 @@ add_subdirectory(common)
 # One add_holohub_operator() call per operator (inside the group's
 # CMakeLists.txt for grouped operators).
 add_subdirectory(fmcw)
+
+# SAR image-formation operators (ported slices are registered in the group).
+add_subdirectory(sar)
+add_subdirectory(io)
 
 # Detection operators (one add_holohub_operator() per operator inside).
 add_subdirectory(detection)
@@ -30,19 +34,21 @@ add_subdirectory(clustering)
 # Angle-estimation operators (one add_holohub_operator() per operator inside).
 add_subdirectory(angle_estimation)
 
-# radar_app Python bindings — deferred here because applications/ is configured
-# before operators/, and pybind needs the radar_common CMake target.
-add_subdirectory(
-    ${PROJECT_SOURCE_DIR}/applications/common/radar_app/python
-    ${CMAKE_BINARY_DIR}/applications/common/radar_app/python)
+# radar_app report Python bindings are deferred here because applications/
+# is configured before operators/, and pybind needs radar_common.
+if(HOLOSCAN_RADAR_BUILD_PYTHON)
+    add_subdirectory(
+        ${PROJECT_SOURCE_DIR}/applications/common/radar_app/python
+        ${CMAKE_BINARY_DIR}/applications/common/radar_app/python)
 
-# Install the aggregate __init__.py alongside each operator's built module.
-configure_file(
-    ${PROJECT_SOURCE_DIR}/python/holoscan/radar/__init__.py
-    ${HOLOSCAN_RADAR_PYTHON_PKG_DIR}/__init__.py COPYONLY)
+    # Install the aggregate __init__.py alongside each operator's built module.
+    configure_file(
+        ${PROJECT_SOURCE_DIR}/python/holoscan/radar/__init__.py
+        ${HOLOSCAN_RADAR_PYTHON_PKG_DIR}/__init__.py COPYONLY)
 
-# Relative DESTINATION — interpreted as <CMAKE_INSTALL_PREFIX>/holoscan/<mod>
-# in plain `cmake --install` (set --prefix to ${Python3_SITEARCH}), and as
-# <wheel-root>/holoscan/<mod> when scikit-build-core builds the wheel.
-install(DIRECTORY ${HOLOSCAN_RADAR_PYTHON_PKG_DIR}
-    DESTINATION holoscan)
+    # Relative DESTINATION — interpreted as <CMAKE_INSTALL_PREFIX>/holoscan/<mod>
+    # in plain `cmake --install` (set --prefix to ${Python3_SITEARCH}), and as
+    # <wheel-root>/holoscan/<mod> when scikit-build-core builds the wheel.
+    install(DIRECTORY ${HOLOSCAN_RADAR_PYTHON_PKG_DIR}
+        DESTINATION holoscan)
+endif()

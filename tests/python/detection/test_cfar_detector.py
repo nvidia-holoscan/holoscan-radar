@@ -16,7 +16,11 @@ cupy = pytest.importorskip("cupy")
 from utils.harness import run_operator_multi, single_map, to_device_array  # noqa: E402
 
 from holoscan.radar import CFARDetectorOpF64  # noqa: E402
-from holoscan.radar import CFARDetectorOpF32, CfarPeakNeighborhood, CfarVariant
+from holoscan.radar import (
+    CFARDetectorOpF32,
+    CfarPeakMode,
+    CfarVariant,
+)
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -306,66 +310,187 @@ def test_CfarPowerIsNciSumOverFold():
 
 
 # ---------------------------------------------------------------------------
-# Peak grouping (peak_only) — port of tests/cpp/detection/test_cfar_detector.cpp
+# Peak modes — port of tests/cpp/detection/test_cfar_detector.cpp
 # ---------------------------------------------------------------------------
 
 
-def test_PeakOnlyOffMatchesRawMask():
-    # Off by default (and peak_only=False) keeps the raw candidate mask: a
+def test_PeakModeNoneMatchesRawMask():
+    # None by default keeps the raw candidate mask: a
     # contiguous 3-cell strip stays 3 detections either way.
     mp = power_map(1.0, [(8, 15), (8, 16), (8, 17)], 100.0)
     raw = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2)
-    off = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2, peak_only=False)
+    off = run_cfar(
+        mp,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.NONE,
+    )
     assert num_detections(raw["idx"]) == 3
     assert num_detections(off["idx"]) == num_detections(raw["idx"])
 
 
-def test_PeakOnlyKeepsSingleMax():
-    # Adjacent (guard-separated) pair with distinct power: peak_only keeps the
+def test_PeakModeRangeDopplerKeepsSingleMax():
+    # Adjacent (guard-separated) pair: range-Doppler mode keeps the
     # maximum only; detection_mask agrees with the reduced count.
     flat = power_map(1.0, [], 1.0).reshape(K_DOPPLER, K_RANGE)
     flat[8, 16] = 100.0
     flat[8, 17] = 50.0
     off = run_cfar(flat, (K_DOPPLER, K_RANGE), pfa=1e-3)
-    on = run_cfar(flat, (K_DOPPLER, K_RANGE), pfa=1e-3, peak_only=True)
+    on = run_cfar(
+        flat,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-3,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
+    )
     assert num_detections(off["idx"]) == 2
     assert num_detections(on["idx"]) == 1
     assert idx_contains(on["idx"], 8, 16)  # the max, not (8, 17)
     assert int((on["mask"] != 0).sum()) == 1
 
 
-def test_PeakOnlyCollapsesStripRasterTiebreak():
+def test_PeakModeRangeDopplerUsesRasterTiebreak():
     # A flat contiguous strip collapses to its lowest-raster-index cell.
     mp = power_map(1.0, [(8, 15), (8, 16), (8, 17)], 100.0)
     off = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2)
-    on = run_cfar(mp, (K_DOPPLER, K_RANGE), pfa=1e-2, peak_only=True)
+    on = run_cfar(
+        mp,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
+    )
     assert num_detections(off["idx"]) == 3
     assert num_detections(on["idx"]) == 1
     assert idx_contains(on["idx"], 8, 15)  # lowest linear index survives
     assert int((on["mask"] != 0).sum()) == 1
 
 
-def test_PeakOnlyNeighborhoodCross4VsSquare8():
-    # square8 sees a diagonal neighbor (collapses a diagonal equal pair to one);
-    # cross4 does not (both survive).
+def test_PeakModeRangeDopplerUsesConfiguredRadius():
+    # Excluding range leaves a diagonal pair separate; enabling it suppresses.
     mp = power_map(1.0, [(5, 5), (6, 6)], 100.0)
-    square8 = run_cfar(
+    square = run_cfar(
         mp,
         (K_DOPPLER, K_RANGE),
         pfa=1e-3,
-        peak_only=True,
-        peak_neighborhood=CfarPeakNeighborhood.SQUARE8,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
+        peak_radius=[1, 1],
     )
-    cross4 = run_cfar(
+    doppler_only = run_cfar(
         mp,
         (K_DOPPLER, K_RANGE),
         pfa=1e-3,
-        peak_only=True,
-        peak_neighborhood=CfarPeakNeighborhood.CROSS4,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
+        peak_radius=[1, 0],
     )
-    assert num_detections(square8["idx"]) == 1
-    assert idx_contains(square8["idx"], 5, 5)  # lower linear index survives
-    assert num_detections(cross4["idx"]) == 2
+    assert num_detections(square["idx"]) == 1
+    assert idx_contains(square["idx"], 5, 5)
+    assert num_detections(doppler_only["idx"]) == 2
+
+
+def test_PeakRadiusSuppressesWiderRangeNeighbors():
+    mp = power_map(1.0, [], 1.0).reshape(K_DOPPLER, K_RANGE)
+    mp[8, 16] = 100.0
+    mp[8, 18] = 90.0
+    radius_one = run_cfar(
+        mp,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
+        peak_radius=[1],
+    )
+    radius_two = run_cfar(
+        mp,
+        (K_DOPPLER, K_RANGE),
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
+        peak_radius=[1, 2],
+    )
+    assert num_detections(radius_one["idx"]) == 2
+    assert radius_two["idx"].tolist() == [[8, 16]]
+
+
+@pytest.mark.parametrize("radius", [[-1], [0, 0], [1, 1, 1]])
+def test_PeakRadiusRejectsInvalidRangeDopplerEncodings(radius):
+    mp = power_map(1.0, [(8, 16)], 100.0)
+    with pytest.raises(ValueError, match="peak_radius"):
+        run_cfar(
+            mp,
+            (K_DOPPLER, K_RANGE),
+            pfa=1e-2,
+            peak_mode=CfarPeakMode.RANGE_DOPPLER,
+            peak_radius=radius,
+        )
+
+
+def test_PeakRadiusMustMatchPostNciOutputRank():
+    data = np.ones((2, K_DOPPLER, K_RANGE), dtype=np.float64)
+    data[:, 8, 16] = 100.0
+    with pytest.raises(ValueError, match="post-NCI output axis"):
+        run_cfar(
+            data,
+            data.shape,
+            pfa=1e-2,
+            nci_axes=[0],
+            peak_mode=CfarPeakMode.ALL,
+            peak_radius=[1, 1, 1],
+            max_rx=2,
+        )
+
+
+def test_PeakModeAllSuppressesAcrossEveryRank4Axis():
+    shape = (2, 2, K_DOPPLER, K_RANGE)
+    data = np.ones(shape, dtype=np.float64)
+    data[0, 0, 8, 16] = 100.0
+    data[0, 1, 8, 16] = 110.0
+    data[1, 0, 8, 16] = 120.0
+    data[1, 1, 8, 16] = 130.0
+    none = run_cfar(data, shape, pfa=1e-2, max_tx=2, max_rx=2)
+    rd = run_cfar(
+        data,
+        shape,
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.RANGE_DOPPLER,
+        max_tx=2,
+        max_rx=2,
+    )
+    all_axes = run_cfar(
+        data,
+        shape,
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.ALL,
+        max_tx=2,
+        max_rx=2,
+    )
+    assert num_detections(none["idx"]) == 4
+    assert num_detections(rd["idx"]) == 4
+    assert all_axes["idx"].tolist() == [[1, 1, 8, 16]]
+    assert int((all_axes["mask"] != 0).sum()) == 1
+    np.testing.assert_array_equal(none["score"], all_axes["score"])
+    np.testing.assert_array_equal(none["noise"], all_axes["noise"])
+    np.testing.assert_array_equal(none["power"], all_axes["power"])
+
+
+def test_PeakModeAllRank3TiesAndDoesNotWrapAxes():
+    shape = (2, K_DOPPLER, K_RANGE)
+    data = np.ones(shape, dtype=np.float32)
+    data[0, 8, 16] = 100.0
+    data[1, 8, 16] = 100.0
+    data[0, 4, K_RANGE - 1] = 90.0
+    data[0, 5, 0] = 80.0
+    out = run_cfar(
+        data,
+        shape,
+        dtype=np.float32,
+        op_cls=CFARDetectorOpF32,
+        pfa=1e-2,
+        peak_mode=CfarPeakMode.ALL,
+        max_rx=2,
+    )
+    assert out["idx"].tolist() == [
+        [0, 4, K_RANGE - 1],
+        [0, 5, 0],
+        [0, 8, 16],
+    ]
+    assert int((out["mask"] != 0).sum()) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +510,11 @@ def run_cfar_ticks(
     n_ticks: int | None = None,
     **cfar_kwargs,
 ) -> dict[str, list[np.ndarray]]:
-    """Multi-tick CFAR run with optional sticky [live] overrides."""
+    """Multi-tick CFAR run with optional [live] overrides.
+
+    An override sequence shorter than the tick count leaves the later ticks
+    without a match, so they fall back to the operator's Params value.
+    """
     arr = np.asarray(host, dtype=dtype).reshape(shape)
     frame = single_map(to_device_array(arr, dtype=dtype), "rd_maps")
     ticks = n_ticks if n_ticks is not None else 3
@@ -489,7 +618,7 @@ def test_CaAlphaK1MatchesContractClosedForm():
     assert ca_cfar_pfa_from_alpha(alpha, k_n, 1) == pytest.approx(k_pfa, abs=1e-9)
 
 
-def test_LiveThresholdScaleOverrideMidStreamAndSticky():
+def test_LiveThresholdScaleOverrideAppliesPerTick():
     mp = power_map(1.0, [(8, 16)], 100.0)
     outs = run_cfar_ticks(
         mp,
@@ -501,10 +630,11 @@ def test_LiveThresholdScaleOverrideMidStreamAndSticky():
     assert len(idx) == 3
     assert num_detections(idx[0]) == 1
     assert num_detections(idx[1]) == 0
-    assert num_detections(idx[2]) == 0
+    # Tick 2 has no override and reverts to the Params scale of 1.0.
+    assert num_detections(idx[2]) == 1
 
 
-def test_LivePfaOverrideMidStreamAndSticky():
+def test_LivePfaOverrideAppliesPerTick():
     dt, rt = 8, 16
     mp = power_map(1.0, [(dt, rt)], 26.0)
     outs = run_cfar_ticks(
@@ -519,11 +649,11 @@ def test_LivePfaOverrideMidStreamAndSticky():
     s0 = float(scores[0][dt, rt])
     s1 = float(scores[1][dt, rt])
     s2 = float(scores[2][dt, rt])
-    assert s0 > s1
-    assert s1 == pytest.approx(s2)
+    # Tick 2 reverts to the Params pfa of 1e-3, between the two overrides.
+    assert s1 < s2 < s0
 
 
-def test_LiveMaxDetectionsOverrideMidStreamAndSticky():
+def test_LiveMaxDetectionsOverrideAppliesPerTick():
     mp = power_map(1.0, [(4, 8), (12, 24)], 100.0)
     outs = run_cfar_ticks(
         mp,
@@ -534,10 +664,11 @@ def test_LiveMaxDetectionsOverrideMidStreamAndSticky():
     idx = outs["detection_idx"]
     assert num_detections(idx[0]) == 2
     assert num_detections(idx[1]) == 1
-    assert num_detections(idx[2]) == 1
+    # Tick 2 reverts to the Params cap, which is unset (uncapped).
+    assert num_detections(idx[2]) == 2
 
 
-def test_LiveGuardCellsOverrideMidStreamAndSticky():
+def test_LiveGuardCellsOverrideAppliesPerTick():
     dt, rt = 8, 16
     mp = power_map(1.0, [], 1.0)
     flat = mp.reshape(K_DOPPLER, K_RANGE)
@@ -555,10 +686,11 @@ def test_LiveGuardCellsOverrideMidStreamAndSticky():
     s1 = float(scores[1][dt, rt])
     s2 = float(scores[2][dt, rt])
     assert s0 < s1
-    assert s1 == pytest.approx(s2)
+    # Tick 2 reverts to the Params guard extent, which tick 0 also used.
+    assert s2 == pytest.approx(s0)
 
 
-def test_LiveTrainingCellsOverrideMidStreamAndSticky():
+def test_LiveTrainingCellsOverrideAppliesPerTick():
     dt, rt = 8, 16
     mp = power_map(1.0, [], 1.0)
     flat = mp.reshape(K_DOPPLER, K_RANGE)
@@ -577,10 +709,11 @@ def test_LiveTrainingCellsOverrideMidStreamAndSticky():
     s1 = float(scores[1][dt, rt])
     s2 = float(scores[2][dt, rt])
     assert s0 < s1
-    assert s1 == pytest.approx(s2)
+    # Tick 2 reverts to the Params training extent, which tick 0 also used.
+    assert s2 == pytest.approx(s0)
 
 
-def test_LiveNciAxesOverrideMidStreamAndSticky():
+def test_LiveNciAxesOverrideAppliesPerTick():
     k_channels = 8
     dt, rt = 8, 16
     floor, weak_peak = 1.0, 14.0
@@ -600,8 +733,9 @@ def test_LiveNciAxesOverrideMidStreamAndSticky():
     assert num_detections(idx[0]) == 0
     assert scores[0].shape == (k_channels, K_DOPPLER, K_RANGE)
     assert scores[1].shape == (K_DOPPLER, K_RANGE)
-    assert scores[2].shape == scores[1].shape
-    assert float(scores[1][dt, rt]) == pytest.approx(float(scores[2][dt, rt]))
+    # Tick 2 reverts to the Params nci_axes (empty), as on tick 0.
+    assert scores[2].shape == scores[0].shape
+    assert num_detections(idx[2]) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -916,7 +1050,18 @@ def test_RejectsOsRankOutOfRange():
         )
 
 
-def test_LiveOsRankOverrideMidStreamAndSticky():
+def test_RejectsUnsetOsRankWithClearError():
+    mp = power_map(1.0, [(8, 16)], 100.0)
+    with pytest.raises(ValueError, match="os_rank is required for OS variant"):
+        run_cfar(
+            mp,
+            (K_DOPPLER, K_RANGE),
+            pfa=1e-3,
+            cfar_variant=CfarVariant.OS,
+        )
+
+
+def test_LiveOsRankOverrideAppliesPerTick():
     dt, rt = 8, 16
     mp = np.empty(K_DOPPLER * K_RANGE, dtype=np.float64)
     for i in range(mp.size):
@@ -937,4 +1082,5 @@ def test_LiveOsRankOverrideMidStreamAndSticky():
     n1 = float(noise[1][dt, rt])
     n2 = float(noise[2][dt, rt])
     assert n0 != n1
-    assert n1 == pytest.approx(n2)
+    # Tick 2 reverts to the Params rank of 5, which tick 0 also used.
+    assert n2 == pytest.approx(n0)

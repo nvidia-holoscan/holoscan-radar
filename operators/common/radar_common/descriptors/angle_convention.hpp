@@ -9,7 +9,8 @@ namespace holoscan::radar {
 
 // Boundary AER parameterization for angle operators. Kernels run in the fixed
 // internal canonical convention; this descriptor relabels scan grids and DOA
-// outputs only.
+// outputs only. Default construction selects the canonical radar_boresight
+// preset; callers choose another boundary convention explicitly.
 struct AngleConvention {
   AngleConventionPreset preset{AngleConventionPreset::kRadarBoresight};
   SignedAxis boresight_axis{SignedAxis::kPlusX};
@@ -17,9 +18,7 @@ struct AngleConvention {
   SignedAxis elevation_positive_axis{SignedAxis::kPlusZ};
   ElevationReference elevation_reference{ElevationReference::kHorizon};
 
-  bool uses_direction_cosine() const {
-    return preset == AngleConventionPreset::kDirectionCosine;
-  }
+  bool uses_direction_cosine() const { return preset == AngleConventionPreset::kDirectionCosine; }
 
   friend bool operator==(const AngleConvention& a, const AngleConvention& b) {
     return a.preset == b.preset && a.boresight_axis == b.boresight_axis &&
@@ -27,9 +26,7 @@ struct AngleConvention {
            a.elevation_positive_axis == b.elevation_positive_axis &&
            a.elevation_reference == b.elevation_reference;
   }
-  friend bool operator!=(const AngleConvention& a, const AngleConvention& b) {
-    return !(a == b);
-  }
+  friend bool operator!=(const AngleConvention& a, const AngleConvention& b) { return !(a == b); }
 };
 
 }  // namespace holoscan::radar

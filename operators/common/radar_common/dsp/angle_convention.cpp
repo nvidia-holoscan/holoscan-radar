@@ -5,7 +5,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 #include "radar_common/math/constants.hpp"
 
@@ -64,8 +67,7 @@ struct CustomFrame {
 };
 
 CustomFrame custom_frame(const AngleConvention& conv) {
-  const CustomFrame f{axis_vec(conv.boresight_axis),
-                      axis_vec(conv.azimuth_positive_axis),
+  const CustomFrame f{axis_vec(conv.boresight_axis), axis_vec(conv.azimuth_positive_axis),
                       axis_vec(conv.elevation_positive_axis)};
   constexpr double kOrthoEps = 1e-9;
   if (std::abs(dot(f.boresight, f.azimuth)) > kOrthoEps ||
@@ -80,8 +82,26 @@ CustomFrame custom_frame(const AngleConvention& conv) {
 
 }  // namespace
 
-CanonicalDirection boundary_to_canonical(const AngleConvention& conv, double az,
-                                         double el) {
+void validate_scan_grid_axes(const AngleConvention& conv, const std::vector<double>& az_coordinates,
+                             const std::vector<double>& el_coordinates, std::string_view who) {
+  const auto validate_axis = [&](const std::vector<double>& values, std::string_view name) {
+    for (std::size_t index = 0; index < values.size(); ++index) {
+      const double value = values[index];
+      const std::string location =
+          std::string(who) + ": " + std::string(name) + "[" + std::to_string(index) + "]";
+      if (!std::isfinite(value)) {
+        throw std::invalid_argument(location + " must be finite");
+      }
+      if (conv.uses_direction_cosine() && (value < -1.0 || value > 1.0)) {
+        throw std::invalid_argument(location + " must be within [-1, 1] for direction_cosine");
+      }
+    }
+  };
+  validate_axis(az_coordinates, "az_coordinates");
+  validate_axis(el_coordinates, "el_coordinates");
+}
+
+CanonicalDirection boundary_to_canonical(const AngleConvention& conv, double az, double el) {
   if (conv.uses_direction_cosine()) {
     const double u = az;
     const double v = el;
@@ -114,8 +134,7 @@ CanonicalDirection boundary_to_canonical(const AngleConvention& conv, double az,
       const CustomFrame f = custom_frame(conv);
       // Zenith reference: boundary el is the polar angle from the elevation
       // axis; convert to elevation-from-the-azimuth-plane before building.
-      const bool zenith =
-          conv.elevation_reference == ElevationReference::kZenith;
+      const bool zenith = conv.elevation_reference == ElevationReference::kZenith;
       const double el_h = zenith ? kHalfPi - el : el;
       const double ce = std::cos(el_h);
       const double se = std::sin(el_h);
@@ -133,8 +152,7 @@ CanonicalDirection boundary_to_canonical(const AngleConvention& conv, double az,
   throw std::invalid_argument("AngleConvention: unknown preset");
 }
 
-void canonical_to_boundary(const AngleConvention& conv,
-                           const CanonicalDirection& dir, double* out0,
+void canonical_to_boundary(const AngleConvention& conv, const CanonicalDirection& dir, double* out0,
                            double* out1) {
   if (conv.uses_direction_cosine()) {
     *out0 = dir.y;

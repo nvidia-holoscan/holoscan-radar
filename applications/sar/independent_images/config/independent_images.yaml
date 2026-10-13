@@ -1,0 +1,97 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Mode-5 demo: rotate six unique-IARP Umbra SNAPSHOT CPHDs (INPUT_DATA.md).
+# Pull first (~10.5 GiB); the app never reaches the network.
+#
+#   python3 tools/sar_data/pull_cphd.py --app independent_images \
+#     --dest data/sar/mode5
+#   Mount data/sar at /tmp/sar for the host CLI run (see README.md).
+#
+# Each collection gets an IARP-centred east-north square inscribed
+# in that file's ground-range x ground-azimuth support, sampled at
+# the coarser of the two GSDs (derived, not hardcoded). max_side 0
+# is native N (Ohio ~12k); a positive value caps N and coarsens
+# GSD on the same square. pixel_scale multiplies native N per
+# collect (same square, coarser GSD): 1 = native, 0.5 = quarter
+# the pixels. Explicit counts/spacing still force an IARP-centred
+# ENU grid.
+# Live overrides of sample_geometry / range_bin_spacing /
+# reference_frequency ride collection_boundary with emit-and-reset.
+# range_compression.nfft is static (one length for the rotate);
+# load_config derives each file's dr from that same length.
+# nfft_pad: next_fast fills it (5-smooth >= max CPHD samples).
+# the loop repeats until the process is stopped.
+# playback_rate 1 = collect-time pacing (sleep collect − wall;
+# skip sleep while behind). 0 = unconstrained.
+# duty_cycle 1 = no gap; <1 sleeps T_c*(1/D-1) between collections.
+
+cphd:
+  path:
+    - /tmp/sar/mode5/2023-09-12-02-36-33_UMBRA-04_CPHD.cphd
+    - /tmp/sar/mode5/2023-07-14-23-20-06_UMBRA-05_CPHD.cphd
+    - /tmp/sar/mode5/2023-10-20-04-22-56_UMBRA-04_CPHD.cphd
+    - /tmp/sar/mode5/2023-02-22-12-54-56_UMBRA-04_CPHD.cphd
+    - /tmp/sar/mode5/2023-02-08-02-11-21_UMBRA-05_CPHD.cphd
+    - /tmp/sar/mode5/2023-10-11-02-20-47_UMBRA-05_CPHD.cphd
+  names:
+    - Panama Canal
+    - Melbourne
+    - Bingham Copper Mine
+    - Kourou
+    - Buenos Aires
+    - Intel Ohio One
+  sidecar: ""
+
+lattice:
+  max_side: 0
+  # Factor on native N, both axes. Order matches cphd.path
+  # (Panama, Melbourne, Bingham, Kourou, Buenos Aires, Ohio).
+  # A scalar applies to every collect. 1 = native.
+  pixel_scale: [1, 1, 1, 1, 1, 1]
+
+# dump: true writes npy (off by default). Ohio's dump was 4.6 s.
+# output:
+#   path: /tmp/sar/mode5/image_{index}.npy
+#   max_files: 6
+
+cphd_reader:
+  coordinate_frame: ecef
+  # 1024 pulses per tick (Ohio is 22 ticks). 100 was NVRadar
+  # Atlanta parity (NVRADAR_PARITY.md item 5), not a mode-5
+  # constraint. 32768 still fits a whole SNAPSHOT on this 96 GiB
+  # GPU if you want one tick per collect.
+  pulses_per_tick: 1024
+  loop: true
+  # 1 = collect-time pacing: sleep while ahead of radar, skip
+  # while behind (catch up at GPU speed). 2 = 2x.
+  playback_rate: 1
+  duty_cycle: 1
+
+# App-owned. Smallest 5-smooth FFT length covering every collect
+# (numpy.fft.next_fast_len). the Graph driver passes it as a parameter
+# so the operator and dr stay one static length. Omit for native
+# N (mode 1). Mutually exclusive with range_compression.nfft.
+nfft_pad: next_fast
+
+# Spotlight spelling: no retention, emit-and-reset on each seam.
+aperture_manager:
+  max_aperture_pulses: 0
+  emit_interval_pulses: 0
+  emit_mode: reset
+
+# Empty operator block: nfft comes from nfft_pad via Arg.
+range_compression:
+  propagation_speed: 299792458.0
+
+backprojection:
+  coordinate_frame: ecef
+
+visualize: true
+# Holoviz window (px, square). LUT box-averages the formed image
+# to this so R8_UINT is 1:1. A dump (dump: true) is the physics
+# lattice.
+visualize_size: 1024
+skip_display_check: false
+headless: false
+visualize_hold_s: -1

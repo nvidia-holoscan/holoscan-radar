@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+cphd:
+  path: [@SAR_FIXTURE@, @SAR_FIXTURE_WIDE@]
+lattice:
+  pixel_scale: [1, 1]
+cphd_reader:
+  coordinate_frame: ecef
+  pulses_per_tick: 3
+aperture_manager:
+  max_aperture_pulses: 0
+  emit_interval_pulses: 0
+  emit_mode: reset
+range_compression:
+  propagation_speed: 299792458.0
+backprojection:
+  coordinate_frame: ecef
+visualize: true
+headless: true
+visualize_size: 32

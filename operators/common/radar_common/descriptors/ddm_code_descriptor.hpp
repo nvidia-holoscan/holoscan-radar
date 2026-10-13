@@ -9,7 +9,7 @@
 
 namespace holoscan::radar {
 
-// Doppler-division multiplexing layout for MIMOCoherentCompensationOp (DDM
+// Doppler-division multiplexing layout for TDMDenseCompensationOp / DDMDenseDemultiplexOp (DDM
 // mode). Lands in radar_common as one of the seven shared descriptor types.
 struct DDMCodeDescriptor {
   int64_t num_tx{0};

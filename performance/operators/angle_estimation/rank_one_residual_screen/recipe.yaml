@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+operator: rank_one_residual_screen
+axes: [items, channels, looks]
+profiles:
+  small: {shape: [32, 8, 3]}
+  medium: {shape: [1024, 32, 9]}
+  large: {shape: [4096, 64, 9]}
+live_ports: [array_geometry]
+recipe:
+  operator_type: radar.RankOneResidualScreenOp.float
+  inputs:
+    - {port: snapshot, shape: [items, channels, looks], dtype: complex64, memory: device, generator: rank_one_mix}
+    - {port: baseline_aoa, shape: [items, two], dtype: float32, memory: device, generator: zero_float}
+  fixtures: {two: 2, selection_percent: 25}
+  constructor: {extents: {max_items: items, max_channels: channels, max_snapshots: looks}}
+  params:
+    array_geometry: {factory: ula_geometry, spacing_wavelengths: 0.5, wavelength: 1.0}
+    residual_threshold: 0.03
+  outputs: {timed: snapshot_out, drain: [selected_idx, is_valid_out, residual_score, selection_mask], unwired: []}
+  live:
+    array_geometry: {physical_port: array_geometry, codec: ula_geometry_patch}
+cases:
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}, fixture: {selection_percent: 25}}
+  - {id: no-selection-medium, profile: medium, scopes: [limited], parameters: {}, fixture: {selection_percent: 0}}
+  - {id: most-selected-medium, profile: medium, scopes: [limited], parameters: {}, fixture: {selection_percent: 75}}
+  - {id: "geometry-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, fixture: {selection_percent: 25}, override: {port: array_geometry, value: {spacing_wavelengths: 0.49}}}
+  - {id: all-selected-medium, profile: medium, scopes: [moderate], parameters: {}, fixture: {selection_percent: 100}}
+  - {id: geometry-most-selected-large, profile: large, scopes: [thorough], parameters: {}, fixture: {selection_percent: 75}, override: {port: array_geometry, value: {spacing_wavelengths: 0.45}}}

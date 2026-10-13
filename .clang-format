@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+---
+Language: Cpp
+
+# The following configuration is from GXF Core project.
+
+BasedOnStyle: Google
+ColumnLimit: 100
+AllowShortBlocksOnASingleLine: Never
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLambdasOnASingleLine: Empty
+AllowShortLoopsOnASingleLine: false
+NamespaceIndentation: None
+
+# Google style doesn't specify a pointer and reference whitespace alignment: it allows both but
+# recommends consistency. We chose to enforce the style for pointers and references to be on the
+# left, that is to the type, with a whitespace after.
+DerivePointerAlignment: false
+PointerAlignment: Left
+
+IncludeBlocks: Preserve
+SortIncludes: false
+SortUsingDeclarations: Never
+
+BinPackArguments: true
+BinPackParameters: true
+ConstructorInitializerIndentWidth: 0
+
+# Leave SPDX comments as is (CommentPragmas is available since clang-format 3.7)
+CommentPragmas: '^(\s*\* )?SPDX-(FileCopyrightText|License-Identifier):'

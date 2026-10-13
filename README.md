@@ -1,272 +1,142 @@
 # Holoscan Radar
 
-Accelerated radar signal processing operators for the Holoscan ecosystem.
+GPU-accelerated FMCW and SAR signal-processing operators for NVIDIA Holoscan.
+Operators are implemented in C++/CUDA on MatX and compose through typed ports,
+without pipeline-specific glue between processing stages.
 
-Holoscan Radar is a **Holoscan Module** — a self-contained, redistributable library that extends
-[Holoscan SDK](https://developer.nvidia.com/holoscan-sdk) with reusable operators under the
-`holoscan.radar` namespace.
+Holoscan Radar currently targets the HSDK 5 `main-5x` development branch. Build
+the local SDK image once before opening the dev container or using the Holoscan CLI; the
+temporary source-build workflow and current packaging limitation are documented
+in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 
----
+## Quick start
 
-## Quick Start
+Install the development CLI as described in [`DEVELOPER.md`](DEVELOPER.md#holoscan-cli),
+then run these commands on the host. The CLI performs the project build and
+application run in the named development container:
 
 ```bash
-# Install the pinned CLI (Python 3.11+) into a virtual environment
-python3 -m venv .venv && . .venv/bin/activate
-python -m pip install -r requirements-cli.txt
-# Run the C++ demo application (synthetic SISO FMCW chain)
-holoscan run fmcw_siso
+./.devcontainer/build-hsdk5-ea-image.sh \
+  --pin 79dc6cb48e5b571b6f0a6daf2b5dbc783de01b76
+holoscan build-container --base-img holoscan-radar-hsdk5-ea:79dc6cb \
+  --img holoscan-radar-dev:hsdk5
+holoscan build siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --configure-args=-DBUILD_ALL=OFF \
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan
+holoscan run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
+  --configure-args=-DBUILD_ALL=OFF \
+  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
+  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
+  --run-args=siso_smoke.yaml
 ```
 
-The existing `./holohub` wrapper also bootstraps the pinned CLI automatically.
+The `--run-args=siso_smoke.yaml` example runs two headless frames. Omit that
+flag to use the SISO executable's default `siso.yaml` configuration.
 
----
+For an offline SAR smoke run, configure testing and run the generated-fixture
+CTest cases. The five shipped SAR YAML files are real-collection presets and
+require local CPHD data before direct execution:
 
-## Operators
-
-All operators below are C++/CUDA (MatX) with **Python bindings for the full
-set** (`holoscan.radar`, generated from the same pybind11-wrapped classes —
-see `python/holoscan/radar/`). Each operator's header documents its full
-port/parameter contract; precision is fixed per instance by the template
-parameter (`float` → complex64, `double` → complex128; Python exposes both as
-explicit `...OpF32` / `...OpF64` classes plus a bare `...Op` alias for `F32`).
-
-### FMCW signal processing + MIMO marshaling
-
-Shared conventions and the full table live in
-[`operators/fmcw/README.md`](operators/fmcw/README.md).
-
-| Operator | Function |
-| --- | --- |
-| `FMCWRangeProcessorOp<T>` | Range compression: optional software dechirp, windowed fast-time FFT; `range_bins` axis output |
-| `ClutterFilterOp<T>` | Slow-time clutter suppression: mean subtraction or 1st/2nd-order MTI delay cancellers |
-| `FMCWDopplerProcessorOp<T>` | Doppler compression: windowed slow-time FFT, zero-Doppler centering; `velocity_bins` axis output |
-| `FMCWRangeDopplerProcessorOp<T>` | Fused range + optional inline clutter + Doppler in one node (bitwise parity with the split chain) |
-| `MIMODeinterleaveOp<T>` | TDM marshaling: split interleaved slow-time into an explicit TX axis via `TXSchedule` gather |
-| `VirtualArrayAssemblyOp<T>` | MIMO marshaling: flatten separated TX×RX channels into a virtual array axis |
-| `MIMOCoherentCompensationOp<T>` | MIMO marshaling: TDM inter-TX phase correction, or DDM Doppler-band demux into an explicit TX axis |
-
-### Detection
-
-Full table in [`operators/detection/README.md`](operators/detection/README.md).
-
-| Operator | Function |
-| --- | --- |
-| `CFARDetectorOp<T>` | 2-D CFAR (CA/GO/SO/OS) on the (Doppler, range) plane; adaptive per-cell threshold from the training-cell noise estimate |
-| `FeatureAssemblyOp<T>` | Gather / bin→physical lookup into the clustering feature matrix |
-| `DetectionReductionOp<T>` | One representative CFAR cell per cluster (`first` / `peak` / `medoid`) |
-
-### Clustering
-
-Full table in [`operators/clustering/README.md`](operators/clustering/README.md).
-
-| Operator | Function |
-| --- | --- |
-| `ClusterDBSCANOp<T>` | Density clustering (DBSCAN) over an N-D feature matrix; noise labeled `-1` |
-
-### Angle estimation
-
-Full table in [`operators/angle_estimation/README.md`](operators/angle_estimation/README.md).
-
-| Operator | Function |
-| --- | --- |
-| `SnapshotGatherOp<T>` | Per-detection channel-vector gather from the RD neighborhood around each CFAR cell |
-| `BeamscanEstimatorOp<T>` | Conventional (Bartlett) sparse-path DOA on a scan grid |
-| `MVDREstimatorOp<T>` | Adaptive (MVDR / Capon) sparse-path DOA; multi-source + eigenvalue diagnostics |
-| `PhaseShiftBeamformerOp<T>` | Conventional (Bartlett) dense-path beamformer: a beam for every RD cell → Range-Doppler-Angle cube |
-
-### Shared config-plane types
-
-`ArrayGeometry`, `AngleConvention`, `WindowSpec`, `FMCWWaveformDescriptor`,
-`DDMCodeDescriptor`, `TXSchedule` — see
-[`operators/common/README.md`](operators/common/README.md). All are
-constructible from Python and flow through Holoscan's `from_config()` on
-either side.
-
-### App-support library (`radar_app`)
-
-Report + Holoviz visualization operators reused across the example apps
-(`ClusterReportOp`, `DetectionReportOp`, `RollingPlotOp`, `BoresightViewOp`,
-`ClusterOverlayOp`, `RdMapToImageOp`, `RdChannelSliceOp`, `NullSinkOp`,
-`CadenceMeter`) — see
-[`applications/common/README.md`](applications/common/README.md). Also bound
-to Python; every `applications/fmcw_*` demo uses them from either language.
-
-### Namespace
-
-- C++: `holoscan::radar`
-
-- Python: `holoscan.radar`
-
----
-
-## Usage
-
-### C++
-
-```cpp
-#include <holoscan/holoscan.hpp>
-
-#include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
-#include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
-#include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
-
-class MyApp : public holoscan::Application {
- public:
-  void compose() override {
-    using holoscan::Arg;
-    namespace radar = holoscan::radar;
-
-    radar::FMCWWaveformDescriptor waveform;
-    waveform.carrier_frequency = 77e9;
-    waveform.bandwidth = 150e6;
-    waveform.chirp_duration = 20e-6;
-    waveform.sample_rate = 12.8e6;
-    waveform.chirp_repetition_interval = 25e-6;
-
-    auto range = make_operator<radar::FMCWRangeProcessorOp<float>>(
-        "range", Arg("waveform") = waveform);
-    auto clutter = make_operator<radar::ClutterFilterOp<float>>("clutter");
-    auto doppler = make_operator<radar::FMCWDopplerProcessorOp<float>>(
-        "doppler", Arg("waveform") = waveform);
-
-    // add_flow(source, range, {{"adc_cube", "adc_cube"}}); ...
-    add_flow(range, clutter, {{"range_profiles", "range_profiles"}});
-    add_flow(clutter, doppler, {{"range_profiles", "range_profiles"}});
-  }
-};
-
-int main() { holoscan::make_application<MyApp>()->run(); }
+```bash
+ctest --test-dir build -R '^Sar_.*_(smoke|viz)$' --output-on-failure
 ```
 
-See [`applications/fmcw_siso`](applications/fmcw_siso) for the
-complete example, including the synthetic ADC source and peak reporting.
+Start with the [SAR application index](applications/sar/README.md), then the
+[CPHD preparation guide](tools/sar_data/README.md) for real data. The C++
+fixture checks graph execution; it does not validate focus on public collects.
 
-### Python
+## Operator groups
 
-```python
-from holoscan.radar import (
-    ClutterFilterOp,
-    FMCWDopplerProcessorOp,
-    FMCWRangeProcessorOp,
-    FMCWWaveformDescriptor,
-    FMCWWaveformSpec,
-)
-
-waveform = FMCWWaveformDescriptor(
-    FMCWWaveformSpec(
-        carrier_frequency=77e9,
-        bandwidth=150e6,
-        chirp_duration=20e-6,
-        sample_rate=12.8e6,
-        chirp_repetition_interval=25e-6,
-    )
-)
-
-range_op = FMCWRangeProcessorOp(self, waveform=waveform, name="range")
-clutter = ClutterFilterOp(self, name="clutter")
-doppler = FMCWDopplerProcessorOp(self, waveform=waveform, name="doppler")
-
-# self.add_flow(source, range_op, {("adc_cube", "adc_cube")}); ...
-self.add_flow(range_op, clutter, {("range_profiles", "range_profiles")})
-self.add_flow(clutter, doppler, {("range_profiles", "range_profiles")})
-```
-
-See [`applications/fmcw_siso/python`](applications/fmcw_siso/python) for the
-complete example. Every `applications/fmcw_*` app has a Python variant with
-the same graph as its C++ counterpart.
-
----
-
-## Building from Source (without HoloHub CLI)
-
-| Requirement | Version |
+| Group | Operators and role |
 | --- | --- |
-| Holoscan SDK | ≥ 4.3.0 |
+| [FMCW](operators/fmcw/README.md) | Range/Doppler processing, clutter and notch filtering, TDM/DDM separation and compensation, virtual-array assembly |
+| [Detection](operators/detection/README.md) | CFAR, feature assembly, cluster reduction, selective multi-source expansion |
+| [Angle estimation](operators/angle_estimation/README.md) | Snapshot gathering, array selection, Beamscan, MVDR, MUSIC, Root-MUSIC, ESPRIT, and dense beamforming |
+| [Clustering](operators/clustering/README.md) | DBSCAN over caller-selected detection features |
+| [SAR](operators/sar/README.md) | Range compression, aperture management, backprojection, and phase correction |
+| [SAR I/O](operators/io/README.md) | CPHD decoding and diagnostic tensor dumps |
+
+Every public operator README starts with the same compact reference: purpose,
+responsibilities, selection guidance, ports, construction requirements, and
+parameters. Precision is fixed per instance (`float` or `double`), and GPU
+execution is required.
+
+Shared descriptors and tensor conventions are documented in
+[`operators/common/README.md`](operators/common/README.md). The FMCW operator API reference is [`docs/planning/OPERATOR_API.md`](docs/planning/OPERATOR_API.md); the current HSDK 5 SAR contract is [`docs/planning/SAR/OPERATOR_API.md`](docs/planning/SAR/OPERATOR_API.md).
+
+## Example applications
+
+| Application | Workflow |
+| --- | --- |
+| [SISO](applications/fmcw/siso/README.md) | Baseline range-Doppler detection and clustering |
+| [SIMO](applications/fmcw/simo/README.md) | Detect first, then sparse angle estimation |
+| [Dense beamforming](applications/fmcw/dense_beamforming/README.md) | Beamform every cell, then detect in range-Doppler-angle |
+| [MIMO TDM](applications/fmcw/mimo_tdm/README.md) | Deinterleave TDM and compensate detected snapshots |
+| [MIMO DDM](applications/fmcw/mimo_ddm/README.md) | Linear or nonlinear dense DDM demultiplexing |
+| [Multi-waveform](applications/fmcw/multi_waveform/README.md) | Coherent switching between FMCW profiles |
+| [Adaptive AoA](applications/fmcw/adaptive_aoa/README.md) | Route likely multi-source cells to a super-resolution estimator |
+| [SAR spotlight](applications/sar/spotlight/README.md) | One reset image from one collection |
+| [SAR video](applications/sar/video_sar/README.md) | Retained pulse window and repeated images |
+| [SAR tiled strip](applications/sar/tiled_strip/README.md) | Tile formation and parent mosaic |
+| [SAR continuous strip](applications/sar/continuous_strip/README.md) | Scrolling lattice and parent mosaic |
+| [SAR independent images](applications/sar/independent_images/README.md) | One restaged image per collection |
+
+Application READMEs include the exact graph and runnable commands. Shared graph
+driving, simulation sources, reporting, and visualization support lives in
+[`applications/common`](applications/common/README.md).
+
+## Building
+
+Requirements:
+
+| Dependency | Requirement |
+| --- | --- |
+| Holoscan SDK | HSDK 5 `main-5x` development image |
 | CUDA Toolkit | 13.x |
-| CMake | ≥ 3.31 |
-| C++ compiler | ≥ C++17 (GCC 11+) |
-| pybind11 | ≥ 2.11 |
-| Python | 3.10 - 3.13 |
+| CMake | 3.31 or newer |
+| C++ compiler | C++20-capable GCC 11 or newer |
+| NVIDIA GPU | Required for operators, applications, and C++ tests |
 
 ```bash
-cmake -S . -B build
-cmake --build build -j$(nproc)
+cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
+cmake --build build -j"$(nproc)"
 ```
 
----
+Python operator bindings are temporarily unavailable because the current SDK source
+image does not export the binding component they require. The current CMake build
+therefore does not register the Python test suites, and a Python-enabled wheel
+cannot be built from this image. See [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 
 ## Testing
 
-Tests build with the code by default in a standalone checkout
-(`HOLOSCAN_RADAR_BUILD_TESTING` defaults to ON; the explicit flag below
-matters only when this module is built as a subproject):
-
 ```bash
-./holohub run-container
-cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING:BOOL=ON
-cmake --build build -j$(nproc)
-
-# C++ (GTest via CTest)
 ctest --test-dir build --output-on-failure -LE performance
-
-# Python (pytest via CTest, or directly)
-ctest --test-dir build --output-on-failure -R pytest
-HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v
-
-# Monte Carlo statistical tests alone (CFAR Pfa, DOA vs. CRLB); the ctest
-# invocation above already covers the C++ half
-HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v -m statistical
+pre-commit run --all-files
 ```
 
----
-
-## Performance Testing
-
-A measurement-only harness under [`performance/`](performance) — `perf_*`
-binaries/scripts, one per operator, both in C++ and Python (mirrored scenario
-matrices). Each times end-to-end frame latency with a device sync at the
-terminal sink and prints a text report (optional JSON via `--output`); these
-are characterization tools, not pass/fail CI gates (see
-[`performance/cpp/CMakeLists.txt`](performance/cpp/CMakeLists.txt) for the
-tiny smoke tests that *are* wired into CI).
+Monte Carlo statistical tests carry the `statistical` label. Performance tests
+are characterization tools rather than latency gates:
 
 ```bash
-# Build (opt-in; requires an existing testing-enabled configure)
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PERFORMANCE=ON
-cmake --build build -j$(nproc)
-
-# C++ — CI-style smoke for every registered perf tool
+cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure -L performance
-
-# C++ — one operator, default (small) matrix
-./build/performance/cpp/perf_cfar_detector
-
-# C++ — full matrix + artifacts
-./build/performance/cpp/perf_cfar_detector --full \
-  --output perf_results/perf_cfar_detector.full.json \
-  --text   perf_results/perf_cfar_detector.full.txt
-
-# Python — fast smoke of every perf script
-export HOLOSCAN_RADAR_BUILD_DIR=build
-for s in performance/python/perf_*.py; do
-  python "$s" --size xs --repeats 1 --warmup 1 --measured 2 --quiet
-done
-
-# Python — one operator, default matrix (mirrors the C++ script above)
-python performance/python/perf_cfar_detector.py
+./build/performance/cpp/perf_cfar_detector --full
 ```
 
-`--full` runs the large scenario matrix (matches the C++ default); plain
-invocations run the smaller default matrix. Some full-matrix scenarios (e.g.
-GO/SO-CFAR mid/large footprints) trigger a multi-second Monte Carlo α-LUT
-calibration on a cold cache — expected, not a regression; steady-state
-latency stays sub-millisecond regardless. See
-[`performance/python/README.md`](performance/python/README.md) for the full
-CLI and script list.
+The 26 C++ performance binaries read colocated YAML recipes under
+`performance/operators/` and report setup, first-frame, steady-state, and
+applicable live-update latencies. Results are meaningful only on the machine
+and GPU where they were captured. See [performance/README.md](performance/README.md).
 
----
+## Project references
+
+- [`DEVELOPER.md`](DEVELOPER.md): build, test, lint, and contribution workflow
+- [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309): deferred product, algorithm, performance, and tooling work
+- [`docs/planning/WORKFLOWS.md`](docs/planning/WORKFLOWS.md): supported radar chains and port wiring
+- [`docs/planning/TESTING.md`](docs/planning/TESTING.md): test strategy and analytic ground truth
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE).
+Apache-2.0; see [`LICENSE`](LICENSE).

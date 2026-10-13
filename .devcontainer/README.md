@@ -11,7 +11,7 @@ in-container layout.
   your local checkout.
 - **Exposes the GPUs.** The dev container passes `--gpus=all` (requires the
   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)).
-  On a GPU-less host, remove `runArgs` from `devcontainer.json`.
+  A CUDA-capable NVIDIA GPU is required to build and run the operator suite.
 - **Runs as a non-root `dev` user** (team convention). The devcontainer runtime
   updates its UID/GID to match your host account so the bind-mounted source stays
   writable.
@@ -60,8 +60,15 @@ Xauthority cookie (not enabled by default — paths vary by desktop).
 The in-repo `./data` folder is available at `/workspace/holoscan-radar/data`,
 the same path the `holohub` wrapper uses for `HOLOSCAN_CLI_DATA_DIR`.
 
-## Overriding the base image
+## SDK base image
 
-The container is pinned to the SDK version in the [`Dockerfile`](../Dockerfile)
-(`BASE_IMAGE`). To build against a different Holoscan SDK image, pass a
-different `BASE_IMAGE` build arg in `devcontainer.json`.
+The dev container currently uses a locally built HSDK 5 `main-5x` image. Build
+that image before opening the container:
+
+```bash
+./.devcontainer/build-hsdk5-ea-image.sh
+```
+
+The complete source-build workflow, pin behavior, HoloHub commands, current
+packaging limitation, and removal criteria are documented once in
+[`SDK_DEVELOPMENT.md`](../SDK_DEVELOPMENT.md).

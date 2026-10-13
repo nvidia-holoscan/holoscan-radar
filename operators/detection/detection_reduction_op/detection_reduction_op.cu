@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
+// The templates this TU instantiates are defined in the impl header.
 #include "detection/detection_reduction_op/detection_reduction_op_impl.cuh"
 
 namespace holoscan::radar {

@@ -1,0 +1,138 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+operator: multi_source_expansion
+profiles:
+  small:
+    shape:
+    - 32
+  medium:
+    shape:
+    - 2048
+  large:
+    shape:
+    - 16384
+live_ports: []
+cases:
+- id: baseline-{profile}
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - minimal
+  parameters: {}
+  fixture:
+    selected_percent: 25
+    sources: 2
+    index_columns: 2
+- id: sparse-medium
+  profile: medium
+  scopes:
+  - limited
+  parameters: {}
+  fixture:
+    selected_percent: 10
+    sources: 2
+    index_columns: 2
+- id: dense-medium
+  profile: medium
+  scopes:
+  - limited
+  parameters: {}
+  fixture:
+    selected_percent: 50
+    sources: 2
+    index_columns: 2
+- id: four-sources-medium
+  profile: medium
+  scopes:
+  - moderate
+  parameters: {}
+  fixture:
+    selected_percent: 25
+    sources: 4
+    index_columns: 2
+- id: wide-indices-medium
+  profile: medium
+  scopes:
+  - moderate
+  parameters: {}
+  fixture:
+    selected_percent: 25
+    sources: 2
+    index_columns: 10
+- id: full-selected-large
+  profile: large
+  scopes:
+  - thorough
+  parameters: {}
+  fixture:
+    selected_percent: 100
+    sources: 4
+    index_columns: 10
+axes:
+- rows
+recipe:
+  operator_type: radar.MultiSourceExpansionOp.float
+  inputs:
+  - port: detection_idx
+    shape:
+    - rows
+    - index_columns
+    dtype: int64
+    memory: device
+    generator: typed
+  - port: baseline_aoa
+    shape:
+    - rows
+    - two
+    dtype: float32
+    memory: device
+    generator: typed
+  - port: selected_idx
+    shape:
+    - selected
+    dtype: int64
+    memory: device
+    generator: typed
+  - port: resolved_aoa
+    shape:
+    - selected
+    - two
+    dtype: float32
+    memory: device
+    generator: typed
+  - port: doa_multi
+    shape:
+    - selected
+    - sources
+    - two
+    dtype: float32
+    memory: device
+    generator: typed
+  - port: source_count
+    shape:
+    - selected
+    dtype: int32
+    memory: device
+    generator: typed
+  fixtures:
+    selected_percent: 25
+    sources: 2
+    index_columns: 2
+    two: 2
+  derived_axes:
+    selected:
+      rounded_percent:
+        axis: rows
+        percent: selected_percent
+        minimum: 1
+  constructor:
+    bounds_policy: multi_source_expansion_bounds
+  params: {}
+  outputs:
+    timed: detection_idx_out
+    drain:
+    - aoa_estimates_out
+    unwired: []

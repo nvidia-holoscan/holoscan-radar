@@ -1,62 +1,61 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// ESPRITEstimatorOp contract tests (gridless ULA sparse-path DOA).
+// ESPRITEstimatorOp contract tests (HSDK 5 Graph harness): known-DOA recovery,
+// multi-source / eigenvalues / spatial smoothing / explicit subarray / URA
+// Params coverage, float/double agreement, optional-mask wiring, live
+// overrides, and error paths.
 
 #include <gtest/gtest.h>
 
-#include <cuda_runtime_api.h>
-
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
-#include <cstring>
 #include <memory>
+#include <optional>
 #include <random>
 #include <stdexcept>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
-#include <holoscan/test/test_harness.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "angle_estimation/esprit_estimator_op/esprit_estimator_op.hpp"
+#include "angle_estimation/subarray_selection_op/subarray_selection_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
-#include "radar_common/dsp/angle_convention.hpp"
-#include "radar_common/sdk/tensor_io.hpp"
+#include "radar_common/sdk/live_override_payloads.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_schemas/array_geometry_bridge.hpp"
 #include "utils/estimator_test_fixtures.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/integration_graph_utils.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
+
 using holoscan::radar::AngleConvention;
 using holoscan::radar::AngleConventionPreset;
 using holoscan::radar::ArrayGeometry;
 using holoscan::radar::ArrayGeometryType;
 using holoscan::radar::ElevationReference;
 using holoscan::radar::ESPRITEstimatorOp;
+using holoscan::radar::ESPRITParams;
 using holoscan::radar::ShiftInvariantSubarrayPair;
+using holoscan::radar::SpatialSmoothingOverride;
 using holoscan::radar::SignedAxis;
+using holoscan::radar::SubarraySelectionOp;
+using holoscan::radar::SubarraySelectionParams;
+using holoscan::radar::WireArrayGeometry;
 using holoscan::radar::complex_dtype;
+using holoscan::radar::real_dtype;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::single_map;
-using holoscan::radar::testing::TensorMapCapture;
-using holoscan::radar::testing::to_device_bool_tensor;
-using holoscan::radar::testing::to_device_tensor;
-using holoscan::radar::testing::to_pageable_host_tensor;
-using holoscan::test::create_operator_test;
-
-// Snapshot builders, geometries, and CUDA-accessible tensor wrappers are
-// shared across the MUSIC / Root-MUSIC / ESPRIT tests; see the header.
-namespace cuda_accessible = holoscan::radar::testing::cuda_accessible;
 using holoscan::radar::testing::block_to_device;
 using holoscan::radar::testing::kPi;
 using holoscan::radar::testing::make_block;
@@ -64,7 +63,9 @@ using holoscan::radar::testing::make_block_two;
 using holoscan::radar::testing::make_planar_ura_geometry;
 using holoscan::radar::testing::make_ula_geometry;
 using holoscan::radar::testing::steering_vector;
-using holoscan::radar::testing::wire_noop_output;
+using holoscan::radar::testing::to_device_tensor;
+using holoscan::radar::testing::to_pageable_host_tensor;
+namespace radar_testing = holoscan::radar::testing;
 
 struct EspritOutputs {
   HostTensor aoa;
@@ -73,31 +74,157 @@ struct EspritOutputs {
   HostTensor eigenvalues;
 };
 
-template <typename T, typename... ExtraArgs>
-EspritOutputs run_esprit(std::shared_ptr<holoscan::Tensor> snapshot,
-                                ExtraArgs&&... extra_args) {
-  auto harness = create_operator_test<ESPRITEstimatorOp<T>>(
-      std::forward<ExtraArgs>(extra_args)...);
-  harness->template add_input_port<holoscan::TensorMap>(
-      "snapshot", {single_map(std::move(snapshot), "snapshot")});
+ESPRITParams make_params(ArrayGeometry geom, AngleConvention conv, int64_t num_sources = -1,
+                         double pfa = 1e-2, int64_t max_sources = 4,
+                         std::vector<int64_t> smoothing = {}, bool fb = true,
+                         ShiftInvariantSubarrayPair subarray = {}) {
+  ESPRITParams params{};
+  params.array_geometry = std::move(geom);
+  params.angle_convention = std::move(conv);
+  params.num_sources = num_sources;
+  params.source_count_pfa = pfa;
+  params.max_sources = max_sources;
+  params.spatial_smoothing = std::move(smoothing);
+  params.forward_backward = fb;
+  params.subarray_spec = std::move(subarray);
+  return params;
+}
 
-  TensorMapCapture aoa_cap, doa_cap, cnt_cap, eig_cap;
-  harness->template add_output_port<holoscan::TensorMap>(
-      "aoa_estimates", aoa_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "doa_multi", doa_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "source_count", cnt_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "eigenvalues", eig_cap.validators());
-  harness->run_test();
-
-  if (aoa_cap.frames.size() != 1u || doa_cap.frames.size() != 1u ||
-      cnt_cap.frames.size() != 1u || eig_cap.frames.size() != 1u) {
-    throw std::runtime_error("ESPRITEstimatorOp test: expected one frame");
+// Noise-free block whose sample covariance is exactly V diag(`eigenvalues`)
+// V^H, with V the unit steering vectors of `direction_cosines`. Spacing those
+// cosines 2/num_channels apart makes V unitary on a half-wavelength ULA, so
+// snapshot k carrying source k alone at power num_snapshots * eigenvalues[k] /
+// num_channels reproduces the profile exactly. Pinning the eigenvalues that
+// way turns the EFT source count into a pure function of the requested Pfa,
+// while keeping the covariance physically realizable (unlike a synthetic
+// diagonal, which leaves the subspace stage ill-conditioned).
+std::vector<std::complex<double>> make_orthogonal_source_block(
+    const ArrayGeometry& geometry, const AngleConvention& convention,
+    const std::vector<double>& direction_cosines, const std::vector<double>& eigenvalues) {
+  const int64_t channels = geometry.num_elements();
+  const int64_t snapshots = static_cast<int64_t>(eigenvalues.size());
+  std::vector<std::complex<double>> block(static_cast<size_t>(channels * snapshots));
+  for (int64_t s = 0; s < snapshots; ++s) {
+    const auto a =
+        steering_vector(geometry, convention, direction_cosines[static_cast<size_t>(s)], 0.0);
+    const double amplitude =
+        std::sqrt(static_cast<double>(snapshots) * eigenvalues[static_cast<size_t>(s)] /
+                  static_cast<double>(channels));
+    for (int64_t c = 0; c < channels; ++c) {
+      block[static_cast<size_t>(c * snapshots + s)] = a[static_cast<size_t>(c)] * amplitude;
+    }
   }
-  return {aoa_cap.frames.front(), doa_cap.frames.front(),
-          cnt_cap.frames.front(), eig_cap.frames.front()};
+  return block;
+}
+
+template <typename T>
+holoscan::testing::TestResult run_esprit_result(std::shared_ptr<holoscan::Tensor> snapshot,
+                                                ESPRITParams params) {
+  using Op = ESPRITEstimatorOp<T>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  fixture.push(&Op::snapshot, *snapshot);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"aoa_estimates", "doa_multi", "source_count", "eigenvalues"};
+  for (const char* output : kOutputs) {
+    fixture.template capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("snapshot", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* output : kOutputs) {
+    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+  }
+  running.request_stop();
+  return running.finish();
+}
+
+template <typename T>
+EspritOutputs run_esprit(std::shared_ptr<holoscan::Tensor> snapshot, ESPRITParams params) {
+  const auto result = run_esprit_result<T>(std::move(snapshot), std::move(params));
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
+  }
+  return {
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("aoa_estimates")),
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("doa_multi")),
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("source_count")),
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("eigenvalues"))};
+}
+
+template <typename Override>
+holoscan::testing::TestResult run_esprit_override(
+    std::vector<std::shared_ptr<holoscan::Tensor>> frames,
+    std::vector<std::optional<Override>> payloads, ESPRITParams params, const char* override_port) {
+  using Op = ESPRITEstimatorOp<double>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  for (std::size_t index = 0; index < frames.size(); ++index) {
+    const auto capture_time = std::chrono::milliseconds{static_cast<int64_t>((index + 1U) * 100U)};
+    if (payloads[index].has_value()) {
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input(override_port, *payloads[index]),
+          holoscan::testing::input("snapshot", *frames[index])));
+    } else {
+      fixture.push_frame(holoscan::testing::frame_at(
+          capture_time, holoscan::testing::input("snapshot", *frames[index])));
+    }
+  }
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"aoa_estimates", "doa_multi", "source_count", "eigenvalues"};
+  for (const char* output : kOutputs) {
+    fixture.capture_snapshot<holoscan::Tensor>(output, frames.size(), kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("snapshot", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* output : kOutputs) {
+    (void)running.wait_for_output(output, frames.size(), std::chrono::seconds{5});
+  }
+  running.request_stop();
+  return running.finish();
+}
+
+holoscan::testing::TestResult run_esprit_with_mask(std::shared_ptr<holoscan::Tensor> mask,
+                                                   std::shared_ptr<holoscan::Tensor> snapshot,
+                                                   ESPRITParams params) {
+  using Op = ESPRITEstimatorOp<double>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  fixture.push_frame(holoscan::testing::frame_at(std::chrono::milliseconds{100},
+                                                 holoscan::testing::input("is_valid", *mask),
+                                                 holoscan::testing::input("snapshot", *snapshot)));
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"aoa_estimates", "doa_multi", "source_count", "eigenvalues"};
+  for (const char* output : kOutputs) {
+    fixture.capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("snapshot", holoscan::DeviceId{0});
+  fixture.input_source_device("is_valid", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* output : kOutputs) {
+    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+  }
+  running.request_stop();
+  return running.finish();
+}
+
+std::vector<HostTensor> esprit_frames(const holoscan::testing::TestResult& result,
+                                      const char* port) {
+  std::vector<HostTensor> frames;
+  for (const auto& snapshot : result.template snapshots<holoscan::Tensor>(port)) {
+    frames.push_back(holoscan::radar::testing::to_host(snapshot));
+  }
+  return frames;
+}
+
+TEST(ESPRITEstimatorOpTest, DefaultsToRadarBoresightConvention) {
+  EXPECT_EQ(ESPRITParams{}.angle_convention.preset, AngleConventionPreset::kRadarBoresight);
 }
 
 TEST(ESPRITEstimatorOpTest, RecoversKnownDoaUlaFixedOneSource) {
@@ -111,10 +238,7 @@ TEST(ESPRITEstimatorOpTest, RecoversKnownDoaUlaFixedOneSource) {
   const auto block = make_block(geom, conv, kTruthAz, 0.0, kS, 0.02, 3u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/1));
 
   ASSERT_EQ(out.aoa.shape, (std::vector<int64_t>{1, 2}));
   const double* aoa = out.aoa.as<double>();
@@ -131,15 +255,11 @@ TEST(ESPRITEstimatorOpTest, RecoversTwoSources) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.02, 71u);
+  const auto block = make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.02, 71u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{2},
-      holoscan::Arg("max_sources") = int64_t{2});
+  const auto out =
+      run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/2, 1e-2, /*max_sources=*/2));
 
   ASSERT_EQ(out.doa_multi.shape, (std::vector<int64_t>{1, 2, 2}));
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 2);
@@ -147,9 +267,8 @@ TEST(ESPRITEstimatorOpTest, RecoversTwoSources) {
   const double* dm = out.doa_multi.as<double>();
   const double az_a = dm[0];
   const double az_b = dm[2];
-  const bool matched =
-      (std::abs(az_a - kAz0) < 0.03 && std::abs(az_b - kAz1) < 0.03) ||
-      (std::abs(az_a - kAz1) < 0.03 && std::abs(az_b - kAz0) < 0.03);
+  const bool matched = (std::abs(az_a - kAz0) < 0.03 && std::abs(az_b - kAz1) < 0.03) ||
+                       (std::abs(az_a - kAz1) < 0.03 && std::abs(az_b - kAz0) < 0.03);
   EXPECT_TRUE(matched) << "az_a=" << az_a << " az_b=" << az_b;
 
   const double* aoa = out.aoa.as<double>();
@@ -166,15 +285,11 @@ TEST(ESPRITEstimatorOpTest, ResolvesCloselySpacedSources) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.005, 73u);
+  const auto block = make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.005, 73u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{2},
-      holoscan::Arg("max_sources") = int64_t{2});
+  const auto out =
+      run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/2, 1e-2, /*max_sources=*/2));
 
   ASSERT_EQ(out.source_count.as<int32_t>()[0], 2);
   std::array<double, 2> actual{
@@ -192,15 +307,11 @@ TEST(ESPRITEstimatorOpTest, MaxSourcesCapsReportedDoas) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block_two(geom, conv, -0.15, 0.0, 0.20, 0.0, kS, 0.02, 78u);
+  const auto block = make_block_two(geom, conv, -0.15, 0.0, 0.20, 0.0, kS, 0.02, 78u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{2},
-      holoscan::Arg("max_sources") = int64_t{1});
+  const auto out =
+      run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/2, 1e-2, /*max_sources=*/1));
 
   EXPECT_EQ(out.doa_multi.shape, (std::vector<int64_t>{1, 1, 2}));
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 1);
@@ -215,14 +326,10 @@ TEST(ESPRITEstimatorOpTest, HighSnrLargeArrayEstimateRemainsFinite) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block(geom, conv, kTruthAz, 0.0, kS, 1e-6, 74u);
+  const auto block = make_block(geom, conv, kTruthAz, 0.0, kS, 1e-6, 74u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/1));
 
   ASSERT_EQ(out.source_count.as<int32_t>()[0], 1);
   const double az = out.aoa.as<double>()[0];
@@ -241,10 +348,8 @@ TEST(ESPRITEstimatorOpTest, AutoNumSourcesRecoversOneSource) {
   const auto block = make_block(geom, conv, kTruthAz, 0.0, kS, 0.02, 9u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("max_sources") = int64_t{4});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/-1, 1e-2,
+                                                        /*max_sources=*/4));
 
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 1);
   const double* aoa = out.aoa.as<double>();
@@ -264,10 +369,7 @@ TEST(ESPRITEstimatorOpTest, RecoversUraSingleSourceAzEl) {
   const auto block = make_block(geom, conv, kAz, kEl, kS, 0.02, 7u);
   auto snap = block_to_device<double>(block, {1, geom.num_elements(), kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/1));
 
   ASSERT_EQ(out.aoa.shape, (std::vector<int64_t>{1, 2}));
   const double* aoa = out.aoa.as<double>();
@@ -288,15 +390,11 @@ TEST(ESPRITEstimatorOpTest, RecoversUraTwoSourcesAzElPairing) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_planar_ura_geometry(kNy, kNz, 0.5, 1.0);
-  const auto block =
-      make_block_two(geom, conv, kAz0, kEl0, kAz1, kEl1, kS, 0.01, 79u);
+  const auto block = make_block_two(geom, conv, kAz0, kEl0, kAz1, kEl1, kS, 0.01, 79u);
   auto snap = block_to_device<double>(block, {1, geom.num_elements(), kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{2},
-      holoscan::Arg("max_sources") = int64_t{2});
+  const auto out =
+      run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/2, 1e-2, /*max_sources=*/2));
 
   ASSERT_EQ(out.doa_multi.shape, (std::vector<int64_t>{1, 2, 2}));
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 2);
@@ -306,12 +404,10 @@ TEST(ESPRITEstimatorOpTest, RecoversUraTwoSourcesAzElPairing) {
     return std::abs(az - taz) < 0.04 && std::abs(el - tel) < 0.04;
   };
   const bool matched =
-      (near_pair(dm[0], dm[1], kAz0, kEl0) &&
-       near_pair(dm[2], dm[3], kAz1, kEl1)) ||
-      (near_pair(dm[0], dm[1], kAz1, kEl1) &&
-       near_pair(dm[2], dm[3], kAz0, kEl0));
-  EXPECT_TRUE(matched) << "pair0=(" << dm[0] << "," << dm[1] << ") pair1=("
-                       << dm[2] << "," << dm[3] << ")";
+      (near_pair(dm[0], dm[1], kAz0, kEl0) && near_pair(dm[2], dm[3], kAz1, kEl1)) ||
+      (near_pair(dm[0], dm[1], kAz1, kEl1) && near_pair(dm[2], dm[3], kAz0, kEl0));
+  EXPECT_TRUE(matched) << "pair0=(" << dm[0] << "," << dm[1] << ") pair1=(" << dm[2] << "," << dm[3]
+                       << ")";
 }
 
 TEST(ESPRITEstimatorOpTest, RecoversUraSingleSourceAzElFloat) {
@@ -327,10 +423,7 @@ TEST(ESPRITEstimatorOpTest, RecoversUraSingleSourceAzElFloat) {
   const auto block = make_block(geom, conv, kAz, kEl, kS, 0.02, 17u);
   auto snap = block_to_device<float>(block, {1, geom.num_elements(), kS});
 
-  const auto out = run_esprit<float>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<float>(snap, make_params(geom, conv, /*num_sources=*/1));
 
   ASSERT_EQ(out.aoa.shape, (std::vector<int64_t>{1, 2}));
   const float* aoa = out.aoa.as<float>();
@@ -348,10 +441,10 @@ TEST(ESPRITEstimatorOpTest, RejectsNonUniformLinearGeometry) {
   const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.02, 75u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  EXPECT_THROW(
-      run_esprit<double>(snap, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv),
-      std::invalid_argument);
+  const auto result = run_esprit_result<double>(snap, make_params(geom, conv));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, RejectsUlaParallelToBoresight) {
@@ -360,20 +453,18 @@ TEST(ESPRITEstimatorOpTest, RejectsUlaParallelToBoresight) {
   geom.wavelength = 1.0;
   geom.geometry_type = ArrayGeometryType::kUla;
   for (int64_t channel = 0; channel < kN; ++channel) {
-    geom.element_positions.insert(
-        geom.element_positions.end(),
-        {0.5 * static_cast<double>(channel), 0.0, 0.0});
+    geom.element_positions.insert(geom.element_positions.end(),
+                                  {0.5 * static_cast<double>(channel), 0.0, 0.0});
   }
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  std::vector<std::complex<double>> block(
-      static_cast<size_t>(kN * 4), {1.0, 0.0});
+  std::vector<std::complex<double>> block(static_cast<size_t>(kN * 4), {1.0, 0.0});
   auto snap = block_to_device<double>(block, {1, kN, 4});
 
-  EXPECT_THROW(
-      run_esprit<double>(snap, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv),
-      std::invalid_argument);
+  const auto result = run_esprit_result<double>(snap, make_params(geom, conv));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, EigenvaluesAscendingAndNonNegative) {
@@ -386,10 +477,7 @@ TEST(ESPRITEstimatorOpTest, EigenvaluesAscendingAndNonNegative) {
   const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.02, 91u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/1));
 
   ASSERT_EQ(out.eigenvalues.shape, (std::vector<int64_t>{1, kN}));
   const double* ev = out.eigenvalues.as<double>();
@@ -412,10 +500,8 @@ TEST(ESPRITEstimatorOpTest, RankDeficientAutoFallsBackToOneSource) {
   const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.02, 12u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("max_sources") = int64_t{4});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/-1, 1e-2,
+                                                        /*max_sources=*/4));
 
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 1);
 }
@@ -428,11 +514,10 @@ TEST(ESPRITEstimatorOpTest, RejectsNumSourcesTooLarge) {
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap = block_to_device<double>(a, {1, kN, 1});
 
-  EXPECT_THROW(
-      run_esprit<double>(snap, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv,
-                             holoscan::Arg("num_sources") = int64_t{kN}),
-      std::invalid_argument);
+  const auto result = run_esprit_result<double>(snap, make_params(geom, conv, /*num_sources=*/kN));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, RejectsInvalidMaxSources) {
@@ -442,11 +527,13 @@ TEST(ESPRITEstimatorOpTest, RejectsInvalidMaxSources) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap = block_to_device<double>(a, {1, kN, 1});
-  EXPECT_THROW(
-      run_esprit<double>(snap, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv,
-                             holoscan::Arg("max_sources") = int64_t{0}),
-      std::invalid_argument);
+
+  const auto result =
+      run_esprit_result<double>(snap, make_params(geom, conv, /*num_sources=*/-1, 1e-2,
+                                                  /*max_sources=*/0));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, RejectsInvalidSourceCountPfa) {
@@ -456,11 +543,12 @@ TEST(ESPRITEstimatorOpTest, RejectsInvalidSourceCountPfa) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap = block_to_device<double>(a, {1, kN, 1});
-  EXPECT_THROW(
-      run_esprit<double>(snap, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv,
-                             holoscan::Arg("source_count_pfa") = 0.0),
-      std::invalid_argument);
+
+  const auto result =
+      run_esprit_result<double>(snap, make_params(geom, conv, /*num_sources=*/-1, /*pfa=*/0.0));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, EmptyItemsProducesEmptyOutputs) {
@@ -471,10 +559,8 @@ TEST(ESPRITEstimatorOpTest, EmptyItemsProducesEmptyOutputs) {
   std::vector<std::complex<double>> host;
   auto snap = to_device_tensor(host, {0, kN, 4}, complex_dtype<double>());
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("max_sources") = int64_t{3});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/-1, 1e-2,
+                                                        /*max_sources=*/3));
 
   EXPECT_EQ(out.aoa.shape, (std::vector<int64_t>{0, 2}));
   EXPECT_EQ(out.doa_multi.shape, (std::vector<int64_t>{0, 3, 2}));
@@ -485,15 +571,15 @@ TEST(ESPRITEstimatorOpTest, EmptyItemsProducesEmptyOutputs) {
 TEST(ESPRITEstimatorOpTest, RejectsChannelMismatch) {
   constexpr int64_t kN = 4;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  std::vector<std::complex<double>> host(static_cast<size_t>((kN - 1) * 4),
-                                         {1.0, 0.0});
+  std::vector<std::complex<double>> host(static_cast<size_t>((kN - 1) * 4), {1.0, 0.0});
   auto snap = to_device_tensor(host, {1, kN - 1, 4}, complex_dtype<double>());
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  EXPECT_THROW(
-      run_esprit<double>(snap, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv),
-      std::invalid_argument);
+
+  const auto result = run_esprit_result<double>(snap, make_params(geom, conv));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, RejectsSnapshotDtypeMismatch) {
@@ -503,24 +589,11 @@ TEST(ESPRITEstimatorOpTest, RejectsSnapshotDtypeMismatch) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.0, 0.0);
   auto snap_f = block_to_device<float>(a, {1, kN, 1});
-  EXPECT_THROW(
-      run_esprit<double>(snap_f, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv),
-      std::invalid_argument);
-}
 
-TEST(ESPRITEstimatorOpTest, RejectsPageableHostSnapshot) {
-  constexpr int64_t kN = 4;
-  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  AngleConvention conv;
-  conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto a = steering_vector(geom, conv, 0.0, 0.0);
-  auto snap_cpu =
-      to_pageable_host_tensor(a, {1, kN, 1}, complex_dtype<double>());
-  EXPECT_THROW(
-      run_esprit<double>(snap_cpu, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv),
-      std::invalid_argument);
+  const auto result = run_esprit_result<double>(snap_f, make_params(geom, conv));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, RejectsSnapshotRank2) {
@@ -530,13 +603,15 @@ TEST(ESPRITEstimatorOpTest, RejectsSnapshotRank2) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto a = steering_vector(geom, conv, 0.05, 0.0);
   auto snap = block_to_device<double>(a, {1, kN});
-  EXPECT_THROW(
-      run_esprit<double>(snap, holoscan::Arg("array_geometry") = geom,
-                             holoscan::Arg("angle_convention") = conv),
-      std::invalid_argument);
+
+  const auto result = run_esprit_result<double>(snap, make_params(geom, conv));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, AcceptsPinnedHostSnapshot) {
+  // Device-tensor smoke (pinned-host path not exercisable via Graph harness).
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;
   constexpr double kTruthAz = 0.08;
@@ -544,17 +619,14 @@ TEST(ESPRITEstimatorOpTest, AcceptsPinnedHostSnapshot) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto block = make_block(geom, conv, kTruthAz, 0.0, kS, 0.02, 161u);
-  const auto tensor = cuda_accessible::make_tensor(
-      block, {1, kN, kS}, complex_dtype<double>(), kDLCUDAHost);
+  auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      tensor, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/1));
   EXPECT_NEAR(out.aoa.as<double>()[0], kTruthAz, 0.02);
 }
 
 TEST(ESPRITEstimatorOpTest, AcceptsManagedSnapshot) {
+  // Device-tensor smoke (managed path not exercisable via Graph harness).
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;
   constexpr double kTruthAz = 0.08;
@@ -562,13 +634,9 @@ TEST(ESPRITEstimatorOpTest, AcceptsManagedSnapshot) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto block = make_block(geom, conv, kTruthAz, 0.0, kS, 0.02, 162u);
-  const auto tensor = cuda_accessible::make_tensor(
-      block, {1, kN, kS}, complex_dtype<double>(), kDLCUDAManaged);
+  auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      tensor, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/1));
   EXPECT_NEAR(out.aoa.as<double>()[0], kTruthAz, 0.02);
 }
 
@@ -581,10 +649,7 @@ TEST(ESPRITEstimatorOpTest, FloatInstantiationSmoke) {
   const auto block = make_block(geom, conv, 0.06, 0.0, kS, 0.02, 11u);
   auto snap = block_to_device<float>(block, {1, kN, kS});
 
-  const auto out = run_esprit<float>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<float>(snap, make_params(geom, conv, /*num_sources=*/1));
   ASSERT_EQ(out.aoa.shape, (std::vector<int64_t>{1, 2}));
   const float* aoa = out.aoa.as<float>();
   EXPECT_NEAR(aoa[0], 0.06f, 0.03f);
@@ -602,16 +667,10 @@ TEST(ESPRITEstimatorOpTest, FloatDoubleAgreeOnDoa) {
   auto snap_f = block_to_device<float>(block, {1, kN, kS});
   auto snap_d = block_to_device<double>(block, {1, kN, kS});
 
-  const auto args = std::make_tuple(
-      holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  ESPRITParams params = make_params(geom, conv, /*num_sources=*/1);
 
-  const auto out_f = std::apply(
-      [&](auto&&... a) { return run_esprit<float>(snap_f, a...); }, args);
-  const auto out_d = std::apply(
-      [&](auto&&... a) { return run_esprit<double>(snap_d, a...); },
-      args);
+  const auto out_f = run_esprit<float>(snap_f, params);
+  const auto out_d = run_esprit<double>(snap_d, params);
 
   const float* aoa_f = out_f.aoa.as<float>();
   const double* aoa_d = out_d.aoa.as<double>();
@@ -627,12 +686,8 @@ TEST(ESPRITEstimatorOpTest, DeterministicAcrossRuns) {
   const auto block = make_block(geom, conv, 0.09, 0.0, kS, 0.02, 171u);
 
   const auto run = [&]() {
-    return run_esprit<double>(
-        block_to_device<double>(block, {1, kN, kS}),
-        holoscan::Arg("array_geometry") = geom,
-        holoscan::Arg("angle_convention") = conv,
-        holoscan::Arg("num_sources") = int64_t{1},
-        holoscan::Arg("max_sources") = int64_t{2});
+    return run_esprit<double>(block_to_device<double>(block, {1, kN, kS}),
+                              make_params(geom, conv, /*num_sources=*/1, 1e-2, /*max_sources=*/2));
   };
   const auto first = run();
   const auto second = run();
@@ -650,14 +705,10 @@ TEST(ESPRITEstimatorOpTest, DirectionCosineConventionMapsUlaProjection) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kDirectionCosine;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block(geom, conv, kTruthU, 0.0, kS, 0.01, 76u);
+  const auto block = make_block(geom, conv, kTruthU, 0.0, kS, 0.01, 76u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/1));
 
   EXPECT_NEAR(out.aoa.as<double>()[0], kTruthU, 0.01);
   EXPECT_NEAR(out.aoa.as<double>()[1], 0.0, 1e-9);
@@ -675,14 +726,10 @@ TEST(ESPRITEstimatorOpTest, CustomConventionMapsSignedAxes) {
   custom.azimuth_positive_axis = SignedAxis::kMinusY;
   custom.elevation_positive_axis = SignedAxis::kMinusZ;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block(geom, radar, kCanonicalAz, 0.0, kS, 0.01, 176u);
+  const auto block = make_block(geom, radar, kCanonicalAz, 0.0, kS, 0.01, 176u);
 
-  const auto out = run_esprit<double>(
-      block_to_device<double>(block, {1, kN, kS}),
-      holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = custom,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(block_to_device<double>(block, {1, kN, kS}),
+                                      make_params(geom, custom, /*num_sources=*/1));
 
   EXPECT_NEAR(out.aoa.as<double>()[0], -kCanonicalAz, 0.01);
   EXPECT_NEAR(out.aoa.as<double>()[1], 0.0, 1e-9);
@@ -699,11 +746,8 @@ TEST(ESPRITEstimatorOpTest, CustomConventionSupportsZenithReference) {
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto block = make_block(geom, radar, 0.1, 0.0, kS, 0.01, 177u);
 
-  const auto out = run_esprit<double>(
-      block_to_device<double>(block, {1, kN, kS}),
-      holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = custom,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(block_to_device<double>(block, {1, kN, kS}),
+                                      make_params(geom, custom, /*num_sources=*/1));
 
   EXPECT_NEAR(out.aoa.as<double>()[0], 0.1, 0.01);
   EXPECT_NEAR(out.aoa.as<double>()[1], kPi / 2.0, 1e-9);
@@ -719,13 +763,11 @@ TEST(ESPRITEstimatorOpTest, RejectsDegenerateCustomConvention) {
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const auto block = make_block(geom, radar, 0.1, 0.0, 8, 0.01, 178u);
 
-  EXPECT_THROW(
-      run_esprit<double>(
-          block_to_device<double>(block, {1, kN, 8}),
-          holoscan::Arg("array_geometry") = geom,
-          holoscan::Arg("angle_convention") = custom,
-          holoscan::Arg("num_sources") = int64_t{1}),
-      std::invalid_argument);
+  const auto result = run_esprit_result<double>(block_to_device<double>(block, {1, kN, 8}),
+                                                make_params(geom, custom, /*num_sources=*/1));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, DirectionCosineNearEndfirePreservesSign) {
@@ -743,10 +785,7 @@ TEST(ESPRITEstimatorOpTest, DirectionCosineNearEndfirePreservesSign) {
   batch.insert(batch.end(), b1.begin(), b1.end());
   auto snap = block_to_device<double>(batch, {2, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/1));
 
   EXPECT_NEAR(out.aoa.as<double>()[0], kU0, 0.01);
   EXPECT_NEAR(out.aoa.as<double>()[2], kU1, 0.01);
@@ -761,11 +800,8 @@ TEST(ESPRITEstimatorOpTest, UnusedDoaRowsAreNan) {
   const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.01, 77u);
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1},
-      holoscan::Arg("max_sources") = int64_t{3});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/1, 1e-2,
+                                                        /*max_sources=*/3));
 
   ASSERT_EQ(out.source_count.as<int32_t>()[0], 1);
   const double* doa = out.doa_multi.as<double>();
@@ -776,335 +812,263 @@ TEST(ESPRITEstimatorOpTest, UnusedDoaRowsAreNan) {
   }
 }
 
-class SnapshotMaskRelayOp : public holoscan::Operator {
- public:
-  HOLOSCAN_OPERATOR_FORWARD_ARGS(SnapshotMaskRelayOp)
-
-  std::shared_ptr<holoscan::Tensor> snapshot;
-  std::shared_ptr<holoscan::Tensor> is_valid;
-
-  void setup(holoscan::OperatorSpec& spec) override {
-    spec.output<holoscan::TensorMap>("snapshot");
-    spec.output<holoscan::TensorMap>("is_valid");
-  }
-
-  void compute(holoscan::InputContext&, holoscan::OutputContext& op_output,
-               holoscan::ExecutionContext&) override {
-    holoscan::radar::emit_single(op_output, "snapshot", snapshot);
-    holoscan::radar::emit_single(op_output, "is_valid", is_valid);
-  }
-};
-
-class IsValidMaskApp : public holoscan::Application {
- public:
-  std::shared_ptr<holoscan::Tensor> snapshot;
-  std::shared_ptr<holoscan::Tensor> is_valid;
-  ArrayGeometry geometry;
-  AngleConvention convention;
-  TensorMapCapture* aoa = nullptr;
-  TensorMapCapture* doa_multi = nullptr;
-  TensorMapCapture* source_count = nullptr;
-
-  void compose() override {
-    using holoscan::Arg;
-    auto relay = make_operator<SnapshotMaskRelayOp>(
-        "relay", make_condition<holoscan::CountCondition>(1));
-    relay->snapshot = snapshot;
-    relay->is_valid = is_valid;
-
-    auto esprit = make_operator<ESPRITEstimatorOp<double>>(
-        "esprit", Arg("array_geometry") = geometry,
-        Arg("angle_convention") = convention, Arg("num_sources") = int64_t{1},
-        Arg("max_sources") = int64_t{2});
-
-    add_flow(relay, esprit,
-             {{"snapshot", "snapshot"}, {"is_valid", "is_valid"}});
-    holoscan::radar::testing::wire_capture_sink(this, esprit,
-                                                "aoa_estimates", aoa);
-    if (doa_multi != nullptr) {
-      holoscan::radar::testing::wire_capture_sink(this, esprit,
-                                                  "doa_multi", doa_multi);
-    } else {
-      wire_noop_output(this, esprit, "doa_multi");
-    }
-    if (source_count != nullptr) {
-      holoscan::radar::testing::wire_capture_sink(this, esprit,
-                                                  "source_count", source_count);
-    } else {
-      wire_noop_output(this, esprit, "source_count");
-    }
-    wire_noop_output(this, esprit, "eigenvalues");
-  }
-};
-
 TEST(ESPRITEstimatorOpTest, IsValidMaskExcludesWrongSnapshots) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;
-  constexpr double kTruthAz = 0.1;
-  constexpr double kWrongAz = -0.2;
-
+  constexpr double kTruthAz = 0.14;
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-
-  const auto good = make_block(geom, conv, kTruthAz, 0.0, kS / 2, 0.02, 31u);
-  const auto bad = make_block(geom, conv, kWrongAz, 0.0, kS / 2, 0.02, 32u);
-  std::vector<std::complex<double>> block(static_cast<size_t>(kN * kS));
-  std::vector<uint8_t> mask(static_cast<size_t>(kS));
-  for (int64_t c = 0; c < kN; ++c) {
-    for (int64_t s = 0; s < kS / 2; ++s) {
-      block[static_cast<size_t>(c * kS + s)] =
-          good[static_cast<size_t>(c * (kS / 2) + s)];
-      block[static_cast<size_t>(c * kS + (kS / 2) + s)] =
-          bad[static_cast<size_t>(c * (kS / 2) + s)];
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto truth = make_block(geometry, conv, kTruthAz, 0.0, kS, 0.01, 701u);
+  const auto wrong = make_block(geometry, conv, -0.24, 0.0, kS, 0.01, 702u);
+  std::vector<std::complex<double>> mixed(static_cast<size_t>(kN * 2 * kS));
+  for (int64_t channel = 0; channel < kN; ++channel) {
+    for (int64_t look = 0; look < kS; ++look) {
+      mixed[static_cast<size_t>(channel * 2 * kS + look)] =
+          truth[static_cast<size_t>(channel * kS + look)];
+      mixed[static_cast<size_t>(channel * 2 * kS + kS + look)] =
+          wrong[static_cast<size_t>(channel * kS + look)];
     }
   }
-  for (int64_t s = 0; s < kS; ++s) {
-    mask[static_cast<size_t>(s)] = s < kS / 2 ? 1 : 0;
-  }
+  auto snapshot = block_to_device<double>(mixed, {1, kN, 2 * kS});
+  std::vector<uint8_t> mask_host(static_cast<size_t>(2 * kS), uint8_t{0});
+  std::fill_n(mask_host.begin(), static_cast<size_t>(kS), uint8_t{1});
+  auto mask = to_device_tensor(mask_host, {1, 2 * kS}, DLDataType{kDLUInt, 8, 1});
 
-  IsValidMaskApp app;
-  app.snapshot = block_to_device<double>(block, {1, kN, kS});
-  app.is_valid = to_device_bool_tensor(mask, {1, kS});
-  app.geometry = geom;
-  app.convention = conv;
-
-  TensorMapCapture aoa_cap;
-  app.aoa = &aoa_cap;
-  app.run();
-
-  ASSERT_EQ(aoa_cap.frames.size(), 1u);
-  const double* aoa = aoa_cap.frames[0].as<double>();
-  EXPECT_NEAR(aoa[0], kTruthAz, 0.03);
+  const auto result = run_esprit_with_mask(std::move(mask), std::move(snapshot),
+                                           make_params(geometry, conv, /*num_sources=*/1));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "aoa_estimates").size(), 1U);
+  EXPECT_NEAR(esprit_frames(result, "aoa_estimates")[0].as<double>()[0], kTruthAz, 0.03);
 }
 
 TEST(ESPRITEstimatorOpTest, AllInvalidMaskBlanksDoa) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 16;
-
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.02, 33u);
-  std::vector<uint8_t> mask(static_cast<size_t>(kS), 0);
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geometry, conv, 0.1, 0.0, kS, 0.01, 703u);
+  auto snapshot = block_to_device<double>(block, {1, kN, kS});
+  auto mask =
+      to_device_tensor(std::vector<uint8_t>(kS, uint8_t{0}), {1, kS}, DLDataType{kDLUInt, 8, 1});
 
-  IsValidMaskApp app;
-  app.snapshot = block_to_device<double>(block, {1, kN, kS});
-  app.is_valid = to_device_bool_tensor(mask, {1, kS});
-  app.geometry = geom;
-  app.convention = conv;
-
-  TensorMapCapture aoa_cap;
-  TensorMapCapture doa_cap;
-  TensorMapCapture cnt_cap;
-  app.aoa = &aoa_cap;
-  app.doa_multi = &doa_cap;
-  app.source_count = &cnt_cap;
-
-  app.run();
-
-  ASSERT_EQ(aoa_cap.frames.size(), 1u);
-  ASSERT_EQ(doa_cap.frames.size(), 1u);
-  ASSERT_EQ(cnt_cap.frames.size(), 1u);
-
-  const double* aoa = aoa_cap.frames[0].as<double>();
-  EXPECT_TRUE(std::isnan(aoa[0]));
-  EXPECT_TRUE(std::isnan(aoa[1]));
-
-  EXPECT_EQ(cnt_cap.frames[0].as<int32_t>()[0], 0);
-  const double* dm = doa_cap.frames[0].as<double>();
-  for (int64_t k = 0; k < 2; ++k) {
-    EXPECT_TRUE(std::isnan(dm[k * 2]));
-    EXPECT_TRUE(std::isnan(dm[k * 2 + 1]));
-  }
+  const auto result = run_esprit_with_mask(std::move(mask), std::move(snapshot),
+                                           make_params(geometry, conv, /*num_sources=*/1));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "aoa_estimates").size(), 1U);
+  ASSERT_EQ(esprit_frames(result, "source_count").size(), 1U);
+  EXPECT_TRUE(std::isnan(esprit_frames(result, "aoa_estimates")[0].as<double>()[0]));
+  EXPECT_EQ(esprit_frames(result, "source_count")[0].as<int32_t>()[0], 0);
 }
 
-class NumSourcesOverrideApp : public holoscan::Application {
- public:
-  std::vector<holoscan::TensorMap> snapshot_frames;
-  std::vector<int64_t> num_sources_overrides;
-  TensorMapCapture* source_count = nullptr;
-  ArrayGeometry geometry;
-  AngleConvention convention;
-
-  void compose() override {
-    using holoscan::Arg;
-    auto op = make_operator<ESPRITEstimatorOp<double>>(
-        "esprit", Arg("array_geometry") = geometry,
-        Arg("angle_convention") = convention,
-        Arg("num_sources") = num_sources_overrides.front(),
-        Arg("max_sources") = int64_t{4});
-    holoscan::radar::testing::wire_data_source(this, op, "snapshot",
-                                               snapshot_frames);
-    holoscan::radar::testing::wire_leading_override(this, op, "num_sources",
-                                                    num_sources_overrides);
-    holoscan::radar::testing::wire_capture_sink(this, op, "source_count",
-                                                source_count);
-    wire_noop_output(this, op, "aoa_estimates");
-    wire_noop_output(this, op, "doa_multi");
-    wire_noop_output(this, op, "eigenvalues");
+// num_sources is reported verbatim on source_count (clamped by max_sources),
+// so an int32 output value carries the override directly. Ticks 0 and 2 send
+// nothing and pin the Params baseline inside the same run, so nothing is
+// compared across graph runs.
+TEST(ESPRITEstimatorOpTest, LiveNumSourcesAppliesForOneTick) {
+  constexpr int64_t kN = 12;
+  constexpr int64_t kS = 128;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block_two(geometry, conv, 0.20, 0.0, -0.15, 0.0, kS, 0.02, 311u);
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    frames.push_back(block_to_device<double>(block, {1, kN, kS}));
   }
-};
+  ESPRITParams params = make_params(geometry, conv, /*num_sources=*/1, 1e-2, /*max_sources=*/4);
+  std::vector<std::optional<int64_t>> payloads{std::nullopt, int64_t{2}, std::nullopt};
 
-TEST(ESPRITEstimatorOpTest, LiveNumSourcesStickyOverride) {
+  const auto result =
+      run_esprit_override(std::move(frames), std::move(payloads), std::move(params), "num_sources");
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "source_count").size(), 3U);
+  EXPECT_EQ(esprit_frames(result, "source_count")[0].as<int32_t>()[0], 1);
+  EXPECT_EQ(esprit_frames(result, "source_count")[1].as<int32_t>()[0], 2);
+  EXPECT_EQ(esprit_frames(result, "source_count")[2].as<int32_t>()[0], 1);
+}
+
+TEST(ESPRITEstimatorOpTest, LiveArrayGeometryAppliesForOneTick) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geometry, conv, 0.1, 0.0, kS, 0.02, 301u);
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    frames.push_back(block_to_device<double>(block, {1, kN, kS}));
+  }
+  // The Params geometry has the same element count but a different
+  // wavelength, so it stays valid against the snapshot yet resolves the
+  // source to a different angle than the override does.
+  ESPRITParams params = make_params(make_ula_geometry(kN, 0.5, 0.8), conv,
+                                    /*num_sources=*/1);
+  std::vector<std::optional<WireArrayGeometry>> payloads;
+  payloads.emplace_back(std::nullopt);
+  payloads.emplace_back(holoscan::radar::to_wire(geometry));
+  payloads.emplace_back(std::nullopt);
+
+  const auto result = run_esprit_override(std::move(frames), std::move(payloads), std::move(params),
+                                          "array_geometry");
+  EXPECT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "aoa_estimates").size(), 3U);
+  EXPECT_NE(esprit_frames(result, "aoa_estimates")[1].data,
+            esprit_frames(result, "aoa_estimates")[0].data);
+  EXPECT_EQ(esprit_frames(result, "aoa_estimates")[2].data,
+            esprit_frames(result, "aoa_estimates")[0].data);
+
+  ESPRITParams invalid_params = make_params(geometry, conv, /*num_sources=*/1);
+  WireArrayGeometry malformed_geometry = holoscan::radar::to_wire(geometry);
+  malformed_geometry.packed_geometry =
+      to_pageable_host_tensor<double>({1.0}, {1}, real_dtype<double>());
+  std::vector<std::optional<WireArrayGeometry>> malformed_payloads;
+  malformed_payloads.emplace_back(std::move(malformed_geometry));
+  const auto invalid = run_esprit_override(
+      std::vector<std::shared_ptr<holoscan::Tensor>>{block_to_device<double>(block, {1, kN, kS})},
+      std::move(malformed_payloads), std::move(invalid_params), "array_geometry");
+  EXPECT_FALSE(invalid.ok());
+  EXPECT_TRUE(esprit_frames(invalid, "aoa_estimates").empty());
+  EXPECT_FALSE(invalid.diagnostics().empty());
+}
+
+TEST(ESPRITEstimatorOpTest, LiveSpatialSmoothingAppliesForOneTick) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geometry, conv, 0.1, 0.0, kS, 0.02, 302u);
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    frames.push_back(block_to_device<double>(block, {1, kN, kS}));
+  }
+  ESPRITParams params = make_params(geometry, conv, /*num_sources=*/1, 1e-2, 4);
+  std::vector<std::optional<SpatialSmoothingOverride>> payloads{
+      std::nullopt,
+      SpatialSmoothingOverride{.count = 1, .first = 2},
+      std::nullopt,
+  };
+
+  const auto result = run_esprit_override(std::move(frames), std::move(payloads), std::move(params),
+                                          "spatial_smoothing");
+  EXPECT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "eigenvalues").size(), 3U);
+  // Smoothing shortens the sub-array, so the eigenvalue count is the
+  // observable. Ticks 0 and 2 publish nothing and share the Params order.
+  EXPECT_NE(esprit_frames(result, "eigenvalues")[1].shape,
+            esprit_frames(result, "eigenvalues")[0].shape);
+  EXPECT_EQ(esprit_frames(result, "eigenvalues")[2].shape,
+            esprit_frames(result, "eigenvalues")[0].shape);
+
+  ESPRITParams invalid_params = make_params(geometry, conv, /*num_sources=*/1);
+  const auto invalid = run_esprit_override(
+      std::vector<std::shared_ptr<holoscan::Tensor>>{block_to_device<double>(block, {1, kN, kS})},
+      std::vector<std::optional<SpatialSmoothingOverride>>{SpatialSmoothingOverride{.count = 3}},
+      std::move(invalid_params), "spatial_smoothing");
+  EXPECT_FALSE(invalid.ok());
+  EXPECT_TRUE(esprit_frames(invalid, "aoa_estimates").empty());
+  EXPECT_FALSE(invalid.diagnostics().empty());
+}
+
+// source_count_pfa only steers the EFT model order, so the observable is the
+// int32 source_count. The crafted covariance pins the eigenvalue profile
+// exactly, which makes the 1 -> 2 transition between the Params Pfa and the
+// override Pfa deterministic instead of a noise draw.
+TEST(ESPRITEstimatorOpTest, LiveSourceCountPfaAppliesForOneTick) {
+  const std::vector<double> spectrum = {0.8930540251, 0.9468277841, 1.3517214181,
+                                        1.6732266229, 9.0798471606, 14.3477610683};
+  const std::vector<double> cosines = {-5.0 / 6.0, -0.5, -1.0 / 6.0, 1.0 / 6.0, 0.5, 5.0 / 6.0};
+  const int64_t kN = static_cast<int64_t>(spectrum.size());
+  const int64_t kS = kN;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kDirectionCosine;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_orthogonal_source_block(geometry, conv, cosines, spectrum);
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    frames.push_back(block_to_device<double>(block, {1, kN, kS}));
+  }
+  ESPRITParams params = make_params(geometry, conv, /*num_sources=*/-1, /*pfa=*/1e-4,
+                                    /*max_sources=*/4, /*smoothing=*/{},
+                                    /*fb=*/false);
+  std::vector<std::optional<double>> payloads{std::nullopt, 0.5, std::nullopt};
+
+  const auto result = run_esprit_override(std::move(frames), std::move(payloads), std::move(params),
+                                          "source_count_pfa");
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "source_count").size(), 3U);
+  EXPECT_EQ(esprit_frames(result, "source_count")[0].as<int32_t>()[0], 1);
+  EXPECT_EQ(esprit_frames(result, "source_count")[1].as<int32_t>()[0], 2);
+  EXPECT_EQ(esprit_frames(result, "source_count")[2].as<int32_t>()[0], 1);
+}
+
+// max_sources widens doa_multi to {items, max_sources, 2}, so the override
+// shows up in the output shape alone.
+TEST(ESPRITEstimatorOpTest, LiveMaxSourcesAppliesForOneTick) {
+  constexpr int64_t kN = 8;
+  constexpr int64_t kS = 32;
+  constexpr int64_t kLiveMaxSources = 3;
+  AngleConvention conv;
+  conv.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kN, 0.5, 1.0);
+  const auto block = make_block(geometry, conv, 0.1, 0.0, kS, 0.02, 312u);
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    frames.push_back(block_to_device<double>(block, {1, kN, kS}));
+  }
+  ESPRITParams params = make_params(geometry, conv, /*num_sources=*/1, 1e-2, /*max_sources=*/1);
+  std::vector<std::optional<int64_t>> payloads{std::nullopt, kLiveMaxSources, std::nullopt};
+
+  const auto result =
+      run_esprit_override(std::move(frames), std::move(payloads), std::move(params), "max_sources");
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  ASSERT_EQ(esprit_frames(result, "doa_multi").size(), 3U);
+  EXPECT_EQ(esprit_frames(result, "doa_multi")[0].shape, (std::vector<int64_t>{1, 1, 2}));
+  EXPECT_EQ(esprit_frames(result, "doa_multi")[1].shape,
+            (std::vector<int64_t>{1, kLiveMaxSources, 2}));
+  // Tick 2 reverts to the Params max_sources, narrowing doa_multi back.
+  EXPECT_EQ(esprit_frames(result, "doa_multi")[2].shape, (std::vector<int64_t>{1, 1, 2}));
+}
+
+TEST(ESPRITEstimatorOpTest, NumSourcesConfigurableFromParams) {
+  // Exercise the authoring-time Params value for num_sources.
   constexpr int64_t kN = 12;
   constexpr int64_t kS = 128;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto block =
-      make_block_two(geom, conv, 0.2, 0.0, -0.15, 0.0, kS, 0.02, 111u);
-  auto snap = block_to_device<double>(block, {1, kN, kS});
+  const auto block = make_block_two(geom, conv, 0.2, 0.0, -0.15, 0.0, kS, 0.02, 111u);
+  auto snap1 = block_to_device<double>(block, {1, kN, kS});
+  auto snap2 = block_to_device<double>(block, {1, kN, kS});
 
-  NumSourcesOverrideApp app;
-  app.geometry = geom;
-  app.convention = conv;
-  app.snapshot_frames = {single_map(snap, "snapshot"),
-                         single_map(snap, "snapshot")};
-  app.num_sources_overrides = {int64_t{1}, int64_t{2}};
+  const auto out1 = run_esprit<double>(snap1, make_params(geom, conv, /*num_sources=*/1, 1e-2, 4));
+  const auto out2 = run_esprit<double>(snap2, make_params(geom, conv, /*num_sources=*/2, 1e-2, 4));
 
-  TensorMapCapture cnt_cap;
-  app.source_count = &cnt_cap;
-  app.run();
-
-  ASSERT_EQ(cnt_cap.frames.size(), 2u);
-  EXPECT_EQ(cnt_cap.frames[0].as<int32_t>()[0], 1);
-  EXPECT_EQ(cnt_cap.frames[1].as<int32_t>()[0], 2);
+  EXPECT_EQ(out1.source_count.as<int32_t>()[0], 1);
+  EXPECT_EQ(out2.source_count.as<int32_t>()[0], 2);
 }
 
-class EspritArrayGeometryOverrideApp : public holoscan::Application {
- public:
-  std::vector<holoscan::TensorMap> snapshot_frames;
-  std::vector<ArrayGeometry> geometry_overrides;
-  TensorMapCapture* aoa = nullptr;
-  AngleConvention convention;
-
-  void compose() override {
-    using holoscan::Arg;
-    auto op = make_operator<ESPRITEstimatorOp<double>>(
-        "esprit", Arg("array_geometry") = geometry_overrides.front(),
-        Arg("angle_convention") = convention, Arg("num_sources") = int64_t{1});
-    holoscan::radar::testing::wire_data_source(this, op, "snapshot",
-                                               snapshot_frames);
-    holoscan::radar::testing::wire_leading_override(
-        this, op, "array_geometry", geometry_overrides);
-    holoscan::radar::testing::wire_capture_sink(this, op, "aoa_estimates", aoa);
-    wire_noop_output(this, op, "doa_multi");
-    wire_noop_output(this, op, "source_count");
-    wire_noop_output(this, op, "eigenvalues");
-  }
-};
-
-TEST(ESPRITEstimatorOpTest, LiveArrayGeometryStickyOverride) {
-  constexpr int64_t kN = 4;
-  constexpr int64_t kS = 16;
-  const auto geom_a = make_ula_geometry(kN, 0.5, 1.0);
-  auto geom_b = make_ula_geometry(kN, 0.5, 1.0);
-  geom_b.wavelength = 0.8;
-  AngleConvention conv;
-  conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto block = make_block(geom_a, conv, 0.05, 0.0, kS, 0.05, 61u);
-  auto snap = block_to_device<double>(block, {1, kN, kS});
-
-  EspritArrayGeometryOverrideApp app;
-  app.convention = conv;
-  app.geometry_overrides = {geom_a, geom_b, geom_a};
-  app.snapshot_frames = {single_map(snap, "snapshot"),
-                         single_map(snap, "snapshot"),
-                         single_map(snap, "snapshot")};
-
-  TensorMapCapture aoa_cap;
-  app.aoa = &aoa_cap;
-  app.run();
-
-  ASSERT_EQ(aoa_cap.frames.size(), 3u);
-  EXPECT_NE(aoa_cap.frames[0].as<double>()[0],
-            aoa_cap.frames[1].as<double>()[0]);
-  EXPECT_EQ(aoa_cap.frames[0].data, aoa_cap.frames[2].data);
-}
-
-class SpatialSmoothingOverrideApp : public holoscan::Application {
- public:
-  std::vector<holoscan::TensorMap> snapshot_frames;
-  std::vector<std::vector<int64_t>> smoothing_overrides;
-  TensorMapCapture* eigenvalues = nullptr;
-  ArrayGeometry geometry;
-  AngleConvention convention;
-
-  void compose() override {
-    using holoscan::Arg;
-    auto op = make_operator<ESPRITEstimatorOp<double>>(
-        "esprit", Arg("array_geometry") = geometry,
-        Arg("angle_convention") = convention,
-        Arg("spatial_smoothing") = smoothing_overrides.front(),
-        Arg("num_sources") = int64_t{1});
-    holoscan::radar::testing::wire_data_source(this, op, "snapshot",
-                                               snapshot_frames);
-    holoscan::radar::testing::wire_leading_override(
-        this, op, "spatial_smoothing", smoothing_overrides);
-    holoscan::radar::testing::wire_capture_sink(this, op, "eigenvalues",
-                                                eigenvalues);
-    wire_noop_output(this, op, "aoa_estimates");
-    wire_noop_output(this, op, "doa_multi");
-    wire_noop_output(this, op, "source_count");
-  }
-};
-
-TEST(ESPRITEstimatorOpTest, LiveSpatialSmoothingStickyOverride) {
+TEST(ESPRITEstimatorOpTest, MaxSourcesConfigurableFromParams) {
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 32;
+  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.02, 141u);
-  auto snap = block_to_device<double>(block, {1, kN, kS});
+  const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.05, 101u);
+  auto snap1 = block_to_device<double>(block, {1, kN, kS});
+  auto snap3 = block_to_device<double>(block, {1, kN, kS});
 
-  SpatialSmoothingOverrideApp app;
-  app.geometry = geom;
-  app.convention = conv;
-  app.snapshot_frames = {single_map(snap, "snapshot"),
-                         single_map(snap, "snapshot"),
-                         single_map(snap, "snapshot")};
-  app.smoothing_overrides = {{}, {2}};
+  const auto out1 = run_esprit<double>(snap1, make_params(geom, conv, /*num_sources=*/1, 1e-2, 1));
+  const auto out3 = run_esprit<double>(snap3, make_params(geom, conv, /*num_sources=*/1, 1e-2, 3));
 
-  TensorMapCapture eig_cap;
-  app.eigenvalues = &eig_cap;
-  app.run();
-
-  ASSERT_EQ(eig_cap.frames.size(), 3u);
-  EXPECT_EQ(eig_cap.frames[0].shape, (std::vector<int64_t>{1, kN}));
-  EXPECT_EQ(eig_cap.frames[1].shape, (std::vector<int64_t>{1, kN - 1}));
-  EXPECT_EQ(eig_cap.frames[2].shape, eig_cap.frames[1].shape);
+  EXPECT_EQ(out1.doa_multi.shape, (std::vector<int64_t>{1, 1, 2}));
+  EXPECT_EQ(out3.doa_multi.shape, (std::vector<int64_t>{1, 3, 2}));
 }
 
-class SourceCountPfaOverrideApp : public holoscan::Application {
- public:
-  std::vector<holoscan::TensorMap> snapshot_frames;
-  std::vector<double> pfa_overrides;
-  TensorMapCapture* source_count = nullptr;
-  ArrayGeometry geometry;
-  AngleConvention convention;
-
-  void compose() override {
-    using holoscan::Arg;
-    auto op = make_operator<ESPRITEstimatorOp<double>>(
-        "esprit", Arg("array_geometry") = geometry,
-        Arg("angle_convention") = convention, Arg("num_sources") = int64_t{-1},
-        Arg("source_count_pfa") = pfa_overrides.front(),
-        Arg("max_sources") = int64_t{4});
-    holoscan::radar::testing::wire_data_source(this, op, "snapshot",
-                                               snapshot_frames);
-    holoscan::radar::testing::wire_leading_override(
-        this, op, "source_count_pfa", pfa_overrides);
-    holoscan::radar::testing::wire_capture_sink(this, op, "source_count",
-                                                source_count);
-    wire_noop_output(this, op, "aoa_estimates");
-    wire_noop_output(this, op, "doa_multi");
-    wire_noop_output(this, op, "eigenvalues");
-  }
-};
-
-TEST(ESPRITEstimatorOpTest, LiveSourceCountPfaStickyOverride) {
+TEST(ESPRITEstimatorOpTest, SourceCountPfaConfigurableFromParams) {
+  // Exercise the authoring-time Params value for source_count_pfa.
   constexpr int64_t kN = 8;
   constexpr int64_t kS = 40;
   constexpr double kTruthAz = 0.08;
@@ -1112,79 +1076,16 @@ TEST(ESPRITEstimatorOpTest, LiveSourceCountPfaStickyOverride) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  const auto block =
-      make_block(geom, conv, kTruthAz, 0.0, kS, 0.45, 191u);
-  auto snap = block_to_device<double>(block, {1, kN, kS});
+  const auto block = make_block(geom, conv, kTruthAz, 0.0, kS, 0.45, 191u);
+  auto snap_a = block_to_device<double>(block, {1, kN, kS});
+  auto snap_b = block_to_device<double>(block, {1, kN, kS});
 
-  SourceCountPfaOverrideApp app;
-  app.geometry = geom;
-  app.convention = conv;
-  app.snapshot_frames = {single_map(snap, "snapshot"),
-                         single_map(snap, "snapshot"),
-                         single_map(snap, "snapshot")};
-  app.pfa_overrides = {1e-4, 0.5};
+  const auto out_a =
+      run_esprit<double>(snap_a, make_params(geom, conv, /*num_sources=*/-1, /*pfa=*/1e-4, 4));
+  const auto out_b =
+      run_esprit<double>(snap_b, make_params(geom, conv, /*num_sources=*/-1, /*pfa=*/0.5, 4));
 
-  TensorMapCapture cnt_cap;
-  app.source_count = &cnt_cap;
-  app.run();
-
-  ASSERT_EQ(cnt_cap.frames.size(), 3u);
-  const int32_t tight = cnt_cap.frames[0].as<int32_t>()[0];
-  const int32_t loose = cnt_cap.frames[1].as<int32_t>()[0];
-  EXPECT_LE(tight, loose);
-  EXPECT_EQ(loose, cnt_cap.frames[2].as<int32_t>()[0]);
-}
-
-class MaxSourcesOverrideApp : public holoscan::Application {
- public:
-  std::vector<holoscan::TensorMap> snapshot_frames;
-  std::vector<int64_t> max_sources_overrides;
-  TensorMapCapture* doa_multi = nullptr;
-  ArrayGeometry geometry;
-  AngleConvention convention;
-
-  void compose() override {
-    using holoscan::Arg;
-    auto op = make_operator<ESPRITEstimatorOp<double>>(
-        "esprit", Arg("array_geometry") = geometry,
-        Arg("angle_convention") = convention, Arg("num_sources") = int64_t{2},
-        Arg("max_sources") = max_sources_overrides.front());
-    holoscan::radar::testing::wire_data_source(this, op, "snapshot",
-                                               snapshot_frames);
-    holoscan::radar::testing::wire_leading_override(this, op, "max_sources",
-                                                    max_sources_overrides);
-    holoscan::radar::testing::wire_capture_sink(this, op, "doa_multi",
-                                                doa_multi);
-    wire_noop_output(this, op, "aoa_estimates");
-    wire_noop_output(this, op, "source_count");
-    wire_noop_output(this, op, "eigenvalues");
-  }
-};
-
-TEST(ESPRITEstimatorOpTest, LiveMaxSourcesStickyOverride) {
-  constexpr int64_t kN = 12;
-  constexpr int64_t kS = 128;
-  const auto geom = make_ula_geometry(kN, 0.5, 1.0);
-  AngleConvention conv;
-  conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto block =
-      make_block_two(geom, conv, 0.2, 0.0, -0.15, 0.0, kS, 0.02, 101u);
-  auto snap = block_to_device<double>(block, {1, kN, kS});
-
-  MaxSourcesOverrideApp app;
-  app.geometry = geom;
-  app.convention = conv;
-  app.snapshot_frames = {single_map(snap, "snapshot"),
-                         single_map(snap, "snapshot")};
-  app.max_sources_overrides = {int64_t{1}, int64_t{3}};
-
-  TensorMapCapture doa_cap;
-  app.doa_multi = &doa_cap;
-  app.run();
-
-  ASSERT_EQ(doa_cap.frames.size(), 2u);
-  EXPECT_EQ(doa_cap.frames[0].shape, (std::vector<int64_t>{1, 1, 2}));
-  EXPECT_EQ(doa_cap.frames[1].shape, (std::vector<int64_t>{1, 3, 2}));
+  EXPECT_LE(out_a.source_count.as<int32_t>()[0], out_b.source_count.as<int32_t>()[0]);
 }
 
 TEST(ESPRITEstimatorOpTest, MultipleItemsRecoverIndependentDoa) {
@@ -1203,10 +1104,7 @@ TEST(ESPRITEstimatorOpTest, MultipleItemsRecoverIndependentDoa) {
   batch.insert(batch.end(), b1.begin(), b1.end());
   auto snap = block_to_device<double>(batch, {2, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/1));
 
   ASSERT_EQ(out.aoa.shape, (std::vector<int64_t>{2, 2}));
   const double* aoa = out.aoa.as<double>();
@@ -1235,21 +1133,16 @@ TEST(ESPRITEstimatorOpTest, SpatialSmoothing1DRecoversDoa) {
     const double ps = phase(rng);
     const std::complex<double> g{std::cos(ps), std::sin(ps)};
     for (int64_t c = 0; c < kN; ++c) {
-      std::complex<double> v =
-          (a0[static_cast<size_t>(c)] + a1[static_cast<size_t>(c)]) * g;
+      std::complex<double> v = (a0[static_cast<size_t>(c)] + a1[static_cast<size_t>(c)]) * g;
       v += std::complex<double>(n(rng), n(rng));
       block[static_cast<size_t>(c * kS + s)] = v;
     }
   }
   auto snap = block_to_device<double>(block, {1, kN, kS});
 
-  const auto out = run_esprit<double>(
-      snap, holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("spatial_smoothing") = std::vector<int64_t>{4},
-      holoscan::Arg("forward_backward") = true,
-      holoscan::Arg("num_sources") = int64_t{2},
-      holoscan::Arg("max_sources") = int64_t{2});
+  const auto out =
+      run_esprit<double>(snap, make_params(geom, conv, /*num_sources=*/2, 1e-2, /*max_sources=*/2,
+                                           /*smoothing=*/{4}, /*fb=*/true));
 
   ASSERT_EQ(out.eigenvalues.shape, (std::vector<int64_t>{1, 7}));
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 2);
@@ -1257,9 +1150,8 @@ TEST(ESPRITEstimatorOpTest, SpatialSmoothing1DRecoversDoa) {
   const double* dm = out.doa_multi.as<double>();
   const double a = dm[0];
   const double b = dm[2];
-  const bool matched =
-      (std::abs(a - kAz0) < 0.04 && std::abs(b - kAz1) < 0.04) ||
-      (std::abs(a - kAz1) < 0.04 && std::abs(b - kAz0) < 0.04);
+  const bool matched = (std::abs(a - kAz0) < 0.04 && std::abs(b - kAz1) < 0.04) ||
+                       (std::abs(a - kAz1) < 0.04 && std::abs(b - kAz0) < 0.04);
   EXPECT_TRUE(matched) << "a=" << a << " b=" << b;
 }
 
@@ -1279,29 +1171,21 @@ TEST(ESPRITEstimatorOpTest, ForwardOnlySmoothingRecoversCoherentSources) {
   std::vector<std::complex<double>> block(static_cast<size_t>(kN * kS));
   for (int64_t snapshot = 0; snapshot < kS; ++snapshot) {
     const double source_phase = phase(rng);
-    const std::complex<double> gain{std::cos(source_phase),
-                                    std::sin(source_phase)};
+    const std::complex<double> gain{std::cos(source_phase), std::sin(source_phase)};
     for (int64_t channel = 0; channel < kN; ++channel) {
-      auto value = (a0[static_cast<size_t>(channel)] +
-                    a1[static_cast<size_t>(channel)]) *
-                   gain;
+      auto value = (a0[static_cast<size_t>(channel)] + a1[static_cast<size_t>(channel)]) * gain;
       value += std::complex<double>{noise(rng), noise(rng)};
       block[static_cast<size_t>(channel * kS + snapshot)] = value;
     }
   }
 
-  const auto out = run_esprit<double>(
-      block_to_device<double>(block, {1, kN, kS}),
-      holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("spatial_smoothing") = std::vector<int64_t>{4},
-      holoscan::Arg("forward_backward") = false,
-      holoscan::Arg("num_sources") = int64_t{2},
-      holoscan::Arg("max_sources") = int64_t{2});
+  const auto out =
+      run_esprit<double>(block_to_device<double>(block, {1, kN, kS}),
+                         make_params(geom, conv, /*num_sources=*/2, 1e-2, /*max_sources=*/2,
+                                     /*smoothing=*/{4}, /*fb=*/false));
 
   ASSERT_EQ(out.source_count.as<int32_t>()[0], 2);
-  std::array<double, 2> actual{out.doa_multi.as<double>()[0],
-                               out.doa_multi.as<double>()[2]};
+  std::array<double, 2> actual{out.doa_multi.as<double>()[0], out.doa_multi.as<double>()[2]};
   std::sort(actual.begin(), actual.end());
   EXPECT_NEAR(actual[0], kAz0, 0.04);
   EXPECT_NEAR(actual[1], kAz1, 0.04);
@@ -1318,14 +1202,12 @@ TEST(ESPRITEstimatorOpTest, RejectsExplicitSubarrayWithSpatialSmoothing) {
   pair.reference_indices = {0, 1, 2, 3};
   pair.shifted_indices = {1, 2, 3, 4};
 
-  EXPECT_THROW(
-      run_esprit<double>(
-          block_to_device<double>(block, {1, kN, kS}),
-          holoscan::Arg("array_geometry") = geom,
-          holoscan::Arg("angle_convention") = conv,
-          holoscan::Arg("subarray_spec") = pair,
-          holoscan::Arg("spatial_smoothing") = std::vector<int64_t>{2}),
-      std::invalid_argument);
+  const auto result = run_esprit_result<double>(
+      block_to_device<double>(block, {1, kN, kS}),
+      make_params(geom, conv, /*num_sources=*/-1, 1e-2, 4, /*smoothing=*/{2}, true, pair));
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(ESPRITEstimatorOpTest, ExplicitSubarrayPairWorks) {
@@ -1335,8 +1217,7 @@ TEST(ESPRITEstimatorOpTest, ExplicitSubarrayPairWorks) {
   auto geom = make_ula_geometry(kN, 0.5, 1.0);
   const std::array<double, kN> y{0.0, 0.20, 0.43, 0.5, 0.70, 0.93};
   for (int64_t channel = 0; channel < kN; ++channel) {
-    geom.element_positions[static_cast<size_t>(3 * channel + 1)] =
-        y[static_cast<size_t>(channel)];
+    geom.element_positions[static_cast<size_t>(3 * channel + 1)] = y[static_cast<size_t>(channel)];
   }
   geom.geometry_type.reset();
   ShiftInvariantSubarrayPair pair;
@@ -1344,15 +1225,11 @@ TEST(ESPRITEstimatorOpTest, ExplicitSubarrayPairWorks) {
   pair.shifted_indices = {3, 4, 5};
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto block =
-      make_block(geom, conv, kTruthAz, 0.0, kS, 0.01, 202u);
+  const auto block = make_block(geom, conv, kTruthAz, 0.0, kS, 0.01, 202u);
 
-  const auto out = run_esprit<double>(
-      block_to_device<double>(block, {1, kN, kS}),
-      holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("subarray_spec") = pair,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out =
+      run_esprit<double>(block_to_device<double>(block, {1, kN, kS}),
+                         make_params(geom, conv, /*num_sources=*/1, 1e-2, 4, {}, true, pair));
   EXPECT_NEAR(out.aoa.as<double>()[0], kTruthAz, 0.02);
 }
 
@@ -1365,32 +1242,24 @@ TEST(ESPRITEstimatorOpTest, ExplicitSubarrayPairRecoversTwoSources) {
   geom.wavelength = 1.0;
   const std::array<double, 4> reference_y{0.0, 0.17, 0.39, 0.68};
   for (double y : reference_y) {
-    geom.element_positions.insert(geom.element_positions.end(),
-                                  {0.0, y, 0.0});
+    geom.element_positions.insert(geom.element_positions.end(), {0.0, y, 0.0});
   }
   for (double y : reference_y) {
-    geom.element_positions.insert(geom.element_positions.end(),
-                                  {0.0, y + 0.5, 0.0});
+    geom.element_positions.insert(geom.element_positions.end(), {0.0, y + 0.5, 0.0});
   }
   ShiftInvariantSubarrayPair pair;
   pair.reference_indices = {0, 1, 2, 3};
   pair.shifted_indices = {4, 5, 6, 7};
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto block =
-      make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.01, 206u);
+  const auto block = make_block_two(geom, conv, kAz0, 0.0, kAz1, 0.0, kS, 0.01, 206u);
 
   const auto out = run_esprit<double>(
       block_to_device<double>(block, {1, kN, kS}),
-      holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("subarray_spec") = pair,
-      holoscan::Arg("num_sources") = int64_t{2},
-      holoscan::Arg("max_sources") = int64_t{2});
+      make_params(geom, conv, /*num_sources=*/2, 1e-2, /*max_sources=*/2, {}, true, pair));
 
   ASSERT_EQ(out.source_count.as<int32_t>()[0], 2);
-  std::array<double, 2> actual{out.doa_multi.as<double>()[0],
-                               out.doa_multi.as<double>()[2]};
+  std::array<double, 2> actual{out.doa_multi.as<double>()[0], out.doa_multi.as<double>()[2]};
   std::sort(actual.begin(), actual.end());
   EXPECT_NEAR(actual[0], kAz0, 0.03);
   EXPECT_NEAR(actual[1], kAz1, 0.03);
@@ -1404,13 +1273,12 @@ TEST(ESPRITEstimatorOpTest, RejectsMalformedExplicitSubarrayPairs) {
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto block = make_block(geom, conv, 0.1, 0.0, kS, 0.01, 207u);
   const auto expect_rejected = [&](ShiftInvariantSubarrayPair pair) {
-    EXPECT_THROW(
-        run_esprit<double>(
-            block_to_device<double>(block, {1, kN, kS}),
-            holoscan::Arg("array_geometry") = geom,
-            holoscan::Arg("angle_convention") = conv,
-            holoscan::Arg("subarray_spec") = pair),
-        std::invalid_argument);
+    const auto result = run_esprit_result<double>(
+        block_to_device<double>(block, {1, kN, kS}),
+        make_params(geom, conv, /*num_sources=*/-1, 1e-2, 4, {}, true, pair));
+    EXPECT_FALSE(result.ok());
+    EXPECT_TRUE(esprit_frames(result, "aoa_estimates").empty());
+    EXPECT_FALSE(result.diagnostics().empty());
   };
 
   expect_rejected({{0, 1, 2}, {1, 2}});
@@ -1425,17 +1293,93 @@ TEST(ESPRITEstimatorOpTest, FixedSourceCountWorksWithFewSnapshots) {
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
-  const auto block =
-      make_block(geom, conv, kTruthAz, 0.0, kS, 0.001, 208u);
+  const auto block = make_block(geom, conv, kTruthAz, 0.0, kS, 0.001, 208u);
 
-  const auto out = run_esprit<double>(
-      block_to_device<double>(block, {1, kN, kS}),
-      holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(block_to_device<double>(block, {1, kN, kS}),
+                                      make_params(geom, conv, /*num_sources=*/1));
 
   EXPECT_EQ(out.source_count.as<int32_t>()[0], 1);
   EXPECT_NEAR(out.aoa.as<double>()[0], kTruthAz, 0.02);
+}
+
+TEST(ESPRITEstimatorOpTest, ReducedSubarrayDirectlyDrivesEstimator) {
+  namespace detail = holoscan::radar::testing::integration;
+  constexpr int64_t kChannels = 6;
+  constexpr int64_t kSnapshots = 32;
+  constexpr double kTruthAz = 0.12;
+  const std::array<int64_t, kChannels> positions{0, 1, 2, 3, 5, 6};
+  ArrayGeometry full;
+  full.wavelength = 1.0;
+  for (int64_t position : positions) {
+    full.element_positions.insert(full.element_positions.end(),
+                                  {0.0, 0.5 * static_cast<double>(position), 0.0});
+  }
+  AngleConvention convention;
+  convention.preset = AngleConventionPreset::kRadarBoresight;
+  const auto block = make_block(full, convention, kTruthAz, 0.0, kSnapshots, 0.001, 209u);
+
+  detail::FrameBank::reset();
+  detail::FrameBank::input_frames = {block_to_device<double>(block, {1, kChannels, kSnapshots})};
+  holoscan::Graph graph{"subarray-to-esprit"};
+  const auto source = graph.op<detail::TensorSourceOp>("source");
+  auto extents = radar_testing::default_test_extents();
+  extents.max_snapshots = kSnapshots;
+  auto selector = graph.op<SubarraySelectionOp<double>>("selector", extents);
+  SubarraySelectionParams selection;
+  selection.array_geometry = full;
+  selection.subarray = {0, 1, 2, 3};
+  selector.set_params(std::move(selection));
+
+  auto estimator = graph.op<ESPRITEstimatorOp<double>>("esprit", extents);
+  // Deliberately wrong spacing for the selected snapshot. Accurate estimation
+  // proves the same-tick wire geometry won over Params.
+  estimator.set_params(make_params(make_ula_geometry(4, 0.25, 1.0), convention,
+                                   /*num_sources=*/1, 1e-2, /*max_sources=*/2));
+  const auto aoa_sink = graph.op<detail::TensorCaptureOp>("aoa_sink");
+  const holoscan::ConnectionOptions queue{.queue_depth = 4U};
+  graph.add_flow(source->out, selector->snapshot, queue);
+  graph.add_flow(selector->snapshot_out, estimator->snapshot, queue);
+  graph.add_flow(selector->array_geometry, estimator->array_geometry, queue);
+  graph.add_flow(estimator->aoa_estimates, aoa_sink->in, queue);
+  graph.partition("integration").add(source).add(selector).add(estimator).add(aoa_sink);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+
+  holoscan::CompileOptions options;
+  const auto bind = [&options](const char* op, const char* port) {
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = op, .output_port = port, .device = holoscan::DeviceId{0}});
+  };
+  bind("source", "out");
+  bind("selector", "snapshot_out");
+  bind("selector", "is_valid_out");
+  bind("esprit", "aoa_estimates");
+  bind("esprit", "doa_multi");
+  bind("esprit", "source_count");
+  bind("esprit", "eigenvalues");
+
+  const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
+  ASSERT_TRUE(plan.ok()) << plan.json();
+  holoscan::RunSession session = holoscan::run_async(plan);
+  const auto deadline = std::chrono::steady_clock::now() + detail::kHarnessDeadline;
+  while (session.diagnostics().empty() && std::chrono::steady_clock::now() < deadline) {
+    bool captured = false;
+    {
+      const std::lock_guard lock(detail::FrameBank::mutex);
+      captured = !detail::FrameBank::captured.empty();
+    }
+    if (captured) {
+      break;
+    }
+    std::this_thread::sleep_for(detail::kHarnessPoll);
+  }
+  session.request_stop();
+  session.wait();
+  ASSERT_TRUE(session.diagnostics().empty());
+  const std::lock_guard lock(detail::FrameBank::mutex);
+  ASSERT_EQ(detail::FrameBank::captured.size(), 1U);
+  const auto& aoa = detail::FrameBank::captured.front();
+  ASSERT_EQ(aoa.shape, (std::vector<int64_t>{1, 2}));
+  EXPECT_NEAR(aoa.as<double>()[0], kTruthAz, 0.02);
 }
 
 TEST(ESPRITEstimatorOpTest, DoubleInstantiationSmoke) {
@@ -1445,11 +1389,8 @@ TEST(ESPRITEstimatorOpTest, DoubleInstantiationSmoke) {
   AngleConvention conv;
   conv.preset = AngleConventionPreset::kRadarBoresight;
   const auto block = make_block(geom, conv, -0.06, 0.0, kS, 0.02, 204u);
-  const auto out = run_esprit<double>(
-      block_to_device<double>(block, {1, kN, kS}),
-      holoscan::Arg("array_geometry") = geom,
-      holoscan::Arg("angle_convention") = conv,
-      holoscan::Arg("num_sources") = int64_t{1});
+  const auto out = run_esprit<double>(block_to_device<double>(block, {1, kN, kS}),
+                                      make_params(geom, conv, /*num_sources=*/1));
   EXPECT_NEAR(out.aoa.as<double>()[0], -0.06, 0.02);
 }
 

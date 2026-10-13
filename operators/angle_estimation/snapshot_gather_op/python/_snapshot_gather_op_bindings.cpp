@@ -15,6 +15,7 @@
 
 #include "angle_estimation/snapshot_gather_op/snapshot_gather_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 
@@ -29,13 +30,19 @@ class PySnapshotGatherOp : public SnapshotGatherOp<T> {
  public:
   using SnapshotGatherOp<T>::SnapshotGatherOp;
 
-  PySnapshotGatherOp(
-      Fragment* fragment, const py::args& args,
-      const std::vector<int64_t>& snapshot_window = {0, 0},
-      SnapshotEdgeMode doppler_edge = SnapshotEdgeMode::kWrap,
-      SnapshotEdgeMode range_edge = SnapshotEdgeMode::kShift,
-      const std::string& name = "snapshot_gather")
-      : SnapshotGatherOp<T>() {
+  PySnapshotGatherOp(Fragment* fragment, const py::args& args,
+                     const std::vector<int64_t>& snapshot_window = {0, 0},
+                     SnapshotEdgeMode doppler_edge = SnapshotEdgeMode::kWrap,
+                     SnapshotEdgeMode range_edge = SnapshotEdgeMode::kShift,
+                     int64_t max_detections = 16384, int64_t max_channels = 16,
+                     int64_t max_snapshots = 25, const std::string& name = "snapshot_gather")
+  : SnapshotGatherOp<T>([&] {
+      MaxTensorExtents extents;
+      extents.max_detections = max_detections;
+      extents.max_channels = max_channels;
+      extents.max_snapshots = max_snapshots;
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -61,12 +68,12 @@ void bind_snapshot_gather(py::module_& m, const char* class_name) {
       "doppler_edge : SnapshotEdgeMode, optional\n"
       "range_edge : SnapshotEdgeMode, optional\n"
       "name : str, optional\n")
-      .def(py::init<Fragment*, const py::args&, const std::vector<int64_t>&,
-                    SnapshotEdgeMode, SnapshotEdgeMode, const std::string&>(),
-           py::arg("fragment"),
-           py::arg("snapshot_window") = std::vector<int64_t>{0, 0},
+      .def(py::init<Fragment*, const py::args&, const std::vector<int64_t>&, SnapshotEdgeMode,
+                    SnapshotEdgeMode, int64_t, int64_t, int64_t, const std::string&>(),
+           py::arg("fragment"), py::arg("snapshot_window") = std::vector<int64_t>{0, 0},
            py::arg("doppler_edge") = SnapshotEdgeMode::kWrap,
-           py::arg("range_edge") = SnapshotEdgeMode::kShift,
+           py::arg("range_edge") = SnapshotEdgeMode::kShift, py::arg("max_detections") = 16384,
+           py::arg("max_channels") = 16, py::arg("max_snapshots") = 25,
            py::arg("name") = "snapshot_gather")
       .def("setup", &Op::setup, py::arg("spec"));
 }

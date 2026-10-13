@@ -16,6 +16,7 @@
 #include "angle_estimation/root_music_estimator_op/root_music_estimator_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
 
@@ -30,16 +31,22 @@ class PyRootMUSICEstimatorOp : public RootMUSICEstimatorOp<T> {
  public:
   using RootMUSICEstimatorOp<T>::RootMUSICEstimatorOp;
 
-  PyRootMUSICEstimatorOp(
-      Fragment* fragment, const py::args& args,
-      const ArrayGeometry& array_geometry = ArrayGeometry{},
-      const AngleConvention& angle_convention = AngleConvention{},
-      int64_t num_sources = -1, double source_count_pfa = 1e-2,
-      int64_t max_sources = 4,
-      const std::vector<int64_t>& spatial_smoothing = {},
-      bool forward_backward = true,
-      const std::string& name = "root_music_estimator")
-      : RootMUSICEstimatorOp<T>() {
+  PyRootMUSICEstimatorOp(Fragment* fragment, const py::args& args,
+                         const ArrayGeometry& array_geometry = ArrayGeometry{},
+                         const AngleConvention& angle_convention = AngleConvention{},
+                         int64_t num_sources = -1, double source_count_pfa = 1e-2,
+                         int64_t max_sources = 4,
+                         const std::vector<int64_t>& spatial_smoothing = {},
+                         bool forward_backward = true, int64_t max_items = 16384,
+                         int64_t max_channels = 16,
+                         const std::string& name = "root_music_estimator")
+  : RootMUSICEstimatorOp<T>([&] {
+      MaxTensorExtents extents;
+      extents.max_items = max_items;
+      extents.max_sources = max_sources;
+      extents.max_channels = max_channels;
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -56,25 +63,20 @@ class PyRootMUSICEstimatorOp : public RootMUSICEstimatorOp<T> {
 };
 
 template <typename T>
-void bind_root_music_estimator(py::module_& module,
-                               const char* class_name) {
+void bind_root_music_estimator(py::module_& module, const char* class_name) {
   using Op = RootMUSICEstimatorOp<T>;
   using PyOp = PyRootMUSICEstimatorOp<T>;
   py::class_<Op, PyOp, Operator, std::shared_ptr<Op>>(
-      module, class_name,
-      "Gridless Root-MUSIC sparse-path ULA DOA estimator.")
-      .def(py::init<Fragment*, const py::args&, const ArrayGeometry&,
-                    const AngleConvention&, int64_t, double, int64_t,
-                    const std::vector<int64_t>&, bool, const std::string&>(),
-           py::arg("fragment"),
-           py::arg("array_geometry") = ArrayGeometry{},
-           py::arg("angle_convention") = AngleConvention{},
-           py::arg("num_sources") = int64_t{-1},
-           py::arg("source_count_pfa") = 1e-2,
-           py::arg("max_sources") = int64_t{4},
+      module, class_name, "Gridless Root-MUSIC sparse-path ULA DOA estimator.")
+      .def(py::init<Fragment*, const py::args&, const ArrayGeometry&, const AngleConvention&,
+                    int64_t, double, int64_t, const std::vector<int64_t>&, bool, int64_t, int64_t,
+                    const std::string&>(),
+           py::arg("fragment"), py::arg("array_geometry") = ArrayGeometry{},
+           py::arg("angle_convention") = AngleConvention{}, py::arg("num_sources") = int64_t{-1},
+           py::arg("source_count_pfa") = 1e-2, py::arg("max_sources") = int64_t{4},
            py::arg("spatial_smoothing") = std::vector<int64_t>{},
-           py::arg("forward_backward") = true,
-           py::arg("name") = "root_music_estimator")
+           py::arg("forward_backward") = true, py::arg("max_items") = int64_t{16384},
+           py::arg("max_channels") = int64_t{16}, py::arg("name") = "root_music_estimator")
       .def("setup", &Op::setup, py::arg("spec"));
 }
 
@@ -85,8 +87,6 @@ void bind_root_music_estimator(py::module_& module,
 PYBIND11_MODULE(_root_music_estimator_op, module) {
   holoscan::radar::ensure_radar_arg_setters();
   module.doc() = "RootMUSICEstimatorOp Python bindings";
-  holoscan::radar::bind_root_music_estimator<float>(
-      module, "RootMUSICEstimatorOpF32");
-  holoscan::radar::bind_root_music_estimator<double>(
-      module, "RootMUSICEstimatorOpF64");
+  holoscan::radar::bind_root_music_estimator<float>(module, "RootMUSICEstimatorOpF32");
+  holoscan::radar::bind_root_music_estimator<double>(module, "RootMUSICEstimatorOpF64");
 }

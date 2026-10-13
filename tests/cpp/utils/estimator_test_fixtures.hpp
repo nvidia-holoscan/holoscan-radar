@@ -23,8 +23,7 @@
 #include <string>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
-#include <holoscan/test/test_harness.hpp>
+#include <holoscan/core/domain/tensor.hpp>
 
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
@@ -60,22 +59,23 @@ struct BufferHolder {
 };
 
 template <typename ElementT>
-std::shared_ptr<holoscan::Tensor> make_tensor(
-    const std::vector<ElementT>& host, const std::vector<int64_t>& shape,
-    DLDataType dtype, DLDeviceType device_type) {
+std::shared_ptr<holoscan::Tensor> make_tensor(const std::vector<ElementT>& host,
+                                              const std::vector<int64_t>& shape, DLDataType dtype,
+                                              DLDeviceType device_type) {
   auto holder = std::make_unique<BufferHolder>();
   holder->shape = shape;
   const size_t nbytes = host.size() * sizeof(ElementT);
-  int device_id = 0;
-  cudaGetDevice(&device_id);
-  holder->device = DLDevice{device_type, device_id};
+  int current_device_id = -1;
+  if (cudaGetDevice(&current_device_id) != cudaSuccess) {
+    throw std::runtime_error("cuda_accessible: cudaGetDevice failed");
+  }
+  holder->device = DLDevice{device_type, current_device_id};
   if (device_type == kDLCUDAManaged) {
     if (cudaMallocManaged(&holder->data, nbytes) != cudaSuccess) {
       throw std::runtime_error("cuda_accessible: cudaMallocManaged failed");
     }
   } else if (device_type == kDLCUDAHost) {
-    if (cudaHostAlloc(&holder->data, nbytes, cudaHostAllocMapped) !=
-        cudaSuccess) {
+    if (cudaHostAlloc(&holder->data, nbytes, cudaHostAllocMapped) != cudaSuccess) {
       throw std::runtime_error("cuda_accessible: cudaHostAlloc failed");
     }
   } else {
@@ -101,8 +101,7 @@ std::shared_ptr<holoscan::Tensor> make_tensor(
 }  // namespace cuda_accessible
 
 // Half-wavelength-spaced ULA along +y (broadside +x), tagged kUla.
-inline ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
-                                       double wavelength) {
+inline ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing, double wavelength) {
   ArrayGeometry geom;
   geom.wavelength = wavelength;
   geom.geometry_type = ArrayGeometryType::kUla;
@@ -116,8 +115,7 @@ inline ArrayGeometry make_ula_geometry(int64_t num_elements, double spacing,
 }
 
 // Filled URA on the y-z plane (element order iz outer, iy inner), tagged kUra.
-inline ArrayGeometry make_planar_ura_geometry(int64_t ny, int64_t nz,
-                                              double spacing,
+inline ArrayGeometry make_planar_ura_geometry(int64_t ny, int64_t nz, double spacing,
                                               double wavelength) {
   ArrayGeometry geom;
   geom.wavelength = wavelength;
@@ -135,18 +133,17 @@ inline ArrayGeometry make_planar_ura_geometry(int64_t ny, int64_t nz,
 
 // Unit-amplitude array manifold vector a(az, el) for the given geometry and
 // angle convention (boundary angles mapped to the canonical direction first).
-inline std::vector<std::complex<double>> steering_vector(
-    const ArrayGeometry& geom, const AngleConvention& conv, double az,
-    double el) {
+inline std::vector<std::complex<double>> steering_vector(const ArrayGeometry& geom,
+                                                         const AngleConvention& conv, double az,
+                                                         double el) {
   const auto dir = holoscan::radar::boundary_to_canonical(conv, az, el);
   const double k = 2.0 * kPi / geom.wavelength;
-  std::vector<std::complex<double>> a(
-      static_cast<size_t>(geom.num_elements()));
+  std::vector<std::complex<double>> a(static_cast<size_t>(geom.num_elements()));
   for (int64_t m = 0; m < geom.num_elements(); ++m) {
     const size_t base = static_cast<size_t>(m * 3);
-    const double phase = k * (geom.element_positions[base] * dir.x +
-                            geom.element_positions[base + 1] * dir.y +
-                            geom.element_positions[base + 2] * dir.z);
+    const double phase =
+        k * (geom.element_positions[base] * dir.x + geom.element_positions[base + 1] * dir.y +
+             geom.element_positions[base + 2] * dir.z);
     a[static_cast<size_t>(m)] = {std::cos(phase), std::sin(phase)};
   }
   return a;
@@ -155,9 +152,8 @@ inline std::vector<std::complex<double>> steering_vector(
 // One-source snapshot block (channels x snapshots, row-major) with a
 // deterministic per-snapshot source phase plus complex Gaussian noise.
 inline std::vector<std::complex<double>> make_block(const ArrayGeometry& geom,
-                                                    const AngleConvention& conv,
-                                                    double az, double el,
-                                                    int64_t S, double noise,
+                                                    const AngleConvention& conv, double az,
+                                                    double el, int64_t S, double noise,
                                                     unsigned seed) {
   const auto a = steering_vector(geom, conv, az, el);
   const int64_t C = geom.num_elements();
@@ -165,8 +161,7 @@ inline std::vector<std::complex<double>> make_block(const ArrayGeometry& geom,
   std::mt19937 rng(seed);
   std::normal_distribution<double> n(0.0, noise);
   for (int64_t s = 0; s < S; ++s) {
-    const double gp =
-        2.0 * kPi * static_cast<double>(s) / static_cast<double>(S);
+    const double gp = 2.0 * kPi * static_cast<double>(s) / static_cast<double>(S);
     const std::complex<double> g{std::cos(gp), std::sin(gp)};
     for (int64_t c = 0; c < C; ++c) {
       std::complex<double> v = a[static_cast<size_t>(c)] * g;
@@ -179,10 +174,10 @@ inline std::vector<std::complex<double>> make_block(const ArrayGeometry& geom,
 
 // Two-source snapshot block with independent uniform-random per-snapshot
 // source phases (decorrelated sources) plus complex Gaussian noise.
-inline std::vector<std::complex<double>> make_block_two(
-    const ArrayGeometry& geom, const AngleConvention& conv, double az0,
-    double el0, double az1, double el1, int64_t S, double noise,
-    unsigned seed) {
+inline std::vector<std::complex<double>> make_block_two(const ArrayGeometry& geom,
+                                                        const AngleConvention& conv, double az0,
+                                                        double el0, double az1, double el1,
+                                                        int64_t S, double noise, unsigned seed) {
   const auto a0 = steering_vector(geom, conv, az0, el0);
   const auto a1 = steering_vector(geom, conv, az1, el1);
   const int64_t C = geom.num_elements();
@@ -196,8 +191,7 @@ inline std::vector<std::complex<double>> make_block_two(
     const std::complex<double> g0{std::cos(p0), std::sin(p0)};
     const std::complex<double> g1{std::cos(p1), std::sin(p1)};
     for (int64_t c = 0; c < C; ++c) {
-      std::complex<double> v =
-          a0[static_cast<size_t>(c)] * g0 + a1[static_cast<size_t>(c)] * g1;
+      std::complex<double> v = a0[static_cast<size_t>(c)] * g0 + a1[static_cast<size_t>(c)] * g1;
       v += std::complex<double>(n(rng), n(rng));
       x[static_cast<size_t>(c * S + s)] = v;
     }
@@ -208,26 +202,13 @@ inline std::vector<std::complex<double>> make_block_two(
 // Cast a complex<double> host block to the instantiation precision T and
 // upload it as a complex device tensor with the given shape.
 template <typename T>
-std::shared_ptr<holoscan::Tensor> block_to_device(
-    const std::vector<std::complex<double>>& host,
-    const std::vector<int64_t>& shape) {
+std::shared_ptr<holoscan::Tensor> block_to_device(const std::vector<std::complex<double>>& host,
+                                                  const std::vector<int64_t>& shape) {
   std::vector<std::complex<T>> cast(host.size());
   for (size_t i = 0; i < host.size(); ++i) {
     cast[i] = {static_cast<T>(host[i].real()), static_cast<T>(host[i].imag())};
   }
   return to_device_tensor(cast, shape, complex_dtype<T>());
-}
-
-// Attach a no-op validating sink to an operator output port so a run that
-// only asserts on other ports still has every emitted port consumed.
-inline void wire_noop_output(holoscan::Fragment* app,
-                             const std::shared_ptr<holoscan::Operator>& op,
-                             const std::string& port) {
-  const auto noop = [](const holoscan::TensorMap&) {};
-  auto sink = app->make_operator<
-      holoscan::test::TestHarnessSinkOp<holoscan::TensorMap>>(port + "_noop");
-  sink->set_validators({noop});
-  app->add_flow(op, sink, {{port, "input"}});
 }
 
 }  // namespace holoscan::radar::testing

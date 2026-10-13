@@ -35,11 +35,9 @@ double peak_sidelobe_db(const std::vector<double>& w, int64_t pad_factor) {
   for (int64_t bin = 0; bin < nfft; ++bin) {
     std::complex<double> acc{0.0, 0.0};
     for (int64_t k = 0; k < n; ++k) {
-      const double phase = -2.0 * kPi * static_cast<double>(bin) *
-                           static_cast<double>(k) /
+      const double phase = -2.0 * kPi * static_cast<double>(bin) * static_cast<double>(k) /
                            static_cast<double>(nfft);
-      acc += w[static_cast<size_t>(k)] *
-             std::complex<double>(std::cos(phase), std::sin(phase));
+      acc += w[static_cast<size_t>(k)] * std::complex<double>(std::cos(phase), std::sin(phase));
     }
     mag[static_cast<size_t>(bin)] = std::abs(acc);
   }
@@ -47,8 +45,7 @@ double peak_sidelobe_db(const std::vector<double>& w, int64_t pad_factor) {
   // Walk right from DC past the main lobe (first local minimum), then take
   // the max of what remains (mirror-symmetric spectrum: one side suffices).
   int64_t i = 1;
-  while (i < nfft / 2 && mag[static_cast<size_t>(i)] <=
-                             mag[static_cast<size_t>(i - 1)]) {
+  while (i < nfft / 2 && mag[static_cast<size_t>(i)] <= mag[static_cast<size_t>(i - 1)]) {
     ++i;
   }
   double side = 0.0;
@@ -86,9 +83,8 @@ TEST(WindowGeneration, SingleSampleCosineSumWindowsPeakAtUnity) {
   // Length-1 cosine-sum windows must return the center/peak value (sum_i a[i]),
   // not the endpoint sum_i (-1)^i a[i] which collapses to ~0 and, under
   // coherent-gain normalization, would divide by a zero mean.
-  for (WindowType type :
-       {WindowType::kHann, WindowType::kHamming, WindowType::kBlackman,
-        WindowType::kBlackmanHarris, WindowType::kFlatTop}) {
+  for (WindowType type : {WindowType::kHann, WindowType::kHamming, WindowType::kBlackman,
+                          WindowType::kBlackmanHarris, WindowType::kFlatTop}) {
     WindowSpec spec;
     spec.type = type;
     const auto w = generate_window(spec, 1);
@@ -98,16 +94,13 @@ TEST(WindowGeneration, SingleSampleCosineSumWindowsPeakAtUnity) {
 }
 
 TEST(WindowGeneration, CoherentGainNormalizationYieldsUnitMean) {
-  for (WindowType type :
-       {WindowType::kHann, WindowType::kHamming, WindowType::kBlackman,
-        WindowType::kBlackmanHarris, WindowType::kKaiser,
-        WindowType::kChebyshev, WindowType::kTaylor, WindowType::kFlatTop,
-        WindowType::kTukey}) {
+  for (WindowType type : {WindowType::kHann, WindowType::kHamming, WindowType::kBlackman,
+                          WindowType::kBlackmanHarris, WindowType::kKaiser, WindowType::kChebyshev,
+                          WindowType::kTaylor, WindowType::kFlatTop, WindowType::kTukey}) {
     WindowSpec spec;
     spec.type = type;
     const auto w = generate_window(spec, 128);
-    const double mean =
-        std::accumulate(w.begin(), w.end(), 0.0) / static_cast<double>(128);
+    const double mean = std::accumulate(w.begin(), w.end(), 0.0) / static_cast<double>(128);
     EXPECT_NEAR(mean, 1.0, 1e-12) << holoscan::radar::to_string(type);
   }
 }
@@ -204,10 +197,8 @@ TEST(WindowGeneration, InvalidSpecsThrow) {
 
   // Non-positive (or NaN) attenuation would silently degrade Kaiser and
   // produce NaN taps for Chebyshev/Taylor (acosh of a ratio < 1).
-  for (WindowType type : {WindowType::kKaiser, WindowType::kChebyshev,
-                          WindowType::kTaylor}) {
-    for (double bad : {0.0, -30.0,
-                       std::numeric_limits<double>::quiet_NaN()}) {
+  for (WindowType type : {WindowType::kKaiser, WindowType::kChebyshev, WindowType::kTaylor}) {
+    for (double bad : {0.0, -30.0, std::numeric_limits<double>::quiet_NaN()}) {
       WindowSpec bad_atten;
       bad_atten.type = type;
       bad_atten.sidelobe_attenuation_db = bad;

@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+operator: virtual_array_assembly
+axes: [tx, rx, doppler, range]
+profiles:
+  small: {shape: [2, 4, 32, 128]}
+  medium: {shape: [4, 16, 128, 512]}
+  large: {shape: [8, 32, 256, 1024]}
+live_ports: [wavelength]
+recipe:
+  operator_type: radar.VirtualArrayAssemblyOp.float
+  publication: fill_in_place
+  inputs:
+    - {port: rd_maps, shape: [tx, rx, doppler, range], dtype: complex64, memory: device, generator: iq_cube}
+  constructor: {extents: {max_tx: tx, max_rx: rx, max_doppler_bins: doppler, max_range_bins: range}}
+  params:
+    tx_positions: {factory: linear_positions, spacing: 0.5}
+    rx_positions: {factory: linear_positions, spacing: 0.5}
+    wavelength: 0.03
+    overlap_policy: dedup
+  outputs: {timed: rd_maps_out, drain: [array_geometry], drain_codecs: {array_geometry: array_geometry}, unwired: []}
+  live:
+    wavelength: {physical_port: wavelength, codec: double}
+cases:
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
+  - {id: average-medium, profile: medium, scopes: [limited], parameters: {overlap_policy: average}}
+  - {id: keep-all-medium, profile: medium, scopes: [limited], parameters: {overlap_policy: keep_all}}
+  - {id: "wavelength-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: wavelength, value: 0.033}}
+  - {id: average-large, profile: large, scopes: [thorough], parameters: {overlap_policy: average}}

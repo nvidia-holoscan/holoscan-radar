@@ -16,6 +16,7 @@
 #include "angle_estimation/esprit_estimator_op/esprit_estimator_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
 #include "radar_common/python/py_operator_utils.hpp"
 #include "radar_common/sdk/arg_setters.hpp"
@@ -34,15 +35,19 @@ class PyESPRITEstimatorOp : public ESPRITEstimatorOp<T> {
   PyESPRITEstimatorOp(
       Fragment* fragment, const py::args& args,
       const ArrayGeometry& array_geometry = ArrayGeometry{},
-      const AngleConvention& angle_convention = AngleConvention{},
-      int64_t num_sources = -1, double source_count_pfa = 1e-2,
-      int64_t max_sources = 4,
-      const std::vector<int64_t>& spatial_smoothing = {},
-      bool forward_backward = true,
-      const ShiftInvariantSubarrayPair& subarray_spec =
-          ShiftInvariantSubarrayPair{},
+      const AngleConvention& angle_convention = AngleConvention{}, int64_t num_sources = -1,
+      double source_count_pfa = 1e-2, int64_t max_sources = 4,
+      const std::vector<int64_t>& spatial_smoothing = {}, bool forward_backward = true,
+      const ShiftInvariantSubarrayPair& subarray_spec = ShiftInvariantSubarrayPair{},
+      int64_t max_items = 16384, int64_t max_channels = 16,
       const std::string& name = "esprit_estimator")
-      : ESPRITEstimatorOp<T>() {
+  : ESPRITEstimatorOp<T>([&] {
+      MaxTensorExtents extents;
+      extents.max_items = max_items;
+      extents.max_sources = max_sources;
+      extents.max_channels = max_channels;
+      return extents;
+    }()) {
     this->name_ = name;
     this->fragment_ = fragment;
     this->spec_ = std::make_shared<OperatorSpec>(fragment);
@@ -64,21 +69,17 @@ void bind_esprit_estimator(py::module_& module, const char* class_name) {
   using Op = ESPRITEstimatorOp<T>;
   using PyOp = PyESPRITEstimatorOp<T>;
   py::class_<Op, PyOp, Operator, std::shared_ptr<Op>>(
-      module, class_name,
-      "Gridless ESPRIT sparse-path shift-invariant DOA estimator.")
-      .def(py::init<Fragment*, const py::args&, const ArrayGeometry&,
-                    const AngleConvention&, int64_t, double, int64_t,
-                    const std::vector<int64_t>&, bool,
-                    const ShiftInvariantSubarrayPair&, const std::string&>(),
-           py::arg("fragment"),
-           py::arg("array_geometry") = ArrayGeometry{},
-           py::arg("angle_convention") = AngleConvention{},
-           py::arg("num_sources") = int64_t{-1},
-           py::arg("source_count_pfa") = 1e-2,
-           py::arg("max_sources") = int64_t{4},
+      module, class_name, "Gridless ESPRIT sparse-path shift-invariant DOA estimator.")
+      .def(py::init<Fragment*, const py::args&, const ArrayGeometry&, const AngleConvention&,
+                    int64_t, double, int64_t, const std::vector<int64_t>&, bool,
+                    const ShiftInvariantSubarrayPair&, int64_t, int64_t, const std::string&>(),
+           py::arg("fragment"), py::arg("array_geometry") = ArrayGeometry{},
+           py::arg("angle_convention") = AngleConvention{}, py::arg("num_sources") = int64_t{-1},
+           py::arg("source_count_pfa") = 1e-2, py::arg("max_sources") = int64_t{4},
            py::arg("spatial_smoothing") = std::vector<int64_t>{},
            py::arg("forward_backward") = true,
            py::arg("subarray_spec") = ShiftInvariantSubarrayPair{},
+           py::arg("max_items") = int64_t{16384}, py::arg("max_channels") = int64_t{16},
            py::arg("name") = "esprit_estimator")
       .def("setup", &Op::setup, py::arg("spec"));
 }
@@ -90,8 +91,6 @@ void bind_esprit_estimator(py::module_& module, const char* class_name) {
 PYBIND11_MODULE(_esprit_estimator_op, module) {
   holoscan::radar::ensure_radar_arg_setters();
   module.doc() = "ESPRITEstimatorOp Python bindings";
-  holoscan::radar::bind_esprit_estimator<float>(
-      module, "ESPRITEstimatorOpF32");
-  holoscan::radar::bind_esprit_estimator<double>(
-      module, "ESPRITEstimatorOpF64");
+  holoscan::radar::bind_esprit_estimator<float>(module, "ESPRITEstimatorOpF32");
+  holoscan::radar::bind_esprit_estimator<double>(module, "ESPRITEstimatorOpF64");
 }

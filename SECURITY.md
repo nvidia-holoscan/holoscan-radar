@@ -63,7 +63,7 @@ The following scenarios reflect the main security concerns for this codebase, in
 
 5. **Supply chain and build-time trust:** Builds depend on Holoscan SDK, CUDA Toolkit, MatX (via the SDK), yaml-cpp (apps), container base images, and optional pip installs (e.g., developer CLI tools in the Dockerfile). Compromised mirrors, tampered packages, or unpinned tooling increase exposure if builds are not verified and run in trusted environments.
 
-6. **Auxiliary scripts invoking shells:** CI and performance helpers (e.g., subprocess usage under `.github/workflows/scripts/` and `performance/python/utils/`) can amplify risk if run on untrusted inputs or in shared CI contexts without the intended trusted-operator assumptions.
+6. **Auxiliary scripts invoking shells:** CI helpers (e.g., subprocess usage under `.github/workflows/scripts/`) can amplify risk if run on untrusted inputs or in shared CI contexts without the intended trusted-operator assumptions.
 
 7. **Native / GPU faults affecting isolation:** Bugs in CUDA kernels, MatX plans, or the C++/Python boundary can corrupt memory or destabilize the process; isolation relies on the OS and deployment (containers, users, devices), not on in-module sandboxing.
 

@@ -22,12 +22,12 @@
 
 constexpr const char* remove_leading_spaces(const char* str) {
   return *str == '\0' ? str
-                      : ((*str == ' ' || *str == '\n')
-                             ? remove_leading_spaces(str + 1)
-                             : str);
+                      : ((*str == ' ' || *str == '\n') ? remove_leading_spaces(str + 1) : str);
 }
 
+// clang-format off
 #define PYDOC(method, doc) \
   static constexpr const char* doc_##method = remove_leading_spaces(doc);
+// clang-format on
 
 #endif  // CMAKE_PYDOC_MACROS_HPP_

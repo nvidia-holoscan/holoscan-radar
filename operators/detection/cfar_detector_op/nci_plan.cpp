@@ -21,8 +21,7 @@ int64_t product(const std::vector<int64_t>& dims) {
   return p;
 }
 
-int64_t compose_row_major(const std::vector<int64_t>& dims,
-                          const std::vector<int64_t>& coords) {
+int64_t compose_row_major(const std::vector<int64_t>& dims, const std::vector<int64_t>& coords) {
   int64_t idx = 0;
   int64_t stride = 1;
   for (int64_t i = static_cast<int64_t>(dims.size()) - 1; i >= 0; --i) {
@@ -44,21 +43,18 @@ void decompose_row_major(int64_t linear, const std::vector<int64_t>& dims,
   }
 }
 
-std::vector<int64_t> NciPlan::output_shape(int64_t num_doppler,
-                                           int64_t num_range) const {
+std::vector<int64_t> NciPlan::output_shape(int64_t num_doppler, int64_t num_range) const {
   std::vector<int64_t> shape = preserved_dims;
   shape.push_back(num_doppler);
   shape.push_back(num_range);
   return shape;
 }
 
-NciPlan NciPlan::from_shape(const std::vector<int64_t>& shape,
-                            const std::vector<int64_t>& nci_axes,
+NciPlan NciPlan::from_shape(const std::vector<int64_t>& shape, const std::vector<int64_t>& nci_axes,
                             const char* port_name) {
   if (shape.size() < 2) {
     std::ostringstream msg;
-    msg << port_name << ": expected rank >= 2 (..., doppler, range), got rank "
-        << shape.size();
+    msg << port_name << ": expected rank >= 2 (..., doppler, range), got rank " << shape.size();
     throw std::invalid_argument(msg.str());
   }
 
@@ -67,17 +63,16 @@ NciPlan NciPlan::from_shape(const std::vector<int64_t>& shape,
   const int64_t num_leading = static_cast<int64_t>(plan.leading_dims.size());
   plan.batch_in = product(plan.leading_dims);
   if (plan.batch_in <= 0) {
-    throw std::invalid_argument(
-        std::string(port_name) +
-        ": zero/negative-sized leading axis in input shape");
+    throw std::invalid_argument(std::string(port_name) +
+                                ": zero/negative-sized leading axis in input shape");
   }
 
   std::unordered_set<int64_t> seen;
   for (int64_t axis : nci_axes) {
     if (axis < 0 || axis >= num_leading) {
       std::ostringstream msg;
-      msg << port_name << ": nci_axes index " << axis
-          << " is out of range for " << num_leading << " leading axis";
+      msg << port_name << ": nci_axes index " << axis << " is out of range for " << num_leading
+          << " leading axis";
       throw std::invalid_argument(msg.str());
     }
     if (!seen.insert(axis).second) {
@@ -92,14 +87,12 @@ NciPlan NciPlan::from_shape(const std::vector<int64_t>& shape,
   std::vector<bool> integrated(static_cast<size_t>(num_leading), false);
   for (int64_t axis : plan.integrated_axes) {
     integrated[static_cast<size_t>(axis)] = true;
-    plan.integrated_dims.push_back(
-        plan.leading_dims[static_cast<size_t>(axis)]);
+    plan.integrated_dims.push_back(plan.leading_dims[static_cast<size_t>(axis)]);
   }
 
   for (int64_t i = 0; i < num_leading; ++i) {
     if (!integrated[static_cast<size_t>(i)]) {
-      plan.preserved_dims.push_back(
-          plan.leading_dims[static_cast<size_t>(i)]);
+      plan.preserved_dims.push_back(plan.leading_dims[static_cast<size_t>(i)]);
     }
   }
 
@@ -123,8 +116,7 @@ NciPlan NciPlan::from_shape(const std::vector<int64_t>& shape,
         size_t integrated_i = 0;
         for (size_t axis = 0; axis < plan.leading_dims.size(); ++axis) {
           if (integrated[axis]) {
-            leading_coords[axis] =
-                integrated_coords[integrated_i++];
+            leading_coords[axis] = integrated_coords[integrated_i++];
           } else {
             leading_coords[axis] = preserved_coords[preserved_i++];
           }

@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+version: 2
+operator: ddm_sparse_demultiplex
+axes: [tx, rx, doppler, range, detections]
+profiles:
+  small: {shape: [2, 4, 64, 256, 16]}
+  medium: {shape: [4, 8, 256, 512, 256]}
+  large: {shape: [4, 16, 512, 1024, 1024]}
+live_ports: [wavelength, snapshot_window]
+recipe:
+  operator_type: radar.DDMSparseDemultiplexOp.float
+  inputs:
+    - {port: rd_maps, shape: [rx, doppler, range], dtype: complex64, memory: device, generator: iq_cube}
+    - {port: detection_idx, shape: [detections, two], dtype: int64, memory: device, generator: in_bounds_rd_indices, index_doppler_divisor: tx}
+  fixtures: {two: 2}
+  constructor: {bounds_policy: sparse_mimo_bounds}
+  params:
+    ddm_code: {factory: linear_exact_ddm_code}
+    tx_positions: {factory: linear_positions, spacing: 0.02, coordinate: 0}
+    rx_positions: {factory: linear_positions, spacing: 0.002, coordinate: 0}
+    overlap_policy: keep_all
+    wavelength: 0.0039
+    snapshot_window: [0, 0]
+  outputs: {timed: snapshot, drain: [is_valid, array_geometry], drain_codecs: {array_geometry: array_geometry}, unwired: []}
+  live:
+    wavelength: {physical_port: wavelength, codec: double}
+    snapshot_window: {physical_port: snapshot_window, codec: sparse_window}
+cases:
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
+  - {id: neighborhood-medium, profile: medium, scopes: [limited], parameters: {snapshot_window: [1, 1]}}
+  - {id: dedup-medium, profile: medium, scopes: [limited], parameters: {overlap_policy: dedup}}
+  - {id: "wavelength-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: wavelength, value: 0.0041}}
+  - {id: "window-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: snapshot_window, value: [1, 1]}}
+  - {id: average-window-medium, profile: medium, scopes: [thorough], parameters: {snapshot_window: [1, 1], overlap_policy: average}, override: {port: snapshot_window, value: [2, 2]}}

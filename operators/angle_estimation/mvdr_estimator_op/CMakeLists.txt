@@ -15,6 +15,7 @@ target_link_libraries(mvdr_estimator_op
         holoscan::radar_common
         holoscan::radar_common_steering
         holoscan::radar_common_spatial_smoothing
+        holoscan::radar_schemas
     PRIVATE
         matx::matx)
 
@@ -35,4 +36,6 @@ install(FILES mvdr_estimator_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/angle_estimation
 )
 
-add_subdirectory(python)
+if(HOLOSCAN_RADAR_BUILD_PYTHON)
+    add_subdirectory(python)
+endif()

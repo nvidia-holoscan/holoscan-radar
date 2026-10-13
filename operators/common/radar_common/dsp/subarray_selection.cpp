@@ -95,28 +95,24 @@ Occupancy build_occupancy(const ArrayGeometry& geometry) {
         "colocated)");
   }
   if (d > 2) {
-    throw std::invalid_argument(
-        "subarray_selection: 3-D element apertures are not supported");
+    throw std::invalid_argument("subarray_selection: 3-D element apertures are not supported");
   }
 
   // Infer unit spacing (gcd of coordinate gaps) + extent per aperture axis.
   std::vector<double> unit(static_cast<size_t>(d));
   std::vector<double> base(static_cast<size_t>(d));
   for (int64_t di = 0; di < d; ++di) {
-    const std::vector<double>& u =
-        uniq[static_cast<size_t>(occ.axis[static_cast<size_t>(di)])];
+    const std::vector<double>& u = uniq[static_cast<size_t>(occ.axis[static_cast<size_t>(di)])];
     double g = u[1] - u[0];
     for (size_t i = 2; i < u.size(); ++i) {
       g = fgcd(g, u[i] - u[i - 1], tol);
     }
     if (!(g > tol)) {
-      throw std::invalid_argument(
-          "subarray_selection: degenerate lattice spacing");
+      throw std::invalid_argument("subarray_selection: degenerate lattice spacing");
     }
     unit[static_cast<size_t>(di)] = g;
     base[static_cast<size_t>(di)] = u.front();
-    const int64_t ext =
-        static_cast<int64_t>(std::llround((u.back() - u.front()) / g)) + 1;
+    const int64_t ext = static_cast<int64_t>(std::llround((u.back() - u.front()) / g)) + 1;
     occ.extent.push_back(ext);
   }
 
@@ -130,8 +126,7 @@ Occupancy build_occupancy(const ArrayGeometry& geometry) {
     for (int64_t di = 0; di < d; ++di) {
       const int c = occ.axis[static_cast<size_t>(di)];
       const double v = p[static_cast<size_t>(e * 3 + c)];
-      const double r = (v - base[static_cast<size_t>(di)]) /
-                       unit[static_cast<size_t>(di)];
+      const double r = (v - base[static_cast<size_t>(di)]) / unit[static_cast<size_t>(di)];
       const int64_t idx = static_cast<int64_t>(std::llround(r));
       if (std::abs(static_cast<double>(idx) * unit[static_cast<size_t>(di)] -
                    (v - base[static_cast<size_t>(di)])) > tol ||
@@ -143,8 +138,7 @@ Occupancy build_occupancy(const ArrayGeometry& geometry) {
       linear = linear * occ.extent[static_cast<size_t>(di)] + idx;
     }
     if (occ.cell[static_cast<size_t>(linear)] != -1) {
-      throw std::invalid_argument(
-          "subarray_selection: duplicate element positions");
+      throw std::invalid_argument("subarray_selection: duplicate element positions");
     }
     occ.cell[static_cast<size_t>(linear)] = static_cast<int32_t>(e);
   }
@@ -222,12 +216,10 @@ std::vector<int32_t> largest_filled_block(const Occupancy& occ) {
 }
 
 ArrayGeometry reduced_from_channels(const ArrayGeometry& geometry,
-                                    const std::vector<int32_t>& channels,
-                                    int64_t d) {
+                                    const std::vector<int32_t>& channels, int64_t d) {
   ArrayGeometry reduced;
   reduced.wavelength = geometry.wavelength;
-  reduced.geometry_type =
-      d == 1 ? ArrayGeometryType::kUla : ArrayGeometryType::kUra;
+  reduced.geometry_type = d == 1 ? ArrayGeometryType::kUla : ArrayGeometryType::kUra;
   reduced.element_positions.resize(channels.size() * 3);
   for (size_t l = 0; l < channels.size(); ++l) {
     const int32_t e = channels[l];
@@ -242,9 +234,9 @@ ArrayGeometry reduced_from_channels(const ArrayGeometry& geometry,
 
 }  // namespace
 
-SubarraySelection build_subarray_selection(
-    const ArrayGeometry& geometry,
-    const std::vector<int64_t>& explicit_indices, int64_t min_subarray_size) {
+SubarraySelection build_subarray_selection(const ArrayGeometry& geometry,
+                                           const std::vector<int64_t>& explicit_indices,
+                                           int64_t min_subarray_size) {
   const int64_t n = geometry.num_elements();
   SubarraySelection sel;
   sel.num_channels = n;
@@ -266,12 +258,10 @@ SubarraySelection build_subarray_selection(
     chosen.wavelength = geometry.wavelength;
     for (int64_t idx : explicit_indices) {
       if (idx < 0 || idx >= n) {
-        throw std::invalid_argument(
-            "subarray_selection: explicit channel index out of range");
+        throw std::invalid_argument("subarray_selection: explicit channel index out of range");
       }
       if (!seen.insert(idx).second) {
-        throw std::invalid_argument(
-            "subarray_selection: duplicate explicit channel index");
+        throw std::invalid_argument("subarray_selection: duplicate explicit channel index");
       }
       for (int c = 0; c < 3; ++c) {
         chosen.element_positions.push_back(
@@ -292,8 +282,7 @@ SubarraySelection build_subarray_selection(
     // occ.cell holds indices into `explicit_indices`; map to input channels in
     // lattice row-major order.
     for (int32_t local : occ.cell) {
-      channels.push_back(
-          static_cast<int32_t>(explicit_indices[static_cast<size_t>(local)]));
+      channels.push_back(static_cast<int32_t>(explicit_indices[static_cast<size_t>(local)]));
     }
   }
 
@@ -304,10 +293,15 @@ SubarraySelection build_subarray_selection(
         "minimum size exists in this geometry");
   }
 
+  bool identity = l == n;
+  for (int64_t channel = 0; identity && channel < n; ++channel) {
+    identity = channels[static_cast<size_t>(channel)] == channel;
+  }
   sel.subarray_size = l;
   sel.channel_index = std::move(channels);
-  sel.reduced_geometry = reduced_from_channels(geometry, sel.channel_index, d);
-  sel.reduced = (l < n);
+  sel.reduced = !identity;
+  sel.reduced_geometry =
+      sel.reduced ? reduced_from_channels(geometry, sel.channel_index, d) : geometry;
   return sel;
 }
 

@@ -93,8 +93,7 @@ Lattice detect_lattice(const ArrayGeometry& geometry) {
     uniq[static_cast<size_t>(c)] = unique_axis_values(std::move(vals), tol);
     if (uniq[static_cast<size_t>(c)].size() > 1) {
       lat.axis.push_back(c);
-      lat.extent.push_back(
-          static_cast<int64_t>(uniq[static_cast<size_t>(c)].size()));
+      lat.extent.push_back(static_cast<int64_t>(uniq[static_cast<size_t>(c)].size()));
     }
   }
 
@@ -146,8 +145,7 @@ Lattice detect_lattice(const ArrayGeometry& geometry) {
       const double v = p[static_cast<size_t>(e * 3 + c)];
       const int64_t idx = axis_index(uniq[static_cast<size_t>(c)], v, tol);
       if (idx < 0) {
-        throw std::invalid_argument(
-            "spatial_smoothing: element off the detected lattice");
+        throw std::invalid_argument("spatial_smoothing: element off the detected lattice");
       }
       lat.coord[static_cast<size_t>(e * d + di)] = idx;
       linear = linear * lat.extent[static_cast<size_t>(di)] + idx;
@@ -164,9 +162,9 @@ Lattice detect_lattice(const ArrayGeometry& geometry) {
 
 }  // namespace
 
-SpatialSmoothingPlan build_spatial_smoothing_plan(
-    const ArrayGeometry& geometry, const std::vector<int64_t>& counts,
-    bool forward_backward) {
+SpatialSmoothingPlan build_spatial_smoothing_plan(const ArrayGeometry& geometry,
+                                                  const std::vector<int64_t>& counts,
+                                                  bool forward_backward) {
   SpatialSmoothingPlan plan;
   plan.num_channels = geometry.num_elements();
   plan.forward_backward = forward_backward;
@@ -181,8 +179,8 @@ SpatialSmoothingPlan build_spatial_smoothing_plan(
   const int64_t d = static_cast<int64_t>(lat.axis.size());
   if (static_cast<int64_t>(counts.size()) != d) {
     std::ostringstream os;
-    os << "spatial_smoothing: expected " << d << " sub-array count(s) for a "
-       << d << "-D aperture, got " << counts.size();
+    os << "spatial_smoothing: expected " << d << " sub-array count(s) for a " << d
+       << "-D aperture, got " << counts.size();
     throw std::invalid_argument(os.str());
   }
 
@@ -193,12 +191,11 @@ SpatialSmoothingPlan build_spatial_smoothing_plan(
     const int64_t p_d = counts[static_cast<size_t>(di)];
     if (p_d < 1 || p_d > lat.extent[static_cast<size_t>(di)]) {
       std::ostringstream os;
-      os << "spatial_smoothing: sub-array count " << p_d << " on axis " << di
-         << " must be in [1, " << lat.extent[static_cast<size_t>(di)] << "]";
+      os << "spatial_smoothing: sub-array count " << p_d << " on axis " << di << " must be in [1, "
+         << lat.extent[static_cast<size_t>(di)] << "]";
       throw std::invalid_argument(os.str());
     }
-    sub_len[static_cast<size_t>(di)] =
-        lat.extent[static_cast<size_t>(di)] - p_d + 1;
+    sub_len[static_cast<size_t>(di)] = lat.extent[static_cast<size_t>(di)] - p_d + 1;
     if (p_d != 1) {
       all_ones = false;
     }
@@ -241,8 +238,7 @@ SpatialSmoothingPlan build_spatial_smoothing_plan(
     for (int64_t l = 0; l < sub_size; ++l) {
       int64_t linear = 0;
       for (int64_t di = 0; di < d; ++di) {
-        const int64_t g =
-            s[static_cast<size_t>(di)] + o[static_cast<size_t>(di)];
+        const int64_t g = s[static_cast<size_t>(di)] + o[static_cast<size_t>(di)];
         linear = linear * lat.extent[static_cast<size_t>(di)] + g;
       }
       plan.subarray_index[static_cast<size_t>(pidx * sub_size + l)] =
@@ -267,10 +263,8 @@ SpatialSmoothingPlan build_spatial_smoothing_plan(
   // Reduced geometry: the reference sub-array (shift 0) = the first sub_size
   // entries of subarray_index, in local order.
   plan.reduced_geometry.wavelength = geometry.wavelength;
-  plan.reduced_geometry.geometry_type =
-      d == 1 ? ArrayGeometryType::kUla : ArrayGeometryType::kUra;
-  plan.reduced_geometry.element_positions.resize(
-      static_cast<size_t>(sub_size * 3));
+  plan.reduced_geometry.geometry_type = d == 1 ? ArrayGeometryType::kUla : ArrayGeometryType::kUra;
+  plan.reduced_geometry.element_positions.resize(static_cast<size_t>(sub_size * 3));
   for (int64_t l = 0; l < sub_size; ++l) {
     const int32_t e = plan.subarray_index[static_cast<size_t>(l)];
     for (int c = 0; c < 3; ++c) {
@@ -287,8 +281,7 @@ SpatialSmoothingPlan build_spatial_smoothing_plan(
     for (int64_t l = 0; l < sub_size; ++l) {
       int64_t flipped = 0;
       for (int64_t di = 0; di < d; ++di) {
-        const int64_t rev = sub_len[static_cast<size_t>(di)] - 1 -
-                            o[static_cast<size_t>(di)];
+        const int64_t rev = sub_len[static_cast<size_t>(di)] - 1 - o[static_cast<size_t>(di)];
         flipped = flipped * sub_len[static_cast<size_t>(di)] + rev;
       }
       plan.fb_flip[static_cast<size_t>(l)] = static_cast<int32_t>(flipped);

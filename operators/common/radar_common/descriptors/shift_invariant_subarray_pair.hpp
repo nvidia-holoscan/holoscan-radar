@@ -19,9 +19,7 @@ struct ShiftInvariantSubarrayPair {
   std::vector<int64_t> reference_indices{};
   std::vector<int64_t> shifted_indices{};
 
-  bool is_auto() const {
-    return reference_indices.empty() && shifted_indices.empty();
-  }
+  bool is_auto() const { return reference_indices.empty() && shifted_indices.empty(); }
 
   void validate() const {
     if (is_auto()) {
@@ -41,8 +39,7 @@ struct ShiftInvariantSubarrayPair {
     for (size_t index = 0; index < reference_indices.size(); ++index) {
       const int64_t reference = reference_indices[index];
       const int64_t shifted = shifted_indices[index];
-      if (!reference_seen.insert(reference).second ||
-          !shifted_seen.insert(shifted).second) {
+      if (!reference_seen.insert(reference).second || !shifted_seen.insert(shifted).second) {
         throw std::invalid_argument(
             "ShiftInvariantSubarrayPair: indices within each subarray must "
             "be unique");
@@ -56,27 +53,22 @@ struct ShiftInvariantSubarrayPair {
       return;
     }
     if (num_elements <= 0) {
-      throw std::invalid_argument(
-          "ShiftInvariantSubarrayPair: num_elements must be positive");
+      throw std::invalid_argument("ShiftInvariantSubarrayPair: num_elements must be positive");
     }
     for (size_t index = 0; index < reference_indices.size(); ++index) {
       const int64_t reference = reference_indices[index];
       const int64_t shifted = shifted_indices[index];
-      if (reference < 0 || reference >= num_elements || shifted < 0 ||
-          shifted >= num_elements) {
+      if (reference < 0 || reference >= num_elements || shifted < 0 || shifted >= num_elements) {
         throw std::invalid_argument(
             "ShiftInvariantSubarrayPair: index out of array_geometry range");
       }
     }
   }
 
-  friend bool operator==(const ShiftInvariantSubarrayPair& a,
-                         const ShiftInvariantSubarrayPair& b) {
-    return a.reference_indices == b.reference_indices &&
-           a.shifted_indices == b.shifted_indices;
+  friend bool operator==(const ShiftInvariantSubarrayPair& a, const ShiftInvariantSubarrayPair& b) {
+    return a.reference_indices == b.reference_indices && a.shifted_indices == b.shifted_indices;
   }
-  friend bool operator!=(const ShiftInvariantSubarrayPair& a,
-                         const ShiftInvariantSubarrayPair& b) {
+  friend bool operator!=(const ShiftInvariantSubarrayPair& a, const ShiftInvariantSubarrayPair& b) {
     return !(a == b);
   }
 };

@@ -17,8 +17,7 @@ namespace holoscan::radar {
 inline void check_cuda(const char* where, const std::string& who) {
   const cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
-    throw std::runtime_error(who + ": " + where + ": " +
-                             cudaGetErrorString(err));
+    throw std::runtime_error(who + ": " + where + ": " + cudaGetErrorString(err));
   }
 }
 

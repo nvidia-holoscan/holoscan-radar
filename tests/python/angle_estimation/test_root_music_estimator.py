@@ -739,7 +739,7 @@ def test_AllInvalidMaskBlanksDoa():
     assert np.all(np.isnan(outs["doa_multi"][0]))
 
 
-def test_LiveNumSourcesStickyOverride():
+def test_LiveNumSourcesOverrideAppliesPerTick():
     k_n, k_s = 12, 128
     conv = radar_boresight_convention()
     geom = make_ula_geometry(k_n, 0.5, 1.0)
@@ -770,7 +770,7 @@ def test_LiveNumSourcesStickyOverride():
     assert int(outs["source_count"][1][0]) == 2
 
 
-def test_LiveArrayGeometryStickyOverride():
+def test_LiveArrayGeometryOverrideAppliesPerTick():
     k_n, k_s = 4, 16
     conv = radar_boresight_convention()
     geom_a = make_ula_geometry(k_n, 0.5, 1.0)
@@ -804,7 +804,7 @@ def test_LiveArrayGeometryStickyOverride():
     np.testing.assert_array_equal(outs["aoa_estimates"][0], outs["aoa_estimates"][2])
 
 
-def test_LiveSpatialSmoothingStickyOverride():
+def test_LiveSpatialSmoothingOverrideAppliesPerTick():
     k_n, k_s = 8, 32
     conv = radar_boresight_convention()
     geom = make_ula_geometry(k_n, 0.5, 1.0)
@@ -833,10 +833,11 @@ def test_LiveSpatialSmoothingStickyOverride():
     assert len(outs["eigenvalues"]) == 3
     assert outs["eigenvalues"][0].shape == (1, k_n)
     assert outs["eigenvalues"][1].shape == (1, k_n - 1)
-    assert outs["eigenvalues"][2].shape == outs["eigenvalues"][1].shape
+    # Tick 2 reverts to the Params smoothing (off), as on tick 0.
+    assert outs["eigenvalues"][2].shape == (1, k_n)
 
 
-def test_LiveSourceCountPfaStickyOverride():
+def test_LiveSourceCountPfaOverrideAppliesPerTick():
     k_n, k_s = 8, 40
     truth_az = 0.08
     conv = radar_boresight_convention()
@@ -868,10 +869,11 @@ def test_LiveSourceCountPfaStickyOverride():
     tight = int(outs["source_count"][0][0])
     loose = int(outs["source_count"][1][0])
     assert tight <= loose
-    assert loose == int(outs["source_count"][2][0])
+    # Tick 2 reverts to the Params Pfa of 1e-4, as on tick 0.
+    assert int(outs["source_count"][2][0]) == tight
 
 
-def test_LiveMaxSourcesStickyOverride():
+def test_LiveMaxSourcesOverrideAppliesPerTick():
     k_n, k_s = 12, 128
     conv = radar_boresight_convention()
     geom = make_ula_geometry(k_n, 0.5, 1.0)

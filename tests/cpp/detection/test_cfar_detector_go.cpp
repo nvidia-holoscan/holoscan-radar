@@ -1,43 +1,39 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// GO-CFAR contract tests for CFARDetectorOp (mirrors the CA matrix in
-// test_cfar_detector.cpp with cfar_variant = GO).
+// GO-CFAR contract tests for CFARDetectorOp on the HSDK 5 Graph harness.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdint>
-#include <functional>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <holoscan/holoscan.hpp>
-#include <holoscan/test/test_harness.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_alpha_mc.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
-#include "utils/sdk_harness.hpp"
+#include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
 namespace {
+
 using holoscan::radar::CFARDetectorOp;
+using holoscan::radar::CFARParams;
+using holoscan::radar::CfarPeakMode;
 using holoscan::radar::CfarVariant;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::real_dtype;
 using holoscan::radar::testing::HostTensor;
-using holoscan::radar::testing::single_map;
-using holoscan::radar::testing::TensorMapCapture;
 using holoscan::radar::testing::to_device_tensor;
-using holoscan::radar::testing::wire_capture_sink;
-using holoscan::radar::testing::wire_data_source;
-using holoscan::radar::testing::wire_leading_override;
-using holoscan::test::create_operator_test;
 
 constexpr int64_t kDoppler = 16;
 constexpr int64_t kRange = 32;
@@ -47,12 +43,11 @@ struct CfarOutputs {
   HostTensor score;
   HostTensor noise;
   HostTensor idx;
+  HostTensor power;
 };
 
-std::vector<double> power_map(int64_t num_doppler, int64_t num_range,
-                              double floor,
-                              const std::vector<std::pair<int64_t, int64_t>>&
-                                  targets,
+std::vector<double> power_map(int64_t num_doppler, int64_t num_range, double floor,
+                              const std::vector<std::pair<int64_t, int64_t>>& targets,
                               double peak) {
   std::vector<double> map(static_cast<size_t>(num_doppler * num_range), floor);
   for (const auto& [d, r] : targets) {
@@ -61,50 +56,62 @@ std::vector<double> power_map(int64_t num_doppler, int64_t num_range,
   return map;
 }
 
-std::vector<double> power_map(
-    double floor,
-    const std::vector<std::pair<int64_t, int64_t>>& targets, double peak) {
+std::vector<double> power_map(double floor, const std::vector<std::pair<int64_t, int64_t>>& targets,
+                              double peak) {
   return power_map(kDoppler, kRange, floor, targets, peak);
 }
 
-template <typename T, typename... Args>
-CfarOutputs run_cfar(std::shared_ptr<holoscan::Tensor> input, Args&&... args) {
-  auto harness = create_operator_test<CFARDetectorOp<T>>(
-      std::forward<Args>(args)...);
-  harness->template add_input_port<holoscan::TensorMap>(
-      "rd_maps", {single_map(std::move(input), "rd_maps")});
-
-  TensorMapCapture mask_cap;
-  TensorMapCapture score_cap;
-  TensorMapCapture noise_cap;
-  TensorMapCapture idx_cap;
-  harness->template add_output_port<holoscan::TensorMap>(
-      "detection_mask", mask_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "detection_score", score_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "noise_estimate", noise_cap.validators());
-  harness->template add_output_port<holoscan::TensorMap>(
-      "detection_idx", idx_cap.validators());
-
-  harness->run_test();
-
-  EXPECT_EQ(mask_cap.frames.size(), 1u);
-  EXPECT_EQ(score_cap.frames.size(), 1u);
-  EXPECT_EQ(noise_cap.frames.size(), 1u);
-  EXPECT_EQ(idx_cap.frames.size(), 1u);
-  return {std::move(mask_cap.frames.front()),
-          std::move(score_cap.frames.front()),
-          std::move(noise_cap.frames.front()),
-          std::move(idx_cap.frames.front())};
+CFARParams go_params(double pfa) {
+  CFARParams p{};
+  p.cfar_variant = CfarVariant::kGO;
+  p.guard_cells = {1, 1};
+  p.training_cells = {2, 2};
+  p.pfa = pfa;
+  return p;
 }
 
-auto go_args(double pfa) {
-  return std::make_tuple(
-      holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = pfa);
+template <typename T>
+holoscan::testing::TestResult run_cfar_result(std::shared_ptr<holoscan::Tensor> input,
+                                              CFARParams params) {
+  using Op = CFARDetectorOp<T>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(std::move(params));
+  fixture.push(&Op::rd_maps, *input);
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  constexpr const char* kOutputs[] = {"detection_mask", "detection_score", "noise_estimate",
+                                      "detection_idx", "cfar_power"};
+  for (const char* output : kOutputs) {
+    fixture.template capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
+    fixture.output_device(output, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  bool observed = true;
+  for (const char* output : kOutputs) {
+    observed = running.wait_for_output(output, 1U, std::chrono::seconds{5}) && observed;
+  }
+  (void)observed;
+  running.request_stop();
+  return running.finish();
+}
+
+template <typename T>
+CfarOutputs run_cfar(std::shared_ptr<holoscan::Tensor> input, CFARParams params) {
+  const auto result = run_cfar_result<T>(std::move(input), std::move(params));
+  if (!result.ok()) {
+    throw std::runtime_error(result.describe_failure());
+  }
+  return {
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("detection_mask")),
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("detection_score")),
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("noise_estimate")),
+      holoscan::radar::testing::to_host(
+          result.template snapshot<holoscan::Tensor>("detection_idx")),
+      holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("cfar_power"))};
 }
 
 int64_t num_detections(const HostTensor& idx) {
@@ -141,8 +148,7 @@ bool idx_contains(const HostTensor& idx, int64_t doppler, int64_t range,
   return false;
 }
 
-int64_t linear_index(const std::vector<int64_t>& shape,
-                     const std::vector<int64_t>& coords) {
+int64_t linear_index(const std::vector<int64_t>& shape, const std::vector<int64_t>& coords) {
   int64_t idx = 0;
   int64_t stride = 1;
   for (int64_t i = static_cast<int64_t>(shape.size()) - 1; i >= 0; --i) {
@@ -152,9 +158,8 @@ int64_t linear_index(const std::vector<int64_t>& shape,
   return idx;
 }
 
-std::vector<double> power_cube(
-    const std::vector<int64_t>& shape, double floor,
-    const std::vector<std::pair<std::vector<int64_t>, double>>& cells) {
+std::vector<double> power_cube(const std::vector<int64_t>& shape, double floor,
+                               const std::vector<std::pair<std::vector<int64_t>, double>>& cells) {
   int64_t count = 1;
   for (int64_t dim : shape) {
     count *= dim;
@@ -167,10 +172,8 @@ std::vector<double> power_cube(
 }
 
 template <typename T>
-void expect_mask_matches_score_interior(const HostTensor& mask,
-                                        const HostTensor& score,
-                                        int64_t num_doppler,
-                                        int64_t num_range) {
+void expect_mask_matches_score_interior(const HostTensor& mask, const HostTensor& score,
+                                        int64_t num_doppler, int64_t num_range) {
   ASSERT_EQ(mask.shape, score.shape);
   const int64_t margin = 3;
   const auto* mask_bytes = mask.as<uint8_t>();
@@ -185,100 +188,9 @@ void expect_mask_matches_score_interior(const HostTensor& mask,
   }
 }
 
-void wire_noop_cfar_output_sinks(holoscan::Fragment* app,
-                                 const std::shared_ptr<holoscan::Operator>& op,
-                                 bool capture_score) {
-  const auto noop = [](const holoscan::TensorMap&) {};
-  for (const char* port :
-       {"detection_mask", "detection_score", "noise_estimate"}) {
-    if (capture_score && std::string(port) == "detection_score") {
-      continue;
-    }
-    auto sink = app->make_operator<
-        holoscan::test::TestHarnessSinkOp<holoscan::TensorMap>>(
-        std::string(port) + "_sink");
-    sink->set_validators({noop});
-    app->add_flow(op, sink, {{port, "input"}});
-  }
+double score_at(const HostTensor& score, int64_t d, int64_t r) {
+  return score.as<double>()[d * kRange + r];
 }
-
-class LiveGoCfarApp : public holoscan::Application {
- public:
-  std::vector<holoscan::TensorMap> frames;
-  TensorMapCapture* idx_capture = nullptr;
-  TensorMapCapture* score_capture = nullptr;
-  std::function<void(holoscan::Fragment*,
-                     const std::shared_ptr<holoscan::Operator>&)>
-      wire_overrides;
-
-  void compose() override {
-    auto op = make_operator<CFARDetectorOp<double>>(
-        "op_under_test", holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-        holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-        holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-        holoscan::Arg("pfa") = 1e-3,
-        holoscan::Arg("threshold_scale") = 1.0,
-        holoscan::Arg("nci_axes") = std::vector<int64_t>{},
-        holoscan::Arg("blocking_alpha_lut_rebuild") = true);
-    wire_data_source(this, op, "rd_maps", frames);
-    if (wire_overrides) {
-      wire_overrides(this, op);
-    }
-    wire_capture_sink(this, op, "detection_idx", idx_capture);
-    if (score_capture != nullptr) {
-      wire_capture_sink(this, op, "detection_score", score_capture);
-      wire_noop_cfar_output_sinks(this, op, /*capture_score=*/true);
-    } else {
-      wire_noop_cfar_output_sinks(this, op, /*capture_score=*/false);
-    }
-  }
-};
-
-void run_three_tick_live_test(
-    std::vector<holoscan::TensorMap> frames,
-    const std::function<void(holoscan::Fragment*,
-                             const std::shared_ptr<holoscan::Operator>&)>&
-        wire_overrides,
-    const std::function<void(const std::vector<HostTensor>&)>& expect,
-    TensorMapCapture* score_capture = nullptr) {
-  TensorMapCapture capture;
-  auto app = holoscan::make_application<LiveGoCfarApp>();
-  app->frames = std::move(frames);
-  app->wire_overrides = wire_overrides;
-  app->idx_capture = &capture;
-  app->score_capture = score_capture;
-  app->run();
-  ASSERT_EQ(capture.frames.size(), 3u);
-  if (score_capture != nullptr) {
-    ASSERT_EQ(score_capture->frames.size(), 3u);
-  }
-  expect(capture.frames);
-}
-
-double score_at(const HostTensor& score, int64_t doppler, int64_t range) {
-  return score.as<double>()[doppler * kRange + range];
-}
-
-class LiveGoThresholdScaleApp : public holoscan::Application {
- public:
-  std::vector<holoscan::TensorMap> frames;
-  std::vector<double> threshold_scale_overrides;
-  TensorMapCapture* idx_capture = nullptr;
-
-  void compose() override {
-    auto op = make_operator<CFARDetectorOp<double>>(
-        "op_under_test", holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-        holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-        holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-        holoscan::Arg("pfa") = 1e-3,
-        holoscan::Arg("threshold_scale") = 1.0);
-    wire_data_source(this, op, "rd_maps", frames);
-    wire_leading_override<double>(this, op, "threshold_scale",
-                                  threshold_scale_overrides);
-    wire_capture_sink(this, op, "detection_idx", idx_capture);
-    wire_noop_cfar_output_sinks(this, op, /*capture_score=*/false);
-  }
-};
 
 }  // namespace
 
@@ -286,14 +198,9 @@ TEST(CFARDetectorOpGoTest, DetectsSingleTargetRealPath) {
   const int64_t dt = 8;
   const int64_t rt = 16;
   const auto map = power_map(1.0, {{dt, rt}}, 100.0);
-  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
-                                        real_dtype<double>());
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<double>(input, std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-3));
+  const auto out = run_cfar<double>(input, go_params(1e-3));
 
   ASSERT_EQ(num_detections(out.idx), 1);
   const auto* rows = out.idx.as<int64_t>();
@@ -306,28 +213,18 @@ TEST(CFARDetectorOpGoTest, DetectsSingleTargetRealPath) {
 TEST(CFARDetectorOpGoTest, NoiseEstimateTracksFloor) {
   const double floor = 3.5;
   const auto map = power_map(floor, {}, floor);
-  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
-                                        real_dtype<double>());
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<double>(input, std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-3));
+  const auto out = run_cfar<double>(input, go_params(1e-3));
 
   EXPECT_NEAR(out.noise.as<double>()[8 * kRange + 16], floor, 1e-9);
 }
 
 TEST(CFARDetectorOpGoTest, NoFalseAlarmsOnFlatMap) {
   const auto map = power_map(1.0, {}, 1.0);
-  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
-                                        real_dtype<double>());
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<double>(input, std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-6));
+  const auto out = run_cfar<double>(input, go_params(1e-6));
 
   EXPECT_EQ(num_detections(out.idx), 0);
 }
@@ -335,33 +232,78 @@ TEST(CFARDetectorOpGoTest, NoFalseAlarmsOnFlatMap) {
 TEST(CFARDetectorOpGoTest, ComplexInputFormsPower) {
   const int64_t dt = 5;
   const int64_t rt = 20;
-  std::vector<std::complex<double>> cube(
-      static_cast<size_t>(kDoppler * kRange), std::complex<double>(1.0, 0.0));
+  std::vector<std::complex<double>> cube(static_cast<size_t>(kDoppler * kRange),
+                                         std::complex<double>(1.0, 0.0));
   cube[static_cast<size_t>(dt * kRange + rt)] = std::complex<double>(10.0, 0.0);
-  auto input = to_device_tensor<std::complex<double>>(
-      cube, {kDoppler, kRange}, complex_dtype<double>());
+  auto input =
+      to_device_tensor<std::complex<double>>(cube, {kDoppler, kRange}, complex_dtype<double>());
 
-  const auto out = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<double>(input, std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-3));
+  const auto out = run_cfar<double>(input, go_params(1e-3));
 
   ASSERT_EQ(num_detections(out.idx), 1);
   EXPECT_NEAR(out.noise.as<double>()[0], 1.0, 1e-9);
 }
 
+TEST(CFARDetectorOpGoTest, CfarPowerIsSquareLawPowerWithoutNci) {
+  const int64_t dt = 5;
+  const int64_t rt = 20;
+  std::vector<std::complex<double>> cube(static_cast<size_t>(kDoppler * kRange),
+                                         std::complex<double>(1.0, 0.0));
+  cube[static_cast<size_t>(dt * kRange + rt)] = std::complex<double>(3.0, 4.0);
+  auto input =
+      to_device_tensor<std::complex<double>>(cube, {kDoppler, kRange}, complex_dtype<double>());
+
+  const auto out = run_cfar<double>(input, go_params(1e-3));
+
+  ASSERT_EQ(out.power.shape, (std::vector<int64_t>{kDoppler, kRange}));
+  ASSERT_EQ(out.power.shape, out.score.shape);
+  const auto* p = out.power.as<double>();
+  for (int64_t i = 0; i < kDoppler * kRange; ++i) {
+    EXPECT_NEAR(p[i], std::norm(cube[static_cast<size_t>(i)]), 1e-9) << i;
+  }
+  EXPECT_NEAR(p[dt * kRange + rt], 25.0, 1e-9);
+}
+
+TEST(CFARDetectorOpGoTest, CfarPowerIsNciSumOverFold) {
+  constexpr int64_t kChannels = 4;
+  const int64_t dt = 5;
+  const int64_t rt = 20;
+  std::vector<std::complex<double>> cube(static_cast<size_t>(kChannels * kDoppler * kRange));
+  for (int64_t k = 0; k < kChannels; ++k) {
+    for (int64_t i = 0; i < kDoppler * kRange; ++i) {
+      cube[static_cast<size_t>(k * kDoppler * kRange + i)] =
+          std::complex<double>(static_cast<double>(k + 1), 0.0);
+    }
+    cube[static_cast<size_t>(k * kDoppler * kRange + dt * kRange + rt)] =
+        std::complex<double>(10.0, 0.0);
+  }
+  auto input = to_device_tensor<std::complex<double>>(cube, {kChannels, kDoppler, kRange},
+                                                      complex_dtype<double>());
+
+  CFARParams params = go_params(1e-3);
+  params.nci_axes = {0};
+  params.nci_fold = kChannels;
+  const auto out = run_cfar<double>(input, params);
+
+  ASSERT_EQ(out.power.shape, (std::vector<int64_t>{kDoppler, kRange}));
+  ASSERT_EQ(out.power.shape, out.score.shape);
+  const auto* p = out.power.as<double>();
+  EXPECT_NEAR(p[0], 30.0, 1e-9);
+  EXPECT_NEAR(p[dt * kRange + rt], 400.0, 1e-9);
+
+  ASSERT_EQ(num_detections(out.idx), 1);
+  const int64_t peak = static_cast<int64_t>(std::max_element(p, p + kDoppler * kRange) - p);
+  const auto* rows = out.idx.as<int64_t>();
+  EXPECT_EQ(peak, rows[0] * kRange + rows[1]);
+}
+
 TEST(CFARDetectorOpGoTest, MaxDetectionsCap) {
   const auto map = power_map(1.0, {{4, 8}, {12, 24}}, 100.0);
-  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
-                                        real_dtype<double>());
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = run_cfar<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("max_detections") = int64_t{1});
+  CFARParams params = go_params(1e-3);
+  params.max_detections = 1;
+  const auto out = run_cfar<double>(input, params);
 
   EXPECT_EQ(num_detections(out.idx), 1);
 }
@@ -372,21 +314,11 @@ TEST(CFARDetectorOpGoTest, FloatDoubleAgree) {
   const auto map = power_map(1.0, {{dt, rt}}, 100.0);
 
   std::vector<float> mapf(map.begin(), map.end());
-  auto in_f = to_device_tensor<float>(mapf, {kDoppler, kRange},
-                                      real_dtype<float>());
-  auto in_d = to_device_tensor<double>(map, {kDoppler, kRange},
-                                       real_dtype<double>());
+  auto in_f = to_device_tensor<float>(mapf, {kDoppler, kRange}, real_dtype<float>());
+  auto in_d = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out_f = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<float>(in_f, std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-3));
-  const auto out_d = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<double>(in_d, std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-3));
+  const auto out_f = run_cfar<float>(in_f, go_params(1e-3));
+  const auto out_d = run_cfar<double>(in_d, go_params(1e-3));
 
   ASSERT_EQ(num_detections(out_f.idx), num_detections(out_d.idx));
   EXPECT_EQ(out_f.idx.as<int64_t>()[0], out_d.idx.as<int64_t>()[0]);
@@ -398,36 +330,23 @@ TEST(CFARDetectorOpGoTest, DetectsOnLargeMap) {
   constexpr int64_t kLargeRange = 512;
   const int64_t dt = 128;
   const int64_t rt = 256;
-  const auto map =
-      power_map(kLargeDoppler, kLargeRange, 1.0, {{dt, rt}}, 100.0);
-  auto input = to_device_tensor<double>(map, {kLargeDoppler, kLargeRange},
-                                        real_dtype<double>());
+  const auto map = power_map(kLargeDoppler, kLargeRange, 1.0, {{dt, rt}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kLargeDoppler, kLargeRange}, real_dtype<double>());
 
-  const auto out = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<double>(input, std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-3));
+  const auto out = run_cfar<double>(input, go_params(1e-3));
 
   ASSERT_EQ(num_detections(out.idx), 1);
   EXPECT_TRUE(idx_contains(out.idx, dt, rt));
-  expect_mask_matches_score_interior<double>(out.mask, out.score,
-                                             kLargeDoppler, kLargeRange);
+  expect_mask_matches_score_interior<double>(out.mask, out.score, kLargeDoppler, kLargeRange);
 }
 
 TEST(CFARDetectorOpGoTest, MaskMatchesScoreInterior) {
   const auto map = power_map(1.0, {{8, 16}}, 100.0);
-  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
-                                        real_dtype<double>());
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<double>(input, std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-3));
+  const auto out = run_cfar<double>(input, go_params(1e-3));
 
-  expect_mask_matches_score_interior<double>(out.mask, out.score, kDoppler,
-                                             kRange);
+  expect_mask_matches_score_interior<double>(out.mask, out.score, kDoppler, kRange);
 }
 
 TEST(CFARDetectorOpGoTest, RealAndComplexPathsAgree) {
@@ -437,28 +356,16 @@ TEST(CFARDetectorOpGoTest, RealAndComplexPathsAgree) {
   const double peak = 80.0;
 
   const auto real_map = power_map(floor, {{dt, rt}}, peak);
-  auto real_input = to_device_tensor<double>(real_map, {kDoppler, kRange},
-                                             real_dtype<double>());
+  auto real_input = to_device_tensor<double>(real_map, {kDoppler, kRange}, real_dtype<double>());
 
-  std::vector<std::complex<double>> complex_map(
-      static_cast<size_t>(kDoppler * kRange),
-      std::complex<double>(std::sqrt(floor), 0.0));
-  complex_map[static_cast<size_t>(dt * kRange + rt)] =
-      std::complex<double>(std::sqrt(peak), 0.0);
-  auto complex_input = to_device_tensor<std::complex<double>>(
-      complex_map, {kDoppler, kRange}, complex_dtype<double>());
+  std::vector<std::complex<double>> complex_map(static_cast<size_t>(kDoppler * kRange),
+                                                std::complex<double>(std::sqrt(floor), 0.0));
+  complex_map[static_cast<size_t>(dt * kRange + rt)] = std::complex<double>(std::sqrt(peak), 0.0);
+  auto complex_input = to_device_tensor<std::complex<double>>(complex_map, {kDoppler, kRange},
+                                                              complex_dtype<double>());
 
-  const auto out_real = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<double>(real_input, std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-3));
-  const auto out_complex = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<double>(complex_input,
-                               std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-3));
+  const auto out_real = run_cfar<double>(real_input, go_params(1e-3));
+  const auto out_complex = run_cfar<double>(complex_input, go_params(1e-3));
 
   ASSERT_EQ(num_detections(out_real.idx), num_detections(out_complex.idx));
   EXPECT_TRUE(idx_contains(out_real.idx, dt, rt));
@@ -468,14 +375,9 @@ TEST(CFARDetectorOpGoTest, RealAndComplexPathsAgree) {
 TEST(CFARDetectorOpGoTest, BorderCellsUseInBoundsTrainingOnly) {
   const double floor = 4.0;
   const auto map = power_map(floor, {}, floor);
-  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
-                                        real_dtype<double>());
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<double>(input, std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-6));
+  const auto out = run_cfar<double>(input, go_params(1e-6));
 
   const auto* noise = out.noise.as<double>();
   const auto* scores = out.score.as<double>();
@@ -487,18 +389,29 @@ TEST(CFARDetectorOpGoTest, BorderCellsUseInBoundsTrainingOnly) {
 
 TEST(CFARDetectorOpGoTest, DetectsTwoTargets) {
   const auto map = power_map(1.0, {{4, 8}, {12, 24}}, 100.0);
-  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
-                                        real_dtype<double>());
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<double>(input, std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-3));
+  const auto out = run_cfar<double>(input, go_params(1e-3));
 
   ASSERT_EQ(num_detections(out.idx), 2);
   EXPECT_TRUE(idx_contains(out.idx, 4, 8));
   EXPECT_TRUE(idx_contains(out.idx, 12, 24));
+}
+
+TEST(CFARDetectorOpGoTest, DetectionIdxRasterOrder) {
+  const auto map = power_map(1.0, {{4, 8}, {12, 24}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
+
+  const auto out = run_cfar<double>(input, go_params(1e-3));
+
+  ASSERT_EQ(num_detections(out.idx), 2);
+  ASSERT_EQ(out.idx.shape.size(), 2u);
+  ASSERT_EQ(out.idx.shape[1], 2);
+  const auto* rows = out.idx.as<int64_t>();
+  EXPECT_EQ(rows[0], 4);
+  EXPECT_EQ(rows[1], 8);
+  EXPECT_EQ(rows[2], 12);
+  EXPECT_EQ(rows[3], 24);
 }
 
 TEST(CFARDetectorOpGoTest, MoreConservativeThanCaWithOneSidedInterferer) {
@@ -507,267 +420,152 @@ TEST(CFARDetectorOpGoTest, MoreConservativeThanCaWithOneSidedInterferer) {
   auto map = power_map(1.0, {}, 1.0);
   map[static_cast<size_t>(dt * kRange + rt)] = 50.0;
   map[static_cast<size_t>(dt * kRange + rt + 3)] = 10000.0;
-  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
-                                        real_dtype<double>());
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out_ca = run_cfar<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kCA,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
-  const auto out_go = std::apply(
-      [&](auto&&... a) {
-        return run_cfar<double>(input, std::forward<decltype(a)>(a)...);
-      },
-      go_args(1e-3));
+  CFARParams ca{};
+  ca.cfar_variant = CfarVariant::kCA;
+  ca.guard_cells = {1, 1};
+  ca.training_cells = {2, 2};
+  ca.pfa = 1e-3;
+  ca.blocking_alpha_lut_rebuild = true;
+  const auto out_ca = run_cfar<double>(input, ca);
+  const auto out_go = run_cfar<double>(input, go_params(1e-3));
 
   EXPECT_GT(score_at(out_ca.score, dt, rt), score_at(out_go.score, dt, rt));
   EXPECT_GT(out_go.noise.as<double>()[dt * kRange + rt],
             out_ca.noise.as<double>()[dt * kRange + rt]);
 }
 
-TEST(CFARDetectorOpGoTest, LiveThresholdScaleOverrideMidStreamAndSticky) {
-  const auto map = power_map(1.0, {{8, 16}}, 100.0);
-  auto frame = [&]() {
-    return single_map(to_device_tensor(map, {kDoppler, kRange},
-                                       real_dtype<double>()),
-                      "rd_maps");
-  };
-
-  TensorMapCapture capture;
-  auto app = holoscan::make_application<LiveGoThresholdScaleApp>();
-  app->frames = {frame(), frame(), frame()};
-  app->threshold_scale_overrides = {1.0, 1.0e4};
-  app->idx_capture = &capture;
-  app->run();
-
-  ASSERT_EQ(capture.frames.size(), 3u);
-  EXPECT_EQ(num_detections(capture.frames[0]), 1);
-  EXPECT_EQ(num_detections(capture.frames[1]), 0);
-  EXPECT_EQ(num_detections(capture.frames[2]), 0);
-}
-
-TEST(CFARDetectorOpGoTest, HarnessGuardCellsOverridePerTick) {
+TEST(CFARDetectorOpGoTest, GuardCellsConfigurableFromParams) {
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
   auto map = power_map(1.0, {}, 1.0);
   map[static_cast<size_t>(dt * kRange + rt)] = 40.0;
   map[static_cast<size_t>(dt * kRange + rt + 2)] = 10000.0;
   auto input = to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
-  auto frame = [&]() { return single_map(input, "rd_maps"); };
-
-  TensorMapCapture score_cap;
-  auto harness = create_operator_test<CFARDetectorOp<double>>(
-      holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
-  harness->add_input_port<holoscan::TensorMap>("rd_maps",
-                                               {frame(), frame(), frame()});
-  harness->add_input_port<std::vector<int64_t>>(
-      "guard_cells",
-      {std::vector<int64_t>{1, 1}, std::vector<int64_t>{1, 2},
-       std::vector<int64_t>{1, 2}});
-  harness->add_output_port<holoscan::TensorMap>("detection_score",
-                                                score_cap.validators());
-  TensorMapCapture mask_cap;
-  TensorMapCapture noise_cap;
-  TensorMapCapture idx_cap;
-  harness->add_output_port<holoscan::TensorMap>("detection_mask",
-                                                mask_cap.validators());
-  harness->add_output_port<holoscan::TensorMap>("noise_estimate",
-                                                noise_cap.validators());
-  harness->add_output_port<holoscan::TensorMap>("detection_idx",
-                                                idx_cap.validators());
-  harness->run_test();
-  ASSERT_EQ(score_cap.frames.size(), 3u);
-  const double s0 = score_at(score_cap.frames[0], dt, rt);
-  const double s1 = score_at(score_cap.frames[1], dt, rt);
-  const double s2 = score_at(score_cap.frames[2], dt, rt);
-  EXPECT_LT(s0, s1);
-  EXPECT_DOUBLE_EQ(s1, s2);
+  CFARParams narrow = go_params(1e-3);
+  narrow.blocking_alpha_lut_rebuild = true;
+  CFARParams wide = narrow;
+  wide.guard_cells = {1, 2};
+  const auto n = run_cfar<double>(input, narrow);
+  const auto w = run_cfar<double>(input, wide);
+  EXPECT_LT(score_at(n.score, dt, rt), score_at(w.score, dt, rt));
 }
 
-TEST(CFARDetectorOpGoTest, LivePfaOverrideMidStreamAndSticky) {
-  constexpr int64_t dt = 8;
-  constexpr int64_t rt = 16;
-  const auto map = power_map(1.0, {{dt, rt}}, 26.0);
-  auto frame = [&]() {
-    return single_map(to_device_tensor(map, {kDoppler, kRange},
-                                       real_dtype<double>()),
-                      "rd_maps");
-  };
-  TensorMapCapture score_cap;
-  run_three_tick_live_test(
-      {frame(), frame(), frame()},
-      [](holoscan::Fragment* app,
-         const std::shared_ptr<holoscan::Operator>& op) {
-        wire_leading_override<double>(app, op, "pfa", {1e-2, 1e-8});
-      },
-      [&](const std::vector<HostTensor>&) {
-        const double s0 = score_at(score_cap.frames[0], dt, rt);
-        const double s1 = score_at(score_cap.frames[1], dt, rt);
-        const double s2 = score_at(score_cap.frames[2], dt, rt);
-        EXPECT_GT(s0, s1);
-        EXPECT_DOUBLE_EQ(s1, s2);
-      },
-      &score_cap);
-}
-
-TEST(CFARDetectorOpGoTest, LiveMaxDetectionsOverrideMidStreamAndSticky) {
-  const auto map = power_map(1.0, {{4, 8}, {12, 24}}, 100.0);
-  auto frame = [&]() {
-    return single_map(to_device_tensor(map, {kDoppler, kRange},
-                                       real_dtype<double>()),
-                      "rd_maps");
-  };
-  run_three_tick_live_test(
-      {frame(), frame(), frame()},
-      [](holoscan::Fragment* app,
-         const std::shared_ptr<holoscan::Operator>& op) {
-        wire_leading_override<int64_t>(app, op, "max_detections",
-                                       {int64_t{0}, int64_t{1}});
-      },
-      [](const std::vector<HostTensor>& idx) {
-        EXPECT_EQ(num_detections(idx[0]), 2);
-        EXPECT_EQ(num_detections(idx[1]), 1);
-        EXPECT_EQ(num_detections(idx[2]), 1);
-      });
-}
-
-TEST(CFARDetectorOpGoTest, LiveGuardCellsOverrideMidStreamAndSticky) {
-  constexpr int64_t dt = 8;
-  constexpr int64_t rt = 16;
-  auto map = power_map(1.0, {}, 1.0);
-  map[static_cast<size_t>(dt * kRange + rt)] = 40.0;
-  map[static_cast<size_t>(dt * kRange + rt + 2)] = 10000.0;
-  auto frame = [&]() {
-    return single_map(to_device_tensor(map, {kDoppler, kRange},
-                                       real_dtype<double>()),
-                      "rd_maps");
-  };
-  TensorMapCapture score_cap;
-  struct LiveGuardApp : public LiveGoCfarApp {
-    void compose() override {
-      auto op = make_operator<CFARDetectorOp<double>>(
-          "op_under_test", holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-          holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-          holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-          holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
-      wire_data_source(this, op, "rd_maps", frames);
-      wire_leading_override<std::vector<int64_t>>(
-          this, op, "guard_cells",
-          {std::vector<int64_t>{1, 1}, std::vector<int64_t>{1, 2}});
-      wire_capture_sink(this, op, "detection_idx", idx_capture);
-      wire_capture_sink(this, op, "detection_score", score_capture);
-      wire_noop_cfar_output_sinks(this, op, /*capture_score=*/true);
-    }
-  };
-  TensorMapCapture idx_cap;
-  auto app = holoscan::make_application<LiveGuardApp>();
-  app->frames = {frame(), frame(), frame()};
-  app->idx_capture = &idx_cap;
-  app->score_capture = &score_cap;
-  app->run();
-  ASSERT_EQ(score_cap.frames.size(), 3u);
-  EXPECT_LT(score_at(score_cap.frames[0], dt, rt),
-            score_at(score_cap.frames[1], dt, rt));
-  EXPECT_DOUBLE_EQ(score_at(score_cap.frames[1], dt, rt),
-                   score_at(score_cap.frames[2], dt, rt));
-}
-
-TEST(CFARDetectorOpGoTest, LiveTrainingCellsOverrideMidStreamAndSticky) {
+TEST(CFARDetectorOpGoTest, TrainingCellsConfigurableFromParams) {
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
   auto map = power_map(1.0, {}, 1.0);
   map[static_cast<size_t>(6 * kRange + rt)] = 10000.0;
   map[static_cast<size_t>(dt * kRange + rt)] = 40.0;
-  auto frame = [&]() {
-    return single_map(to_device_tensor(map, {kDoppler, kRange},
-                                       real_dtype<double>()),
-                      "rd_maps");
-  };
-  TensorMapCapture score_cap;
-  struct LiveTrainingApp : public LiveGoCfarApp {
-    void compose() override {
-      auto op = make_operator<CFARDetectorOp<double>>(
-          "op_under_test", holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-          holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-          holoscan::Arg("training_cells") = std::vector<int64_t>{1, 1},
-          holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
-      wire_data_source(this, op, "rd_maps", frames);
-      wire_leading_override<std::vector<int64_t>>(
-          this, op, "training_cells",
-          {std::vector<int64_t>{1, 1}, std::vector<int64_t>{3, 3}});
-      wire_capture_sink(this, op, "detection_idx", idx_capture);
-      wire_capture_sink(this, op, "detection_score", score_capture);
-      wire_noop_cfar_output_sinks(this, op, /*capture_score=*/true);
-    }
-  };
-  TensorMapCapture idx_cap;
-  auto app = holoscan::make_application<LiveTrainingApp>();
-  app->frames = {frame(), frame(), frame()};
-  app->idx_capture = &idx_cap;
-  app->score_capture = &score_cap;
-  app->run();
-  ASSERT_EQ(score_cap.frames.size(), 3u);
-  EXPECT_LT(score_at(score_cap.frames[0], dt, rt),
-            score_at(score_cap.frames[1], dt, rt));
-  EXPECT_DOUBLE_EQ(score_at(score_cap.frames[1], dt, rt),
-                   score_at(score_cap.frames[2], dt, rt));
+  auto input = to_device_tensor(map, {kDoppler, kRange}, real_dtype<double>());
+  CFARParams wide = go_params(1e-3);
+  wide.blocking_alpha_lut_rebuild = true;
+  wide.training_cells = {3, 3};
+  CFARParams narrow = go_params(1e-3);
+  narrow.blocking_alpha_lut_rebuild = true;
+  narrow.training_cells = {1, 1};
+  const auto w = run_cfar<double>(input, wide);
+  const auto n = run_cfar<double>(input, narrow);
+  EXPECT_GT(score_at(w.score, dt, rt), score_at(n.score, dt, rt));
 }
 
-TEST(CFARDetectorOpGoTest, LiveNciAxesOverrideMidStreamAndSticky) {
-  constexpr int64_t kChannels = 8;
+TEST(CFARDetectorOpGoTest, PeakModeNoneMatchesRawMask) {
+  const auto map = power_map(1.0, {{8, 15}, {8, 16}, {8, 17}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
+
+  const auto raw = run_cfar<double>(input, go_params(1e-2));
+  CFARParams off = go_params(1e-2);
+  off.peak_mode = CfarPeakMode::kNone;
+  const auto out = run_cfar<double>(input, off);
+
+  EXPECT_EQ(num_detections(raw.idx), 3);
+  EXPECT_EQ(num_detections(out.idx), num_detections(raw.idx));
+  for (const auto r : {15, 16, 17}) {
+    EXPECT_TRUE(idx_contains(out.idx, 8, r));
+  }
+}
+
+TEST(CFARDetectorOpGoTest, PeakModeRangeDopplerKeepsSingleMax) {
+  auto data = power_map(1.0, {}, 1.0);
+  data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
+  data[static_cast<size_t>(8 * kRange + 17)] = 50.0;
+  auto input = to_device_tensor<double>(data, {kDoppler, kRange}, real_dtype<double>());
+
+  CFARParams params = go_params(1e-2);
+  params.peak_mode = CfarPeakMode::kRangeDoppler;
+  const auto out = run_cfar<double>(input, params);
+
+  ASSERT_EQ(num_detections(out.idx), 1);
+  EXPECT_TRUE(idx_contains(out.idx, 8, 16));
+  EXPECT_FALSE(idx_contains(out.idx, 8, 17));
+  const auto* mask = out.mask.as<uint8_t>();
+  EXPECT_EQ(mask[8 * kRange + 16], 1);
+  EXPECT_EQ(mask[8 * kRange + 17], 0);
+}
+
+TEST(CFARDetectorOpGoTest, PeakModeRangeDopplerUsesRasterTiebreak) {
+  const auto map = power_map(1.0, {{8, 15}, {8, 16}, {8, 17}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
+
+  CFARParams params = go_params(1e-2);
+  params.peak_mode = CfarPeakMode::kRangeDoppler;
+  const auto out = run_cfar<double>(input, params);
+
+  ASSERT_EQ(num_detections(out.idx), 1);
+  EXPECT_TRUE(idx_contains(out.idx, 8, 15));
+}
+
+TEST(CFARDetectorOpGoTest, PeakModeRangeDopplerUsesConfiguredRadius) {
+  auto data = power_map(1.0, {}, 1.0);
+  data[static_cast<size_t>(8 * kRange + 16)] = 100.0;
+  data[static_cast<size_t>(9 * kRange + 17)] = 90.0;
+  auto input = to_device_tensor<double>(data, {kDoppler, kRange}, real_dtype<double>());
+
+  CFARParams doppler_only = go_params(1e-2);
+  doppler_only.peak_mode = CfarPeakMode::kRangeDoppler;
+  doppler_only.peak_radius = {1, 0};
+  CFARParams square = doppler_only;
+  square.peak_radius = {1, 1};
+
+  const auto out_doppler_only = run_cfar<double>(input, doppler_only);
+  const auto out_square = run_cfar<double>(input, square);
+
+  EXPECT_EQ(num_detections(out_doppler_only.idx), 2);
+  EXPECT_EQ(num_detections(out_square.idx), 1);
+  EXPECT_TRUE(idx_contains(out_square.idx, 8, 16));
+}
+
+TEST(CFARDetectorOpGoTest, ThresholdScaleConfigurableFromParams) {
+  const auto map = power_map(1.0, {{8, 16}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
+  CFARParams detect = go_params(1e-3);
+  detect.threshold_scale = 1.0;
+  CFARParams suppress = go_params(1e-3);
+  suppress.threshold_scale = 1e4;
+  EXPECT_EQ(num_detections(run_cfar<double>(input, detect).idx), 1);
+  EXPECT_EQ(num_detections(run_cfar<double>(input, suppress).idx), 0);
+}
+
+TEST(CFARDetectorOpGoTest, MaxDetectionsConfigurableFromParams) {
+  const auto map = power_map(1.0, {{4, 8}, {12, 24}}, 100.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
+  CFARParams params = go_params(1e-3);
+  params.max_detections = 1;
+  EXPECT_EQ(num_detections(run_cfar<double>(input, params).idx), 1);
+}
+
+TEST(CFARDetectorOpGoTest, PfaConfigurableFromParams) {
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
-  const double floor = 1.0;
-  // Flat cube: per-channel GO must not fire before nci_axes integrates.
-  const auto cube = power_cube({kChannels, kDoppler, kRange}, floor, {});
-  auto frame = [&]() {
-    return single_map(
-        to_device_tensor(cube, {kChannels, kDoppler, kRange},
-                         real_dtype<double>()),
-        "rd_maps");
-  };
-  TensorMapCapture score_cap;
-  struct LiveNciApp : public LiveGoCfarApp {
-    void compose() override {
-      auto op = make_operator<CFARDetectorOp<double>>(
-          "op_under_test", holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-          holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-          holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-          holoscan::Arg("pfa") = 1e-6,
-          holoscan::Arg("nci_axes") = std::vector<int64_t>{},
-          holoscan::Arg("blocking_alpha_lut_rebuild") = true);
-      wire_data_source(this, op, "rd_maps", frames);
-      wire_leading_override<std::vector<int64_t>>(
-          this, op, "nci_axes",
-          {std::vector<int64_t>{}, std::vector<int64_t>{0}});
-      wire_capture_sink(this, op, "detection_idx", idx_capture);
-      wire_capture_sink(this, op, "detection_score", score_capture);
-      wire_noop_cfar_output_sinks(this, op, /*capture_score=*/true);
-    }
-  };
-  TensorMapCapture idx_cap;
-  auto app = holoscan::make_application<LiveNciApp>();
-  app->frames = {frame(), frame(), frame()};
-  app->idx_capture = &idx_cap;
-  app->score_capture = &score_cap;
-  app->run();
-  ASSERT_EQ(idx_cap.frames.size(), 3u);
-  EXPECT_EQ(num_detections(idx_cap.frames[0]), 0);
-  EXPECT_EQ(score_cap.frames[0].shape,
-            (std::vector<int64_t>{kChannels, kDoppler, kRange}));
-  EXPECT_EQ(score_cap.frames[1].shape,
-            (std::vector<int64_t>{kDoppler, kRange}));
-  EXPECT_EQ(score_cap.frames[2].shape, score_cap.frames[1].shape);
-  EXPECT_DOUBLE_EQ(score_at(score_cap.frames[1], dt, rt),
-                   score_at(score_cap.frames[2], dt, rt));
+  const auto map = power_map(1.0, {{dt, rt}}, 26.0);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
+  CFARParams loose = go_params(1e-2);
+  loose.blocking_alpha_lut_rebuild = true;
+  CFARParams tight = go_params(1e-8);
+  tight.blocking_alpha_lut_rebuild = true;
+  EXPECT_GT(score_at(run_cfar<double>(input, loose).score, dt, rt),
+            score_at(run_cfar<double>(input, tight).score, dt, rt));
 }
 
 TEST(CFARDetectorOpGoTest, NciIntegratesChannelsForDetection) {
@@ -777,16 +575,12 @@ TEST(CFARDetectorOpGoTest, NciIntegratesChannelsForDetection) {
   const double floor = 1.0;
   const double weak_peak = 14.0;
 
-  const auto flat_cube =
-      power_cube({kChannels, kDoppler, kRange}, floor, {});
-  auto flat_input = to_device_tensor<double>(
-      flat_cube, {kChannels, kDoppler, kRange}, real_dtype<double>());
+  const auto flat_cube = power_cube({kChannels, kDoppler, kRange}, floor, {});
+  auto flat_input =
+      to_device_tensor<double>(flat_cube, {kChannels, kDoppler, kRange}, real_dtype<double>());
 
-  const auto per_channel = run_cfar<double>(
-      flat_input, holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-6);
+  CFARParams per_chan = go_params(1e-6);
+  const auto per_channel = run_cfar<double>(flat_input, per_chan);
   EXPECT_EQ(num_detections(per_channel.idx), 0);
 
   std::vector<std::pair<std::vector<int64_t>, double>> cells;
@@ -794,15 +588,11 @@ TEST(CFARDetectorOpGoTest, NciIntegratesChannelsForDetection) {
     cells.push_back({{c, dt, rt}, c == 0 ? weak_peak : floor});
   }
   const auto cube = power_cube({kChannels, kDoppler, kRange}, floor, cells);
-  auto input = to_device_tensor<double>(cube, {kChannels, kDoppler, kRange},
-                                        real_dtype<double>());
+  auto input = to_device_tensor<double>(cube, {kChannels, kDoppler, kRange}, real_dtype<double>());
 
-  const auto integrated = run_cfar<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
+  CFARParams params = go_params(1e-3);
+  params.nci_axes = {0};
+  const auto integrated = run_cfar<double>(input, params);
 
   EXPECT_GT(integrated.score.as<double>()[dt * kRange + rt], 1.0);
   ASSERT_GE(num_detections(integrated.idx), 1);
@@ -818,15 +608,11 @@ TEST(CFARDetectorOpGoTest, NciSumsAllChannelPower) {
     cells.push_back({{c, dt, rt}, 10.0});
   }
   const auto cube = power_cube({kChannels, kDoppler, kRange}, 1.0, cells);
-  auto input = to_device_tensor<double>(cube, {kChannels, kDoppler, kRange},
-                                        real_dtype<double>());
+  auto input = to_device_tensor<double>(cube, {kChannels, kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = run_cfar<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
+  CFARParams params = go_params(1e-3);
+  params.nci_axes = {0};
+  const auto out = run_cfar<double>(input, params);
 
   EXPECT_GT(out.score.as<double>()[dt * kRange + rt], 1.0);
   ASSERT_EQ(num_detections(out.idx), 1);
@@ -844,17 +630,13 @@ TEST(CFARDetectorOpGoTest, NciPreservesBatchAxis) {
   for (int64_t c = 0; c < kChannels; ++c) {
     cells.push_back({{1, c, dt, rt}, peak});
   }
-  const auto cube =
-      power_cube({kBatch, kChannels, kDoppler, kRange}, floor, cells);
-  auto input = to_device_tensor<double>(
-      cube, {kBatch, kChannels, kDoppler, kRange}, real_dtype<double>());
+  const auto cube = power_cube({kBatch, kChannels, kDoppler, kRange}, floor, cells);
+  auto input =
+      to_device_tensor<double>(cube, {kBatch, kChannels, kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = run_cfar<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("nci_axes") = std::vector<int64_t>{1});
+  CFARParams params = go_params(1e-3);
+  params.nci_axes = {1};
+  const auto out = run_cfar<double>(input, params);
 
   EXPECT_EQ(out.mask.shape, (std::vector<int64_t>{kBatch, kDoppler, kRange}));
   ASSERT_EQ(num_detections(out.idx), 1);
@@ -865,18 +647,13 @@ TEST(CFARDetectorOpGoTest, BatchIdxIncludesPreservedAxes) {
   constexpr int64_t kBatch = 2;
   constexpr int64_t dt = 8;
   constexpr int64_t rt = 16;
-  const auto cube = power_cube(
-      {kBatch, kDoppler, kRange}, 1.0,
-      {{{0, dt, rt}, 100.0}, {{1, dt, rt}, 100.0}});
-  auto input = to_device_tensor<double>(cube, {kBatch, kDoppler, kRange},
-                                        real_dtype<double>());
+  const auto cube =
+      power_cube({kBatch, kDoppler, kRange}, 1.0, {{{0, dt, rt}, 100.0}, {{1, dt, rt}, 100.0}});
+  auto input = to_device_tensor<double>(cube, {kBatch, kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = run_cfar<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("blocking_alpha_lut_rebuild") = true);
+  CFARParams params = go_params(1e-3);
+  params.blocking_alpha_lut_rebuild = true;
+  const auto out = run_cfar<double>(input, params);
 
   ASSERT_EQ(num_detections(out.idx), 2);
   EXPECT_TRUE(idx_contains(out.idx, dt, rt, {0}));
@@ -885,67 +662,52 @@ TEST(CFARDetectorOpGoTest, BatchIdxIncludesPreservedAxes) {
 
 TEST(CFARDetectorOpGoTest, NciMaskMatchesScoreOnIntegratedMap) {
   constexpr int64_t kChannels = 4;
-  const auto cube = power_cube({kChannels, kDoppler, kRange}, 1.0,
-                               {{{0, 8, 16}, 40.0}});
-  auto input = to_device_tensor<double>(cube, {kChannels, kDoppler, kRange},
-                                        real_dtype<double>());
+  const auto cube = power_cube({kChannels, kDoppler, kRange}, 1.0, {{{0, 8, 16}, 40.0}});
+  auto input = to_device_tensor<double>(cube, {kChannels, kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = run_cfar<double>(
-      input, holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-      holoscan::Arg("guard_cells") = std::vector<int64_t>{1, 1},
-      holoscan::Arg("training_cells") = std::vector<int64_t>{2, 2},
-      holoscan::Arg("pfa") = 1e-3,
-      holoscan::Arg("nci_axes") = std::vector<int64_t>{0});
+  CFARParams params = go_params(1e-3);
+  params.nci_axes = {0};
+  const auto out = run_cfar<double>(input, params);
 
-  expect_mask_matches_score_interior<double>(out.mask, out.score, kDoppler,
-                                             kRange);
+  expect_mask_matches_score_interior<double>(out.mask, out.score, kDoppler, kRange);
 }
 
 TEST(CFARDetectorOpGoTest, RejectsMissingGuardCells) {
   const auto map = power_map(1.0, {}, 1.0);
-  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
-                                        real_dtype<double>());
-  EXPECT_THROW(
-      run_cfar<double>(input, holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-                       holoscan::Arg("training_cells") =
-                           std::vector<int64_t>{2, 2},
-                       holoscan::Arg("pfa") = 1e-3),
-      std::invalid_argument);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
+  CFARParams params{};
+  params.cfar_variant = CfarVariant::kGO;
+  params.training_cells = {2, 2};
+  params.pfa = 1e-3;
+  const auto result = run_cfar_result<double>(input, params);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("detection_mask").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(CFARDetectorOpGoTest, RejectsInvalidNciAxis) {
   const auto map = power_map(1.0, {}, 1.0);
-  auto input = to_device_tensor<double>(map, {kDoppler, kRange},
-                                        real_dtype<double>());
-  EXPECT_THROW(
-      run_cfar<double>(input, holoscan::Arg("cfar_variant") = CfarVariant::kGO,
-                       holoscan::Arg("guard_cells") =
-                           std::vector<int64_t>{1, 1},
-                       holoscan::Arg("training_cells") =
-                           std::vector<int64_t>{2, 2},
-                       holoscan::Arg("pfa") = 1e-3,
-                       holoscan::Arg("nci_axes") = std::vector<int64_t>{0}),
-      std::invalid_argument);
+  auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
+  CFARParams params = go_params(1e-3);
+  params.nci_axes = {0};
+  const auto result = run_cfar_result<double>(input, params);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("detection_mask").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
 }
 
 TEST(CFARDetectorOpGoTest, GoAlphaInvertsMonteCarloPfa) {
   constexpr int64_t kN = 8;
   constexpr double kPfa = 1e-2;
-  const double alpha =
-      holoscan::radar::detail::go_cfar_alpha(kPfa, kN, 1, 1, 1, 2, 2);
-  const double recovered =
-      holoscan::radar::detail::go_cfar_pfa_from_alpha(alpha, kN, 1);
+  const double alpha = holoscan::radar::detail::go_cfar_alpha(kPfa, kN, 1, 1, 1, 2, 2);
+  const double recovered = holoscan::radar::detail::go_cfar_pfa_from_alpha(alpha, kN, 1);
   EXPECT_NEAR(recovered, kPfa, 0.02);
 }
 
-// Regression: GO MC must depend on n_side. The old interior-window simulator
-// ignored n_side, so alpha(n=8) ≈ alpha(n=18) and border LUT slots were wrong.
 TEST(CFARDetectorOpGoTest, GoAlphaDependsOnSideCount) {
   constexpr double kPfa = 1e-2;
-  const double alpha_small =
-      holoscan::radar::detail::go_cfar_alpha(kPfa, 8, 1, 1, 1, 2, 2);
-  const double alpha_large =
-      holoscan::radar::detail::go_cfar_alpha(kPfa, 18, 1, 1, 1, 2, 2);
+  const double alpha_small = holoscan::radar::detail::go_cfar_alpha(kPfa, 8, 1, 1, 1, 2, 2);
+  const double alpha_large = holoscan::radar::detail::go_cfar_alpha(kPfa, 18, 1, 1, 1, 2, 2);
   ASSERT_GT(alpha_large, 0.0);
   EXPECT_GT(std::abs(alpha_small - alpha_large) / alpha_large, 0.05)
       << "alpha_small=" << alpha_small << " alpha_large=" << alpha_large;
@@ -953,9 +715,7 @@ TEST(CFARDetectorOpGoTest, GoAlphaDependsOnSideCount) {
 
 TEST(CFARDetectorOpGoTest, GoLutBorderAlphaDiffersFromInterior) {
   constexpr double kPfa = 1e-2;
-  const auto lut = holoscan::radar::detail::build_go_alpha_lut(
-      kPfa, 1, 32, 32, 1, 1, 2, 2);
-  // guard=1,train=2 → interior lut index 18; corner (0,0) → index 10.
+  const auto lut = holoscan::radar::detail::build_go_alpha_lut(kPfa, 1, 32, 32, 1, 1, 2, 2);
   ASSERT_GT(lut.size(), 18u);
   ASSERT_GT(lut[10], 0.0);
   ASSERT_GT(lut[18], 0.0);
@@ -963,47 +723,32 @@ TEST(CFARDetectorOpGoTest, GoLutBorderAlphaDiffersFromInterior) {
       << "border=" << lut[10] << " interior=" << lut[18];
 }
 
-// Regression: LUT must use cell-faithful MC, not the four-side n_side model.
-// Corner (0,0) → index 10 with two sides of 10; go_cfar_alpha(10) assumes
-// four sides of 10 and understates alpha substantially. Compact indexing
-// also aliases other geometries onto index 10; the LUT stores the max α
-// across those geometries so every aliased cell meets the target Pfa.
 TEST(CFARDetectorOpGoTest, GoLutUsesCellFaithfulAlpha) {
   constexpr double kPfa = 1e-2;
-  const auto lut = holoscan::radar::detail::build_go_alpha_lut(
-      kPfa, 1, 32, 32, 1, 1, 2, 2);
+  const auto lut = holoscan::radar::detail::build_go_alpha_lut(kPfa, 1, 32, 32, 1, 1, 2, 2);
   ASSERT_GT(lut.size(), 10u);
   ASSERT_GT(lut[10], 0.0);
-  const double at_corner = holoscan::radar::detail::go_cfar_alpha_at_cell(
-      kPfa, 1, 0, 0, 32, 32, 1, 1, 2, 2);
-  const double at_edge = holoscan::radar::detail::go_cfar_alpha_at_cell(
-      kPfa, 1, 0, 16, 32, 32, 1, 1, 2, 2);
-  const double four_side =
-      holoscan::radar::detail::go_cfar_alpha(kPfa, 10, 1, 1, 1, 2, 2);
-  EXPECT_GE(lut[10], at_corner * 0.95)
-      << "lut=" << lut[10] << " at_corner=" << at_corner;
-  EXPECT_GE(lut[10], at_edge * 0.95)
-      << "lut=" << lut[10] << " at_edge=" << at_edge;
+  const double at_corner =
+      holoscan::radar::detail::go_cfar_alpha_at_cell(kPfa, 1, 0, 0, 32, 32, 1, 1, 2, 2);
+  const double at_edge =
+      holoscan::radar::detail::go_cfar_alpha_at_cell(kPfa, 1, 0, 16, 32, 32, 1, 1, 2, 2);
+  const double four_side = holoscan::radar::detail::go_cfar_alpha(kPfa, 10, 1, 1, 1, 2, 2);
+  EXPECT_GE(lut[10], at_corner * 0.95) << "lut=" << lut[10] << " at_corner=" << at_corner;
+  EXPECT_GE(lut[10], at_edge * 0.95) << "lut=" << lut[10] << " at_edge=" << at_edge;
   EXPECT_GT(std::abs(lut[10] - four_side) / lut[10], 0.05)
       << "lut=" << lut[10] << " four_side_n10=" << four_side;
 }
 
-// K>1 MC inversion used too few CRN trials and returned the bracket midpoint,
-// which systematically under-shot alpha (isolation Pfa ~1.27x at K=8).
 TEST(CFARDetectorOpGoTest, GoAlphaAtCellInvertsMonteCarloPfaKgt1) {
   using holoscan::radar::detail::go_cfar_alpha_at_cell;
   using holoscan::radar::detail::goso_mc_pfa_at_cell_gpu;
   constexpr double kPfa = 1e-2;
   constexpr int64_t kFold = 8;
   constexpr int nd = 64, nr = 64, g = 1, t = 2, d = 32, r = 32;
-  // Calibrate a single interior cell — full-map LUT build is unnecessary here
-  // and would pull this unit test into multi-second statistical territory.
-  const double alpha =
-      go_cfar_alpha_at_cell(kPfa, kFold, d, r, nd, nr, g, g, t, t);
+  const double alpha = go_cfar_alpha_at_cell(kPfa, kFold, d, r, nd, nr, g, g, t, t);
   ASSERT_GT(alpha, 0.0);
-  const double pfa_est = goso_mc_pfa_at_cell_gpu(
-      alpha, kFold, 200000, d, r, nd, nr, g, g, t, t, true);
+  const double pfa_est =
+      goso_mc_pfa_at_cell_gpu(alpha, kFold, 200000, d, r, nd, nr, g, g, t, t, true);
   ASSERT_GE(pfa_est, 0.0) << "GPU MC calibration unavailable";
-  EXPECT_NEAR(pfa_est, kPfa, 0.15 * kPfa)
-      << "alpha=" << alpha << " pfa_est=" << pfa_est;
+  EXPECT_NEAR(pfa_est, kPfa, 0.15 * kPfa) << "alpha=" << alpha << " pfa_est=" << pfa_est;
 }

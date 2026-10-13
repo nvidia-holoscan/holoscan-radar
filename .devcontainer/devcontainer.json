@@ -10,7 +10,11 @@
   "name": "holoscan-radar",
   "build": {
     "context": "..",
-    "dockerfile": "../Dockerfile"
+    "dockerfile": "../Dockerfile",
+    // Build this image first; remove this args block before GA.
+    "args": {
+      "BASE_IMAGE": "holoscan-radar-hsdk5-ea:79dc6cb"
+    }
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/holoscan-radar,type=bind,consistency=cached",
   "workspaceFolder": "/workspace/holoscan-radar",

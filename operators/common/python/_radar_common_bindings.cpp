@@ -110,7 +110,8 @@ PYBIND11_MODULE(_radar_common, m) {
   py::enum_<RepresentativePolicy>(m, "RepresentativePolicy")
       .value("PEAK", RepresentativePolicy::kPeak)
       .value("MEDOID", RepresentativePolicy::kMedoid)
-      .value("FIRST", RepresentativePolicy::kFirst);
+      .value("FIRST", RepresentativePolicy::kFirst)
+      .value("WEIGHTED_MEAN", RepresentativePolicy::kWeightedMean);
 
   py::enum_<ScoreMethod>(m, "ScoreMethod")
       .value("WEIGHTED_SUM", ScoreMethod::kWeightedSum)
@@ -121,14 +122,12 @@ PYBIND11_MODULE(_radar_common, m) {
   py::class_<WindowSpec>(m, "WindowSpec")
       .def(py::init<>())
       .def_readwrite("type", &WindowSpec::type)
-      .def_readwrite("sidelobe_attenuation_db",
-                     &WindowSpec::sidelobe_attenuation_db)
+      .def_readwrite("sidelobe_attenuation_db", &WindowSpec::sidelobe_attenuation_db)
       .def_readwrite("kaiser_beta", &WindowSpec::kaiser_beta)
       .def_readwrite("taylor_nbar", &WindowSpec::taylor_nbar)
       .def_readwrite("tukey_alpha", &WindowSpec::tukey_alpha)
       .def_readwrite("coefficients", &WindowSpec::coefficients)
-      .def_readwrite("coherent_gain_normalization",
-                     &WindowSpec::coherent_gain_normalization);
+      .def_readwrite("coherent_gain_normalization", &WindowSpec::coherent_gain_normalization);
 
   py::class_<ArrayGeometry>(m, "ArrayGeometry")
       .def(py::init<>())
@@ -140,25 +139,18 @@ PYBIND11_MODULE(_radar_common, m) {
 
   py::class_<ShiftInvariantSubarrayPair>(m, "ShiftInvariantSubarrayPair")
       .def(py::init<>())
-      .def_readwrite("reference_indices",
-                     &ShiftInvariantSubarrayPair::reference_indices)
-      .def_readwrite("shifted_indices",
-                     &ShiftInvariantSubarrayPair::shifted_indices)
+      .def_readwrite("reference_indices", &ShiftInvariantSubarrayPair::reference_indices)
+      .def_readwrite("shifted_indices", &ShiftInvariantSubarrayPair::shifted_indices)
       .def("is_auto", &ShiftInvariantSubarrayPair::is_auto)
-      .def("validate",
-           py::overload_cast<>(&ShiftInvariantSubarrayPair::validate,
-                               py::const_));
+      .def("validate", py::overload_cast<>(&ShiftInvariantSubarrayPair::validate, py::const_));
 
   py::class_<AngleConvention>(m, "AngleConvention")
       .def(py::init<>())
       .def_readwrite("preset", &AngleConvention::preset)
       .def_readwrite("boresight_axis", &AngleConvention::boresight_axis)
-      .def_readwrite("azimuth_positive_axis",
-                     &AngleConvention::azimuth_positive_axis)
-      .def_readwrite("elevation_positive_axis",
-                     &AngleConvention::elevation_positive_axis)
-      .def_readwrite("elevation_reference",
-                     &AngleConvention::elevation_reference)
+      .def_readwrite("azimuth_positive_axis", &AngleConvention::azimuth_positive_axis)
+      .def_readwrite("elevation_positive_axis", &AngleConvention::elevation_positive_axis)
+      .def_readwrite("elevation_reference", &AngleConvention::elevation_reference)
       .def("uses_direction_cosine", &AngleConvention::uses_direction_cosine);
 
   py::class_<TXSchedule>(m, "TXSchedule")
@@ -183,10 +175,8 @@ PYBIND11_MODULE(_radar_common, m) {
       .def_readwrite("chirp_slope", &FMCWWaveformSpec::chirp_slope)
       .def_readwrite("chirp_duration", &FMCWWaveformSpec::chirp_duration)
       .def_readwrite("sample_rate", &FMCWWaveformSpec::sample_rate)
-      .def_readwrite("chirp_repetition_interval",
-                     &FMCWWaveformSpec::chirp_repetition_interval)
-      .def_readwrite("reference_samples",
-                     &FMCWWaveformSpec::reference_samples);
+      .def_readwrite("chirp_repetition_interval", &FMCWWaveformSpec::chirp_repetition_interval)
+      .def_readwrite("reference_samples", &FMCWWaveformSpec::reference_samples);
 
   py::class_<FMCWWaveformDescriptor>(m, "FMCWWaveformDescriptor")
       .def(py::init<>())
@@ -197,13 +187,9 @@ PYBIND11_MODULE(_radar_common, m) {
       .def("slope", &FMCWWaveformDescriptor::slope)
       .def("chirp_duration", &FMCWWaveformDescriptor::chirp_duration)
       .def("sample_rate", &FMCWWaveformDescriptor::sample_rate)
-      .def("chirp_repetition_interval",
-           &FMCWWaveformDescriptor::chirp_repetition_interval)
-      .def("wavelength",
-           py::overload_cast<>(&FMCWWaveformDescriptor::wavelength, py::const_))
-      .def("wavelength",
-           py::overload_cast<double>(&FMCWWaveformDescriptor::wavelength,
-                                     py::const_),
+      .def("chirp_repetition_interval", &FMCWWaveformDescriptor::chirp_repetition_interval)
+      .def("wavelength", py::overload_cast<>(&FMCWWaveformDescriptor::wavelength, py::const_))
+      .def("wavelength", py::overload_cast<double>(&FMCWWaveformDescriptor::wavelength, py::const_),
            py::arg("propagation_speed"))
       .def("reference_samples", &FMCWWaveformDescriptor::reference_samples,
            py::return_value_policy::reference_internal);
@@ -239,8 +225,7 @@ PYBIND11_MODULE(_radar_common, m) {
           dtype = DLDataType{kDLFloat, 64, 1};
         } else if (name == "complex64" || name == "c8") {
           dtype = DLDataType{kDLComplex, 64, 1};
-        } else if (name == "complex128" || name == "c16" ||
-                   name == "complex") {
+        } else if (name == "complex128" || name == "c16" || name == "complex") {
           dtype = DLDataType{kDLComplex, 128, 1};
         } else if (name == "int64" || name == "i8" || name == "int") {
           dtype = DLDataType{kDLInt, 64, 1};
@@ -251,8 +236,7 @@ PYBIND11_MODULE(_radar_common, m) {
         } else if (name == "uint8" || name == "u1") {
           dtype = DLDataType{kDLUInt, 8, 1};
         } else {
-          throw py::value_error(
-              "make_device_tensor: unsupported dtype '" + name + "'");
+          throw py::value_error("make_device_tensor: unsupported dtype '" + name + "'");
         }
         return make_device_tensor(shape, dtype);
       },
@@ -266,21 +250,17 @@ PYBIND11_MODULE(_radar_common, m) {
     registry.add_emitter_receiver<ArrayGeometry>("ArrayGeometry", true);
     registry.add_emitter_receiver<AngleConvention>("AngleConvention", true);
     registry.add_emitter_receiver<WindowSpec>("WindowSpec", true);
-    registry.add_emitter_receiver<FMCWWaveformDescriptor>(
-        "FMCWWaveformDescriptor", true);
+    registry.add_emitter_receiver<FMCWWaveformDescriptor>("FMCWWaveformDescriptor", true);
     registry.add_emitter_receiver<DDMCodeDescriptor>("DDMCodeDescriptor", true);
     registry.add_emitter_receiver<TXSchedule>("TXSchedule", true);
-    registry.add_emitter_receiver<ClutterFilterMethod>("ClutterFilterMethod",
-                                                      true);
+    registry.add_emitter_receiver<ClutterFilterMethod>("ClutterFilterMethod", true);
     registry.add_emitter_receiver<WindowType>("WindowType", true);
     registry.add_emitter_receiver<FftNorm>("FftNorm", true);
     registry.add_emitter_receiver<PeakInterpolation>("PeakInterpolation", true);
-    registry.add_emitter_receiver<MultiplexingScheme>("MultiplexingScheme",
-                                                     true);
+    registry.add_emitter_receiver<MultiplexingScheme>("MultiplexingScheme", true);
     registry.add_emitter_receiver<OverlapPolicy>("OverlapPolicy", true);
     registry.add_emitter_receiver<SnapshotEdgeMode>("SnapshotEdgeMode", true);
-    registry.add_emitter_receiver<RepresentativePolicy>(
-        "RepresentativePolicy", true);
+    registry.add_emitter_receiver<RepresentativePolicy>("RepresentativePolicy", true);
     registry.add_emitter_receiver<ScoreMethod>("ScoreMethod", true);
   });
 }

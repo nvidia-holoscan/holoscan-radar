@@ -151,6 +151,7 @@ endfunction()
 #   NAME: The name of the application to build
 #
 # Keyword Arguments:
+#   DIRECTORY: Source directory relative to the caller (defaults to NAME)
 #   DEPENDS: Dependency specification with sub-arguments:
 #     EXTENSIONS: List of GXF extensions that this application depends on
 #     OPERATORS: List of Holoscan operators that this application depends on
@@ -167,13 +168,17 @@ endfunction()
 #   )
 function(add_holohub_application NAME)
 
-  cmake_parse_arguments(APP "" "" "DEPENDS" ${ARGN})
+  cmake_parse_arguments(APP "" "DIRECTORY" "DEPENDS" ${ARGN})
 
   set(appname "APP_${NAME}")
   option(${appname} "Build the ${NAME} application" ${BUILD_ALL})
 
   if(${appname})
-    add_subdirectory(${NAME})
+    if(APP_DIRECTORY)
+      add_subdirectory(${APP_DIRECTORY})
+    else()
+      add_subdirectory(${NAME})
+    endif()
 
     # If we have dependencies make sure they are built
     if(APP_DEPENDS)
