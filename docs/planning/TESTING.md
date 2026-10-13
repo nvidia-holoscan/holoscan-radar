@@ -190,7 +190,8 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - Every `rep_idx` addresses a real detected cell (a subset of `detection_idx`); one per cluster; noise (`−1`) excluded.
 - `points` is always a required exact-aligned input, including for `representative=first`; an unwired graph is rejected for every policy.
 - A caller-instantiated compile-time `ScoreFn` is exercised through the Graph harness from a CUDA translation unit.
-- Exact peak/medoid ties choose the lowest input row; opaque leading batch rank is rejected.
+- Computed exact peak/medoid/weighted-index ties choose the lowest input row; opaque leading batch rank is rejected.
+- Unordered floating-point medoid/weighted-mean accumulation can vary across runs. Validate means with input-derived precision-aware rounding bounds and representatives with an independent admissible-distance set; gathered features must exactly match the selected real member. Clearly separated winners, `first` and `peak` remain deterministic. Preserve dedicated computed-tie fixtures; interval overlap is not an exact tie. See [semantic validation policy](../performance/optimizations/detection-reduction-validation.md).
 
 ### Angle estimation
 
@@ -315,7 +316,7 @@ Common check (all five): default-constructed Params select `radar_boresight`; `s
 - **`[live]` override behavior.** An Exact-matched override mid-stream changes the output accordingly; a following tick with no match reverts to the Params value, since an override applies to one tick only. Warn only when a genuine rebuild is triggered (FFT plan, window coefficients, CFAR window kernel); previously-seen configurations are reused from cache.
 - **Precision.** Single- and double-precision instantiations agree within their respective tolerances.
 - **Memory spaces.** Operators accept tensors in each CUDA-accessible memory space (device, managed, pinned host) and reject pageable-host input with a clear error; outputs are always device memory. `test_tensor` directly covers the shared `require_cuda_accessible()` rejection and diagnostic. Graph sources materialize data through device-bound output loans, so do not duplicate an unreachable pageable-host case as a skipped test in every operator suite.
-- **Determinism.** A fixed seed reproduces identical outputs across runs.
+- **Determinism.** A fixed seed reproduces identical outputs across runs, except the documented DetectionReduction unordered-accumulation cases, which require semantic validation and dedicated exact-tie fixtures.
 
 ---
 

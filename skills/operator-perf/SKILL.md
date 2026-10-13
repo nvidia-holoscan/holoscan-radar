@@ -85,6 +85,12 @@ differences only; it does not authorize changed math, discrete decisions,
 precision, or interface behavior. Never widen tests or comparison tolerances
 to make a candidate pass.
 
+DetectionReduction has an explicitly authorized, opt-in
+[input-derived semantic policy](../../docs/performance/optimizations/detection-reduction-validation.md).
+It requires fresh native input witnesses, coupled port checks, and existing
+computed-tie fixtures. It does not authorize changed formulas or consumer
+outputs. Retain exact comparison elsewhere; never migrate historical evidence.
+
 Before editing, propose and obtain confirmation of the concrete session:
 operator, comparison rules for **each port and precision**, cases, objective,
 protected cases, editable scope, and limits. Defaults: 20 candidate turns, three

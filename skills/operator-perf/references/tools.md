@@ -72,6 +72,11 @@ evidence-backed `rationale`. Descriptor and discrete content remain exact.
 All output ports, including unwired optional ones, must appear in policies and
 snapshot exports. Do not reuse one operator's tolerances for another.
 
+DetectionReduction may opt into `mode: detection-reduction-v1` with a rationale
+for both ports and both precisions. Its [semantic policy](../../../docs/performance/optimizations/detection-reduction-validation.md)
+requires fresh input witnesses and coupled checks; bounds cannot be adjusted
+in configuration. Consumer policies remain separate.
+
 ```bash
 python3 performance/optimization/radar_perf.py init \
   --config /absolute/config.json --confirmed --out /absolute/session.json
