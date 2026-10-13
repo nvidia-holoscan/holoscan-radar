@@ -34,10 +34,6 @@ For example, download the Imperial Valley collect and run continuous strip:
 python3 tools/sar_data/pull_cphd.py --app continuous_strip \
   --dest data/sar/imperial
 ./holoscan-radar run continuous_strip \
-  --img holoscan-radar-dev:hsdk5 --no-docker-build \
-  --configure-args=-DBUILD_ALL=OFF \
-  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
-  --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan \
   --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
 ```
 

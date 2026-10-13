@@ -4,33 +4,26 @@ GPU-accelerated FMCW and SAR signal-processing operators for NVIDIA Holoscan.
 Operators are implemented in C++/CUDA on MatX and compose through typed ports,
 without pipeline-specific glue between processing stages.
 
-Holoscan Radar targets HSDK 5. Pull the staging SDK image before opening the dev
-container or using the Holoscan CLI. This pre-release image requires
-`nvstaging` as your user org in NGC Catalog. Setup and the current packaging
-limitation are documented in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
+Holoscan Radar targets HSDK 5. The Holoscan CLI pulls the staging SDK image
+when needed; the devcontainer can use the same image. This pre-release image
+requires `nvstaging` as your user org in NGC Catalog. Setup and the current
+packaging limitation are documented in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 
 ## Quick start
 
-Install the development CLI as described in [`DEVELOPER.md`](DEVELOPER.md#holoscan-cli),
-then use the `./holoscan-radar` wrapper from the repository root. It selects the
-staging image and runs the project build and application in the named container:
+Set your NGC Catalog user org to `nvstaging`, install the development CLI,
+then run the two-frame headless example from the repository root:
 
 ```bash
-docker pull nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13
-./holoscan-radar build-container --img holoscan-radar-dev:hsdk5
-./holoscan-radar build siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
-  --configure-args=-DBUILD_ALL=OFF \
-  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
-  --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan
-./holoscan-radar run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
-  --configure-args=-DBUILD_ALL=OFF \
-  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
-  --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan \
-  --run-args=siso_smoke.yaml
+uv sync
+docker login nvcr.io
+./holoscan-radar run siso --run-args=siso_smoke.yaml
 ```
 
-The `--run-args=siso_smoke.yaml` example runs two headless frames. Omit that
-flag to use the SISO executable's default `siso.yaml` configuration.
+The CLI builds the project image and SISO application as needed. To prepare the
+image separately, run `./holoscan-radar build-container`. For the 250-frame
+visualization preset, run `./holoscan-radar run siso` on a host with a display.
+See [`DEVELOPER.md`](DEVELOPER.md#holoscan-cli) for CLI installation alternatives.
 
 For an offline SAR smoke run, configure testing and run the generated-fixture
 CTest cases. The five shipped SAR YAML files are real-collection presets and

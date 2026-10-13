@@ -66,7 +66,6 @@ install them from the repository root using uv:
 
 ```bash
 uv sync
-source .venv/bin/activate
 ./holoscan-radar version
 ```
 
@@ -76,45 +75,35 @@ are not part of the published wheel. With pip 25.1+, the equivalent setup is:
 
 ```bash
 python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade 'pip>=25.1'
-python -m pip install --extra-index-url https://pypi.nvidia.com --group cli --group test
+.venv/bin/python -m pip install --upgrade 'pip>=25.1'
+.venv/bin/python -m pip install --extra-index-url https://pypi.nvidia.com --group cli --group test
 ./holoscan-radar version
 ```
 
 The development Dockerfile installs the same groups. From the repository root,
-use `./holoscan-radar` to run the pinned CLI; the wrapper prefers `.venv` and
-sets the project root and staging image. First pull the HSDK 5 image as
-described in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md), then build one named
-development image:
-
-```bash
-./holoscan-radar build-container --img holoscan-radar-dev:hsdk5
-```
-
-The following host commands reuse that image. The CLI starts a container for
-each command; no interactive container shell is required. Keep the same `--img`
-value throughout because the CLI otherwise derives a different image name for
-each project. The wrapper sets the image default and, when a sibling
-`../holoscan-sdk` checkout exists, selects the SDK in the image for nested
-builds. The CLI still mounts that sibling checkout. The `holoscan_DIR` argument
-selects the image's CMake package; start with a clean `build/<app>` tree when
-switching SDK images because CMake caches dependency paths.
+use `./holoscan-radar` to run the pinned CLI; the wrapper prefers `.venv`
+without requiring activation. Authenticate to NGC as described in
+[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md), then use the commands below. The CLI
+builds the project image when needed and tags it from the project and branch.
+`./holoscan-radar build-container` builds the image separately if desired.
 
 | Command | What it does |
 | --- | --- |
-| `./holoscan-radar build holoscan-radar --language cpp --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan` | Build the C++ module in the container |
-| `./holoscan-radar build simo --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-DBUILD_ALL=OFF --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan` | Build SIMO and its dependencies in the container |
-| `./holoscan-radar run simo --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-DBUILD_ALL=OFF --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan` | Build and run SIMO in the container |
-| `./holoscan-radar test --img holoscan-radar-dev:hsdk5 --no-docker-build --cmake-options=-Dholoscan_DIR=/usr/lib/cmake/holoscan` | Build and run the test suite in the container |
-| `./holoscan-radar package holoscan-radar --img holoscan-radar-dev:hsdk5 --no-docker-build` | Build the Debian package in the container |
-| `./holoscan-radar run-container --img holoscan-radar-dev:hsdk5 --no-docker-build` | Open an interactive container shell when needed |
+| `./holoscan-radar build holoscan-radar --language cpp` | Build the C++ module in a container |
+| `./holoscan-radar build simo` | Build SIMO and its dependencies in a container |
+| `./holoscan-radar run simo` | Build and run SIMO in a container |
+| `./holoscan-radar test` | Build and run the test suite in a container |
+| `./holoscan-radar package holoscan-radar` | Build the Debian package in a container |
+| `./holoscan-radar run-container` | Open an interactive container shell |
 
-The focused app flags turn off `BUILD_ALL` and the test suite; without them,
-a standalone CMake build enables every app, operator, and test by default.
-`[tool.holoscan]` selects [`ci/container.ctest`](ci/container.ctest) for `./holoscan-radar test`.
-To try an unpublished CLI checkout, install it into the selected environment and
-run its `holoscan` command there.
+Each host command starts a container; no interactive shell is required for
+builds or tests. The CLI selects the required app dependencies, and the wrapper
+selects the image SDK for nested builds when a sibling `../holoscan-sdk`
+checkout exists. The CLI still mounts that sibling checkout. Start with a clean
+`build/<app>` tree when switching SDK images because CMake caches dependency
+paths. `[tool.holoscan]` selects [`ci/container.ctest`](ci/container.ctest) for
+`./holoscan-radar test`. To try an unpublished CLI checkout, install it into
+the selected environment and run its `holoscan` command there.
 
 ---
 
@@ -165,22 +154,17 @@ HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v
 
 ## Running the full suite with `./holoscan-radar test`
 
-From the host, `./holoscan-radar test` starts the named development image, configures
-and builds the module, and runs the suite in that container:
+From the host, `./holoscan-radar test` builds the project image if needed,
+configures and builds the module, and runs the suite in a container:
 
 ```bash
-./holoscan-radar test --img holoscan-radar-dev:hsdk5 --no-docker-build \
-  --cmake-options=-Dholoscan_DIR=/usr/lib/cmake/holoscan
-./holoscan-radar test --img holoscan-radar-dev:hsdk5 --no-docker-build \
-  --cmake-options=-Dholoscan_DIR=/usr/lib/cmake/holoscan \
-  --dryrun --verbose
+./holoscan-radar test
+./holoscan-radar test --dryrun --verbose
 ```
 
-If the development image has not been built yet, run the `build-container`
-command above first. The test command can also build it with
-`--base-img nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13` instead of `--no-docker-build`. The
-`--cmake-options` override selects the image SDK's CMake package. The
-wrapper handles the sibling checkout when one exists.
+The wrapper selects the staging base image and handles the sibling SDK
+checkout when one exists. The CLI finds the image SDK's CMake package without
+an explicit `holoscan_DIR` override.
 
 What it does, and where to change it:
 

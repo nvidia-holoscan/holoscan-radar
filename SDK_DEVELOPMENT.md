@@ -17,44 +17,35 @@ This pre-release image requires `nvstaging` as your **user org** in NGC Catalog.
 Select that user org before authenticating to `nvcr.io`; a successful Docker
 login with a different user org does not grant access to the image.
 
-From the repository root on a host with NGC staging access:
+From the repository root on a host with NGC staging access, install the CLI
+as described in [`DEVELOPER.md`](DEVELOPER.md#holoscan-cli), then authenticate:
 
 ```bash
 docker login nvcr.io
-docker pull nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13
-./holoscan-radar build-container --img holoscan-radar-dev:hsdk5
 ```
 
-The devcontainer builds from the same staging image. Rebuild and reopen it
-when switching from the former locally built SDK image.
+The CLI pulls the staging base image when needed. You can build the project
+image separately with `./holoscan-radar build-container`; the run, build, and
+test commands also build it when needed. The devcontainer uses the same base
+image. Rebuild and reopen it when switching from the former locally built SDK
+image.
 
-Use the repository's `./holoscan-radar` wrapper for the commands below. It
-selects the staging image by default and uses the CLI installed in `.venv`
-when available. If a sibling `../holoscan-sdk` checkout exists, the CLI still
-mounts it; the wrapper selects the image SDK for nested builds.
-
-Run the CLI on the host and let it execute builds, applications, and tests in
-the named development image:
+Use the repository's `./holoscan-radar` wrapper on the host. It selects the
+staging base image and uses the CLI installed in `.venv` when available. If a
+sibling `../holoscan-sdk` checkout exists, the CLI still mounts it; the
+wrapper selects the image SDK for nested builds.
 
 ```bash
-./holoscan-radar build holoscan-radar --language cpp --img holoscan-radar-dev:hsdk5 \
-  --no-docker-build --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan
-./holoscan-radar run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
-  --configure-args=-DBUILD_ALL=OFF \
-  --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
-  --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan \
-  --run-args=siso_smoke.yaml
-./holoscan-radar test --img holoscan-radar-dev:hsdk5 --no-docker-build \
-  --cmake-options=-Dholoscan_DIR=/usr/lib/cmake/holoscan
+./holoscan-radar build holoscan-radar --language cpp
+./holoscan-radar run siso --run-args=siso_smoke.yaml
+./holoscan-radar test
 ```
 
-`./holoscan-radar run-container --img holoscan-radar-dev:hsdk5 --no-docker-build`
-opens an interactive shell if needed. Do not pass `--local` to the host commands:
-that flag runs the build or application on the host instead of in the container.
-The explicit `holoscan_DIR` selects the image CMake package; the wrapper also
-makes nested CLI builds select the image SDK and prevents transitive
-dependencies from using the mounted checkout. Start with a clean
-`build/<app>` tree when switching SDK images so CMake does not retain old paths.
+`./holoscan-radar run-container` opens an interactive shell if needed. The CLI
+tags images from the project and branch automatically. Do not pass `--local` to
+the host commands: that flag runs the build or application on the host instead
+of in the container. Start with a clean `build/<app>` tree when switching SDK
+images so CMake does not retain old paths.
 
 ## Current packaging limitation
 
