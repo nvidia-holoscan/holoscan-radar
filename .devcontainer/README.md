@@ -62,13 +62,14 @@ the same path the `holohub` wrapper uses for `HOLOSCAN_CLI_DATA_DIR`.
 
 ## SDK base image
 
-The dev container currently uses a locally built HSDK 5 `main-5x` image. Build
-that image before opening the container:
+The dev container uses the HSDK 5 staging image. Authenticate to NGC and pull
+it before opening the container:
 
 ```bash
-./.devcontainer/build-hsdk5-ea-image.sh
+docker login nvcr.io
+docker pull nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13
 ```
 
-The complete source-build workflow, pin behavior, HoloHub commands, current
-packaging limitation, and removal criteria are documented once in
+The image version, Holoscan CLI commands, and current packaging limitation are
+documented in
 [`SDK_DEVELOPMENT.md`](../SDK_DEVELOPMENT.md).

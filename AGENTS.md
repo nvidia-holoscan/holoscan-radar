@@ -4,9 +4,9 @@ GPU radar signal-processing operator library for the NVIDIA Holoscan SDK: Holosc
 
 **Current phase: HSDK 5 development.** Operator contracts are fully specified
 in `docs/planning/`, and all public C++ operators and example applications use
-the HSDK 5 Graph and Tensor APIs. The temporary local SDK-image workflow and
+the HSDK 5 Graph and Tensor APIs. The staging SDK-image workflow and
 its one remaining packaging limitation are documented in
-[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md). Use the pinned `main-5x` SDK source
+[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md). Use the HSDK 5 `main-5x` SDK source
 for APIs not yet covered by public documentation; do not infer HSDK 5 behavior
 from HSDK 4.x code.
 
@@ -22,7 +22,7 @@ Read before starting non-trivial work, in this precedence order:
 6. [`docs/planning/OPERATOR_DEVELOPMENT.md`](docs/planning/OPERATOR_DEVELOPMENT.md) — how to implement well: hot-path discipline, diagnosis, `[live]`/calibration pitfalls, tests, and performance characterization (lessons from landed operators).
 7. [`docs/planning/TEMPORAL_CONTRACTS.md`](docs/planning/TEMPORAL_CONTRACTS.md) — how the data plane joins the config plane: the measured selector/trigger behavior, the coherence design (shared transmit-time stamp + `Exact{}`), and what was rejected. Read before changing any `contract()`.
 8. [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309) — the single backlog for deferred product, algorithm, performance, and tooling work.
-9. [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md) — the temporary local SDK-image workflow and current SDK packaging limitation.
+9. [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md) — the staging SDK-image workflow and current SDK packaging limitation.
 
 Rules that follow from "lockdown":
 

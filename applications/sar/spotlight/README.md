@@ -56,7 +56,7 @@ holoscan run spotlight \
   --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
-  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
+  --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan \
   --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
 ```
 

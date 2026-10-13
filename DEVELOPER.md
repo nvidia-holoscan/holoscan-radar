@@ -84,27 +84,36 @@ holoscan version
 
 The development Dockerfile installs the same groups. Run the CLI from the
 repository root on the host, or pass `holoscan --project-root <path>` before the
-command. First build the HSDK 5 image from [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md),
+command. First pull the HSDK 5 image as described in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md),
 then build one named development image:
 
 ```bash
-holoscan build-container --base-img <reported-image> --img holoscan-radar-dev:hsdk5
+holoscan build-container --base-img nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13 --img holoscan-radar-dev:hsdk5
 ```
 
 The following host commands reuse that image. The CLI starts a container for
 each command; no interactive container shell is required. Keep the same `--img`
 value throughout because the CLI otherwise derives a different image name for
-each project. The CLI auto-detects a sibling `../holoscan-sdk` checkout and
-mounts its local installation ahead of the SDK baked into the image. The
-`holoscan_DIR` configure argument below selects the validated image SDK even
-when that sibling checkout exists.
+each project. The CLI auto-detects a sibling `../holoscan-sdk` checkout and mounts its
+local installation. If one exists, isolate the staging image's SDK before
+running the commands below:
+
+```bash
+export HOLOSCAN_CLI_DEFAULT_DOCKER_RUN_ARGS='-e HOLOSCAN_SDK_ROOT=/usr -e HOLOSCAN_LIB_PATH= -e CMAKE_PREFIX_PATH=/usr -e PYTHONPATH=/usr/lib/python3.12/site-packages'
+```
+
+The `holoscan_DIR` argument selects the image's CMake package. The environment
+override also makes nested CLI builds select the image SDK and prevents
+transitive dependencies from selecting headers and libraries in the mounted
+checkout. Start with a clean `build/<app>` tree when switching SDK images;
+CMake can retain paths from the previous SDK in its cache.
 
 | Command | What it does |
 | --- | --- |
-| `holoscan build holoscan-radar --language cpp --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan` | Build the C++ module in the container |
-| `holoscan build simo --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-DBUILD_ALL=OFF --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan` | Build SIMO and its dependencies in the container |
-| `holoscan run simo --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-DBUILD_ALL=OFF --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan` | Build and run SIMO in the container |
-| `holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build --cmake-options=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan` | Build and run the test suite in the container |
+| `holoscan build holoscan-radar --language cpp --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan` | Build the C++ module in the container |
+| `holoscan build simo --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-DBUILD_ALL=OFF --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan` | Build SIMO and its dependencies in the container |
+| `holoscan run simo --img holoscan-radar-dev:hsdk5 --no-docker-build --configure-args=-DBUILD_ALL=OFF --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan` | Build and run SIMO in the container |
+| `holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build --cmake-options=-Dholoscan_DIR=/usr/lib/cmake/holoscan` | Build and run the test suite in the container |
 | `holoscan package holoscan-radar --img holoscan-radar-dev:hsdk5 --no-docker-build` | Build the Debian package in the container |
 | `holoscan run-container --img holoscan-radar-dev:hsdk5 --no-docker-build` | Open an interactive container shell when needed |
 
@@ -168,17 +177,17 @@ and builds the module, and runs the suite in that container:
 
 ```bash
 holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build \
-  --cmake-options=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan
+  --cmake-options=-Dholoscan_DIR=/usr/lib/cmake/holoscan
 holoscan test --img holoscan-radar-dev:hsdk5 --no-docker-build \
-  --cmake-options=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
+  --cmake-options=-Dholoscan_DIR=/usr/lib/cmake/holoscan \
   --dryrun --verbose
 ```
 
 If the development image has not been built yet, run the `build-container`
 command above first. The test command can also build it with
-`--base-img <reported-image>` instead of `--no-docker-build`. The
-`--cmake-options` override selects the validated image SDK when the CLI
-also finds an older sibling `holoscan-sdk` installation.
+`--base-img nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13` instead of `--no-docker-build`. The
+`--cmake-options` override selects the image SDK's CMake package. Use
+the environment override above when a sibling SDK installation exists.
 
 What it does, and where to change it:
 

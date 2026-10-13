@@ -4,9 +4,8 @@ GPU-accelerated FMCW and SAR signal-processing operators for NVIDIA Holoscan.
 Operators are implemented in C++/CUDA on MatX and compose through typed ports,
 without pipeline-specific glue between processing stages.
 
-Holoscan Radar currently targets the HSDK 5 `main-5x` development branch. Build
-the local SDK image once before opening the dev container or using the Holoscan CLI; the
-temporary source-build workflow and current packaging limitation are documented
+Holoscan Radar targets HSDK 5. Pull the staging SDK image before opening the dev
+container or using the Holoscan CLI; setup and the current packaging limitation are documented
 in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 
 ## Quick start
@@ -16,18 +15,19 @@ then run these commands on the host. The CLI performs the project build and
 application run in the named development container:
 
 ```bash
-./.devcontainer/build-hsdk5-ea-image.sh \
-  --pin 79dc6cb48e5b571b6f0a6daf2b5dbc783de01b76
-holoscan build-container --base-img holoscan-radar-hsdk5-ea:79dc6cb \
+docker pull nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13
+holoscan build-container --base-img nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13 \
   --img holoscan-radar-dev:hsdk5
+# If ../holoscan-sdk exists, keep its automatic CLI mount out of SDK lookup.
+export HOLOSCAN_CLI_DEFAULT_DOCKER_RUN_ARGS='-e HOLOSCAN_SDK_ROOT=/usr -e HOLOSCAN_LIB_PATH= -e CMAKE_PREFIX_PATH=/usr -e PYTHONPATH=/usr/lib/python3.12/site-packages'
 holoscan build siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
-  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan
+  --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan
 holoscan run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
-  --configure-args=-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan \
+  --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan \
   --run-args=siso_smoke.yaml
 ```
 
