@@ -68,10 +68,24 @@ def normalize_config(config):
     result["metric_policies"] = copy.deepcopy(DEFAULTS["metric_policies"]) | config.get(
         "metric_policies", {}
     )
-    if result["measurement_policy_version"] != 2:
+    if result["measurement_policy_version"] not in {2, 3}:
         raise ValueError("measurement policy changed; create a freshly confirmed session")
+    if result["measurement_policy_version"] == 3:
+        from measurement import EARLY_METRICS, protocol
+
+        result["sampling"] = protocol(result["sampling"])
+        result["protected_metrics"] = sorted(
+            set(result["protected_metrics"])
+            | set(EARLY_METRICS)
+            | {"median_ms", "p90_ms", "p99_ms", "cold_ms", "setup_ms", "override_ms"}
+        )
     if not result.get("operator") or not result.get("policies") or not result.get("editable_scope"):
         raise ValueError("operator, policies, and editable_scope are required")
+    if (
+        type(result.get("campaign_family_size", 1)) is not int
+        or result.get("campaign_family_size", 1) < 1
+    ):
+        raise ValueError("campaign family size must be a positive integer")
     if result["mode"] not in {"assess", "fix", "optimize"} or result["objective"] not in METRICS:
         raise ValueError("invalid mode or objective")
     for name in ("max_candidates", "max_unsuccessful", "pairs"):
@@ -194,7 +208,8 @@ def timing_comparison(config, pairs, calibration, plan=None, calibrate=False):
         min_effect_pct=config["min_effect_pct"],
         max_aa_delta_pct=config["max_aa_delta_pct"],
         max_baseline_spread_pct=config["max_baseline_spread_pct"],
-        family_multiplier=1 + len(config["consumer_policies"]),
+        family_multiplier=config.get("campaign_family_size", 1)
+        * (1 + len(config["consumer_policies"])),
         metric_policies=config.get("metric_policies", {}),
         expected_clock_configuration=config.get("clock_configuration"),
     )
@@ -323,8 +338,12 @@ def comparison_evidence(value, config, context, plan=None):
 
 
 def add_candidate(session, record):
-    if session["config"].get("measurement_policy_version") != 2:
+    if session["config"].get("measurement_policy_version") not in {2, 3}:
         raise ValueError("archived policy; start a freshly confirmed session before optimization")
+    if session["config"].get("measurement_policy_version") == 3:
+        from campaign import validate_admission
+
+        validate_admission(session["config"], verify_current=False)
     if session.get("stop_reason") or stop_reason(session):
         raise ValueError("session stopped or budget exhausted")
     if session["config"]["mode"] == "assess":
@@ -524,15 +543,15 @@ def render_report(session):
         lines += [
             "Compared final retained state against the original baseline.",
             "",
-            "| Case | Metric | Improvement (%) | Familywise 95% Interval (%) | Verdict |",
-            "| --- | --- | --- | --- | --- |",
+            "| Case | Metric | Original ms | Final ms | Improvement (%) | Familywise 95% Interval (%) | Verdict |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
         ]
         for row in timing["results"]:
             lo, hi = row["familywise_ci95_pct"]
             interval = "unresolved pair budget" if lo is None else f"{lo:.3f}, {hi:.3f}"
             lines.append(
                 f"| {' / '.join(row['case'])} | {row['metric']} | "
-                f"{row['improvement_pct']:.3f} | {interval} | {row['verdict']} |"
+                f"{row['before_median']:.6g} | {row['after_median']:.6g} | {row['improvement_pct']:.3f} | {interval} | {row['verdict']} |"
             )
     else:
         lines.append(
@@ -549,12 +568,34 @@ def render_report(session):
             f"- {candidate['id']} {name}: `{gate['path']}` ({gate['sha256']})"
             for name, gate in candidate["gates"].items()
         ]
+    from qualification import checked, timing_table
+
+    def comparisons(evidence):
+        if evidence.get("results"):
+            yield evidence
+        for ref in evidence.get("checks", []):
+            yield from comparisons(checked(ref))
+
+    for candidate in session["candidates"]:
+        for gate in candidate["gates"].values():
+            for comparison in comparisons(checked(gate)):
+                if comparison.get("metric"):
+                    lines += ["", "## " + candidate["id"] + " paired timings", ""] + timing_table(
+                        comparison
+                    )
+                if comparison.get("calibration"):
+                    lines += ["", "## A/A Calibration", ""] + timing_table(
+                        comparison["calibration"]
+                    )
     return "\n".join(lines) + "\n"
 
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser(
+        "campaign", help="Deployment discovery, qualification, baselines and reports"
+    )
     init = commands.add_parser("init")
     init.add_argument("--config", required=True)
     init.add_argument("--confirmed", action="store_true")
@@ -632,7 +673,12 @@ def parser():
 
 
 def main(argv=None):
-    args = parser().parse_args(argv)
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments and arguments[0] == "campaign":
+        from campaign import main as campaign_main
+
+        return campaign_main(arguments[1:])
+    args = parser().parse_args(arguments)
     command = args.command
     if command == "budget":
         config = normalize_config(read_json(args.config))
@@ -694,6 +740,14 @@ def main(argv=None):
         return 0 if passed else 1
     if command == "init":
         config = normalize_config(read_json(args.config))
+        if config["measurement_policy_version"] == 3 and config["mode"] != "assess":
+            from campaign import validate_admission
+
+            validate_admission(config)
+        if config["measurement_policy_version"] == 2 and config["mode"] != "assess":
+            raise ValueError(
+                "version-2 evidence is historical; start a fresh qualified version-3 session"
+            )
         if not args.confirmed:
             raise ValueError("obtain user confirmation of configuration before init --confirmed")
         if Path(args.out).exists():
@@ -802,6 +856,13 @@ def main(argv=None):
     else:
         session = load_session(args.session)
         if command == "plan":
+            if session["config"]["measurement_policy_version"] != 3:
+                raise ValueError(
+                    "historical version-2 sessions cannot start new production candidates"
+                )
+            from campaign import validate_admission
+
+            validate_admission(session["config"], verify_current=False)
             plan = read_json(args.record)
             validate_plan(plan, session["config"])
             if fingerprint(args.root) != plan["before_source_id"]:
@@ -822,6 +883,10 @@ def main(argv=None):
                 "declared_at": time.time(),
             }
         elif command == "candidate":
+            if session["config"]["measurement_policy_version"] != 3:
+                raise ValueError(
+                    "historical version-2 sessions cannot record new production candidates"
+                )
             record = add_candidate(session, read_json(args.record))
             print(f"{record['id']}: {'kept' if record['kept'] else 'rejected'}")
         elif command == "bug":

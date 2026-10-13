@@ -759,8 +759,10 @@ class OptimizationToolsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unchanged predeclared"):
             add_candidate(state, record)
 
-    def test_plan_command_checks_baseline_and_refuses_redeclaration(self):
+    @patch("campaign.validate_admission")
+    def test_plan_command_checks_baseline_and_refuses_redeclaration(self, _admission):
         state = session()
+        state["config"] = normalize_config(state["config"] | {"measurement_policy_version": 3})
         state["config"]["target_cases"] = ["baseline"]
         state["confirmed_config_sha256"] = config_hash(state["config"])
         state_path = self.json_file("plan-session.json", state)

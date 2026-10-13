@@ -22,6 +22,9 @@ METRICS = {
     "p90_ms",
     "p99_ms",
     "max_ms",
+    "early_median_ms",
+    "early_p90_ms",
+    "early_p99_ms",
 }
 
 
@@ -141,6 +144,20 @@ def run_pairs(
     wall_time_s=None,
     expected_clock_configuration=None,
 ):
+    if sampling and sampling.get("raw_frame_times"):
+        from measurement import run_adjacent
+
+        return run_adjacent(
+            before,
+            after,
+            output,
+            pairs,
+            timeout_s,
+            sampling,
+            wall_time_s,
+            expected_clock_configuration,
+            before.get("device_id", "cuda-visible-device-0"),
+        )
     if pairs < 2 or timeout_s <= 0:
         raise ValueError("need at least two pairs and a positive process timeout")
     compatible(before, after)
@@ -280,6 +297,11 @@ def run_pairs(
 def aggregate_isolated(reports, sampling, inventory):
     import copy
 
+    raw = sampling.get("raw_frame_times", False)
+    if raw:
+        from measurement import derive_raw, effective
+
+        reports = [derive_raw(report, sampling) for report in reports]
     result = copy.deepcopy(reports[0])
     settings = result["run_settings"]
     settings.update(
@@ -288,9 +310,15 @@ def aggregate_isolated(reports, sampling, inventory):
         scenarios_completed=len(inventory),
         selected_cases=list(inventory),
         process_mode="isolated",
-        statistic="median_of_repeat_report_metrics",
+        statistic=sampling.get("aggregation", "median") + "_of_repeat_report_metrics",
         initialization_context="fresh_process_and_graph_per_case_repeat",
     )
+    if raw:
+        settings["sampling_by_case"] = {
+            case: {k: effective(sampling, case)[k] for k in ("frames", "repeats")}
+            for case in inventory
+        }
+        settings["measurement_protocol"] = sampling
     grouped = {}
     for report in reports:
         if (
@@ -303,7 +331,10 @@ def aggregate_isolated(reports, sampling, inventory):
             ("frames", "measured_frames"),
             ("scope", "scope"),
         ):
-            if report["run_settings"].get(field) != sampling[option]:
+            expected = sampling[option]
+            if raw and option == "frames":
+                expected = effective(sampling, report["results"][0]["scenario_id"])[option]
+            if report["run_settings"].get(field) != expected:
                 raise ValueError("isolated subprocess sampling changed")
         for field in ("sync_policy", "case_order", "stop_after_s"):
             if report["run_settings"].get(field) != reports[0]["run_settings"].get(field):
@@ -320,7 +351,10 @@ def aggregate_isolated(reports, sampling, inventory):
             grouped.setdefault(key, []).append(row)
     result["results"] = []
     for rows in grouped.values():
-        if len(rows) != sampling["repeats"]:
+        repeats = (
+            effective(sampling, rows[0]["scenario_id"])["repeats"] if raw else sampling["repeats"]
+        )
+        if len(rows) != repeats:
             raise ValueError("incomplete isolated repeat set")
         row = copy.deepcopy(rows[0])
         for entry in rows:
@@ -333,7 +367,14 @@ def aggregate_isolated(reports, sampling, inventory):
                 continue
             if any(value is None for value in values):
                 raise ValueError("isolated metric missing in one repeat")
-            row[metric] = max(values) if metric == "max_ms" else statistics.median(values)
+            aggregate = (
+                statistics.mean if sampling.get("aggregation") == "mean" else statistics.median
+            )
+            row[metric] = max(values) if metric == "max_ms" else aggregate(values)
+        if raw:
+            row.pop("raw_steady_ms", None)
+            row.pop("raw_steady_run_offsets", None)
+            row["frame_diagnostics"] = [entry.get("frame_diagnostics", {}) for entry in rows]
         if "samples" in row:
             row["samples"] = sum(entry["samples"] for entry in rows)
         result["results"].append(row)
@@ -413,6 +454,7 @@ def compare_pairs(
     if any(m not in METRICS for m in protected_metrics):
         raise ValueError("unknown protected metric")
     keys, rows, settings, platform = None, [], None, None
+    raw_units = set()
     for pair in index["pairs"]:
         sides = []
         for side in ("before", "after"):
@@ -428,6 +470,13 @@ def compare_pairs(
                 ):
                     raise ValueError("duplicate isolated subprocess artifact")
                 for child in isolation.get("children", []):
+                    if sampling.get("raw_frame_times"):
+                        unit = str(Path(child["path"]).resolve())
+                        if unit in raw_units:
+                            raise ValueError(
+                                "repeated isolated measurement across paired observations"
+                            )
+                        raw_units.add(unit)
                     if digest(child["path"]) != child["sha256"]:
                         raise ValueError("isolated raw report changed")
                     raw = read_json(child["path"])
@@ -446,6 +495,8 @@ def compare_pairs(
                 ("repeats", "repeats"),
                 ("scope", "scope"),
             ):
+                if sampling.get("raw_frame_times") and option in {"frames", "repeats"}:
+                    continue  # Raw children and the sealed effective map are replayed above.
                 if report["run_settings"][field] != sampling[option]:
                     raise ValueError(f"report differs from confirmed sampling: {option}")
             if (
@@ -524,6 +575,13 @@ def compare_pairs(
             100 * (quantile(values, 0.75) - quantile(values, 0.25)) / statistics.median(values)
         )
         result["stall_count"] = sum(value > 3 * statistics.median(values) for value in values)
+        policy = (metric_policies or {}).get(measure, {})
+        result["limits"] = {
+            "aa_p90_delta_pct": policy.get("max_aa_p90_delta_pct", max_aa_delta_pct),
+            "baseline_iqr_pct": policy.get("max_baseline_iqr_pct", max_baseline_spread_pct),
+        }
+        result["confidence_width_pct"] = None if lo is None else hi - lo
+        result["within_diagnostic_precision_target"] = lo is not None and lo >= -1 and hi <= 1
     target_set = set(targets or [])
     present = {r["case"][1] for r in results if r["metric"] == metric}
     if target_set - present:
@@ -572,7 +630,47 @@ def compare_pairs(
             )
         ]
         passed = not blocked
+    reasons = []
+    if insufficient:
+        reasons.append({"kind": "insufficient_interval_resolution"})
+    for result in results:
+        if {"case": result["case"], "metric": result["metric"]} not in blocked:
+            continue
+        policy = (metric_policies or {}).get(result["metric"], {})
+        for field, limit in (
+            ("aa_p90_delta_pct", policy.get("max_aa_p90_delta_pct", max_aa_delta_pct)),
+            ("baseline_iqr_pct", policy.get("max_baseline_iqr_pct", max_baseline_spread_pct)),
+        ):
+            if result[field] > limit:
+                reasons.append(
+                    {
+                        "kind": "dispersion",
+                        "case": result["case"],
+                        "metric": result["metric"],
+                        "statistic": field,
+                        "observed": result[field],
+                        "limit": limit,
+                    }
+                )
+        lo, hi = result["familywise_ci95_pct"]
+        if lo is not None and (lo > 0 or hi < 0):
+            reasons.append(
+                {
+                    "kind": "directional_bias",
+                    "case": result["case"],
+                    "metric": result["metric"],
+                    "interval": [lo, hi],
+                }
+            )
     return {
+        "blocker_reasons": reasons,
+        "timing_regimes": [
+            {"case": list(key), "side": side_number, "diagnostics": entry["frame_diagnostics"]}
+            for pair in rows
+            for side_number, side in enumerate(pair)
+            for key, entry in side.items()
+            if entry.get("frame_diagnostics")
+        ],
         "passed": passed,
         "status": "validation_blocked" if blocked else "pass" if passed else "unsuccessful",
         "blocked_cases": blocked,
