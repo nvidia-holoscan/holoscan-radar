@@ -150,6 +150,8 @@ radar_add_test(angle_estimation/test_root_music_estimator
     holoscan::root_music_estimator_op
     holoscan::radar_common_spatial_smoothing
     holoscan::radar_common_source_count)
+radar_add_test(angle_estimation/test_root_music_solver EXT .cu
+    holoscan::root_music_estimator_op matx::matx CUDA::cusolver)
 radar_add_test(angle_estimation/test_esprit_estimator
     holoscan::esprit_estimator_op
     holoscan::subarray_selection_op
