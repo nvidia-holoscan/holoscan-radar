@@ -5,8 +5,9 @@ Operators are implemented in C++/CUDA on MatX and compose through typed ports,
 without pipeline-specific glue between processing stages.
 
 Holoscan Radar targets HSDK 5. Pull the staging SDK image before opening the dev
-container or using the Holoscan CLI. Setup and the current packaging limitation
-are documented in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
+container or using the Holoscan CLI. This pre-release image requires
+`nvstaging` as your user org in NGC Catalog. Setup and the current packaging
+limitation are documented in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 
 ## Quick start
 

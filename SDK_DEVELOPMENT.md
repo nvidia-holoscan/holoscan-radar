@@ -13,6 +13,10 @@ not yet documented, but build against this image.
 
 ## Prepare the image
 
+This pre-release image requires `nvstaging` as your **user org** in NGC Catalog.
+Select that user org before authenticating to `nvcr.io`; a successful Docker
+login with a different user org does not grant access to the image.
+
 From the repository root on a host with NGC staging access:
 
 ```bash
