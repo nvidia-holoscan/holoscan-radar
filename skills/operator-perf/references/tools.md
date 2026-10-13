@@ -33,12 +33,12 @@ the example is not permission to optimize or select exact numerical rules:
   "max_unsuccessful": 3,
   "wall_time_s": null,
   "target_ms": null,
-  "measurement_policy_version": 2,
+  "measurement_policy_version": 3,
   "pairs": 20,
   "objective": "median_ms",
   "target_cases": ["baseline-small", "baseline-medium", "baseline-large"],
   "timing_precisions": {},
-  "min_effect_pct": 0.0,
+  "min_effect_pct": 2.0,
   "max_aa_delta_pct": 5.0,
   "max_baseline_spread_pct": 10.0,
   "metric_policies": {
@@ -57,7 +57,12 @@ the example is not permission to optimize or select exact numerical rules:
     "warmup": 5,
     "frames": 50,
     "repeats": 3,
-    "process_mode": "isolated"
+    "process_mode": "isolated",
+    "raw_frame_times": true,
+    "early_frames": 50,
+    "pairing_order": "adjacent_repeat",
+    "aggregation": "median",
+    "case_overrides": {}
   }
 }
 ```
@@ -370,3 +375,25 @@ Final-versus-original evidence must use a separate clean paired measurement;
 also supply `finish --calibration /absolute/original-aa/pairs.json`.
 do not multiply intermediate percentages. Reports preserve suspected bugs first
 and explicitly identify absent cumulative evidence.
+
+## Version 3 And Campaigns
+
+New production sessions require explicit version 3 and a hash-bound full-case
+`benchmark_admission` prepared by the campaign tool. Version 2 remains readable
+for reporting and historical gate replay; its evidence is never upgraded in
+place. Start a freshly qualified, confirmed session to continue production work.
+
+Run `radar_perf.py campaign --help` for discovery, qualification, baseline,
+session preparation, disposition, status, resume and reporting commands. Read
+[qualification](qualification.md) and the campaign skill's
+[configuration reference](../../operator-benchmark/references/configuration.md)
+for budget and admission requirements. `measurement.py`, `qualification.py` and
+`campaign.py` coordinate evidence; they do not edit production operators.
+
+Per-case overrides specify frame/repeat counts, are resolved before execution
+and are sealed in `run_settings.sampling_by_case`. Raw one-repeat children
+record chronological frames and repeat offsets. Pair order alternates adjacent
+A1/A2 executions per repeat and pair; aggregates retain every child reference.
+`paired_precision.py OPERATOR BUILD_DIR ...` runs separate float/double
+executables using archived runtime libraries, verifies matching inventories and
+retains both child reports. Include the wrapper and runtime hashes in manifests.

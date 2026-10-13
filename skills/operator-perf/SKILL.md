@@ -34,23 +34,41 @@ the skill's installation path.
 
 ## Workspace Layout
 
-Keep every spin-off inside the repository checkout, under the git-ignored
-`.worktrees/` directory, grouped by tool, operator, and session:
+Respect the caller's workspace choice. Both layouts are supported:
 
-```text
-.worktrees/operator-perf/<operator>/session-<N>/
-  original/    detached worktree at the baseline commit
-  best/        detached worktree holding the current best
-  candidate/   worktree on the session branch, where edits happen
-  artifacts/   session JSON, manifests, snapshots, gates, reports, scripts
-```
+- **Single checkout:** use a dedicated branch and separate ignored
+  `build-optimization/operator-perf/<operator>/<session>/{original,best,candidate,artifacts}/`
+  directories. Archive executables and resolved runtime libraries before another
+  build. Checkpoint current-best files; restore only through verified receipts.
+- **Worktrees:** use `.worktrees/operator-perf/<operator>/session-<N>/` with
+  original, best, candidate and artifact directories. Create no worktrees when
+  the caller requests the existing checkout.
 
-`<operator>` is the recipe's operator name (for example `fmcw_range_processor`)
-and `<N>` increments per session for that operator. Create worktrees with
-`git worktree add`, never as sibling directories or copies outside the checkout.
-Tell the user the session directory and branch when the session starts and in
-every milestone update. Recorded artifacts embed absolute paths and are
-hash-bound by the session ledger, so do not move or rewrite them mid-session.
+Build identities, runtime resolution, source fingerprints and checkpoint rules
+apply to both layouts. Never overwrite an immutable build. Tell the user the
+branch and session path at milestones. Absolute, hash-bound artifact paths must
+remain fixed during a session. Read [workspace safety](references/workspace.md)
+for restoration and scratch rebuilds.
+
+## Qualify Before Baseline Collection
+
+Use [measurement qualification](references/qualification.md) before expensive
+baselines. Require a positive caller-specified qualification time budget; do
+not silently choose a budget. Separate exploratory calibration, frozen protocol
+selection, disjoint held-out validation, full-case calibration and production
+acceptance. Representative results qualify only measured workloads.
+
+Median aggregation remains the default. Keep five warmup frames and the
+harness's existing process-warmup semantics; capture chronological raw frames
+and boundaries. Version 3 protects median/p90/p99 for the first 50 measured
+frames and the complete window, plus setup, cold and applicable transitions.
+Confidence width and +/-1% precision are descriptive diagnostics, never new
+acceptance gates or evidence of adequate power. Report unresolved regimes and
+blocked cases without extending budgets or relaxing thresholds automatically.
+
+For deployment-wide inventory, qualification and reporting use
+[operator-benchmark](../operator-benchmark/SKILL.md). It delegates candidate
+edits and acceptance to this skill.
 
 ## Invariants
 
@@ -78,7 +96,7 @@ are configurable. Existing confirmation remains valid until scope or policy
 changes. Assessment does not need an editing-session confirmation.
 
 A turn means one attempted candidate, not one chat message or tool call.
-Calibrate each baseline/metric with repeated A/A runs before editing. Timing
+Qualify the protocol first, then calibrate every full-matrix baseline/metric with repeated A/A runs before editing. Timing
 precision coverage is separate from output equivalence. A noisy calibration
 blocks affected validation; it does not justify accepting differences. Follow
 the reference's familywise gates and report insufficient measurement power.

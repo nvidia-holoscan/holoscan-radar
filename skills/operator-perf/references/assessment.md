@@ -1,5 +1,13 @@
 # Assessment
 
+## Measurement Qualification
+
+Qualify before collecting the full baseline. Read
+[qualification](qualification.md) for bounded exploration, frozen selection,
+disjoint validation, early-window protection and blocker reporting. A pilot
+recommendation does not qualify unmeasured cases. Preserve historical A/A and
+full-case calibration evidence for original-versus-final comparisons.
+
 ## Preflight And Matrix
 
 Use the host Holoscan CLI with the pinned HSDK 5 image, as documented in
@@ -56,8 +64,9 @@ baseline dispersion, both configurable. Cold/setup/override have separate
 proposed defaults and may need evidence-backed policies and more samples.
 Directional familywise A/A intervals still block bias even when the expected
 gain threshold is larger. Maxima, full ranges and 3x-median stall counts remain
-visible; no samples are dropped. Protect `p90_ms`, `p99_ms` or `max_ms` explicitly
-when tail behavior is part of the objective. Robust diagnostics do not prove
+visible; no samples are dropped. Version 3 always protects `p90_ms`, `p99_ms` and their first-50-frame
+counterparts. Retain `max_ms` and stall diagnostics; protect maxima explicitly
+when required by the confirmed policy. Robust diagnostics do not prove
 stationarity; inspect distributions, drift and mode changes too.
 A failed calibration is **validation blocked**, not proof of an SDK bug.
 Rerun calibration on the current best after an accepted candidate. Keep the

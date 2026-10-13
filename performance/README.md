@@ -101,6 +101,52 @@ through `radar_add_yaml_perf`; run validation, Minimal, and relevant Overrides
 smokes. Add an `adapter.cpp` only when a declared component cannot encode
 a valid contract value or sizing rule.
 
+## Precision and native recipe snapshots
+
+Each of the 26 typed adapters builds two executables: `perf_<operator>` for
+float and `perf_<operator>_double` for double. Precision remains a compile-time
+operator instantiation. Both executables consume the same canonical recipe;
+the double build selects paired float64/complex128 input representations and
+reports `precision: double`. Discrete tensors and precision-agnostic live
+configuration retain their declared types.
+
+Registered recipes also accept `--verify-output <path>`. This runs the selected
+cases through `holoscan::testing::NativeOperatorTest`, outside the timing Graph,
+and exports owning output snapshots with observed sequence, capture time,
+clock, shape, dtype, and bytes. Descriptor content is exported separately from
+transport storage. One-frame live cases include a match and following miss;
+cached cases additionally prime the changed configuration. Deliberately unwired
+outputs remain named in the export. This recipe coverage complements the
+analytic, boundary/error, optional-wiring, and ownership tests; it does not
+replace them. Snapshot limits come from authored output bounds.
+
+```bash
+./build/performance/cpp/perf_clutter_filter_double --scope overrides \
+  --output clutter-double.json
+./build/performance/cpp/perf_clutter_filter --scope overrides \
+  --verify-output clutter-native-float.json
+```
+
+Native staging copies imported generator buffers into SDK-owned Tensor storage
+with a producer-readiness contract. Those copies never enter timing runs.
+Floating data and supplied validity masks vary across three frames to expose
+stale output reuse; indices and labels retain valid fixture values. Capture both
+precision executables and retain their individual exports when assembling an
+optimization session's complete verification evidence. Campaign captures use a
+fresh process per case and precision, independently of timing runs.
+
+## Raw frame timings
+
+Pass `--raw-frame-times` to include chronological `raw_steady_ms` and
+`raw_steady_run_offsets` in each compute row. The offsets delimit individual
+Graph repeats in the concatenated steady samples. Warmup, changed and reversion
+frames are excluded using the same rules as the existing summary statistics.
+Export and copying happen after Graph execution; ordinary reports omit these
+fields. Use `--repeats 1` in a fresh process for each isolated repeat. Increasing
+`--repeats` inside one executable instead pools multiple Graph sessions within
+that process. Raw frames retain their order and are not independent process
+replicates.
+
 ## YAML profiles and scopes
 
 All C++ tools read their colocated `recipe.yaml` automatically from the
@@ -113,10 +159,18 @@ parameterizations; `overrides` includes Limited and every live port alone at
 every size; `moderate` expands Limited with selected live cases; `thorough`
 includes all cases. An override source emits its sideband once, on the changed
 frame, so the following frame takes Params through Exact + SafeDefault.
-The `fmcw_range_processor` and `fmcw_doppler_processor` Thorough suites include
-cached `nfft` transitions: frame zero primes the new FFT plan during warmup,
-then the measured change reuses it. Their unseen cases make the same change
-without priming. Cached cases require at least one warmup frame.
+Thorough suites include primed revisits of live configurations: frame zero
+publishes the changed configuration during warmup, subsequent misses take Params,
+and the measured override revisits the changed value. Unseen cases make the same
+change without priming. Cached cases require at least one warmup frame; the label
+describes prior configuration use, without asserting an implementation cache hit.
+
+Cases may set `output_mode` to `all` or `minimal`. `all` connects configured
+unwired Tensor outputs; `minimal` disconnects only the recipe's explicit
+`optional_tensor_outputs`, retaining required outputs and descriptor drains.
+An optional paired timed output then becomes unwired. Default `configured`
+wiring comes from the base recipe. These variants keep public port names and
+output policies explicit in native exports.
 
 Check every YAML case and typed adapter conversion before running a Graph:
 
@@ -150,11 +204,13 @@ bindings. The production Python package and its tests are separate from this
 harness. A future Python Graph measurement tool should consume the same recipes
 when bindings become available.
 
-The retired Python matrices included two performance paths not yet represented
-by the current C++ recipes: CFAR full-axis peak suppression on a rank-four
-input and FeatureAssembly's score/AoA feature packs. C++ unit tests cover those
-operator behaviors, but the YAML performance suites do not time them. Adding
-them requires extending the respective typed recipe fixtures and adapters.
+The C++ recipes include CFAR full-axis peak suppression on rank-four inputs
+and FeatureAssembly score/AoA feature packs at all three sizes. Feature packs
+stage only the inputs required by their selected feature list. DopplerNotch and
+DDM's optional velocity-axis fixtures use a uniformly spaced center-zero
+physical axis rather than a power-map pattern. SubarraySelection also covers
+supplied bool and uint8 masks, with mask publication before the snapshot trigger,
+and optional mask-output wiring.
 
 ## Automated optimization
 
@@ -239,3 +295,35 @@ Run from this checkout, or give the agent the absolute path to `SKILL.md`.
 Tool paths resolve from the active repository, not the installed skill folder.
 No provider-specific metadata is required. Installation outside this repository
 is not performed automatically.
+
+## Deployment-qualified campaigns
+
+Use [operator-benchmark](../skills/operator-benchmark/SKILL.md) to inventory a
+set of operators, qualify affordable measurement protocols, freeze selection,
+validate on held-out runs, then collect full-case baselines and reports. It uses
+[operator-perf](../skills/operator-perf/SKILL.md) for assessments and confirmed
+candidate sessions. Campaigns default to assessment-only; missing harnesses and
+unstable or uncovered cases remain visible as blocked scopes.
+
+```bash
+python3 performance/optimization/radar_perf.py campaign --help
+python3 -m unittest discover -s performance/optimization/tests -v
+```
+
+Version 3 captures chronological raw frames with isolated repeat boundaries,
+alternates adjacent A/A or A/B processes and protects first-50-frame
+median/p90/p99 alongside the complete window and initialization/live costs.
+Qualification requires an explicit positive caller budget. Sampling exploration
+starts at 50/500/2,000 frames and 3/7 repeats, subject to cost and budget; these
+are exploration levels, not universal benchmark defaults. Median aggregation
+remains the default. Optional exploratory means require frozen policy and fresh
+validation. Confidence width and +/-1% precision are diagnostics, not gates.
+
+The maintained `measurement.py`, `qualification.py` and `campaign.py` tools
+record forecasts, budget ledgers, frozen selections, disjoint validation,
+per-case sampling, clocks, owned subprocesses, device locks and hashed resume
+receipts. Reports include absolute A/A milliseconds, variability/limits,
+confidence intervals and partial coverage. Version-2 artifacts remain usable
+for historical reports/replay; new production sessions require fresh version-3
+qualification, full-case admission and confirmed configurations. Both existing
+checkout and worktree layouts preserve immutable builds and archived runtimes.
