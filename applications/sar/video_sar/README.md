@@ -24,7 +24,9 @@ typed `stream_boundary` is joined to the aperture manager on the same tick.
 
 ## Build and offline fixture
 
-Build in the pinned HSDK 5 GPU image with Python application bindings disabled:
+For this targeted fixture test, first open the devcontainer or run
+`./holoscan-radar run-container` on the **host**. Then, from the
+repository root **inside the container**, run:
 
 ```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=ON
@@ -41,8 +43,8 @@ real collections.
 
 The Houston preset expects `/tmp/sar/mode02_houston_1p0m.cphd` inside the container. The commands below write the subset to the host `data/sar/` directory and mount that directory at `/tmp/sar`. The recipe fetches the full dwell and central 16,753-sample FX subband; the output is about 27 GiB. The YAML retains 8262 pulses, emits every 4096, and forms a grid capped at 6144 pixels per side. Disk and GPU memory requirements are substantial.
 
-From the repository root, with the Holoscan CLI installed and the pinned
-`holoscan-radar-dev:hsdk5` image available, run:
+From the repository root **on the host**, with the Holoscan CLI installed
+and NGC staging access configured, run:
 
 ```bash
 python3 -m pip install -r tools/sar_data/requirements.txt

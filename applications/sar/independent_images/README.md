@@ -30,7 +30,9 @@ the current values, then installs the next values after `EmitAndReset`.
 
 ## Build and offline fixture
 
-Build in the pinned HSDK 5 GPU image with Python application bindings disabled:
+For this targeted fixture test, first open the devcontainer or run
+`./holoscan-radar run-container` on the **host**. Then, from the
+repository root **inside the container**, run:
 
 ```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=ON
@@ -47,8 +49,8 @@ real collections.
 
 The preset rotates six distinct Umbra SNAPSHOT CPHDs under `/tmp/sar/mode5/`. Run `python3 tools/sar_data/pull_cphd.py --app independent_images --list` to inspect their paths, then use the commands below to download about 10.5 GiB to the host `data/sar/mode5/` directory and mount it at `/tmp/sar`. It derives an IARP-centred ENU grid per file and chooses a common padded FFT length. The ordered `cphd.path` list and `pixel_scale` list correspond by index. A single-CPHD CLI override is rejected because the topology requires multiple collections.
 
-From the repository root, with the Holoscan CLI installed and the pinned
-`holoscan-radar-dev:hsdk5` image available, run:
+From the repository root **on the host**, with the Holoscan CLI installed
+and NGC staging access configured, run:
 
 ```bash
 python3 tools/sar_data/pull_cphd.py --app independent_images \

@@ -2,7 +2,10 @@
 
 The C++ tools measure one HSDK 5 operator in a source → operator → terminal-sink
 Graph. Results are diagnostic measurements, not timing pass/fail thresholds.
-The terminal sink synchronizes the GPU. A process warmup precedes the matrix;
+The terminal sink synchronizes the GPU. Run the executable commands in this
+guide **inside a development container**, after configuring a performance build
+as shown in the [developer guide](../DEVELOPER.md#performance-characterization).
+A process warmup precedes the matrix;
 each scenario then runs three independent Graph sessions by default, with five
 warmup frames and fifty steady frames per session. The report separates setup,
 first-frame, steady latency, changed-frame latency, achieved frames/s, and

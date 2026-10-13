@@ -88,6 +88,10 @@ Invariants: leading named axes are processed independently (collapsed to a batch
 
 Harness: `performance/operators/fmcw/fmcw_range_processor/recipe.yaml` defines small, medium, and large chirps × samples profiles, curated parameter cases, and one-frame `[live]` transitions, including cached and unseen FFT lengths. Its colocated `adapter.cpp` supplies contract-specific values. No measured numbers are recorded in-tree; run the harness for timings.
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build -R perf_fmcw_range_processor_smoke
 ```

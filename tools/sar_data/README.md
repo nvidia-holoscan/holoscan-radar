@@ -5,13 +5,15 @@ SAR applications. They are not imported by an operator or application at run
 time. CTest uses a C++ CPHD generator and does not install these dependencies
 or download public collections.
 
-Install the optional dependencies in a Python environment of your choice:
+On the **host**, install the optional dependencies in a Python environment
+of your choice:
 
 ```bash
 python3 -m pip install -r tools/sar_data/requirements.txt
 ```
 
-On the pinned SDK container, which lacks `ensurepip`, a local target also works:
+If preparing data **inside a development container**, the pinned SDK image
+lacks `ensurepip`; a local target also works:
 
 ```bash
 python3 -m pip install --target .cache/sar-data-python -r tools/sar_data/requirements.txt
@@ -20,7 +22,7 @@ export PYTHONPATH="$PWD/.cache/sar-data-python${PYTHONPATH:+:$PYTHONPATH}"
 
 ## Host CLI data layout
 
-Run these commands from the repository root. The shipped YAML presets refer to
+Run these commands from the repository root **on the host**. The shipped YAML presets refer to
 `/tmp/sar` **inside the app container**. Save downloads under the ignored host
 `data/sar/` directory, then pass
 `--docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"`
@@ -47,14 +49,14 @@ read-only mount; if `dump: true` writes next to a CPHD, set a writable
 
 ## Public collection downloads
 
-List a manifest without touching the network:
+On the **host**, list a manifest without touching the network:
 
 ```bash
 python3 tools/sar_data/pull_cphd.py --app tiled_strip --list
 ```
 
-Download the Capella Imperial Valley CPHD used by both strip apps, or the six
-Umbra collections used by independent images:
+On the **host**, download the Capella Imperial Valley CPHD used by both strip
+apps, or the six Umbra collections used by independent images:
 
 ```bash
 python3 tools/sar_data/pull_cphd.py --app tiled_strip --dest data/sar/imperial
@@ -76,7 +78,7 @@ direct `curl` command.
 ## Houston video subset
 
 The video preset expects `/tmp/sar/mode02_houston_1p0m.cphd` inside the
-container. Create it under the host `data/sar/` directory without downloading
+container. On the **host**, create it under `data/sar/` without downloading
 the full 110 GiB signal block:
 
 ```bash
@@ -100,11 +102,21 @@ and dimensions. Passing that test does not validate real-collection focus.
 
 ## Generated local subset check
 
-After building the C++ fixture generator in the pinned GPU image, a small
-local subset can exercise the same CLI without fetching public data:
+A small local subset can exercise the data tool without fetching public
+data. First open the devcontainer or run `./holoscan-radar run-container`
+**on the host**, then build the C++ fixture generator **inside the container**:
 
 ```bash
+cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
+cmake --build build --target generate_cphd_fixture
 ./build/tests/cpp/generate_cphd_fixture build/tests/cpp/generated_sar_smoke.cphd
+```
+
+The repository is mounted into the container, so the generated file is also
+available **on the host**. With the optional Python dependencies installed,
+run:
+
+```bash
 python3 tools/sar_data/subset_cphd.py \
   --source build/tests/cpp/generated_sar_smoke.cphd \
   --pulse-count 3 --sample-count 4 -o build/tests/cpp/subset_local.cphd

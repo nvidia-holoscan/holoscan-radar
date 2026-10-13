@@ -17,16 +17,17 @@ flowchart LR
     Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
 ```
 
-## Build and run
+## Run from the host
+
+From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=OFF -DAPP_simo=ON
-cmake --build build --target simo
-./build/applications/fmcw/simo/cpp/simo
+./holoscan-radar run simo --run-args=simo_smoke.yaml
 ```
 
-The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset intentionally omits it, uses the constant-amplitude analytic model, and emits a warning.
+This runs the two-frame headless smoke preset. Run
+`./holoscan-radar run simo` on a host with a display for the normal preset.
 
-The executable defaults to `config/simo.yaml`. Pass `config/simo_smoke.yaml` as the first argument for the two-frame, headless single-target smoke scene.
+The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset intentionally omits it, uses the constant-amplitude analytic model, and emits a warning.
 
 Simulator-backed sources default `app.scene_visibility` to `front_half_space`, with radar-local `+x` as boresight. Select `frustum` with explicit horizontal/vertical FOVs in radians, or `all` to restore isotropic target synthesis. This binary coverage gate is separate from relative range loss and does not model antenna gain.

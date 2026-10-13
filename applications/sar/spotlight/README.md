@@ -24,7 +24,9 @@ typed `stream_boundary` is joined to the aperture manager on the same tick.
 
 ## Build and offline fixture
 
-Build in the pinned HSDK 5 GPU image with Python application bindings disabled:
+For this targeted fixture test, first open the devcontainer or run
+`./holoscan-radar run-container` on the **host**. Then, from the
+repository root **inside the container**, run:
 
 ```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=ON
@@ -41,8 +43,8 @@ real collections.
 
 The shipped Atlanta preset selects pulses `[91273, 102773)` from a 28.59 GiB Umbra CPHD, uses a fixed 8192 × 8192 ENU grid, and runs double-precision formation. Download the CPHD to the host `data/sar/` directory below; the CLI mounts it at the YAML's `/tmp/sar/` path in the container. The CPHD must supply the PVP fields required by `CPHDReaderOp`; the preset assumes its reference position and sample spacing.
 
-From the repository root, with the Holoscan CLI installed and the pinned
-`holoscan-radar-dev:hsdk5` image available, run:
+From the repository root **on the host**, with the Holoscan CLI installed
+and NGC staging access configured, run:
 
 ```bash
 mkdir -p data/sar

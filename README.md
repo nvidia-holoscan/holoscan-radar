@@ -11,8 +11,8 @@ packaging limitation are documented in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md
 
 ## Quick start
 
-Set your NGC Catalog user org to `nvstaging`, install the development CLI,
-then run the two-frame headless example from the repository root:
+On the **host**, set your NGC Catalog user org to `nvstaging`, then run this
+from the repository root. The CLI starts a container for the build and app:
 
 ```bash
 uv sync
@@ -25,17 +25,12 @@ image separately, run `./holoscan-radar build-container`. For the 250-frame
 visualization preset, run `./holoscan-radar run siso` on a host with a display.
 See [`DEVELOPER.md`](DEVELOPER.md#holoscan-cli) for CLI installation alternatives.
 
-For an offline SAR smoke run, configure testing and run the generated-fixture
-CTest cases. The five shipped SAR YAML files are real-collection presets and
-require local CPHD data before direct execution:
-
-```bash
-ctest --test-dir build -R '^Sar_.*_(smoke|viz)$' --output-on-failure
-```
-
-Start with the [SAR application index](applications/sar/README.md), then the
-[CPHD preparation guide](tools/sar_data/README.md) for real data. The C++
-fixture checks graph execution; it does not validate focus on public collects.
+For offline SAR fixture checks, run `./holoscan-radar test` on the host; it
+includes the registered SAR smokes. The shipped SAR YAML files are real-data
+presets and need local CPHD data before direct execution. See the
+[SAR application index](applications/sar/README.md) and
+[CPHD preparation guide](tools/sar_data/README.md). The fixture checks graph
+execution, not focus on public collections.
 
 ## Operator groups
 
@@ -77,49 +72,25 @@ Application READMEs include the exact graph and runnable commands. Shared graph
 driving, simulation sources, reporting, and visualization support lives in
 [`applications/common`](applications/common/README.md).
 
-## Building
+## Building and testing
 
-Requirements:
-
-| Dependency | Requirement |
-| --- | --- |
-| Holoscan SDK | HSDK 5 staging image |
-| CUDA Toolkit | 13.x |
-| CMake | 3.31 or newer |
-| C++ compiler | C++20-capable GCC 11 or newer |
-| NVIDIA GPU | Required for operators, applications, and C++ tests |
+Run these commands from the **host**; the CLI builds and runs in containers:
 
 ```bash
-cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
-cmake --build build -j"$(nproc)"
+./holoscan-radar build holoscan-radar --language cpp
+./holoscan-radar test
 ```
 
-Python operator bindings are temporarily unavailable because the current SDK staging
-image does not export the binding component they require. The current CMake build
-therefore does not register the Python test suites, and a Python-enabled wheel
-cannot be built from this image. See [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
+The development image supplies the HSDK 5 SDK, CUDA toolkit, and C++ build tools.
+A CUDA-capable NVIDIA GPU is required for operators, apps, and C++ tests.
+Python operator bindings are temporarily unavailable in this image; see
+[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 
-## Testing
-
-```bash
-ctest --test-dir build --output-on-failure -LE performance
-pre-commit run --all-files
-```
-
-Monte Carlo statistical tests carry the `statistical` label. Performance tests
-are characterization tools rather than latency gates:
-
-```bash
-cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PERFORMANCE=ON
-cmake --build build -j"$(nproc)"
-ctest --test-dir build --output-on-failure -L performance
-./build/performance/cpp/perf_cfar_detector --full
-```
-
-The 26 C++ performance binaries read colocated YAML recipes under
-`performance/operators/` and report setup, first-frame, steady-state, and
-applicable live-update latencies. Results are meaningful only on the machine
-and GPU where they were captured. See [performance/README.md](performance/README.md).
+For manual CMake and targeted CTest work **inside** a development container,
+see [`DEVELOPER.md`](DEVELOPER.md#inside-a-development-container). The same
+guide covers host-side lint. Performance measurements and their container-side
+build commands are documented in [`DEVELOPER.md`](DEVELOPER.md#performance-characterization)
+and [performance/README.md](performance/README.md).
 
 ## Project references
 

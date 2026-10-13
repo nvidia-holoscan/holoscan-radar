@@ -41,17 +41,18 @@ also falls back to Beamscan. Repeated range-Doppler indices therefore
 intentionally gather the same range, velocity, and score for each resolved
 angle.
 
-## Build and run
+## Run from the host
+
+From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=OFF -DAPP_adaptive_aoa=ON
-cmake --build build --target adaptive_aoa
-./build/applications/fmcw/adaptive_aoa/cpp/adaptive_aoa
+./holoscan-radar run adaptive_aoa --run-args=adaptive_aoa_smoke.yaml
 ```
 
-The executable defaults to `config/adaptive_aoa.yaml`. Pass
-`config/adaptive_aoa_smoke.yaml` as the first argument for the two-frame,
-headless close-pair smoke scene.
+This runs the two-frame headless smoke preset. Run
+`./holoscan-radar run adaptive_aoa` on a host with a display for the normal preset.
+
+The smoke preset demonstrates a close target pair.
 
 Set `app.aoa_algorithm` to exactly one of `music`, `root_music`, `esprit`, or
 `mvdr`. Selection is fixed for the process lifetime, and only that estimator

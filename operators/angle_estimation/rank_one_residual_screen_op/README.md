@@ -95,6 +95,10 @@ Steady work is `O(num_items × num_channels × num_snapshots)` plus a linear sel
 
 `performance/operators/angle_estimation/rank_one_residual_screen/adapter.cpp` sweeps item, channel, snapshot, selection fraction, and live geometry while draining every output and reporting process warmup, setup/cold, and steady timing.
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build-perf-check -R perf_rank_one_residual_screen_smoke
 ```

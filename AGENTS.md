@@ -120,23 +120,32 @@ axis or geometry grid is allowed, but must be commented as a read-only mirror.
 
 ## Build, test, lint
 
-See [`DEVELOPER.md`](DEVELOPER.md) for detail. Quick reference:
+See [`DEVELOPER.md`](DEVELOPER.md) for detail. Use the host CLI for the
+usual build, app, and test workflow; it starts containers to do the work:
 
 ```bash
-# Configure + build in the HSDK 5 devcontainer. find_package(holoscan) must
-# resolve the pinned 5.x SDK; this branch has no HSDK 4.x compatibility layer.
+uv sync
+./holoscan-radar run siso --run-args=siso_smoke.yaml
+./holoscan-radar test
+```
+
+For direct CMake debugging, open the devcontainer or run
+`./holoscan-radar run-container` **on the host**. Then, from the repository
+root **inside the container**:
+
+```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j"$(nproc)"
-
-# C++ tests
 ctest --test-dir build --output-on-failure -LE performance
+```
 
-# Python bindings and pytest registration are disabled by the current SDK
-# image; see SDK_DEVELOPMENT.md. When enabled, run in the GPU container with
-# HOLOSCAN_RADAR_BUILD_DIR set to the build tree.
+A CUDA-capable NVIDIA GPU is required. Python bindings and pytest registration
+are disabled by the current SDK image; see `SDK_DEVELOPMENT.md`. For lint, run
+these commands **on the host** from the repository root. Activate `.venv` so
+the metadata hook imports the pinned CLI:
 
-# Lint — CI runs exactly this on every PR; run it before pushing. The lint
-# requirements pin pre-commit plus the CLI that the metadata hook imports.
+```bash
+source .venv/bin/activate
 python -m pip install -r utilities/requirements.lint.txt
 pre-commit run --all-files
 ```

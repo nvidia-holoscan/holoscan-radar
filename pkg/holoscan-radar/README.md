@@ -4,7 +4,7 @@ This directory defines the Debian package for `holoscan-radar`.
 
 ## Usage
 
-From the repository root:
+From the repository root **on the host**; the CLI builds the package in a container:
 
 ```bash
 ./holoscan-radar package holoscan-radar --pkg-generator DEB

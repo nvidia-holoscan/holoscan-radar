@@ -109,6 +109,10 @@ Planning is `O(num_items + num_selected × source_count)` and scatter is `O(num_
 
 `performance/operators/detection/multi_source_expansion/adapter.cpp` sweeps original rows, selected fraction, sources per selected row, and index width while draining both outputs and reporting warmup, setup/cold, and steady timing.
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build-perf-check -R perf_multi_source_expansion_smoke
 ```

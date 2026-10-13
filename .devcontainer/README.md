@@ -28,15 +28,20 @@ Passwordless `sudo` is enabled for `dev`, matching common dev-container practice
 Treat the container as a development environment: code and tools you run inside it
 can escalate to root within the container.
 
-This non-root workflow is specific to the dev container. The
-`./holohub run-container` path intentionally keeps the Dockerfile's default root
-user for compatibility with the CLI and packaging flows, so files created through
-that path may have different ownership behavior on bind mounts.
+This non-root workflow is specific to the dev container. Running
+`./holoscan-radar run-container` from the host opens an interactive shell with
+the Dockerfile's default root user, so files created there may have different
+ownership on bind mounts.
 
 If your host UID/GID change, rebuild the container (*Dev Containers: Rebuild
 Container*) so the `dev` user is recreated with the new ids.
 
 ## Opening it
+
+Run these entry commands **on the host**. Once inside the devcontainer, run
+CMake, CTest, or built executables directly from the repository root; see the
+[developer guide](../DEVELOPER.md#inside-a-development-container). The host
+`./holoscan-radar run <app>` path is described separately in that guide.
 
 - **VS Code / Cursor:** *Dev Containers: Reopen in Container* from the command palette.
 - **CLI:** `devcontainer up --workspace-folder .`

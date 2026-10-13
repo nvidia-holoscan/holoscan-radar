@@ -126,6 +126,10 @@ Thin operator over the public `radar_common/reduce/` group-by-label primitive (`
 
 Harness: `performance/operators/detection/detection_reduction/adapter.cpp` (Graph triple-in, both outputs consumed). Axes: detection count, cluster count, policy {first, peak, medoid, weighted_mean}. Live-override timing is not measured. No measured numbers are recorded in-repo.
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build -R perf_detection_reduction_smoke
 ```

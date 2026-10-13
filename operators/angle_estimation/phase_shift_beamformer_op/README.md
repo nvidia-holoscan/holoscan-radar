@@ -113,6 +113,10 @@ Cold / first unseen steering key: host taper + per-beam `boundary_to_canonical`,
 
 Harness: `performance/operators/angle_estimation/phase_shift_beamformer/adapter.cpp`. Size ladder `xs`…`xl` (channels × `num_az` × `num_el` × RD extent). Every selected size runs four isolated inline-override scenarios: `array_geometry`, `az_coordinates`, `el_coordinates`, and `array_taper`. The source co-emits the complete live bundle before the triggering `rd_maps`; one value changes mid-session, and the report records `override_ms` / `override_delta_ms` against pre-override steady state. No reference results are checked in; run:
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build -R perf_phase_shift_beamformer_smoke
 ```

@@ -61,8 +61,8 @@ holoscan-radar/
 ## Holoscan CLI
 
 The development-only `cli` and `test` groups in [`pyproject.toml`](pyproject.toml)
-pin the Holoscan CLI and Python CTest dependencies. With Python 3.11+ available,
-install them from the repository root using uv:
+pin the Holoscan CLI and Python CTest dependencies. On the **host**, with
+Python 3.11+ available, install them from the repository root using uv:
 
 ```bash
 uv sync
@@ -80,12 +80,14 @@ python3.12 -m venv .venv
 ./holoscan-radar version
 ```
 
-The development Dockerfile installs the same groups. From the repository root,
-use `./holoscan-radar` to run the pinned CLI; the wrapper prefers `.venv`
-without requiring activation. Authenticate to NGC as described in
+The development Dockerfile installs the same groups. Run the following
+commands from the **host** at the repository root. The wrapper prefers the
+pinned CLI in `.venv` without requiring activation; the CLI performs the build,
+run, and test work in containers. Authenticate to NGC as described in
 [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md), then use the commands below. The CLI
 builds the project image when needed and tags it from the project and branch.
-`./holoscan-radar build-container` builds the image separately if desired.
+`./holoscan-radar build-container` prepares the image separately when you
+want to inspect or reuse it before building an app; it is not a prerequisite.
 
 | Command | What it does |
 | --- | --- |
@@ -107,22 +109,27 @@ the selected environment and run its `holoscan` command there.
 
 ---
 
-## Building directly with CMake inside the container
+## Inside a development container
 
-For manual debugging in an interactive development container:
+For manual CMake work, first open the devcontainer or run
+`./holoscan-radar run-container` **on the host**. Then run the following
+commands **inside that container**, from the repository root:
 
 ```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j"$(nproc)"
 ```
 
-Run C++ tests:
+Run the C++ tests or a built SISO executable inside the same container:
 
 ```bash
 ctest --test-dir build --output-on-failure -LE performance
+./build/applications/fmcw/siso/cpp/siso \
+  build/applications/fmcw/siso/cpp/siso_smoke.yaml
 ```
 
-Run all five SAR fixture and headless visualization paths without public data:
+Run all five SAR fixture and headless visualization paths inside the same
+container without public data:
 
 ```bash
 ctest --test-dir build -R '^Sar_.*_(smoke|viz)$' --output-on-failure
@@ -150,9 +157,27 @@ target and bindings are enabled, run the Python suite with:
 HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v
 ```
 
+### Performance characterization
+
+Run these commands **inside** the development container after opening it as
+described above. These are diagnostic measurements, not pass/fail latency
+thresholds:
+
+```bash
+cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PERFORMANCE=ON
+cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure -L performance
+./build/performance/cpp/perf_cfar_detector --full
+```
+
+The 26 C++ performance tools read colocated YAML recipes and report setup,
+first-frame, steady-state, and live-update latencies. Results depend on the
+GPU and host. See [performance/README.md](performance/README.md) for scopes,
+recipes, and output formats.
+
 ---
 
-## Running the full suite with `./holoscan-radar test`
+## From the host: full test suite
 
 From the host, `./holoscan-radar test` builds the project image if needed,
 configures and builds the module, and runs the suite in a container:
@@ -202,7 +227,16 @@ completed under Xvfb in the pinned environment.
 
 ---
 
-## Formatting and lint
+## From the host: formatting and lint
+
+Run lint from the repository root **on the host**. Activate `.venv` for these
+commands because the metadata hook imports the Holoscan CLI from the active
+Python environment:
+
+```bash
+source .venv/bin/activate
+python -m pip install -r utilities/requirements.lint.txt
+```
 
 C++ and CUDA formatting is defined by `.clang-format` and pinned to clang-format 18.1.8
 through pre-commit. The policy uses a 100-column limit. Run the authoritative formatter and

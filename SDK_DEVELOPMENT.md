@@ -30,8 +30,9 @@ test commands also build it when needed. The devcontainer uses the same base
 image. Rebuild and reopen it when switching from the former locally built SDK
 image.
 
-Use the repository's `./holoscan-radar` wrapper on the host. It selects the
-staging base image and uses the CLI installed in `.venv` when available. If a
+Run the repository's `./holoscan-radar` wrapper **on the host**. It selects
+the staging base image and uses the CLI installed in `.venv` when available.
+Each command below starts a container to do its work. If a
 sibling `../holoscan-sdk` checkout exists, the CLI still mounts it; the
 wrapper selects the image SDK for nested builds.
 
@@ -41,7 +42,9 @@ wrapper selects the image SDK for nested builds.
 ./holoscan-radar test
 ```
 
-`./holoscan-radar run-container` opens an interactive shell if needed. The CLI
+Run `./holoscan-radar run-container` on the host to open a shell for direct
+CMake or CTest work; those commands then run inside the container. See the
+[interactive workflow](DEVELOPER.md#inside-a-development-container). The CLI
 tags images from the project and branch automatically. Do not pass `--local` to
 the host commands: that flag runs the build or application on the host instead
 of in the container. Start with a clean `build/<app>` tree when switching SDK

@@ -112,6 +112,10 @@ Cold / first unseen steering key: device weight/grid build (same weight helper a
 
 Harness: `performance/operators/angle_estimation/beamscan_estimator/adapter.cpp` (Graph). Size ladder `xs`…`xl` (channels × detections × scan grid). Every selected size runs five isolated inline-override scenarios and reports `override_ms` / `override_delta_ms` for geometry, azimuth grid, elevation grid, taper, and interpolation. Optional `is_valid` is omitted from performance runs. No reference results are checked in; run:
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build -R perf_beamscan_estimator_smoke
 ```

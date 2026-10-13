@@ -32,14 +32,17 @@ ddm_dense_demultiplex: {}
 
 The normal linear and nonlinear presets enable relative monostatic free-space range loss with a 100 m reference. The matching `_smoke.yaml` files omit range loss, use the constant-amplitude analytic model with a warning, and otherwise retain the same waveform and DSP tuning while changing only the frame count, visualization enablement, and target list.
 
-## Build and run
+## Run from the host
+
+From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=OFF -DAPP_mimo_ddm=ON
-cmake --build build --target mimo_ddm
-./build/applications/fmcw/mimo_ddm/cpp/mimo_ddm
-./build/applications/fmcw/mimo_ddm/cpp/mimo_ddm \
-  applications/fmcw/mimo_ddm/config/mimo_ddm_nonlinear.yaml
+./holoscan-radar run mimo_ddm --run-args=mimo_ddm_linear_smoke.yaml
+./holoscan-radar run mimo_ddm --run-args=mimo_ddm_nonlinear_smoke.yaml
 ```
+
+These headless presets run two frames. For the visual normal presets, use
+`./holoscan-radar run mimo_ddm` (linear) or pass
+`--run-args=mimo_ddm_nonlinear.yaml` (nonlinear) on a host with a display.
 
 Simulator-backed sources default `app.scene_visibility` to `front_half_space`, with radar-local `+x` as boresight. Select `frustum` with explicit horizontal/vertical FOVs in radians, or `all` to restore isotropic target synthesis. This binary coverage gate is separate from relative range loss and does not model antenna gain.

@@ -25,7 +25,9 @@ typed `stream_boundary` is joined to the aperture manager on the same tick.
 
 ## Build and offline fixture
 
-Build in the pinned HSDK 5 GPU image with Python application bindings disabled:
+For this targeted fixture test, first open the devcontainer or run
+`./holoscan-radar run-container` on the **host**. Then, from the
+repository root **inside the container**, run:
 
 ```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF -DHOLOSCAN_RADAR_BUILD_TESTING=ON
@@ -42,8 +44,8 @@ real collections.
 
 The preset uses the same Capella CPHD as tiled strip. Download it into the host `data/sar/imperial/` directory below. The CLI mounts that tree at `/tmp/sar`, where the preset expects `/tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd`. Reader batches contain up to 1024 pulses; the stager makes 256-pulse slices, including a shorter final slice at the collection seam. `geometry_change: scroll` requires the forward v-axis geometry supplied by this app.
 
-From the repository root, with the Holoscan CLI installed and the pinned
-`holoscan-radar-dev:hsdk5` image available, run:
+From the repository root **on the host**, with the Holoscan CLI installed
+and NGC staging access configured, run:
 
 ```bash
 python3 tools/sar_data/pull_cphd.py --app continuous_strip \
