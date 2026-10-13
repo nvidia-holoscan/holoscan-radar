@@ -17,7 +17,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::TDMDenseCompensationOp<float>;
+using Op = hr::TDMDenseCompensationOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
@@ -41,7 +41,8 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   const double elems = static_cast<double>(scen.axis("tx")) * static_cast<double>(scen.axis("rx")) *
                        static_cast<double>(scen.axis("doppler")) *
                        static_cast<double>(scen.axis("range"));
-  perf::set_recipe_throughput(row, elems, std::nullopt, 2.0 * elems * sizeof(std::complex<float>));
+  perf::set_recipe_throughput(row, elems, std::nullopt,
+                              2.0 * elems * sizeof(std::complex<perf::Scalar>));
   row.notes =
       "TDM per-bin complex multiply; cold_ms includes the initial "
       "correction-table build; median/p90 are steady state; cells/s "

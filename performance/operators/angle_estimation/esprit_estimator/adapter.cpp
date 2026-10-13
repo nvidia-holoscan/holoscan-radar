@@ -15,7 +15,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::ESPRITEstimatorOp<float>;
+using Op = hr::ESPRITEstimatorOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {

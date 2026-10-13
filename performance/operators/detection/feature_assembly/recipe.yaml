@@ -14,10 +14,12 @@ recipe:
     - {port: detection_idx, shape: [detections, two], dtype: int64, memory: device, generator: in_bounds_rd_indices}
     - {port: range_bins, shape: [range], dtype: float32, memory: device, generator: axis_ramp}
     - {port: velocity_bins, shape: [doppler], dtype: float32, memory: device, generator: axis_ramp}
-  fixtures: {detections: 64, two: 2, features: 2}
+    - {port: detection_score, shape: [doppler, range], dtype: float32, memory: device, generator: power_map}
+    - {port: aoa_estimates, shape: [detections, two], dtype: float32, memory: device, generator: power_map}
+  fixtures: {detections: 64, two: 2, features: 2, pack: 0}
   constructor: {bounds_policy: feature_assembly_bounds, features: [range, velocity]}
   params: {}
-  outputs: {timed: points, drain: [], unwired: []}
+  outputs: {timed: points, drain: [], unwired: [], optional_tensor_outputs: []}
 cases:
   - {id: baseline-small, profile: small, scopes: [minimal], parameters: {}, fixture: {detections: 64}}
   - {id: baseline-medium, profile: medium, scopes: [minimal], parameters: {}, fixture: {detections: 1024}}
@@ -28,3 +30,5 @@ cases:
   - {id: dense-large, profile: large, scopes: [moderate], parameters: {}, fixture: {detections: 65536}}
   - {id: empty-small, profile: small, scopes: [thorough], parameters: {}, fixture: {detections: 0}}
   - {id: dense-small, profile: small, scopes: [thorough], parameters: {}, fixture: {detections: 4096}}
+  - {id: "score-pack-{profile}", profiles: [small, medium, large], scopes: [limited], parameters: {}, fixture: {pack: 1}}
+  - {id: "score-aoa-pack-{profile}", profiles: [small, medium, large], scopes: [limited], parameters: {}, fixture: {pack: 2}}

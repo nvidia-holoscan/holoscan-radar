@@ -30,6 +30,7 @@ struct RunSettings {
   int warmup_frames{5};
   int measured_frames{50};
   int repeats{3};
+  bool raw_frame_times{false};
   std::string scope{"limited"};
   std::vector<std::string> selected_cases;
   std::string case_order{"forward"};
@@ -69,6 +70,8 @@ struct ResultRow {
   double setup_ms{std::numeric_limits<double>::quiet_NaN()};
   double cold_ms{std::numeric_limits<double>::quiet_NaN()};
   LatencyStats latency;  // compute / override per-frame stats
+  std::vector<double> raw_steady_ms;
+  std::vector<int64_t> raw_steady_run_offsets;
 
   double override_ms{std::numeric_limits<double>::quiet_NaN()};
   double override_delta_ms{std::numeric_limits<double>::quiet_NaN()};
@@ -297,6 +300,16 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
     os << "      \"p99_ms\": " << detail::num_or_null(row.latency.p99_ms) << ",\n";
     os << "      \"max_ms\": " << detail::num_or_null(row.latency.max_ms) << ",\n";
     os << "      \"samples\": " << row.latency.samples << ",\n";
+    if (!row.raw_steady_ms.empty()) {
+      os << "      \"raw_steady_ms\": [";
+      const auto previous_precision = os.precision();
+      os << std::setprecision(17);
+      for (size_t j = 0; j < row.raw_steady_ms.size(); ++j)
+        os << (j ? ", " : "") << row.raw_steady_ms[j];
+      os.precision(previous_precision);
+      os << "],\n      \"raw_steady_run_offsets\": "
+         << detail::shape_json(row.raw_steady_run_offsets) << ",\n";
+    }
     os << "      \"override_ms\": " << detail::num_or_null(row.override_ms) << ",\n";
     os << "      \"override_delta_ms\": " << detail::num_or_null(row.override_delta_ms) << ",\n";
     os << "      \"achieved_frames_per_second\": "

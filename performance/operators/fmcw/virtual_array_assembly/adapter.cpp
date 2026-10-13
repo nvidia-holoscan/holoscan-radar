@@ -16,7 +16,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::VirtualArrayAssemblyOp<float>;
+using Op = hr::VirtualArrayAssemblyOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {
   hr::OverlapPolicy policy{hr::OverlapPolicy::kDedup};
 };
@@ -59,7 +59,8 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   const double elems = static_cast<double>(scen.axis("tx")) * static_cast<double>(scen.axis("rx")) *
                        static_cast<double>(scen.axis("doppler")) *
                        static_cast<double>(scen.axis("range"));
-  perf::set_recipe_throughput(row, elems, std::nullopt, 2.0 * elems * sizeof(std::complex<float>));
+  perf::set_recipe_throughput(row, elems, std::nullopt,
+                              2.0 * elems * sizeof(std::complex<perf::Scalar>));
   row.notes = "virtual channel flatten + geometry emit; cells/s counts input complex samples";
   if (!scen.live_port.empty())
     row.notes += "; one-frame wavelength change";

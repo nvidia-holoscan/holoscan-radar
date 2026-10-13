@@ -47,7 +47,7 @@ inline RecipeScenario recipe_scenario(const ProfileSuite& suite, const ProfileCa
   RecipeScenario result;
   result.id = c.id;
   result.size_id = c.profile;
-  result.recipe = parse_yaml_recipe(suite);
+  result.recipe = case_recipe(suite, c);
   result.params = merge_recipe_map(result.recipe.params, c.parameters);
   result.values = recipe_values(suite, c);
   if (c.override_value) {
@@ -106,7 +106,7 @@ YamlRecipe validate_pilot_suite(const ProfileSuite& suite, std::string_view oper
                                 const std::map<std::string, std::string>& expected_live,
                                 const std::map<std::string, std::string>& expected_codecs = {}) {
   auto recipe = parse_yaml_recipe(suite);
-  if (recipe.operator_type != operator_type)
+  if (recipe.operator_type != precision_operator(operator_type))
     throw std::invalid_argument("recipe operator type differs from typed pilot registration");
   validate_recipe_manifest(recipe, expected_inputs, expected_outputs, expected_live);
   if (recipe.live_codecs != expected_codecs)
@@ -118,7 +118,7 @@ YamlRecipe validate_pilot_suite(const ProfileSuite& suite, std::string_view oper
              recipe.constructor["bounds_policy"].as<std::string>() != bounds_policy) {
     throw std::invalid_argument("pilot recipe bounds policy differs from typed builder");
   }
-  PerfRegisteredOperator<Op>::ensure_registered(operator_type);
+  PerfRegisteredOperator<Op>::ensure_registered(recipe.operator_type);
   return recipe;
 }
 

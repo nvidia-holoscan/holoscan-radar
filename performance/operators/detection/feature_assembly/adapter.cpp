@@ -18,11 +18,11 @@ namespace perf = holoscan::radar::perf;
 namespace holoscan::radar::perf {
 
 template <>
-struct PerfOperatorFactory<FeatureAssemblyOp<float>> {
+struct PerfOperatorFactory<FeatureAssemblyOp<Scalar>> {
   inline static thread_local std::vector<AssemblyFeature> features;
-  static holoscan::OperatorHandle<FeatureAssemblyOp<float>> create(
+  static holoscan::OperatorHandle<FeatureAssemblyOp<Scalar>> create(
       holoscan::Graph& graph, std::string_view name, const MaxTensorExtents& extents) {
-    return graph.op<FeatureAssemblyOp<float>>(name, extents, features);
+    return graph.op<FeatureAssemblyOp<Scalar>>(name, extents, features);
   }
 };
 
@@ -30,7 +30,7 @@ struct PerfOperatorFactory<FeatureAssemblyOp<float>> {
 
 namespace {
 
-using Op = hr::FeatureAssemblyOp<float>;
+using Op = hr::FeatureAssemblyOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 std::vector<hr::AssemblyFeature> constructor_features(const Scenario& scen) {
@@ -38,25 +38,37 @@ std::vector<hr::AssemblyFeature> constructor_features(const Scenario& scen) {
   if (!features.IsSequence() || features.size() != 2 || features[0].as<std::string>() != "range" ||
       features[1].as<std::string>() != "velocity")
     throw std::invalid_argument("FeatureAssembly recipe requires [range, velocity]");
-  return {hr::AssemblyFeature::kRange, hr::AssemblyFeature::kVelocity};
+  std::vector<hr::AssemblyFeature> result{hr::AssemblyFeature::kRange,
+                                          hr::AssemblyFeature::kVelocity};
+  if (scen.axis("pack") > 0)
+    result.push_back(hr::AssemblyFeature::kScore);
+  if (scen.axis("pack") > 1) {
+    result.push_back(hr::AssemblyFeature::kAzEstimate);
+    result.push_back(hr::AssemblyFeature::kElEstimate);
+  }
+  return result;
 }
 
 perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
   hr::MaxTensorExtents extents;
   extents.max_points = std::max<int64_t>(scen.axis("detections"), 1);
-  extents.max_features = 2;
+  extents.max_features = static_cast<int64_t>(constructor_features(scen).size());
   perf::PerfOperatorFactory<Op>::features = constructor_features(scen);
-  return perf::run_recipe_case<Op, 3>(scen, plan, extents, Op::Params{});
+  if (scen.axis("pack") == 0)
+    return perf::run_recipe_case<Op, 3>(scen, plan, extents, Op::Params{});
+  if (scen.axis("pack") == 1)
+    return perf::run_recipe_case<Op, 4>(scen, plan, extents, Op::Params{});
+  return perf::run_recipe_case<Op, 5>(scen, plan, extents, Op::Params{});
 }
 
 perf::ResultRow base_row(const Scenario& scen) {
   perf::ResultRow row;
   row.op_name = "FeatureAssemblyOp";
-  row.variant = "physical_range_velocity";
+  row.variant = "feature_pack_" + std::to_string(scen.axis("pack"));
   row.map_shape = {scen.axis("doppler"), scen.axis("range")};
   row.input_shape = {scen.axis("detections"), 2};
   row.out_batch = scen.axis("detections");
-  row.k = 2;
+  row.k = static_cast<int64_t>(constructor_features(scen).size());
   row.notes = "join=exact_aligned_axes";
   return row;
 }
@@ -64,12 +76,11 @@ perf::ResultRow base_row(const Scenario& scen) {
 void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   const double count = static_cast<double>(scen.axis("detections"));
   const double bytes =
-      count * (2.0 * sizeof(int64_t) + 2.0 * sizeof(float)) +
-      static_cast<double>(scen.axis("doppler") + scen.axis("range")) * sizeof(float);
+      count * (2.0 * sizeof(int64_t) + static_cast<double>(row.k) * sizeof(perf::Scalar)) +
+      static_cast<double>(scen.axis("doppler") + scen.axis("range")) * sizeof(perf::Scalar);
   perf::set_recipe_throughput(row, count, std::nullopt, bytes);
   row.notes =
-      "bins-only (range+velocity) — score/aoa optional ports "
-      "omitted from this Graph benchmark (covered by stage tests); "
+      "range/velocity and optional score/AoA packs; "
       "cold_ms is first-frame latency; median/p90 are "
       "steady state; cells/s is detections/s";
 }
@@ -88,7 +99,9 @@ struct Traits : perf::PerfDriverDefaults {
         suite, "radar.FeatureAssemblyOp.float", "feature_assembly_bounds",
         {{"detection_idx", {"detections", "two"}, "int64", "device", "in_bounds_rd_indices", {}},
          {"range_bins", {"range"}, "float32", "device", "axis_ramp", {}},
-         {"velocity_bins", {"doppler"}, "float32", "device", "axis_ramp", {}}},
+         {"velocity_bins", {"doppler"}, "float32", "device", "axis_ramp", {}},
+         {"detection_score", {"doppler", "range"}, "float32", "device", "power_map", {}},
+         {"aoa_estimates", {"detections", "two"}, "float32", "device", "power_map", {}}},
         {"points", {}, {}, 4U}, {}, {});
   }
   static Scenario parse_case(const perf::ProfileCase& c, const std::vector<int64_t>& shape,
@@ -98,6 +111,10 @@ struct Traits : perf::PerfDriverDefaults {
       throw std::invalid_argument("FeatureAssembly detections out of range");
     perf::require_recipe_params(scen.params, {});
     (void)constructor_features(scen);
+    const auto pack = scen.axis("pack");
+    if (pack < 0 || pack > 2)
+      throw std::invalid_argument("unsupported FeatureAssembly pack");
+    scen.recipe.inputs.resize(static_cast<std::size_t>(3 + pack));
     return scen;
   }
 };

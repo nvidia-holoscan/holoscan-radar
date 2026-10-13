@@ -11,6 +11,7 @@ target_include_directories(radar_perf_utils INTERFACE
     ${PROJECT_SOURCE_DIR}/operators)
 target_link_libraries(radar_perf_utils INTERFACE
     holoscan::core
+    holoscan::testing
     holoscan::radar_common
     holoscan::radar_schemas
     CUDA::cudart
@@ -89,7 +90,10 @@ foreach(_perf_entry IN LISTS HOLOSCAN_RADAR_PERF_OPERATORS)
     endif()
     add_executable(perf_${_perf_name} "${_operator_dir}/adapter.cpp")
     radar_configure_perf_target(${_perf_name} ${_op_target})
-    list(APPEND HOLOSCAN_RADAR_PERF_TARGETS ${_perf_name})
+    add_executable(perf_${_perf_name}_double "${_operator_dir}/adapter.cpp")
+    target_compile_definitions(perf_${_perf_name}_double PRIVATE RADAR_PERF_DOUBLE=1)
+    radar_configure_perf_target(${_perf_name}_double ${_op_target})
+    list(APPEND HOLOSCAN_RADAR_PERF_TARGETS ${_perf_name} ${_perf_name}_double)
 endforeach()
 
 # A standard recipe can omit adapter.cpp. Register its HSDK operator type once;

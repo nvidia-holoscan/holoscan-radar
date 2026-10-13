@@ -39,7 +39,9 @@
 #include <holoscan/profiler/nvtx3.hpp>
 
 #include "utils/perf_app.hpp"
+#include "utils/perf_native_capture.hpp"
 #include "utils/perf_platform.hpp"
+#include "utils/perf_precision.hpp"
 #include "utils/perf_profiles.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
@@ -57,6 +59,7 @@ struct PerfDriverDefaults {
 // through the scenario matrix the flags select, never through new flags.
 struct Options {
   std::string output;
+  std::string verify_output;
   std::string text;
   bool quiet{false};
   bool validate_only{false};
@@ -90,8 +93,10 @@ void print_help() {
             << "Usage: " << Traits::tool_name() << " [options]\n\n"
             << "  --validate        Validate every YAML case without running a Graph\n"
             << "  --list-cases      Validate and list selected cases without a GPU\n"
+            << "  --verify-output <path>  Export native snapshots without timing\n"
             << "  --output <path>   Write machine-readable JSON report\n"
                "  --text <path>     Also write the text summary to a file\n"
+               "  --raw-frame-times  Export chronological steady samples and run boundaries\n"
                "  --quiet           Suppress the stdout text summary\n"
                "  --warmup N        Warmup frames excluded from stats "
                "(default 5)\n"
@@ -127,12 +132,16 @@ bool parse_args(int argc, char** argv, Options* opt) {
       opt->validate_only = true;
     } else if (a == "--list-cases") {
       opt->list_cases = true;
+    } else if (a == "--verify-output") {
+      opt->verify_output = next("--verify-output");
     } else if (a == "--output") {
       opt->output = next("--output");
     } else if (a == "--text") {
       opt->text = next("--text");
     } else if (a == "--quiet") {
       opt->quiet = true;
+    } else if (a == "--raw-frame-times") {
+      opt->rs.raw_frame_times = true;
     } else if (a == "--full") {
       opt->scope = "thorough";
     } else if (a == "--scope") {
@@ -250,12 +259,23 @@ std::vector<SelectedScenario<typename Traits::Scenario>> select_scenarios(const 
           }))
         throw std::invalid_argument("unknown/unselected scenario ID: " + id);
     }
-    std::erase_if(selected, [&](const auto& entry) {
-      return std::find(opt.cases.begin(), opt.cases.end(), entry.scenario.id) == opt.cases.end();
-    });
+    // YAML::Node assignment mutates shared handles. Construct entries instead
+    // of moving them over existing scenarios during filtering or reversal.
+    std::vector<SelectedScenario<typename Traits::Scenario>> filtered;
+    filtered.reserve(selected.size());
+    for (auto& entry : selected) {
+      if (std::find(opt.cases.begin(), opt.cases.end(), entry.scenario.id) != opt.cases.end())
+        filtered.push_back(std::move(entry));
+    }
+    selected.swap(filtered);
   }
-  if (opt.reverse_order)
-    std::reverse(selected.begin(), selected.end());
+  if (opt.reverse_order) {
+    std::vector<SelectedScenario<typename Traits::Scenario>> reversed;
+    reversed.reserve(selected.size());
+    for (auto entry = selected.rbegin(); entry != selected.rend(); ++entry)
+      reversed.push_back(std::move(*entry));
+    selected.swap(reversed);
+  }
   return selected;
 }
 
@@ -291,6 +311,7 @@ void run_adapter_case(const SelectedScenario<typename Traits::Scenario>& selecte
     validate_run_settings(scenario, settings);
   }
   ResultRow row = base_row(scenario);
+  row.precision = kPrecision;
   row.scenario_id = scenario.id;
   row.size_id = scenario.size_id;
   if (row.live_port != selected.live_port)
@@ -435,6 +456,39 @@ int perf_main(int argc, char** argv) {
   if (!detail::ensure_cuda_device(Traits::tool_name()))
     return 1;
   detail::default_log_level();
+
+  if (!opt.verify_output.empty()) {
+    std::ofstream output(opt.verify_output);
+    if (!output) {
+      std::cerr << "error: cannot open native snapshot output\n";
+      return 1;
+    }
+    output << "{\"schema_version\":1,\"byte_order\":\"little\",\"fixture_id\":\"recipe-native-v1\","
+              "\"operator\":\""
+           << std::string(Traits::tool_name()).substr(5) << "\",\"cases\":[";
+    NativeCaptureState::stream = &output;
+    NativeCaptureState::first = true;
+    try {
+      for (const auto& selected : scenarios) {
+        NativeCaptureState::case_id = selected.scenario.id;
+        RunPlan plan{.total_frames = 3, .override_at = selected.live_port.empty() ? -1 : 1};
+        if constexpr (requires { run_graph(selected.scenario, plan, *selected.suite); }) {
+          (void)run_graph(selected.scenario, plan, *selected.suite);
+        } else {
+          (void)run_graph(selected.scenario, plan);
+        }
+      }
+      if (NativeCaptureState::first)
+        throw std::runtime_error("selected adapter lacks native snapshot support");
+      NativeCaptureState::stream = nullptr;
+      output << "]}";
+      return 0;
+    } catch (const std::exception& error) {
+      NativeCaptureState::stream = nullptr;
+      std::cerr << "native verification error: " << error.what() << "\n";
+      return 1;
+    }
+  }
 
   PerfReport report;
   report.provenance = capture_provenance();

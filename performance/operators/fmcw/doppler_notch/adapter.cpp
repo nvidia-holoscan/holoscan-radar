@@ -16,7 +16,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::DopplerNotchOp<float>;
+using Op = hr::DopplerNotchOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
@@ -52,7 +52,7 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   for (const auto extent : row.input_shape)
     elements *= static_cast<double>(extent);
   perf::set_recipe_throughput(row, elements, std::nullopt,
-                              2.0 * elements * sizeof(std::complex<float>));
+                              2.0 * elements * sizeof(std::complex<perf::Scalar>));
 }
 
 struct Traits : perf::PerfDriverDefaults {
@@ -65,7 +65,7 @@ struct Traits : perf::PerfDriverDefaults {
   static void validate_suite(const perf::ProfileSuite& suite) {
     (void)perf::validate_pilot_suite<Op>(
         suite, "radar.DopplerNotchOp.float", "doppler_notch_bounds",
-        {{"velocity_bins", {"doppler"}, "float32", "device", "power_map", {}},
+        {{"velocity_bins", {"doppler"}, "float32", "device", "centered_axis_ramp", {}},
          {"rd_maps",
           {"tx", "rx", "doppler", "range"},
           "complex64",

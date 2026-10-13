@@ -15,7 +15,7 @@ recipe:
   fixtures: {channels: 1}
   constructor: {bounds_policy: clutter_filter_bounds}
   params: {method: mean_subtraction, doppler_window: {type: none}}
-  outputs: {timed: range_profiles_out, drain: [], unwired: []}
+  outputs: {timed: range_profiles_out, drain: [], unwired: [], optional_tensor_outputs: []}
   live:
     method: {physical_port: method, codec: enum}
     doppler_window: {physical_port: doppler_window, codec: window_spec}
@@ -29,3 +29,28 @@ cases:
   - {id: four-channels-medium, profile: medium, scopes: [moderate], parameters: {}, fixture: {channels: 4}}
   - {id: hann-medium, profile: medium, scopes: [moderate], parameters: {doppler_window: {type: hann}}}
   - {id: sixteen-channels-large, profile: large, scopes: [thorough], parameters: {}, fixture: {channels: 16}}
+  - id: method-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: method
+      value: single_delay
+      cache: cached
+  - id: window-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: doppler_window
+      value:
+        type: hamming
+      cache: cached

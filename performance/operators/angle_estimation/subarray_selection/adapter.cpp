@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -16,7 +17,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::SubarraySelectionOp<float>;
+using Op = hr::SubarraySelectionOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 hr::ArrayGeometry holey_geometry(const Scenario& scen, double wavelength) {
@@ -45,28 +46,33 @@ hr::SubarraySelectionParams parameters(const Scenario& scen) {
 perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
   const auto extents = perf::direct_recipe_extents(scen.recipe, scen.values);
   const auto params = parameters(scen);
-  return perf::run_recipe_selected_case<Op, 1>(
-      scen, plan, extents, params, [&](const std::string& codec) -> perf::TimingCollector {
-        if (codec == "holey_ula_patch") {
-          const auto wavelength = scen.live_value["wavelength"].as<double>();
-          const auto value = hr::to_wire(holey_geometry(scen, wavelength));
-          return perf::run_recipe_live_case<Op, 1>(scen, plan, extents, params, value, value);
-        }
-        if (codec == "contiguous_subarray") {
-          std::vector<int64_t> indices;
-          for (int64_t i = 0; i < scen.axis("channels") - scen.axis("channels") / 4; ++i)
-            indices.push_back(i);
-          return perf::run_recipe_live_case<Op, 1>(scen, plan, extents, params, indices, indices);
-        }
-        throw std::invalid_argument("unsupported SubarraySelection live codec: " + codec);
-      });
+  const auto run = [&]<std::size_t N>() -> perf::TimingCollector {
+    return perf::run_recipe_selected_case<Op, N>(
+        scen, plan, extents, params, [&](const std::string& codec) -> perf::TimingCollector {
+          if (codec == "holey_ula_patch") {
+            const auto wavelength = scen.live_value["wavelength"].as<double>();
+            const auto value = hr::to_wire(holey_geometry(scen, wavelength));
+            return perf::run_recipe_live_case<Op, N>(scen, plan, extents, params, value, value);
+          }
+          if (codec == "contiguous_subarray") {
+            std::vector<int64_t> indices;
+            for (int64_t i = 0; i < scen.axis("channels") - scen.axis("channels") / 4; ++i)
+              indices.push_back(i);
+            return perf::run_recipe_live_case<Op, N>(scen, plan, extents, params, indices, indices);
+          }
+          throw std::invalid_argument("unsupported SubarraySelection live codec: " + codec);
+        });
+  };
+  if (scen.recipe.inputs.size() == 1U)
+    return run.template operator()<1>();
+  return run.template operator()<2>();
 }
 
 perf::ResultRow base_row(const Scenario& scen) {
   perf::ResultRow row;
   row.op_name = "SubarraySelectionOp";
   row.variant = "holey_ula";
-  row.input_shape = perf::recipe_shape(scen.recipe.inputs.at(0), scen.values);
+  row.input_shape = {scen.axis("items"), scen.axis("channels"), scen.axis("snapshots")};
   row.out_batch = scen.axis("items");
   row.k = scen.axis("channels") - scen.axis("channels") / 4;
   row.live_port = scen.live_port;
@@ -78,7 +84,7 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
                       static_cast<double>(scen.axis("channels") - scen.axis("channels") / 4) *
                       static_cast<double>(scen.axis("snapshots"));
   perf::set_recipe_throughput(row, static_cast<double>(scen.axis("items")), values,
-                              4.0 * values * sizeof(std::complex<float>));
+                              4.0 * values * sizeof(std::complex<perf::Scalar>));
   row.notes = row.live_port.empty()
                   ? "default parameters; no live override"
                   : "cold_ms includes first selection plan; override_ms is one changed frame for " +
@@ -97,7 +103,8 @@ struct Traits : perf::PerfDriverDefaults {
   static void validate_suite(const perf::ProfileSuite& suite) {
     (void)perf::validate_pilot_suite<Op>(
         suite, "radar.SubarraySelectionOp.float", "",
-        {{"snapshot", {"items", "channels", "snapshots"}, "complex64", "device", "iq_cube", {}}},
+        {{"is_valid", {"items", "snapshots"}, "bool", "device", "valid_mask", {}},
+         {"snapshot", {"items", "channels", "snapshots"}, "complex64", "device", "iq_cube", {}}},
         {"snapshot_out",
          {"array_geometry"},
          {"is_valid_out"},
@@ -122,6 +129,14 @@ struct Traits : perf::PerfDriverDefaults {
       throw std::invalid_argument("SubarraySelection invalid live wavelength");
     if (scen.live_port == "subarray" && scen.live_value.as<std::string>() != "contiguous")
       throw std::invalid_argument("SubarraySelection live subarray must be contiguous");
+    const auto with_mask = scen.axis("with_mask");
+    const auto mask_dtype = scen.axis("mask_dtype");
+    if ((with_mask != 0 && with_mask != 1) || (mask_dtype != 0 && mask_dtype != 1))
+      throw std::invalid_argument("SubarraySelection invalid mask fixture");
+    if (with_mask == 0)
+      scen.recipe.inputs.erase(scen.recipe.inputs.begin());
+    else if (mask_dtype == 1)
+      scen.recipe.inputs.front().dtype = "uint8";
     return scen;
   }
 };

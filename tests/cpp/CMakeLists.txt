@@ -63,7 +63,8 @@ radar_add_test(common/test_sdk yaml-cpp holoscan::config_io)
 radar_add_test(common/test_max_tensor_extents yaml-cpp)
 radar_add_test(utils/test_perf_profiles yaml-cpp)
 radar_add_test(utils/test_perf_runner)
-radar_add_test(utils/test_perf_yaml_standard yaml-cpp holoscan::doppler_notch_op)
+radar_add_test(utils/test_perf_yaml_standard yaml-cpp holoscan::doppler_notch_op
+    holoscan::fmcw_range_processor_op holoscan::subarray_selection_op)
 target_include_directories(test_perf_yaml_standard PRIVATE
     ${PROJECT_SOURCE_DIR}/performance/harness/cpp
     ${PROJECT_SOURCE_DIR}/operators)

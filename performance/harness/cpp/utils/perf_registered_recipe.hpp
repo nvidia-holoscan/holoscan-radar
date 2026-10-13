@@ -21,6 +21,7 @@
 #include <holoscan/core/graph.hpp>
 
 #include "utils/perf_authoring_registry.hpp"
+#include "utils/perf_native_capture.hpp"
 #include "utils/perf_recipe.hpp"
 
 namespace holoscan::radar::perf {
@@ -74,10 +75,12 @@ inline void validate_authored_input(const holoscan::PortRecord& port,
   if (repr.rank && *repr.rank != declared.rank)
     throw std::invalid_argument("recipe rank disagrees with HSDK port: " + declared.port);
   if (repr.dtype) {
-    const auto expected = declared.dtype == "complex64" ? DLDataType{kDLComplex, 64, 1}
-                          : declared.dtype == "float32" ? DLDataType{kDLFloat, 32, 1}
-                          : declared.dtype == "int32"   ? DLDataType{kDLInt, 32, 1}
-                                                        : DLDataType{kDLInt, 64, 1};
+    const auto expected = declared.dtype == "complex64"    ? DLDataType{kDLComplex, 64, 1}
+                          : declared.dtype == "complex128" ? DLDataType{kDLComplex, 128, 1}
+                          : declared.dtype == "float64"    ? DLDataType{kDLFloat, 64, 1}
+                          : declared.dtype == "float32"    ? DLDataType{kDLFloat, 32, 1}
+                          : declared.dtype == "int32"      ? DLDataType{kDLInt, 32, 1}
+                                                           : DLDataType{kDLInt, 64, 1};
     if (repr.dtype->code != expected.code || repr.dtype->bits != expected.bits ||
         repr.dtype->lanes != expected.lanes)
       throw std::invalid_argument("recipe dtype disagrees with HSDK port: " + declared.port);
@@ -199,6 +202,9 @@ TimingCollector run_registered_recipe(std::array<std::shared_ptr<holoscan::Tenso
                                       const RegisteredOutputRecipe& outputs,
                                       std::span<const RegisteredInputContract> contracts = {},
                                       PerfPublishMode publication = PerfPublishMode::kCopy) {
+  if (NativeCaptureState::stream != nullptr)
+    return capture_native_recipe<Op>(inputs, registry_name, extents, params, data_ports, outputs,
+                                     [](auto&, std::size_t) {});
   return run_registered_recipe_core<Op>(
       std::move(inputs), plan, registry_name, extents, params, data_ports, outputs,
       [](holoscan::Graph& graph) {
@@ -236,6 +242,19 @@ TimingCollector run_registered_live_recipe(std::array<std::shared_ptr<holoscan::
                                            std::span<const RegisteredInputContract> contracts = {},
                                            PerfPublishMode publication = PerfPublishMode::kCopy) {
   ensure_recipe_live_payload<Value>();
+  if (NativeCaptureState::stream != nullptr) {
+    return capture_native_recipe<Op>(
+        inputs, registry_name, extents, params, data_ports, outputs,
+        [&](auto& frame, std::size_t index) {
+          if (index == 1U || (live.prime_changed && index == 0U)) {
+            auto entry = holoscan::testing::frame_at(
+                std::chrono::milliseconds{index + 1U},
+                holoscan::testing::input(live.physical_port, native_live_payload(live.changed)));
+            // Sideband publication must precede the data trigger.
+            frame.fields.insert(frame.fields.begin(), std::move(entry.fields.front()));
+          }
+        });
+  }
   if (!plan.has_override() || plan.override_at >= plan.total_frames)
     throw std::invalid_argument("performance recipe requires one changed frame");
   return run_registered_recipe_core<Op>(
@@ -259,6 +278,19 @@ TimingCollector run_registered_live_recipe_with_connector(
     const RegisteredOutputRecipe& outputs, const RegisteredLiveRecipe<Value>& live, Connect connect,
     std::span<const RegisteredInputContract> contracts = {},
     PerfPublishMode publication = PerfPublishMode::kCopy) {
+  if (NativeCaptureState::stream != nullptr) {
+    return capture_native_recipe<Op>(
+        inputs, registry_name, extents, params, data_ports, outputs,
+        [&](auto& frame, std::size_t index) {
+          if (index == 1U || (live.prime_changed && index == 0U)) {
+            auto entry = holoscan::testing::frame_at(
+                std::chrono::milliseconds{index + 1U},
+                holoscan::testing::input(live.physical_port, native_live_payload(live.changed)));
+            // Sideband publication must precede the data trigger.
+            frame.fields.insert(frame.fields.begin(), std::move(entry.fields.front()));
+          }
+        });
+  }
   if (!plan.has_override() || plan.override_at >= plan.total_frames)
     throw std::invalid_argument("performance recipe requires one changed frame");
   return run_registered_recipe_core<Op>(

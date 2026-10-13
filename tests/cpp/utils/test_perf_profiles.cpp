@@ -11,6 +11,7 @@
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <fstream>
 #include <set>
+#include <sstream>
 #include <vector>
 #include <stdexcept>
 #include <string>
@@ -41,6 +42,48 @@ TEST(PerfProfiles, FindsColocatedRecipeByOperatorName) {
   EXPECT_THROW(profile_path("missing_operator"), std::invalid_argument);
 }
 
+TEST(PerfProfiles, RawFrameTimesPreserveOrderAndRepeatBoundariesWithoutChangingStatistics) {
+  perf::RunSettings settings;
+  settings.warmup_frames = 1;
+  settings.measured_frames = 3;
+  settings.repeats = 2;
+  settings.raw_frame_times = true;
+  const auto plan = perf::make_run_plan(settings, true);
+  const auto run = [](int repeat, const perf::RunPlan& p) {
+    perf::TimingCollector collector;
+    collector.t_first_tick = collector.t_construct + std::chrono::milliseconds{1};
+    collector.live_emissions.push_back(p.override_at);
+    const std::array durations{9000, 3000, 1000, 2000, 7000, 8000};
+    for (int frame = 0; frame < p.total_frames; ++frame) {
+      const auto start = collector.t_construct + std::chrono::milliseconds{20 * frame};
+      collector.starts.push_back(start);
+      collector.ends.push_back(start +
+                               std::chrono::microseconds{durations.at(frame) + 500 * repeat});
+    }
+    return collector;
+  };
+  const auto samples = perf::collect_scenario_samples(settings, plan, run);
+  perf::ResultRow captured;
+  perf::fill_compute_row(&captured, samples);
+  EXPECT_EQ(captured.raw_steady_ms, (std::vector<double>{3, 1, 2, 3.5, 1.5, 2.5}));
+  EXPECT_EQ(captured.raw_steady_run_offsets, (std::vector<int64_t>{0, 3, 6}));
+  settings.raw_frame_times = false;
+  perf::ResultRow ordinary;
+  perf::fill_compute_row(&ordinary, perf::collect_scenario_samples(settings, plan, run));
+  EXPECT_TRUE(ordinary.raw_steady_ms.empty());
+  EXPECT_TRUE(ordinary.raw_steady_run_offsets.empty());
+  EXPECT_DOUBLE_EQ(captured.latency.median_ms, ordinary.latency.median_ms);
+  EXPECT_DOUBLE_EQ(captured.latency.p99_ms, ordinary.latency.p99_ms);
+  EXPECT_DOUBLE_EQ(captured.cold_ms, ordinary.cold_ms);
+  EXPECT_DOUBLE_EQ(captured.override_ms, ordinary.override_ms);
+  perf::PerfReport report;
+  report.results.push_back(captured);
+  std::ostringstream json;
+  perf::write_json(json, report);
+  EXPECT_NE(json.str().find("\"raw_steady_ms\": [3, 1, 2, 3.5, 1.5, 2.5]"), std::string::npos);
+  EXPECT_NE(json.str().find("\"raw_steady_run_offsets\": [0, 3, 6]"), std::string::npos);
+}
+
 TEST(PerfProfiles, SelectsCuratedClutterScopes) {
   const auto path = profile_path("clutter_filter");
   const auto suite = perf::load_profile_suite(path, "clutter_filter");
@@ -48,7 +91,7 @@ TEST(PerfProfiles, SelectsCuratedClutterScopes) {
   EXPECT_EQ(suite.select("limited").size(), 6U);
   EXPECT_EQ(suite.select("overrides").size(), 12U);
   EXPECT_EQ(suite.select("moderate").size(), 11U);
-  EXPECT_EQ(suite.select("thorough").size(), 15U);
+  EXPECT_EQ(suite.select("thorough").size(), 21U);
   EXPECT_THROW(suite.select("unknown"), std::invalid_argument);
 
   for (const auto profile : perf::kProfiles) {
@@ -97,7 +140,10 @@ TEST(PerfProfiles, EveryMigratedSuiteHasThreeBaselinesAndBoundedThorough) {
     EXPECT_NO_THROW((void)perf::parse_yaml_recipe(suite));
     EXPECT_EQ(suite.select("minimal").size(), 3U);
     EXPECT_GE(suite.select("limited").size(), 3U);
-    EXPECT_LE(suite.select("thorough").size(), 64U);
+    // The fused processor's nine live ports add 27 explicit revisit cases.
+    // Keep a concrete bound for this expanded matrix, rather than a product.
+    const auto bound = std::string_view(name) == "fmcw_range_doppler_processor" ? 66U : 64U;
+    EXPECT_LE(suite.select("thorough").size(), bound);
     for (const auto profile : perf::kProfiles) {
       for (const auto& port : suite.live_ports) {
         bool covered = false;
@@ -106,6 +152,14 @@ TEST(PerfProfiles, EveryMigratedSuiteHasThreeBaselinesAndBoundedThorough) {
                      (*c.override_value)["port"].as<std::string>() == port;
         }
         EXPECT_TRUE(covered) << profile << ": " << port;
+        bool revisited = false;
+        for (const auto& c : suite.select("thorough")) {
+          revisited |= c.profile == profile && c.override_value.has_value() &&
+                       (*c.override_value)["port"].as<std::string>() == port &&
+                       (*c.override_value)["cache"] &&
+                       (*c.override_value)["cache"].as<std::string>() == "cached";
+        }
+        EXPECT_TRUE(revisited) << profile << ": cached " << port;
       }
     }
   }
@@ -351,7 +405,7 @@ TEST(PerfProfiles, PilotLiveCodecDeclarationsAreValidatedBeforeSelection) {
   EXPECT_THROW(perf::parse_yaml_recipe(suite), std::invalid_argument);
 }
 
-TEST(PerfProfiles, FftPlanCasesDistinguishUnseenAndCached) {
+TEST(PerfProfiles, LiveCasesDistinguishUnseenAndCached) {
   for (const char* name : {"fmcw_range_processor", "fmcw_doppler_processor"}) {
     SCOPED_TRACE(name);
     const auto suite = perf::load_profile_suite(profile_path(name), name);
@@ -370,14 +424,13 @@ TEST(PerfProfiles, FftPlanCasesDistinguishUnseenAndCached) {
         suite, "thorough", {"medium"}, [](const perf::ProfileCase& c, const std::vector<int64_t>&) {
           return Scenario{c.id, c.profile};
         });
-    int cached_count = 0;
+    std::set<std::string> cached_ports;
     for (const auto& item : selected) {
-      if (item.cached) {
-        ++cached_count;
-        EXPECT_EQ(item.live_port, "nfft");
-      }
+      if (item.cached)
+        cached_ports.insert(item.live_port);
     }
-    EXPECT_EQ(cached_count, 1);
+    EXPECT_EQ(cached_ports,
+              (std::set<std::string>{suite.live_ports.begin(), suite.live_ports.end()}));
   }
 }
 

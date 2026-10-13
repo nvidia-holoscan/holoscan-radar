@@ -16,7 +16,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::DetectionReductionOp<float>;
+using Op = hr::DetectionReductionOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 hr::RepresentativePolicy policy(std::string_view name) {
@@ -99,8 +99,8 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   const double points = static_cast<double>(scen.axis("points"));
   const double clusters = static_cast<double>(scen.axis("clusters"));
   const double features = static_cast<double>(scen.axis("features"));
-  const double bytes = points * (3.0 * sizeof(int64_t) + features * sizeof(float)) +
-                       clusters * (2.0 * sizeof(int64_t) + features * sizeof(float));
+  const double bytes = points * (3.0 * sizeof(int64_t) + features * sizeof(perf::Scalar)) +
+                       clusters * (2.0 * sizeof(int64_t) + features * sizeof(perf::Scalar));
   perf::set_recipe_throughput(row, points, clusters, bytes);
   row.notes = row.live_port.empty()
                   ? "default parameters; no live override"

@@ -42,7 +42,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace perf_fmcw_range_processor_adapter {
 
-using PerfPrecision = float;  // v1 characterizes single precision (complex64).
+using PerfPrecision = perf::Scalar;
 
 struct RangeScenario : perf::RecipeScenario {
   hr::WindowType window{hr::WindowType::kNone};
@@ -184,8 +184,6 @@ struct RangeTraits : perf::PerfDriverDefaults {
       } else {
         throw std::invalid_argument("unknown FMCWRange live port");
       }
-      if ((*c.override_value)["cache"] && scenario.live_port != "nfft")
-        throw std::invalid_argument("cached transition only applies to nfft");
     }
     return scenario;
   }

@@ -82,7 +82,7 @@ struct PerfFrameBank {
   template <std::size_t N>
   static void reset(std::array<std::shared_ptr<holoscan::Tensor>, N> frames, int count,
                     TimingCollector* collector, PerfPublishMode publish = PerfPublishMode::kCopy) {
-    static_assert(N == 1 || N == 2 || N == 3 || N == 6);
+    static_assert(N == 1 || N == 2 || N == 3 || N == 4 || N == 5 || N == 6);
     const std::lock_guard lock(mutex);
     input_frames.fill(nullptr);
     for (std::size_t i = 0; i < N; ++i)
