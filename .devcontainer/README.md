@@ -44,7 +44,7 @@ Container*) so the `dev` user is recreated with the new ids.
 ## Host display (Holoviz)
 
 Startup forwards the host X11 display into the container so apps like
-`fmcw_siso` with `visualize: true` can open a window:
+`siso` with `visualize: true` can open a window:
 
 - `initializeCommand` runs `xhost +local:docker` (or `+local:`) on the **host**
 - `DISPLAY` is copied from the host via `containerEnv`
@@ -58,7 +58,7 @@ Xauthority cookie (not enabled by default — paths vary by desktop).
 ## Data Directory
 
 The in-repo `./data` folder is available at `/workspace/holoscan-radar/data`,
-the same path the `holohub` wrapper uses for `HOLOSCAN_CLI_DATA_DIR`.
+the same path the Holoscan CLI uses for this repository's `HOLOSCAN_CLI_DATA_DIR`.
 
 ## SDK base image
 

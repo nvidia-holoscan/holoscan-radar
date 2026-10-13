@@ -53,7 +53,7 @@ From the repository root, with the Holoscan CLI installed and the pinned
 ```bash
 python3 tools/sar_data/pull_cphd.py --app independent_images \
   --dest data/sar/mode5
-holoscan run independent_images \
+./holoscan-radar run independent_images \
   --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \

@@ -24,7 +24,7 @@ Run these commands from the repository root. The shipped YAML presets refer to
 `/tmp/sar` **inside the app container**. Save downloads under the ignored host
 `data/sar/` directory, then pass
 `--docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"`
-to `holoscan run`. The CLI already mounts the repository at `/workspace/radar`,
+to `./holoscan-radar run`. The CLI already mounts the repository at `/workspace/holoscan-radar`,
 but it does not mount the host's `/tmp/sar` directory or symlink. `--add-volume`
 mounts under `/workspace/volumes` and does not match the shipped YAML paths.
 
@@ -33,7 +33,7 @@ For example, download the Imperial Valley collect and run continuous strip:
 ```bash
 python3 tools/sar_data/pull_cphd.py --app continuous_strip \
   --dest data/sar/imperial
-holoscan run continuous_strip \
+./holoscan-radar run continuous_strip \
   --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \

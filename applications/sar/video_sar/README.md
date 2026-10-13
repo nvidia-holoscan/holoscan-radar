@@ -49,7 +49,7 @@ python3 -m pip install -r tools/sar_data/requirements.txt
 mkdir -p data/sar
 python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
   -o data/sar
-holoscan run video_sar \
+./holoscan-radar run video_sar \
   --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \

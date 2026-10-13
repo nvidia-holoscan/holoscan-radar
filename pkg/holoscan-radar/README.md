@@ -4,8 +4,10 @@ This directory defines the Debian package for `holoscan-radar`.
 
 ## Usage
 
+From the repository root:
+
 ```bash
-holoscan package holoscan-radar --pkg-generator DEB
+./holoscan-radar package holoscan-radar --pkg-generator DEB
 ```
 
 ## metadata.json
@@ -14,7 +16,7 @@ holoscan package holoscan-radar --pkg-generator DEB
 
 - **`package` key** — marks this directory as a HoloHub *package* project. The CLI
   discovers it through the module root and the `pkg/` search path,
-  which makes it appear under the `PACKAGES` section of `holoscan list`.
+  which makes it appear under the `PACKAGES` section of `./holoscan-radar list`.
 - **`package.dockerfile`** — path (relative to the module root) to the Dockerfile
   used for container-based package builds.
 

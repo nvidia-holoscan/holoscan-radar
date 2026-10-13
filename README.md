@@ -5,26 +5,23 @@ Operators are implemented in C++/CUDA on MatX and compose through typed ports,
 without pipeline-specific glue between processing stages.
 
 Holoscan Radar targets HSDK 5. Pull the staging SDK image before opening the dev
-container or using the Holoscan CLI; setup and the current packaging limitation are documented
-in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
+container or using the Holoscan CLI. Setup and the current packaging limitation
+are documented in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 
 ## Quick start
 
 Install the development CLI as described in [`DEVELOPER.md`](DEVELOPER.md#holoscan-cli),
-then run these commands on the host. The CLI performs the project build and
-application run in the named development container:
+then use the `./holoscan-radar` wrapper from the repository root. It selects the
+staging image and runs the project build and application in the named container:
 
 ```bash
 docker pull nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13
-holoscan build-container --base-img nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13 \
-  --img holoscan-radar-dev:hsdk5
-# If ../holoscan-sdk exists, keep its automatic CLI mount out of SDK lookup.
-export HOLOSCAN_CLI_DEFAULT_DOCKER_RUN_ARGS='-e HOLOSCAN_SDK_ROOT=/usr -e HOLOSCAN_LIB_PATH= -e CMAKE_PREFIX_PATH=/usr -e PYTHONPATH=/usr/lib/python3.12/site-packages'
-holoscan build siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
+./holoscan-radar build-container --img holoscan-radar-dev:hsdk5
+./holoscan-radar build siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
   --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan
-holoscan run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
+./holoscan-radar run siso --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
   --configure-args=-Dholoscan_DIR=/usr/lib/cmake/holoscan \
@@ -92,7 +89,7 @@ Requirements:
 
 | Dependency | Requirement |
 | --- | --- |
-| Holoscan SDK | HSDK 5 `main-5x` development image |
+| Holoscan SDK | HSDK 5 staging image |
 | CUDA Toolkit | 13.x |
 | CMake | 3.31 or newer |
 | C++ compiler | C++20-capable GCC 11 or newer |
@@ -103,7 +100,7 @@ cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j"$(nproc)"
 ```
 
-Python operator bindings are temporarily unavailable because the current SDK source
+Python operator bindings are temporarily unavailable because the current SDK staging
 image does not export the binding component they require. The current CMake build
 therefore does not register the Python test suites, and a Python-enabled wheel
 cannot be built from this image. See [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).

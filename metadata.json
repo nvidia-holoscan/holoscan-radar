@@ -20,9 +20,9 @@
       "python": "holoscan.radar"
     },
     "holoscan_sdk": {
-      "minimum_required_version": "4.3.0",
+      "minimum_required_version": "5.0.0",
       "tested_versions": [
-        "4.3.0"
+        "5.0.0"
       ]
     },
     "platforms": [

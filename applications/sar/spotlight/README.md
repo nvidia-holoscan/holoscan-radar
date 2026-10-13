@@ -52,7 +52,7 @@ if [ ! -f "$spotlight_cphd" ]; then
     'https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com/sar-data/task-data/0f1231be-26d3-4b98-96ab-f675a5375c14/2026-02-20-03-03-38_UMBRA-07/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd'
   mv "$spotlight_cphd.part" "$spotlight_cphd"
 fi
-holoscan run spotlight \
+./holoscan-radar run spotlight \
   --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \

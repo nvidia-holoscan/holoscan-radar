@@ -48,7 +48,7 @@ From the repository root, with the Holoscan CLI installed and the pinned
 ```bash
 python3 tools/sar_data/pull_cphd.py --app continuous_strip \
   --dest data/sar/imperial
-holoscan run continuous_strip \
+./holoscan-radar run continuous_strip \
   --img holoscan-radar-dev:hsdk5 --no-docker-build \
   --configure-args=-DBUILD_ALL=OFF \
   --configure-args=-DHOLOSCAN_RADAR_BUILD_TESTING=OFF \
