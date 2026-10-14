@@ -470,6 +470,7 @@ void CphdFile::parse_xml(const std::string& xml) {
                              std::to_string(num_bytes_pvp_) +
                              "; expected a positive multiple of 8 (PVP words are 8 bytes)");
   }
+  const int64_t pvp_record_words = num_bytes_pvp_ / static_cast<int64_t>(sizeof(double));
 
   const tinyxml2::XMLElement* data = first_child(root, "Data");
   for (const tinyxml2::XMLElement* node = data->FirstChildElement(); node != nullptr;
@@ -524,13 +525,11 @@ void CphdFile::parse_xml(const std::string& xml) {
     // undefined behaviour rather than the parse error it should be.
     field.offset_words = to_int(required_text(node, "Offset", path_), "PVP Offset", path_);
     field.size_words = to_int(required_text(node, "Size", path_), "PVP Size", path_);
-    // Bound the field against the record it is read from. field() checks the
-    // requested component count against size_words but never the declared
-    // offset, so without this a field placed past the end of the record is an
-    // out-of-bounds read on every vector of every block.
-    if (field.offset_words < 0 || field.size_words <= 0 ||
-        (field.offset_words + field.size_words) * static_cast<int64_t>(sizeof(double)) >
-            num_bytes_pvp_) {
+    // Bound the field against the record it is read from. Check the size
+    // before subtracting it from the record length, so no sum or product of
+    // attacker-controlled extents can overflow during validation.
+    if (field.offset_words < 0 || field.size_words <= 0 || field.size_words > pvp_record_words ||
+        field.offset_words > pvp_record_words - field.size_words) {
       throw std::runtime_error(
           "CphdFile: " + path_ + ": PVP field '" + node->Name() + "' declares offset " +
           std::to_string(field.offset_words) + " size " + std::to_string(field.size_words) +

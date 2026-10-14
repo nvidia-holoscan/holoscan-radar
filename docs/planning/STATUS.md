@@ -237,6 +237,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| CPHD PVP offset-overflow hardening | Codex | `tbirdsong/aivo/cphd-pvp-offset-overflow` | **ready for review:** PVP field placement now uses a word-domain subtraction proof, rejecting negative, overflowing, and past-record layouts before pointer arithmetic while preserving an exact-boundary field. The focused parser regression passes under host ASan/UBSan, and changed-file pinned hooks pass; HSDK 5 CTest validation remains for PR CI. |
 | Jenkins HSDK 5 GPU failure fixes | Codex | `codex/hsdk5-ci-gpu-fixes` | **in progress:** run #174 reached 1,087 CTests; added missing GPU bindings in dashboard/SAR graphs and sized beamformer live-override pools from their inputs. The four beamformer tests pass locally; the older local SDK rejects explicit bindings that the Jenkins SDK requires. All-file lint passes; Jenkins GPU and PR #57 `/build` reruns remain. |
 | Restore TinyXML2 in the Radar development image | tbirdsong | `tbirdsong/tinyxml2-main-5x` | implemented — add `libtinyxml2-dev` for `CPHDReaderOp` after its removal from the HSDK 5 development image; container and Jenkins validation pending |
 | CTest dashboard naming and coverage reporting | tbirdsong | `tbirdsong/5x/ctest-main-5x` | implemented — exact Jenkins build names, build flags, failure submissions, and non-empty JUnit coverage; five host contract checks pass. GitHub PR #47; live GPU and Jenkins reporting validation in progress |
