@@ -259,15 +259,17 @@ class DetectionReportOp : public holoscan::Operator<> {
                             "detection_idx column in cluster mode"});
       }
       if (!use_reduced_points_) {
-        std::vector<bool> seen(static_cast<size_t>(num_features), false);
+        std::vector<int64_t> seen;
+        seen.reserve(point_index_columns_.size());
         for (const int64_t column : point_index_columns_) {
-          if (column < 0 || column >= num_features || seen[static_cast<size_t>(column)]) {
+          if (column < 0 || column >= num_features ||
+              std::find(seen.begin(), seen.end(), column) != seen.end()) {
             return holoscan::make_unexpected(
                 holoscan::Error{holoscan::ErrorCode::kInvalidArgument,
                                 "DetectionReportOp: point_index_columns entries must be "
                                 "unique valid points columns"});
           }
-          seen[static_cast<size_t>(column)] = true;
+          seen.push_back(column);
         }
       }
       HOLOSCAN_TRY(auto labels_count, checked_report_elements(lshape, labels_t.nbytes(),
