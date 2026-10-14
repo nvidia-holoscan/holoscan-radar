@@ -119,6 +119,10 @@ Consumers receive the coherent descriptor with `from_wire`; direct angle operato
 
 Harness `performance/operators/fmcw/virtual_array_assembly/adapter.cpp`: size rungs `xs`–`xl` over `(M_tx, N_rx, num_doppler, num_range)`, overlap-policy variants. `array_geometry` is drained by a typed schema sink. No leading-batch rung. Every compute run inlines a mid-session `[live] wavelength` flip and reports `override_ms` / `override_delta_ms`.
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build -R perf_virtual_array_assembly_smoke
 ```

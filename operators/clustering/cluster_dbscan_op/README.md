@@ -117,6 +117,10 @@ Empty `points` → `labels` and `sizes` both shape `(0,)`.
 
 Harness: `performance/operators/clustering/cluster_dbscan/adapter.cpp` (Graph). Axes: `(N, F)` ladder `xs`…`xl5` (256×2 through 8192×5; well-separated blobs). It measures the production Exact `min_points` override; `epsilon` and `max_clusters` overrides are not timed. Both outputs are wired, so timings include `sizes` publication. No measured numbers are recorded in-repo.
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build -R perf_cluster_dbscan_smoke
 ```

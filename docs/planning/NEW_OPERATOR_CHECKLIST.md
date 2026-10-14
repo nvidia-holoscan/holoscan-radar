@@ -231,7 +231,8 @@ in Jira.
       **`performance/CMakeLists.txt`**. That registers the executable and
       Minimal GPU smoke. Add a focused Overrides smoke for a new live payload
       representation or timing behavior.
-- [ ] Smoke passes: `ctest --test-dir build -R perf_<operator>_smoke` (or via
+- [ ] Smoke passes inside the development container:
+      `ctest --test-dir build -R perf_<operator>_smoke` (or via
       `ctest -L performance`); skim cold vs steady for per-tick alloc / D2H /
       host-scan red flags before calling the operator performance-ready.
 

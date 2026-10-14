@@ -101,6 +101,10 @@ The fused `rd_maps` follow the split-chain numerical contract. The shared stages
 
 Harness: `performance/operators/fmcw/fmcw_range_doppler_processor/recipe.yaml` defines small, medium, and large profiles plus explicit parameter and one-frame live cases; its colocated `adapter.cpp` supplies contract-specific values. The tool times this operator alone. No measured numbers are recorded in-tree.
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build -R perf_fmcw_range_doppler_processor_smoke
 ```

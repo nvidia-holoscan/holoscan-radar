@@ -5,7 +5,7 @@
 # The bundled CLI driver lives in site-packages; this relative path resolves
 # from the repository root, including inside the development container.
 #
-# Invoke via the Holoscan CLI: holoscan test
+# Invoke via the Holoscan CLI: ./holoscan-radar test
 # Or directly: ctest -S ci/container.ctest -VV
 #
 # CTest -D variables (mirrors the stock driver so CLI flags keep working):
@@ -94,9 +94,9 @@ ctest_empty_binary_directory(${CTEST_BINARY_DIRECTORY})
 # wrapper only carries defaults the CLI itself consumes.
 #
 # NOTE: holoscan-cli has first-class sccache support — HOLOSCAN_CLI_ENABLE_SCCACHE=true
-# makes `holoscan build` set these same three launchers, and `holoscan setup`
+# makes `./holoscan-radar build` set these same three launchers, and `./holoscan-radar setup`
 # installs the RAPIDS sccache. That path does not apply here (this driver calls
-# ctest_configure directly, not `holoscan build`), hence the local wiring. Worth
+# ctest_configure directly, not `./holoscan-radar build`), hence the local wiring. Worth
 # revisiting: sccache supports remote/shared caches, which is the missing piece
 # for caching across ephemeral CI pods.
 if(NOT DEFINED ENV{CCACHE_DIR})

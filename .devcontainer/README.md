@@ -28,15 +28,20 @@ Passwordless `sudo` is enabled for `dev`, matching common dev-container practice
 Treat the container as a development environment: code and tools you run inside it
 can escalate to root within the container.
 
-This non-root workflow is specific to the dev container. The
-`./holohub run-container` path intentionally keeps the Dockerfile's default root
-user for compatibility with the CLI and packaging flows, so files created through
-that path may have different ownership behavior on bind mounts.
+This non-root workflow is specific to the dev container. Running
+`./holoscan-radar run-container` from the host opens an interactive shell with
+the Dockerfile's default root user, so files created there may have different
+ownership on bind mounts.
 
 If your host UID/GID change, rebuild the container (*Dev Containers: Rebuild
 Container*) so the `dev` user is recreated with the new ids.
 
 ## Opening it
+
+Run these entry commands **on the host**. Once inside the devcontainer, run
+CMake, CTest, or built executables directly from the repository root; see the
+[developer guide](../DEVELOPER.md#inside-a-development-container). The host
+`./holoscan-radar run <app>` path is described separately in that guide.
 
 - **VS Code / Cursor:** *Dev Containers: Reopen in Container* from the command palette.
 - **CLI:** `devcontainer up --workspace-folder .`
@@ -44,7 +49,7 @@ Container*) so the `dev` user is recreated with the new ids.
 ## Host display (Holoviz)
 
 Startup forwards the host X11 display into the container so apps like
-`fmcw_siso` with `visualize: true` can open a window:
+`siso` with `visualize: true` can open a window:
 
 - `initializeCommand` runs `xhost +local:docker` (or `+local:`) on the **host**
 - `DISPLAY` is copied from the host via `containerEnv`
@@ -58,17 +63,19 @@ Xauthority cookie (not enabled by default — paths vary by desktop).
 ## Data Directory
 
 The in-repo `./data` folder is available at `/workspace/holoscan-radar/data`,
-the same path the `holohub` wrapper uses for `HOLOSCAN_CLI_DATA_DIR`.
+the same path the Holoscan CLI uses for this repository's `HOLOSCAN_CLI_DATA_DIR`.
 
 ## SDK base image
 
-The dev container currently uses a locally built HSDK 5 `main-5x` image. Build
-that image before opening the container:
+The dev container uses the HSDK 5 staging image. Set your **user org** in NGC
+Catalog to `nvstaging`, then authenticate to NGC and pull the image before
+opening the container:
 
 ```bash
-./.devcontainer/build-hsdk5-ea-image.sh
+docker login nvcr.io
+docker pull nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13
 ```
 
-The complete source-build workflow, pin behavior, HoloHub commands, current
-packaging limitation, and removal criteria are documented once in
+The image version, Holoscan CLI commands, and current packaging limitation are
+documented in
 [`SDK_DEVELOPMENT.md`](../SDK_DEVELOPMENT.md).

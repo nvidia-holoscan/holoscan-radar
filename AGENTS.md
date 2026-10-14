@@ -4,9 +4,9 @@ GPU radar signal-processing operator library for the NVIDIA Holoscan SDK: Holosc
 
 **Current phase: HSDK 5 development.** Operator contracts are fully specified
 in `docs/planning/`, and all public C++ operators and example applications use
-the HSDK 5 Graph and Tensor APIs. The temporary local SDK-image workflow and
+the HSDK 5 Graph and Tensor APIs. The staging SDK-image workflow and
 its one remaining packaging limitation are documented in
-[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md). Use the pinned `main-5x` SDK source
+[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md). Use the HSDK 5 `main-5x` SDK source
 for APIs not yet covered by public documentation; do not infer HSDK 5 behavior
 from HSDK 4.x code.
 
@@ -22,7 +22,7 @@ Read before starting non-trivial work, in this precedence order:
 6. [`docs/planning/OPERATOR_DEVELOPMENT.md`](docs/planning/OPERATOR_DEVELOPMENT.md) — how to implement well: hot-path discipline, diagnosis, `[live]`/calibration pitfalls, tests, and performance characterization (lessons from landed operators).
 7. [`docs/planning/TEMPORAL_CONTRACTS.md`](docs/planning/TEMPORAL_CONTRACTS.md) — how the data plane joins the config plane: the measured selector/trigger behavior, the coherence design (shared transmit-time stamp + `Exact{}`), and what was rejected. Read before changing any `contract()`.
 8. [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309) — the single backlog for deferred product, algorithm, performance, and tooling work.
-9. [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md) — the temporary local SDK-image workflow and current SDK packaging limitation.
+9. [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md) — the staging SDK-image workflow and current SDK packaging limitation.
 
 Rules that follow from "lockdown":
 
@@ -120,23 +120,32 @@ axis or geometry grid is allowed, but must be commented as a read-only mirror.
 
 ## Build, test, lint
 
-See [`DEVELOPER.md`](DEVELOPER.md) for detail. Quick reference:
+See [`DEVELOPER.md`](DEVELOPER.md) for detail. Use the host CLI for the
+usual build, app, and test workflow; it starts containers to do the work:
 
 ```bash
-# Configure + build in the HSDK 5 devcontainer. find_package(holoscan) must
-# resolve the pinned 5.x SDK; this branch has no HSDK 4.x compatibility layer.
+uv sync
+./holoscan-radar run siso --run-args=siso_smoke.yaml
+./holoscan-radar test
+```
+
+For direct CMake debugging, open the devcontainer or run
+`./holoscan-radar run-container` **on the host**. Then, from the repository
+root **inside the container**:
+
+```bash
 cmake -S . -B build -DHOLOSCAN_RADAR_BUILD_TESTING=ON
 cmake --build build -j"$(nproc)"
-
-# C++ tests
 ctest --test-dir build --output-on-failure -LE performance
+```
 
-# Python bindings and pytest registration are disabled by the current SDK
-# image; see SDK_DEVELOPMENT.md. When enabled, run in the GPU container with
-# HOLOSCAN_RADAR_BUILD_DIR set to the build tree.
+A CUDA-capable NVIDIA GPU is required. Python bindings and pytest registration
+are disabled by the current SDK image; see `SDK_DEVELOPMENT.md`. For lint, run
+these commands **on the host** from the repository root. Activate `.venv` so
+the metadata hook imports the pinned CLI:
 
-# Lint — CI runs exactly this on every PR; run it before pushing. The lint
-# requirements pin pre-commit plus the CLI that the metadata hook imports.
+```bash
+source .venv/bin/activate
 python -m pip install -r utilities/requirements.lint.txt
 pre-commit run --all-files
 ```
@@ -147,8 +156,7 @@ The lint stack (`.pre-commit-config.yaml`): ruff + isort + black (Python), clang
 
 **Iterate with `pre-commit run <hook-id> --files <changed>`, not a system-installed tool.** The hooks pin exact versions (e.g. `black==26.5.1`, `clang-format==18.1.8`, `cpplint==2.0.2`), and a different local version re-flags already-clean files or formats differently than CI — the pre-commit run is the only authoritative check. Before every commit, run the applicable pinned hooks with `pre-commit run --files <changed files>` and require them to pass; re-stage files rewritten by a hook before committing. Before pushing or handing work off, run `pre-commit run --all-files` and require the complete suite to pass.
 
-**Verifying a change.** The analytic simulators (`radar_common/sim/`) are the ground-truth "tautology guard" — assert operator/pipeline output against them, and add sim self-checks (`tests/cpp/common/test_sim.cpp`) when you add or change a signal model. For a behavior-preserving refactor, diff an app's deterministic log output before/after — but exclude the per-cluster representative (`rep_*`) fields: floating-point medoid centroid accumulation can perturb near-ties (see `operators/detection/detection_reduction_op/README.md`), so a naive diff may show false churn. Build and run from the host through the Holoscan CLI: build a named image with `holoscan build-container --base-img <HSDK-5-image> --img holoscan-radar-dev:hsdk5`.
-Then use `holoscan build` / `run` / `test` with that `--img` and `--no-docker-build`.
+**Verifying a change.** The analytic simulators (`radar_common/sim/`) are the ground-truth "tautology guard" — assert operator/pipeline output against them, and add sim self-checks (`tests/cpp/common/test_sim.cpp`) when you add or change a signal model. For a behavior-preserving refactor, diff an app's deterministic log output before/after — but exclude the per-cluster representative (`rep_*`) fields: floating-point medoid centroid accumulation can perturb near-ties (see `operators/detection/detection_reduction_op/README.md`), so a naive diff may show false churn. Build and run from the host with `./holoscan-radar build`, `run`, and `test`; the CLI builds and tags the project image when needed. Use `./holoscan-radar build-container` to prepare the image separately.
 
 ## Conventions
 

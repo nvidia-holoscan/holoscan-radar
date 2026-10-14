@@ -18,16 +18,19 @@ flowchart LR
 
 The optional dashboard displays the range-Doppler heatmap and rolling range and velocity histories. SISO has no angle products, so the spatial and angle-history panels are omitted.
 
-## Build and run
+## Run from the host
+
+From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=OFF -DAPP_siso=ON
-cmake --build build --target siso
-./build/applications/fmcw/siso/cpp/siso
+./holoscan-radar run siso --run-args=siso_smoke.yaml
 ```
 
-The executable defaults to `config/siso.yaml`. The normal preset enables relative monostatic free-space range loss with a 100 m reference.
+This runs the two-frame headless smoke preset. Run
+`./holoscan-radar run siso` on a host with a display for the normal preset.
 
-Pass `config/siso_smoke.yaml` as the first argument for the two-frame, headless single-target smoke scene. The smoke preset omits range loss and therefore retains the constant-amplitude analytic mode.
+The normal preset enables relative monostatic free-space range loss with a
+100 m reference. The smoke preset omits range loss and retains the
+constant-amplitude analytic mode.
 
 Simulator-backed sources default `app.scene_visibility` to `front_half_space`, with radar-local `+x` as boresight. Select `frustum` with explicit horizontal/vertical FOVs in radians, or `all` to restore isotropic target synthesis. This binary coverage gate is separate from relative range loss and does not model antenna gain.

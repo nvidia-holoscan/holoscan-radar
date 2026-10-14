@@ -147,6 +147,10 @@ A ULA `∥` canonical `+x` is rejected by the shift-invariant planner (same embe
 
 **`[live]` cost.** Scalar overrides are cheap; `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the pair, rebuilds the smoothing plan, and (auto URA) re-uploads the invariance tables on the tick it arrives. The Graph harness isolates all five live inputs.
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build -R perf_esprit_estimator_smoke
 ```

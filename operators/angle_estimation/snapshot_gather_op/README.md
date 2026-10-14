@@ -109,6 +109,10 @@ Constructor-created state reuses the leading-dimension vector, batch-linear tabl
 
 Harness: `performance/operators/angle_estimation/snapshot_gather/adapter.cpp` (Graph dual-input runner). Size ladder `xs`…`xl` (channels × RD map × detection count) and windows `{0,0}`, `{1,1}`, `{2,2}`. It records cold, steady, and inline Exact `snapshot_window` override timing. No measured numbers are recorded in-repo for this operator; run the harness:
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build -R perf_snapshot_gather_smoke
 ```
