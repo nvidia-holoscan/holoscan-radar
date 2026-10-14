@@ -100,7 +100,7 @@ configuring the named build tree with performance enabled (see the
 [developer guide](../../../DEVELOPER.md#performance-characterization)):
 
 ```bash
-ctest --test-dir build-perf-check -R perf_rank_one_residual_screen_smoke
+ctest --test-dir build -R perf_rank_one_residual_screen_smoke
 ```
 
 ## Usage
