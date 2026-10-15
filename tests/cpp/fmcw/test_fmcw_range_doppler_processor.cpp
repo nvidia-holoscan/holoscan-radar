@@ -44,6 +44,7 @@
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
@@ -256,12 +257,13 @@ ChainOutputs run_split(const std::shared_ptr<holoscan::Tensor>& input_tensor,
 }
 
 template <typename T>
-holoscan::testing::TestResult run_fused_result(const std::shared_ptr<holoscan::Tensor>& input,
-                                               FMCWRangeDopplerProcessorParams params,
-                                               bool capture_axes = true) {
+holoscan::testing::TestResult run_fused_result(
+    const std::shared_ptr<holoscan::Tensor>& input, FMCWRangeDopplerProcessorParams params,
+    bool capture_axes = true,
+    const holoscan::radar::MaxTensorExtents& extents =
+        holoscan::radar::testing::default_test_extents()) {
   using Op = FMCWRangeDopplerProcessorOp<T>;
-  auto fixture =
-      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  auto fixture = holoscan::testing::create_operator_test<Op>(extents);
   fixture.set_params(std::move(params));
   fixture.push(&Op::adc_cube, *input);
   constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
@@ -441,6 +443,20 @@ TEST(FMCWRangeDopplerProcessorOpTest, UlpParityNfftDoppler) {
   const auto fused = run_fused<float>(make(), cfg, waveform);
   const auto split = run_split<float>(make(), cfg, waveform);
   expect_parity_ulp<float>(fused, split, "nfft_doppler=2x");
+}
+
+TEST(FMCWRangeDopplerProcessorOpTest, NfftPoolUsesMaxDopplerBins) {
+  auto extents = holoscan::radar::testing::default_test_extents();
+  extents.max_chirps = kChirps;
+  extents.max_doppler_bins = 2 * kChirps;
+  extents.max_range_bins = kSamples;
+  FMCWRangeDopplerProcessorParams params;
+  params.nfft_doppler = 2 * kChirps;
+  const auto result = run_fused_result<float>(
+      complex_cube_to_device<float>(parity_sim().cube, parity_sim().shape), params, false, extents);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  EXPECT_EQ(tensor_frames(result, "rd_maps").front().shape,
+            (std::vector<int64_t>{2 * kChirps, kSamples}));
 }
 
 TEST(FMCWRangeDopplerProcessorOpTest, UlpParityRealIf) {

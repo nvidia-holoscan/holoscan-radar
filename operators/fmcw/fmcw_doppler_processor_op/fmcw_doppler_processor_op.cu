@@ -5,6 +5,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -98,6 +99,10 @@ FMCWDopplerProcessorOp<T>::FMCWDopplerProcessorOp(const MaxTensorExtents& extent
   const char* who = "FMCWDopplerProcessorOp";
   const std::int64_t max_chirps = require_extent(extents.max_chirps, "max_chirps", who);
   const std::int64_t max_range_bins = require_extent(extents.max_range_bins, "max_range_bins", who);
+  const std::int64_t max_doppler_bins =
+      extents.max_doppler_bins.has_value()
+          ? require_extent(extents.max_doppler_bins, "max_doppler_bins", who)
+          : max_chirps;
   const std::int64_t max_rx = extent_rx_or_channels(extents);
   const std::int64_t max_tx = extent_or_one(extents.max_tx);
   if (max_rx <= 0 || max_tx <= 0) {
@@ -107,8 +112,10 @@ FMCWDopplerProcessorOp<T>::FMCWDopplerProcessorOp(const MaxTensorExtents& extent
   }
   extents_ = extents;
   max_rank_ = static_cast<std::uint32_t>(2U + named_tx_rx_leading_rank(extents_));
-  max_byte_span_ = byte_span_complex_cube<T>({max_tx, max_rx, max_chirps, max_range_bins}, who);
-  velocity_bins_byte_span_ = byte_span_real_cube<T>({max_chirps}, who);
+  const std::int64_t max_output_doppler = std::max(max_chirps, max_doppler_bins);
+  max_byte_span_ =
+      byte_span_complex_cube<T>({max_tx, max_rx, max_output_doppler, max_range_bins}, who);
+  velocity_bins_byte_span_ = byte_span_real_cube<T>({max_output_doppler}, who);
 }
 
 template <typename T>
