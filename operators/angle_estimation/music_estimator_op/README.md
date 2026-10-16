@@ -164,6 +164,10 @@ Rejected combinations (operator’s own message unless noted):
 
 Harness (Graph, isolated production-Exact timing for every live input):
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build -R perf_music_estimator_smoke
 ```

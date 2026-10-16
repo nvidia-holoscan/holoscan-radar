@@ -34,17 +34,16 @@ flowchart LR
   WAVEFORM -->|Exact| COMP
 ```
 
-## Build and run
+## Run from the host
+
+From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-cmake -S . -B build -DBUILD_ALL=OFF -DAPP_multi_waveform=ON
-cmake --build build --target multi_waveform
-./build/applications/fmcw/multi_waveform/cpp/multi_waveform
+./holoscan-radar run multi_waveform --run-args=multi_waveform_smoke.yaml
 ```
 
-The executable defaults to `config/multi_waveform.yaml`. Pass
-`config/multi_waveform_smoke.yaml` as the first argument for the two-frame,
-headless single-target smoke scene.
+This runs the two-frame headless smoke preset. Run
+`./holoscan-radar run multi_waveform` on a host with a display for the normal preset.
 
 The `app.profiles` list is the only waveform, sample-count, and physical-PRI
 authority; the YAML does not repeat a baseline waveform or cube. The default

@@ -11,14 +11,13 @@
 # the project tree is bind-mounted when the container is launched.
 #
 # Build & run via the Holoscan CLI:
-#   holoscan run-container --base-img <HSDK-5-image>
+#   ./holoscan-radar run-container --base-img <HSDK-5-image>
 #
 # Manual build (without the CLI):
 #   docker build --build-arg BASE_IMAGE=<HSDK-5-image> -t holoscan-radar .
 
-# Supply the temporary HSDK 5 image with --base-img or --build-arg BASE_IMAGE.
-# The default remains the published SDK image until a public HSDK 5 image exists.
-ARG BASE_IMAGE=nvcr.io/nvidia/clara-holoscan/holoscan:v4.3.0-cuda13
+# Use the HSDK 5 staging image by default. Override BASE_IMAGE to test another SDK.
+ARG BASE_IMAGE=nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13
 FROM ${BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -28,7 +27,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # free those ids and reassign them to `dev` — matching the typical host user and
 # keeping the bind-mounted source tree writable. Hosts whose user isn't 1000 are
 # handled at container-create time by `updateRemoteUserUID` (see .devcontainer/).
-# The default USER stays root so `holoscan run-container` and packaging are
+# The default USER stays root so `./holoscan-radar run-container` and packaging are
 # unaffected.
 ARG DEV_USER=dev
 ARG DEV_UID=1000
@@ -45,7 +44,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade 'pip>=25.1' \
 
 # TODO: add module-specific runtime / build dependencies below.
 #
-# The last three serve `holoscan test` (ci/container.ctest):
+# The last three serve `./holoscan-radar test` (ci/container.ctest):
 #   ninja-build — the driver's CMake generator
 #   xvfb        — holoscan-cli wraps ctest in `xvfb-run -a` unless --no-xvfb.
 #                 This satisfies that wrapper; it does NOT make Holoviz work
@@ -76,7 +75,7 @@ RUN apt-get update \
         ccache \
     && rm -rf /var/lib/apt/lists/*
 
-# Wheel packaging tooling: `holoscan package --pkg-generator WHEEL`
+# Wheel packaging tooling: `./holoscan-radar package --pkg-generator WHEEL`
 # drives `python -m build`; its backend is declared in pyproject.toml.
 RUN pip install --no-cache-dir build scikit-build-core
 

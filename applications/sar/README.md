@@ -16,12 +16,13 @@ and CUDA visualization live in `applications/common/radar_app/sar/`.
 
 ## Choose a run path
 
-For immediate offline validation, configure and build with testing enabled,
-then run `ctest --test-dir build -R '^Sar_.*_(smoke|viz)$' --output-on-failure`.
-CTest generates one CPHD fixture in C++, invokes all five applications, and
-checks output image counts and dimensions as well as headless visualization.
-This is a wiring and numerical smoke, not validation of image quality on a
-real collection.
+For immediate offline validation, run `./holoscan-radar test` from the
+repository root **on the host**. The CLI builds the module in a container and
+runs the registered suite, including all five SAR fixture smokes and headless
+visualization checks. CTest generates the CPHD fixture in C++ and checks image
+counts and dimensions. These are wiring and numerical smokes, not validation
+of image quality on a real collection. For targeted SAR CTest commands inside
+a development container, see the individual app guides.
 
 The shipped YAML files are **real-data presets**. Download or subset the CPHD
 files in the host `data/sar/` directory using [optional data preparation tools](../../tools/sar_data/README.md),
@@ -40,8 +41,8 @@ reporting, and optional tensor dumping keep their normal delivery policy.
 
 The former `applications/sar_formation/` path and `sar_formation` executable
 were replaced by these five entries. There is no compatibility launcher.
-Run `ctest --test-dir build -R '^Sar_' --output-on-failure` for generated CPHD
-smokes and headless visualization. The CPHD fixture is generated once by C++.
+The host `./holoscan-radar test` command includes generated CPHD smokes and
+headless visualization. The CPHD fixture is generated once by C++.
 See the [SAR open-items roll-up](../../docs/planning/SAR/OPEN_ITEMS.md) for
 tracked follow-ups and [SAR input data](../../docs/planning/SAR/INPUT_DATA.md) for optional real
 collections and [SDK development](../../SDK_DEVELOPMENT.md) for the pinned image.

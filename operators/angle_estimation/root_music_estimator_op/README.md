@@ -155,6 +155,10 @@ Rejected combinations (operator’s message unless noted):
 
 **`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the aperture and rebuilds the smoothing plan (and can resize the cuSOLVER workspace) on the tick it arrives. The Graph harness isolates all five live inputs.
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build -R perf_root_music_estimator_smoke
 ```

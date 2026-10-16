@@ -255,6 +255,10 @@ No `[live]` overrides. `features` cannot change mid-stream.
 
 Harness: `performance/operators/detection/feature_assembly/adapter.cpp`. Axes: map-size ladder (`xs`…`xlw`) × detection-count. The driver times the physical `{range, velocity}` pack with aligned axis inputs; score / AoA / dense paths are unit-tested. No measured numbers are recorded in-repo.
 
+Run this performance smoke **inside a development container**, after
+configuring the named build tree with performance enabled (see the
+[developer guide](../../../DEVELOPER.md#performance-characterization)):
+
 ```bash
 ctest --test-dir build -R perf_feature_assembly_smoke
 ```
