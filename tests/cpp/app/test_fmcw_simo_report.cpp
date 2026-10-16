@@ -29,6 +29,8 @@ namespace app = holoscan::radar::app;
 namespace testing = holoscan::radar::testing;
 
 constexpr DLDataType kFloat32{kDLFloat, 32, 1};
+constexpr DLDataType kInt16{kDLInt, 16, 1};
+constexpr DLDataType kInt32{kDLInt, 32, 1};
 constexpr DLDataType kInt64{kDLInt, 64, 1};
 
 struct ReportFrames {
@@ -180,7 +182,8 @@ std::vector<std::string> run_report(ReportFrames frames, app::DetectionReportOp:
   session.wait();
   std::vector<std::string> diagnostics;
   for (const auto& diagnostic : session.diagnostics()) {
-    diagnostics.emplace_back(diagnostic.token);
+    diagnostics.emplace_back(diagnostic.token + ": " +
+                             (diagnostic.detail ? diagnostic.detail->error.message : ""));
   }
   return diagnostics;
 }
@@ -215,6 +218,17 @@ void expect_report_ok(ReportFrames frames, app::DetectionReportOp::Config config
   EXPECT_TRUE(diagnostics.empty()) << (diagnostics.empty() ? "" : diagnostics.front());
 }
 
+void expect_byte_size_mismatch(ReportFrames frames, app::DetectionReportOp::Config config,
+                               const char* input) {
+  const auto diagnostics = run_report(std::move(frames), std::move(config));
+  ASSERT_EQ(diagnostics.size(), 1U);
+  EXPECT_NE(diagnostics.front().find("RUNTIME_OPERATOR_CALLBACK_FAILED"), std::string::npos);
+  EXPECT_NE(
+      diagnostics.front().find(std::string("DetectionReportOp: ") + input + " byte size mismatch"),
+      std::string::npos)
+      << diagnostics.front();
+}
+
 TEST(DetectionReportOpTest, ReportsRawTwoColumnDetections) {
   expect_report_ok(raw_frames({1, 2, 3, 4}, 2, 2), app::DetectionReportOp::Config{});
 }
@@ -225,6 +239,26 @@ TEST(DetectionReportOpTest, ReportsRawFourColumnDetections) {
 
 TEST(DetectionReportOpTest, ReportsEmptyRawDetectionSet) {
   expect_report_ok(raw_frames({}, 0, 4), app::DetectionReportOp::Config{});
+}
+
+TEST(DetectionReportOpTest, RejectsMalformedRawTensorByteSizes) {
+  auto points = raw_frames({1, 2}, 1, 2);
+  // Narrower element widths preserve the shape but make the Tensor too small
+  // for the report's expected copy into its host buffer.
+  points.points = testing::to_device_tensor(std::vector<int16_t>{0, 0, 0, 0, 0}, {1, 5}, kInt16);
+  expect_byte_size_mismatch(std::move(points), app::DetectionReportOp::Config{}, "points");
+
+  auto indices = raw_frames({1, 2}, 1, 2);
+  indices.detection_idx = testing::to_device_tensor(std::vector<int32_t>{1, 2}, {1, 2}, kInt32);
+  expect_byte_size_mismatch(std::move(indices), app::DetectionReportOp::Config{}, "detection_idx");
+
+  auto range = raw_frames({1, 2}, 1, 2);
+  range.range_bins = testing::to_device_tensor(std::vector<int16_t>(64), {64}, kInt16);
+  expect_byte_size_mismatch(std::move(range), app::DetectionReportOp::Config{}, "range_bins");
+
+  auto velocity = raw_frames({1, 2}, 1, 2);
+  velocity.velocity_bins = testing::to_device_tensor(std::vector<int16_t>(64), {64}, kInt16);
+  expect_byte_size_mismatch(std::move(velocity), app::DetectionReportOp::Config{}, "velocity_bins");
 }
 
 TEST(DetectionReportOpTest, ReportsClustersWithRepresentativeLookup) {
@@ -255,6 +289,18 @@ TEST(DetectionReportOpTest, ReportsAllNoiseAsNoClusters) {
   expect_report_ok(std::move(frames),
                    app::DetectionReportOp::Config{.mode = app::DetectionReportMode::kClusters,
                                                   .point_index_columns = {6, 5}});
+}
+
+TEST(DetectionReportOpTest, RejectsMalformedClusterTensorByteSizes) {
+  const app::DetectionReportOp::Config config{.mode = app::DetectionReportMode::kClusters,
+                                              .point_index_columns = {6, 5}};
+  auto labels = single_cluster_frames({10, 20});
+  labels.labels = testing::to_device_tensor(std::vector<int32_t>{0}, {1}, kInt32);
+  expect_byte_size_mismatch(std::move(labels), config, "labels");
+
+  auto sizes = single_cluster_frames({10, 20});
+  sizes.sizes = testing::to_device_tensor(std::vector<int32_t>{1}, {1}, kInt32);
+  expect_byte_size_mismatch(std::move(sizes), config, "sizes");
 }
 
 TEST(DetectionReportOpTest, RejectsIncompletePointIndexMapping) {
