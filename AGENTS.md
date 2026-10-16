@@ -139,8 +139,10 @@ cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure -LE performance
 ```
 
-A CUDA-capable NVIDIA GPU is required. Enable the FMCW Python provider and its
-pytest registration with `-DHOLOSCAN_RADAR_BUILD_PYTHON=ON`; see
+A CUDA-capable NVIDIA GPU is required. `./holoscan-radar test` enables the FMCW
+Python provider and its pytest registration by default; pass
+`--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF` for C++ tests only. Direct
+CMake builds still need `-DHOLOSCAN_RADAR_BUILD_PYTHON=ON` to enable Python; see
 `SDK_DEVELOPMENT.md`. For lint, run
 these commands **on the host** from the repository root. Activate `.venv` so
 the metadata hook imports the pinned CLI:

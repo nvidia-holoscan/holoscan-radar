@@ -82,11 +82,12 @@ Run these commands from the **host**; the CLI builds and runs in containers:
 ```
 
 The development image supplies the HSDK 5 SDK, CUDA toolkit, and C++ build tools.
-A CUDA-capable NVIDIA GPU is required for operators, apps, and tests. To build
-and test the FMCW Python provider, run:
+A CUDA-capable NVIDIA GPU is required for operators, apps, and tests. The test
+command includes the FMCW Python provider and its pytest suite by default. To
+run only the C++ tests, pass `--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF`.
+To run a Python application:
 
 ```bash
-./holoscan-radar test --cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=ON
 ./holoscan-radar run siso --language python --run-args=siso_smoke.yaml
 ```
 

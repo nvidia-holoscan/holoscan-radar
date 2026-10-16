@@ -95,8 +95,8 @@ want to inspect or reuse it before building an app; it is not a prerequisite.
 | `./holoscan-radar build holoscan-radar --language cpp` | Build the C++ module in a container |
 | `./holoscan-radar build simo` | Build SIMO and its dependencies in a container |
 | `./holoscan-radar run simo` | Build and run SIMO in a container |
-| `./holoscan-radar test` | Build and run the test suite in a container |
-| `./holoscan-radar test --cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=ON` | Build and test the FMCW Python provider |
+| `./holoscan-radar test` | Build and run the C++ and Python test suites in a container |
+| `./holoscan-radar test --cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF` | Build and run only the C++ test suite |
 | `./holoscan-radar run siso --language python --run-args=siso_smoke.yaml` | Run the Python SISO Graph smoke preset |
 | `./holoscan-radar package holoscan-radar` | Build the Debian package in a container |
 | `./holoscan-radar run-container` | Open an interactive container shell |
@@ -206,10 +206,10 @@ What it does, and where to change it:
   inside the pip install tree and cannot see this repo.
 - Builds into **`build-test/`**, a dedicated tree. The driver wipes it on every run, which
   is why it is deliberately not your `build/` directory.
-- Runs every registered C++ tier except `performance`, which has its own invocation.
-  That includes the Monte Carlo `statistical` tests. Pass
-  `--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=ON` to register and run
-  `pytest_provider` in the same dashboard. Narrow to one tier with
+- Runs every registered C++ tier except `performance`, which has its own invocation,
+  plus the Python `pytest_provider` suite by default. That includes the Monte Carlo
+  `statistical` tests. Pass `--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF`
+  for a C++-only run. Narrow to one tier with
   `--ctest-options='-DINCLUDE_LABELS=statistical'`, or widen the exclusion with
   `-DEXCLUDE_LABELS='performance|statistical'`.
 - The selection is **exclude-based on purpose**: an include list silently drops any label

@@ -4,6 +4,12 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-16** — **The host test dashboard includes Python by default.**
+  `./holoscan-radar test` now configures the FMCW provider and runs
+  `pytest_provider` alongside the C++ suite. Pass
+  `--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF` for a C++-only dashboard;
+  direct CMake builds retain their Python-off default.
+
 - **2026-10-16** — **Python provider rebased onto the staging SDK workflow.** `deustice/python` now includes `origin/main` at `22df786f`. Seven Python application manifests select `/usr/lib` for HSDK 5 instead of the former `/opt/nvidia/holoscan` source image, and their guides use the host `./holoscan-radar` wrapper. The wrapper built the staging-derived image and ran the two-frame Python SISO smoke; its Python-enabled CTest dashboard passed all 1,089 cases with zero failures or skips, including `pytest_provider`. Direct provider pytest passed all 80 cases on the staging SDK.
 
 - **2026-10-15** — **Python binding runtime checks added.** The HSDK 5 Python provider suite now drives `ClutterFilterOp` through the public facade and native GPU Tensor boundary in both precisions, and verifies a one-tick `FMCWDopplerProcessorOp.nfft` override returns to Params on the next tick. The test exposed Doppler output pools sized from `max_chirps` even when `max_doppler_bins` admitted a larger FFT; both split and fused operators now use the configured output extent. The pinned GPU image passes all 80 provider tests through pytest and the CTest `pytest_provider` entry, plus focused split and fused C++ nfft regressions.

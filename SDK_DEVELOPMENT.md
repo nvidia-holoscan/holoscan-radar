@@ -55,11 +55,13 @@ images so CMake does not retain old paths.
 The staging image installs HSDK 5 Python Core and Visualization under
 `/usr/lib/python3.12/site-packages`. Radar's FMCW provider uses nanobind and
 does not require the SDK's former pybind11 CMake target. The development image
-installs nanobind 3.0.1. Enable the provider and its `pytest_provider` CTest
-entry with `-DHOLOSCAN_RADAR_BUILD_PYTHON=ON`:
+installs nanobind 3.0.1. `./holoscan-radar test` enables the provider and its
+`pytest_provider` CTest entry by default. For a C++-only test run, pass
+`--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF`. Direct CMake builds still
+default to Python off; enable them with `-DHOLOSCAN_RADAR_BUILD_PYTHON=ON`.
 
 ```bash
-./holoscan-radar test --cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=ON
+./holoscan-radar test
 ./holoscan-radar run siso --language python --run-args=siso_smoke.yaml
 ```
 
