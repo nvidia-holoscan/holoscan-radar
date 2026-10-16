@@ -19,7 +19,7 @@ requires-python = ">=3.10"
 # Development tools stay out of the published radar wheel. The CLI requires
 # Python 3.11+; the radar wheel itself still supports Python 3.10.
 [dependency-groups]
-cli = ["holoscan-cli==5.0.0rc1"]
+cli = ["holoscan-cli==5.0.0rc2"]
 test = ["pytest==8.4.2", "pytest-timeout==2.4.0"]
 
 [tool.uv]
