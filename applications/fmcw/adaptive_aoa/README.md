@@ -108,8 +108,7 @@ From the repository root, the host CLI builds and runs the colocated
 `python/` graph with the pinned development image:
 
 ```bash
-holoscan run adaptive_aoa --language python --img holoscan-radar-dev:hsdk5 \
-  --no-docker-build --run-args=adaptive_aoa_smoke.yaml
+./holoscan-radar run adaptive_aoa --language python --run-args=adaptive_aoa_smoke.yaml
 ```
 
 After building or installing the Python wheel, call the graph directly:

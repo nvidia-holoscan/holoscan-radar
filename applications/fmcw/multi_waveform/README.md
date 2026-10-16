@@ -83,8 +83,7 @@ From the repository root, the host CLI builds and runs the colocated
 `python/` graph with the pinned development image:
 
 ```bash
-holoscan run multi_waveform --language python --img holoscan-radar-dev:hsdk5 \
-  --no-docker-build --run-args=multi_waveform_smoke.yaml
+./holoscan-radar run multi_waveform --language python --run-args=multi_waveform_smoke.yaml
 ```
 
 After building or installing the Python wheel, call the graph directly:

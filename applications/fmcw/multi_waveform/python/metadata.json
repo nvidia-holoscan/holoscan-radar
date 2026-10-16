@@ -43,8 +43,8 @@
           "command": "python3.12 -m holoscan_radar.applications.cli multi_waveform",
           "workdir": "<holohub_app_source>/../config",
           "env": {
-            "PYTHONPATH": "/opt/nvidia/holoscan/lib/python3.12/site-packages:<holohub_bin>/python/lib:<PYTHONPATH>",
-            "HOLOSCAN_LIB_PATH": "/opt/nvidia/holoscan/lib"
+            "PYTHONPATH": "/usr/lib/python3.12/site-packages:<holohub_bin>/python/lib:<PYTHONPATH>",
+            "HOLOSCAN_LIB_PATH": "/usr/lib"
           }
         },
         "build": {
@@ -52,7 +52,7 @@
             "-DBUILD_ALL=OFF",
             "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
             "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
-            "-Dholoscan_DIR=/opt/nvidia/holoscan/lib/cmake/holoscan"
+            "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
           ]
         }
       }

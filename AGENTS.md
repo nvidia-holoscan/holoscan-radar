@@ -81,10 +81,10 @@ Rules that follow from "lockdown":
 | `applications/fmcw/mimo_ddm/` | Linear and nonlinear MIMO DDM workflow |
 | `applications/common/radar_app/` | Shared Graph driver, source, report, and visualization support |
 | `performance/` | C++ YAML recipes, typed adapters, and measurement harness — diagnostic timing, not pass/fail thresholds |
-| `python/holoscan/radar/` | Python package source and operator exports; bindings are disabled by the current SDK image |
-| `tests/cpp/`, `tests/python/` | GTest suite; pytest suite registers only when Python bindings build |
+| `python/holoscan_radar/` | HSDK 5 FMCW Python provider, facade, and shared Graph helpers |
+| `tests/cpp/`, `tests/provider/` | GTest suite; Python provider pytest suite registers when bindings build |
 | `pkg/` | Debian/wheel packaging (`add_holohub_package`) |
-| `cmake/` | HoloHub CMake helpers (`HoloHubConfigHelpers.cmake`, `pybind11_add_holohub_module.cmake`) |
+| `cmake/` | HoloHub CMake helpers and HSDK 5 optional-feature probes |
 | `metadata.json` | Module metadata (schema `urn:holohub:module:v2`); per-operator `metadata.json` under each operator dir |
 
 ## Building example applications
@@ -139,8 +139,9 @@ cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure -LE performance
 ```
 
-A CUDA-capable NVIDIA GPU is required. Python bindings and pytest registration
-are disabled by the current SDK image; see `SDK_DEVELOPMENT.md`. For lint, run
+A CUDA-capable NVIDIA GPU is required. Enable the FMCW Python provider and its
+pytest registration with `-DHOLOSCAN_RADAR_BUILD_PYTHON=ON`; see
+`SDK_DEVELOPMENT.md`. For lint, run
 these commands **on the host** from the repository root. Activate `.venv` so
 the metadata hook imports the pinned CLI:
 
@@ -163,7 +164,7 @@ The lint stack (`.pre-commit-config.yaml`): ruff + isort + black (Python), clang
 - C++ namespace `holoscan::radar`; Python package `holoscan.radar`; operator classes CamelCase ending in `Op`; directories snake_case.
 - Include headers by their path from the include root (`#include "group/op/op.hpp"`), never bare — the one exception is a same-dir colocated app-private header (`config.hpp` / `custom_ops.hpp`), tagged `// NOLINT(build/include_subdir)`.
 - Commits: imperative subject, `Area: Summary` prefix style (e.g. `CI: Add linting workflow`, `Operators: ...`).
-- Branches: `<user>/<topic>` (e.g. `deustice/planning`). Current HSDK 5 PRs target `main-5x`; lint CI must pass; contract changes (see Docs first) get called out explicitly.
+- Branches: `<user>/<topic>` (e.g. `deustice/planning`). Current HSDK 5 PRs target `main`; lint CI must pass; contract changes (see Docs first) get called out explicitly.
 
 ## Team workflow
 

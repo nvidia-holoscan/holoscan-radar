@@ -48,12 +48,13 @@ holoscan-radar/
 │       ├── multi_waveform/
 │       └── mimo_ddm/
 ├── tools/sar_data/               # Optional CPHD download/subset CLIs
-├── python/holoscan/radar/
-│   └── __init__.py                 # Operator exports; compiled bindings currently disabled
+├── python/holoscan_radar/
+│   ├── _radar.cpp                  # HSDK 5 FMCW operator provider
+│   └── applications/              # Shared Python Graph helpers
 ├── performance/                   # C++ YAML recipes, adapters, and shared runner
 └── tests/
     ├── cpp/                        # GTest suite (+ utils/: fixtures and Graph helpers)
-    └── python/                     # pytest suite (requires compiled bindings)
+    └── provider/                   # FMCW provider and Graph pytest suite
 ```
 
 ---
@@ -95,6 +96,8 @@ want to inspect or reuse it before building an app; it is not a prerequisite.
 | `./holoscan-radar build simo` | Build SIMO and its dependencies in a container |
 | `./holoscan-radar run simo` | Build and run SIMO in a container |
 | `./holoscan-radar test` | Build and run the test suite in a container |
+| `./holoscan-radar test --cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=ON` | Build and test the FMCW Python provider |
+| `./holoscan-radar run siso --language python --run-args=siso_smoke.yaml` | Run the Python SISO Graph smoke preset |
 | `./holoscan-radar package holoscan-radar` | Build the Debian package in a container |
 | `./holoscan-radar run-container` | Open an interactive container shell |
 
@@ -145,17 +148,22 @@ preparation. All five SAR GUI apps have been visually checked with their
 current presets. That check does not establish full-resolution image quality
 or validate every public collection and backprojection backend.
 
-Python bindings are disabled in the current SDK image because it does not
-export the required binding target. Consequently, CMake does not register
-`pytest` or `pytest_statistical`; the direct pytest suite also requires
-compiled bindings and is not a current build gate. Once the SDK supplies the
-target and bindings are enabled, run the Python suite with:
+The HSDK 5 staging image supplies Python Core and Visualization. Configure the
+FMCW provider with nanobind and run its Graph suite inside the container:
 
 ```bash
-# conftest.py extends the installed SDK package with build-tree modules.
-# Do not put build/python/lib alone on PYTHONPATH: it shadows the SDK package.
-HOLOSCAN_RADAR_BUILD_DIR=build pytest tests/python/ -v
+cmake -S . -B build-python -DHOLOSCAN_RADAR_BUILD_PYTHON=ON
+cmake --build build-python -j"$(nproc)"
+PYTHONPATH=/usr/lib/python3.12/site-packages:build-python/python/lib \
+  python3.12 -m pytest tests/provider -q
 ```
+
+The seven Python Graph sources are colocated at
+`applications/fmcw/<app>/python/<app>.py`; CMake stages them under
+`holoscan_radar.applications` for source builds and wheels. The provider
+registers all 26 FMCW operators in both precisions under `holoscan.radar`.
+Python `[live]` enum ports remain unavailable until the SDK can register those
+port payloads.
 
 ### Performance characterization
 
@@ -199,9 +207,9 @@ What it does, and where to change it:
 - Builds into **`build-test/`**, a dedicated tree. The driver wipes it on every run, which
   is why it is deliberately not your `build/` directory.
 - Runs every registered C++ tier except `performance`, which has its own invocation.
-  That includes the Monte Carlo `statistical` tests. Python suites are registered
-  only when bindings are enabled; they are absent with the current SDK image.
-  Narrow to one tier with
+  That includes the Monte Carlo `statistical` tests. Pass
+  `--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=ON` to register and run
+  `pytest_provider` in the same dashboard. Narrow to one tier with
   `--ctest-options='-DINCLUDE_LABELS=statistical'`, or widen the exclusion with
   `-DEXCLUDE_LABELS='performance|statistical'`.
 - The selection is **exclude-based on purpose**: an include list silently drops any label
@@ -268,13 +276,12 @@ Key fields to update before publishing:
 | `[project].authors` | Your name / organisation |
 | `[tool.scikit-build].cmake.args` | Extra CMake flags passed during `pip install` |
 
-The current HSDK 5 image cannot build the Python extensions, so a
-Python-enabled wheel is not currently available. When the SDK exports the
-required binding target and the Python build is enabled, build one with:
+The FMCW provider uses the SDK's Python Core and Visualization packages and
+nanobind 3.0.1. Build its CPython 3.12 stable ABI wheel inside the staging
+development container with:
 
 ```bash
-pip install build
-python -m build --wheel
+python3.12 -m pip wheel . --no-deps -w dist
 ```
 
 ---

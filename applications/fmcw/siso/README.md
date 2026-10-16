@@ -43,8 +43,7 @@ From the repository root, the host CLI builds and runs the colocated
 `python/` graph with the pinned development image:
 
 ```bash
-holoscan run siso --language python --img holoscan-radar-dev:hsdk5 \
-  --no-docker-build --run-args=siso_smoke.yaml
+./holoscan-radar run siso --language python --run-args=siso_smoke.yaml
 ```
 
 After building or installing the Python wheel, call the graph directly:

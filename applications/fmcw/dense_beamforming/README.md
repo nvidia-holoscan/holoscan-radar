@@ -40,8 +40,7 @@ From the repository root, the host CLI builds and runs the colocated
 `python/` graph with the pinned development image:
 
 ```bash
-holoscan run dense_beamforming --language python --img holoscan-radar-dev:hsdk5 \
-  --no-docker-build --run-args=dense_beamforming_smoke.yaml
+./holoscan-radar run dense_beamforming --language python --run-args=dense_beamforming_smoke.yaml
 ```
 
 After building or installing the Python wheel, call the graph directly:

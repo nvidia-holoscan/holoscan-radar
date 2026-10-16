@@ -55,8 +55,7 @@ From the repository root, the host CLI builds and runs the colocated
 `python/` graph with the pinned development image:
 
 ```bash
-holoscan run mimo_ddm --language python --img holoscan-radar-dev:hsdk5 \
-  --no-docker-build --run-args=mimo_ddm_linear_smoke.yaml
+./holoscan-radar run mimo_ddm --language python --run-args=mimo_ddm_linear_smoke.yaml
 ```
 
 After building or installing the Python wheel, call the graph directly:

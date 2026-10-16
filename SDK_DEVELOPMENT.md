@@ -50,20 +50,26 @@ the host commands: that flag runs the build or application on the host instead
 of in the container. Start with a clean `build/<app>` tree when switching SDK
 images so CMake does not retain old paths.
 
-## Current packaging limitation
+## Python provider
 
-The staging image provides the Holoscan Python package, but does not export the
-CMake binding target required by this module's pybind11 extensions. C++
-operators, applications, tests, and performance tools remain supported;
-`HOLOSCAN_RADAR_BUILD_PYTHON` is forced off until that SDK component is
-available. CMake does not register pytest while bindings are off, and this
-image cannot produce a Python-enabled radar wheel. The Python package source
-remains in the repository.
+The staging image installs HSDK 5 Python Core and Visualization under
+`/usr/lib/python3.12/site-packages`. Radar's FMCW provider uses nanobind and
+does not require the SDK's former pybind11 CMake target. The development image
+installs nanobind 3.0.1. Enable the provider and its `pytest_provider` CTest
+entry with `-DHOLOSCAN_RADAR_BUILD_PYTHON=ON`:
+
+```bash
+./holoscan-radar test --cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=ON
+./holoscan-radar run siso --language python --run-args=siso_smoke.yaml
+```
+
+Python `[live]` enum inputs remain unavailable because the SDK cannot register
+those port payloads; the corresponding C++ contracts are unchanged.
 
 ## When the SDK image changes
 
 Update the image reference in the root `Dockerfile`,
 `.devcontainer/devcontainer.json`, `holoscan-radar` wrapper, and this guide together. Confirm the new
 image's architecture, `holoscan_DIR`, visualization and testing components, and
-Python binding target. Then rebuild the development image and run the build,
-CTest, and application smoke checks described in `DEVELOPER.md`.
+Python Core and Visualization packages. Then rebuild the development image and
+run the build, CTest, and application smoke checks described in `DEVELOPER.md`.
