@@ -4,6 +4,11 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-16** — **Documented the CLI's Python-first app selection.** The
+  CLI selects Python for dual-language FMCW apps when `--language` is omitted.
+  The C++ app guides now pass `--language cpp` explicitly; the root and
+  developer guides describe both choices.
+
 - **2026-10-16** — **The host test dashboard includes Python by default.**
   `./holoscan-radar test` now configures the FMCW provider and runs
   `pytest_provider` alongside the C++ suite. Pass

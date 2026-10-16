@@ -19,16 +19,17 @@ flowchart LR
 
 The physical source PRI is divided across TX slots. The downstream waveform uses the per-TX effective PRI, equal to `num_tx` times the physical inter-chirp spacing.
 
-## Run from the host
+## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run mimo_tdm --run-args=mimo_tdm_smoke.yaml
+./holoscan-radar run mimo_tdm --language cpp --run-args=mimo_tdm_smoke.yaml
 ```
 
 This runs the two-frame headless smoke preset. Run
-`./holoscan-radar run mimo_tdm` on a host with a display for the normal preset.
+`./holoscan-radar run mimo_tdm --language cpp` on a host with a display for
+the normal preset. The CLI selects Python if `--language` is omitted.
 
 The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset intentionally omits it, uses the constant-amplitude analytic model, and emits a warning.
 

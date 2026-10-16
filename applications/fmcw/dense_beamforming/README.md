@@ -17,16 +17,17 @@ flowchart LR
     Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
 ```
 
-## Run from the host
+## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run dense_beamforming --run-args=dense_beamforming_smoke.yaml
+./holoscan-radar run dense_beamforming --language cpp --run-args=dense_beamforming_smoke.yaml
 ```
 
 This runs the two-frame headless smoke preset. Run
-`./holoscan-radar run dense_beamforming` on a host with a display for the normal preset.
+`./holoscan-radar run dense_beamforming --language cpp` on a host with a
+display for the normal preset. The CLI selects Python if `--language` is omitted.
 
 The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset intentionally omits it, uses the constant-amplitude analytic model, and emits a warning.
 

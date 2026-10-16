@@ -93,8 +93,8 @@ want to inspect or reuse it before building an app; it is not a prerequisite.
 | Command | What it does |
 | --- | --- |
 | `./holoscan-radar build holoscan-radar --language cpp` | Build the C++ module in a container |
-| `./holoscan-radar build simo` | Build SIMO and its dependencies in a container |
-| `./holoscan-radar run simo` | Build and run SIMO in a container |
+| `./holoscan-radar build simo --language cpp` | Build the C++ SIMO app and its dependencies in a container |
+| `./holoscan-radar run simo --language cpp` | Build and run the C++ SIMO app in a container |
 | `./holoscan-radar test` | Build and run the C++ and Python test suites in a container |
 | `./holoscan-radar test --cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF` | Build and run only the C++ test suite |
 | `./holoscan-radar run siso --language python --run-args=siso_smoke.yaml` | Run the Python SISO Graph smoke preset |
@@ -102,8 +102,11 @@ want to inspect or reuse it before building an app; it is not a prerequisite.
 | `./holoscan-radar run-container` | Open an interactive container shell |
 
 Each host command starts a container; no interactive shell is required for
-builds or tests. The CLI selects the required app dependencies, and the wrapper
-selects the image SDK for nested builds when a sibling `../holoscan-sdk`
+builds or tests. When an app has both C++ and Python implementations, the CLI
+selects Python if `--language` is omitted; use `--language cpp` or
+`--language python` to choose explicitly. The CLI selects the required app
+dependencies. The wrapper selects the image SDK for nested builds when a sibling
+`../holoscan-sdk`
 checkout exists. The CLI still mounts that sibling checkout. Start with a clean
 `build/<app>` tree when switching SDK images because CMake caches dependency
 paths. `[tool.holoscan]` selects [`ci/container.ctest`](ci/container.ctest) for

@@ -38,13 +38,14 @@ wrapper selects the image SDK for nested builds.
 
 ```bash
 ./holoscan-radar build holoscan-radar --language cpp
-./holoscan-radar run siso --run-args=siso_smoke.yaml
+./holoscan-radar run siso --language cpp --run-args=siso_smoke.yaml
 ./holoscan-radar test
 ```
 
 Run `./holoscan-radar run-container` on the host to open a shell for direct
 CMake or CTest work; those commands then run inside the container. See the
 [interactive workflow](DEVELOPER.md#inside-a-development-container). The CLI
+selects Python when both app languages exist and `--language` is omitted. It
 tags images from the project and branch automatically. Do not pass `--local` to
 the host commands: that flag runs the build or application on the host instead
 of in the container. Start with a clean `build/<app>` tree when switching SDK

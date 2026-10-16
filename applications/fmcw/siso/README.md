@@ -18,16 +18,18 @@ flowchart LR
 
 The optional dashboard displays the range-Doppler heatmap and rolling range and velocity histories. SISO has no angle products, so the spatial and angle-history panels are omitted.
 
-## Run from the host
+## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run siso --run-args=siso_smoke.yaml
+./holoscan-radar run siso --language cpp --run-args=siso_smoke.yaml
 ```
 
 This runs the two-frame headless smoke preset. Run
-`./holoscan-radar run siso` on a host with a display for the normal preset.
+`./holoscan-radar run siso --language cpp` on a host with a display for the
+normal preset. The CLI selects Python if `--language` is omitted because both
+implementations use the `siso` app name.
 
 The normal preset enables relative monostatic free-space range loss with a
 100 m reference. The smoke preset omits range loss and retains the

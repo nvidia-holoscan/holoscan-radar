@@ -20,9 +20,12 @@ docker login nvcr.io
 ./holoscan-radar run siso --run-args=siso_smoke.yaml
 ```
 
-The CLI builds the project image and SISO application as needed. To prepare the
-image separately, run `./holoscan-radar build-container`. For the 250-frame
-visualization preset, run `./holoscan-radar run siso` on a host with a display.
+The CLI builds the project image and SISO application as needed. When an app
+has both C++ and Python implementations, the CLI selects Python if
+`--language` is omitted. Pass `--language cpp` to run the C++ implementation.
+To prepare the image separately, run `./holoscan-radar build-container`. For
+the 250-frame visualization preset, run `./holoscan-radar run siso` on a host
+with a display.
 See [`DEVELOPER.md`](DEVELOPER.md#holoscan-cli) for CLI installation alternatives.
 
 For offline SAR fixture checks, run `./holoscan-radar test` on the host; it

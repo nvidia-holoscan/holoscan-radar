@@ -125,9 +125,12 @@ usual build, app, and test workflow; it starts containers to do the work:
 
 ```bash
 uv sync
-./holoscan-radar run siso --run-args=siso_smoke.yaml
+./holoscan-radar run siso --language cpp --run-args=siso_smoke.yaml
 ./holoscan-radar test
 ```
+
+For apps with both C++ and Python implementations, the CLI selects Python when
+`--language` is omitted. Pass `--language cpp` for a C++ run.
 
 For direct CMake debugging, open the devcontainer or run
 `./holoscan-radar run-container` **on the host**. Then, from the repository

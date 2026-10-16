@@ -41,16 +41,17 @@ also falls back to Beamscan. Repeated range-Doppler indices therefore
 intentionally gather the same range, velocity, and score for each resolved
 angle.
 
-## Run from the host
+## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run adaptive_aoa --run-args=adaptive_aoa_smoke.yaml
+./holoscan-radar run adaptive_aoa --language cpp --run-args=adaptive_aoa_smoke.yaml
 ```
 
 This runs the two-frame headless smoke preset. Run
-`./holoscan-radar run adaptive_aoa` on a host with a display for the normal preset.
+`./holoscan-radar run adaptive_aoa --language cpp` on a host with a display
+for the normal preset. The CLI selects Python if `--language` is omitted.
 
 The smoke preset demonstrates a close target pair.
 

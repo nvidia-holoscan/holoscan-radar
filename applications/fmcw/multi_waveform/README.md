@@ -34,16 +34,17 @@ flowchart LR
   WAVEFORM -->|Exact| COMP
 ```
 
-## Run from the host
+## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run multi_waveform --run-args=multi_waveform_smoke.yaml
+./holoscan-radar run multi_waveform --language cpp --run-args=multi_waveform_smoke.yaml
 ```
 
 This runs the two-frame headless smoke preset. Run
-`./holoscan-radar run multi_waveform` on a host with a display for the normal preset.
+`./holoscan-radar run multi_waveform --language cpp` on a host with a display
+for the normal preset. The CLI selects Python if `--language` is omitted.
 
 The `app.profiles` list is the only waveform, sample-count, and physical-PRI
 authority; the YAML does not repeat a baseline waveform or cube. The default
