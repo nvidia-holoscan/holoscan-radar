@@ -10,6 +10,3 @@ install(TARGETS ddm_dense_demultiplex_op EXPORT holoscan_ddm_dense_demultiplex_o
 install(EXPORT holoscan_ddm_dense_demultiplex_op_targets NAMESPACE holoscan:: DESTINATION lib/cmake/holoscan_radar)
 include(GNUInstallDirs)
 install(FILES ddm_dense_demultiplex_op.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw)
-if(HOLOSCAN_RADAR_BUILD_PYTHON)
-  add_subdirectory(python)
-endif()

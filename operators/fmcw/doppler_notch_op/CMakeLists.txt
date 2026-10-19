@@ -28,7 +28,3 @@ install(EXPORT holoscan_doppler_notch_op_targets
 include(GNUInstallDirs)
 install(FILES doppler_notch_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw)
-
-if(HOLOSCAN_RADAR_BUILD_PYTHON)
-    add_subdirectory(python)
-endif()

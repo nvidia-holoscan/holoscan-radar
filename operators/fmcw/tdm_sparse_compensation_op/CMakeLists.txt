@@ -32,7 +32,3 @@ install(EXPORT holoscan_tdm_sparse_compensation_op_targets
 include(GNUInstallDirs)
 install(FILES tdm_sparse_compensation_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw)
-
-if(HOLOSCAN_RADAR_BUILD_PYTHON)
-    add_subdirectory(python)
-endif()

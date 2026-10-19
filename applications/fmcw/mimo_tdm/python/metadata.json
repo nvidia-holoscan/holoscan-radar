@@ -1,0 +1,62 @@
+{
+  "$schema": "urn:holohub:application:v1",
+  "application": {
+    "name": "mimo_tdm",
+    "authors": [
+      {
+        "name": "Holoscan Team",
+        "affiliation": "NVIDIA"
+      }
+    ],
+    "language": [
+      "Python"
+    ],
+    "version": "0.1.0",
+    "changelog": {
+      "0.1.0": "Sparse detect-before-compensate MIMO TDM processing"
+    },
+    "holoscan_sdk": {
+      "minimum_required_version": "5.0.0",
+      "tested_versions": [
+        "5.0.0"
+      ]
+    },
+    "platforms": [
+      "x86_64",
+      "aarch64"
+    ],
+    "tags": [
+      "Radar",
+      "Signal Processing",
+      "GPU",
+      "FMCW",
+      "MIMO",
+      "TDM",
+      "Angle"
+    ],
+    "ranking": 3,
+    "requirements": {},
+    "default_mode": "default",
+    "modes": {
+      "default": {
+        "description": "Run the Python mimo_tdm Graph workflow",
+        "run": {
+          "command": "python3.12 -m holoscan_radar.applications.cli mimo_tdm",
+          "workdir": "<holohub_app_source>/../config",
+          "env": {
+            "PYTHONPATH": "/usr/lib/python3.12/site-packages:<holohub_bin>/python/lib:<PYTHONPATH>",
+            "HOLOSCAN_LIB_PATH": "/usr/lib"
+          }
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
+            "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
+          ]
+        }
+      }
+    }
+  }
+}

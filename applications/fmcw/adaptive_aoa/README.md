@@ -41,16 +41,17 @@ also falls back to Beamscan. Repeated range-Doppler indices therefore
 intentionally gather the same range, velocity, and score for each resolved
 angle.
 
-## Run from the host
+## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run adaptive_aoa --run-args=adaptive_aoa_smoke.yaml
+./holoscan-radar run adaptive_aoa --language cpp --run-args=adaptive_aoa_smoke.yaml
 ```
 
 This runs the two-frame headless smoke preset. Run
-`./holoscan-radar run adaptive_aoa` on a host with a display for the normal preset.
+`./holoscan-radar run adaptive_aoa --language cpp` on a host with a display
+for the normal preset. The CLI selects Python if `--language` is omitted.
 
 The smoke preset demonstrates a close target pair.
 
@@ -99,3 +100,27 @@ Simulator-backed sources default `app.scene_visibility` to
 explicit horizontal and vertical FOVs in radians, or `all` to restore
 isotropic target synthesis. This binary coverage gate is separate from
 relative range loss and does not model antenna gain.
+
+## Python Graph
+
+The HSDK 5 Python provider uses the same C++ YAML loader, operator ports,
+device bindings, report sink, and optional dashboard as this C++ application.
+From the repository root, the host CLI builds and runs the colocated
+`python/` graph with the pinned development image:
+
+```bash
+./holoscan-radar run adaptive_aoa --language python --run-args=adaptive_aoa_smoke.yaml
+```
+
+After building or installing the Python wheel, call the graph directly:
+
+```python
+from holoscan.radar.applications.adaptive_aoa import build_graph
+
+workflow = build_graph("applications/fmcw/adaptive_aoa/config/adaptive_aoa_smoke.yaml")
+workflow.run()
+```
+
+`build_graph()` returns a `BuiltGraph`; call `.run()` to stop the Graph after
+the configured report frame count. The canonical import path is
+`holoscan_radar.applications.adaptive_aoa`.

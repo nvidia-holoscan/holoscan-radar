@@ -10,6 +10,3 @@ install(TARGETS tdm_dense_compensation_op EXPORT holoscan_tdm_dense_compensation
 install(EXPORT holoscan_tdm_dense_compensation_op_targets NAMESPACE holoscan:: DESTINATION lib/cmake/holoscan_radar)
 include(GNUInstallDirs)
 install(FILES tdm_dense_compensation_op.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw)
-if(HOLOSCAN_RADAR_BUILD_PYTHON)
-  add_subdirectory(python)
-endif()

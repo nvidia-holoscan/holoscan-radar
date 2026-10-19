@@ -21,7 +21,3 @@ install(EXPORT holoscan_ddm_power_fold_op_targets
 include(GNUInstallDirs)
 install(FILES ddm_power_fold_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw)
-
-if(HOLOSCAN_RADAR_BUILD_PYTHON)
-    add_subdirectory(python)
-endif()

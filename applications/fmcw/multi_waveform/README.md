@@ -34,16 +34,17 @@ flowchart LR
   WAVEFORM -->|Exact| COMP
 ```
 
-## Run from the host
+## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run multi_waveform --run-args=multi_waveform_smoke.yaml
+./holoscan-radar run multi_waveform --language cpp --run-args=multi_waveform_smoke.yaml
 ```
 
 This runs the two-frame headless smoke preset. Run
-`./holoscan-radar run multi_waveform` on a host with a display for the normal preset.
+`./holoscan-radar run multi_waveform --language cpp` on a host with a display
+for the normal preset. The CLI selects Python if `--language` is omitted.
 
 The `app.profiles` list is the only waveform, sample-count, and physical-PRI
 authority; the YAML does not repeat a baseline waveform or cube. The default
@@ -74,3 +75,27 @@ cyclic recurrence gap. Changing the selection requires restarting the
 application; runtime profile selection is not part of this example.
 
 Simulator-backed sources default `app.scene_visibility` to `front_half_space`, with radar-local `+x` as boresight. Select `frustum` with explicit horizontal/vertical FOVs in radians, or `all` to restore isotropic target synthesis. This binary coverage gate is separate from relative range loss and does not model antenna gain.
+
+## Python Graph
+
+The HSDK 5 Python provider uses the same C++ YAML loader, operator ports,
+device bindings, report sink, and optional dashboard as this C++ application.
+From the repository root, the host CLI builds and runs the colocated
+`python/` graph with the pinned development image:
+
+```bash
+./holoscan-radar run multi_waveform --language python --run-args=multi_waveform_smoke.yaml
+```
+
+After building or installing the Python wheel, call the graph directly:
+
+```python
+from holoscan.radar.applications.multi_waveform import build_graph
+
+workflow = build_graph("applications/fmcw/multi_waveform/config/multi_waveform_smoke.yaml")
+workflow.run()
+```
+
+`build_graph()` returns a `BuiltGraph`; call `.run()` to stop the Graph after
+the configured report frame count. The canonical import path is
+`holoscan_radar.applications.multi_waveform`.
