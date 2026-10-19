@@ -22,7 +22,8 @@
 #   PLATFORM_NAME          Platform portion of the build name (default: "linux")
 #   BUILD_NAME_PREFIX      Leading token in the CTest build name
 #   CONFIGURE_OPTIONS      Semicolon-separated list of extra cmake -D flags
-#                          (holoscan-cli passes --cmake-options through here)
+#                          (holoscan-cli passes --cmake-options through here;
+#                          -DHOLOSCAN_RADAR_BUILD_PYTHON=OFF disables Python)
 #   CTEST_SUBMIT_URL       CDash submit URL; omit to skip submission
 #   EXCLUDE_LABELS         Label regex NOT to run (default: performance)
 #   INCLUDE_LABELS         Optional label regex to narrow to one tier, e.g.
@@ -104,6 +105,9 @@ if(NOT DEFINED ENV{CCACHE_DIR})
 endif()
 
 set(configure_options
+    # The dashboard tests both languages by default. Put this before the CLI
+    # options so --cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF wins.
+    -D HOLOSCAN_RADAR_BUILD_PYTHON:BOOL=ON
     ${CONFIGURE_OPTIONS}
     -D HOLOSCAN_RADAR_BUILD_TESTING:BOOL=ON
     -D CMAKE_BUILD_TYPE=RelWithDebInfo
@@ -136,10 +140,9 @@ endif()
 # the day it is added, and the failure mode is a too-slow run rather than
 # silent loss of coverage.
 #
-# This includes the Monte Carlo `statistical` tier. Measured 2026-07-29: the
-# 8 C++ CFAR Pfa tests take ~7.9 s and `pytest_statistical` ~5 s, against a
-# ~207 s suite. Cheap enough that deferring them to a scheduled job would buy
-# nothing and cost per-PR signal.
+# This includes the C++ Monte Carlo `statistical` tier. The Python provider
+# suite tests bindings and Graph execution; there is no Python statistical
+# CTest target in the HSDK 5 provider migration.
 if(NOT EXCLUDE_LABELS)
     set(EXCLUDE_LABELS "performance")
 endif()

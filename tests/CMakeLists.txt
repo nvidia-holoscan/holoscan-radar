@@ -3,53 +3,20 @@
 
 add_subdirectory(cpp)
 
-# The pytest suites exercise the Python bindings, so they only
-# make sense when those are built. Registering them unconditionally made a
-# bare `ctest` fail when no operator bindings are available (no operator bindings to import) and forced
-# every caller to remember `-E pytest`.
+# The provider suite checks Python bindings and Graph execution. Numerical
+# Monte Carlo CFAR coverage remains in the C++ statistical CTest tier; the
+# removed Python statistical suite is not part of tests/provider. Registering
+# pytest without bindings would fail on import.
 if(NOT HOLOSCAN_RADAR_BUILD_PYTHON)
     message(STATUS
-        "Skipping pytest suites "
+        "Skipping pytest provider suite "
         "(HOLOSCAN_RADAR_BUILD_PYTHON=OFF)")
     return()
 endif()
 
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-
-add_test(
-    NAME pytest
-    COMMAND ${Python3_EXECUTABLE} -m pytest ${PROJECT_SOURCE_DIR}/tests/python/ -v --tb=short
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-
-# Path wiring: HOLOSCAN_RADAR_BUILD_DIR lets conftest.py prepend
-# ${CMAKE_BINARY_DIR}/python/lib/holoscan onto holoscan.__path__ after the
-# SDK package is imported. Do NOT put HOLOSCAN_RADAR_PYTHON_ROOT on
-# PYTHONPATH — a partial holoscan/ tree there would shadow the SDK package.
-#
-# No SKIP_RETURN_CODE: pytest exits 5 when it collects zero items, which is
-# what an unimportable ``holoscan`` looks like. Treating that as a skip made
-# CTest report success for a run that tested nothing — a broken Python
-# staging step went green. A CUDA-capable GPU and an importable SDK are hard
-# dependencies for this module (see the "GPU as a hard dependency" settled
-# decision), so exit 5 is a genuine failure. Build and test in the container.
-#
-# This is a DELIBERATE DEVIATION from the standard Holoscan module
-# scaffolding, which ships SKIP_RETURN_CODE 5 so the same test invocation is
-# valid on both GPU and CPU-only hosts. That is right for a template targeting
-# GPU-optional modules and wrong for this one. If that guidance appears to
-# contradict this file, this comment is the answer.
-#
-# Default pytest.ini excludes ``statistical`` (Monte Carlo); mirror C++
-# ``ctest -L statistical`` with a dedicated target.
-set_tests_properties(pytest PROPERTIES
-    ENVIRONMENT "HOLOSCAN_RADAR_BUILD_DIR=${CMAKE_BINARY_DIR}"
+find_package(Python3 3.12 REQUIRED COMPONENTS Interpreter)
+add_test(NAME pytest_provider
+    COMMAND ${Python3_EXECUTABLE} -m pytest -q ${PROJECT_SOURCE_DIR}/tests/provider/)
+set_tests_properties(pytest_provider PROPERTIES
+    ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python/lib:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}:$ENV{PYTHONPATH}"
     LABELS "python;unit")
-
-add_test(
-    NAME pytest_statistical
-    COMMAND ${Python3_EXECUTABLE} -m pytest ${PROJECT_SOURCE_DIR}/tests/python/
-            -v --tb=short -m statistical
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-set_tests_properties(pytest_statistical PROPERTIES
-    ENVIRONMENT "HOLOSCAN_RADAR_BUILD_DIR=${CMAKE_BINARY_DIR}"
-    LABELS "python;statistical")

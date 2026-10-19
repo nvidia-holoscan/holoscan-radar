@@ -123,16 +123,6 @@ struct ParamStorageTraits<radar::app::mimo::DdmSimulationConfig>
 template <>
 struct ParamStorageTraits<radar::app::mimo::FeatureAssemblyParams>
 : radar::app::mimo::AppStorage<radar::app::mimo::FeatureAssemblyParams> {};  // NOLINT
-template <>
-struct ParamStorageTraits<radar::TXSchedule>
-: radar::config_detail::PortableParamStorageTraits<radar::TXSchedule> {};  // NOLINT
-template <>
-struct ParamStorageTraits<radar::DDMCodeDescriptor>
-: radar::config_detail::PortableParamStorageTraits<radar::DDMCodeDescriptor> {};  // NOLINT
-template <>
-struct ParamStorageTraits<radar::OverlapPolicy>
-: radar::config_detail::PortableParamStorageTraits<radar::OverlapPolicy> {};  // NOLINT
-
 }  // namespace holoscan
 
 namespace holoscan::radar::app::mimo {
@@ -275,86 +265,6 @@ struct ConfigCodec<radar::app::mimo::DdmSimulationConfig>
   static constexpr auto fields = std::make_tuple(
       defaulted_object_field("generate_phase_codes", &Config::generate_phase_codes));
 };
-
-template <>
-struct ConfigCodec<radar::TXSchedule> : ObjectCodec<radar::TXSchedule> {
-  static constexpr auto fields =
-      std::make_tuple(defaulted_object_field("num_tx", &radar::TXSchedule::num_tx),
-                      defaulted_object_field("tx_order", &radar::TXSchedule::tx_order),
-                      defaulted_object_field("chirp_tx_index", &radar::TXSchedule::chirp_tx_index));
-};
-
-struct DdmCodeFields {
-  int64_t num_tx{0};
-  std::vector<double> phase_codes{};
-  std::vector<double> doppler_offsets{};
-  int64_t guard_bands{0};
-};
-
-template <>
-struct ConfigCodec<DdmCodeFields> : ObjectCodec<DdmCodeFields> {
-  static constexpr auto fields =
-      std::make_tuple(defaulted_object_field("num_tx", &DdmCodeFields::num_tx),
-                      defaulted_object_field("phase_codes", &DdmCodeFields::phase_codes),
-                      defaulted_object_field("doppler_offsets", &DdmCodeFields::doppler_offsets),
-                      defaulted_object_field("guard_bands", &DdmCodeFields::guard_bands));
-};
-
-template <>
-struct ConfigCodec<radar::DDMCodeDescriptor> {
-  static ConfigResult<radar::DDMCodeDescriptor> decode(ConfigView view,
-                                                       const DecodeOptions& options,
-                                                       DecodeContext& context) {
-    auto fields = ConfigCodec<DdmCodeFields>::decode(std::move(view), options, context);
-    if (!fields) {
-      return tl::make_unexpected(fields.error());
-    }
-    if (fields->phase_codes.size() % 2U != 0U) {
-      return tl::make_unexpected(ConfigError::make(
-          ConfigErrorCode::kUnsupportedValue,
-          "phase_codes must contain interleaved real/imaginary pairs", context.path()));
-    }
-    radar::DDMCodeDescriptor result;
-    result.num_tx = fields->num_tx;
-    result.doppler_offsets = std::move(fields->doppler_offsets);
-    result.guard_bands = fields->guard_bands;
-    result.phase_codes.reserve(fields->phase_codes.size() / 2U);
-    for (std::size_t i = 0; i < fields->phase_codes.size(); i += 2U) {
-      result.phase_codes.emplace_back(fields->phase_codes[i], fields->phase_codes[i + 1U]);
-    }
-    try {
-      result.validate();
-    } catch (const std::invalid_argument& error) {
-      return tl::make_unexpected(
-          ConfigError::make(ConfigErrorCode::kUnsupportedValue, error.what(), context.path()));
-    }
-    return result;
-  }
-
-  static ConfigResult<ConfigValue> encode(const radar::DDMCodeDescriptor& value,
-                                          const EncodeOptions& options, EncodeContext& context) {
-    DdmCodeFields fields;
-    fields.num_tx = value.num_tx;
-    fields.doppler_offsets = value.doppler_offsets;
-    fields.guard_bands = value.guard_bands;
-    fields.phase_codes.reserve(value.phase_codes.size() * 2U);
-    for (const std::complex<double>& sample : value.phase_codes) {
-      fields.phase_codes.push_back(sample.real());
-      fields.phase_codes.push_back(sample.imag());
-    }
-    return ConfigCodec<DdmCodeFields>::encode(fields, options, context);
-  }
-};
-
-inline constexpr radar::OverlapPolicy kOverlapPolicies[] = {
-    radar::OverlapPolicy::kDedup,
-    radar::OverlapPolicy::kAverage,
-    radar::OverlapPolicy::kKeepAll,
-};
-
-template <>
-struct ConfigCodec<radar::OverlapPolicy>
-: radar::config_detail::CanonicalEnumCodec<radar::OverlapPolicy, kOverlapPolicies> {};  // NOLINT
 
 using AppParamsCodec = params::DefaultedParamSchemaCodec<radar::app::mimo::AppParams>;  // NOLINT
 template <>

@@ -6,8 +6,8 @@ without pipeline-specific glue between processing stages.
 
 Holoscan Radar targets HSDK 5. The Holoscan CLI pulls the staging SDK image
 when needed; the devcontainer can use the same image. This pre-release image
-requires `nvstaging` as your user org in NGC Catalog. Setup and the current
-packaging limitation are documented in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
+requires `nvstaging` as your user org in NGC Catalog. Setup and Python provider
+requirements are documented in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 
 ## Quick start
 
@@ -20,9 +20,12 @@ docker login nvcr.io
 ./holoscan-radar run siso --run-args=siso_smoke.yaml
 ```
 
-The CLI builds the project image and SISO application as needed. To prepare the
-image separately, run `./holoscan-radar build-container`. For the 250-frame
-visualization preset, run `./holoscan-radar run siso` on a host with a display.
+The CLI builds the project image and SISO application as needed. When an app
+has both C++ and Python implementations, the CLI selects Python if
+`--language` is omitted. Pass `--language cpp` to run the C++ implementation.
+To prepare the image separately, run `./holoscan-radar build-container`. For
+the 250-frame visualization preset, run `./holoscan-radar run siso` on a host
+with a display.
 See [`DEVELOPER.md`](DEVELOPER.md#holoscan-cli) for CLI installation alternatives.
 
 For offline SAR fixture checks, run `./holoscan-radar test` on the host; it
@@ -82,9 +85,19 @@ Run these commands from the **host**; the CLI builds and runs in containers:
 ```
 
 The development image supplies the HSDK 5 SDK, CUDA toolkit, and C++ build tools.
-A CUDA-capable NVIDIA GPU is required for operators, apps, and C++ tests.
-Python operator bindings are temporarily unavailable in this image; see
-[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
+A CUDA-capable NVIDIA GPU is required for operators, apps, and tests. The test
+command includes the FMCW Python provider and its pytest suite by default. To
+run only the C++ tests, pass `--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF`.
+To run a Python application:
+
+```bash
+./holoscan-radar run siso --language python --run-args=siso_smoke.yaml
+```
+
+The Python provider is optional in ordinary C++ builds; see
+[`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md) for SDK components and packaging.
+It registers the 26 FMCW operators in both precisions under `holoscan.radar`
+and exposes seven Python Graph workflows through `holoscan_radar.applications`.
 
 For manual CMake and targeted CTest work **inside** a development container,
 see [`DEVELOPER.md`](DEVELOPER.md#inside-a-development-container). The same

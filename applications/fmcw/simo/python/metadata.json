@@ -1,0 +1,61 @@
+{
+  "$schema": "urn:holohub:application:v1",
+  "application": {
+    "name": "simo",
+    "authors": [
+      {
+        "name": "Holoscan Team",
+        "affiliation": "NVIDIA"
+      }
+    ],
+    "language": [
+      "Python"
+    ],
+    "version": "0.1.0",
+    "changelog": {
+      "0.1.0": "Detect range-Doppler cells before sparse receive beamforming"
+    },
+    "holoscan_sdk": {
+      "minimum_required_version": "5.0.0",
+      "tested_versions": [
+        "5.0.0"
+      ]
+    },
+    "platforms": [
+      "x86_64",
+      "aarch64"
+    ],
+    "tags": [
+      "Radar",
+      "Signal Processing",
+      "GPU",
+      "FMCW",
+      "SIMO",
+      "Angle"
+    ],
+    "ranking": 3,
+    "requirements": {},
+    "default_mode": "default",
+    "modes": {
+      "default": {
+        "description": "Run the Python simo Graph workflow",
+        "run": {
+          "command": "python3.12 -m holoscan_radar.applications.cli simo",
+          "workdir": "<holohub_app_source>/../config",
+          "env": {
+            "PYTHONPATH": "/usr/lib/python3.12/site-packages:<holohub_bin>/python/lib:<PYTHONPATH>",
+            "HOLOSCAN_LIB_PATH": "/usr/lib"
+          }
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
+            "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
+          ]
+        }
+      }
+    }
+  }
+}

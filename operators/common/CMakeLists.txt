@@ -185,9 +185,6 @@ install(EXPORT holoscan_radar_common_simulator_targets
 )
 
 # Python bindings for shared descriptors / enums (holoscan.radar.radar_common).
-if(HOLOSCAN_RADAR_BUILD_PYTHON)
-    add_subdirectory(python)
-endif()
 
 # CUDA spatial-smoothing gather (shared by the covariance angle estimators).
 # Materializes sub-array "looks" from the host-planned index tables; the host

@@ -32,17 +32,44 @@ ddm_dense_demultiplex: {}
 
 The normal linear and nonlinear presets enable relative monostatic free-space range loss with a 100 m reference. The matching `_smoke.yaml` files omit range loss, use the constant-amplitude analytic model with a warning, and otherwise retain the same waveform and DSP tuning while changing only the frame count, visualization enablement, and target list.
 
-## Run from the host
+## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run mimo_ddm --run-args=mimo_ddm_linear_smoke.yaml
-./holoscan-radar run mimo_ddm --run-args=mimo_ddm_nonlinear_smoke.yaml
+./holoscan-radar run mimo_ddm --language cpp --run-args=mimo_ddm_linear_smoke.yaml
+./holoscan-radar run mimo_ddm --language cpp --run-args=mimo_ddm_nonlinear_smoke.yaml
 ```
 
 These headless presets run two frames. For the visual normal presets, use
-`./holoscan-radar run mimo_ddm` (linear) or pass
-`--run-args=mimo_ddm_nonlinear.yaml` (nonlinear) on a host with a display.
+`./holoscan-radar run mimo_ddm --language cpp` (linear) or add
+`--run-args=mimo_ddm_nonlinear.yaml` (nonlinear) on a host with a display. The
+CLI selects Python if `--language` is omitted.
 
 Simulator-backed sources default `app.scene_visibility` to `front_half_space`, with radar-local `+x` as boresight. Select `frustum` with explicit horizontal/vertical FOVs in radians, or `all` to restore isotropic target synthesis. This binary coverage gate is separate from relative range loss and does not model antenna gain.
+
+## Python Graph
+
+The HSDK 5 Python provider uses the same C++ YAML loader, operator ports,
+device bindings, report sink, and optional dashboard as this C++ application.
+From the repository root, the host CLI builds and runs the colocated
+`python/` graph with the pinned development image:
+
+```bash
+./holoscan-radar run mimo_ddm --language python --run-args=mimo_ddm_linear_smoke.yaml
+```
+
+After building or installing the Python wheel, call the graph directly:
+
+```python
+from holoscan.radar.applications.mimo_ddm import build_graph
+
+workflow = build_graph("applications/fmcw/mimo_ddm/config/mimo_ddm_linear_smoke.yaml")
+workflow.run()
+workflow = build_graph("applications/fmcw/mimo_ddm/config/mimo_ddm_nonlinear_smoke.yaml")
+workflow.run()
+```
+
+`build_graph()` returns a `BuiltGraph`; call `.run()` to stop the Graph after
+the configured report frame count. The canonical import path is
+`holoscan_radar.applications.mimo_ddm`.

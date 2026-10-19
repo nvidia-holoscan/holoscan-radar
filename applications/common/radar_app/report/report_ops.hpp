@@ -10,6 +10,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -34,6 +35,32 @@
 
 // HSDK 5 Graph logging / drain sinks for the FMCW example applications.
 namespace holoscan::radar::app {
+
+inline holoscan::expected<size_t, holoscan::Error> checked_report_elements(
+    const std::vector<int64_t>& shape, int64_t nbytes, size_t element_bytes, const char* op,
+    const char* name) {
+  const size_t max_elements = std::numeric_limits<size_t>::max() / element_bytes;
+  size_t elements = 1;
+  for (const int64_t dimension : shape) {
+    if (dimension == 0) {
+      elements = 0;
+      continue;
+    }
+    if (dimension < 0 || static_cast<uint64_t>(dimension) > max_elements ||
+        elements > max_elements / static_cast<size_t>(dimension)) {
+      return holoscan::make_unexpected(
+          holoscan::Error{holoscan::ErrorCode::kInvalidArgument,
+                          std::string(op) + ": " + name + " has an invalid or oversized shape"});
+    }
+    elements *= static_cast<size_t>(dimension);
+  }
+  if (nbytes < 0 || static_cast<size_t>(nbytes) != elements * element_bytes) {
+    return holoscan::make_unexpected(
+        holoscan::Error{holoscan::ErrorCode::kInvalidArgument,
+                        std::string(op) + ": " + name + " byte size mismatch"});
+  }
+  return elements;
+}
 
 // Shared completion counter for Graph apps.
 struct AppFrameBank {
@@ -182,13 +209,21 @@ class DetectionReportOp : public holoscan::Operator<> {
     const int64_t num_features = pshape[1];
     const int64_t num_reports = idx_shape[0];
     const int64_t idx_cols = idx_shape[1];
-    const int64_t num_range = range_bins_t.shape()[0];
-    const int64_t num_doppler = velocity_bins_t.shape()[0];
+    HOLOSCAN_TRY(auto points_count,
+                 checked_report_elements(pshape, points_t.nbytes(), sizeof(float), kWho, "points"));
+    HOLOSCAN_TRY(auto idx_count, checked_report_elements(idx_shape, detection_idx_t.nbytes(),
+                                                         sizeof(int64_t), kWho, "detection_idx"));
+    HOLOSCAN_TRY(auto range_count,
+                 checked_report_elements(range_bins_t.shape(), range_bins_t.nbytes(), sizeof(float),
+                                         kWho, "range_bins"));
+    HOLOSCAN_TRY(auto velocity_count,
+                 checked_report_elements(velocity_bins_t.shape(), velocity_bins_t.nbytes(),
+                                         sizeof(float), kWho, "velocity_bins"));
 
-    std::vector<float> pts(static_cast<size_t>(num_points * num_features));
-    std::vector<int64_t> idx(static_cast<size_t>(num_reports * idx_cols));
-    std::vector<float> ranges(static_cast<size_t>(num_range));
-    std::vector<float> velocities(static_cast<size_t>(num_doppler));
+    std::vector<float> pts(points_count);
+    std::vector<int64_t> idx(idx_count);
+    std::vector<float> ranges(range_count);
+    std::vector<float> velocities(velocity_count);
     std::vector<int64_t> lab;
     std::vector<int64_t> sz;
     std::vector<float> reduced;
@@ -197,24 +232,6 @@ class DetectionReportOp : public holoscan::Operator<> {
     holoscan::Tensor reduced_t;
     holoscan::Tensor convention_t;
     int64_t active_convention_index{0};
-
-    const auto require_bytes = [](const char* name, const holoscan::Tensor& t,
-                                  size_t expected) -> holoscan::expected<void, holoscan::Error> {
-      if (static_cast<size_t>(t.nbytes()) != expected) {
-        return holoscan::make_unexpected(holoscan::Error{
-            holoscan::ErrorCode::kInvalidArgument,
-            std::string("DetectionReportOp: ") + name + " byte size mismatch (expected " +
-                std::to_string(expected) + ", got " + std::to_string(t.nbytes()) + ")"});
-      }
-      return {};
-    };
-    HOLOSCAN_RETURN_IF_ERROR(require_bytes("points", points_t, sizeof(float) * pts.size()));
-    HOLOSCAN_RETURN_IF_ERROR(
-        require_bytes("detection_idx", detection_idx_t, sizeof(int64_t) * idx.size()));
-    HOLOSCAN_RETURN_IF_ERROR(
-        require_bytes("range_bins", range_bins_t, sizeof(float) * ranges.size()));
-    HOLOSCAN_RETURN_IF_ERROR(
-        require_bytes("velocity_bins", velocity_bins_t, sizeof(float) * velocities.size()));
 
     if (mode_ == DetectionReportMode::kClusters) {
       HOLOSCAN_TRY(labels_t, receive_tensor(labels, kWho));
@@ -242,21 +259,25 @@ class DetectionReportOp : public holoscan::Operator<> {
                             "detection_idx column in cluster mode"});
       }
       if (!use_reduced_points_) {
-        std::vector<bool> seen(static_cast<size_t>(num_features), false);
+        std::vector<int64_t> seen;
+        seen.reserve(point_index_columns_.size());
         for (const int64_t column : point_index_columns_) {
-          if (column < 0 || column >= num_features || seen[static_cast<size_t>(column)]) {
+          if (column < 0 || column >= num_features ||
+              std::find(seen.begin(), seen.end(), column) != seen.end()) {
             return holoscan::make_unexpected(
                 holoscan::Error{holoscan::ErrorCode::kInvalidArgument,
                                 "DetectionReportOp: point_index_columns entries must be "
                                 "unique valid points columns"});
           }
-          seen[static_cast<size_t>(column)] = true;
+          seen.push_back(column);
         }
       }
-      lab.resize(static_cast<size_t>(num_points));
-      sz.resize(static_cast<size_t>(num_reports));
-      HOLOSCAN_RETURN_IF_ERROR(require_bytes("labels", labels_t, sizeof(int64_t) * lab.size()));
-      HOLOSCAN_RETURN_IF_ERROR(require_bytes("sizes", sizes_t, sizeof(int64_t) * sz.size()));
+      HOLOSCAN_TRY(auto labels_count, checked_report_elements(lshape, labels_t.nbytes(),
+                                                              sizeof(int64_t), kWho, "labels"));
+      HOLOSCAN_TRY(auto sizes_count, checked_report_elements(sshape, sizes_t.nbytes(),
+                                                             sizeof(int64_t), kWho, "sizes"));
+      lab.resize(labels_count);
+      sz.resize(sizes_count);
       if (use_reduced_points_) {
         const auto reduced_shape = reduced_t.shape();
         if (reduced_shape.size() != 2U || reduced_shape[0] != num_reports || reduced_shape[1] < 2) {
@@ -264,9 +285,10 @@ class DetectionReportOp : public holoscan::Operator<> {
               holoscan::Error{holoscan::ErrorCode::kInvalidArgument,
                               "DetectionReportOp: reduced_points must be (clusters, F>=2)"});
         }
-        reduced.resize(static_cast<size_t>(reduced_shape[0] * reduced_shape[1]));
-        HOLOSCAN_RETURN_IF_ERROR(
-            require_bytes("reduced_points", reduced_t, sizeof(float) * reduced.size()));
+        HOLOSCAN_TRY(auto reduced_count,
+                     checked_report_elements(reduced_shape, reduced_t.nbytes(), sizeof(float), kWho,
+                                             "reduced_points"));
+        reduced.resize(reduced_count);
       }
     } else if (num_reports != num_points) {
       return holoscan::make_unexpected(

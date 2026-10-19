@@ -3,6 +3,10 @@
 In this tutorial you will learn how to create a new **Holoscan Module** extending the Holoscan SDK.
 We will walk through project setup from a blank directory to a published community module.
 
+> This generic HoloHub template still describes its pybind11 and namespace-path workflow.
+> Radar on HSDK 5 uses the nanobind registry provider and wheel entry point described in
+> [`DEVELOPER.md`](../../DEVELOPER.md); use that workflow for Radar operators.
+
 ## 1. Holoscan Modules in Context
 
 ### What is NVIDIA Holoscan?
