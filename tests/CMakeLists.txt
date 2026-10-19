@@ -3,13 +3,13 @@
 
 add_subdirectory(cpp)
 
-# The pytest suites exercise the Python bindings, so they only
-# make sense when those are built. Registering them unconditionally made a
-# bare `ctest` fail when no operator bindings are available (no operator bindings to import) and forced
-# every caller to remember `-E pytest`.
+# The provider suite checks Python bindings and Graph execution. Numerical
+# Monte Carlo CFAR coverage remains in the C++ statistical CTest tier; the
+# removed Python statistical suite is not part of tests/provider. Registering
+# pytest without bindings would fail on import.
 if(NOT HOLOSCAN_RADAR_BUILD_PYTHON)
     message(STATUS
-        "Skipping pytest suites "
+        "Skipping pytest provider suite "
         "(HOLOSCAN_RADAR_BUILD_PYTHON=OFF)")
     return()
 endif()

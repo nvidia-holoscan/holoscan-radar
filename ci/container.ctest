@@ -140,10 +140,9 @@ endif()
 # the day it is added, and the failure mode is a too-slow run rather than
 # silent loss of coverage.
 #
-# This includes the Monte Carlo `statistical` tier. Measured 2026-07-29: the
-# 8 C++ CFAR Pfa tests take ~7.9 s and `pytest_statistical` ~5 s, against a
-# ~207 s suite. Cheap enough that deferring them to a scheduled job would buy
-# nothing and cost per-PR signal.
+# This includes the C++ Monte Carlo `statistical` tier. The Python provider
+# suite tests bindings and Graph execution; there is no Python statistical
+# CTest target in the HSDK 5 provider migration.
 if(NOT EXCLUDE_LABELS)
     set(EXCLUDE_LABELS "performance")
 endif()

@@ -210,8 +210,9 @@ What it does, and where to change it:
 - Builds into **`build-test/`**, a dedicated tree. The driver wipes it on every run, which
   is why it is deliberately not your `build/` directory.
 - Runs every registered C++ tier except `performance`, which has its own invocation,
-  plus the Python `pytest_provider` suite by default. That includes the Monte Carlo
-  `statistical` tests. Pass `--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF`
+  plus the Python `pytest_provider` binding and Graph suite by default. The C++
+  tier includes the Monte Carlo `statistical` tests; the provider has no Python
+  statistical suite. Pass `--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF`
   for a C++-only run. Narrow to one tier with
   `--ctest-options='-DINCLUDE_LABELS=statistical'`, or widen the exclusion with
   `-DEXCLUDE_LABELS='performance|statistical'`.

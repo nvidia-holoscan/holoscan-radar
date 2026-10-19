@@ -4,6 +4,12 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-19** — **Python provider coverage is scoped to bindings and Graphs.**
+  The former Python CFAR Monte Carlo suite was removed with the HSDK 5 binding
+  migration. C++ CTest retains CFAR statistical coverage; `pytest_provider`
+  has no statistical cases. Removed the stale pytest marker exclusion and
+  updated the test driver and developer guide to state this scope.
+
 - **2026-10-16** — **Documented the CLI's Python-first app selection.** The
   CLI selects Python for dual-language FMCW apps when `--language` is omitted.
   The C++ app guides now pass `--language cpp` explicitly; the root and
