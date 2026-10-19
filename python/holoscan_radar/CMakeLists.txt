@@ -64,6 +64,10 @@ target_link_libraries(holoscan_radar_python PRIVATE holoscan::core holoscan::par
 )
 configure_file(__init__.py "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/__init__.py" COPYONLY)
 configure_file(py.typed "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/py.typed" COPYONLY)
+# HSDK 5's holoscan_add_nanobind_stubs() and holoscan_add_operator_stubs()
+# describe native bindings and registry proxies. The public functions in
+# __init__.py add Radar's extents/config conversion, so keep their facade stub
+# until a generator can describe that call shape.
 configure_file(__init__.pyi "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/__init__.pyi" COPYONLY)
 install(TARGETS holoscan_radar_python LIBRARY DESTINATION holoscan_radar)
 install(FILES __init__.py __init__.pyi py.typed DESTINATION holoscan_radar)

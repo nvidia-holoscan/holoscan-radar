@@ -4,6 +4,12 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-19** — **Retained Radar's public facade type stub.** The staging
+  HSDK 5 package provides CMake helpers for native nanobind and registry proxy
+  stubs, but those do not describe Radar's `extents` argument and config
+  conversion in `holoscan_radar.__init__`. A provider test now checks that the
+  shipped `__init__.pyi` declares every public operator and no extras.
+
 - **2026-10-19** — **Python provider coverage is scoped to bindings and Graphs.**
   The former Python CFAR Monte Carlo suite was removed with the HSDK 5 binding
   migration. C++ CTest retains CFAR statistical coverage; `pytest_provider`

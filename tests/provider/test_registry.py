@@ -3,12 +3,27 @@
 
 """HSDK 5 registry and native constructor checks for FMCW Python operators."""
 
+import ast
 from pathlib import Path
 
 import holoscan_radar as radar
 import pytest
 
 import holoscan as hs
+
+
+def test_facade_stub_matches_public_operators():
+    stub_path = Path(radar.__file__).with_suffix(".pyi")
+    stub = ast.parse(stub_path.read_text(encoding="utf-8"))
+    declared = {
+        node.target.id
+        for node in stub.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and isinstance(node.annotation, ast.Name)
+        and node.annotation.id == "RadarOperator"
+    }
+    assert declared == set(radar.__all__)
 
 
 def test_all_fmcw_precisions_are_registered():
