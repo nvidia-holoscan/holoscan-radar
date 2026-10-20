@@ -99,6 +99,10 @@ commit/push/publication authorization from a new optimization request.
 - Publish baseline, per-operator disposition and final reports between sealed
   sessions. Link branch/artifact paths in chat at every milestone. Final gains
   require direct original/current-best paired measurements.
+- Track every attempted candidate in a linked `candidates.md`, with a document
+  explaining the actual change, acceptance/rejection/blocker and measured
+  impact. Follow operator-perf's [candidate records](../operator-perf/references/candidate-records.md);
+  include unsuccessful attempts and reconcile counts with sealed sessions.
 - Maintain a linked, user-readable `overview.md` throughout the campaign,
   following [reporting](references/reporting.md). At each milestone state the
   decision enabled by the evidence and the next action with its dependencies.

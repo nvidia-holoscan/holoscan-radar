@@ -7,6 +7,18 @@ profiles, checkpoints, budgets and manifests remain in ignored artifacts.
 reports, checks evidence hashes and records publication provenance separately.
 Run it only between sealed candidate sessions; do not mutate active identities.
 
+## Candidate Register
+
+Publish `candidates.md` with one linked explanation per attempted candidate,
+following the shared [candidate record requirements](../../operator-perf/references/candidate-records.md).
+Link the register prominently from `overview.md` and `final.md`; show attempted,
+accepted, rejected and validation-blocked totals, including zeros. Each entry
+names the mechanism, decision and reason, and measured impact or why it could
+not be measured. Operator-level dispositions do not replace attempt history.
+Publish only between sealed sessions and preserve earlier records when a later
+candidate supersedes them. This register is agent-maintained; the campaign report
+command does not generate it.
+
 ## Running Overview
 
 Create `overview.md` in the campaign report directory at discovery and keep the

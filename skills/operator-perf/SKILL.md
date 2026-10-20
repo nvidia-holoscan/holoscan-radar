@@ -153,6 +153,10 @@ authorized.
 
 ## Deliver
 
+For every attempted candidate, follow [candidate records](references/candidate-records.md):
+publish a linked register and a concrete before/after explanation, gate-based
+decision rationale and measured impact, including rejected/blocked attempts.
+
 Keep raw artifacts, provenance, candidate decisions, coverage gaps, and the stop
 reason. Remove temporary instrumentation and verify the retained state. Present
 the diff, cumulative results versus the original baseline, and report locations.

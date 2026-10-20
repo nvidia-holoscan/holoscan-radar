@@ -65,7 +65,10 @@ until final validation, then record the final reviewed source state separately.
 5. Record the candidate with evidence for contract, coverage, tests,
    equivalence, and speed gates. Keep only if all pass. For failure, seal the
    candidate file state and `restore` the checkpoint; it refuses unexpected
-   intervening edits and preserves previously accepted changes.
+   intervening edits and preserves previously accepted changes. Prepare the
+   [candidate explanation and register entry](candidate-records.md), including
+   the actual mechanism, decision rationale and measured impact or its absence.
+   Keep drafts in ignored notes while identities are frozen; publish after seal.
 6. After a keep, refresh attribution and compare structural evidence with the
    prior run; stale exports cannot establish convergence. Update current best.
    Do not run a mandatory standalone current-best A/A refresh. Stop on the
