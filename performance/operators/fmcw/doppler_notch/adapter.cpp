@@ -23,6 +23,8 @@ perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan)
   hr::MaxTensorExtents extents;
   extents.max_doppler_bins = scen.axis("doppler");
   extents.max_range_bins = scen.axis("range");
+  if (scen.axis("rx") > 1)
+    extents.max_rx = scen.axis("rx");
   if (scen.axis("tx") > 1) {
     extents.max_tx = scen.axis("tx");
     extents.max_rx = scen.axis("rx");
@@ -39,7 +41,7 @@ perf::ResultRow base_row(const Scenario& scen) {
   perf::ResultRow row;
   row.op_name = "DopplerNotchOp";
   row.variant = scen.params["transition_width"].as<double>() > 0.0 ? "cosine" : "hard";
-  row.variant += scen.axis("tx") > 1 ? "_mimo" : "_siso";
+  row.variant += scen.axis("tx") > 1 ? "_mimo" : (scen.axis("rx") > 1 ? "_simo" : "_siso");
   row.input_shape = perf::recipe_shape(scen.recipe.inputs.at(1), scen.values);
   row.k = scen.axis("doppler");
   row.live_port = scen.live_port;

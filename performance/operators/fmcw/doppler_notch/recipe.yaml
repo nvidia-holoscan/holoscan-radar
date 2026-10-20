@@ -24,6 +24,7 @@ recipe:
 cases:
   - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
   - {id: cosine-medium, profile: medium, scopes: [limited], parameters: {transition_width: 1.0}}
+  - {id: simo-medium, profile: medium, scopes: [limited], parameters: {}, fixture: {rx: 4}}
   - {id: mimo-medium, profile: medium, scopes: [limited], parameters: {}, fixture: {tx: 4, rx: 4}}
   - {id: noncyclic-medium, profile: medium, scopes: [limited], parameters: {cyclic_velocity_axis: false}}
   - {id: "center-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: center_velocity, value: 1.0}}
