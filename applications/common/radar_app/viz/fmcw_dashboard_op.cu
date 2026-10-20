@@ -379,21 +379,6 @@ void draw_oval(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
   }
 }
 
-void draw_polar_arc(AnnotationCanvas* image, std::int64_t width, std::int64_t height, float cx,
-                    float cy, float radius, float start_azimuth, float end_azimuth,
-                    const std::array<std::uint8_t, 4>& color, int segments) {
-  for (int segment = 0; segment < segments; ++segment) {
-    const float fraction0 = static_cast<float>(segment) / segments;
-    const float fraction1 = static_cast<float>(segment + 1) / segments;
-    const float azimuth0 = start_azimuth + fraction0 * (end_azimuth - start_azimuth);
-    const float azimuth1 = start_azimuth + fraction1 * (end_azimuth - start_azimuth);
-    draw_line(image, width, height, static_cast<int>(std::lround(cx + radius * std::sin(azimuth0))),
-              static_cast<int>(std::lround(cy - radius * std::cos(azimuth0))),
-              static_cast<int>(std::lround(cx + radius * std::sin(azimuth1))),
-              static_cast<int>(std::lround(cy - radius * std::cos(azimuth1))), color);
-  }
-}
-
 std::array<std::uint8_t, 4> aged_color(const std::array<std::uint8_t, 4>& color, std::int64_t age,
                                        std::int64_t lifetime) {
   const float fraction = std::clamp(
@@ -428,7 +413,7 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
       .x = panel.x + (is_polar ? 16 : (compact ? 36 : 48)),
       .y = panel.y + (height < 540 ? 28 : 44),
       .width = panel.width - (is_polar ? 32 : (compact ? 48 : 64)),
-      .height = panel.height - (height < 540 ? 52 : 84),
+      .height = panel.height - (is_polar ? (compact ? 48 : 68) : (compact ? 52 : 84)),
   };
   if (plot.width <= 1 || plot.height <= 1) {
     return;
@@ -443,45 +428,73 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
   const float circle_cx = plot.x + 0.5F * (plot.width - 1);
   const bool use_sector = is_polar && detail::use_azimuth_sector(config.az_bounds);
   const float display_center_azimuth =
-      use_sector ? 0.5F * (config.az_bounds[0] + config.az_bounds[1]) : 0.0F;
+      use_sector ? std::lerp(config.az_bounds[0], config.az_bounds[1], 0.5F) : 0.0F;
   const float display_half_span =
       use_sector ? 0.5F * (config.az_bounds[1] - config.az_bounds[0]) : 0.0F;
-  const float circle_cy = use_sector ? static_cast<float>(plot.y + plot.height - 12)
-                                     : plot.y + 0.5F * (plot.height - 1);
-  const float projected_half_width = std::max(0.001F, std::sin(display_half_span));
-  const float circle_radius =
-      use_sector ? std::min(0.5F * (plot.width - 2) / projected_half_width,
-                            static_cast<float>(plot.height - 20))
-                 : 0.5F * static_cast<float>(std::min(plot.width, plot.height) - 2);
+  const float circle_cy = plot.y + 0.5F * (plot.height - 1);
+  const float circle_radius = 0.5F * static_cast<float>(std::min(plot.width, plot.height) - 2);
+  const auto sector_pixel = [&](float range_fraction, float azimuth) {
+    const auto position = detail::sector_plot_position(range_fraction, azimuth, config.az_bounds);
+    if (!position) {
+      return std::optional<std::array<int, 2>>{};
+    }
+    return std::optional<std::array<int, 2>>{{
+        plot.x + static_cast<int>(std::lround((*position)[0] * (plot.width - 1))),
+        plot.y + static_cast<int>(std::lround((*position)[1] * (plot.height - 1))),
+    }};
+  };
   if (view == SpatialView::kAzimuthRange) {
     if (use_sector) {
-      draw_polar_arc(image, width, height, circle_cx, circle_cy, circle_radius, -display_half_span,
-                     display_half_span, kGrid, 48);
-      draw_polar_arc(image, width, height, circle_cx, circle_cy, 0.5F * circle_radius,
-                     -display_half_span, display_half_span, kGrid, 32);
-      const std::string left_label = format_degrees(config.az_bounds[0]);
-      const std::string center_label = format_degrees(display_center_azimuth);
-      const std::string right_label = format_degrees(config.az_bounds[1]);
-      const std::string degree_legend =
-          "Az: " + left_label + " / " + center_label + " / " + right_label + " deg";
+      // Fit x and y independently, retaining the actual azimuth and range in
+      // every grid line and sample. Equal-distance aspect would waste most of
+      // this short, wide panel for a narrow field of view.
+      const int ring_count = compact ? 2 : 4;
+      for (int ring = 1; ring <= ring_count; ++ring) {
+        const float fraction = static_cast<float>(ring) / ring_count;
+        auto previous = *sector_pixel(fraction, config.az_bounds[0]);
+        for (int segment = 1; segment <= 48; ++segment) {
+          const float azimuth =
+              std::lerp(config.az_bounds[0], config.az_bounds[1], segment / 48.0F);
+          const auto pixel = *sector_pixel(fraction, azimuth);
+          draw_line(image, width, height, previous[0], previous[1], pixel[0], pixel[1], kGrid);
+          previous = pixel;
+        }
+        const auto label = *sector_pixel(fraction, display_center_azimuth);
+        draw_text(image, width, height, label[0] + 5, label[1] + 2,
+                  format_value(fraction * max_range), 1);
+      }
+      const auto origin = *sector_pixel(0.0F, display_center_azimuth);
+      for (int ray = 0; ray <= 4; ++ray) {
+        const float azimuth = std::lerp(config.az_bounds[0], config.az_bounds[1], ray / 4.0F);
+        const auto edge = *sector_pixel(1.0F, azimuth);
+        draw_line(image, width, height, origin[0], origin[1], edge[0], edge[1], kGrid);
+      }
+      const std::string degree_legend = "Az: " + format_degrees(config.az_bounds[0]) + " / " +
+                                        format_degrees(display_center_azimuth) + " / " +
+                                        format_degrees(config.az_bounds[1]) + " deg";
       if (!compact) {
         draw_text(image, width, height,
                   panel.x + (panel.width - static_cast<int>(degree_legend.size()) * 7) / 2,
                   panel.y + 27, degree_legend, 1);
       }
+      const float aspect =
+          0.5F * (plot.width - 1) / (std::sin(display_half_span) * (plot.height - 1));
+      const std::string caption = "X scale " + format_value(aspect) + "x | m";
+      draw_text(image, width, height, panel.x + 12, panel.y + panel.height - (compact ? 15 : 18),
+                caption, 1);
     } else {
       draw_oval(image, width, height, circle_cx, circle_cy, circle_radius, circle_radius, kGrid,
                 48);
       draw_oval(image, width, height, circle_cx, circle_cy, 0.5F * circle_radius,
                 0.5F * circle_radius, kGrid, 32);
-    }
-    draw_line(image, width, height, static_cast<int>(circle_cx), static_cast<int>(circle_cy),
-              static_cast<int>(circle_cx), static_cast<int>(circle_cy - circle_radius), kGrid);
-    for (float azimuth : config.az_bounds) {
-      const float display_azimuth = azimuth - display_center_azimuth;
       draw_line(image, width, height, static_cast<int>(circle_cx), static_cast<int>(circle_cy),
-                static_cast<int>(circle_cx + circle_radius * std::sin(display_azimuth)),
-                static_cast<int>(circle_cy - circle_radius * std::cos(display_azimuth)), kGrid);
+                static_cast<int>(circle_cx), static_cast<int>(circle_cy - circle_radius), kGrid);
+      for (float azimuth : config.az_bounds) {
+        const float display_azimuth = azimuth - display_center_azimuth;
+        draw_line(image, width, height, static_cast<int>(circle_cx), static_cast<int>(circle_cy),
+                  static_cast<int>(circle_cx + circle_radius * std::sin(display_azimuth)),
+                  static_cast<int>(circle_cy - circle_radius * std::cos(display_azimuth)), kGrid);
+      }
     }
   } else {
     for (int tick = 0; tick < 3; ++tick) {
@@ -500,7 +513,11 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
     }
   }
 
-  const auto to_pixel = [&](const std::array<float, 4>& features) {
+  const auto to_pixel =
+      [&](const std::array<float, 4>& features) -> std::optional<std::array<int, 2>> {
+    if (use_sector) {
+      return sector_pixel(features[0] / max_range, features[2]);
+    }
     if (view == SpatialView::kAzimuthRange) {
       const float normalized_range = std::clamp(features[0] / max_range, 0.0F, 1.0F);
       const float display_azimuth = features[2] - display_center_azimuth;
@@ -537,10 +554,14 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
         continue;
       }
       const auto pixel = to_pixel(detail::truth_features_at_time(target, truth_time));
-      if (have_previous) {
-        draw_line(image, width, height, previous[0], previous[1], pixel[0], pixel[1], color);
+      if (!pixel) {
+        have_previous = false;
+        continue;
       }
-      previous = pixel;
+      if (have_previous) {
+        draw_line(image, width, height, previous[0], previous[1], (*pixel)[0], (*pixel)[1], color);
+      }
+      previous = *pixel;
       have_previous = true;
     }
   }
@@ -550,7 +571,11 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
         kClusterColors[static_cast<std::size_t>(sample.color_bucket) % kClusterColors.size()];
     const std::int64_t age = frame_index - sample.frame;
     const auto color = aged_color(base_color, age, config.detection_trail_frames);
-    const auto pixel = to_pixel(sample.features);
+    const auto position = to_pixel(sample.features);
+    if (!position) {
+      continue;
+    }
+    const auto pixel = *position;
     const int radius = age == 0 ? 4 : 2;
     draw_disc(image, width, height, pixel[0], pixel[1], radius, color);
     if (age == 0) {
@@ -1271,7 +1296,28 @@ bool use_azimuth_sector(const std::array<float, 2>& az_bounds) {
   constexpr float kPi = 3.14159265358979323846F;
   constexpr float kTolerance = 1.0e-5F;
   return std::isfinite(az_bounds[0]) && std::isfinite(az_bounds[1]) &&
-         az_bounds[0] <= az_bounds[1] && az_bounds[1] - az_bounds[0] <= kPi + kTolerance;
+         az_bounds[0] < az_bounds[1] && az_bounds[1] - az_bounds[0] <= kPi + kTolerance;
+}
+
+std::optional<std::array<float, 2>> sector_plot_position(float range_fraction, float azimuth,
+                                                         const std::array<float, 2>& az_bounds) {
+  if (!use_azimuth_sector(az_bounds) || !std::isfinite(range_fraction) || !std::isfinite(azimuth) ||
+      range_fraction < 0.0F || range_fraction > 1.0F) {
+    return std::nullopt;
+  }
+  constexpr double kTwoPi = 6.28318530717958647692;
+  const double half_span = 0.5 * (static_cast<double>(az_bounds[1]) - az_bounds[0]);
+  const double center = 0.5 * (static_cast<double>(az_bounds[1]) + az_bounds[0]);
+  const double delta = std::remainder(static_cast<double>(azimuth) - center, kTwoPi);
+  if (std::abs(delta) > half_span * (1.0 + 1.0e-5)) {
+    return std::nullopt;
+  }
+  return std::array<float, 2>{
+      std::clamp(
+          static_cast<float>(0.5 + 0.5 * range_fraction * std::sin(delta) / std::sin(half_span)),
+          0.0F, 1.0F),
+      std::clamp(static_cast<float>(1.0 - range_fraction * std::cos(delta)), 0.0F, 1.0F),
+  };
 }
 
 std::array<float, 2> history_plot_position(const HistorySample& sample, std::int64_t current_frame,

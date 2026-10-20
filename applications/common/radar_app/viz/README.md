@@ -12,6 +12,21 @@ are projected with the maximum power across the leading angle axes. Range
 increases upward; velocity increases to the right. Physical angle axes use the
 existing radar-boresight presentation conversion.
 
+## Azimuth / range sector
+
+For fields of view up to 180 degrees, the sector fills the panel width and
+height independently. This expands narrow scans instead of leaving a tiny
+wedge inside a mostly empty panel. Range rings mark quarters of the displayed
+maximum range (halves in compact windows), in meters; the azimuth legend gives the actual scan limits and
+center. The `X scale` caption reports the horizontal distance scale relative
+to the vertical distance scale. This is a fitted view with unequal axis scales,
+so screen angles and distances should not be measured as a plan view.
+
+Grid lines, simulated truth, and detection trails use the same projection.
+Samples outside the displayed range or azimuth bounds are omitted, and truth
+trails break when leaving the field of view. Wider scans retain the circular
+plan view. The projection is shared by the C++ and Python applications.
+
 ## Native text and presentation
 
 HSDK 5.0.0.7 provides `TextLayerDesc` and `TextRunHeader`. The compositor emits

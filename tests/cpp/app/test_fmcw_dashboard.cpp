@@ -305,6 +305,67 @@ TEST(FmcwDashboardTest, UsesUpwardSemicircleForAtMost180DegreeCoverage) {
   EXPECT_FALSE(viz::detail::use_azimuth_sector({-2.0F, 2.0F}));
 }
 
+TEST(FmcwDashboardTest, NarrowSectorFillsPanelWidthAndHeight) {
+  const std::array<float, 2> bounds{-0.3F, 0.3F};
+  const auto left = viz::detail::sector_plot_position(1.0F, bounds[0], bounds);
+  const auto right = viz::detail::sector_plot_position(1.0F, bounds[1], bounds);
+  const auto far = viz::detail::sector_plot_position(1.0F, 0.0F, bounds);
+  const auto near = viz::detail::sector_plot_position(0.0F, 0.0F, bounds);
+  ASSERT_TRUE(left && right && far && near);
+  EXPECT_NEAR((*left)[0], 0.0F, 1.0e-6F);
+  EXPECT_NEAR((*right)[0], 1.0F, 1.0e-6F);
+  EXPECT_NEAR((*left)[1], 1.0F - std::cos(0.3F), 1.0e-6F);
+  EXPECT_EQ(*far, (std::array<float, 2>{0.5F, 0.0F}));
+  EXPECT_EQ(*near, (std::array<float, 2>{0.5F, 1.0F}));
+  const auto halfway = viz::detail::sector_plot_position(0.5F, 0.0F, bounds);
+  ASSERT_TRUE(halfway);
+  EXPECT_EQ(*halfway, (std::array<float, 2>{0.5F, 0.5F}));
+}
+
+TEST(FmcwDashboardTest, FittedSectorHandlesOffCenterAndWrappedAzimuths) {
+  const std::array<float, 2> bounds{2.8F, 3.4F};
+  constexpr float kTwoPi = 6.28318530717958647692F;
+  const auto right = viz::detail::sector_plot_position(1.0F, bounds[1] - kTwoPi, bounds);
+  ASSERT_TRUE(right);
+  EXPECT_NEAR((*right)[0], 1.0F, 1.0e-6F);
+  const auto center = viz::detail::sector_plot_position(0.5F, 3.1F, bounds);
+  ASSERT_TRUE(center);
+  EXPECT_NEAR((*center)[0], 0.5F, 1.0e-6F);
+  EXPECT_NEAR((*center)[1], 0.5F, 1.0e-6F);
+}
+
+TEST(FmcwDashboardTest, FittedSectorContainsAllRangesForNarrowAndWideScans) {
+  constexpr float kHalfPi = 1.57079632679489661923F;
+  for (const auto& bounds :
+       {std::array<float, 2>{-1.0e-7F, 1.0e-7F}, std::array<float, 2>{-kHalfPi, kHalfPi},
+        std::array<float, 2>{-2.0F, 0.0F}}) {
+    for (int step = 0; step <= 100; ++step) {
+      const float azimuth = bounds[0] + (bounds[1] - bounds[0]) * step / 100.0F;
+      for (float range : {0.0F, 0.25F, 0.5F, 1.0F}) {
+        const auto position = viz::detail::sector_plot_position(range, azimuth, bounds);
+        ASSERT_TRUE(position);
+        for (float coordinate : *position) {
+          EXPECT_GE(coordinate, 0.0F);
+          EXPECT_LE(coordinate, 1.0F);
+        }
+      }
+    }
+  }
+}
+
+TEST(FmcwDashboardTest, FittedSectorRejectsOutOfViewAndInvalidSamples) {
+  const std::array<float, 2> bounds{-0.3F, 0.3F};
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, 0.4F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, -0.4F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(-0.1F, 0.0F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(1.1F, 0.0F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(std::nanf(""), 0.0F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, std::nanf(""), bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, 0.0F, {0.0F, 0.0F}));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, 0.0F, {0.3F, -0.3F}));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, 0.0F, {-3.14F, 3.14F}));
+}
+
 TEST(FmcwDashboardTest, ComputesClusterCentroids) {
   const std::vector<viz::DetectionMarker> markers =
       viz::detail::make_cluster_markers({0, 2, 2, 4, 3, 6},

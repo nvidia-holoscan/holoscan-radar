@@ -145,6 +145,11 @@ std::array<float, 2> rd_plot_position(float doppler_bin, float range_bin, std::i
 
 bool use_azimuth_sector(const std::array<float, 2>& az_bounds);
 
+// Unit-panel coordinates for an aspect-fitted polar sector. Out-of-view samples
+// have no position, so histories cannot draw across neighboring panels.
+std::optional<std::array<float, 2>> sector_plot_position(float range_fraction, float azimuth,
+                                                         const std::array<float, 2>& az_bounds);
+
 std::array<float, 2> history_plot_position(const HistorySample& sample, std::int64_t current_frame,
                                            std::int64_t history_frames, int feature,
                                            std::array<float, 2> bounds);
