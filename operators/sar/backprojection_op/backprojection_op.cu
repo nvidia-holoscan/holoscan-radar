@@ -799,10 +799,9 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
         });
       }
       // Copy after GPU work is synced, and reset only after a successful
-      // image emit: a failed Tensor emit consumes the loan, so a wait retry
-      // must still see the formed accum.
-      HOLOSCAN_RETURN_IF_ERROR(emit_required_tensor(
-          image, context, "BackprojectionOp.image", params().wait_for_downstream, [&] {
+      // image emit: a failed Tensor emit consumes the loan.
+      HOLOSCAN_RETURN_IF_ERROR(
+          emit_required_tensor(image, context, "BackprojectionOp.image", false, [&] {
             return prepare_device_tensor(
                 image, context, std::vector<int64_t>{num_v, num_u}, complex_dtype<T>(),
                 [&](void* dst, std::size_t) -> expected<void, Error> {

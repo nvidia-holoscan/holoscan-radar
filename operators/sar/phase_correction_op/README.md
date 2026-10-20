@@ -38,7 +38,6 @@ Set `max_pulses` and `max_range_bins` to cover the largest aligned tick. The out
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- |
 | `sense` | `PhaseCorrectionSense` | required | Static | Add or subtract per-pulse phase |
-| `wait_for_downstream` | `bool` | false | Static | Required emits wait on full queues |
 
 ## Operation and synchronization
 
@@ -55,15 +54,13 @@ positive pulse counts within `MaxTensorExtents`. Profile dtype is complex
 `T` and correction dtype real `T`; output dtype and shape match profiles.
 The operator rejects an invalid `sense`, mismatched pulse axes, invalid
 dtypes, or missing CUDA stream. `sense` is static for the instance.
-`wait_for_downstream: true` waits on the required `range_profiles_out` emit
-instead of failing `compute()` when the output queue is full.
+A full `range_profiles_out` queue fails `compute()`.
 
 ## Use and verification
 
 ```yaml
 phase_correction:
   sense: subtract
-  wait_for_downstream: false
 ```
 
 Connect a pulse-aligned phase estimator upstream and the corrected profiles

@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -254,19 +253,10 @@ inline std::size_t tensor_byte_span(std::span<const int64_t> shape, DLDataType d
   return static_cast<std::size_t>(count) * bytes_per_element;
 }
 
-// App-owned operators capture this at the graph ctor. Library SAR operators
-// read the optional static Param `wait_for_downstream` (default false)
-// instead — see docs/planning/SAR/OPERATOR_API.md. FMCW has not added that
-// Param yet; copy the SAR spelling and emit_required_tensor when they do.
-// Default false keeps fail-fast demos. A failed Tensor emit consumes the
-// loan, so wait retries must re-prepare, not re-emit.
-struct QueueWaitPolicy {
-  bool wait{false};
-};
-
-inline bool wait_queues(const std::shared_ptr<QueueWaitPolicy>& policy) {
-  return policy && policy->wait;
-}
+// CPHDReaderOp is the only library operator that retries a full queue
+// (`wait_for_downstream`, default false). Other required emits fail-fast
+// through emit_required_tensor(..., false). A failed Tensor emit consumes
+// the loan, so a wait retry must re-prepare, not re-emit.
 
 template <typename Fn>
 auto retry_transient(ExecutionContext& context, std::string_view what, Fn&& fn) -> decltype(fn()) {
@@ -290,15 +280,13 @@ auto retry_transient(ExecutionContext& context, std::string_view what, Fn&& fn) 
 }
 
 // Fail-fast (wait false): keep the SDK code, replace the message so a
-// RUNTIME_OPERATOR_CALLBACK_FAILED names the port and points at
-// wait_for_downstream. Log it too: the runtime wrapper can bury the Error.
+// RUNTIME_OPERATOR_CALLBACK_FAILED names the port. Log it too: the runtime
+// wrapper can bury the Error. Only CPHDReaderOp.wait_for_downstream retries.
 inline Error explain_fail_fast_emit(std::string_view what, ErrorCode code) {
   const char* detail = code == ErrorCode::kBackpressured
                            ? "next stage is behind; output queue is full"
                            : "no free tensor buffer";
-  return Error{code, std::string(what) + ": " + detail +
-                         ". The run is stopping. Set wait_for_downstream: true to wait "
-                         "instead of aborting."};
+  return Error{code, std::string(what) + ": " + detail + ". The run is stopping."};
 }
 
 template <typename Fn>

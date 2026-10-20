@@ -68,7 +68,8 @@ emits on `kBackpressured` / `kResourceExhausted` through the shared helper:
 HSDK 5 `QueuePolicy::kBlocking` does not park `OnClock` until the consumer
 has room, and a failed `emit(TensorOutputLoan)` consumes the loan, so the
 reader waits and re-prepares. Omit the key (default false) to fail-fast with
-the shared explanation. The wait returns on cooperative stop. The lag HUD
+the shared explanation. Only this operator takes the Param; formation
+operators fail-fast. The wait returns on cooperative stop. The lag HUD
 is live target versus wall (`TxTime` span / `playback_rate` versus now since
 the collection start), matching the HSDK 4 `playback_status()` poll. Pace
 sleep uses that same slack (no sleep while behind). A paced reader

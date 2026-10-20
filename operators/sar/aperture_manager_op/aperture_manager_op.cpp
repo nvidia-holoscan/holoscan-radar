@@ -365,11 +365,10 @@ expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
     admitted_since_emit_ = 0;
   }
   if (output_batch) {
-    const bool wait = p.wait_for_downstream;
     auto emit_copy = [&](Output<Tensor>& port, const Tensor& source,
                          std::string_view what) -> expected<void, Error> {
       return emit_required_tensor(
-          port, context, what, wait, [&]() -> expected<TensorOutputLoan, Error> {
+          port, context, what, false, [&]() -> expected<TensorOutputLoan, Error> {
             HOLOSCAN_TRY(auto loan, prepare_copy(port, context, source));
             if (cudaStreamSynchronize(stream) != cudaSuccess) {
               return make_unexpected(

@@ -26,17 +26,12 @@ namespace holoscan::radar {
 // Static correction sense; no implicit sign is safe for autofocus.
 struct PhaseCorrectionParams {
   PhaseCorrectionSense sense{PhaseCorrectionSense::kUnspecified};
-  bool wait_for_downstream{false};
 };
 
-HOLOSCAN_PARAM_SCHEMA(
-    PhaseCorrectionParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.PhaseCorrectionParams", 2),
-    holoscan::field<&PhaseCorrectionParams::sense>("sense").description(
-        "subtract multiplies by exp(-i phi); add by exp(+i phi). Required."),
-    holoscan::field<&PhaseCorrectionParams::wait_for_downstream>("wait_for_downstream")
-        .description("When true, required Tensor emits wait on kBackpressured / "
-                     "kResourceExhausted instead of failing compute(). Static. Default false."));
+HOLOSCAN_PARAM_SCHEMA(PhaseCorrectionParams,
+                      holoscan::param_schema("com.nvidia.holoscan.radar.PhaseCorrectionParams", 3),
+                      holoscan::field<&PhaseCorrectionParams::sense>("sense").description(
+                          "subtract multiplies by exp(-i phi); add by exp(+i phi). Required."));
 
 template <typename T>
 class PhaseCorrectionOp : public holoscan::Operator<PhaseCorrectionParams> {

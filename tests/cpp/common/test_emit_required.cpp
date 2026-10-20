@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// emit_required_tensor: fail-fast names wait_for_downstream; wait retries until
+// emit_required_tensor: fail-fast names a full queue; wait retries until
 // a slow cross-partition consumer drains a depth-1 kBlocking queue.
 
 #include <gtest/gtest.h>
@@ -170,28 +170,25 @@ RunOutcome run_backpressure_graph(bool wait) {
   return outcome;
 }
 
-TEST(EmitRequired, FailFastMessageNamesWaitParam) {
+TEST(EmitRequired, FailFastMessageNamesFullQueue) {
   const auto backpressured =
       explain_fail_fast_emit("RequiredEmitOp.out", holoscan::ErrorCode::kBackpressured);
   const std::string queue_full = holoscan::runtime_error_message(backpressured);
   EXPECT_EQ(backpressured.code, holoscan::ErrorCode::kBackpressured);
-  EXPECT_NE(queue_full.find("wait_for_downstream"), std::string::npos);
   EXPECT_NE(queue_full.find("output queue is full"), std::string::npos);
-  EXPECT_EQ(queue_full.find("on this operator"), std::string::npos);
+  EXPECT_EQ(queue_full.find("wait_for_downstream"), std::string::npos);
 
   const auto exhausted =
       explain_fail_fast_emit("RequiredEmitOp.out", holoscan::ErrorCode::kResourceExhausted);
   const std::string no_buffer = holoscan::runtime_error_message(exhausted);
   EXPECT_EQ(exhausted.code, holoscan::ErrorCode::kResourceExhausted);
   EXPECT_NE(no_buffer.find("no free tensor buffer"), std::string::npos);
-  EXPECT_NE(no_buffer.find("wait_for_downstream"), std::string::npos);
+  EXPECT_EQ(no_buffer.find("wait_for_downstream"), std::string::npos);
 }
 
 TEST(EmitRequired, FailFastAbortsWhenConsumerIsBehind) {
   const RunOutcome outcome = run_backpressure_graph(false);
   EXPECT_EQ(outcome.termination, holoscan::RunTermination::kFailed) << outcome.diagnostics;
-  EXPECT_NE(outcome.diagnostics.find("wait_for_downstream"), std::string::npos)
-      << outcome.diagnostics;
   EXPECT_NE(outcome.diagnostics.find("output queue is full"), std::string::npos)
       << outcome.diagnostics;
   EXPECT_LT(outcome.received, kTicks);

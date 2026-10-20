@@ -91,8 +91,7 @@ expected<void, Error> PhaseCorrectionOp<T>::compute(ExecutionContext& context) {
   }
   // Apply the declared add/subtract sign across every range bin of each pulse.
   HOLOSCAN_TRY(emit_required_tensor(
-      range_profiles_out, context, "PhaseCorrectionOp.range_profiles_out",
-      context.params<PhaseCorrectionParams>().wait_for_downstream, [&] {
+      range_profiles_out, context, "PhaseCorrectionOp.range_profiles_out", false, [&] {
         return prepare_device_tensor(
             range_profiles_out, context, shape, profiles.dtype(),
             [&](void* destination, std::size_t) -> expected<void, Error> {

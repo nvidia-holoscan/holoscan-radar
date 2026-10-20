@@ -44,11 +44,10 @@ struct BackprojectionParams {
   RangeInterpolation interpolation{RangeInterpolation::kLinear};
   BackprojectionBackend backend{kDefaultBackprojectionBackend};
   GeometryChange geometry_change{GeometryChange::kReset};
-  bool wait_for_downstream{false};
 };
 HOLOSCAN_PARAM_SCHEMA(
     BackprojectionParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.BackprojectionParams", 2),
+    holoscan::param_schema("com.nvidia.holoscan.radar.BackprojectionParams", 3),
     holoscan::field<&BackprojectionParams::coordinate_frame>("coordinate_frame"),
     holoscan::field<&BackprojectionParams::sample_geometry>("sample_geometry"),
     holoscan::field<&BackprojectionParams::range_bin_spacing>("range_bin_spacing"),
@@ -56,10 +55,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&BackprojectionParams::reference_frequency>("reference_frequency"),
     holoscan::field<&BackprojectionParams::interpolation>("interpolation"),
     holoscan::field<&BackprojectionParams::backend>("backend"),
-    holoscan::field<&BackprojectionParams::geometry_change>("geometry_change"),
-    holoscan::field<&BackprojectionParams::wait_for_downstream>("wait_for_downstream")
-        .description("When true, required Tensor emits wait on kBackpressured / "
-                     "kResourceExhausted instead of failing compute(). Static. Default false."));
+    holoscan::field<&BackprojectionParams::geometry_change>("geometry_change"));
 
 template <typename T>
 class BackprojectionOp : public holoscan::Operator<BackprojectionParams> {

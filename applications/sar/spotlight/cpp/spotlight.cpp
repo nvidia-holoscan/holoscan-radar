@@ -16,8 +16,8 @@ constexpr const char* kQueueFullHint =
     "consumed the previous tick, and no buffers remain available, an exception is "
     "raised.  For some missions, falling behind may be tolerable, and for others, "
     "this would be catastrophic.  This application models the latter case.  To make this "
-    "pipeline run successfully, either change the wait policy, reduce the playback "
-    "rate, or reduce the image size so that the pipeline can keep up.";
+    "pipeline run successfully, either set cphd_reader.playback_rate to a lower value, "
+    "or reduce the image size so that the pipeline can keep up.";
 
 int main(int argc, char** argv) {
   return run_sar_graph_app(

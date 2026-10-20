@@ -34,18 +34,14 @@ struct ApertureManagerParams {
   int64_t emit_interval_pulses{0};
   ApertureEmitMode emit_mode{ApertureEmitMode::kContinue};
   WindowSpec aperture_window{};
-  bool wait_for_downstream{false};
 };
 HOLOSCAN_PARAM_SCHEMA(
     ApertureManagerParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.ApertureManagerParams", 2),
+    holoscan::param_schema("com.nvidia.holoscan.radar.ApertureManagerParams", 3),
     holoscan::field<&ApertureManagerParams::max_aperture_pulses>("max_aperture_pulses"),
     holoscan::field<&ApertureManagerParams::emit_interval_pulses>("emit_interval_pulses"),
     holoscan::field<&ApertureManagerParams::emit_mode>("emit_mode"),
-    holoscan::field<&ApertureManagerParams::aperture_window>("aperture_window"),
-    holoscan::field<&ApertureManagerParams::wait_for_downstream>("wait_for_downstream")
-        .description("When true, required Tensor emits wait on kBackpressured / "
-                     "kResourceExhausted instead of failing compute(). Static. Default false."));
+    holoscan::field<&ApertureManagerParams::aperture_window>("aperture_window"));
 
 template <typename T>
 class ApertureManagerOp : public holoscan::Operator<ApertureManagerParams> {

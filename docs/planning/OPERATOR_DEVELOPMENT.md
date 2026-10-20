@@ -288,15 +288,12 @@ and the `(void)` reads as the deliberate choice it is.
 
 Required library emits are fail-fast by default (`emit_required_tensor` with
 wait false). A failed Tensor emit consumes the loan, so a wait retry must
-re-prepare. SAR formation producers take an optional static Param
+re-prepare. Only `CPHDReaderOp` takes the optional static Param
 `wait_for_downstream` (default false, not `[live]`, Params schema version 2)
-that switches required emits to that helper. Do not capture wait in a library
-constructor. `CPHDReaderOp` takes the same Param (default false). App-owned
-operators may capture `QueueWaitPolicy` from app YAML. FMCW has not added the
-Param yet: copy the SAR spelling, emit through `emit_required_tensor`, and
-bump the Params schema. Do not use `kDropOldest` on a formation data path.
-Continuous strip opts in on reader, range-compression, aperture-manager, and
-backprojection YAML plus the app-owned scroll/mosaic flag.
+that switches required emits to retry. Do not capture wait in a library
+constructor. Do not add this Param to formation or FMCW operators. Do not use
+`kDropOldest` on a formation data path. Continuous strip opts in on
+`cphd_reader` YAML only.
 
 ### Sample time propagation and aligned joins
 
@@ -593,8 +590,8 @@ it: no leak, no backwards steps, and the operator chooses which sample matters
 
 Structural enums that select a kernel (`cfar_variant`, multiplexing scheme,
 `angle_convention`) stay **static** — callers instantiate another operator.
-`wait_for_downstream` is static too: it selects fail-fast vs retry for the
-run, not a per-tick encoding. Footguns that are "reasonable" (live `pfa`,
+`CPHDReaderOp.wait_for_downstream` is static too: it selects fail-fast vs retry
+for the run, not a per-tick encoding. Footguns that are "reasonable" (live `pfa`,
 live window size) are allowed with warn-once + cache.
 
 ### When the contract says "cheap" but reality is not

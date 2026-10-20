@@ -39,20 +39,16 @@ struct SARRangeCompressionParams {
   FftNorm fft_norm{FftNorm::kBackward};
   int64_t nfft{0};  // 0 = observed num_samples.
   double propagation_speed{kDefaultPropagationSpeed};
-  bool wait_for_downstream{false};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
     SARRangeCompressionParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.SARRangeCompressionParams", 2),
+    holoscan::param_schema("com.nvidia.holoscan.radar.SARRangeCompressionParams", 3),
     holoscan::field<&SARRangeCompressionParams::range_window>("range_window"),
     holoscan::field<&SARRangeCompressionParams::waveform>("waveform"),
     holoscan::field<&SARRangeCompressionParams::fft_norm>("fft_norm"),
     holoscan::field<&SARRangeCompressionParams::nfft>("nfft"),
-    holoscan::field<&SARRangeCompressionParams::propagation_speed>("propagation_speed"),
-    holoscan::field<&SARRangeCompressionParams::wait_for_downstream>("wait_for_downstream")
-        .description("When true, required Tensor emits wait on kBackpressured / "
-                     "kResourceExhausted instead of failing compute(). Static. Default false."));
+    holoscan::field<&SARRangeCompressionParams::propagation_speed>("propagation_speed"));
 
 template <typename T>
 class SARRangeCompressionOp : public holoscan::Operator<SARRangeCompressionParams> {

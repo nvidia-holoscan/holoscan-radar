@@ -33,10 +33,9 @@ namespace detail {
 inline expected<void, Error> emit_geometry(Output<WireSampleGeometry>& output,
                                            ExecutionContext& context,
                                            const SampleGeometry& geometry, TimePoint capture_time,
-                                           bool wait = false,
                                            std::string_view what = "sample_geometry") {
   return emit_required_schema_tensor(
-      output, context, what, wait, to_wire(geometry),
+      output, context, what, false, to_wire(geometry),
       [&]() -> expected<TensorOutputLoan, Error> {
         auto loan = output.allocate_tensor(TensorLoanRequest{
             .shape = std::vector<int64_t>{11}, .dtype = DLDataType{kDLFloat, 64U, 1U}});

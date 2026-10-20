@@ -130,10 +130,6 @@ struct AppConfig : radar::app::CommonRunConfig {
   // 5 omit it. Display still gates on HUD playback.paced so
   // an unpaced YAML stays blank.
   bool show_playback_lag{false};
-  // When true, app-owned scroll/mosaic required emits wait on
-  // kBackpressured. Library operators take the same-named static Param
-  // on their YAML blocks (default false).
-  bool wait_for_downstream{false};
   // Holoviz window: longest side (px) for square collects, and
   // the no-DISPLAY fallback for a parent strip. A parent strip
   // (mode 3 mosaic / mode 4 scroll blit) fits the desktop work
@@ -1335,9 +1331,6 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
   }
   if (!std::isfinite(cfg.visualize_hold_s)) {
     throw std::runtime_error("visualize_hold_s must be finite");
-  }
-  if (const YAML::Node v = root["wait_for_downstream"]; v && !v.IsNull()) {
-    cfg.wait_for_downstream = v.as<bool>();
   }
   return cfg;
 }

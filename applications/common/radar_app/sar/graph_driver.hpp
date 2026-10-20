@@ -91,8 +91,7 @@ inline radar::MaxTensorExtents make_extents(const AppConfig& cfg,
 // Operator Error text stays as-is. When the run fails because a required emit
 // could not land, append the calling demo's teaching paragraph.
 inline bool mentions_full_queue(const std::string& text) {
-  return text.find("wait_for_downstream") != std::string::npos ||
-         text.find("output queue is full") != std::string::npos ||
+  return text.find("output queue is full") != std::string::npos ||
          text.find("no free tensor buffer") != std::string::npos;
 }
 

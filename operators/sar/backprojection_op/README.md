@@ -59,7 +59,6 @@ Set `max_pulses`, `max_range_bins`, `max_image_v`, and `max_image_u` for the lar
 | `interpolation` | `RangeInterpolation` | linear | [live] | Range lookup method |
 | `backend` | `BackprojectionBackend` | NVRadar LUT vector | Static | CUDA arithmetic strategy |
 | `geometry_change` | `GeometryChange` | reset | Static | Reset or scroll lattice |
-| `wait_for_downstream` | `bool` | false | Static | Required emits wait on full queues |
 
 ## Formation and accumulation
 
@@ -75,8 +74,7 @@ for their chosen range-compression setup.
 
 `control` drives image emission and reset/continuation. An unwired or missing
 control means the stage accumulates without emitting; stopping with pending
-pulses warns. `wait_for_downstream: true` waits on the required `image` emit
-instead of failing `compute()` when the output queue is full; an
+pulses warns. A full `image` queue fails `compute()`; an
 `emit_and_reset` tick resets the accumulator only after that emit succeeds. With `geometry_change: reset`, a changed lattice discards the
 old accumulation. With `scroll`, a forward shift along the lattice v axis
 retains overlapping rows and clears newly exposed rows. Scroll disallows

@@ -191,8 +191,7 @@ expected<void, Error> SARRangeCompressionOp<T>::compute(ExecutionContext& contex
                                          "SARRangeCompressionOp.range_window_out");
   }
   HOLOSCAN_TRY(emit_required_tensor(
-      range_profiles, context, "SARRangeCompressionOp.range_profiles",
-      context.params<SARRangeCompressionParams>().wait_for_downstream, [&] {
+      range_profiles, context, "SARRangeCompressionOp.range_profiles", false, [&] {
         return prepare_device_tensor(
             range_profiles, context, out_shape, complex_dtype<T>(),
             [&](void* dst, std::size_t) -> expected<void, Error> {

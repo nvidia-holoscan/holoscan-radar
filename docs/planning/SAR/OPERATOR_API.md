@@ -59,10 +59,10 @@ The SAR descriptors are `CoordinateFrame`,
 | Operator | Params |
 | --- | --- |
 | `CPHDReaderOp` | `path` required; `coordinate_frame` required; `pulses_per_tick` required; `channel=0`; `pulse_range=[]`; `loop=false`; `playback_rate=0`; `duty_cycle=1`; static `wait_for_downstream=false` |
-| `SARRangeCompressionOp` | `[live] range_window=rectangular`; `[live] waveform=unset`; `[live] fft_norm=backward`; `[live] nfft=observed num_samples`; `[live] propagation_speed=299792458 m/s`; static `wait_for_downstream=false` |
-| `ApertureManagerOp` | `max_aperture_pulses=0`; `emit_interval_pulses=0`; `emit_mode=continue`; `aperture_window=rectangular`; `wait_for_downstream=false`; all static |
-| `BackprojectionOp` | `coordinate_frame` required; `sample_geometry` required unless sample points are supplied; `[live] range_bin_spacing=unset`, `range_bin_origin=unset`, `reference_frequency` must be set to first fast-time sample frequency, `interpolation=linear`; static `backend=nvradar_block_anchored_expanded_throughput_phase_lut_vec`, `geometry_change=reset`, `wait_for_downstream=false` |
-| `PhaseCorrectionOp` | static `sense` required (`add` or `subtract`); static `wait_for_downstream=false` |
+| `SARRangeCompressionOp` | `[live] range_window=rectangular`; `[live] waveform=unset`; `[live] fft_norm=backward`; `[live] nfft=observed num_samples`; `[live] propagation_speed=299792458 m/s` |
+| `ApertureManagerOp` | `max_aperture_pulses=0`; `emit_interval_pulses=0`; `emit_mode=continue`; `aperture_window=rectangular`; all static |
+| `BackprojectionOp` | `coordinate_frame` required; `sample_geometry` required unless sample points are supplied; `[live] range_bin_spacing=unset`, `range_bin_origin=unset`, `reference_frequency` must be set to first fast-time sample frequency, `interpolation=linear`; static `backend=nvradar_block_anchored_expanded_throughput_phase_lut_vec`, `geometry_change=reset` |
+| `PhaseCorrectionOp` | static `sense` required (`add` or `subtract`) |
 | `TensorDumpOp` | static `path` required, `format=npy`, `max_files=unlimited`; `[live] every_n=1` |
 
 `initial_image`, `nearest` and `sinc` are declared but currently rejected by
@@ -71,7 +71,7 @@ MatX exposes it. These are deferred capabilities, not silently supported ones.
 The branch's range-compression normalization default remains implemented as
 `backward`; whether that is the right radiometric default is still open (I5).
 
-**`wait_for_downstream` (static, default false).** Optional. When true, each required Tensor emit retries on `kBackpressured` / `kResourceExhausted` (re-prepare: a failed Tensor emit consumes the loan) instead of failing `compute()`. Not `[live]`. Omit the key for fail-fast: the emit keeps the SDK code, logs why the queue/pool is full, and names `wait_for_downstream` before `compute()` fails. Taken by `CPHDReaderOp`, `SARRangeCompressionOp`, `ApertureManagerOp`, `BackprojectionOp`, and `PhaseCorrectionOp`. `TensorDumpOp` has no Tensor outputs. App-owned operators are outside this contract (continuous strip uses a same-named app YAML flag for scroll/mosaic). FMCW operators do not take this Param yet; copy this spelling and `emit_required_tensor` when they do.
+**`wait_for_downstream` (static, default false).** Optional on `CPHDReaderOp` only (and the future `CRSDReaderOp` that copies that contract). When true, that reader's required Tensor emits retry on `kBackpressured` / `kResourceExhausted` (re-prepare: a failed Tensor emit consumes the loan) instead of failing `compute()`. Not `[live]`. Omit the key for fail-fast. Formation operators (`SARRangeCompressionOp`, `ApertureManagerOp`, `BackprojectionOp`, `PhaseCorrectionOp`) and app-owned SAR stages do not take this Param: a full queue fails `compute()`. `TensorDumpOp` has no Tensor outputs.
 
 ### Public contract changes in this port
 
@@ -82,7 +82,7 @@ The branch's range-compression normalization default remains implemented as
 | `[live]` overrides are per tick, `Exact{}`/`SafeDefault{}`; no sticky value | Matches main-5x temporal contract |
 | Output names `range_window_out`, `sample_geometry_out`, `range_profiles_out` | HSDK 5 unique input/output names |
 | `CoordinateFrame`, `SampleGeometry`, and `LFMWaveformDescriptor` use HSDK 5 schema-backed wire values | Shared descriptor policy |
-| `wait_for_downstream` optional static Param on SAR producers with a required Tensor emit, including `CPHDReaderOp` (default false); Params schema version 2 | HSDK 5 `kBlocking` emit does not park; demos that must keep running late opt in per operator YAML. FMCW has not added this Param yet |
+| `wait_for_downstream` optional static Param on `CPHDReaderOp` only (default false; Params schema version 2). Formation operators fail-fast (Params schema version 3 after removing the field) | HSDK 5 `kBlocking` emit does not park; ingest may wait. Formation does not |
 
 ## Historical SAR design reference
 
@@ -366,7 +366,7 @@ Reads a CPHD collection and emits phase history together with the per-pulse geom
 - `loop` **[CONTRACT CHANGE 2026-08-26]** — bool. After the last file, wrap to the first rather than ending the stream. Every seam — including last→first — is `collection_boundary`; `end_of_stream` is never stamped. The graph runs until SIGINT (or an application-owned stop). Static. Default: **false** (today's termination).
 - `playback_rate` **[CONTRACT CHANGE 2026-08-26]** — float, ≥ 0. Pace pulse emission against collect time. **`0`** (default) emits as fast as compute allows. **`1`** is collect time. **[CONTRACT CHANGE 2026-08-28]** Sleep is global slack: (TxTime span of pulses read so far) / rate − wall since the collection's first tick. Positive (ahead) sleeps; negative (behind) does not — catch up at GPU speed, never slower than the GPU. **`2`** is twice as fast, **`0.5`** half speed — video-playback convention. Static.
 - `duty_cycle` **[CONTRACT CHANGE 2026-08-26]** — float, in `(0, 1]`. Collection-platform duty cycle: after a collection, when another follows (next file, or wrap when `loop` is true), sleep `T_c · (1/D − 1)` of **radar** collect time, where `T_c` is the `TxTime` span of the pulses actually read. **`1`** (default) is no gap. With `playback_rate > 0` the sleep is divided by that rate so the whole timeline scales; with `playback_rate = 0` the gap is unscaled platform wall time. Not applied after the last file when `loop` is false (nothing follows). A value outside `(0, 1]` is an error. Static.
-- `wait_for_downstream` **[CONTRACT CHANGE 2026-10-10]** — bool. When true, required Tensor emits (`phase_history`, `positions`, `reference_position`) and `stream_boundary` wait on `kBackpressured` / `kResourceExhausted` (re-prepare) instead of failing `compute()`. HSDK 5 `kBlocking` does not park an `OnClock` source, so omit the key for fail-fast. Static. Default: **false**.
+- `wait_for_downstream` **[CONTRACT CHANGE 2026-10-10; reader-only 2026-10-19]** — bool. When true, required Tensor emits (`phase_history`, `positions`, `reference_position`) and `stream_boundary` wait on `kBackpressured` / `kResourceExhausted` (re-prepare) instead of failing `compute()`. HSDK 5 `kBlocking` does not park an `OnClock` source, so omit the key for fail-fast. Formation operators do not take this Param. Static. Default: **false**.
 
 **Algorithm:**
 
@@ -413,7 +413,6 @@ The remaining ports — the per-pulse geometry and the deramp reference record t
 - `fft_norm` **[live]** — enum {backward, ortho, forward}. Which transform direction carries the `1/N` factor, on the NumPy/MatX convention: `backward` scales the inverse, `forward` scales the forward, `ortho` splits it as `1/sqrt(N)` each way. **Because this stage's transform is the inverse one, `backward` applies the `1/N` here** — the same spelling that leaves the FMCW range stage's output unscaled. The default is therefore a radiometric choice rather than a spelling detail, and it is not settled: see *Open items*, I5. Default: backward.
 - `nfft` **[live]** — int, ≥ `num_samples`. Fast-time transform length; larger zero-pads the **spectral edges** (the middle of the rotated row) for a finer interpolated range grid over the same span, and is the escape hatch for a large-prime `num_samples`. The output bin count follows it (downstream infers). An unseen length builds a new plan and warns; seen lengths reuse the MatX plan cache. Default: none (= `num_samples`, exact N-point).
 - `propagation_speed` **[live]** — float. Wave speed for the frequency → range conversion (`range_bins` only). Default: speed of light ≈ 2.998e8 m/s.
-- `wait_for_downstream` **[CONTRACT CHANGE 2026-10-10]** — bool. When true, the required `range_profiles` emit waits on `kBackpressured` / `kResourceExhausted` (re-prepare) instead of failing `compute()`. Static. Default: **false**.
 
 **Algorithm:**
 
@@ -471,7 +470,6 @@ geometry, this applies the result so a formation on any geometry sees corrected 
 **Parameters:**
 
 - `sense` — enum {subtract, add}. Whether the correction is removed from the data (`subtract`, multiplying by `exp(−iφ)`) or impressed onto it (`add`, `exp(+iφ)`). **Static** and **required with no default**: both are one sign apart, neither is checkable from the values, and guessing wrong doubles the error instead of removing it — the same reasoning that makes `azimuth_axis` required. `add` exists because injecting a known error is how [TESTING.md](TESTING.md) builds its ground truth. Default: none (required).
-- `wait_for_downstream` **[CONTRACT CHANGE 2026-10-10]** — bool. When true, the required `range_profiles_out` emit waits on `kBackpressured` / `kResourceExhausted` (re-prepare) instead of failing `compute()`. Static. Default: **false**.
 
 **Algorithm:** broadcast the per-pulse phase across the range axis and multiply. Stateless, in-place-able, one pass.
 
@@ -526,7 +524,6 @@ Time-domain image formation. **Accumulating across ticks** — see *Cross-tick a
   - Block-anchored + LUT: `nvradar_block_anchored_phase_lut`, `nvradar_block_anchored_refined_quality_phase_lut`, `nvradar_block_anchored_expanded_throughput_phase_lut`, `nvradar_block_anchored_expanded_throughput_phase_lut_vec`, `nvradar_block_anchored_expanded_throughput_phase_lut_vec_z0`, `nvradar_block_anchored_expanded_quality_phase_lut`, `nvradar_block_anchored_phase_lut_legacy`, `nvradar_block_anchored_fp64_trajectory_phase_lut`.
   - The name was `precision_mode` until 2026-08-06; it selects a strategy of which precision is one consequence, so it is now `backend`.
 - `geometry_change` — enum {reset, scroll}. What an incoming sample geometry *means*: under `reset` it invalidates every partial sum, so it must arrive with a resetting control message; under `scroll` a pure translation along `v` instead advances a scrolling accumulator, preserving the partial sums of every pixel still in view. `scroll` works in either geometry mode, and rejects a connected `weight` — see *Scrolling accumulation*. Static — it selects the accumulator's structure, not a per-tick behaviour. Default: reset. `geometry_update` was the alternative spelling and reads as though it named a rate.
-- `wait_for_downstream` **[CONTRACT CHANGE 2026-10-10]** — bool. When true, the required `image` emit waits on `kBackpressured` / `kResourceExhausted` (re-prepare) instead of failing `compute()`. An `emit_and_reset` tick resets the accumulator only after that image emit succeeds, so a wait retry still copies the formed image. Static. Default: **false**.
 
 **There is deliberately no `emit_policy`, `reset_policy`, or aperture-retention parameter, and this operator never resets itself.** Retention, the emit decision, and the timing of every configuration change belong to the formation manager (below); this operator holds an accumulator, not an aperture, and applies whatever it is told when it is told. See *Notes* for why the split, and *Running without a manager* for what happens when there is none.
 
@@ -667,7 +664,6 @@ Such an application wires control from a small operator of its own — fed by th
 - `emit_mode` — enum {continue, reset, reform}. Which control message accompanies an emit. *continue* sends *emit-and-continue* and keeps the downstream accumulator running; *reset* sends *emit-and-reset* and clears it after the image; *reform* replays the whole retained aperture at the boundary with final weights and sends *reset-then-emit*, forming the image from scratch. **`reform` requires `max_aperture_pulses > 0`** — with no retention there is nothing to replay, so the combination is rejected at initialization rather than emitting an empty image. Structural, so it is Static per invariant 5. Default: continue.
 - `aperture_window` — WindowSpec. Cross-range (azimuth) taper applied across the aperture, emitted on `weight`. Reuses the existing descriptor and the same spelling as `SARRangeCompressionOp.range_window`, on the other axis. A taper is a function of a pulse's slot within its aperture, so it is computable by whoever owns membership — this operator where it owns it, and **the application directly where the application owns it**: an app handing over whole apertures knows every slot and drives `BackprojectionOp.weight` itself, with no manager in the graph. Static. Default: none (rectangular, all weights `+1`).
   - It exists here so a caller who would rather configure than write an operator does not have to, and because `reform` needs the window where the retained pulses are. Legal only where the weights are computable — see *Notes*.
-- `wait_for_downstream` **[CONTRACT CHANGE 2026-10-10]** — bool. When true, the required `range_profiles`, `positions`, and `reference_position` emits wait on `kBackpressured` / `kResourceExhausted` (re-prepare) instead of failing `compute()`. Optional ports stay latched. Static. Default: **false**.
 
 **Algorithm:**
 
@@ -1060,6 +1056,7 @@ Rename a parameter or move a port and the same gate applies — the contract bei
 | 2026-08-26 | **`CPHDReaderOp` `loop` / `playback_rate` / `duty_cycle`.** Three static parameters (defaults `false` / `0` / `1`). `loop` wraps last→first as `collection_boundary`. `playback_rate` 1 = collect-time pacing (video convention). `duty_cycle` sleeps `T_c·(1/D−1)` between collections. `CRSDReaderOp` takes the same three when it exists. Also [TESTING.md](TESTING.md). | SAR-scoped | developer, in session |
 | 2026-08-28 | **`CPHDReaderOp.playback_rate` catch-up.** Sleep is `collect / rate − wall` since the collection start, not per-tick "at least this batch's `TxTime`". Behind skips sleep until on time. Also [TESTING.md](TESTING.md). | SAR-scoped | developer, in session |
 | 2026-10-10 | **`CPHDReaderOp.wait_for_downstream`.** Same optional static Param as the SAR formation producers (default false, schema v2). Required emits fail-fast unless the YAML key is true. Continuous strip opts in; other SAR demos omit it. Also [TESTING.md](TESTING.md). | SAR-scoped | developer, in session |
+| 2026-10-19 | **Formation wait withdrawn.** `wait_for_downstream` remains only on `CPHDReaderOp` (schema v2). `SARRangeCompressionOp`, `ApertureManagerOp`, `BackprojectionOp`, and `PhaseCorrectionOp` drop the Param (schema v3); required emits fail-fast. App-owned scroll/mosaic drop `QueueWaitPolicy`. Continuous strip keeps the key on `cphd_reader` only. Also [TESTING.md](TESTING.md). | SAR-scoped | developer, in session |
 
 Two changes landed on 2026-08-06, immediately **before** approval, and are recorded in [STATUS.md](../STATUS.md) rather than here: D24 (`LFMWaveformDescriptor` added instead of renaming the FMCW type) and the `precision_mode` → `backend` rename. They are part of what was approved.
 

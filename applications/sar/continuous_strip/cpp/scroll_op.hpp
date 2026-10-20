@@ -11,7 +11,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -38,16 +37,14 @@ namespace holoscan::radar::app::sar {
 class ScrollGeometryStagerOp : public Operator<> {
  public:
   ScrollGeometryStagerOp(SampleGeometry parent, SampleGeometry window, int64_t anchor, bool loop,
-                         int64_t slice_pulses, int64_t max_pulses, int64_t max_bins,
-                         std::shared_ptr<QueueWaitPolicy> queue_wait = {})
+                         int64_t slice_pulses, int64_t max_pulses, int64_t max_bins)
   : parent_(std::move(parent)),
     window_(std::move(window)),
     anchor_(anchor),
     loop_(loop),
     slice_pulses_(slice_pulses),
     max_pulses_(max_pulses),
-    max_bins_(max_bins),
-    queue_wait_(std::move(queue_wait)) {
+    max_bins_(max_bins) {
     if (!parent_.is_valid() || !window_.is_valid() || window_.num_v() > parent_.num_v() ||
         window_.num_u() != parent_.num_u() || anchor_ < 0 || anchor_ >= window_.num_v() ||
         max_pulses_ < 1 || max_bins_ < 1) {
@@ -132,32 +129,31 @@ class ScrollGeometryStagerOp : public Operator<> {
       auto slice_time = context.activation_time();
       slice_time.timestamp_ns += first / step;
       const auto time = EmitOptions{.capture_time = slice_time};
-      const bool wait = wait_queues(queue_wait_);
       SampleGeometrySpec spec{.origin = parent_.sample_position(v0_, 0),
                               .axis_u = parent_.axis_u(),
                               .axis_v = parent_.axis_v(),
                               .spacing = parent_.spacing(),
                               .counts = {window_.num_v(), parent_.num_u()}};
       HOLOSCAN_RETURN_IF_ERROR(detail::emit_geometry(sample_geometry, context, SampleGeometry(spec),
-                                                     slice_time, wait,
+                                                     slice_time,
                                                      "ScrollGeometryStagerOp.sample_geometry"));
       HOLOSCAN_RETURN_IF_ERROR(emit_required_tensor(
-          positions_out, context, "ScrollGeometryStagerOp.positions_out", wait,
+          positions_out, context, "ScrollGeometryStagerOp.positions_out", false,
           [&] {
             return slice(positions_out, pos, first, count, context);
           },
           time));
       HOLOSCAN_RETURN_IF_ERROR(emit_required_tensor(
-          reference_position_out, context, "ScrollGeometryStagerOp.reference_position_out", wait,
+          reference_position_out, context, "ScrollGeometryStagerOp.reference_position_out", false,
           [&] {
             return slice(reference_position_out, ref, first, count, context);
           },
           time));
       HOLOSCAN_RETURN_IF_ERROR(emit_required_value(stream_boundary_out, context,
                                                    "ScrollGeometryStagerOp.stream_boundary_out",
-                                                   wait, last ? boundary : uint8_t{0}, time));
+                                                   false, last ? boundary : uint8_t{0}, time));
       HOLOSCAN_RETURN_IF_ERROR(emit_required_tensor(
-          range_profiles_out, context, "ScrollGeometryStagerOp.range_profiles_out", wait,
+          range_profiles_out, context, "ScrollGeometryStagerOp.range_profiles_out", false,
           [&] {
             return slice(range_profiles_out, profiles, first, count, context);
           },
@@ -200,7 +196,6 @@ class ScrollGeometryStagerOp : public Operator<> {
   int64_t anchor_{0};
   bool loop_{false};
   int64_t slice_pulses_{0}, max_pulses_{0}, max_bins_{0};
-  std::shared_ptr<QueueWaitPolicy> queue_wait_{};
   std::uint32_t capacity_{1U};
   int64_t v0_{0};
 };
