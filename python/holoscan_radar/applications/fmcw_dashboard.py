@@ -31,6 +31,9 @@ def add_dashboard(
     bridge = graph.op(
         "holoscan.radar._app.ImageBridge", "dashboard_image", width=width, height=height
     )
+    frame = graph.op(
+        "holoscan.radar._app.FrameComposer", "dashboard_frame", width=width, height=height
+    )
     holoviz = graph.op(
         "holoscan.radar._app.DashboardViewer",
         "holoviz",
@@ -39,10 +42,11 @@ def add_dashboard(
         title=f"{viz['window_title']} - {title}",
     )
     partition.add(display, bridge)
-    graph.partition("visualization").add(holoviz)
+    graph.partition("visualization").add(frame, holoviz)
     for operator_name, port_name in (
         ("display_compositor", "rgba"),
         ("dashboard_image", "image"),
+        ("dashboard_frame", "output"),
     ):
         options.deployment.bind_tensor_output_device(
             operator_path=operator_name,
@@ -109,9 +113,11 @@ def add_dashboard(
         display.rgba, bridge.rgba, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
     )
     graph.add_flow(
-        bridge.image, holoviz.image, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+        bridge.image, frame.image, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
     )
 
+    graph.add_flow(display.text, frame.text, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1)
+
     graph.add_flow(
-        display.text, holoviz.text, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+        frame.output, holoviz.image, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
     )

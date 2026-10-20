@@ -31,7 +31,8 @@ HOLOSCAN_PARAM_SCHEMA(ImageSize, holoscan::param_schema("com.nvidia.holoscan.rad
                       holoscan::field<&ImageSize::width>("width"),
                       holoscan::field<&ImageSize::height>("height"));
 
-struct BridgeThunks : authoring::ManualOperatorRegistrationThunks<viz::RgbaImageBridgeOp> {
+template <typename Op>
+struct SizeThunks : authoring::ManualOperatorRegistrationThunks<Op> {
   static authoring::OpaqueOperatorRef add_to_graph(
       holoscan::Graph& graph, std::string_view name,
       const authoring::MaterializedParameters* params) {
@@ -40,8 +41,7 @@ struct BridgeThunks : authoring::ManualOperatorRegistrationThunks<viz::RgbaImage
       throw holoscan::RuntimeError{holoscan::ErrorCode::kInvalidArgument,
                                    "dashboard image width and height must be positive"};
     }
-    return BridgeThunks::make_operator_ref(
-        graph.op<viz::RgbaImageBridgeOp>(name, input->width, input->height));
+    return SizeThunks::make_operator_ref(graph.op<Op>(name, input->width, input->height));
   }
   static holoscan::expected<authoring::OpaqueOperatorRef, holoscan::Error> from_assignments(
       holoscan::Graph& graph, std::string_view name,
@@ -52,14 +52,14 @@ struct BridgeThunks : authoring::ManualOperatorRegistrationThunks<viz::RgbaImage
     if (!params) {
       return holoscan::make_unexpected(std::move(params).error());
     }
-    return BridgeThunks::invoke_add([&] {
+    return SizeThunks::invoke_add([&] {
       return add_to_graph(graph, name, &*params);
     });
   }
   static void set_params(const authoring::OpaqueOperatorRef&,
                          const authoring::MaterializedParameters&) {
     throw holoscan::RuntimeError{holoscan::ErrorCode::kNotSupported,
-                                 "image bridge dimensions are constructor-only"};
+                                 "image dimensions are constructor-only"};
   }
 };
 
@@ -109,7 +109,7 @@ struct ViewerThunks : authoring::ManualOperatorRegistrationThunks<viz::FmcwHolov
 }  // namespace
 
 void register_viz_bindings(nanobind::module_&) {
-  using T = BridgeThunks;
+  using T = SizeThunks<viz::RgbaImageBridgeOp>;
   auto result = authoring::authoring_registry().register_operator({
       .name = "holoscan.radar._app.ImageBridge",
       .param_type = &holoscan::param_type_descriptor<ImageSize>(),
@@ -129,6 +129,27 @@ void register_viz_bindings(nanobind::module_&) {
   });
   if (!result) {
     throw holoscan::RuntimeError{result.error()};
+  }
+  using F = SizeThunks<viz::FmcwFrameComposerOp>;
+  auto composer_result = authoring::authoring_registry().register_operator({
+      .name = "holoscan.radar._app.FrameComposer",
+      .param_type = &holoscan::param_type_descriptor<ImageSize>(),
+      .param_schema = holoscan::param_schema_descriptor<ImageSize>(),
+      .parameter_introspection = authoring::OperatorParameterIntrospection::kConstructorReplay,
+      .add_to_graph = &F::add_to_graph,
+      .add_to_graph_from_assignments = &F::from_assignments,
+      .set_params = &F::set_params,
+      .port = &F::port,
+      .ports = &F::ports,
+      .region_add = &F::region_add,
+      .partition_add = &F::partition_add,
+      .lifecycle_before = &F::lifecycle_before,
+      .lifecycle_allow_self_restart = &F::lifecycle_allow_self_restart,
+      .lifecycle_allow_external_restart = &F::lifecycle_allow_external_restart,
+      .lifecycle_allow_restart_request = &F::lifecycle_allow_restart_request,
+  });
+  if (!composer_result) {
+    throw holoscan::RuntimeError{composer_result.error()};
   }
   using V = ViewerThunks;
   auto viewer_result = authoring::authoring_registry().register_operator({

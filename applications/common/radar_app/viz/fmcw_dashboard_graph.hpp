@@ -152,6 +152,13 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
       .output_port = "image",
       .device = holoscan::DeviceId{0},
   });
+  auto frame = graph.op<FmcwFrameComposerOp>("dashboard_frame",
+                                             static_cast<std::int32_t>(config.window_width),
+                                             static_cast<std::int32_t>(config.window_height));
+  options.deployment.bind_tensor_output_device(
+      holoscan::TensorOutputDevicePlacement{.operator_path = "dashboard_frame",
+                                            .output_port = "output",
+                                            .device = holoscan::DeviceId{0}});
   auto holoviz = graph.op<FmcwHolovizOp>("holoviz", static_cast<std::int32_t>(config.window_width),
                                          static_cast<std::int32_t>(config.window_height),
                                          config.window_title + " - " + std::move(workflow_title));
@@ -159,7 +166,7 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
   // Keep presentation on its own partition; each completed image drives one render.
   application.add(display);
   application.add(image_bridge);
-  graph.partition("visualization").add(holoviz);
+  graph.partition("visualization").add(frame).add(holoviz);
 
   // Visualization is best-effort: discard stale frames instead of
   // backpressuring the radar pipeline when rendering falls behind.
@@ -184,9 +191,10 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
     const holoscan::ConnectionOptions waveform_queue{.queue_depth = max_profile_gap_frames + 2U};
     graph.add_flow(inputs.waveform, display->waveform_in, waveform_queue);
   }
-  graph.add_flow(display->text, holoviz->tensor_layer_input(1), display_queue);
+  graph.add_flow(display->text, frame->tensor_layer_input(1), display_queue);
   graph.add_flow(display->rgba, image_bridge->rgba, display_queue);
-  graph.add_flow(image_bridge->image, holoviz->image_layer_input(0), display_queue);
+  graph.add_flow(image_bridge->image, frame->image_layer_input(0), display_queue);
+  graph.add_flow(frame->output(), holoviz->image_layer_input(0), display_queue);
 }
 
 }  // namespace holoscan::radar::app::viz

@@ -13,8 +13,8 @@ flowchart LR
     Features --> Dashboard
     Range --> Dashboard
     Doppler --> Dashboard
-    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[FmcwHolovizOp]
-    Dashboard -->|Native text| Holoviz
+    Dashboard --> Image[RgbaImageBridgeOp] --> Frame[FmcwFrameComposerOp] --> Holoviz[FmcwHolovizOp]
+    Dashboard -->|Native text| Frame
 ```
 
 The optional dashboard displays the range-Doppler heatmap and rolling range and velocity histories. SISO has no angle products, so the spatial and angle-history panels are omitted.

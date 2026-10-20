@@ -18,6 +18,7 @@
 
 #include <holoscan/core/compile.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/sensor_io/schemas/image_schema_traits.hpp>
 #include <holoscan/time/realtime_clock.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 #include <holoscan/visualization/holoviz_op.hpp>
@@ -75,12 +76,14 @@ TEST(FmcwDashboardTest, ConnectsImageAndNativeHostTextToHsdk5Holoviz) {
   holoscan::Graph graph{"dashboard-image-bridge-test"};
   auto source = graph.op<RgbaGraphSourceOp>("source");
   auto bridge = graph.op<viz::RgbaImageBridgeOp>("bridge", 2, 2);
+  auto frame = graph.op<viz::FmcwFrameComposerOp>("frame", 2, 2);
   auto sink = graph.op<viz::FmcwHolovizOp>("holoviz", 2, 2, "test");
   graph.partition("application").add(source).add(bridge);
-  graph.partition("visualization").add(sink);
+  graph.partition("visualization").add(frame).add(sink);
   graph.add_flow(source->rgba, bridge->rgba);
-  graph.add_flow(bridge->image, sink->image_layer_input(0));
-  graph.add_flow(source->text, sink->tensor_layer_input(1));
+  graph.add_flow(bridge->image, frame->image_layer_input(0));
+  graph.add_flow(frame->output(), sink->image_layer_input(0));
+  graph.add_flow(source->text, frame->tensor_layer_input(1));
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
   holoscan::CompileOptions options;
@@ -88,8 +91,67 @@ TEST(FmcwDashboardTest, ConnectsImageAndNativeHostTextToHsdk5Holoviz) {
       .operator_path = "source", .output_port = "rgba", .device = holoscan::DeviceId{0}});
   options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = "bridge", .output_port = "image", .device = holoscan::DeviceId{0}});
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "frame", .output_port = "output", .device = holoscan::DeviceId{0}});
   const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
   EXPECT_TRUE(plan.ok()) << plan.json();
+}
+
+TEST(FmcwDashboardTest, ComposesOnlyMatchedImageAndTextIntoOneCudaFrame) {
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  constexpr std::int64_t kWidth = 128;
+  constexpr std::int64_t kHeight = 64;
+  constexpr DLDataType kRgba{kDLUInt, 8U, 1U};
+  std::vector<std::uint8_t> pixels(kWidth * kHeight * 4U);
+  for (std::size_t i = 0; i < pixels.size(); i += 4U) {
+    pixels[i] = 10U;
+    pixels[i + 1U] = 20U;
+    pixels[i + 2U] = 30U;
+    pixels[i + 3U] = 255U;
+  }
+  holoscan::schema::ImageT image;
+  image.width = kWidth;
+  image.height = kHeight;
+  image.encoding = holoscan::schema::ImageEncoding_RGBA8;
+  image.data = radar::testing::to_device_tensor(pixels, {kHeight, kWidth, 4}, kRgba);
+  std::vector<std::uint8_t> records;
+  viz::detail::append_dashboard_text(&records, kWidth, kHeight, 8.0F, 8.0F, "123", 13.0F);
+  const auto text = radar::testing::to_pageable_host_tensor(
+      records, {1, static_cast<std::int64_t>(viz::detail::kDashboardTextRowBytes)}, kRgba);
+  auto harness = holoscan::testing::create_operator_test<viz::FmcwFrameComposerOp>(
+      static_cast<std::int32_t>(kWidth), static_cast<std::int32_t>(kHeight));
+  // Unmatched samples must not render. The matched frame deliberately publishes
+  // its image first, so rendering cannot rely on sideband-before-driver order.
+  harness.push_frame(frame_at(std::chrono::milliseconds{1}, input("image", image)));
+  harness.push_frame(frame_at(std::chrono::milliseconds{2}, input("text", *text)));
+  harness.push_frame(
+      frame_at(std::chrono::milliseconds{3}, input("image", image), input("text", *text)));
+  harness.input_source_device("image", holoscan::DeviceId{0});
+  harness.output_device("output", holoscan::DeviceId{0});
+  harness.capture_snapshot<holoscan::schema::ImageT>("output", 1U, pixels.size());
+  auto running = harness.run_async({.expect_stop = true});
+  const bool ready = running.wait_for_output("output", 1U, std::chrono::seconds{10});
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto composed = result.snapshot<holoscan::schema::ImageT>("output");
+  const auto output =
+      radar::testing::to_host(composed.tensor(holoscan::schema::ImageTensorFields::data));
+  ASSERT_EQ(output.shape, (std::vector<std::int64_t>{kHeight, kWidth, 4}));
+  const auto* rgba = output.as<std::uint8_t>();
+  const std::size_t corner = 4U * (kWidth * kHeight - 1U);
+  for (std::size_t channel = 0; channel < 4U; ++channel) {
+    EXPECT_EQ(rgba[corner + channel], pixels[corner + channel]);
+  }
+  bool found_native_text = false;
+  for (std::size_t row = 8U; row < 24U; ++row) {
+    for (std::size_t col = 8U; col < 40U; ++col) {
+      found_native_text = found_native_text || rgba[4U * (row * kWidth + col)] > 128U;
+    }
+  }
+  EXPECT_TRUE(found_native_text) << "SDK text must be present in the emitted GPU image";
 }
 
 TEST(FmcwDashboardTest, ComposesOpaqueHeatmapAndEmitsNativeTextWithoutDetections) {

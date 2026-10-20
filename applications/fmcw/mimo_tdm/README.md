@@ -14,8 +14,8 @@ flowchart LR
     Features --> Dashboard
     Range --> Dashboard
     Doppler --> Dashboard
-    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[FmcwHolovizOp]
-    Dashboard -->|Native text| Holoviz
+    Dashboard --> Image[RgbaImageBridgeOp] --> Frame[FmcwFrameComposerOp] --> Holoviz[FmcwHolovizOp]
+    Dashboard -->|Native text| Frame
 ```
 
 The physical source PRI is divided across TX slots. The downstream waveform uses the per-TX effective PRI, equal to `num_tx` times the physical inter-chirp spacing.

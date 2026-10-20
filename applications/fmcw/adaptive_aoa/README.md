@@ -30,8 +30,8 @@ flowchart LR
     Features --> Dashboard
     Range --> Dashboard
     Doppler --> Dashboard
-    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[FmcwHolovizOp]
-    Dashboard -->|Native text| Holoviz
+    Dashboard --> Image[RgbaImageBridgeOp] --> Frame[FmcwFrameComposerOp] --> Holoviz[FmcwHolovizOp]
+    Dashboard -->|Native text| Frame
 ```
 
 There is deliberately no clustering or detection reduction. CFAR emits one

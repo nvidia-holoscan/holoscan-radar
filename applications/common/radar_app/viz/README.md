@@ -39,20 +39,29 @@ Subplot titles are centered on their panels; axis captions are centered on the p
 Titles use brighter text than ticks and labels; supporting captions are muted.
 Axis gutters are compact, and label widths follow the selected text size.
 Dark panel backgrounds and subdued grids keep target accents prominent.
-Resizing the window can stretch the raster independently of those text positions.
+`FmcwFrameComposerOp` uses the SDK's `CudaSinkDesc` to render text and the canvas
+into one CUDA-backed image before presentation. Resizing the window scales the
+complete frame, keeping labels and plots aligned. This scales the configured
+layout; it does not reflow panels or change the render resolution. Increase
+`visualization.window_width` / `window_height` for a higher-resolution canvas.
 The operator's built-in monospace font supports ASCII; longer workflow/profile titles are shortened to fit.
 
-The app-private `FmcwHolovizOp` reuses the SDK renderer and requires image and
-text with one shared completion stamp (`OnEach` + required `Exact` text selection,
-`Skip` on a missing match). Each completed pair drives one Holoviz render. This matters because the SDK
-operator skips a missing text sample instead of retaining it: an independent
-render clock can redraw the image without its labels. The compositor caps
+The app-private `FmcwFrameComposerOp` reuses the SDK renderer and requires image
+and text with one shared completion stamp (`OnAligned` with zero tolerance and
+`Exact` selectors on both inputs). Each completed pair drives one offscreen SDK render.
+The image-only `FmcwHolovizOp` presents the completed frame in a resizable window.
+Joining both inputs lets the viewer recover after resize or remote-display stalls
+have dropped queued frames. An image-driven `OnEach` with an `Exact` text side
+selector can strand a stale image after its matching text is evicted. An independent
+render clock can also redraw the image without its labels. The compositor caps
 rasterization at `visualization.display_rate_hz`, while updating histories for
 every admitted radar frame. Display products share a completion timestamp so
 presentation alignment excludes upstream processing latency. Radar data and
 report timestamps retain their existing behavior.
 
-The renderer runs in its own partition. Depth-one drop-oldest display queues
+Composition and window presentation run in their own partition. Native CUDA
+capture adds a GPU render/resolve stage and one device copy, with bounded SDK
+pools; text remains SDK-rendered rather than drawn by Radar. Depth-one drop-oldest display queues
 bound pending images; processing queues retain their existing aligned-input
 policy. The image bridge retains its dedicated device pool for consumption on
 the renderer's CUDA stream. Canvas initialization, heatmap coloring, and raster
@@ -71,3 +80,9 @@ are available through the lower-level renderer, rather than callbacks on
 Window events are serviced on rendered frames. A stalled or stopped producer
 leaves the last image visible but does not provide an independent UI event
 pump; this is an SDK operator limitation.
+
+Resize recovery can be checked with the delayed-X11 regression probe in
+[`tests/gui/README.md`](../../../../tests/gui/README.md). It verifies update
+recovery across resize bursts and delayed X11 traffic. The GPU dashboard test
+also checks that native text is embedded in the emitted frame and unmatched
+image/text inputs do not render.

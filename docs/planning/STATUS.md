@@ -4,6 +4,15 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 
 ## Where the project stands
 
+- **2026-10-20** â€” **FMCW window resizing preserves text alignment** on
+  `deustice/gui-updates`. The SDK composes text and plots into one CUDA image,
+  then the image-only window scales the complete canvas. Joint image/text
+  admission also fixes a stalled display reproduced under delayed X11 traffic.
+  Layout scales rather than reflowing; native font selection is unchanged.
+  All 33 dashboard regressions (including headless native-text composition),
+  provider CTest, nine GUI checks, and five-size C++/Python resize probes with
+  20 ms injected X11 delay pass. Full lint passes; DSP contracts are unchanged.
+
 - **2026-10-20** â€” **Centered FMCW subplot titles and captions** on
   `deustice/gui-updates`. Panel titles share centered placement; time, azimuth,
   and sector-scale captions align with their plots. The footer now reads
@@ -348,6 +357,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 | DopplerNotch descending velocity axis | Codex | `deustice/doppler-notch-axis-order` | **verified locally:** signed nearest-bin indexing and positive cyclic periods preserve descending-axis passbands; contract now permits either monotonic direction. Both new axis-order tests fail before the fix; all 15 focused GPU CTests pass afterward on Thor with HSDK 5 GA. Jira duplicate search/P0 awaits MaaS access. |
 | PR 66 non-uniform non-cyclic nearest bin | Codex | `deustice/doppler-notch-axis-order` | **verified locally:** non-cyclic nearest-bin selection searches actual physical coordinates, supporting non-uniform axes in either direction. Both precision regressions fail before the fix; all 17 focused GPU unit/pipeline CTests pass afterward on HSDK 5 GA. PR 68 restacking also applies the corrected selection in its shared row-kernel gain helper; all 21 downstream GPU unit/pipeline CTests pass. Pinned all-file lint passes with Node 22 for markdownlint. |
 | FMCW dashboard styling refinement | Codex | `deustice/gui-updates` | **verified locally:** tighter axis gutters, text-size-aware label placement, brighter titles, subdued secondary text/grids, and refined target accents. All 32 dashboard regressions, nine Python GUI checks, a five-target C++ MIMO TDM preview, and full lint pass. |
+| FMCW GUI resize investigation | Codex | `deustice/gui-updates` | **verified locally:** SDK CUDA frame composition keeps text and plots aligned while resizing; joint image/text admission recovers from delayed-display pressure. All 33 dashboard regressions, provider CTest, nine GUI checks, and repeated five-size C++/Python resize probes with 20 ms X11 delay pass; full lint passes. |
 | FMCW sector plot expansion | Codex | `deustice/gui-updates` | **verified locally:** fitted sectors, explicit axis scale, labeled range rings, and shared grid/truth/detection projection. All 32 dashboard regressions, two application smoke tests, nine Python GUI checks, and full lint pass. |
 | FMCW native text and dashboard refresh | Codex | `deustice/gui-updates` | **verified locally:** native SDK text, exact frame pairing, rate-gated and fused rendering, updated layout/palette/axes, and matching C++/Python wiring. All 1,098 baseline CTests, 28 dashboard regressions, nine Xvfb visual checks, delayed SISO/SIMO rendering, host CLI SISO build, and full lint pass. |
 | GA migration review corrections | Codex | `deustice/hsdk-ga-image` | **complete:** aligned tutorial SDK minimum, unconditional aligned-input guidance, and L18 implementation status; restored the helper diagnostic's documented EA attribution from Git history. Exact original SDK/reproducer unavailable, so no new reproduction claimed. Documentation/comment-only; pinned focused and all-file lint pass. |
