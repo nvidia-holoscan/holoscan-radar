@@ -111,11 +111,12 @@ outputs. Retain exact comparison elsewhere; never migrate historical evidence.
 Before editing, propose and obtain confirmation of the concrete session:
 operator, comparison rules for **each port and precision**, cases, objective,
 protected cases, editable scope, and limits. Defaults: 20 candidate turns, three
-consecutive unsuccessful candidates, all three sizes, steady latency, 20
-screening A/B pairs with isolated case/repeat processes. Confirmation uses
+consecutive unsuccessful candidates, all three sizes, steady latency, two
+screening A/B blocks with isolated case/repeat processes. Confirmation uses
 separately budgeted four-run blocks, not an implicit reuse of this pair count.
 Before confirmation, use the selected matrix to propose adequate sampling;
-20 is not a power guarantee. Wall-time and target limits are optional. All defaults
+A screening count is not a confirmation power guarantee. Target limits are optional;
+measurement execution still requires a positive caller budget. All defaults
 are configurable. Existing confirmation remains valid until scope or policy
 changes. Assessment does not need an editing-session confirmation.
 

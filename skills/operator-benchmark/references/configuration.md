@@ -85,8 +85,11 @@ never relaxed to fix timing uncertainty.
 
 ## Optimization handoff
 
-Default to assessment. For an authorized optimization campaign, use
-`mode: optimize` and present all concrete operator configurations together:
+Resolve mode from the request: use `mode: optimize` for an explicit optimization
+campaign, and `mode: assess` for assessment/benchmarking without editing intent.
+Begin either mode with discovery and baseline preparation. An optimization
+request does not bypass the concrete review before production edits. Present
+all concrete operator configurations together:
 outputs, targets, protected matrix, consumers, editable scope, sampling,
 statistical error budget, control review and stopping limits. Record existing
 user confirmation; do not ask again while its scope remains valid.
