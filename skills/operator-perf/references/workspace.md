@@ -3,6 +3,21 @@
 Use `performance/optimization/workspace.py` for these operations. They preserve
 accepted changes and do not create commits or modify agent configuration.
 
+## Skills and Campaign Branches
+
+Commit authorized optimization-skill updates on `deustice/optimization-skills`.
+Keep operator changes and campaign reports on the campaign branch. After a
+skills update, rebase the campaign branch onto `deustice/optimization-skills`
+before continuing candidate work so it uses the committed workflow.
+
+Seal active measurement sessions before changing skills or rebasing; preserve
+their source/build identities and evidence. Preserve uncommitted work when
+switching branches. Do not infer permission to commit an operator candidate
+merely to make a branch switch possible. When the user authorizes both, commit
+the candidate first, commit the workflow change on the skills branch, then
+rebase the campaign and verify retained file contents. This branch convention
+does not authorize pushes or new measurement budget.
+
 ## Scratch Profiling
 
 Before adding temporary instrumentation, register every file and every target

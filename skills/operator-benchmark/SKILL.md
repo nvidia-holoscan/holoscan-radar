@@ -56,6 +56,11 @@ concrete consolidated review is still required before production edits.
   worktrees merely to start discovery. Keep immutable builds/raw evidence in
   ignored paths and versioned overview, baseline, disposition and final reports.
 
+For authorized skill commits, use `deustice/optimization-skills`, then rebase
+the campaign branch on top before continuing. Follow the shared
+[branch and workspace rules](../operator-perf/references/workspace.md#skills-and-campaign-branches)
+to preserve sealed evidence and uncommitted work.
+
 Ask for one consolidated review once concrete operator configurations and
 baseline coverage are available. After confirmation, run autonomous bounded
 operator sessions within that scope. No separate user approval is needed for
