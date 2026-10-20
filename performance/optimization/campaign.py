@@ -190,8 +190,8 @@ def leaf_config(state, name):
     if not ref:
         raise ValueError("missing operator configuration: " + name)
     config = read_json(ref)
-    if config.get("measurement_policy_version") != 3:
-        raise ValueError("campaign requires explicit version-3 configurations")
+    if config.get("measurement_policy_version") not in {3, 4}:
+        raise ValueError("campaign requires explicit version-3 or version-4 configurations")
     config["campaign_family_size"] = len([x for x in state["operators"] if x["recipe"]])
     return normalize_config(config)
 
@@ -218,6 +218,18 @@ def save(output, state):
 
 def qualify_campaign(output):
     state = load(output)
+    eligible = [item for item in state["operators"] if item["recipe"]]
+    if eligible and all(
+        leaf_config(state, item["operator"])["measurement_policy_version"] == 4 for item in eligible
+    ):
+        for item in state["operators"]:
+            if item["recipe"]:
+                identity(build_for(state, item["operator"]))
+                item["design"] = {"policy": 4, "standalone_aa_required": False}
+        state["phase"] = "design_ready"
+        save(output, state)
+        return state
+
     budget = finite(
         state["config"].get("qualification_budget_seconds"),
         "explicit qualification budget",
@@ -315,9 +327,15 @@ class CorrectnessFailure(ValueError):
         self.evidence = evidence
 
 
-def _native_baseline(build, config, output, correctness_command, coverage_ref):
+def _native_baseline(build, config, output, correctness_command, coverage_ref, deadline=None):
     """Existing native SDK fixtures only; hashes bind exact snapshots and test evidence."""
     from equivalence import compare_snapshots
+
+    def limit():
+        seconds = 600 if deadline is None else min(600, deadline - time.time())
+        if seconds <= 0:
+            raise TimeoutError("baseline budget exhausted")
+        return seconds
 
     coverage = checked(coverage_ref)
     if coverage.get("source_id") != build["source_id"] or not coverage.get("passed"):
@@ -332,7 +350,7 @@ def _native_baseline(build, config, output, correctness_command, coverage_ref):
         build["cwd"],
         output / "correctness.log",
         output / "correctness-process.json",
-        600,
+        limit(),
     )
     exports = []
     for repeat in range(2):
@@ -353,7 +371,7 @@ def _native_baseline(build, config, output, correctness_command, coverage_ref):
                 build["cwd"],
                 path.with_suffix(".log"),
                 path.with_suffix(".process.json"),
-                600,
+                limit(),
             )
             write_json(receipt, reference(path))
         export = read_json(path)
@@ -382,13 +400,189 @@ def _native_baseline(build, config, output, correctness_command, coverage_ref):
     return result
 
 
-def native_baseline(build, config, output, correctness_command, coverage_ref):
+def native_baseline(build, config, output, correctness_command, coverage_ref, deadline=None):
     with device_lock(build.get("device_id", "cuda-visible-device-0")):
-        return _native_baseline(build, config, output, correctness_command, coverage_ref)
+        return _native_baseline(build, config, output, correctness_command, coverage_ref, deadline)
+
+
+def native_record(config, record, name, verify_current=True):
+    """Version-four correctness admission has no timing repeatability prerequisite."""
+    build = record["build"]
+    identity(build) if verify_current else verify_build(build)
+    policies = (
+        config["policies"] if name == config["operator"] else config["consumer_policies"][name]
+    )
+    if record["config"]["policies"] != policies:
+        raise ValueError("native output policies differ from confirmation")
+    native = checked(record["native"])
+    coverage = checked(native.get("coverage"))
+    cases = set(config["verification_cases"].get(name, []))
+    if (
+        not cases
+        or set(coverage.get("cases", [])) != cases
+        or coverage.get("source_id") != build["source_id"]
+    ):
+        raise ValueError("native coverage identity/inventory differs")
+    if (
+        not native.get("passed")
+        or not coverage.get("passed")
+        or any(
+            coverage.get(field) is not True
+            for field in (
+                "ownership",
+                "boundaries",
+                "analytic_reference",
+                "errors",
+                "live_fallback",
+            )
+        )
+    ):
+        raise ValueError("native behavioral coverage is incomplete")
+    if not coverage.get("evidence"):
+        raise ValueError("native coverage requires hashed fixture evidence")
+    for ref in coverage["evidence"]:
+        if digest(ref["path"]) != ref["sha256"] or not Path(ref["path"]).stat().st_size:
+            raise ValueError("native fixture evidence changed or empty")
+    exports = []
+    for ref in native.get("exports", []):
+        export = checked(ref)
+        export["source_id"] = build["source_id"]
+        if {(case["id"], case["precision"]) for case in export["cases"]} != {
+            (case, precision) for case in cases for precision in ("float", "double")
+        }:
+            raise ValueError("native precision/case coverage incomplete")
+        exports.append(export)
+    from equivalence import compare_snapshots
+
+    if len(exports) != 2 or not compare_snapshots(*exports, policies)["passed"]:
+        raise ValueError("native exact repeats failed")
+
+
+def baseline_v4(output, state):
+    from confirmation import raw_sampling
+    from measurement import derive_raw
+    from timing import aggregate_isolated
+
+    budget = finite(
+        state["config"].get("baseline_budget_seconds"), "explicit baseline budget", positive=True
+    )
+    state.setdefault("baseline_deadline", time.time() + budget)
+    save(output, state)
+    for item in state["operators"]:
+        if not item["recipe"]:
+            continue
+        name = item["operator"]
+        started = time.time()
+        try:
+            cfg, build = leaf_config(state, name), build_for(state, name)
+            if cfg["measurement_policy_version"] != 4:
+                raise ValueError("do not mix legacy calibration and version-4 baseline policies")
+            identity(build)
+            if item.get("baseline"):
+                native_record(cfg, item["baseline"], name)
+                checked(item["baseline"]["screening"])
+                continue
+            directory = Path(output) / name / "baseline"
+            directory.mkdir(parents=True, exist_ok=True)
+            validation = state["config"].get("verification", {}).get(name, {})
+            native_baseline(
+                build,
+                cfg,
+                directory,
+                validation.get("correctness_command"),
+                validation.get("coverage"),
+                state["baseline_deadline"],
+            )
+            sampling = raw_sampling(cfg["sampling"])
+            sampling["repeats"] = 1
+            for override in sampling["case_overrides"].values():
+                override["repeats"] = 1
+            reports, children = [], []
+            with device_lock(build.get("device_id", "cuda-visible-device-0")):
+                for case in sampling["cases"].split(","):
+                    settings = sampling | sampling["case_overrides"].get(case, {})
+                    path = directory / (case + "-screen.json")
+                    receipt = path.with_suffix(".receipt.json")
+                    if receipt.exists():
+                        checked(read_json(receipt))
+                    else:
+                        if path.exists():
+                            raise ValueError("unsealed baseline screen; quarantine before retry")
+                        seconds = state["baseline_deadline"] - time.time()
+                        if seconds <= 0:
+                            raise TimeoutError("baseline budget exhausted")
+                        clocks = clock_state()
+                        if (
+                            cfg["clock_configuration"] is not None
+                            and clocks["configuration"] != cfg["clock_configuration"]
+                        ):
+                            raise ValueError("baseline deployment configuration changed")
+                        execute(
+                            build["command"]
+                            + [
+                                "--scope",
+                                sampling["scope"],
+                                "--cases",
+                                case,
+                                "--warmup",
+                                str(settings["warmup"]),
+                                "--frames",
+                                str(settings["frames"]),
+                                "--repeats",
+                                "1",
+                                "--raw-frame-times",
+                                "--output",
+                                str(path),
+                            ],
+                            build["cwd"],
+                            path.with_suffix(".log"),
+                            path.with_suffix(".process.json"),
+                            min(600, seconds),
+                        )
+                        if clock_state()["configuration"] != clocks["configuration"]:
+                            raise ValueError("baseline clock context changed during screen")
+                        write_json(receipt, reference(path))
+                    reports.append(derive_raw(read_json(path), sampling))
+                    children.append(reference(path))
+            preview = aggregate_isolated(reports, sampling, sampling["cases"].split(","))
+            preview["isolation"] = {"children": children, "inventory": sampling["cases"].split(",")}
+            write_json(directory / "baseline-screen.json", preview)
+            item["baseline"] = {
+                "config": cfg,
+                "build": build,
+                "native": reference(directory / "native-review.json"),
+                "screening": reference(directory / "baseline-screen.json"),
+            }
+            native_record(cfg, item["baseline"], name)
+            item.update(
+                status="baseline_ready",
+                gaps=["Baseline screen only; candidate confirmation pending"],
+            )
+        except (ValueError, OSError, subprocess.SubprocessError, TimeoutError) as error:
+            item.update(status="blocked", gaps=[str(error)])
+        state["events"].append(
+            {
+                "phase": "baseline_screen",
+                "operator": name,
+                "started_at": started,
+                "finished_at": time.time(),
+                "status": item["status"],
+            }
+        )
+        save(output, state)
+    state["phase"] = "baseline_complete"
+    save(output, state)
+    return state
 
 
 def baseline(output):
     state = load(output)
+    if any(
+        leaf_config(state, item["operator"])["measurement_policy_version"] == 4
+        for item in state["operators"]
+        if item["recipe"]
+    ):
+        return baseline_v4(output, state)
     state["phase"] = "baseline_running"
     save(output, state)
     for item in state["operators"]:
@@ -499,6 +693,9 @@ def validate_consumer_baselines(config, records, verify_current=True):
     from radar_perf import timing_comparison
 
     for name, record in records.items():
+        if config["measurement_policy_version"] == 4:
+            native_record(config, record, name, verify_current)
+            continue
         if verify_current:
             identity(record["build"])
         else:
@@ -521,7 +718,7 @@ def validate_consumer_baselines(config, records, verify_current=True):
 def validate_admission(config, verify_current=True):
     admission = config.get("benchmark_admission")
     if not admission:
-        raise ValueError("version-3 optimization requires full-case benchmark admission")
+        raise ValueError("optimization requires hash-bound native benchmark admission")
     value = checked(admission)
     if value.get("config_sha256") != config_digest(config):
         raise ValueError("admission configuration changed")
@@ -529,6 +726,10 @@ def validate_admission(config, verify_current=True):
         identity(value["build"])
     else:
         verify_build(value["build"])
+    if config["measurement_policy_version"] == 4:
+        native_record(config, value, config["operator"], verify_current)
+        validate_consumer_baselines(config, value.get("consumer_baselines", {}), verify_current)
+        return
     calibration = checked(value["calibration"])
     native = checked(value["native"])
     if (
@@ -559,7 +760,7 @@ def prepare_sessions(output, confirmed=False):
     directory = Path(output) / "sessions"
     directory.mkdir(exist_ok=True)
     for item in state["operators"]:
-        if item["status"] != "assessed":
+        if item["status"] not in {"assessed", "baseline_ready"}:
             continue
         name = item["operator"]
         record = item["baseline"]
@@ -567,7 +768,7 @@ def prepare_sessions(output, confirmed=False):
         consumers = {}
         for consumer in config["consumer_policies"]:
             peer = next((x for x in state["operators"] if x["operator"] == consumer), None)
-            if not peer or peer["status"] != "assessed":
+            if not peer or peer["status"] not in {"assessed", "baseline_ready"}:
                 raise ValueError("affected consumer is not fully assessed: " + consumer)
             consumers[consumer] = peer["baseline"]
         validate_consumer_baselines(config, consumers)
@@ -638,8 +839,30 @@ def timing_summary(item):
     outcome = checked(item["disposition"]) if item.get("disposition") else None
     cumulative = outcome.get("cumulative_timing") if outcome else None
     measured = cumulative or (
-        checked(item["baseline"]["calibration"]) if item.get("baseline") else {}
+        checked(item["baseline"]["calibration"])
+        if item.get("baseline", {}).get("calibration")
+        else {}
     )
+    if not measured and item.get("baseline", {}).get("screening"):
+        preview = checked(item["baseline"]["screening"])
+        measured = {
+            "results": [
+                row
+                | {
+                    "metric": "median_ms",
+                    "case": [
+                        row["operator"],
+                        row["scenario_id"],
+                        row["precision"],
+                        row["size_id"],
+                        row["bucket"],
+                    ],
+                    "before_median": row.get("median_ms"),
+                }
+                for row in preview["results"]
+                if row.get("median_ms") is not None
+            ]
+        }
     rows = [
         row
         for row in measured.get("results", [])
@@ -704,7 +927,7 @@ def report(output, destination):
             lines += ["", "## " + item["operator"] + " qualification A/A", ""] + timing_table(
                 checked(qualification["validation"])
             )
-        if item.get("baseline"):
+        if item.get("baseline", {}).get("calibration"):
             lines += ["", "## " + item["operator"] + " full-case A/A", ""] + timing_table(
                 checked(item["baseline"]["calibration"])
             )

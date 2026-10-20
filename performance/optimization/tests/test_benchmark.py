@@ -30,7 +30,7 @@ from campaign import (
     validate_consumer_baselines,
 )
 from measurement import derive_raw, device_lock, effective, execute, protocol
-from qualification import checked, forecast, qualify, timing_table
+from qualification import checked, forecast, qualify, review, timing_table
 from radar_perf import main, normalize_config
 from test_optimization import config, perf_report, snapshots
 from timing import aggregate_isolated, budget_proposal, compare_pairs, quantile, run_pairs
@@ -157,6 +157,19 @@ Path(arg('--output')).write_text(json.dumps(report))
         early = budget_proposal(report, self.settings()["protected_metrics"], "median_ms", 2)
         self.assertGreater(early["family_size"], base["family_size"])
         self.assertEqual(early["family_size"], 14)
+
+    def test_qualification_family_matches_pair_budget_and_acceptance(self):
+        index = self.index()
+        cfg = self.settings() | {
+            "campaign_family_size": 26,
+            "consumer_policies": {"a": {}, "b": {}},
+        }
+        result = review(index, cfg, 2)
+        preview = checked(index["pairs"][0]["before"])
+        proposal = budget_proposal(preview, cfg["protected_metrics"], cfg["objective"], 26 * 3)
+        self.assertEqual(result["family_size"], len(result["results"]) * 26 * 3)
+        self.assertEqual(result["family_size"], proposal["family_size"])
+        self.assertEqual(result["minimum_resolvable_pairs"], proposal["minimum_resolvable_pairs"])
 
     def test_adjacent_order_resume_and_tamper_rejection(self):
         index = self.index()

@@ -42,7 +42,7 @@ def review(index, config, pairs):
         max_baseline_spread_pct=config["max_baseline_spread_pct"],
         metric_policies=config["metric_policies"],
         family_multiplier=config.get("campaign_family_size", 1)
-        * (config.get("campaign_family_size", 1) * (1 + len(config["consumer_policies"]))),
+        * (1 + len(config["consumer_policies"])),
         expected_clock_configuration=config.get("clock_configuration"),
     )
 

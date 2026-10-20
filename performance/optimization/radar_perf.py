@@ -9,6 +9,7 @@ import csv
 import datetime
 import hashlib
 import io
+import json
 import subprocess
 import sys
 import time
@@ -68,16 +69,38 @@ def normalize_config(config):
     result["metric_policies"] = copy.deepcopy(DEFAULTS["metric_policies"]) | config.get(
         "metric_policies", {}
     )
-    if result["measurement_policy_version"] not in {2, 3}:
+    if result["measurement_policy_version"] not in {2, 3, 4}:
         raise ValueError("measurement policy changed; create a freshly confirmed session")
-    if result["measurement_policy_version"] == 3:
+    if result["measurement_policy_version"] in {3, 4}:
         from measurement import EARLY_METRICS, protocol
+
+        if result["measurement_policy_version"] == 4:
+            from confirmation import protocol
+
+            if any(k in config for k in ("max_aa_delta_pct", "max_baseline_spread_pct")):
+                raise ValueError("version 4 has no A/A dispersion admission thresholds")
+            result.pop("max_aa_delta_pct", None)
+            result.pop("max_baseline_spread_pct", None)
+            result["metric_policies"] = copy.deepcopy(config.get("metric_policies", {}))
+            result["min_effect_pct"] = config.get("min_effect_pct", 2.0)
+            result["screen_pairs"] = config.get("screen_pairs", 2)
+            if type(result["screen_pairs"]) is not int or result["screen_pairs"] < 2:
+                raise ValueError("screening requires at least two blocks")
+            if result["objective"] == "achieved_frames_per_second":
+                raise ValueError("version 4 currently supports latency objectives")
 
         result["sampling"] = protocol(result["sampling"])
         result["protected_metrics"] = sorted(
             set(result["protected_metrics"])
             | set(EARLY_METRICS)
             | {"median_ms", "p90_ms", "p99_ms", "cold_ms", "setup_ms", "override_ms"}
+        )
+    if (
+        result["measurement_policy_version"] == 4
+        and "achieved_frames_per_second" in result["protected_metrics"]
+    ):
+        raise ValueError(
+            "version 4 currently supports latency inference; throughput remains diagnostic"
         )
     if not result.get("operator") or not result.get("policies") or not result.get("editable_scope"):
         raise ValueError("operator, policies, and editable_scope are required")
@@ -96,12 +119,14 @@ def normalize_config(config):
         if value is not None:
             finite(value, name, positive=True)
     for name in ("min_effect_pct", "max_aa_delta_pct", "max_baseline_spread_pct"):
-        if finite(result[name], name) < 0:
+        if name in result and finite(result[name], name) < 0:
             raise ValueError(f"negative measurement threshold: {name}")
     for precisions in result["timing_precisions"].values():
         if not precisions or set(precisions) - {"float", "double"}:
             raise ValueError("timing precisions must explicitly name float and/or double")
     allowed_policy = {"max_aa_p90_delta_pct", "max_baseline_iqr_pct", "min_effect_pct"}
+    if result["measurement_policy_version"] == 4:
+        allowed_policy = {"min_effect_pct"}
     for metric, policy in result["metric_policies"].items():
         if metric not in METRICS or not isinstance(policy, dict) or set(policy) - allowed_policy:
             raise ValueError("invalid per-metric measurement policy")
@@ -130,11 +155,35 @@ def normalize_config(config):
                 raise ValueError("consumer policies require both precisions")
             for policy in precisions.values():
                 validate_policy(policy)
+    consumer_sampling = copy.deepcopy(result.get("consumer_sampling", {}))
+    if "consumer_sampling" in result:
+        result["consumer_sampling"] = consumer_sampling
+    if not isinstance(consumer_sampling, dict) or set(consumer_sampling) - set(
+        result["consumer_policies"]
+    ):
+        raise ValueError("consumer sampling requires declared consumer output policies")
+    if consumer_sampling and result["measurement_policy_version"] not in {3, 4}:
+        raise ValueError(
+            "consumer sampling requires a freshly confirmed version-3 or version-4 session"
+        )
+    for name, sampling in consumer_sampling.items():
+        # Resolve full protocols independently; never inherit primary case IDs.
+        if not isinstance(sampling, dict):
+            raise ValueError("consumer sampling must be a protocol mapping")
+        resolved = protocol(sampling)
+        cases = resolved.get("cases")
+        if (
+            not isinstance(cases, str)
+            or not cases
+            or any(not case.strip() or case != case.strip() for case in cases.split(","))
+            or len(set(cases.split(","))) != len(cases.split(","))
+        ):
+            raise ValueError("consumer sampling requires distinct explicit case IDs")
+        consumer_sampling[name] = resolved
     return result
 
 
 def config_hash(config):
-    import json
 
     return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
 
@@ -184,7 +233,15 @@ def validate_plan(plan, config):
         raise ValueError("candidate targets are outside the confirmed allowable set")
 
 
-def timing_comparison(config, pairs, calibration, plan=None, calibrate=False):
+def timing_sampling(config, operator):
+    if operator == config["operator"]:
+        return config["sampling"]
+    if operator not in config["consumer_policies"]:
+        raise ValueError("timing operator is not a confirmed consumer")
+    return config.get("consumer_sampling", {}).get(operator, config["sampling"])
+
+
+def timing_comparison(config, pairs, calibration, plan=None, calibrate=False, control_review=None):
     """One policy path for CLI, acceptance replay, and cumulative reporting."""
     operator = pairs["before"]["operator"]
     primary = operator == config["operator"]
@@ -197,12 +254,46 @@ def timing_comparison(config, pairs, calibration, plan=None, calibrate=False):
             raise ValueError("candidate plan baseline source mismatch")
         if primary:
             targets = plan["target_cases"]
+    if config["measurement_policy_version"] == 4:
+        from confirmation import compare
+
+        if calibrate or calibration is not None:
+            raise ValueError("version 4 uses integrated controls, not standalone A/A calibration")
+        from qualification import checked
+
+        if plan is not None and checked(pairs["plan"]) != plan:
+            raise ValueError("confirmation differs from the frozen candidate plan")
+        selected = copy.deepcopy(config)
+        selected["sampling"] = timing_sampling(config, operator)
+        value = compare(pairs, selected, targets, require_improvement=primary)
+        value["statistical_passed"] = value["passed"]
+        if control_review is None:
+            value.update(passed=False, status="validation_blocked", control_review="required")
+        else:
+            from qualification import checked
+
+            if (
+                checked(control_review.get("index")) != pairs
+                or control_review.get("candidate_plan_sha256") != pairs["plan"]["sha256"]
+                or not control_review.get("rationale")
+                or not control_review.get("evidence")
+                or type(control_review.get("interpretable")) is not bool
+            ):
+                raise ValueError(
+                    "control review must bind the frozen index/plan and explain evidence"
+                )
+            for ref in control_review["evidence"]:
+                checked(ref)
+            if not control_review["interpretable"]:
+                value.update(passed=False, status="validation_blocked")
+            value["control_review"] = control_review
+        return value
     options = dict(
         metric=config["objective"],
         targets=targets,
         protected_metrics=config["protected_metrics"],
         expected_pairs=config["pairs"],
-        expected_sampling=config["sampling"],
+        expected_sampling=timing_sampling(config, operator),
         require_improvement=primary,
         required_precisions=config["timing_precisions"].get(operator, ["float", "double"]),
         min_effect_pct=config["min_effect_pct"],
@@ -263,7 +354,7 @@ def timing_comparison(config, pairs, calibration, plan=None, calibrate=False):
     return actual
 
 
-def comparison_evidence(value, config, context, plan=None):
+def comparison_evidence(value, config, context, plan=None, declared_at=None):
     name = value["kind"]
     if value.get("context") != context or name not in {"equivalence", "speed"}:
         raise ValueError("comparison belongs to another candidate/configuration/source")
@@ -310,8 +401,13 @@ def comparison_evidence(value, config, context, plan=None):
         if not inventory or set(actual["case_ids"]) != set(inventory):
             raise ValueError("verification cases differ from confirmed complete inventory")
     else:
-        if set(inputs) != {"pairs", "calibration", "plan"}:
-            raise ValueError("speed gate requires paired timing, calibration, and plan artifacts")
+        required_inputs = (
+            {"pairs", "plan", "control_review"}
+            if config["measurement_policy_version"] == 4
+            else {"pairs", "calibration", "plan"}
+        )
+        if set(inputs) != required_inputs:
+            raise ValueError("speed gate lacks required timing/plan/control evidence")
         if read_json(inputs["plan"]["path"]) != plan:
             raise ValueError("speed plan differs from predeclared candidate")
         pairs = read_json(inputs["pairs"]["path"])
@@ -321,7 +417,21 @@ def comparison_evidence(value, config, context, plan=None):
         ):
             raise ValueError("speed gate source identity mismatch")
         operator = pairs["before"]["operator"]
-        actual = timing_comparison(config, pairs, read_json(inputs["calibration"]["path"]), plan)
+        if (
+            config["measurement_policy_version"] == 4
+            and declared_at is not None
+            and pairs["frozen_at"] < declared_at
+        ):
+            raise ValueError("confirmation predates the registered candidate plan")
+        actual = timing_comparison(
+            config,
+            pairs,
+            read_json(inputs["calibration"]["path"]) if "calibration" in inputs else None,
+            plan,
+            control_review=(
+                read_json(inputs["control_review"]["path"]) if "control_review" in inputs else None
+            ),
+        )
     if not actual["passed"]:
         raise ValueError(f"{name} gate evidence does not pass")
     target_reached = False
@@ -338,9 +448,9 @@ def comparison_evidence(value, config, context, plan=None):
 
 
 def add_candidate(session, record):
-    if session["config"].get("measurement_policy_version") not in {2, 3}:
+    if session["config"].get("measurement_policy_version") not in {2, 3, 4}:
         raise ValueError("archived policy; start a freshly confirmed session before optimization")
-    if session["config"].get("measurement_policy_version") == 3:
+    if session["config"].get("measurement_policy_version") in {3, 4}:
         from campaign import validate_admission
 
         validate_admission(session["config"], verify_current=False)
@@ -364,6 +474,8 @@ def add_candidate(session, record):
     if not declaration or digest(declaration["path"]) != declaration["sha256"]:
         raise ValueError("candidate requires an unchanged predeclared plan")
     plan = read_json(declaration["path"])
+    if session["config"]["measurement_policy_version"] == 4 and not declaration.get("declared_at"):
+        raise ValueError("version 4 requires a registered plan timestamp")
     validate_plan(plan, session["config"])
     if plan["before_source_id"] != record["before_source_id"]:
         raise ValueError("candidate differs from predeclared baseline")
@@ -397,7 +509,7 @@ def add_candidate(session, record):
             raise ValueError(f"{name} evidence must cover every affected consumer")
         if value["passed"] and name in {"equivalence", "speed"}:
             operators, cases, hit_target = comparison_evidence(
-                value, session["config"], expected_context, plan
+                value, session["config"], expected_context, plan, declaration.get("declared_at")
             )
             if operators != set(record["affected_operators"]):
                 raise ValueError(f"{name} gate lacks affected consumer evidence")
@@ -543,7 +655,13 @@ def render_report(session):
         lines += [
             "Compared final retained state against the original baseline.",
             "",
-            "| Case | Metric | Original ms | Final ms | Improvement (%) | Familywise 95% Interval (%) | Verdict |",
+            "| Case | Metric | Original ms | Final ms | "
+            + (
+                "Change % (slower positive)"
+                if session["config"]["measurement_policy_version"] == 4
+                else "Improvement (%)"
+            )
+            + " | Familywise 95% Interval (%) | Verdict |",
             "| --- | --- | --- | --- | --- | --- | --- |",
         ]
         for row in timing["results"]:
@@ -551,7 +669,7 @@ def render_report(session):
             interval = "unresolved pair budget" if lo is None else f"{lo:.3f}, {hi:.3f}"
             lines.append(
                 f"| {' / '.join(row['case'])} | {row['metric']} | "
-                f"{row['before_median']:.6g} | {row['after_median']:.6g} | {row['improvement_pct']:.3f} | {interval} | {row['verdict']} |"
+                f"{row['before_median']:.6g} | {row['after_median']:.6g} | {row.get('effect_pct', row.get('improvement_pct')):.3f} | {interval} | {row['verdict']} |"
             )
     else:
         lines.append(
@@ -580,9 +698,20 @@ def render_report(session):
         for gate in candidate["gates"].values():
             for comparison in comparisons(checked(gate)):
                 if comparison.get("metric"):
-                    lines += ["", "## " + candidate["id"] + " paired timings", ""] + timing_table(
-                        comparison
-                    )
+                    if comparison.get("measurement_policy_version") == 4:
+                        from confirmation import render_table
+
+                        lines += [
+                            "",
+                            "## " + candidate["id"] + " integrated confirmation",
+                            "",
+                        ] + render_table(comparison)
+                    else:
+                        lines += [
+                            "",
+                            "## " + candidate["id"] + " paired timings",
+                            "",
+                        ] + timing_table(comparison)
                 if comparison.get("calibration"):
                     lines += ["", "## A/A Calibration", ""] + timing_table(
                         comparison["calibration"]
@@ -636,13 +765,22 @@ def parser():
     measure.add_argument("--out", required=True)
     measure.add_argument("--timeout-s", type=float, default=600)
     measure.add_argument("--session")
+    measure.add_argument("--phase", choices=["screen", "confirmation"])
+    measure.add_argument("--plan")
+    measure.add_argument("--screening", nargs="*", default=[])
     compare = commands.add_parser("compare-timing")
-    compare.add_argument("--pairs", required=True)
+    compare.add_argument("--pairs", "--blocks", dest="pairs", required=True)
     compare.add_argument("--config", required=True)
     compare.add_argument("--out", required=True)
     compare.add_argument("--context", required=True)
-    compare.add_argument("--calibration", required=True)
+    compare.add_argument("--calibration")
+    compare.add_argument("--control-review")
     compare.add_argument("--plan", required=True)
+    inspect = commands.add_parser("inspect-confirmation")
+    inspect.add_argument("--pairs", "--blocks", dest="pairs", required=True)
+    inspect.add_argument("--config", required=True)
+    inspect.add_argument("--plan", required=True)
+    inspect.add_argument("--out", required=True)
     calibrate = commands.add_parser("calibrate")
     calibrate.add_argument("--pairs", required=True)
     calibrate.add_argument("--config", required=True)
@@ -666,6 +804,7 @@ def parser():
     finish.add_argument("--coverage-gaps", nargs="*", default=[])
     finish.add_argument("--cumulative-timing")
     finish.add_argument("--calibration")
+    finish.add_argument("--control-review")
     report = commands.add_parser("report")
     report.add_argument("--session", required=True)
     report.add_argument("--out", required=True)
@@ -682,6 +821,11 @@ def main(argv=None):
     command = args.command
     if command == "budget":
         config = normalize_config(read_json(args.config))
+        if config["measurement_policy_version"] == 4:
+            from confirmation import budget_proposal as confirmation_budget
+
+            write_json(args.out, confirmation_budget(read_json(args.report), config))
+            return 0
         value = budget_proposal(
             read_json(args.report),
             config["protected_metrics"],
@@ -740,7 +884,7 @@ def main(argv=None):
         return 0 if passed else 1
     if command == "init":
         config = normalize_config(read_json(args.config))
-        if config["measurement_policy_version"] == 3 and config["mode"] != "assess":
+        if config["measurement_policy_version"] in {3, 4} and config["mode"] != "assess":
             from campaign import validate_admission
 
             validate_admission(config)
@@ -799,6 +943,7 @@ def main(argv=None):
         write_json(args.out, value)
         return 0 if value["passed"] else 1
     elif command == "measure":
+        session = None
         config = normalize_config(read_json(args.config))
         remaining = config["wall_time_s"]
         if args.session:
@@ -807,13 +952,41 @@ def main(argv=None):
                 raise ValueError("measurement configuration changed or session budget exhausted")
             if remaining is not None:
                 remaining -= time.time() - session["started_at"]
+        before, after = read_json(args.before), read_json(args.after)
+        if config["measurement_policy_version"] == 4:
+            from confirmation import collect
+
+            if config["mode"] != "assess" and session is None:
+                raise ValueError("version-4 production measurements require a confirmed --session")
+            if not args.phase or not args.plan:
+                raise ValueError("version 4 measurement requires --phase and --plan")
+            plan = read_json(args.plan)
+            validate_plan(plan, config)
+            if session is not None and (
+                session.get("plans", {}).get(plan["id"], {}).get("sha256") != digest(args.plan)
+            ):
+                raise ValueError("measurement plan is not predeclared in this session")
+            collect(
+                before,
+                after,
+                args.out,
+                config["screen_pairs"] if args.phase == "screen" else config["pairs"],
+                timing_sampling(config, before["operator"]),
+                args.phase,
+                args.timeout_s,
+                remaining,
+                config.get("clock_configuration"),
+                args.plan,
+                args.screening,
+            )
+            return 0
         run_pairs(
-            read_json(args.before),
-            read_json(args.after),
+            before,
+            after,
             args.out,
             config["pairs"],
             args.timeout_s,
-            config["sampling"],
+            timing_sampling(config, before["operator"]),
             wall_time_s=remaining,
             expected_clock_configuration=config.get("clock_configuration"),
         )
@@ -828,7 +1001,18 @@ def main(argv=None):
             raise ValueError("comparison context differs from candidate plan")
         if context.get("candidate_id") != plan["id"]:
             raise ValueError("comparison candidate differs from declared plan")
-        value = timing_comparison(config, pairs, read_json(args.calibration), plan)
+        if config["measurement_policy_version"] == 4 and any(
+            pairs[side]["source_id"] != context[field]
+            for side, field in (("before", "before_source_id"), ("after", "after_source_id"))
+        ):
+            raise ValueError("confirmation sources differ from candidate context")
+        value = timing_comparison(
+            config,
+            pairs,
+            read_json(args.calibration) if args.calibration else None,
+            plan,
+            control_review=read_json(args.control_review) if args.control_review else None,
+        )
         value.update(
             kind="speed",
             context=context,
@@ -839,10 +1023,25 @@ def main(argv=None):
                     ("calibration", args.calibration),
                     ("plan", args.plan),
                 )
+                if path is not None
             },
         )
+        if config["measurement_policy_version"] == 4:
+            if not args.control_review:
+                raise ValueError("version 4 acceptance requires --control-review")
+            value["inputs"].pop("calibration", None)
+            value["inputs"]["control_review"] = {
+                "path": str(Path(args.control_review).resolve()),
+                "sha256": digest(args.control_review),
+            }
         write_json(args.out, value)
         return 0 if value["passed"] else 1
+    elif command == "inspect-confirmation":
+        config = normalize_config(read_json(args.config))
+        if config["measurement_policy_version"] != 4:
+            raise ValueError("inspection requires version 4")
+        value = timing_comparison(config, read_json(args.pairs), None, read_json(args.plan))
+        write_json(args.out, value)
     elif command == "calibrate":
         value = timing_comparison(
             normalize_config(read_json(args.config)), read_json(args.pairs), None, calibrate=True
@@ -856,7 +1055,7 @@ def main(argv=None):
     else:
         session = load_session(args.session)
         if command == "plan":
-            if session["config"]["measurement_policy_version"] != 3:
+            if session["config"]["measurement_policy_version"] not in {3, 4}:
                 raise ValueError(
                     "historical version-2 sessions cannot start new production candidates"
                 )
@@ -883,7 +1082,7 @@ def main(argv=None):
                 "declared_at": time.time(),
             }
         elif command == "candidate":
-            if session["config"]["measurement_policy_version"] != 3:
+            if session["config"]["measurement_policy_version"] not in {3, 4}:
                 raise ValueError(
                     "historical version-2 sessions cannot record new production candidates"
                 )
@@ -921,10 +1120,13 @@ def main(argv=None):
                         "cumulative evidence is not original baseline versus retained state"
                     )
                 config = session["config"]
-                if not args.calibration:
+                if not args.calibration and config["measurement_policy_version"] != 4:
                     raise ValueError("cumulative timing requires original-baseline calibration")
                 session["cumulative_timing"] = timing_comparison(
-                    config, pairs, read_json(args.calibration)
+                    config,
+                    pairs,
+                    read_json(args.calibration) if args.calibration else None,
+                    control_review=read_json(args.control_review) if args.control_review else None,
                 )
         elif command == "report":
             Path(args.out).write_text(render_report(session), encoding="utf-8")
