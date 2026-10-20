@@ -87,6 +87,7 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored) {
   }
   require_positive("app.cube.num_chirps", authored.cube.num_chirps);
   require_positive("app.cube.samples_per_chirp", authored.cube.samples_per_chirp);
+  result.visualization.validate_layout();
   require_positive("app.visualization.window_width", result.visualization.window_width);
   require_positive("app.visualization.window_height", result.visualization.window_height);
   if (result.visualization.window_width > std::numeric_limits<std::uint32_t>::max() ||

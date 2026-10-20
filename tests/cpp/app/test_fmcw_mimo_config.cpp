@@ -99,6 +99,7 @@ TEST(FmcwMimoConfig, DecodesTdmDefault) {
   const auto config = mimo::load_tdm_config(config_path("mimo_tdm/config/mimo_tdm.yaml"));
 
   EXPECT_EQ(config.num_frames, 250);
+  EXPECT_DOUBLE_EQ(config.visualization.range_doppler_width_percent, 45.0);
   EXPECT_EQ(config.scene.range_loss.model, radar::sim::RangeLossModel::kMonostaticFreeSpace);
   EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 100.0);
   EXPECT_EQ(config.scene_visibility.model, radar::sim::SceneVisibilityModel::kFrontHalfSpace);
@@ -126,6 +127,23 @@ TEST(FmcwMimoConfig, DecodesTdmDefault) {
   EXPECT_EQ(config.extents.max_doppler_bins, 64);
   EXPECT_EQ(config.extents.max_detections, 64 * 256);
   expect_common_geometry_and_tail(config, 13, 32);
+}
+
+TEST(FmcwMimoConfig, DecodesDashboardWidthAndRejectsInvalidPercentages) {
+  for (const double percent : {25.0, 37.5, 70.0}) {
+    const MutatedConfig file(
+        "mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
+        "display_rate_hz: 20.0\n        range_doppler_width_percent: " + std::to_string(percent));
+    const auto config = mimo::load_tdm_config(file.path());
+    EXPECT_DOUBLE_EQ(config.visualization.range_doppler_width_percent, percent);
+  }
+  for (const auto* percent : {"24.9", "70.1", ".nan", ".inf"}) {
+    SCOPED_TRACE(percent);
+    const MutatedConfig file(
+        "mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
+        std::string("display_rate_hz: 20.0\n        range_doppler_width_percent: ") + percent);
+    EXPECT_THROW(mimo::load_tdm_config(file.path()), std::runtime_error);
+  }
 }
 
 TEST(FmcwMimoConfig, DecodesTdmSmoke) {

@@ -61,6 +61,7 @@ struct FmcwDashboardConfig {
   DashboardMode mode{DashboardMode::kRawDetections};
   bool show_angles{true};
   float dynamic_range_db{60.0F};
+  double range_doppler_width_percent{45.0};
   float detection_radius{0.010F};
   double frame_period{0.1};
   double display_rate_hz{60.0};

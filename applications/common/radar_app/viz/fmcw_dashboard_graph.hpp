@@ -121,6 +121,7 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
           .mode = kClustered ? DashboardMode::kClusters : DashboardMode::kRawDetections,
           .show_angles = show_angles,
           .dynamic_range_db = static_cast<float>(config.dynamic_range_db),
+          .range_doppler_width_percent = config.range_doppler_width_percent,
           .detection_radius = static_cast<float>(config.detection_radius),
           .frame_period = frame_period,
           .display_rate_hz = config.display_rate_hz,

@@ -126,6 +126,7 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored, const char* 
   if (result.meter_log_every < 0) {
     throw std::runtime_error("app.run.meter_log_every must be >= 0");
   }
+  result.visualization.validate_layout();
   require_positive("app.visualization.window_width", result.visualization.window_width);
   require_positive("app.visualization.window_height", result.visualization.window_height);
   if (result.visualization.window_width > std::numeric_limits<std::uint32_t>::max() ||

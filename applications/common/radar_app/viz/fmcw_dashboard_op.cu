@@ -289,14 +289,18 @@ struct DashboardLayout {
   std::array<PixelRect, 4> history_panels;
 };
 
-DashboardLayout make_dashboard_layout(std::int64_t width, std::int64_t height, bool show_angles) {
+DashboardLayout make_dashboard_layout(std::int64_t width, std::int64_t height, bool show_angles,
+                                      double range_doppler_width_percent) {
   constexpr int kOuter = 16;
   const bool compact = height < 540;
   const int gap = compact ? 8 : 12;
   const int canvas_width = static_cast<int>(width);
   const int canvas_height = static_cast<int>(height);
-  const int side_width =
-      std::max(show_angles ? 280 : 240, canvas_width * (show_angles ? 42 : 32) / 100);
+  const int available_width = canvas_width - 2 * kOuter - gap;
+  const int rd_width = std::clamp(
+      static_cast<int>(std::lround(available_width * range_doppler_width_percent / 100.0)), 240,
+      available_width - (show_angles ? 280 : 240));
+  const int side_width = available_width - rd_width;
   const int side_x = canvas_width - kOuter - side_width;
   const int rd_right = side_x - gap;
 
@@ -695,7 +699,8 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
                                  const FmcwDashboardConfig& config, std::int64_t frame_index) {
   const std::int64_t width = config.width;
   const std::int64_t height = config.height;
-  const DashboardLayout layout = make_dashboard_layout(width, height, config.show_angles);
+  const DashboardLayout layout =
+      make_dashboard_layout(width, height, config.show_angles, config.range_doppler_width_percent);
   const PixelRect& plot = layout.rd_plot;
   const bool reverse_velocity = velocities.front() > velocities.back();
   AnnotationCanvas image{
@@ -712,12 +717,9 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
 
   draw_text(&image, width, height, 20, height < 540 ? 8 : 15, config.title, 2,
             detail::kDashboardTextPrimary);
-  const std::string status = "Frame " + std::to_string(frame_index + 1) + "   |   Scenario " +
+  const std::string status = "Frame " + std::to_string(frame_index + 1) + " (" +
                              format_value(static_cast<float>(frame_index * config.frame_period)) +
-                             " s   |   " + std::to_string(markers.size()) +
-                             (config.mode == DashboardMode::kClusters
-                                  ? (markers.size() == 1U ? " cluster" : " clusters")
-                                  : (markers.size() == 1U ? " detection" : " detections"));
+                             " s) | " + std::to_string(markers.size()) + " detections";
   draw_text(&image, width, height, 20, height < 540 ? 29 : 43, status, 1);
   draw_text(&image, width, height, 20, height - 22, "Dots: detections | Lines: truth", 1,
             detail::kDashboardTextMuted);
@@ -806,7 +808,9 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
 
 FmcwDashboardOp::FmcwDashboardOp(FmcwDashboardConfig config) : config_(std::move(config)) {
   sim::validate_scene_visibility(config_.scene_visibility);
-  if (!std::isfinite(config_.dynamic_range_db) || config_.dynamic_range_db <= 0.0F ||
+  if (!std::isfinite(config_.range_doppler_width_percent) ||
+      config_.range_doppler_width_percent < 25.0 || config_.range_doppler_width_percent > 70.0 ||
+      !std::isfinite(config_.dynamic_range_db) || config_.dynamic_range_db <= 0.0F ||
       !std::isfinite(config_.detection_radius) || config_.detection_radius <= 0.0F ||
       !std::isfinite(config_.frame_period) || config_.frame_period <= 0.0 ||
       !std::isfinite(config_.display_rate_hz) || config_.display_rate_hz <= 0.0 ||
@@ -1017,8 +1021,8 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
   const std::int64_t canvas_width = config_.width;
   const std::int64_t canvas_height = config_.height;
   const std::int64_t canvas_pixels = canvas_width * canvas_height;
-  const DashboardLayout dashboard =
-      make_dashboard_layout(canvas_width, canvas_height, config_.show_angles);
+  const DashboardLayout dashboard = make_dashboard_layout(
+      canvas_width, canvas_height, config_.show_angles, config_.range_doppler_width_percent);
   const std::vector<std::int64_t> shape{canvas_height, canvas_width, 4};
   HOLOSCAN_TRY(
       auto loan,

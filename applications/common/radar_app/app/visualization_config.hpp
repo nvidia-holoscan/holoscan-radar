@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <cmath>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 
@@ -20,10 +22,19 @@ struct VisualizationConfig {
   std::string window_title{"FMCW Radar"};
   double display_rate_hz{60.0};
   double dynamic_range_db{60.0};
+  double range_doppler_width_percent{45.0};
   double detection_radius{0.010};
   int64_t history_frames{120};
   int64_t detection_trail_frames{12};
   std::string profile;
+
+  void validate_layout() const {
+    if (!std::isfinite(range_doppler_width_percent) || range_doppler_width_percent < 25.0 ||
+        range_doppler_width_percent > 70.0) {
+      throw std::runtime_error(
+          "app.visualization.range_doppler_width_percent must be finite and in [25, 70]");
+    }
+  }
 };
 
 }  // namespace holoscan::radar::app
@@ -49,6 +60,7 @@ struct ConfigCodec<radar::app::VisualizationConfig>
       defaulted_object_field("window_title", &Config::window_title),
       defaulted_object_field("display_rate_hz", &Config::display_rate_hz),
       defaulted_object_field("dynamic_range_db", &Config::dynamic_range_db),
+      defaulted_object_field("range_doppler_width_percent", &Config::range_doppler_width_percent),
       defaulted_object_field("detection_radius", &Config::detection_radius),
       defaulted_object_field("history_frames", &Config::history_frames),
       defaulted_object_field("detection_trail_frames", &Config::detection_trail_frames),

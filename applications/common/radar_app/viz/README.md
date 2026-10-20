@@ -4,13 +4,32 @@ All seven FMCW applications use `FmcwDashboardOp` and the same C++/Python
 visualization wiring. The dashboard presents the CFAR power surface, current
 range-Doppler detections, spatial detection trails where angles are available,
 and rolling feature histories. Lines show analytic simulated truth; dots show
-detections. The header distinguishes scenario time from wall-clock performance.
+detections. The subtitle reads `Frame <N> (<t> s) | <M> detections`, using scenario time
+and the number of displayed markers (cluster representatives in clustered workflows).
 
 The power map uses a sequential viridis palette with a relative dB legend.
 Normalization remains relative to the current frame's peak. Dense angle cubes
 are projected with the maximum power across the leading angle axes. Range
 increases upward; velocity increases to the right. Physical angle axes use the
 existing radar-boresight presentation conversion.
+
+## Panel widths
+
+Set `app.visualization.range_doppler_width_percent` to the percentage of usable
+horizontal panel space allocated to the range-Doppler section, including its
+axis gutter. The default is 45 (previously approximately 58 with angles and 68
+without). The remaining width goes to spatial plots and histories. Both C++
+and Python read the same setting:
+
+```yaml
+app:
+  visualization:
+    range_doppler_width_percent: 45
+```
+
+Values must be finite and between 25 and 70. Outer margins and the panel gap
+are excluded. Compact canvases clamp the split to leave at least 240 px for
+the range-Doppler section and 280 px for angle panels (240 px without angles).
 
 ## Azimuth / range sector
 
