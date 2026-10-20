@@ -1,125 +1,125 @@
-# Campaign Configuration
+# Campaign configuration
 
-All commands use host Python 3 and argv arrays. Start in an ignored directory:
+Use explicit **measurement-policy version 4** and operator-perf's
+[command guide](../../../performance/optimization/CONFIRMATION.md). The workflow is
+**discover → correctness/baseline screen → bounded A/B candidate screen → freeze
+→ fresh integrated confirmation → disposition/report**. Standalone A/A or B/B
+campaigns are not prerequisites. Version-2/version-3 workflows remain available
+for historical replay; do not implicitly migrate their sessions or evidence.
+
+## Discover and prepare
 
 ```bash
-python3 performance/optimization/radar_perf.py campaign discover --config /absolute/config.json --out /absolute/campaign
+python3 performance/optimization/radar_perf.py campaign discover --config /absolute/campaign-config.json --out /absolute/campaign
 python3 performance/optimization/radar_perf.py campaign qualify --campaign /absolute/campaign
 python3 performance/optimization/radar_perf.py campaign baseline --campaign /absolute/campaign
 python3 performance/optimization/radar_perf.py campaign status --campaign /absolute/campaign
-python3 performance/optimization/radar_perf.py campaign resume --campaign /absolute/campaign --phase qualify
+python3 performance/optimization/radar_perf.py campaign resume --campaign /absolute/campaign --phase baseline
 python3 performance/optimization/radar_perf.py campaign report --campaign /absolute/campaign --out /absolute/reports/baseline.md
 ```
 
-The qualification command performs exploration, immutable selection and held-out
-validation. Baseline uses a validated family recommendation as a sampling
-proposal and performs full-case correctness/calibration; it never assumes a
-representative pilot qualifies other cases. `resume --phase baseline` replays
-completed hash-bound evidence. Changing measurement identity requires a fresh
-campaign; do not patch old manifests or budgets.
-
-## Campaign JSON
+For version 4, `qualify` checks design/build identities without launching A/A
+measurements. It is not deployment qualification. Baseline runs the provided
+native correctness fixtures, compares two output captures and collects one clean
+original-build screen per case. Sampling and coverage claims remain scoped to
+the actual measured matrix; representative results never qualify omitted cases.
 
 ```json
 {
   "root": "/absolute/checkout",
   "mode": "assess",
   "operators": ["clutter_filter", "fmcw_range_processor"],
-  "representatives": ["clutter_filter", "fmcw_range_processor"],
-  "qualification_budget_seconds": 300,
   "configs": {
-    "clutter_filter": "/absolute/clutter-config.json",
-    "fmcw_range_processor": "/absolute/range-config.json"
+    "clutter_filter": "/absolute/clutter-config-v4.json",
+    "fmcw_range_processor": "/absolute/range-config-v4.json"
   },
   "builds": {
     "clutter_filter": "/absolute/clutter-build.json",
     "fmcw_range_processor": "/absolute/range-build.json"
   },
-  "exploration": {
-    "frames": [50, 500, 2000],
-    "repeats": [3, 7],
-    "calibration_pairs": 10,
-    "validation_pairs": null,
-    "allow_mean": false
-  },
-  "verification": {},
-  "baseline_budget_seconds": null
+  "baseline_budget_seconds": 300,
+  "verification": {}
 }
 ```
 
-The sample budget is an example, not a default or authorization for measurement.
-Require the caller to specify a positive budget. It is divided among selected
-representatives and persists across resumes. `validation_pairs: null` uses the
-matrix-derived proposal with a 30-pair floor; confidence resolution is checked,
-not presumed. An explicit smaller smoke budget can exercise orchestration while
-remaining blocked for qualification.
+The budget and operators are examples, not authorization or universal defaults.
+Require a positive caller-specified budget before new timing. The baseline
+allocation is shared across all operators and persists across resume. Leaf
+session budgets bound candidate measurement phases. Forecast correctness,
+builds, screening and four-run confirmation separately; exhausted allocations
+leave explicit unresolved scopes without automatic extensions.
 
-`representative_cases` optionally maps operator names to comma-separated case IDs.
-Default pilots use `baseline-small`; representative selection is separate from
-the full baseline matrix in each operator configuration.
+Each operator config includes version 4, both-precision output policies,
+verification cases, timing precision, targets, protected metrics, scope and
+limits. Use explicit sampling case IDs, two confirmation runs per build and a
+random seed as shown in the command guide. Confirm a consumer-specific protocol
+when case IDs differ. `pairs` means independent confirmation blocks, not frames,
+repeat medians or four independent cross-build pairings. `screen_pairs` bounds
+exploratory A/B blocks separately. Derive confirmation resolution with the
+version-4 `budget` command; no single count establishes power.
 
-Operator configs follow [operator-perf tools](../../operator-perf/references/tools.md)
-with explicit `measurement_policy_version: 3`. Their `sampling.cases` selects the complete baseline matrix;
-use campaign `representative_cases` to narrow qualification independently. The campaign carries the number of harness-backed requested operators
-into familywise budget calculations. Review affected consumers explicitly.
-`qualification_cost_estimate` may specify `case_count`, `precisions`,
-`launch_seconds` and `frame_ms`; these are forecasts, never evidence. Default
-forecast assumptions are labeled and refined by observed job durations.
+Record workload dimensions, variants, compute role and horizon. Relative
+small/medium/large labels are not universal deployment sizes. Keep useful
+small overhead cases without requiring them to satisfy a fixed percentage of
+repeatability. No fixed deployment means scenarios are explicitly synthetic;
+do not silently enlarge recipes or require deployment matching.
 
-A build manifest binds operator/class, source ID, git commit, recipe hash,
-immutable SDK image, build settings, absolute cwd, argv command, device ID and
-hashes of executable/runtime artifacts. Supply `measurement_files` as a reviewed
-path/hash closure containing production sources, shared consumers, harnesses,
-recipes and measurement tools to permit reuse after unrelated report edits.
-Without that closure, whole-checkout source identity must match. Freeze the
-closure with build provenance; an arbitrary current-source hash list cannot
-prove an older executable was built from those sources. Record the build log,
-resolved runtime libraries and a source-verification/reuse receipt separately.
+## Provenance and native coverage
 
-`verification[operator]` supplies `correctness_command` and `coverage` (an
-absolute path/SHA256 reference). Coverage receipts bind the build source ID,
-`passed: true`, the complete confirmed native `cases`, and reviewed true flags
-for `ownership`, `boundaries`, `analytic_reference`, `errors`, `live_fallback`.
-These flags are claims backed by fixture logs, not substitutes for tests.
-The tool runs the supplied fixtures, captures two native exports and requires
-exact comparison under the declared per-port policies. Missing evidence blocks
-baseline admission. No correctness tolerance is silently weakened.
+Build manifests bind operator/class, compiled/source identity, recipe, immutable
+SDK image, settings, cwd/argv, device and executable/runtime artifact hashes.
+A reviewed `measurement_files` closure permits verified reuse after unrelated
+report edits; otherwise the whole checkout identity must match. Source hashes
+alone do not prove an older executable was compiled from those sources. Keep
+build logs, runtime resolution and reuse receipts. Changed shared consumers
+invalidate affected evidence closures.
 
-## Optimization Handoff
+`verification[operator]` supplies `correctness_command` and a hash-bound coverage
+receipt. It binds source ID, complete native case inventory, `passed: true`,
+reviewed `ownership`, `boundaries`, `analytic_reference`, `errors`, `live_fallback`
+flags and nonempty hashed `evidence` from real fixtures. A non-applicable behavior
+needs an explicit reviewed rationale, not an invented test. The tool executes
+the command, captures both precisions twice and checks exact policies and case
+coverage. Missing evidence blocks correctness admission; output tolerance is
+never relaxed to fix timing uncertainty.
 
-Set `mode: optimize` only with authorization. After qualified full baselines:
+## Optimization handoff
+
+Default to assessment. For an authorized optimization campaign, use
+`mode: optimize` and present all concrete operator configurations together:
+outputs, targets, protected matrix, consumers, editable scope, sampling,
+statistical error budget, control review and stopping limits. Record existing
+user confirmation; do not ask again while its scope remains valid.
 
 ```bash
 python3 performance/optimization/radar_perf.py campaign prepare-sessions --campaign /absolute/campaign
+python3 performance/optimization/radar_perf.py campaign prepare-sessions --campaign /absolute/campaign --confirmed
 ```
 
-Review every generated `sessions/*-config.json` together, including targets,
-output policies, full protected matrix, precision, consumers, scope and limits.
-After recording user confirmation, use `prepare-sessions --confirmed` (or its
-`optimize --confirmed` alias) to initialize operator-perf sessions. This command
-performs no production edits. The agent follows operator-perf for each bounded
-candidate and refreshes current-best calibration after retained changes.
+Version-4 `benchmark_admission` validates native correctness/coverage and affected
+consumer native records; no A/A calibration artifact is needed. Use the generated
+session configuration for subsequent commands so its admission reference and
+confirmed hash remain intact. These commands do not edit production operators.
 
-Seal each operator session with operator-perf `finish`, then register it:
+For each bounded candidate, operator-perf declares the plan, checkpoints sources,
+checks exact behavior, screens A/B, freezes the candidate, then collects fresh
+randomized balanced two-A/two-B confirmation. A/A and B/B controls share those
+runs with A/B. The agent records an evidence-backed interpretation review;
+this is not another user approval, an agreement-percentage test or permission
+to override a demonstrated slowdown. Repeated control checks do not authorize
+rerunning until a pass. Use validated error/stopping rules and remaining budget.
 
-```bash
-python3 performance/optimization/radar_perf.py campaign disposition --campaign /absolute/campaign --operator clutter_filter --session /absolute/session.json
-```
-
-An improved disposition requires direct original/current-best cumulative timing.
-Publish reports between sealed sessions. Shared-source edits invalidate affected
-build/evidence closures; rebuild and refresh required matrices before proceeding.
-
-After publishing reports, create a fresh build-provenance binding only after
-verified closure/runtime checks:
+After an accepted change, refresh attribution and reassess the queue. There is
+no mandatory current-best A/A refresh. Final gains require direct original/final
+measurements with integrated controls; never multiply intermediate percentages.
 
 ```bash
+python3 performance/optimization/radar_perf.py campaign disposition --campaign /absolute/campaign --operator clutter_filter --session /absolute/campaign/sessions/clutter_filter-session.json
 python3 performance/optimization/radar_perf.py campaign reuse-build --build /absolute/preserved-build.json --out /absolute/new-binding
 ```
 
-The new receipt distinguishes compiled-source identity from current whole-checkout
-provenance, preserves the original manifest and rejects changed source/runtime
-hashes. It does not upgrade old measurements or authorize reusing calibration
-under changed policies or contexts. Rebind evidence only through a reviewed
-receipt and replay; otherwise collect fresh calibration. Affected consumer
-correctness and full-matrix calibration must also pass before session admission.
+Publish only between sealed sessions and capture fresh provenance afterward.
+Reuse verifies closure/runtime/context and preserves original artifacts. It does
+not reinterpret old calibration, authorize new GPU runs or silently upgrade a
+historical policy. Host-tool tests validate orchestration; real deployment
+qualification and performance conclusions require actual GPU evidence.

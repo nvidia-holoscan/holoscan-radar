@@ -5,10 +5,10 @@ description: Qualify measurement protocols and assess or coordinate bounded opti
 
 # Operator Benchmark Campaign
 
-Use **discover → qualify → freeze protocol → baseline → assess/optimize → report**.
+Use **discover → correctness/screen → freeze design → paired A/B → integrated confirmation → report**.
 This skill coordinates deployment-wide evidence; delegate operator assessment,
 attribution and candidate sessions to [operator-perf](../operator-perf/SKILL.md).
-Its correctness, equivalence, calibration and familywise acceptance gates remain
+Its correctness, equivalence and declared statistical acceptance rules remain
 authoritative. Scope is this repository's HSDK 5 CUDA deployments.
 
 Read [configuration](references/configuration.md) before preparing a campaign
@@ -19,15 +19,26 @@ commands. Resolve repository paths from the checkout, not an installed skill.
 - Inventory requested public operators, existing recipes, cases, precisions,
   verification and consumers. Missing harnesses are blocked coverage; creating
   recipes requires explicit scope. Review transitive consumers with operator-perf.
-- Require a positive **user-specified qualification time budget** before timing.
-  Choose existing reduction, FFT, eigensolver and irregular representatives,
-  subject to coverage and cost; honor explicit case overrides. Report forecasts
-  and evaluate affordable sampling levels. Exhaustion leaves unresolved scopes.
-- Select from calibration, freeze identity and budgets, then validate using
-  disjoint runs. Representative qualification covers measured cases only.
-  Calibrate complete operator/consumer matrices before production acceptance.
-- Collect native correctness and repeat-output evidence with clean baselines.
-  Keep blocked cases visible while proceeding with independent qualified scopes.
+- For library-wide opportunity reviews, begin breadth-first using existing
+  evidence and implementation review. Representative measurement pilots do not
+  narrow the requested campaign. Blocked timing prevents affected acceptance,
+  not independent discovery or attribution. Report tool-chain validation and
+  operator optimization outcomes separately; further tool work should resolve
+  a concrete assessment or candidate decision.
+- Require a positive **user-specified measurement budget** before timing.
+  Choose useful existing workloads across processing families, subject to cost;
+  honor explicit overrides. Do not make a general qualification study or a
+  standalone full-matrix A/A sweep a prerequisite to candidate testing.
+- Freeze the design, sampling, identities and budgets before confirmation.
+  Screen correct bounded candidates with paired A/B. Confirm promising frozen
+  candidates on fresh randomized balanced four-run blocks: two current-best A
+  runs and two candidate B runs. Follow operator-perf's
+  [integrated confirmation protocol](../operator-perf/references/confirmation.md).
+  A/A and B/B are dependent matched controls, with no fixed agreement limits.
+- Collect native correctness and repeat-output evidence before candidate edits.
+  Protect the full confirmed operator/consumer matrix during confirmation.
+  Screening or representative results do not validate unmeasured cases. Keep
+  unresolved scopes visible while independent discovery proceeds.
 - Default to **assessment-only**. Before production edits, present one
   consolidated review of concrete operator configurations: outputs, targets,
   eligibility, protected metrics, editable scope, consumers, sampling and limits.
@@ -39,10 +50,27 @@ commands. Resolve repository paths from the checkout, not an installed skill.
 - Publish baseline, per-operator disposition and final reports between sealed
   sessions. Link branch/artifact paths in chat at every milestone. Final gains
   require direct original/current-best paired measurements.
+- Maintain a linked, user-readable `overview.md` throughout the campaign,
+  following [reporting](references/reporting.md). At each milestone state the
+  decision enabled by the evidence and the next action with its dependencies.
+  For unstable timing, use operator-perf's
+  [distribution analysis](../operator-perf/references/distributions.md) before
+  expanding frame counts. Do not let exploratory protocols become gates.
+  Distinguish invalid evidence, ordinary variability, limited sensitivity and
+  demonstrated regressions. Controls help investigate confounding; a failure to
+  reject a control null does not prove measurement reliability.
+
+Use explicit version-4 configurations and the
+[command guide](../../performance/optimization/CONFIRMATION.md). Campaign design
+checks do not launch A/A; baseline preparation verifies native behavior and
+collects inexpensive original-build screens. Session admission requires native
+coverage, not timing repeatability. Production acceptance uses integrated
+confirmation and evidence-backed agent control review. Host validation does not
+qualify a GPU deployment; no new measurement budget is implied.
 
 Respect the caller's worktree or single-checkout choice. Keep immutable builds,
 archived runtime dependencies, checkpoints and active notes in ignored session
-paths. Preserve user edits and historical evidence. Version-2 evidence supports
-historical reporting/replay; fresh version-3 qualification and confirmation are
-required for new production sessions. No implicit migration, CPU fallback,
+paths. Preserve user edits and historical evidence. Version-2/version-3 evidence supports
+historical reporting/replay; the new workflow requires implemented policy-version
+support and fresh confirmed evidence. No implicit migration, CPU fallback,
 threshold relaxation, clock changes, skill installation or external publication.

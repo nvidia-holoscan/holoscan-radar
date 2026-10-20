@@ -2,11 +2,22 @@
 
 ## Measurement Qualification
 
-Qualify before collecting the full baseline. Read
-[qualification](qualification.md) for bounded exploration, frozen selection,
-disjoint validation, early-window protection and blocker reporting. A pilot
-recommendation does not qualify unmeasured cases. Preserve historical A/A and
-full-case calibration evidence for original-versus-final comparisons.
+Read [measurement design](qualification.md) and
+[integrated confirmation](confirmation.md) for bounded screening, frozen design,
+fresh confirmation and early-window protection. No standalone A/A qualification
+is required before an assessment or bounded candidate. A representative screen
+does not validate unmeasured cases. Preserve historical evidence under its own
+policy; it is not new-policy acceptance evidence.
+
+Distinguish discovery from acceptance. Read-only source review and existing
+profile analysis can identify leads before timing is qualified. Investigate
+recurring work and its cost rather than requiring a general measurement study
+to finish first. Allocation sites may be cached or constructor-only, and
+synchronization may be contract-required or teardown; verify the call path.
+No structural lead proves suboptimality or authorizes a production edit.
+Noisy cases retain their uncertainty and coverage status while independent
+work proceeds. Invalid evidence or unsupported inference can block acceptance;
+ordinary dispersion alone is not a universal admission failure.
 
 ## Preflight And Matrix
 
@@ -53,24 +64,28 @@ end-to-end measurements. Distinguish setup, cold, steady, changed-frame,
 source cadence, and achieved throughput. Never add overlapping CUDA API and
 kernel durations as if they were disjoint parts of the tick.
 
-Before candidate edits, use the same baseline manifest on both sides of
-`measure`, then `calibrate` its raw pairs. Check every objective/protected
-metric, case and precision for directional bias, drift, and bimodality. Inspect
-the distributions as well as the automated delta/spread limits. Propose
-practical effect thresholds using this evidence and obtain confirmation before
-`init`; never derive a more permissive threshold after a rejection. Defaults
-for steady metrics are 5% P90 absolute A/A paired delta and 10% IQR/median
-baseline dispersion, both configurable. Cold/setup/override have separate
-proposed defaults and may need evidence-backed policies and more samples.
-Directional familywise A/A intervals still block bias even when the expected
-gain threshold is larger. Maxima, full ranges and 3x-median stall counts remain
-visible; no samples are dropped. Version 3 always protects `p90_ms`, `p99_ms` and their first-50-frame
-counterparts. Retain `max_ms` and stall diagnostics; protect maxima explicitly
-when required by the confirmed policy. Robust diagnostics do not prove
-stationarity; inspect distributions, drift and mode changes too.
-A failed calibration is **validation blocked**, not proof of an SDK bug.
-Rerun calibration on the current best after an accepted candidate. Keep the
-original calibration for final-versus-original measurements.
+Prepare baseline correctness and verification coverage before candidate edits.
+Use paired A/B screening for a concrete correct candidate; confirm a promising
+frozen candidate with fresh two-A/two-B blocks in randomized balanced order.
+The A/A and B/B controls come from that same confirmation experiment. There is
+no pre-edit full-matrix A/A requirement, fixed relative-dispersion veto or
+mandatory current-best A/A refresh after a keep. Report controls, absolute
+latencies, uncertainty and chronological effects alongside the A/B decision.
+
+Use [distribution inference](distributions.md) to compare declared p50/p90/p99
+and early/full windows, retaining maxima and stall diagnostics. Higher variation
+can reduce sensitivity; it does not automatically invalidate a comparison.
+Investigate control evidence of order/time effects without interpreting a
+non-significant control as proof of stability. Retain all observations. Unknown
+causes stay unknown; do not attribute an SDK defect from scatter alone.
+
+Protect setup/cold/live endpoints and the complete confirmed consumer matrix.
+Confirm the objective and protected semantics before candidate results, and
+account for candidate selection, endpoint multiplicity and stopping. Refresh
+attribution after a keep; directly compare preserved original and final builds
+for cumulative results. See [tool compatibility](tools.md#workflow-and-tool-compatibility)
+for explicit version-4 commands. Legacy interfaces retain the superseded
+admission workflow only for historical compatibility.
 
 Record timing precision coverage independently of float/double verification.
 The current recipes may time float only. Default timing protection requires
@@ -91,7 +106,7 @@ first-use work triggered by that changed frame; recipe cached cases prime it
 explicitly. Do not warm all paths or rename first-use costs away.
 The schema-v3 `override_context` records `none`, `cached_configuration`, or
 `first_changed_configuration_after_baseline` from validated recipe priming.
-It is compared across baseline/candidate and calibration. This labels context,
+It is compared across all corresponding baseline/candidate confirmation runs. This labels context,
 not a claim to decompose every global CUDA initialization cost.
 Confirm which contexts are protected before edits and add missing cached cases when needed.
 Unchanged immediate CUDA calls do not rule out a real process-state regression.

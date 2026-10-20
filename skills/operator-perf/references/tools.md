@@ -13,7 +13,25 @@ Keep session files in an ignored directory, for example
 use argument arrays, never shell strings. A container command must mount the
 artifact directory at the same absolute path so `--output` reaches the host.
 
-## Configuration And Identity
+## Workflow And Tool Compatibility
+
+Use explicit **measurement-policy version 4** for the approved
+[integrated confirmation workflow](confirmation.md). The maintained
+[command guide](../../../performance/optimization/CONFIRMATION.md) documents
+correctness-only campaign admission, direct A/B screening, fresh randomized
+four-run confirmation, dependent A/A–B/B diagnostics, control review, replay and
+final cumulative reporting. No standalone A/A or B/B admission run or fixed
+consistency threshold is required. Never pass invented calibration artifacts.
+
+Version 4 is host-tested with real synthetic subprocesses; that does not qualify
+a GPU deployment or waive native correctness coverage. New timing needs a caller
+budget. Keep version-2/version-3 evidence under its original rules. The legacy
+collection/calibration/acceptance examples below document those historical
+interfaces; their A/A prerequisites do not govern version-4 sessions. Generic
+provenance, native verification, checkpoint/restore and five-gate evidence remain
+applicable. Use the new guide's screening/confirmation commands for fresh work.
+
+## Legacy Configuration And Identity
 
 Propose this configuration, adjusting policies/cases to the actual operator;
 the example is not permission to optimize or select exact numerical rules:
@@ -122,7 +140,10 @@ to both float and double. An explicitly confirmed `["float"]` allows a recipe
 that times float only, but does not claim double-performance protection. Missing
 required precision for any available case/metric is invalid evidence.
 
-Before edits, run `measure` with the same baseline manifest for both sides:
+### Legacy Timing And Calibration
+
+For version-2/version-3 replay only, the old workflow ran the same baseline
+manifest on both sides before edits:
 
 ```bash
 python3 performance/optimization/radar_perf.py calibrate \
@@ -171,7 +192,7 @@ semantics. Old sessions cannot accept new candidates under changed rules.
 `metric_policies` sets `max_aa_p90_delta_pct`, `max_baseline_iqr_pct` and optional
 `min_effect_pct` separately for each metric. The legacy-named global fields
 `max_aa_delta_pct`/`max_baseline_spread_pct` supply **P90/IQR** defaults only in
-version 2; they no longer gate on extrema. Cold/setup/override proposed defaults
+legacy versions 2/3; they no longer gate on extrema. Cold/setup/override proposed defaults
 are examples to confirm, not permission to increase thresholds after results.
 Extremes and stall counts remain diagnostics, and all observations enter the
 familywise comparison. Minimum gain never waives a supported regression.
@@ -315,7 +336,30 @@ PATH --checks PATH... --out PATH` to combine independently verified consumer
 results. Acceptance rechecks the children and requires every affected operator.
 Confirm each extra operator's `consumer_policies`, `consumer_targets`, and
 `verification_cases` in the session config before changing shared code.
-Each operator uses the common confirmed sampling settings. Acceptance checks
+By default, consumers use the common confirmed sampling settings. A fresh
+version-3 session may declare `consumer_sampling`, keyed by an operator already
+in `consumer_policies`. Each entry resolves its own complete protocol, with
+explicit unique comma-separated `cases`; it does not inherit primary case IDs.
+For example, expansion cases differ from FeatureAssembly's score/AoA cases:
+
+```json
+{
+  "consumer_sampling": {
+    "feature_assembly": {
+      "cases": "score-aoa-pack-small,score-aoa-pack-medium,score-aoa-pack-large",
+      "warmup": 5,
+      "frames": 50,
+      "repeats": 3
+    }
+  }
+}
+```
+
+Pass the same confirmed config to `measure` and comparison commands. Collection
+and replay select the protocol using the build's operator identity; confirmation
+hashes bind these selections. An absent map preserves historical behavior.
+Version-2 sessions cannot opt into this field; start and confirm a fresh
+version-3 session instead of modifying historical evidence. Acceptance checks
 bug conflicts against actual measured/verified cases, not only declared cases.
 
 ```bash
@@ -383,10 +427,10 @@ and explicitly identify absent cumulative evidence.
 
 ## Version 3 And Campaigns
 
-New production sessions require explicit version 3 and a hash-bound full-case
+Legacy version-3 production acceptance requires explicit version 3 and a hash-bound full-case
 `benchmark_admission` prepared by the campaign tool. Version 2 remains readable
 for reporting and historical gate replay; its evidence is never upgraded in
-place. Start a freshly qualified, confirmed session to continue production work.
+place. Fresh work uses version 4 and the integrated confirmation guide above.
 
 Run `radar_perf.py campaign --help` for discovery, qualification, baseline,
 session preparation, disposition, status, resume and reporting commands. Read

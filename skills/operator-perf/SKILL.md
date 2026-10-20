@@ -50,21 +50,38 @@ branch and session path at milestones. Absolute, hash-bound artifact paths must
 remain fixed during a session. Read [workspace safety](references/workspace.md)
 for restoration and scratch rebuilds.
 
-## Qualify Before Baseline Collection
+## Measurement Design And Confirmation
 
-Use [measurement qualification](references/qualification.md) before expensive
-baselines. Require a positive caller-specified qualification time budget; do
-not silently choose a budget. Separate exploratory calibration, frozen protocol
-selection, disjoint held-out validation, full-case calibration and production
-acceptance. Representative results qualify only measured workloads.
+Use [measurement design](references/qualification.md) and the approved
+[integrated confirmation protocol](references/confirmation.md). Begin with
+correctness and inexpensive screening; test a bounded candidate with paired
+A/B runs, then confirm a promising frozen candidate on fresh blocks containing
+two A runs and two B runs in randomized balanced order. A/A and B/B are matched
+controls alongside A/B, not standalone admission campaigns.
 
-Median aggregation remains the default. Keep five warmup frames and the
-harness's existing process-warmup semantics; capture chronological raw frames
-and boundaries. Version 3 protects median/p90/p99 for the first 50 measured
-frames and the complete window, plus setup, cold and applicable transitions.
-Confidence width and +/-1% precision are descriptive diagnostics, never new
-acceptance gates or evidence of adequate power. Report unresolved regimes and
-blocked cases without extending budgets or relaxing thresholds automatically.
+Require a positive caller-specified measurement budget before timing. Freeze
+sampling, targets, protected cases/consumers, order schedule, inference and
+stopping rules before confirmation. Keep five warmups and existing process
+warmup by default. Record raw chronological frames, first-50/full-window
+p50/p90/p99, setup, cold and applicable live transitions. Variation determines
+uncertainty and sensitivity; no fixed percentage or microsecond consistency
+limit qualifies a workload. A non-significant control does not prove stability.
+
+Use [paired distribution inference](references/distributions.md); the whole
+confirmation block is the inferential unit. Shared controls are dependent.
+Keep exact correctness, the more-than-2% target objective and directional
+protection against demonstrated slowdowns unless explicitly changed. Report
+inconclusive protected results and unsupported intervals distinctly. Confidence
+width is diagnostic, not a universal precision gate. Read the
+[measurement review](references/measurement-redesign.md) for rationale.
+
+Use explicit **measurement-policy version 4** and the
+[maintained command guide](../../performance/optimization/CONFIRMATION.md).
+The tools support correctness-only admission, A/B screening and fresh integrated
+confirmation with raw replay and evidence-backed control review. Version-2/
+version-3 A/A admission remains historical; never migrate its evidence in place.
+Host tests validate orchestration, not GPU deployment performance. Preserve
+native coverage requirements and obtain a caller budget before new timing.
 
 For deployment-wide inventory, qualification and reporting use
 [operator-benchmark](../operator-benchmark/SKILL.md). It delegates candidate
@@ -95,20 +112,22 @@ Before editing, propose and obtain confirmation of the concrete session:
 operator, comparison rules for **each port and precision**, cases, objective,
 protected cases, editable scope, and limits. Defaults: 20 candidate turns, three
 consecutive unsuccessful candidates, all three sizes, steady latency, 20
-alternating A/B pairs with isolated case/repeat processes. Before confirmation,
-use the selected matrix to propose an adequate budget; 20 is not a power
-guarantee. Wall-time and target limits are optional. All defaults
+screening A/B pairs with isolated case/repeat processes. Confirmation uses
+separately budgeted four-run blocks, not an implicit reuse of this pair count.
+Before confirmation, use the selected matrix to propose adequate sampling;
+20 is not a power guarantee. Wall-time and target limits are optional. All defaults
 are configurable. Existing confirmation remains valid until scope or policy
 changes. Assessment does not need an editing-session confirmation.
 
 A turn means one attempted candidate, not one chat message or tool call.
-Qualify the protocol first, then calibrate every full-matrix baseline/metric with repeated A/A runs before editing. Timing
-precision coverage is separate from output equivalence. A noisy calibration
-blocks affected validation; it does not justify accepting differences. Follow
-the reference's familywise gates and report insufficient measurement power.
-Confirm metric-specific calibration policies and the intended clock/power
-environment. Clock changes need separate authorization; never silently lock
-clocks or substitute a controlled-clock benchmark for deployment behavior.
+Prepare baseline correctness and measurement design before edits; complete
+fresh integrated confirmation across the affected matrix before acceptance.
+Timing precision coverage is separate from output equivalence. Noisy controls
+prompt uncertainty reporting or investigation, not an automatic dispersion
+failure. Invalid evidence or unresolved confounding can block interpretation.
+Confirm the intended deployment context. Clock changes need separate
+authorization; never silently lock clocks or substitute a controlled-clock
+benchmark for deployment behavior.
 
 On a failed gate, do not retroactively change exclusions, objectives, numerical
 rules, initialization semantics or thresholds to accept that candidate. A new

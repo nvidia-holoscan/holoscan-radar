@@ -6,10 +6,13 @@ Prepare a session JSON using the interface in [tools](tools.md). Propose rules
 for every output port separately for float and double; integer/index/mask and
 descriptor content are exact. Floating rules are exact or confirmed explicit
 absolute/relative tolerances with evidence from analytic tests. Confirm the
-configuration and limits before edits. Record confirmation through `init`.
+configuration and limits before edits. Record confirmation through version-4
+`init`, using correctness-only admission prepared by the campaign tools. Read the
+[command guide](../../../performance/optimization/CONFIRMATION.md); legacy
+version-3 admission is not a prerequisite for the new workflow.
 
-Default to a dedicated worktree with the intended starting state, placed in the
-session directory described in SKILL.md's Workspace Layout. If the user
+Respect the caller's single-checkout or worktree choice and preserve the intended
+starting state in the layout described in SKILL.md. If the user
 has uncommitted relevant work, preserve and reproduce it there before taking
 the baseline. Do not stash, reset, or discard their work. Keep original and
 current-best builds separately, including their runtime libraries; merely
@@ -48,20 +51,25 @@ until final validation, then record the final reviewed source state separately.
 3. Build and run relevant correctness tests, native output comparisons, and
    temporal/error checks. Save contract-review and coverage evidence. Missing
    output/timestamp coverage is a failed gate, not an exception.
-4. Run `measure` using distinct source/build manifests and the same immutable
-   recipe and sampling settings. It alternates A/B order and writes raw reports.
-   Supply current-best A/A raw pairs to `compare-timing`. Descriptive paired
-   medians/bootstrap intervals accompany exact Bonferroni familywise intervals
-   used for decisions. Confirm practical gain thresholds before measurements.
-   Confirm the target cases and protect all measured cases by default. Reject
-   regressions in setup/cold/live timing where these are protected objectives.
+4. Screen using bounded paired A/B measurements with distinct source/build
+   manifests and identical recipe/timing settings. Screening is exploratory.
+   Freeze a promising candidate and the confirmation design before collecting
+   fresh randomized balanced two-A/two-B blocks over the complete affected
+   matrix. Follow [integrated confirmation](confirmation.md) and
+   [distribution inference](distributions.md). Use A/A and B/B as dependent
+   controls alongside A/B, not separate admission sweeps or fixed agreement
+   gates. Investigate unresolved confounding; ordinary variability contributes
+   uncertainty. Every predeclared target must demonstrate its practical gain,
+   and protected demonstrated slowdowns reject. Retain uncertainty for permitted
+   inconclusive protected endpoints. Unsupported evidence cannot count as a pass.
 5. Record the candidate with evidence for contract, coverage, tests,
    equivalence, and speed gates. Keep only if all pass. For failure, seal the
    candidate file state and `restore` the checkpoint; it refuses unexpected
    intervening edits and preserves previously accepted changes.
 6. After a keep, refresh attribution and compare structural evidence with the
    prior run; stale exports cannot establish convergence. Update current best.
-   Stop on the confirmed attempt/dry/time/target limit or an empty queue.
+   Do not run a mandatory standalone current-best A/A refresh. Stop on the
+   confirmed attempt/dry/time/target limit or an empty queue.
 
 Single-fix mode attempts one candidate. Iterative mode defaults to 20 candidate
 turns and three consecutive failures; no-win/inconclusive trials count.
@@ -106,8 +114,9 @@ only scoped performance claims. Correctness/contract/equivalence coverage for
 an affected candidate is never optional. Do not retroactively accept a failed
 candidate by switching objectives, thresholds or exclusions.
 
-At completion or interruption, run `finish` with a concrete stop reason, then
-`report`. Include remaining findings and coverage gaps, every unresolved bug,
+At completion or interruption, seal the supported session with a concrete stop
+reason with version-4 `finish`, then `report`. Pass the final integrated control
+review when supplying cumulative timing; no standalone A/A calibration is required. Include remaining findings and coverage gaps, every unresolved bug,
 kept/rejected changes, and final versus original-baseline timing. An all-rejected
 session is a valid outcome. Remove scratch instrumentation, rebuild, rerun the
 final relevant gates, and run pinned lint before handing off.
