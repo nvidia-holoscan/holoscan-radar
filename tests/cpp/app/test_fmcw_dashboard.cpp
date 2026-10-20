@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -11,6 +12,7 @@
 #include <cstring>
 #include <deque>
 #include <optional>
+#include <ostream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -154,7 +156,19 @@ TEST(FmcwDashboardTest, ComposesOnlyMatchedImageAndTextIntoOneCudaFrame) {
   EXPECT_TRUE(found_native_text) << "SDK text must be present in the emitted GPU image";
 }
 
-TEST(FmcwDashboardTest, ComposesOpaqueHeatmapAndEmitsNativeTextWithoutDetections) {
+struct PowerLegendCase {
+  float power;
+  const char* lower;
+  const char* upper;
+};
+
+void PrintTo(const PowerLegendCase& value, std::ostream* stream) {
+  *stream << value.power;
+}
+
+class FmcwDashboardPowerTest : public ::testing::TestWithParam<PowerLegendCase> {};
+
+TEST_P(FmcwDashboardPowerTest, ComposesHeatmapWithMatchingPowerLegend) {
   using Op = viz::FmcwDashboardOp;
   using holoscan::testing::frame_at;
   using holoscan::testing::input;
@@ -168,7 +182,7 @@ TEST(FmcwDashboardTest, ComposesOpaqueHeatmapAndEmitsNativeTextWithoutDetections
   harness.push_frame(frame_at(
       std::chrono::milliseconds{1},
       input("cfar_power",
-            *to_device_tensor(std::vector<float>{1.0F, 1.0F, 1.0F, 1.0F}, {2, 2}, kFloat)),
+            *to_device_tensor(std::vector<float>(4U, GetParam().power), {2, 2}, kFloat)),
       input("detection_idx", *to_device_tensor(std::vector<std::int64_t>{}, {0, 2}, kInt)),
       input("points", *to_device_tensor(std::vector<float>{}, {0, 2}, kFloat)),
       input("range_bins", *to_device_tensor(std::vector<float>{0.0F, 100.0F}, {2}, kFloat)),
@@ -206,7 +220,22 @@ TEST(FmcwDashboardTest, ComposesOpaqueHeatmapAndEmitsNativeTextWithoutDetections
   EXPECT_STREQ(reinterpret_cast<const char*>(text.data.data() +
                                              holoscan::visualization::kTextRunHeaderBytes),
                "FMCW test");
+  std::vector<std::string> labels;
+  for (std::size_t offset = 0; offset < text.data.size();
+       offset += viz::detail::kDashboardTextRowBytes) {
+    labels.emplace_back(reinterpret_cast<const char*>(
+        text.data.data() + offset + holoscan::visualization::kTextRunHeaderBytes));
+  }
+  EXPECT_NE(std::find(labels.begin(), labels.end(), GetParam().lower), labels.end());
+  EXPECT_NE(std::find(labels.begin(), labels.end(), GetParam().upper), labels.end());
 }
+
+// A 100x power change moves both legend endpoints by 20 dB while retaining
+// the same 60 dB span and peak color in the CUDA image.
+INSTANTIATE_TEST_SUITE_P(PowerLevels, FmcwDashboardPowerTest,
+                         ::testing::Values(PowerLegendCase{1.0F, "-60.0", "0.0 dB"},
+                                           PowerLegendCase{100.0F, "-40.0", "20.0 dB"},
+                                           PowerLegendCase{0.01F, "-80.0", "-20.0 dB"}));
 
 TEST(FmcwDashboardTextTest, EncodesNativeSdkRowsWithOwnedTextAndPixelPositions) {
   std::vector<std::uint8_t> records;

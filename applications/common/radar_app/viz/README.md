@@ -7,8 +7,13 @@ and rolling feature histories. Lines show analytic simulated truth; dots show
 detections. The subtitle reads `Frame <N> (<t> s) | <M> detections`, using scenario time
 and the number of displayed markers (cluster representatives in clustered workflows).
 
-The power map uses a sequential viridis palette with a relative dB legend.
-Normalization remains relative to the current frame's peak. Dense angle cubes
+The power map uses a sequential viridis palette and a moving power window.
+Normalization remains relative to the current frame's peak; the colorbar labels
+show `10 log10(peak) - dynamic_range_db` through `10 log10(peak)` for that same
+frame. The default window stays 60 dB wide while both endpoints follow signal
+power. These are dB relative to one input power unit, not calibrated dBm.
+The peak readback shares the existing annotation input synchronization; frames
+skipped by the display-rate cap do not run the reduction. Dense angle cubes
 are projected with the maximum power across the leading angle axes. Range
 increases upward; velocity increases to the right. Physical angle axes use the
 existing radar-boresight presentation conversion.
@@ -36,8 +41,9 @@ the range-Doppler section and 280 px for angle panels (240 px without angles).
 For fields of view up to 180 degrees, the sector fills the panel width and
 height independently. This expands narrow scans instead of leaving a tiny
 wedge inside a mostly empty panel. Range rings mark quarters of the displayed
-maximum range (halves in compact windows), in meters; the azimuth legend gives the actual scan limits and
-center. The `X scale` caption reports the horizontal distance scale relative
+maximum range (halves in compact windows), with whole-meter labels outside
+the sector edge. Azimuth ticks above the wedge show the actual scan limits and
+center in degrees (only limits in compact windows). The `X scale` caption reports the horizontal distance scale relative
 to the vertical distance scale. This is a fitted view with unequal axis scales,
 so screen angles and distances should not be measured as a plan view.
 
@@ -54,7 +60,8 @@ CUDA RGBA image. Holoviz renders labels, ticks, titles, counters, and legends;
 Radar no longer maintains bitmap glyphs or rotates text into the image.
 Text uses the staging SDK's verified pixel-coordinate mode; layout and glyph sizes
 target the configured window dimensions, with compact spacing below 540 px height.
-Subplot titles are centered on their panels; axis captions are centered on the plot area.
+Subplot titles are centered on their panels, with compact top insets and tighter
+spacing above the data; axis captions are centered on the plot area.
 Titles use brighter text than ticks and labels; supporting captions are muted.
 Axis gutters are compact, and label widths follow the selected text size.
 Dark panel backgrounds and subdued grids keep target accents prominent.

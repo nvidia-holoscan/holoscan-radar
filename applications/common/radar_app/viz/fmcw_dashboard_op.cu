@@ -432,15 +432,15 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
   const bool is_polar = view == SpatialView::kAzimuthRange;
   const bool compact = height < 540;
   const PixelRect plot{
-      .x = panel.x + (is_polar ? 16 : (compact ? 32 : 44)),
-      .y = panel.y + (compact ? 28 : (is_polar ? 44 : 34)),
-      .width = panel.width - (is_polar ? 32 : (compact ? 44 : 56)),
-      .height = panel.height - (is_polar ? (compact ? 48 : 68) : (compact ? 48 : 66)),
+      .x = panel.x + (is_polar ? (compact ? 38 : 50) : (compact ? 32 : 44)),
+      .y = panel.y + (is_polar ? (compact ? 30 : 38) : (compact ? 24 : 26)),
+      .width = panel.width - (is_polar ? (compact ? 50 : 66) : (compact ? 44 : 56)),
+      .height = panel.height - (is_polar ? (compact ? 46 : 56) : (compact ? 44 : 58)),
   };
   if (plot.width <= 1 || plot.height <= 1) {
     return;
   }
-  draw_centered_text(image, width, height, panel, panel.y + 10, title);
+  draw_centered_text(image, width, height, panel, panel.y + (height < 540 ? 5 : 6), title);
   if (!is_polar && !compact) {
     draw_centered_text(image, width, height, plot, plot.y + plot.height + 18, "Azimuth (rad)",
                        detail::kDashboardTextSecondary);
@@ -481,9 +481,12 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
           draw_line(image, width, height, previous[0], previous[1], pixel[0], pixel[1], kGrid);
           previous = pixel;
         }
-        const auto label = *sector_pixel(fraction, display_center_azimuth);
-        draw_text(image, width, height, label[0] + 5, label[1] + 2,
-                  format_value(fraction * max_range), 1);
+        const auto label = *sector_pixel(fraction, config.az_bounds[0]);
+        char range_label[32];
+        std::snprintf(range_label, sizeof(range_label), "%.0f m",
+                      static_cast<double>(fraction * max_range));
+        draw_text(image, width, height, label[0] - text_width(range_label, height) - 5,
+                  label[1] - (compact ? 4 : 5), range_label, 1, detail::kDashboardTextSecondary);
       }
       const auto origin = *sector_pixel(0.0F, display_center_azimuth);
       for (int ray = 0; ray <= 4; ++ray) {
@@ -491,16 +494,21 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
         const auto edge = *sector_pixel(1.0F, azimuth);
         draw_line(image, width, height, origin[0], origin[1], edge[0], edge[1], kGrid);
       }
-      const std::string degree_legend = "Az: " + format_degrees(config.az_bounds[0]) + " / " +
-                                        format_degrees(display_center_azimuth) + " / " +
-                                        format_degrees(config.az_bounds[1]) + " deg";
-      if (!compact) {
-        draw_centered_text(image, width, height, panel, panel.y + 27, degree_legend,
-                           detail::kDashboardTextSecondary);
+      for (int tick = 0; tick < 3; ++tick) {
+        if (compact && tick == 1) {
+          continue;
+        }
+        const float fraction = tick / 2.0F;
+        const std::string label =
+            format_degrees(std::lerp(config.az_bounds[0], config.az_bounds[1], fraction)) + " deg";
+        const int x = plot.x + static_cast<int>(fraction * (plot.width - 1));
+        const int offset = static_cast<int>(fraction * text_width(label, height));
+        draw_text(image, width, height, x - offset, plot.y - (compact ? 13 : 16), label, 1,
+                  detail::kDashboardTextSecondary);
       }
       const float aspect =
           0.5F * (plot.width - 1) / (std::sin(display_half_span) * (plot.height - 1));
-      const std::string caption = "X scale " + format_value(aspect) + "x | m";
+      const std::string caption = "X scale " + format_value(aspect) + "x";
       draw_centered_text(image, width, height, panel, panel.y + panel.height - (compact ? 15 : 18),
                          caption, detail::kDashboardTextMuted);
     } else {
@@ -616,14 +624,14 @@ void draw_history_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
 
   const PixelRect plot{
       .x = panel.x + (height < 540 ? 32 : 44),
-      .y = panel.y + (height < 540 ? 28 : 34),
+      .y = panel.y + (height < 540 ? 24 : 26),
       .width = panel.width - (height < 540 ? 44 : 56),
-      .height = panel.height - (height < 540 ? 48 : 66),
+      .height = panel.height - (height < 540 ? 44 : 58),
   };
   if (plot.width <= 1 || plot.height <= 1) {
     return;
   }
-  draw_centered_text(image, width, height, panel, panel.y + 10, title);
+  draw_centered_text(image, width, height, panel, panel.y + (height < 540 ? 5 : 6), title);
 
   for (int tick = 0; tick < 3; ++tick) {
     const float fraction = static_cast<float>(tick) / 2.0F;
@@ -690,13 +698,11 @@ void draw_history_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
   }
 }
 
-AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
-                                 const std::vector<DetectionMarker>& markers,
-                                 const std::deque<HistorySample>& history,
-                                 const std::deque<HistorySample>& detection_history,
-                                 const std::vector<float>& ranges,
-                                 const std::vector<float>& velocities,
-                                 const FmcwDashboardConfig& config, std::int64_t frame_index) {
+AnnotationCanvas make_annotation(
+    std::int64_t rows, std::int64_t cols, const std::vector<DetectionMarker>& markers,
+    const std::deque<HistorySample>& history, const std::deque<HistorySample>& detection_history,
+    const std::vector<float>& ranges, const std::vector<float>& velocities,
+    const FmcwDashboardConfig& config, std::int64_t frame_index, float peak_power) {
   const std::int64_t width = config.width;
   const std::int64_t height = config.height;
   const DashboardLayout layout =
@@ -728,9 +734,13 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
             plot.y + plot.height + (height < 540 ? 16 : 21), kDopplerLabel, 1);
   draw_text(&image, width, height, plot.x, plot.y - (height < 540 ? 15 : 20), "Range (m)", 1);
 
-  // A relative dB legend makes the per-frame peak normalization explicit.
+  // Show the same moving power window used by the per-frame peak normalization.
+  // The input power has no calibrated physical reference; these are not dBm.
+  const float upper_db = 10.0F * std::log10(std::max(peak_power, FLT_MIN));
+  const std::string lower_label = format_value(upper_db - config.dynamic_range_db);
+  const std::string upper_label = format_value(upper_db) + " dB";
   const int bar_width = std::min(100, plot.width / 3);
-  const int bar_x = plot.x + plot.width - bar_width - 36;
+  const int bar_x = plot.x + plot.width - bar_width - text_width(upper_label, height) - 5;
   for (int x = 0; x < bar_width; ++x) {
     const float t = static_cast<float>(x) / std::max(1, bar_width - 1);
     const std::array<std::uint8_t, 4> color{
@@ -741,9 +751,9 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
       set_pixel(&image, width, height, bar_x + x, plot.y - 16 + y, color);
     }
   }
-  draw_text(&image, width, height, bar_x - 38, plot.y - 20,
-            "-" + format_value(config.dynamic_range_db), 1);
-  draw_text(&image, width, height, bar_x + bar_width + 5, plot.y - 20, "0 dB", 1);
+  draw_text(&image, width, height, bar_x - text_width(lower_label, height) - 5, plot.y - 20,
+            lower_label, 1);
+  draw_text(&image, width, height, bar_x + bar_width + 5, plot.y - 20, upper_label, 1);
 
   const std::array<std::int64_t, 3> x_positions{plot.x, plot.x + plot.width / 2,
                                                 plot.x + plot.width - 1};
@@ -951,6 +961,32 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
     return make_unexpected(Error{ErrorCode::kNotSupported, std::string(kWho) + ": no CUDA stream"});
   }
 
+  HOLOSCAN_TRY(auto render_time, context.clock().now());
+  const bool should_render = !last_render_ns_ || render_time.timestamp_ns - *last_render_ns_ >=
+                                                     1.0e9 / config_.display_rate_hz;
+  constexpr int kBlock = 256;
+  float host_peak = 0.0F;
+  if (should_render) {
+    const std::int64_t pixels = layout.rows * layout.cols;
+    const std::int64_t count = layout.batch * pixels;
+    if (cudaMemsetAsync(peak_power_->mutable_data().value(), 0, sizeof(float), stream) !=
+        cudaSuccess) {
+      return cuda_failure(kWho, "peak reset");
+    }
+    const int reduce_grid = static_cast<int>((count + kBlock - 1) / kBlock);
+    reduce_positive_peak<<<reduce_grid, kBlock, 0, stream>>>(
+        static_cast<const float*>(power.data()), count,
+        static_cast<unsigned int*>(peak_power_->mutable_data().value()));
+    if (cudaGetLastError() != cudaSuccess) {
+      return cuda_failure(kWho, "peak reduction launch");
+    }
+    // Piggyback the scalar readback on the existing annotation input barrier.
+    if (cudaMemcpyAsync(&host_peak, peak_power_->data(), sizeof(host_peak), cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
+      return cuda_failure(kWho, "peak readback");
+    }
+  }
+
   HOLOSCAN_TRY(auto host_idx, copy_int64_to_host(idx, stream, "detection_idx"));
   HOLOSCAN_TRY(auto host_points, copy_float_to_host(feature_points, stream, "points"));
   HOLOSCAN_TRY(auto host_ranges, copy_float_to_host(ranges, stream, "range_bins"));
@@ -967,7 +1003,6 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
     return cuda_failure(kWho, "annotation input synchronization");
   }
 
-  HOLOSCAN_TRY(auto render_time, context.clock().now());
   AnnotationCanvas host_annotation;
   try {
     std::vector<DetectionMarker> markers;
@@ -987,13 +1022,12 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
                            config_.detection_trail_frames);
     // Maintain every admitted detection in the histories, but only rasterize at
     // the requested display rate. No display clock repeatedly redraws old frames.
-    if (last_render_ns_ &&
-        render_time.timestamp_ns - *last_render_ns_ < 1.0e9 / config_.display_rate_hz) {
+    if (!should_render) {
       return {};
     }
     host_annotation =
         make_annotation(layout.rows, layout.cols, markers, history_, detection_history_,
-                        host_ranges, host_velocities, config_, current_frame);
+                        host_ranges, host_velocities, config_, current_frame, host_peak);
   } catch (const std::invalid_argument& e) {
     return make_unexpected(Error{ErrorCode::kInvalidArgument, std::string(e.what())});
   }
@@ -1001,21 +1035,6 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
                       host_annotation.pixels.size(), cudaMemcpyHostToDevice,
                       stream) != cudaSuccess) {
     return cuda_failure(kWho, "annotation upload");
-  }
-
-  const std::int64_t pixels = layout.rows * layout.cols;
-  const std::int64_t count = layout.batch * pixels;
-  if (cudaMemsetAsync(peak_power_->mutable_data().value(), 0, sizeof(float), stream) !=
-      cudaSuccess) {
-    return cuda_failure(kWho, "peak reset");
-  }
-  constexpr int kBlock = 256;
-  const int reduce_grid = static_cast<int>((count + kBlock - 1) / kBlock);
-  reduce_positive_peak<<<reduce_grid, kBlock, 0, stream>>>(
-      static_cast<const float*>(power.data()), count,
-      static_cast<unsigned int*>(peak_power_->mutable_data().value()));
-  if (cudaGetLastError() != cudaSuccess) {
-    return cuda_failure(kWho, "peak reduction launch");
   }
 
   const std::int64_t canvas_width = config_.width;

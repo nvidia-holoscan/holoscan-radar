@@ -4,6 +4,15 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 
 ## Where the project stands
 
+- **2026-10-20** â€” **Cleaner FMCW sector ticks and a moving power legend** on
+  `deustice/gui-updates`. Whole-meter range labels sit outside the wedge,
+  degree ticks replace the azimuth legend, and subplot title spacing is tighter.
+  Colorbar endpoints now follow the same-frame peak in input-power dB, retaining
+  the configured span and color mapping. Peak readback shares the annotation
+  barrier. All 37 focused CTests including provider and three GPU power-level
+  cases, nine GUI checks, the C++ MIMO TDM run, matched captures, and full lint
+  pass. DSP contracts and native font selection are unchanged.
+
 - **2026-10-20** â€” **Configurable FMCW dashboard split and simpler subtitle** on
   `deustice/gui-updates`. `app.visualization.range_doppler_width_percent` defaults
   to 45, with compact-panel minimum widths and finite 25â€“70 validation. The
@@ -363,6 +372,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 | Portable SAR data defaults | Codex | `dpc/main-5x-catchup` | **verified locally:** all nine CPHD downloads have valid XML and complete declared block extents. Presets resolve relative paths under `HOLOHUB_DATA_DIR` (repository `data/` by default); downloader defaults and guides match. All five real-data configs load from outside the repository, all five CLI targets build, 20 SAR CTests pass, and a finite real-data CLI strip run emits 16 images without an extra data mount. Pinned all-file lint passes. |
 | DopplerNotch descending velocity axis | Codex | `deustice/doppler-notch-axis-order` | **verified locally:** signed nearest-bin indexing and positive cyclic periods preserve descending-axis passbands; contract now permits either monotonic direction. Both new axis-order tests fail before the fix; all 15 focused GPU CTests pass afterward on Thor with HSDK 5 GA. Jira duplicate search/P0 awaits MaaS access. |
 | PR 66 non-uniform non-cyclic nearest bin | Codex | `deustice/doppler-notch-axis-order` | **verified locally:** non-cyclic nearest-bin selection searches actual physical coordinates, supporting non-uniform axes in either direction. Both precision regressions fail before the fix; all 17 focused GPU unit/pipeline CTests pass afterward on HSDK 5 GA. PR 68 restacking also applies the corrected selection in its shared row-kernel gain helper; all 21 downstream GPU unit/pipeline CTests pass. Pinned all-file lint passes with Node 22 for markdownlint. |
+| FMCW axis labels and power legend | Codex | `deustice/gui-updates` | **verified locally:** outside-edge meter labels, azimuth ticks, tighter titles, and same-frame dB limits. All 37 focused CTests including provider, nine GUI checks, C++ MIMO TDM, matched captures, and full lint pass. |
 | FMCW dashboard width and subtitle | Codex | `deustice/gui-updates` | **verified locally:** configurable range-Doppler width defaults to 45%, subtitle simplified; 64 focused tests, provider CTest, nine GUI checks, custom-width C++/Python runs, matched before/after captures, and full lint pass. |
 | FMCW dashboard styling refinement | Codex | `deustice/gui-updates` | **verified locally:** tighter axis gutters, text-size-aware label placement, brighter titles, subdued secondary text/grids, and refined target accents. All 32 dashboard regressions, nine Python GUI checks, a five-target C++ MIMO TDM preview, and full lint pass. |
 | FMCW GUI resize investigation | Codex | `deustice/gui-updates` | **verified locally:** SDK CUDA frame composition keeps text and plots aligned while resizing; joint image/text admission recovers from delayed-display pressure. All 33 dashboard regressions, provider CTest, nine GUI checks, and repeated five-size C++/Python resize probes with 20 ms X11 delay pass; full lint passes. |
