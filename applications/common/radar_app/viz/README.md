@@ -35,6 +35,7 @@ CUDA RGBA image. Holoviz renders labels, ticks, titles, counters, and legends;
 Radar no longer maintains bitmap glyphs or rotates text into the image.
 Text uses the staging SDK's verified pixel-coordinate mode; layout and glyph sizes
 target the configured window dimensions, with compact spacing below 540 px height.
+Subplot titles are centered on their panels; axis captions are centered on the plot area.
 Titles use brighter text than ticks and labels; supporting captions are muted.
 Axis gutters are compact, and label widths follow the selected text size.
 Dark panel backgrounds and subdued grids keep target accents prominent.

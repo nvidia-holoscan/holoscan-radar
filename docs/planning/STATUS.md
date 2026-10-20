@@ -4,6 +4,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-20** — **Centered FMCW subplot titles and captions** on
+  `deustice/gui-updates`. Panel titles share centered placement; time, azimuth,
+  and sector-scale captions align with their plots. The footer now reads
+  `Dots: detections | Lines: truth`. All 32 dashboard regressions, SISO/MIMO TDM
+  and compact GUI checks, and full lint pass. Matching frame-30 before/after
+  captures use the separate TrueType preview; production font selection is unchanged.
+
 - **2026-10-20** — **Refined FMCW dashboard spacing and contrast** on
   `deustice/gui-updates`: tighter axis gutters, compact text-width measurements,
   brighter titles, subdued secondary text/grids, and refined target accents.

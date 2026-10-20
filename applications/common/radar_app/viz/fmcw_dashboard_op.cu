@@ -272,6 +272,16 @@ struct PixelRect {
   int height{0};
 };
 
+void draw_centered_text(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
+                        const PixelRect& panel, int y, std::string_view text,
+                        std::uint32_t color = detail::kDashboardTextPrimary) {
+  const auto available = static_cast<std::size_t>(std::max(0, panel.width - 24) /
+                                                  (text_size(height, 1) * 7.0F / 13.0F));
+  const auto label = text.substr(0, available);
+  draw_text(image, width, height, panel.x + (panel.width - text_width(label, height)) / 2, y, label,
+            1, color);
+}
+
 struct DashboardLayout {
   PixelRect rd_plot;
   PixelRect azimuth_range_panel;
@@ -426,12 +436,10 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
   if (plot.width <= 1 || plot.height <= 1) {
     return;
   }
-  draw_text(image, width, height, panel.x + 12, panel.y + 10,
-            title.substr(0, static_cast<std::size_t>(std::max(0, panel.width - 24) /
-                                                     (text_size(height, 1) * 7.0F / 13.0F))),
-            1, detail::kDashboardTextPrimary);
+  draw_centered_text(image, width, height, panel, panel.y + 10, title);
   if (!is_polar && !compact) {
-    draw_text(image, width, height, plot.x, plot.y + plot.height + 18, "Azimuth (rad)", 1);
+    draw_centered_text(image, width, height, plot, plot.y + plot.height + 18, "Azimuth (rad)",
+                       detail::kDashboardTextSecondary);
   }
 
   const float max_range = std::max(1.0F, range_bounds[1]);
@@ -483,15 +491,14 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
                                         format_degrees(display_center_azimuth) + " / " +
                                         format_degrees(config.az_bounds[1]) + " deg";
       if (!compact) {
-        draw_text(image, width, height,
-                  panel.x + (panel.width - text_width(degree_legend, height)) / 2, panel.y + 27,
-                  degree_legend, 1);
+        draw_centered_text(image, width, height, panel, panel.y + 27, degree_legend,
+                           detail::kDashboardTextSecondary);
       }
       const float aspect =
           0.5F * (plot.width - 1) / (std::sin(display_half_span) * (plot.height - 1));
       const std::string caption = "X scale " + format_value(aspect) + "x | m";
-      draw_text(image, width, height, panel.x + 12, panel.y + panel.height - (compact ? 15 : 18),
-                caption, 1, detail::kDashboardTextMuted);
+      draw_centered_text(image, width, height, panel, panel.y + panel.height - (compact ? 15 : 18),
+                         caption, detail::kDashboardTextMuted);
     } else {
       draw_oval(image, width, height, circle_cx, circle_cy, circle_radius, circle_radius, kGrid,
                 48);
@@ -612,10 +619,7 @@ void draw_history_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
   if (plot.width <= 1 || plot.height <= 1) {
     return;
   }
-  draw_text(image, width, height, panel.x + 12, panel.y + 10,
-            title.substr(0, static_cast<std::size_t>(std::max(0, panel.width - 24) /
-                                                     (text_size(height, 1) * 7.0F / 13.0F))),
-            1, detail::kDashboardTextPrimary);
+  draw_centered_text(image, width, height, panel, panel.y + 10, title);
 
   for (int tick = 0; tick < 3; ++tick) {
     const float fraction = static_cast<float>(tick) / 2.0F;
@@ -636,8 +640,8 @@ void draw_history_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
   }
 
   if (height >= 540) {
-    draw_text(image, width, height, plot.x + plot.width / 2 - 28, plot.y + plot.height + 19,
-              "Time (s)", 1);
+    draw_centered_text(image, width, height, plot, plot.y + plot.height + 19, "Time (s)",
+                       detail::kDashboardTextSecondary);
   }
 
   const std::int64_t first_truth_frame =
