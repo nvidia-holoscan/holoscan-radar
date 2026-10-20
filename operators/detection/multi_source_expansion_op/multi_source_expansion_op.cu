@@ -6,6 +6,7 @@
 #include <cuda_runtime_api.h>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -94,7 +95,8 @@ MultiSourceExpansionOp<T>::MultiSourceExpansionOp(const MaxTensorExtents& extent
   aoa_max_byte_span_ = tensor_byte_span(aoa_bounds, real_dtype<T>());
   state_ = std::make_shared<RuntimeState>();
   state_->selected_ordinal = make_device_tensor({max_items_}, kInt64Dtype);
-  state_->error = make_device_tensor({1}, kInt32Dtype);
+  // One aligned eight-byte scalar serves packed parallel errors or serial int32 errors.
+  state_->error = make_device_tensor({1}, kInt64Dtype);
 }
 
 template <typename T>
@@ -204,24 +206,50 @@ expected<void, Error> MultiSourceExpansionOp<T>::compute(ExecutionContext& conte
   }
   HOLOSCAN_TRY(auto ordinal_ptr, writable(*state_->selected_ordinal, "selected ordinal"));
   HOLOSCAN_TRY(auto error_ptr, writable(*state_->error, "error scalar"));
-  // Build and validate the bounded execution plan for this input shape.
-  detail::build_expansion_plan_kernel<T><<<1, 1, 0, stream>>>(
-      static_cast<const int64_t*>(selected.data()), num_selected,
-      static_cast<const T*>(resolved.data()), static_cast<const T*>(multi.data()),
-      static_cast<const int32_t*>(counts.data()), items, source_slots, state_->compact.d_offsets,
-      static_cast<int64_t*>(ordinal_ptr), state_->compact.d_count,
-      static_cast<int32_t*>(error_ptr));
-  check_cuda("build expansion plan", kOpName);
+  // Keep small-input launch costs unchanged; validate larger selections in parallel.
+  constexpr int kPlanThreads = 256;
+  const bool parallel_plan = items > kPlanThreads;
+  const int plan_blocks = parallel_plan ? static_cast<int>((items - 1) / kPlanThreads + 1) : 1;
+  if (parallel_plan) {
+    detail::initialize_parallel_expansion_plan_kernel<<<1, 1, 0, stream>>>(
+        items, state_->compact.d_count, static_cast<detail::ExpansionAtomicWord*>(error_ptr));
+    check_cuda("initialize expansion plan", kOpName);
+    if (num_selected > 0) {
+      const int selected_blocks = static_cast<int>((num_selected - 1) / kPlanThreads + 1);
+      detail::validate_parallel_expansion_plan_kernel<T>
+          <<<selected_blocks, kPlanThreads, 0, stream>>>(
+              static_cast<const int64_t*>(selected.data()), num_selected,
+              static_cast<const T*>(resolved.data()), static_cast<const T*>(multi.data()),
+              static_cast<const int32_t*>(counts.data()), items, source_slots,
+              state_->compact.d_count, static_cast<detail::ExpansionAtomicWord*>(error_ptr));
+      check_cuda("validate expansion plan", kOpName);
+    }
+  } else {
+    detail::build_expansion_plan_kernel<T><<<1, 1, 0, stream>>>(
+        static_cast<const int64_t*>(selected.data()), num_selected,
+        static_cast<const T*>(resolved.data()), static_cast<const T*>(multi.data()),
+        static_cast<const int32_t*>(counts.data()), items, source_slots, state_->compact.d_offsets,
+        static_cast<int64_t*>(ordinal_ptr), state_->compact.d_count,
+        static_cast<int32_t*>(error_ptr));
+    check_cuda("build expansion plan", kOpName);
+  }
 
   int64_t output_rows = 0;
   int32_t host_error = 0;
+  detail::ExpansionAtomicWord parallel_error = ~0ULL;
+  void* error_destination =
+      parallel_plan ? static_cast<void*>(&parallel_error) : static_cast<void*>(&host_error);
+  const std::size_t error_bytes = parallel_plan ? sizeof(parallel_error) : sizeof(host_error);
   if (cudaMemcpyAsync(&output_rows, state_->compact.d_count, sizeof(output_rows),
                       cudaMemcpyDeviceToHost, stream) != cudaSuccess ||
-      cudaMemcpyAsync(&host_error, error_ptr, sizeof(host_error), cudaMemcpyDeviceToHost, stream) !=
+      cudaMemcpyAsync(error_destination, error_ptr, error_bytes, cudaMemcpyDeviceToHost, stream) !=
           cudaSuccess ||
       cudaStreamSynchronize(stream) != cudaSuccess) {
     return make_unexpected(
         Error{ErrorCode::kFailure, "MultiSourceExpansionOp: validation readback failed"});
+  }
+  if (parallel_plan && parallel_error != ~0ULL) {
+    host_error = static_cast<int32_t>(parallel_error & 3ULL);
   }
   if (host_error != 0)
     return invalid(expansion_error_message(host_error));
@@ -230,6 +258,15 @@ expected<void, Error> MultiSourceExpansionOp<T>::compute(ExecutionContext& conte
   }
   try {
     if (items > 0) {
+      // Materialize only a validated unique selection before the unchanged scan.
+      if (parallel_plan) {
+        detail::
+            materialize_parallel_expansion_plan_kernel<<<plan_blocks, kPlanThreads, 0, stream>>>(
+                static_cast<const int64_t*>(selected.data()), num_selected,
+                static_cast<const int32_t*>(counts.data()), items, state_->compact.d_offsets,
+                static_cast<int64_t*>(ordinal_ptr));
+        check_cuda("materialize expansion plan", kOpName);
+      }
       // Execute the device stage on the input runtime stream.
       detail::compact_detail::launch_exclusive_sum(state_->compact.d_offsets, items,
                                                    &state_->compact, stream);
