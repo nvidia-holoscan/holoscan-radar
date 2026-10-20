@@ -13,8 +13,8 @@ namespace app = holoscan::radar::app;
 constexpr const char* kQueueFullHint =
     "This application demonstrates a pipeline that loudly fails when it fails to keep up "
     "with input.  When an operator cannot emit because the next stage has not "
-    "consumed the previous tick, and no buffers remain available, an exception is "
-    "raised.  For some missions, falling behind may be tolerable, and for others, "
+    "consumed the previous tick, and no buffers remain available, the run is "
+    "aborted.  For some missions, falling behind may be tolerable, and for others, "
     "this would be catastrophic.  This application models the latter case.  To make this "
     "pipeline run successfully, either set cphd_reader.playback_rate to a lower value, "
     "or reduce the image size so that the pipeline can keep up.";
