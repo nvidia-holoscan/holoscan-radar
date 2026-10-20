@@ -715,12 +715,8 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
                                   ? (markers.size() == 1U ? " cluster" : " clusters")
                                   : (markers.size() == 1U ? " detection" : " detections"));
   draw_text(&image, width, height, 20, height < 540 ? 29 : 43, status, 1);
-  draw_text(
-      &image, width, height, 20, height - 22,
-      "Dots: detections   Lines: simulated truth   |   History: " +
-          format_value(static_cast<float>((config.history_frames - 1) * config.frame_period)) +
-          " s",
-      1, detail::kDashboardTextMuted);
+  draw_text(&image, width, height, 20, height - 22, "Dots: detections | Lines: truth", 1,
+            detail::kDashboardTextMuted);
   constexpr std::string_view kDopplerLabel = "Velocity (m/s)";
   draw_text(&image, width, height, plot.x + (plot.width - text_width(kDopplerLabel, height)) / 2,
             plot.y + plot.height + (height < 540 ? 16 : 21), kDopplerLabel, 1);
