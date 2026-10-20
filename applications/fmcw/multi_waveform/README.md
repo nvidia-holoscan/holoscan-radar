@@ -27,12 +27,17 @@ flowchart LR
   COMP --> ANGLE["BeamscanEstimatorOp"] --> TAIL["features / clusters / report"]
   WAVEFORM -->|Exact| RANGE
   TAIL --> DASHBOARD["FmcwDashboardOp"]
-  DASHBOARD --> IMAGE["RgbaImageBridgeOp"] --> HOLOVIZ["HSDK 5 HolovizOp"]
+  DASHBOARD --> IMAGE["RgbaImageBridgeOp"] --> HOLOVIZ["FmcwHolovizOp"]
+  DASHBOARD -->|Native text| HOLOVIZ
   WAVEFORM -->|Exact profile identity| DASHBOARD
 
   WAVEFORM -->|Exact| DOPPLER
   WAVEFORM -->|Exact| COMP
 ```
+
+The [shared dashboard](../../common/radar_app/viz/README.md) uses native SDK text,
+a relative-power legend, and frame-driven presentation capped by
+`visualization.display_rate_hz`.
 
 ## Run the C++ app from the host
 

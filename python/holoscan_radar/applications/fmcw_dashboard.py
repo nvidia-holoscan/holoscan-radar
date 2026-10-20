@@ -3,10 +3,7 @@
 
 """Shared HSDK 5 visualization graph wiring for FMCW workflows."""
 
-from datetime import timedelta
 from typing import Any
-
-from holoscan_visualization.operators import HolovizOp
 
 import holoscan as hs
 
@@ -34,30 +31,12 @@ def add_dashboard(
     bridge = graph.op(
         "holoscan.radar._app.ImageBridge", "dashboard_image", width=width, height=height
     )
-    period = timedelta(seconds=1.0 / viz["display_rate_hz"])
-    max_age = timedelta(
-        seconds=max((profile_gap + 1) * viz["frame_period"], 2.0 / viz["display_rate_hz"])
-    )
-    holoviz = HolovizOp(
-        graph,
+    holoviz = graph.op(
+        "holoscan.radar._app.DashboardViewer",
         "holoviz",
-        layers=[
-            {
-                "port_name": "image",
-                "kind": "image",
-                "format": "rgba8_unorm",
-                "max_width": width,
-                "max_height": height,
-            }
-        ],
-        sink={
-            "kind": "window",
-            "title": f"{viz['window_title']} - {title}",
-            "width": width,
-            "height": height,
-        },
-        trigger={"kind": "clock", "period": period},
-        max_input_age=max_age,
+        width=width,
+        height=height,
+        title=f"{viz['window_title']} - {title}",
     )
     partition.add(display, bridge)
     graph.partition("visualization").add(holoviz)
@@ -127,8 +106,12 @@ def add_dashboard(
         graph.add_flow(inputs["waveform"], display.waveform, queue_depth=profile_gap + 2)
     # Convert the rendered Tensor to an ImageT for the SDK viewer.
     graph.add_flow(
-        display.rgba, bridge.rgba, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=8
+        display.rgba, bridge.rgba, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
     )
     graph.add_flow(
-        bridge.image, holoviz.image, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=8
+        bridge.image, holoviz.image, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+    )
+
+    graph.add_flow(
+        display.text, holoviz.text, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
     )

@@ -30,7 +30,8 @@ flowchart LR
     Features --> Dashboard
     Range --> Dashboard
     Doppler --> Dashboard
-    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
+    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[FmcwHolovizOp]
+    Dashboard -->|Native text| Holoviz
 ```
 
 There is deliberately no clustering or detection reduction. CFAR emits one
@@ -40,6 +41,10 @@ confirmed source count; if the estimator confirms fewer than two sources, it
 also falls back to Beamscan. Repeated range-Doppler indices therefore
 intentionally gather the same range, velocity, and score for each resolved
 angle.
+
+The [shared dashboard](../../common/radar_app/viz/README.md) uses native SDK text,
+a relative-power legend, and frame-driven presentation capped by
+`visualization.display_rate_hz`.
 
 ## Run the C++ app from the host
 

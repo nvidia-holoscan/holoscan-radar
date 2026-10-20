@@ -23,6 +23,7 @@
 #include "radar_app/app/angle_presentation.hpp"
 #include "radar_app/app/visualization_config.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
+#include "radar_app/viz/fmcw_holoviz_op.hpp"
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
 #include "radar_common/sim/scene.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
@@ -122,6 +123,7 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
           .dynamic_range_db = static_cast<float>(config.dynamic_range_db),
           .detection_radius = static_cast<float>(config.detection_radius),
           .frame_period = frame_period,
+          .display_rate_hz = config.display_rate_hz,
           .history_frames = config.history_frames,
           .detection_trail_frames = config.detection_trail_frames,
           .width = config.window_width,
@@ -142,19 +144,6 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
       .device = holoscan::DeviceId{0},
   });
 
-  holoscan::visualization::LayerStack layers;
-  layers.add_image_layer("image",
-                         holoscan::visualization::ImageLayerDesc{
-                             .format = holoscan::visualization::ImageFormat::kR8G8B8A8Unorm,
-                             .max_width = static_cast<std::uint32_t>(config.window_width),
-                             .max_height = static_cast<std::uint32_t>(config.window_height)});
-
-  const auto display_period = std::chrono::duration_cast<std::chrono::nanoseconds>(
-      std::chrono::duration<double>{1.0 / config.display_rate_hz});
-  const auto max_input_age =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>{
-          std::max(static_cast<double>(max_profile_gap_frames + 1U) * frame_period,
-                   2.0 / config.display_rate_hz)});
   auto image_bridge =
       graph.op<RgbaImageBridgeOp>("dashboard_image", static_cast<std::int32_t>(config.window_width),
                                   static_cast<std::int32_t>(config.window_height));
@@ -163,15 +152,11 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
       .output_port = "image",
       .device = holoscan::DeviceId{0},
   });
-  auto holoviz = graph.op<holoscan::visualization::HolovizOp>(
-      "holoviz", std::move(layers),
-      holoscan::visualization::WindowSinkDesc{
-          .title = config.window_title + " - " + std::move(workflow_title),
-          .width = static_cast<std::uint32_t>(config.window_width),
-          .height = static_cast<std::uint32_t>(config.window_height)},
-      holoscan::visualization::ClockTrigger{display_period}, max_input_age);
+  auto holoviz = graph.op<FmcwHolovizOp>("holoviz", static_cast<std::int32_t>(config.window_width),
+                                         static_cast<std::int32_t>(config.window_height),
+                                         config.window_title + " - " + std::move(workflow_title));
 
-  // Keep the independently clock-driven display in its own partition.
+  // Keep presentation on its own partition; each completed image drives one render.
   application.add(display);
   application.add(image_bridge);
   graph.partition("visualization").add(holoviz);
@@ -181,7 +166,7 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
   const holoscan::ConnectionOptions processing_queue{
       .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 4U};
   const holoscan::ConnectionOptions display_queue{
-      .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 8U};
+      .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 1U};
 
   graph.add_flow(inputs.cfar_power, display->cfar_power, processing_queue);
   graph.add_flow(inputs.detection_idx, display->detection_idx, processing_queue);
@@ -199,6 +184,7 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
     const holoscan::ConnectionOptions waveform_queue{.queue_depth = max_profile_gap_frames + 2U};
     graph.add_flow(inputs.waveform, display->waveform_in, waveform_queue);
   }
+  graph.add_flow(display->text, holoviz->tensor_layer_input(1), display_queue);
   graph.add_flow(display->rgba, image_bridge->rgba, display_queue);
   graph.add_flow(image_bridge->image, holoviz->image_layer_input(0), display_queue);
 }

@@ -4,6 +4,16 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 
 ## Where the project stands
 
+- **2026-10-20** â€” **FMCW dashboards use native HSDK 5 text** on
+  `deustice/gui-updates`. Shared C++/Python presentation adds exact image/text
+  pairing, display-rate gating, compact layouts, physical velocity orientation,
+  and a sequential power palette with a dB legend. CUDA canvas composition is
+  fused into one pass. All 1,098 baseline CTests, 28 dashboard regressions,
+  eight Python workflow visual checks plus the compact layout, and full lint
+  pass in the staging image. Delayed-input SISO/SIMO visualization also passes.
+  DSP contracts are unchanged; pixel-coordinate resizing limits are documented
+  in the shared dashboard guide.
+
 - **2026-10-21** â€” **HSDK 5 GA image adopted.** The Dockerfile, host CLI wrapper,
   and devcontainer now default to
   `nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13`; active setup guides
@@ -317,6 +327,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 | Portable SAR data defaults | Codex | `dpc/main-5x-catchup` | **verified locally:** all nine CPHD downloads have valid XML and complete declared block extents. Presets resolve relative paths under `HOLOHUB_DATA_DIR` (repository `data/` by default); downloader defaults and guides match. All five real-data configs load from outside the repository, all five CLI targets build, 20 SAR CTests pass, and a finite real-data CLI strip run emits 16 images without an extra data mount. Pinned all-file lint passes. |
 | DopplerNotch descending velocity axis | Codex | `deustice/doppler-notch-axis-order` | **verified locally:** signed nearest-bin indexing and positive cyclic periods preserve descending-axis passbands; contract now permits either monotonic direction. Both new axis-order tests fail before the fix; all 15 focused GPU CTests pass afterward on Thor with HSDK 5 GA. Jira duplicate search/P0 awaits MaaS access. |
 | PR 66 non-uniform non-cyclic nearest bin | Codex | `deustice/doppler-notch-axis-order` | **verified locally:** non-cyclic nearest-bin selection searches actual physical coordinates, supporting non-uniform axes in either direction. Both precision regressions fail before the fix; all 17 focused GPU unit/pipeline CTests pass afterward on HSDK 5 GA. PR 68 restacking also applies the corrected selection in its shared row-kernel gain helper; all 21 downstream GPU unit/pipeline CTests pass. Pinned all-file lint passes with Node 22 for markdownlint. |
+| FMCW native text and dashboard refresh | Codex | `deustice/gui-updates` | **verified locally:** native SDK text, exact frame pairing, rate-gated and fused rendering, updated layout/palette/axes, and matching C++/Python wiring. All 1,098 baseline CTests, 28 dashboard regressions, nine Xvfb visual checks, delayed SISO/SIMO rendering, host CLI SISO build, and full lint pass. |
 | GA migration review corrections | Codex | `deustice/hsdk-ga-image` | **complete:** aligned tutorial SDK minimum, unconditional aligned-input guidance, and L18 implementation status; restored the helper diagnostic's documented EA attribution from Git history. Exact original SDK/reproducer unavailable, so no new reproduction claimed. Documentation/comment-only; pinned focused and all-file lint pass. |
 | EA-only source and documentation qualifiers | Codex | `deustice/hsdk-ga-image` | **complete:** audited identifiers, feature gates, type/schema comments, test labels, and planning guidance across tracked files. Removed stale qualifiers from schema/test comments and current guidance; no active HSDK5-EA identifiers or EA-only gates remain. Schema fields and executable code are unchanged; historical measurements retain their SDK versions. All-file pinned lint passes. |
 | Repository-wide EA reference sweep | Codex | `deustice/hsdk-ga-image` | **complete:** audited all 743 tracked paths, hidden configuration, and ignored local `uv.lock`; no active EA/RC image or dependency pins remain. Refreshed local CLI/lock from rc1 to GA 5.0.0, corrected the tutorial image tag, and clarified temporal measurement provenance. Historical records and workaround rationale retained. GA CLI Python SISO smoke, lock consistency, and all-file pinned lint pass. |

@@ -6,21 +6,28 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include <holoscan/core/compile.hpp>
 #include <holoscan/core/graph.hpp>
 #include <holoscan/time/realtime_clock.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 #include <holoscan/visualization/holoviz_op.hpp>
 
 #include "radar_app/app/angle_presentation.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
+#include "radar_app/viz/dashboard_text.hpp"
+#include "radar_app/viz/fmcw_holoviz_op.hpp"
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
+#include "utils/tensor_fixtures.hpp"
 
 namespace {
 
@@ -30,6 +37,13 @@ namespace radar = holoscan::radar;
 class RgbaGraphSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
+    spec.output(text).produces_tensor(holoscan::TensorOutputSpec{
+        .representation = {.memory_kind = holoscan::MemoryKind::kHost,
+                           .dtype = DLDataType{kDLUInt, 8U, 1U},
+                           .rank = 2U,
+                           .strides = holoscan::TensorStridePolicy::kContiguousOnly},
+        .bounds = holoscan::TensorBounds{.max_rank = 2U, .max_byte_span = 208U},
+    });
     spec.output(rgba).produces_tensor(holoscan::TensorOutputSpec{
         .representation =
             holoscan::TensorRepresentation{
@@ -54,25 +68,19 @@ class RgbaGraphSourceOp final : public holoscan::Operator<> {
   }
 
   holoscan::Output<holoscan::Tensor> rgba{"rgba"};
+  holoscan::Output<holoscan::Tensor> text{"text"};
 };
 
-TEST(FmcwDashboardTest, ConnectsRgbaTensorToHsdk5HolovizImageLayer) {
+TEST(FmcwDashboardTest, ConnectsImageAndNativeHostTextToHsdk5Holoviz) {
   holoscan::Graph graph{"dashboard-image-bridge-test"};
   auto source = graph.op<RgbaGraphSourceOp>("source");
   auto bridge = graph.op<viz::RgbaImageBridgeOp>("bridge", 2, 2);
-  holoscan::visualization::LayerStack layers;
-  layers.add_image_layer("image",
-                         holoscan::visualization::ImageLayerDesc{
-                             .format = holoscan::visualization::ImageFormat::kR8G8B8A8Unorm,
-                             .max_width = 2U,
-                             .max_height = 2U});
-  auto sink = graph.op<holoscan::visualization::HolovizOp>(
-      "holoviz", std::move(layers),
-      holoscan::visualization::WindowSinkDesc{.title = "test", .width = 2U, .height = 2U});
+  auto sink = graph.op<viz::FmcwHolovizOp>("holoviz", 2, 2, "test");
   graph.partition("application").add(source).add(bridge);
   graph.partition("visualization").add(sink);
   graph.add_flow(source->rgba, bridge->rgba);
   graph.add_flow(bridge->image, sink->image_layer_input(0));
+  graph.add_flow(source->text, sink->tensor_layer_input(1));
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
   holoscan::CompileOptions options;
@@ -82,6 +90,98 @@ TEST(FmcwDashboardTest, ConnectsRgbaTensorToHsdk5HolovizImageLayer) {
       .operator_path = "bridge", .output_port = "image", .device = holoscan::DeviceId{0}});
   const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
   EXPECT_TRUE(plan.ok()) << plan.json();
+}
+
+TEST(FmcwDashboardTest, ComposesOpaqueHeatmapAndEmitsNativeTextWithoutDetections) {
+  using Op = viz::FmcwDashboardOp;
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  using radar::testing::to_device_tensor;
+  constexpr DLDataType kFloat{kDLFloat, 32U, 1U};
+  constexpr DLDataType kInt{kDLInt, 64U, 1U};
+  viz::FmcwDashboardConfig config;
+  config.show_angles = false;
+  config.title = "FMCW test";
+  auto harness = holoscan::testing::create_operator_test<Op>(config);
+  harness.push_frame(frame_at(
+      std::chrono::milliseconds{1},
+      input("cfar_power",
+            *to_device_tensor(std::vector<float>{1.0F, 1.0F, 1.0F, 1.0F}, {2, 2}, kFloat)),
+      input("detection_idx", *to_device_tensor(std::vector<std::int64_t>{}, {0, 2}, kInt)),
+      input("points", *to_device_tensor(std::vector<float>{}, {0, 2}, kFloat)),
+      input("range_bins", *to_device_tensor(std::vector<float>{0.0F, 100.0F}, {2}, kFloat)),
+      input("velocity_bins", *to_device_tensor(std::vector<float>{-10.0F, 10.0F}, {2}, kFloat))));
+  harness.capture_snapshot<holoscan::Tensor>("rgba", 1U, 1280U * 720U * 4U);
+  harness.capture_snapshot<holoscan::Tensor>(
+      "text", 1U, viz::detail::kDashboardTextRows * viz::detail::kDashboardTextRowBytes);
+  for (const auto* port :
+       {"cfar_power", "detection_idx", "points", "range_bins", "velocity_bins"}) {
+    harness.input_source_device(port, holoscan::DeviceId{0});
+  }
+  harness.output_device("rgba", holoscan::DeviceId{0});
+  auto running = harness.run_async({.expect_stop = true});
+  const bool image_ready = running.wait_for_output("rgba", 1U, std::chrono::seconds{5});
+  const bool text_ready = running.wait_for_output("text", 1U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(image_ready && text_ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto image = radar::testing::to_host(result.snapshot<holoscan::Tensor>("rgba"));
+  const auto* pixels = image.as<std::uint8_t>();
+  EXPECT_EQ(image.shape, (std::vector<std::int64_t>{720, 1280, 4}));
+  // Equal positive power reaches the palette maximum throughout the RD interior.
+  const std::size_t center = 4U * (300U * 1280U + 300U);
+  EXPECT_EQ(pixels[center], 253U);
+  EXPECT_EQ(pixels[center + 1U], 231U);
+  EXPECT_EQ(pixels[center + 2U], 37U);
+  for (std::size_t i = 3U; i < image.data.size(); i += 4U) {
+    ASSERT_EQ(pixels[i], 255U) << "transparent canvas pixel " << i / 4U;
+  }
+  const auto text = radar::testing::to_host(result.snapshot<holoscan::Tensor>("text"));
+  ASSERT_EQ(text.shape.size(), 2U);
+  EXPECT_EQ(text.shape[1], viz::detail::kDashboardTextRowBytes);
+  EXPECT_GT(text.shape[0], 10);
+  EXPECT_STREQ(reinterpret_cast<const char*>(text.data.data() +
+                                             holoscan::visualization::kTextRunHeaderBytes),
+               "FMCW test");
+}
+
+TEST(FmcwDashboardTextTest, EncodesNativeSdkRowsWithOwnedTextAndPixelPositions) {
+  std::vector<std::uint8_t> records;
+  std::string label = "Range (m)";
+  viz::detail::append_dashboard_text(&records, 1280, 720, 640.0F, 180.0F, label, 13.0F);
+  label = "changed";
+  viz::detail::append_dashboard_text(&records, 1280, 720, 20.0F, 43.0F, "Frame 2", 13.0F);
+  ASSERT_EQ(records.size(), 2U * viz::detail::kDashboardTextRowBytes);
+  holoscan::visualization::TextRunHeader header;
+  std::memcpy(&header, records.data(), sizeof(header));
+  EXPECT_FLOAT_EQ(header.x, 640.0F);
+  EXPECT_FLOAT_EQ(header.y, 180.0F);
+  EXPECT_FLOAT_EQ(header.size_px, 13.0F);
+  EXPECT_EQ(header.color >> 24U, 255U);
+  const auto* text = reinterpret_cast<const char*>(records.data() + sizeof(header));
+  EXPECT_STREQ(text, "Range (m)");
+  for (std::size_t i = sizeof(header) + 9U; i < viz::detail::kDashboardTextRowBytes; ++i) {
+    EXPECT_EQ(records[i], 0U);
+  }
+}
+
+TEST(FmcwDashboardTextTest, FitsLongWorkflowNamesAndEnforcesThePerFrameBudget) {
+  std::vector<std::uint8_t> records;
+  viz::detail::append_dashboard_text(&records, 640, 360, 20.0F, 15.0F, std::string(400U, 'A'),
+                                     20.0F);
+  const auto* text =
+      reinterpret_cast<const char*>(records.data() + holoscan::visualization::kTextRunHeaderBytes);
+  const std::string displayed(text);
+  EXPECT_LT(displayed.size(), viz::detail::kDashboardTextBytes);
+  EXPECT_TRUE(displayed.ends_with("..."));
+  EXPECT_LE(20.0F + displayed.size() * 20.0F * 7.0F / 13.0F, 628.0F);
+  for (std::size_t i = 1U; i < viz::detail::kDashboardTextRows; ++i) {
+    viz::detail::append_dashboard_text(&records, 640, 360, 20.0F, 15.0F, "x", 13.0F);
+  }
+  EXPECT_THROW(
+      viz::detail::append_dashboard_text(&records, 640, 360, 20.0F, 15.0F, "overflow", 13.0F),
+      std::invalid_argument);
 }
 
 TEST(AnglePresentationTest, ConvertsDirectionCosinesToPhysicalAngles) {
@@ -164,13 +264,13 @@ TEST(FmcwRdHeatmapTest, MapsPeakAndDynamicRange) {
   const std::vector<std::uint8_t> rgba =
       viz::detail::make_heatmap_rgba_reference({1.0F, 1000000.0F}, {1, 2}, 60.0F);
   ASSERT_EQ(rgba.size(), 8U);
-  EXPECT_EQ(rgba[0], 0U);
-  EXPECT_EQ(rgba[1], 0U);
-  EXPECT_EQ(rgba[2], 255U);
+  EXPECT_EQ(rgba[0], 68U);
+  EXPECT_EQ(rgba[1], 1U);
+  EXPECT_EQ(rgba[2], 84U);
   EXPECT_EQ(rgba[3], 255U);
-  EXPECT_EQ(rgba[4], 255U);
-  EXPECT_EQ(rgba[5], 0U);
-  EXPECT_EQ(rgba[6], 0U);
+  EXPECT_EQ(rgba[4], 253U);
+  EXPECT_EQ(rgba[5], 231U);
+  EXPECT_EQ(rgba[6], 37U);
   EXPECT_EQ(rgba[7], 255U);
 }
 
@@ -188,6 +288,13 @@ TEST(FmcwRdHeatmapTest, MapsDopplerToXAndRangeUpward) {
   const auto later_doppler = viz::detail::rd_plot_position(2.0F, 0.0F, 4, 8);
   EXPECT_LT(low_range[0], later_doppler[0]);
   EXPECT_GT(low_range[1], high_range[1]);
+}
+
+TEST(FmcwRdHeatmapTest, ReversesMarkersWithDescendingPhysicalVelocityBins) {
+  const auto normal = viz::detail::rd_plot_position(1.0F, 2.0F, 8, 4);
+  const auto reversed = viz::detail::rd_plot_position(1.0F, 2.0F, 8, 4, true);
+  EXPECT_FLOAT_EQ(reversed[0], 1.0F - normal[0]);
+  EXPECT_FLOAT_EQ(reversed[1], normal[1]);
 }
 
 TEST(FmcwDashboardTest, UsesUpwardSemicircleForAtMost180DegreeCoverage) {

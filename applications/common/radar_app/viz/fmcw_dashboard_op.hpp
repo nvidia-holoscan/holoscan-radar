@@ -63,6 +63,7 @@ struct FmcwDashboardConfig {
   float dynamic_range_db{60.0F};
   float detection_radius{0.010F};
   double frame_period{0.1};
+  double display_rate_hz{60.0};
   std::int64_t history_frames{120};
   std::int64_t detection_trail_frames{12};
   std::int64_t width{1280};
@@ -96,6 +97,7 @@ class FmcwDashboardOp : public holoscan::Operator<> {
   holoscan::Input<holoscan::Tensor> reduced_points{"reduced_points"};
   holoscan::Input<wire::FMCWWaveformT> waveform_in{"waveform"};
   holoscan::Output<holoscan::Tensor> rgba{"rgba"};
+  holoscan::Output<holoscan::Tensor> text{"text"};
 
  private:
   FmcwDashboardConfig config_;
@@ -104,6 +106,7 @@ class FmcwDashboardOp : public holoscan::Operator<> {
   std::shared_ptr<holoscan::Tensor> annotation_;
   holoscan::Tensor retained_input_;
   std::int64_t frame_index_{0};
+  std::optional<std::int64_t> last_render_ns_;
   std::deque<HistorySample> history_;
   std::deque<HistorySample> detection_history_;
 };
@@ -138,7 +141,7 @@ void append_history(std::deque<HistorySample>* history, const std::vector<Detect
                     std::int64_t frame, std::int64_t history_frames);
 
 std::array<float, 2> rd_plot_position(float doppler_bin, float range_bin, std::int64_t rows,
-                                      std::int64_t cols);
+                                      std::int64_t cols, bool reverse_velocity = false);
 
 bool use_azimuth_sector(const std::array<float, 2>& az_bounds);
 

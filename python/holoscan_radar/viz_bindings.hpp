@@ -102,6 +102,7 @@ viz::FmcwDashboardConfig dashboard_config(const Config& cfg, std::string title, 
   result.dynamic_range_db = static_cast<float>(cfg.visualization.dynamic_range_db);
   result.detection_radius = static_cast<float>(cfg.visualization.detection_radius);
   result.frame_period = cfg.frame_period;
+  result.display_rate_hz = cfg.visualization.display_rate_hz;
   result.history_frames = cfg.visualization.history_frames;
   result.detection_trail_frames = cfg.visualization.detection_trail_frames;
   result.width = cfg.visualization.window_width;
