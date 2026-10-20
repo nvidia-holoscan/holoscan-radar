@@ -95,9 +95,9 @@ __global__ void power_to_rgba(const float* power, std::int64_t num_planes, std::
   const std::int64_t output_row = output_pixel / canvas_width - plot_y;
   const std::int64_t output_col = output_pixel % canvas_width - plot_x;
   if (output_row < 0 || output_row >= plot_height || output_col < 0 || output_col >= plot_width) {
-    rgba[out] = 10U;
-    rgba[out + 1] = 15U;
-    rgba[out + 2] = 24U;
+    rgba[out] = 8U;
+    rgba[out + 1] = 12U;
+    rgba[out + 2] = 20U;
     rgba[out + 3] = 255U;
     return;
   }
@@ -206,12 +206,20 @@ void set_pixel(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
   std::copy(color.begin(), color.end(), image->pixels.begin() + offset);
 }
 
+float text_size(std::int64_t height, int scale) {
+  return scale == 2 ? (height < 540 ? 14.0F : 20.0F) : (height < 540 ? 10.0F : 13.0F);
+}
+
+int text_width(std::string_view text, std::int64_t height, int scale = 1) {
+  return static_cast<int>(std::ceil(text.size() * text_size(height, scale) * 7.0F / 13.0F));
+}
+
 void draw_text(AnnotationCanvas* image, std::int64_t width, std::int64_t height, std::int64_t x,
-               std::int64_t y, std::string_view text, int scale) {
+               std::int64_t y, std::string_view text, int scale,
+               std::uint32_t color = detail::kDashboardTextSecondary) {
   // SDK text uses framebuffer pixels; the layout targets the configured canvas.
-  detail::append_dashboard_text(
-      &image->text, width, height, static_cast<float>(x), static_cast<float>(y), text,
-      scale == 2 ? (height < 540 ? 14.0F : 20.0F) : (height < 540 ? 10.0F : 13.0F));
+  detail::append_dashboard_text(&image->text, width, height, static_cast<float>(x),
+                                static_cast<float>(y), text, text_size(height, scale), color);
 }
 
 void draw_line(AnnotationCanvas* image, std::int64_t width, std::int64_t height, int x0, int y0,
@@ -284,10 +292,10 @@ DashboardLayout make_dashboard_layout(std::int64_t width, std::int64_t height, b
 
   DashboardLayout result;
   result.rd_plot = PixelRect{
-      .x = compact ? 64 : 76,
-      .y = compact ? 64 : 100,
-      .width = rd_right - (compact ? 72 : 84),
-      .height = canvas_height - (compact ? 124 : 168),
+      .x = compact ? 54 : 64,
+      .y = compact ? 60 : 92,
+      .width = rd_right - (compact ? 62 : 72),
+      .height = canvas_height - (compact ? 116 : 152),
   };
   const int panel_width = (side_width - gap) / 2;
   const int panel_top = compact ? 54 : 72;
@@ -320,13 +328,13 @@ DashboardLayout make_dashboard_layout(std::int64_t width, std::int64_t height, b
 }
 
 constexpr std::array<std::array<std::uint8_t, 4>, 8> kClusterColors{{
-    {0U, 255U, 255U, 255U},
-    {255U, 210U, 0U, 255U},
-    {255U, 90U, 180U, 255U},
-    {100U, 255U, 100U, 255U},
-    {255U, 130U, 60U, 255U},
-    {120U, 170U, 255U, 255U},
-    {220U, 120U, 255U, 255U},
+    {59U, 232U, 255U, 255U},
+    {255U, 209U, 102U, 255U},
+    {255U, 98U, 159U, 255U},
+    {141U, 233U, 105U, 255U},
+    {255U, 155U, 84U, 255U},
+    {123U, 170U, 255U, 255U},
+    {197U, 149U, 255U, 255U},
     {255U, 255U, 255U, 255U},
 }};
 
@@ -403,25 +411,27 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
                         const std::deque<HistorySample>& history,
                         const std::array<float, 2>& range_bounds, std::int64_t frame_index,
                         const FmcwDashboardConfig& config) {
-  constexpr std::array<std::uint8_t, 4> kBackground{17U, 24U, 36U, 255U};
-  constexpr std::array<std::uint8_t, 4> kGrid{44U, 58U, 76U, 255U};
-  constexpr std::array<std::uint8_t, 4> kWhite{94U, 114U, 139U, 255U};
+  constexpr std::array<std::uint8_t, 4> kBackground{14U, 21U, 33U, 255U};
+  constexpr std::array<std::uint8_t, 4> kGrid{34U, 47U, 65U, 255U};
+  constexpr std::array<std::uint8_t, 4> kWhite{72U, 93U, 120U, 255U};
   fill_rect(image, width, height, panel, kBackground);
   const bool is_polar = view == SpatialView::kAzimuthRange;
   const bool compact = height < 540;
   const PixelRect plot{
-      .x = panel.x + (is_polar ? 16 : (compact ? 36 : 48)),
-      .y = panel.y + (height < 540 ? 28 : 44),
-      .width = panel.width - (is_polar ? 32 : (compact ? 48 : 64)),
-      .height = panel.height - (is_polar ? (compact ? 48 : 68) : (compact ? 52 : 84)),
+      .x = panel.x + (is_polar ? 16 : (compact ? 32 : 44)),
+      .y = panel.y + (compact ? 28 : (is_polar ? 44 : 34)),
+      .width = panel.width - (is_polar ? 32 : (compact ? 44 : 56)),
+      .height = panel.height - (is_polar ? (compact ? 48 : 68) : (compact ? 48 : 66)),
   };
   if (plot.width <= 1 || plot.height <= 1) {
     return;
   }
   draw_text(image, width, height, panel.x + 12, panel.y + 10,
-            title.substr(0, static_cast<std::size_t>(std::max(0, panel.width - 24) / 7)), 1);
+            title.substr(0, static_cast<std::size_t>(std::max(0, panel.width - 24) /
+                                                     (text_size(height, 1) * 7.0F / 13.0F))),
+            1, detail::kDashboardTextPrimary);
   if (!is_polar && !compact) {
-    draw_text(image, width, height, plot.x, plot.y + plot.height + 22, "Azimuth (rad)", 1);
+    draw_text(image, width, height, plot.x, plot.y + plot.height + 18, "Azimuth (rad)", 1);
   }
 
   const float max_range = std::max(1.0F, range_bounds[1]);
@@ -474,14 +484,14 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
                                         format_degrees(config.az_bounds[1]) + " deg";
       if (!compact) {
         draw_text(image, width, height,
-                  panel.x + (panel.width - static_cast<int>(degree_legend.size()) * 7) / 2,
-                  panel.y + 27, degree_legend, 1);
+                  panel.x + (panel.width - text_width(degree_legend, height)) / 2, panel.y + 27,
+                  degree_legend, 1);
       }
       const float aspect =
           0.5F * (plot.width - 1) / (std::sin(display_half_span) * (plot.height - 1));
       const std::string caption = "X scale " + format_value(aspect) + "x | m";
       draw_text(image, width, height, panel.x + 12, panel.y + panel.height - (compact ? 15 : 18),
-                caption, 1);
+                caption, 1, detail::kDashboardTextMuted);
     } else {
       draw_oval(image, width, height, circle_cx, circle_cy, circle_radius, circle_radius, kGrid,
                 48);
@@ -507,9 +517,9 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
                                           fraction * (config.az_bounds[1] - config.az_bounds[0]));
       const std::string el = format_value(config.el_bounds[1] -
                                           fraction * (config.el_bounds[1] - config.el_bounds[0]));
-      draw_text(image, width, height, x - static_cast<int>(az.size()) * 7 / 2,
-                plot.y + plot.height + 8, az, 1);
-      draw_text(image, width, height, plot.x - 6 - static_cast<int>(el.size()) * 7, y - 6, el, 1);
+      draw_text(image, width, height, x - text_width(az, height) / 2, plot.y + plot.height + 5, az,
+                1);
+      draw_text(image, width, height, plot.x - 6 - text_width(el, height), y - 6, el, 1);
     }
   }
 
@@ -589,21 +599,23 @@ void draw_history_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
                         const PixelRect& panel, std::string_view title, int feature,
                         std::array<float, 2> bounds, const std::deque<HistorySample>& history,
                         std::int64_t frame_index, const FmcwDashboardConfig& config) {
-  constexpr std::array<std::uint8_t, 4> kBackground{17U, 24U, 36U, 255U};
-  constexpr std::array<std::uint8_t, 4> kGrid{44U, 58U, 76U, 255U};
+  constexpr std::array<std::uint8_t, 4> kBackground{14U, 21U, 33U, 255U};
+  constexpr std::array<std::uint8_t, 4> kGrid{34U, 47U, 65U, 255U};
   fill_rect(image, width, height, panel, kBackground);
 
   const PixelRect plot{
-      .x = panel.x + (height < 540 ? 36 : 48),
-      .y = panel.y + (height < 540 ? 28 : 44),
-      .width = panel.width - (height < 540 ? 48 : 64),
-      .height = panel.height - (height < 540 ? 52 : 84),
+      .x = panel.x + (height < 540 ? 32 : 44),
+      .y = panel.y + (height < 540 ? 28 : 34),
+      .width = panel.width - (height < 540 ? 44 : 56),
+      .height = panel.height - (height < 540 ? 48 : 66),
   };
   if (plot.width <= 1 || plot.height <= 1) {
     return;
   }
   draw_text(image, width, height, panel.x + 12, panel.y + 10,
-            title.substr(0, static_cast<std::size_t>(std::max(0, panel.width - 24) / 7)), 1);
+            title.substr(0, static_cast<std::size_t>(std::max(0, panel.width - 24) /
+                                                     (text_size(height, 1) * 7.0F / 13.0F))),
+            1, detail::kDashboardTextPrimary);
 
   for (int tick = 0; tick < 3; ++tick) {
     const float fraction = static_cast<float>(tick) / 2.0F;
@@ -614,18 +626,17 @@ void draw_history_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
 
     const float value = bounds[1] - fraction * (bounds[1] - bounds[0]);
     const std::string y_label = format_value(value);
-    draw_text(image, width, height, plot.x - 4 - static_cast<int>(y_label.size()) * 7, y - 3,
-              y_label, 1);
+    draw_text(image, width, height, plot.x - 4 - text_width(y_label, height), y - 3, y_label, 1);
 
     const double seconds =
         -(1.0 - fraction) * static_cast<double>(config.history_frames - 1) * config.frame_period;
     const std::string x_label = format_value(static_cast<float>(seconds));
-    draw_text(image, width, height, x - static_cast<int>(x_label.size()) * 7 / 2,
-              plot.y + plot.height + 8, x_label, 1);
+    draw_text(image, width, height, x - text_width(x_label, height) / 2, plot.y + plot.height + 5,
+              x_label, 1);
   }
 
   if (height >= 540) {
-    draw_text(image, width, height, plot.x + plot.width / 2 - 28, plot.y + plot.height + 24,
+    draw_text(image, width, height, plot.x + plot.width / 2 - 28, plot.y + plot.height + 19,
               "Time (s)", 1);
   }
 
@@ -685,7 +696,7 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
   const bool reverse_velocity = velocities.front() > velocities.back();
   AnnotationCanvas image{
       .pixels = std::vector<std::uint8_t>(static_cast<std::size_t>(width * height * 4), 0U)};
-  constexpr std::array<std::uint8_t, 4> kWhite{94U, 114U, 139U, 255U};
+  constexpr std::array<std::uint8_t, 4> kWhite{72U, 93U, 120U, 255U};
 
   draw_line(&image, width, height, plot.x - 1, plot.y - 1, plot.x + plot.width, plot.y - 1, kWhite);
   draw_line(&image, width, height, plot.x - 1, plot.y + plot.height, plot.x + plot.width,
@@ -695,7 +706,8 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
   draw_line(&image, width, height, plot.x + plot.width, plot.y - 1, plot.x + plot.width,
             plot.y + plot.height, kWhite);
 
-  draw_text(&image, width, height, 20, height < 540 ? 8 : 15, config.title, 2);
+  draw_text(&image, width, height, 20, height < 540 ? 8 : 15, config.title, 2,
+            detail::kDashboardTextPrimary);
   const std::string status = "Frame " + std::to_string(frame_index + 1) + "   |   Scenario " +
                              format_value(static_cast<float>(frame_index * config.frame_period)) +
                              " s   |   " + std::to_string(markers.size()) +
@@ -708,12 +720,11 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
       "Dots: detections   Lines: simulated truth   |   History: " +
           format_value(static_cast<float>((config.history_frames - 1) * config.frame_period)) +
           " s",
-      1);
+      1, detail::kDashboardTextMuted);
   constexpr std::string_view kDopplerLabel = "Velocity (m/s)";
-  draw_text(&image, width, height,
-            plot.x + (plot.width - static_cast<std::int64_t>(kDopplerLabel.size()) * 7) / 2,
-            plot.y + plot.height + (height < 540 ? 18 : 25), kDopplerLabel, 1);
-  draw_text(&image, width, height, plot.x, plot.y - (height < 540 ? 16 : 24), "Range (m)", 1);
+  draw_text(&image, width, height, plot.x + (plot.width - text_width(kDopplerLabel, height)) / 2,
+            plot.y + plot.height + (height < 540 ? 16 : 21), kDopplerLabel, 1);
+  draw_text(&image, width, height, plot.x, plot.y - (height < 540 ? 15 : 20), "Range (m)", 1);
 
   // A relative dB legend makes the per-frame peak normalization explicit.
   const int bar_width = std::min(100, plot.width / 3);
@@ -725,12 +736,12 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
         static_cast<std::uint8_t>(255.0F * heatmap_channel(t, 1)),
         static_cast<std::uint8_t>(255.0F * heatmap_channel(t, 2)), 255U};
     for (int y = 0; y < 6; ++y) {
-      set_pixel(&image, width, height, bar_x + x, plot.y - 18 + y, color);
+      set_pixel(&image, width, height, bar_x + x, plot.y - 16 + y, color);
     }
   }
-  draw_text(&image, width, height, bar_x - 38, plot.y - 23,
+  draw_text(&image, width, height, bar_x - 38, plot.y - 20,
             "-" + format_value(config.dynamic_range_db), 1);
-  draw_text(&image, width, height, bar_x + bar_width + 5, plot.y - 23, "0 dB", 1);
+  draw_text(&image, width, height, bar_x + bar_width + 5, plot.y - 20, "0 dB", 1);
 
   const std::array<std::int64_t, 3> x_positions{plot.x, plot.x + plot.width / 2,
                                                 plot.x + plot.width - 1};
@@ -738,8 +749,7 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
   for (std::size_t i = 0; i < x_positions.size(); ++i) {
     const std::string tick = format_value(
         velocities[reverse_velocity ? velocities.size() - 1U - x_indices[i] : x_indices[i]]);
-    draw_text(&image, width, height,
-              x_positions[i] - static_cast<std::int64_t>(tick.size()) * 7 / 2,
+    draw_text(&image, width, height, x_positions[i] - text_width(tick, height) / 2,
               plot.y + plot.height + 5, tick, 1);
   }
   const std::array<std::int64_t, 3> y_positions{plot.y, plot.y + plot.height / 2,
@@ -747,8 +757,8 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
   const std::array<std::size_t, 3> y_indices{ranges.size() - 1U, ranges.size() / 2U, 0U};
   for (std::size_t i = 0; i < y_positions.size(); ++i) {
     const std::string tick = format_value(ranges[y_indices[i]]);
-    draw_text(&image, width, height, plot.x - 4 - static_cast<std::int64_t>(tick.size()) * 7,
-              y_positions[i], tick, 1);
+    draw_text(&image, width, height, plot.x - 4 - text_width(tick, height), y_positions[i], tick,
+              1);
   }
 
   constexpr std::array<std::uint8_t, 4> kBlack{0U, 0U, 0U, 255U};

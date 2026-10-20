@@ -16,6 +16,11 @@
 
 namespace holoscan::radar::app::viz::detail {
 
+// SDK colors are packed ABGR.
+inline constexpr std::uint32_t kDashboardTextPrimary = 0xFFF3EDE6U;
+inline constexpr std::uint32_t kDashboardTextSecondary = 0xFFC2AC9BU;
+inline constexpr std::uint32_t kDashboardTextMuted = 0xFF9C8471U;
+
 inline constexpr std::size_t kDashboardTextRows = 128U;
 inline constexpr std::size_t kDashboardTextBytes = 192U;
 static_assert(visualization::kTextRunHeaderBytes == 16U);
@@ -25,7 +30,7 @@ inline constexpr auto kDashboardTextRowBytes = 16U + kDashboardTextBytes;
 // the renderer may consume it on a separate partition after the next radar tick.
 inline void append_dashboard_text(std::vector<std::uint8_t>* records, std::int64_t width,
                                   std::int64_t /*height*/, float x, float y, std::string_view text,
-                                  float size_px) {
+                                  float size_px, std::uint32_t color = kDashboardTextPrimary) {
   if (records->size() / kDashboardTextRowBytes >= kDashboardTextRows) {
     throw std::invalid_argument("FMCW dashboard exceeded its text run budget");
   }
@@ -45,7 +50,7 @@ inline void append_dashboard_text(std::vector<std::uint8_t>* records, std::int64
       .x = x,
       .y = y,
       .size_px = size_px,
-      .color = 0xFFE8DED2U,
+      .color = color,
   };
   const std::size_t start = records->size();
   records->resize(start + kDashboardTextRowBytes, 0U);
