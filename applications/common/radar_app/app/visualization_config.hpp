@@ -27,7 +27,7 @@ struct VisualizationConfig {
   int64_t noise_range_half_width{3};
   int64_t noise_doppler_half_width{3};
   double noise_sigma{2.0};
-  double noise_headroom_db{0.0};
+  double noise_headroom_db{6.0};
   double range_doppler_width_percent{45.0};
   double detection_radius{0.010};
   int64_t history_frames{120};

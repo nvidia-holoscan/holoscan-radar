@@ -311,7 +311,7 @@ TEST_P(FmcwDashboardBackgroundTest, MasksDetectionCrossesAndProjectsLeadingPlane
         text.data.data() + offset + holoscan::visualization::kTextRunHeaderBytes));
   }
   EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "14.0" : "17.0"), labels.end());
-  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "26.0 dB" : "29.0 dB"),
+  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "32.0 dB" : "35.0 dB"),
             labels.end());
 }
 

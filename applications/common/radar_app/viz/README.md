@@ -16,7 +16,7 @@ lower = mean_db - noise_sigma * stddev_db
 upper = mean_db + noise_sigma * stddev_db + noise_headroom_db
 ```
 
-The default is mean plus/minus two standard deviations, with zero additional
+The default is mean plus/minus two standard deviations, with 6 additional
 dB above the upper bound. Both limits are smoothed together, and the image
 and colorbar use the same limits. This narrow window reveals background
 texture; strong targets saturate at the upper endpoint. Increase
@@ -33,7 +33,7 @@ app:
     noise_range_half_width: 3
     noise_doppler_half_width: 3
     noise_sigma: 2.0
-    noise_headroom_db: 0.0
+    noise_headroom_db: 6.0
     dynamic_range_db: 60.0  # Peak-relative fallback span only
 ```
 

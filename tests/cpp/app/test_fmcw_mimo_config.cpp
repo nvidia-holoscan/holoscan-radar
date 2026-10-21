@@ -100,6 +100,7 @@ TEST(FmcwMimoConfig, DecodesTdmDefault) {
 
   EXPECT_EQ(config.num_frames, 250);
   EXPECT_DOUBLE_EQ(config.visualization.range_doppler_width_percent, 45.0);
+  EXPECT_DOUBLE_EQ(config.visualization.noise_headroom_db, 6.0);
   EXPECT_EQ(config.scene.range_loss.model, radar::sim::RangeLossModel::kMonostaticFreeSpace);
   EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 100.0);
   EXPECT_EQ(config.scene_visibility.model, radar::sim::SceneVisibilityModel::kFrontHalfSpace);
