@@ -350,6 +350,147 @@ TEST(BeamscanEstimatorOpTest, Accepts3DSnapshotWithOneLook) {
   EXPECT_EQ(out.spectrum.shape[0], 1);
 }
 
+template <typename T>
+class BeamscanNineLookTest : public ::testing::Test {};
+using BeamscanNineLookPrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(BeamscanNineLookTest, BeamscanNineLookPrecisions);
+
+std::vector<std::complex<double>> nine_look_markers() {
+  std::vector<std::complex<double>> values(2U * 4U * 9U);
+  for (int64_t item = 0; item < 2; ++item) {
+    for (int64_t channel = 0; channel < 4; ++channel) {
+      for (int64_t look = 0; look < 9; ++look) {
+        // Binary fractions and alternating signs expose channel/look swaps and cancellation.
+        const double real = (channel % 2 == 0 ? 32.0 : -32.0) +
+                            static_cast<double>(item * 13 + channel * 3 + look) / 8.0;
+        const double imag = (look % 2 == 0 ? 8.0 : -8.0) +
+                            static_cast<double>(item * 5 - channel * 7 + look) / 16.0;
+        values[static_cast<size_t>((item * 4 + channel) * 9 + look)] = {real, imag};
+      }
+    }
+  }
+  return values;
+}
+
+TYPED_TEST(BeamscanNineLookTest, EverySpectrumCellMatchesIndependentMeanPower) {
+  using T = TypeParam;
+  const auto geometry = make_planar_ura_geometry(2, 2, 0.5, 1.0);
+  const std::vector<double> az{-0.31, -0.07, 0.19};
+  const std::vector<double> el{-0.23, 0.03, 0.29};
+  const auto markers = nine_look_markers();
+  const auto output = run_beamscan<T>(snapshot_to_device<T>(markers, {2, 4, 9}),
+                                      make_params(geometry, AngleConvention{}, az, el));
+  ASSERT_EQ(output.spectrum.shape, (std::vector<int64_t>{2, 3, 3}));
+  ASSERT_EQ(output.aoa.shape, (std::vector<int64_t>{2, 2}));
+  const double relative_tolerance = sizeof(T) == sizeof(float) ? 2e-5 : 1e-11;
+  for (int64_t item = 0; item < 2; ++item) {
+    double best = -1.0;
+    size_t best_az = 0;
+    size_t best_el = 0;
+    for (size_t ie = 0; ie < el.size(); ++ie) {
+      for (size_t ia = 0; ia < az.size(); ++ia) {
+        const auto direction =
+            holoscan::radar::boundary_to_canonical(AngleConvention{}, az[ia], el[ie]);
+        double expected = 0.0;
+        for (int64_t look = 0; look < 9; ++look) {
+          std::complex<double> sum{0.0, 0.0};
+          for (int64_t channel = 0; channel < 4; ++channel) {
+            const size_t offset = static_cast<size_t>(channel * 3);
+            const double phase = -2.0 * kPi *
+                                 (geometry.element_positions[offset] * direction.x +
+                                  geometry.element_positions[offset + 1] * direction.y +
+                                  geometry.element_positions[offset + 2] * direction.z);
+            sum += markers[static_cast<size_t>((item * 4 + channel) * 9 + look)] *
+                   std::complex<double>{std::cos(phase), std::sin(phase)};
+          }
+          expected += std::norm(sum);
+        }
+        expected /= 9.0;
+        const size_t index = static_cast<size_t>(item * 9) + ia * el.size() + ie;
+        EXPECT_NEAR(output.spectrum.template as<T>()[index], expected,
+                    relative_tolerance * std::max(1.0, expected));
+        if (expected > best) {
+          best = expected;
+          best_az = ia;
+          best_el = ie;
+        }
+      }
+    }
+    EXPECT_EQ(output.aoa.template as<T>()[item * 2], static_cast<T>(az[best_az]));
+    EXPECT_EQ(output.aoa.template as<T>()[item * 2 + 1], static_cast<T>(el[best_el]));
+  }
+}
+
+TYPED_TEST(BeamscanNineLookTest, AllValidGenericMaskMatchesUnmaskedBytes) {
+  using T = TypeParam;
+  const auto geometry = make_planar_ura_geometry(2, 2, 0.5, 1.0);
+  const auto params =
+      make_params(geometry, AngleConvention{}, {-0.31, -0.07, 0.19}, {-0.23, 0.03, 0.29});
+  const auto markers = nine_look_markers();
+  const auto unmasked = run_beamscan_result<T>(snapshot_to_device<T>(markers, {2, 4, 9}), params);
+  const auto masked = run_beamscan_with_mask_result<T>(
+      snapshot_to_device<T>(markers, {2, 4, 9}),
+      to_device_bool_tensor(std::vector<uint8_t>(18U, 1U), {2, 9}), params);
+  ASSERT_TRUE(unmasked.ok()) << unmasked.describe_failure();
+  ASSERT_TRUE(masked.ok()) << masked.describe_failure();
+  for (const char* port : {"aoa_estimates", "angle_spectrum"}) {
+    const auto expected = beamscan_frames(masked, port);
+    const auto actual = beamscan_frames(unmasked, port);
+    ASSERT_EQ(expected.size(), 1U);
+    ASSERT_EQ(actual.size(), 1U);
+    EXPECT_EQ(actual[0].shape, expected[0].shape);
+    EXPECT_EQ(actual[0].data, expected[0].data) << port;
+  }
+}
+
+TYPED_TEST(BeamscanNineLookTest, LargeGridMaskMatchesUnmaskedBytesAndLowestBeamTie) {
+  using T = TypeParam;
+  constexpr int64_t kItems = 2;
+  constexpr int64_t kLooks = 9;
+  // 1085 beams cross the proposed 1024 threshold and fit the existing masked fixture bounds.
+  const auto az = linspace(-0.31, 0.19, 35);
+  const auto el = linspace(-0.23, 0.29, 31);
+  for (int scene = 0; scene < 2; ++scene) {
+    const bool equal_power = scene == 1;
+    SCOPED_TRACE(equal_power ? "origin sensor equal-power tie" : "signed C4 markers");
+    const int64_t channels = equal_power ? 1 : 4;
+    const auto geometry =
+        equal_power ? make_ula_geometry(1, 0.5, 1.0) : make_planar_ura_geometry(2, 2, 0.5, 1.0);
+    const auto params = make_params(geometry, AngleConvention{}, az, el);
+    const auto markers = equal_power
+                             ? std::vector<std::complex<double>>(kItems * kLooks, {2.0, 1.0})
+                             : nine_look_markers();
+    const std::vector<int64_t> shape{kItems, channels, kLooks};
+    const auto unmasked = run_beamscan_result<T>(snapshot_to_device<T>(markers, shape), params);
+    const auto masked = run_beamscan_with_mask_result<T>(
+        snapshot_to_device<T>(markers, shape),
+        to_device_bool_tensor(std::vector<uint8_t>(kItems * kLooks, 1U), {kItems, kLooks}), params);
+    ASSERT_TRUE(unmasked.ok()) << unmasked.describe_failure();
+    ASSERT_TRUE(masked.ok()) << masked.describe_failure();
+    for (const char* port : {"aoa_estimates", "angle_spectrum"}) {
+      const auto expected = beamscan_frames(masked, port);
+      const auto actual = beamscan_frames(unmasked, port);
+      ASSERT_EQ(expected.size(), 1U);
+      ASSERT_EQ(actual.size(), 1U);
+      EXPECT_EQ(actual[0].shape, expected[0].shape);
+      EXPECT_EQ(actual[0].data, expected[0].data) << port;
+      if (equal_power && std::string(port) == "angle_spectrum") {
+        // The sensor is at the origin: every steering weight is 1, and |2+i|^2 is 5.
+        for (int64_t cell = 0; cell < actual[0].size(); ++cell) {
+          EXPECT_EQ(actual[0].template as<T>()[cell], T{5}) << "cell=" << cell;
+        }
+      }
+      if (equal_power && std::string(port) == "aoa_estimates") {
+        // Every beam ties positively, so both launch shapes must select el-major beam zero.
+        for (int64_t item = 0; item < kItems; ++item) {
+          EXPECT_EQ(actual[0].template as<T>()[item * 2], static_cast<T>(az.front()));
+          EXPECT_EQ(actual[0].template as<T>()[item * 2 + 1], static_cast<T>(el.front()));
+        }
+      }
+    }
+  }
+}
+
 TEST(BeamscanEstimatorOpTest, MultiLookSpectrumAveragesPerLookPower) {
   constexpr int64_t kN = 6;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
