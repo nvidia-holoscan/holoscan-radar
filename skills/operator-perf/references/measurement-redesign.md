@@ -1,5 +1,10 @@
 # Measurement approach review — workload-dependent uncertainty
 
+Historical rationale for the formal version-4 design. Its full statistical
+process is now opt-in; [proportionate acceptance](acceptance.md) is the default
+for routine profiling and optimization. Preserve the historical reasoning and
+artifacts rather than applying it as a universal campaign requirement.
+
 Review dated 2026-10-19; workflow adopted and implemented on 2026-10-20.
 Use the [approved integrated confirmation protocol](confirmation.md) and explicit
 version-4 [commands](../../../performance/optimization/CONFIRMATION.md). The core

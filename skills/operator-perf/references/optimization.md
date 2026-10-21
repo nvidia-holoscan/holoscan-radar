@@ -2,14 +2,16 @@
 
 ## Establish The Session
 
-Prepare a session JSON using the interface in [tools](tools.md). Propose rules
-for every output port separately for float and double; integer/index/mask and
-descriptor content are exact. Floating rules are exact or confirmed explicit
-absolute/relative tolerances with evidence from analytic tests. Confirm the
-configuration and limits before edits. Record confirmation through version-4
-`init`, using correctness-only admission prepared by the campaign tools. Read the
-[command guide](../../../performance/optimization/CONFIRMATION.md); legacy
-version-3 admission is not a prerequisite for the new workflow.
+Use [proportionate acceptance](acceptance.md) unless the request needs formal
+statistical confirmation. Record a concrete engineering experiment: scope,
+comparator, per-output policies, correctness checks, representative timing cases,
+criteria and budget. Existing authorization covers routine choices within the
+confirmed scope; changed acceptance rules are prospective and explicit.
+
+The maintained session JSON/`init`/five-gate acceptance state machine implements
+[formal version 4](confirmation.md), not the default engineering review. Use
+that optional path only when selected, and never fabricate its passing gates.
+Engineering records must clearly identify their acceptance basis and raw evidence.
 
 Respect the caller's single-checkout or worktree choice and preserve the intended
 starting state in the layout described in SKILL.md. If the user
@@ -27,8 +29,10 @@ Audit verification coverage against the candidate's affected surface: both
 precisions; all outputs/descriptors; optional wiring; empty/boundary inputs;
 multi-frame ownership; live match/miss and shape changes; cached/unseen
 transitions; invalid-input behavior. Bundled fixtures cover ClutterFilter and
-expanded split/fused FMCW range-stage subsets. Extend native fixtures and
-analytic tests for uncovered behavior before accepting a dependent candidate.
+expanded split/fused FMCW range-stage subsets. Reuse valid unchanged evidence
+with a dependency rationale; extend native
+fixtures and analytic tests for gaps relevant to the candidate, rather than
+requiring a complete new whole-operator suite for every local edit.
 Do not build a second radar-owned single-operator Graph harness.
 
 Extend fixtures and record the STATUS claim **before** freezing the intended
@@ -40,54 +44,43 @@ until final validation, then record the final reviewed source state separately.
 
 ## Candidate Loop
 
-1. Select one actionable finding against the current best. Identify transitive
-   consumers of every edited shared helper, kernel, or header, including tests,
-   applications, SAR, and other operators. Add their validation to the matrix.
-   Before editing, register `plan`: mechanism, baseline source, target cases
-   chosen from the confirmed allowable set, and expected percentage gain. Bind
-   its hash into every gate context; do not select targets after seeing results.
-2. Checkpoint explicitly listed files with `checkpoint`. Add new paths before
-   creating them. Apply the smallest candidate preserving behavior and contract.
-3. Build and run relevant correctness tests, native output comparisons, and
-   temporal/error checks. Save contract-review and coverage evidence. Missing
-   output/timestamp coverage is a failed gate, not an exception.
-4. Screen using bounded paired A/B measurements with distinct source/build
-   manifests and identical recipe/timing settings. Screening is exploratory.
-   Freeze a promising candidate and the confirmation design before collecting
-   fresh randomized balanced two-A/two-B blocks over the complete affected
-   matrix. Follow [integrated confirmation](confirmation.md) and
-   [distribution inference](distributions.md). Use A/A and B/B as dependent
-   controls alongside A/B, not separate admission sweeps or fixed agreement
-   gates. Investigate unresolved confounding; ordinary variability contributes
-   uncertainty. Every predeclared target must demonstrate its practical gain,
-   and protected demonstrated slowdowns reject. Retain uncertainty for permitted
-   inconclusive protected endpoints. Unsupported evidence cannot count as a pass.
-5. Record the candidate with evidence for contract, coverage, tests,
-   equivalence, and speed gates. Keep only if all pass. For failure, seal the
-   candidate file state and `restore` the checkpoint; it refuses unexpected
-   intervening edits and preserves previously accepted changes. Prepare the
-   [candidate explanation and register entry](candidate-records.md), including
-   the actual mechanism, decision rationale and measured impact or its absence.
-   Keep drafts in ignored notes while identities are frozen; publish after seal.
-6. After a keep, refresh attribution and compare structural evidence with the
-   prior run; stale exports cannot establish convergence. Update current best.
-   Do not run a mandatory standalone current-best A/A refresh. Stop on the
-   confirmed attempt/dry/time/target limit or an empty queue.
+1. Select one attributed bottleneck against current best. Review dependencies of
+   edited code and relevant application paths. Separate the functional coverage
+   set from the smaller performance-risk set. Register the proposed mechanism,
+   target cases, useful gain and possible costs before editing.
+2. Checkpoint explicitly listed files and preserve immutable baseline builds.
+   Apply the smallest behavior-preserving change. Both sides use identical
+   fixture/recipe code and timing boundaries.
+3. Run relevant existing tests, analytic checks and native output comparisons,
+   both precisions. Add missing checks for the changed path. Explain reuse of
+   unchanged ownership/live/error coverage and any remaining limits. A failure
+   undermining the changed behavior blocks the candidate.
+4. Screen with a few paired A/B runs on the predeclared representative set.
+   Freeze a promising candidate and run a fresh bounded paired check. Record
+   every run, variability and unfavorable result. Time affected downstream paths
+   when there is a plausible performance dependency, rather than automatically
+   repeating every consumer recipe. Follow [acceptance](acceptance.md) for
+   engineering criteria and the distinct optional formal protocol.
+5. Record contract/coverage review, tests, equivalence and performance evidence,
+   then keep, reject or mark validation-blocked. Explain absolute benefit and
+   tradeoffs. Restore rejected/blocked edits with a verified checkpoint receipt.
+   Publish the [candidate explanation and register entry](candidate-records.md)
+   between sealed experiments. Never count a source lead as an attempted edit.
+6. Reassess the queue. Refresh attribution if it can guide the next change;
+   avoid a mandatory profiler or A/A sweep after every keep. Stop at the
+   confirmed attempt, unsuccessful, time or target limit.
 
-Single-fix mode attempts one candidate. Iterative mode defaults to 20 candidate
-turns and three consecutive failures; no-win/inconclusive trials count.
-Each attempted candidate is one turn, irrespective of chat/tool messages.
-Blocked validation is reported separately and does not increment the failure
-streak, but an attempted blocked candidate still consumes the 20-turn budget.
-Do not spend extra trials outside the confirmed budget. Session checkpoints do
-not authorize commits. Session state records stop decisions but the agent owns
-the optimization loop and code changes.
+Choose attempt limits appropriate to the task. One attempted candidate is one
+turn; preparatory work and messages are not turns. Missing validation counts
+separately from rejection but remains visible. Neither a time limit nor weak
+sensitivity authorizes extra runs or a retroactive change in criteria.
 
-After each assessment/candidate, announce the session path and distinguish
-estimated gain from measured casewise gain, confidence intervals, absolute
-latency and protected regressions. Report cumulative current-best versus
-original results for all affected operators when measured; do not extrapolate
-them from intermediate percentages. Keep unresolved bugs prominent.
+After a candidate, report its measured cases, acceptance basis, absolute and
+relative results, uncertainty/variability, regressions and omitted scope.
+A fresh first-candidate check against the preserved original already supplies
+original/final evidence when retained bytes match; do not duplicate it. After
+multiple keeps, use direct original/final measurements for cumulative claims or
+label them unmeasured. Do not multiply intermediate gains.
 
 For temporary profiling, follow [workspace safety](workspace.md). Restore the
 current best and verify rebuild receipts before rerunning gates. An applicable
@@ -102,7 +95,8 @@ do not silently treat a rerun as proof the original failure was irrelevant.
 
 ## Bugs And Completion
 
-Use `bug` to persist a suspected bug immediately, with baseline reproduction,
+Persist a suspected bug immediately (use `bug` for an active formal session,
+or the engineering experiment's findings record), with baseline reproduction,
 evidence, expected/observed behavior, and the cases whose validation it blocks.
 Alert the user immediately through the agent's normal conversation interface.
 Continue only candidates independent of those
@@ -117,9 +111,9 @@ only scoped performance claims. Correctness/contract/equivalence coverage for
 an affected candidate is never optional. Do not retroactively accept a failed
 candidate by switching objectives, thresholds or exclusions.
 
-At completion or interruption, seal the supported session with a concrete stop
-reason with version-4 `finish`, then `report`. Pass the final integrated control
-review when supplying cumulative timing; no standalone A/A calibration is required. Include remaining findings and coverage gaps, every unresolved bug,
-kept/rejected changes, and final versus original-baseline timing. An all-rejected
-session is a valid outcome. Remove scratch instrumentation, rebuild, rerun the
-final relevant gates, and run pinned lint before handing off.
+At completion or interruption, seal the engineering decision record with its
+concrete stop reason, or use version-4 `finish`/`report` for an actual formal
+session. Do not feed engineering evidence into formal replay. Include remaining
+findings, coverage gaps, attempt decisions and directly measured original/final
+results where available. An all-rejected session is a valid outcome. Remove
+instrumentation, verify the retained build, and run pinned lint before handoff.

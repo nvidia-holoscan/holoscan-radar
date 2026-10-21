@@ -1,6 +1,10 @@
-# Paired screening and integrated confirmation
+# Formal version-4 confirmation (opt-in)
 
-Approved skill workflow, 2026-10-20. Implemented as explicit measurement-policy
+This is the high-assurance statistical option, not the default process for
+profiling or routine optimization. Start with [proportionate acceptance](acceptance.md).
+Select this protocol prospectively when its guarantees warrant the cost; scope
+formal claims and endpoints deliberately rather than treating all diagnostics
+as mandatory claims. It remains implemented as explicit measurement-policy
 version 4; see the [command guide](../../../performance/optimization/CONFIRMATION.md).
 Version-2/version-3 reporting/replay remain historical. Host tests exercise
 orchestration and acceptance; they are not GPU qualification or authorization
@@ -110,9 +114,12 @@ never authorizes acceptance.
 After a keep, refresh attribution and reassess opportunities. Do not launch a
 new mandatory current-best A/A campaign; future confirmation blocks measure
 current-best repeatability alongside the next candidate. Final cumulative gains
-require direct preserved-original versus final measurements, using the same
-integrated-control design and confirmed matrix. Never multiply intermediate
-percentages.
+require direct preserved-original versus final measurements. An existing fresh
+confirmation already satisfies that comparison when its comparator is the
+original and its candidate is the final retained state; reference it rather
+than collect an identical second experiment. After multiple keeps, use the
+declared integrated-control design for any new formal cumulative claim. Never
+multiply intermediate percentages.
 
 ## Tool support and limits
 

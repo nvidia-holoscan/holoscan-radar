@@ -52,36 +52,36 @@ for restoration and scratch rebuilds.
 
 ## Measurement Design And Confirmation
 
-Use [measurement design](references/qualification.md) and the approved
-[integrated confirmation protocol](references/confirmation.md). Begin with
-correctness and inexpensive screening; test a bounded candidate with paired
-A/B runs, then confirm a promising frozen candidate on fresh blocks containing
-two A runs and two B runs in randomized balanced order. A/A and B/B are matched
-controls alongside A/B, not standalone admission campaigns.
+Use the [proportionate acceptance workflow](references/acceptance.md) by default.
+Separate broad relevant correctness checks from a small representative performance
+experiment. Profile to answer a concrete question; do not require a general
+qualification study before trying a bounded change.
 
-Require a positive caller-specified measurement budget before timing. Freeze
-sampling, targets, protected cases/consumers, order schedule, inference and
-stopping rules before confirmation. Keep five warmups and existing process
-warmup by default. Record raw chronological frames, first-50/full-window
-p50/p90/p99, setup, cold and applicable live transitions. Variation determines
-uncertainty and sensitivity; no fixed percentage or microsecond consistency
-limit qualifies a workload. A non-significant control does not prove stability.
+Require a positive caller-specified measurement budget before timing. Predeclare
+targets, risk cases, precisions, sampling, useful gain, regression criteria and
+stopping limits. Screen with a few paired A/B runs, then use one fresh bounded
+check of a promising frozen candidate. Record absolute latency, variability,
+chronology and limits. Small overhead cases and distinct changed paths matter
+more than timing every recipe combination. Correctness remains both-precision
+and exact or covered by an already approved per-output policy.
 
-Use [paired distribution inference](references/distributions.md); the whole
-confirmation block is the inferential unit. Shared controls are dependent.
-Keep exact correctness, the more-than-2% target objective and directional
-protection against demonstrated slowdowns unless explicitly changed. Report
-inconclusive protected results and unsupported intervals distinctly. Confidence
-width is diagnostic, not a universal precision gate. Read the
-[measurement review](references/measurement-redesign.md) for rationale.
+Time downstream operators when the diff plausibly affects their performance;
+functional dependency does not itself require repeated downstream timing.
+Reuse valid unchanged correctness evidence and fill candidate-specific gaps.
+Stop an ambiguous gain at the declared ceiling rather than escalating repeats.
+No universal four-run blocks, familywise endpoint inventory, complete-consumer
+timing matrix or duplicate fresh-final experiment is required for the default
+engineering keep decision. It makes scoped empirical claims, not formal
+statistical guarantees or proof of no regressions.
 
-Use explicit **measurement-policy version 4** and the
-[maintained command guide](../../performance/optimization/CONFIRMATION.md).
-The tools support correctness-only admission, A/B screening and fresh integrated
-confirmation with raw replay and evidence-backed control review. Version-2/
-version-3 A/A admission remains historical; never migrate its evidence in place.
-Host tests validate orchestration, not GPU deployment performance. Preserve
-native coverage requirements and obtain a caller budget before new timing.
+Use [formal confirmation](references/confirmation.md) and
+[distribution inference](references/distributions.md) when explicitly needed
+for the requested assurance or statistical claim. The automated tools implement
+that optional version-4 workflow; the default engineering decision is recorded
+and reviewed separately as explained in [tool compatibility](references/tools.md).
+Do not label manual or screening evidence a passing version-4 gate. Historical
+policies/evidence stay unchanged. A revised active policy needs a fresh design,
+not retroactive reinterpretation of a previous result.
 
 For deployment-wide inventory, qualification and reporting use
 [operator-benchmark](../operator-benchmark/SKILL.md). It delegates candidate
@@ -108,32 +108,26 @@ It requires fresh native input witnesses, coupled port checks, and existing
 computed-tie fixtures. It does not authorize changed formulas or consumer
 outputs. Retain exact comparison elsewhere; never migrate historical evidence.
 
-Before editing, propose and obtain confirmation of the concrete session:
-operator, comparison rules for **each port and precision**, cases, objective,
-protected cases, editable scope, and limits. Defaults: 20 candidate turns, three
-consecutive unsuccessful candidates, all three sizes, steady latency, two
-screening A/B blocks with isolated case/repeat processes. Confirmation uses
-separately budgeted four-run blocks, not an implicit reuse of this pair count.
-Before confirmation, use the selected matrix to propose adequate sampling;
-A screening count is not a confirmation power guarantee. Target limits are optional;
-measurement execution still requires a positive caller budget. All defaults
-are configurable. Existing confirmation remains valid until scope or policy
-changes. Assessment does not need an editing-session confirmation.
+Before editing, confirm the concrete scope, per-output comparison rules,
+representative timing design, acceptance basis and limits. Existing campaign
+confirmation covers routine candidates within that scope; do not ask again
+without a material change. Assessment does not require editing confirmation.
+Use bounded candidate/unsuccessful-attempt limits appropriate to the request;
+do not multiply the timing family by a hypothetical 20 future attempts.
 
 A turn means one attempted candidate, not one chat message or tool call.
-Prepare baseline correctness and measurement design before edits; complete
-fresh integrated confirmation across the affected matrix before acceptance.
-Timing precision coverage is separate from output equivalence. Noisy controls
-prompt uncertainty reporting or investigation, not an automatic dispersion
-failure. Invalid evidence or unresolved confounding can block interpretation.
-Confirm the intended deployment context. Clock changes need separate
-authorization; never silently lock clocks or substitute a controlled-clock
-benchmark for deployment behavior.
+Prepare relevant baseline correctness before edits. Preserve contracts and
+run candidate-specific correctness/analytic/native checks; a whole-operator
+coverage expansion is not automatically a prerequisite for a local change.
+New behavior/lifetime/synchronization risks or failures undermining the changed
+surface still need resolution. Exact equivalence is independent of timing scope.
+Confirm deployment context; clock changes require separate authorization.
 
-On a failed gate, do not retroactively change exclusions, objectives, numerical
-rules, initialization semantics or thresholds to accept that candidate. A new
-confirmed policy requires a fresh session and baseline. A significant first-use
-regression remains relevant even when its immediate code path is unchanged.
+Do not change exclusions, numerical policies, objectives or practical regression
+criteria after seeing an unfavorable result. Preserve failed/inconclusive data
+and stop at the declared limit. A revised design is prospective, source-bound
+and explicit about any weaker guarantee. Formal-v4 sessions retain their frozen
+rules until closed; never migrate their evidence in place.
 
 Use [workspace safety](references/workspace.md) for scratch profiling and moved
 archives. Never restore instrumentation with Git checkout/reset: checkpoint the

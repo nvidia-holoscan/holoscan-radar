@@ -15,21 +15,21 @@ artifact directory at the same absolute path so `--output` reaches the host.
 
 ## Workflow And Tool Compatibility
 
-Use explicit **measurement-policy version 4** for the approved
-[integrated confirmation workflow](confirmation.md). The maintained
-[command guide](../../../performance/optimization/CONFIRMATION.md) documents
-correctness-only campaign admission, direct A/B screening, fresh randomized
-four-run confirmation, dependent A/A–B/B diagnostics, control review, replay and
-final cumulative reporting. No standalone A/A or B/B admission run or fixed
-consistency threshold is required. Never pass invented calibration artifacts.
+The default [engineering acceptance](acceptance.md) uses reviewed decision
+records and raw source-bound harness/native evidence. The automated
+`radar_perf.py` acceptance state machine currently implements **formal version
+4**, not that engineering judgment. There is no new version-5 option. Do not
+pass exploratory screens as formal speed gates or imply automated engineering
+acceptance support. A manual engineering record must preserve identities,
+commands/settings, exit status, raw reports, correctness and decision evidence.
 
-Version 4 is host-tested with real synthetic subprocesses; that does not qualify
-a GPU deployment or waive native correctness coverage. New timing needs a caller
-budget. Keep version-2/version-3 evidence under its original rules. The legacy
-collection/calibration/acceptance examples below document those historical
-interfaces; their A/A prerequisites do not govern version-4 sessions. Generic
-provenance, native verification, checkpoint/restore and five-gate evidence remain
-applicable. Use the new guide's screening/confirmation commands for fresh work.
+When formal statistical guarantees are needed, select version 4 explicitly and
+follow the [command guide](../../../performance/optimization/CONFIRMATION.md).
+Its randomized four-run blocks, control review, replay and declared statistical
+rules apply to that selected experiment. Host tests do not qualify a GPU.
+Keep historical version-2/3 evidence unchanged; legacy examples below are not
+default recommendations. Generic provenance, native checks and safe restoration
+remain applicable across acceptance bases.
 
 ## Legacy Configuration And Identity
 
@@ -430,7 +430,8 @@ and explicitly identify absent cumulative evidence.
 Legacy version-3 production acceptance requires explicit version 3 and a hash-bound full-case
 `benchmark_admission` prepared by the campaign tool. Version 2 remains readable
 for reporting and historical gate replay; its evidence is never upgraded in
-place. Fresh work uses version 4 and the integrated confirmation guide above.
+place. New formal sessions use version 4; default engineering experiments follow
+the separate acceptance reference above.
 
 Run `radar_perf.py campaign --help` for discovery, qualification, baseline,
 session preparation, disposition, status, resume and reporting commands. Read

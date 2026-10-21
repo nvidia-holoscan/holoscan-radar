@@ -1,5 +1,11 @@
 # Version-4 integrated candidate confirmation
 
+This guide documents the optional automated **formal statistical** workflow.
+Routine profiling and optimization default to the smaller
+[engineering acceptance process](../../skills/operator-perf/references/acceptance.md).
+That reviewed process is not implemented by this CLI's acceptance state machine;
+do not turn its small-sample evidence into a passing version-4 gate.
+
 Use paired A/B screening, then fresh four-run confirmation blocks with integrated
 A/A and B/B controls. Version 4 removes standalone A/A admission and fixed
 repeatability thresholds. Version 2/3 collectors, calibration and historical
@@ -132,7 +138,9 @@ more than its confirmed gain threshold. A/A and B/B observations are not extra
 independent A/B samples.
 
 Record the five usual candidate gates. For final original-versus-retained
-validation, use direct integrated confirmation and pass its `--control-review`
+validation, use direct integrated confirmation; an existing fresh first-candidate
+confirmation is sufficient if it already binds original and final retained
+identities. Pass its `--control-review`
 to `finish --cumulative-timing`; version 4 does not require original A/A
 calibration. Reports label the positive-is-slower orientation and retain control
 diagnostics, absolute values, effect intervals and coverage gaps. No cumulative

@@ -17,8 +17,9 @@ The register includes one row per attempted candidate:
 | --- | --- | --- | --- | --- | --- |
 | Stable attempt key | Operator and session ID | Concrete mechanism | Accepted (kept), rejected, or validation_blocked, with decisive evidence | Cases/precisions, absolute before/after and effect; or why unavailable | Link to this attempt's document |
 
-Use the maintained session's outcome; distinguish rejected candidates from
-blocked validation. A candidate that fails screening still needs a record.
+Use the sealed engineering decision record or maintained formal session's
+outcome; label acceptance basis `engineering` or `formal-v4` and distinguish
+rejected candidates from blocked validation. A candidate that fails screening still needs a record.
 Unattempted source leads, preparatory fixture failures and harnessless operators
 are not rejected candidates. Report attempted/accepted/rejected/blocked counts
 explicitly, including zeros, and reconcile them with session records. Preserve
@@ -62,12 +63,15 @@ Write for a reviewer who has not read the conversation. Include:
   acceptance from a screen or a favorable control review alone.
 - **Performance impact:** identify target/protected cases, recipe dimensions,
   both precisions and affected consumers. Show absolute before/after latency,
-  percentage effect and declared uncertainty for the decision-relevant metrics;
-  link the complete matrix. Separate expected gains, exploratory screens,
+  percentage effect and descriptive variability or declared formal uncertainty
+  for the decision-relevant metrics;
+  link the measured set and explain omitted variants/consumer timing. Separate
+  expected gains, exploratory screens,
   confirmation and direct original/final results. Preserve unfavorable results,
   inconclusive protection and coverage gaps. When timing was not reached or is
   invalid, say so and make no measured-gain claim. Never multiply intermediate
-  gains or substitute an earlier phase for missing final evidence.
+  gains. A fresh first-candidate check comparing original to final retained
+  bytes already supplies final evidence; reference it rather than duplicate it.
 - **Limits and next action:** include attribution limits, unresolved findings
   and the disposition's consequence for the remaining queue/budget.
 

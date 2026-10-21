@@ -2,12 +2,11 @@
 
 ## Measurement Qualification
 
-Read [measurement design](qualification.md) and
-[integrated confirmation](confirmation.md) for bounded screening, frozen design,
-fresh confirmation and early-window protection. No standalone A/A qualification
-is required before an assessment or bounded candidate. A representative screen
-does not validate unmeasured cases. Preserve historical evidence under its own
-policy; it is not new-policy acceptance evidence.
+Use [proportionate acceptance](acceptance.md) and [measurement design](qualification.md).
+Assessment needs representative clean timings and attribution for a concrete
+question, not a formal acceptance experiment or standalone A/A qualification.
+Use [formal confirmation](confirmation.md) only when its statistical guarantees
+are requested. Preserve historical evidence under its original policy.
 
 Distinguish discovery from acceptance. Read-only source review and existing
 profile analysis can identify leads before timing is qualified. Investigate
@@ -64,33 +63,26 @@ end-to-end measurements. Distinguish setup, cold, steady, changed-frame,
 source cadence, and achieved throughput. Never add overlapping CUDA API and
 kernel durations as if they were disjoint parts of the tick.
 
-Prepare baseline correctness and verification coverage before candidate edits.
-Use paired A/B screening for a concrete correct candidate; confirm a promising
-frozen candidate with fresh two-A/two-B blocks in randomized balanced order.
-The A/A and B/B controls come from that same confirmation experiment. There is
-no pre-edit full-matrix A/A requirement, fixed relative-dispersion veto or
-mandatory current-best A/A refresh after a keep. Report controls, absolute
-latencies, uncertainty and chronological effects alongside the A/B decision.
+For an optimization, establish relevant correctness and select a small timing
+set by changed execution path and risk. Screen a correct bounded candidate,
+then use one fresh bounded paired check before an engineering keep. Report
+absolute results, variability, order and coverage limits; do not promise formal
+tail bounds or zero regressions from a few runs. Extra controls or horizons
+should answer a specific uncertainty. Native coverage and timing coverage are
+separate: downstream functional checks do not mandate all downstream timings.
 
-Use [distribution inference](distributions.md) to compare declared p50/p90/p99
-and early/full windows, retaining maxima and stall diagnostics. Higher variation
-can reduce sensitivity; it does not automatically invalidate a comparison.
-Investigate control evidence of order/time effects without interpreting a
-non-significant control as proof of stability. Retain all observations. Unknown
-causes stay unknown; do not attribute an SDK defect from scatter alone.
-
-Protect setup/cold/live endpoints and the complete confirmed consumer matrix.
-Confirm the objective and protected semantics before candidate results, and
-account for candidate selection, endpoint multiplicity and stopping. Refresh
-attribution after a keep; directly compare preserved original and final builds
-for cumulative results. See [tool compatibility](tools.md#workflow-and-tool-compatibility)
-for explicit version-4 commands. Legacy interfaces retain the superseded
-admission workflow only for historical compatibility.
+Keep setup/cold/live observations as diagnostics and make them acceptance
+endpoints when materially affected or required by the application. Compare
+original and retained builds directly for cumulative claims; reuse an existing
+fresh first-candidate comparison if it already does this. For an explicitly
+selected formal-v4 experiment, follow its frozen endpoints and control rules
+without silently changing scope. See [tool compatibility](tools.md#workflow-and-tool-compatibility).
 
 Record timing precision coverage independently of float/double verification.
-The current recipes may time float only. Default timing protection requires
-both precisions; either extend the recipe/typed adapter or confirm an explicit
-float-only scope and report that double performance is unprotected.
+Prefer both timing precisions when costs may differ. If a recipe times float
+only, select an explicit float-only timing scope and report double performance
+as unmeasured; recipe/adapter extension is separate scope. Correctness remains
+both-precision.
 
 Use `--cases` to select exact expanded IDs and `--reverse-order` for a position
 probe before trusting bulk-process measurements. Compare same-work cases at

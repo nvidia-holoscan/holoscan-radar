@@ -5,11 +5,13 @@ description: Qualify measurement protocols and assess or coordinate bounded opti
 
 # Operator Benchmark Campaign
 
-Use **discover → correctness/screen → freeze design → paired A/B → integrated confirmation → report**.
+Use **discover → relevant correctness → representative paired screen → fresh bounded check → report**.
 This skill coordinates deployment-wide evidence; delegate operator assessment,
 attribution and candidate sessions to [operator-perf](../operator-perf/SKILL.md).
-Its correctness, equivalence and declared statistical acceptance rules remain
-authoritative. Scope is this repository's HSDK 5 CUDA deployments.
+Its correctness/equivalence rules and selected acceptance basis remain
+authoritative. Use [proportionate acceptance](../operator-perf/references/acceptance.md)
+by default; formal version-4 confirmation is an optional statistical tier.
+Scope is this repository's HSDK 5 CUDA deployments.
 
 Read [configuration](references/configuration.md) before preparing a campaign
 and [reporting](references/reporting.md) before milestone publication. Use
@@ -40,13 +42,12 @@ concrete consolidated review is still required before production edits.
   budget before timing. Propose bounded phases with assumptions and actionable
   alternatives. Do not spend the allocation on the first operators without
   exposing the coverage tradeoff. Exhaustion leaves explicit partial coverage.
-- Use version 4, the current deployment settings, both supported precisions,
-  applicable existing workload variants and protected early/full/setup/cold/live
-  metrics. Start from five warmups and 50 measured frames; resolve affordable
-  case coverage, screening and confirmation counts from costs and inference
-  resolution in the consolidated design. No universal frame or block count
-  guarantees adequate sensitivity. With no fixed deployment, label workload
-  scenarios synthetic and retain recipe dimensions unless a change is scoped.
+- Use current deployment settings, existing recipe dimensions and both
+  precisions for correctness. Select timing cases by distinct execution path,
+  intended use and risk. Start with five warmups/50 frames and a few paired
+  runs; choose additional horizons/controls only for a concrete question.
+  Broad correctness coverage does not mandate timing every variant or consumer.
+  Formal version-4 collection is available when its guarantees are requested.
 - A fresh campaign gets new session identities and current-state reports.
   Reuse older builds/evidence only through verified receipts; historical budgets,
   confirmations and failures are not automatically active campaign authority.
@@ -82,20 +83,21 @@ commit/push/publication authorization from a new optimization request.
   Choose useful existing workloads across processing families, subject to cost;
   honor explicit overrides. Do not make a general qualification study or a
   standalone full-matrix A/A sweep a prerequisite to candidate testing.
-- Freeze the design, sampling, identities and budgets before confirmation.
-  Screen correct bounded candidates with paired A/B. Confirm promising frozen
-  candidates on fresh randomized balanced four-run blocks: two current-best A
-  runs and two candidate B runs. Follow operator-perf's
-  [integrated confirmation protocol](../operator-perf/references/confirmation.md).
-  A/A and B/B are dependent matched controls, with no fixed agreement limits.
-- Collect native correctness and repeat-output evidence before candidate edits.
-  Protect the full confirmed operator/consumer matrix during confirmation.
-  Screening or representative results do not validate unmeasured cases. Keep
-  unresolved scopes visible while independent discovery proceeds.
+- Predeclare the candidate, representative timing set, useful gain/regression
+  criteria, order and stopping ceiling. Screen a correct change, then run one
+  fresh bounded paired check before an engineering keep. Record uncertainty
+  without claiming familywise guarantees or performance of unmeasured cases.
+  Use formal [confirmation](../operator-perf/references/confirmation.md) only
+  for a deliberately selected and affordable statistical claim.
+- Run relevant native correctness/equivalence before acceptance. Reuse valid
+  unchanged coverage and add candidate-specific gaps. Trace transitive consumers
+  for functional impact; time consumers only for plausible performance effects,
+  rather than automatically multiplying all their recipe variants.
 - Infer assessment or optimization intent using the defaults above. Before
   production edits, present one
   consolidated review of concrete operator configurations: outputs, targets,
-  eligibility, protected metrics, editable scope, consumers, sampling and limits.
+  correctness scope, representative timing, editable files, relevant consumers,
+  acceptance basis and limits.
   Record confirmation. Subsequent operator-perf sessions proceed autonomously
   within those configurations; expanded scope or changed policy needs confirmation.
 - Rank opportunities by attributed avoidable recurring work, removable fraction,
@@ -103,7 +105,9 @@ commit/push/publication authorization from a new optimization request.
   Tool commands coordinate sessions; the agent applies and validates edits.
 - Publish baseline, per-operator disposition and final reports between sealed
   sessions. Link branch/artifact paths in chat at every milestone. Final gains
-  require direct original/current-best paired measurements.
+  require direct original/current-best paired measurements. Reuse the fresh
+  first-candidate check when it already compares original and final retained
+  bytes; do not collect an identical second confirmation.
 - Track every attempted candidate in a linked `candidates.md`, with a document
   explaining the actual change, acceptance/rejection/blocker and measured
   impact. Follow operator-perf's [candidate records](../operator-perf/references/candidate-records.md);
@@ -118,17 +122,18 @@ commit/push/publication authorization from a new optimization request.
   demonstrated regressions. Controls help investigate confounding; a failure to
   reject a control null does not prove measurement reliability.
 
-Use explicit version-4 configurations and the
-[command guide](../../performance/optimization/CONFIRMATION.md). Campaign design
-checks do not launch A/A; baseline preparation verifies native behavior and
-collects inexpensive original-build screens. Session admission requires native
-coverage, not timing repeatability. Production acceptance uses integrated
-confirmation and evidence-backed agent control review. Host validation does not
-qualify a GPU deployment; no new measurement budget is implied.
+For engineering experiments, keep reviewed source-bound decision records and
+raw harness/native artifacts as described in [acceptance](../operator-perf/references/acceptance.md).
+The maintained campaign/session state machine and [command guide](../../performance/optimization/CONFIRMATION.md)
+still implement formal version 4. Do not invent a new schema, pass engineering
+screens as formal gates or imply automated support that does not exist. Frozen
+historical sessions retain their policy. A new timing design needs an explicit
+positive budget and prospective scope; no additional allocation is implied.
 
 Respect the caller's worktree or single-checkout choice. Keep immutable builds,
 archived runtime dependencies, checkpoints and active notes in ignored session
 paths. Preserve user edits and historical evidence. Version-2/version-3 evidence supports
-historical reporting/replay; the new workflow requires implemented policy-version
-support and fresh confirmed evidence. No implicit migration, CPU fallback,
+historical reporting/replay; new experiments explicitly record their acceptance
+basis and fresh evidence. Automated formal acceptance requires supported policy
+versions. No implicit migration, CPU fallback,
 threshold relaxation, clock changes, skill installation or external publication.

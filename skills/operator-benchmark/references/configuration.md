@@ -1,5 +1,16 @@
 # Campaign configuration
 
+## Default engineering experiments
+
+Use [proportionate acceptance](../../operator-perf/references/acceptance.md).
+Keep functional verification coverage separate from representative timing cases.
+A reviewed engineering record is the default; the JSON/commands below describe
+only the optional automated formal-v4 path, not a universal requirement. There
+is no implied new CLI/schema for the default process. Do not populate formal
+consumer timing maps solely because a data edge exists.
+
+## Optional formal-v4 campaign interface
+
 Use explicit **measurement-policy version 4** and operator-perf's
 [command guide](../../../performance/optimization/CONFIRMATION.md). The workflow is
 **discover → correctness/baseline screen → bounded A/B candidate screen → freeze
@@ -114,7 +125,9 @@ rerunning until a pass. Use validated error/stopping rules and remaining budget.
 
 After an accepted change, refresh attribution and reassess the queue. There is
 no mandatory current-best A/A refresh. Final gains require direct original/final
-measurements with integrated controls; never multiply intermediate percentages.
+measurements with integrated controls; reuse the existing first-candidate
+confirmation if it already compares the final retained state to original.
+Never multiply intermediate percentages.
 
 ```bash
 python3 performance/optimization/radar_perf.py campaign disposition --campaign /absolute/campaign --operator clutter_filter --session /absolute/campaign/sessions/clutter_filter-session.json

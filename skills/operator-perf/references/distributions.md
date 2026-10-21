@@ -1,4 +1,9 @@
-# Per-frame Distribution Analysis
+# Formal per-frame distribution analysis
+
+This reference defines inference for optional formal-v4 confirmation. It is not
+a mandatory analysis of every metric/variant in the default
+[engineering workflow](acceptance.md). Small paired run ranges are descriptive;
+do not call them these formal intervals.
 
 Use this statistical definition with the approved
 [screening and integrated confirmation workflow](confirmation.md). The maintained

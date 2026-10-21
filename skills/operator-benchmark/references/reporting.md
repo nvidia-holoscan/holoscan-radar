@@ -48,18 +48,22 @@ a bounded experiment, a policy decision or an unresolved disposition.
 
 ## Detailed Evidence
 
-Report the measured deployment/image/SDK, source and measurement identities,
-branch/session paths, recipe matrix, precision, verification coverage and gaps.
-Show absolute latency/throughput and setup/cold/live costs, early/full windows,
-maxima/stalls, A/B effect intervals and dependent A/A–B/B control diagnostics
-in absolute and relative units. Show screening versus fresh confirmation,
-randomized order, independent block counts, the control interpretation review
-and remaining uncertainty. There is no fixed new-policy dispersion limit; label
-legacy limits only when replaying historical results. Confidence width and
-+/-1% remain diagnostic.
-Unknown telemetry remains unknown. Distinguish correctness, bias, insufficient
-resolution, ordinary variability, unresolved confounding/regimes and budget
-exhaustion. A non-significant control is not proof of reliability.
+Report the measured deployment/image/SDK, source/build identities, branch and
+experiment paths, recipe dimensions, precisions, verification coverage and gaps.
+State acceptance basis (`engineering` or `formal-v4`) and the actual measured
+set. Show absolute before/after latency, paired effects, run variability, order,
+observed setup/cold/live costs and relevant stalls. Distinguish screening from
+the fresh check and preserve unfavorable results. Label unmeasured variants
+and consumers; never imply universal performance protection.
+
+For formal-v4 experiments, additionally report declared horizons/endpoints,
+independent block counts, simultaneous intervals, dependent A/A–B/B diagnostics
+and their interpretation review. Do not present a small engineering sample
+range as a confidence interval or infer population-tail bounds from 50 frames.
+Unknown telemetry remains unknown. Separate invalid evidence, unresolved
+confounding, insufficient sensitivity and ordinary variability. Non-significant
+controls do not prove reliability. Historical policies and results retain their
+original labels and guarantees.
 
 Include forecasts with assumptions, raw storage and actual phase durations.
 Measurement-job durations include launch/orchestration; they do not measure
@@ -67,8 +71,8 @@ agent working time. Never infer an agent-versus-harness time percentage from
 those durations alone.
 
 After each operator session include retained/rejected candidates, mechanism,
-casewise absolute/percentage results and intervals, protected regressions,
-direct cumulative measurements, affected consumers, unresolved findings and
+casewise absolute/percentage results and variability or formal intervals,
+regressions, direct cumulative measurements, affected consumers, unresolved findings and
 stop reason. A blocked attempt consumes the attempt budget, but does not add to
 the unsuccessful streak. Reassess the actionable opportunity queue using
 avoidable work, removable fraction, affected cases and attribution confidence.
