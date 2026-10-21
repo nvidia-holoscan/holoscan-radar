@@ -85,7 +85,7 @@ If auto `δ` is not `> 0` (all-zero / empty covariance), the kernel uses the abs
 
 **4. Hermitian inverse.** Batched `matx::inv(R̂)`.
 
-**5. Capon scan** (`capon_reduce_kernel`). Untapered steering `a(θ)` from `build_steering_weights_device` (`WindowSpec{}`, el-major, beam-major, `conjugate=false`):
+**5. Capon scan** (`capon_reduce_kernel`). Untapered steering `a(θ)` from `build_steering_weights_device` (`WindowSpec{}`, el-major beams, `conjugate=false`). The cached private tensor is channel-major for float with effective `C >= 8` (including smoothing), with matching scan read stride `num_beams`; smaller float apertures and all double use the original beam-major layout/read stride 1:
 
 ```text
 a_m(θ) = exp(j · k · (p_m · dir(θ))),   k = 2π / λ

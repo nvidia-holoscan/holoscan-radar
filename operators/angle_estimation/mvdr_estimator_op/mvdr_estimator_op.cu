@@ -456,10 +456,12 @@ expected<std::shared_ptr<MVDRSteeringArtifact>, Error> prepare_mvdr_steering(
   const std::shared_ptr<MVDRSteeringArtifact>& steering =
       state.steering_cache.get_or_build(cache_key, "steering manifold and scan grids", [&] {
         auto artifact = std::make_shared<MVDRSteeringArtifact>();
-        artifact->manifold =
-            build_steering_weights_device<T>(geometry, convention, azimuth, elevation, WindowSpec{},
-                                             BeamOrder::kElMajor, SteeringLayout::kBeamMajor,
-                                             /*conjugate=*/false, stream);
+        artifact->manifold = build_steering_weights_device<T>(
+            geometry, convention, azimuth, elevation, WindowSpec{}, BeamOrder::kElMajor,
+            detail::use_channel_major_mvdr<T>(geometry.num_elements())
+                ? SteeringLayout::kChannelMajor
+                : SteeringLayout::kBeamMajor,
+            /*conjugate=*/false, stream);
         const auto azimuth_host = cast_vector<T>(azimuth);
         const auto elevation_host = cast_vector<T>(elevation);
         artifact->az_grid = make_device_tensor({num_az}, output_dtype);

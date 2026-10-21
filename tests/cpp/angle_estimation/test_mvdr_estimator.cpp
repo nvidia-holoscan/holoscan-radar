@@ -526,6 +526,31 @@ TEST(MVDREstimatorOpTest, RecoversKnownDoaUra) {
   EXPECT_NEAR(aoa[1], kTruthEl, 0.02);
 }
 
+TEST(MVDREstimatorOpTest, FloatNineChannelUraRecoversDoaAndSpectrumPeak) {
+  constexpr int64_t kSnapshots = 32;
+  constexpr double kTruthAz = 0.12;
+  constexpr double kTruthEl = -0.08;
+  constexpr int64_t kNumAz = 31;
+  constexpr int64_t kNumEl = 17;
+  const auto geometry = make_planar_ura_geometry(3, 3, 0.5, 1.0);
+  const auto block =
+      make_block(geometry, AngleConvention{}, kTruthAz, kTruthEl, kSnapshots, 1e-3, 173u);
+  // Nine channels exercise the optimized scan's c2 remainder after two groups of four.
+  const auto output =
+      run_mvdr<float>(block_to_device<float>(block, {1, 9, kSnapshots}),
+                      make_params(geometry, AngleConvention{}, linspace(-0.28, 0.32, kNumAz),
+                                  linspace(-0.18, 0.14, kNumEl), /*loading=*/1e-2));
+  ASSERT_EQ(output.aoa.shape, (std::vector<int64_t>{1, 2}));
+  ASSERT_EQ(output.spectrum.shape, (std::vector<int64_t>{1, kNumAz, kNumEl}));
+  EXPECT_NEAR(output.aoa.as<float>()[0], kTruthAz, 0.01);
+  EXPECT_NEAR(output.aoa.as<float>()[1], kTruthEl, 0.01);
+  const float* spectrum = output.spectrum.as<float>();
+  const auto peak = std::max_element(spectrum, spectrum + output.spectrum.size());
+  // The analytic scene lies exactly on az cell20/el cell5; public storage is az-major.
+  EXPECT_EQ(peak - spectrum, 20 * kNumEl + 5);
+  EXPECT_GT(*peak, 0.0f);
+}
+
 // MVDR documents four optional outputs, but every one of them used to be
 // emitted under HOLOSCAN_TRY, so an application that declined any of them died
 // on its first tick with RUNTIME_OPERATOR_CALLBACK_FAILED — the contract
