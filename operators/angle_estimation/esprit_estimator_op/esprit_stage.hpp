@@ -648,8 +648,8 @@ inline void run_esprit_stage(
       broadside_y, broadside_z, convention, matrix_workspace, q_workspace, r_workspace, aoa,
       doa_multi, max_sources, source_count);
 
+  // Reuse dimension/stream-keyed eig plans; stop() retires their owned workspaces.
   mark_music_eig_cache_live();
-  clear_music_matx_caches();
 }
 
 // Full 2-D URA ESPRIT for one tick: shared covariance / Hermitian eig / model
@@ -705,8 +705,8 @@ inline void run_esprit_2d_stage(
       kz_spacing, yax_x, yax_y, yax_z, zax_x, zax_y, zax_z, nrm_x, nrm_y, nrm_z, convention,
       psi_y_ws, psi_z_ws, z_ws, q_ws, r_ws, tmp_ws, aoa, doa_multi, max_sources, source_count);
 
+  // Reuse dimension/stream-keyed eig plans; stop() retires their owned workspaces.
   mark_music_eig_cache_live();
-  clear_music_matx_caches();
 }
 
 }  // namespace holoscan::radar::detail

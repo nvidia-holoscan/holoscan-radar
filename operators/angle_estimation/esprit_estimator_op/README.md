@@ -143,7 +143,7 @@ A ULA `∥` canonical `+x` is rejected by the shift-invariant planner (same embe
 
 **Cold.** First tick: `matx::eig` plan, optional smoothing plan, and (auto URA) dual-invariance index H2D + sync. First unseen geometry revalidates the pair.
 
-**Steady.** Covariance + eig + EFT run on stable constructor-created workspace; then one CUDA block per item (thread 0) handles the `d×d` LS solve / QR or Schur. `d` is small (`≤ max_sources ≤ 64`). No per-item host `geev`.
+**Steady.** Covariance + eig + EFT run on stable constructor-created workspace; then one CUDA block per item (thread 0) handles the `d×d` LS solve / QR or Schur. `d` is small (`≤ max_sources ≤ 64`). No per-item host `geev`. MatX eig plans are retained across matching configurations instead of being cleared each tick; existing live markers and stop-time retirement remain. Plan workspaces can persist until eviction/stop.
 
 **`[live]` cost.** Scalar overrides are cheap; `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the pair, rebuilds the smoothing plan, and (auto URA) re-uploads the invariance tables on the tick it arrives. The Graph harness isolates all five live inputs.
 
