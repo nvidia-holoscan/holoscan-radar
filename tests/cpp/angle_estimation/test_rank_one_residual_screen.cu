@@ -11,6 +11,9 @@
 #include <cstdint>
 #include <type_traits>
 #include <memory>
+#include <limits>
+#include <chrono>
+#include <cstddef>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -21,6 +24,9 @@
 #include "angle_estimation/rank_one_residual_screen_op/rank_one_residual_screen_op.hpp"
 #include "angle_estimation/rank_one_residual_screen_op/rank_one_residual_screen_stage.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
+#include "radar_common/descriptors/array_geometry.hpp"
+#include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
@@ -393,6 +399,167 @@ TEST(RankOneResidualScreenOpTest, RejectsCapturedExtentOverflow) {
                                {make_graph_baseline<double>(2, 0.0)}, std::move(params), extents);
   EXPECT_FALSE(result.ok());
   EXPECT_FALSE(result.diagnostics().empty());
+}
+
+template <typename T>
+class RankOneHoistedWeights : public ::testing::Test {};
+using RankOneHoistedWeightTypes = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(RankOneHoistedWeights, RankOneHoistedWeightTypes);
+
+TYPED_TEST(RankOneHoistedWeights, CurrentAnglesLiveWavelengthAndInvalidRecoveryPreserveFivePorts) {
+  using T = TypeParam;
+  using Op = holoscan::radar::RankOneResidualScreenOp<T>;
+  constexpr int64_t items = 5;
+  constexpr int64_t channels = 4;
+  constexpr int64_t looks = 3;
+  holoscan::radar::ArrayGeometry geometry;
+  geometry.wavelength = 1.0;
+  geometry.geometry_type = holoscan::radar::ArrayGeometryType::kConformal;
+  geometry.element_positions = {0.0, 0.0, 0.0, 0.1, 0.5, 0.0, 0.0, 1.0, 0.15, -0.1, 1.5, 0.25};
+  auto alternate = geometry;
+  alternate.wavelength = 0.6;
+  holoscan::radar::RankOneResidualScreenParams params;
+  params.array_geometry = geometry;
+  params.residual_threshold = 0.5;
+  holoscan::radar::MaxTensorExtents extents;
+  extents.max_items = items;
+  extents.max_channels = channels;
+  extents.max_snapshots = looks;
+  auto fixture = holoscan::testing::create_operator_test<Op>(extents);
+  fixture.set_params(params);
+  std::vector<std::vector<cuda::std::complex<T>>> values;
+  std::vector<std::vector<uint8_t>> validity;
+  std::vector<std::shared_ptr<holoscan::Tensor>> snapshots, baselines, masks;
+  for (int tick = 0; tick < 3; ++tick) {
+    const auto& effective = tick == 1 ? alternate : geometry;
+    const T az = static_cast<T>(tick == 1 ? -0.4 : 0.3);
+    const T el = static_cast<T>(tick == 1 ? 0.1 : 0.2);
+    std::vector<T> angles(static_cast<size_t>(items * 2));
+    for (int64_t row = 0; row < items; ++row) {
+      angles[static_cast<size_t>(2 * row)] = az;
+      angles[static_cast<size_t>(2 * row + 1)] = el;
+    }
+    if (tick == 0)
+      angles[6] = std::numeric_limits<T>::quiet_NaN();
+    values.emplace_back(static_cast<size_t>(items * channels * looks));
+    validity.emplace_back(static_cast<size_t>(items * looks), uint8_t{1});
+    // Row0 is an analytic rank-one plane wave at the current nonzero direction.
+    const double x = std::cos(static_cast<double>(el)) * std::cos(static_cast<double>(az));
+    const double y = std::cos(static_cast<double>(el)) * std::sin(static_cast<double>(az));
+    const double z = std::sin(static_cast<double>(el));
+    for (int64_t channel = 0; channel < channels; ++channel) {
+      const auto offset = static_cast<size_t>(channel * 3);
+      const double phase =
+          holoscan::radar::kTwoPi / effective.wavelength *
+          (effective.element_positions[offset] * x + effective.element_positions[offset + 1] * y +
+           effective.element_positions[offset + 2] * z);
+      for (int64_t look = 0; look < looks; ++look) {
+        values.back()[static_cast<size_t>(channel * looks + look)] = {
+            static_cast<T>(std::cos(phase)), static_cast<T>(std::sin(phase))};
+      }
+    }
+    // Single-channel impulses have residual1-1/C=.75 at every finite baseline.
+    // Distinct signed markers preserve packed values, including masked look payload.
+    for (const int64_t row : {int64_t{1}, int64_t{3}, int64_t{4}}) {
+      for (int64_t look = 0; look < looks; ++look) {
+        const T marker = static_cast<T>((tick + 1) * (row + 1) * (look + 1));
+        values.back()[static_cast<size_t>(row * channels * looks + look)] = {marker, -marker};
+      }
+    }
+    // Row2 has zero energy; row4 has no valid looks despite nonzero input.
+    validity.back()[4] = 0;
+    for (int64_t look = 0; look < looks; ++look)
+      validity.back()[12 + look] = 0;
+    snapshots.push_back(holoscan::radar::testing::to_device_tensor(
+        values.back(), {items, channels, looks}, holoscan::radar::complex_dtype<T>()));
+    baselines.push_back(holoscan::radar::testing::to_device_tensor(
+        angles, {items, 2}, holoscan::radar::real_dtype<T>()));
+    masks.push_back(holoscan::radar::testing::to_device_tensor(validity.back(), {items, looks},
+                                                               DLDataType{kDLUInt, 8U, 1U}));
+    const auto stamp = std::chrono::milliseconds{100 * (tick + 1)};
+    if (tick == 1) {
+      fixture.push_frame(holoscan::testing::frame_at(
+          stamp, holoscan::testing::input("array_geometry", holoscan::radar::to_wire(alternate)),
+          holoscan::testing::input("is_valid", *masks.back()),
+          holoscan::testing::input("snapshot", *snapshots.back()),
+          holoscan::testing::input("baseline_aoa", *baselines.back())));
+    } else {
+      fixture.push_frame(
+          holoscan::testing::frame_at(stamp, holoscan::testing::input("is_valid", *masks.back()),
+                                      holoscan::testing::input("snapshot", *snapshots.back()),
+                                      holoscan::testing::input("baseline_aoa", *baselines.back())));
+    }
+  }
+  constexpr std::size_t kMaximumBytes = 1024U * 1024U;
+  for (const char* port :
+       {"residual_score", "selection_mask", "selected_idx", "snapshot_out", "is_valid_out"}) {
+    fixture.template capture_snapshot<holoscan::Tensor>(port, 3U, kMaximumBytes);
+    fixture.output_device(port, holoscan::DeviceId{0});
+  }
+  for (const char* port : {"snapshot", "baseline_aoa", "is_valid"}) {
+    fixture.input_source_device(port, holoscan::DeviceId{0});
+  }
+  auto running =
+      fixture.run_async({.expect_stop = true, .frames = holoscan::testing::FrameRelease::kManual});
+  for (std::size_t count = 1; count <= 3; ++count) {
+    const auto released = running.release_frame(std::chrono::seconds{5});
+    ASSERT_TRUE(released) << released.error().message;
+    for (const char* port :
+         {"residual_score", "selection_mask", "selected_idx", "snapshot_out", "is_valid_out"}) {
+      ASSERT_TRUE(running.wait_for_output(port, count, std::chrono::seconds{5}));
+    }
+  }
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const double tolerance = std::is_same_v<T, float> ? 1e-5 : 1e-12;
+  const auto scores = result.template snapshots<holoscan::Tensor>("residual_score");
+  const auto selections = result.template snapshots<holoscan::Tensor>("selection_mask");
+  const auto indices = result.template snapshots<holoscan::Tensor>("selected_idx");
+  const auto packed = result.template snapshots<holoscan::Tensor>("snapshot_out");
+  const auto packed_masks = result.template snapshots<holoscan::Tensor>("is_valid_out");
+  ASSERT_EQ(scores.size(), 3U);
+  ASSERT_EQ(selections.size(), 3U);
+  ASSERT_EQ(indices.size(), 3U);
+  ASSERT_EQ(packed.size(), 3U);
+  ASSERT_EQ(packed_masks.size(), 3U);
+  for (size_t tick = 0; tick < 3; ++tick) {
+    const auto score = holoscan::radar::testing::to_host(scores[tick]);
+    const auto selected = holoscan::radar::testing::to_host(selections[tick]);
+    const auto idx = holoscan::radar::testing::to_host(indices[tick]);
+    const auto data = holoscan::radar::testing::to_host(packed[tick]);
+    const auto mask = holoscan::radar::testing::to_host(packed_masks[tick]);
+    const int64_t count = tick == 0 ? 1 : 2;
+    ASSERT_EQ(score.shape, (std::vector<int64_t>{items}));
+    ASSERT_EQ(selected.shape, (std::vector<int64_t>{items}));
+    ASSERT_EQ(idx.shape, (std::vector<int64_t>{count}));
+    ASSERT_EQ(data.shape, (std::vector<int64_t>{count, channels, looks}));
+    ASSERT_EQ(mask.shape, (std::vector<int64_t>{count, looks}));
+    EXPECT_NEAR(score.template as<T>()[0], 0.0, tolerance);
+    EXPECT_NEAR(score.template as<T>()[1], 0.75, tolerance);
+    EXPECT_TRUE(std::isnan(score.template as<T>()[2]));
+    EXPECT_TRUE(std::isnan(score.template as<T>()[4]));
+    if (tick == 0)
+      EXPECT_TRUE(std::isnan(score.template as<T>()[3]));
+    else
+      EXPECT_NEAR(score.template as<T>()[3], 0.75, tolerance);
+    for (int64_t row = 0; row < items; ++row) {
+      EXPECT_EQ(selected.template as<uint8_t>()[row],
+                static_cast<uint8_t>(row == 1 || (tick != 0 && row == 3)));
+    }
+    for (int64_t dest = 0; dest < count; ++dest) {
+      const int64_t source = dest == 0 ? 1 : 3;
+      EXPECT_EQ(idx.template as<int64_t>()[dest], source);
+      for (int64_t element = 0; element < channels * looks; ++element) {
+        EXPECT_EQ(data.template as<cuda::std::complex<T>>()[dest * channels * looks + element],
+                  values[tick][static_cast<size_t>(source * channels * looks + element)]);
+      }
+      for (int64_t look = 0; look < looks; ++look) {
+        EXPECT_EQ(mask.template as<uint8_t>()[dest * looks + look],
+                  validity[tick][static_cast<size_t>(source * looks + look)]);
+      }
+    }
+  }
 }
 
 }  // namespace
