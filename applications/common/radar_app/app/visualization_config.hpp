@@ -26,7 +26,8 @@ struct VisualizationConfig {
   int64_t noise_sample_limit{2048};
   int64_t noise_range_half_width{3};
   int64_t noise_doppler_half_width{3};
-  double noise_floor_sigma{2.0};
+  double noise_sigma{2.0};
+  double noise_headroom_db{0.0};
   double range_doppler_width_percent{45.0};
   double detection_radius{0.010};
   int64_t history_frames{120};
@@ -36,11 +37,12 @@ struct VisualizationConfig {
   void validate_layout() const {
     if (noise_sample_limit < 64 || noise_sample_limit > 65536 || noise_range_half_width < 0 ||
         noise_range_half_width > 64 || noise_doppler_half_width < 0 ||
-        noise_doppler_half_width > 64 || !std::isfinite(noise_floor_sigma) ||
-        noise_floor_sigma < 0.0 || noise_floor_sigma > 10.0) {
+        noise_doppler_half_width > 64 || !std::isfinite(noise_sigma) || noise_sigma < 0.0 ||
+        noise_sigma > 10.0 || !std::isfinite(static_cast<float>(noise_headroom_db)) ||
+        noise_headroom_db < 0.0) {
       throw std::runtime_error(
           "app.visualization: invalid noise scaling settings "
-          "(samples 64..65536, half-widths 0..64, sigma 0..10)");
+          "(samples 64..65536, half-widths 0..64, sigma 0..10, headroom finite and nonnegative)");
     }
     if (!std::isfinite(range_doppler_width_percent) || range_doppler_width_percent < 25.0 ||
         range_doppler_width_percent > 70.0) {
@@ -77,7 +79,8 @@ struct ConfigCodec<radar::app::VisualizationConfig>
       defaulted_object_field("noise_sample_limit", &Config::noise_sample_limit),
       defaulted_object_field("noise_range_half_width", &Config::noise_range_half_width),
       defaulted_object_field("noise_doppler_half_width", &Config::noise_doppler_half_width),
-      defaulted_object_field("noise_floor_sigma", &Config::noise_floor_sigma),
+      defaulted_object_field("noise_sigma", &Config::noise_sigma),
+      defaulted_object_field("noise_headroom_db", &Config::noise_headroom_db),
       defaulted_object_field("range_doppler_width_percent", &Config::range_doppler_width_percent),
       defaulted_object_field("detection_radius", &Config::detection_radius),
       defaulted_object_field("history_frames", &Config::history_frames),

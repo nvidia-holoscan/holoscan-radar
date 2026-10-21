@@ -151,16 +151,18 @@ TEST(FmcwMimoConfig, DecodesBackgroundScalingAndRejectsInvalidSettings) {
       "mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
       "display_rate_hz: 20.0\n        noise_scaling: false\n        noise_sample_limit: 512"
       "\n        noise_range_half_width: 2\n        noise_doppler_half_width: 4"
-      "\n        noise_floor_sigma: 1.5");
+      "\n        noise_sigma: 1.5\n        noise_headroom_db: 12.5");
   const auto config = mimo::load_tdm_config(file.path());
   EXPECT_FALSE(config.visualization.noise_scaling);
   EXPECT_EQ(config.visualization.noise_sample_limit, 512);
   EXPECT_EQ(config.visualization.noise_range_half_width, 2);
   EXPECT_EQ(config.visualization.noise_doppler_half_width, 4);
-  EXPECT_DOUBLE_EQ(config.visualization.noise_floor_sigma, 1.5);
+  EXPECT_DOUBLE_EQ(config.visualization.noise_sigma, 1.5);
+  EXPECT_DOUBLE_EQ(config.visualization.noise_headroom_db, 12.5);
   for (const auto* setting :
        {"noise_sample_limit: 63", "noise_sample_limit: 65537", "noise_range_half_width: -1",
-        "noise_doppler_half_width: 65", "noise_floor_sigma: .nan", "noise_floor_sigma: 10.1"}) {
+        "noise_doppler_half_width: 65", "noise_sigma: .nan", "noise_sigma: 10.1",
+        "noise_headroom_db: -0.1", "noise_headroom_db: .nan", "noise_headroom_db: .inf"}) {
     SCOPED_TRACE(setting);
     const MutatedConfig invalid("mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
                                 std::string("display_rate_hz: 20.0\n        ") + setting);

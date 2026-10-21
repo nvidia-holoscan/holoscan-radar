@@ -69,11 +69,11 @@ struct BackgroundStatistics {
 std::optional<BackgroundStatistics> background_statistics(const std::vector<float>& samples_db);
 
 struct BackgroundScaleState {
-  std::optional<float> floor_db;
+  std::optional<std::array<float, 2>> noise_limits_db;
   std::optional<std::int64_t> last_valid_ns;
 
   std::array<float, 2> limits(const std::optional<BackgroundStatistics>& background,
-                              float peak_power, float span_db, float floor_sigma,
+                              float peak_power, float span_db, float sigma, float headroom_db,
                               std::int64_t now_ns);
 };
 
@@ -87,7 +87,8 @@ struct FmcwDashboardConfig {
   std::int64_t noise_sample_limit{2048};
   std::int64_t noise_range_half_width{3};
   std::int64_t noise_doppler_half_width{3};
-  double noise_floor_sigma{2.0};
+  double noise_sigma{2.0};
+  double noise_headroom_db{0.0};
   double range_doppler_width_percent{45.0};
   float detection_radius{0.010F};
   double frame_period{0.1};

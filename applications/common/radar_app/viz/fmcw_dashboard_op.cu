@@ -949,8 +949,9 @@ FmcwDashboardOp::FmcwDashboardOp(FmcwDashboardConfig config) : config_(std::move
   if (config_.noise_sample_limit < 64 || config_.noise_sample_limit > 65536 ||
       config_.noise_range_half_width < 0 || config_.noise_range_half_width > 64 ||
       config_.noise_doppler_half_width < 0 || config_.noise_doppler_half_width > 64 ||
-      !std::isfinite(config_.noise_floor_sigma) || config_.noise_floor_sigma < 0.0 ||
-      config_.noise_floor_sigma > 10.0) {
+      !std::isfinite(config_.noise_sigma) || config_.noise_sigma < 0.0 ||
+      config_.noise_sigma > 10.0 || !std::isfinite(static_cast<float>(config_.noise_headroom_db)) ||
+      config_.noise_headroom_db < 0.0) {
     throw std::invalid_argument("FmcwDashboardOp: invalid background sampling settings");
   }
   if (config_.noise_scaling) {
@@ -1161,9 +1162,10 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
     return cuda_failure(kWho, "annotation input synchronization");
   }
 
-  const auto power_limits = noise_scale_.limits(
-      detail::background_statistics(background_samples), host_peak, config_.dynamic_range_db,
-      static_cast<float>(config_.noise_floor_sigma), render_time.timestamp_ns);
+  const auto power_limits =
+      noise_scale_.limits(detail::background_statistics(background_samples), host_peak,
+                          config_.dynamic_range_db, static_cast<float>(config_.noise_sigma),
+                          static_cast<float>(config_.noise_headroom_db), render_time.timestamp_ns);
   AnnotationCanvas host_annotation;
   try {
     std::vector<DetectionMarker> markers;
@@ -1275,20 +1277,30 @@ std::optional<BackgroundStatistics> background_statistics(const std::vector<floa
 
 std::array<float, 2> BackgroundScaleState::limits(
     const std::optional<BackgroundStatistics>& background, float peak_power, float span_db,
-    float floor_sigma, std::int64_t now_ns) {
+    float sigma, float headroom_db, std::int64_t now_ns) {
   if (background) {
-    const float target = background->mean_db - floor_sigma * background->stddev_db;
+    const float offset = sigma * background->stddev_db;
+    std::array<float, 2> target{background->mean_db - offset,
+                                background->mean_db + offset + headroom_db};
+    // Flat backgrounds or sigma=0 must still yield a finite, nonzero color span.
+    if (target[1] - target[0] < 0.1F) {
+      const float center = 0.5F * (target[0] + target[1]);
+      target = {center - 0.05F, center + 0.05F};
+    }
     const double elapsed = last_valid_ns ? std::max<std::int64_t>(0, now_ns - *last_valid_ns) : 0;
     const float alpha = static_cast<float>(-std::expm1(-elapsed / 250000000.0));
-    floor_db = floor_db && last_valid_ns && elapsed <= 1000000000.0
-                   ? *floor_db + alpha * (target - *floor_db)
-                   : target;
+    if (noise_limits_db && last_valid_ns && elapsed <= 1000000000.0) {
+      for (std::size_t i = 0; i < target.size(); ++i) {
+        target[i] = (*noise_limits_db)[i] + alpha * (target[i] - (*noise_limits_db)[i]);
+      }
+    }
+    noise_limits_db = target;
     last_valid_ns = now_ns;
   }
-  if (floor_db && last_valid_ns && now_ns - *last_valid_ns <= 1000000000) {
-    return {*floor_db, *floor_db + span_db};
+  if (noise_limits_db && last_valid_ns && now_ns - *last_valid_ns <= 1000000000) {
+    return *noise_limits_db;
   }
-  floor_db.reset();
+  noise_limits_db.reset();
   const float upper =
       std::isfinite(peak_power) && peak_power > 0.0F ? 10.0F * std::log10(peak_power) : 0.0F;
   return {upper - span_db, upper};

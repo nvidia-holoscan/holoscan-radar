@@ -104,7 +104,8 @@ viz::FmcwDashboardConfig dashboard_config(const Config& cfg, std::string title, 
   result.noise_sample_limit = cfg.visualization.noise_sample_limit;
   result.noise_range_half_width = cfg.visualization.noise_range_half_width;
   result.noise_doppler_half_width = cfg.visualization.noise_doppler_half_width;
-  result.noise_floor_sigma = cfg.visualization.noise_floor_sigma;
+  result.noise_sigma = cfg.visualization.noise_sigma;
+  result.noise_headroom_db = cfg.visualization.noise_headroom_db;
   result.range_doppler_width_percent = cfg.visualization.range_doppler_width_percent;
   result.detection_radius = static_cast<float>(cfg.visualization.detection_radius);
   result.frame_period = cfg.frame_period;

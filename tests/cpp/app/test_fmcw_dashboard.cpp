@@ -311,7 +311,7 @@ TEST_P(FmcwDashboardBackgroundTest, MasksDetectionCrossesAndProjectsLeadingPlane
         text.data.data() + offset + holoscan::visualization::kTextRunHeaderBytes));
   }
   EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "14.0" : "17.0"), labels.end());
-  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "74.0 dB" : "77.0 dB"),
+  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "26.0 dB" : "29.0 dB"),
             labels.end());
 }
 
@@ -336,17 +336,47 @@ TEST(FmcwDashboardBackgroundStatsTest, EstimatesDbMomentsAndRejectsOutliers) {
 TEST(FmcwDashboardBackgroundStatsTest, SmoothsHoldsAndExpiresToPeakFallback) {
   viz::detail::BackgroundScaleState state;
   const viz::detail::BackgroundStatistics background{20.0F, 1.0F, 256};
-  EXPECT_EQ(state.limits(std::nullopt, 100.0F, 60.0F, 2.0F, 0),
+  EXPECT_EQ(state.limits(std::nullopt, 100.0F, 60.0F, 2.0F, 0.0F, 0),
             (std::array<float, 2>{-40.0F, 20.0F}));
-  EXPECT_EQ(state.limits(background, 1e12F, 60.0F, 2.0F, 0), (std::array<float, 2>{18.0F, 78.0F}));
+  EXPECT_EQ(state.limits(background, 1e12F, 60.0F, 2.0F, 0.0F, 0),
+            (std::array<float, 2>{18.0F, 22.0F}));
   const auto moved = state.limits(viz::detail::BackgroundStatistics{30.0F, 1.0F, 256}, 1e12F, 60.0F,
-                                  2.0F, 250000000);
+                                  2.0F, 0.0F, 250000000);
   EXPECT_NEAR(moved[0], 18.0F + 10.0F * (1.0F - std::exp(-1.0F)), 1e-5F);
-  EXPECT_EQ(state.limits(std::nullopt, 1e12F, 60.0F, 2.0F, 750000000), moved);
-  EXPECT_EQ(state.limits(std::nullopt, 100.0F, 60.0F, 2.0F, 1250000001),
+  EXPECT_NEAR(moved[1], 22.0F + 10.0F * (1.0F - std::exp(-1.0F)), 1e-5F);
+  EXPECT_EQ(state.limits(std::nullopt, 1e12F, 60.0F, 2.0F, 0.0F, 750000000), moved);
+  EXPECT_EQ(state.limits(std::nullopt, 100.0F, 60.0F, 2.0F, 0.0F, 1250000001),
             (std::array<float, 2>{-40.0F, 20.0F}));
-  EXPECT_EQ(state.limits(std::nullopt, 0.0F, 60.0F, 2.0F, 1500000000),
+  EXPECT_EQ(state.limits(std::nullopt, 0.0F, 60.0F, 2.0F, 0.0F, 1500000000),
             (std::array<float, 2>{-60.0F, 0.0F}));
+}
+
+TEST(FmcwDashboardBackgroundStatsTest, UsesSymmetricSigmaBandAndUpperOnlyHeadroom) {
+  const viz::detail::BackgroundStatistics background{20.0F, 3.0F, 256};
+  viz::detail::BackgroundScaleState symmetric;
+  EXPECT_EQ(symmetric.limits(background, 1e12F, 60.0F, 2.0F, 0.0F, 0),
+            (std::array<float, 2>{14.0F, 26.0F}));
+  viz::detail::BackgroundScaleState headroom;
+  EXPECT_EQ(headroom.limits(background, 1e12F, 60.0F, 2.0F, 12.0F, 0),
+            (std::array<float, 2>{14.0F, 38.0F}));
+  viz::detail::BackgroundScaleState narrower;
+  EXPECT_EQ(narrower.limits(background, 1e12F, 60.0F, 1.0F, 0.0F, 0),
+            (std::array<float, 2>{17.0F, 23.0F}));
+}
+
+TEST(FmcwDashboardBackgroundStatsTest, KeepsFlatBackgroundAndZeroSigmaLimitsFinite) {
+  for (const float deviation : {0.0F, 3.0F}) {
+    viz::detail::BackgroundScaleState state;
+    const auto limits = state.limits(viz::detail::BackgroundStatistics{20.0F, deviation, 256},
+                                     1e12F, 60.0F, 0.0F, 0.0F, 0);
+    EXPECT_TRUE(std::isfinite(limits[0]) && std::isfinite(limits[1]));
+    EXPECT_NEAR(limits[1] - limits[0], 0.1F, 1e-5F);
+    EXPECT_NEAR(0.5F * (limits[0] + limits[1]), 20.0F, 1e-5F);
+  }
+  viz::detail::BackgroundScaleState headroom;
+  EXPECT_EQ(headroom.limits(viz::detail::BackgroundStatistics{20.0F, 0.0F, 256}, 1e12F, 60.0F, 2.0F,
+                            12.0F, 0),
+            (std::array<float, 2>{20.0F, 32.0F}));
 }
 
 TEST(FmcwDashboardTextTest, EncodesNativeSdkRowsWithOwnedTextAndPixelPositions) {

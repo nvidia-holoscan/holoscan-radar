@@ -9,13 +9,19 @@ and the number of displayed markers (cluster representatives in clustered workfl
 
 The power map uses a sequential viridis palette and noise-anchored limits by
 default. A bounded sample estimates the mean and standard deviation of background
-power in dB. The lower endpoint is `mean_db - noise_floor_sigma * stddev_db`;
-the upper endpoint is `dynamic_range_db` above it. The image and colorbar use
-exactly the same limits; strong targets can saturate at the upper endpoint.
-These are dB relative to one input power unit, not calibrated dBm or a CFAR
-threshold. The floor sits below the background mean so typical noise samples
-retain color variation. A wide span can still make that variation subtle; reducing
-`dynamic_range_db` emphasizes noise texture while saturating stronger returns.
+power in dB. The endpoints are:
+
+```text
+lower = mean_db - noise_sigma * stddev_db
+upper = mean_db + noise_sigma * stddev_db + noise_headroom_db
+```
+
+The default is mean plus/minus two standard deviations, with zero additional
+dB above the upper bound. Both limits are smoothed together, and the image
+and colorbar use the same limits. This narrow window reveals background
+texture; strong targets saturate at the upper endpoint. Increase
+`noise_headroom_db` to show more of their power range. These are dB relative
+to one input power unit, not calibrated dBm or a CFAR threshold.
 Dense angle cubes use the same maximum
 projection across leading axes for sampling and display.
 
@@ -26,8 +32,9 @@ app:
     noise_sample_limit: 2048
     noise_range_half_width: 3
     noise_doppler_half_width: 3
-    noise_floor_sigma: 2.0
-    dynamic_range_db: 60.0
+    noise_sigma: 2.0
+    noise_headroom_db: 0.0
+    dynamic_range_db: 60.0  # Peak-relative fallback span only
 ```
 
 Each raw CFAR detection excludes a full range/Doppler cross: a horizontal strip
@@ -42,12 +49,16 @@ projection and detection-dependent censoring can bias it as a physical noise est
 
 At least `max(64, candidate_count / 16)` samples must survive both passes.
 Limits are smoothed with a 0.25 s time constant. A missing estimate holds the
-last valid floor for at most 1 s, then falls back to the current peak minus
+last valid pair of limits for at most 1 s, then falls back to the current peak minus
 `dynamic_range_db`. More than 4096 raw detections skips estimation and takes
 the same fallback path. With `noise_scaling: false`, peak-relative scaling is
 immediate. All-zero/invalid frames have finite fallback limits of `[-60, 0]`
 for the default span. Half-widths accept 0..64 bins, the sample cap 64..65536,
-and the sigma offset finite values in 0..10.
+and the sigma multiplier finite values in 0..10. Headroom must be finite,
+nonnegative, and representable as float32. A degenerate noise band (flat
+background or zero sigma) is widened symmetrically to at least 0.1 dB.
+`noise_sigma` replaces the earlier `noise_floor_sigma` setting and controls
+both endpoints; `dynamic_range_db` now applies only to peak-relative fallback.
 
 Sampling and the peak readback share the existing annotation input barrier,
 with no additional stream synchronization. Work is bounded by the candidate
@@ -71,8 +82,8 @@ The comparison toggled only `noise_scaling` on the same binary. Nsight Systems
 processed 100 frames each, excluding the first 20 frames and the final frame
 from timing (79 samples per run). Timing values below are medians of run medians.
 Operator wall times include synchronization and waiting; they are not CPU execution times.
-The subsequent visibility fix changes the scalar floor from mean plus the sigma
-offset to mean minus that offset; these measurements precede that correction.
+The later visibility and symmetric-band changes affect scalar limit placement;
+these timings precede those changes.
 
 | Metric | Peak scaling | Noise scaling |
 | --- | --- | --- |
