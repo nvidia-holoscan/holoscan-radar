@@ -641,7 +641,7 @@ void draw_history_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
     draw_line(image, width, height, plot.x, y, plot.x + plot.width - 1, y, kGrid);
 
     const float value = bounds[1] - fraction * (bounds[1] - bounds[0]);
-    const std::string y_label = format_value(value);
+    const std::string y_label = feature >= 2 ? format_degrees(value) : format_value(value);
     draw_text(image, width, height, plot.x - 4 - text_width(y_label, height), y - 3, y_label, 1);
 
     const double seconds =
@@ -806,9 +806,9 @@ AnnotationCanvas make_annotation(
                      {*velocity_bounds.first, *velocity_bounds.second}, history, frame_index,
                      config);
   if (config.show_angles) {
-    draw_history_panel(&image, width, height, layout.history_panels[2], "Azimuth (rad)", 2,
+    draw_history_panel(&image, width, height, layout.history_panels[2], "Azimuth (deg)", 2,
                        config.az_bounds, history, frame_index, config);
-    draw_history_panel(&image, width, height, layout.history_panels[3], "Elevation (rad)", 3,
+    draw_history_panel(&image, width, height, layout.history_panels[3], "Elevation (deg)", 3,
                        config.el_bounds, history, frame_index, config);
   }
   return image;

@@ -53,9 +53,9 @@ Samples outside the displayed range or azimuth bounds are omitted, and truth
 trails break when leaving the field of view. Wider scans retain the circular
 plan view. The projection is shared by the C++ and Python applications.
 
-The boresight plot displays azimuth and elevation ticks in degrees, as indicated
-in its title. This is a label conversion only: angle bounds, projections,
-detection/truth coordinates, and angle-history plots retain radians.
+The boresight and azimuth/elevation history plots display angle ticks in degrees,
+as indicated in their titles. This is a label conversion only: angle bounds,
+projections, and stored detection/truth coordinates retain radians.
 
 ## Native text and presentation
 
