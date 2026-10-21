@@ -68,7 +68,12 @@ target the configured window dimensions, with compact spacing below 540 px heigh
 Subplot titles are centered on their panels, with compact top insets and tighter
 spacing above the data; axis captions are centered on the plot area.
 Titles use brighter text than ticks and labels; supporting captions are muted.
-Axis gutters are compact, and label widths follow the selected text size.
+Axis gutters reserve separate rows for ticks and captions. Endpoint X labels
+stay within the plot width; vertical gutters keep centered Y labels clear of
+titles and bottom tick labels to avoid corner collisions. Cartesian axes use short inward ticks, with four unlabeled
+minor ticks between each pair of major ticks (one in compact layouts). Sector
+edges have matching minor range/azimuth marks. Minor ticks add no grid lines;
+label widths and tick density follow the selected canvas size.
 Dark panel backgrounds and subdued grids keep target accents prominent.
 `FmcwFrameComposerOp` uses the SDK's `CudaSinkDesc` to render text and the canvas
 into one CUDA-backed image before presentation. Resizing the window scales the

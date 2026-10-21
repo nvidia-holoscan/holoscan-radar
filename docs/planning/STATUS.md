@@ -4,6 +4,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 
 ## Where the project stands
 
+- **2026-10-21** â€” **FMCW axes have roomier gutters and minor ticks** on
+  `deustice/gui-updates`. Endpoint X labels stay within the plot width; centered
+  Y labels, bottom ticks, and captions have separate space. Short inward ticks
+  mark Cartesian axes and sector edges without adding minor grid lines; compact
+  canvases use fewer ticks. All 37 focused checks, nine GUI runs, the C++ MIMO TDM
+  run, matching captures, and full lint pass. DSP contracts are unchanged.
+
 - **2026-10-21** â€” **ASCII FMCW labels retained** on `deustice/gui-updates`.
   Removed the UTF-8/TrueType experiments and visualization-assessment scripts,
   report, and measurement data. The sector title is `Azimuth / range (deg)`;
@@ -382,6 +389,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 | PR 66 non-uniform non-cyclic nearest bin | Codex | `deustice/doppler-notch-axis-order` | **verified locally:** non-cyclic nearest-bin selection searches actual physical coordinates, supporting non-uniform axes in either direction. Both precision regressions fail before the fix; all 17 focused GPU unit/pipeline CTests pass afterward on HSDK 5 GA. PR 68 restacking also applies the corrected selection in its shared row-kernel gain helper; all 21 downstream GPU unit/pipeline CTests pass. Pinned all-file lint passes with Node 22 for markdownlint. |
 | MIMO TDM visualization resource assessment | Codex | `deustice/gui-updates` | **verified locally:** 12 resource runs / 1,800 report frames, four Nsight profiles, and a degree-symbol preview; current GUI and native SDK UTF-8/TrueType costs documented in `performance/reports/2026-10-21-mimo-tdm-visualization.md`. Production renderer unchanged; full lint passes. |
 | FMCW ASCII labels and experiment cleanup | Codex | `deustice/gui-updates` | **verified locally:** sector title units, boresight degree ticks, and removal of renderer/profiling experiments and reports. All 37 focused checks, nine GUI runs, C++ MIMO TDM, native ASCII captures, and full lint pass. |
+| FMCW axis gutters and minor ticks | Codex | `deustice/gui-updates` | **verified locally:** contained endpoint X labels, roomier gutters/caption rows, centered Y labels, and subtle minor ticks with lower compact-layout density. All 37 focused checks, nine GUI runs, C++ MIMO TDM, matching captures, and full lint pass. |
 | FMCW ASCII labels and experiment cleanup | Codex | `deustice/gui-updates` | **verified locally:** all angular plot labels use degrees; ASCII renderer and internal radian coordinates retained. Experiments removed. All 37 focused checks, MIMO TDM and compact GUI checks, C++ MIMO TDM, matching captures, and full lint pass. |
 | FMCW axis labels and power legend | Codex | `deustice/gui-updates` | **verified locally:** outside-edge meter labels, azimuth ticks, tighter titles, and same-frame dB limits. All 37 focused CTests including provider, nine GUI checks, C++ MIMO TDM, matched captures, and full lint pass. |
 | FMCW dashboard width and subtitle | Codex | `deustice/gui-updates` | **verified locally:** configurable range-Doppler width defaults to 45%, subtitle simplified; 64 focused tests, provider CTest, nine GUI checks, custom-width C++/Python runs, matched before/after captures, and full lint pass. |

@@ -282,6 +282,52 @@ void draw_centered_text(AnnotationCanvas* image, std::int64_t width, std::int64_
             1, color);
 }
 
+// Reserve enough room for endpoint labels and the separate axis caption row.
+PixelRect cartesian_plot_rect(const PixelRect& panel, std::int64_t height) {
+  const bool compact = height < 540;
+  return PixelRect{.x = panel.x + (compact ? 38 : 52),
+                   .y = panel.y + (compact ? 26 : 30),
+                   .width = panel.width - (compact ? 56 : 72),
+                   .height = panel.height - (compact ? 50 : 78)};
+}
+
+void draw_x_tick_label(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
+                       const PixelRect& plot, int x, std::string_view label) {
+  const int label_width = text_width(label, height);
+  const int left =
+      std::clamp(x - label_width / 2, plot.x, plot.x + std::max(0, plot.width - label_width));
+  draw_text(image, width, height, left, plot.y + plot.height + (height < 540 ? 6 : 8), label, 1);
+}
+
+void draw_y_tick_label(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
+                       const PixelRect& plot, int y, std::string_view label) {
+  const int label_height = static_cast<int>(std::ceil(text_size(height, 1)));
+  const int top = y - label_height / 2;
+  draw_text(image, width, height, plot.x - (height < 540 ? 6 : 8) - text_width(label, height), top,
+            label, 1);
+}
+
+void draw_axis_ticks(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
+                     const PixelRect& plot) {
+  constexpr std::array<std::uint8_t, 4> kMajor{72U, 93U, 120U, 255U};
+  constexpr std::array<std::uint8_t, 4> kMinor{48U, 64U, 84U, 255U};
+  const bool compact = height < 540;
+  const int divisions = compact ? 4 : 10;
+  const int right = plot.x + plot.width - 1;
+  const int bottom = plot.y + plot.height - 1;
+  for (int tick = 0; tick <= divisions; ++tick) {
+    const bool major = tick % (divisions / 2) == 0;
+    const int length = major ? (compact ? 3 : 5) : (compact ? 2 : 3);
+    const auto& color = major ? kMajor : kMinor;
+    const int x = plot.x + tick * (plot.width - 1) / divisions;
+    const int y = plot.y + tick * (plot.height - 1) / divisions;
+    draw_line(image, width, height, x, plot.y, x, plot.y + length, color);
+    draw_line(image, width, height, x, bottom - length, x, bottom, color);
+    draw_line(image, width, height, plot.x, y, plot.x + length, y, color);
+    draw_line(image, width, height, right - length, y, right, y, color);
+  }
+}
+
 struct DashboardLayout {
   PixelRect rd_plot;
   PixelRect azimuth_range_panel;
@@ -306,10 +352,10 @@ DashboardLayout make_dashboard_layout(std::int64_t width, std::int64_t height, b
 
   DashboardLayout result;
   result.rd_plot = PixelRect{
-      .x = compact ? 54 : 64,
+      .x = compact ? 60 : 72,
       .y = compact ? 60 : 92,
-      .width = rd_right - (compact ? 62 : 72),
-      .height = canvas_height - (compact ? 116 : 152),
+      .width = rd_right - (compact ? 68 : 80),
+      .height = canvas_height - (compact ? 122 : 160),
   };
   const int panel_width = (side_width - gap) / 2;
   const int panel_top = compact ? 54 : 72;
@@ -431,18 +477,17 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
   fill_rect(image, width, height, panel, kBackground);
   const bool is_polar = view == SpatialView::kAzimuthRange;
   const bool compact = height < 540;
-  const PixelRect plot{
-      .x = panel.x + (is_polar ? (compact ? 38 : 50) : (compact ? 32 : 44)),
-      .y = panel.y + (is_polar ? (compact ? 30 : 38) : (compact ? 24 : 26)),
-      .width = panel.width - (is_polar ? (compact ? 50 : 66) : (compact ? 44 : 56)),
-      .height = panel.height - (is_polar ? (compact ? 46 : 56) : (compact ? 44 : 58)),
-  };
+  const PixelRect plot = is_polar ? PixelRect{.x = panel.x + (compact ? 42 : 54),
+                                              .y = panel.y + (compact ? 32 : 42),
+                                              .width = panel.width - (compact ? 58 : 74),
+                                              .height = panel.height - (compact ? 50 : 64)}
+                                  : cartesian_plot_rect(panel, height);
   if (plot.width <= 1 || plot.height <= 1) {
     return;
   }
   draw_centered_text(image, width, height, panel, panel.y + (height < 540 ? 5 : 6), title);
   if (!is_polar && !compact) {
-    draw_centered_text(image, width, height, plot, plot.y + plot.height + 18, "Azimuth",
+    draw_centered_text(image, width, height, plot, plot.y + plot.height + 25, "Azimuth",
                        detail::kDashboardTextSecondary);
   }
 
@@ -485,7 +530,7 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
         char range_label[32];
         std::snprintf(range_label, sizeof(range_label), "%.0f m",
                       static_cast<double>(fraction * max_range));
-        draw_text(image, width, height, label[0] - text_width(range_label, height) - 5,
+        draw_text(image, width, height, label[0] - text_width(range_label, height) - 7,
                   label[1] - (compact ? 4 : 5), range_label, 1, detail::kDashboardTextSecondary);
       }
       const auto origin = *sector_pixel(0.0F, display_center_azimuth);
@@ -505,6 +550,26 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
         const int offset = static_cast<int>(fraction * text_width(label, height));
         draw_text(image, width, height, x - offset, plot.y - (compact ? 13 : 16), label, 1,
                   detail::kDashboardTextSecondary);
+      }
+      // Minor marks follow the same sector projection as the grid and data.
+      constexpr std::array<std::uint8_t, 4> kMinor{48U, 64U, 84U, 255U};
+      const int divisions = compact ? 4 : 10;
+      const float inset = (compact ? 2.0F : 3.0F) / (plot.height - 1);
+      for (int tick = 1; tick < divisions; ++tick) {
+        if (tick == divisions / 2)
+          continue;
+        const float azimuth =
+            std::lerp(config.az_bounds[0], config.az_bounds[1], tick / float(divisions));
+        const auto edge = *sector_pixel(1.0F, azimuth);
+        const auto inner = *sector_pixel(1.0F - inset, azimuth);
+        draw_line(image, width, height, edge[0], edge[1], inner[0], inner[1], kMinor);
+      }
+      for (int ring = 0; ring < ring_count; ++ring) {
+        const float fraction = (ring + 0.5F) / ring_count;
+        const auto left = *sector_pixel(fraction, config.az_bounds[0]);
+        const auto right = *sector_pixel(fraction, config.az_bounds[1]);
+        draw_line(image, width, height, left[0], left[1], left[0] + 3, left[1], kMinor);
+        draw_line(image, width, height, right[0] - 3, right[1], right[0], right[1], kMinor);
       }
       const float aspect =
           0.5F * (plot.width - 1) / (std::sin(display_half_span) * (plot.height - 1));
@@ -536,10 +601,10 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
                                             fraction * (config.az_bounds[1] - config.az_bounds[0]));
       const std::string el = format_degrees(config.el_bounds[1] -
                                             fraction * (config.el_bounds[1] - config.el_bounds[0]));
-      draw_text(image, width, height, x - text_width(az, height) / 2, plot.y + plot.height + 5, az,
-                1);
-      draw_text(image, width, height, plot.x - 6 - text_width(el, height), y - 6, el, 1);
+      draw_x_tick_label(image, width, height, plot, x, az);
+      draw_y_tick_label(image, width, height, plot, y, el);
     }
+    draw_axis_ticks(image, width, height, plot);
   }
 
   const auto to_pixel =
@@ -622,12 +687,7 @@ void draw_history_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
   constexpr std::array<std::uint8_t, 4> kGrid{34U, 47U, 65U, 255U};
   fill_rect(image, width, height, panel, kBackground);
 
-  const PixelRect plot{
-      .x = panel.x + (height < 540 ? 32 : 44),
-      .y = panel.y + (height < 540 ? 24 : 26),
-      .width = panel.width - (height < 540 ? 44 : 56),
-      .height = panel.height - (height < 540 ? 44 : 58),
-  };
+  const PixelRect plot = cartesian_plot_rect(panel, height);
   if (plot.width <= 1 || plot.height <= 1) {
     return;
   }
@@ -642,17 +702,17 @@ void draw_history_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
 
     const float value = bounds[1] - fraction * (bounds[1] - bounds[0]);
     const std::string y_label = feature >= 2 ? format_degrees(value) : format_value(value);
-    draw_text(image, width, height, plot.x - 4 - text_width(y_label, height), y - 3, y_label, 1);
+    draw_y_tick_label(image, width, height, plot, y, y_label);
 
     const double seconds =
         -(1.0 - fraction) * static_cast<double>(config.history_frames - 1) * config.frame_period;
     const std::string x_label = format_value(static_cast<float>(seconds));
-    draw_text(image, width, height, x - text_width(x_label, height) / 2, plot.y + plot.height + 5,
-              x_label, 1);
+    draw_x_tick_label(image, width, height, plot, x, x_label);
   }
 
+  draw_axis_ticks(image, width, height, plot);
   if (height >= 540) {
-    draw_centered_text(image, width, height, plot, plot.y + plot.height + 19, "Time (s)",
+    draw_centered_text(image, width, height, plot, plot.y + plot.height + 25, "Time (s)",
                        detail::kDashboardTextSecondary);
   }
 
@@ -731,7 +791,7 @@ AnnotationCanvas make_annotation(
             detail::kDashboardTextMuted);
   constexpr std::string_view kDopplerLabel = "Velocity (m/s)";
   draw_text(&image, width, height, plot.x + (plot.width - text_width(kDopplerLabel, height)) / 2,
-            plot.y + plot.height + (height < 540 ? 16 : 21), kDopplerLabel, 1);
+            plot.y + plot.height + (height < 540 ? 21 : 25), kDopplerLabel, 1);
   draw_text(&image, width, height, plot.x, plot.y - (height < 540 ? 15 : 20), "Range (m)", 1);
 
   // Show the same moving power window used by the per-frame peak normalization.
@@ -761,18 +821,17 @@ AnnotationCanvas make_annotation(
   for (std::size_t i = 0; i < x_positions.size(); ++i) {
     const std::string tick = format_value(
         velocities[reverse_velocity ? velocities.size() - 1U - x_indices[i] : x_indices[i]]);
-    draw_text(&image, width, height, x_positions[i] - text_width(tick, height) / 2,
-              plot.y + plot.height + 5, tick, 1);
+    draw_x_tick_label(&image, width, height, plot, x_positions[i], tick);
   }
   const std::array<std::int64_t, 3> y_positions{plot.y, plot.y + plot.height / 2,
-                                                plot.y + plot.height - 7};
+                                                plot.y + plot.height - 1};
   const std::array<std::size_t, 3> y_indices{ranges.size() - 1U, ranges.size() / 2U, 0U};
   for (std::size_t i = 0; i < y_positions.size(); ++i) {
     const std::string tick = format_value(ranges[y_indices[i]]);
-    draw_text(&image, width, height, plot.x - 4 - text_width(tick, height), y_positions[i], tick,
-              1);
+    draw_y_tick_label(&image, width, height, plot, y_positions[i], tick);
   }
 
+  draw_axis_ticks(&image, width, height, plot);
   constexpr std::array<std::uint8_t, 4> kBlack{0U, 0U, 0U, 255U};
   for (const DetectionMarker& marker : markers) {
     const auto& color =
