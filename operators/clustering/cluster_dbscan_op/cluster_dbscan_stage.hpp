@@ -119,11 +119,13 @@ __global__ void cc_step_kernel(const T* __restrict__ points, const T* __restrict
     if (j == i || is_core[j] == 0) {
       continue;
     }
+    const int64_t lj = cc_in[j];
+    // This snapshot label cannot improve the current minimum, regardless of distance.
+    if (lj >= m) {
+      continue;
+    }
     if (dbscan_neighbor<T>(pi, points + j * f, eps_inv2, f)) {
-      const int64_t lj = cc_in[j];
-      if (lj < m) {
-        m = lj;
-      }
+      m = lj;
     }
   }
   cc_out[i] = m;

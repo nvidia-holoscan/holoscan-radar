@@ -300,6 +300,37 @@ TEST(ClusterDBSCANOpTest, DefaultMinPointsIsTwiceNumFeatures) {
   EXPECT_EQ(out.sizes.shape[0], 0);
 }
 
+TYPED_TEST(DbscanCoreThresholdBoundary, ShuffledEqualChainsPreserveRootTiesAndNoise) {
+  using T = TypeParam;
+  // Binary-exact spacing creates two multihop chains, interleaved in input-row order.
+  // Their lowest member rows are 0 and 1, not their lowest coordinate positions.
+  const std::vector<double> positions{2.25, 0.0, 4.5, 0.75, 3.0, 5.25, 1.5, 3.75};
+  std::vector<double> points;
+  points.reserve(17U);
+  for (const double position : positions) {
+    points.push_back(position);
+    points.push_back(position + 16.0);
+  }
+  points.push_back(48.0);
+  for (const int64_t min_points : {int64_t{1}, int64_t{2}}) {
+    SCOPED_TRACE(::testing::Message() << "min_points=" << min_points);
+    const auto output =
+        run_dbscan<T>(points_tensor<T>(points, 17, 1), make_params({1.0}, min_points));
+    ASSERT_EQ(output.labels.shape, (std::vector<int64_t>{17}));
+    const std::vector<int64_t> expected_sizes =
+        min_points == 1 ? std::vector<int64_t>{8, 8, 1} : std::vector<int64_t>{8, 8};
+    ASSERT_EQ(output.sizes.shape,
+              (std::vector<int64_t>{static_cast<int64_t>(expected_sizes.size())}));
+    for (size_t cluster = 0; cluster < expected_sizes.size(); ++cluster) {
+      EXPECT_EQ(output.sizes.template as<int64_t>()[cluster], expected_sizes[cluster]);
+    }
+    for (int64_t row = 0; row < 16; ++row) {
+      EXPECT_EQ(output.labels.template as<int64_t>()[row], row % 2) << "row=" << row;
+    }
+    EXPECT_EQ(output.labels.template as<int64_t>()[16], min_points == 1 ? 2 : -1);
+  }
+}
+
 TEST(ClusterDBSCANOpTest, DefaultMinPointsCountsOnlyActiveFeatures) {
   std::vector<double> pts = {
       0.0,   100.0, 200.0, 300.0, 400.0, 0.1,   101.0, 201.0,

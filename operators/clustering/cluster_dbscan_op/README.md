@@ -68,7 +68,7 @@ That is the contract ellipsoid `Σ_i ((p_i − q_i) / epsilon_i)² ≤ 1` over p
 
 1. **`mark_core`.** Count neighbors of each point **including itself**, stopping once the positive effective `min_points` threshold is reached. `is_core` is the same `count >= min_points` boolean; points that never reach it scan all `num_points` (worst-case `O(N²)`). Seed CC: core → own row index; non-core → `kNoiseRoot` (`-1`).
 
-2. **`cc_step` loop.** Iterative min-label propagation over **core–core** edges, ping-pong buffers, plus one pointer jump `cc_in[cc_in[i]]`. Converges to the minimum row index of each core component (the root). Each iteration D2H-syncs a `changed` flag. Cap: `num_points + 64` iterations, else `ClusterDBSCANOp: connected-components did not converge`.
+2. **`cc_step` loop.** Iterative min-label propagation over **core–core** edges, ping-pong buffers, plus one pointer jump `cc_in[cc_in[i]]`. Before evaluating a distance, skip a core neighbor whose snapshot label is at least the running minimum; it cannot lower that minimum. The predicate and per-iteration labels are unchanged. Converges to the minimum row index of each core component (the root). Each iteration D2H-syncs a `changed` flag. Cap: `num_points + 64` iterations, else `ClusterDBSCANOp: connected-components did not converge`.
 
 3. **`assign_border`.** Each non-core point joins the **lowest-root** core neighbor (if any); otherwise stays noise. This is the pinned inter-cluster border tie-break.
 
@@ -111,7 +111,7 @@ Empty `points` → `labels` and `sizes` both shape `(0,)`.
 
 **Cold.** First-tick scratch allocs and `1/ε²` H2D.
 
-**Steady.** Cache-hit reuse of the device `1/ε²` vector; `O(N² · F)` neighbor sweeps (mark_core, each CC step, border assign) plus a host argsort of `num_clusters` counts. CC iteration count is bounded by the graph diameter. Appropriate for post-CFAR tens–low-thousands of points; not a general-purpose large-N DBSCAN.
+**Steady.** The CC neighbor loop skips distance evaluation when the snapshot neighbor label cannot lower its current minimum; pointer jump, exact per-iteration labels and convergence remain unchanged. Cache-hit reuse of the device `1/ε²` vector; `O(N² · F)` neighbor sweeps (mark_core, each CC step, border assign) plus a host argsort of `num_clusters` counts. CC iteration count is bounded by the graph diameter. Appropriate for post-CFAR tens–low-thousands of points; not a general-purpose large-N DBSCAN.
 
 **Live rebuilds.** `min_points` / `max_clusters` are free. A new effective `(epsilon, num_features)` pair rebuilds and uploads `1/ε²`; an unchanged pair reuses the cached device vector. Every epsilon value still selects a new neighbor graph computation for that tick.
 
