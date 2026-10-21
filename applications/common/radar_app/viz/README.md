@@ -43,7 +43,8 @@ height independently. This expands narrow scans instead of leaving a tiny
 wedge inside a mostly empty panel. Range rings mark quarters of the displayed
 maximum range (halves in compact windows), with whole-meter labels outside
 the sector edge. Azimuth ticks above the wedge show the actual scan limits and
-center in degrees (only limits in compact windows). The `X scale` caption reports the horizontal distance scale relative
+center in degrees (only limits in compact windows). Units appear once in the
+`Azimuth / range (deg)` title; ring labels include meters. The `X scale` caption reports the horizontal distance scale relative
 to the vertical distance scale. This is a fitted view with unequal axis scales,
 so screen angles and distances should not be measured as a plan view.
 
@@ -51,6 +52,10 @@ Grid lines, simulated truth, and detection trails use the same projection.
 Samples outside the displayed range or azimuth bounds are omitted, and truth
 trails break when leaving the field of view. Wider scans retain the circular
 plan view. The projection is shared by the C++ and Python applications.
+
+The boresight plot displays azimuth and elevation ticks in degrees, as indicated
+in its title. This is a label conversion only: angle bounds, projections,
+detection/truth coordinates, and angle-history plots retain radians.
 
 ## Native text and presentation
 

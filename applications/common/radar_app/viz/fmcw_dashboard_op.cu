@@ -442,7 +442,7 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
   }
   draw_centered_text(image, width, height, panel, panel.y + (height < 540 ? 5 : 6), title);
   if (!is_polar && !compact) {
-    draw_centered_text(image, width, height, plot, plot.y + plot.height + 18, "Azimuth (rad)",
+    draw_centered_text(image, width, height, plot, plot.y + plot.height + 18, "Azimuth",
                        detail::kDashboardTextSecondary);
   }
 
@@ -500,7 +500,7 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
         }
         const float fraction = tick / 2.0F;
         const std::string label =
-            format_degrees(std::lerp(config.az_bounds[0], config.az_bounds[1], fraction)) + " deg";
+            format_degrees(std::lerp(config.az_bounds[0], config.az_bounds[1], fraction));
         const int x = plot.x + static_cast<int>(fraction * (plot.width - 1));
         const int offset = static_cast<int>(fraction * text_width(label, height));
         draw_text(image, width, height, x - offset, plot.y - (compact ? 13 : 16), label, 1,
@@ -532,10 +532,10 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
       const int y = plot.y + static_cast<int>(fraction * (plot.height - 1));
       draw_line(image, width, height, x, plot.y, x, plot.y + plot.height - 1, kGrid);
       draw_line(image, width, height, plot.x, y, plot.x + plot.width - 1, y, kGrid);
-      const std::string az = format_value(config.az_bounds[0] +
-                                          fraction * (config.az_bounds[1] - config.az_bounds[0]));
-      const std::string el = format_value(config.el_bounds[1] -
-                                          fraction * (config.el_bounds[1] - config.el_bounds[0]));
+      const std::string az = format_degrees(config.az_bounds[0] +
+                                            fraction * (config.az_bounds[1] - config.az_bounds[0]));
+      const std::string el = format_degrees(config.el_bounds[1] -
+                                            fraction * (config.el_bounds[1] - config.el_bounds[0]));
       draw_text(image, width, height, x - text_width(az, height) / 2, plot.y + plot.height + 5, az,
                 1);
       draw_text(image, width, height, plot.x - 6 - text_width(el, height), y - 6, el, 1);
@@ -792,11 +792,11 @@ AnnotationCanvas make_annotation(
   const auto velocity_bounds = std::minmax_element(velocities.begin(), velocities.end());
   const std::array<float, 2> physical_range_bounds{*range_bounds.first, *range_bounds.second};
   if (config.show_angles) {
-    draw_spatial_panel(&image, width, height, layout.azimuth_range_panel, "Azimuth / range",
+    draw_spatial_panel(&image, width, height, layout.azimuth_range_panel, "Azimuth / range (deg)",
                        SpatialView::kAzimuthRange, detection_history, physical_range_bounds,
                        frame_index, config);
     draw_spatial_panel(&image, width, height, layout.boresight_panel,
-                       config.height < 540 ? "Az / el (rad)" : "Boresight - el / az (rad)",
+                       config.height < 540 ? "Az / el (deg)" : "Boresight - el / az (deg)",
                        SpatialView::kBoresight, detection_history, physical_range_bounds,
                        frame_index, config);
   }

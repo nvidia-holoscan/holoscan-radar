@@ -335,11 +335,3 @@ belong to the legacy formal workflow, not prerequisites for new engineering
 experiments. New formal sessions use the optional version-4 protocol with a
 confirmed design. Both existing checkout and worktree layouts preserve immutable
 builds and archived runtimes.
-
-## Application visualization assessment
-
-The [MIMO TDM visualization and UTF-8 assessment](reports/2026-10-21-mimo-tdm-visualization.md)
-records matched GUI on/off resource runs and Nsight operator/GPU timings, plus
-an isolated SDK UTF-8/TrueType renderer comparison. The Linux container sampler
-is [measure_fmcw_viz.py](applications/measure_fmcw_viz.py); the optional renderer
-interposer is a measurement-only prototype, not an application configuration.
