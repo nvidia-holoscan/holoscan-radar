@@ -1277,7 +1277,7 @@ std::array<float, 2> BackgroundScaleState::limits(
     const std::optional<BackgroundStatistics>& background, float peak_power, float span_db,
     float floor_sigma, std::int64_t now_ns) {
   if (background) {
-    const float target = background->mean_db + floor_sigma * background->stddev_db;
+    const float target = background->mean_db - floor_sigma * background->stddev_db;
     const double elapsed = last_valid_ns ? std::max<std::int64_t>(0, now_ns - *last_valid_ns) : 0;
     const float alpha = static_cast<float>(-std::expm1(-elapsed / 250000000.0));
     floor_db = floor_db && last_valid_ns && elapsed <= 1000000000.0

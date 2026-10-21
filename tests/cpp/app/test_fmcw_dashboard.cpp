@@ -258,7 +258,9 @@ TEST_P(FmcwDashboardBackgroundTest, MasksDetectionCrossesAndProjectsLeadingPlane
   for (int plane = 0; plane < planes; ++plane) {
     for (int d = 0; d < 16; ++d) {
       for (int r = 0; r < 16; ++r) {
-        powers[plane * 256 + d * 16 + r] = d == 4 || r == 5 ? 1.0e12F : 100.0F * (plane + 1);
+        powers[plane * 256 + d * 16 + r] =
+            d == 4 || r == 5 ? 1.0e12F
+                             : (plane + 1) * std::pow(10.0F, ((d + r) % 2 ? 23.0F : 17.0F) / 10.0F);
       }
     }
   }
@@ -288,6 +290,13 @@ TEST_P(FmcwDashboardBackgroundTest, MasksDetectionCrossesAndProjectsLeadingPlane
   const auto result = running.finish();
   ASSERT_TRUE(image_ready && text_ready) << result.describe_failure();
   ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto image = radar::testing::to_host(result.snapshot<holoscan::Tensor>("rgba"));
+  const auto* pixels = image.as<std::uint8_t>();
+  // Ordinary background away from the detection cross must retain color,
+  // rather than clipping to the palette minimum (green = 1).
+  const std::size_t center = 4U * (300U * 1280U + 300U);
+  EXPECT_GT(pixels[center + 1U], 1U);
+  EXPECT_LT(pixels[center + 1U], 231U);
   const auto text = radar::testing::to_host(result.snapshot<holoscan::Tensor>("text"));
   ASSERT_EQ(text.shape.size(), 2U);
   EXPECT_EQ(text.shape[1], viz::detail::kDashboardTextRowBytes);
@@ -301,8 +310,8 @@ TEST_P(FmcwDashboardBackgroundTest, MasksDetectionCrossesAndProjectsLeadingPlane
     labels.emplace_back(reinterpret_cast<const char*>(
         text.data.data() + offset + holoscan::visualization::kTextRunHeaderBytes));
   }
-  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "20.0" : "23.0"), labels.end());
-  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "80.0 dB" : "83.0 dB"),
+  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "14.0" : "17.0"), labels.end());
+  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "74.0 dB" : "77.0 dB"),
             labels.end());
 }
 
@@ -329,10 +338,10 @@ TEST(FmcwDashboardBackgroundStatsTest, SmoothsHoldsAndExpiresToPeakFallback) {
   const viz::detail::BackgroundStatistics background{20.0F, 1.0F, 256};
   EXPECT_EQ(state.limits(std::nullopt, 100.0F, 60.0F, 2.0F, 0),
             (std::array<float, 2>{-40.0F, 20.0F}));
-  EXPECT_EQ(state.limits(background, 1e12F, 60.0F, 2.0F, 0), (std::array<float, 2>{22.0F, 82.0F}));
+  EXPECT_EQ(state.limits(background, 1e12F, 60.0F, 2.0F, 0), (std::array<float, 2>{18.0F, 78.0F}));
   const auto moved = state.limits(viz::detail::BackgroundStatistics{30.0F, 1.0F, 256}, 1e12F, 60.0F,
                                   2.0F, 250000000);
-  EXPECT_NEAR(moved[0], 22.0F + 10.0F * (1.0F - std::exp(-1.0F)), 1e-5F);
+  EXPECT_NEAR(moved[0], 18.0F + 10.0F * (1.0F - std::exp(-1.0F)), 1e-5F);
   EXPECT_EQ(state.limits(std::nullopt, 1e12F, 60.0F, 2.0F, 750000000), moved);
   EXPECT_EQ(state.limits(std::nullopt, 100.0F, 60.0F, 2.0F, 1250000001),
             (std::array<float, 2>{-40.0F, 20.0F}));

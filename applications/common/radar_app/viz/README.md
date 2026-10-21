@@ -9,10 +9,14 @@ and the number of displayed markers (cluster representatives in clustered workfl
 
 The power map uses a sequential viridis palette and noise-anchored limits by
 default. A bounded sample estimates the mean and standard deviation of background
-power in dB. The lower endpoint is `mean_db + noise_floor_sigma * stddev_db`;
+power in dB. The lower endpoint is `mean_db - noise_floor_sigma * stddev_db`;
 the upper endpoint is `dynamic_range_db` above it. The image and colorbar use
-exactly the same limits; strong targets can saturate at the upper endpoint. These are dB relative to one input power unit, not
-calibrated dBm or a CFAR threshold. Dense angle cubes use the same maximum
+exactly the same limits; strong targets can saturate at the upper endpoint.
+These are dB relative to one input power unit, not calibrated dBm or a CFAR
+threshold. The floor sits below the background mean so typical noise samples
+retain color variation. A wide span can still make that variation subtle; reducing
+`dynamic_range_db` emphasizes noise texture while saturating stronger returns.
+Dense angle cubes use the same maximum
 projection across leading axes for sampling and display.
 
 ```yaml
@@ -59,7 +63,7 @@ use the existing radar-boresight presentation conversion.
 
 ## Measured scaling cost
 
-A matched MIMO TDM check on 2026-10-21 used the Release staging CUDA 13 image
+A matched MIMO TDM check at `d9d92ac5` on 2026-10-21 used the Release staging CUDA 13 image
 on NVIDIA GB10 (driver 580.173.02), a 1280 by 720 Xvfb window, the production
 64 by 256 power map, 10 Hz input, and the default sampling settings above.
 The comparison toggled only `noise_scaling` on the same binary. Nsight Systems
@@ -67,6 +71,8 @@ The comparison toggled only `noise_scaling` on the same binary. Nsight Systems
 processed 100 frames each, excluding the first 20 frames and the final frame
 from timing (79 samples per run). Timing values below are medians of run medians.
 Operator wall times include synchronization and waiting; they are not CPU execution times.
+The subsequent visibility fix changes the scalar floor from mean plus the sigma
+offset to mean minus that offset; these measurements precede that correction.
 
 | Metric | Peak scaling | Noise scaling |
 | --- | --- | --- |
