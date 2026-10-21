@@ -4,6 +4,16 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-21** — **MIMO TDM visualization and UTF-8 costs measured** on
+  `deustice/gui-updates`. At 1280×720 / 10 Hz on GB10, the current GUI adds
+  4.7% of one CPU core and 189 MiB RSS; traced visualization latency averages
+  5.16 ms (p95 7.55 ms), mostly presentation. A native SDK UTF-8/TrueType
+  prototype adds 56 µs to offscreen composition and 2.5 MiB RSS, with the degree
+  glyph verified. Twelve resource runs completed all 1,800 report frames; four
+  100-frame profiles provide 79 steady samples each. Results, repeatable sampler,
+  and internal-API caveats live in the performance assessment. Production renderer
+  and DSP contracts are unchanged; full lint passes.
+
 - **2026-10-20** — **Cleaner FMCW sector ticks and a moving power legend** on
   `deustice/gui-updates`. Whole-meter range labels sit outside the wedge,
   degree ticks replace the azimuth legend, and subplot title spacing is tighter.
@@ -372,6 +382,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 | Portable SAR data defaults | Codex | `dpc/main-5x-catchup` | **verified locally:** all nine CPHD downloads have valid XML and complete declared block extents. Presets resolve relative paths under `HOLOHUB_DATA_DIR` (repository `data/` by default); downloader defaults and guides match. All five real-data configs load from outside the repository, all five CLI targets build, 20 SAR CTests pass, and a finite real-data CLI strip run emits 16 images without an extra data mount. Pinned all-file lint passes. |
 | DopplerNotch descending velocity axis | Codex | `deustice/doppler-notch-axis-order` | **verified locally:** signed nearest-bin indexing and positive cyclic periods preserve descending-axis passbands; contract now permits either monotonic direction. Both new axis-order tests fail before the fix; all 15 focused GPU CTests pass afterward on Thor with HSDK 5 GA. Jira duplicate search/P0 awaits MaaS access. |
 | PR 66 non-uniform non-cyclic nearest bin | Codex | `deustice/doppler-notch-axis-order` | **verified locally:** non-cyclic nearest-bin selection searches actual physical coordinates, supporting non-uniform axes in either direction. Both precision regressions fail before the fix; all 17 focused GPU unit/pipeline CTests pass afterward on HSDK 5 GA. PR 68 restacking also applies the corrected selection in its shared row-kernel gain helper; all 21 downstream GPU unit/pipeline CTests pass. Pinned all-file lint passes with Node 22 for markdownlint. |
+| MIMO TDM visualization resource assessment | Codex | `deustice/gui-updates` | **verified locally:** 12 resource runs / 1,800 report frames, four Nsight profiles, and a degree-symbol preview; current GUI and native SDK UTF-8/TrueType costs documented in `performance/reports/2026-10-21-mimo-tdm-visualization.md`. Production renderer unchanged; full lint passes. |
 | FMCW axis labels and power legend | Codex | `deustice/gui-updates` | **verified locally:** outside-edge meter labels, azimuth ticks, tighter titles, and same-frame dB limits. All 37 focused CTests including provider, nine GUI checks, C++ MIMO TDM, matched captures, and full lint pass. |
 | FMCW dashboard width and subtitle | Codex | `deustice/gui-updates` | **verified locally:** configurable range-Doppler width defaults to 45%, subtitle simplified; 64 focused tests, provider CTest, nine GUI checks, custom-width C++/Python runs, matched before/after captures, and full lint pass. |
 | FMCW dashboard styling refinement | Codex | `deustice/gui-updates` | **verified locally:** tighter axis gutters, text-size-aware label placement, brighter titles, subdued secondary text/grids, and refined target accents. All 32 dashboard regressions, nine Python GUI checks, a five-target C++ MIMO TDM preview, and full lint pass. |
