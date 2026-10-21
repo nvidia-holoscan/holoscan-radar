@@ -100,6 +100,11 @@ viz::FmcwDashboardConfig dashboard_config(const Config& cfg, std::string title, 
   result.mode = clustered ? viz::DashboardMode::kClusters : viz::DashboardMode::kRawDetections;
   result.show_angles = show_angles;
   result.dynamic_range_db = static_cast<float>(cfg.visualization.dynamic_range_db);
+  result.noise_scaling = cfg.visualization.noise_scaling;
+  result.noise_sample_limit = cfg.visualization.noise_sample_limit;
+  result.noise_range_half_width = cfg.visualization.noise_range_half_width;
+  result.noise_doppler_half_width = cfg.visualization.noise_doppler_half_width;
+  result.noise_floor_sigma = cfg.visualization.noise_floor_sigma;
   result.range_doppler_width_percent = cfg.visualization.range_doppler_width_percent;
   result.detection_radius = static_cast<float>(cfg.visualization.detection_radius);
   result.frame_period = cfg.frame_period;

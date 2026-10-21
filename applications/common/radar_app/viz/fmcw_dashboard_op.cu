@@ -54,6 +54,59 @@ __global__ void reduce_positive_peak(const float* values, std::int64_t count,
   }
 }
 
+// Two compact bitsets mark full Doppler/range strips around every raw detection.
+__global__ void mark_detection_crosses(const std::int64_t* indices, std::int64_t detections,
+                                       std::int64_t rank, std::int64_t rows, std::int64_t cols,
+                                       int doppler_radius, int range_radius, unsigned int* mask) {
+  const auto i = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i >= detections)
+    return;
+  const auto d = indices[i * rank + rank - 2];
+  const auto r = indices[i * rank + rank - 1];
+  if (d < 0 || d >= rows || r < 0 || r >= cols)
+    return;
+  for (int offset = -doppler_radius; offset <= doppler_radius; ++offset) {
+    const auto bin = ((d + offset) % rows + rows) % rows;
+    atomicOr(mask + bin / 32, 1U << (bin % 32));
+  }
+  const auto range_mask = mask + (rows + 31) / 32;
+  for (int offset = -range_radius; offset <= range_radius; ++offset) {
+    const auto bin = r + offset;
+    if (bin >= 0 && bin < cols)
+      atomicOr(range_mask + bin / 32, 1U << (bin % 32));
+  }
+}
+
+__global__ void sample_background(const float* power, std::int64_t planes, std::int64_t rows,
+                                  std::int64_t cols, const unsigned int* mask, int samples,
+                                  unsigned int frame, float* result) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= samples)
+    return;
+  // One jittered candidate per disjoint stratum: bounded work, no rejection loop.
+  unsigned int hash = static_cast<unsigned int>(i) ^ (frame * 0x9e3779b9U);
+  hash = (hash ^ (hash >> 16)) * 0x7feb352dU;
+  hash = (hash ^ (hash >> 15)) * 0x846ca68bU;
+  hash ^= hash >> 16;
+  const auto pixels = rows * cols;
+  const auto begin = i * pixels / samples;
+  const auto end = (i + 1) * pixels / samples;
+  const auto pixel = begin + hash % (end - begin);
+  const auto d = pixel / cols;
+  const auto r = pixel % cols;
+  result[i] = nanf("");
+  if ((mask[d / 32] & (1U << (d % 32))) || (mask[(rows + 31) / 32 + r / 32] & (1U << (r % 32))))
+    return;
+  float value = 0.0F;
+  for (std::int64_t plane = 0; plane < planes; ++plane) {
+    const float candidate = power[plane * pixels + pixel];
+    if (isfinite(candidate))
+      value = fmaxf(value, candidate);
+  }
+  if (value > 0.0F)
+    result[i] = 10.0F * log10f(value);
+}
+
 // Five anchors of a sequential viridis palette. Interpolation keeps the same
 // scale for the CUDA heatmap, CPU reference, and displayed color legend.
 __host__ __device__ float heatmap_channel(float t, int component) {
@@ -75,7 +128,7 @@ __device__ unsigned char channel(float value) {
 }
 
 __global__ void power_to_rgba(const float* power, std::int64_t num_planes, std::int64_t source_rows,
-                              std::int64_t source_cols, const float* peak, float dynamic_range_db,
+                              std::int64_t source_cols, float lower_db, float upper_db,
                               std::int64_t canvas_width, std::int64_t canvas_pixels,
                               const std::uint8_t* annotation, int plot_x, int plot_y,
                               int plot_width, int plot_height, bool reverse_velocity,
@@ -108,11 +161,12 @@ __global__ void power_to_rgba(const float* power, std::int64_t num_planes, std::
   const std::int64_t source_pixels = source_rows * source_cols;
   float value = 0.0F;
   for (std::int64_t plane = 0; plane < num_planes; ++plane) {
-    value = fmaxf(value, power[plane * source_pixels + source_pixel]);
+    const float candidate = power[plane * source_pixels + source_pixel];
+    if (isfinite(candidate))
+      value = fmaxf(value, candidate);
   }
-  const float reference = fmaxf(*peak, FLT_MIN);
-  const float db = 10.0F * log10f(fmaxf(value, FLT_MIN) / reference);
-  const float t = fminf(fmaxf(1.0F + db / dynamic_range_db, 0.0F), 1.0F);
+  const float db = 10.0F * log10f(fmaxf(value, FLT_MIN));
+  const float t = fminf(fmaxf((db - lower_db) / (upper_db - lower_db), 0.0F), 1.0F);
 
   const float red = heatmap_channel(t, 0);
   const float green = heatmap_channel(t, 1);
@@ -758,11 +812,14 @@ void draw_history_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
   }
 }
 
-AnnotationCanvas make_annotation(
-    std::int64_t rows, std::int64_t cols, const std::vector<DetectionMarker>& markers,
-    const std::deque<HistorySample>& history, const std::deque<HistorySample>& detection_history,
-    const std::vector<float>& ranges, const std::vector<float>& velocities,
-    const FmcwDashboardConfig& config, std::int64_t frame_index, float peak_power) {
+AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
+                                 const std::vector<DetectionMarker>& markers,
+                                 const std::deque<HistorySample>& history,
+                                 const std::deque<HistorySample>& detection_history,
+                                 const std::vector<float>& ranges,
+                                 const std::vector<float>& velocities,
+                                 const FmcwDashboardConfig& config, std::int64_t frame_index,
+                                 const std::array<float, 2>& power_limits) {
   const std::int64_t width = config.width;
   const std::int64_t height = config.height;
   const DashboardLayout layout =
@@ -796,9 +853,8 @@ AnnotationCanvas make_annotation(
 
   // Show the same moving power window used by the per-frame peak normalization.
   // The input power has no calibrated physical reference; these are not dBm.
-  const float upper_db = 10.0F * std::log10(std::max(peak_power, FLT_MIN));
-  const std::string lower_label = format_value(upper_db - config.dynamic_range_db);
-  const std::string upper_label = format_value(upper_db) + " dB";
+  const std::string lower_label = format_value(power_limits[0]);
+  const std::string upper_label = format_value(power_limits[1]) + " dB";
   const int bar_width = std::min(100, plot.width / 3);
   const int bar_x = plot.x + plot.width - bar_width - text_width(upper_label, height) - 5;
   for (int x = 0; x < bar_width; ++x) {
@@ -889,6 +945,16 @@ FmcwDashboardOp::FmcwDashboardOp(FmcwDashboardConfig config) : config_(std::move
       (config_.show_angles && (!(config_.az_bounds[0] < config_.az_bounds[1]) ||
                                !(config_.el_bounds[0] < config_.el_bounds[1])))) {
     throw std::invalid_argument("FmcwDashboardOp: invalid scales, history, bounds, or canvas size");
+  }
+  if (config_.noise_sample_limit < 64 || config_.noise_sample_limit > 65536 ||
+      config_.noise_range_half_width < 0 || config_.noise_range_half_width > 64 ||
+      config_.noise_doppler_half_width < 0 || config_.noise_doppler_half_width > 64 ||
+      !std::isfinite(config_.noise_floor_sigma) || config_.noise_floor_sigma < 0.0 ||
+      config_.noise_floor_sigma > 10.0) {
+    throw std::invalid_argument("FmcwDashboardOp: invalid background sampling settings");
+  }
+  if (config_.noise_scaling) {
+    noise_samples_ = make_device_tensor({config_.noise_sample_limit}, kFloat32);
   }
   const std::vector<std::int64_t> max_shape{config_.height, config_.width, 4};
   max_byte_span_ = tensor_byte_span(max_shape, kRgba8);
@@ -1025,6 +1091,7 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
                                                      1.0e9 / config_.display_rate_hz;
   constexpr int kBlock = 256;
   float host_peak = 0.0F;
+  std::vector<float> background_samples;
   if (should_render) {
     const std::int64_t pixels = layout.rows * layout.cols;
     const std::int64_t count = layout.batch * pixels;
@@ -1046,6 +1113,38 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
     }
   }
 
+  if (should_render && config_.noise_scaling && idx.shape()[0] <= 4096) {
+    if (!dldatatype_equals(idx.dtype(), kInt64) || !idx.is_contiguous()) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   "FmcwDashboardOp: expected compact int64 detection indices"});
+    }
+    const auto words = (layout.rows + 31) / 32 + (layout.cols + 31) / 32;
+    if (!noise_mask_ || noise_mask_->nbytes() < words * sizeof(unsigned int)) {
+      noise_mask_ = make_device_tensor({words}, DLDataType{kDLUInt, 32U, 1U});
+    }
+    auto* mask = static_cast<unsigned int*>(noise_mask_->mutable_data().value());
+    if (cudaMemsetAsync(mask, 0, words * sizeof(unsigned int), stream) != cudaSuccess) {
+      return cuda_failure(kWho, "background mask reset");
+    }
+    if (idx.shape()[0] > 0) {
+      mark_detection_crosses<<<(idx.shape()[0] + kBlock - 1) / kBlock, kBlock, 0, stream>>>(
+          static_cast<const std::int64_t*>(idx.data()), idx.shape()[0], idx.shape()[1], layout.rows,
+          layout.cols, config_.noise_doppler_half_width, config_.noise_range_half_width, mask);
+    }
+    const int samples =
+        static_cast<int>(std::min(config_.noise_sample_limit, layout.rows * layout.cols));
+    background_samples.resize(samples);
+    sample_background<<<(samples + kBlock - 1) / kBlock, kBlock, 0, stream>>>(
+        static_cast<const float*>(power.data()), layout.batch, layout.rows, layout.cols, mask,
+        samples, static_cast<unsigned int>(current_frame),
+        static_cast<float*>(noise_samples_->mutable_data().value()));
+    if (cudaGetLastError() != cudaSuccess ||
+        cudaMemcpyAsync(background_samples.data(), noise_samples_->data(), samples * sizeof(float),
+                        cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
+      return cuda_failure(kWho, "background sampling/readback");
+    }
+  }
+
   HOLOSCAN_TRY(auto host_idx, copy_int64_to_host(idx, stream, "detection_idx"));
   HOLOSCAN_TRY(auto host_points, copy_float_to_host(feature_points, stream, "points"));
   HOLOSCAN_TRY(auto host_ranges, copy_float_to_host(ranges, stream, "range_bins"));
@@ -1062,6 +1161,9 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
     return cuda_failure(kWho, "annotation input synchronization");
   }
 
+  const auto power_limits = noise_scale_.limits(
+      detail::background_statistics(background_samples), host_peak, config_.dynamic_range_db,
+      static_cast<float>(config_.noise_floor_sigma), render_time.timestamp_ns);
   AnnotationCanvas host_annotation;
   try {
     std::vector<DetectionMarker> markers;
@@ -1086,7 +1188,7 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
     }
     host_annotation =
         make_annotation(layout.rows, layout.cols, markers, history_, detection_history_,
-                        host_ranges, host_velocities, config_, current_frame, host_peak);
+                        host_ranges, host_velocities, config_, current_frame, power_limits);
   } catch (const std::invalid_argument& e) {
     return make_unexpected(Error{ErrorCode::kInvalidArgument, std::string(e.what())});
   }
@@ -1109,11 +1211,10 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
             const int grid = static_cast<int>((canvas_pixels + kBlock - 1) / kBlock);
             power_to_rgba<<<grid, kBlock, 0, stream>>>(
                 static_cast<const float*>(power.data()), layout.batch, layout.rows, layout.cols,
-                static_cast<const float*>(peak_power_->data()), config_.dynamic_range_db,
-                canvas_width, canvas_pixels, static_cast<const std::uint8_t*>(annotation_->data()),
-                dashboard.rd_plot.x, dashboard.rd_plot.y, dashboard.rd_plot.width,
-                dashboard.rd_plot.height, host_velocities.front() > host_velocities.back(),
-                static_cast<std::uint8_t*>(dst));
+                power_limits[0], power_limits[1], canvas_width, canvas_pixels,
+                static_cast<const std::uint8_t*>(annotation_->data()), dashboard.rd_plot.x,
+                dashboard.rd_plot.y, dashboard.rd_plot.width, dashboard.rd_plot.height,
+                host_velocities.front() > host_velocities.back(), static_cast<std::uint8_t*>(dst));
             if (cudaGetLastError() != cudaSuccess) {
               return cuda_failure(kWho, "color mapping launch");
             }
@@ -1144,6 +1245,54 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
 }
 
 namespace detail {
+
+std::optional<BackgroundStatistics> background_statistics(const std::vector<float>& samples_db) {
+  const std::size_t minimum = std::max<std::size_t>(64, samples_db.size() / 16);
+  auto moments = [&](double center, double radius) {
+    std::size_t count = 0;
+    double mean = 0.0;
+    double m2 = 0.0;
+    for (const float value : samples_db) {
+      if (!std::isfinite(value) || std::abs(value - center) > radius)
+        continue;
+      ++count;
+      const double delta = value - mean;
+      mean += delta / count;
+      m2 += delta * (value - mean);
+    }
+    return BackgroundStatistics{static_cast<float>(mean),
+                                static_cast<float>(std::sqrt(m2 / std::max<std::size_t>(count, 1))),
+                                count};
+  };
+  const auto initial = moments(0.0, INFINITY);
+  if (initial.count < minimum)
+    return std::nullopt;
+  const auto clipped = moments(initial.mean_db, std::max(3.0F * initial.stddev_db, 0.0001F));
+  if (clipped.count < minimum)
+    return std::nullopt;
+  return clipped;
+}
+
+std::array<float, 2> BackgroundScaleState::limits(
+    const std::optional<BackgroundStatistics>& background, float peak_power, float span_db,
+    float floor_sigma, std::int64_t now_ns) {
+  if (background) {
+    const float target = background->mean_db + floor_sigma * background->stddev_db;
+    const double elapsed = last_valid_ns ? std::max<std::int64_t>(0, now_ns - *last_valid_ns) : 0;
+    const float alpha = static_cast<float>(-std::expm1(-elapsed / 250000000.0));
+    floor_db = floor_db && last_valid_ns && elapsed <= 1000000000.0
+                   ? *floor_db + alpha * (target - *floor_db)
+                   : target;
+    last_valid_ns = now_ns;
+  }
+  if (floor_db && last_valid_ns && now_ns - *last_valid_ns <= 1000000000) {
+    return {*floor_db, *floor_db + span_db};
+  }
+  floor_db.reset();
+  const float upper =
+      std::isfinite(peak_power) && peak_power > 0.0F ? 10.0F * std::log10(peak_power) : 0.0F;
+  return {upper - span_db, upper};
+}
 
 expected<bool, Error> selected_profile_matches(
     const std::optional<wire::FMCWWaveformT>& applied_waveform, std::string_view selected_profile,

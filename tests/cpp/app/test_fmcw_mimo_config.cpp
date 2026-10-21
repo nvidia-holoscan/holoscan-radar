@@ -146,6 +146,28 @@ TEST(FmcwMimoConfig, DecodesDashboardWidthAndRejectsInvalidPercentages) {
   }
 }
 
+TEST(FmcwMimoConfig, DecodesBackgroundScalingAndRejectsInvalidSettings) {
+  const MutatedConfig file(
+      "mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
+      "display_rate_hz: 20.0\n        noise_scaling: false\n        noise_sample_limit: 512"
+      "\n        noise_range_half_width: 2\n        noise_doppler_half_width: 4"
+      "\n        noise_floor_sigma: 1.5");
+  const auto config = mimo::load_tdm_config(file.path());
+  EXPECT_FALSE(config.visualization.noise_scaling);
+  EXPECT_EQ(config.visualization.noise_sample_limit, 512);
+  EXPECT_EQ(config.visualization.noise_range_half_width, 2);
+  EXPECT_EQ(config.visualization.noise_doppler_half_width, 4);
+  EXPECT_DOUBLE_EQ(config.visualization.noise_floor_sigma, 1.5);
+  for (const auto* setting :
+       {"noise_sample_limit: 63", "noise_sample_limit: 65537", "noise_range_half_width: -1",
+        "noise_doppler_half_width: 65", "noise_floor_sigma: .nan", "noise_floor_sigma: 10.1"}) {
+    SCOPED_TRACE(setting);
+    const MutatedConfig invalid("mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
+                                std::string("display_rate_hz: 20.0\n        ") + setting);
+    EXPECT_THROW(mimo::load_tdm_config(invalid.path()), std::runtime_error);
+  }
+}
+
 TEST(FmcwMimoConfig, DecodesTdmSmoke) {
   const auto config = mimo::load_tdm_config(config_path("mimo_tdm/config/mimo_tdm_smoke.yaml"));
 

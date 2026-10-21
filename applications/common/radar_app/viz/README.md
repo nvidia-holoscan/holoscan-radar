@@ -7,16 +7,95 @@ and rolling feature histories. Lines show analytic simulated truth; dots show
 detections. The subtitle reads `Frame <N> (<t> s) | <M> detections`, using scenario time
 and the number of displayed markers (cluster representatives in clustered workflows).
 
-The power map uses a sequential viridis palette and a moving power window.
-Normalization remains relative to the current frame's peak; the colorbar labels
-show `10 log10(peak) - dynamic_range_db` through `10 log10(peak)` for that same
-frame. The default window stays 60 dB wide while both endpoints follow signal
-power. These are dB relative to one input power unit, not calibrated dBm.
-The peak readback shares the existing annotation input synchronization; frames
-skipped by the display-rate cap do not run the reduction. Dense angle cubes
-are projected with the maximum power across the leading angle axes. Range
-increases upward; velocity increases to the right. Physical angle axes use the
-existing radar-boresight presentation conversion.
+The power map uses a sequential viridis palette and noise-anchored limits by
+default. A bounded sample estimates the mean and standard deviation of background
+power in dB. The lower endpoint is `mean_db + noise_floor_sigma * stddev_db`;
+the upper endpoint is `dynamic_range_db` above it. The image and colorbar use
+exactly the same limits; strong targets can saturate at the upper endpoint. These are dB relative to one input power unit, not
+calibrated dBm or a CFAR threshold. Dense angle cubes use the same maximum
+projection across leading axes for sampling and display.
+
+```yaml
+app:
+  visualization:
+    noise_scaling: true
+    noise_sample_limit: 2048
+    noise_range_half_width: 3
+    noise_doppler_half_width: 3
+    noise_floor_sigma: 2.0
+    dynamic_range_db: 60.0
+```
+
+Each raw CFAR detection excludes a full range/Doppler cross: a horizontal strip
+within the Doppler half-width and a vertical strip within the range half-width.
+Doppler wraps periodically; range clips at its endpoints. Two compact GPU bitsets
+represent the strips. Up to `noise_sample_limit` distinct, stratified cells are
+jittered each rendered frame; masked, nonfinite, and nonpositive samples are
+rejected without a search for replacements. The host computes dB moments with
+one two-sided three-standard-deviation clipping pass. No sorting or full-map
+readback is required. This describes the displayed background distribution;
+projection and detection-dependent censoring can bias it as a physical noise estimate.
+
+At least `max(64, candidate_count / 16)` samples must survive both passes.
+Limits are smoothed with a 0.25 s time constant. A missing estimate holds the
+last valid floor for at most 1 s, then falls back to the current peak minus
+`dynamic_range_db`. More than 4096 raw detections skips estimation and takes
+the same fallback path. With `noise_scaling: false`, peak-relative scaling is
+immediate. All-zero/invalid frames have finite fallback limits of `[-60, 0]`
+for the default span. Half-widths accept 0..64 bins, the sample cap 64..65536,
+and the sigma offset finite values in 0..10.
+
+Sampling and the peak readback share the existing annotation input barrier,
+with no additional stream synchronization. Work is bounded by the candidate
+cap times the number of projected planes, plus at most 4096 detection crosses
+and a reset of the two axis bitsets.
+Default sampling adds an 8 KiB device sample payload, at most 8 KiB of host readback,
+and two bitsets (40 bytes for the TDM application's 64 by 256 map). Frames
+skipped by the display-rate cap run neither reduction nor sampling. The
+processing graph, CFAR outputs, and detection reporting are unchanged.
+
+Range increases upward; velocity increases to the right. Physical angle axes
+use the existing radar-boresight presentation conversion.
+
+## Measured scaling cost
+
+A matched MIMO TDM check on 2026-10-21 used the Release staging CUDA 13 image
+on NVIDIA GB10 (driver 580.173.02), a 1280 by 720 Xvfb window, the production
+64 by 256 power map, 10 Hz input, and the default sampling settings above.
+The comparison toggled only `noise_scaling` on the same binary. Nsight Systems
+2026.4.1 used software CUDA, NVTX, and Vulkan tracing. Three runs per setting
+processed 100 frames each, excluding the first 20 frames and the final frame
+from timing (79 samples per run). Timing values below are medians of run medians.
+Operator wall times include synchronization and waiting; they are not CPU execution times.
+
+| Metric | Peak scaling | Noise scaling |
+| --- | --- | --- |
+| Dashboard compositor wall time | 0.677 ms | 0.699 ms |
+| Compositor CUDA kernels, summed per frame | 82.5 us | 85.6 us |
+| Added cross-mask kernel | — | 2.30 us |
+| Added sampling kernel | — | 2.05 us |
+| Whole-application CPU, percent of one core | 21.75% | 21.33% |
+| Whole-application mean RSS | 718.50 MiB | 718.46 MiB |
+
+CPU/RSS used three separate unprofiled runs per setting, sampled every 0.2 s,
+excluding the first 3 s and final 1 s; the table reports the median of the
+three run averages. The small CPU/RSS differences do not
+establish a reduction. Default payload costs are 8232 device bytes and up to
+8192 host sample bytes for this map, plus tensor/allocator bookkeeping.
+
+Complete visualization time, from dashboard compute entry through the matching
+window operator return, had per-run medians of 3.73/3.28/3.27 ms with peak
+scaling and 3.80/3.37/4.29 ms with noise scaling. Paired differences were
++0.07/+0.09/+1.03 ms; the slow third pair spent most of the difference in
+window presentation (3.05 versus 2.21 ms). This is a small local Xvfb study
+with default clocks, not a bound on GUI, scanout, or SSH display latency.
+All profiled runs retained 100 source/report frames. The matched reports' 460
+cluster rows were identical after excluding floating-point-sensitive representative fields.
+
+The 58 focused dashboard/config/provider tests, nine Python GUI workflow and
+compact-layout checks, a native C++ TDM GUI run, and the full lint suite passed.
+One-off capture/profiling artifacts live under ignored
+`build-gui/noise-scaling-checks/`; no assessment scripts are part of the library.
 
 ## Panel widths
 

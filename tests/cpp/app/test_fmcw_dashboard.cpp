@@ -12,6 +12,7 @@
 #include <cstring>
 #include <deque>
 #include <optional>
+#include <limits>
 #include <ostream>
 #include <stdexcept>
 #include <string>
@@ -236,6 +237,108 @@ INSTANTIATE_TEST_SUITE_P(PowerLevels, FmcwDashboardPowerTest,
                          ::testing::Values(PowerLegendCase{1.0F, "-60.0", "0.0 dB"},
                                            PowerLegendCase{100.0F, "-40.0", "20.0 dB"},
                                            PowerLegendCase{0.01F, "-80.0", "-20.0 dB"}));
+
+class FmcwDashboardBackgroundTest : public ::testing::TestWithParam<int> {};
+
+TEST_P(FmcwDashboardBackgroundTest, MasksDetectionCrossesAndProjectsLeadingPlanes) {
+  using Op = viz::FmcwDashboardOp;
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  using radar::testing::to_device_tensor;
+  constexpr DLDataType kFloat{kDLFloat, 32U, 1U};
+  constexpr DLDataType kInt{kDLInt, 64U, 1U};
+  viz::FmcwDashboardConfig config;
+  config.show_angles = false;
+  config.title = "FMCW test";
+  config.noise_sample_limit = 256;
+  config.noise_doppler_half_width = 1;
+  config.noise_range_half_width = 1;
+  const int planes = GetParam();
+  std::vector<float> powers(planes * 256, 100.0F);
+  for (int plane = 0; plane < planes; ++plane) {
+    for (int d = 0; d < 16; ++d) {
+      for (int r = 0; r < 16; ++r) {
+        powers[plane * 256 + d * 16 + r] = d == 4 || r == 5 ? 1.0e12F : 100.0F * (plane + 1);
+      }
+    }
+  }
+  std::vector<float> bins(16);
+  for (int i = 0; i < 16; ++i)
+    bins[i] = static_cast<float>(i);
+  auto harness = holoscan::testing::create_operator_test<Op>(config);
+  harness.push_frame(frame_at(
+      std::chrono::milliseconds{1},
+      input("cfar_power", *to_device_tensor(powers, {planes, 16, 16}, kFloat)),
+      input("detection_idx", *to_device_tensor(std::vector<std::int64_t>{0, 4, 5}, {1, 3}, kInt)),
+      input("points", *to_device_tensor(std::vector<float>{5.0F, 4.0F}, {1, 2}, kFloat)),
+      input("range_bins", *to_device_tensor(bins, {16}, kFloat)),
+      input("velocity_bins", *to_device_tensor(bins, {16}, kFloat))));
+  harness.capture_snapshot<holoscan::Tensor>("rgba", 1U, 1280U * 720U * 4U);
+  harness.capture_snapshot<holoscan::Tensor>(
+      "text", 1U, viz::detail::kDashboardTextRows * viz::detail::kDashboardTextRowBytes);
+  for (const auto* port :
+       {"cfar_power", "detection_idx", "points", "range_bins", "velocity_bins"}) {
+    harness.input_source_device(port, holoscan::DeviceId{0});
+  }
+  harness.output_device("rgba", holoscan::DeviceId{0});
+  auto running = harness.run_async({.expect_stop = true});
+  const bool image_ready = running.wait_for_output("rgba", 1U, std::chrono::seconds{5});
+  const bool text_ready = running.wait_for_output("text", 1U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(image_ready && text_ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto text = radar::testing::to_host(result.snapshot<holoscan::Tensor>("text"));
+  ASSERT_EQ(text.shape.size(), 2U);
+  EXPECT_EQ(text.shape[1], viz::detail::kDashboardTextRowBytes);
+  EXPECT_GT(text.shape[0], 10);
+  EXPECT_STREQ(reinterpret_cast<const char*>(text.data.data() +
+                                             holoscan::visualization::kTextRunHeaderBytes),
+               "FMCW test");
+  std::vector<std::string> labels;
+  for (std::size_t offset = 0; offset < text.data.size();
+       offset += viz::detail::kDashboardTextRowBytes) {
+    labels.emplace_back(reinterpret_cast<const char*>(
+        text.data.data() + offset + holoscan::visualization::kTextRunHeaderBytes));
+  }
+  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "20.0" : "23.0"), labels.end());
+  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "80.0 dB" : "83.0 dB"),
+            labels.end());
+}
+
+INSTANTIATE_TEST_SUITE_P(Projection, FmcwDashboardBackgroundTest, ::testing::Values(1, 2));
+
+TEST(FmcwDashboardBackgroundStatsTest, EstimatesDbMomentsAndRejectsOutliers) {
+  std::vector<float> samples(256);
+  for (std::size_t i = 0; i < samples.size(); ++i)
+    samples[i] = i % 2 ? 19.0F : 21.0F;
+  samples.push_back(1000.0F);
+  samples.push_back(std::numeric_limits<float>::quiet_NaN());
+  const auto stats = viz::detail::background_statistics(samples);
+  ASSERT_TRUE(stats);
+  EXPECT_NEAR(stats->mean_db, 20.0F, 1e-5F);
+  EXPECT_NEAR(stats->stddev_db, 1.0F, 1e-5F);
+  EXPECT_EQ(stats->count, 256U);
+  EXPECT_FALSE(viz::detail::background_statistics(std::vector<float>(63, 20.0F)));
+  EXPECT_FALSE(viz::detail::background_statistics(
+      std::vector<float>(2048, std::numeric_limits<float>::quiet_NaN())));
+}
+
+TEST(FmcwDashboardBackgroundStatsTest, SmoothsHoldsAndExpiresToPeakFallback) {
+  viz::detail::BackgroundScaleState state;
+  const viz::detail::BackgroundStatistics background{20.0F, 1.0F, 256};
+  EXPECT_EQ(state.limits(std::nullopt, 100.0F, 60.0F, 2.0F, 0),
+            (std::array<float, 2>{-40.0F, 20.0F}));
+  EXPECT_EQ(state.limits(background, 1e12F, 60.0F, 2.0F, 0), (std::array<float, 2>{22.0F, 82.0F}));
+  const auto moved = state.limits(viz::detail::BackgroundStatistics{30.0F, 1.0F, 256}, 1e12F, 60.0F,
+                                  2.0F, 250000000);
+  EXPECT_NEAR(moved[0], 22.0F + 10.0F * (1.0F - std::exp(-1.0F)), 1e-5F);
+  EXPECT_EQ(state.limits(std::nullopt, 1e12F, 60.0F, 2.0F, 750000000), moved);
+  EXPECT_EQ(state.limits(std::nullopt, 100.0F, 60.0F, 2.0F, 1250000001),
+            (std::array<float, 2>{-40.0F, 20.0F}));
+  EXPECT_EQ(state.limits(std::nullopt, 0.0F, 60.0F, 2.0F, 1500000000),
+            (std::array<float, 2>{-60.0F, 0.0F}));
+}
 
 TEST(FmcwDashboardTextTest, EncodesNativeSdkRowsWithOwnedTextAndPixelPositions) {
   std::vector<std::uint8_t> records;

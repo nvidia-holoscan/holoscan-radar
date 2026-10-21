@@ -57,10 +57,37 @@ enum class DashboardMode {
   kClusters,
 };
 
+namespace detail {
+
+struct BackgroundStatistics {
+  float mean_db;
+  float stddev_db;
+  std::size_t count;
+};
+
+// A clipped display-background estimate, not a thermal-noise calibration.
+std::optional<BackgroundStatistics> background_statistics(const std::vector<float>& samples_db);
+
+struct BackgroundScaleState {
+  std::optional<float> floor_db;
+  std::optional<std::int64_t> last_valid_ns;
+
+  std::array<float, 2> limits(const std::optional<BackgroundStatistics>& background,
+                              float peak_power, float span_db, float floor_sigma,
+                              std::int64_t now_ns);
+};
+
+}  // namespace detail
+
 struct FmcwDashboardConfig {
   DashboardMode mode{DashboardMode::kRawDetections};
   bool show_angles{true};
   float dynamic_range_db{60.0F};
+  bool noise_scaling{true};
+  std::int64_t noise_sample_limit{2048};
+  std::int64_t noise_range_half_width{3};
+  std::int64_t noise_doppler_half_width{3};
+  double noise_floor_sigma{2.0};
   double range_doppler_width_percent{45.0};
   float detection_radius{0.010F};
   double frame_period{0.1};
@@ -105,6 +132,9 @@ class FmcwDashboardOp : public holoscan::Operator<> {
   std::size_t max_byte_span_{0U};
   std::shared_ptr<holoscan::Tensor> peak_power_;
   std::shared_ptr<holoscan::Tensor> annotation_;
+  std::shared_ptr<holoscan::Tensor> noise_mask_;
+  std::shared_ptr<holoscan::Tensor> noise_samples_;
+  detail::BackgroundScaleState noise_scale_;
   holoscan::Tensor retained_input_;
   std::int64_t frame_index_{0};
   std::optional<std::int64_t> last_render_ns_;
