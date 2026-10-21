@@ -282,13 +282,13 @@ void draw_centered_text(AnnotationCanvas* image, std::int64_t width, std::int64_
             1, color);
 }
 
-// Reserve enough room for endpoint labels and the separate axis caption row.
+// Keep tick/caption rows separate without reserving excess space around the data.
 PixelRect cartesian_plot_rect(const PixelRect& panel, std::int64_t height) {
   const bool compact = height < 540;
-  return PixelRect{.x = panel.x + (compact ? 38 : 52),
-                   .y = panel.y + (compact ? 26 : 30),
-                   .width = panel.width - (compact ? 56 : 72),
-                   .height = panel.height - (compact ? 50 : 78)};
+  return PixelRect{.x = panel.x + (compact ? 36 : 46),
+                   .y = panel.y + (compact ? 22 : 26),
+                   .width = panel.width - (compact ? 46 : 58),
+                   .height = panel.height - (compact ? 42 : 62)};
 }
 
 void draw_x_tick_label(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
@@ -296,14 +296,14 @@ void draw_x_tick_label(AnnotationCanvas* image, std::int64_t width, std::int64_t
   const int label_width = text_width(label, height);
   const int left =
       std::clamp(x - label_width / 2, plot.x, plot.x + std::max(0, plot.width - label_width));
-  draw_text(image, width, height, left, plot.y + plot.height + (height < 540 ? 6 : 8), label, 1);
+  draw_text(image, width, height, left, plot.y + plot.height + 5, label, 1);
 }
 
 void draw_y_tick_label(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
                        const PixelRect& plot, int y, std::string_view label) {
   const int label_height = static_cast<int>(std::ceil(text_size(height, 1)));
   const int top = y - label_height / 2;
-  draw_text(image, width, height, plot.x - (height < 540 ? 6 : 8) - text_width(label, height), top,
+  draw_text(image, width, height, plot.x - (height < 540 ? 5 : 6) - text_width(label, height), top,
             label, 1);
 }
 
@@ -477,17 +477,17 @@ void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
   fill_rect(image, width, height, panel, kBackground);
   const bool is_polar = view == SpatialView::kAzimuthRange;
   const bool compact = height < 540;
-  const PixelRect plot = is_polar ? PixelRect{.x = panel.x + (compact ? 42 : 54),
-                                              .y = panel.y + (compact ? 32 : 42),
-                                              .width = panel.width - (compact ? 58 : 74),
-                                              .height = panel.height - (compact ? 50 : 64)}
+  const PixelRect plot = is_polar ? PixelRect{.x = panel.x + (compact ? 38 : 48),
+                                              .y = panel.y + (compact ? 28 : 38),
+                                              .width = panel.width - (compact ? 46 : 58),
+                                              .height = panel.height - (compact ? 44 : 56)}
                                   : cartesian_plot_rect(panel, height);
   if (plot.width <= 1 || plot.height <= 1) {
     return;
   }
   draw_centered_text(image, width, height, panel, panel.y + (height < 540 ? 5 : 6), title);
   if (!is_polar && !compact) {
-    draw_centered_text(image, width, height, plot, plot.y + plot.height + 25, "Azimuth",
+    draw_centered_text(image, width, height, plot, plot.y + plot.height + 19, "Azimuth",
                        detail::kDashboardTextSecondary);
   }
 
@@ -712,7 +712,7 @@ void draw_history_panel(AnnotationCanvas* image, std::int64_t width, std::int64_
 
   draw_axis_ticks(image, width, height, plot);
   if (height >= 540) {
-    draw_centered_text(image, width, height, plot, plot.y + plot.height + 25, "Time (s)",
+    draw_centered_text(image, width, height, plot, plot.y + plot.height + 19, "Time (s)",
                        detail::kDashboardTextSecondary);
   }
 
