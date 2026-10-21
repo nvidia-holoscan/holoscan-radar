@@ -793,7 +793,6 @@ inline void run_root_music_2d_stage(
       doa_multi, source_count);
 
   mark_music_eig_cache_live();
-  clear_music_matx_caches();
 }
 
 template <typename T>
@@ -851,7 +850,6 @@ inline void run_root_music_stage(
                                broadside_y, broadside_z, convention, aoa, doa_multi, source_count);
 
   mark_music_eig_cache_live();
-  clear_music_matx_caches();
 }
 
 }  // namespace holoscan::radar::detail
