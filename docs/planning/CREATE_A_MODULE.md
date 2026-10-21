@@ -214,7 +214,7 @@ holoscan-my-sensor/
 │                              #   namespace, binary_packages, platforms, SDK pin)
 ├── pyproject.toml             # scikit-build-core; selectively builds the module
 ├── CMakeLists.txt             # find_package(holoscan), BUILD_ALL toggle, python staging
-├── Dockerfile                 # Pinned to nvcr.io/.../holoscan:<ver>-cuda13-dgpu
+├── Dockerfile                 # Pinned to nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13
 ├── README.md                  # Module-facing readme (edit me)
 ├── .clang-format              # C++ modules only
 ├── .gitignore

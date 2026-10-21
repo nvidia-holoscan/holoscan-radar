@@ -16,8 +16,8 @@
 # Manual build (without the CLI):
 #   docker build --build-arg BASE_IMAGE=<HSDK-5-image> -t holoscan-radar .
 
-# Use the HSDK 5 staging image by default. Override BASE_IMAGE to test another SDK.
-ARG BASE_IMAGE=nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13
+# Use the HSDK 5 GA image by default. Override BASE_IMAGE to test another SDK.
+ARG BASE_IMAGE=nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13
 FROM ${BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive

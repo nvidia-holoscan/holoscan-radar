@@ -22,8 +22,8 @@ enum WindowType : ubyte {
 table WindowSpec {
   type: WindowType = None (id: 0);
   sidelobe_attenuation_db: double = 30.0 (id: 1);
-  // EA descriptor traits do not compile nullable scalars; preserve optional
-  // semantics losslessly with an explicit presence bit.
+  // Preserve optional scalar semantics losslessly with an explicit presence
+  // bit, as required by the shared schema payload policy.
   kaiser_beta: double (id: 2);
   has_kaiser_beta: bool = false (id: 3);
   taylor_nbar: int = 4 (id: 4);

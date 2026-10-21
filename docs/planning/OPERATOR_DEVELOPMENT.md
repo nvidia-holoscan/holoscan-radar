@@ -523,7 +523,7 @@ from `contract()`). They are **not** the `[live]` contract.
 **Override selection is causal on event time, one-sidedly.** A `LatestWithin`
 port takes the newest value stamped at or before the frame being processed and
 never one stamped after it, so a producer that stamps a value for a future
-frame cannot have it applied early — verified against EA `v5.0.0.1`. `max_age`
+frame cannot have it applied early — originally verified against SDK `v5.0.0.1`. `max_age`
 is measured on the sample's `capture_time`, not on when it arrived: an override
 published *now* but stamped 500 ms in the past is not selected under a 100 ms
 window, and is selected under a 1000 ms one
@@ -549,7 +549,7 @@ notice, and swallowing it hides the real behavior. Both behaviors are
 observable in `tmp-app/control_plane_app.cpp`.
 
 **Sustained over-publication on a `LatestWithin` port kills the run.**
-Measured on EA `v5.0.0.1` (`tmp-app/selector_probe.cpp`, a 25 ms control plane
+Originally measured on SDK `v5.0.0.1` (`tmp-app/selector_probe.cpp`, a 25 ms control plane
 against a 100 ms consumer): the activation consumes one sample, the other three
 stay retained, and once the queue is full the *producer's* `emit` fails with
 `kBackpressured` — which fails its `compute()`, so the session ends with
