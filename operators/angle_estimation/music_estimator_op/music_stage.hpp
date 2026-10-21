@@ -654,8 +654,8 @@ inline void run_music_stage(const cuda::std::complex<T>* snapshots, const unsign
   music_blank_empty_items_kernel<T><<<grid, blank_block, 0, stream>>>(
       k_counts, num_items, num_az, num_el, max_sources, spectrum, aoa, doa_multi, source_count);
 
+  // Reuse dimension/stream-keyed eig plans; stop() retires their owned workspaces.
   mark_music_eig_cache_live();
-  clear_music_matx_caches();
 }
 
 }  // namespace holoscan::radar::detail

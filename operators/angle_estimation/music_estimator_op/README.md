@@ -158,7 +158,7 @@ Rejected combinations (operator’s own message unless noted):
 
 **Cold.** First tick (or first unseen geometry / grid / smoothing key) builds one steering artifact containing the untapered manifold and device scan grids and, if enabled, the spatial-smoothing plan plus index / FB-flip H2D. First `matx::eig` also creates a plan.
 
-**Steady.** Covariance, eig, EFT, projector, and scan run every tick on stable constructor-created workspace. Device scan grids are reused with the cached manifold; the peak pass drops out once both associated optional outputs latch unwired.
+**Steady.** Covariance, eig, EFT, projector, and scan run every tick on stable constructor-created workspace. Device scan grids are reused with the cached manifold; the peak pass drops out once both associated optional outputs latch unwired. MatX eig plans are retained across matching configurations instead of being cleared each tick; existing live markers and stop-time retirement remain. Plan workspaces can persist until eviction/stop.
 
 **`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives. The Graph harness isolates all seven live inputs. The reduce kernel stages `P_n` in shared memory only when it fits a 40 KiB budget **and** the item grid covers at least one occupancy wave; otherwise it reads `P_n` from global memory.
 
