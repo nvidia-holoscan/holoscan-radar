@@ -79,6 +79,10 @@ __global__ void mark_core_kernel(const T* __restrict__ points, const T* __restri
   for (int64_t j = 0; j < n; ++j) {
     if (dbscan_neighbor<T>(pi, points + j * f, eps_inv2, f)) {
       ++count;
+      // Only the core predicate is consumed; later neighbors cannot change it.
+      if (count >= min_points) {
+        break;
+      }
     }
   }
   const bool core = count >= min_points;

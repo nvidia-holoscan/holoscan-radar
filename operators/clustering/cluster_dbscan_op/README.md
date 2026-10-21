@@ -66,7 +66,7 @@ where eps_inv2_a = epsilon_a > 0 ? 1 / epsilon_a² : 0
 
 That is the contract ellipsoid `Σ_i ((p_i − q_i) / epsilon_i)² ≤ 1` over positive `epsilon` entries. A per-axis zero excludes that feature from the metric while preserving its value in the input row. Length-1 positive `epsilon` broadcasts to every axis.
 
-1. **`mark_core`.** Count neighbors of each point **including itself** over all `num_points` (brute-force `O(N²)`). `is_core` when `count >= min_points`. Seed CC: core → own row index; non-core → `kNoiseRoot` (`-1`).
+1. **`mark_core`.** Count neighbors of each point **including itself**, stopping once the positive effective `min_points` threshold is reached. `is_core` is the same `count >= min_points` boolean; points that never reach it scan all `num_points` (worst-case `O(N²)`). Seed CC: core → own row index; non-core → `kNoiseRoot` (`-1`).
 
 2. **`cc_step` loop.** Iterative min-label propagation over **core–core** edges, ping-pong buffers, plus one pointer jump `cc_in[cc_in[i]]`. Converges to the minimum row index of each core component (the root). Each iteration D2H-syncs a `changed` flag. Cap: `num_points + 64` iterations, else `ClusterDBSCANOp: connected-components did not converge`.
 
@@ -115,7 +115,7 @@ Empty `points` → `labels` and `sizes` both shape `(0,)`.
 
 **Live rebuilds.** `min_points` / `max_clusters` are free. A new effective `(epsilon, num_features)` pair rebuilds and uploads `1/ε²`; an unchanged pair reuses the cached device vector. Every epsilon value still selects a new neighbor graph computation for that tick.
 
-Harness: `performance/operators/clustering/cluster_dbscan/adapter.cpp` (Graph). Axes: `(N, F)` ladder `xs`…`xl5` (256×2 through 8192×5; well-separated blobs). It measures the production Exact `min_points` override; `epsilon` and `max_clusters` overrides are not timed. Both outputs are wired, so timings include `sizes` publication. No measured numbers are recorded in-repo.
+Harness: `performance/operators/clustering/cluster_dbscan/adapter.cpp` (Graph). Axes: `(N, F)` ladder `xs`…`xl5` (256×2 through 8192×5; well-separated blobs). It measures the production Exact `min_points` override; `epsilon` and `max_clusters` overrides are not timed. Both outputs are wired, so timings include `sizes` publication.
 
 Run this performance smoke **inside a development container**, after
 configuring the named build tree with performance enabled (see the

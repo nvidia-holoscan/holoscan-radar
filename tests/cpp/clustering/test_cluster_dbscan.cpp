@@ -253,6 +253,41 @@ TEST(ClusterDBSCANOpTest, MinPointsSeparatesCoreFromNoise) {
   }
 }
 
+template <typename T>
+class DbscanCoreThresholdBoundary : public ::testing::Test {};
+using DbscanCoreThresholdPrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(DbscanCoreThresholdBoundary, DbscanCoreThresholdPrecisions);
+
+TYPED_TEST(DbscanCoreThresholdBoundary, DenseExactThresholdAndNoCoreKeepExpectedLabels) {
+  using T = TypeParam;
+  // Five early neighbors, three insufficient neighbors, then four late neighbors.
+  // At min_points=4, the final group reaches its threshold only at the last input row.
+  const std::vector<double> points{0.0,  0.0, 0.0625,  0.0, 0.125,   0.0, 0.1875,  0.0,
+                                   0.25, 0.0, 16.0,    0.0, 16.0625, 0.0, 16.125,  0.0,
+                                   32.0, 0.0, 32.0625, 0.0, 32.125,  0.0, 32.1875, 0.0};
+  for (const int64_t min_points : {int64_t{1}, int64_t{4}, int64_t{0}, int64_t{13}}) {
+    SCOPED_TRACE(::testing::Message() << "min_points=" << min_points);
+    const auto output =
+        run_dbscan<T>(points_tensor<T>(points, 12, 2), make_params({1.0}, min_points));
+    ASSERT_EQ(output.labels.shape, (std::vector<int64_t>{12}));
+    const bool no_core = min_points > 12;
+    const bool all_groups = min_points == 1;
+    const std::vector<int64_t> expected_sizes =
+        no_core ? std::vector<int64_t>{}
+                : (all_groups ? std::vector<int64_t>{5, 4, 3} : std::vector<int64_t>{5, 4});
+    ASSERT_EQ(output.sizes.shape,
+              (std::vector<int64_t>{static_cast<int64_t>(expected_sizes.size())}));
+    for (size_t cluster = 0; cluster < expected_sizes.size(); ++cluster) {
+      EXPECT_EQ(output.sizes.template as<int64_t>()[cluster], expected_sizes[cluster]);
+    }
+    for (int64_t row = 0; row < 12; ++row) {
+      const int64_t expected =
+          no_core ? -1 : (row < 5 ? 0 : (row >= 8 ? 1 : (all_groups ? 2 : -1)));
+      EXPECT_EQ(output.labels.template as<int64_t>()[row], expected) << "row=" << row;
+    }
+  }
+}
+
 TEST(ClusterDBSCANOpTest, DefaultMinPointsIsTwiceNumFeatures) {
   // num_features=2 → default min_points=4. A triple cannot form a cluster.
   std::vector<double> pts = {0.0, 0.0, 0.1, 0.0, 0.2, 0.0};
