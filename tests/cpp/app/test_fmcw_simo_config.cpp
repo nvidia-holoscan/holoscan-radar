@@ -123,6 +123,9 @@ TEST(FmcwSimoConfig, DecodesBeamformThenDetectSmoke) {
 
   EXPECT_EQ(config.num_frames, 2);
   EXPECT_TRUE(config.cfar_params->nci_axes.empty());
+  EXPECT_EQ(config.cfar_params->cfar_variant, radar::CfarVariant::kCA);
+  EXPECT_EQ(config.cfar_params->guard_cells, (std::vector<int64_t>{3, 3}));
+  EXPECT_DOUBLE_EQ(config.cfar_params->pfa, 1.0e-9);
   EXPECT_EQ(config.beamformer_params->array_geometry, config.array_geometry);
   EXPECT_EQ(config.extents.max_channels, 169);
   EXPECT_EQ(config.cfar_extents.max_tx, 13);
@@ -141,7 +144,7 @@ TEST(FmcwSimoConfig, DecodesBeamformThenDetectSmoke) {
           holoscan::radar::AssemblyFeature::kElBin}));
 }
 
-TEST(FmcwSimoConfig, DecodesBothDefaultWorkflowBlocks) {
+TEST(FmcwSimoConfig, DecodesBothDefaultWorkflows) {
   const auto detect = simo::load_detect_then_beamform_config(config_path("simo/config/simo.yaml"));
   const auto beamform =
       simo::load_beamform_then_detect_config(config_path("dense_beamforming/config/"

@@ -22,6 +22,14 @@ The [shared dashboard](../../common/radar_app/viz/README.md) uses native SDK tex
 a relative-power legend, and frame-driven presentation capped by
 `visualization.display_rate_hz`.
 
+## Configuration
+
+Operator settings are top-level YAML blocks: `range_processor`, `clutter_filter`,
+`doppler_processor`, `phase_shift_beamformer`, `cfar_detector`, and
+`feature_assembly`. Scenario and visualization settings remain under `app`.
+For existing presets, remove the former `beamform_then_detect:` wrapper and
+unindent its three operator blocks by one level. Both languages use this layout.
+
 ## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:

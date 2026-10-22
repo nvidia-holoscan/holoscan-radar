@@ -96,50 +96,48 @@ doppler_processor:
     # See operators/fmcw/fmcw_doppler_processor_op/README.md.
     doppler_window: *doppler_window
 
-
-beamform_then_detect:
-    phase_shift_beamformer:
-        angle_convention:
-            # Common options: radar_boresight, direction_cosine, custom.
-            # See operators/angle_estimation/phase_shift_beamformer_op/README.md.
-            preset: direction_cosine
-        # Scan coordinates accept an explicit array or inclusive {min, max, step}.
-        # Units follow angle_convention: dimensionless u/v here.
-        az_coordinates: {min: -0.3, max: 0.3, step: 0.05}
-        el_coordinates: {min: -0.3, max: 0.3, step: 0.05}
-        array_taper:
-            # Common options: none, hann, taylor.
-            # See operators/angle_estimation/phase_shift_beamformer_op/README.md.
-            type: taylor
-            sidelobe_attenuation_db: 35.0
-    cfar_detector:
-        # Options: CA, GO, SO, OS.
-        cfar_variant: CA
-        guard_cells:
-            - 3  # Doppler
-            - 3  # Range
-        training_cells:
-            - 3  # Doppler
-            - 3  # Range
-        pfa: 1.0e-9
-        # Options: none, range_doppler, all.
-        peak_mode: all
-        peak_radius:
-            - 2  # Azimuth
-            - 2  # Elevation
-            - 2  # Doppler
-            - 2  # Range
-        nci_axes: []
-    feature_assembly:
-        # Common options: range, velocity, score.
-        # See operators/detection/feature_assembly_op/README.md.
-        features:
-            - range
-            - velocity
-            - az
-            - el
-            - score
-            - range_bin
-            - doppler_bin
-            - az_bin
-            - el_bin
+phase_shift_beamformer:
+    angle_convention:
+        # Common options: radar_boresight, direction_cosine, custom.
+        # See operators/angle_estimation/phase_shift_beamformer_op/README.md.
+        preset: direction_cosine
+    # Scan coordinates accept an explicit array or inclusive {min, max, step}.
+    # Units follow angle_convention: dimensionless u/v here.
+    az_coordinates: {min: -0.3, max: 0.3, step: 0.05}
+    el_coordinates: {min: -0.3, max: 0.3, step: 0.05}
+    array_taper:
+        # Common options: none, hann, taylor.
+        # See operators/angle_estimation/phase_shift_beamformer_op/README.md.
+        type: taylor
+        sidelobe_attenuation_db: 35.0
+cfar_detector:
+    # Options: CA, GO, SO, OS.
+    cfar_variant: CA
+    guard_cells:
+        - 3  # Doppler
+        - 3  # Range
+    training_cells:
+        - 3  # Doppler
+        - 3  # Range
+    pfa: 1.0e-9
+    # Options: none, range_doppler, all.
+    peak_mode: all
+    peak_radius:
+        - 2  # Azimuth
+        - 2  # Elevation
+        - 2  # Doppler
+        - 2  # Range
+    nci_axes: []
+feature_assembly:
+    # Common options: range, velocity, score.
+    # See operators/detection/feature_assembly_op/README.md.
+    features:
+        - range
+        - velocity
+        - az
+        - el
+        - score
+        - range_bin
+        - doppler_bin
+        - az_bin
+        - el_bin
