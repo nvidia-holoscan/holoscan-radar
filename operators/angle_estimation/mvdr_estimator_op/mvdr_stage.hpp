@@ -206,6 +206,106 @@ __global__ void load_diagonal_kernel(cuda::std::complex<T>* __restrict__ cov, in
   }
 }
 
+template <typename T>
+__global__ void covariance_loaded_kernel(const cuda::std::complex<T>* __restrict__ x,
+                                         const unsigned char* __restrict__ mask, int64_t num_items,
+                                         int64_t num_channels, int64_t num_snapshots,
+                                         cuda::std::complex<T>* __restrict__ cov,
+                                         int64_t* __restrict__ k_counts, double loading) {
+  {
+    const int64_t item = static_cast<int64_t>(blockIdx.x);
+    if (item >= num_items) {
+      return;
+    }
+
+    __shared__ int64_t k_valid;
+    if (threadIdx.x == 0) {
+      int64_t count = 0;
+      for (int64_t s = 0; s < num_snapshots; ++s) {
+        const bool valid = mask == nullptr || mask[item * num_snapshots + s] != 0;
+        count += valid ? 1 : 0;
+      }
+      k_valid = count;
+      k_counts[item] = count;
+    }
+    __syncthreads();
+
+    const int64_t k_count = k_valid;  // valid-snapshot count (covariance divisor)
+    const cuda::std::complex<T>* xi = x + item * num_channels * num_snapshots;
+    const int64_t entries = num_channels * num_channels;
+    const int tid = static_cast<int>(threadIdx.x);
+    const int nthreads = static_cast<int>(blockDim.x);
+    for (int64_t e = tid; e < entries; e += nthreads) {
+      const int64_t c1 = e / num_channels;
+      const int64_t c2 = e % num_channels;
+      cuda::std::complex<T> acc{T{0}, T{0}};
+      for (int64_t s = 0; s < num_snapshots; ++s) {
+        const bool valid = mask == nullptr || mask[item * num_snapshots + s] != 0;
+        if (!valid) {
+          continue;
+        }
+        const cuda::std::complex<T> a = xi[c1 * num_snapshots + s];
+        const cuda::std::complex<T> b = xi[c2 * num_snapshots + s];
+        // a · conj(b)
+        acc += cuda::std::complex<T>(a.real() * b.real() + a.imag() * b.imag(),
+                                     a.imag() * b.real() - a.real() * b.imag());
+      }
+      if (k_count > 0) {
+        const T scale = T{1} / static_cast<T>(k_count);
+        acc = cuda::std::complex<T>(acc.real() * scale, acc.imag() * scale);
+      } else {
+        acc = cuda::std::complex<T>(T{0}, T{0});
+      }
+      cov[item * entries + e] = acc;
+    }
+  }
+  __syncthreads();
+  {
+    const int64_t item = static_cast<int64_t>(blockIdx.x);
+    if (item >= num_items) {
+      return;
+    }
+    const int64_t stride = num_channels * num_channels;
+    cuda::std::complex<T>* R = cov + item * stride;
+
+    extern __shared__ __align__(16) unsigned char smem_dl[];
+    auto* red = reinterpret_cast<T*>(smem_dl);
+    const int tid = static_cast<int>(threadIdx.x);
+    const int nthreads = static_cast<int>(blockDim.x);
+
+    T partial = T{0};
+    for (int64_t c = tid; c < num_channels; c += nthreads) {
+      partial += R[c * num_channels + c].real();
+    }
+    red[tid] = partial;
+    __syncthreads();
+    for (int stride2 = nthreads / 2; stride2 > 0; stride2 >>= 1) {
+      if (tid < stride2) {
+        red[tid] += red[tid + stride2];
+      }
+      __syncthreads();
+    }
+    const T trace = red[0];
+
+    T delta;
+    if (loading < 0.0) {
+      delta = kAutoLoadingFactor<T> * trace / static_cast<T>(num_channels);
+      // Empty / all-zero covariances have trace == 0 → auto δ would be 0 and
+      // leave a singular R̂. Use an absolute floor so the batched inv stays
+      // defined; blank_empty_items_kernel then zeros Capon / DOA for K_i == 0.
+      if (!(delta > T{0})) {
+        delta = kAutoLoadingFactor<T>;
+      }
+    } else {
+      delta = static_cast<T>(loading);
+    }
+    for (int64_t c = tid; c < num_channels; c += nthreads) {
+      cuda::std::complex<T>& d = R[c * num_channels + c];
+      d = cuda::std::complex<T>(d.real() + delta, d.imag());
+    }
+  }
+}
+
 // spectrum is stored (num_az, num_el) per item; beams are el-major
 // (beam = ie·num_az + ia) matching the steering-manifold build.
 template <typename T>
@@ -553,8 +653,18 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots, const unsigne
 
   constexpr int cov_block = 256;
   const int grid = static_cast<int>(num_items);
-  covariance_kernel<T><<<grid, cov_block, 0, stream>>>(snapshots, mask, num_items, num_channels,
-                                                       num_snapshots, cov, k_counts);
+  if constexpr (std::is_same_v<T, float>) {
+    if (eigenvalues == nullptr) {
+      covariance_loaded_kernel<T><<<grid, 256, static_cast<size_t>(256) * sizeof(T), stream>>>(
+          snapshots, mask, num_items, num_channels, num_snapshots, cov, k_counts, loading);
+    } else {
+      covariance_kernel<T><<<grid, cov_block, 0, stream>>>(snapshots, mask, num_items, num_channels,
+                                                           num_snapshots, cov, k_counts);
+    }
+  } else {
+    covariance_kernel<T><<<grid, cov_block, 0, stream>>>(snapshots, mask, num_items, num_channels,
+                                                         num_snapshots, cov, k_counts);
+  }
 
   // The solver plans reference stable operator-owned covariance/inverse
   // buffers. Mark them before first use so stop() retires any plan that MatX
@@ -581,8 +691,15 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots, const unsigne
 
   const int dl_block = 256;
   const size_t dl_smem = static_cast<size_t>(dl_block) * sizeof(T);
-  load_diagonal_kernel<T>
-      <<<grid, dl_block, dl_smem, stream>>>(cov, num_items, num_channels, loading);
+  if constexpr (std::is_same_v<T, float>) {
+    if (eigenvalues != nullptr) {
+      load_diagonal_kernel<T>
+          <<<grid, dl_block, dl_smem, stream>>>(cov, num_items, num_channels, loading);
+    }
+  } else {
+    load_diagonal_kernel<T>
+        <<<grid, dl_block, dl_smem, stream>>>(cov, num_items, num_channels, loading);
+  }
 
   // MatX 1.0's cached batch_size==1 inverse selects a cuSolver getrf/getrs
   // path that is not repeatable across executions. Promote only that inverse

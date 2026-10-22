@@ -270,10 +270,11 @@ MvdrOutputs run_mvdr(std::shared_ptr<holoscan::Tensor> snapshot, MVDRParams para
       holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("eigenvalues"))};
 }
 
+template <typename T = double>
 holoscan::testing::TestResult run_mvdr_with_mask(std::shared_ptr<holoscan::Tensor> mask,
                                                  std::shared_ptr<holoscan::Tensor> snapshot,
                                                  MVDRParams params) {
-  using Op = MVDREstimatorOp<double>;
+  using Op = MVDREstimatorOp<T>;
   const auto extents = holoscan::radar::testing::extents_for_scan_grid(
       params.az_coordinates.size(), params.el_coordinates.size());
   auto fixture = holoscan::testing::create_operator_test<Op>(extents);
@@ -285,7 +286,7 @@ holoscan::testing::TestResult run_mvdr_with_mask(std::shared_ptr<holoscan::Tenso
   constexpr const char* kOutputs[] = {"aoa_estimates", "angle_spectrum", "doa_multi",
                                       "source_count", "eigenvalues"};
   for (const char* output : kOutputs) {
-    fixture.capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
+    fixture.template capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
@@ -415,6 +416,133 @@ holoscan::testing::TestResult run_live_mvdr(std::vector<LiveMvdrTick> ticks, MVD
   auto fixture_result = running.finish();
   completion.check(fixture_result);
   return fixture_result;
+}
+
+template <typename T>
+class MVDRAngleBoundaries : public ::testing::Test {};
+using MVDRBoundaryPrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(MVDRAngleBoundaries, MVDRBoundaryPrecisions);
+
+TYPED_TEST(MVDRAngleBoundaries, TiledScanPreservesPositiveTieInvisibleAndMaskedEmptyRows) {
+  using T = TypeParam;
+  constexpr int64_t kChannels = 1;
+  constexpr int64_t kLooks = 3;
+  constexpr int64_t kGrid = 33;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const std::vector<std::complex<double>> values{{1.0, 1.0}, {nan, nan}, {1.0, -1.0},
+                                                 {nan, nan}, {nan, nan}, {nan, nan}};
+  const auto snapshot = block_to_device<T>(values, {2, kChannels, kLooks});
+  const auto mask = to_device_tensor(std::vector<uint8_t>{1, 0, 1, 0, 0, 0}, {2, kLooks},
+                                     DLDataType{kDLUInt, 8, 1});
+  const auto geometry = make_ula_geometry(kChannels, 0.5, 1.0);
+  AngleConvention convention;
+  convention.preset = AngleConventionPreset::kDirectionCosine;
+  const auto coordinates = linspace(-1.0, 1.0, kGrid);
+  // C=1 at the origin gives a=1 at every visible beam. The two valid looks
+  // have power 2, so fixed load 2 gives R_loaded=4 and Capon power 4. The
+  // first visible beam in el-major order is (u=0,v=-1); all others tie.
+  const auto result = run_mvdr_with_mask<T>(
+      mask, snapshot, make_params(geometry, convention, coordinates, coordinates, 2.0));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto aoa = mvdr_frames(result, "aoa_estimates");
+  const auto spectrum = mvdr_frames(result, "angle_spectrum");
+  ASSERT_EQ(aoa.size(), 1U);
+  ASSERT_EQ(spectrum.size(), 1U);
+  ASSERT_EQ(aoa[0].shape, (std::vector<int64_t>{2, 2}));
+  ASSERT_EQ(spectrum[0].shape, (std::vector<int64_t>{2, kGrid, kGrid}));
+  EXPECT_EQ(aoa[0].template as<T>()[0], T{0});
+  EXPECT_EQ(aoa[0].template as<T>()[1], T{-1});
+  EXPECT_TRUE(std::isnan(aoa[0].template as<T>()[2]));
+  EXPECT_TRUE(std::isnan(aoa[0].template as<T>()[3]));
+  for (int64_t ia = 0; ia < kGrid; ++ia) {
+    for (int64_t ie = 0; ie < kGrid; ++ie) {
+      const double u = coordinates[static_cast<size_t>(ia)];
+      const double v = coordinates[static_cast<size_t>(ie)];
+      const T expected = u * u + v * v <= 1.0 ? T{4} : T{0};
+      const int64_t offset = ia * kGrid + ie;
+      EXPECT_EQ(spectrum[0].template as<T>()[offset], expected) << ia << "," << ie;
+      EXPECT_EQ(spectrum[0].template as<T>()[kGrid * kGrid + offset], T{0});
+    }
+  }
+}
+
+TYPED_TEST(MVDRAngleBoundaries, UnwiredEigenvaluesMatchWiredAcrossChangedMaskedInputs) {
+  using T = TypeParam;
+  using Op = MVDREstimatorOp<T>;
+  constexpr int64_t kChannels = 4;
+  constexpr int64_t kLooks = 8;
+  constexpr std::size_t kFrames = 3;
+  const auto geometry = make_ula_geometry(kChannels, 0.5, 1.0);
+  const AngleConvention convention;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  std::vector<std::shared_ptr<holoscan::Tensor>> snapshots;
+  for (const double az : {0.1, -0.1, 0.1}) {
+    auto values = make_block(geometry, convention, az, 0.0, kLooks, 0.0, 1901u);
+    values.resize(static_cast<size_t>(2 * kChannels * kLooks), {nan, nan});
+    snapshots.push_back(block_to_device<T>(values, {2, kChannels, kLooks}));
+  }
+  const auto mask =
+      to_device_tensor(std::vector<uint8_t>{1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+                       {2, kLooks}, DLDataType{kDLUInt, 8, 1});
+  const auto params = make_params(geometry, convention, linspace(-0.3, 0.3, 13), {0.0},
+                                  /*loading=*/0.125, /*max_sources=*/2);
+  const std::array<const char*, 4> compared_ports{"aoa_estimates", "angle_spectrum", "doa_multi",
+                                                  "source_count"};
+  const auto run = [&](bool capture_eigenvalues) {
+    auto extents = holoscan::radar::testing::extents_for_scan_grid(13, 1);
+    extents.max_items = 2;
+    auto fixture = holoscan::testing::create_operator_test<Op>(extents);
+    fixture.set_params(params);
+    for (std::size_t tick = 0; tick < kFrames; ++tick) {
+      fixture.push_frame(holoscan::testing::frame_at(
+          std::chrono::milliseconds{static_cast<int64_t>((tick + 1U) * 100U)},
+          holoscan::testing::input("is_valid", *mask),
+          holoscan::testing::input("snapshot", *snapshots[tick])));
+    }
+    constexpr std::size_t kMaximumBytes = 1024U * 1024U;
+    for (const char* port : compared_ports) {
+      fixture.template capture_snapshot<holoscan::Tensor>(port, kFrames, kMaximumBytes);
+      fixture.output_device(port, holoscan::DeviceId{0});
+    }
+    if (capture_eigenvalues) {
+      fixture.template capture_snapshot<holoscan::Tensor>("eigenvalues", kFrames, kMaximumBytes);
+    }
+    fixture.output_device("eigenvalues", holoscan::DeviceId{0});
+    fixture.input_source_device("snapshot", holoscan::DeviceId{0});
+    fixture.input_source_device("is_valid", holoscan::DeviceId{0});
+    auto running = fixture.run_async({.expect_stop = true});
+    for (const char* port : compared_ports) {
+      (void)running.wait_for_output(port, kFrames, std::chrono::seconds{5});
+    }
+    if (capture_eigenvalues) {
+      (void)running.wait_for_output("eigenvalues", kFrames, std::chrono::seconds{5});
+    }
+    running.request_stop();
+    return running.finish();
+  };
+  const auto wired = run(true);
+  ASSERT_TRUE(wired.ok()) << wired.describe_failure();
+  const auto unwired = run(false);
+  ASSERT_TRUE(unwired.ok()) << unwired.describe_failure();
+  EXPECT_THROW((unwired.template snapshots<holoscan::Tensor>("eigenvalues")),
+               std::invalid_argument);
+  for (const char* port : compared_ports) {
+    const auto reference = mvdr_frames(wired, port);
+    const auto actual = mvdr_frames(unwired, port);
+    ASSERT_EQ(reference.size(), kFrames) << port;
+    ASSERT_EQ(actual.size(), kFrames) << port;
+    for (std::size_t tick = 0; tick < kFrames; ++tick) {
+      EXPECT_EQ(actual[tick].shape, reference[tick].shape) << port << " tick " << tick;
+      EXPECT_EQ(actual[tick].data, reference[tick].data) << port << " tick " << tick;
+    }
+    EXPECT_EQ(actual[0].data, actual[2].data) << port;
+  }
+  const auto aoa = mvdr_frames(unwired, "aoa_estimates");
+  for (std::size_t tick = 0; tick < kFrames; ++tick) {
+    EXPECT_NEAR(aoa[tick].template as<T>()[0], tick == 1U ? -0.1 : 0.1, 0.011);
+    EXPECT_TRUE(std::isnan(aoa[tick].template as<T>()[2]));
+    EXPECT_TRUE(std::isnan(aoa[tick].template as<T>()[3]));
+  }
 }
 
 TEST(MVDREstimatorOpTest, DefaultsToRadarBoresightConvention) {
