@@ -194,6 +194,7 @@ radar_add_test(integration/test_sar_autofocus_graph
 # directory is an include root for this one target.
 target_include_directories(test_sar_autofocus_graph PRIVATE
     ${PROJECT_SOURCE_DIR}/applications/sar)
+radar_add_test(detection/test_cfar_calibration cfar_detector_op)
 radar_add_test(detection/test_cfar_detector
     holoscan::cfar_detector_op
     holoscan::feature_assembly_op)

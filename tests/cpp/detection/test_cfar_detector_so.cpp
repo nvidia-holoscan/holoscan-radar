@@ -61,6 +61,8 @@ std::vector<double> power_map(double floor, const std::vector<std::pair<int64_t,
   return power_map(kDoppler, kRange, floor, targets, peak);
 }
 
+// Numerical calibration cost scales with 1/Pfa. Shape/noise/score tests use
+// affordable probabilities; rare-event budgeting and cancellation have dedicated tests.
 CFARParams so_params(double pfa) {
   CFARParams p{};
   p.cfar_variant = CfarVariant::kSO;
@@ -231,7 +233,7 @@ TEST(CFARDetectorOpSoTest, NoFalseAlarmsOnFlatMap) {
   const auto map = power_map(1.0, {}, 1.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = run_cfar<double>(input, so_params(1e-6));
+  const auto out = run_cfar<double>(input, so_params(1e-3));
 
   EXPECT_EQ(num_detections(out.idx), 0);
 }
@@ -390,7 +392,7 @@ TEST(CFARDetectorOpSoTest, BorderCellsUseInBoundsTrainingOnly) {
   const auto map = power_map(floor, {}, floor);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = run_cfar<double>(input, so_params(1e-6));
+  const auto out = run_cfar<double>(input, so_params(1e-3));
 
   const auto* noise = out.noise.as<double>();
   const auto* scores = out.score.as<double>();
@@ -497,7 +499,7 @@ TEST(CFARDetectorOpSoTest, NciIntegratesChannelsForDetection) {
   auto flat_input =
       to_device_tensor<double>(flat_cube, {kChannels, kDoppler, kRange}, real_dtype<double>());
 
-  CFARParams flat_params = so_params(1e-6);
+  CFARParams flat_params = so_params(1e-3);
   const auto per_channel = run_cfar<double>(flat_input, flat_params);
   EXPECT_EQ(num_detections(per_channel.idx), 0);
 
@@ -740,7 +742,7 @@ TEST(CFARDetectorOpSoTest, PfaConfigurableFromParams) {
   auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
   CFARParams loose = so_params(1e-2);
   loose.blocking_alpha_lut_rebuild = true;
-  CFARParams tight = so_params(1e-8);
+  CFARParams tight = so_params(1e-3);
   tight.blocking_alpha_lut_rebuild = true;
   EXPECT_GT(score_at(run_cfar<double>(input, loose).score, dt, rt),
             score_at(run_cfar<double>(input, tight).score, dt, rt));

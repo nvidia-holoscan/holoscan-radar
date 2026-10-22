@@ -21,6 +21,7 @@
 #include <holoscan/logger/logger.hpp>
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
+#include "detection/cfar_detector_op/cfar_calibration.hpp"
 #include "detection/cfar_detector_op/cfar_compact.cuh"
 #include "detection/cfar_detector_op/cfar_stage.hpp"
 #include "detection/cfar_detector_op/nci_plan.hpp"
@@ -350,6 +351,8 @@ expected<detail::CfarStageConfig, Error> resolve_params(
     const MaxTensorExtents& extents) {
   detail::CfarStageConfig stage;
   stage.cfar_variant = pinned.cfar_variant;
+  stage.calibration_relative_error = pinned.calibration_relative_error;
+  stage.calibration_confidence = pinned.calibration_confidence;
   HOLOSCAN_TRY(stage.os_rank, resolve_live_override(os_rank, pinned.os_rank));
   HOLOSCAN_TRY(stage.guard_cells,
                resolve_live_override_via(guard_cells, pinned.guard_cells,
@@ -454,6 +457,13 @@ expected<CfarStagePlan, Error> build_cfar_stage_plan(detail::CfarStageConfig sta
                                                      const MaxTensorExtents& extents,
                                                      std::size_t max_leading) {
   try {
+    if (!std::isfinite(stage.calibration_relative_error) || stage.calibration_relative_error <= 0 ||
+        stage.calibration_relative_error >= 1 || !std::isfinite(stage.calibration_confidence) ||
+        stage.calibration_confidence <= 0 || stage.calibration_confidence >= 1) {
+      return make_unexpected(Error{
+          ErrorCode::kInvalidArgument,
+          "CFAR calibration_relative_error and calibration_confidence must be finite in (0,1)"});
+    }
     const InputPrecision precision = classify_input_dtype<T>(input, "rd_maps", /*allow_real=*/true);
     require_cuda_accessible(input, "rd_maps", kOpName);
     require_contiguous(input, "rd_maps", kOpName);
@@ -598,7 +608,7 @@ expected<void, Error> upload_alpha_lut(detail::CfarDetectorState& state,
 
 template <typename T>
 expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const CfarStagePlan& plan,
-                                       cudaStream_t stream) {
+                                       cudaStream_t stream, CancellationView cancellation) {
   const auto& stage = plan.stage;
   const bool pfa_override_changed = state.pfa_seen && stage.pfa != state.last_seen_pfa;
   state.last_seen_pfa = stage.pfa;
@@ -618,10 +628,18 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
     state.window_exceeds_map_warned = true;
   }
 
-  const CfarAlphaLutKey lut_key{stage.cfar_variant, stage.pfa,    plan.effective_fold,
-                                stage.os_rank,      plan.guard_d, plan.guard_r,
-                                plan.train_d,       plan.train_r, plan.key_num_doppler,
-                                plan.key_num_range};
+  const CfarAlphaLutKey lut_key{stage.cfar_variant,
+                                stage.pfa,
+                                plan.effective_fold,
+                                stage.os_rank,
+                                plan.guard_d,
+                                plan.guard_r,
+                                plan.train_d,
+                                plan.train_r,
+                                plan.key_num_doppler,
+                                plan.key_num_range,
+                                stage.calibration_relative_error,
+                                stage.calibration_confidence};
   const bool had_external_alpha_lut = state.using_external_alpha_lut;
   const bool has_external_alpha_lut = !stage.alpha_lut.empty();
 
@@ -704,6 +722,9 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
             !uses_slow_pfa_lut_calibration(lut_key.variant, lut_key.fold)) {
           return;
         }
+        if (detail::max_training_cell_count(plan.num_doppler, plan.num_range, plan.guard_d,
+                                            plan.guard_r, plan.train_d, plan.train_r) == 0)
+          return;
         HOLOSCAN_LOG_WARN(
             "CFARDetectorOp: deriving the alpha LUT from pfa for {} is the "
             "slow calibration path (Monte Carlo LUT build); for low-latency "
@@ -719,7 +740,10 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
             "CFARDetectorOp: calibrating the alpha LUT at runtime (the "
             "configuration was not pre-warmed at start — e.g. a [live] "
             "override, an NCI fold not covered by nci_fold, or a sub-window "
-            "map); this stalls the tick or serves a stale LUT while building.");
+            "map); mode={}",
+            stage.blocking_alpha_lut_rebuild || state.alpha_lut_host_cache.empty()
+                ? "blocking until alpha LUT is ready"
+                : "serving the previous LUT while building");
         state.runtime_build_warned = true;
       };
       detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
@@ -729,14 +753,19 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
         warn_runtime_rebuild();
         warn_slow_pfa_lut();
         try {
-          HOLOSCAN_TRY(adopt_ready_lut(detail::get_cached_alpha_lut(lut_key)));
+          HOLOSCAN_TRY(adopt_ready_lut(detail::get_cached_alpha_lut(
+              lut_key,
+              [&] {
+                return cancellation.stop_requested();
+              },
+              &state)));
         } catch (const std::exception& e) {
           return fail_runtime(e.what());
         }
       } else {
         warn_runtime_rebuild();
         warn_slow_pfa_lut();
-        detail::ensure_alpha_lut_build(lut_key);
+        detail::ensure_alpha_lut_build(lut_key, &state);
         state.pending_lut_key = lut_key;
         state.pending_lut_active = true;
         if (!state.stale_lut_warned) {
@@ -894,9 +923,26 @@ void CFARDetectorOp<T>::start() {
   const int win_d = 2 * (gd + td) + 1;
   const int win_r = 2 * (gr + tr) + 1;
 
-  const CfarAlphaLutKey warm_key{variant, pinned.pfa, fold, pinned.os_rank, gd,
-                                 gr,      td,         tr,   win_d,          win_r};
+  const CfarAlphaLutKey warm_key{variant,
+                                 pinned.pfa,
+                                 fold,
+                                 pinned.os_rank,
+                                 gd,
+                                 gr,
+                                 td,
+                                 tr,
+                                 win_d,
+                                 win_r,
+                                 pinned.calibration_relative_error,
+                                 pinned.calibration_confidence};
   try {
+    if (uses_slow_pfa_lut_calibration(variant, fold)) {
+      detail::ensure_alpha_lut_build(warm_key, state_.get());
+      HOLOSCAN_LOG_WARN(
+          "CFARDetectorOp: queued cancellable start-time Monte Carlo calibration; first tick waits "
+          "for alpha_lut");
+      return;
+    }
     (void)detail::get_cached_alpha_lut(warm_key);
     HOLOSCAN_LOG_INFO(
         "CFARDetectorOp: pre-calibrated alpha LUT at start (variant={}, "
@@ -912,7 +958,7 @@ void CFARDetectorOp<T>::start() {
 
 template <typename T>
 void CFARDetectorOp<T>::stop() {
-  detail::join_inflight_alpha_lut_builds();
+  detail::release_alpha_lut_builds(state_.get());
 }
 
 template <typename T>
@@ -1011,7 +1057,12 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
   detail::CfarDetectorState& state = *state_;
   HOLOSCAN_TRY(auto workspace, prepare_dense_workspace<T>(state, plan));
 
-  HOLOSCAN_TRY(update_alpha_lut<T>(state, plan, stream));
+  auto updated = update_alpha_lut<T>(state, plan, stream, context.cancellation());
+  if (!updated) {
+    if (context.cancellation().stop_requested())
+      return {};
+    return make_unexpected(updated.error());
+  }
   HOLOSCAN_TRY(auto nci_table_dev_ptr, update_nci_table(state, plan.nci, stream));
 
   // Run the CFAR stage.

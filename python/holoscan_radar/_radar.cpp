@@ -596,12 +596,14 @@ void register_catalog() {
 }
 }  // namespace
 
+void register_calibration_bindings(nanobind::module_& module);
 void register_siso_bindings(nanobind::module_& module);
 void register_tdm_bindings(nanobind::module_& module);
 void register_viz_bindings(nanobind::module_& module);
 
 NB_MODULE(_radar, module) {
   register_catalog();
+  register_calibration_bindings(module);
   register_siso_bindings(module);
   register_tdm_bindings(module);
   register_viz_bindings(module);

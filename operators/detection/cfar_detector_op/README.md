@@ -54,6 +54,8 @@ rd_maps / rda_cube / power_map -> CFARDetectorOp
 | `guard_cells` | int64[2] `(doppler, range)` | none (required) | `[live]` Exact POD pair | Guard half-extent each side of the CUT Cost: May recalibrate the α LUT; no kernel rebuild. |
 | `training_cells` | int64[2] `(doppler, range)` | none (required) | `[live]` Exact POD pair | Training half-extent each side; sets `N` Cost: Same as `guard_cells`. |
 | `pfa` | float64 | `1e-6` | `[live]` Exact | Target Pfa when `alpha_lut` is empty; ignored for α while an external LUT is set Cost: Unseen `(variant, pfa, K, window, …)` key builds / queues an α LUT and warns once. |
+| `calibration_relative_error` | float64 | `0.10` | static | Relative Pfa error target for direct Monte Carlo; finite in `(0,1)`; not alpha error. |
+| `calibration_confidence` | float64 | `0.95` | static | Per-geometry coverage of the relative Pfa band; finite in `(0,1)`; not simultaneous LUT coverage. |
 | `alpha_lut` | float64 vector | `[]` | `[live]` Exact host config Tensor | Precomputed α table; non-empty → used directly, `pfa` ignored for α Cost: Validation + H2D upload. |
 | `blocking_alpha_lut_rebuild` | bool | `false` | static | `true` blocks the tick on a pfa-LUT miss; `false` serves the previous LUT while a background build runs (first build still blocks) |
 | `nci_fold` | int64 | `0` (unset) | static | Optional `K` hint so `start()` can pre-warm when `nci_axes` is set; `<= 0` defers |
@@ -94,13 +96,114 @@ group: [`operators/detection/README.md`](../README.md)
    Pfa = prod_{i=0}^{rank} (N - i) / (N - i + alpha)
    ```
 
-   GO, SO, and OS with `K > 1` have no closed form and invert Pfa by Monte Carlo. An external `alpha_lut` skips calibration and ignores `pfa` for α. `threshold_scale` always multiplies the active α.
+   GO, SO, and OS with `K > 1` use direct Monte Carlo with a Pfa- and accuracy-dependent trial budget. Each trial draws training powers and a CUT, then forms `CUT / noise_statistic`. Streamed upper-tail selection gives alpha without repeating draws for a threshold search. An external `alpha_lut` skips calibration and ignores `pfa` for α. `threshold_scale` always multiplies the active α.
 
-5. **Start-time pre-warm.** `start()` pre-builds the pfa-derived LUT for **CA and OS only**, keyed on a canonical window-sized map (`win = 2·(guard+train)+1` per axis). GO / SO are map-dependent (`go_lut_index`) and are **not** pre-warmed. A missing `nci_fold` when `nci_axes` is set defers calibration to the first tick. `preintegrated_looks` contributes to `K` even when `nci_axes` is empty.
+5. **Start-time pre-warm.** `start()` pre-builds analytic LUTs and queues cancellable multi-look OS calibration for **CA and OS only**, keyed on a canonical window-sized map (`win = 2·(guard+train)+1` per axis). GO / SO are map-dependent (`go_lut_index`) and are **not** pre-warmed. A missing `nci_fold` when `nci_axes` is set defers calibration to the first tick. `preintegrated_looks` contributes to `K` even when `nci_axes` is empty.
 
 6. **Peak-mode NMS** (static, default `none`). `range_doppler` runs `cfar_peak_suppress_kernel` independently in every leading plane. `all` dispatches rank-2/3/4 N-D kernels. `peak_radius` defines a full hyperrectangle in bins; a scalar broadcasts, while `all` also accepts one value per post-NCI output axis. Zero excludes an axis. Both modes compare only detected neighbors using raw `cfar_power`; exact ties retain the lowest full row-major index. Dense score/noise/power remain unchanged; mask/index follow selected peaks.
 
 7. **`detection_idx` compaction.** CUB reduce + exclusive-scan scatter writes rows in batch-major raster order: preserved leading coordinates, then `(doppler_bin, range_bin)`. A scalar device→host count sync sizes the exact output (`count_mask_detections`). If `max_detections > 0` and the scene exceeds it, surplus rows are dropped (raster-first kept) and the operator warns.
+
+## Offline calibration and accuracy
+
+Automatic Monte Carlo calibration defaults to `calibration_relative_error: 0.10`
+and `calibration_confidence: 0.95`. The initial budget is approximately
+`z^2 * (1-pfa) / (error^2 * pfa)`, with at least 4096 trials. The final budget
+and tail rank are checked against binomial order-statistic coverage. Confidence
+describes the probability that the selected alpha's model Pfa lies in
+`[(1-error)*pfa, min(1,(1+error)*pfa)]` for one geometry. It is not a bound on
+alpha error, simultaneous coverage across the table, or a guarantee for
+correlated application noise. Taking the maximum alpha across aliased GO/SO
+geometries may make a shared LUT entry conservative. Coverage refers to the
+unscaled per-bin test, before `threshold_scale` and peak suppression.
+
+At Pfa `1e-9`, the defaults require roughly 400 billion trials per geometry.
+This is intentionally no longer approximated using 4096 trials. Calculations
+use checked uint64 counts and reject unrepresentable budgets instead of
+silently reducing accuracy. Trials use deterministic Philox streams and bounded
+65536-trial GPU batches. Only the required upper tail survives between batches;
+there is no full-run sample buffer or CPU sampling fallback.
+
+On a cache miss, warnings report the start timestamp, settings, geometries,
+trial counts, and whether the caller blocks or serves a previous table. A
+bounded GPU probe estimates duration and completion time; progress logs refresh
+at most every five seconds. Estimates include generation and tail selection
+and can change with GPU load and geometry. Builds continue until completion or
+cancellation. Explicit `alpha_lut` bypasses this work. Cancelled/failed jobs do
+not enter the cache; a shared build is cancelled only after its last consumer
+releases it. Calibration settings and algorithm version are part of cache identity.
+
+Both offline APIs use the same engine and actual input shape as the operator:
+
+```cpp
+#include <holoscan/radar/detection/cfar_calibration.hpp>
+#include <holoscan/radar/detection/cfar_detector_op.hpp>
+
+holoscan::radar::CFARParams params;
+params.cfar_variant = holoscan::radar::CfarVariant::kGO;
+params.guard_cells = {3, 3};
+params.training_cells = {3, 3};
+params.pfa = 1e-9;
+const std::vector<std::int64_t> shape{128, 256};
+auto plan = holoscan::radar::plan_cfar_calibration(params, shape);  // Bounded timing probe.
+// Inspect plan.total_trials and plan.estimated_seconds before a long job.
+auto result = holoscan::radar::calibrate_cfar(params, shape);  // Potentially hours.
+params.alpha_lut = result.alpha_lut;  // Bypass runtime Monte Carlo.
+```
+
+The C++ overload accepts a progress callback and `std::stop_token`. Callback
+exceptions cancel the build. Python releases the GIL while computing and
+checks interrupts between batches; raising from its callback also cancels:
+
+```python
+import json
+from holoscan_radar import calibrate_cfar, plan_cfar_calibration
+
+params = {
+    "cfar_variant": "GO",
+    "guard_cells": [3, 3],
+    "training_cells": [3, 3],
+    "pfa": 1e-9,
+    "calibration_relative_error": 0.10,
+    "calibration_confidence": 0.95,
+}
+plan = plan_cfar_calibration(params, [128, 256])
+print(plan["total_trials"], plan["estimated_seconds"])
+# Run deliberately offline; this example's requested accuracy is expensive.
+result = calibrate_cfar(params, [128, 256])
+with open("cfar_calibration.json", "w") as stream:
+    json.dump(result, stream)
+with open("cfar_calibration.json") as stream:
+    saved = json.load(stream)
+params["alpha_lut"] = saved["alpha_lut"]
+```
+
+Results use `method` to distinguish analytic, external, empty-training and Monte Carlo paths. Python `coverage` is null outside Monte Carlo; no empirical accuracy is claimed for a supplied LUT.
+
+Results contain the LUT plus configuration, shape, effective looks, per-geometry
+alphas, trial budget, coverage, seed/algorithm version, timestamps, and elapsed
+time. Store the metadata alongside the LUT and regenerate when its noise-model
+configuration changes. YAML serialization of the returned ordinary Python
+values is also supported. This version has no calibration CLI or persistent
+runtime cache. A more efficient rare-event estimator is tracked as P1 in
+[CLARAHOLOS-3583](https://nvidia.atlassian.net/browse/CLARAHOLOS-3583).
+
+### Local calibration timing
+
+A Release HSDK 5 GA CUDA 13 check on NVIDIA GB10 (driver 580.173.02) used GO, a 128x256 map,
+guard `[3,3]`, training `[3,3]`, and the default 95% / 10% accuracy settings.
+Three complete offline builds at `pfa: 1e-3` each processed 64,855,778 trials
+across 169 geometries. Observed durations were 1.09, 0.82, and 0.82 seconds;
+initial estimates were 1.75, 1.69, and 1.69 seconds. The timing probe warms
+CUDA first, then uses the median of three bounded batches at the largest LUT
+index. Applying that rate to every geometry is deliberately conservative.
+Runtime progress updates use observed complete-build throughput instead.
+
+Planning the same configuration at `pfa: 1e-9` selected 384,145,881,686 trials
+per geometry (coverage 0.95022), 64,920,654,004,934 trials in total, and a
+conservative initial estimate of approximately 20 days on this machine.
+That rare-event job was **not executed**. This is a local timing observation,
+not a latency bound or a guarantee under different GPU load, clocks, or looks.
 
 ## Shape and dtype rules
 
@@ -131,7 +234,7 @@ group: [`operators/detection/README.md`](../README.md)
 
 ## Performance
 
-**Cold.** First-seen α LUT (host incomplete-beta for CA; Monte Carlo for GO/SO/OS-`K>1` — seconds on large footprints); start-time CA/OS pre-warm when `nci_fold` is set; dense workspace allocation (score / noise / mask / peak_mask / power / integrated_power) on geometry change; CUB temps and NCI lookup-table H2D; first exact-size `detection_idx` loan.
+**Cold.** First-seen α LUT (host incomplete-beta for CA; Monte Carlo for GO/SO/OS-`K>1` — potentially hours or longer for rare Pfa); start-time CA/OS pre-warm when `nci_fold` is set; dense workspace allocation (score / noise / mask / peak_mask / power / integrated_power) on geometry change; CUB temps and NCI lookup-table H2D; first exact-size `detection_idx` loan.
 
 **Steady.** Fused stencil + optional NCI/NMS; CUB compact while `detection_idx` is active; one D2D emit per active output. Workspace and CUB state reuse when `(batch_in, out_batch, num_doppler, num_range)` is unchanged. Previously seen LUT keys are served from the process-wide `CfarAlphaLutKey` cache (variant, pfa, fold, os_rank, guard, train, key map size). For 1–65535 post-NCI planes, one detector launch maps planes to `grid.z`; larger counts retain the per-plane fallback. Each cell keeps the same ordered stencil arithmetic; NCI and peak-suppression algorithms are unchanged.
 

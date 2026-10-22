@@ -39,6 +39,8 @@ struct CfarStageConfig {
   std::vector<int64_t> guard_cells;
   std::vector<int64_t> training_cells;
   double pfa;
+  double calibration_relative_error{0.10};
+  double calibration_confidence{0.95};
   std::vector<double> alpha_lut;
   double threshold_scale;
   std::vector<int64_t> nci_axes;

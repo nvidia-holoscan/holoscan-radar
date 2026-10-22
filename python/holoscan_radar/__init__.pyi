@@ -67,3 +67,10 @@ TDMSparseCompensationOpF32: RadarOperator
 TDMSparseCompensationOpF64: RadarOperator
 VirtualArrayAssemblyOpF32: RadarOperator
 VirtualArrayAssemblyOpF64: RadarOperator
+
+def plan_cfar_calibration(
+    params: Mapping[str, object], input_shape: list[int]
+) -> dict[str, Any]: ...
+def calibrate_cfar(
+    params: Mapping[str, object], input_shape: list[int], *, progress: Any = None
+) -> dict[str, Any]: ...

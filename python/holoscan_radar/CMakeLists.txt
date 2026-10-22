@@ -19,7 +19,7 @@ else()
         GIT_SUBMODULES_RECURSE TRUE)
     FetchContent_MakeAvailable(nanobind)
 endif()
-nanobind_add_module(holoscan_radar_python NB_STATIC STABLE_ABI _radar.cpp _siso.cpp _tdm.cpp _viz.cpp)
+nanobind_add_module(holoscan_radar_python NB_STATIC STABLE_ABI _radar.cpp _siso.cpp _tdm.cpp _viz.cpp _calibration.cpp)
 set_target_properties(holoscan_radar_python PROPERTIES
     OUTPUT_NAME _radar
     LIBRARY_OUTPUT_DIRECTORY "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar"

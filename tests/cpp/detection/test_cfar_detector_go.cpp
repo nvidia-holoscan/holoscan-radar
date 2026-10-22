@@ -62,6 +62,8 @@ std::vector<double> power_map(double floor, const std::vector<std::pair<int64_t,
   return power_map(kDoppler, kRange, floor, targets, peak);
 }
 
+// Numerical calibration cost scales with 1/Pfa. Shape/noise/score tests use
+// affordable probabilities; rare-event budgeting and cancellation have dedicated tests.
 CFARParams go_params(double pfa) {
   CFARParams p{};
   p.cfar_variant = CfarVariant::kGO;
@@ -224,11 +226,19 @@ TEST(CFARDetectorOpGoTest, NoiseEstimateTracksFloor) {
   EXPECT_NEAR(out.noise.as<double>()[8 * kRange + 16], floor, 1e-9);
 }
 
+TEST(CFARDetectorOpGoTest, NoTrainingCellsProducesNoDetections) {
+  auto input =
+      to_device_tensor<double>(power_map(1.0, {}, 1.0), {kDoppler, kRange}, real_dtype<double>());
+  auto params = go_params(1e-3);
+  params.training_cells = {0, 0};
+  EXPECT_EQ(num_detections(run_cfar<double>(input, params).idx), 0);
+}
+
 TEST(CFARDetectorOpGoTest, NoFalseAlarmsOnFlatMap) {
   const auto map = power_map(1.0, {}, 1.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = run_cfar<double>(input, go_params(1e-6));
+  const auto out = run_cfar<double>(input, go_params(1e-3));
 
   EXPECT_EQ(num_detections(out.idx), 0);
 }
@@ -381,7 +391,7 @@ TEST(CFARDetectorOpGoTest, BorderCellsUseInBoundsTrainingOnly) {
   const auto map = power_map(floor, {}, floor);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = run_cfar<double>(input, go_params(1e-6));
+  const auto out = run_cfar<double>(input, go_params(1e-3));
 
   const auto* noise = out.noise.as<double>();
   const auto* scores = out.score.as<double>();
@@ -566,7 +576,7 @@ TEST(CFARDetectorOpGoTest, PfaConfigurableFromParams) {
   auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
   CFARParams loose = go_params(1e-2);
   loose.blocking_alpha_lut_rebuild = true;
-  CFARParams tight = go_params(1e-8);
+  CFARParams tight = go_params(1e-3);
   tight.blocking_alpha_lut_rebuild = true;
   EXPECT_GT(score_at(run_cfar<double>(input, loose).score, dt, rt),
             score_at(run_cfar<double>(input, tight).score, dt, rt));
@@ -583,7 +593,7 @@ TEST(CFARDetectorOpGoTest, NciIntegratesChannelsForDetection) {
   auto flat_input =
       to_device_tensor<double>(flat_cube, {kChannels, kDoppler, kRange}, real_dtype<double>());
 
-  CFARParams per_chan = go_params(1e-6);
+  CFARParams per_chan = go_params(1e-3);
   const auto per_channel = run_cfar<double>(flat_input, per_chan);
   EXPECT_EQ(num_detections(per_channel.idx), 0);
 
@@ -710,11 +720,18 @@ TEST(CFARDetectorOpGoTest, GoAlphaInvertsMonteCarloPfa) {
 
 TEST(CFARDetectorOpGoTest, GoAlphaDependsOnSideCount) {
   constexpr double kPfa = 1e-2;
-  const double alpha_small = holoscan::radar::detail::go_cfar_alpha(kPfa, 8, 1, 1, 1, 2, 2);
-  const double alpha_large = holoscan::radar::detail::go_cfar_alpha(kPfa, 18, 1, 1, 1, 2, 2);
+  // Well-separated footprints make this a meaningful parameter test even
+  // with finite Monte Carlo uncertainty in the selected threshold.
+  const double alpha_small = holoscan::radar::detail::go_cfar_alpha(kPfa, 1, 1, 1, 1, 2, 2);
+  const double alpha_large = holoscan::radar::detail::go_cfar_alpha(kPfa, 64, 1, 1, 1, 2, 2);
   ASSERT_GT(alpha_large, 0.0);
-  EXPECT_GT(std::abs(alpha_small - alpha_large) / alpha_large, 0.05)
-      << "alpha_small=" << alpha_small << " alpha_large=" << alpha_large;
+  EXPECT_NE(alpha_small, alpha_large);
+  // For four independent one-cell sides, the Laplace transform of their
+  // maximum is 24 / product(alpha+i, i=1..4). This is an independent oracle.
+  const double exact_small_pfa =
+      24.0 / ((alpha_small + 1) * (alpha_small + 2) * (alpha_small + 3) * (alpha_small + 4));
+  EXPECT_NEAR(exact_small_pfa, kPfa, 0.002);
+  EXPECT_NEAR(holoscan::radar::detail::go_cfar_pfa_from_alpha(alpha_large, 64, 1), kPfa, 0.003);
 }
 
 TEST(CFARDetectorOpGoTest, GoLutBorderAlphaDiffersFromInterior) {

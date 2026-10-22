@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace holoscan::radar {
@@ -28,7 +29,10 @@ struct AlphaLutSnapshot {
 AlphaLutSnapshot poll_cached_alpha_lut(const CfarAlphaLutKey& key);
 
 // Idempotently queue a background LUT build for key when not cached.
-void ensure_alpha_lut_build(const CfarAlphaLutKey& key);
+void ensure_alpha_lut_build(const CfarAlphaLutKey& key, const void* owner = nullptr);
+
+// Drop only this detector's subscriptions; cancel and drain jobs with no remaining users.
+void release_alpha_lut_builds(const void* owner);
 
 // Block until every in-flight background alpha-LUT build has finished. Called
 // from CFARDetectorOp::stop() so a detached GPU Monte-Carlo build cannot launch
@@ -36,7 +40,9 @@ void ensure_alpha_lut_build(const CfarAlphaLutKey& key);
 void join_inflight_alpha_lut_builds();
 
 // Blocking LUT lookup (first tick or when async rebuild is disabled).
-std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key);
+std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key,
+                                         std::function<bool()> cancelled = {},
+                                         const void* owner = nullptr);
 
 // Training-cell count for one (doppler, range) cell under the CA window
 // footprint (matches cfar_ca_kernel).

@@ -149,3 +149,26 @@ _REGISTRY_NAMES = (
 )
 globals().update({name: _make_operator(f"holoscan.radar.{name}") for name in _REGISTRY_NAMES})
 __all__ = list(_REGISTRY_NAMES)
+
+
+def plan_cfar_calibration(params: Mapping[str, object], input_shape: list[int]) -> dict[str, Any]:
+    """Plan a CFAR LUT build, including a bounded GPU timing probe for Monte Carlo.
+
+    The returned trial budget describes per-geometry relative Pfa coverage,
+    not alpha error or simultaneous coverage across the complete LUT.
+    """
+    payload = {"params": _config_value(params)}
+    return _radar._plan_cfar_calibration(json.dumps(payload, allow_nan=False), input_shape)
+
+
+def calibrate_cfar(
+    params: Mapping[str, object], input_shape: list[int], *, progress: Any = None
+) -> dict[str, Any]:
+    """Generate an offline alpha_lut and configuration/accuracy metadata on the GPU.
+
+    The progress callback receives a dictionary after each bounded batch. Raising
+    from it cancels the build. KeyboardInterrupt is checked between batches.
+    Save the returned alpha_lut as an operator parameter to bypass calibration.
+    """
+    payload = {"params": _config_value(params)}
+    return _radar._calibrate_cfar(json.dumps(payload, allow_nan=False), input_shape, progress)
