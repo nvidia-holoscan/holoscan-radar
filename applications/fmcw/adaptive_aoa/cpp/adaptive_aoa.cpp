@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
               graph, application, options, cfg.visualization, cfg.frame_period, true,
               cfg.beamscan_params->az_coordinates, cfg.beamscan_params->el_coordinates,
               cfg.beamscan_params->angle_convention, cfg.scene.targets, cfg.scene_visibility,
-              std::string("Adaptive AoA — ") + adaptive::algorithm_name(cfg.algorithm),
+              std::string("Adaptive AoA | ") + adaptive::algorithm_name(cfg.algorithm),
               app::viz::RawDashboardInputs{cfar->cfar_power, expansion->detection_idx_out,
                                            features->points, range->range_bins,
                                            doppler->velocity_bins});

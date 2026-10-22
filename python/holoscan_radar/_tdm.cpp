@@ -616,7 +616,7 @@ struct AdaptiveDashboardLoader {
   }
   static app::viz::FmcwDashboardConfig dashboard(const app::adaptive_aoa::Config& cfg) {
     return radar::python_viz::dashboard_config(
-        cfg, std::string("Adaptive AoA — ") + app::adaptive_aoa::algorithm_name(cfg.algorithm),
+        cfg, std::string("Adaptive AoA | ") + app::adaptive_aoa::algorithm_name(cfg.algorithm),
         false, true, cfg.beamscan_params->az_coordinates, cfg.beamscan_params->el_coordinates,
         cfg.beamscan_params->angle_convention);
   }
