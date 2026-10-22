@@ -20,6 +20,70 @@ struct DopplerNotchStageConfig {
 };
 
 template <typename T>
+__device__ T doppler_notch_gain(const T* velocity_bins, int64_t doppler, int64_t num_doppler,
+                                DopplerNotchStageConfig config) {
+  const double velocity = static_cast<double>(velocity_bins[doppler]);
+  double distance = fabs(velocity - config.center_velocity);
+
+  int64_t nearest = 0;
+  if (num_doppler > 1) {
+    const double first = static_cast<double>(velocity_bins[0]);
+    const double last = static_cast<double>(velocity_bins[num_doppler - 1]);
+    const double spacing = (last - first) / static_cast<double>(num_doppler - 1);
+    // Velocity producers may emit either axis direction; retain the signed index step.
+    if (spacing != 0.0 && isfinite(spacing)) {
+      int64_t raw_nearest =
+          static_cast<int64_t>(llround((config.center_velocity - first) / spacing));
+      if (config.cyclic_velocity_axis) {
+        raw_nearest %= num_doppler;
+        if (raw_nearest < 0)
+          raw_nearest += num_doppler;
+        nearest = raw_nearest;
+        const double period = fabs(spacing) * static_cast<double>(num_doppler);
+        distance = fmod(distance, period);
+        distance = fmin(distance, period - distance);
+      } else {
+        nearest = raw_nearest;
+        if (nearest < 0)
+          nearest = 0;
+        if (nearest >= num_doppler)
+          nearest = num_doppler - 1;
+      }
+    }
+  }
+
+  double gain = 1.0;
+  if (doppler == nearest || distance <= config.stop_half_width) {
+    gain = 0.0;
+  } else if (config.transition_width > 0.0 &&
+             distance < config.stop_half_width + config.transition_width) {
+    const double fraction = (distance - config.stop_half_width) / config.transition_width;
+    gain = 0.5 * (1.0 - cos(3.14159265358979323846 * fraction));
+  }
+  return static_cast<T>(gain);
+}
+
+template <typename T>
+__global__ void doppler_notch_row_kernel(const cuda::std::complex<T>* input, const T* velocity_bins,
+                                         cuda::std::complex<T>* output, int64_t num_rows,
+                                         int64_t num_doppler, int64_t num_range,
+                                         DopplerNotchStageConfig config) {
+  __shared__ T row_gain;
+  for (int64_t row = blockIdx.x; row < num_rows; row += gridDim.x) {
+    if (threadIdx.x == 0) {
+      row_gain = doppler_notch_gain(velocity_bins, row % num_doppler, num_doppler, config);
+    }
+    __syncthreads();
+    const T gain = row_gain;
+    for (int64_t r = threadIdx.x; r < num_range; r += blockDim.x) {
+      const int64_t index = row * num_range + r;
+      output[index] = input[index] * gain;
+    }
+    __syncthreads();
+  }
+}
+
+template <typename T>
 __global__ void doppler_notch_kernel(const cuda::std::complex<T>* input, const T* velocity_bins,
                                      cuda::std::complex<T>* output, int64_t total_elements,
                                      int64_t num_doppler, int64_t num_range,
@@ -94,9 +158,16 @@ void run_doppler_notch_stage(const cuda::std::complex<T>* input, const T* veloci
     throw std::invalid_argument("doppler notch stage: invalid extent");
   }
   constexpr int kBlock = 256;
-  const int grid = static_cast<int>((total_elements + kBlock - 1) / kBlock);
-  doppler_notch_kernel<T><<<grid, kBlock, 0, stream>>>(input, velocity_bins, output, total_elements,
-                                                       num_doppler, num_range, config);
+  if (total_elements % num_range != 0) {
+    const int grid = static_cast<int>((total_elements + kBlock - 1) / kBlock);
+    doppler_notch_kernel<T><<<grid, kBlock, 0, stream>>>(
+        input, velocity_bins, output, total_elements, num_doppler, num_range, config);
+  } else {
+    const int64_t rows = total_elements / num_range;
+    const int grid = static_cast<int>(rows < 65535 ? rows : 65535);
+    doppler_notch_row_kernel<T><<<grid, kBlock, 0, stream>>>(input, velocity_bins, output, rows,
+                                                             num_doppler, num_range, config);
+  }
   if (cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("doppler notch stage: kernel launch failed");
   }
