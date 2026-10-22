@@ -751,4 +751,75 @@ TEST(ClusterDBSCANOpTest, LiveMaxClustersRevertsToParamsAfterMiss) {
   EXPECT_EQ(sizes[1].shape[0], 3);
 }
 
+template <typename T>
+class DbscanScratchReuseNative : public ::testing::Test {};
+using DbscanScratchPrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(DbscanScratchReuseNative, DbscanScratchPrecisions);
+
+TYPED_TEST(DbscanScratchReuseNative, ShrinkNoiseExpandAndFreshInstancePreserveAllRows) {
+  using T = TypeParam;
+  using Op = ClusterDBSCANOp<T>;
+  const std::vector<std::vector<double>> points{
+      {0, 0, 0.125, 0, 0, 0.125, 5, 5, 10, 10, 10.125, 10, 20, 20, 30, 30},
+      {0, 0, 5, 5, 10, 10},
+      {20, 20, 20.125, 20},
+      {0, 0, 0.125, 0, 0, 0.125, 5, 5, 10, 10, 10.125, 10, 20, 20, 30, 30}};
+  const std::vector<std::vector<int64_t>> expected_labels{
+      {0, 0, 0, -1, 1, 1, -1, -1}, {-1, -1, -1}, {0, 0}, {0, 0, 0, -1, 1, 1, -1, -1}};
+  const std::vector<std::vector<int64_t>> expected_sizes{{3, 2}, {}, {2}, {3, 2}};
+  const auto run_sequence = [&](std::size_t count) {
+    auto extents = holoscan::radar::testing::default_test_extents();
+    extents.max_points = 8;
+    extents.max_features = 2;
+    extents.max_clusters = 8;
+    std::vector<std::shared_ptr<holoscan::Tensor>> owners;
+    auto fixture = holoscan::testing::create_operator_test<Op>(extents);
+    fixture.set_params(make_params({0.5}, 2));
+    for (std::size_t frame = 0; frame < count; ++frame) {
+      owners.push_back(points_tensor<T>(points[frame], points[frame].size() / 2, 2));
+      fixture.push(&Op::points, *owners.back());
+    }
+    fixture.template capture_snapshot<holoscan::Tensor>("labels", count, 4096U);
+    fixture.template capture_snapshot<holoscan::Tensor>("sizes", count, 4096U);
+    fixture.input_source_device("points", holoscan::DeviceId{0});
+    fixture.output_device("labels", holoscan::DeviceId{0});
+    fixture.output_device("sizes", holoscan::DeviceId{0});
+    auto running = fixture.run_async({.expect_stop = true});
+    const bool labels_ready = running.wait_for_output("labels", count, std::chrono::seconds{5});
+    const bool sizes_ready = running.wait_for_output("sizes", count, std::chrono::seconds{5});
+    running.request_stop();
+    auto result = running.finish();
+    EXPECT_TRUE(labels_ready && sizes_ready) << result.describe_failure();
+    return result;
+  };
+  for (const std::size_t count : {points.size(), std::size_t{1}}) {
+    const auto result = run_sequence(count);
+    ASSERT_TRUE(result.ok()) << result.describe_failure();
+    const auto labels = result.template snapshots<holoscan::Tensor>("labels");
+    const auto sizes = result.template snapshots<holoscan::Tensor>("sizes");
+    ASSERT_EQ(labels.size(), count);
+    ASSERT_EQ(sizes.size(), count);
+    for (std::size_t frame = 0; frame < count; ++frame) {
+      const auto lab = holoscan::radar::testing::to_host(labels[frame]);
+      const auto size = holoscan::radar::testing::to_host(sizes[frame]);
+      ASSERT_EQ(lab.shape,
+                (std::vector<int64_t>{static_cast<int64_t>(expected_labels[frame].size())}));
+      ASSERT_EQ(size.shape,
+                (std::vector<int64_t>{static_cast<int64_t>(expected_sizes[frame].size())}));
+      for (std::size_t i = 0; i < expected_labels[frame].size(); ++i) {
+        EXPECT_EQ(lab.template as<int64_t>()[i], expected_labels[frame][i]);
+      }
+      for (std::size_t i = 0; i < expected_sizes[frame].size(); ++i) {
+        EXPECT_EQ(size.template as<int64_t>()[i], expected_sizes[frame][i]);
+      }
+    }
+    if (count > 1) {
+      EXPECT_EQ(holoscan::radar::testing::to_host(labels.front()).data,
+                holoscan::radar::testing::to_host(labels.back()).data);
+      EXPECT_EQ(holoscan::radar::testing::to_host(sizes.front()).data,
+                holoscan::radar::testing::to_host(sizes.back()).data);
+    }
+  }
+}
+
 }  // namespace

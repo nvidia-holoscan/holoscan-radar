@@ -66,7 +66,7 @@ where eps_inv2_a = epsilon_a > 0 ? 1 / epsilon_a² : 0
 
 That is the contract ellipsoid `Σ_i ((p_i − q_i) / epsilon_i)² ≤ 1` over positive `epsilon` entries. A per-axis zero excludes that feature from the metric while preserving its value in the input row. Length-1 positive `epsilon` broadcasts to every axis.
 
-1. **`mark_core`.** Count neighbors of each point **including itself**, stopping once the positive effective `min_points` threshold is reached. `is_core` is the same `count >= min_points` boolean; points that never reach it scan all `num_points` (worst-case `O(N²)`). Seed CC: core → own row index; non-core → `kNoiseRoot` (`-1`).
+1. **`mark_core`.** Count neighbors of each point **including itself**, stopping once the positive effective `min_points` threshold is reached. `is_core` is the same `count >= min_points` boolean; points that never reach it scan all `num_points` (worst-case `O(N²)`). Seed CC: core → own row index; non-core → `kNoiseRoot` (`-1`). Float with 2, 3 or 5 features uses a separate fixed-bound distance loop with the same ordered scalar arithmetic. Every double input and other float feature count uses the original generic kernel.
 
 2. **`cc_step` loop.** Iterative min-label propagation over **core–core** edges, ping-pong buffers, plus one pointer jump `cc_in[cc_in[i]]`. Before evaluating a distance, skip a core neighbor whose snapshot label is at least the running minimum; it cannot lower that minimum. The predicate and per-iteration labels are unchanged. Converges to the minimum row index of each core component (the root). Each iteration D2H-syncs a `changed` flag. Cap: `num_points + 64` iterations, else `ClusterDBSCANOp: connected-components did not converge`.
 
@@ -112,6 +112,10 @@ Empty `points` → `labels` and `sizes` both shape `(0,)`.
 **Cold.** First-tick scratch allocs and `1/ε²` H2D.
 
 **Steady.** The CC neighbor loop skips distance evaluation when the snapshot neighbor label cannot lower its current minimum; pointer jump, exact per-iteration labels and convergence remain unchanged. Cache-hit reuse of the device `1/ε²` vector; `O(N² · F)` neighbor sweeps (mark_core, each CC step, border assign) plus a host argsort of `num_clusters` counts. CC iteration count is bounded by the graph diameter. Appropriate for post-CFAR tens–low-thousands of points; not a general-purpose large-N DBSCAN.
+
+A paired Thor HSDK 5 check (5 warmups, 50 measured frames, three fresh pairs) measured large float marginal medians of 1.874515→1.722816ms, with a 156.630µs/8.325% paired reduction (8.091–8.861% across pairs). All nine selected protected endpoint rules passed; the same 38 native tests and exact labels/sizes exports across eight cases passed in both precisions. This is a workload-specific throughput result.
+
+Latency tradeoffs remain: small double's fresh paired median slowed 10.028µs/2.089%. The capped float workload had recurring isolated slow frames; one fresh pair's maximum increased by 2.249ms even while its full 50-frame mean improved 6.18%. Setup, cold and override costs were mixed; these samples do not establish a tail-latency bound or universal improvement.
 
 **Live rebuilds.** `min_points` / `max_clusters` are free. A new effective `(epsilon, num_features)` pair rebuilds and uploads `1/ε²`; an unchanged pair reuses the cached device vector. Every epsilon value still selects a new neighbor graph computation for that tick.
 
