@@ -261,7 +261,7 @@ void set_pixel(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
 }
 
 float text_size(std::int64_t height, int scale) {
-  return scale == 2 ? (height < 540 ? 14.0F : 20.0F) : (height < 540 ? 10.0F : 13.0F);
+  return scale == 2 ? 13.0F : (height < 540 ? 10.0F : 13.0F);
 }
 
 int text_width(std::string_view text, std::int64_t height, int scale = 1) {
@@ -839,7 +839,7 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
             plot.y + plot.height, kWhite);
 
   draw_text(&image, width, height, 20, height < 540 ? 8 : 15, config.title, 2,
-            detail::kDashboardTextPrimary);
+            detail::kDashboardTextTitle);
   const std::string status = "Frame " + std::to_string(frame_index + 1) + " (" +
                              format_value(static_cast<float>(frame_index * config.frame_period)) +
                              " s) | " + std::to_string(markers.size()) + " detections";

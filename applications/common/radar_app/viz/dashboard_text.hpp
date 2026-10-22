@@ -17,6 +17,7 @@
 namespace holoscan::radar::app::viz::detail {
 
 // SDK colors are packed ABGR.
+inline constexpr std::uint32_t kDashboardTextTitle = 0xFF00B976U;  // #76B900
 inline constexpr std::uint32_t kDashboardTextPrimary = 0xFFF3EDE6U;
 inline constexpr std::uint32_t kDashboardTextSecondary = 0xFFC2AC9BU;
 inline constexpr std::uint32_t kDashboardTextMuted = 0xFF9C8471U;

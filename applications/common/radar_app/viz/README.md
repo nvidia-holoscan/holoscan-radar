@@ -163,7 +163,9 @@ Text uses the staging SDK's verified pixel-coordinate mode; layout and glyph siz
 target the configured window dimensions, with compact spacing below 540 px height.
 Subplot titles are centered on their panels, with compact top insets and tighter
 spacing above the data; axis captions are centered on the plot area.
-Titles use brighter text than ticks and labels; supporting captions are muted.
+The main title uses regular `#76B900` text at the built-in font's native 13 px
+height in both normal and compact layouts. Subplot titles use brighter text
+than ticks and labels; supporting captions are muted.
 Axis gutters reserve compact, separate rows for ticks and captions, with small
 outer insets so the data fills more of each subplot. Endpoint X labels
 stay within the plot width; vertical gutters keep centered Y labels clear of
