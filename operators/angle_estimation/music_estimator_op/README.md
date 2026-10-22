@@ -160,6 +160,12 @@ Rejected combinations (operator’s own message unless noted):
 
 **Steady.** Covariance, eig, EFT, projector, and scan run every tick on stable constructor-created workspace. Device scan grids are reused with the cached manifold; the peak pass drops out once both associated optional outputs latch unwired. MatX eig plans are retained across matching configurations instead of being cleared each tick; existing live markers and stop-time retirement remain. Plan workspaces can persist until eviction/stop.
 
+Float steering artifacts use a channel-major layout so neighboring beam threads read neighboring manifold entries; double retains the beam-major layout. Each beam keeps the same ordered scalar reductions and output ordering.
+
+A paired Thor measurement of the existing `baseline-large` recipe (256 items, 16 channels, 48 snapshots, 61 × 31 grid) reduced float steady medians from 6.347 to 1.739 ms, with a 4.609 ms / 72.64% median paired saving. Three fresh pairs followed three screening pairs, each with five warmups and 50 frames. Medium float improved about 0.132 ms / 24.09%; double was approximately flat. All 47 native tests and exact five-output policies across seven cases in both precisions passed. These results cover the selected deployment and workloads.
+
+Startup and tails are separate tradeoffs: cached-smoothing float cold time increased 1.057 ms in the fresh check, while its steady time improved 23.92%. Cached-smoothing double p99 increased 0.116 ms; small float and large double p99 increased 0.016 and 0.022 ms. Other cold/setup diagnostics were mixed. Fifty-frame p99 is descriptive; this is a steady-state improvement without a startup, tail, arbitrary-shape or multi-GPU guarantee.
+
 **`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives. The Graph harness isolates all seven live inputs. The reduce kernel stages `P_n` in shared memory only when it fits a 40 KiB budget **and** the item grid covers at least one occupancy wave; otherwise it reads `P_n` from global memory.
 
 Harness (Graph, isolated production-Exact timing for every live input):
