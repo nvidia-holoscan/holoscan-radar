@@ -196,10 +196,11 @@ holoscan::testing::TestResult run_esprit_override(
   return fixture_result;
 }
 
+template <typename T = double>
 holoscan::testing::TestResult run_esprit_with_mask(std::shared_ptr<holoscan::Tensor> mask,
                                                    std::shared_ptr<holoscan::Tensor> snapshot,
                                                    ESPRITParams params) {
-  using Op = ESPRITEstimatorOp<double>;
+  using Op = ESPRITEstimatorOp<T>;
   auto fixture =
       holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
   fixture.set_params(std::move(params));
@@ -209,7 +210,7 @@ holoscan::testing::TestResult run_esprit_with_mask(std::shared_ptr<holoscan::Ten
   constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
   constexpr const char* kOutputs[] = {"aoa_estimates", "doa_multi", "source_count", "eigenvalues"};
   for (const char* output : kOutputs) {
-    fixture.capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
+    fixture.template capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
@@ -1531,6 +1532,137 @@ TYPED_TEST(ESPRITCacheLifecycle, SmoothingChangesEigSizeThenRevisitsExactOutputs
   for (std::size_t tick = 0; tick < aoa.size(); ++tick) {
     EXPECT_NEAR(aoa[tick].template as<T>()[0], 0.1, 0.03);
     EXPECT_EQ(counts[tick].template as<int32_t>()[0], 1);
+  }
+}
+
+// Thirty-three items cross the proposed 32-thread solve grouping. Adjacent
+// threads independently take empty, one-source and two-source solve paths.
+// Orthogonal source snapshots give a known covariance spectrum; masks arrive
+// before the aligned data input, preserving the existing SafeDefault contract.
+TYPED_TEST(ESPRITCacheLifecycle, PackedItemsKeepMixedOrdersAndEmptyMasksIndependent) {
+  using T = TypeParam;
+  constexpr int64_t kItems = 33;
+  constexpr int64_t kChannels = 6;
+  constexpr int64_t kLooks = 12;
+  AngleConvention convention;
+  convention.preset = AngleConventionPreset::kDirectionCosine;
+  const auto geometry = make_ula_geometry(kChannels, 0.5, 1.0);
+  const std::vector<double> cosines{-5.0 / 6.0, -0.5, -1.0 / 6.0, 1.0 / 6.0, 0.5, 5.0 / 6.0};
+  const std::array<std::vector<double>, 2> spectra{
+      std::vector<double>{0.90, 0.95, 1.00, 1.05, 1.10, 100.0},
+      std::vector<double>{0.90, 0.95, 1.00, 1.05, 50.0, 100.0}};
+  std::array<std::vector<std::complex<double>>, 2> basis{
+      make_orthogonal_source_block(geometry, convention, cosines, spectra[0]),
+      make_orthogonal_source_block(geometry, convention, cosines, spectra[1])};
+  std::vector<std::complex<double>> values(static_cast<size_t>(kItems * kChannels * kLooks));
+  std::vector<uint8_t> valid(static_cast<size_t>(kItems * kLooks), uint8_t{1});
+  for (int64_t item = 0; item < kItems; ++item) {
+    const size_t scene = item % 3 == 2 ? 1U : 0U;
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+      for (int64_t look = 0; look < kLooks; ++look) {
+        values[static_cast<size_t>((item * kChannels + channel) * kLooks + look)] =
+            basis[scene][static_cast<size_t>(channel * kChannels + look % kChannels)];
+      }
+    }
+    if (item % 3 == 0) {
+      std::fill_n(valid.begin() + item * kLooks, static_cast<size_t>(kLooks), uint8_t{0});
+    }
+  }
+  const auto result = run_esprit_with_mask<T>(
+      to_device_tensor(valid, {kItems, kLooks}, DLDataType{kDLUInt, 8, 1}),
+      block_to_device<T>(values, {kItems, kChannels, kLooks}),
+      make_params(geometry, convention, /*num_sources=*/-1, /*pfa=*/0.1, /*max_sources=*/2,
+                  /*smoothing=*/{}, /*fb=*/false));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto aoa_frames = esprit_frames(result, "aoa_estimates");
+  const auto doa_frames = esprit_frames(result, "doa_multi");
+  const auto count_frames = esprit_frames(result, "source_count");
+  const auto eigenvalue_frames = esprit_frames(result, "eigenvalues");
+  ASSERT_EQ(aoa_frames.size(), 1U);
+  ASSERT_EQ(doa_frames.size(), 1U);
+  ASSERT_EQ(count_frames.size(), 1U);
+  ASSERT_EQ(eigenvalue_frames.size(), 1U);
+  ASSERT_EQ(aoa_frames[0].shape, (std::vector<int64_t>{kItems, 2}));
+  ASSERT_EQ(doa_frames[0].shape, (std::vector<int64_t>{kItems, 2, 2}));
+  ASSERT_EQ(count_frames[0].shape, (std::vector<int64_t>{kItems}));
+  ASSERT_EQ(eigenvalue_frames[0].shape, (std::vector<int64_t>{kItems, kChannels}));
+  const T* aoa = aoa_frames[0].template as<T>();
+  const T* doa = doa_frames[0].template as<T>();
+  const auto* count = count_frames[0].template as<int32_t>();
+  const T* eigenvalues = eigenvalue_frames[0].template as<T>();
+  for (int64_t item = 0; item < kItems; ++item) {
+    const int expected = static_cast<int>(item % 3);
+    ASSERT_EQ(count[item], expected) << item;
+    if (expected == 0) {
+      EXPECT_TRUE(std::isnan(aoa[item * 2])) << item;
+      EXPECT_TRUE(std::isnan(aoa[item * 2 + 1])) << item;
+    } else {
+      EXPECT_NEAR(aoa[item * 2 + 1], 0.0, 0.03) << item;
+      if (expected == 1) {
+        EXPECT_NEAR(doa[item * 4], 5.0 / 6.0, 0.03) << item;
+      } else {
+        const double first = static_cast<double>(doa[item * 4]);
+        const double second = static_cast<double>(doa[item * 4 + 2]);
+        EXPECT_NEAR(std::min(first, second), 0.5, 0.03) << item;
+        EXPECT_NEAR(std::max(first, second), 5.0 / 6.0, 0.03) << item;
+      }
+    }
+    for (int64_t source = expected; source < 2; ++source) {
+      EXPECT_TRUE(std::isnan(doa[item * 4 + source * 2])) << item << ',' << source;
+      EXPECT_TRUE(std::isnan(doa[item * 4 + source * 2 + 1])) << item << ',' << source;
+    }
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+      const double expected_eigenvalue =
+          expected == 0 ? 0.0 : spectra[expected == 2 ? 1U : 0U][static_cast<size_t>(channel)];
+      EXPECT_NEAR(eigenvalues[item * kChannels + channel], expected_eigenvalue, 1e-3) << item;
+    }
+  }
+}
+
+// The 2-D solver has separate workspaces and a separate launch. Exercise a
+// full packed group plus its one-item tail, with invalid neighbors interleaved.
+TYPED_TEST(ESPRITCacheLifecycle, PackedUraItemsKeepIndependentDirectionsAndEmptyMasks) {
+  using T = TypeParam;
+  constexpr int64_t kItems = 33;
+  constexpr int64_t kLooks = 16;
+  const auto geometry = make_planar_ura_geometry(3, 3, 0.5, 1.0);
+  const int64_t channels = geometry.num_elements();
+  AngleConvention convention;
+  convention.preset = AngleConventionPreset::kRadarBoresight;
+  std::vector<std::complex<double>> values;
+  values.reserve(static_cast<size_t>(kItems * channels * kLooks));
+  std::vector<uint8_t> valid(static_cast<size_t>(kItems * kLooks), uint8_t{1});
+  for (int64_t item = 0; item < kItems; ++item) {
+    const double az = item % 2 == 0 ? 0.12 : -0.17;
+    const double el = item % 2 == 0 ? 0.08 : -0.09;
+    const auto block = make_block(geometry, convention, az, el, kLooks, 1e-4,
+                                  static_cast<unsigned int>(940 + item));
+    values.insert(values.end(), block.begin(), block.end());
+    if (item % 3 == 0) {
+      std::fill_n(valid.begin() + item * kLooks, static_cast<size_t>(kLooks), uint8_t{0});
+    }
+  }
+  const auto result = run_esprit_with_mask<T>(
+      to_device_tensor(valid, {kItems, kLooks}, DLDataType{kDLUInt, 8, 1}),
+      block_to_device<T>(values, {kItems, channels, kLooks}),
+      make_params(geometry, convention, /*num_sources=*/1, 1e-2, /*max_sources=*/2));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto aoa_frames = esprit_frames(result, "aoa_estimates");
+  const auto count_frames = esprit_frames(result, "source_count");
+  ASSERT_EQ(aoa_frames.size(), 1U);
+  ASSERT_EQ(count_frames.size(), 1U);
+  const T* aoa = aoa_frames[0].template as<T>();
+  const auto* count = count_frames[0].template as<int32_t>();
+  for (int64_t item = 0; item < kItems; ++item) {
+    const bool empty = item % 3 == 0;
+    EXPECT_EQ(count[item], empty ? 0 : 1) << item;
+    if (empty) {
+      EXPECT_TRUE(std::isnan(aoa[item * 2])) << item;
+      EXPECT_TRUE(std::isnan(aoa[item * 2 + 1])) << item;
+    } else {
+      EXPECT_NEAR(aoa[item * 2], item % 2 == 0 ? 0.12 : -0.17, 0.03) << item;
+      EXPECT_NEAR(aoa[item * 2 + 1], item % 2 == 0 ? 0.08 : -0.09, 0.03) << item;
+    }
   }
 }
 
