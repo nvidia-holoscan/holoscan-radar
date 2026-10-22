@@ -579,19 +579,32 @@ namespace {
 // MatX/numpy ifftshift with c = (D + 1) / 2:
 //   out[..., d_fft] = in[..., (d_fft - c) mod D].
 template <typename T>
-__global__ void pack_rd_tile_kernel(const Complex<T>* in, Complex<T>* out, int64_t batch_rx,
-                                    int64_t D, int64_t R, int64_t r0, int64_t t) {
-  const int64_t b = static_cast<int64_t>(blockIdx.x);
-  const int64_t d_fft = static_cast<int64_t>(blockIdx.y);
-  if (b >= batch_rx || d_fft >= D) {
-    return;
-  }
+__global__ void pack_rd_tile_tiled_kernel(const Complex<T>* in, Complex<T>* out, int64_t batch_rx,
+                                          int64_t D, int64_t R, int64_t r0, int64_t t) {
+  __shared__ T tile_real[32][33];
+  __shared__ T tile_imag[32][33];
+  const int64_t b = blockIdx.z;
+  const int64_t ri = static_cast<int64_t>(blockIdx.x) * 32 + threadIdx.x;
+  const int64_t d0 = static_cast<int64_t>(blockIdx.y) * 32 + threadIdx.y;
   const int64_t c = (D + 1) / 2;
-  const int64_t d_cz = (d_fft - c + D) % D;
-  const Complex<T>* in_row = in + (b * D + d_cz) * R + r0;
-  for (int64_t ri = static_cast<int64_t>(threadIdx.x); ri < t;
-       ri += static_cast<int64_t>(blockDim.x)) {
-    out[(b * t + ri) * D + d_fft] = in_row[ri];
+  for (int j = 0; j < 32; j += 8) {
+    const int64_t d_fft = d0 + j;
+    if (b < batch_rx && ri < t && d_fft < D) {
+      const int64_t d_cz = (d_fft - c + D) % D;
+      const auto value = in[(b * D + d_cz) * R + r0 + ri];
+      tile_real[threadIdx.y + j][threadIdx.x] = value.real();
+      tile_imag[threadIdx.y + j][threadIdx.x] = value.imag();
+    }
+  }
+  __syncthreads();
+  const int64_t out_d = static_cast<int64_t>(blockIdx.y) * 32 + threadIdx.x;
+  const int64_t out_r0 = static_cast<int64_t>(blockIdx.x) * 32 + threadIdx.y;
+  for (int j = 0; j < 32; j += 8) {
+    const int64_t out_r = out_r0 + j;
+    if (b < batch_rx && out_r < t && out_d < D) {
+      out[(b * t + out_r) * D + out_d] = {tile_real[threadIdx.x][threadIdx.y + j],
+                                          tile_imag[threadIdx.x][threadIdx.y + j]};
+    }
   }
 }
 
@@ -611,6 +624,54 @@ __global__ void mul_corr_weights_kernel(const Complex<T>* y_hat, const Complex<T
 // Scatter fft-order (Nrx, t, D) → center-zero (Nrx, D, R). Block (rx, d_fft).
 // MatX fftshift1D maps fft-order j → center-zero (j - c) mod D with
 // c = (D + 1) / 2 (same map as pack; for even D this equals (j + D/2) mod D).
+template <typename T>
+__global__ void scatter_corr_tile_tiled_kernel(const Complex<T>* corr, Complex<T>* out_m,
+                                               int64_t Nrx, int64_t D, int64_t R, int64_t r0,
+                                               int64_t t) {
+  __shared__ T tile_real[32][33];
+  __shared__ T tile_imag[32][33];
+  const int64_t rx = blockIdx.z;
+  const int64_t d_fft = static_cast<int64_t>(blockIdx.x) * 32 + threadIdx.x;
+  const int64_t ri0 = static_cast<int64_t>(blockIdx.y) * 32 + threadIdx.y;
+  const int64_t c = (D + 1) / 2;
+  for (int j = 0; j < 32; j += 8) {
+    const int64_t ri = ri0 + j;
+    if (rx < Nrx && d_fft < D && ri < t) {
+      const auto value = corr[(rx * t + ri) * D + d_fft];
+      tile_real[threadIdx.y + j][threadIdx.x] = value.real();
+      tile_imag[threadIdx.y + j][threadIdx.x] = value.imag();
+    }
+  }
+  __syncthreads();
+  const int64_t out_r = static_cast<int64_t>(blockIdx.y) * 32 + threadIdx.x;
+  const int64_t out_d0 = static_cast<int64_t>(blockIdx.x) * 32 + threadIdx.y;
+  for (int j = 0; j < 32; j += 8) {
+    const int64_t out_d = out_d0 + j;
+    if (rx < Nrx && out_d < D && out_r < t) {
+      const int64_t d_cz = (out_d - c + D) % D;
+      out_m[(rx * D + d_cz) * R + r0 + out_r] = {tile_real[threadIdx.x][threadIdx.y + j],
+                                                 tile_imag[threadIdx.x][threadIdx.y + j]};
+    }
+  }
+}
+
+template <typename T>
+__global__ void pack_rd_tile_kernel(const Complex<T>* in, Complex<T>* out, int64_t batch_rx,
+                                    int64_t D, int64_t R, int64_t r0, int64_t t) {
+  const int64_t b = static_cast<int64_t>(blockIdx.x);
+  const int64_t d_fft = static_cast<int64_t>(blockIdx.y);
+  if (b >= batch_rx || d_fft >= D) {
+    return;
+  }
+  const int64_t c = (D + 1) / 2;
+  const int64_t d_cz = (d_fft - c + D) % D;
+  const Complex<T>* in_row = in + (b * D + d_cz) * R + r0;
+  for (int64_t ri = static_cast<int64_t>(threadIdx.x); ri < t;
+       ri += static_cast<int64_t>(blockDim.x)) {
+    out[(b * t + ri) * D + d_fft] = in_row[ri];
+  }
+}
+
 template <typename T>
 __global__ void scatter_corr_tile_kernel(const Complex<T>* corr, Complex<T>* out_m, int64_t Nrx,
                                          int64_t D, int64_t R, int64_t r0, int64_t t) {
@@ -811,9 +872,17 @@ void run_ddm_correlate_stage(const void* input, void* output, const DdmRdMapsLay
     scratch.plan.ensure(nbatch, static_cast<int>(D), sizeof(T) == 4, stream);
 
     {
-      dim3 grid(static_cast<unsigned>(batch_rx), static_cast<unsigned>(D));
-      const int threads = static_cast<int>(std::min<int64_t>(kBlock, t));
-      pack_rd_tile_kernel<T><<<grid, threads, 0, stream>>>(in, d_yhat, batch_rx, D, R, r0, t);
+      if (batch_rx <= 65535 && (D + 31) / 32 <= 65535 && (t + 31) / 32 <= 2147483647LL) {
+        dim3 grid(static_cast<unsigned>((t + 31) / 32), static_cast<unsigned>((D + 31) / 32),
+                  static_cast<unsigned>(batch_rx));
+        const dim3 threads(32, 8);
+        pack_rd_tile_tiled_kernel<T>
+            <<<grid, threads, 0, stream>>>(in, d_yhat, batch_rx, D, R, r0, t);
+      } else {
+        dim3 grid(static_cast<unsigned>(batch_rx), static_cast<unsigned>(D));
+        const int threads = static_cast<int>(std::min<int64_t>(kBlock, t));
+        pack_rd_tile_kernel<T><<<grid, threads, 0, stream>>>(in, d_yhat, batch_rx, D, R, r0, t);
+      }
     }
     cufft_c2c<T>(scratch.plan.plan, d_yhat, CUFFT_FORWARD);
 
@@ -827,9 +896,18 @@ void run_ddm_correlate_stage(const void* input, void* output, const DdmRdMapsLay
       for (int64_t b = 0; b < B; ++b) {
         ComplexT* out_bm = out_base + ((b * num_tx + m) * Nrx * D * R);
         const ComplexT* corr_b = d_work + (b * Nrx * t * D);
-        dim3 grid(static_cast<unsigned>(Nrx), static_cast<unsigned>(D));
-        const int threads = static_cast<int>(std::min<int64_t>(kBlock, t));
-        scatter_corr_tile_kernel<T><<<grid, threads, 0, stream>>>(corr_b, out_bm, Nrx, D, R, r0, t);
+        if (Nrx <= 65535 && (t + 31) / 32 <= 65535 && (D + 31) / 32 <= 2147483647LL) {
+          dim3 grid(static_cast<unsigned>((D + 31) / 32), static_cast<unsigned>((t + 31) / 32),
+                    static_cast<unsigned>(Nrx));
+          const dim3 threads(32, 8);
+          scatter_corr_tile_tiled_kernel<T>
+              <<<grid, threads, 0, stream>>>(corr_b, out_bm, Nrx, D, R, r0, t);
+        } else {
+          dim3 grid(static_cast<unsigned>(Nrx), static_cast<unsigned>(D));
+          const int threads = static_cast<int>(std::min<int64_t>(kBlock, t));
+          scatter_corr_tile_kernel<T>
+              <<<grid, threads, 0, stream>>>(corr_b, out_bm, Nrx, D, R, r0, t);
+        }
       }
     }
   }
