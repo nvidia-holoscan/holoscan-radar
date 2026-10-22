@@ -426,8 +426,9 @@ def download_aws(bucket: str, key: str, dest: Path, progress: DownloadProgress) 
     try:
         # AWS CLI writes a transfer-manager temp and only renames to `partial`
         # on success, so polling `.part` stays at 0. Native CLI progress is
-        # the live indicator; our meter records the final size after rename.
-        completed = subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL)
+        # the live indicator (stdout); our meter records the size after rename.
+        output = sys.stderr if sys.stderr.isatty() else subprocess.DEVNULL
+        completed = subprocess.run(cmd, check=False, stdout=output)
         if completed.returncode != 0:
             raise subprocess.CalledProcessError(completed.returncode, cmd)
         if not partial.exists():
