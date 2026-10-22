@@ -911,4 +911,36 @@ TEST(DetectionReductionOpTest, LiveScoreMethodAppliesForOneTick) {
   EXPECT_EQ(frames[2].as<int64_t>()[0], 10);
 }
 
+template <typename T>
+class ReductionTiledCompactionNative : public ::testing::Test {};
+using ReductionTiledPrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(ReductionTiledCompactionNative, ReductionTiledPrecisions);
+
+TYPED_TEST(ReductionTiledCompactionNative, SparseLabelsCrossScanTilesInAscendingOrder) {
+  using T = TypeParam;
+  // Occupancy spans both sides of two 256-slot boundaries; input order differs
+  // from ascending label order. Singleton clusters give exact analytic means.
+  const std::vector<int64_t> labels{512, 0, 256, 255, 511};
+  const std::vector<int64_t> indices{50, 500, 10, 100, 30, 300, 20, 200, 40, 400};
+  const std::vector<T> points{9, 10, 1, 2, 5, 6, 3, 4, 7, 8};
+  const std::vector<int64_t> expected_idx{10, 100, 20, 200, 30, 300, 40, 400, 50, 500};
+  const std::vector<T> expected_points{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  for (const auto policy : {RepresentativePolicy::kFirst, RepresentativePolicy::kWeightedMean}) {
+    const auto result = run_reduction_dual_result<T>(
+        to_device_tensor(labels, {5}, kInt64), to_device_tensor(indices, {5, 2}, kInt64),
+        to_device_tensor(points, {5, 2}, real_dtype<T>()), make_params(policy));
+    ASSERT_TRUE(result.ok()) << result.describe_failure();
+    const auto rep =
+        holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("rep_idx"));
+    const auto reduced = holoscan::radar::testing::to_host(
+        result.template snapshot<holoscan::Tensor>("reduced_points"));
+    ASSERT_EQ(rep.shape, (std::vector<int64_t>{5, 2}));
+    ASSERT_EQ(reduced.shape, (std::vector<int64_t>{5, 2}));
+    for (std::size_t i = 0; i < expected_idx.size(); ++i) {
+      EXPECT_EQ(rep.template as<int64_t>()[i], expected_idx[i]);
+      EXPECT_EQ(reduced.template as<T>()[i], expected_points[i]);
+    }
+  }
+}
+
 }  // namespace
