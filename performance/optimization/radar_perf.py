@@ -903,7 +903,7 @@ def main(argv=None):
                 "config": config,
                 "confirmed_config_sha256": config_hash(config),
                 "started_at": time.time(),
-                "confirmed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "confirmed_at": datetime.datetime.now(datetime.UTC).isoformat(),
                 "candidates": [],
                 "bugs": [],
                 "coverage_gaps": [],
