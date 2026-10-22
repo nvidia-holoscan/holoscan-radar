@@ -67,13 +67,11 @@ the same path the Holoscan CLI uses for this repository's `HOLOSCAN_CLI_DATA_DIR
 
 ## SDK base image
 
-The dev container uses the HSDK 5 staging image. Set your **user org** in NGC
-Catalog to `nvstaging`, then authenticate to NGC and pull the image before
+The dev container uses the public HSDK 5 GA image. Pull the image before
 opening the container:
 
 ```bash
-docker login nvcr.io
-docker pull nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13
+docker pull nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13
 ```
 
 The image version, Holoscan CLI commands, and current packaging limitation are

@@ -149,7 +149,7 @@ or customize with your own:
 | `operator_slug` | `my_sensor_op` | Initial operator |
 | `language` | `cpp` or `python` | Implementation language |
 | `version` | `0.1.0` | Initial semver |
-| `holoscan_version` | `4.3.0` | Minimum SDK version |
+| `holoscan_version` | `5.0.0` | Minimum SDK version |
 | `full_name`, `affiliation`, `contact_email` | your details | Authorship and Debian metadata |
 
 The CLI will further derive some names using these rules:
@@ -214,7 +214,7 @@ holoscan-my-sensor/
 │                              #   namespace, binary_packages, platforms, SDK pin)
 ├── pyproject.toml             # scikit-build-core; selectively builds the module
 ├── CMakeLists.txt             # find_package(holoscan), BUILD_ALL toggle, python staging
-├── Dockerfile                 # Pinned to nvcr.io/.../holoscan:<ver>-cuda13-dgpu
+├── Dockerfile                 # Pinned to nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13
 ├── README.md                  # Module-facing readme (edit me)
 ├── .clang-format              # C++ modules only
 ├── .gitignore

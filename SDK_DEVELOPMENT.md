@@ -1,37 +1,33 @@
 # Holoscan SDK development setup
 
-Holoscan Radar builds against the HSDK 5 staging image
-`nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13`. Access to the
-`nvstaging` repository is required. The image replaces the former local build
-from the SDK `main-5x` source branch.
+Holoscan Radar builds against the public HSDK 5 GA image
+`nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13`. This replaces the
+pre-release staging image; access to `nvstaging` is no longer required.
 
-The image was pulled on an NVIDIA GB10 host as Linux `arm64` with digest
-`sha256:16f37addcce05e4013cdefacae6e28ed73706d08d49682af4eabc055ac888591`.
-Its CMake package is at `/usr/lib/cmake/holoscan`; it includes the separate
-visualization and testing components. Use the SDK source branch when an API is
-not yet documented, but build against this image.
+The image was verified on an NVIDIA GB10 host as Linux `arm64` with digest
+`sha256:faa23a3a2479697fd64babcb27d28cf97f21d5da54d65c92225f8a9b0d99264a`.
+Its CMake package is at `/usr/lib/cmake/holoscan`, including the visualization
+and testing components.
+
+Use the SDK `main-5x` source branch when an API is not yet documented, but
+build against the GA image.
 
 ## Prepare the image
 
-This pre-release image requires `nvstaging` as your **user org** in NGC Catalog.
-Select that user org before authenticating to `nvcr.io`; a successful Docker
-login with a different user org does not grant access to the image.
-
-From the repository root on a host with NGC staging access, install the CLI
-as described in [`DEVELOPER.md`](DEVELOPER.md#holoscan-cli), then authenticate:
+From the repository root on the host, install the CLI as described in
+[`DEVELOPER.md`](DEVELOPER.md#holoscan-cli). You can pull the SDK image directly:
 
 ```bash
-docker login nvcr.io
+docker pull nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13
 ```
 
-The CLI pulls the staging base image when needed. You can build the project
+The CLI pulls the GA base image when needed. You can build the project
 image separately with `./holoscan-radar build-container`; the run, build, and
 test commands also build it when needed. The devcontainer uses the same base
-image. Rebuild and reopen it when switching from the former locally built SDK
-image.
+image. Rebuild and reopen it when switching SDK images.
 
 Run the repository's `./holoscan-radar` wrapper **on the host**. It selects
-the staging base image and uses the CLI installed in `.venv` when available.
+the GA base image and uses the CLI installed in `.venv` when available.
 Each command below starts a container to do its work. If a
 sibling `../holoscan-sdk` checkout exists, the CLI still mounts it; the
 wrapper selects the image SDK for nested builds.
@@ -53,7 +49,7 @@ images so CMake does not retain old paths.
 
 ## Python provider
 
-The staging image installs HSDK 5 Python Core and Visualization under
+The GA image installs HSDK 5 Python Core and Visualization under
 `/usr/lib/python3.12/site-packages`. Radar's FMCW provider uses nanobind and
 does not require the SDK's former pybind11 CMake target. The development image
 installs nanobind 3.0.1. `./holoscan-radar test` enables the provider and its
