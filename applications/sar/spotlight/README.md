@@ -22,7 +22,7 @@ The solid paths are required data and control flows. Dashed dump and
 visualization branches are enabled by application configuration. The reader's
 typed `stream_boundary` is joined to the aperture manager on the same tick.
 The paced reader, range/manager, and backprojection are separate Graph partitions with dedicated `ThreadPlacement` lanes so collect-vs-wall lag is the live playback clock, not formation GPU time on the controller.
-A required emit onto a full output queue aborts the run. After the operator Error, the Graph driver prints a teaching paragraph: lower `cphd_reader.playback_rate` or reduce the image size so the pipeline can keep up.
+Unmetered ingest (`cphd_reader.playback_rate` 0, the default) waits on a full reader queue. Formation operators still fail-fast on a full queue; after that Error, the Graph driver prints a teaching paragraph: lower `cphd_reader.playback_rate` or reduce the image size so the pipeline can keep up.
 
 ## Build and offline fixture
 

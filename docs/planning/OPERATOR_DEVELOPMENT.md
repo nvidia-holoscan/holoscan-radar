@@ -288,12 +288,13 @@ and the `(void)` reads as the deliberate choice it is.
 
 Required library emits are fail-fast by default (`emit_required_tensor` with
 wait false). A failed Tensor emit consumes the loan, so a wait retry must
-re-prepare. Only `CPHDReaderOp` takes the optional static Param
-`wait_for_downstream` (default false, not `[live]`, Params schema version 2)
-that switches required emits to retry. Do not capture wait in a library
-constructor. Do not add this Param to formation or FMCW operators. Do not use
-`kDropOldest` on a formation data path. Continuous strip opts in on
-`cphd_reader` YAML only.
+re-prepare. Only `CPHDReaderOp` retries: unmetered `playback_rate` 0 always
+waits, and the optional static Param `wait_for_downstream` (default false,
+not `[live]`, Params schema version 2) opts paced ingest into the same retry.
+Do not capture wait in a library constructor. Do not add this Param to
+formation or FMCW operators. Do not use `kDropOldest` on a formation data
+path. Continuous strip opts in on paced `cphd_reader` YAML. It deepens the
+4-slice fan-out edges to 16 rather than waiting on a full queue.
 
 ### Sample time propagation and aligned joins
 
@@ -590,8 +591,8 @@ it: no leak, no backwards steps, and the operator chooses which sample matters
 
 Structural enums that select a kernel (`cfar_variant`, multiplexing scheme,
 `angle_convention`) stay **static** — callers instantiate another operator.
-`CPHDReaderOp.wait_for_downstream` is static too: it selects fail-fast vs retry
-for the run, not a per-tick encoding. Footguns that are "reasonable" (live `pfa`,
+`CPHDReaderOp.wait_for_downstream` is static too: together with `playback_rate`
+it selects fail-fast vs retry for the run, not a per-tick encoding. Footguns that are "reasonable" (live `pfa`,
 live window size) are allowed with warn-once + cache.
 
 ### When the contract says "cheap" but reality is not

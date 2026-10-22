@@ -194,15 +194,17 @@ void BackprojectionOp<T>::setup(OperatorSpec& spec) {
       .memory_kind = MemoryKind::kCudaDevice, .dtype = std::nullopt, .rank = std::nullopt};
   constexpr TensorRepresentation host{
       .memory_kind = MemoryKind::kHost, .dtype = DLDataType{kDLFloat, 64U, 1U}, .rank = 1U};
-  spec.input(range_profiles).queue_depth(4U).expects_tensor(tensor_input(device));
-  spec.input(positions).queue_depth(4U).expects_tensor(tensor_input(device));
-  spec.input(reference_position).queue_depth(4U).expects_tensor(tensor_input(device));
-  spec.input(control).optional().queue_depth(4U);
+  // Setup default 16: continuous strip fans 4 BP ticks per reader cube. Per-edge
+  // ConnectionOptions still set destination depth (other apps keep 4).
+  spec.input(range_profiles).queue_depth(16U).expects_tensor(tensor_input(device));
+  spec.input(positions).queue_depth(16U).expects_tensor(tensor_input(device));
+  spec.input(reference_position).queue_depth(16U).expects_tensor(tensor_input(device));
+  spec.input(control).optional().queue_depth(16U);
   spec.input(range_bins).optional().queue_depth(4U);
   spec.input(sample_points).optional().queue_depth(4U);
   spec.input(weight).optional().queue_depth(4U);
   spec.input(initial_image).optional().queue_depth(4U);
-  spec.input(sample_geometry).optional().queue_depth(4U);
+  spec.input(sample_geometry).optional().queue_depth(16U);
   spec.input(range_bin_spacing).optional().queue_depth(4U);
   spec.input(range_bin_origin).optional().queue_depth(4U);
   spec.input(reference_frequency).optional().queue_depth(4U);

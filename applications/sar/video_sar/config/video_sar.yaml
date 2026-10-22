@@ -33,13 +33,14 @@ cphd:
 # Scene vs formed pixels. counts × spacing is the map (6.8 km
 # at 1 m). max_side is the formed pixel side — the number to
 # lower on a slower GPU (same km, coarser GSD; cost ~ N²).
-# 6800 was ~7% behind collect time on RTX PRO 6000; 6144 is
-# ~18% fewer pixels. 0 = use counts as-is.
+# 6800 was ~7% behind collect time on RTX PRO 6000; 6144 still
+# raced collect on this GPU and fail-fast aborted. 5632 is ~16%
+# fewer pixels than 6144. 0 = use counts as-is.
 # counts may be N (square) or [num_v, num_u].
 lattice:
   counts: 6800
   spacing: 1.0
-  max_side: 6144
+  max_side: 5632
 
 cphd_reader:
   coordinate_frame: ecef

@@ -53,19 +53,26 @@ struct CphdReaderParams {
   bool wait_for_downstream{false};
 };
 
-HOLOSCAN_PARAM_SCHEMA(
-    CphdReaderParams, holoscan::param_schema("com.nvidia.holoscan.radar.CphdReaderParams", 2),
-    holoscan::field<&CphdReaderParams::path>("path"),
-    holoscan::field<&CphdReaderParams::coordinate_frame>("coordinate_frame"),
-    holoscan::field<&CphdReaderParams::pulses_per_tick>("pulses_per_tick"),
-    holoscan::field<&CphdReaderParams::channel>("channel"),
-    holoscan::field<&CphdReaderParams::pulse_range>("pulse_range"),
-    holoscan::field<&CphdReaderParams::loop>("loop"),
-    holoscan::field<&CphdReaderParams::playback_rate>("playback_rate"),
-    holoscan::field<&CphdReaderParams::duty_cycle>("duty_cycle"),
-    holoscan::field<&CphdReaderParams::wait_for_downstream>("wait_for_downstream")
-        .description("When true, required Tensor emits wait on kBackpressured / "
-                     "kResourceExhausted instead of failing compute(). Static. Default false."));
+HOLOSCAN_PARAM_SCHEMA(CphdReaderParams,
+                      holoscan::param_schema("com.nvidia.holoscan.radar.CphdReaderParams", 2),
+                      holoscan::field<&CphdReaderParams::path>("path"),
+                      holoscan::field<&CphdReaderParams::coordinate_frame>("coordinate_frame"),
+                      holoscan::field<&CphdReaderParams::pulses_per_tick>("pulses_per_tick"),
+                      holoscan::field<&CphdReaderParams::channel>("channel"),
+                      holoscan::field<&CphdReaderParams::pulse_range>("pulse_range"),
+                      holoscan::field<&CphdReaderParams::loop>("loop"),
+                      holoscan::field<&CphdReaderParams::playback_rate>("playback_rate"),
+                      holoscan::field<&CphdReaderParams::duty_cycle>("duty_cycle"),
+                      holoscan::field<&CphdReaderParams::wait_for_downstream>("wait_for_downstream")
+                          .description("When true, required Tensor emits wait on kBackpressured / "
+                                       "kResourceExhausted instead of failing compute(). Unmetered "
+                                       "playback_rate 0 always waits. Static. Default false."));
+
+// Unmetered ingest (playback_rate 0) waits on a full queue. A positive rate
+// fail-fasts unless wait_for_downstream is true.
+[[nodiscard]] inline bool cphd_reader_waits_on_full(const CphdReaderParams& params) {
+  return params.wait_for_downstream || !(params.playback_rate > 0.0);
+}
 
 template <typename T>
 class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {

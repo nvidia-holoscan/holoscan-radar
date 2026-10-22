@@ -73,12 +73,16 @@ class SarImageReportOp : public holoscan::Operator<> {
           Error{ErrorCode::kInvalidArgument, "SarImageReportOp: expected (num_v,num_u)"});
     }
     const auto index = count_->count.fetch_add(1) + 1;
+    const bool shape_changed = !last_num_v_.has_value() || *last_num_v_ != shape[0] ||
+                               !last_num_u_.has_value() || *last_num_u_ != shape[1];
     log_formed(index, shape[0], shape[1], /*info=*/false);
     const auto now = std::chrono::steady_clock::now();
-    if (!last_info_at_.has_value() || now - *last_info_at_ >= kHeartbeatPeriod) {
+    if (shape_changed || !last_info_at_.has_value() || now - *last_info_at_ >= kHeartbeatPeriod) {
       log_formed(index, shape[0], shape[1], /*info=*/true);
       last_info_at_ = now;
     }
+    last_num_v_ = shape[0];
+    last_num_u_ = shape[1];
     return {};
   }
   Input<Tensor> image{"image"};
@@ -112,5 +116,7 @@ class SarImageReportOp : public holoscan::Operator<> {
   std::shared_ptr<ImageCount> count_;
   std::shared_ptr<FormationHud> hud_{};
   std::optional<std::chrono::steady_clock::time_point> last_info_at_{};
+  std::optional<int64_t> last_num_v_{};
+  std::optional<int64_t> last_num_u_{};
 };
 }  // namespace holoscan::radar::app::sar

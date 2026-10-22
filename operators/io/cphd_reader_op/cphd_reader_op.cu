@@ -406,7 +406,7 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
       }
     }
     const auto& p = params();
-    const bool wait = p.wait_for_downstream;
+    const bool wait = cphd_reader_waits_on_full(p);
     const auto tick_start = std::chrono::steady_clock::now();
     const auto& info = file_->channel(p.channel);
     const int64_t count = std::min(p.pulses_per_tick, last_pulse_ - next_pulse_);
@@ -603,7 +603,8 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
                                     to_wire(p.coordinate_frame), "CPHDReaderOp.coordinate_frame");
     }
     // Tensor emit consumes the loan on every outcome, including kBackpressured.
-    // wait_for_downstream re-prepares and retries; omit the Param to fail-fast.
+    // Unmetered or wait_for_downstream re-prepares and retries; paced omit
+    // fail-fasts.
     auto publish_tensor = [&](Output<Tensor>& port, std::optional<TensorOutputLoan>& held,
                               auto&& prepare, const char* what) -> expected<void, Error> {
       return retry_pool(context, what, wait, [&]() -> expected<void, Error> {

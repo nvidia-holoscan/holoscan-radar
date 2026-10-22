@@ -131,10 +131,12 @@ template <typename T>
 void ApertureManagerOp<T>::setup(OperatorSpec& spec) {
   const auto pulses = *extents_.max_pulses;
   const auto bins = *extents_.max_range_bins;
-  spec.input(range_profiles).queue_depth(4U).expects_tensor(tensor_input(kDevice));
-  spec.input(positions).queue_depth(4U).expects_tensor(tensor_input(kDevice));
-  spec.input(reference_position).queue_depth(4U).expects_tensor(tensor_input(kDevice));
-  spec.input(stream_boundary).queue_depth(4U);
+  // Setup default 16: continuous strip fans 4 slices per reader cube. Per-edge
+  // ConnectionOptions still set destination depth (other apps keep 4).
+  spec.input(range_profiles).queue_depth(16U).expects_tensor(tensor_input(kDevice));
+  spec.input(positions).queue_depth(16U).expects_tensor(tensor_input(kDevice));
+  spec.input(reference_position).queue_depth(16U).expects_tensor(tensor_input(kDevice));
+  spec.input(stream_boundary).queue_depth(16U);
   spec.input(sample_geometry).optional().queue_depth(4U);
   spec.input(sample_points).optional().queue_depth(4U);
   spec.input(control).optional().queue_depth(4U);

@@ -48,9 +48,9 @@ complex64/float32; `T=double` means complex128/float64.
 | `channel` | `int64` | 0 | Static | Selected CPHD channel |
 | `pulse_range` | `vector<int64>` | empty | Static | Half-open per-file selection |
 | `loop` | `bool` | false | Static | Repeat the file list |
-| `playback_rate` | `double` | 0 | Static | Pace by TxTime |
+| `playback_rate` | `double` | 0 | Static | `0` unmetered (wait on full); `>0` pace by TxTime |
 | `duty_cycle` | `double` | 1 | Static | Gap between collections |
-| `wait_for_downstream` | `bool` | false | Static | Required emits wait on full queues |
+| `wait_for_downstream` | `bool` | false | Static | Paced ingest waits on full queues |
 
 ## Decode and timing
 
@@ -63,13 +63,14 @@ A positive `playback_rate` paces collection time relative to wall time;
 `duty_cycle` adds an inter-collection gap. Collect time is the finite `TxTime`
 span (non-finite PVP samples are skipped; some Umbra vectors store NaN there).
 Playback slack and duty-cycle quiet sleeps return early when the run requests
-cooperative stop. `wait_for_downstream: true` retries required Tensor
-emits on `kBackpressured` / `kResourceExhausted` through the shared helper:
+cooperative stop. Unmetered `playback_rate` 0 always retries required Tensor
+emits on `kBackpressured` / `kResourceExhausted` through the shared helper.
 HSDK 5 `QueuePolicy::kBlocking` does not park `OnClock` until the consumer
 has room, and a failed `emit(TensorOutputLoan)` consumes the loan, so the
-reader waits and re-prepares. Omit the key (default false) to fail-fast with
-the shared explanation. Only this operator takes the Param; formation
-operators fail-fast. The wait returns on cooperative stop. The lag HUD
+reader waits and re-prepares. A positive `playback_rate` fail-fasts with the
+shared explanation unless `wait_for_downstream: true`. Only this operator
+takes the Param; formation operators fail-fast. The wait returns on
+cooperative stop. The lag HUD
 is live target versus wall (`TxTime` span / `playback_rate` versus now since
 the collection start), matching the HSDK 4 `playback_status()` poll. Pace
 sleep uses that same slack (no sleep while behind). A paced reader

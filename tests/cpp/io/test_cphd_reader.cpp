@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -12,7 +13,6 @@
 #include <fstream>
 #include <string>
 #include <vector>
-#include <chrono>
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
@@ -26,6 +26,20 @@ namespace {
 namespace fs = std::filesystem;
 using holoscan::radar::cphd::CphdFile;
 using holoscan::radar::testing::cphd_fixture::make_fixture;
+
+TEST(CphdReaderOp, UnmeteredWaitsOnFullQueueUnlessPaced) {
+  using holoscan::radar::CphdReaderParams;
+  using holoscan::radar::cphd_reader_waits_on_full;
+  CphdReaderParams params;
+  EXPECT_TRUE(cphd_reader_waits_on_full(params));
+  params.playback_rate = 1.0;
+  EXPECT_FALSE(cphd_reader_waits_on_full(params));
+  params.wait_for_downstream = true;
+  EXPECT_TRUE(cphd_reader_waits_on_full(params));
+  params.wait_for_downstream = false;
+  params.playback_rate = 0.0;
+  EXPECT_TRUE(cphd_reader_waits_on_full(params));
+}
 
 TEST(CphdFile, CppFixtureDecodesHeaderPvpAndSignal) {
   const fs::path path = fs::temp_directory_path() / "holoscan_sar_cphd_cpp_fixture.cphd";
@@ -81,7 +95,12 @@ TEST(CphdReaderOp, AcceptsRecordedGridRampButRejectsFrequencyStep) {
                              "pulse_times", "velocities"}) {
       fixture.output_device(port, holoscan::DeviceId{0});
     }
+    // The reader parks after D22 so a downstream aperture can drain; HSDK
+    // request_stop does not. Isolated operator tests must cancel, matching
+    // EmitsEachBatchAndTypedEndBoundary.
     auto running = fixture.run_async({.expect_stop = true});
+    (void)running.wait_for_output("stream_boundary", 1U, std::chrono::seconds{5});
+    running.request_stop();
     return running.finish();
   };
   const auto accepted = run_reader(ramp);

@@ -254,9 +254,9 @@ inline std::size_t tensor_byte_span(std::span<const int64_t> shape, DLDataType d
 }
 
 // CPHDReaderOp is the only library operator that retries a full queue
-// (`wait_for_downstream`, default false). Other required emits fail-fast
-// through emit_required_tensor(..., false). A failed Tensor emit consumes
-// the loan, so a wait retry must re-prepare, not re-emit.
+// (unmetered playback_rate 0, or wait_for_downstream). Other required emits
+// fail-fast through emit_required_tensor(..., false). A failed Tensor emit
+// consumes the loan, so a wait retry must re-prepare, not re-emit.
 
 template <typename Fn>
 auto retry_transient(ExecutionContext& context, std::string_view what, Fn&& fn) -> decltype(fn()) {
@@ -281,7 +281,8 @@ auto retry_transient(ExecutionContext& context, std::string_view what, Fn&& fn) 
 
 // Fail-fast (wait false): keep the SDK code, replace the message so a
 // RUNTIME_OPERATOR_CALLBACK_FAILED names the port. Log it too: the runtime
-// wrapper can bury the Error. Only CPHDReaderOp.wait_for_downstream retries.
+// wrapper can bury the Error. Only CPHDReaderOp retries (unmetered or
+// wait_for_downstream).
 inline Error explain_fail_fast_emit(std::string_view what, ErrorCode code) {
   const char* detail = code == ErrorCode::kBackpressured
                            ? "next stage is behind; output queue is full"

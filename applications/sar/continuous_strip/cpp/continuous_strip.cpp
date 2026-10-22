@@ -37,19 +37,23 @@ int main(int argc, char** argv) {
         application.add(scroll);
         bind_outputs(options, "scroll_stager",
                      {"range_profiles_out", "positions_out", "reference_position_out"});
+        // One 1024-pulse cube is four 256-pulse BP ticks. The shared depth-4
+        // edge fills on the first cube if formation has not drained; 16 holds
+        // four cubes of slack without waiting on backpressure.
+        const holoscan::ConnectionOptions staged{.queue_depth = 16U};
         graph.add_flow(range->range_profiles, scroll->range_profiles, queue);
         graph.add_flow(reader->positions, scroll->positions, queue);
         graph.add_flow(reader->reference_position, scroll->reference_position, queue);
         graph.add_flow(reader->stream_boundary, scroll->stream_boundary, queue);
-        graph.add_flow(scroll->range_profiles_out, manager->range_profiles, queue);
-        graph.add_flow(scroll->positions_out, manager->positions, queue);
-        graph.add_flow(scroll->reference_position_out, manager->reference_position, queue);
-        graph.add_flow(scroll->stream_boundary_out, manager->stream_boundary, queue);
-        graph.add_flow(scroll->sample_geometry, bp->sample_geometry, queue);
-        graph.add_flow(manager->range_profiles_out, bp->range_profiles, queue);
-        graph.add_flow(manager->positions_out, bp->positions, queue);
-        graph.add_flow(manager->reference_position_out, bp->reference_position, queue);
-        graph.add_flow(manager->control_out, bp->control, queue);
+        graph.add_flow(scroll->range_profiles_out, manager->range_profiles, staged);
+        graph.add_flow(scroll->positions_out, manager->positions, staged);
+        graph.add_flow(scroll->reference_position_out, manager->reference_position, staged);
+        graph.add_flow(scroll->stream_boundary_out, manager->stream_boundary, staged);
+        graph.add_flow(scroll->sample_geometry, bp->sample_geometry, staged);
+        graph.add_flow(manager->range_profiles_out, bp->range_profiles, staged);
+        graph.add_flow(manager->positions_out, bp->positions, staged);
+        graph.add_flow(manager->reference_position_out, bp->reference_position, staged);
+        graph.add_flow(manager->control_out, bp->control, staged);
         auto mosaic = graph.template op<app::sar::SarMosaicOp>("sar_mosaic", cfg.scroll_parent,
                                                                cfg.reader_loop);
         formation.add(mosaic);

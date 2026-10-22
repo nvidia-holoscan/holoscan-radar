@@ -406,7 +406,16 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     if (!plan.ok()) {
       const std::string json = std::string(plan.json());
       std::string hint;
-      if (json.find("holoscan.partition.exact_cover") != std::string::npos) {
+      if (json.find("PHYSICAL_TENSOR_DEVICE_BINDING_UNUSED") != std::string::npos) {
+        hint =
+            " (a GPU device binding was set on an output that forwards an upstream "
+            "tensor and has no pool)";
+      } else if (json.find("IMPLICIT_DEVICE_ZERO_REJECTED") != std::string::npos) {
+        hint =
+            " (a GPU tensor output is missing bind_tensor_output_device; implicit "
+            "device 0 is not admitted)";
+      } else if (json.find("\"token\":\"PARTITION_") != std::string::npos ||
+                 json.find("holoscan.partition.exact_cover") != std::string::npos) {
         hint =
             " (partition exact_cover: each authored partition must be one directed chain, "
             "not a join of two producers)";
