@@ -78,6 +78,9 @@ struct FormationHudSnapshot {
   PlaybackStatus last_batch_playback{};
   LastMeanApc apc{};
   std::optional<std::chrono::steady_clock::time_point> last_packet_at;
+  // True after CPHDReaderOp parks on kEndOfStream. Collection-boundary
+  // dwell_end is not EOS: independent_images still has files to read.
+  bool reader_stopped{false};
   FormationHudBp bp{};
   // Last INFO heartbeat rate line from SarImageReportOp. The HUD draws this
   // instead of live-polling `bp` after the LUT: visualization is drop-oldest
@@ -89,7 +92,8 @@ struct FormationHudSnapshot {
 class FormationHud {
  public:
   void publish_reader(std::vector<CollectionSpan> spans, PlaybackStatus playback, LastMeanApc apc,
-                      std::optional<std::chrono::steady_clock::time_point> last_packet) {
+                      std::optional<std::chrono::steady_clock::time_point> last_packet,
+                      bool reader_stopped = false) {
     const std::lock_guard lock(mu_);
     spans_ = std::move(spans);
     playback_ = playback;
@@ -99,6 +103,7 @@ class FormationHud {
       last_batch_playback_.live = false;
     }
     last_packet_at_ = last_packet;
+    reader_stopped_ = reader_stopped;
   }
 
   void publish_bp(FormationHudBp bp) {
@@ -118,6 +123,7 @@ class FormationHud {
                               .last_batch_playback = last_batch_playback_,
                               .apc = apc_,
                               .last_packet_at = last_packet_at_,
+                              .reader_stopped = reader_stopped_,
                               .bp = bp_,
                               .rate_line = rate_line_};
     if (snap.playback.valid && snap.playback.live) {
@@ -136,6 +142,7 @@ class FormationHud {
   PlaybackStatus last_batch_playback_{};
   LastMeanApc apc_{};
   std::optional<std::chrono::steady_clock::time_point> last_packet_at_;
+  bool reader_stopped_{false};
   FormationHudBp bp_{};
   std::string rate_line_;
 };

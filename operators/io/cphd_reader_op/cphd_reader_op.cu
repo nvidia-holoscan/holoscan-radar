@@ -271,7 +271,7 @@ Contract CPHDReaderOp<T>::contract() const {
 template <typename T>
 void CPHDReaderOp<T>::publish_hud() {
   if (hud_)
-    hud_->publish_reader(spans_, playback_, last_apc_, last_packet_at_);
+    hud_->publish_reader(spans_, playback_, last_apc_, last_packet_at_, stopped_);
 }
 
 template <typename T>

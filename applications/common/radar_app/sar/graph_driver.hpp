@@ -9,6 +9,7 @@
 #include <exception>
 #include <initializer_list>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -440,26 +441,36 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     }
 #endif
     if (!cfg.reader_loop) {
-      // request_stop does not drain queued samples. The reader parks after D22;
-      // wait until that last batch has formed an image (or SIGINT) before stop.
+      // request_stop does not drain queued samples. The reader parks after D22
+      // (kEndOfStream, not a collection_boundary). Arm the 180 s drain only
+      // after the HUD reports that stop, then wait until the last packet has
+      // formed an image (or SIGINT) before request_stop.
       constexpr auto kDrainWait = std::chrono::seconds{180};
       constexpr auto kPoll = std::chrono::milliseconds{50};
-      const auto drain_deadline = std::chrono::steady_clock::now() + kDrainWait;
+      std::optional<std::chrono::steady_clock::time_point> drain_deadline;
       auto eos_flushed = [&] {
         const auto snap = hud->snapshot();
-        if (snap.spans.empty() || !snap.spans.back().dwell_end.has_value())
+        if (!snap.reader_stopped)
           return false;
         return snap.bp.emit_at.has_value() && snap.last_packet_at.has_value() &&
                *snap.bp.emit_at >= *snap.last_packet_at;
       };
       while (!eos_flushed()) {
         const auto now = std::chrono::steady_clock::now();
-        if (now >= drain_deadline)
+        if (!drain_deadline.has_value()) {
+          const auto snap = hud->snapshot();
+          if (snap.reader_stopped)
+            drain_deadline = now + kDrainWait;
+        }
+        if (drain_deadline.has_value() && now >= *drain_deadline)
           break;
-        const auto remaining = drain_deadline - now;
-        const auto slice_ns =
-            std::min(std::chrono::duration_cast<std::chrono::nanoseconds>(remaining),
-                     std::chrono::duration_cast<std::chrono::nanoseconds>(kPoll));
+        auto slice_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(kPoll);
+        if (drain_deadline.has_value()) {
+          const auto remaining =
+              std::chrono::duration_cast<std::chrono::nanoseconds>(*drain_deadline - now);
+          if (remaining < slice_ns)
+            slice_ns = remaining;
+        }
         if (session.wait_for(slice_ns))
           break;
       }

@@ -420,19 +420,19 @@ def download_aws(bucket: str, key: str, dest: Path, progress: DownloadProgress) 
     if partial.exists():
         partial.unlink()
     uri = f"s3://{bucket}/{key}"
+    cmd = ["aws", "s3", "cp", uri, str(partial), "--no-sign-request"]
+    if not sys.stderr.isatty():
+        cmd.append("--no-progress")
     try:
-        proc = subprocess.Popen(
-            ["aws", "s3", "cp", uri, str(partial), "--no-sign-request", "--no-progress"],
-            stdout=subprocess.DEVNULL,
-        )
-        while proc.poll() is None:
-            if partial.exists():
-                progress.set(partial.stat().st_size)
-            time.sleep(PROGRESS_INTERVAL_S)
-        if partial.exists():
-            progress.set(partial.stat().st_size)
-        if proc.returncode != 0:
-            raise subprocess.CalledProcessError(proc.returncode, proc.args)
+        # AWS CLI writes a transfer-manager temp and only renames to `partial`
+        # on success, so polling `.part` stays at 0. Native CLI progress is
+        # the live indicator; our meter records the final size after rename.
+        completed = subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL)
+        if completed.returncode != 0:
+            raise subprocess.CalledProcessError(completed.returncode, cmd)
+        if not partial.exists():
+            raise RuntimeError(f"aws s3 cp produced no file at {partial}")
+        progress.set(partial.stat().st_size)
         partial.replace(dest)
         progress.finish()
     except BaseException:
