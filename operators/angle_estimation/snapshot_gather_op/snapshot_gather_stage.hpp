@@ -136,10 +136,12 @@ static __global__ void gather_snapshots_kernel(
     // c * num_snapshots + snap_slot — NOT snap_slot * num_channels + c, which
     // transposes to (num_snapshots, num_channels) and only agrees for K == 1.
     cuda::std::complex<T>* out = snapshot + row * num_channels * num_snapshots;
-    if (valid) {
-      for (int64_t c = 0; c < num_channels; ++c) {
+    for (int64_t c = 0; c < num_channels; ++c) {
+      if (valid) {
         const int64_t src = batch_base + c * (num_doppler * num_range) + plane_offset;
         out[c * num_snapshots + snap_slot] = rd_maps[src];
+      } else {
+        out[c * num_snapshots + snap_slot] = cuda::std::complex<T>{T{0}, T{0}};
       }
     }
   }
