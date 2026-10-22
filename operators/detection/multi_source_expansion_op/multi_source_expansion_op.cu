@@ -289,12 +289,13 @@ expected<void, Error> MultiSourceExpansionOp<T>::compute(ExecutionContext& conte
   HOLOSCAN_TRY(auto idx_writer, idx_loan->write(context.cuda_stream()));
   HOLOSCAN_TRY(auto aoa_writer, aoa_loan->write(context.cuda_stream()));
   if (items > 0) {
-    detail::scatter_expanded_rows_kernel<T><<<static_cast<int>(items), 128, 0, stream>>>(
-        static_cast<const int64_t*>(idx.data()), static_cast<const T*>(baseline.data()),
-        static_cast<const int64_t*>(ordinal_ptr), static_cast<const T*>(resolved.data()),
-        static_cast<const T*>(multi.data()), static_cast<const int32_t*>(counts.data()),
-        state_->compact.d_offsets, items, idx_cols, source_slots,
-        static_cast<int64_t*>(idx_writer.data()), static_cast<T*>(aoa_writer.data()));
+    detail::scatter_expanded_rows_kernel<T>
+        <<<static_cast<int>((items - 1) / 128 + 1), 128, 0, stream>>>(
+            static_cast<const int64_t*>(idx.data()), static_cast<const T*>(baseline.data()),
+            static_cast<const int64_t*>(ordinal_ptr), static_cast<const T*>(resolved.data()),
+            static_cast<const T*>(multi.data()), static_cast<const int32_t*>(counts.data()),
+            state_->compact.d_offsets, items, idx_cols, source_slots,
+            static_cast<int64_t*>(idx_writer.data()), static_cast<T*>(aoa_writer.data()));
     check_cuda("scatter expanded rows", kOpName);
   }
 
