@@ -38,12 +38,9 @@ app:
         - range: 245.0
           azimuth: 0.15
           elevation: 0.10
-          velocity:
-              - -6.5262  # x
-              - -1.4415  # y
-              - -0.5686  # z
+          velocity: [-6.5262, -1.4415, -0.5686]
           amplitude: 0.8
-    noise_snr_db: 18.0
+    noise_snr_db: 5.0
 
 range_processor:
     waveform: *waveform

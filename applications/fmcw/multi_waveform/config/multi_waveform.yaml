@@ -66,7 +66,7 @@ app:
           elevation: -0.12
           velocity: [2.0, -0.2, 0.1]
           amplitude: 0.7
-    noise_snr_db: 18.0
+    noise_snr_db: 5.0
 
 mimo_deinterleave: {}
 range_processor:

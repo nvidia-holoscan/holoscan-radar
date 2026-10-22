@@ -45,44 +45,29 @@ app:
         - range: 245.0
           azimuth: 0.15
           elevation: 0.10
-          velocity:
-              - -6.5262  # x
-              - -1.4415  # y
-              - -0.5686  # z
+          velocity: [-6.5262, -1.4415, -0.5686]
           amplitude: 0.8
         - range: 132.0
           azimuth: -0.10
           elevation: -0.12
-          velocity:
-              - 1.2227  # x
-              - -0.2734  # y
-              - 0.1522  # z
+          velocity: [1.2227, -0.2734, 0.1522]
           amplitude: 0.6
         - range: 22.0
           azimuth: 0.0
           elevation: 0.08
-          velocity:
-              - 8.4896  # x
-              - 0.0  # y
-              - 0.6806  # z
+          velocity: [8.4896, 0.0, 0.6806]
           amplitude: 0.7
         - range: 117.0
           azimuth: 0.20
           elevation: 0.10
-          velocity:
-              - 2.9717  # x
-              - 0.7248  # y
-              - 0.0052  # z
+          velocity: [2.9717, 0.7248, 0.0052]
           amplitude: 0.55
         - range: 218.0
           azimuth: 0.17
           elevation: 0.04
-          velocity:
-              - -4.7264  # x
-              - -1.2375  # y
-              - -0.0747  # z
+          velocity: [-4.7264, -1.2375, -0.0747]
           amplitude: 0.7
-    noise_snr_db: 18.0
+    noise_snr_db: 5.0
 
 range_processor:
     waveform: *waveform

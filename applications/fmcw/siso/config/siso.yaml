@@ -35,12 +35,22 @@ app:
         reference_range: 100.0
     # Baseline SIMO targets projected onto the SISO radial axis.
     targets:
-        - {range: 245.0, velocity: -6.5006, amplitude: 0.8}
-        - {range: 132.0, velocity: 1.5000, amplitude: 0.6}
-        - {range: 22.0, velocity: 8.9712, amplitude: 0.7}
-        - {range: 117.0, velocity: 3.0000, amplitude: 0.55}
-        - {range: 218.0, velocity: -5.0000, amplitude: 0.7}
-    noise_snr_db: 20.0
+        - range: 245.0
+          velocity: -6.5006
+          amplitude: 0.8
+        - range: 132.0
+          velocity: 1.5000
+          amplitude: 0.6
+        - range: 22.0
+          velocity: 8.9712
+          amplitude: 0.7
+        - range: 117.0
+          velocity: 3.0000
+          amplitude: 0.55
+        - range: 218.0
+          velocity: -5.0000
+          amplitude: 0.7
+    noise_snr_db: 5.0
 
 range_processor:
     waveform: *waveform

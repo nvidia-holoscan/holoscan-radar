@@ -26,8 +26,12 @@ app:
     rx_poll_period: 0.001
     simulated_receive_polls: 2
     targets:
-        - {range: 35.0, azimuth: 0.15, elevation: 0.10, velocity: [-4.0, -0.6, -0.4], amplitude: 0.8}
-    noise_snr_db: 18.0
+        - range: 35.0
+          azimuth: 0.15
+          elevation: 0.10
+          velocity: [-4.0, -0.6, -0.4]
+          amplitude: 0.8
+    noise_snr_db: 5.0
 mimo_deinterleave: {}
 range_processor: {range_window: hann, nfft: 0}
 clutter_filter: {method: mean_subtraction, doppler_window: &doppler_window hann}

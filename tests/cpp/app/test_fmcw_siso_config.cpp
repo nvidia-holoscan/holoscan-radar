@@ -31,7 +31,7 @@ TEST(FmcwSisoConfig, DecodesProductionAndDerivesRankTwoExtents) {
   EXPECT_EQ(config.scene.samples_per_chirp, 256);
   EXPECT_EQ(config.scene.targets.size(), 5U);
   ASSERT_TRUE(config.scene.snr_db.has_value());
-  EXPECT_DOUBLE_EQ(*config.scene.snr_db, 20.0);
+  EXPECT_DOUBLE_EQ(*config.scene.snr_db, 5.0);
   EXPECT_EQ(config.scene.range_loss.model, radar::sim::RangeLossModel::kMonostaticFreeSpace);
   EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 100.0);
   ASSERT_EQ(config.scene.rx_positions.size(), 1U);

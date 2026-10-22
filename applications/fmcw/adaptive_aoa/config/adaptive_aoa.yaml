@@ -68,7 +68,7 @@ app:
           elevation: -0.08
           velocity: [2.414, 0.591, -0.200]
           amplitude: 0.75
-    noise_snr_db: 24.0
+    noise_snr_db: 5.0
 
 mimo_deinterleave: {}
 range_processor:
@@ -92,9 +92,9 @@ tdm_sparse_compensation:
 cfar_detector:
     # Detect local maxima on the TX/RX-folded range-Doppler plane.
     cfar_variant: CA
-    guard_cells: [2, 2]
+    guard_cells: [3, 3]
     training_cells: [4, 4]
-    pfa: 1.0e-7
+    pfa: 1.0e-9
     peak_mode: range_doppler
     nci_axes: [0, 1]
 beamscan_estimator: &beamscan

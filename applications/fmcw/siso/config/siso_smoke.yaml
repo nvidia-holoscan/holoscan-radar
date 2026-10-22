@@ -28,8 +28,10 @@ app:
         detection_trail_frames: 50
     # Baseline SIMO targets projected onto the SISO radial axis.
     targets:
-        - {range: 245.0, velocity: -6.5006, amplitude: 0.8}
-    noise_snr_db: 20.0
+        - range: 245.0
+          velocity: -6.5006
+          amplitude: 0.8
+    noise_snr_db: 5.0
 
 range_processor:
     waveform: *waveform
