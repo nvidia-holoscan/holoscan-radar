@@ -108,7 +108,11 @@ Rejected combinations and the operator's own messages:
 
 ## Performance
 
-Cold / first unseen steering key: device weight/grid build (same weight helper as PhaseShift). Steady: cache hit + `X · Wᶜ` GEMM + reduce kernel + optional blanking. `peak_interpolation` does not rebuild the artifact; a grid / geometry / taper override does.
+Cold / first unseen steering key: device weight/grid build (same weight helper as PhaseShift). One-look steady processing uses a cache hit, `X · Wᶜ` GEMM, reduction and optional blanking. Multiple looks use the ordered per-beam mean-power kernel. Float stages the snapshot plane in block-local shared memory when `num_channels * num_snapshots <= 2048` and total dynamic shared storage fits 32 KiB; larger planes and double use global loads. The channel/look accumulation and deterministic peak rules stay the same. `peak_interpolation` does not rebuild the artifact; a grid / geometry / taper override does.
+
+A local Thor HSDK 5 engineering check used five warmups, 50 steady frames, three screen pairs and three fresh pairs. For baseline-large float (16 channels, 1024 items, nine looks, 61×31 beams), fresh compute medians changed 2.746724 → 2.545900 ms: paired saving 0.199546 ms (7.268%), with pair gains 7.247–7.406%. All eleven other case/precision endpoints in the six-case check met the declared median/pair risk allowance of max(5 microseconds, 5%). Both builds passed 47 native tests and exact comparisons under both public-output policies across seven cases, in both precisions, including minimal optional wiring. These results describe the measured workloads.
+
+Startup and tails are separate tradeoffs: fresh medium-float cold latency increased 0.712 ms, optional-minimal double setup increased 1.217 ms, large-double p99 increased 0.080 ms and small-float p99 increased 0.008 ms. The cached interpolation event changed 2.757 → 2.556 ms in float and 63.189 → 63.196 ms in double. Fifty-frame tails are descriptive; the retained benefit targets streaming large float workloads and establishes no startup or tail guarantee.
 
 Harness: `performance/operators/angle_estimation/beamscan_estimator/adapter.cpp` (Graph). Size ladder `xs`…`xl` (channels × detections × scan grid). Every selected size runs five isolated inline-override scenarios and reports `override_ms` / `override_delta_ms` for geometry, azimuth grid, elevation grid, taper, and interpolation. Optional `is_valid` is omitted from performance runs. No reference results are checked in; run:
 

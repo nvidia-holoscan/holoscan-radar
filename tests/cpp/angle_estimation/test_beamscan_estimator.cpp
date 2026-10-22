@@ -491,6 +491,78 @@ TYPED_TEST(BeamscanNineLookTest, LargeGridMaskMatchesUnmaskedBytesAndLowestBeamT
   }
 }
 
+TYPED_TEST(BeamscanNineLookTest, StagingBoundariesMatchIndependentMeanPower) {
+  using T = TypeParam;
+  const auto geometry = make_ula_geometry(1, 0.5, 1.0);
+  const std::vector<double> az{-0.2, 0.0, 0.3};
+  for (const int64_t looks : {1792, 1793, 2048, 2049}) {
+    SCOPED_TRACE(looks);
+    std::vector<std::complex<double>> markers(static_cast<size_t>(looks));
+    double expected = 0.0;
+    for (int64_t look = 0; look < looks; ++look) {
+      const double real = 1.0 + static_cast<double>(look % 7) / 8.0;
+      const double imag = look % 2 == 0 ? 0.5 : -0.5;
+      markers[static_cast<size_t>(look)] = {real, imag};
+      // One sensor at the origin has unit weight at every beam. Compute mean
+      // power independently; binary markers make each squared magnitude exact.
+      expected += real * real + imag * imag;
+    }
+    expected /= static_cast<double>(looks);
+    auto extents = holoscan::radar::testing::extents_for_scan_grid(az.size(), 1U);
+    extents.max_items = 1;
+    extents.max_channels = 1;
+    extents.max_snapshots = looks;
+    const auto result =
+        run_beamscan_result<T>(snapshot_to_device<T>(markers, {1, 1, looks}),
+                               make_params(geometry, AngleConvention{}, az, {0.0}), extents);
+    ASSERT_TRUE(result.ok()) << result.describe_failure();
+    const auto spectrum = beamscan_frames(result, "angle_spectrum");
+    const auto aoa = beamscan_frames(result, "aoa_estimates");
+    ASSERT_EQ(spectrum.size(), 1U);
+    ASSERT_EQ(aoa.size(), 1U);
+    ASSERT_EQ(spectrum[0].shape, (std::vector<int64_t>{1, 3, 1}));
+    ASSERT_EQ(aoa[0].shape, (std::vector<int64_t>{1, 2}));
+    const double relative_tolerance = sizeof(T) == sizeof(float) ? 2e-5 : 1e-11;
+    for (int64_t beam = 0; beam < 3; ++beam) {
+      EXPECT_NEAR(spectrum[0].template as<T>()[beam], expected,
+                  relative_tolerance * std::max(1.0, expected));
+    }
+    // Positive equal-power beams retain the existing lowest-beam tie rule.
+    EXPECT_EQ(aoa[0].template as<T>()[0], static_cast<T>(az.front()));
+    EXPECT_EQ(aoa[0].template as<T>()[1], T{0});
+  }
+}
+
+TYPED_TEST(BeamscanNineLookTest, TiledMaskedLooksMatchIndependentPowerAndEmptyRows) {
+  using T = TypeParam;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const std::vector<std::complex<double>> markers{{2.0, 1.0}, {nan, nan}, {1.0, -2.0},
+                                                  {nan, nan}, {nan, nan}, {nan, nan}};
+  const auto az = linspace(-0.31, 0.19, 35);
+  const auto el = linspace(-0.23, 0.29, 31);
+  const auto result = run_beamscan_with_mask_result<T>(
+      snapshot_to_device<T>(markers, {2, 1, 3}), to_device_bool_tensor({1, 0, 1, 0, 0, 0}, {2, 3}),
+      make_params(make_ula_geometry(1, 0.5, 1.0), AngleConvention{}, az, el));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto spectrum = beamscan_frames(result, "angle_spectrum");
+  const auto aoa = beamscan_frames(result, "aoa_estimates");
+  ASSERT_EQ(spectrum.size(), 1U);
+  ASSERT_EQ(aoa.size(), 1U);
+  ASSERT_EQ(spectrum[0].shape, (std::vector<int64_t>{2, 35, 31}));
+  ASSERT_EQ(aoa[0].shape, (std::vector<int64_t>{2, 2}));
+  constexpr int64_t kBeams = 35 * 31;
+  for (int64_t beam = 0; beam < kBeams; ++beam) {
+    // Unit steering weights: (|2+i|^2 + |1-2i|^2)/2 = 5. The masked
+    // NaN look must not enter the sum; the entirely invalid row is blank.
+    EXPECT_EQ(spectrum[0].template as<T>()[beam], T{5}) << "beam=" << beam;
+    EXPECT_EQ(spectrum[0].template as<T>()[kBeams + beam], T{0}) << "beam=" << beam;
+  }
+  EXPECT_EQ(aoa[0].template as<T>()[0], static_cast<T>(az.front()));
+  EXPECT_EQ(aoa[0].template as<T>()[1], static_cast<T>(el.front()));
+  EXPECT_TRUE(std::isnan(aoa[0].template as<T>()[2]));
+  EXPECT_TRUE(std::isnan(aoa[0].template as<T>()[3]));
+}
+
 TEST(BeamscanEstimatorOpTest, MultiLookSpectrumAveragesPerLookPower) {
   constexpr int64_t kN = 6;
   const auto geom = make_ula_geometry(kN, 0.5, 1.0);
