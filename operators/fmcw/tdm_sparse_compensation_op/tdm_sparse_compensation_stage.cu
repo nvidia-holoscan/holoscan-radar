@@ -114,6 +114,79 @@ __global__ void sparse_compensation_kernel(
   }
 }
 
+template <typename T>
+__global__ void sparse_compensation_kernel_point(
+    const Complex<T>* rd_maps, const int64_t* detection_idx, const int64_t* fold_idx,
+    int64_t num_detections, int64_t num_tx, int64_t num_rx, int64_t num_doppler, int64_t num_range,
+    int64_t num_virtual, int64_t num_snapshots, int64_t doppler_half, int64_t range_half,
+    int doppler_edge, int range_edge, int overlap_policy, const Complex<T>* correction,
+    const Complex<T>* fold_correction, const int64_t* src_channel, const int64_t* member_offsets,
+    const int64_t* member_indices, Complex<T>* snapshot, uint8_t* is_valid, int* error_flag) {
+  const int64_t flat = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const int64_t item = flat / num_virtual;
+  const int64_t virt = flat % num_virtual;
+  if (item >= num_detections || virt >= num_virtual) {
+    return;
+  }
+
+  const int64_t doppler_center = detection_idx[item * 2];
+  const int64_t range_center = detection_idx[item * 2 + 1];
+  const int64_t center_fold = fold_idx == nullptr ? 0 : fold_idx[item];
+  if (doppler_center < 0 || doppler_center >= num_doppler || range_center < 0 ||
+      range_center >= num_range) {
+    if (virt == 0) {
+      atomicMax(error_flag, kSparseTdmErrCellCoord);
+    }
+    return;
+  }
+  if (center_fold < 0 || center_fold >= num_tx) {
+    if (virt == 0) {
+      atomicMax(error_flag, kSparseTdmErrFold);
+    }
+    return;
+  }
+
+  for (int64_t slot = 0; slot < 1; ++slot) {
+    const int64_t range_len = 2 * range_half + 1;
+    const int64_t od = slot / range_len - doppler_half;
+    const int64_t orng = slot % range_len - range_half;
+    bool valid_d = true;
+    bool valid_r = true;
+    const int64_t doppler =
+        resolve_axis_index(doppler_center, od, doppler_half, num_doppler, doppler_edge, &valid_d);
+    const int64_t range =
+        resolve_axis_index(range_center, orng, range_half, num_range, range_edge, &valid_r);
+    const bool valid = valid_d && valid_r;
+    const int64_t unfolded_doppler = doppler_center + od;
+    const int64_t wrap_count = doppler_edge == edge_mode_id(SnapshotEdgeMode::kWrap)
+                                   ? floor_div(unfolded_doppler, num_doppler)
+                                   : 0;
+    const int64_t fold = positive_mod(center_fold + wrap_count, num_tx);
+    if (virt == 0) {
+      is_valid[item * num_snapshots + slot] = static_cast<uint8_t>(valid);
+    }
+
+    Complex<T> value{};
+    if (valid) {
+      if (overlap_policy == static_cast<int>(OverlapPolicy::kAverage)) {
+        const int64_t begin = member_offsets[virt];
+        const int64_t finish = member_offsets[virt + 1];
+        for (int64_t member = begin; member < finish; ++member) {
+          value += corrected_channel(rd_maps, correction, fold_correction, fold, num_tx,
+                                     member_indices[member], num_rx, num_doppler, num_range,
+                                     doppler, range);
+        }
+        value /= static_cast<T>(finish - begin);
+      } else {
+        value =
+            corrected_channel(rd_maps, correction, fold_correction, fold, num_tx, src_channel[virt],
+                              num_rx, num_doppler, num_range, doppler, range);
+      }
+    }
+    snapshot[(item * num_virtual + virt) * num_snapshots + slot] = value;
+  }
+}
+
 }  // namespace
 
 template <typename T>
@@ -133,13 +206,28 @@ void run_tdm_sparse_compensation_stage(const void* rd_maps, const int64_t* detec
   const dim3 grid(static_cast<unsigned int>(num_detections),
                   static_cast<unsigned int>(virtual_plan.num_virtual));
   constexpr int kBlock = 128;
-  sparse_compensation_kernel<T><<<grid, kBlock, 0, stream>>>(
-      static_cast<const Complex<T>*>(rd_maps), detection_idx, fold_idx, num_detections,
-      layout.num_tx, layout.num_rx, layout.num_doppler, layout.num_range, virtual_plan.num_virtual,
-      num_snapshots, doppler_half, range_half, edge_mode_id(doppler_edge), edge_mode_id(range_edge),
-      static_cast<int>(virtual_plan.policy), static_cast<const Complex<T>*>(correction),
-      static_cast<const Complex<T>*>(fold_correction), src_channel, member_offsets, member_indices,
-      static_cast<Complex<T>*>(snapshot), is_valid, error_flag);
+  if (num_snapshots == 1 && virtual_plan.num_virtual > 0 &&
+      num_detections <= (2147483647LL * kBlock) / virtual_plan.num_virtual) {
+    const int64_t total = num_detections * virtual_plan.num_virtual;
+    const int point_grid = static_cast<int>((total + kBlock - 1) / kBlock);
+    sparse_compensation_kernel_point<T><<<point_grid, kBlock, 0, stream>>>(
+        static_cast<const Complex<T>*>(rd_maps), detection_idx, fold_idx, num_detections,
+        layout.num_tx, layout.num_rx, layout.num_doppler, layout.num_range,
+        virtual_plan.num_virtual, num_snapshots, doppler_half, range_half,
+        edge_mode_id(doppler_edge), edge_mode_id(range_edge), static_cast<int>(virtual_plan.policy),
+        static_cast<const Complex<T>*>(correction), static_cast<const Complex<T>*>(fold_correction),
+        src_channel, member_offsets, member_indices, static_cast<Complex<T>*>(snapshot), is_valid,
+        error_flag);
+  } else {
+    sparse_compensation_kernel<T><<<grid, kBlock, 0, stream>>>(
+        static_cast<const Complex<T>*>(rd_maps), detection_idx, fold_idx, num_detections,
+        layout.num_tx, layout.num_rx, layout.num_doppler, layout.num_range,
+        virtual_plan.num_virtual, num_snapshots, doppler_half, range_half,
+        edge_mode_id(doppler_edge), edge_mode_id(range_edge), static_cast<int>(virtual_plan.policy),
+        static_cast<const Complex<T>*>(correction), static_cast<const Complex<T>*>(fold_correction),
+        src_channel, member_offsets, member_indices, static_cast<Complex<T>*>(snapshot), is_valid,
+        error_flag);
+  }
   check_cuda("sparse TDM compensation kernel", "TDMSparseCompensationOp");
 }
 
