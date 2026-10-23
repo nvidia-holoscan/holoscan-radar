@@ -5,13 +5,15 @@
 
 import copy
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from distributions import analyze, window_pairs, window_runs
+from artifacts import read_json, write_json
+from distributions import analyze, main, window_pairs, window_runs
 from frame_count import summarize
 
 
@@ -109,6 +111,51 @@ class DistributionTest(unittest.TestCase):
         ]
         with self.assertRaisesRegex(ValueError, "identity collision"):
             self.analyze(spec)
+
+    def test_cli_prepares_output_directories_with_and_without_report(self):
+        for with_report in (False, True):
+            with self.subTest(with_report=with_report), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                spec = root / "spec.json"
+                write_json(spec, self.spec())
+                output = root / "json" / "result.json"
+                report = root / "markdown" / "report.md"
+                argv = ["distributions", "--spec", str(spec), "--out", str(output)]
+                if with_report:
+                    argv += ["--report", str(report)]
+                with (
+                    patch("sys.argv", argv),
+                    patch("distributions.analyze", return_value={}),
+                    patch("distributions.render_report", return_value="report\n"),
+                ):
+                    main()
+                self.assertIn("spec_reference", read_json(output))
+                if with_report:
+                    self.assertEqual(report.read_text(), "report\n")
+                else:
+                    self.assertFalse(report.parent.exists())
+
+    def test_unusable_report_parent_does_not_publish_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spec = root / "spec.json"
+            write_json(spec, self.spec())
+            output = root / "json" / "result.json"
+            blocked = root / "blocked"
+            blocked.write_text("file")
+            argv = [
+                "distributions",
+                "--spec",
+                str(spec),
+                "--out",
+                str(output),
+                "--report",
+                str(blocked / "report.md"),
+            ]
+            with patch("sys.argv", argv), patch("distributions.analyze", return_value={}):
+                with self.assertRaises(FileExistsError):
+                    main()
+            self.assertFalse(output.exists())
 
     def test_tail_change_is_not_hidden_by_median(self):
         pairs = [[[[1.0] * 100], [[1.0] * 98 + [10.0] * 2]]] * 30

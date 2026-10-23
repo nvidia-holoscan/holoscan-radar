@@ -185,6 +185,9 @@ def main():
         raise ValueError("JSON and report destinations must differ")
     result = analyze(read_json(args.spec))
     result["spec_reference"] = {"path": str(Path(args.spec).resolve()), "sha256": digest(args.spec)}
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    if args.report:
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
     write_json(args.out, result)
     if args.report:
         Path(args.report).write_text(render_report(result), encoding="utf-8")
