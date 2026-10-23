@@ -5,10 +5,11 @@ accepted changes and do not create commits or modify agent configuration.
 
 ## Skills and Campaign Branches
 
-Commit authorized optimization-skill updates on `deustice/optimization-skills`.
+Commit authorized optimization-skill updates on the designated skills branch.
 Keep operator changes and campaign reports on the campaign branch. After a
-skills update, rebase the campaign branch onto `deustice/optimization-skills`
-before continuing candidate work so it uses the committed workflow.
+skills update, rebase the campaign branch onto the designated skills branch
+before continuing candidate work so it uses the committed workflow. Record
+personal branch names and local artifact paths in session artifacts.
 
 Seal active measurement sessions before changing skills or rebasing; preserve
 their source/build identities and evidence. Preserve uncommitted work when
@@ -70,5 +71,5 @@ The output preserves original paths and lists resolved paths, checked hashes
 and failures. Missing/changed evidence fails the audit; do not invent artifacts
 or rehash them to pass. This is read-only archive replay, not acceptance under
 a new measurement policy. Runtime dependencies and archived source/build
-execution require their own provenance checks. Existing session relocations in
-this checkout use the ignored `.worktrees/operator-perf/relocations.json`.
+execution require their own provenance checks. Record any relocation-map path
+in the corresponding session artifacts.
