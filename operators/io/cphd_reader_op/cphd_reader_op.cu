@@ -28,7 +28,6 @@
 
 #include "io/cphd_reader_op/cphd_cf8_decode.hpp"
 #include "io/cphd_reader_op/cphd_file.hpp"
-#include "radar_common/sdk/cooperative_sleep.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -47,6 +46,15 @@ constexpr TensorRepresentation kFrameHost{.memory_kind = MemoryKind::kHost,
 constexpr double kBehindWarnEnterS = 0.2;
 constexpr double kBehindWarnExitS = 0.05;
 constexpr auto kBehindWarnPeriod = std::chrono::seconds{1};
+
+struct CallbackTimer {
+  std::chrono::steady_clock::time_point start{std::chrono::steady_clock::now()};
+  ~CallbackTimer() {
+    HOLOSCAN_LOG_DEBUG(
+        "CPHDReaderOp: callback={:.6f}s",
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+  }
+};
 
 std::vector<std::string> resolve_paths(const CollectionPaths& source) {
   std::vector<std::string> result;
@@ -171,24 +179,6 @@ expected<void, Error> sync_ingest(cudaStream_t h2d, cudaEvent_t h2d_done, cudaSt
   return {};
 }
 
-template <typename Fn>
-auto retry_pool(ExecutionContext& context, const char* what, bool wait, Fn&& fn) -> decltype(fn()) {
-  const std::string label = std::string("CPHDReaderOp.") + what;
-  auto result = emit_required_result(context, label, wait, std::forward<Fn>(fn));
-  if (result)
-    return result;
-  const Error err = result.error();
-  if (!is_transient_pool_error(err.code) || context.cancellation().stop_requested()) {
-    std::size_t free_b = 0, total_b = 0;
-    (void)cudaMemGetInfo(&free_b, &total_b);
-    HOLOSCAN_LOG_ERROR("CPHDReaderOp: {} failed ({}); GPU mem {:.0f}/{:.0f} MiB free", what,
-                       holoscan::runtime_error_message(err),
-                       static_cast<double>(free_b) / (1024.0 * 1024.0),
-                       static_cast<double>(total_b) / (1024.0 * 1024.0));
-  }
-  return result;
-}
-
 void check_sample_axis(const std::vector<double>& values, const char* name) {
   // Umbra SNAPSHOT PVPs have a small recorded-grid ramp within a batch. A
   // relative 1e-5 bound admits that residual while rejecting a frequency step.
@@ -204,6 +194,19 @@ void check_sample_axis(const std::vector<double>& values, const char* name) {
 }  // namespace
 
 template <typename T>
+struct CPHDReaderOp<T>::Batch {
+  int64_t first{}, count{}, samples{};
+  bool final{}, follows{}, cf8{};
+  double collect_span{};
+  std::vector<T> apc, reference, axis, vel;
+  std::vector<double> times, amp;
+  TimePoint capture_time{};
+  // Optional outputs are attempted once; required outputs retire independently.
+  unsigned published{};
+  bool retry_warned{};
+};
+
+template <typename T>
 CPHDReaderOp<T>::CPHDReaderOp(const MaxTensorExtents& extents, std::shared_ptr<FormationHud> hud)
 : extents_(extents), hud_(std::move(hud)) {
   require_extent(extents.max_pulses, "max_pulses", kWho);
@@ -212,6 +215,35 @@ CPHDReaderOp<T>::CPHDReaderOp(const MaxTensorExtents& extents, std::shared_ptr<F
 
 template <typename T>
 CPHDReaderOp<T>::~CPHDReaderOp() {
+  stop();
+  release_resources();
+}
+
+template <typename T>
+LifecycleStatus CPHDReaderOp<T>::on_arm(LifecycleContext& context) noexcept {
+  auto sender = context.notification_sender(wake_);
+  if (!sender)
+    return LifecycleStatus::kFatalFailure;
+  scheduler_.bind(std::move(*sender));
+  return LifecycleStatus::kOk;
+}
+
+template <typename T>
+void CPHDReaderOp<T>::stop() {
+  scheduler_.stop();
+}
+
+template <typename T>
+LifecycleStatus CPHDReaderOp<T>::on_release(LifecycleContext&) noexcept {
+  scheduler_.release();
+  batch_.reset();
+  file_.reset();
+  release_resources();
+  return LifecycleStatus::kOk;
+}
+
+template <typename T>
+void CPHDReaderOp<T>::release_resources() noexcept {
   if (h2d_done_ != 0) {
     cudaEventDestroy(reinterpret_cast<cudaEvent_t>(h2d_done_));
     h2d_done_ = 0;
@@ -236,6 +268,10 @@ CPHDReaderOp<T>::~CPHDReaderOp() {
 
 template <typename T>
 void CPHDReaderOp<T>::setup(OperatorSpec& spec) {
+  spec.notification_source(wake_, "playback").capacity(2U).sender_reference_capacity(1U);
+  spec.lifecycle()
+      .stage(LifecycleStage::kArm, &CPHDReaderOp::on_arm)
+      .stage(LifecycleStage::kRelease, &CPHDReaderOp::on_release);
   const auto pulses = *extents_.max_pulses;
   const auto samples = *extents_.max_samples_per_pulse;
   spec.output(phase_history)
@@ -264,14 +300,14 @@ void CPHDReaderOp<T>::setup(OperatorSpec& spec) {
 template <typename T>
 Contract CPHDReaderOp<T>::contract() const {
   Contract result;
-  result.trigger(OnClock{.period = std::chrono::microseconds(1)});
+  result.trigger(OnNotified{.event = wake_});
   return result;
 }
 
 template <typename T>
 void CPHDReaderOp<T>::publish_hud() {
   if (hud_)
-    hud_->publish_reader(spans_, playback_, last_apc_, last_packet_at_, stopped_);
+    hud_->publish_reader(spans_, playback_, last_apc_, last_packet_at_, stopped_, capture_time_ns_);
 }
 
 template <typename T>
@@ -326,6 +362,16 @@ void CPHDReaderOp<T>::open_file() {
 
 template <typename T>
 void CPHDReaderOp<T>::start() {
+  stopped_ = false;
+  capture_time_ns_.reset();
+  stage_ = Stage::kRead;
+  batch_.reset();
+  spans_.clear();
+  pending_cooldown_s_ = 0.0;
+  axis_out_ = {};
+  times_out_ = {};
+  velocities_out_ = {};
+  frame_out_ = {};
   const auto& p = params();
   if (!p.coordinate_frame.is_valid() || p.pulses_per_tick <= 0 ||
       p.pulses_per_tick > *extents_.max_pulses ||
@@ -374,74 +420,179 @@ void CPHDReaderOp<T>::start() {
     throw std::runtime_error("CPHDReaderOp: failed to allocate device AmpSF buffer");
   }
   device_amp_ = reinterpret_cast<std::uintptr_t>(amp);
+  scheduler_.start();
+  scheduler_.schedule(std::chrono::steady_clock::now());
 }
 
 template <typename T>
 expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
+  const CallbackTimer timing;
   if (context.cancellation().stop_requested()) {
     context.request_stop();
     return {};
   }
-  if (stopped_) {
-    // The last batch already carried D22. HSDK request_stop does not drain
-    // queued samples, so stopping on this 1 µs OnClock tick aborts the
-    // in-flight EmitAndReset before BackprojectionOp can emit. Park until
-    // the app or SIGINT cancels the run.
-    while (!context.cancellation().stop_requested())
-      cooperative_sleep(context, 1.0);
-    context.request_stop();
+  if (stopped_)
     return {};
-  }
   try {
-    if (pending_cooldown_s_ > 0.0) {
-      spans_.back().quiet_start = std::chrono::steady_clock::now();
-      publish_hud();
-      cooperative_sleep(context, pending_cooldown_s_);
-      spans_.back().quiet_end = std::chrono::steady_clock::now();
-      pending_cooldown_s_ = 0.0;
-      publish_hud();
-      if (context.cancellation().stop_requested()) {
-        context.request_stop();
+    const auto& p = params();
+    const bool wait = cphd_reader_waits_on_full(p);
+    if (stage_ == Stage::kPacing) {
+      playback_.wall_s =
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - collection_wall_start_)
+              .count();
+      playback_.behind_s = playback_.wall_s - playback_.target_s();
+      playback_.last_slack_s = p.playback_rate > 0.0 ? -playback_.behind_s : 0.0;
+      next_pulse_ += batch_->count;
+      if (batch_->final) {
+        spans_.back().dwell_end = std::chrono::steady_clock::now();
+        if (!batch_->follows) {
+          stopped_ = true;
+          stage_ = Stage::kStopped;
+          batch_.reset();
+          publish_hud();
+          return {};
+        }
+        pending_cooldown_s_ =
+            cphd::quiet_seconds(batch_->collect_span, p.duty_cycle, p.playback_rate);
+        file_index_ = (file_index_ + 1U) % files_.size();
+        open_file();
+      }
+      batch_.reset();
+      stage_ = Stage::kRead;
+      if (pending_cooldown_s_ > 0.0) {
+        spans_.back().quiet_start = std::chrono::steady_clock::now();
+        stage_ = Stage::kQuiet;
+        scheduler_.schedule(cphd::after_seconds(*spans_.back().quiet_start, pending_cooldown_s_));
+        publish_hud();
         return {};
       }
     }
-    const auto& p = params();
-    const bool wait = cphd_reader_waits_on_full(p);
-    const auto tick_start = std::chrono::steady_clock::now();
-    const auto& info = file_->channel(p.channel);
-    const int64_t count = std::min(p.pulses_per_tick, last_pulse_ - next_pulse_);
-    const int64_t first = next_pulse_;
-    const bool final = first + count == last_pulse_;
-    const bool follows = p.loop || file_index_ + 1U < files_.size();
-    if (first == first_pulse_) {
-      collection_wall_start_ = tick_start;
-      spans_.push_back(
-          CollectionSpan{.file_index = static_cast<int>(file_index_), .dwell_start = tick_start});
-      if (spans_.size() > 32U)
-        spans_.erase(spans_.begin());
+    if (stage_ == Stage::kQuiet) {
+      spans_.back().quiet_end = std::chrono::steady_clock::now();
+      pending_cooldown_s_ = 0.0;
+      stage_ = Stage::kRead;
+      publish_hud();
     }
-    // Decode one bounded CPHD batch and derive the pulse geometry from its PVPs.
-    auto pvp = file_->read_pvp_block(p.channel, first, count);
-    const auto times = pvp.field("TxTime", 1);
-    // Umbra files can put NaN on a handful of TxTime/TxPos words (one surveyed
-    // file had 32 of 4844). Front/back of the batch is not a span: a NaN on
-    // vector 0 poisons collect time for the rest of the file, skips pace
-    // sleep, and shrinks the Gantt dwell. Skip non-finite samples, matching
-    // the HSDK 4 reader.
-    for (double t : times) {
-      if (!std::isfinite(t))
-        continue;
-      if (!collection_time_valid_) {
-        collection_t_min_ = t;
-        collection_t_max_ = t;
-        collection_time_valid_ = true;
-      } else {
-        collection_t_min_ = std::min(collection_t_min_, t);
-        collection_t_max_ = std::max(collection_t_max_, t);
+    if (stage_ == Stage::kRead) {
+      const auto tick_start = std::chrono::steady_clock::now();
+      const auto& info = file_->channel(p.channel);
+      const int64_t count = std::min(p.pulses_per_tick, last_pulse_ - next_pulse_);
+      const int64_t first = next_pulse_;
+      const bool final = first + count == last_pulse_;
+      const bool follows = p.loop || file_index_ + 1U < files_.size();
+      if (first == first_pulse_) {
+        collection_wall_start_ = tick_start;
+        spans_.push_back(
+            CollectionSpan{.file_index = static_cast<int>(file_index_), .dwell_start = tick_start});
+        if (spans_.size() > 32U)
+          spans_.erase(spans_.begin());
       }
+      // Decode one bounded CPHD batch and derive the pulse geometry from its PVPs.
+      auto pvp = file_->read_pvp_block(p.channel, first, count);
+      const auto times = pvp.field("TxTime", 1);
+      // Umbra files can put NaN on a handful of TxTime/TxPos words (one surveyed
+      // file had 32 of 4844). Front/back of the batch is not a span: a NaN on
+      // vector 0 poisons collect time for the rest of the file, skips pace
+      // sleep, and shrinks the Gantt dwell. Skip non-finite samples, matching
+      // the HSDK 4 reader.
+      for (double t : times) {
+        if (!std::isfinite(t))
+          continue;
+        if (!collection_time_valid_) {
+          collection_t_min_ = t;
+          collection_t_max_ = t;
+          collection_time_valid_ = true;
+        } else {
+          collection_t_min_ = std::min(collection_t_min_, t);
+          collection_t_max_ = std::max(collection_t_max_, t);
+        }
+      }
+      const double collect_s = collection_time_valid_ ? collection_t_max_ - collection_t_min_ : 0.0;
+      const double collect_span = (collect_s > 0.0 && std::isfinite(collect_s)) ? collect_s : 0.0;
+      const auto tx = pvp.field("TxPos", 3);
+      const auto rx = pvp.field("RcvPos", 3);
+      const auto srp = pvp.field("SRPPos", 3);
+      std::vector<T> apc(tx.size()), reference(srp.size());
+      std::array<double, 3> mean{};
+      int64_t finite_count = 0;
+      for (int64_t pulse = 0; pulse < count; ++pulse) {
+        bool finite = true;
+        for (int axis = 0; axis < 3; ++axis) {
+          const size_t i = static_cast<size_t>(3 * pulse + axis);
+          const double value = 0.5 * (tx[i] + rx[i]);
+          apc[i] = static_cast<T>(value);
+          reference[i] = static_cast<T>(srp[i]);
+          finite = finite && std::isfinite(value);
+        }
+        if (finite) {
+          for (int axis = 0; axis < 3; ++axis)
+            mean[axis] += apc[3 * pulse + axis];
+          ++finite_count;
+        } else if (!nonfinite_warned_) {
+          HOLOSCAN_LOG_WARN("{}: non-finite phase-centre positions passed through", kWho);
+          nonfinite_warned_ = true;
+        }
+      }
+      if (finite_count > 0) {
+        for (double& value : mean)
+          value /= static_cast<double>(finite_count);
+        last_apc_ = {.valid = true, .file_index = static_cast<int64_t>(file_index_), .ecef = mean};
+      }
+      const auto sc0 = pvp.field("SC0", 1);
+      const auto scss = pvp.field("SCSS", 1);
+      check_sample_axis(sc0, "SC0");
+      check_sample_axis(scss, "SCSS");
+      std::vector<T> axis(static_cast<size_t>(info.num_samples));
+      for (int64_t i = 0; i < info.num_samples; ++i) {
+        axis[static_cast<size_t>(i)] = static_cast<T>(sc0[0] + i * scss[0]);
+      }
+      std::vector<T> vel;
+      if (pvp.has("TxVel") && pvp.has("RcvVel")) {
+        const auto tx_vel = pvp.field("TxVel", 3);
+        const auto rx_vel = pvp.field("RcvVel", 3);
+        vel.resize(tx_vel.size());
+        for (size_t i = 0; i < vel.size(); ++i) {
+          vel[i] = static_cast<T>(0.5 * (tx_vel[i] + rx_vel[i]));
+        }
+      }
+
+      char* const pinned = reinterpret_cast<char*>(pinned_signal_);
+      if (pinned == nullptr) {
+        return make_unexpected(
+            Error{ErrorCode::kFailure, "CPHDReaderOp: pinned ingest buffer is not armed"});
+      }
+      const bool cf8 = file_->sample_format() == cphd::SampleFormat::kCF8;
+      std::vector<double> amp;
+      if (cf8 && file_->has_amp_sf())
+        amp = file_->amplitude_scale(&pvp, count);
+      if (cf8) {
+        file_->read_signal_bytes(p.channel, first, count, pinned, pinned_signal_bytes_);
+      } else {
+        file_->read_signal_into<T>(p.channel, first, count,
+                                   reinterpret_cast<std::complex<T>*>(pinned), &pvp);
+      }
+      batch_ = std::make_unique<Batch>(Batch{.first = first,
+                                             .count = count,
+                                             .samples = info.num_samples,
+                                             .final = final,
+                                             .follows = follows,
+                                             .cf8 = cf8,
+                                             .collect_span = collect_span,
+                                             .apc = std::move(apc),
+                                             .reference = std::move(reference),
+                                             .axis = std::move(axis),
+                                             .vel = std::move(vel),
+                                             .times = times,
+                                             .amp = std::move(amp),
+                                             .capture_time = context.activation_time()});
+      capture_time_ns_ = batch_->capture_time.timestamp_ns;
+      stage_ = Stage::kPublish;
     }
-    const double collect_s = collection_time_valid_ ? collection_t_max_ - collection_t_min_ : 0.0;
-    const double collect_span = (collect_s > 0.0 && std::isfinite(collect_s)) ? collect_s : 0.0;
+    auto& batch = *batch_;
+    const auto count = batch.count;
+    const auto samples = batch.samples;
+    const bool final = batch.final;
+    const double collect_span = batch.collect_span;
     // Publish collect as soon as TxTime is known so the HUD is live during
     // ingest rather than still showing the previous tick's collect.
     auto publish_playback = [&](bool live) {
@@ -463,203 +614,125 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
       maybe_warn_behind();
     };
     publish_playback(!final);
-    const auto tx = pvp.field("TxPos", 3);
-    const auto rx = pvp.field("RcvPos", 3);
-    const auto srp = pvp.field("SRPPos", 3);
-    std::vector<T> apc(tx.size()), reference(srp.size());
-    std::array<double, 3> mean{};
-    int64_t finite_count = 0;
-    for (int64_t pulse = 0; pulse < count; ++pulse) {
-      bool finite = true;
-      for (int axis = 0; axis < 3; ++axis) {
-        const size_t i = static_cast<size_t>(3 * pulse + axis);
-        const double value = 0.5 * (tx[i] + rx[i]);
-        apc[i] = static_cast<T>(value);
-        reference[i] = static_cast<T>(srp[i]);
-        finite = finite && std::isfinite(value);
-      }
-      if (finite) {
-        for (int axis = 0; axis < 3; ++axis)
-          mean[axis] += apc[3 * pulse + axis];
-        ++finite_count;
-      } else if (!nonfinite_warned_) {
-        HOLOSCAN_LOG_WARN("{}: non-finite phase-centre positions passed through", kWho);
-        nonfinite_warned_ = true;
-      }
-    }
-    if (finite_count > 0) {
-      for (double& value : mean)
-        value /= static_cast<double>(finite_count);
-      last_apc_ = {.valid = true, .file_index = static_cast<int64_t>(file_index_), .ecef = mean};
-    }
-    const auto sc0 = pvp.field("SC0", 1);
-    const auto scss = pvp.field("SCSS", 1);
-    check_sample_axis(sc0, "SC0");
-    check_sample_axis(scss, "SCSS");
-    std::vector<T> axis(static_cast<size_t>(info.num_samples));
-    for (int64_t i = 0; i < info.num_samples; ++i) {
-      axis[static_cast<size_t>(i)] = static_cast<T>(sc0[0] + i * scss[0]);
-    }
-    std::vector<T> vel;
-    if (pvp.has("TxVel") && pvp.has("RcvVel")) {
-      const auto tx_vel = pvp.field("TxVel", 3);
-      const auto rx_vel = pvp.field("RcvVel", 3);
-      vel.resize(tx_vel.size());
-      for (size_t i = 0; i < vel.size(); ++i) {
-        vel[i] = static_cast<T>(0.5 * (tx_vel[i] + rx_vel[i]));
-      }
-    }
-
-    char* const pinned = reinterpret_cast<char*>(pinned_signal_);
-    if (pinned == nullptr) {
-      return make_unexpected(
-          Error{ErrorCode::kFailure, "CPHDReaderOp: pinned ingest buffer is not armed"});
-    }
-    const std::size_t nsamp = static_cast<std::size_t>(count * info.num_samples);
-    const bool cf8 = file_->sample_format() == cphd::SampleFormat::kCF8;
-    std::vector<double> amp;
-    if (cf8 && file_->has_amp_sf())
-      amp = file_->amplitude_scale(&pvp, count);
-    const auto signal_begin = std::chrono::steady_clock::now();
-    if (cf8) {
-      file_->read_signal_bytes(p.channel, first, count, pinned, pinned_signal_bytes_);
-    } else {
-      file_->read_signal_into<T>(p.channel, first, count,
-                                 reinterpret_cast<std::complex<T>*>(pinned), &pvp);
-    }
-    const auto signal_at = std::chrono::steady_clock::now();
+    const EmitOptions options{.capture_time = batch.capture_time};
+    const auto* pinned = reinterpret_cast<const char*>(pinned_signal_);
+    const auto nsamp = static_cast<std::size_t>(count * samples);
     const auto h2d = reinterpret_cast<cudaStream_t>(h2d_stream_);
     const auto h2d_done = reinterpret_cast<cudaEvent_t>(h2d_done_);
     if (h2d == nullptr || h2d_done == nullptr) {
       return make_unexpected(Error{ErrorCode::kFailure, "CPHDReaderOp: H2D stream is not armed"});
     }
 
-    // CF8: H2D stored bytes and decode on the device. Integer formats H2D the
-    // host-decoded samples. Private stream so a compute-stream sync cannot
-    // wait for formation kernels already recorded there.
-    auto prepare_history = [&] {
-      return prepare_device_tensor(
-          phase_history, context, std::vector<int64_t>{count, info.num_samples}, complex_dtype<T>(),
-          [&](void* dst, std::size_t bytes) {
-            return fill_history<T>(dst, bytes, nsamp, info.num_samples, cf8, pinned,
-                                   reinterpret_cast<void*>(device_cf8_),
-                                   reinterpret_cast<double*>(device_amp_), amp, h2d);
-          });
-    };
-    auto prepare_positions = [&] {
-      return upload(positions, context, apc, {count, 3}, real_dtype<T>(), h2d);
-    };
-    auto prepare_reference = [&] {
-      return upload(reference_position, context, reference, {count, 3}, real_dtype<T>(), h2d);
-    };
-    std::optional<TensorOutputLoan> history_loan;
-    std::optional<TensorOutputLoan> positions_loan;
-    std::optional<TensorOutputLoan> reference_loan;
-    HOLOSCAN_TRY(auto history_prepared,
-                 retry_pool(context, "phase_history", wait, prepare_history));
-    history_loan.emplace(std::move(history_prepared));
-    HOLOSCAN_TRY(auto positions_prepared,
-                 retry_pool(context, "positions", wait, prepare_positions));
-    positions_loan.emplace(std::move(positions_prepared));
-    HOLOSCAN_TRY(auto reference_prepared,
-                 retry_pool(context, "reference_position", wait, prepare_reference));
-    reference_loan.emplace(std::move(reference_prepared));
-    std::optional<TensorOutputLoan> axis_loan;
-    std::optional<TensorOutputLoan> times_loan;
-    std::optional<TensorOutputLoan> vel_loan;
-    if (axis_out_.active()) {
-      HOLOSCAN_TRY(auto loan,
-                   upload(sample_axis, context, axis, {info.num_samples}, real_dtype<T>(), h2d));
-      axis_loan.emplace(std::move(loan));
-    }
-    if (times_out_.active()) {
-      HOLOSCAN_TRY(auto loan,
-                   upload(pulse_times, context, times, {count}, real_dtype<double>(), h2d));
-      times_loan.emplace(std::move(loan));
-    }
-    if (velocities_out_.active() && !vel.empty()) {
-      HOLOSCAN_TRY(auto loan, upload(velocities, context, vel, {count, 3}, real_dtype<T>(), h2d));
-      vel_loan.emplace(std::move(loan));
-    }
     const cudaStream_t compute = context.cuda_stream().get();
-    HOLOSCAN_RETURN_IF_ERROR(sync_ingest(h2d, h2d_done, compute));
-    const auto uploaded_at = std::chrono::steady_clock::now();
-    // Stamp before emit so a parallel BP emit-tick snapshot sees this batch,
-    // not the previous collect. Re-stamp after emit (packet is in the graph).
-    last_packet_at_ = uploaded_at;
-    publish_hud();
-    if (axis_loan) {
-      axis_out_.emit(sample_axis, context, std::move(*axis_loan), "CPHDReaderOp.sample_axis");
-    }
-    if (times_loan) {
-      times_out_.emit(pulse_times, context, std::move(*times_loan), "CPHDReaderOp.pulse_times");
-    }
-    if (vel_loan) {
-      velocities_out_.emit(velocities, context, std::move(*vel_loan), "CPHDReaderOp.velocities");
-    }
-    if (frame_out_.active()) {
-      HOLOSCAN_TRY(auto loan, prepare_frame(coordinate_frame, p.coordinate_frame));
-      frame_out_.emit_schema_tensor(coordinate_frame, context, std::move(loan),
-                                    to_wire(p.coordinate_frame), "CPHDReaderOp.coordinate_frame");
-    }
-    // Tensor emit consumes the loan on every outcome, including kBackpressured.
-    // Unmetered or wait_for_downstream re-prepares and retries; paced omit
-    // fail-fasts.
-    auto publish_tensor = [&](Output<Tensor>& port, std::optional<TensorOutputLoan>& held,
-                              auto&& prepare, const char* what) -> expected<void, Error> {
-      return retry_pool(context, what, wait, [&]() -> expected<void, Error> {
-        if (!held) {
-          HOLOSCAN_TRY(auto loan, prepare());
+    // Each successful publication retires exactly once. A declined loan is
+    // consumed by the SDK; retry uploads from retained host storage.
+    const char* publishing_port = "sample_axis";
+    auto publish = [&]() -> expected<void, Error> {
+      auto required = [&](Output<Tensor>& port, unsigned bit,
+                          auto&& prepare) -> expected<void, Error> {
+        if (batch.published & bit)
+          return {};
+        publishing_port = port.name().data();
+        HOLOSCAN_TRY(auto loan, prepare());
+        HOLOSCAN_RETURN_IF_ERROR(sync_ingest(h2d, h2d_done, compute));
+        last_packet_at_ = std::chrono::steady_clock::now();
+        publish_hud();
+        HOLOSCAN_RETURN_IF_ERROR(port.emit(std::move(loan), options));
+        batch.published |= bit;
+        return {};
+      };
+      // Optional outputs preserve their existing one-attempt, latched policy.
+      if (!(batch.published & 1U)) {
+        if (axis_out_.active()) {
+          HOLOSCAN_TRY(auto loan,
+                       upload(sample_axis, context, batch.axis, {samples}, real_dtype<T>(), h2d));
           HOLOSCAN_RETURN_IF_ERROR(sync_ingest(h2d, h2d_done, compute));
-          held.emplace(std::move(loan));
+          axis_out_.emit(sample_axis, context, std::move(loan), "CPHDReaderOp.sample_axis",
+                         options);
         }
-        TensorOutputLoan outgoing = std::move(*held);
-        held.reset();
-        return emit_prepared_tensor(port, context, std::move(outgoing));
-      });
+        batch.published |= 1U;
+      }
+      publishing_port = "pulse_times";
+      if (!(batch.published & 2U)) {
+        if (times_out_.active()) {
+          HOLOSCAN_TRY(auto loan, upload(pulse_times, context, batch.times, {count},
+                                         real_dtype<double>(), h2d));
+          HOLOSCAN_RETURN_IF_ERROR(sync_ingest(h2d, h2d_done, compute));
+          times_out_.emit(pulse_times, context, std::move(loan), "CPHDReaderOp.pulse_times",
+                          options);
+        }
+        batch.published |= 2U;
+      }
+      publishing_port = "velocities";
+      if (!(batch.published & 4U)) {
+        if (velocities_out_.active() && !batch.vel.empty()) {
+          HOLOSCAN_TRY(auto loan,
+                       upload(velocities, context, batch.vel, {count, 3}, real_dtype<T>(), h2d));
+          HOLOSCAN_RETURN_IF_ERROR(sync_ingest(h2d, h2d_done, compute));
+          velocities_out_.emit(velocities, context, std::move(loan), "CPHDReaderOp.velocities",
+                               options);
+        }
+        batch.published |= 4U;
+      }
+      publishing_port = "coordinate_frame";
+      if (!(batch.published & 8U)) {
+        if (frame_out_.active()) {
+          HOLOSCAN_TRY(auto loan, prepare_frame(coordinate_frame, p.coordinate_frame));
+          frame_out_.emit_schema_tensor(coordinate_frame, context, std::move(loan),
+                                        to_wire(p.coordinate_frame),
+                                        "CPHDReaderOp.coordinate_frame", options);
+        }
+        batch.published |= 8U;
+      }
+      HOLOSCAN_RETURN_IF_ERROR(required(phase_history, 16U, [&] {
+        return prepare_device_tensor(phase_history, context, std::vector<int64_t>{count, samples},
+                                     complex_dtype<T>(), [&](void* dst, std::size_t bytes) {
+                                       return fill_history<T>(
+                                           dst, bytes, nsamp, samples, batch.cf8, pinned,
+                                           reinterpret_cast<void*>(device_cf8_),
+                                           reinterpret_cast<double*>(device_amp_), batch.amp, h2d);
+                                     });
+      }));
+      HOLOSCAN_RETURN_IF_ERROR(required(positions, 32U, [&] {
+        return upload(positions, context, batch.apc, {count, 3}, real_dtype<T>(), h2d);
+      }));
+      HOLOSCAN_RETURN_IF_ERROR(required(reference_position, 64U, [&] {
+        return upload(reference_position, context, batch.reference, {count, 3}, real_dtype<T>(),
+                      h2d);
+      }));
+      const auto boundary = final ? (batch.follows ? SarStreamBoundary::kCollectionBoundary
+                                                   : SarStreamBoundary::kEndOfStream)
+                                  : SarStreamBoundary::kNone;
+      publishing_port = "stream_boundary";
+      HOLOSCAN_RETURN_IF_ERROR(stream_boundary.emit(static_cast<uint8_t>(boundary), options));
+      return {};
     };
-    HOLOSCAN_RETURN_IF_ERROR(
-        publish_tensor(phase_history, history_loan, prepare_history, "phase_history"));
-    HOLOSCAN_RETURN_IF_ERROR(
-        publish_tensor(positions, positions_loan, prepare_positions, "positions"));
-    HOLOSCAN_RETURN_IF_ERROR(publish_tensor(reference_position, reference_loan, prepare_reference,
-                                            "reference_position"));
-    // Stamp the closing boundary on this batch, including the last partial batch.
-    const auto boundary =
-        final ? (follows ? SarStreamBoundary::kCollectionBoundary : SarStreamBoundary::kEndOfStream)
-              : SarStreamBoundary::kNone;
-    const EmitOptions boundary_opts{.capture_time = context.activation_time()};
-    HOLOSCAN_RETURN_IF_ERROR(retry_pool(context, "stream_boundary", wait, [&] {
-      return stream_boundary.emit(static_cast<uint8_t>(boundary), boundary_opts);
-    }));
+    auto result = publish();
+    if (!result) {
+      if (wait && is_transient_pool_error(result.error().code)) {
+        if (!batch.retry_warned) {
+          HOLOSCAN_LOG_WARN("CPHDReaderOp.{}: waiting for tensor pool/queue ({})", publishing_port,
+                            holoscan::error_code_name(result.error().code));
+          batch.retry_warned = true;
+        }
+        scheduler_.schedule(std::chrono::steady_clock::now() + std::chrono::milliseconds{10});
+        return {};
+      }
+      return emit_required_result(context, std::string("CPHDReaderOp.") + publishing_port, false,
+                                  [&] {
+                                    return result;
+                                  });
+    }
     last_packet_at_ = std::chrono::steady_clock::now();
     publish_playback(!final);
-    HOLOSCAN_LOG_DEBUG(
-        "CPHDReaderOp: pulses {}-{} collect={:.3f}s wall={:.3f}s signal={:.3f}s decode={:.3f}s "
-        "emit={:.3f}s slack={:.3f}s",
-        first, first + count - 1, collect_span, playback_.wall_s,
-        std::chrono::duration<double>(signal_at - signal_begin).count(),
-        std::chrono::duration<double>(uploaded_at - signal_at).count(),
-        std::chrono::duration<double>(last_packet_at_.value() - uploaded_at).count(),
-        playback_.last_slack_s);
-    const double slack_s = playback_.last_slack_s;
-    if (slack_s > 0.0) {
-      cooperative_sleep(context, slack_s);
-      publish_playback(!final);
-    }
-    next_pulse_ += count;
-    if (final) {
-      spans_.back().dwell_end = std::chrono::steady_clock::now();
-      if (follows) {
-        pending_cooldown_s_ = collect_span * (1.0 / p.duty_cycle - 1.0);
-        if (p.playback_rate > 0.0)
-          pending_cooldown_s_ /= p.playback_rate;
-        file_index_ = file_index_ + 1U == files_.size() ? 0U : file_index_ + 1U;
-        open_file();
-      } else {
-        stopped_ = true;
-      }
-    }
+    HOLOSCAN_LOG_DEBUG("CPHDReaderOp: pulses {}-{} collect={:.3f}s wall={:.3f}s slack={:.3f}s",
+                       batch.first, batch.first + count - 1, collect_span, playback_.wall_s,
+                       playback_.last_slack_s);
+    stage_ = Stage::kPacing;
+    // The batch emits ASAP. Its accumulated radar span gates the NEXT read.
+    scheduler_.schedule(p.playback_rate > 0.0 ? cphd::after_seconds(collection_wall_start_,
+                                                                    collect_span / p.playback_rate)
+                                              : std::chrono::steady_clock::now());
     publish_hud();
     return {};
   } catch (const std::exception& error) {

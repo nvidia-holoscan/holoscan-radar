@@ -52,6 +52,7 @@ class SarImageSchemaSinkOp : public holoscan::Operator<> {
 
 struct ImageCount {
   std::atomic<int64_t> count{0};
+  std::atomic<int64_t> reported_capture_ns{0};
 };
 
 class SarImageReportOp : public holoscan::Operator<> {
@@ -65,7 +66,7 @@ class SarImageReportOp : public holoscan::Operator<> {
     result.trigger(OnEach{image});
     return result;
   }
-  [[nodiscard]] expected<void, Error> compute(ExecutionContext&) override {
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override {
     HOLOSCAN_TRY(auto received, receive_tensor(image, "SarImageReportOp"));
     const auto shape = received.shape();
     if (shape.size() != 2U) {
@@ -83,6 +84,8 @@ class SarImageReportOp : public holoscan::Operator<> {
     }
     last_num_v_ = shape[0];
     last_num_u_ = shape[1];
+    count_->reported_capture_ns.store(context.activation_time().timestamp_ns,
+                                      std::memory_order_release);
     return {};
   }
   Input<Tensor> image{"image"};

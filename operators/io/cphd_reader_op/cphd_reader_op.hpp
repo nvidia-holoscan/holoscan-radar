@@ -18,12 +18,15 @@
 #include <holoscan/core/execution_context.hpp>
 #include <holoscan/core/expected.hpp>
 #include <holoscan/core/operator.hpp>
+#include <holoscan/core/lifecycle.hpp>
+#include <holoscan/core/readiness_source.hpp>
 #include <holoscan/core/operator_spec.hpp>
 #include <holoscan/core/parameter_schema.hpp>
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
 
 #include "io/cphd_reader_op/collection_paths.hpp"
+#include "io/cphd_reader_op/playback_scheduler.hpp"
 #include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/sar/formation_hud.hpp"
@@ -85,6 +88,7 @@ class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
   void start() override;
+  void stop() override;
   [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
 
   Output<Tensor> phase_history{"phase_history"};
@@ -97,6 +101,16 @@ class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
   Output<uint8_t> stream_boundary{"stream_boundary"};
 
  private:
+  LifecycleStatus on_arm(LifecycleContext& context) noexcept;
+  LifecycleStatus on_release(LifecycleContext& context) noexcept;
+  void release_resources() noexcept;
+  struct Batch;
+  enum class Stage { kRead, kPublish, kPacing, kQuiet, kStopped };
+  NotificationSource wake_;
+  cphd::PlaybackScheduler scheduler_;
+  Stage stage_{Stage::kRead};
+  std::unique_ptr<Batch> batch_;
+  std::optional<int64_t> capture_time_ns_;
   void open_file();
   void publish_hud();
   void maybe_warn_behind();

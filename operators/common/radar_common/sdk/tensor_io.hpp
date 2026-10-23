@@ -187,16 +187,19 @@ class LatchedOutput {
   // Emit and absorb. Never fails the activation: a declined optional output
   // must not take the tick's other outputs down with it.
   void emit(Output<Tensor>& port, ExecutionContext& context, TensorOutputLoan loan,
-            std::string_view op_and_port) {
-    const auto emitted = emit_prepared_tensor(port, context, std::move(loan));
+            std::string_view op_and_port, std::optional<EmitOptions> options = {}) {
+    const auto emitted = port.emit(
+        std::move(loan), options.value_or(EmitOptions{.capture_time = context.activation_time()}));
     absorb_emit_result(emitted, op_and_port);
   }
 
   template <typename Payload>
   void emit_schema_tensor(Output<Payload>& port, ExecutionContext& context, TensorOutputLoan loan,
-                          Payload payload, std::string_view op_and_port) {
+                          Payload payload, std::string_view op_and_port,
+                          std::optional<EmitOptions> options = {}) {
     const auto emitted =
-        emit_prepared_schema_tensor(port, context, std::move(loan), std::move(payload));
+        port.emit_tensor(std::move(loan), std::move(payload),
+                         options.value_or(EmitOptions{.capture_time = context.activation_time()}));
     absorb_emit_result(emitted, op_and_port);
   }
 

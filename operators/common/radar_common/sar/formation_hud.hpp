@@ -57,6 +57,8 @@ struct LastMeanApc {
 };
 
 struct FormationHudBp {
+  int64_t capture_time_ns{0};
+  bool closes_aperture{false};
   double compute_s{0.0};
   int64_t pulses{0};
   int64_t pixels{0};
@@ -78,7 +80,8 @@ struct FormationHudSnapshot {
   PlaybackStatus last_batch_playback{};
   LastMeanApc apc{};
   std::optional<std::chrono::steady_clock::time_point> last_packet_at;
-  // True after CPHDReaderOp parks on kEndOfStream. Collection-boundary
+  std::optional<int64_t> reader_capture_time_ns;
+  // True after CPHDReaderOp becomes idle on kEndOfStream. Collection-boundary
   // dwell_end is not EOS: independent_images still has files to read.
   bool reader_stopped{false};
   FormationHudBp bp{};
@@ -89,11 +92,21 @@ struct FormationHudSnapshot {
   std::string rate_line;
 };
 
+// The last reader batch may fan out into multiple formation ticks. Wall time
+// alone cannot identify its terminal image. Wait for a closing BP tick at or
+// after that batch's capture stamp, and for reporting to acknowledge that tick.
+inline bool sar_eof_drained(const FormationHudSnapshot& snapshot, int64_t reported_capture_ns) {
+  return snapshot.reader_stopped && snapshot.reader_capture_time_ns.has_value() &&
+         snapshot.bp.closes_aperture &&
+         snapshot.bp.capture_time_ns >= *snapshot.reader_capture_time_ns &&
+         reported_capture_ns >= snapshot.bp.capture_time_ns;
+}
+
 class FormationHud {
  public:
   void publish_reader(std::vector<CollectionSpan> spans, PlaybackStatus playback, LastMeanApc apc,
                       std::optional<std::chrono::steady_clock::time_point> last_packet,
-                      bool reader_stopped = false) {
+                      bool reader_stopped = false, std::optional<int64_t> capture_time_ns = {}) {
     const std::lock_guard lock(mu_);
     spans_ = std::move(spans);
     playback_ = playback;
@@ -104,6 +117,7 @@ class FormationHud {
     }
     last_packet_at_ = last_packet;
     reader_stopped_ = reader_stopped;
+    reader_capture_time_ns_ = capture_time_ns;
   }
 
   void publish_bp(FormationHudBp bp) {
@@ -123,6 +137,7 @@ class FormationHud {
                               .last_batch_playback = last_batch_playback_,
                               .apc = apc_,
                               .last_packet_at = last_packet_at_,
+                              .reader_capture_time_ns = reader_capture_time_ns_,
                               .reader_stopped = reader_stopped_,
                               .bp = bp_,
                               .rate_line = rate_line_};
@@ -142,6 +157,7 @@ class FormationHud {
   PlaybackStatus last_batch_playback_{};
   LastMeanApc apc_{};
   std::optional<std::chrono::steady_clock::time_point> last_packet_at_;
+  std::optional<int64_t> reader_capture_time_ns_;
   bool reader_stopped_{false};
   FormationHudBp bp_{};
   std::string rate_line_;

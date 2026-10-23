@@ -790,6 +790,8 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       last_image_emit_valid_.store(true, std::memory_order_release);
       if (hud_) {
         hud_->publish_bp(FormationHudBp{
+            .capture_time_ns = context.activation_time().timestamp_ns,
+            .closes_aperture = stage_after,
             .compute_s = aperture_compute_s_,
             .pulses = emitted_pulses,
             .pixels = emitted_pixels,

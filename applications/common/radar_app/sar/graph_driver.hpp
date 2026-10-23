@@ -441,19 +441,15 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     }
 #endif
     if (!cfg.reader_loop) {
-      // request_stop does not drain queued samples. The reader parks after D22
-      // (kEndOfStream, not a collection_boundary). Arm the 180 s drain only
-      // after the HUD reports that stop, then wait until the last packet has
-      // formed an image (or SIGINT) before request_stop.
+      // request_stop does not drain queued samples. After reader EOF, wait
+      // for the terminal closing image to reach reporting, including fan-out
+      // slices. A BP wall timestamp alone can refer to an earlier image.
       constexpr auto kDrainWait = std::chrono::seconds{180};
       constexpr auto kPoll = std::chrono::milliseconds{50};
       std::optional<std::chrono::steady_clock::time_point> drain_deadline;
       auto eos_flushed = [&] {
         const auto snap = hud->snapshot();
-        if (!snap.reader_stopped)
-          return false;
-        return snap.bp.emit_at.has_value() && snap.last_packet_at.has_value() &&
-               *snap.bp.emit_at >= *snap.last_packet_at;
+        return sar_eof_drained(snap, counter->reported_capture_ns.load(std::memory_order_acquire));
       };
       while (!eos_flushed()) {
         const auto now = std::chrono::steady_clock::now();

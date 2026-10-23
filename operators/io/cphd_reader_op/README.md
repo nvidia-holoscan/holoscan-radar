@@ -62,23 +62,28 @@ the last batch may be shorter. With `loop: true`, the ordered file list repeats.
 A positive `playback_rate` paces collection time relative to wall time;
 `duty_cycle` adds an inter-collection gap. Collect time is the finite `TxTime`
 span (non-finite PVP samples are skipped; some Umbra vectors store NaN there).
-Playback slack and duty-cycle quiet sleeps return early when the run requests
-cooperative stop. Unmetered `playback_rate` 0 always retries required Tensor
-emits on `kBackpressured` / `kResourceExhausted` through the shared helper.
-HSDK 5 `QueuePolicy::kBlocking` does not park `OnClock` until the consumer
-has room, and a failed `emit(TensorOutputLoan)` consumes the loan, so the
-reader waits and re-prepares. A positive `playback_rate` fail-fasts with the
-shared explanation unless `wait_for_downstream: true`. Only this operator
-takes the Param; formation operators fail-fast. The wait returns on
-cooperative stop. The lag HUD
+`OnNotified` wakes a pending-batch state machine. One lifecycle-owned timer
+worker waits on absolute `steady_clock` deadlines outside the execution lane;
+it performs no file reads. `compute()` reads, uploads, and emits the current
+batch ASAP, then its accumulated collect-time deadline gates the next batch.
+First-batch publication does not wait for its own end `TxTime`.
+
+Unmetered playback and `wait_for_downstream: true` retry pool/queue pressure
+on a notification after 10 ms. Successful publications are tracked across
+callbacks; retries retain the original capture timestamp and host data,
+without rereading or duplicating outputs. A positive rate otherwise fails
+fast with the existing queue/pool explanation and cancellation. The sender
+has two finite credits (one active activation and one pending wake); the
+worker retries startup/posting pressure after a cancellable 1 ms wait.
+The sender binds at `kArm`, the worker starts at `kStart`, `kStop` wakes and
+joins it, and `kRelease` releases storage and the sender. The lag HUD
 is live target versus wall (`TxTime` span / `playback_rate` versus now since
-the collection start), matching the HSDK 4 `playback_status()` poll. Pace
-sleep uses that same slack (no sleep while behind). A paced reader
+the collection start), matching the HSDK 4 `playback_status()` poll. Pacing uses that same slack (no delay while behind). A paced reader
 (`playback_rate > 0`) also WARNs at most once per second while behind by
 0.2 s or more (the Gantt lag-band entry), and stops once behind is back to
 0.05 s. The WARN prints `target` (paced transmit time) and wall so behind is
 `wall − target`. Unpaced `playback_rate: 0` does not warn. Per-batch
-collect/wall/`signal`/`decode`/`emit`/`slack` timing is DEBUG
+collect/wall/slack and per-callback duration are DEBUG
 (`HOLOSCAN_LOG_LEVEL=DEBUG`). Apps put the reader and backprojection in
 separate Graph partitions so formation cannot steal the playback clock.
 
@@ -99,9 +104,11 @@ another file or loop iteration, and `2` closes the final collection. Connect
 it to `ApertureManagerOp.stream_boundary` with the same batch's profiles and
 geometry. If an app splits a batch, put the original boundary on its last
 slice and `0` on earlier slices. After the last batch the reader stops
-producing and parks this OnClock worker; it does not emit a separate empty EOS
-tick. HSDK `request_stop` does not drain queued samples, so requesting stop on
-the next 1 µs tick aborts the in-flight D22 `EmitAndReset`. Finite (non-loop)
+producing after final pacing and posts no further notifications; it does not
+emit a separate empty EOS tick. HSDK `request_stop` does not drain queued
+samples, so the application owns downstream D22 `EmitAndReset` drain.
+The SAR driver waits for the closing image at or after the last reader
+capture stamp to reach reporting, including the final slice of a batch. Finite (non-loop)
 SAR apps request session stop after the formed image and `visualize_hold_s`.
 
 ## Validation and failure cases
@@ -133,3 +140,24 @@ uses the C++ fixture generator. The CPHD reader C++ tests cover decoding,
 selection, boundaries, and malformed inputs. Real-collection validation is
 tracked in the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md); see
 [SAR data preparation](../../../tools/sar_data/README.md).
+
+## Scheduling baseline
+
+On GB10 with the GA HSDK 5 CUDA 13 image, a Release spotlight run using the
+Atlanta preset's 11,500 selected pulses and 100-pulse batches, a 32×32 image,
+unmetered playback, no visualization/dump, and warm filesystem cache produced
+the following median of three runs after the scheduling refactor:
+
+| Measurement | Scheduling only |
+| --- | --- |
+| End-to-end throughput | 9,148 pulses/s |
+| Reader callback mean / p95 | 5.34 / 6.64 ms |
+| Process CPU time | 2.87 s |
+| Peak host RSS | 248.8 MiB |
+
+End-to-end timing includes process startup and final downstream drain. CPU time
+is user plus system time; RSS is the process peak, not GPU allocation size.
+Callback duration is measured by the reader's DEBUG timer. This SDK image
+requires `holoscan::set_log_level()` to initialize the environment log-level
+override; the measurement used an external preload calling that function.
+These are diagnostic measurements of this workload, not performance thresholds.
