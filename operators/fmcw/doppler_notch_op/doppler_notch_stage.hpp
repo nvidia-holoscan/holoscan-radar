@@ -37,7 +37,8 @@ __global__ void doppler_notch_kernel(const cuda::std::complex<T>* input, const T
     const double first = static_cast<double>(velocity_bins[0]);
     const double last = static_cast<double>(velocity_bins[num_doppler - 1]);
     const double spacing = (last - first) / static_cast<double>(num_doppler - 1);
-    if (spacing > 0.0 && isfinite(spacing)) {
+    // Velocity producers may emit either axis direction; retain the signed index step.
+    if (spacing != 0.0 && isfinite(spacing)) {
       int64_t raw_nearest =
           static_cast<int64_t>(llround((config.center_velocity - first) / spacing));
       if (config.cyclic_velocity_axis) {
@@ -45,7 +46,7 @@ __global__ void doppler_notch_kernel(const cuda::std::complex<T>* input, const T
         if (raw_nearest < 0)
           raw_nearest += num_doppler;
         nearest = raw_nearest;
-        const double period = spacing * static_cast<double>(num_doppler);
+        const double period = fabs(spacing) * static_cast<double>(num_doppler);
         distance = fmod(distance, period);
         distance = fmin(distance, period - distance);
       } else {

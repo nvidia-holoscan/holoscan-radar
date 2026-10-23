@@ -108,10 +108,10 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 
 #### DopplerNotchOp
 
-- Hard mode (`transition_width = 0`) zeros the nearest bin to `center_velocity` plus every bin inside `stop_half_width`, preserving all bins outside.
+- Hard mode (`transition_width = 0`) zeros the nearest bin to `center_velocity` plus every bin inside `stop_half_width`, preserving all bins outside. Ascending and descending velocity axes produce the same physical gains, including cyclic boundaries and centers outside one period; descending DDM axes must preserve the highest positive-velocity passband bin.
 - Positive `transition_width` matches an independent cyclic-distance raised-cosine reference, reaches exactly zero/one at the stop/transition boundaries, and never changes relative channel phase.
 - Named rank-2 SISO, rank-3 SIMO, and rank-4 MIMO layouts agree; unexpected leading axes reject. Float/double agree within tolerance.
-- Live center/width overrides apply to one exactly paired activation; a following miss reverts to Params. Malformed axis shape/dtype, non-finite or non-increasing values, precision mismatch, and exceeded extents fail predictably.
+- Live center/width overrides apply to one exactly paired activation; a following miss reverts to Params. Malformed axis shape/dtype, non-finite or non-monotonic values, precision mismatch, and exceeded extents fail predictably.
 - Linear-offset and nonlinear-code dense DDM integrations suppress a stationary target at physical zero velocity, preserve targets outside the transition, and introduce no range-aligned pedestal. Folded sparse-DDM input is outside the contract.
 - `tests/cpp/fmcw/test_doppler_notch_pipeline.cpp` supplies simulator-backed ADC cubes to the real range → Doppler → dense-demux → notch GPU chain. The independent one-factor/Monte Carlo reference under `studies/ddm_doppler_notch/` cross-checks physical scaling, window leakage, near-static target loss, confidence intervals, and CA-CFAR training bias; its checked-in report is guidance, not a production-default change.
 
