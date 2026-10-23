@@ -12,7 +12,10 @@ from pathlib import Path
 operator, build, *arguments = sys.argv[1:]
 archive = Path(build) / "runtime"
 if archive.is_dir():
-    os.environ["LD_LIBRARY_PATH"] = str(archive) + ":" + os.environ.get("LD_LIBRARY_PATH", "")
+    prior_library_path = os.environ.get("LD_LIBRARY_PATH")
+    os.environ["LD_LIBRARY_PATH"] = str(archive) + (
+        f":{prior_library_path}" if prior_library_path else ""
+    )
 executables = [
     Path(build) / "performance/cpp" / f"perf_{operator}{suffix}" for suffix in ("", "_double")
 ]

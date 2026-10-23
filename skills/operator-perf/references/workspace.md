@@ -11,6 +11,12 @@ skills update, rebase the campaign branch onto the designated skills branch
 before continuing candidate work so it uses the committed workflow. Record
 personal branch names and local artifact paths in session artifacts.
 
+After rebasing, keep sealed manifests and reports immutable for their recorded
+`source_id` and `git_commit`. If `source_id` changes, start a new confirmed
+session, rebuild both manifests, and capture a new baseline before candidate
+work. If only `git_commit` changes, preserve the provenance of sealed artifacts
+and record the new commit on new artifacts.
+
 Seal active measurement sessions before changing skills or rebasing; preserve
 their source/build identities and evidence. Preserve uncommitted work when
 switching branches. Do not infer permission to commit an operator candidate

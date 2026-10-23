@@ -18,7 +18,7 @@ from artifacts import digest, read_json, write_json
 from campaign import config_digest, validate_admission
 from confirmation import collect, compare, protocol, render_table, replay, schedule
 from qualification import reference
-from radar_perf import config_hash, main, normalize_config, timing_comparison
+from radar_perf import comparison_evidence, config_hash, main, normalize_config, timing_comparison
 from test_optimization import snapshots
 
 SCRIPT = """import json,sys
@@ -550,6 +550,24 @@ class ConfirmationTest(unittest.TestCase):
             0,
         )
         self.assertNotIn("calibration", read_json(speed)["inputs"])
+        evidence = read_json(speed)
+        frozen_at = read_json(index)["frozen_at"]
+        for depth in range(3):
+            with self.subTest(aggregate_depth=depth):
+                self.assertEqual(
+                    comparison_evidence(evidence, cfg, context, read_json(self.plan), frozen_at),
+                    ({"test"}, {"baseline"}, False),
+                )
+                with self.assertRaisesRegex(ValueError, "predates the registered candidate plan"):
+                    comparison_evidence(evidence, cfg, context, read_json(self.plan), frozen_at + 1)
+            child = self.root / f"speed-depth-{depth}.json"
+            write_json(child, evidence)
+            evidence = {
+                "kind": "speed",
+                "context": context,
+                "passed": True,
+                "checks": [reference(child)],
+            }
         gates = {"speed": str(speed)}
         before, after = snapshots(), snapshots()
         before["source_id"], after["source_id"] = "A", "B"

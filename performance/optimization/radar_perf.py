@@ -369,7 +369,9 @@ def comparison_evidence(value, config, context, plan=None, declared_at=None):
             child = read_json(artifact["path"])
             if child.get("kind") != name or not child.get("passed"):
                 raise ValueError("consumer comparison does not pass")
-            covered, measured, hit_target = comparison_evidence(child, config, context, plan)
+            covered, measured, hit_target = comparison_evidence(
+                child, config, context, plan, declared_at
+            )
             operators |= covered
             cases |= measured
             target_reached = target_reached or hit_target

@@ -181,6 +181,25 @@ class OptimizationToolsTest(unittest.TestCase):
                 self.assertEqual(list(self.root.iterdir()), [child])
                 child.unlink()
 
+    def test_precision_launcher_archive_library_path(self):
+        script = Path(__file__).resolve().parents[1] / "paired_precision.py"
+        archive = self.root / "runtime"
+        archive.mkdir()
+        for prior in (None, "", "/existing/lib:/other/lib"):
+            with self.subTest(prior=prior):
+                environment = {} if prior is None else {"LD_LIBRARY_PATH": prior}
+                argv = [str(script), "test", str(self.root), "--validate"]
+                with (
+                    patch.dict(os.environ, environment, clear=True),
+                    patch("sys.argv", argv),
+                    patch("subprocess.run"),
+                ):
+                    with self.assertRaises(SystemExit) as stopped:
+                        runpy.run_path(str(script), run_name="__main__")
+                    self.assertEqual(stopped.exception.code, 0)
+                    expected = str(archive) if not prior else f"{archive}:{prior}"
+                    self.assertEqual(os.environ["LD_LIBRARY_PATH"], expected)
+
     def timing_index(self, after=8.0, before=10.0):
         builds = {
             side: {
