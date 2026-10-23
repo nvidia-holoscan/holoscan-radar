@@ -77,6 +77,7 @@ def analyze(spec):
         by_name[name] = window
     jobs = [(w["id"], w, None) for w in windows]
     seen = set()
+    comparison_names = set(by_name)
     for contrast in contrasts:
         before, after = contrast["before"], contrast["after"]
         if before not in by_name or after not in by_name or before == after:
@@ -87,7 +88,11 @@ def analyze(spec):
         a, b = by_name[before], by_name[after]
         if a["frames"] != b["frames"]:
             raise ValueError("temporal contrasts require equal-length windows")
-        jobs.append((f"{after}/{before}", a, b))
+        name = f"{after}/{before}"
+        if name in comparison_names:
+            raise ValueError(f"comparison identity collision: {name}")
+        comparison_names.add(name)
+        jobs.append((name, a, b))
     family = prior + bound * len(jobs) * len(quantiles) * 2
     rows, unavailable = [], []
     ids = set()

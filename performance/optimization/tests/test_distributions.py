@@ -95,6 +95,21 @@ class DistributionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "equal-length"):
             self.analyze(spec)
 
+    def test_contrast_identity_cannot_collide_with_window_or_another_contrast(self):
+        spec = self.spec()
+        spec["windows"].append({"id": "late/early", "start": 0, "frames": 50})
+        with self.assertRaisesRegex(ValueError, "identity collision"):
+            self.analyze(spec)
+        spec["windows"] = [
+            {"id": name, "start": 0, "frames": 50} for name in ("a", "b/c", "a/b", "c")
+        ]
+        spec["contrasts"] = [
+            {"before": "b/c", "after": "a"},
+            {"before": "c", "after": "a/b"},
+        ]
+        with self.assertRaisesRegex(ValueError, "identity collision"):
+            self.analyze(spec)
+
     def test_tail_change_is_not_hidden_by_median(self):
         pairs = [[[[1.0] * 100], [[1.0] * 98 + [10.0] * 2]]] * 30
         median, tail = summarize(pairs, 100, [0.5, 0.99], 100)
