@@ -830,7 +830,7 @@ def main(argv=None):
             read_json(args.report),
             config["protected_metrics"],
             config["objective"],
-            1 + len(config["consumer_policies"]),
+            config.get("campaign_family_size", 1) * (1 + len(config["consumer_policies"])),
         )
         write_json(args.out, value)
         return 0

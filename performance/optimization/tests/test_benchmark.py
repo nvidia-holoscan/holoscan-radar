@@ -151,6 +151,36 @@ Path(arg('--output')).write_text(json.dumps(report))
         self.assertEqual(mean["results"][0]["max_ms"], 9.0)
         self.assertNotIn("raw_steady_ms", median["results"][0])
 
+    def test_budget_cli_includes_campaign_and_consumer_families(self):
+        preview = self.root / "preview.json"
+        write_json(preview, perf_report(10.0))
+        for family in (None, 26):
+            with self.subTest(campaign_family_size=family):
+                cfg = config() | {
+                    "consumer_policies": {"a": {}, "b": {}},
+                    "protected_metrics": ["median_ms"],
+                }
+                if family is not None:
+                    cfg["campaign_family_size"] = family
+                settings = self.root / "config.json"
+                output = self.root / "budget.json"
+                write_json(settings, cfg)
+                self.assertEqual(
+                    main(
+                        [
+                            "budget",
+                            "--config",
+                            str(settings),
+                            "--report",
+                            str(preview),
+                            "--out",
+                            str(output),
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(read_json(output)["family_size"], (family or 1) * 3)
+
     def test_early_metrics_increase_family_budget(self):
         report = derive_raw(raw_report([10.0] * 50), protocol({}))
         base = budget_proposal(report, ["p90_ms", "p99_ms"], "median_ms", 2)
