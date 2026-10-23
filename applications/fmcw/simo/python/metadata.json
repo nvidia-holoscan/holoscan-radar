@@ -38,7 +38,7 @@
     "default_mode": "default",
     "modes": {
       "default": {
-        "description": "Run the Python simo Graph workflow",
+        "description": "Detect range-Doppler cells before sparse receive beamforming",
         "run": {
           "command": "python3.12 -m holoscan_radar.applications.cli simo",
           "workdir": "<holohub_app_source>/../config",

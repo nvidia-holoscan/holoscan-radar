@@ -220,7 +220,9 @@ int main(int argc, char** argv) {
               app::viz::ClusterDashboardInputs{cfar->cfar_power, cfar->detection_idx,
                                                features->points, cluster->labels, cluster->sizes,
                                                range->range_bins, demultiplex->velocity_bins_out,
-                                               reduction->reduced_points});
+                                               reduction->reduced_points},
+              app::application_description("mimo_ddm",
+                                           cfg.correlate ? "nonlinear_ddm" : "default"));
         }
 #endif
       });

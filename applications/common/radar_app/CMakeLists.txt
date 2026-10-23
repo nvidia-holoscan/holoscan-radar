@@ -24,6 +24,36 @@ target_link_libraries(radar_app INTERFACE
     CUDA::cudart
     ${CMAKE_DL_LIBS})
 
+# Generate GUI copy from the canonical C++ manifests; changes reconfigure the build.
+set(_radar_descriptions "#pragma once\n#include <stdexcept>\n#include <string>\n#include <string_view>\nnamespace holoscan::radar::app {\ninline std::string application_description(std::string_view application, std::string_view mode = \"default\") {\n")
+foreach(_radar_app IN ITEMS siso simo dense_beamforming mimo_tdm mimo_ddm adaptive_aoa multi_waveform)
+    set(_radar_manifest "${PROJECT_SOURCE_DIR}/applications/fmcw/${_radar_app}/cpp/metadata.json")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_radar_manifest}")
+    file(READ "${_radar_manifest}" _radar_metadata)
+    string(JSON _radar_mode_count LENGTH "${_radar_metadata}" application modes)
+    math(EXPR _radar_last_mode "${_radar_mode_count} - 1")
+    foreach(_radar_index RANGE ${_radar_last_mode})
+        string(JSON _radar_mode MEMBER "${_radar_metadata}" application modes ${_radar_index})
+        if(_radar_mode MATCHES "smoke")
+            continue()
+        endif()
+        string(JSON _radar_description GET "${_radar_metadata}"
+            application modes "${_radar_mode}" description)
+        string(REPLACE "\\" "\\\\" _radar_description "${_radar_description}")
+        string(REPLACE "\"" "\\\"" _radar_description "${_radar_description}")
+        string(REPLACE "\n" "\\n" _radar_description "${_radar_description}")
+        string(APPEND _radar_descriptions
+            "if (application == \"${_radar_app}\" && mode == \"${_radar_mode}\") return \"${_radar_description}\";\n")
+    endforeach()
+endforeach()
+string(APPEND _radar_descriptions
+    "throw std::invalid_argument(\"Unknown FMCW application description: \" + std::string(application) + \"/\" + std::string(mode));\n}\n}\n")
+file(GENERATE OUTPUT
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/radar_app/app/application_descriptions.hpp"
+    CONTENT "${_radar_descriptions}")
+target_include_directories(radar_app INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>)
+
 # The HSDK 5 dashboard compositor is compiled because its raster path contains
 # CUDA kernels. Graph wiring remains header-only for reuse by FMCW applications.
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)

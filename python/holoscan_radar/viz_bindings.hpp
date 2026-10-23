@@ -92,7 +92,8 @@ template <typename Config>
 viz::FmcwDashboardConfig dashboard_config(const Config& cfg, std::string title, bool clustered,
                                           bool show_angles, const std::vector<double>& az_grid,
                                           const std::vector<double>& el_grid,
-                                          const AngleConvention& angle_convention) {
+                                          const AngleConvention& angle_convention,
+                                          std::string description = {}) {
   const auto bounds = show_angles
                           ? app::physical_scan_grid_bounds(angle_convention, az_grid, el_grid)
                           : app::PhysicalAngleBounds{{-1.0, 1.0}, {-1.0, 1.0}};
@@ -118,6 +119,7 @@ viz::FmcwDashboardConfig dashboard_config(const Config& cfg, std::string title, 
   result.el_bounds = viz::display_bounds(bounds.el);
   result.angle_convention = angle_convention;
   result.title = std::move(title);
+  result.description = std::move(description);
   result.truth_targets = viz::make_truth_targets(cfg.scene.targets);
   result.scene_visibility = cfg.scene_visibility;
   return result;

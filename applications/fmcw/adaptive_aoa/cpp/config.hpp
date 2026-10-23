@@ -41,6 +41,20 @@ inline Algorithm parse_algorithm(const holoscan::config::Document& document) {
   throw std::runtime_error("app.aoa_algorithm must be music, root_music, esprit, or mvdr");
 }
 
+inline const char* algorithm_mode(Algorithm value) {
+  switch (value) {
+    case Algorithm::kMusic:
+      return "default";
+    case Algorithm::kRootMusic:
+      return "root_music";
+    case Algorithm::kEsprit:
+      return "esprit";
+    case Algorithm::kMvdr:
+      return "mvdr";
+  }
+  throw std::runtime_error("unknown Adaptive AoA algorithm");
+}
+
 inline const char* algorithm_name(Algorithm value) {
   switch (value) {
     case Algorithm::kMusic:

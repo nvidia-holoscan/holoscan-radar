@@ -246,7 +246,8 @@ int main(int argc, char** argv) {
                   cluster->sizes, range->range_bins, doppler->velocity_bins,
                   reduction->reduced_points, tx->waveform,
                   cfg.profiles[cfg.visualization_profile_index].waveform,
-                  cfg.visualization_profile_max_gap_frames});
+                  cfg.visualization_profile_max_gap_frames},
+              app::application_description("multi_waveform"));
         }
 #endif
       });

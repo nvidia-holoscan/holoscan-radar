@@ -24,6 +24,11 @@ to each file and resolve before merging. Changing an anchored value in an
 override does not change other resolved copies of that anchor; waveform presets
 must override each affected waveform block explicitly.
 
+The GUI shows the selected mode description below its main title, with frame
+status on a separate line. Normal mode descriptions match across C++ and Python;
+the build generates the shared GUI copy from the C++ manifests. Algorithm/coding
+settings select the description, including for custom inherited presets.
+
 ## Launch modes
 
 Modes are the optional second positional argument to the host CLI. Python is

@@ -39,7 +39,7 @@
     "default_mode": "default",
     "modes": {
       "default": {
-        "description": "Run the Python dense_beamforming Graph workflow",
+        "description": "Beamform the full SIMO range-Doppler cube before detection",
         "run": {
           "command": "python3.12 -m holoscan_radar.applications.cli dense_beamforming",
           "workdir": "<holohub_app_source>/../config",

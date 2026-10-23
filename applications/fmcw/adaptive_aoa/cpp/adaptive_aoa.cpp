@@ -257,7 +257,9 @@ int main(int argc, char** argv) {
               std::string("Adaptive AoA | ") + adaptive::algorithm_name(cfg.algorithm),
               app::viz::RawDashboardInputs{cfar->cfar_power, expansion->detection_idx_out,
                                            features->points, range->range_bins,
-                                           doppler->velocity_bins});
+                                           doppler->velocity_bins},
+              app::application_description("adaptive_aoa",
+                                           adaptive::algorithm_mode(cfg.algorithm)));
         }
 #endif
       });

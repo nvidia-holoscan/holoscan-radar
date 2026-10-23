@@ -37,7 +37,7 @@
     "default_mode": "default",
     "modes": {
       "default": {
-        "description": "Run the Python siso Graph workflow",
+        "description": "Baseline FMCW SISO range-Doppler processing",
         "run": {
           "command": "python3.12 -m holoscan_radar.applications.cli siso",
           "workdir": "<holohub_app_source>/../config",

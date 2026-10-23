@@ -373,7 +373,8 @@ struct SisoDashboardLoader {
   static auto load(const std::filesystem::path& path) { return app::siso::load_config(path); }
   static app::viz::FmcwDashboardConfig dashboard(const app::siso::Config& cfg) {
     return radar::python_viz::dashboard_config(cfg, "SISO", true, false, {}, {},
-                                               radar::AngleConvention{});
+                                               radar::AngleConvention{},
+                                               app::application_description("siso"));
   }
 };
 
@@ -382,7 +383,8 @@ struct SimoDashboardLoader {
   static app::viz::FmcwDashboardConfig dashboard(const app::simo::Config& cfg) {
     return radar::python_viz::dashboard_config(
         cfg, "SIMO", true, true, cfg.beamscan_params->az_coordinates,
-        cfg.beamscan_params->el_coordinates, cfg.beamscan_params->angle_convention);
+        cfg.beamscan_params->el_coordinates, cfg.beamscan_params->angle_convention,
+        app::application_description("simo"));
   }
 };
 
@@ -393,7 +395,8 @@ struct DenseDashboardLoader {
   static app::viz::FmcwDashboardConfig dashboard(const app::dense_beamforming::Config& cfg) {
     return radar::python_viz::dashboard_config(
         cfg, "SIMO Dense Beamforming", false, true, cfg.beamformer_params->az_coordinates,
-        cfg.beamformer_params->el_coordinates, cfg.beamformer_params->angle_convention);
+        cfg.beamformer_params->el_coordinates, cfg.beamformer_params->angle_convention,
+        app::application_description("dense_beamforming"));
   }
 };
 

@@ -27,6 +27,7 @@
 #include <holoscan/visualization/holoviz_op.hpp>
 
 #include "radar_app/app/angle_presentation.hpp"
+#include "radar_app/app/application_descriptions.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
 #include "radar_app/viz/dashboard_text.hpp"
 #include "radar_app/viz/fmcw_holoviz_op.hpp"
@@ -179,6 +180,7 @@ TEST_P(FmcwDashboardPowerTest, ComposesHeatmapWithMatchingPowerLegend) {
   viz::FmcwDashboardConfig config;
   config.show_angles = false;
   config.title = "FMCW test";
+  config.description = radar::app::application_description("adaptive_aoa", "root_music");
   auto harness = holoscan::testing::create_operator_test<Op>(config);
   harness.push_frame(frame_at(
       std::chrono::milliseconds{1},
@@ -227,6 +229,10 @@ TEST_P(FmcwDashboardPowerTest, ComposesHeatmapWithMatchingPowerLegend) {
     labels.emplace_back(reinterpret_cast<const char*>(
         text.data.data() + offset + holoscan::visualization::kTextRunHeaderBytes));
   }
+  ASSERT_GT(labels.size(), 2U);
+  EXPECT_NE(std::find(labels.begin(), labels.end(), config.description), labels.end());
+  EXPECT_NE(std::find(labels.begin(), labels.end(), "Frame 1 (0.0 s) | 0 detections"),
+            labels.end());
   EXPECT_NE(std::find(labels.begin(), labels.end(), GetParam().lower), labels.end());
   EXPECT_NE(std::find(labels.begin(), labels.end(), GetParam().upper), labels.end());
 }

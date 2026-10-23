@@ -597,7 +597,8 @@ struct TdmDashboardLoader {
   static app::viz::FmcwDashboardConfig dashboard(const app::mimo_tdm::Config& cfg) {
     return radar::python_viz::dashboard_config(
         cfg, "MIMO TDM", true, true, cfg.beamscan_params->az_coordinates,
-        cfg.beamscan_params->el_coordinates, cfg.beamscan_params->angle_convention);
+        cfg.beamscan_params->el_coordinates, cfg.beamscan_params->angle_convention,
+        app::application_description("mimo_tdm"));
   }
 };
 
@@ -606,7 +607,8 @@ struct DdmDashboardLoader {
   static app::viz::FmcwDashboardConfig dashboard(const mimo::DdmConfig& cfg) {
     return radar::python_viz::dashboard_config(
         cfg, "MIMO DDM", true, true, cfg.beamscan_params->az_coordinates,
-        cfg.beamscan_params->el_coordinates, cfg.beamscan_params->angle_convention);
+        cfg.beamscan_params->el_coordinates, cfg.beamscan_params->angle_convention,
+        app::application_description("mimo_ddm", cfg.correlate ? "nonlinear_ddm" : "default"));
   }
 };
 
@@ -618,7 +620,9 @@ struct AdaptiveDashboardLoader {
     return radar::python_viz::dashboard_config(
         cfg, std::string("Adaptive AoA | ") + app::adaptive_aoa::algorithm_name(cfg.algorithm),
         false, true, cfg.beamscan_params->az_coordinates, cfg.beamscan_params->el_coordinates,
-        cfg.beamscan_params->angle_convention);
+        cfg.beamscan_params->angle_convention,
+        app::application_description("adaptive_aoa",
+                                     app::adaptive_aoa::algorithm_mode(cfg.algorithm)));
   }
 };
 
@@ -630,7 +634,7 @@ struct MultiDashboardLoader {
     auto result = radar::python_viz::dashboard_config(
         cfg, "Multi-Waveform | PROFILE: " + cfg.visualization.profile, true, true,
         cfg.beamscan_params->az_coordinates, cfg.beamscan_params->el_coordinates,
-        cfg.beamscan_params->angle_convention);
+        cfg.beamscan_params->angle_convention, app::application_description("multi_waveform"));
     result.selected_profile = cfg.visualization.profile;
     result.selected_waveform = cfg.profiles.at(cfg.visualization_profile_index).waveform;
     return result;

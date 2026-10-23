@@ -101,6 +101,7 @@ struct FmcwDashboardConfig {
   std::array<float, 2> el_bounds{};
   AngleConvention angle_convention;
   std::string title;
+  std::string description;
   std::string selected_profile;
   FMCWWaveformDescriptor selected_waveform;
   std::vector<TruthTarget> truth_targets;

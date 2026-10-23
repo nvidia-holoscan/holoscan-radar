@@ -261,7 +261,7 @@ void set_pixel(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
 }
 
 float text_size(std::int64_t height, int scale) {
-  return scale == 2 ? 13.0F : (height < 540 ? 10.0F : 13.0F);
+  return scale == 2 ? (height < 540 ? 17.0F : 20.0F) : (height < 540 ? 10.0F : 13.0F);
 }
 
 int text_width(std::string_view text, std::int64_t height, int scale = 1) {
@@ -407,12 +407,12 @@ DashboardLayout make_dashboard_layout(std::int64_t width, std::int64_t height, b
   DashboardLayout result;
   result.rd_plot = PixelRect{
       .x = compact ? 60 : 72,
-      .y = compact ? 60 : 92,
+      .y = compact ? 72 : 92,
       .width = rd_right - (compact ? 68 : 80),
-      .height = canvas_height - (compact ? 122 : 160),
+      .height = canvas_height - (compact ? 134 : 160),
   };
   const int panel_width = (side_width - gap) / 2;
-  const int panel_top = compact ? 54 : 72;
+  const int panel_top = compact ? 66 : 72;
   const int available_height = canvas_height - panel_top - (compact ? 24 : 36);
   const int panel_height = (available_height - 2 * gap) / 3;
   result.azimuth_range_panel = PixelRect{side_x, panel_top, panel_width, panel_height};
@@ -838,12 +838,17 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
   draw_line(&image, width, height, plot.x + plot.width, plot.y - 1, plot.x + plot.width,
             plot.y + plot.height, kWhite);
 
-  draw_text(&image, width, height, 20, height < 540 ? 8 : 15, config.title, 2,
+  draw_text(&image, width, height, 20, height < 540 ? 5 : 10, config.title, 2,
             detail::kDashboardTextTitle);
+  // Native text has no font-weight option; a one-pixel overdraw thickens the title.
+  draw_text(&image, width, height, 21, height < 540 ? 5 : 10, config.title, 2,
+            detail::kDashboardTextTitle);
+  draw_text(&image, width, height, 20, height < 540 ? 25 : 34, config.description, 1,
+            detail::kDashboardTextMuted);
   const std::string status = "Frame " + std::to_string(frame_index + 1) + " (" +
                              format_value(static_cast<float>(frame_index * config.frame_period)) +
                              " s) | " + std::to_string(markers.size()) + " detections";
-  draw_text(&image, width, height, 20, height < 540 ? 29 : 43, status, 1);
+  draw_text(&image, width, height, 20, height < 540 ? 39 : 52, status, 1);
   draw_text(&image, width, height, 20, height - 22, "Dots: detections | Lines: truth", 1,
             detail::kDashboardTextMuted);
   constexpr std::string_view kDopplerLabel = "Velocity (m/s)";

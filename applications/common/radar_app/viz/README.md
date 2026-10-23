@@ -4,7 +4,7 @@ All seven FMCW applications use `FmcwDashboardOp` and the same C++/Python
 visualization wiring. The dashboard presents the CFAR power surface, current
 range-Doppler detections, spatial detection trails where angles are available,
 and rolling feature histories. Lines show analytic simulated truth; dots show
-detections. The subtitle reads `Frame <N> (<t> s) | <M> detections`, using scenario time
+detections. The status line reads `Frame <N> (<t> s) | <M> detections`, using scenario time
 and the number of displayed markers (cluster representatives in clustered workflows).
 
 The power map uses a sequential viridis palette and noise-anchored limits by
@@ -163,8 +163,13 @@ Text uses the staging SDK's verified pixel-coordinate mode; layout and glyph siz
 target the configured window dimensions, with compact spacing below 540 px height.
 Subplot titles are centered on their panels, with compact top insets and tighter
 spacing above the data; axis captions are centered on the plot area.
-The main title uses regular `#76B900` text at the built-in font's native 13 px
-height in both normal and compact layouts. Subplot titles use brighter text
+The main title uses `#76B900` text at 20 px (17 px in compact layouts), with a
+one-pixel horizontal overdraw for a bold appearance; the native font has no weight setting.
+The subtitle shows the selected mode's metadata description in muted blue-gray,
+followed by a brighter, separate frame-status line. Descriptions are compiled from the C++ application manifests
+and shared by both language dashboards; metadata edits trigger CMake regeneration.
+AoA algorithm and DDM coding settings select the matching description even when
+a custom YAML is launched directly. Compact layouts reserve one extra header row. Subplot titles use brighter text
 than ticks and labels; supporting captions are muted.
 Axis gutters reserve compact, separate rows for ticks and captions, with small
 outer insets so the data fills more of each subplot. Endpoint X labels

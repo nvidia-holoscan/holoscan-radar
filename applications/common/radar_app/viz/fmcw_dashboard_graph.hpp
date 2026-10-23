@@ -21,6 +21,7 @@
 #include <holoscan/visualization/holoviz_op.hpp>
 
 #include "radar_app/app/angle_presentation.hpp"
+#include "radar_app/app/application_descriptions.hpp"
 #include "radar_app/app/visualization_config.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
 #include "radar_app/viz/fmcw_holoviz_op.hpp"
@@ -88,15 +89,13 @@ struct ProfiledClusterDashboardInputs {
 };
 
 template <typename Inputs>
-inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle& application,
-                               holoscan::CompileOptions& options, const VisualizationConfig& config,
-                               double frame_period, bool show_angles,
-                               const std::vector<double>& az_grid,
-                               const std::vector<double>& el_grid,
-                               const AngleConvention& angle_convention,
-                               const std::vector<sim::PointTarget>& truth_targets,
-                               const sim::SceneVisibility& scene_visibility,
-                               std::string workflow_title, const Inputs& inputs) {
+inline void add_fmcw_dashboard(
+    holoscan::Graph& graph, holoscan::PartitionHandle& application,
+    holoscan::CompileOptions& options, const VisualizationConfig& config, double frame_period,
+    bool show_angles, const std::vector<double>& az_grid, const std::vector<double>& el_grid,
+    const AngleConvention& angle_convention, const std::vector<sim::PointTarget>& truth_targets,
+    const sim::SceneVisibility& scene_visibility, std::string workflow_title, const Inputs& inputs,
+    std::string description = {}) {
   static_assert(std::is_same_v<Inputs, RawDashboardInputs> ||
                     std::is_same_v<Inputs, ClusterDashboardInputs> ||
                     std::is_same_v<Inputs, ProfiledClusterDashboardInputs>,
@@ -140,6 +139,7 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
           .angle_convention = angle_convention,
           .title =
               workflow_title + (selected_profile.empty() ? "" : " | PROFILE: " + selected_profile),
+          .description = std::move(description),
           .selected_profile = std::move(selected_profile),
           .selected_waveform = std::move(selected_waveform),
           .truth_targets = make_truth_targets(truth_targets),

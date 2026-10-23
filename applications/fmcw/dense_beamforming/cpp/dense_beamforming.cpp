@@ -157,7 +157,8 @@ int main(int argc, char** argv) {
               cfg.beamformer_params->angle_convention, cfg.scene.targets, cfg.scene_visibility,
               "SIMO Dense Beamforming",
               app::viz::RawDashboardInputs{cfar->cfar_power, cfar->detection_idx, features->points,
-                                           range->range_bins, doppler->velocity_bins});
+                                           range->range_bins, doppler->velocity_bins},
+              app::application_description("dense_beamforming"));
         }
 #endif
       });

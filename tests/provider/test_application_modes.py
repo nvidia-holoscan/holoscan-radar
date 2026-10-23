@@ -38,6 +38,10 @@ def test_mode_manifests_match_languages_and_presets_exist(name):
     for manifest in manifests:
         assert manifest["default_mode"] == "default"
         assert set(manifest["modes"]) == expected
+    for mode in expected:
+        assert (
+            manifests[0]["modes"][mode]["description"] == manifests[1]["modes"][mode]["description"]
+        )
     for mode in expected - {"default"}:
         commands = [
             shlex.split(manifest["modes"][mode]["run"]["command"]) for manifest in manifests

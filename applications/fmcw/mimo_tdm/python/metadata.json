@@ -39,7 +39,7 @@
     "default_mode": "default",
     "modes": {
       "default": {
-        "description": "Run the Python mimo_tdm Graph workflow",
+        "description": "Sparse detect-before-compensate MIMO TDM processing",
         "run": {
           "command": "python3.12 -m holoscan_radar.applications.cli mimo_tdm",
           "workdir": "<holohub_app_source>/../config",

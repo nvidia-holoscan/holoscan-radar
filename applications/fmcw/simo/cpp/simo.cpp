@@ -193,7 +193,8 @@ int main(int argc, char** argv) {
               app::viz::ClusterDashboardInputs{cfar->cfar_power, cfar->detection_idx,
                                                features->points, cluster->labels, cluster->sizes,
                                                range->range_bins, doppler->velocity_bins,
-                                               reduction->reduced_points});
+                                               reduction->reduced_points},
+              app::application_description("simo"));
         }
 #endif
       });

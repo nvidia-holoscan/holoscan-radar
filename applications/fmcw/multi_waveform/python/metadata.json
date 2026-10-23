@@ -38,7 +38,7 @@
     "default_mode": "default",
     "modes": {
       "default": {
-        "description": "Run the Python multi_waveform Graph workflow",
+        "description": "Coherent alternating near/far MIMO TDM processing",
         "run": {
           "command": "python3.12 -m holoscan_radar.applications.cli multi_waveform",
           "workdir": "<holohub_app_source>/../config",
