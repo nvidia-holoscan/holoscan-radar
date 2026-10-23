@@ -800,6 +800,14 @@ inline std::filesystem::path resolve_existing(const std::filesystem::path& given
   if (std::filesystem::is_regular_file(beside_yaml)) {
     return std::filesystem::absolute(beside_yaml);
   }
+  // Preset paths such as sar/imperial/... also resolve under the build's data root.
+  // Keep absolute paths and existing caller/YAML-relative files authoritative.
+  if (given.is_relative()) {
+    const auto in_data = std::filesystem::path(HOLOSCAN_RADAR_DATA_DIR) / given;
+    if (std::filesystem::is_regular_file(in_data)) {
+      return in_data;
+    }
+  }
   return given;
 }
 

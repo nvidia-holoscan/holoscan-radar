@@ -42,7 +42,7 @@ real collections.
 
 ## Real collection preset
 
-The Houston preset expects `/tmp/sar/mode02_houston_1p0m.cphd` inside the container. The commands below write the subset to the host `data/sar/` directory and mount that directory at `/tmp/sar`. The recipe fetches the full dwell and central 16,753-sample FX subband; the output is about 27 GiB. The YAML retains 8262 pulses, emits every 4096, and forms a grid capped at 5632 pixels per side. Disk and GPU memory requirements are substantial.
+The Houston preset expects `data/sar/mode02_houston_1p0m.cphd` in the repository. The commands below write the subset to that directory. The recipe fetches the full dwell and central 16,753-sample FX subband; the output is about 27 GiB. The YAML retains 8262 pulses, emits every 4096, and forms a grid capped at 5632 pixels per side. Disk and GPU memory requirements are substantial.
 
 From the repository root **on the host**, with the Holoscan CLI installed,
 run:
@@ -52,14 +52,17 @@ python3 -m pip install -r tools/sar_data/requirements.txt
 mkdir -p data/sar
 python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
   -o data/sar
-./holoscan-radar run video_sar \
-  --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
+./holoscan-radar run video_sar
 ```
 
-The CLI mounts the host `data/sar/` directory read-only at `/tmp/sar` in the
-container, matching the shipped YAML. A host `/tmp/sar` directory or symlink
-is not visible in the container unless mounted. The shipped [`video_sar.yaml`](config/video_sar.yaml) is copied beside the
-executable by CMake and is the default real-data preset.
+The shipped [`video_sar.yaml`](config/video_sar.yaml) is copied beside the
+executable by CMake and is the default real-data preset. Its relative CPHD paths
+resolve under `HOLOHUB_DATA_DIR` (default: the repository's `data/` directory),
+which is already shared with both CLI containers and the DevContainer. No extra
+mount is needed. Inside the DevContainer, run
+`./build/applications/sar/video_sar/cpp/video_sar` from the repository root
+after building the target. Absolute CPHD paths and existing paths relative to
+the working directory or YAML directory remain supported.
 
 This preset loops. Stop it with Ctrl-C in the **launch terminal** (click that
 terminal if the Holoviz window has focus). The CLI maps Ctrl-C to SIGTERM in

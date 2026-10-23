@@ -164,7 +164,7 @@ data/2024/11/29/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602/CAPELLA_C14
 
 Credential-free: `aws s3 cp --no-sign-request` or HTTPS GET. 3,706,536,768 bytes (3.452 GiB). `CPHD/1.1.0`, `CI4`, FX, `SGN` +1, `AmpSF` present, `STRIPMAP` / VV / right-looking. 159,051 vectors × 5,760 samples. TxTime dwell **15.766 s** at 10,088.1 Hz PRF. IARP 32.8423°N, 115.5275°W (HAE 10 m) — Imperial Valley, California. Graze 73.11 deg, slant 616.8 km, FxC 9.650 GHz, bandwidth 200 MHz. `SC0` 9,550,000,277.42 Hz and `SCSS` 34,722.221 Hz both constant. `SRPFixed=false`: SRP travels 103.8 km (platform 113.8 km at 7,217 m/s). Ground-range swath ≈ 10.3 km (TOASaved); the formed cross-track is the IFFT window (~14.8 km). Fields and canals; a ~10:1 strip. `nvec` only divides evenly by 3; the demo drops one vector (`pulse_range: [0, 159050)`) for ten ~10.4 km along-track tiles.
 
-The demo pulls the file whole (no subsetter): `python3 tools/sar_data/pull_cphd.py --app tiled_strip --dest /tmp/sar/imperial`. `--app continuous_strip` is the same key and dest. Tiles are along-track ROIs of a parent lattice that follows the SRP chord (along-track on `v`); every tile forms the parent's full cross-track so joins line up. `lattice.max_side` caps each tile's along-track axis, not `u`; `SarMosaicOp` holds finished squares. Taylor `range_window` / `aperture_window`; `weight` wired. Palmdale/Rosamond is not this YAML.
+The demo pulls the file whole (no subsetter): `python3 tools/sar_data/pull_cphd.py --app tiled_strip --dest data/sar/imperial`. `--app continuous_strip` is the same key and dest. Tiles are along-track ROIs of a parent lattice that follows the SRP chord (along-track on `v`); every tile forms the parent's full cross-track so joins line up. `lattice.max_side` caps each tile's along-track axis, not `u`; `SarMosaicOp` holds finished squares. Taylor `range_window` / `aperture_window`; `weight` wired. Palmdale/Rosamond is not this YAML.
 
 ## Mode 4 — Imperial Valley stripmap (continuous strip)
 
@@ -174,7 +174,7 @@ a coarsening cap). `SarMosaicOp` blits each window into the parent so
 Holoviz is the strip (same landscape fit as mode 3). `weight` is
 unconnected (untapered ~−13 dB). `emit_interval_pulses: 256` with
 `pulses_per_tick: 1024` — the app stager slices each reader cube so
-formation sees the interval. Pull: `python3 tools/sar_data/pull_cphd.py --app continuous_strip --dest /tmp/sar/imperial`.
+formation sees the interval. Pull: `python3 tools/sar_data/pull_cphd.py --app continuous_strip --dest data/sar/imperial`.
 
 ## Palmdale / Rosamond — optional CPHD 1.0.1 spare
 

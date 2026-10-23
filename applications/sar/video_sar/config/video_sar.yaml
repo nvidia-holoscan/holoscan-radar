@@ -14,7 +14,7 @@
 #
 #   python3 tools/sar_data/subset_cphd.py \
 #     tools/sar_data/recipes/houston_1m.yaml -o data/sar
-#   Mount data/sar at /tmp/sar for the host CLI run (see README.md).
+#   Paths below resolve under the build data directory (default: data/).
 #
 # Scene is counts × spacing (6.8 km IARP-centred ENU). Aperture
 # 8262 is 2020 * 4.09 / 1.0 (the 4.09 m window scaled). No
@@ -25,7 +25,7 @@
 # straddle it.
 
 cphd:
-  path: /tmp/sar/mode02_houston_1p0m.cphd
+  path: sar/mode02_houston_1p0m.cphd
   names:
     - Houston
   sidecar: ""

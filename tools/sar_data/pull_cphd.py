@@ -100,15 +100,15 @@ IMPERIAL_VALLEY: list[tuple[str, str]] = [
 
 # app -> (bucket, https prefix, collects, default dest, iarp check)
 APPS: dict[str, tuple[str, str, list[tuple[str, str]], str, bool]] = {
-    "tiled_strip": (CAPELLA_BUCKET, CAPELLA_HTTPS, IMPERIAL_VALLEY, "/tmp/sar/imperial", False),
+    "tiled_strip": (CAPELLA_BUCKET, CAPELLA_HTTPS, IMPERIAL_VALLEY, "data/sar/imperial", False),
     "continuous_strip": (
         CAPELLA_BUCKET,
         CAPELLA_HTTPS,
         IMPERIAL_VALLEY,
-        "/tmp/sar/imperial",
+        "data/sar/imperial",
         False,
     ),
-    "independent_images": (UMBRA_BUCKET, UMBRA_HTTPS, MODE5, "/tmp/sar/mode5", True),
+    "independent_images": (UMBRA_BUCKET, UMBRA_HTTPS, MODE5, "data/sar/mode5", True),
 }
 
 # Two IARPs closer than this are the same scene (Ohio's second plant
@@ -246,7 +246,7 @@ def jobs_for(app: str, dest: Path | None) -> list[PullJob]:
 
     Strip apps share Imperial Valley, so ``all`` downloads that object once.
     ``--dest`` for ``all`` is the parent of each preset directory
-    (``imperial``, ``mode5``), matching a ``data/sar`` bind mount.
+    (``imperial``, ``mode5``), matching the repository ``data/sar`` layout.
     """
     selected = ["tiled_strip", "independent_images"] if app == "all" else [app]
     jobs: list[PullJob] = []

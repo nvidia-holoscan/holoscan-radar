@@ -1,6 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+# Resolve preset CPHD paths against the same data tree in CLI and devcontainer builds.
+if(NOT DEFINED HOLOHUB_DATA_DIR)
+    set(HOLOHUB_DATA_DIR "${PROJECT_SOURCE_DIR}/data" CACHE PATH "Application data directory")
+endif()
+get_filename_component(_sar_data_dir "${HOLOHUB_DATA_DIR}" ABSOLUTE
+    BASE_DIR "${PROJECT_SOURCE_DIR}")
+add_compile_definitions(HOLOSCAN_RADAR_DATA_DIR="${_sar_data_dir}")
+unset(_sar_data_dir)
+
 if(BUILD_ALL OR APP_spotlight OR APP_video_sar OR APP_tiled_strip OR
         APP_continuous_strip OR APP_independent_images)
     find_package(holoscan 5 CONFIG REQUIRED COMPONENTS core visualization)

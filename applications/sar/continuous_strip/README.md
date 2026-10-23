@@ -46,7 +46,7 @@ real collections.
 
 ## Real collection preset
 
-The preset uses the same Capella CPHD as tiled strip. Download it into the host `data/sar/imperial/` directory below. The CLI mounts that tree at `/tmp/sar`, where the preset expects `/tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd`. Reader batches contain up to 1024 pulses; the stager makes 256-pulse slices, including a shorter final slice at the collection seam. `geometry_change: scroll` requires the forward v-axis geometry supplied by this app.
+The preset uses the same Capella CPHD as tiled strip. Download it into the host `data/sar/imperial/` directory below. The preset resolves `sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd` under the build data directory. Reader batches contain up to 1024 pulses; the stager makes 256-pulse slices, including a shorter final slice at the collection seam. `geometry_change: scroll` requires the forward v-axis geometry supplied by this app.
 
 From the repository root **on the host**, with the Holoscan CLI installed,
 run:
@@ -54,14 +54,17 @@ run:
 ```bash
 python3 tools/sar_data/pull_cphd.py --app continuous_strip \
   --dest data/sar/imperial
-./holoscan-radar run continuous_strip \
-  --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
+./holoscan-radar run continuous_strip
 ```
 
-The CLI mounts the host `data/sar/` directory read-only at `/tmp/sar` in the
-container, matching the shipped YAML. A host `/tmp/sar` directory or symlink
-is not visible in the container unless mounted. The shipped [`continuous_strip.yaml`](config/continuous_strip.yaml) is copied beside the
-executable by CMake and is the default real-data preset.
+The shipped [`continuous_strip.yaml`](config/continuous_strip.yaml) is copied beside the
+executable by CMake and is the default real-data preset. Its relative CPHD paths
+resolve under `HOLOHUB_DATA_DIR` (default: the repository's `data/` directory),
+which is already shared with both CLI containers and the DevContainer. No extra
+mount is needed. Inside the DevContainer, run
+`./build/applications/sar/continuous_strip/cpp/continuous_strip` from the repository root
+after building the target. Absolute CPHD paths and existing paths relative to
+the working directory or YAML directory remain supported.
 
 Pass an explicit YAML path as the first argument. For this topology,
 a CPHD path may replace `cphd.path` directly, or follow a YAML path as the second argument.

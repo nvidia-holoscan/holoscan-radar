@@ -43,7 +43,7 @@ real collections.
 
 ## Real collection preset
 
-The shipped Atlanta preset selects pulses `[91273, 102773)` from a 28.59 GiB Umbra CPHD, uses a fixed 8192 × 8192 ENU grid, and runs double-precision formation. Download the CPHD to the host `data/sar/` directory below; the CLI mounts it at the YAML's `/tmp/sar/` path in the container. The CPHD must supply the PVP fields required by `CPHDReaderOp`; the preset assumes its reference position and sample spacing.
+The shipped Atlanta preset selects pulses `[91273, 102773)` from a 28.59 GiB Umbra CPHD, uses a fixed 8192 × 8192 ENU grid, and runs double-precision formation. Download the CPHD to the host `data/sar/` directory below; the preset resolves its relative path under the build data directory. The CPHD must supply the PVP fields required by `CPHDReaderOp`; the preset assumes its reference position and sample spacing.
 
 From the repository root **on the host**, with the Holoscan CLI installed,
 run:
@@ -56,14 +56,17 @@ if [ ! -f "$spotlight_cphd" ]; then
     'https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com/sar-data/task-data/0f1231be-26d3-4b98-96ab-f675a5375c14/2026-02-20-03-03-38_UMBRA-07/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd'
   mv "$spotlight_cphd.part" "$spotlight_cphd"
 fi
-./holoscan-radar run spotlight \
-  --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
+./holoscan-radar run spotlight
 ```
 
-The CLI mounts the host `data/sar/` directory read-only at `/tmp/sar` in the
-container, matching the shipped YAML. A host `/tmp/sar` directory or symlink
-is not visible in the container unless mounted. The shipped [`spotlight.yaml`](config/spotlight.yaml) is copied beside the
-executable by CMake and is the default real-data preset.
+The shipped [`spotlight.yaml`](config/spotlight.yaml) is copied beside the
+executable by CMake and is the default real-data preset. Its relative CPHD paths
+resolve under `HOLOHUB_DATA_DIR` (default: the repository's `data/` directory),
+which is already shared with both CLI containers and the DevContainer. No extra
+mount is needed. Inside the DevContainer, run
+`./build/applications/sar/spotlight/cpp/spotlight` from the repository root
+after building the target. Absolute CPHD paths and existing paths relative to
+the working directory or YAML directory remain supported.
 
 Pass an explicit YAML path as the first argument. For this topology,
 a CPHD path may replace `cphd.path` directly, or follow a YAML path as the second argument.

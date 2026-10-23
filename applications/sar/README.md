@@ -26,8 +26,9 @@ a development container, see the individual app guides.
 
 The shipped YAML files are **real-data presets**. Download or subset the CPHD
 files in the host `data/sar/` directory using [optional data preparation tools](../../tools/sar_data/README.md),
-then run through the Holoscan CLI with `data/sar/` mounted at the YAML's
-`/tmp/sar` path inside the container. Each app guide gives a complete
+then run through the Holoscan CLI or directly inside the DevContainer. Relative
+CPHD paths resolve under `HOLOHUB_DATA_DIR` (default: the repository `data/`
+directory); the repository mount already exposes these files in both environments. Each app guide gives a complete
 download-and-run command block. Read each app guide for
 the exact collection, geometry, output, and display prerequisites. The
 [CPHD reader](../../operators/io/cphd_reader_op/README.md) and

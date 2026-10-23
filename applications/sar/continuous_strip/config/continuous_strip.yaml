@@ -9,7 +9,7 @@
 #
 #   python3 tools/sar_data/pull_cphd.py --app continuous_strip \
 #     --dest data/sar/imperial
-#   Mount data/sar at /tmp/sar for the host CLI run (see README.md).
+#   Paths below resolve under the build data directory (default: data/).
 #
 # Lattice follows the SRP chord (not the IARP tangent plane).
 # lattice.max_side is the scrolling window depth along v, not a
@@ -32,7 +32,7 @@
 # visualize_size caps that long display axis in pixels.
 
 cphd:
-  path: /tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
+  path: sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
   names:
     - Imperial Valley
   sidecar: ""

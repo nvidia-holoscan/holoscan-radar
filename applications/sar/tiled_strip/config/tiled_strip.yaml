@@ -9,7 +9,7 @@
 #
 #   python3 tools/sar_data/pull_cphd.py --app tiled_strip \
 #     --dest data/sar/imperial
-#   Mount data/sar at /tmp/sar for the host CLI run (see README.md).
+#   Paths below resolve under the build data directory (default: data/).
 #
 # nvec 159051 does not divide by 10; pulse_range drops the last
 # vector so ten tiles of 15905 pulses (~10.4 km along-track).
@@ -30,7 +30,7 @@
 # formation and dump keep (v,u). visualize_size bounds the raster.
 
 cphd:
-  path: /tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
+  path: sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
   names:
     - Imperial Valley
   sidecar: ""
