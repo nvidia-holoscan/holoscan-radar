@@ -274,6 +274,12 @@ void expect_notch_behavior(const PipelineResult& baseline, const PipelineResult&
   for (std::size_t index = 0; index < baseline.maps.data.size() / sizeof(std::complex<float>);
        ++index) {
     EXPECT_LE(std::abs(after[index]), std::abs(before[index]) + 1e-3F);
+    const int64_t bin = static_cast<int64_t>(index) / num_range % num_doppler;
+    // Default hard notch removes only the nearest zero bin, preserving every other cell.
+    const auto expected = bin == zero ? std::complex<float>{} : before[index];
+    const float tolerance = 1e-4F * std::abs(before[index]) + 1e-4F;
+    EXPECT_NEAR(after[index].real(), expected.real(), tolerance) << "Doppler bin " << bin;
+    EXPECT_NEAR(after[index].imag(), expected.imag(), tolerance) << "Doppler bin " << bin;
   }
 }
 
