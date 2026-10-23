@@ -1,5 +1,7 @@
 # Dense beamforming
 
+See [shared preset inheritance and launch modes](../README.md).
+
 Beamform-then-detect FMCW example. This implementation happens to use a SIMO
 array, but the application is named for the processing approach it demonstrates. It forms the full range-Doppler-angle cube, applies N-D CFAR peak suppression, resolves physical coordinates, and reports the retained detections directly.
 
@@ -35,14 +37,14 @@ unindent its three operator blocks by one level. Both languages use this layout.
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run dense_beamforming --language cpp --run-args=dense_beamforming_smoke.yaml
+./holoscan-radar run dense_beamforming smoke --language cpp
 ```
 
 This runs the two-frame headless smoke preset. Run
 `./holoscan-radar run dense_beamforming --language cpp` on a host with a
 display for the normal preset. The CLI selects Python if `--language` is omitted.
 
-The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset intentionally omits it, uses the constant-amplitude analytic model, and emits a warning.
+The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset explicitly disables it, uses the constant-amplitude analytic model, and emits a warning.
 
 Simulator-backed sources default `app.scene_visibility` to `front_half_space`, with radar-local `+x` as boresight. Select `frustum` with explicit horizontal/vertical FOVs in radians, or `all` to restore isotropic target synthesis. This binary coverage gate is separate from relative range loss and does not model antenna gain.
 
@@ -54,7 +56,7 @@ From the repository root, the host CLI builds and runs the colocated
 `python/` graph with the pinned development image:
 
 ```bash
-./holoscan-radar run dense_beamforming --language python --run-args=dense_beamforming_smoke.yaml
+./holoscan-radar run dense_beamforming smoke --language python
 ```
 
 After building or installing the Python wheel, call the graph directly:

@@ -1,5 +1,7 @@
 # Multi-waveform application
 
+See [shared preset inheritance and launch modes](../README.md).
+
 This application alternates a high-resolution `near` CPI with a lower-slope
 `far` CPI. Its current graph uses MIMO TDM, but the application is named for
 the waveform diversity and coherent profile switching it demonstrates. The
@@ -44,7 +46,7 @@ a relative-power legend, and frame-driven presentation capped by
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run multi_waveform --language cpp --run-args=multi_waveform_smoke.yaml
+./holoscan-radar run multi_waveform smoke --language cpp
 ```
 
 This runs the two-frame headless smoke preset. Run
@@ -61,7 +63,7 @@ the effective per-TX DSP PRI as `num_tx * physical_pri`.
 The normal preset's incoming near-profile target starts at 50 m and remains
 above 20 m throughout the 25 s run. Its amplitude approximately preserves the initial
 received strength of the earlier 35 m scene under the 100 m reference range
-loss. The smoke preset intentionally omits range loss, uses the
+loss. The smoke preset explicitly disables range loss, uses the
 constant-amplitude analytic model, and emits a warning.
 
 The coordinator and backend interfaces live in shared `radar_app` support.
@@ -89,7 +91,7 @@ From the repository root, the host CLI builds and runs the colocated
 `python/` graph with the pinned development image:
 
 ```bash
-./holoscan-radar run multi_waveform --language python --run-args=multi_waveform_smoke.yaml
+./holoscan-radar run multi_waveform smoke --language python
 ```
 
 After building or installing the Python wheel, call the graph directly:

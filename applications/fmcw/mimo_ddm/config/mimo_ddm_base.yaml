@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+app:
+    waveform:
+        carrier_frequency: 77.0e9
+        bandwidth: 150.0e6
+        chirp_duration: 2.0e-05
+        sample_rate: 12.8e6
+        chirp_repetition_interval: 2.5e-05
+    cube:
+        num_chirps: 128
+        samples_per_chirp: 256
+    run:
+        num_frames: 250
+        frame_period: 0.1
+        meter_cadence: true
+        meter_log_every: 0
+    visualization:
+        enabled: true
+        window_width: 1280
+        window_height: 720
+        window_title: FMCW MIMO DDM
+        display_rate_hz: 20.0
+        dynamic_range_db: 60.0
+        detection_radius: 0.01
+        history_frames: 120
+        detection_trail_frames: 50
+    tx_array:
+        num_tx: 2
+        spacing: 0.5
+    rx_array:
+        az_elements: 4
+        el_elements: 4
+        spacing: 0.5
+    scene_visibility:
+        model: front_half_space
+        boresight_direction: [1.0, 0.0, 0.0]
+    range_loss:
+        model: monostatic_free_space
+        reference_range: 100.0
+    noise_snr_db: 5.0
+range_processor:
+    waveform:
+        carrier_frequency: 77.0e9
+        bandwidth: 150.0e6
+        chirp_duration: 2.0e-05
+        sample_rate: 12.8e6
+        chirp_repetition_interval: 2.5e-05
+    range_window: hann
+doppler_processor:
+    waveform:
+        carrier_frequency: 77.0e9
+        bandwidth: 150.0e6
+        chirp_duration: 2.0e-05
+        sample_rate: 12.8e6
+        chirp_repetition_interval: 2.5e-05
+doppler_notch:
+    center_velocity: 0.0
+    stop_half_width: 0.61
+    transition_width: 1.22
+    cyclic_velocity_axis: true
+virtual_array_assembly:
+    overlap_policy: keep_all
+cfar_detector:
+    cfar_variant: CA
+    guard_cells: [3, 3]
+    training_cells: [3, 3]
+    pfa: 1.0e-09
+    peak_mode: none
+    nci_axes: [0]
+snapshot_gather:
+    snapshot_window: [0, 0]
+beamscan_estimator:
+    angle_convention:
+        preset: radar_boresight
+    az_coordinates:
+        min: -0.3
+        max: 0.3
+        step: 0.05
+    el_coordinates:
+        min: -0.3
+        max: 0.3
+        step: 0.05
+    peak_interpolation: parabolic
+feature_assembly:
+    features: [range, velocity, az_estimate, el_estimate, score, range_bin, doppler_bin]
+cluster_dbscan:
+    epsilon: [0.0, 0.0, 0.0, 0.0, 0.0, 1.5, 1.5]
+    min_points: 1
+    max_clusters: 32
+reduction:
+    representative: weighted_mean
+    score_method: weighted_sum
+    feature_weights: [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]

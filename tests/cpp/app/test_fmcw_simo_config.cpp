@@ -6,8 +6,6 @@
 #include <yaml-cpp/yaml.h>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
-#include <fstream>
-#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -17,7 +15,12 @@
 
 #include "radar_app/fmcw/simo_config.hpp"
 
+#include "app/config_fixture.hpp"
+
 namespace {
+
+using holoscan::radar::testing::PresetOverride;
+using holoscan::radar::testing::resolved_yaml;
 
 namespace simo = holoscan::radar::app::simo;
 namespace radar = holoscan::radar;
@@ -26,48 +29,12 @@ std::filesystem::path config_path(const char* name) {
   return std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) / "applications/fmcw" / name;
 }
 
-class MutatedConfig {
- public:
-  MutatedConfig(const char* source_name, const std::string& old_text, const std::string& new_text) {
-    std::ifstream input(config_path(source_name));
-    if (!input) {
-      throw std::runtime_error("cannot read source config");
-    }
-    std::string contents{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-    const std::size_t position = contents.find(old_text);
-    if (position == std::string::npos ||
-        contents.find(old_text, position + old_text.size()) != std::string::npos) {
-      throw std::runtime_error("config mutation anchor must occur once");
-    }
-    contents.replace(position, old_text.size(), new_text);
-    path_ = std::filesystem::temp_directory_path() /
-            ("holoscan_radar_simo_config_" + std::to_string(next_id_++) + ".yaml");
-    std::ofstream output(path_);
-    output << contents;
-    if (!output) {
-      throw std::runtime_error("cannot write temporary config");
-    }
-  }
-
-  ~MutatedConfig() { std::filesystem::remove(path_); }
-
-  MutatedConfig(const MutatedConfig&) = delete;
-  MutatedConfig& operator=(const MutatedConfig&) = delete;
-
-  const std::filesystem::path& path() const { return path_; }
-
- private:
-  inline static int64_t next_id_{0};
-  std::filesystem::path path_;
-};
-
 void expect_smoke_matches_production(const char* production_name, const char* smoke_name) {
-  YAML::Node expected = YAML::LoadFile(config_path(production_name).string());
-  const YAML::Node smoke = YAML::LoadFile(config_path(smoke_name).string());
+  YAML::Node expected = resolved_yaml(config_path(production_name));
+  const YAML::Node smoke = resolved_yaml(config_path(smoke_name));
   expected["app"]["run"]["num_frames"] = 2;
   expected["app"]["visualization"]["enabled"] = false;
-  expected["app"].remove("range_loss");
-  expected["app"].remove("scene_visibility");
+  expected["app"]["range_loss"] = YAML::Node(YAML::NodeType::Null);
   YAML::Node targets(YAML::NodeType::Sequence);
   targets.push_back(expected["app"]["targets"][0]);
   expected["app"]["targets"] = targets;
@@ -211,11 +178,9 @@ TEST(FmcwSimoConfig, RejectsInvalidScanCoordinateRangeMapping) {
 }
 
 TEST(FmcwSimoConfig, DecodesSharedRangeLossBlock) {
-  const MutatedConfig preset("simo/config/simo_smoke.yaml", "    rx_array:\n",
-                             "    range_loss:\n"
-                             "        model: monostatic_free_space\n"
-                             "        reference_range: 40.0\n"
-                             "    rx_array:\n");
+  const PresetOverride preset(
+      config_path("simo/config/simo_smoke.yaml"),
+      "app:\n    range_loss: {model: monostatic_free_space, reference_range: 40.0}\n");
   const auto config = simo::load_detect_then_beamform_config(preset.path());
   EXPECT_EQ(config.scene.range_loss.model, radar::sim::RangeLossModel::kMonostaticFreeSpace);
   EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 40.0);

@@ -31,7 +31,12 @@ if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     target_link_libraries(adaptive_aoa PRIVATE holoscan::fmcw_dashboard)
 endif()
 
-foreach(_config IN ITEMS adaptive_aoa.yaml adaptive_aoa_smoke.yaml)
+foreach(_config IN ITEMS
+        adaptive_aoa.yaml
+        adaptive_aoa_esprit.yaml
+        adaptive_aoa_mvdr.yaml
+        adaptive_aoa_root_music.yaml
+        adaptive_aoa_smoke.yaml)
     configure_file(../config/${_config}
         ${CMAKE_CURRENT_BINARY_DIR}/${_config} COPYONLY)
 endforeach()

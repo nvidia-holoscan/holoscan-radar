@@ -31,6 +31,7 @@
 #include "fmcw/fmcw_range_processor_op/params_config.hpp"
 #include "radar_app/app/run_config.hpp"
 #include "radar_app/app/config_utils.hpp"
+#include "radar_app/fmcw/config_loader.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/math/uniform_grid.hpp"
@@ -41,7 +42,7 @@
 namespace holoscan::radar::app::simo {
 
 using config::decode_params;
-using config::load_document;
+using config::load_inherited_document;
 using config::normalize_enum_field;
 using config::normalize_scan_coordinate_field;
 using config::reject_authored;
@@ -283,7 +284,8 @@ inline holoscan::config::Document normalize_operator_enums(holoscan::config::Doc
 
 inline DetectThenBeamformConfig load_detect_then_beamform_config(
     const std::filesystem::path& path) {
-  auto document = normalize_operator_enums(load_document(path), Workflow::kDetectThenBeamform);
+  auto document =
+      normalize_operator_enums(load_inherited_document(path), Workflow::kDetectThenBeamform);
   const auto app_params = decode_params<AppParams>(document, "/app");
   RuntimeConfig runtime = make_runtime_config(*app_params, "detect_then_beamform");
 
@@ -333,7 +335,8 @@ inline DetectThenBeamformConfig load_detect_then_beamform_config(
 
 inline BeamformThenDetectConfig load_beamform_then_detect_config(
     const std::filesystem::path& path) {
-  auto document = normalize_operator_enums(load_document(path), Workflow::kBeamformThenDetect);
+  auto document =
+      normalize_operator_enums(load_inherited_document(path), Workflow::kBeamformThenDetect);
   const auto app_params = decode_params<AppParams>(document, "/app");
   RuntimeConfig runtime = make_runtime_config(*app_params, "beamform_then_detect");
 

@@ -16,7 +16,12 @@
 #include "radar_app/fmcw/mimo_config.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 
+#include "app/config_fixture.hpp"
+
 namespace {
+
+using holoscan::radar::testing::PresetOverride;
+using holoscan::radar::testing::resolved_yaml;
 
 namespace mimo = holoscan::radar::app::mimo;
 namespace radar = holoscan::radar;
@@ -26,12 +31,11 @@ std::filesystem::path config_path(const char* name) {
 }
 
 void expect_smoke_matches_production(const char* production_name, const char* smoke_name) {
-  YAML::Node expected = YAML::LoadFile(config_path(production_name).string());
-  const YAML::Node smoke = YAML::LoadFile(config_path(smoke_name).string());
+  YAML::Node expected = resolved_yaml(config_path(production_name));
+  const YAML::Node smoke = resolved_yaml(config_path(smoke_name));
   expected["app"]["run"]["num_frames"] = 2;
   expected["app"]["visualization"]["enabled"] = false;
-  expected["app"].remove("range_loss");
-  expected["app"].remove("scene_visibility");
+  expected["app"]["range_loss"] = YAML::Node(YAML::NodeType::Null);
   YAML::Node targets(YAML::NodeType::Sequence);
   targets.push_back(expected["app"]["targets"][0]);
   expected["app"]["targets"] = targets;
@@ -253,9 +257,8 @@ TEST(FmcwMimoConfig, DecodesDocumentedNonlinearDdmPreset) {
 
 TEST(FmcwMimoConfig, DecodesNonlinearDdmGeneratorAliases) {
   for (const char* generator : {"zc", "sin"}) {
-    const MutatedConfig preset("mimo_ddm/config/mimo_ddm_nonlinear_smoke.yaml",
-                               "generate_phase_codes: zadoff_chu",
-                               "generate_phase_codes: " + std::string(generator));
+    const PresetOverride preset(config_path("mimo_ddm/config/mimo_ddm_nonlinear_smoke.yaml"),
+                                "ddm:\n    generate_phase_codes: " + std::string(generator));
     const auto config = mimo::load_ddm_config(preset.path());
 
     EXPECT_TRUE(config.correlate);
@@ -283,82 +286,55 @@ TEST(FmcwMimoConfig, RejectsWrongLoaderSection) {
 }
 
 TEST(FmcwMimoConfig, RejectsAuthoredDeinterleaveSchedule) {
-  const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml", "mimo_deinterleave: {}",
-                             "mimo_deinterleave: {tx_schedule: {num_tx: 2}}");
+  const PresetOverride config(config_path("mimo_tdm/config/mimo_tdm_smoke.yaml"),
+                              "mimo_deinterleave: {tx_schedule: {num_tx: 2}}\n");
   EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
 }
 
 TEST(FmcwMimoConfig, RejectsAuthoredDerivedSparseFields) {
-  {
-    const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml",
-                               "    overlap_policy: keep_all",
-                               "    waveform: {}\n    overlap_policy: keep_all");
-    EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
-  }
-  {
-    const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml",
-                               "    overlap_policy: keep_all",
-                               "    tx_schedule: {num_tx: 2}\n    overlap_policy: keep_all");
-    EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
-  }
-  {
-    const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml",
-                               "    overlap_policy: keep_all",
-                               "    tx_positions: [0.0, 0.0, 0.0]\n"
-                               "    overlap_policy: keep_all");
-    EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
-  }
-  {
-    const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml",
-                               "    overlap_policy: keep_all",
-                               "    rx_positions: [0.0, 0.0, 0.0]\n"
-                               "    overlap_policy: keep_all");
+  for (const auto* field : {"waveform: {}", "tx_schedule: {num_tx: 2}",
+                            "tx_positions: [0.0, 0.0, 0.0]", "rx_positions: [0.0, 0.0, 0.0]"}) {
+    const PresetOverride config(config_path("mimo_tdm/config/mimo_tdm_smoke.yaml"),
+                                "tdm_sparse_compensation:\n    " + std::string(field));
     EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
   }
 }
 
 TEST(FmcwMimoConfig, RejectsTdmPriMismatch) {
-  const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml",
-                             "chirp_repetition_interval: 50.0e-6",
-                             "chirp_repetition_interval: 51.0e-6");
+  const PresetOverride config(config_path("mimo_tdm/config/mimo_tdm_smoke.yaml"),
+                              "app:\n    waveform:\n        chirp_repetition_interval: 51.0e-6\n");
   EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
 }
 
 TEST(FmcwMimoConfig, RejectsDdmTxMismatch) {
-  const MutatedConfig config("mimo_ddm/config/mimo_ddm_linear_smoke.yaml",
-                             "ddm_code:\n        num_tx: 2", "ddm_code:\n        num_tx: 3");
+  const PresetOverride config(config_path("mimo_ddm/config/mimo_ddm_linear_smoke.yaml"),
+                              "ddm_dense_demultiplex:\n    ddm_code:\n        num_tx: 3\n");
   EXPECT_THROW(mimo::load_ddm_config(config.path()), std::runtime_error);
 }
 
 TEST(FmcwMimoConfig, RejectsDdmClutterFilter) {
-  const MutatedConfig config("mimo_ddm/config/mimo_ddm_linear_smoke.yaml",
-                             "virtual_array_assembly:\n",
-                             "clutter_filter:\n    method: mean_subtraction\n"
-                             "virtual_array_assembly:\n");
+  const PresetOverride config(config_path("mimo_ddm/config/mimo_ddm_linear_smoke.yaml"),
+                              "clutter_filter:\n    method: mean_subtraction\n");
   EXPECT_THROW(mimo::load_ddm_config(config.path()), std::runtime_error);
 }
 
 TEST(FmcwMimoConfig, RejectsMalformedSchemeSpecificConfig) {
-  const MutatedConfig config("mimo_ddm/config/mimo_ddm_linear.yaml", "    targets:\n",
-                             "    ddm:\n"
-                             "        generate_phase_codes: zadoff_chu\n"
-                             "    targets:\n");
+  const PresetOverride config(config_path("mimo_ddm/config/mimo_ddm_linear.yaml"),
+                              "app:\n    ddm:\n        generate_phase_codes: zadoff_chu\n");
   EXPECT_THROW(mimo::load_ddm_config(config.path()), std::runtime_error);
 }
 
 TEST(FmcwMimoConfig, RejectsInvalidClusteredTailShape) {
-  const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml",
-                             "        - score\n        - range_bin\n        - doppler_bin\n",
-                             "        - score\n        - doppler_bin\n        - range_bin\n");
+  const PresetOverride config(config_path("mimo_tdm/config/mimo_tdm_smoke.yaml"),
+                              "feature_assembly:\n    features: [range, velocity, az_estimate, "
+                              "el_estimate, score, doppler_bin, range_bin]\n");
   EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
 }
 
 TEST(FmcwMimoConfig, DecodesSharedRangeLossBlock) {
-  const MutatedConfig preset("mimo_tdm/config/mimo_tdm_smoke.yaml", "    tx_array:\n",
-                             "    range_loss:\n"
-                             "        model: monostatic_free_space\n"
-                             "        reference_range: 40.0\n"
-                             "    tx_array:\n");
+  const PresetOverride preset(
+      config_path("mimo_tdm/config/mimo_tdm_smoke.yaml"),
+      "app:\n    range_loss: {model: monostatic_free_space, reference_range: 40.0}\n");
   const auto config = mimo::load_tdm_config(preset.path());
   EXPECT_EQ(config.scene.range_loss.model, radar::sim::RangeLossModel::kMonostaticFreeSpace);
   EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 40.0);

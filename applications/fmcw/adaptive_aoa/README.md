@@ -1,5 +1,7 @@
 # Adaptive AoA
 
+See [shared preset inheritance and launch modes](../README.md).
+
 Selective angular super-resolution on a single-waveform FMCW MIMO-TDM
 stream. The application keeps conventional Beamscan on every peak-CFAR cell,
 uses a rank-one residual as a cheap routing screen, and runs one configured
@@ -51,7 +53,7 @@ a relative-power legend, and frame-driven presentation capped by
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run adaptive_aoa --language cpp --run-args=adaptive_aoa_smoke.yaml
+./holoscan-radar run adaptive_aoa smoke --language cpp
 ```
 
 This runs the two-frame headless smoke preset. Run
@@ -114,7 +116,7 @@ From the repository root, the host CLI builds and runs the colocated
 `python/` graph with the pinned development image:
 
 ```bash
-./holoscan-radar run adaptive_aoa --language python --run-args=adaptive_aoa_smoke.yaml
+./holoscan-radar run adaptive_aoa smoke --language python
 ```
 
 After building or installing the Python wheel, call the graph directly:

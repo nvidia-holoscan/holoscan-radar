@@ -3,8 +3,6 @@
 
 #pragma once
 
-#include <yaml-cpp/yaml.h>
-
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -55,22 +53,24 @@ inline std::size_t maximum_cyclic_profile_gap(const std::vector<std::size_t>& se
   return max_gap;
 }
 
-inline double require_scalar(const YAML::Node& node, const char* field) {
-  if (!node[field]) {
+inline double require_scalar(const holoscan::config::Document& document,
+                             const std::string& profile_path, const char* field) {
+  if (!document.find(profile_path + "/" + field)) {
     throw std::runtime_error(std::string("app.profiles[].") + field + " is required");
   }
-  const double value = node[field].as<double>();
+  const double value = document.get<double>(profile_path + "/" + field);
   if (!std::isfinite(value) || value <= 0.0) {
     throw std::runtime_error(std::string("app.profiles[].") + field + " must be finite and > 0");
   }
   return value;
 }
 
-inline int64_t require_integer(const YAML::Node& node, const char* field) {
-  if (!node[field]) {
+inline int64_t require_integer(const holoscan::config::Document& document,
+                               const std::string& profile_path, const char* field) {
+  if (!document.find(profile_path + "/" + field)) {
     throw std::runtime_error(std::string("app.profiles[].") + field + " is required");
   }
-  const int64_t value = node[field].as<int64_t>();
+  const int64_t value = document.get<int64_t>(profile_path + "/" + field);
   if (value <= 0) {
     throw std::runtime_error(std::string("app.profiles[].") + field + " must be > 0");
   }
@@ -78,39 +78,44 @@ inline int64_t require_integer(const YAML::Node& node, const char* field) {
 }
 
 inline Config load_config(const std::filesystem::path& path) {
-  const YAML::Node root = YAML::LoadFile(path.string());
-  const YAML::Node app = root["app"];
-  const YAML::Node profiles = app["profiles"];
-  const YAML::Node sequence = app["profile_sequence"];
+  const auto document = config::load_inherited_document(path);
+  const auto profiles = document.find("/app/profiles");
+  const auto sequence = document.find("/app/profile_sequence");
   // Profiles are the sole authority for waveform and cube shape.
-  if (!profiles || !profiles.IsSequence() || profiles.size() == 0U) {
+  if (!profiles || profiles->kind() != holoscan::config::ConfigValueKind::kArray ||
+      profiles->size() == 0U) {
     throw std::runtime_error("app.profiles must be a non-empty sequence");
   }
-  if (!sequence || !sequence.IsSequence() || sequence.size() == 0U) {
+  if (!sequence || sequence->kind() != holoscan::config::ConfigValueKind::kArray ||
+      sequence->size() == 0U) {
     throw std::runtime_error("app.profile_sequence must be a non-empty sequence");
   }
-  if (app["waveform"] || app["cube"] ||
-      (app["tdm"] && app["tdm"]["physical_chirp_repetition_interval"])) {
+  if (document.find("/app/waveform") || document.find("/app/cube") ||
+      document.find("/app/tdm/physical_chirp_repetition_interval")) {
     throw std::runtime_error(
         "multi-profile waveform, cube, and physical PRI belong only in app.profiles");
   }
   // Decode source coordination bounds independently of DSP parameters.
   const std::size_t max_frames_in_flight =
-      app["max_frames_in_flight"] ? app["max_frames_in_flight"].as<std::size_t>() : 4U;
+      document.find("/app/max_frames_in_flight")
+          ? document.get<std::size_t>("/app/max_frames_in_flight")
+          : 4U;
   if (max_frames_in_flight == 0U) {
     throw std::runtime_error("app.max_frames_in_flight must be > 0");
   }
-  const double rx_poll_period = app["rx_poll_period"] ? app["rx_poll_period"].as<double>() : 0.001;
+  const double rx_poll_period =
+      document.find("/app/rx_poll_period") ? document.get<double>("/app/rx_poll_period") : 0.001;
   mimo::require_finite_positive("app.rx_poll_period", rx_poll_period);
-  const int simulated_receive_polls =
-      app["simulated_receive_polls"] ? app["simulated_receive_polls"].as<int>() : 2;
+  const int simulated_receive_polls = document.find("/app/simulated_receive_polls")
+                                          ? document.get<int>("/app/simulated_receive_polls")
+                                          : 2;
   if (simulated_receive_polls < 0) {
     throw std::runtime_error("app.simulated_receive_polls must be >= 0");
   }
 
   // Resolve profiles once, derive both physical and effective-TDM timing,
   // and accumulate pool maxima across every possible frame shape.
-  const int64_t num_tx = app["tx_array"]["num_tx"].as<int64_t>();
+  const int64_t num_tx = document.get<int64_t>("/app/tx_array/num_tx");
   std::unordered_map<std::string, std::size_t> by_name;
   std::vector<TdmTransmitProfile> decoded_profiles;
   std::vector<std::size_t> decoded_sequence;
@@ -118,19 +123,23 @@ inline Config load_config(const std::filesystem::path& path) {
   int64_t max_samples = 0;
   double longest_cpi = 0.0;
   double carrier = 0.0;
-  decoded_profiles.reserve(profiles.size());
-  for (const YAML::Node& authored : profiles) {
-    const std::string name = authored["name"] ? authored["name"].as<std::string>() : "";
+  decoded_profiles.reserve(profiles->size());
+  for (std::size_t i = 0; i < profiles->size(); ++i) {
+    const auto profile_path = "/app/profiles/" + std::to_string(i);
+    const std::string name = document.find(profile_path + "/name")
+                                 ? document.get<std::string>(profile_path + "/name")
+                                 : "";
     if (name.empty() || by_name.count(name) != 0U) {
       throw std::runtime_error("app.profiles names must be non-empty and unique");
     }
-    const double fc = require_scalar(authored, "carrier_frequency");
-    const double bandwidth = require_scalar(authored, "bandwidth");
-    const double duration = require_scalar(authored, "chirp_duration");
-    const double sample_rate = require_scalar(authored, "sample_rate");
-    const double physical_pri = require_scalar(authored, "physical_chirp_repetition_interval");
-    const int64_t chirps = require_integer(authored, "chirps_per_tx");
-    const int64_t samples = require_integer(authored, "samples_per_chirp");
+    const double fc = require_scalar(document, profile_path, "carrier_frequency");
+    const double bandwidth = require_scalar(document, profile_path, "bandwidth");
+    const double duration = require_scalar(document, profile_path, "chirp_duration");
+    const double sample_rate = require_scalar(document, profile_path, "sample_rate");
+    const double physical_pri =
+        require_scalar(document, profile_path, "physical_chirp_repetition_interval");
+    const int64_t chirps = require_integer(document, profile_path, "chirps_per_tx");
+    const int64_t samples = require_integer(document, profile_path, "samples_per_chirp");
     if (physical_pri < duration) {
       throw std::runtime_error("profile physical PRI must be >= chirp duration");
     }
@@ -169,8 +178,7 @@ inline Config load_config(const std::filesystem::path& path) {
     longest_cpi = std::max(longest_cpi, physical_pri * static_cast<double>(num_tx * chirps));
   }
   // Convert the authored name schedule to stable profile indices.
-  for (const YAML::Node& entry : sequence) {
-    const std::string name = entry.as<std::string>();
+  for (const auto& name : document.get<std::vector<std::string>>("/app/profile_sequence")) {
     const auto found = by_name.find(name);
     if (found == by_name.end()) {
       throw std::runtime_error("app.profile_sequence references unknown profile: " + name);

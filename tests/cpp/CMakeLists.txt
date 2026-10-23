@@ -198,6 +198,8 @@ radar_add_test(detection/test_cfar_detector_statistical
     LABELS statistical
     holoscan::cfar_detector_op)
 
+radar_add_test(app/test_fmcw_config_loader yaml-cpp holoscan::params_io holoscan::radar_app)
+
 radar_add_test(app/test_fmcw_simo_config
     yaml-cpp
     holoscan::params_io

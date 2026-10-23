@@ -14,7 +14,11 @@
 #include "config.hpp"  // NOLINT(build/include_subdir): app-private header
 #include "radar_common/math/constants.hpp"
 
+#include "app/config_fixture.hpp"
+
 namespace {
+
+using holoscan::radar::testing::resolved_yaml;
 
 namespace siso = holoscan::radar::app::siso;
 namespace radar = holoscan::radar;
@@ -66,12 +70,11 @@ TEST(FmcwSisoConfig, DecodesSmoke) {
 }
 
 TEST(FmcwSisoConfig, SmokeOnlyAppliesAllowedOverrides) {
-  YAML::Node expected = YAML::LoadFile(config_path("siso.yaml").string());
-  const YAML::Node smoke = YAML::LoadFile(config_path("siso_smoke.yaml").string());
+  YAML::Node expected = resolved_yaml(config_path("siso.yaml"));
+  const YAML::Node smoke = resolved_yaml(config_path("siso_smoke.yaml"));
   expected["app"]["run"]["num_frames"] = 2;
   expected["app"]["visualization"]["enabled"] = false;
-  expected["app"].remove("range_loss");
-  expected["app"].remove("scene_visibility");
+  expected["app"]["range_loss"] = YAML::Node(YAML::NodeType::Null);
   expected["app"]["targets"] = smoke["app"]["targets"];
   EXPECT_EQ(YAML::Dump(expected), YAML::Dump(smoke));
 }

@@ -33,6 +33,7 @@
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_op.hpp"
 #include "radar_app/app/run_config.hpp"
 #include "radar_app/app/config_utils.hpp"
+#include "radar_app/fmcw/config_loader.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/dsp/ddm_code_generators.hpp"
@@ -47,7 +48,7 @@ namespace holoscan::radar::app::mimo {
 
 using config::decode_params;
 using config::inject_derived_params;
-using config::load_document;
+using config::load_inherited_document;
 using config::normalize_enum_field;
 using config::normalize_scan_coordinate_field;
 using config::reject_authored;
@@ -378,7 +379,7 @@ inline CommonPrepared prepare_common(const holoscan::config::Document& document,
 
 inline TdmConfig load_tdm_config_impl(const std::filesystem::path& path,
                                       std::optional<AppParams> app_baseline) {
-  auto document = normalize_operator_fields(load_document(path), true);
+  auto document = normalize_operator_fields(load_inherited_document(path), true);
   const auto app_params = app_baseline.has_value()
                               ? decode_params<AppParams>(document, "/app", std::move(*app_baseline))
                               : decode_params<AppParams>(document, "/app");
@@ -472,7 +473,7 @@ inline TdmConfig load_tdm_config(const std::filesystem::path& path, AppParams ap
 }
 
 inline DdmConfig load_ddm_config(const std::filesystem::path& path) {
-  auto document = normalize_operator_fields(load_document(path), false);
+  auto document = normalize_operator_fields(load_inherited_document(path), false);
   const auto app_params = decode_params<AppParams>(document, "/app");
   if (app_params->tdm.has_value()) {
     throw std::runtime_error("ddm: app.tdm must not be authored");
