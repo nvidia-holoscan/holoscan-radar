@@ -61,6 +61,37 @@ collections and [SDK development](../../SDK_DEVELOPMENT.md) for the pinned image
 
 ## Troubleshooting
 
+### Vulkan or display initialization fails on any platform
+
+For x86, Jetson, and GB10 systems, start with the
+[HSDK 5 visualization troubleshooting table](https://docs.nvidia.com/holoscan/sdk-user-guide/modules/visualization#troubleshooting).
+It covers display forwarding and authorization, NVIDIA Vulkan driver visibility
+inside containers, CUDA/Vulkan adapter matching, hybrid-GPU presentation, and
+multi-GPU placement. Match the reported error to those checks before applying
+the GB10 memory-cache workaround below.
+
+### Vulkan initialization fails on DGX Spark / GB10
+
+`VK_ERROR_INITIALIZATION_FAILED` from `create_device_for_surface` or
+`create_swapchain` can accompany host NVIDIA-driver allocation failures. Check
+`journalctl -k` for `NV_ERR_NO_MEMORY` and `kgrctxAllocMainCtxBuffer` near the
+application failure. On GB10, these errors can occur even when `free -h` reports
+substantial available memory; a successful X11 connection alone does not rule
+out this driver allocation failure. Rebuilding the container does not reclaim
+host memory caches.
+
+On the **host**, try NVIDIA's documented cache-reclaim workaround, then restart
+the application:
+
+```bash
+sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+./holoscan-radar run continuous_strip
+```
+
+This flushes filesystem caches; it does not delete downloaded CPHD files.
+It is a debugging workaround, not a diagnosis for every Vulkan error. See
+[NVIDIA's DGX Spark known issues](https://docs.nvidia.com/dgx/dgx-spark/known-issues.html#guidance-for-reporting-memory-resources-with-unified-memory-architecture).
+
 ### Formation falls behind and a required output queue fills
 
 The reader may wait for downstream capacity when `cphd_reader.wait_for_downstream`
