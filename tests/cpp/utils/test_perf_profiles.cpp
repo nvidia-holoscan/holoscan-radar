@@ -564,6 +564,21 @@ void decorate_row(perf::ResultRow& row, const AdapterFixtureScenario&) {
   row.notes = "typed adapter";
 }
 
+TEST(PerfProfiles, CachedAdapterRequiresWarmupBeforeFrameExecution) {
+  const AdapterFixtureScenario scenario{"fixture-cached", "small", true};
+  const perf::SelectedScenario<AdapterFixtureScenario> selected{scenario, "method", true};
+  perf::RunSettings settings;
+  settings.measured_frames = 3;
+  settings.repeats = 1;
+  perf::PerfReport report;
+  for (const int warmup : {-1, 0}) {
+    settings.warmup_frames = warmup;
+    EXPECT_THROW(perf::detail::run_adapter_case<AdapterFixtureTraits>(selected, settings, &report),
+                 std::invalid_argument);
+    EXPECT_TRUE(report.results.empty());
+  }
+}
+
 TEST(PerfProfiles, SharedAdapterOwnsSizeAndReportIdentity) {
   const auto suite = perf::load_profile_suite(profile_path("clutter_filter"), "clutter_filter");
   const AdapterFixtureScenario scenario{"fixture-live", "small", true};

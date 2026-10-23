@@ -306,6 +306,9 @@ template <typename Traits>
 void run_adapter_case(const SelectedScenario<typename Traits::Scenario>& selected,
                       const RunSettings& settings, PerfReport* report,
                       bool process_warmup = false) {
+  if (selected.cached && settings.warmup_frames < 1) {
+    throw std::invalid_argument("cached cases require at least one warmup frame");
+  }
   const auto& scenario = selected.scenario;
   if constexpr (requires { validate_run_settings(scenario, settings); }) {
     validate_run_settings(scenario, settings);
