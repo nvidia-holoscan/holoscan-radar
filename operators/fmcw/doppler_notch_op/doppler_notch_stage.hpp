@@ -33,7 +33,27 @@ __global__ void doppler_notch_kernel(const cuda::std::complex<T>* input, const T
   double distance = fabs(velocity - config.center_velocity);
 
   int64_t nearest = 0;
-  if (num_doppler > 1) {
+  if (num_doppler > 1 && !config.cyclic_velocity_axis) {
+    // Search actual coordinates: a non-cyclic axis need not have uniform spacing.
+    const bool ascending = velocity_bins[0] < velocity_bins[num_doppler - 1];
+    int64_t lower = 0;
+    int64_t upper = num_doppler;
+    while (lower < upper) {
+      const int64_t middle = lower + (upper - lower) / 2;
+      const double value = static_cast<double>(velocity_bins[middle]);
+      if (ascending ? value < config.center_velocity : value > config.center_velocity) {
+        lower = middle + 1;
+      } else {
+        upper = middle;
+      }
+    }
+    nearest = lower < num_doppler ? lower : num_doppler - 1;
+    if (lower > 0 &&
+        fabs(static_cast<double>(velocity_bins[lower - 1]) - config.center_velocity) <=
+            fabs(static_cast<double>(velocity_bins[nearest]) - config.center_velocity)) {
+      nearest = lower - 1;
+    }
+  } else if (num_doppler > 1) {
     const double first = static_cast<double>(velocity_bins[0]);
     const double last = static_cast<double>(velocity_bins[num_doppler - 1]);
     const double spacing = (last - first) / static_cast<double>(num_doppler - 1);
@@ -41,21 +61,13 @@ __global__ void doppler_notch_kernel(const cuda::std::complex<T>* input, const T
     if (spacing != 0.0 && isfinite(spacing)) {
       int64_t raw_nearest =
           static_cast<int64_t>(llround((config.center_velocity - first) / spacing));
-      if (config.cyclic_velocity_axis) {
-        raw_nearest %= num_doppler;
-        if (raw_nearest < 0)
-          raw_nearest += num_doppler;
-        nearest = raw_nearest;
-        const double period = fabs(spacing) * static_cast<double>(num_doppler);
-        distance = fmod(distance, period);
-        distance = fmin(distance, period - distance);
-      } else {
-        nearest = raw_nearest;
-        if (nearest < 0)
-          nearest = 0;
-        if (nearest >= num_doppler)
-          nearest = num_doppler - 1;
-      }
+      raw_nearest %= num_doppler;
+      if (raw_nearest < 0)
+        raw_nearest += num_doppler;
+      nearest = raw_nearest;
+      const double period = fabs(spacing) * static_cast<double>(num_doppler);
+      distance = fmod(distance, period);
+      distance = fmin(distance, period - distance);
     }
   }
 

@@ -290,6 +290,44 @@ TYPED_TEST(DopplerNotchAxisOrder, PhysicalGainsAgreeForBothOrdersAndCyclicBounda
   }
 }
 
+TYPED_TEST(DopplerNotchAxisOrder, NonCyclicNonUniformAxisNullsActualNearestBin) {
+  using T = TypeParam;
+  for (const bool descending : {false, true}) {
+    std::vector<T> axis{T{-8}, T{-7}, T{-6}, T{-5}, T{8}};
+    if (descending)
+      std::reverse(axis.begin(), axis.end());
+    for (const double center : {-20.0, -6.8, -5.2, 0.5, 20.0}) {
+      for (const double transition : {0.0, 2.0}) {
+        SCOPED_TRACE(::testing::Message() << "descending=" << descending << " center=" << center
+                                          << " transition=" << transition);
+        DopplerNotchParams params;
+        params.center_velocity = center;
+        params.transition_width = transition;
+        params.cyclic_velocity_axis = false;
+        const auto result = run_notch<T>({kDoppler, kRange}, params, make_axis<T>(axis));
+        ASSERT_TRUE(result.ok()) << result.describe_failure();
+        const auto frames = host_frames(result);
+        ASSERT_EQ(frames.size(), 1U);
+        // Exhaustive physical-distance reference, independent of the kernel's index search.
+        std::vector<double> distances;
+        for (const T velocity : axis)
+          distances.push_back(std::abs(static_cast<double>(velocity) - center));
+        const auto nearest = std::min_element(distances.begin(), distances.end());
+        for (int64_t bin = 0; bin < kDoppler; ++bin) {
+          const double distance = distances[static_cast<std::size_t>(bin)];
+          double gain = 1.0;
+          if (distance == *nearest) {
+            gain = 0.0;
+          } else if (transition > 0.0 && distance < transition) {
+            gain = 0.5 * (1.0 - std::cos(std::acos(-1.0) * distance / transition));
+          }
+          expect_gain(frames[0], bin, static_cast<T>(gain));
+        }
+      }
+    }
+  }
+}
+
 TYPED_TEST(DopplerNotchAxisOrder, DescendingDdmAxisPreservesPositiveEdgePassband) {
   using T = TypeParam;
   constexpr int64_t kDdmDoppler = 60;
