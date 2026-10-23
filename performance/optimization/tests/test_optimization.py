@@ -141,6 +141,29 @@ class OptimizationToolsTest(unittest.TestCase):
         write_json(path, value)
         return str(path)
 
+    def test_json_write_uses_unique_temporary_and_preserves_stale_files(self):
+        destination = self.root / "result.json"
+        stale = self.root / "result.json.tmp"
+        stale.write_text("retained evidence")
+        write_json(destination, {"value": 1})
+        write_json(destination, {"value": 2})
+        self.assertEqual(read_json(destination), {"value": 2})
+        self.assertEqual(stale.read_text(), "retained evidence")
+        self.assertEqual(set(self.root.iterdir()), {destination, stale})
+
+    def test_failed_json_write_preserves_destination_and_cleans_temporary(self):
+        destination = self.root / "result.json"
+        write_json(destination, {"original": True})
+        with self.assertRaises(ValueError):
+            write_json(destination, {"bad": float("nan")})
+        failure = PermissionError("replace denied")
+        with patch("artifacts.os.replace", side_effect=failure):
+            with self.assertRaises(PermissionError) as raised:
+                write_json(destination, {"replacement": True})
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(read_json(destination), {"original": True})
+        self.assertEqual(list(self.root.iterdir()), [destination])
+
     def timing_index(self, after=8.0, before=10.0):
         builds = {
             side: {
