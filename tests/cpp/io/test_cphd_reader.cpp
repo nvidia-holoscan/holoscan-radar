@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,7 @@
 
 #include "io/cphd_reader_op/cphd_reader_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "radar_common/sar/formation_hud.hpp"
 #include "utils/tensor_fixtures.hpp"
 #include "io/cphd_reader_op/cphd_file.hpp"
 #include "io/cphd_fixture.hpp"  // NOLINT(build/include_subdir)
@@ -39,6 +41,78 @@ TEST(CphdReaderOp, UnmeteredWaitsOnFullQueueUnlessPaced) {
   params.wait_for_downstream = false;
   params.playback_rate = 0.0;
   EXPECT_TRUE(cphd_reader_waits_on_full(params));
+}
+
+TEST(CphdReaderOp, DutyCycleQuietTimeScalesWithPlaybackRate) {
+  using holoscan::radar::CPHDReaderOp;
+  using holoscan::radar::CphdReaderParams;
+  using holoscan::radar::CoordinateFrame;
+  using holoscan::radar::CoordinateFrameSpec;
+  using holoscan::radar::CoordinateFrameType;
+  using holoscan::radar::FormationHud;
+  using holoscan::radar::MaxTensorExtents;
+  const fs::path path = fs::temp_directory_path() / "holoscan_sar_reader_cooldown.cphd";
+  make_fixture(path);
+  struct Case {
+    double rate;
+    double duty;
+    double quiet_s;
+  };
+  // Five pulses at 10 ms spacing span 40 ms. A 1/26 duty cycle adds
+  // 1000 ms of radar quiet time, scaled along with playback (except rate 0).
+  const std::array<Case, 5> cases{{{2.0, 1.0 / 26.0, 0.5},
+                                   {0.5, 1.0 / 26.0, 2.0},
+                                   {1.0, 1.0 / 26.0, 1.0},
+                                   {0.0, 1.0 / 26.0, 1.0},
+                                   {2.0, 1.0, 0.0}}};
+  for (const auto& sample : cases) {
+    SCOPED_TRACE(sample.rate);
+    SCOPED_TRACE(sample.duty);
+    MaxTensorExtents extents;
+    extents.max_pulses = 5;
+    extents.max_samples_per_pulse = 8;
+    auto hud = std::make_shared<FormationHud>();
+    auto fixture = holoscan::testing::create_operator_test<CPHDReaderOp<double>>(extents, hud);
+    CphdReaderParams params;
+    params.path = holoscan::radar::CollectionPaths(path.string());
+    params.coordinate_frame =
+        CoordinateFrame(CoordinateFrameSpec{.frame = CoordinateFrameType::kEcef});
+    params.pulses_per_tick = 5;
+    params.loop = true;
+    params.playback_rate = sample.rate;
+    params.duty_cycle = sample.duty;
+    fixture.set_params(params);
+    fixture.capture_snapshot<holoscan::Tensor>("phase_history", 2U,
+                                               5U * 8U * sizeof(std::complex<double>));
+    fixture.capture_snapshot<holoscan::Tensor>("positions", 2U, 5U * 3U * sizeof(double));
+    fixture.capture_snapshot<holoscan::Tensor>("reference_position", 2U, 5U * 3U * sizeof(double));
+    fixture.capture<uint8_t>("stream_boundary", 2U);
+    for (const char* port : {"phase_history", "positions", "reference_position", "sample_axis",
+                             "pulse_times", "velocities"}) {
+      fixture.output_device(port, holoscan::DeviceId{0});
+    }
+    auto running = fixture.run_async({.expect_stop = true});
+    const bool observed = running.wait_for_output("stream_boundary", 2U, std::chrono::seconds{5});
+    running.request_stop();
+    const auto result = running.finish();
+    ASSERT_TRUE(observed) << result.describe_failure();
+    ASSERT_TRUE(result.ok()) << result.describe_failure();
+    const auto snapshot = hud->snapshot();
+    ASSERT_GE(snapshot.spans.size(), 2U);
+    const auto& first = snapshot.spans.front();
+    if (sample.quiet_s == 0.0) {
+      EXPECT_FALSE(first.quiet_start.has_value());
+      EXPECT_FALSE(first.quiet_end.has_value());
+    } else {
+      ASSERT_TRUE(first.quiet_start.has_value());
+      ASSERT_TRUE(first.quiet_end.has_value());
+      const double actual =
+          std::chrono::duration<double>(*first.quiet_end - *first.quiet_start).count();
+      // Observe the actual sleep interval, with slack for host scheduling jitter.
+      EXPECT_NEAR(actual, sample.quiet_s, 0.15);
+    }
+  }
+  fs::remove(path);
 }
 
 TEST(CphdFile, CppFixtureDecodesHeaderPvpAndSignal) {

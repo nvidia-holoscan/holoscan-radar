@@ -652,6 +652,8 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
       spans_.back().dwell_end = std::chrono::steady_clock::now();
       if (follows) {
         pending_cooldown_s_ = collect_span * (1.0 / p.duty_cycle - 1.0);
+        if (p.playback_rate > 0.0)
+          pending_cooldown_s_ /= p.playback_rate;
         file_index_ = file_index_ + 1U == files_.size() ? 0U : file_index_ + 1U;
         open_file();
       } else {
