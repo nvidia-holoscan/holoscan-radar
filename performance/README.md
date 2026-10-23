@@ -224,19 +224,25 @@ acceptance is a separate confirmed session decision.
 
 The default loop is at most **20 attempted candidate turns**, stopping after
 **three consecutive unsuccessful candidates** (including inconclusive timing).
-Calibration-blocked validation is reported separately. Before edits, calibrate
-each current-best build against itself, declare candidate targets/mechanism,
-and confirm practical gain and timing precision coverage. Default protection
-requires both precisions; explicitly scoped float-only timing cannot establish
-double-performance protection. Acceptance uses conservative familywise paired
-median intervals; descriptive bootstrap intervals alone do not decide a gate.
-Twenty proposed pairs may lack power for a large matrix; use the baseline
-matrix's `budget` proposal and confirm adequate sampling
-before rerunning, rather than accepting a favorable repeat. See the tool
-interface for the updated plan, calibration, manifest `cwd`, and diagnostics
-commands. Existing sessions need fresh confirmation/evidence for the new gates.
+Use the [bounded engineering acceptance workflow](../skills/operator-perf/references/acceptance.md):
+predeclare the mechanism, representative cases and precisions, practical gain
+and regression criteria, sampling, and a positive total measurement budget.
+Check relevant behavior in both precisions against exact or already approved
+output policies. Screen with a few clean paired A/B runs, then freeze a promising
+candidate and run one fresh bounded paired check, disjoint from selection data.
+Report absolute before/after latency, paired effects, variability, chronology,
+and limits. Any omitted timing precision or case remains an explicit claim limit.
 
-Version-2 measurement policies use isolated case/repeat processes by default,
+Keep a candidate when correctness passes and the fresh check supports the
+predeclared useful gain without an unresolved material regression in selected
+risk cases. Stop inconclusive results at the declared ceiling. Current-best
+self-calibration and familywise intervals are not prerequisites for these
+engineering experiments. Use the optional version-4
+[formal confirmation protocol](../skills/operator-perf/references/confirmation.md)
+when its statistical guarantees are needed; the automated session tools implement
+that tier, while default engineering decisions are recorded and reviewed separately.
+
+Legacy version-2 measurement policies use isolated case/repeat processes by default,
 robust P90/IQR calibration with metric-specific thresholds, and recorded clock
 configuration. Extreme stalls remain visible; optional p90/p99/max protection
 is explicit. Shared `--cases` and `--reverse-order` flags enable baseline
@@ -324,6 +330,8 @@ record forecasts, budget ledgers, frozen selections, disjoint validation,
 per-case sampling, clocks, owned subprocesses, device locks and hashed resume
 receipts. Reports include absolute A/A milliseconds, variability/limits,
 confidence intervals and partial coverage. Version-2 artifacts remain usable
-for historical reports/replay; new production sessions require fresh version-3
-qualification, full-case admission and confirmed configurations. Both existing
-checkout and worktree layouts preserve immutable builds and archived runtimes.
+for historical reports/replay. Version-3 qualification and full-case admission
+belong to the legacy formal workflow, not prerequisites for new engineering
+experiments. New formal sessions use the optional version-4 protocol with a
+confirmed design. Both existing checkout and worktree layouts preserve immutable
+builds and archived runtimes.
