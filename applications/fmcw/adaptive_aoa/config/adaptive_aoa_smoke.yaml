@@ -31,17 +31,17 @@ app:
         - range: 22.0
           azimuth: -0.10
           elevation: 0.0
-          velocity: [-2.0, 0.2, 0.0]
+          velocity: [-1.90017, 1.195, 0.0]
           amplitude: 1.0
         - range: 22.0
           azimuth: 0.10
           elevation: 0.0
-          velocity: [-2.0, -0.2, 0.0]
+          velocity: [-2.09983, 0.795, 0.0]
           amplitude: 1.0
         - range: 28.0
           azimuth: 0.25
           elevation: 0.0
-          velocity: [1.0, 0.25, 0.0]
+          velocity: [0.7526, 1.21891, 0.0]
           amplitude: 0.8
     noise_snr_db: 5.0
 

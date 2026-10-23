@@ -38,7 +38,7 @@ app:
         - range: 245.0
           azimuth: 0.15
           elevation: 0.10
-          velocity: [-6.5262, -1.4415, -0.5686]
+          velocity: [-6.45598, -1.90609, -0.5686]
           amplitude: 0.8
     noise_snr_db: 5.0
 

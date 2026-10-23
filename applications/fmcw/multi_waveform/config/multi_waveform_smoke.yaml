@@ -29,7 +29,7 @@ app:
         - range: 35.0
           azimuth: 0.15
           elevation: 0.10
-          velocity: [-4.0, -0.6, -0.4]
+          velocity: [-4.14944, 0.38877, -0.4]
           amplitude: 0.8
     noise_snr_db: 5.0
 mimo_deinterleave: {}
