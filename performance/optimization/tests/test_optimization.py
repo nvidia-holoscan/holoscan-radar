@@ -8,6 +8,7 @@ import contextlib
 import copy
 import io
 import os
+import runpy
 import sqlite3
 import struct
 import sys
@@ -163,6 +164,22 @@ class OptimizationToolsTest(unittest.TestCase):
         self.assertIs(raised.exception, failure)
         self.assertEqual(read_json(destination), {"original": True})
         self.assertEqual(list(self.root.iterdir()), [destination])
+
+    def test_precision_launcher_checks_both_children_before_launch(self):
+        script = Path(__file__).resolve().parents[1] / "paired_precision.py"
+        output = self.root / "paired.json"
+        for precision in ("float", "double"):
+            with self.subTest(precision=precision):
+                child = self.root / f"paired.{precision}.json"
+                child.write_text("retained evidence")
+                argv = [str(script), "test", str(self.root), "--output", str(output)]
+                with patch("sys.argv", argv), patch("subprocess.run") as launch:
+                    with self.assertRaisesRegex(RuntimeError, "quarantine"):
+                        runpy.run_path(str(script), run_name="__main__")
+                launch.assert_not_called()
+                self.assertEqual(child.read_text(), "retained evidence")
+                self.assertEqual(list(self.root.iterdir()), [child])
+                child.unlink()
 
     def timing_index(self, after=8.0, before=10.0):
         builds = {

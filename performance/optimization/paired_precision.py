@@ -40,9 +40,15 @@ position = arguments.index(flag) + 1
 output = Path(arguments[position]).resolve()
 if output.exists():
     raise RuntimeError(f"refusing to overwrite {output}")
+precision_outputs = [
+    output.with_name(output.stem + f".{precision}" + output.suffix)
+    for precision in ("float", "double")
+]
+for child in precision_outputs:
+    if child.exists():
+        raise RuntimeError(f"precision child already exists; quarantine {child} before retrying")
 reports, children = [], []
-for precision, executable in zip(("float", "double"), executables):
-    child = output.with_name(output.stem + f".{precision}" + output.suffix)
+for precision, executable, child in zip(("float", "double"), executables, precision_outputs):
     if child.exists():
         raise RuntimeError(f"refusing to overwrite {child}")
     argv = list(arguments)
