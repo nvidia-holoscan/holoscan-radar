@@ -311,8 +311,8 @@ the logical Params/YAML types. Those types do not change to satisfy
 These control-plane Tensors are the sole pageable-host exception to the data
 Tensor memory-space rule. The physical payload does not alter Exact /
 SafeDefault joining, wiring, validation, defaults, or
-shape-change semantics. Schema identity/evolution, generated-artifact, EA
-generator-workaround, and C++-only limitations are locked in
+shape-change semantics. Schema identity/evolution, generated-artifact,
+generator-compatibility, and C++-only limitations are locked in
 [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md).
 
 **Bridge operators.** The workflows also use small add-on operators to connect detection, clustering, and the sparse angle estimators. Per the plain-tensor-ports convention, bridging is done by explicit add-on operators (never shared structs). Each carries a **delivery-model** decision — a mainstream library operator, a per-application implementation, or a shared helper called inside another operator's `compute()` — recorded per bridge. Three exist — `SnapshotGatherOp`, `DetectionReductionOp`, and `FeatureAssemblyOp` — grouped into the functional sections below alongside the operators they connect (each flagged in its own Notes).

@@ -4,19 +4,17 @@ GPU-accelerated FMCW and SAR signal-processing operators for NVIDIA Holoscan.
 Operators are implemented in C++/CUDA on MatX and compose through typed ports,
 without pipeline-specific glue between processing stages.
 
-Holoscan Radar targets HSDK 5. The Holoscan CLI pulls the staging SDK image
-when needed; the devcontainer can use the same image. This pre-release image
-requires `nvstaging` as your user org in NGC Catalog. Setup and Python provider
-requirements are documented in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
+Holoscan Radar targets HSDK 5. The Holoscan CLI pulls the public GA SDK image
+`nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13` when needed; the
+devcontainer uses the same image. Setup and Python provider requirements are
+documented in [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md).
 
 ## Quick start
 
-On the **host**, set your NGC Catalog user org to `nvstaging`, then run this
-from the repository root. The CLI starts a container for the build and app:
+On the **host**, run this from the repository root. The CLI starts a container for the build and app:
 
 ```bash
 uv sync
-docker login nvcr.io
 ./holoscan-radar run siso --run-args=siso_smoke.yaml
 ```
 

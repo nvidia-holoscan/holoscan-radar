@@ -12,7 +12,7 @@
     "context": "..",
     "dockerfile": "../Dockerfile",
     "args": {
-      "BASE_IMAGE": "nvcr.io/nvstaging/holoscan/holoscan:v5.0.0.7-cuda13"
+      "BASE_IMAGE": "nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13"
     }
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/holoscan-radar,type=bind,consistency=cached",

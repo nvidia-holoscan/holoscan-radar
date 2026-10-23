@@ -4,6 +4,16 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-21** — **HSDK 5 GA image adopted.** The Dockerfile, host CLI wrapper,
+  and devcontainer now default to
+  `nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13`; active setup guides
+  no longer require NGC staging access. Verified the Linux arm64 image on GB10,
+  its `/usr/lib/cmake/holoscan` package and testing/visualization components,
+  and Python Core/Visualization imports. The GA development image builds;
+  all 1,094 Python-enabled CTests pass with zero failures or skips, including
+  application smokes and `pytest_provider`. The host-wrapper Python SISO
+  smoke and repository-wide pinned lint also pass.
+
 - **2026-10-19** — **Retained Radar's public facade type stub.** The staging
   HSDK 5 package provides CMake helpers for native nanobind and registry proxy
   stubs, but those do not describe Radar's `extents` argument and config
@@ -277,6 +287,10 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| GA migration review corrections | Codex | `deustice/hsdk-ga-image` | **complete:** aligned tutorial SDK minimum, unconditional aligned-input guidance, and L18 implementation status; restored the helper diagnostic's documented EA attribution from Git history. Exact original SDK/reproducer unavailable, so no new reproduction claimed. Documentation/comment-only; pinned focused and all-file lint pass. |
+| EA-only source and documentation qualifiers | Codex | `deustice/hsdk-ga-image` | **complete:** audited identifiers, feature gates, type/schema comments, test labels, and planning guidance across tracked files. Removed stale qualifiers from schema/test comments and current guidance; no active HSDK5-EA identifiers or EA-only gates remain. Schema fields and executable code are unchanged; historical measurements retain their SDK versions. All-file pinned lint passes. |
+| Repository-wide EA reference sweep | Codex | `deustice/hsdk-ga-image` | **complete:** audited all 743 tracked paths, hidden configuration, and ignored local `uv.lock`; no active EA/RC image or dependency pins remain. Refreshed local CLI/lock from rc1 to GA 5.0.0, corrected the tutorial image tag, and clarified temporal measurement provenance. Historical records and workaround rationale retained. GA CLI Python SISO smoke, lock consistency, and all-file pinned lint pass. |
+| HSDK 5 GA image migration | Codex | `deustice/hsdk-ga-image` | **verified locally:** Dockerfile, CLI wrapper, and devcontainer use the public CUDA 13 GA image; active setup guides updated. GB10 arm64 SDK layout/import checks, development-image build, all 1,094 CTests (zero failures/skips), Python SISO CLI smoke, and all-file pinned lint pass. |
 | Rebase Python provider onto staging SDK and wrapper | Codex | `deustice/python` | **verified locally:** branch rebased onto `origin/main` at `22df786f`; seven Python manifests and guides use the `/usr` SDK and `./holoscan-radar`; wrapper Python SISO smoke, 1,089 Python-enabled CTests, and 80 direct provider cases pass on staging SDK 5.0.0.7. |
 | Python binding runtime coverage and Doppler FFT pool sizing | Codex | `deustice/python` | **complete:** three provider runtime checks cover both precisions, GPU Tensor transport, Params decoding, and one-tick `nfft`; split/fused pools honor `max_doppler_bins`. All 80 provider tests, the CTest entry, and focused C++ nfft regressions pass in the pinned GPU image. |
 | Development workflow documentation | Codex | `deustice/hsdk-container` | **complete locally:** host CLI is the default in active guides, interactive-container commands are labeled, FMCW and SAR examples use CLI defaults, and the former `./holohub run-container` reference is corrected; the module-scaffolding tutorial is deferred for a separate audit. |
@@ -339,7 +353,7 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 | L6 — CFAR exact-sized `detection_idx` | **Ratify exact sizing** (chosen over a capacity + `num_detections` port). Accept the per-tick scalar device→host count sync as the cost of the contract: it moves one integer, and the exact-size, no-companion shape is load-bearing across the downstream chain (`SnapshotGather`/`FeatureAssembly`/`DetectionReduction`/`ClusterDBSCAN` all positionally join on "row count *is* `num_detections`"), so breaking it is a broad change unjustified without a measured latency budget the sync violates. Docs-only — the locked `detection_idx` contract is unchanged. **Deferred:** a capacity + `num_detections` port as an **opt-in** fast path, added only if profiling shows the sync bounds latency (CFAR README → Performance) | 2026-07-21 |
 | L16 — Exact `[live]` join | **Adopt Exact{}** against the data trigger's `capture_time` for every enabled `[live]` port. No epoch field. `on_missing SafeDefault{}`, and (revised 2026-09-01) an override applies to **one tick**: a matched sample is the effective value for that activation and any tick without a match takes Params. Operators keep no latch and there is no `sticky_*` parameter — an app that wants an override to hold publishes it every tick. Landed on every POD `[live]` Input and the FMCW schema-backed window/waveform ports; Graph Exact tests cover range `nfft`, range/Doppler windows, waveform validation, and fused schema overrides. Transmit-stamp ownership (sequencer vs device) still open | 2026-08-21, revised 2026-09-01 |
 | L17 — optional `[live]` port declaration | **Declare unconditionally; wiring is the app's only statement.** Register the port in `setup()` and its `Exact{}` + `SafeDefault{}` entry in `contract()`; an unwired port reports `kNotConnected` and reads as no override. This holds under `OnAligned` as well as `OnEach`; no operator carries an `expect_*` parameter (§11). Contract-visible in `OPERATOR_API.md` | 2026-08-21, revised 2026-08-28 |
-| L18 — mixed HSDK 5 `[live]` payloads | **Adopt a shape-driven physical policy:** generated FlatBuffers descriptor-Tensor schemas for shared owning descriptors; ChannelPod wrappers for bounded fixed-layout scalar tuples; rank-1 pageable-host `Input<Tensor>` for variable-length scalar vectors, each with a ctor-captured finite element bound. Physical types do not alter logical operator Params/YAML types. Schema compatibility is exact canonical-name + version + hash identity; explicit append-only ids, coordinated deployment, current EA generator workarounds, and C++-only schema objects remain required. Resolves the former payload-shape item; fully implemented as of 2026-08-27 — every `[live]` port rides its category (the earlier migration notes §9) | 2026-08-23 |
+| L18 — mixed HSDK 5 `[live]` payloads | **Adopt a shape-driven physical policy:** generated FlatBuffers descriptor-Tensor schemas for shared owning descriptors; ChannelPod wrappers for bounded fixed-layout scalar tuples; rank-1 pageable-host `Input<Tensor>` for variable-length scalar vectors, each with a ctor-captured finite element bound. Physical types do not alter logical operator Params/YAML types. Schema compatibility is exact canonical-name + version + hash identity; explicit append-only ids, coordinated deployment, schema generator compatibility rules, and C++-only schema objects remain required. Resolves the payload-shape policy; implementation remains in progress (see the Mixed HSDK 5 `[live]` payload policy claim above and earlier migration notes §9) | 2026-08-23 |
 
 ## Open items for team review
 
@@ -347,11 +361,11 @@ Contract, SDK, and signal-processing questions that need a team decision are tra
 New operators should follow [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md)
 and [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md).
 
-Temporal contracts — how the data plane joins the config plane, what the EA
+Temporal contracts — how the data plane joins the config plane, what the SDK
 selectors and triggers actually do, and the adopted Exact + unconditional-entry
 shape (L16 / L17): [`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md).
-Every ported operator declares its live Inputs in `contract()` unconditionally
-(the `OnAligned` pair excepted); Graph coverage remains incomplete outside the
+Every ported operator declares its live Inputs in `contract()` unconditionally,
+including the `OnAligned` pair; Graph coverage remains incomplete outside the
 FMCW schema-backed ports and the range `nfft` pilot.
 
 HSDK 5 Tensor pool sizing guidance lives in
