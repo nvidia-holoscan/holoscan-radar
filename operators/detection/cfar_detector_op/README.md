@@ -54,6 +54,7 @@ rd_maps / rda_cube / power_map -> CFARDetectorOp
 | `guard_cells` | int64[2] `(doppler, range)` | none (required) | `[live]` Exact POD pair | Guard half-extent each side of the CUT Cost: May recalibrate the α LUT; no kernel rebuild. |
 | `training_cells` | int64[2] `(doppler, range)` | none (required) | `[live]` Exact POD pair | Training half-extent each side; sets `N` Cost: Same as `guard_cells`. |
 | `pfa` | float64 | `1e-6` | `[live]` Exact | Target Pfa when `alpha_lut` is empty; ignored for α while an external LUT is set Cost: Unseen `(variant, pfa, K, window, …)` key builds / queues an α LUT and warns once. |
+| `calibration_trials` | int64 | `0` | static | Monte Carlo trials per geometry: 0 derives the Pfa/accuracy budget; positive fixes the exact count and reports actual coverage; negative rejected. |
 | `calibration_relative_error` | float64 | `0.10` | static | Relative Pfa error target for direct Monte Carlo; finite in `(0,1)`; not alpha error. |
 | `calibration_confidence` | float64 | `0.95` | static | Per-geometry coverage of the relative Pfa band; finite in `(0,1)`; not simultaneous LUT coverage. |
 | `alpha_lut` | float64 vector | `[]` | `[live]` Exact host config Tensor | Precomputed α table; non-empty → used directly, `pfa` ignored for α Cost: Validation + H2D upload. |
@@ -116,6 +117,28 @@ alpha error, simultaneous coverage across the table, or a guarantee for
 correlated application noise. Taking the maximum alpha across aliased GO/SO
 geometries may make a shared LUT entry conservative. Coverage refers to the
 unscaled per-bin test, before `threshold_scale` and peak suppression.
+
+To override the automatic count, set `calibration_trials` in the detector YAML
+block, the Python offline parameter dictionary, or `CFARParams` in C++:
+
+```yaml
+cfar_detector:
+  cfar_variant: GO
+  guard_cells: [3, 3]
+  training_cells: [3, 3]
+  pfa: 1e-6
+  calibration_trials: 1000000  # Exact trials per geometry, not total across the LUT.
+```
+
+The default `0` retains the automatic budget. A positive override accepts any
+count, including below 4096, without increasing it to meet the accuracy target.
+Tail rank is `clamp(round(trials*pfa), 1, trials)`. Plans/results still report
+actual binomial `coverage`; execution warns if this is below the requested
+confidence. At very low Pfa a small override selects the sample maximum and
+cannot accurately resolve the requested tail probability. Analytic and explicit
+`alpha_lut` paths ignore the count. Negative values are rejected. The pure C++
+`cfar_calibration_budget(pfa, error, confidence, trials)` helper also accepts the
+optional override as its fourth argument. The override is part of cache identity.
 
 At Pfa `1e-9`, the defaults require roughly 400 billion trials per geometry.
 This is intentionally no longer approximated using 4096 trials. Calculations

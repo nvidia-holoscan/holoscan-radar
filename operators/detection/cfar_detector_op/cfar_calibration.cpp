@@ -121,9 +121,11 @@ double estimate_seconds(const CfarCalibrationPlan& plan, std::stop_token stop) {
 }
 }  // namespace
 
-CfarCalibrationBudget cfar_calibration_budget(double pfa, double relative_error,
-                                              double confidence) {
+CfarCalibrationBudget cfar_calibration_budget(double pfa, double relative_error, double confidence,
+                                              std::uint64_t trials) {
   validate_accuracy(pfa, relative_error, confidence);
+  if (trials == std::numeric_limits<std::uint64_t>::max())
+    throw std::invalid_argument("CFAR calibration trial budget exceeds supported capacity");
   long double lo = 0, hi = 16;
   for (int i = 0; i < 80; ++i) {
     const auto mid = (lo + hi) / 2;
@@ -132,13 +134,16 @@ CfarCalibrationBudget cfar_calibration_budget(double pfa, double relative_error,
     else
       hi = mid;
   }
-  auto n = count(std::max(4096.0L, hi * hi * (1 - pfa) / (relative_error * relative_error * pfa)));
+  auto n =
+      trials
+          ? trials
+          : count(std::max(4096.0L, hi * hi * (1 - pfa) / (relative_error * relative_error * pfa)));
   for (;;) {
     const auto rank = std::clamp<std::uint64_t>(
         count(std::max(1.0L, std::round(static_cast<long double>(n) * pfa))), 1, n);
     const auto coverage = binomial_cdf(n, (1 - relative_error) * pfa, rank - 1) -
                           binomial_cdf(n, std::min(1.0, (1 + relative_error) * pfa), rank - 1);
-    if (coverage >= confidence)
+    if (trials || coverage >= confidence)
       return {n, rank, static_cast<double>(coverage)};
     n = count(static_cast<long double>(n) * 1.02L + 1);
   }
@@ -151,6 +156,8 @@ CfarCalibrationPlan prepare_cfar_calibration(const CFARParams& params,
       params.cfar_variant != CfarVariant::kSO && params.cfar_variant != CfarVariant::kOS)
     throw std::invalid_argument("CFAR calibration invalid variant");
   validate_accuracy(params.pfa, params.calibration_relative_error, params.calibration_confidence);
+  if (params.calibration_trials < 0)
+    throw std::invalid_argument("CFAR calibration_trials must be nonnegative");
   if (shape.size() < 2 || params.guard_cells.size() != 2 || params.training_cells.size() != 2 ||
       params.preintegrated_looks <= 0)
     throw std::invalid_argument(
@@ -231,7 +238,7 @@ CfarCalibrationPlan prepare_cfar_calibration(const CFARParams& params,
   } else if (go || params.cfar_variant == CfarVariant::kOS) {
     plan.method = "direct_monte_carlo";
     plan.budget = cfar_calibration_budget(params.pfa, params.calibration_relative_error,
-                                          params.calibration_confidence);
+                                          params.calibration_confidence, params.calibration_trials);
     plan.total_trials = multiply(plan.budget.trials, plan.geometries.size());
   } else {
     throw std::invalid_argument("CFAR calibration invalid variant");
@@ -261,14 +268,23 @@ CfarCalibrationResult execute_cfar_calibration(CfarCalibrationPlan plan,
     if (progress)
       progress(state);
   };
+  if (plan.method == "direct_monte_carlo" && plan.params->calibration_trials > 0 &&
+      plan.budget.coverage < plan.params->calibration_confidence)
+    HOLOSCAN_LOG_WARN(
+        "CFAR calibration_trials override={} per geometry: achieved coverage={} is below requested "
+        "confidence={}; requested Pfa accuracy is not assured. Set calibration_trials=0 for the "
+        "automatic budget",
+        plan.budget.trials, plan.budget.coverage, plan.params->calibration_confidence);
   if (plan.method == "direct_monte_carlo")
     HOLOSCAN_LOG_WARN(
         "CFAR calibration {} start={} pfa={} relative_error={} confidence={} geometries={} "
-        "trials_per_geometry={} total_trials={}; supply alpha_lut from calibrate_cfar to bypass "
+        "trials_per_geometry={} total_trials={} budget_mode={} coverage={}; supply alpha_lut from "
+        "calibrate_cfar to bypass "
         "runtime Monte Carlo",
         to_string(plan.params->cfar_variant), result.started_at, plan.params->pfa,
         plan.params->calibration_relative_error, plan.params->calibration_confidence,
-        plan.geometries.size(), plan.budget.trials, plan.total_trials);
+        plan.geometries.size(), plan.budget.trials, plan.total_trials,
+        plan.params->calibration_trials ? "override" : "automatic", plan.budget.coverage);
   try {
     notify("started");
     result.alpha_lut.assign(plan.lut_size, 0.0);

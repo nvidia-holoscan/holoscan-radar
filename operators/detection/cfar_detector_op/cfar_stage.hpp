@@ -41,6 +41,7 @@ struct CfarStageConfig {
   double pfa;
   double calibration_relative_error{0.10};
   double calibration_confidence{0.95};
+  int64_t calibration_trials{0};
   std::vector<double> alpha_lut;
   double threshold_scale;
   std::vector<int64_t> nci_axes;

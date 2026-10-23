@@ -137,6 +137,7 @@ struct CfarAlphaLutKey {
   double relative_error{0.10};
   double confidence{0.95};
   std::uint32_t algorithm_version{1};
+  int64_t calibration_trials{0};
 
   bool operator==(const CfarAlphaLutKey& other) const {
     return variant == other.variant && pfa == other.pfa && fold == other.fold &&
@@ -144,7 +145,8 @@ struct CfarAlphaLutKey {
            train_d == other.train_d && train_r == other.train_r &&
            num_doppler == other.num_doppler && num_range == other.num_range &&
            relative_error == other.relative_error && confidence == other.confidence &&
-           algorithm_version == other.algorithm_version;
+           algorithm_version == other.algorithm_version &&
+           calibration_trials == other.calibration_trials;
   }
   bool operator!=(const CfarAlphaLutKey& other) const { return !(*this == other); }
 };
@@ -186,6 +188,7 @@ struct CFARParams {
   double pfa{1e-6};
   double calibration_relative_error{0.10};
   double calibration_confidence{0.95};
+  int64_t calibration_trials{0};
   std::vector<double> alpha_lut{};
   double threshold_scale{1.0};
   std::vector<int64_t> nci_axes{};
@@ -217,6 +220,8 @@ HOLOSCAN_PARAM_SCHEMA(
         .description("Static relative Pfa error target for Monte Carlo; default 0.10"),
     holoscan::field<&CFARParams::calibration_confidence>("calibration_confidence")
         .description("Static per-geometry Pfa coverage target for Monte Carlo; default 0.95"),
+    holoscan::field<&CFARParams::calibration_trials>("calibration_trials")
+        .description("Static Monte Carlo trials per geometry; 0 selects the Pfa-derived budget"),
     holoscan::field<&CFARParams::alpha_lut>("alpha_lut")
         .description("Optional threshold multiplier table; when non-empty, used "
                      "directly and pfa is ignored for alpha calibration"),

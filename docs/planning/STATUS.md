@@ -4,6 +4,14 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-17** — **CFAR calibration rebased onto current main** at `ea8660ae`.
+  Replayed only the Pfa-aware/offline calibration and trial-override commits;
+  retained main's SAR autofocus test registration alongside the calibration
+  test. A fresh HSDK 5 GA build on Thor passes all 195 focused CFAR CTests
+  (185 unit and 10 statistical); repository-wide pinned lint passes. Python
+  provider runtime checks were not rerun. The original branch is preserved
+  as `deustice/cfar-calibration-before-rebase-20261117`; no remote update.
+
 - **2026-11-05** — SAR-branch CI follow-up: added `autofocus_op` to the
   default native package selection (33 operators), fixing missing autofocus
   test targets in explicit-test package configurations. Fresh package, subset,
@@ -1282,7 +1290,7 @@ still declare SDK 4.3.0.
 | FMCW GUI resize investigation | Codex | `deustice/gui-updates` | **verified locally:** SDK CUDA frame composition keeps text and plots aligned while resizing; joint image/text admission recovers from delayed-display pressure. All 33 dashboard regressions, provider CTest, nine GUI checks, and repeated five-size C++/Python resize probes with 20 ms X11 delay pass; full lint passes. |
 | FMCW sector plot expansion | Codex | `deustice/gui-updates` | **verified locally:** fitted sectors, explicit axis scale, labeled range rings, and shared grid/truth/detection projection. All 32 dashboard regressions, two application smoke tests, nine Python GUI checks, and full lint pass. |
 | FMCW native text and dashboard refresh | Codex | `deustice/gui-updates` | **verified locally:** native SDK text, exact frame pairing, rate-gated and fused rendering, updated layout/palette/axes, and matching C++/Python wiring. All 1,098 baseline CTests, 28 dashboard regressions, nine Xvfb visual checks, delayed SISO/SIMO rendering, host CLI SISO build, and full lint pass. |
-| CFAR Pfa-aware calibration | Codex | `deustice/cfar-calibration` | **verified locally:** Pfa-aware direct Monte Carlo budgets, streamed CUDA tails, cancellable shared builds with ETA/progress, C++/Python offline APIs and static accuracy parameters. All 194 focused checks, SISO/dense C++ smoke, installed C++ consumer and full lint pass. Rare `pfa=1e-9` production-size LUT planned only (~20-day conservative GB10 ETA). Efficient-estimator P1 follow-up: [CLARAHOLOS-3583](https://nvidia.atlassian.net/browse/CLARAHOLOS-3583). |
+| CFAR Pfa-aware calibration | Codex | `deustice/cfar-calibration` | **verified locally:** automatic Pfa/accuracy budgets plus static `calibration_trials` override (0 = automatic; positive = exact trials per geometry). Runtime/offline APIs, cache keys and metadata include the override; low-coverage builds warn. All 199 focused C++ checks and the provider suite pass, including the graph override smoke; pinned full lint passes. Baseline installed C++ consumer and SISO/dense smokes previously passed. Rare `pfa=1e-9` production LUT planned only (~20-day GB10 ETA). P1 follow-ups: [efficient estimator](https://nvidia.atlassian.net/browse/CLARAHOLOS-3583), [API documentation](https://nvidia.atlassian.net/browse/CLARAHOLOS-3584). |
 | GA migration review corrections | Codex | `deustice/hsdk-ga-image` | **complete:** aligned tutorial SDK minimum, unconditional aligned-input guidance, and L18 implementation status; restored the helper diagnostic's documented EA attribution from Git history. Exact original SDK/reproducer unavailable, so no new reproduction claimed. Documentation/comment-only; pinned focused and all-file lint pass. |
 | EA-only source and documentation qualifiers | Codex | `deustice/hsdk-ga-image` | **complete:** audited identifiers, feature gates, type/schema comments, test labels, and planning guidance across tracked files. Removed stale qualifiers from schema/test comments and current guidance; no active HSDK5-EA identifiers or EA-only gates remain. Schema fields and executable code are unchanged; historical measurements retain their SDK versions. All-file pinned lint passes. |
 | Repository-wide EA reference sweep | Codex | `deustice/hsdk-ga-image` | **complete:** audited all 743 tracked paths, hidden configuration, and ignored local `uv.lock`; no active EA/RC image or dependency pins remain. Refreshed local CLI/lock from rc1 to GA 5.0.0, corrected the tutorial image tag, and clarified temporal measurement provenance. Historical records and workaround rationale retained. GA CLI Python SISO smoke, lock consistency, and all-file pinned lint pass. |

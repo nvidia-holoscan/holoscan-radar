@@ -55,7 +55,13 @@ def test_rare_pfa_plan_and_keyboard_interrupt():
 
 
 @pytest.mark.parametrize(
-    "field,value", [("pfa", 0), ("calibration_relative_error", 0), ("calibration_confidence", 1)]
+    "field,value",
+    [
+        ("pfa", 0),
+        ("calibration_relative_error", 0),
+        ("calibration_confidence", 1),
+        ("calibration_trials", -1),
+    ],
 )
 def test_invalid_accuracy(field, value):
     with pytest.raises((ValueError, RuntimeError)):
@@ -118,3 +124,59 @@ def test_graph_stop_cancels_runtime_calibration(tmp_path, capfd):
     assert time.monotonic() - started < 3
     assert not session.diagnostics, session.diagnostics
     assert "CFAR calibration GO start=" in capfd.readouterr().err
+
+
+@pytest.mark.parametrize("variant", ["GO", "SO", "OS"])
+def test_explicit_trials_override_rare_pfa_and_report_coverage(variant):
+    p = {
+        **config(variant),
+        "pfa": 1e-30,
+        "calibration_trials": 17,
+        "preintegrated_looks": 2,
+        "os_rank": 10,
+    }
+    events = []
+    result = calibrate_cfar(p, [8, 8], progress=events.append)
+    assert result["trials_per_geometry"] == 17
+    assert result["tail_rank"] == 1
+    assert result["coverage"] < p.get("calibration_confidence", 0.95)
+    assert result["params"]["calibration_trials"] == 17
+    assert result["total_trials"] == 17 * len(result["geometries"])
+    assert events[-1]["completed_trials"] == result["total_trials"]
+    assert plan_cfar_calibration(p, [8, 8])["trials_per_geometry"] == 17
+
+
+def test_default_trials_and_analytic_bypass():
+    default = plan_cfar_calibration(config("GO"), [8, 8])
+    explicit_zero = plan_cfar_calibration({**config("GO"), "calibration_trials": 0}, [8, 8])
+    assert default["params"]["calibration_trials"] == 0
+    assert default["trials_per_geometry"] == explicit_zero["trials_per_geometry"]
+    assert default["coverage"] >= 0.95
+    analytic = plan_cfar_calibration({**config(), "calibration_trials": 17}, [8, 8])
+    assert analytic["total_trials"] == 0
+    assert analytic["coverage"] is None
+
+
+def test_graph_runtime_trial_override(tmp_path, capfd):
+    from pathlib import Path
+
+    import yaml
+    from holoscan_radar.applications import dense_beamforming
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "applications/fmcw/dense_beamforming/config/dense_beamforming_smoke.yaml"
+    )
+    config_data = yaml.safe_load(path.read_text())
+    config_data["beamform_then_detect"]["cfar_detector"].update(
+        cfar_variant="GO", pfa=1e-9, calibration_trials=1024
+    )
+    preset = tmp_path / "override.yaml"
+    preset.write_text(yaml.safe_dump(config_data))
+    workflow = dense_beamforming.build_graph(preset)
+    session = workflow.run()
+    assert not session.diagnostics, session.diagnostics
+    logs = capfd.readouterr().err
+    assert "trials_per_geometry=1024" in logs
+    assert "budget_mode=override" in logs
+    assert "requested Pfa accuracy is not assured" in logs

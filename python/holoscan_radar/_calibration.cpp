@@ -70,6 +70,7 @@ nb::dict plan_dict(const radar::CfarCalibrationPlan& p) {
   config["preintegrated_looks"] = p.params->preintegrated_looks;
   config["calibration_relative_error"] = p.params->calibration_relative_error;
   config["calibration_confidence"] = p.params->calibration_confidence;
+  config["calibration_trials"] = p.params->calibration_trials;
   d["params"] = config;
   d["input_shape"] = p.input_shape;
   d["effective_looks"] = p.effective_looks;

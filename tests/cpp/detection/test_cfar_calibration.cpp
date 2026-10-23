@@ -48,6 +48,45 @@ TEST(CfarCalibration, RarePfaBudgetsAreNotSilentlyTruncated) {
   EXPECT_THROW(radar::cfar_calibration_budget(0.01, 0.1, 1.0), std::invalid_argument);
 }
 
+TEST(CfarCalibration, ExplicitTrialsAreExactAndReportActualCoverage) {
+  for (std::uint64_t trials : {1ULL, 17ULL, 4097ULL, 1000000ULL}) {
+    const auto b = radar::cfar_calibration_budget(1e-9, 0.1, 0.95, trials);
+    EXPECT_EQ(b.trials, trials);
+    EXPECT_EQ(b.tail_rank, 1U);
+    // Rank 1 selects the sample maximum; independently evaluate its coverage.
+    const auto expected = std::pow(1 - 0.9e-9L, trials) - std::pow(1 - 1.1e-9L, trials);
+    EXPECT_NEAR(b.coverage, expected, 1e-12);
+    EXPECT_LT(b.coverage, 0.95);
+  }
+  const auto automatic = radar::cfar_calibration_budget(0.01);
+  const auto fixed = radar::cfar_calibration_budget(0.01, 0.1, 0.95, automatic.trials);
+  EXPECT_EQ(automatic.trials, fixed.trials);
+  EXPECT_EQ(automatic.tail_rank, fixed.tail_rank);
+  EXPECT_EQ(automatic.coverage, fixed.coverage);
+  // An explicit budget also bypasses an otherwise unrepresentable automatic budget.
+  EXPECT_EQ(radar::cfar_calibration_budget(1e-30, 0.1, 0.95, 17).trials, 17U);
+}
+
+TEST(CfarCalibration, TrialOverridePropagatesThroughRuntimeCache) {
+  auto p = params();
+  p.pfa = 1e-9;
+  p.calibration_trials = 257;
+  auto plan = detail::prepare_cfar_calibration(p, {8, 8});
+  EXPECT_EQ(plan.budget.trials, 257U);
+  EXPECT_EQ(plan.total_trials, 257U * plan.geometries.size());
+  radar::CfarAlphaLutKey key{radar::CfarVariant::kGO, p.pfa, 1, -1, 1, 1, 1, 1, 8, 8};
+  key.calibration_trials = p.calibration_trials;
+  EXPECT_EQ(detail::get_cached_alpha_lut(key), radar::calibrate_cfar(p, {8, 8}).alpha_lut);
+  auto changed = key;
+  changed.calibration_trials *= 2;
+  EXPECT_NE(changed, key);
+  EXPECT_FALSE(detail::poll_cached_alpha_lut(changed).ready);
+  p.calibration_trials = changed.calibration_trials;
+  EXPECT_EQ(detail::get_cached_alpha_lut(changed), radar::calibrate_cfar(p, {8, 8}).alpha_lut);
+  p.calibration_trials = -1;
+  EXPECT_THROW(detail::prepare_cfar_calibration(p, {8, 8}), std::invalid_argument);
+}
+
 TEST(CfarCalibration, RareBudgetCoverageAgreesWithIndependentBinomialSum) {
   const auto b = radar::cfar_calibration_budget(1e-9);
   auto cdf = [&](long double q) {
@@ -91,6 +130,7 @@ TEST(CfarCalibration, PlanResolvesLooksAndEnumeratesEveryClippedSideGeometry) {
 
 TEST(CfarCalibration, AnalyticAndExternalTablesBypassMonteCarlo) {
   auto p = params(radar::CfarVariant::kCA);
+  p.calibration_trials = 1;  // Ignored by analytic and explicit-table paths.
   auto result = radar::calibrate_cfar(p, {16, 16});
   EXPECT_EQ(result.plan.method, "analytic");
   EXPECT_EQ(result.plan.total_trials, 0U);

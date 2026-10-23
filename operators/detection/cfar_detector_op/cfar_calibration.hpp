@@ -73,8 +73,10 @@ struct CfarCalibrationResult {
 
 // Confidence is coverage of relative Pfa error per geometry, not alpha error
 // or simultaneous coverage across a table. Pure planning: no Monte Carlo draws.
+// trials=0 derives an accuracy budget; positive trials fixes the budget and reports actual
+// coverage.
 CfarCalibrationBudget cfar_calibration_budget(double pfa, double relative_error = 0.10,
-                                              double confidence = 0.95);
+                                              double confidence = 0.95, std::uint64_t trials = 0);
 // Benchmark a bounded representative batch when Monte Carlo is required.
 CfarCalibrationPlan plan_cfar_calibration(const CFARParams& params,
                                           const std::vector<std::int64_t>& input_shape);

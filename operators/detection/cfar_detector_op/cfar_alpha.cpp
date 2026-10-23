@@ -926,6 +926,7 @@ struct CfarAlphaLutKeyHash {
     h = mix(h, error_bits);
     h = mix(h, confidence_bits);
     h = mix(h, key.algorithm_version);
+    h = mix(h, key.calibration_trials);
     return h;
   }
 };
@@ -966,6 +967,7 @@ std::vector<double> build_alpha_lut(const CfarAlphaLutKey& key, std::stop_token 
   p.training_cells = {key.train_d, key.train_r};
   p.calibration_relative_error = key.relative_error;
   p.calibration_confidence = key.confidence;
+  p.calibration_trials = key.calibration_trials;
   return calibrate_cfar(p, {key.num_doppler, key.num_range}, {}, stop).alpha_lut;
 }
 

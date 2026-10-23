@@ -353,6 +353,7 @@ expected<detail::CfarStageConfig, Error> resolve_params(
   stage.cfar_variant = pinned.cfar_variant;
   stage.calibration_relative_error = pinned.calibration_relative_error;
   stage.calibration_confidence = pinned.calibration_confidence;
+  stage.calibration_trials = pinned.calibration_trials;
   HOLOSCAN_TRY(stage.os_rank, resolve_live_override(os_rank, pinned.os_rank));
   HOLOSCAN_TRY(stage.guard_cells,
                resolve_live_override_via(guard_cells, pinned.guard_cells,
@@ -457,6 +458,9 @@ expected<CfarStagePlan, Error> build_cfar_stage_plan(detail::CfarStageConfig sta
                                                      const MaxTensorExtents& extents,
                                                      std::size_t max_leading) {
   try {
+    if (stage.calibration_trials < 0)
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument, "CFAR calibration_trials must be nonnegative"});
     if (!std::isfinite(stage.calibration_relative_error) || stage.calibration_relative_error <= 0 ||
         stage.calibration_relative_error >= 1 || !std::isfinite(stage.calibration_confidence) ||
         stage.calibration_confidence <= 0 || stage.calibration_confidence >= 1) {
@@ -639,7 +643,9 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
                                 plan.key_num_doppler,
                                 plan.key_num_range,
                                 stage.calibration_relative_error,
-                                stage.calibration_confidence};
+                                stage.calibration_confidence,
+                                kCfarCalibrationVersion,
+                                stage.calibration_trials};
   const bool had_external_alpha_lut = state.using_external_alpha_lut;
   const bool has_external_alpha_lut = !stage.alpha_lut.empty();
 
@@ -934,7 +940,9 @@ void CFARDetectorOp<T>::start() {
                                  win_d,
                                  win_r,
                                  pinned.calibration_relative_error,
-                                 pinned.calibration_confidence};
+                                 pinned.calibration_confidence,
+                                 kCfarCalibrationVersion,
+                                 pinned.calibration_trials};
   try {
     if (uses_slow_pfa_lut_calibration(variant, fold)) {
       detail::ensure_alpha_lut_build(warm_key, state_.get());
