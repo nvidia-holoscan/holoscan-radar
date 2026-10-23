@@ -420,9 +420,11 @@ python3 performance/optimization/radar_perf.py report --session /absolute/sessio
   --out /absolute/report.md
 ```
 
-Final-versus-original evidence must use a separate clean paired measurement;
-also supply `finish --calibration /absolute/original-aa/pairs.json`.
-do not multiply intermediate percentages. Reports preserve suspected bugs first
+Final-versus-original evidence must use a separate clean paired measurement.
+For legacy version-2/3 sessions, also supply
+`finish --calibration /absolute/original-aa/pairs.json`. Version-4 sessions use
+`finish --control-review /absolute/control-review.json` instead.
+Do not multiply intermediate percentages. Reports preserve suspected bugs first
 and explicitly identify absent cumulative evidence.
 
 ## Version 3 And Campaigns
