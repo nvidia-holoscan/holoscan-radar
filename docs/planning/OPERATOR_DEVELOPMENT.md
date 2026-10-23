@@ -287,8 +287,12 @@ transient fault costs one frame rather than the run.
 and the `(void)` reads as the deliberate choice it is.
 
 Required library emits are fail-fast by default (`emit_required_tensor` with
-wait false). A failed Tensor emit consumes the loan, so a wait retry must
-re-prepare. Only `CPHDReaderOp` retries: unmetered `playback_rate` 0 always
+wait false). On queue/pool exhaustion, the helper requests cooperative stop
+before returning the error. HSDK 5 can wait for peer callbacks before completing
+failure shutdown; without cancellation, a reader retrying an emit can wait
+forever after downstream stops. Preserve the returned error so the final run
+termination remains failed and the application can explain the cause.
+A failed Tensor emit consumes the loan, so a wait retry must re-prepare. Only `CPHDReaderOp` retries: unmetered `playback_rate` 0 always
 waits, and the optional static Param `wait_for_downstream` (default false,
 not `[live]`, Params schema version 2) opts paced ingest into the same retry.
 Do not capture wait in a library constructor. Do not add this Param to

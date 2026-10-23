@@ -303,6 +303,10 @@ auto emit_required_result(ExecutionContext& context, std::string_view what, bool
     return result;
   Error explained = explain_fail_fast_emit(what, code);
   HOLOSCAN_LOG_ERROR("{}", holoscan::runtime_error_message(explained));
+  // HSDK 5 can wait for peer callbacks before propagating a partition failure.
+  // Cancel reader retry loops now so they can retire even after downstream stops.
+  // Return the original error as well: failure takes precedence over requested stop.
+  context.request_stop();
   return make_unexpected(std::move(explained));
 }
 

@@ -58,3 +58,14 @@ headless visualization. The CPHD fixture is generated once by C++.
 See the [SAR open-items roll-up](../../docs/planning/SAR/OPEN_ITEMS.md) for
 tracked follow-ups and [SAR input data](../../docs/planning/SAR/INPUT_DATA.md) for optional real
 collections and [SDK development](../../SDK_DEVELOPMENT.md) for the pinned image.
+
+## Troubleshooting
+
+### Formation falls behind and a required output queue fills
+
+The reader may wait for downstream capacity when `cphd_reader.wait_for_downstream`
+is enabled. Required outputs in the formation stages fail the run when their
+queues fill. A fatal required-emit error also requests cooperative cancellation,
+so a reader already retrying an emit can exit and the application can report
+the original error and its playback-rate/image-size guidance. Visualization
+uses separate drop-oldest queues and may discard stale display frames.

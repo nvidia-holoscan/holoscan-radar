@@ -120,6 +120,64 @@ class SlowSinkOp final : public holoscan::Operator<> {
   std::shared_ptr<Counters> counters_;
 };
 
+struct CancellationState {
+  std::atomic<bool> retrying{false};
+  std::atomic<bool> retired{false};
+};
+
+// Model a reader already inside its cooperative queue/pool retry when another
+// partition fails. The retry must observe cancellation without an external stop.
+class RetryingPeerOp final : public holoscan::Operator<> {
+ public:
+  explicit RetryingPeerOp(std::shared_ptr<CancellationState> state) : state_(std::move(state)) {}
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = kTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    (void)holoscan::radar::retry_transient(
+        context, "RetryingPeerOp", [&]() -> holoscan::expected<void, holoscan::Error> {
+          state_->retrying.store(true);
+          return holoscan::make_unexpected(holoscan::Error{holoscan::ErrorCode::kBackpressured});
+        });
+    state_->retired.store(true);
+    return {};
+  }
+
+ private:
+  std::shared_ptr<CancellationState> state_;
+};
+
+class FailingEmitOp final : public holoscan::Operator<> {
+ public:
+  FailingEmitOp(std::shared_ptr<CancellationState> state, holoscan::ErrorCode code)
+  : state_(std::move(state)), code_(code) {}
+
+  [[nodiscard]] holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = kTick});
+    return result;
+  }
+
+  [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
+      holoscan::ExecutionContext& context) override {
+    if (!state_->retrying.load())
+      return {};
+    return holoscan::radar::emit_required_result(
+        context, "FailingEmitOp.out", false, [&]() -> holoscan::expected<void, holoscan::Error> {
+          return holoscan::make_unexpected(holoscan::Error{code_});
+        });
+  }
+
+ private:
+  std::shared_ptr<CancellationState> state_;
+  holoscan::ErrorCode code_;
+};
+
 struct RunOutcome {
   holoscan::RunTermination termination{holoscan::RunTermination::kFailed};
   std::string diagnostics;
@@ -192,6 +250,42 @@ TEST(EmitRequired, FailFastAbortsWhenConsumerIsBehind) {
   EXPECT_NE(outcome.diagnostics.find("output queue is full"), std::string::npos)
       << outcome.diagnostics;
   EXPECT_LT(outcome.received, kTicks);
+}
+
+TEST(EmitRequired, FailFastCancelsRetryingPeerAndPreservesFailure) {
+  for (const auto code :
+       {holoscan::ErrorCode::kBackpressured, holoscan::ErrorCode::kResourceExhausted}) {
+    SCOPED_TRACE(holoscan::error_code_name(code));
+    auto state = std::make_shared<CancellationState>();
+    holoscan::Graph graph{"emit-required-cancellation"};
+    auto peer = graph.op<RetryingPeerOp>("retrying_peer", state);
+    auto failing = graph.op<FailingEmitOp>("failing_emit", state, code);
+    graph.partition("peer").add(peer);
+    graph.partition("failure").add(failing);
+    graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+    holoscan::CompileOptions options;
+    const holoscan::ThreadPlacement lane{};
+    options.deployment.bind_thread_placement("peer", lane).bind_thread_placement("failure", lane);
+    const auto plan = holoscan::compile(graph, std::move(options));
+    ASSERT_TRUE(plan.ok()) << plan.json();
+    auto session = holoscan::run_async(plan);
+    const bool finished = session.wait_for(std::chrono::seconds{2});
+    // Bound a regression's cleanup without letting the fallback satisfy the assertion.
+    if (!finished)
+      session.request_stop();
+    session.wait();
+    EXPECT_TRUE(finished) << "Fatal emit failed to cancel a peer's retry loop";
+    EXPECT_TRUE(state->retired.load());
+    EXPECT_EQ(session.termination(), holoscan::RunTermination::kFailed);
+    bool preserved = false;
+    const auto expected =
+        holoscan::runtime_error_message(explain_fail_fast_emit("FailingEmitOp.out", code));
+    for (const auto& diagnostic : session.diagnostics()) {
+      const auto formatted = holoscan::format_diagnostic(diagnostic, plan.graph());
+      preserved = preserved || formatted.find(expected) != std::string::npos;
+    }
+    EXPECT_TRUE(preserved) << "Original fatal emit diagnostic was lost";
+  }
 }
 
 TEST(EmitRequired, WaitRetriesUntilConsumerDrains) {
