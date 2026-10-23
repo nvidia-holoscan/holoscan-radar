@@ -62,11 +62,24 @@ the last batch may be shorter. With `loop: true`, the ordered file list repeats.
 A positive `playback_rate` paces collection time relative to wall time;
 `duty_cycle` adds an inter-collection gap. Collect time is the finite `TxTime`
 span (non-finite PVP samples are skipped; some Umbra vectors store NaN there).
-`OnNotified` wakes a pending-batch state machine. One lifecycle-owned timer
-worker waits on absolute `steady_clock` deadlines outside the execution lane;
-it performs no file reads. `compute()` reads, uploads, and emits the current
-batch ASAP, then its accumulated collect-time deadline gates the next batch.
+`OnNotified` wakes a pending-batch state machine. One lifecycle-owned worker
+waits on absolute `steady_clock` deadlines outside the execution lane and
+reads/prepares one batch ahead. Two bounded pinned host slots hold the current
+batch and its successor; `compute()` performs GPU upload/decode and publication,
+with the existing H2D completion synchronization. It performs no file reads.
+The current batch emits ASAP, then its accumulated collect-time deadline gates
+the next batch's promotion.
 First-batch publication does not wait for its own end `TxTime`.
+
+The worker may read across file seams and loop wraps during playback or quiet
+time. Only promotion starts a collection's HUD dwell and updates playback;
+speculative reads never publish boundaries. A read exception is retained in
+its slot and reported when that batch becomes current, after earlier batches.
+The current slot survives all publication retries. The fixed pinned allocation
+is twice `pulses_per_tick × max_samples_per_pulse × sizeof(complex<T>)`, plus
+bounded metadata and decoded geometry for the two batches. Cancellation wakes
+timer waits promptly; joining the worker may wait for an active synchronous
+filesystem read to return. No second worker or new public configuration is used.
 
 Unmetered playback and `wait_for_downstream: true` retry pool/queue pressure
 on a notification after 10 ms. Successful publications are tracked across
@@ -141,23 +154,35 @@ selection, boundaries, and malformed inputs. Real-collection validation is
 tracked in the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md); see
 [SAR data preparation](../../../tools/sar_data/README.md).
 
-## Scheduling baseline
+## Scheduling and prefetch measurements
 
 On GB10 with the GA HSDK 5 CUDA 13 image, a Release spotlight run using the
 Atlanta preset's 11,500 selected pulses and 100-pulse batches, a 32×32 image,
 unmetered playback, no visualization/dump, and warm filesystem cache produced
-the following median of three runs after the scheduling refactor:
+the following medians of three runs per implementation. The scheduling-only
+baseline is commit `e4232c22`; the second column adds one-batch prefetch:
 
-| Measurement | Scheduling only |
-| --- | --- |
-| End-to-end throughput | 9,148 pulses/s |
-| Reader callback mean / p95 | 5.34 / 6.64 ms |
-| Process CPU time | 2.87 s |
-| Peak host RSS | 248.8 MiB |
+| Measurement | Scheduling only | With prefetch |
+| --- | --- | --- |
+| End-to-end elapsed time | 1.257 s | 1.312 s |
+| End-to-end throughput | 9,148 pulses/s | 8,764 pulses/s |
+| Reader callback mean / p95 | 5.34 / 6.64 ms | 5.37 / 5.89 ms |
+| Process CPU time | 2.87 s | 3.10 s |
+| Process CPU utilization | 223% | 238% |
+| Peak host RSS | 248.8 MiB | 306.0 MiB |
 
 End-to-end timing includes process startup and final downstream drain. CPU time
-is user plus system time; RSS is the process peak, not GPU allocation size.
+is user plus system time; utilization divides that by elapsed time (100%
+is one CPU core). RSS is the process peak, not GPU allocation size.
 Callback duration is measured by the reader's DEBUG timer. This SDK image
 requires `holoscan::set_log_level()` to initialize the environment log-level
 override; the measurement used an external preload calling that function.
 These are diagnostic measurements of this workload, not performance thresholds.
+
+This small warm-cache comparison did not demonstrate a throughput improvement.
+The observed callback p95 was lower, while CPU time and RSS increased. Prefetch
+provides host I/O overlap with one extra staging slot; it does not add GPU
+compute capacity. In this Atlanta configuration the extra fixed pinned slot is
+about 56.9 MiB, consistent with the RSS increase. Synchronous I/O on the shared
+worker can delay a due notification; release deadlines are gates, not hard
+real-time guarantees.

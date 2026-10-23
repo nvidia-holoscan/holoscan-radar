@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -15,6 +16,9 @@
 #include <cstring>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <fstream>
+#include <future>
+#include <stdexcept>
+#include <exception>
 #include <memory>
 #include <string>
 #include <vector>
@@ -31,6 +35,7 @@
 #include "io/cphd_reader_op/playback_scheduler.hpp"
 
 #include "io/cphd_reader_op/cphd_reader_op.hpp"
+#include "io/cphd_reader_op/host_read_ahead.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_common/sar/formation_hud.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -55,6 +60,83 @@ TEST(CphdReaderOp, AbsolutePlaybackAndQuietDeadlines) {
   EXPECT_DOUBLE_EQ(quiet_seconds(4.0, 1.0, 2.0), 0.0);
   // Deadlines are rooted at collection start, not at a late callback's time.
   EXPECT_LT(after_seconds(origin, 0.04), origin + std::chrono::seconds{1});
+}
+
+TEST(CphdReaderOp, HostReadAheadOverlapsCurrentBatchAndRemainsBounded) {
+  using holoscan::radar::cphd::HostReadAhead;
+  using holoscan::radar::cphd::PlaybackScheduler;
+  PlaybackScheduler worker;
+  HostReadAhead<int> ahead;
+  std::promise<void> read_started, allow_read, completed;
+  const auto allowed = allow_read.get_future().share();
+  const auto started = read_started.get_future();
+  auto done = completed.get_future();
+  worker.start();
+  // Model the current slot being retained for GPU upload/publication retries.
+  auto current = std::make_unique<int>(7);
+  ahead.request(worker, [&] {
+    read_started.set_value();
+    allowed.wait();
+    return std::make_unique<int>(8);
+  });
+  const auto observed = started.wait_for(std::chrono::seconds{1});
+  // Always unblock cleanup even if the worker failed to start.
+  EXPECT_EQ(observed, std::future_status::ready);
+  EXPECT_EQ(*current, 7);
+  // Neither a third slot nor a second outstanding read may be admitted.
+  EXPECT_THROW(ahead.request(worker,
+                             [] {
+                               return std::make_unique<int>(9);
+                             }),
+               std::logic_error);
+  worker.submit([&] {
+    completed.set_value();
+  });
+  allow_read.set_value();
+  EXPECT_EQ(done.wait_for(std::chrono::seconds{1}), std::future_status::ready);
+  worker.stop();
+  auto ready = ahead.take();
+  ASSERT_TRUE(ready.has_value());
+  EXPECT_FALSE(ready->error);
+  EXPECT_EQ(*ready->batch, 8);
+  EXPECT_EQ(*current, 7);  // The prefetched read did not overwrite the current slot.
+  ahead.clear();
+}
+
+TEST(CphdReaderOp, HostReadAheadDefersErrorsAndJoinsAnInProgressRead) {
+  using holoscan::radar::cphd::HostReadAhead;
+  using holoscan::radar::cphd::PlaybackScheduler;
+  PlaybackScheduler worker;
+  HostReadAhead<int> ahead;
+  std::promise<void> read_started, allow_read;
+  auto started = read_started.get_future();
+  const auto allowed = allow_read.get_future().share();
+  worker.start();
+  ahead.request(worker, [&]() -> std::unique_ptr<int> {
+    read_started.set_value();
+    allowed.wait();
+    throw std::runtime_error("deferred CPHD read error");
+  });
+  EXPECT_EQ(started.wait_for(std::chrono::seconds{1}), std::future_status::ready);
+  auto stopped = std::async(std::launch::async, [&] {
+    worker.stop();
+  });
+  EXPECT_EQ(stopped.wait_for(std::chrono::milliseconds{10}), std::future_status::timeout);
+  // Shutdown cannot preempt a synchronous filesystem read; it joins it.
+  allow_read.set_value();
+  EXPECT_EQ(stopped.wait_for(std::chrono::seconds{1}), std::future_status::ready);
+  stopped.get();
+  auto result = ahead.take();
+  ASSERT_TRUE(result.has_value());
+  EXPECT_FALSE(result->batch);
+  ASSERT_TRUE(result->error);
+  try {
+    std::rethrow_exception(result->error);
+    FAIL() << "Expected a deferred read exception";
+  } catch (const std::runtime_error& error) {
+    EXPECT_STREQ(error.what(), "deferred CPHD read error");
+  }
+  ahead.clear();
 }
 
 TEST(CphdReaderOp, EofDrainWaitsForClosingImageAndReport) {
@@ -438,7 +520,7 @@ TEST(CphdReaderOp, AcceptsRecordedGridRampButRejectsFrequencyStep) {
                              "pulse_times", "velocities"}) {
       fixture.output_device(port, holoscan::DeviceId{0});
     }
-    // The reader parks after D22 so a downstream aperture can drain; HSDK
+    // The reader becomes idle after D22 so a downstream aperture can drain; HSDK
     // request_stop does not. Isolated operator tests must cancel, matching
     // EmitsEachBatchAndTypedEndBoundary.
     auto running = fixture.run_async({.expect_stop = true});
@@ -456,6 +538,50 @@ TEST(CphdReaderOp, AcceptsRecordedGridRampButRejectsFrequencyStep) {
   EXPECT_NE(rejected.describe_failure().find("SC0 varies across a pulse batch"), std::string::npos);
   fs::remove(ramp);
   fs::remove(step);
+}
+
+TEST(CphdReaderOp, PrefetchedReadFailureFollowsTheValidOutputPrefix) {
+  using holoscan::radar::CPHDReaderOp;
+  using holoscan::radar::CphdReaderParams;
+  using holoscan::radar::CoordinateFrame;
+  using holoscan::radar::CoordinateFrameSpec;
+  using holoscan::radar::CoordinateFrameType;
+  using holoscan::radar::MaxTensorExtents;
+  const auto path = fs::temp_directory_path() / "holoscan_reader_prefetch_error.cphd";
+  make_fixture(path);
+  // Preserve the header/PVPs and first two pulses, but truncate the next signal block.
+  fs::resize_file(path, 8192 + 2 * 8 * 8);
+  MaxTensorExtents extents;
+  extents.max_pulses = 2;
+  extents.max_samples_per_pulse = 8;
+  auto fixture = holoscan::testing::create_operator_test<CPHDReaderOp<double>>(extents);
+  CphdReaderParams p;
+  p.path = holoscan::radar::CollectionPaths(path.string());
+  p.coordinate_frame = CoordinateFrame(CoordinateFrameSpec{.frame = CoordinateFrameType::kEcef});
+  p.pulses_per_tick = 2;
+  // Leave enough pacing time for the next batch's failure to be prefetched.
+  p.playback_rate = 0.1;
+  p.wait_for_downstream = true;
+  fixture.set_params(p);
+  fixture.capture_snapshot<holoscan::Tensor>("phase_history", 3U, 2U * 8U * 16U);
+  fixture.capture_snapshot<holoscan::Tensor>("positions", 3U, 2U * 3U * 8U);
+  fixture.capture_snapshot<holoscan::Tensor>("reference_position", 3U, 2U * 3U * 8U);
+  fixture.capture<uint8_t>("stream_boundary", 3U);
+  for (const char* port : {"phase_history", "positions", "reference_position", "sample_axis",
+                           "pulse_times", "velocities"})
+    fixture.output_device(port, holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  EXPECT_TRUE(running.wait_for_output("stream_boundary", 1U, std::chrono::seconds{2}));
+  // Wait for the failure rather than externally cancelling during pacing.
+  EXPECT_FALSE(running.wait_for_output("stream_boundary", 2U, std::chrono::seconds{2}));
+  const auto result = running.finish();
+  EXPECT_FALSE(result.ok());
+  EXPECT_NE(result.describe_failure().find("signal block"), std::string::npos);
+  EXPECT_EQ(result.snapshots<holoscan::Tensor>("phase_history").size(), 1U);
+  const auto boundaries = result.samples<uint8_t>("stream_boundary");
+  ASSERT_EQ(boundaries.size(), 1U);
+  EXPECT_EQ(boundaries[0].data, 0U);
+  fs::remove(path);
 }
 
 TEST(CphdReaderOp, EmitsEachBatchAndTypedEndBoundary) {
@@ -501,13 +627,17 @@ TEST(CphdReaderOp, EmitsEachBatchAndTypedEndBoundary) {
   ASSERT_EQ(outputs.size(), 3U);
   EXPECT_EQ(outputs[0].shape(), (std::vector<int64_t>{2, 8}));
   EXPECT_EQ(outputs[2].shape(), (std::vector<int64_t>{1, 8}));
-  const auto expected_signal = CphdFile(path.string()).read_signal(0, 0, 2);
-  const auto host = holoscan::radar::testing::to_host(outputs[0]);
-  ASSERT_EQ(host.size(), static_cast<int64_t>(expected_signal.size()));
-  const auto* samples = host.as<std::complex<float>>();
-  for (std::size_t i = 0; i < expected_signal.size(); ++i) {
-    EXPECT_NEAR(samples[i].real(), expected_signal[i].real(), 1e-5F) << i;
-    EXPECT_NEAR(samples[i].imag(), expected_signal[i].imag(), 1e-5F) << i;
+  for (std::size_t batch = 0; batch < outputs.size(); ++batch) {
+    const int64_t first = static_cast<int64_t>(batch) * 2;
+    const auto expected_signal =
+        CphdFile(path.string()).read_signal(0, first, std::min<int64_t>(2, 5 - first));
+    const auto host = holoscan::radar::testing::to_host(outputs[batch]);
+    ASSERT_EQ(host.size(), static_cast<int64_t>(expected_signal.size()));
+    const auto* samples = host.as<std::complex<float>>();
+    for (std::size_t i = 0; i < expected_signal.size(); ++i) {
+      EXPECT_NEAR(samples[i].real(), expected_signal[i].real(), 1e-5F) << batch << ":" << i;
+      EXPECT_NEAR(samples[i].imag(), expected_signal[i].imag(), 1e-5F) << batch << ":" << i;
+    }
   }
   fs::remove(path);
 }
@@ -522,6 +652,13 @@ TEST(CphdReaderOp, MarksFinalBatchOfEachCollection) {
   const fs::path second = fs::temp_directory_path() / "holoscan_sar_reader_second.cphd";
   make_fixture(first);
   make_fixture(second);
+  {
+    std::ofstream out(second, std::ios::binary | std::ios::in | std::ios::out);
+    out.seekp(8192);
+    holoscan::radar::testing::cphd_fixture::write_be32(out, 0.25F);
+    holoscan::radar::testing::cphd_fixture::write_be32(out, 0.75F);
+  }
+
   MaxTensorExtents extents;
   extents.max_pulses = 2;
   extents.max_samples_per_pulse = 8;
@@ -555,13 +692,18 @@ TEST(CphdReaderOp, MarksFinalBatchOfEachCollection) {
     EXPECT_EQ(boundaries[i].data, expected[i]) << "batch " << i;
   const auto outputs = result.snapshots<holoscan::Tensor>("phase_history");
   ASSERT_EQ(outputs.size(), 6U);
-  const auto expected_signal = CphdFile(first.string()).read_signal(0, 0, 2);
-  const auto host = holoscan::radar::testing::to_host(outputs[0]);
-  ASSERT_EQ(host.size(), static_cast<int64_t>(expected_signal.size()));
-  const auto* samples = host.as<std::complex<double>>();
-  for (std::size_t i = 0; i < expected_signal.size(); ++i) {
-    EXPECT_NEAR(samples[i].real(), expected_signal[i].real(), 1e-5) << i;
-    EXPECT_NEAR(samples[i].imag(), expected_signal[i].imag(), 1e-5) << i;
+  for (std::size_t batch = 0; batch < outputs.size(); ++batch) {
+    const auto& path = batch < 3U ? first : second;
+    const int64_t pulse = static_cast<int64_t>(batch % 3U) * 2;
+    const auto expected_signal =
+        CphdFile(path.string()).read_signal(0, pulse, std::min<int64_t>(2, 5 - pulse));
+    const auto host = holoscan::radar::testing::to_host(outputs[batch]);
+    ASSERT_EQ(host.size(), static_cast<int64_t>(expected_signal.size()));
+    const auto* samples = host.as<std::complex<double>>();
+    for (std::size_t i = 0; i < expected_signal.size(); ++i) {
+      EXPECT_NEAR(samples[i].real(), expected_signal[i].real(), 1e-5) << batch << ":" << i;
+      EXPECT_NEAR(samples[i].imag(), expected_signal[i].imag(), 1e-5) << batch << ":" << i;
+    }
   }
   fs::remove(first);
   fs::remove(second);

@@ -5,6 +5,8 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <functional>
+#include <stdexcept>
 #include <mutex>
 #include <optional>
 #include <stop_token>
@@ -42,17 +44,25 @@ class PlaybackScheduler {
       std::unique_lock lock(mutex_);
       while (!token.stop_requested()) {
         changed_.wait(lock, token, [this] {
-          return deadline_.has_value();
+          return task_ || deadline_.has_value();
         });
         if (token.stop_requested())
           break;
+        if (task_) {
+          auto task = std::move(task_);
+          task_ = {};
+          lock.unlock();
+          task();
+          lock.lock();
+          continue;
+        }
         const auto deadline = *deadline_;
         changed_.wait_until(lock, token, deadline, [this, deadline] {
-          return !deadline_ || *deadline_ != deadline;
+          return task_ || !deadline_ || *deadline_ != deadline;
         });
         if (token.stop_requested())
           break;
-        if (!deadline_ || *deadline_ != deadline)
+        if (task_ || !deadline_ || *deadline_ != deadline)
           continue;
         deadline_.reset();
         lock.unlock();
@@ -79,6 +89,14 @@ class PlaybackScheduler {
     });
   }
 
+  void submit(std::function<void()> task) {
+    const std::lock_guard lock(mutex_);
+    if (task_)
+      throw std::logic_error("CPHDReaderOp: worker task already pending");
+    task_ = std::move(task);
+    changed_.notify_all();
+  }
+
   void schedule(PlaybackClock::time_point deadline) {
     const std::lock_guard lock(mutex_);
     deadline_ = deadline;
@@ -93,6 +111,7 @@ class PlaybackScheduler {
     }
     const std::lock_guard lock(mutex_);
     deadline_.reset();
+    task_ = {};
   }
 
   void release() { sender_ = {}; }
@@ -103,5 +122,6 @@ class PlaybackScheduler {
   std::condition_variable_any changed_;
   std::optional<PlaybackClock::time_point> deadline_;
   std::jthread worker_;
+  std::function<void()> task_;
 };
 }  // namespace holoscan::radar::cphd

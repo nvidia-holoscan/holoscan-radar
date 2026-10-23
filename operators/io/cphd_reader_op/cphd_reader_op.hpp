@@ -27,6 +27,7 @@
 
 #include "io/cphd_reader_op/collection_paths.hpp"
 #include "io/cphd_reader_op/playback_scheduler.hpp"
+#include "io/cphd_reader_op/host_read_ahead.hpp"
 #include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/sar/formation_hud.hpp"
@@ -110,6 +111,10 @@ class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
   cphd::PlaybackScheduler scheduler_;
   Stage stage_{Stage::kRead};
   std::unique_ptr<Batch> batch_;
+  cphd::HostReadAhead<Batch> read_ahead_;
+  CphdReaderParams read_params_;
+  std::unique_ptr<Batch> read_batch(unsigned slot);
+  void request_read(unsigned slot);
   std::optional<int64_t> capture_time_ns_;
   void open_file();
   void publish_hud();
@@ -142,6 +147,7 @@ class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
   // Reused CF8 ingest: pinned stored-bytes (or host-decoded integer samples),
   // a device CF8 scratch for the double widen, and per-pulse AmpSF.
   std::uintptr_t pinned_signal_{0};
+  std::uintptr_t second_pinned_signal_{0};
   std::uintptr_t device_cf8_{0};
   std::uintptr_t device_amp_{0};
   std::size_t pinned_signal_bytes_{0};

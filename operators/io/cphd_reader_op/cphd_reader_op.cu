@@ -12,6 +12,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <optional>
 #include <memory>
@@ -196,6 +197,11 @@ void check_sample_axis(const std::vector<double>& values, const char* name) {
 template <typename T>
 struct CPHDReaderOp<T>::Batch {
   int64_t first{}, count{}, samples{};
+  size_t file_index{};
+  bool collection_start{}, nonfinite{};
+  LastMeanApc mean_apc{};
+  unsigned slot{};
+  const char* signal{};
   bool final{}, follows{}, cf8{};
   double collect_span{};
   std::vector<T> apc, reference, axis, vel;
@@ -237,6 +243,7 @@ template <typename T>
 LifecycleStatus CPHDReaderOp<T>::on_release(LifecycleContext&) noexcept {
   scheduler_.release();
   batch_.reset();
+  read_ahead_.clear();
   file_.reset();
   release_resources();
   return LifecycleStatus::kOk;
@@ -255,6 +262,10 @@ void CPHDReaderOp<T>::release_resources() noexcept {
   if (pinned_signal_ != 0) {
     cudaFreeHost(reinterpret_cast<void*>(pinned_signal_));
     pinned_signal_ = 0;
+  }
+  if (second_pinned_signal_ != 0) {
+    cudaFreeHost(reinterpret_cast<void*>(second_pinned_signal_));
+    second_pinned_signal_ = 0;
   }
   if (device_cf8_ != 0) {
     cudaFree(reinterpret_cast<void*>(device_cf8_));
@@ -334,7 +345,7 @@ void CPHDReaderOp<T>::maybe_warn_behind() {
 
 template <typename T>
 void CPHDReaderOp<T>::open_file() {
-  const auto& p = params();
+  const auto& p = read_params_;
   file_ = std::make_unique<cphd::CphdFile>(files_[file_index_]);
   const auto& info = file_->channel(p.channel);
   if (p.coordinate_frame.frame() != CoordinateFrameType::kEcef) {
@@ -352,12 +363,6 @@ void CPHDReaderOp<T>::open_file() {
     throw std::invalid_argument("CPHDReaderOp: pulse range or sample count exceeds bounds");
   }
   next_pulse_ = first_pulse_;
-  nonfinite_warned_ = false;
-  behind_episode_ = false;
-  last_behind_warn_at_.reset();
-  collection_t_min_ = 0.0;
-  collection_t_max_ = 0.0;
-  collection_time_valid_ = false;
 }
 
 template <typename T>
@@ -372,7 +377,9 @@ void CPHDReaderOp<T>::start() {
   times_out_ = {};
   velocities_out_ = {};
   frame_out_ = {};
-  const auto& p = params();
+  read_ahead_.clear();
+  read_params_ = params();
+  const auto& p = read_params_;
   if (!p.coordinate_frame.is_valid() || p.pulses_per_tick <= 0 ||
       p.pulses_per_tick > *extents_.max_pulses ||
       (!p.pulse_range.empty() && p.pulse_range.size() != 2U) || !std::isfinite(p.playback_rate) ||
@@ -408,6 +415,10 @@ void CPHDReaderOp<T>::start() {
     throw std::runtime_error("CPHDReaderOp: failed to allocate pinned ingest buffer");
   }
   pinned_signal_ = reinterpret_cast<std::uintptr_t>(pinned);
+  void* second = nullptr;
+  if (cudaMallocHost(&second, pinned_signal_bytes_) != cudaSuccess)
+    throw std::runtime_error("CPHDReaderOp: failed to allocate second pinned ingest buffer");
+  second_pinned_signal_ = reinterpret_cast<std::uintptr_t>(second);
   if constexpr (std::is_same_v<T, double>) {
     void* scratch = nullptr;
     if (cudaMalloc(&scratch, pulses * samples * 8U) != cudaSuccess) {
@@ -421,7 +432,116 @@ void CPHDReaderOp<T>::start() {
   }
   device_amp_ = reinterpret_cast<std::uintptr_t>(amp);
   scheduler_.start();
+  request_read(0U);
   scheduler_.schedule(std::chrono::steady_clock::now());
+}
+
+template <typename T>
+void CPHDReaderOp<T>::request_read(unsigned slot) {
+  read_ahead_.request(scheduler_, [this, slot] {
+    return read_batch(slot);
+  });
+}
+
+template <typename T>
+std::unique_ptr<typename CPHDReaderOp<T>::Batch> CPHDReaderOp<T>::read_batch(unsigned slot) {
+  const auto& p = read_params_;
+  if (next_pulse_ == last_pulse_) {
+    file_index_ = (file_index_ + 1U) % files_.size();
+    open_file();
+  }
+  const auto& info = file_->channel(p.channel);
+  const int64_t count = std::min(p.pulses_per_tick, last_pulse_ - next_pulse_);
+  const int64_t first = next_pulse_;
+  const bool final = first + count == last_pulse_;
+  const bool follows = p.loop || file_index_ + 1U < files_.size();
+  // Decode one bounded CPHD batch and derive the pulse geometry from its PVPs.
+  auto pvp = file_->read_pvp_block(p.channel, first, count);
+  const auto times = pvp.field("TxTime", 1);
+  const auto tx = pvp.field("TxPos", 3);
+  const auto rx = pvp.field("RcvPos", 3);
+  const auto srp = pvp.field("SRPPos", 3);
+  std::vector<T> apc(tx.size()), reference(srp.size());
+  std::array<double, 3> mean{};
+  int64_t finite_count = 0;
+  bool nonfinite = false;
+  LastMeanApc mean_apc{};
+  for (int64_t pulse = 0; pulse < count; ++pulse) {
+    bool finite = true;
+    for (int axis = 0; axis < 3; ++axis) {
+      const size_t i = static_cast<size_t>(3 * pulse + axis);
+      const double value = 0.5 * (tx[i] + rx[i]);
+      apc[i] = static_cast<T>(value);
+      reference[i] = static_cast<T>(srp[i]);
+      finite = finite && std::isfinite(value);
+    }
+    if (finite) {
+      for (int axis = 0; axis < 3; ++axis)
+        mean[axis] += apc[3 * pulse + axis];
+      ++finite_count;
+    } else {
+      nonfinite = true;
+    }
+  }
+  if (finite_count > 0) {
+    for (double& value : mean)
+      value /= static_cast<double>(finite_count);
+    mean_apc = {.valid = true, .file_index = static_cast<int64_t>(file_index_), .ecef = mean};
+  }
+  const auto sc0 = pvp.field("SC0", 1);
+  const auto scss = pvp.field("SCSS", 1);
+  check_sample_axis(sc0, "SC0");
+  check_sample_axis(scss, "SCSS");
+  std::vector<T> axis(static_cast<size_t>(info.num_samples));
+  for (int64_t i = 0; i < info.num_samples; ++i) {
+    axis[static_cast<size_t>(i)] = static_cast<T>(sc0[0] + i * scss[0]);
+  }
+  std::vector<T> vel;
+  if (pvp.has("TxVel") && pvp.has("RcvVel")) {
+    const auto tx_vel = pvp.field("TxVel", 3);
+    const auto rx_vel = pvp.field("RcvVel", 3);
+    vel.resize(tx_vel.size());
+    for (size_t i = 0; i < vel.size(); ++i) {
+      vel[i] = static_cast<T>(0.5 * (tx_vel[i] + rx_vel[i]));
+    }
+  }
+
+  char* const pinned = reinterpret_cast<char*>(slot == 0U ? pinned_signal_ : second_pinned_signal_);
+  if (pinned == nullptr) {
+    throw std::runtime_error("CPHDReaderOp: pinned ingest buffer is not armed");
+  }
+  const bool cf8 = file_->sample_format() == cphd::SampleFormat::kCF8;
+  std::vector<double> amp;
+  if (cf8 && file_->has_amp_sf())
+    amp = file_->amplitude_scale(&pvp, count);
+  if (cf8) {
+    file_->read_signal_bytes(p.channel, first, count, pinned, pinned_signal_bytes_);
+  } else {
+    file_->read_signal_into<T>(p.channel, first, count, reinterpret_cast<std::complex<T>*>(pinned),
+                               &pvp);
+  }
+  auto batch = std::make_unique<Batch>(Batch{
+      .first = first,
+      .count = count,
+      .samples = info.num_samples,
+      .file_index = file_index_,
+      .collection_start = first == first_pulse_,
+      .nonfinite = nonfinite,
+      .mean_apc = mean_apc,
+      .slot = slot,
+      .signal = pinned,
+      .final = final,
+      .follows = follows,
+      .cf8 = cf8,
+      .apc = std::move(apc),
+      .reference = std::move(reference),
+      .axis = std::move(axis),
+      .vel = std::move(vel),
+      .times = times,
+      .amp = std::move(amp),
+  });
+  next_pulse_ += count;
+  return batch;
 }
 
 template <typename T>
@@ -442,7 +562,6 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
               .count();
       playback_.behind_s = playback_.wall_s - playback_.target_s();
       playback_.last_slack_s = p.playback_rate > 0.0 ? -playback_.behind_s : 0.0;
-      next_pulse_ += batch_->count;
       if (batch_->final) {
         spans_.back().dwell_end = std::chrono::steady_clock::now();
         if (!batch_->follows) {
@@ -454,8 +573,6 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
         }
         pending_cooldown_s_ =
             cphd::quiet_seconds(batch_->collect_span, p.duty_cycle, p.playback_rate);
-        file_index_ = (file_index_ + 1U) % files_.size();
-        open_file();
       }
       batch_.reset();
       stage_ = Stage::kRead;
@@ -474,119 +591,52 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
       publish_hud();
     }
     if (stage_ == Stage::kRead) {
-      const auto tick_start = std::chrono::steady_clock::now();
-      const auto& info = file_->channel(p.channel);
-      const int64_t count = std::min(p.pulses_per_tick, last_pulse_ - next_pulse_);
-      const int64_t first = next_pulse_;
-      const bool final = first + count == last_pulse_;
-      const bool follows = p.loop || file_index_ + 1U < files_.size();
-      if (first == first_pulse_) {
-        collection_wall_start_ = tick_start;
+      auto ready = read_ahead_.take();
+      if (!ready)
+        return {};
+      if (ready->error)
+        std::rethrow_exception(ready->error);
+      batch_ = std::move(ready->batch);
+      auto& current = *batch_;
+      current.capture_time = context.activation_time();
+      capture_time_ns_ = current.capture_time.timestamp_ns;
+      if (current.collection_start) {
+        const auto now = std::chrono::steady_clock::now();
+        collection_wall_start_ = now;
+        collection_time_valid_ = false;
+        nonfinite_warned_ = false;
+        behind_episode_ = false;
+        last_behind_warn_at_.reset();
         spans_.push_back(
-            CollectionSpan{.file_index = static_cast<int>(file_index_), .dwell_start = tick_start});
+            CollectionSpan{.file_index = static_cast<int>(current.file_index), .dwell_start = now});
         if (spans_.size() > 32U)
           spans_.erase(spans_.begin());
       }
-      // Decode one bounded CPHD batch and derive the pulse geometry from its PVPs.
-      auto pvp = file_->read_pvp_block(p.channel, first, count);
-      const auto times = pvp.field("TxTime", 1);
-      // Umbra files can put NaN on a handful of TxTime/TxPos words (one surveyed
-      // file had 32 of 4844). Front/back of the batch is not a span: a NaN on
-      // vector 0 poisons collect time for the rest of the file, skips pace
-      // sleep, and shrinks the Gantt dwell. Skip non-finite samples, matching
-      // the HSDK 4 reader.
-      for (double t : times) {
-        if (!std::isfinite(t))
+      // Only promotion advances the playback/HUD state. Speculative I/O is
+      // allowed across seams without starting a new collection's dwell.
+      for (double time : current.times) {
+        if (!std::isfinite(time))
           continue;
         if (!collection_time_valid_) {
-          collection_t_min_ = t;
-          collection_t_max_ = t;
+          collection_t_min_ = collection_t_max_ = time;
           collection_time_valid_ = true;
         } else {
-          collection_t_min_ = std::min(collection_t_min_, t);
-          collection_t_max_ = std::max(collection_t_max_, t);
+          collection_t_min_ = std::min(collection_t_min_, time);
+          collection_t_max_ = std::max(collection_t_max_, time);
         }
       }
-      const double collect_s = collection_time_valid_ ? collection_t_max_ - collection_t_min_ : 0.0;
-      const double collect_span = (collect_s > 0.0 && std::isfinite(collect_s)) ? collect_s : 0.0;
-      const auto tx = pvp.field("TxPos", 3);
-      const auto rx = pvp.field("RcvPos", 3);
-      const auto srp = pvp.field("SRPPos", 3);
-      std::vector<T> apc(tx.size()), reference(srp.size());
-      std::array<double, 3> mean{};
-      int64_t finite_count = 0;
-      for (int64_t pulse = 0; pulse < count; ++pulse) {
-        bool finite = true;
-        for (int axis = 0; axis < 3; ++axis) {
-          const size_t i = static_cast<size_t>(3 * pulse + axis);
-          const double value = 0.5 * (tx[i] + rx[i]);
-          apc[i] = static_cast<T>(value);
-          reference[i] = static_cast<T>(srp[i]);
-          finite = finite && std::isfinite(value);
-        }
-        if (finite) {
-          for (int axis = 0; axis < 3; ++axis)
-            mean[axis] += apc[3 * pulse + axis];
-          ++finite_count;
-        } else if (!nonfinite_warned_) {
-          HOLOSCAN_LOG_WARN("{}: non-finite phase-centre positions passed through", kWho);
-          nonfinite_warned_ = true;
-        }
+      const double span = collection_time_valid_ ? collection_t_max_ - collection_t_min_ : 0.0;
+      current.collect_span = span > 0.0 && std::isfinite(span) ? span : 0.0;
+      if (current.nonfinite && !nonfinite_warned_) {
+        HOLOSCAN_LOG_WARN("{}: non-finite phase-centre positions passed through", kWho);
+        nonfinite_warned_ = true;
       }
-      if (finite_count > 0) {
-        for (double& value : mean)
-          value /= static_cast<double>(finite_count);
-        last_apc_ = {.valid = true, .file_index = static_cast<int64_t>(file_index_), .ecef = mean};
-      }
-      const auto sc0 = pvp.field("SC0", 1);
-      const auto scss = pvp.field("SCSS", 1);
-      check_sample_axis(sc0, "SC0");
-      check_sample_axis(scss, "SCSS");
-      std::vector<T> axis(static_cast<size_t>(info.num_samples));
-      for (int64_t i = 0; i < info.num_samples; ++i) {
-        axis[static_cast<size_t>(i)] = static_cast<T>(sc0[0] + i * scss[0]);
-      }
-      std::vector<T> vel;
-      if (pvp.has("TxVel") && pvp.has("RcvVel")) {
-        const auto tx_vel = pvp.field("TxVel", 3);
-        const auto rx_vel = pvp.field("RcvVel", 3);
-        vel.resize(tx_vel.size());
-        for (size_t i = 0; i < vel.size(); ++i) {
-          vel[i] = static_cast<T>(0.5 * (tx_vel[i] + rx_vel[i]));
-        }
-      }
-
-      char* const pinned = reinterpret_cast<char*>(pinned_signal_);
-      if (pinned == nullptr) {
-        return make_unexpected(
-            Error{ErrorCode::kFailure, "CPHDReaderOp: pinned ingest buffer is not armed"});
-      }
-      const bool cf8 = file_->sample_format() == cphd::SampleFormat::kCF8;
-      std::vector<double> amp;
-      if (cf8 && file_->has_amp_sf())
-        amp = file_->amplitude_scale(&pvp, count);
-      if (cf8) {
-        file_->read_signal_bytes(p.channel, first, count, pinned, pinned_signal_bytes_);
-      } else {
-        file_->read_signal_into<T>(p.channel, first, count,
-                                   reinterpret_cast<std::complex<T>*>(pinned), &pvp);
-      }
-      batch_ = std::make_unique<Batch>(Batch{.first = first,
-                                             .count = count,
-                                             .samples = info.num_samples,
-                                             .final = final,
-                                             .follows = follows,
-                                             .cf8 = cf8,
-                                             .collect_span = collect_span,
-                                             .apc = std::move(apc),
-                                             .reference = std::move(reference),
-                                             .axis = std::move(axis),
-                                             .vel = std::move(vel),
-                                             .times = times,
-                                             .amp = std::move(amp),
-                                             .capture_time = context.activation_time()});
-      capture_time_ns_ = batch_->capture_time.timestamp_ns;
+      if (current.mean_apc.valid)
+        last_apc_ = current.mean_apc;
       stage_ = Stage::kPublish;
+      // Exactly one subsequent slot, before GPU work/publication/retries.
+      if (!current.final || current.follows)
+        request_read(1U - current.slot);
     }
     auto& batch = *batch_;
     const auto count = batch.count;
@@ -615,7 +665,7 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
     };
     publish_playback(!final);
     const EmitOptions options{.capture_time = batch.capture_time};
-    const auto* pinned = reinterpret_cast<const char*>(pinned_signal_);
+    const auto* pinned = batch.signal;
     const auto nsamp = static_cast<std::size_t>(count * samples);
     const auto h2d = reinterpret_cast<cudaStream_t>(h2d_stream_);
     const auto h2d_done = reinterpret_cast<cudaEvent_t>(h2d_done_);
