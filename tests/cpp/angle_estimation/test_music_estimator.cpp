@@ -34,6 +34,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "angle_estimation/beamscan_estimator_op/beamscan_estimator_op.hpp"
 #include "angle_estimation/music_estimator_op/music_estimator_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
@@ -250,12 +251,15 @@ holoscan::testing::TestResult run_music_result(std::shared_ptr<holoscan::Tensor>
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<HostTensor> music_frames(const holoscan::testing::TestResult& result,
@@ -303,12 +307,15 @@ holoscan::testing::TestResult run_music_with_mask(std::shared_ptr<holoscan::Tens
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
   fixture.input_source_device("is_valid", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 struct LiveMusicTick {
@@ -425,12 +432,15 @@ holoscan::testing::TestResult run_live_music(std::vector<LiveMusicTick> ticks, M
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, ticks.size(), std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, ticks.size());
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 BeamscanParams make_beamscan_params(ArrayGeometry geom, AngleConvention conv,
                                     std::vector<double> az, std::vector<double> el) {
@@ -457,11 +467,14 @@ holoscan::testing::TestResult run_beamscan_result(std::shared_ptr<holoscan::Tens
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("aoa_estimates", 1U, std::chrono::seconds{5});
-  (void)running.wait_for_output("angle_spectrum", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "aoa_estimates", 1U);
+  (void)completion.wait_for_output(running, "angle_spectrum", 1U);
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -533,10 +546,12 @@ TEST(MUSICEstimatorOpTest, UnwiredOptionalOutputsDoNotSuppressAoa) {
        {"aoa_estimates", "angle_spectrum", "doa_multi", "source_count", "eigenvalues"}) {
     fixture.output_device(output, holoscan::DeviceId{0});
   }
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("aoa_estimates", kFrames, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "aoa_estimates", kFrames);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   const auto frames = music_frames(result, "aoa_estimates");
   ASSERT_EQ(frames.size(), kFrames);

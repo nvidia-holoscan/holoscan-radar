@@ -90,6 +90,8 @@ radar_add_test(common/test_tensor)
 radar_add_test(common/test_virtual_array)
 radar_add_test(utils/test_native_operator_testing
     holoscan::clutter_filter_op)
+radar_add_test(utils/test_fixture_completion
+    holoscan::clutter_filter_op)
 radar_add_test(fmcw/test_clutter_filter
     holoscan::clutter_filter_op)
 radar_add_test(fmcw/test_mimo_deinterleave

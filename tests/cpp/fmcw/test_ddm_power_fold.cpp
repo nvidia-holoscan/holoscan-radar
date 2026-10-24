@@ -15,6 +15,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "fmcw/ddm_power_fold_op/ddm_power_fold_op.hpp"
 #include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -57,10 +58,12 @@ hr::testing::HostTensor run(const hr::DDMCodeDescriptor& ddm_code) {
   fixture.template capture_snapshot<holoscan::Tensor>("power_map", 1U, input->nbytes());
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
   fixture.output_device("power_map", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("power_map", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "power_map", 1U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   if (!observed || !result.ok()) {
     throw std::runtime_error("DDMPowerFoldOp failed: " + result.describe_failure());
   }

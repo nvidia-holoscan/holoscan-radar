@@ -40,6 +40,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
@@ -125,7 +126,8 @@ int64_t argmax(const std::vector<double>& values) {
 
 template <typename T>
 holoscan::testing::TestResult run_range_frames(
-    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, FMCWRangeProcessorParams params) {
+    std::vector<std::shared_ptr<holoscan::Tensor>> inputs, FMCWRangeProcessorParams params,
+    bool capture_bins = true) {
   using Op = FMCWRangeProcessorOp<T>;
   auto fixture =
       holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
@@ -136,15 +138,22 @@ holoscan::testing::TestResult run_range_frames(
   constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
   fixture.template capture_snapshot<holoscan::Tensor>("range_profiles", inputs.size(),
                                                       kMaximumBytes);
-  fixture.template capture_snapshot<holoscan::Tensor>("range_bins", inputs.size(), kMaximumBytes);
+  if (capture_bins) {
+    fixture.template capture_snapshot<holoscan::Tensor>("range_bins", inputs.size(), kMaximumBytes);
+  }
   fixture.input_source_device("adc_cube", holoscan::DeviceId{0});
   fixture.output_device("range_profiles", holoscan::DeviceId{0});
   fixture.output_device("range_bins", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("range_profiles", inputs.size(), std::chrono::seconds{5});
-  (void)running.wait_for_output("range_bins", inputs.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "range_profiles", inputs.size());
+  if (capture_bins) {
+    (void)completion.wait_for_output(running, "range_bins", inputs.size());
+  }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -160,7 +169,7 @@ holoscan::testing::TestResult run_complex_frame(const sim::SimResult& result,
 template <typename T>
 holoscan::testing::TestResult run_profiles_only_graph_result(
     std::vector<std::shared_ptr<holoscan::Tensor>> inputs, FMCWRangeProcessorParams params) {
-  return run_range_frames<T>(std::move(inputs), std::move(params));
+  return run_range_frames<T>(std::move(inputs), std::move(params), false);
 }
 
 std::vector<HostTensor> range_frames(const holoscan::testing::TestResult& result,
@@ -540,15 +549,16 @@ holoscan::testing::TestResult run_nfft_override_graph(std::vector<LiveNfftTick> 
   }
   constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
   fixture.capture_snapshot<holoscan::Tensor>("range_profiles", ticks.size(), kMaximumBytes);
-  fixture.capture_snapshot<holoscan::Tensor>("range_bins", ticks.size(), kMaximumBytes);
   fixture.input_source_device("adc_cube", holoscan::DeviceId{0});
   fixture.output_device("range_profiles", holoscan::DeviceId{0});
   fixture.output_device("range_bins", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("range_profiles", ticks.size(), std::chrono::seconds{5});
-  (void)running.wait_for_output("range_bins", ticks.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "range_profiles", ticks.size());
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 std::vector<LiveNfftTick> two_cube_ticks(const std::shared_ptr<holoscan::Tensor>& cube,
                                          std::optional<int64_t> nfft0, std::optional<int64_t> nfft1,
@@ -647,11 +657,14 @@ holoscan::testing::TestResult run_range_descriptor_override_graph(
   fixture.input_source_device("adc_cube", holoscan::DeviceId{0});
   fixture.output_device("range_profiles", holoscan::DeviceId{0});
   fixture.output_device("range_bins", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("range_profiles", ticks.size(), std::chrono::seconds{5});
-  (void)running.wait_for_output("range_bins", ticks.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "range_profiles", ticks.size());
+  (void)completion.wait_for_output(running, "range_bins", ticks.size());
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 TEST(FMCWRangeProcessorOpTest, LiveWindowOverrideAppliesPerTick) {
   const sim::SimWaveform base_waveform{};

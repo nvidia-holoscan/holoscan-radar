@@ -16,6 +16,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "io/cphd_reader_op/cphd_reader_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -81,8 +82,11 @@ TEST(CphdReaderOp, AcceptsRecordedGridRampButRejectsFrequencyStep) {
                              "pulse_times", "velocities"}) {
       fixture.output_device(port, holoscan::DeviceId{0});
     }
-    auto running = fixture.run_async({.expect_stop = true});
-    return running.finish();
+    holoscan::radar::testing::FixtureCompletion completion;
+    auto running = fixture.run_async(completion.run_options());
+    auto fixture_result = running.finish();
+    completion.check(fixture_result);
+    return fixture_result;
   };
   const auto accepted = run_reader(ramp);
   ASSERT_TRUE(accepted.ok()) << accepted.describe_failure();
@@ -124,10 +128,12 @@ TEST(CphdReaderOp, EmitsEachBatchAndTypedEndBoundary) {
                            "pulse_times", "velocities"}) {
     fixture.output_device(port, holoscan::DeviceId{0});
   }
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("stream_boundary", 3U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "stream_boundary", 3U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(observed) << result.describe_failure();
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   const auto boundaries = result.samples<uint8_t>("stream_boundary");
@@ -172,10 +178,12 @@ TEST(CphdReaderOp, MarksFinalBatchOfEachCollection) {
                            "pulse_times", "velocities"}) {
     fixture.output_device(port, holoscan::DeviceId{0});
   }
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("stream_boundary", 6U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "stream_boundary", 6U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(observed) << result.describe_failure();
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   const auto boundaries = result.samples<uint8_t>("stream_boundary");

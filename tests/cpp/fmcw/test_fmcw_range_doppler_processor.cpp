@@ -37,6 +37,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
@@ -195,11 +196,13 @@ ChainOutputs run_split(const std::shared_ptr<holoscan::Tensor>& input_tensor,
       fixture.output_device(output, holoscan::DeviceId{0});
     }
     fixture.input_source_device("adc_cube", holoscan::DeviceId{0});
-    auto running = fixture.run_async({.expect_stop = true});
-    (void)running.wait_for_output("range_profiles", 1U, std::chrono::seconds{5});
-    (void)running.wait_for_output("range_bins", 1U, std::chrono::seconds{5});
+    holoscan::radar::testing::FixtureCompletion completion;
+    auto running = fixture.run_async(completion.run_options());
+    (void)completion.wait_for_output(running, "range_profiles", 1U);
+    (void)completion.wait_for_output(running, "range_bins", 1U);
     running.request_stop();
     const auto result = running.finish();
+    completion.check(result);
     EXPECT_TRUE(result.ok()) << result.describe_failure();
     profiles_host = tensor_frames(result, "range_profiles").front();
     out.range_bins = tensor_frames(result, "range_bins").front();
@@ -219,10 +222,12 @@ ChainOutputs run_split(const std::shared_ptr<holoscan::Tensor>& input_tensor,
     fixture.template capture_snapshot<holoscan::Tensor>("range_profiles_out", 1U, kMaximumBytes);
     fixture.input_source_device("range_profiles", holoscan::DeviceId{0});
     fixture.output_device("range_profiles_out", holoscan::DeviceId{0});
-    auto running = fixture.run_async({.expect_stop = true});
-    (void)running.wait_for_output("range_profiles_out", 1U, std::chrono::seconds{5});
+    holoscan::radar::testing::FixtureCompletion completion;
+    auto running = fixture.run_async(completion.run_options());
+    (void)completion.wait_for_output(running, "range_profiles_out", 1U);
     running.request_stop();
     const auto result = running.finish();
+    completion.check(result);
     EXPECT_TRUE(result.ok()) << result.describe_failure();
     profiles_host = tensor_frames(result, "range_profiles_out").front();
   }
@@ -244,11 +249,13 @@ ChainOutputs run_split(const std::shared_ptr<holoscan::Tensor>& input_tensor,
       fixture.output_device(output, holoscan::DeviceId{0});
     }
     fixture.input_source_device("range_profiles", holoscan::DeviceId{0});
-    auto running = fixture.run_async({.expect_stop = true});
-    (void)running.wait_for_output("rd_maps", 1U, std::chrono::seconds{5});
-    (void)running.wait_for_output("velocity_bins", 1U, std::chrono::seconds{5});
+    holoscan::radar::testing::FixtureCompletion completion;
+    auto running = fixture.run_async(completion.run_options());
+    (void)completion.wait_for_output(running, "rd_maps", 1U);
+    (void)completion.wait_for_output(running, "velocity_bins", 1U);
     running.request_stop();
     const auto result = running.finish();
+    completion.check(result);
     EXPECT_TRUE(result.ok()) << result.describe_failure();
     out.rd = tensor_frames(result, "rd_maps").front();
     out.velocity_bins = tensor_frames(result, "velocity_bins").front();
@@ -276,14 +283,17 @@ holoscan::testing::TestResult run_fused_result(
   for (const char* output : {"rd_maps", "range_bins", "velocity_bins"}) {
     fixture.output_device(output, holoscan::DeviceId{0});
   }
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("rd_maps", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "rd_maps", 1U);
   if (capture_axes) {
-    (void)running.wait_for_output("range_bins", 1U, std::chrono::seconds{5});
-    (void)running.wait_for_output("velocity_bins", 1U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, "range_bins", 1U);
+    (void)completion.wait_for_output(running, "velocity_bins", 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -718,10 +728,12 @@ TEST(FMCWRangeDopplerProcessorOpTest, RangeLossMakesCriFoldedTargetFallBelowCfar
          {"detection_idx", "detection_mask", "detection_score", "noise_estimate", "cfar_power"}) {
       fixture.output_device(output, holoscan::DeviceId{0});
     }
-    auto running = fixture.run_async({.expect_stop = true});
-    (void)running.wait_for_output("detection_idx", 1U, std::chrono::seconds{5});
+    holoscan::radar::testing::FixtureCompletion completion;
+    auto running = fixture.run_async(completion.run_options());
+    (void)completion.wait_for_output(running, "detection_idx", 1U);
     running.request_stop();
     const auto result = running.finish();
+    completion.check(result);
     EXPECT_TRUE(result.ok()) << result.describe_failure();
     const auto frames = tensor_frames(result, "detection_idx");
     EXPECT_EQ(frames.size(), 1U);
@@ -847,12 +859,15 @@ holoscan::testing::TestResult run_fused_descriptor_override_graph(
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("adc_cube", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : {"rd_maps", "range_bins", "velocity_bins"}) {
-    (void)running.wait_for_output(output, ticks.size(), std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, ticks.size());
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 TEST(FMCWRangeDopplerProcessorOpTest, LiveWindowAndWaveformOverride) {
   const auto base_waveform = to_descriptor(sim::SimWaveform{});
@@ -923,10 +938,12 @@ TEST(FMCWRangeDopplerProcessorOpTest, LiveClutterFilterAppliesOneTickThenReverts
   for (const char* output : {"rd_maps", "range_bins", "velocity_bins"}) {
     fixture.output_device(output, holoscan::DeviceId{0});
   }
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("rd_maps", 3U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "rd_maps", 3U);
   running.request_stop();
   const auto out = running.finish();
+  completion.check(out);
   ASSERT_TRUE(out.ok()) << out.describe_failure();
   const auto frames = tensor_frames(out, "rd_maps");
   ASSERT_EQ(frames.size(), 3U);

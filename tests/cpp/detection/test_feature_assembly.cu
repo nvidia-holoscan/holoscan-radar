@@ -21,6 +21,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "detection/feature_assembly_op/feature_assembly_stage.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
@@ -63,11 +64,14 @@ holoscan::testing::TestResult run_assembly_frame(
     fixture.input_source_device(name, holoscan::DeviceId{0});
   }
   fixture.output_device("points", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("points", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "points", 1U);
   (void)observed;
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>

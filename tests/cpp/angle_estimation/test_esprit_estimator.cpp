@@ -24,6 +24,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "angle_estimation/esprit_estimator_op/esprit_estimator_op.hpp"
 #include "angle_estimation/subarray_selection_op/subarray_selection_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
@@ -132,12 +133,15 @@ holoscan::testing::TestResult run_esprit_result(std::shared_ptr<holoscan::Tensor
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -180,12 +184,15 @@ holoscan::testing::TestResult run_esprit_override(
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, frames.size(), std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, frames.size());
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 holoscan::testing::TestResult run_esprit_with_mask(std::shared_ptr<holoscan::Tensor> mask,
@@ -206,12 +213,15 @@ holoscan::testing::TestResult run_esprit_with_mask(std::shared_ptr<holoscan::Ten
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
   fixture.input_source_device("is_valid", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<HostTensor> esprit_frames(const holoscan::testing::TestResult& result,

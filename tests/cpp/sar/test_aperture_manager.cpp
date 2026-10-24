@@ -10,6 +10,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "sar/aperture_manager_op/aperture_manager_op.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -60,11 +61,13 @@ TEST(ApertureManagerOp, RetainsEvictsAndFlushesOnTypedBoundary) {
   fixture.capture_snapshot<holoscan::Tensor>("reference_position_out", 3U, 3U * 3U * 4U);
   fixture.capture_snapshot<holoscan::Tensor>("weight", 3U, 3U * 4U);
   fixture.capture_snapshot<holoscan::Tensor>("control_out", 1U, 1U);
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("control_out", 1U, std::chrono::seconds{5}) &&
-                        running.wait_for_output("weight", 3U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "control_out", 1U) &&
+                        completion.wait_for_output(running, "weight", 3U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(observed) << result.describe_failure();
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   auto weights = result.snapshots<holoscan::Tensor>("weight");

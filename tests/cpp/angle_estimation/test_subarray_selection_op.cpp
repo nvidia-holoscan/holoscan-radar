@@ -40,6 +40,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "angle_estimation/beamscan_estimator_op/beamscan_estimator_op.hpp"
 #include "angle_estimation/subarray_selection_op/subarray_selection_op.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
@@ -113,11 +114,14 @@ holoscan::testing::TestResult run_select_result(
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
   fixture.output_device("snapshot_out", holoscan::DeviceId{0});
   fixture.output_device("is_valid_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("snapshot_out", 1U, std::chrono::seconds{5});
-  (void)running.wait_for_output("array_geometry", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "snapshot_out", 1U);
+  (void)completion.wait_for_output(running, "array_geometry", 1U);
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<HostTensor> selected_snapshots(const holoscan::testing::TestResult& result) {
@@ -174,10 +178,13 @@ holoscan::testing::TestResult run_snapshot_only(
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
   fixture.output_device("snapshot_out", holoscan::DeviceId{0});
   fixture.output_device("is_valid_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("snapshot_out", snapshots.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "snapshot_out", snapshots.size());
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 std::set<double> y_set(const ArrayGeometry& g) {
   std::set<double> s;
@@ -294,11 +301,14 @@ holoscan::testing::TestResult run_live_subarray_graph(
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
   fixture.output_device("snapshot_out", holoscan::DeviceId{0});
   fixture.output_device("is_valid_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("snapshot_out", ticks.size(), std::chrono::seconds{5});
-  (void)running.wait_for_output("array_geometry", ticks.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "snapshot_out", ticks.size());
+  (void)completion.wait_for_output(running, "array_geometry", ticks.size());
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 std::shared_ptr<holoscan::Tensor> host_subarray(const std::vector<int64_t>& values) {
   return to_pageable_host_tensor(values, {static_cast<int64_t>(values.size())},

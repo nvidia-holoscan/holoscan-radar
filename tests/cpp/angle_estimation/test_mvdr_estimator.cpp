@@ -35,6 +35,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "angle_estimation/mvdr_estimator_op/mvdr_estimator_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
@@ -234,12 +235,15 @@ holoscan::testing::TestResult run_mvdr_result(std::shared_ptr<holoscan::Tensor> 
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<HostTensor> mvdr_frames(const holoscan::testing::TestResult& result, const char* port) {
@@ -286,12 +290,15 @@ holoscan::testing::TestResult run_mvdr_with_mask(std::shared_ptr<holoscan::Tenso
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
   fixture.input_source_device("is_valid", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 struct LiveMvdrTick {
@@ -399,12 +406,15 @@ holoscan::testing::TestResult run_live_mvdr(std::vector<LiveMvdrTick> ticks, MVD
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, ticks.size(), std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, ticks.size());
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 TEST(MVDREstimatorOpTest, DefaultsToRadarBoresightConvention) {
@@ -560,10 +570,12 @@ TEST(MVDREstimatorOpTest, UnwiredOptionalOutputsDoNotFailTheRun) {
        {"aoa_estimates", "angle_spectrum", "doa_multi", "source_count", "eigenvalues"}) {
     fixture.output_device(output, holoscan::DeviceId{0});
   }
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("aoa_estimates", kFrames, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "aoa_estimates", kFrames);
   running.request_stop();
   const auto out = running.finish();
+  completion.check(out);
   ASSERT_TRUE(out.ok()) << out.describe_failure();
   // Every tick's wired output is delivered, start to finish.
   const auto frames = mvdr_frames(out, "aoa_estimates");
