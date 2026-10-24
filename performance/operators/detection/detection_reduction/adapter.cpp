@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -16,7 +18,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::DetectionReductionOp<float>;
+using Op = hr::DetectionReductionOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 hr::RepresentativePolicy policy(std::string_view name) {
@@ -56,6 +58,31 @@ hr::DetectionReductionParams parameters(const Scenario& scen) {
 perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
   const auto extents = perf::direct_recipe_extents(scen.recipe, scen.values);
   const auto params = parameters(scen);
+  if (perf::NativeCaptureState::stream) {
+    perf::NativeCaptureState::semantic_parameters.clear();
+    for (std::size_t frame = 0; frame < 3U; ++frame) {
+      auto effective = params;
+      const bool match =
+          !scen.live_port.empty() && (frame == 1U || (scen.cached_override && frame == 0U));
+      if (match) {
+        if (scen.live_port == "representative")
+          effective.representative = policy(scen.live_value.as<std::string>());
+        else if (scen.live_port == "score_method")
+          effective.score_method = score(scen.live_value.as<std::string>());
+        else if (scen.live_port == "feature_weights")
+          effective.feature_weights[0] = 2.0;
+      }
+      std::ostringstream context;
+      context << std::setprecision(17) << "{\"representative\":\""
+              << hr::to_string(effective.representative) << "\",\"score_method\":\""
+              << hr::to_string(effective.score_method) << "\",\"feature_weights\":[";
+      for (std::size_t i = 0; i < effective.feature_weights.size(); ++i)
+        context << (i ? "," : "") << effective.feature_weights[i];
+      context << "]}";
+      perf::NativeCaptureState::semantic_parameters.push_back(context.str());
+    }
+  }
+
   return perf::run_recipe_selected_case<Op, 3>(
       scen, plan, extents, params, [&](const std::string& codec) -> perf::TimingCollector {
         if (codec == "representative_policy") {
@@ -99,8 +126,8 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   const double points = static_cast<double>(scen.axis("points"));
   const double clusters = static_cast<double>(scen.axis("clusters"));
   const double features = static_cast<double>(scen.axis("features"));
-  const double bytes = points * (3.0 * sizeof(int64_t) + features * sizeof(float)) +
-                       clusters * (2.0 * sizeof(int64_t) + features * sizeof(float));
+  const double bytes = points * (3.0 * sizeof(int64_t) + features * sizeof(perf::Scalar)) +
+                       clusters * (2.0 * sizeof(int64_t) + features * sizeof(perf::Scalar));
   perf::set_recipe_throughput(row, points, clusters, bytes);
   row.notes = row.live_port.empty()
                   ? "default parameters; no live override"

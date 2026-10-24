@@ -20,7 +20,7 @@ recipe:
     center_zero_doppler: true
     fft_norm: backward
     nfft: 0
-  outputs: {timed: rd_maps, drain: [velocity_bins], unwired: []}
+  outputs: {timed: rd_maps, drain: [velocity_bins], unwired: [], optional_tensor_outputs: [velocity_bins]}
   live:
     doppler_window: {physical_port: doppler_window, codec: window_spec}
     center_zero_doppler: {physical_port: center_zero_doppler, codec: bool}
@@ -40,3 +40,88 @@ cases:
   - {id: ortho-hann-medium, profile: medium, scopes: [moderate], parameters: {doppler_window: {type: hann}, fft_norm: ortho}}
   - {id: hamming-window-medium, profile: medium, scopes: [thorough], parameters: {doppler_window: {type: hann}, fft_norm: ortho}, override: {port: doppler_window, value: {type: hamming}}}
   - {id: nfft-cached-medium, profile: medium, scopes: [thorough], parameters: {}, override: {port: nfft, value: {scale: 2}, cache: cached}}
+  - id: window-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: doppler_window
+      value:
+        type: hann
+      cache: cached
+  - id: shift-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: center_zero_doppler
+      value: false
+      cache: cached
+  - id: waveform-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: waveform
+      value:
+        pri_seconds: 3.0e-05
+      cache: cached
+  - id: norm-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: fft_norm
+      value: ortho
+      cache: cached
+  - id: nfft-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: nfft
+      value:
+        scale: 2
+      cache: cached
+  - id: hamming-window-medium-cached
+    profile: medium
+    scopes:
+    - thorough
+    parameters:
+      doppler_window:
+        type: hann
+      fft_norm: ortho
+    override:
+      port: doppler_window
+      value:
+        type: hamming
+      cache: cached
+  - id: optional-minimal-{profile}
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    output_mode: minimal

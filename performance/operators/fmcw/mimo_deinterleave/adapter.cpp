@@ -16,7 +16,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::MIMODeinterleaveOp<float>;
+using Op = hr::MIMODeinterleaveOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
@@ -39,7 +39,7 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   const double elems = static_cast<double>(scen.axis("tx")) * static_cast<double>(scen.axis("rx")) *
                        static_cast<double>(scen.axis("chirps_per_tx")) *
                        static_cast<double>(scen.axis("samples"));
-  const double bytes = 2.0 * elems * sizeof(std::complex<float>);
+  const double bytes = 2.0 * elems * sizeof(std::complex<perf::Scalar>);
   perf::set_recipe_throughput(row, elems, std::nullopt, bytes);
   row.notes =
       "pure gather marshaling; cold_ms is first-frame latency; "

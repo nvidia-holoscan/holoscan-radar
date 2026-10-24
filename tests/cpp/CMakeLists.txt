@@ -64,7 +64,8 @@ radar_add_test(common/test_emit_required)
 radar_add_test(common/test_max_tensor_extents yaml-cpp)
 radar_add_test(utils/test_perf_profiles yaml-cpp)
 radar_add_test(utils/test_perf_runner)
-radar_add_test(utils/test_perf_yaml_standard yaml-cpp holoscan::doppler_notch_op)
+radar_add_test(utils/test_perf_yaml_standard yaml-cpp holoscan::doppler_notch_op
+    holoscan::fmcw_range_processor_op holoscan::subarray_selection_op)
 target_include_directories(test_perf_yaml_standard PRIVATE
     ${PROJECT_SOURCE_DIR}/performance/harness/cpp
     ${PROJECT_SOURCE_DIR}/operators)
@@ -89,6 +90,8 @@ radar_add_test(common/test_sim_gpu holoscan::radar_common_simulator)
 radar_add_test(common/test_tensor)
 radar_add_test(common/test_virtual_array)
 radar_add_test(utils/test_native_operator_testing
+    holoscan::clutter_filter_op)
+radar_add_test(utils/test_fixture_completion
     holoscan::clutter_filter_op)
 radar_add_test(fmcw/test_clutter_filter
     holoscan::clutter_filter_op)
@@ -150,6 +153,8 @@ radar_add_test(angle_estimation/test_root_music_estimator
     holoscan::root_music_estimator_op
     holoscan::radar_common_spatial_smoothing
     holoscan::radar_common_source_count)
+radar_add_test(angle_estimation/test_root_music_solver EXT .cu
+    holoscan::root_music_estimator_op matx::matx CUDA::cusolver)
 radar_add_test(angle_estimation/test_esprit_estimator
     holoscan::esprit_estimator_op
     holoscan::subarray_selection_op

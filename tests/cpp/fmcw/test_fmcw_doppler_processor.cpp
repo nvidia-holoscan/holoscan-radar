@@ -33,6 +33,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
@@ -110,13 +111,16 @@ holoscan::testing::TestResult run_rd_result(std::shared_ptr<holoscan::Tensor> in
   fixture.input_source_device("range_profiles", holoscan::DeviceId{0});
   fixture.output_device("rd_maps", holoscan::DeviceId{0});
   fixture.output_device("velocity_bins", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("rd_maps", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "rd_maps", 1U);
   if (wait_velocity) {
-    (void)running.wait_for_output("velocity_bins", 1U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, "velocity_bins", 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<HostTensor> doppler_frames(const holoscan::testing::TestResult& result,
@@ -486,11 +490,14 @@ holoscan::testing::TestResult run_doppler_descriptor_override_graph(
   fixture.input_source_device("range_profiles", holoscan::DeviceId{0});
   fixture.output_device("rd_maps", holoscan::DeviceId{0});
   fixture.output_device("velocity_bins", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("rd_maps", ticks.size(), std::chrono::seconds{5});
-  (void)running.wait_for_output("velocity_bins", ticks.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "rd_maps", ticks.size());
+  (void)completion.wait_for_output(running, "velocity_bins", ticks.size());
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 TEST(FMCWDopplerProcessorOpTest, LiveOverrideCenterZeroDopplerMidStream) {
   // center_zero_doppler is observable without comparing any float payload:

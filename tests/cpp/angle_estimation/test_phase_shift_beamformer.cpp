@@ -34,6 +34,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "angle_estimation/phase_shift_beamformer_op/phase_shift_beamformer_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
@@ -196,12 +197,15 @@ holoscan::testing::TestResult run_beamformer_result(
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -302,12 +306,15 @@ holoscan::testing::TestResult run_live_beamformer_graph(
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, ticks.size(), std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, ticks.size());
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 TEST(PhaseShiftBeamformerOpTest, DefaultsToRadarBoresightConvention) {

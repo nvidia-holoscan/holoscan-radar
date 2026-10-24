@@ -16,7 +16,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::ClusterDBSCANOp<float>;
+using Op = hr::ClusterDBSCANOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 hr::ClusterDBSCANParams parameters(const Scenario& scen) {
@@ -50,7 +50,7 @@ perf::ResultRow base_row(const Scenario& scen) {
 void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   const double n = static_cast<double>(scen.axis("points"));
   const double bytes =
-      n * static_cast<double>(scen.axis("features")) * sizeof(float) + n * sizeof(int64_t);
+      n * static_cast<double>(scen.axis("features")) * sizeof(perf::Scalar) + n * sizeof(int64_t);
   perf::set_recipe_throughput(row, n, static_cast<double>(scen.axis("clusters")), bytes);
   row.notes = "end-to-end Graph latency; cells/s is points/s";
   if (!scen.live_port.empty())

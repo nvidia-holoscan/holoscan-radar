@@ -17,7 +17,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::TDMSparseCompensationOp<float>;
+using Op = hr::TDMSparseCompensationOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 hr::TDMSparseCompensationParams parameters(const Scenario& scen) {

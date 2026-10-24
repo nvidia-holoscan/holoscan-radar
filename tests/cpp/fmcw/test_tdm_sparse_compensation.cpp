@@ -17,6 +17,7 @@
 #include <holoscan/core/connection_options.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_op.hpp"
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_stage.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
@@ -328,12 +329,15 @@ holoscan::testing::TestResult run_sparse_operator(
   fixture.input_source_device("fold_idx", holoscan::DeviceId{0});
   fixture.output_device("snapshot", holoscan::DeviceId{0});
   fixture.output_device("is_valid", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("snapshot", 1U, std::chrono::seconds{5});
-  (void)running.wait_for_output("is_valid", 1U, std::chrono::seconds{5});
-  (void)running.wait_for_output("array_geometry", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "snapshot", 1U);
+  (void)completion.wait_for_output(running, "is_valid", 1U);
+  (void)completion.wait_for_output(running, "array_geometry", 1U);
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<hr::testing::HostTensor> sparse_snapshots(const holoscan::testing::TestResult& result) {

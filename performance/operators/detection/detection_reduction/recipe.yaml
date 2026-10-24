@@ -20,7 +20,7 @@ recipe:
     representative: peak
     score_method: weighted_sum
     feature_weights: {factory: ones, count: features}
-  outputs: {timed: rep_idx, timed_pair: reduced_points, drain: [], unwired: []}
+  outputs: {timed: rep_idx, timed_pair: reduced_points, drain: [], unwired: [], optional_tensor_outputs: [reduced_points]}
   live:
     representative: {physical_port: representative, codec: representative_policy}
     score_method: {physical_port: score_method, codec: score_method}
@@ -35,3 +35,58 @@ cases:
   - {id: "score_method-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: score_method, value: weighted_l2}}
   - {id: "feature_weights-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: feature_weights, value: first_double}}
   - {id: weighted-weights-medium, profile: medium, scopes: [thorough], parameters: {representative: weighted_mean}, override: {port: feature_weights, value: first_double}}
+  - id: representative-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: representative
+      value: medoid
+      cache: cached
+  - id: score_method-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: score_method
+      value: weighted_l2
+      cache: cached
+  - id: feature_weights-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: feature_weights
+      value: first_double
+      cache: cached
+  - id: weighted-weights-medium-cached
+    profile: medium
+    scopes:
+    - thorough
+    parameters:
+      representative: weighted_mean
+    override:
+      port: feature_weights
+      value: first_double
+      cache: cached
+  - id: optional-minimal-{profile}
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    output_mode: minimal

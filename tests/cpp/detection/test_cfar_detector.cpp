@@ -32,6 +32,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "detection/feature_assembly_op/feature_assembly_op.hpp"
@@ -134,12 +135,15 @@ holoscan::testing::TestResult run_cfar_result(
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -241,12 +245,15 @@ holoscan::testing::TestResult run_cfar_live(std::vector<CfarLiveTick> ticks, CFA
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, ticks.size(), std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, ticks.size());
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<HostTensor> cfar_frames(const holoscan::testing::TestResult& result, const char* port) {
@@ -692,10 +699,13 @@ TEST(CFARDetectorOpTest, OptionalOutputsMayBeLeftUnwired) {
       fixture.output_device(output, holoscan::DeviceId{0});
     }
     fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
-    auto running = fixture.run_async({.expect_stop = true});
-    (void)running.wait_for_output(captured_port, kFrames, std::chrono::seconds{5});
+    holoscan::radar::testing::FixtureCompletion completion;
+    auto running = fixture.run_async(completion.run_options());
+    (void)completion.wait_for_output(running, captured_port, kFrames);
     running.request_stop();
-    return running.finish();
+    auto fixture_result = running.finish();
+    completion.check(fixture_result);
+    return fixture_result;
   };
 
   const auto idx_only = run_selected("detection_idx");

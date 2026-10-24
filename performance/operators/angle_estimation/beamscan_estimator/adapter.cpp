@@ -63,7 +63,7 @@ using perf::make_ula_geometry;
 using perf::emit_host_vector;
 using perf::emit_wire_doubles;
 
-using PerfPrecision = float;
+using PerfPrecision = perf::Scalar;
 
 struct BeamScenario : perf::RecipeScenario {};
 

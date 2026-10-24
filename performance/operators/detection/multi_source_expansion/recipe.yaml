@@ -136,3 +136,4 @@ recipe:
     drain:
     - aoa_estimates_out
     unwired: []
+    optional_tensor_outputs: []

@@ -642,6 +642,19 @@ managed fixture: wait for the required output prefix, request stop, then call
 bytes, cardinalities, and timestamps. Multi-frame tests stay within one run;
 separate runs on one fixture must prove a fresh operator instance.
 
+Use `tests/cpp/utils/fixture_completion.hpp` for the shared correctness-run
+observation policy. `FixtureCompletion::run_options()` gives the native fixture
+a watchdog twice the output budget; the default budget is 30 seconds and
+`HOLOSCAN_RADAR_TEST_TIMEOUT_SECONDS` accepts a positive integer override in
+the test process. All prefix waits and manual releases share one observation
+deadline through `wait_for_output()` and `remaining()`. Keep native
+`request_stop()` and `finish()` explicit, then call `check(result)` before
+reading payloads. A missing prefix fails even after an otherwise successful
+requested stop. Native operator/compile failures keep their original diagnostics
+and existing negative-test assertions. This is a correctness deadline, not a
+performance requirement; declare expected prefixes only for outputs that the
+test requires. All native asynchronous operator fixtures use this policy.
+
 Do not add a direct `Graph`, source/sink operator, `RunSession`, condition
 variable, frame bank, or port-arity runner to a single-operator test. Whole
 pipeline and application tests remain ordinary production Graphs; any finite

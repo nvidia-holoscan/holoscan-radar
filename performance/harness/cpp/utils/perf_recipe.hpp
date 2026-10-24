@@ -83,6 +83,18 @@ struct PerfDefaultSource<3> {
 };
 
 template <>
+struct PerfDefaultSource<4> {
+  using Op = PerfDataSourceOp<4>;
+  static constexpr std::array<const char*, 4> ports{"a", "b", "c", "d"};
+};
+
+template <>
+struct PerfDefaultSource<5> {
+  using Op = PerfDataSourceOp<5>;
+  static constexpr std::array<const char*, 5> ports{"a", "b", "c", "d", "e"};
+};
+
+template <>
 struct PerfDefaultSource<6> {
   using Op = PerfDataSourceOp<6>;
   static constexpr std::array<const char*, 6> ports{"a", "b", "c", "d", "e", "f"};
@@ -275,6 +287,53 @@ struct PerfDataPorts<3> {
     HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(out_a, context, frames[0], mode));
     HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(out_b, context, frames[1], mode));
     return detail::emit_device_frame(out_c, context, frames[2], mode);
+  }
+};
+
+template <>
+struct PerfDataPorts<4> {
+  holoscan::Output<holoscan::Tensor> a{"a"};
+  holoscan::Output<holoscan::Tensor> b{"b"};
+  holoscan::Output<holoscan::Tensor> c{"c"};
+  holoscan::Output<holoscan::Tensor> d{"d"};
+  void setup(holoscan::OperatorSpec& spec) {
+    setup_device_input(spec, a, PerfFrameBank::span(0));
+    setup_device_input(spec, b, PerfFrameBank::span(1));
+    setup_device_input(spec, c, PerfFrameBank::span(2));
+    setup_device_input(spec, d, PerfFrameBank::span(3));
+  }
+  holoscan::expected<void, holoscan::Error> emit(
+      holoscan::ExecutionContext& context,
+      const std::array<std::shared_ptr<holoscan::Tensor>, 4>& frames, PerfPublishMode mode) {
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(a, context, frames[0], mode));
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(b, context, frames[1], mode));
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(c, context, frames[2], mode));
+    return detail::emit_device_frame(d, context, frames[3], mode);
+  }
+};
+
+template <>
+struct PerfDataPorts<5> {
+  holoscan::Output<holoscan::Tensor> a{"a"};
+  holoscan::Output<holoscan::Tensor> b{"b"};
+  holoscan::Output<holoscan::Tensor> c{"c"};
+  holoscan::Output<holoscan::Tensor> d{"d"};
+  holoscan::Output<holoscan::Tensor> e{"e"};
+  void setup(holoscan::OperatorSpec& spec) {
+    setup_device_input(spec, a, PerfFrameBank::span(0));
+    setup_device_input(spec, b, PerfFrameBank::span(1));
+    setup_device_input(spec, c, PerfFrameBank::span(2));
+    setup_device_input(spec, d, PerfFrameBank::span(3));
+    setup_device_input(spec, e, PerfFrameBank::span(4));
+  }
+  holoscan::expected<void, holoscan::Error> emit(
+      holoscan::ExecutionContext& context,
+      const std::array<std::shared_ptr<holoscan::Tensor>, 5>& frames, PerfPublishMode mode) {
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(a, context, frames[0], mode));
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(b, context, frames[1], mode));
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(c, context, frames[2], mode));
+    HOLOSCAN_RETURN_IF_ERROR(detail::emit_device_frame(d, context, frames[3], mode));
+    return detail::emit_device_frame(e, context, frames[4], mode);
   }
 };
 

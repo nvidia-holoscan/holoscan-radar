@@ -18,6 +18,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "angle_estimation/snapshot_gather_op/snapshot_gather_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -106,11 +107,14 @@ holoscan::testing::TestResult run_gather_result(std::shared_ptr<holoscan::Tensor
   fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
   fixture.output_device("snapshot", holoscan::DeviceId{0});
   fixture.output_device("is_valid", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("snapshot", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "snapshot", 1U);
   (void)observed;
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -261,15 +265,17 @@ TEST(SnapshotGatherOpTest, LiveSnapshotWindowAppliesForOneTick) {
   fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
   fixture.output_device("snapshot", holoscan::DeviceId{0});
   fixture.output_device("is_valid", holoscan::DeviceId{0});
+  holoscan::radar::testing::FixtureCompletion completion;
   auto running =
-      fixture.run_async({.expect_stop = true, .frames = holoscan::testing::FrameRelease::kManual});
+      fixture.run_async(completion.run_options(holoscan::testing::FrameRelease::kManual));
   for (std::size_t count = 1; count <= 3; ++count) {
-    const auto released = running.release_frame(std::chrono::seconds{5});
+    const auto released = running.release_frame(completion.remaining());
     ASSERT_TRUE(released) << released.error().message;
-    ASSERT_TRUE(running.wait_for_output("snapshot", count, std::chrono::seconds{5}));
+    ASSERT_TRUE(completion.wait_for_output(running, "snapshot", count));
   }
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   const auto frames = result.snapshots<holoscan::Tensor>("snapshot");
   ASSERT_EQ(frames.size(), 3U);

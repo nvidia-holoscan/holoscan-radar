@@ -107,6 +107,88 @@ cases:
     port: array_geometry
     value:
       spacing_wavelengths: 0.45
+- id: geometry-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters: {}
+  override:
+    port: array_geometry
+    value:
+      spacing_wavelengths: 0.45
+    cache: cached
+- id: az-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters: {}
+  override:
+    port: az_coordinates
+    value:
+      shift: 0.05
+    cache: cached
+- id: el-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters: {}
+  override:
+    port: el_coordinates
+    value:
+      shift: 0.05
+    cache: cached
+- id: taper-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters: {}
+  override:
+    port: array_taper
+    value:
+      type: hann
+    cache: cached
+- id: tapered-geometry-medium-cached
+  profile: medium
+  scopes:
+  - thorough
+  parameters:
+    array_taper:
+      type: hann
+  override:
+    port: array_geometry
+    value:
+      spacing_wavelengths: 0.45
+    cache: cached
+- id: optional-all-{profile}
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters: {}
+  output_mode: all
+- id: optional-minimal-{profile}
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters: {}
+  output_mode: minimal
 axes:
 - channels
 - az
@@ -156,6 +238,7 @@ recipe:
     - az_grid
     - el_grid
     queue_depth: 8
+    optional_tensor_outputs: [az_grid, el_grid]
   live:
     array_geometry:
       physical_port: array_geometry

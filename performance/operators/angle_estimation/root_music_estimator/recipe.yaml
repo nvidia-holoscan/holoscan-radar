@@ -114,6 +114,88 @@ cases:
     port: array_geometry
     value:
       spacing_wavelengths: 0.45
+- id: array-geometry-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters: {}
+  override:
+    port: array_geometry
+    value:
+      spacing_wavelengths: 0.45
+    cache: cached
+- id: spatial-smoothing-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters: {}
+  override:
+    port: spatial_smoothing
+    value:
+    - 2
+    cache: cached
+- id: num-sources-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters: {}
+  override:
+    port: num_sources
+    value: 2
+    cache: cached
+- id: source-count-pfa-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters: {}
+  override:
+    port: source_count_pfa
+    value: 0.001
+    cache: cached
+- id: max-sources-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters: {}
+  override:
+    port: max_sources
+    value: 3
+    cache: cached
+- id: transition-medium-cached
+  profile: medium
+  scopes:
+  - thorough
+  parameters:
+    num_sources: 2
+  override:
+    port: array_geometry
+    value:
+      spacing_wavelengths: 0.45
+    cache: cached
+- id: optional-minimal-{profile}
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters: {}
+  output_mode: minimal
 axes:
 - channels
 - detections
@@ -155,6 +237,7 @@ recipe:
     - eigenvalues
     unwired: []
     queue_depth: 8
+    optional_tensor_outputs: [doa_multi, source_count, eigenvalues]
   live:
     array_geometry:
       physical_port: array_geometry

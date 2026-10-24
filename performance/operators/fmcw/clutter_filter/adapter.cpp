@@ -18,7 +18,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::ClutterFilterOp<float>;
+using Op = hr::ClutterFilterOp<perf::Scalar>;
 
 struct Scenario : perf::RecipeScenario {
   hr::ClutterFilterMethod method{hr::ClutterFilterMethod::kMeanSubtraction};
@@ -93,7 +93,7 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
                        static_cast<double>(scen.axis("chirps")) *
                        static_cast<double>(scen.axis("range_bins"));
   const double slices = static_cast<double>(scen.axis("channels") * scen.axis("range_bins"));
-  perf::set_recipe_throughput(row, cells, slices, 2.0 * cells * sizeof(std::complex<float>));
+  perf::set_recipe_throughput(row, cells, slices, 2.0 * cells * sizeof(std::complex<perf::Scalar>));
   row.notes = "end-to-end Graph latency; cells/s is complex cells/s";
   if (scen.live_port == "doppler_window")
     row.notes += "; unseen Hamming window on one frame";

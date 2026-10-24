@@ -22,6 +22,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "clustering/cluster_dbscan_op/cluster_dbscan_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/test_extents.hpp"
@@ -61,13 +62,16 @@ holoscan::testing::TestResult run_dbscan_result(std::shared_ptr<holoscan::Tensor
   fixture.input_source_device("points", holoscan::DeviceId{0});
   fixture.output_device("labels", holoscan::DeviceId{0});
   fixture.output_device("sizes", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool labels = running.wait_for_output("labels", 1U, std::chrono::seconds{5});
-  const bool sizes = running.wait_for_output("sizes", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool labels = completion.wait_for_output(running, "labels", 1U);
+  const bool sizes = completion.wait_for_output(running, "sizes", 1U);
   (void)labels;
   (void)sizes;
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -123,10 +127,12 @@ TEST(ClusterDBSCANOpTest, UnwiredSizesDoesNotFailTheRunOrDisturbLabels) {
   fixture.input_source_device("points", holoscan::DeviceId{0});
   fixture.output_device("labels", holoscan::DeviceId{0});
   fixture.output_device("sizes", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("labels", kFrames, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "labels", kFrames);
   running.request_stop();
   const auto out = running.finish();
+  completion.check(out);
   ASSERT_TRUE(observed) << out.describe_failure();
   ASSERT_TRUE(out.ok()) << out.describe_failure();
   const auto captured = out.snapshots<holoscan::Tensor>("labels");
@@ -530,13 +536,16 @@ holoscan::testing::TestResult run_epsilon_override_graph(std::vector<LiveEpsilon
   fixture.input_source_device("points", holoscan::DeviceId{0});
   fixture.output_device("labels", holoscan::DeviceId{0});
   fixture.output_device("sizes", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool labels = running.wait_for_output("labels", ticks.size(), std::chrono::seconds{5});
-  const bool sizes = running.wait_for_output("sizes", ticks.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool labels = completion.wait_for_output(running, "labels", ticks.size());
+  const bool sizes = completion.wait_for_output(running, "sizes", ticks.size());
   (void)labels;
   (void)sizes;
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<HostTensor> captured_sizes(const holoscan::testing::TestResult& result) {

@@ -11,6 +11,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "radar_common/sim/sar_phase_history_sim.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "sar/sar_range_compression_op/sar_range_compression_op.hpp"
@@ -38,10 +39,12 @@ TEST(SARRangeCompressionOp, ConstantSpectrumHasCentredUnitImpulse) {
   fixture.input_source_device("phase_history", holoscan::DeviceId{0});
   fixture.output_device("range_profiles", holoscan::DeviceId{0});
   fixture.output_device("range_bins", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("range_profiles", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "range_profiles", 1U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(observed) << result.describe_failure();
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   const auto output = to_host(result.snapshot<holoscan::Tensor>("range_profiles"));
@@ -76,10 +79,12 @@ TEST(SARRangeCompressionOp, AnalyticOffCentrePointPreservesRangeAndPhase) {
   fixture.input_source_device("phase_history", holoscan::DeviceId{0});
   fixture.output_device("range_profiles", holoscan::DeviceId{0});
   fixture.output_device("range_bins", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("range_profiles", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "range_profiles", 1U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(observed) << result.describe_failure();
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   const auto output = to_host(result.snapshot<holoscan::Tensor>("range_profiles"));

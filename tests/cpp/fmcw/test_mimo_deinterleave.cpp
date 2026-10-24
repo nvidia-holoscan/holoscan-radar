@@ -24,6 +24,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -129,12 +130,14 @@ TestResult run_deinterleave_result(std::vector<std::shared_ptr<holoscan::Tensor>
   fixture.template capture_snapshot<holoscan::Tensor>("adc_cube_out", inputs.size());
   fixture.input_source_device("adc_cube", holoscan::DeviceId{0});
   fixture.output_device("adc_cube_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed =
-      running.wait_for_output("adc_cube_out", inputs.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "adc_cube_out", inputs.size());
   (void)observed;
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>

@@ -16,7 +16,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::PhaseShiftBeamformerOp<float>;
+using Op = hr::PhaseShiftBeamformerOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
@@ -43,7 +43,7 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   const double beams = static_cast<double>(scen.axis("az")) * static_cast<double>(scen.axis("el"));
   const double channels = static_cast<double>(scen.axis("channels"));
   const double bytes =
-      (cells * channels + beams * channels + cells * beams) * sizeof(std::complex<float>);
+      (cells * channels + beams * channels + cells * beams) * sizeof(std::complex<perf::Scalar>);
   perf::set_recipe_throughput(row, cells, cells * beams, bytes);
   row.notes =
       scen.live_port.empty()

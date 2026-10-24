@@ -17,7 +17,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::DDMDenseDemultiplexOp<float>;
+using Op = hr::DDMDenseDemultiplexOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 hr::DDMCodeDescriptor code(const Scenario& scen) {
@@ -78,7 +78,8 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   const double elems = static_cast<double>(scen.axis("rx")) *
                        static_cast<double>(scen.axis("doppler")) *
                        static_cast<double>(scen.axis("range"));
-  perf::set_recipe_throughput(row, elems, std::nullopt, 2.0 * elems * sizeof(std::complex<float>));
+  perf::set_recipe_throughput(row, elems, std::nullopt,
+                              2.0 * elems * sizeof(std::complex<perf::Scalar>));
   row.notes =
       scen.params["ddm_code"]["factory"].as<std::string>() == "nonlinear_phase_code"
           ? "DDM nonlinear phase-code correlation; cold_ms includes weights and FFT setup; output "
@@ -99,7 +100,7 @@ struct Traits : perf::PerfDriverDefaults {
   static void validate_suite(const perf::ProfileSuite& suite) {
     (void)perf::validate_pilot_suite<Op>(
         suite, "radar.DDMDenseDemultiplexOp.float", "",
-        {{"velocity_bins", {"doppler"}, "float32", "device", "power_map", {}},
+        {{"velocity_bins", {"doppler"}, "float32", "device", "centered_axis_ramp", {}},
          {"rd_maps", {"rx", "doppler", "range"}, "complex64", "device", "iq_cube", {}}},
         {"rd_maps_out", {"velocity_bins_out"}, {}, 4U}, {}, {});
   }

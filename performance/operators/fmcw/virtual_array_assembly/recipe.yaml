@@ -19,7 +19,7 @@ recipe:
     rx_positions: {factory: linear_positions, spacing: 0.5}
     wavelength: 0.03
     overlap_policy: dedup
-  outputs: {timed: rd_maps_out, drain: [array_geometry], drain_codecs: {array_geometry: array_geometry}, unwired: []}
+  outputs: {timed: rd_maps_out, drain: [array_geometry], drain_codecs: {array_geometry: array_geometry}, unwired: [], optional_tensor_outputs: []}
   live:
     wavelength: {physical_port: wavelength, codec: double}
 cases:
@@ -28,3 +28,15 @@ cases:
   - {id: keep-all-medium, profile: medium, scopes: [limited], parameters: {overlap_policy: keep_all}}
   - {id: "wavelength-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: wavelength, value: 0.033}}
   - {id: average-large, profile: large, scopes: [thorough], parameters: {overlap_policy: average}}
+  - id: wavelength-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: wavelength
+      value: 0.033
+      cache: cached

@@ -13,7 +13,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -21,6 +20,7 @@
 #include <holoscan/memory/unbounded_allocator.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "fmcw/clutter_filter_op/clutter_filter_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -39,7 +39,6 @@ using holoscan::radar::testing::to_device_tensor;
 using holoscan::radar::testing::to_host;
 
 constexpr std::size_t kMaximumSnapshotBytes = 1024U;
-constexpr auto kObservationTimeout = std::chrono::seconds{5};
 
 class EmptyTensorProducer final : public holoscan::Operator<> {
  public:
@@ -102,22 +101,6 @@ void place_device_ports(holoscan::testing::OperatorTestHarness<Op>& harness) {
   harness.output_device("range_profiles_out", holoscan::DeviceId{0});
 }
 
-bool release_frame(holoscan::testing::RunningFixture& running) {
-  const auto deadline = std::chrono::steady_clock::now() + kObservationTimeout;
-  while (std::chrono::steady_clock::now() < deadline) {
-    const auto released = running.release_frame();
-    if (released) {
-      return true;
-    }
-    if (released.error().code != holoscan::ErrorCode::kNotReady &&
-        released.error().code != holoscan::ErrorCode::kBackpressured) {
-      return false;
-    }
-    std::this_thread::yield();
-  }
-  return false;
-}
-
 TEST(NativeOperatorTesting, RunsWithConstructorParamsAndOwningSnapshot) {
   auto harness = holoscan::testing::create_operator_test<Op>(default_test_extents());
   harness.set_params(ClutterFilterParams{.method = ClutterFilterMethod::kNone});
@@ -126,10 +109,12 @@ TEST(NativeOperatorTesting, RunsWithConstructorParamsAndOwningSnapshot) {
   harness.capture_snapshot<holoscan::Tensor>("range_profiles_out", 1U, kMaximumSnapshotBytes);
   place_device_ports(harness);
 
-  auto running = harness.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("range_profiles_out", 1U, kObservationTimeout);
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = harness.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "range_profiles_out", 1U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
 
   ASSERT_TRUE(observed) << result.describe_failure();
   EXPECT_EQ(result.termination(), holoscan::RunTermination::kStopped);
@@ -146,20 +131,24 @@ TEST(NativeOperatorTesting, RepeatedRunsUseFreshOperatorsAndExplicitStaging) {
   place_device_ports(harness);
 
   harness.push(&Op::range_profiles, device_frame(0.0F));
-  auto first_running = harness.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion first_completion;
+  auto first_running = harness.run_async(first_completion.run_options());
   const bool first_observed =
-      first_running.wait_for_output("range_profiles_out", 1U, kObservationTimeout);
+      first_completion.wait_for_output(first_running, "range_profiles_out", 1U);
   first_running.request_stop();
   const auto first = first_running.finish();
+  first_completion.check(first);
   ASSERT_TRUE(first_observed) << first.describe_failure();
   ASSERT_TRUE(first.ok()) << first.describe_failure();
 
   harness.push(&Op::range_profiles, device_frame(100.0F));
-  auto second_running = harness.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion second_completion;
+  auto second_running = harness.run_async(second_completion.run_options());
   const bool second_observed =
-      second_running.wait_for_output("range_profiles_out", 1U, kObservationTimeout);
+      second_completion.wait_for_output(second_running, "range_profiles_out", 1U);
   second_running.request_stop();
   const auto second = second_running.finish();
+  second_completion.check(second);
   ASSERT_TRUE(second_observed) << second.describe_failure();
   ASSERT_TRUE(second.ok()) << second.describe_failure();
 
@@ -181,17 +170,16 @@ TEST(NativeOperatorTesting, GroupedExactOverrideFallsBackOnTheNextFrame) {
   harness.capture_snapshot<holoscan::Tensor>("range_profiles_out", 2U, kMaximumSnapshotBytes);
   place_device_ports(harness);
 
-  auto running = harness.run_async({.timeout = kObservationTimeout,
-                                    .expect_stop = true,
-                                    .frames = holoscan::testing::FrameRelease::kManual});
-  const bool first_released = release_frame(running);
-  const bool first_observed =
-      running.wait_for_output("range_profiles_out", 1U, kObservationTimeout);
-  const bool second_released = release_frame(running);
-  const bool second_observed =
-      running.wait_for_output("range_profiles_out", 2U, kObservationTimeout);
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running =
+      harness.run_async(completion.run_options(holoscan::testing::FrameRelease::kManual));
+  const auto first_released = running.release_frame(completion.remaining());
+  const bool first_observed = completion.wait_for_output(running, "range_profiles_out", 1U);
+  const auto second_released = running.release_frame(completion.remaining());
+  const bool second_observed = completion.wait_for_output(running, "range_profiles_out", 2U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
 
   ASSERT_TRUE(first_released) << result.describe_failure();
   ASSERT_TRUE(first_observed) << result.describe_failure();

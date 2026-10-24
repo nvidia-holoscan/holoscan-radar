@@ -16,7 +16,7 @@ recipe:
   fixtures: {two: 2}
   constructor: {bounds_policy: snapshot_gather_bounds}
   params: {snapshot_window: [1, 1], doppler_edge: wrap, range_edge: shift}
-  outputs: {timed: snapshot, drain: [is_valid], unwired: []}
+  outputs: {timed: snapshot, drain: [is_valid], unwired: [], optional_tensor_outputs: [is_valid]}
   live: {snapshot_window: {physical_port: snapshot_window, codec: snapshot_window}}
 cases:
   - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
@@ -24,3 +24,40 @@ cases:
   - {id: wide-medium, profile: medium, scopes: [limited], parameters: {snapshot_window: [2, 2]}}
   - {id: "window-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {snapshot_window: [0, 0]}, override: {port: snapshot_window, value: [1, 1]}}
   - {id: wide-window-medium, profile: medium, scopes: [thorough], parameters: {}, override: {port: snapshot_window, value: [2, 2]}}
+  - id: window-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters:
+      snapshot_window:
+      - 0
+      - 0
+    override:
+      port: snapshot_window
+      value:
+      - 1
+      - 1
+      cache: cached
+  - id: wide-window-medium-cached
+    profile: medium
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: snapshot_window
+      value:
+      - 2
+      - 2
+      cache: cached
+  - id: optional-minimal-{profile}
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    output_mode: minimal

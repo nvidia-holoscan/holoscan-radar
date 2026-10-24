@@ -30,7 +30,10 @@ struct RunSettings {
   int warmup_frames{5};
   int measured_frames{50};
   int repeats{3};
+  bool raw_frame_times{false};
   std::string scope{"limited"};
+  std::vector<std::string> selected_cases;
+  std::string case_order{"forward"};
   std::string sync_policy{"device_sync_at_terminal_sink"};
   double stop_after_s{0.0};  // 0 = disabled; wall-clock cap per scenario
   bool stopped_early{false};
@@ -67,12 +70,15 @@ struct ResultRow {
   double setup_ms{std::numeric_limits<double>::quiet_NaN()};
   double cold_ms{std::numeric_limits<double>::quiet_NaN()};
   LatencyStats latency;  // compute / override per-frame stats
+  std::vector<double> raw_steady_ms;
+  std::vector<int64_t> raw_steady_run_offsets;
 
   double override_ms{std::numeric_limits<double>::quiet_NaN()};
   double override_delta_ms{std::numeric_limits<double>::quiet_NaN()};
   double achieved_frames_per_second{std::numeric_limits<double>::quiet_NaN()};
   double source_frames_per_second{std::numeric_limits<double>::quiet_NaN()};
   std::string live_port;
+  std::string override_context{"none"};
 
   double cells_per_second{std::numeric_limits<double>::quiet_NaN()};
   double slices_per_second{std::numeric_limits<double>::quiet_NaN()};
@@ -250,6 +256,12 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
   os << "    \"measured_frames\": " << r.run_settings.measured_frames << ",\n";
   os << "    \"repeats\": " << r.run_settings.repeats << ",\n";
   os << "    \"scope\": \"" << detail::json_escape(r.run_settings.scope) << "\",\n";
+  os << "    \"selected_cases\": [";
+  for (size_t i = 0; i < r.run_settings.selected_cases.size(); ++i) {
+    os << (i ? ", " : "") << '"' << detail::json_escape(r.run_settings.selected_cases[i]) << '"';
+  }
+  os << "],\n";
+  os << "    \"case_order\": \"" << detail::json_escape(r.run_settings.case_order) << "\",\n";
   os << "    \"sync_policy\": \"" << detail::json_escape(r.run_settings.sync_policy) << "\",\n";
   os << "    \"stop_after_s\": " << detail::num_or_null(r.run_settings.stop_after_s) << ",\n";
   os << "    \"stopped_early\": " << (r.run_settings.stopped_early ? "true" : "false") << ",\n";
@@ -288,6 +300,16 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
     os << "      \"p99_ms\": " << detail::num_or_null(row.latency.p99_ms) << ",\n";
     os << "      \"max_ms\": " << detail::num_or_null(row.latency.max_ms) << ",\n";
     os << "      \"samples\": " << row.latency.samples << ",\n";
+    if (!row.raw_steady_ms.empty()) {
+      os << "      \"raw_steady_ms\": [";
+      const auto previous_precision = os.precision();
+      os << std::setprecision(17);
+      for (size_t j = 0; j < row.raw_steady_ms.size(); ++j)
+        os << (j ? ", " : "") << row.raw_steady_ms[j];
+      os.precision(previous_precision);
+      os << "],\n      \"raw_steady_run_offsets\": "
+         << detail::shape_json(row.raw_steady_run_offsets) << ",\n";
+    }
     os << "      \"override_ms\": " << detail::num_or_null(row.override_ms) << ",\n";
     os << "      \"override_delta_ms\": " << detail::num_or_null(row.override_delta_ms) << ",\n";
     os << "      \"achieved_frames_per_second\": "
@@ -295,6 +317,7 @@ inline void write_json(std::ostream& os, const PerfReport& r) {
     os << "      \"source_frames_per_second\": "
        << detail::num_or_null(row.source_frames_per_second) << ",\n";
     os << "      \"live_port\": \"" << detail::json_escape(row.live_port) << "\",\n";
+    os << "      \"override_context\": \"" << detail::json_escape(row.override_context) << "\",\n";
     os << "      \"cells_per_second\": " << detail::num_or_null(row.cells_per_second) << ",\n";
     os << "      \"slices_per_second\": " << detail::num_or_null(row.slices_per_second) << ",\n";
     os << "      \"estimated_effective_gbps\": "

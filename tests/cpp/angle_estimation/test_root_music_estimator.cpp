@@ -24,6 +24,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "angle_estimation/root_music_estimator_op/root_music_estimator_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
@@ -124,12 +125,15 @@ holoscan::testing::TestResult run_root_music_result(std::shared_ptr<holoscan::Te
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -147,12 +151,12 @@ RootMusicOutputs run_root_music(std::shared_ptr<holoscan::Tensor> snapshot,
       holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("eigenvalues"))};
 }
 
-template <typename Override>
+template <typename Override, typename T = double>
 holoscan::testing::TestResult run_root_music_override(
     std::vector<std::shared_ptr<holoscan::Tensor>> frames,
     std::vector<std::optional<Override>> payloads, RootMUSICParams params,
     const char* override_port) {
-  using Op = RootMUSICEstimatorOp<double>;
+  using Op = RootMUSICEstimatorOp<T>;
   auto fixture =
       holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
   fixture.set_params(std::move(params));
@@ -170,16 +174,19 @@ holoscan::testing::TestResult run_root_music_override(
   constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
   constexpr const char* kOutputs[] = {"aoa_estimates", "doa_multi", "source_count", "eigenvalues"};
   for (const char* output : kOutputs) {
-    fixture.capture_snapshot<holoscan::Tensor>(output, frames.size(), kMaximumBytes);
+    fixture.template capture_snapshot<holoscan::Tensor>(output, frames.size(), kMaximumBytes);
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, frames.size(), std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, frames.size());
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 holoscan::testing::TestResult run_root_music_with_mask(std::shared_ptr<holoscan::Tensor> mask,
@@ -200,12 +207,15 @@ holoscan::testing::TestResult run_root_music_with_mask(std::shared_ptr<holoscan:
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
   fixture.input_source_device("is_valid", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, output, 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<HostTensor> root_music_frames(const holoscan::testing::TestResult& result,
@@ -1230,3 +1240,54 @@ TEST(RootMUSICEstimatorOpTest, SpatialSmoothing1DRecoversDoa) {
 }
 
 }  // namespace
+
+// Campaign reproducer: finite equal-channel IQ at three amplitudes. Float
+// roundoff can change the EFT-selected null-space basis on the second frame,
+// giving an exactly zero leading coefficient. Accept either a blanked item or
+// finite AoA; later frames must still execute with the same operator and solver state.
+TEST(RootMUSICEstimatorOpTest, FloatScaledRankOneFramesDoNotAbort) {
+  constexpr int64_t kChannels = 4;
+  constexpr int64_t kSnapshots = 16;
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    std::vector<std::complex<float>> block(kChannels * kSnapshots);
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+      for (int64_t sample = 0; sample < kSnapshots; ++sample) {
+        const double phase1 = 2.0 * kPi * 5.0 * static_cast<double>(sample) / kSnapshots;
+        const double phase2 = 2.0 * kPi * 17.0 * static_cast<double>(sample) / kSnapshots;
+        const float scale = 1.0F + static_cast<float>(tick) * 0.125F;
+        block[channel * kSnapshots + sample] =
+            std::complex<float>{static_cast<float>(std::cos(phase1) + 0.5 * std::cos(phase2) + 0.1),
+                                static_cast<float>(std::sin(phase1) + 0.5 * std::sin(phase2))} *
+            scale;
+      }
+    }
+    frames.push_back(to_device_tensor(block, {1, kChannels, kSnapshots}, complex_dtype<float>()));
+  }
+  auto params = make_params(make_ula_geometry(kChannels, 0.5, 1.0), AngleConvention{});
+  const auto result = run_root_music_override<int64_t, float>(
+      std::move(frames), std::vector<std::optional<int64_t>>(3), std::move(params), "num_sources");
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto counts = root_music_frames(result, "source_count");
+  const auto aoa = root_music_frames(result, "aoa_estimates");
+  const auto eigenvalues = root_music_frames(result, "eigenvalues");
+  ASSERT_EQ(counts.size(), 3U);
+  ASSERT_EQ(aoa.size(), 3U);
+  ASSERT_EQ(eigenvalues.size(), 3U);
+  EXPECT_GT(counts[0].as<int32_t>()[0], 0);
+  const int32_t second_count = counts[1].as<int32_t>()[0];
+  EXPECT_GE(second_count, 0);
+  if (second_count == 0) {
+    EXPECT_TRUE(std::isnan(aoa[1].as<float>()[0]));
+    EXPECT_TRUE(std::isnan(aoa[1].as<float>()[1]));
+  } else {
+    EXPECT_TRUE(std::isfinite(aoa[1].as<float>()[0]));
+    EXPECT_TRUE(std::isfinite(aoa[1].as<float>()[1]));
+  }
+  EXPECT_GT(counts[2].as<int32_t>()[0], 0);
+  for (const auto& values : eigenvalues) {
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+      EXPECT_TRUE(std::isfinite(values.as<float>()[channel]));
+    }
+  }
+}

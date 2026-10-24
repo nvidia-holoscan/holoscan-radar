@@ -243,6 +243,168 @@ cases:
     doppler_window:
       type: hamming
     fft_norm: ortho
+- id: range-window-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters:
+    range_window:
+      type: none
+    doppler_window:
+      type: none
+  override:
+    port: range_window
+    value:
+      type: hann
+    cache: cached
+- id: doppler-window-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters:
+    range_window:
+      type: none
+    doppler_window:
+      type: none
+  override:
+    port: doppler_window
+    value:
+      type: hann
+    cache: cached
+- id: dechirp-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters:
+    range_window:
+      type: none
+    doppler_window:
+      type: none
+  override:
+    port: apply_dechirp
+    value: true
+    cache: cached
+- id: clutter-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters:
+    range_window:
+      type: none
+    doppler_window:
+      type: none
+  override:
+    port: clutter_filter
+    value: mean_subtraction
+    cache: cached
+- id: waveform-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters:
+    range_window:
+      type: none
+    doppler_window:
+      type: none
+  override:
+    port: waveform
+    value:
+      pri_seconds: 3.0e-05
+    cache: cached
+- id: norm-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters:
+    range_window:
+      type: none
+    doppler_window:
+      type: none
+  override:
+    port: fft_norm
+    value: ortho
+    cache: cached
+- id: shift-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters:
+    range_window:
+      type: none
+    doppler_window:
+      type: none
+  override:
+    port: center_zero_doppler
+    value: false
+    cache: cached
+- id: nfft-range-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters:
+    range_window:
+      type: none
+    doppler_window:
+      type: none
+  override:
+    port: nfft_range
+    value:
+      scale: 2
+    cache: cached
+- id: nfft-doppler-{profile}-cached
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters:
+    range_window:
+      type: none
+    doppler_window:
+      type: none
+  override:
+    port: nfft_doppler
+    value:
+      scale: 2
+    cache: cached
+- id: optional-minimal-{profile}
+  profiles:
+  - small
+  - medium
+  - large
+  scopes:
+  - thorough
+  parameters:
+    range_window:
+      type: none
+    doppler_window:
+      type: none
+  output_mode: minimal
 axes:
 - chirps
 - samples
@@ -287,6 +449,7 @@ recipe:
     - range_bins
     - velocity_bins
     unwired: []
+    optional_tensor_outputs: [range_bins, velocity_bins]
   live:
     range_window:
       physical_port: range_window

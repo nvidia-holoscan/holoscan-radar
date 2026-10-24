@@ -46,6 +46,7 @@ struct RootMUSICSolverState {
   size_t host_workspace_bytes{0};
   std::shared_ptr<holoscan::Tensor> device_workspace{};
   std::shared_ptr<holoscan::Tensor> info{};
+  std::shared_ptr<holoscan::Tensor> finite_companions{};
   std::vector<std::byte> host_workspace{};
 
   RootMUSICSolverState() {
@@ -283,6 +284,8 @@ inline void configure_root_solver(RootMUSICSolverState* state, int64_t degree,
   state->device_workspace = make_device_tensor(
       {static_cast<int64_t>(std::max<size_t>(device_bytes, size_t{1}))}, DLDataType{kDLUInt, 8, 1});
   state->info = make_device_tensor({std::max<int64_t>(num_items, 1)}, DLDataType{kDLInt, 32, 1});
+  state->finite_companions =
+      make_device_tensor({std::max<int64_t>(num_items, 1)}, DLDataType{kDLInt, 32, 1});
   state->host_workspace.resize(std::max<size_t>(host_bytes, size_t{1}));
   state->degree = degree;
   state->data_type = type;
@@ -290,11 +293,37 @@ inline void configure_root_solver(RootMUSICSolverState* state, int64_t degree,
   state->host_workspace_bytes = host_bytes;
 }
 
+// NaN companions represent a vanishing leading coefficient, not a matrix
+// that geev can solve. Some precisions return an API error rather than info > 0
+// for these inputs. Classify them before calling the solver so only that item
+// is blanked, with the same policy as numerical non-convergence.
+template <typename T>
+__global__ void root_music_finite_companions_kernel(
+    const cuda::std::complex<T>* __restrict__ companion, int64_t degree,
+    int32_t* __restrict__ finite_companions) {
+  __shared__ int finite;
+  if (threadIdx.x == 0) {
+    finite = 1;
+  }
+  __syncthreads();
+  const int64_t entries = degree * degree;
+  const auto* matrix = companion + static_cast<int64_t>(blockIdx.x) * entries;
+  for (int64_t index = threadIdx.x; index < entries; index += blockDim.x) {
+    if (!isfinite(matrix[index].real()) || !isfinite(matrix[index].imag())) {
+      atomicExch(&finite, 0);
+    }
+  }
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    finite_companions[blockIdx.x] = finite;
+  }
+}
+
 // One companion-matrix eigen-solve per item on the operator stream (see
 // CLARAHOLOS-3399). Configures/reuses the cuSolver
 // workspace, runs cusolverDnXgeev per item, then downloads and checks the
 // per-item info codes (synchronizes `stream`). A per-item non-convergence
-// (info > 0, e.g. a degenerate NaN companion matrix) blanks that item's roots
+// (info > 0) or a non-finite companion blanks that item's roots
 // so the selection kernels skip it; only an illegal argument (info < 0) throws.
 template <typename T>
 inline void solve_companion_roots(RootMUSICSolverState* solver, int64_t degree,
@@ -305,7 +334,27 @@ inline void solve_companion_roots(RootMUSICSolverState* solver, int64_t degree,
   }
   configure_root_solver<T>(solver, degree, companion, roots, num_items);
   check_cusolver(cusolverDnSetStream(solver->handle, stream), "cusolverDnSetStream");
+  root_music_finite_companions_kernel<T><<<static_cast<int>(num_items), 256, 0, stream>>>(
+      companion, degree,
+      require_mutable<int32_t>(*solver->finite_companions, "geev companion validity"));
+  std::vector<int32_t> finite_host(static_cast<size_t>(num_items));
+  if (cudaMemcpyAsync(finite_host.data(), solver->finite_companions->data(),
+                      finite_host.size() * sizeof(int32_t), cudaMemcpyDeviceToHost,
+                      stream) != cudaSuccess ||
+      cudaStreamSynchronize(stream) != cudaSuccess) {
+    throw std::runtime_error("RootMUSICEstimatorOp: companion validity download failed");
+  }
   for (int64_t item = 0; item < num_items; ++item) {
+    if (finite_host[static_cast<size_t>(item)] == 0) {
+      if (cudaMemsetAsync(roots + item * degree, 0xFF,
+                          static_cast<size_t>(degree) * sizeof(cuda::std::complex<T>),
+                          stream) != cudaSuccess ||
+          cudaMemsetAsync(require_mutable<int>(*solver->info, "geev info") + item, 0, sizeof(int),
+                          stream) != cudaSuccess) {
+        throw std::runtime_error("RootMUSICEstimatorOp: failed to blank non-finite companion");
+      }
+      continue;
+    }
     check_cusolver(
         cusolverDnXgeev(
             solver->handle, solver->params, CUSOLVER_EIG_MODE_NOVECTOR, CUSOLVER_EIG_MODE_NOVECTOR,
@@ -335,10 +384,8 @@ inline void solve_companion_roots(RootMUSICSolverState* solver, int64_t degree,
                                std::to_string(item) + " (info " + std::to_string(info) + ")");
     }
     if (info > 0) {
-      // info > 0: QR failed to converge for this item -- the expected outcome
-      // for a numerically degenerate companion matrix (e.g. root_music_
-      // companion_kernel deliberately writes a NaN matrix when the leading
-      // coefficient underflows). Blank just this item's roots with an
+      // info > 0: QR failed to converge for this finite companion.
+      // Blank just this item's roots with an
       // all-ones bit pattern (a NaN for both float and double); the selection
       // kernels skip non-finite roots and emit zero sources for it, so one bad
       // item no longer aborts the whole tick.

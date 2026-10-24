@@ -15,6 +15,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "fmcw/doppler_notch_op/doppler_notch_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -86,11 +87,14 @@ holoscan::testing::TestResult run_notch(const std::vector<int64_t>& shape,
   fixture.input_source_device("velocity_bins", holoscan::DeviceId{0});
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
   fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("rd_maps_out", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "rd_maps_out", 1U);
   (void)observed;
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<HostTensor> host_frames(const holoscan::testing::TestResult& result) {
@@ -193,14 +197,16 @@ TEST(DopplerNotchOp, LiveCenterOverrideAppliesForOneTick) {
   fixture.input_source_device("velocity_bins", holoscan::DeviceId{0});
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
   fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
+  holoscan::radar::testing::FixtureCompletion completion;
   auto running =
-      fixture.run_async({.expect_stop = true, .frames = holoscan::testing::FrameRelease::kManual});
-  const auto released0 = running.release_frame(std::chrono::seconds{5});
-  const bool observed0 = running.wait_for_output("rd_maps_out", 1U, std::chrono::seconds{5});
-  const auto released1 = running.release_frame(std::chrono::seconds{5});
-  const bool observed1 = running.wait_for_output("rd_maps_out", 2U, std::chrono::seconds{5});
+      fixture.run_async(completion.run_options(holoscan::testing::FrameRelease::kManual));
+  const auto released0 = running.release_frame(completion.remaining());
+  const bool observed0 = completion.wait_for_output(running, "rd_maps_out", 1U);
+  const auto released1 = running.release_frame(completion.remaining());
+  const bool observed1 = completion.wait_for_output(running, "rd_maps_out", 2U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(released0) << released0.error().message;
   ASSERT_TRUE(released1) << released1.error().message;
   ASSERT_TRUE(result.ok()) << result.describe_failure();

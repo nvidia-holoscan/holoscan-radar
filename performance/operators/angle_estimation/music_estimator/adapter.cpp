@@ -15,7 +15,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::MUSICEstimatorOp<float>;
+using Op = hr::MUSICEstimatorOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
