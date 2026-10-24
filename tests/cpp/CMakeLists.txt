@@ -324,6 +324,7 @@ target_include_directories(test_fmcw_simo_report PRIVATE
     ${PROJECT_SOURCE_DIR}/operators)
 
 radar_add_test(app/test_report_shapes holoscan::radar_app)
+radar_add_test(app/test_sar_diagnostics holoscan::radar_app)
 
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     radar_add_test(app/test_fmcw_dashboard holoscan::fmcw_dashboard)

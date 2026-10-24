@@ -47,6 +47,7 @@
 #include "sar/sar_range_compression_op/params_config.hpp"
 #include "radar_app/sar/config.hpp"
 #include "radar_app/sar/custom_ops.hpp"
+#include "radar_app/sar/diagnostics.hpp"
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
 #include <holoscan/visualization/holoviz_op.hpp>
 #include "radar_app/sar/sar_image_viz.hpp"
@@ -91,13 +92,6 @@ inline radar::MaxTensorExtents make_extents(const AppConfig& cfg,
   extents.max_image_v = max_v;
   extents.max_image_u = max_u;
   return extents;
-}
-
-// Operator Error text stays as-is. When the run fails because a required emit
-// could not land, append a prominent banner with the calling demo's hint.
-inline bool mentions_full_queue(const std::string& text) {
-  return text.find("output queue is full") != std::string::npos ||
-         text.find("no free tensor buffer") != std::string::npos;
 }
 
 template <typename LoadConfig, typename BuildGraph>
@@ -494,7 +488,7 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
       for (const auto& diagnostic : session.diagnostics()) {
         const std::string formatted = holoscan::format_diagnostic(diagnostic, plan.graph());
         error += " [" + formatted + "]";
-        full_queue = full_queue || mentions_full_queue(formatted);
+        full_queue = full_queue || app::sar::is_backpressure_failure(diagnostic);
       }
       if (session.diagnostics().empty())
         error += " [failed with no diagnostics]";
