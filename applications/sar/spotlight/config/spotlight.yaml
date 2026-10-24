@@ -54,6 +54,7 @@ cphd_reader:
   # Half-open. Their 1° keep is [91273, 102839); they then drop 66
   # trailing pulses so Np % 100 == 0. Match that trim.
   pulse_range: [91273, 102773]
+  playback_rate: 1
 
 # Spotlight spelling: no retention, emit-and-reset on D22.
 aperture_manager:
