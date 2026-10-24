@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
   return run_sar_graph_app(
       argc, argv, "video_sar", load_config,
       [](auto& graph, auto& options, const auto& queue, const auto& cfg, auto& reader, auto& range,
-         auto& manager, auto& bp, auto& application,
+         auto& manager, auto& bp, auto& source, auto& /*application*/, auto& /*formation*/,
          const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {
         graph.add_flow(range->range_profiles, manager->range_profiles, queue);
         graph.add_flow(reader->stream_boundary, manager->stream_boundary, queue);
@@ -21,7 +21,7 @@ int main(int argc, char** argv) {
           auto enu = graph.template op<app::sar::EcefToSceneEnuOp>(
               "ecef_to_enu", cfg.enu_origin_ecef, cfg.quantize_phase_center_f32,
               cfg.reader_pulses_per_tick);
-          application.add(enu);
+          source.add(enu);
           bind_outputs(options, "ecef_to_enu", {"positions_out", "reference_position_out"});
           graph.add_flow(reader->positions, enu->positions, queue);
           graph.add_flow(reader->reference_position, enu->reference_position, queue);

@@ -14,18 +14,18 @@
 #
 #   python3 tools/sar_data/subset_cphd.py \
 #     tools/sar_data/recipes/houston_1m.yaml -o data/sar
-#   Mount data/sar at /tmp/sar for the host CLI run (see README.md).
+#   Paths below resolve under the build data directory (default: data/).
 #
 # Scene is counts × spacing (6.8 km IARP-centred ENU). Aperture
 # 8262 is 2020 * 4.09 / 1.0 (the 4.09 m window scaled). No
 # aperture_window: a sliding window is unweighted (~−13 dB).
-# the loop repeats until the process is stopped. The wrap is collection_boundary
+# the loop repeats until SIGINT/SIGTERM (Ctrl-C in the launch terminal). The wrap is collection_boundary
 # (emit-and-reset): same IARP, but 22 deg of aspect between
 # the last pulses and the first, so the window cannot
 # straddle it.
 
 cphd:
-  path: /tmp/sar/mode02_houston_1p0m.cphd
+  path: sar/mode02_houston_1p0m.cphd
   names:
     - Houston
   sidecar: ""
@@ -33,13 +33,14 @@ cphd:
 # Scene vs formed pixels. counts × spacing is the map (6.8 km
 # at 1 m). max_side is the formed pixel side — the number to
 # lower on a slower GPU (same km, coarser GSD; cost ~ N²).
-# 6800 was ~7% behind collect time on RTX PRO 6000; 6144 is
-# ~18% fewer pixels. 0 = use counts as-is.
+# 6800 was ~7% behind collect time on RTX PRO 6000; 6144 still
+# raced collect on this GPU and fail-fast aborted. 5632 is ~16%
+# fewer pixels than 6144. 0 = use counts as-is.
 # counts may be N (square) or [num_v, num_u].
 lattice:
   counts: 6800
   spacing: 1.0
-  max_side: 6144
+  max_side: 5632
 
 cphd_reader:
   coordinate_frame: ecef
@@ -66,8 +67,9 @@ backprojection:
 
 visualize: true
 # Holoviz window (px), not formation cost. LUT box-averages
-# the formed lattice to this. If the planned timeline HUD says
-# "behind", lower lattice.max_side, not this.
+# the formed lattice to this. Lag HUD is live collect vs wall
+# (same as the HSDK 4 demo). If it stays behind, lower
+# lattice.max_side.
 visualize_size: 1024
 skip_display_check: false
 headless: false

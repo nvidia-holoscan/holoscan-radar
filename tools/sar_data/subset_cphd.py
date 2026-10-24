@@ -8,7 +8,7 @@ Windows are a recipe/CLI knob, resolved against the source header. Give an
 explicit [start, stop), or a count / bandwidth / duration placed at origin
 (center, start, or end). Omit an axis to keep it whole.
 
-python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml -o /tmp/sar
+python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml -o data/sar
 python3 subset_cphd.py --source in.cphd --sample-count 128 --pulse-count 40 -o out.cphd
 """
 

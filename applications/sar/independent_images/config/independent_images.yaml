@@ -6,7 +6,7 @@
 #
 #   python3 tools/sar_data/pull_cphd.py --app independent_images \
 #     --dest data/sar/mode5
-#   Mount data/sar at /tmp/sar for the host CLI run (see README.md).
+#   Paths below resolve under the build data directory (default: data/).
 #
 # Each collection gets an IARP-centred east-north square inscribed
 # in that file's ground-range x ground-azimuth support, sampled at
@@ -28,12 +28,12 @@
 
 cphd:
   path:
-    - /tmp/sar/mode5/2023-09-12-02-36-33_UMBRA-04_CPHD.cphd
-    - /tmp/sar/mode5/2023-07-14-23-20-06_UMBRA-05_CPHD.cphd
-    - /tmp/sar/mode5/2023-10-20-04-22-56_UMBRA-04_CPHD.cphd
-    - /tmp/sar/mode5/2023-02-22-12-54-56_UMBRA-04_CPHD.cphd
-    - /tmp/sar/mode5/2023-02-08-02-11-21_UMBRA-05_CPHD.cphd
-    - /tmp/sar/mode5/2023-10-11-02-20-47_UMBRA-05_CPHD.cphd
+    - sar/mode5/2023-09-12-02-36-33_UMBRA-04_CPHD.cphd
+    - sar/mode5/2023-07-14-23-20-06_UMBRA-05_CPHD.cphd
+    - sar/mode5/2023-10-20-04-22-56_UMBRA-04_CPHD.cphd
+    - sar/mode5/2023-02-22-12-54-56_UMBRA-04_CPHD.cphd
+    - sar/mode5/2023-02-08-02-11-21_UMBRA-05_CPHD.cphd
+    - sar/mode5/2023-10-11-02-20-47_UMBRA-05_CPHD.cphd
   names:
     - Panama Canal
     - Melbourne
@@ -52,7 +52,7 @@ lattice:
 
 # dump: true writes npy (off by default). Ohio's dump was 4.6 s.
 # output:
-#   path: /tmp/sar/mode5/image_{index}.npy
+#   path: data/sar/mode5/image_{index}.npy
 #   max_files: 6
 
 cphd_reader:

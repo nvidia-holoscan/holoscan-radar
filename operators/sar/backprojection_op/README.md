@@ -74,7 +74,8 @@ for their chosen range-compression setup.
 
 `control` drives image emission and reset/continuation. An unwired or missing
 control means the stage accumulates without emitting; stopping with pending
-pulses warns. With `geometry_change: reset`, a changed lattice discards the
+pulses warns. A full `image` queue fails `compute()`; an
+`emit_and_reset` tick resets the accumulator only after that emit succeeds. With `geometry_change: reset`, a changed lattice discards the
 old accumulation. With `scroll`, a forward shift along the lattice v axis
 retains overlapping rows and clears newly exposed rows. Scroll disallows
 signed `weight`. `range_bins` can supply a uniform explicit range axis;

@@ -137,6 +137,77 @@ struct BackprojectionState {
   bool lattice_valid{false};
   bool planes_valid{false};
 
+  // Per-tick GPU spans for px*pls/s. Host wall around compute() only
+  // sees launch overhead on non-emit ticks (the runtime finishes the
+  // partition stream after return); video SAR emits every N ticks, so
+  // that under-counts time by ~N and inflates the HUD rate.
+  struct GpuTickEvents {
+    cudaEvent_t start{nullptr};
+    cudaEvent_t stop{nullptr};
+  };
+  // Caps CUDA event growth when control is unwired and no image is emitted.
+  // Do not fold with take_tick_gpu_s() on the record path: that GPU-syncs.
+  static constexpr size_t kMaxTickGpuEvents = 16384;
+  std::vector<GpuTickEvents> tick_events;
+  size_t tick_event_n{0};
+  bool tick_gpu_armed_{false};
+
+  ~BackprojectionState() {
+    for (auto& ev : tick_events) {
+      if (ev.start != nullptr)
+        cudaEventDestroy(ev.start);
+      if (ev.stop != nullptr)
+        cudaEventDestroy(ev.stop);
+    }
+  }
+
+  void discard_tick_gpu_timing() {
+    tick_event_n = 0;
+    tick_gpu_armed_ = false;
+  }
+
+  void record_tick_gpu_start(cudaStream_t stream) {
+    if (tick_event_n >= kMaxTickGpuEvents) {
+      tick_gpu_armed_ = false;
+      return;
+    }
+    if (tick_event_n >= tick_events.size()) {
+      GpuTickEvents ev;
+      if (cudaEventCreate(&ev.start) != cudaSuccess || cudaEventCreate(&ev.stop) != cudaSuccess) {
+        throw std::runtime_error("BackprojectionOp: cudaEventCreate failed");
+      }
+      tick_events.push_back(ev);
+    }
+    if (cudaEventRecord(tick_events[tick_event_n].start, stream) != cudaSuccess) {
+      throw std::runtime_error("BackprojectionOp: cudaEventRecord start failed");
+    }
+    tick_gpu_armed_ = true;
+  }
+
+  void record_tick_gpu_stop(cudaStream_t stream) {
+    if (!tick_gpu_armed_)
+      return;
+    if (cudaEventRecord(tick_events[tick_event_n].stop, stream) != cudaSuccess) {
+      throw std::runtime_error("BackprojectionOp: cudaEventRecord stop failed");
+    }
+    ++tick_event_n;
+    tick_gpu_armed_ = false;
+  }
+
+  double take_tick_gpu_s() {
+    float total_ms = 0.0F;
+    for (size_t i = 0; i < tick_event_n; ++i) {
+      float ms = 0.0F;
+      if (cudaEventElapsedTime(&ms, tick_events[i].start, tick_events[i].stop) != cudaSuccess) {
+        throw std::runtime_error("BackprojectionOp: cudaEventElapsedTime failed");
+      }
+      total_ms += ms;
+    }
+    tick_event_n = 0;
+    tick_gpu_armed_ = false;
+    return static_cast<double>(total_ms) * 1.0e-3;
+  }
+
   double* x_d() { return x_plane.as<double>() + static_cast<size_t>(launch_row0 * lattice_num_u); }
   double* y_d() { return y_plane.as<double>() + static_cast<size_t>(launch_row0 * lattice_num_u); }
   double* z_d() { return z_plane.as<double>() + static_cast<size_t>(launch_row0 * lattice_num_u); }

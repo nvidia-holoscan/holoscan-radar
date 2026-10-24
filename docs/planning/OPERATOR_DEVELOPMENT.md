@@ -149,6 +149,7 @@ the plan builder and validate there.
 | Need | Header |
 | --- | --- |
 | Single-entry `TensorMap` receive/emit | `radar_common/sdk/tensor_io.hpp` |
+| Required emit wait-or-fail | `emit_required_tensor` / `retry_transient` in `tensor_io.hpp` |
 | Exact `[live]` resolve | `radar_common/sdk/override_param.hpp` |
 | Warn-once artifact cache | `radar_common/sdk/config_cache.hpp` |
 | Arg setters for custom types | `radar_common/sdk/arg_setters.hpp` |
@@ -284,6 +285,20 @@ transient fault costs one frame rather than the run.
 `emit_prepared_tensor` and `emit_device_tensor` carry `[[nodiscard]]` like the
 `Output::emit` they wrap, so forgetting to handle the result is a build error
 and the `(void)` reads as the deliberate choice it is.
+
+Required library emits are fail-fast by default (`emit_required_tensor` with
+wait false). On queue/pool exhaustion, the helper requests cooperative stop
+before returning the error. HSDK 5 can wait for peer callbacks before completing
+failure shutdown; without cancellation, a reader retrying an emit can wait
+forever after downstream stops. Preserve the returned error so the final run
+termination remains failed and the application can explain the cause.
+A failed Tensor emit consumes the loan, so a wait retry must re-prepare. Only `CPHDReaderOp` retries: unmetered `playback_rate` 0 always
+waits, and the optional static Param `wait_for_downstream` (default false,
+not `[live]`, Params schema version 2) opts paced ingest into the same retry.
+Do not capture wait in a library constructor. Do not add this Param to
+formation or FMCW operators. Do not use `kDropOldest` on a formation data
+path. Continuous strip opts in on paced `cphd_reader` YAML. It deepens the
+4-slice fan-out edges to 16 rather than waiting on a full queue.
 
 ### Sample time propagation and aligned joins
 
@@ -580,8 +595,9 @@ it: no leak, no backwards steps, and the operator chooses which sample matters
 
 Structural enums that select a kernel (`cfar_variant`, multiplexing scheme,
 `angle_convention`) stay **static** — callers instantiate another operator.
-Footguns that are "reasonable" (live `pfa`, live window size) are allowed with
-warn-once + cache.
+`CPHDReaderOp.wait_for_downstream` is static too: together with `playback_rate`
+it selects fail-fast vs retry for the run, not a per-tick encoding. Footguns that are "reasonable" (live `pfa`,
+live window size) are allowed with warn-once + cache.
 
 ### When the contract says "cheap" but reality is not
 

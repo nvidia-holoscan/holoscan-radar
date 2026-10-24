@@ -7,8 +7,8 @@
 #
 # Local file, not S3:
 #   python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
-#     --source /tmp/sar/2024-10-30-16-10-33_UMBRA-06_CPHD.cphd \
-#     -o /tmp/sar
+#     --source data/sar/2024-10-30-16-10-33_UMBRA-06_CPHD.cphd \
+#     -o data/sar
 
 name: mode02_houston_1p0m
 description: >-

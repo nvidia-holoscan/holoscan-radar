@@ -29,7 +29,7 @@ struct PhaseCorrectionParams {
 };
 
 HOLOSCAN_PARAM_SCHEMA(PhaseCorrectionParams,
-                      holoscan::param_schema("com.nvidia.holoscan.radar.PhaseCorrectionParams", 1),
+                      holoscan::param_schema("com.nvidia.holoscan.radar.PhaseCorrectionParams", 3),
                       holoscan::field<&PhaseCorrectionParams::sense>("sense").description(
                           "subtract multiplies by exp(-i phi); add by exp(+i phi). Required."));
 

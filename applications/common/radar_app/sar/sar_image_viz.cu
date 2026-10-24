@@ -7,11 +7,12 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
-#include <cmath>
+#include <array>
 #include <chrono>
-#include <thread>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -21,6 +22,7 @@
 #include <holoscan/core/payload_options.hpp>
 #include <holoscan/core/tensor_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/logger/logger.hpp>
 #include <holoscan/sensor_io/image_metadata.hpp>
 
 #include "radar_common/sdk/tensor_io.hpp"
@@ -72,13 +74,13 @@ __global__ void render_gray(const float* magnitude, std::uint8_t* output, int64_
 }
 }  // namespace
 
-SarImageVizOp::SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side, double hold_s,
-                             bool transpose_axes)
+SarImageVizOp::SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side,
+                             bool transpose_axes, OverlayConfig overlay)
 : max_v_(max_v),
   max_u_(max_u),
   display_side_(display_side),
-  hold_s_(hold_s),
-  transpose_axes_(transpose_axes) {
+  transpose_axes_(transpose_axes),
+  overlay_(std::move(overlay)) {
   if (max_v_ < 1 || max_u_ < 1 || display_side_ < 1)
     throw std::invalid_argument("SarImageVizOp: invalid image extents");
 }
@@ -91,12 +93,20 @@ void SarImageVizOp::setup(OperatorSpec& spec) {
       .memory_kind = MemoryKind::kCudaDevice, .dtype = std::nullopt, .rank = std::nullopt};
   constexpr TensorRepresentation rgba{
       .memory_kind = MemoryKind::kCudaDevice, .dtype = DLDataType{kDLUInt, 8U, 1U}, .rank = 3U};
+  constexpr TensorRepresentation hud_text{
+      .memory_kind = MemoryKind::kHost, .dtype = DLDataType{kDLUInt, 8U, 1U}, .rank = 2U};
+  constexpr TensorRepresentation hud_geom{
+      .memory_kind = MemoryKind::kHost, .dtype = DLDataType{kDLFloat, 32U, 1U}, .rank = 1U};
   spec.input(image).queue_depth(4U).expects_tensor(tensor_input(device));
   spec.output(frame)
       .tensor_field(schema::ImageTensorFields::data)
       .produces_tensor(pooled_tensor_output(
           rgba, 3U,
           static_cast<uint64_t>(display_side_) * static_cast<uint64_t>(display_side_) * 4U));
+  spec.output(labels).produces_tensor(
+      pooled_tensor_output(hud_text, 2U, static_cast<uint64_t>(kHudRuns) * kHudRowBytes));
+  spec.output(overlay).produces_tensor(pooled_tensor_output(
+      hud_geom, 1U, static_cast<uint64_t>(kHudMaxLines) * kHudLineFloats * sizeof(float)));
 }
 Contract SarImageVizOp::contract() const {
   Contract result;
@@ -110,6 +120,7 @@ void SarImageVizOp::start() {
     throw std::runtime_error("SarImageVizOp: sampled magnitude allocation failed");
 }
 expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
+  // Receive and validate inputs
   HOLOSCAN_TRY(auto input, receive_tensor(image, "SarImageVizOp"));
   const auto shape = input.shape();
   const auto dtype = input.dtype();
@@ -125,6 +136,7 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
   const auto stream = context.cuda_stream().get();
   constexpr int kThreads = 256;
   const int64_t output_count = height * width;
+  // Execute the device stage
   if (dtype.bits == 128U)
     sample_magnitude<<<(output_count + kThreads - 1) / kThreads, kThreads, 0, stream>>>(
         static_cast<const double2*>(input.data()), shape[0], shape[1], sampled_magnitude_, height,
@@ -155,15 +167,92 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
   if (cudaPeekAtLastError() != cudaSuccess)
     return make_unexpected(Error{ErrorCode::kFailure, "SarImageVizOp: render kernel failed"});
   HOLOSCAN_RETURN_IF_ERROR(std::move(*writer).commit());
+
+  // Publish outputs: HUD tensors before the ImageT trigger
+  FormationDiag diag{};
+  if (overlay_.diag)
+    diag = overlay_.diag();
+  std::vector<std::string> banner;
+  const std::string size = std::to_string(shape[0]) + "x" + std::to_string(shape[1]);
+  if (!overlay_.scene_names.empty()) {
+    const size_t idx = static_cast<size_t>(overlay_index_) % overlay_.scene_names.size();
+    banner.push_back(overlay_.scene_names[idx] + "  " + size);
+  } else {
+    banner.push_back(size);
+  }
+  ++overlay_index_;
+  if (!diag.rate_line.empty()) {
+    banner.push_back(diag.rate_line);
+  } else {
+    const std::string rate_line =
+        format_bp_rate_line(diag.bp_compute_s, diag.pulses, diag.pixels, diag.bp_num_v,
+                            diag.bp_num_u, shape[0], shape[1]);
+    const auto overlay_now = std::chrono::steady_clock::now();
+    if (!rate_line.empty() &&
+        (!have_overlay_rate_ ||
+         std::chrono::duration<double>(overlay_now - overlay_rate_at_).count() >= 1.0)) {
+      overlay_rate_at_ = overlay_now;
+      have_overlay_rate_ = true;
+      held_rate_line_ = rate_line;
+    }
+    if (!held_rate_line_.empty())
+      banner.push_back(held_rate_line_);
+  }
+  if (diag.form_latency_s.has_value()) {
+    const auto latency = format_form_latency(*diag.form_latency_s);
+    if (!latency.empty())
+      banner.push_back(latency);
+  }
+
+  const std::array<int64_t, 2> label_shape{static_cast<int64_t>(kHudRuns),
+                                           static_cast<int64_t>(kHudRowBytes)};
+  auto records = labels.allocate_tensor(
+      TensorLoanRequest{.shape = label_shape, .dtype = DLDataType{kDLUInt, 8U, 1U}});
+  if (!records)
+    return make_unexpected(std::move(records).error());
+  auto labels_filled = records->write_host_and_commit(
+      [&](const TensorOutputWriteGuard& guard) -> expected<void, Error> {
+        auto* rows = guard.data_as<std::uint8_t>();
+        if (rows == nullptr || guard.byte_size() < kHudRuns * kHudRowBytes)
+          return make_unexpected(
+              Error{ErrorCode::kFailure, "SarImageVizOp: text record loan is too small"});
+        write_hud_rows(rows, banner, diag, overlay_.show_playback_lag, height);
+        return {};
+      });
+  if (!labels_filled)
+    return make_unexpected(std::move(labels_filled).error());
+
+  std::vector<float> geom;
+  fill_hud_geometry(&geom, diag, transpose_axes_);
+  if (geom.empty())
+    geom.assign(kHudLineFloats, 0.0F);
+  const std::array<int64_t, 1> overlay_shape{static_cast<int64_t>(geom.size())};
+  auto lines = overlay.allocate_tensor(
+      TensorLoanRequest{.shape = overlay_shape, .dtype = DLDataType{kDLFloat, 32U, 1U}});
+  if (!lines)
+    return make_unexpected(std::move(lines).error());
+  auto overlay_filled = lines->write_host_and_commit(
+      [&](const TensorOutputWriteGuard& guard) -> expected<void, Error> {
+        auto* out = guard.data_as<float>();
+        if (out == nullptr || guard.byte_size() < geom.size() * sizeof(float))
+          return make_unexpected(
+              Error{ErrorCode::kFailure, "SarImageVizOp: overlay loan is too small"});
+        std::memcpy(out, geom.data(), geom.size() * sizeof(float));
+        return {};
+      });
+  if (!overlay_filled)
+    return make_unexpected(std::move(overlay_filled).error());
+
+  const EmitOptions options{.capture_time = context.activation_time()};
+  HOLOSCAN_RETURN_IF_ERROR(labels.emit(std::move(*records), options));
+  HOLOSCAN_RETURN_IF_ERROR(overlay.emit(std::move(*lines), options));
   schema::ImageT descriptor{};
   descriptor.height = static_cast<std::int32_t>(height);
   descriptor.width = static_cast<std::int32_t>(width);
   descriptor.encoding = schema::ImageEncoding_RGBA8;
   descriptor.color_space = schema::ColorSpace_UNSPECIFIED;
-  HOLOSCAN_RETURN_IF_ERROR(frame.emit_tensor(
-      std::move(*loan), descriptor, EmitOptions{.capture_time = context.activation_time()}));
-  if (hold_s_ > 0.0)
-    std::this_thread::sleep_for(std::chrono::duration<double>(hold_s_));
+  HOLOSCAN_RETURN_IF_ERROR(frame.emit_tensor(std::move(*loan), descriptor, options));
+  HOLOSCAN_LOG_DEBUG("SarImageVizOp: {}x{} -> {}x{} display", shape[0], shape[1], height, width);
   return {};
 }
 }  // namespace holoscan::radar::app::sar

@@ -9,7 +9,7 @@
 #
 #   python3 tools/sar_data/pull_cphd.py --app tiled_strip \
 #     --dest data/sar/imperial
-#   Mount data/sar at /tmp/sar for the host CLI run (see README.md).
+#   Paths below resolve under the build data directory (default: data/).
 #
 # nvec 159051 does not divide by 10; pulse_range drops the last
 # vector so ten tiles of 15905 pulses (~10.4 km along-track).
@@ -22,7 +22,7 @@
 # emit_interval = tile length is the stamped-window row
 # (aperture_window is illegal when max > 0). Taylor on range and
 # azimuth; weight wired. pulses_per_tick 3181 divides the tile
-# (five ticks). playback_rate 0.5 so each square sits ~3 s.
+# (five ticks). playback_rate 1 paces to collect time (~1.6 s per tile).
 # nfft_pad: next_fast. The loop repeats until stopped; wrap
 # restages tile 0 and clears the mosaic. A display u-crop was
 # planned but is not wired; Holoviz and dump show the full
@@ -30,7 +30,7 @@
 # formation and dump keep (v,u). visualize_size bounds the raster.
 
 cphd:
-  path: /tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
+  path: sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
   names:
     - Imperial Valley
   sidecar: ""
@@ -44,7 +44,7 @@ cphd_reader:
   pulse_range: [0, 159050]
   pulses_per_tick: 3181
   loop: true
-  playback_rate: 0.5
+  playback_rate: 1
   duty_cycle: 1
 
 nfft_pad: next_fast

@@ -9,7 +9,7 @@
 #
 #   python3 tools/sar_data/pull_cphd.py --app continuous_strip \
 #     --dest data/sar/imperial
-#   Mount data/sar at /tmp/sar for the host CLI run (see README.md).
+#   Paths below resolve under the build data directory (default: data/).
 #
 # Lattice follows the SRP chord (not the IARP tangent plane).
 # lattice.max_side is the scrolling window depth along v, not a
@@ -20,7 +20,7 @@
 # the graph driver gives the stager that slice size, so one
 # reader cube becomes four manager/BP ticks (window from each
 # slice's last SRP). 159050 / 1024 leaves a 330-pulse final
-# reader batch (256+74 after slicing). playback_rate 0.5.
+# reader batch (256+74 after slicing). playback_rate 1 paces to collect time.
 # nfft_pad: next_fast. loop continues until the process is stopped; wrap restages
 # the opening window with emit-and-reset. Holoviz is the parent
 # strip (same landscape fit as mode 3), not the scrolling chip:
@@ -32,7 +32,7 @@
 # visualize_size caps that long display axis in pixels.
 
 cphd:
-  path: /tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
+  path: sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
   names:
     - Imperial Valley
   sidecar: ""
@@ -46,8 +46,9 @@ cphd_reader:
   pulse_range: [0, 159050]
   pulses_per_tick: 1024
   loop: true
-  playback_rate: 0.5
+  playback_rate: 1
   duty_cycle: 1
+  wait_for_downstream: true
 
 nfft_pad: next_fast
 

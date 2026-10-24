@@ -114,18 +114,17 @@ class SarMosaicOp : public Operator<> {
             static_cast<std::size_t>(shape[0]), cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
       return make_unexpected(Error{ErrorCode::kFailure, "SarMosaicOp: blit failed"});
     }
-    HOLOSCAN_TRY(auto loan, prepare_device_tensor(
-                                image_out, context, std::vector<int64_t>{pv, pu}, dtype,
-                                [&](void* output, std::size_t size) -> expected<void, Error> {
-                                  if (size != bytes || cudaMemcpyAsync(output, canvas_, bytes,
-                                                                       cudaMemcpyDeviceToDevice,
-                                                                       stream) != cudaSuccess)
-                                    return make_unexpected(Error{
-                                        ErrorCode::kFailure, "SarMosaicOp: parent copy failed"});
-                                  return {};
-                                }));
     last_v0_ = v0;
-    return emit_prepared_tensor(image_out, context, std::move(loan));
+    return emit_required_tensor(image_out, context, "SarMosaicOp.image_out", false, [&] {
+      return prepare_device_tensor(
+          image_out, context, std::vector<int64_t>{pv, pu}, dtype,
+          [&](void* output, std::size_t size) -> expected<void, Error> {
+            if (size != bytes || cudaMemcpyAsync(output, canvas_, bytes, cudaMemcpyDeviceToDevice,
+                                                 stream) != cudaSuccess)
+              return make_unexpected(Error{ErrorCode::kFailure, "SarMosaicOp: parent copy failed"});
+            return {};
+          });
+    });
   }
   Input<Tensor> image{"image"};
   Input<WireSampleGeometry> sample_geometry{"sample_geometry"};
