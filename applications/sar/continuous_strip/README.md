@@ -25,7 +25,7 @@ typed `stream_boundary` is joined to the aperture manager on the same tick.
 The paced reader, range/manager, and backprojection are separate Graph partitions with dedicated `ThreadPlacement` lanes so collect-vs-wall lag is the live playback clock, not formation GPU time on the controller.
 
 This demo sets `cphd_reader.wait_for_downstream: true` so ingest waits on a full queue. One reader cube is four backprojection slices; those fan-out edges use queue depth 16 so the default rate-1 preset is not aborted by a full depth-4 queue on the first mosaic.
-Range compression, aperture manager, backprojection, the scroll stager, and mosaic still fail-fast when those deeper queues fill. Raise `cphd_reader.playback_rate` above 1 to overload the GPU without a slower machine. The console keeps behind and queue-wait as WARN; per-slice timers are DEBUG. Progress is a 1 Hz `SAR: image N formed` INFO line. Use `HOLOSCAN_LOG_LEVEL=DEBUG` for every slice. A queue-full abort is a downstream operator; the Graph driver then prints the same teaching paragraph as the other SAR demos: lower `cphd_reader.playback_rate` or reduce the image size.
+Range compression, aperture manager, backprojection, the scroll stager, and mosaic still fail-fast when those deeper queues fill. Raise `cphd_reader.playback_rate` above 1 to overload the GPU without a slower machine. The console keeps behind and queue-wait as WARN; per-slice timers are DEBUG. Progress is a 1 Hz `SAR: image N formed` INFO line. Use `HOLOSCAN_LOG_LEVEL=DEBUG` for every slice. A queue-full abort is a downstream operator; the Graph driver then prints the same backpressure banner as the other SAR demos: lower `cphd_reader.playback_rate` or reduce the image size.
 
 ## Build and offline fixture
 

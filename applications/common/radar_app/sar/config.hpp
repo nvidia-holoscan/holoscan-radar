@@ -37,6 +37,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -181,6 +182,35 @@ inline CliPaths parse_cli(int argc, char** argv, const char* default_yaml) {
     out.cphd_override = argv[2];
   }
   return out;
+}
+
+// Display the editable source of a staged default; preserve custom configs.
+inline std::string config_hint_path(const std::filesystem::path& config, const char* app_name) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  const fs::path absolute = fs::absolute(config, ec).lexically_normal();
+  if (ec)
+    return config.string();
+  bool in_build = false;
+  for (auto root = absolute.parent_path(); !root.empty(); root = root.parent_path()) {
+    in_build = in_build || fs::is_regular_file(root / "CMakeCache.txt", ec);
+    if (fs::is_regular_file(root / "metadata.json", ec) &&
+        fs::is_directory(root / "applications" / "sar", ec)) {
+      const fs::path source =
+          fs::path("applications") / "sar" / app_name / "config" / absolute.filename();
+      const fs::path staged =
+          fs::path("applications") / "sar" / app_name / "cpp" / (std::string(app_name) + ".yaml");
+      const auto relative = absolute.lexically_relative(root).generic_string();
+      if (in_build && relative.ends_with("/" + staged.generic_string()) &&
+          fs::is_regular_file(root / source, ec)) {
+        return "./" + source.generic_string();
+      }
+      return "./" + relative;
+    }
+    if (root == root.root_path())
+      break;
+  }
+  return config.string();
 }
 
 // dr = c / (2 * N_bins * df), df = SCSS. Same formula RC uses when

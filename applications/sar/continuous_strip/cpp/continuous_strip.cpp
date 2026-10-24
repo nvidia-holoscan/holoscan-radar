@@ -11,16 +11,6 @@
 
 namespace app = holoscan::radar::app;
 
-// Appended after session.diagnostics() when a required emit cannot land.
-constexpr const char* kQueueFullHint =
-    "This application demonstrates a pipeline that loudly fails when it fails to keep up "
-    "with input.  When an operator cannot emit because the next stage has not "
-    "consumed the previous tick, and no buffers remain available, the run is "
-    "aborted.  For some missions, falling behind may be tolerable, and for others, "
-    "this would be catastrophic.  This application models the latter case.  To make this "
-    "pipeline run successfully, either set cphd_reader.playback_rate to a lower value, "
-    "or reduce the image size so that the pipeline can keep up.";
-
 int main(int argc, char** argv) {
   return run_sar_graph_app(
       argc, argv, "continuous_strip", load_config,
@@ -61,6 +51,5 @@ int main(int argc, char** argv) {
         graph.add_flow(bp->image, mosaic->image, queue);
         graph.add_flow(bp->sample_geometry_out, mosaic->sample_geometry, queue);
         return &mosaic->image_out;
-      },
-      kQueueFullHint);
+      });
 }

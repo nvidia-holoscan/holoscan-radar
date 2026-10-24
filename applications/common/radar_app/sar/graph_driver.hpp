@@ -3,9 +3,13 @@
 
 #pragma once
 
+#include <unistd.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <initializer_list>
 #include <memory>
@@ -90,7 +94,7 @@ inline radar::MaxTensorExtents make_extents(const AppConfig& cfg,
 }
 
 // Operator Error text stays as-is. When the run fails because a required emit
-// could not land, append the calling demo's teaching paragraph.
+// could not land, append a prominent banner with the calling demo's hint.
 inline bool mentions_full_queue(const std::string& text) {
   return text.find("output queue is full") != std::string::npos ||
          text.find("no free tensor buffer") != std::string::npos;
@@ -98,7 +102,7 @@ inline bool mentions_full_queue(const std::string& text) {
 
 template <typename LoadConfig, typename BuildGraph>
 int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_config,
-                      BuildGraph build_graph, const char* failure_hint = nullptr) {
+                      BuildGraph build_graph) {
   try {
     // Own SIGINT/SIGTERM before Holoviz or the runtime start threads. Host
     // `holoscan run` maps Ctrl-C to `docker stop` (SIGTERM); without this
@@ -494,9 +498,29 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
       }
       if (session.diagnostics().empty())
         error += " [failed with no diagnostics]";
-      if (full_queue && failure_hint != nullptr && failure_hint[0] != '\0') {
-        error += "\nNote: ";
-        error += failure_hint;
+      if (full_queue) {
+        const char* term = std::getenv("TERM");
+        const bool color = ::isatty(::fileno(stderr)) != 0 && std::getenv("NO_COLOR") == nullptr &&
+                           (term == nullptr || std::string(term) != "dumb");
+        error += "\n\n";
+        if (color)
+          error += "\033[1;31m";
+        error += "========================== BACKPRESSURE: RUN STOPPED ===========================";
+        if (color)
+          error += "\033[0;37m";
+        error += "\n";
+        error += "Pipeline cannot keep up - output queue or tensor pool is full.";
+        error += "\nThis is expected when data playback rate is higher than the compute capacity.";
+        error += "\n\nOptions:\n";
+        error += " 1. Lower playback via cphd_reader.playback_rate in " +
+                 config_hint_path(cli.config, name) + "\n" + " 2. Decrease image size\n" +
+                 " 3. Use a platform with a more capable GPU\n";
+        if (color)
+          error += "\033[1;31m";
+        error += std::string(80, '=');
+        if (color)
+          error += "\033[0m";
+        error += "\n";
       }
       throw std::runtime_error(error);
     }
