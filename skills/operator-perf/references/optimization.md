@@ -13,6 +13,11 @@ The maintained session JSON/`init`/five-gate acceptance state machine implements
 that optional path only when selected, and never fabricate its passing gates.
 Engineering records must clearly identify their acceptance basis and raw evidence.
 
+Name the implementation and integration files intended for delivery separately
+from temporary experiment files. Verify that the requested build executes the
+changed code; resolve a mismatch between an external adapter and a library
+operator before presenting the adapter's gains as an operator optimization.
+
 Respect the caller's single-checkout or worktree choice and preserve the intended
 starting state in the layout described in SKILL.md. If the user
 has uncommitted relevant work, preserve and reproduce it there before taking

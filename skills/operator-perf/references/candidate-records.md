@@ -6,10 +6,16 @@ and timing tables support that explanation; they do not replace it.
 
 ## Register and timing
 
-Keep a versioned `candidates.md` in the campaign report directory, linked from
+Keep `candidates.md` in the ignored campaign report directory by default, linked from
 `overview.md` and `final.md`. For a standalone operator session, use its report
 directory. Give every attempt a stable key containing operator, session and
 candidate ID; `candidate-1` alone is not unique across sessions.
+
+Preserve earlier report revisions locally. Recording or publishing a report here
+means making it available with evidence links, not adding it to Git. Commit
+reports only when requested as repository deliverables or already covered by the
+campaign's explicit reporting scope. Keep temporary experiment infrastructure
+out of implementation commits.
 
 The register includes one row per attempted candidate:
 

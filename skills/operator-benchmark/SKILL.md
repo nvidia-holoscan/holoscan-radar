@@ -55,9 +55,11 @@ concrete consolidated review is still required before production edits.
 - Use the existing checkout and dedicated campaign branch unless the caller or
   repository guidance selects another layout. Preserve edits; do not create
   worktrees merely to start discovery. Keep immutable builds/raw evidence in
-  ignored paths and versioned overview, baseline, disposition and final reports.
+  ignored paths alongside overview, baseline, disposition and final reports.
+  Preserve report revisions there; include reports in Git only when requested
+  as repository deliverables or covered by explicit campaign reporting scope.
 
-For authorized skill commits, use `deustice/optimization-skills`, then rebase
+For authorized skill commits, use the designated skills branch, then rebase
 the campaign branch on top before continuing. Follow the shared
 [branch and workspace rules](../operator-perf/references/workspace.md#skills-and-campaign-branches)
 to preserve sealed evidence and uncommitted work.
@@ -73,6 +75,9 @@ commit/push/publication authorization from a new optimization request.
 - Inventory requested public operators, existing recipes, cases, precisions,
   verification and consumers. Missing harnesses are blocked coverage; creating
   recipes requires explicit scope. Review transitive consumers with operator-perf.
+- Verify that each retained implementation is integrated into its named target.
+  Keep application/comparison-adapter gains distinct from public operator gains;
+  benchmark-only kernels do not establish a delivered operator improvement.
 - For library-wide opportunity reviews, begin breadth-first using existing
   evidence and implementation review. Representative measurement pilots do not
   narrow the requested campaign. Blocked timing prevents affected acceptance,

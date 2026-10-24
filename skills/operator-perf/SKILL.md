@@ -89,6 +89,11 @@ edits and acceptance to this skill.
 
 ## Invariants
 
+Identify the actual execution path: public operator, application adapter, or
+benchmark-only code. Trace the requested target's call site to the changed
+function. Attribute gains to that path; an isolated candidate kernel is not an
+integrated operator improvement.
+
 Read the applicable FMCW/SAR `OPERATOR_API.md`, relevant tests and workflows,
 `TEMPORAL_CONTRACTS.md`, `OPERATOR_DEVELOPMENT.md`, `NEW_OPERATOR_CHECKLIST.md`,
 `STATUS.md`, and `SDK_DEVELOPMENT.md` before substantial work. Inspect the
@@ -148,8 +153,17 @@ authorized.
 ## Deliver
 
 For every attempted candidate, follow [candidate records](references/candidate-records.md):
-publish a linked register and a concrete before/after explanation, gate-based
+record a linked register and a concrete before/after explanation, gate-based
 decision rationale and measured impact, including rejected/blocked attempts.
+Keep these reports and evidence in ignored session directories by default;
+recording and linking evidence does not imply committing it.
+
+When a commit is authorized, include the retained implementation, its required
+integration, and focused regression tests. Keep temporary probes, experiment
+runners, copied benchmarks, raw measurements and supporting reports local unless
+the user requests them as repository deliverables. Maintained project benchmarks
+or fixtures may belong in the change when needed for its requested behavior or
+regression coverage. Do not add an unused kernel to stand in for integration.
 
 Keep raw artifacts, provenance, candidate decisions, coverage gaps, and the stop
 reason. Remove temporary instrumentation and verify the retained state. Present

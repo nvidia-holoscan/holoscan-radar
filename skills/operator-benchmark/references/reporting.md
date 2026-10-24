@@ -1,8 +1,12 @@
 # Milestone Reports
 
-Keep versioned summaries in `docs/performance/optimizations/<campaign>/`:
-`baseline.md`, one report per operator and `final.md`. Raw notes, process logs,
-profiles, checkpoints, budgets and manifests remain in ignored artifacts.
+Keep `baseline.md`, operator reports, `final.md` and their revisions in the
+ignored campaign report directory by default, alongside raw notes, process logs,
+profiles, checkpoints, budgets and manifests. Recording or publishing evidence
+does not imply a Git commit. Use `docs/performance/optimizations/<campaign>/`
+only when repository reports are requested or covered by explicit reporting
+scope. An implementation commit contains the retained code, required integration
+and focused regression coverage; temporary experiment infrastructure stays local.
 `campaign report --out ...` writes the campaign summary and adjacent operator
 reports, checks evidence hashes and records publication provenance separately.
 Run it only between sealed candidate sessions; do not mutate active identities.
