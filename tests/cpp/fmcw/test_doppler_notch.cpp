@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -33,10 +34,11 @@ using holoscan::radar::testing::to_device_tensor;
 constexpr int64_t kDoppler = 5;
 constexpr int64_t kRange = 2;
 
-MaxTensorExtents extents_for_rank(std::size_t rank) {
+MaxTensorExtents extents_for_rank(std::size_t rank, int64_t doppler = kDoppler,
+                                  int64_t range = kRange) {
   MaxTensorExtents extents;
-  extents.max_doppler_bins = kDoppler;
-  extents.max_range_bins = kRange;
+  extents.max_doppler_bins = doppler;
+  extents.max_range_bins = range;
   if (rank >= 3U)
     extents.max_rx = 2;
   if (rank == 4U)
@@ -47,7 +49,7 @@ MaxTensorExtents extents_for_rank(std::size_t rank) {
 template <typename T>
 std::shared_ptr<holoscan::Tensor> make_axis(const std::vector<T>& values = std::vector<T>{
                                                 T{-2}, T{-1}, T{0}, T{1}, T{2}}) {
-  return to_device_tensor<T>(values, {kDoppler}, real_dtype<T>());
+  return to_device_tensor<T>(values, {static_cast<int64_t>(values.size())}, real_dtype<T>());
 }
 
 template <typename T>
@@ -67,7 +69,8 @@ holoscan::testing::TestResult run_notch(const std::vector<int64_t>& shape,
                                         std::optional<double> center = std::nullopt) {
   using Op = DopplerNotchOp<T>;
   auto maps = make_maps<T>(shape);
-  auto fixture = holoscan::testing::create_operator_test<Op>(extents_for_rank(shape.size()));
+  auto fixture = holoscan::testing::create_operator_test<Op>(
+      extents_for_rank(shape.size(), shape[shape.size() - 2U], shape.back()));
   fixture.set_params(std::move(params));
   auto frame =
       center.has_value()
@@ -233,6 +236,138 @@ TEST(DopplerNotchOp, RejectsNegativeWidths) {
   EXPECT_FALSE(result.ok());
   EXPECT_TRUE(result.snapshots<holoscan::Tensor>("rd_maps_out").empty());
   EXPECT_FALSE(result.diagnostics().empty());
+}
+
+template <typename T>
+class DopplerNotchAxisOrder : public ::testing::Test {};
+using NotchPrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(DopplerNotchAxisOrder, NotchPrecisions);
+
+TYPED_TEST(DopplerNotchAxisOrder, PhysicalGainsAgreeForBothOrdersAndCyclicBoundaries) {
+  using T = TypeParam;
+  for (const bool descending : {false, true}) {
+    std::vector<T> axis{T{-2}, T{-1}, T{0}, T{1}, T{2}};
+    if (descending)
+      std::reverse(axis.begin(), axis.end());
+    for (const bool cyclic : {false, true}) {
+      for (const double center : {0.0, 2.0, 7.0, -7.0}) {
+        for (const double transition : {0.0, 2.0}) {
+          SCOPED_TRACE(::testing::Message()
+                       << "descending=" << descending << " cyclic=" << cyclic
+                       << " center=" << center << " transition=" << transition);
+          DopplerNotchParams params;
+          params.center_velocity = center;
+          params.transition_width = transition;
+          params.cyclic_velocity_axis = cyclic;
+          const auto result = run_notch<T>({kDoppler, kRange}, params, make_axis<T>(axis));
+          ASSERT_TRUE(result.ok()) << result.describe_failure();
+          const auto frames = host_frames(result);
+          ASSERT_EQ(frames.size(), 1U);
+          // Independent physical-distance reference: scan actual bin coordinates, not index math.
+          std::vector<double> distances;
+          for (const T velocity : axis) {
+            double distance = std::abs(static_cast<double>(velocity) - center);
+            if (cyclic) {
+              distance = std::fmod(distance, 5.0);
+              distance = std::min(distance, 5.0 - distance);
+            }
+            distances.push_back(distance);
+          }
+          const auto nearest = std::min_element(distances.begin(), distances.end());
+          for (int64_t bin = 0; bin < kDoppler; ++bin) {
+            const double distance = distances[static_cast<std::size_t>(bin)];
+            double gain = 1.0;
+            if (distance == *nearest) {
+              gain = 0.0;
+            } else if (transition > 0.0 && distance < transition) {
+              gain = 0.5 * (1.0 - std::cos(std::acos(-1.0) * distance / transition));
+            }
+            expect_gain(frames[0], bin, static_cast<T>(gain));
+          }
+        }
+      }
+    }
+  }
+}
+
+TYPED_TEST(DopplerNotchAxisOrder, NonCyclicNonUniformAxisNullsActualNearestBin) {
+  using T = TypeParam;
+  for (const bool descending : {false, true}) {
+    std::vector<T> axis{T{-8}, T{-7}, T{-6}, T{-5}, T{8}};
+    if (descending)
+      std::reverse(axis.begin(), axis.end());
+    for (const double center : {-20.0, -6.8, -5.2, 0.5, 20.0}) {
+      for (const double transition : {0.0, 2.0}) {
+        SCOPED_TRACE(::testing::Message() << "descending=" << descending << " center=" << center
+                                          << " transition=" << transition);
+        DopplerNotchParams params;
+        params.center_velocity = center;
+        params.transition_width = transition;
+        params.cyclic_velocity_axis = false;
+        const auto result = run_notch<T>({kDoppler, kRange}, params, make_axis<T>(axis));
+        ASSERT_TRUE(result.ok()) << result.describe_failure();
+        const auto frames = host_frames(result);
+        ASSERT_EQ(frames.size(), 1U);
+        // Exhaustive physical-distance reference, independent of the kernel's index search.
+        std::vector<double> distances;
+        for (const T velocity : axis)
+          distances.push_back(std::abs(static_cast<double>(velocity) - center));
+        const auto nearest = std::min_element(distances.begin(), distances.end());
+        for (int64_t bin = 0; bin < kDoppler; ++bin) {
+          const double distance = distances[static_cast<std::size_t>(bin)];
+          double gain = 1.0;
+          if (distance == *nearest) {
+            gain = 0.0;
+          } else if (transition > 0.0 && distance < transition) {
+            gain = 0.5 * (1.0 - std::cos(std::acos(-1.0) * distance / transition));
+          }
+          expect_gain(frames[0], bin, static_cast<T>(gain));
+        }
+      }
+    }
+  }
+}
+
+TYPED_TEST(DopplerNotchAxisOrder, DescendingDdmAxisPreservesPositiveEdgePassband) {
+  using T = TypeParam;
+  constexpr int64_t kDdmDoppler = 60;
+  constexpr int64_t kDdmRange = 257;
+  // Linear DDM: 77 GHz, PRI 25 us, 128 coded chirps, two TX, four guard bins.
+  constexpr double kSpacing = 299792458.0 / (2.0 * 77e9 * 25e-6 * 128.0);
+  std::vector<T> axis;
+  for (int64_t bin = 0; bin < kDdmDoppler; ++bin)
+    axis.push_back(static_cast<T>((30 - bin) * kSpacing));
+  for (const bool cyclic : {false, true}) {
+    for (const double stop : {0.0, 0.61}) {
+      DopplerNotchParams params;
+      params.stop_half_width = stop;
+      params.transition_width = 1.22;
+      params.cyclic_velocity_axis = cyclic;
+      const auto result = run_notch<T>({2, 2, kDdmDoppler, kDdmRange}, params, make_axis<T>(axis));
+      ASSERT_TRUE(result.ok()) << result.describe_failure();
+      const auto frames = host_frames(result);
+      ASSERT_EQ(frames.size(), 1U);
+      const auto* output = frames[0].template as<std::complex<T>>();
+      for (int64_t channel = 0; channel < 4; ++channel) {
+        for (int64_t bin = 0; bin < kDdmDoppler; ++bin) {
+          const double distance =
+              std::abs(static_cast<double>(axis[static_cast<std::size_t>(bin)]));
+          double gain = 1.0;
+          if (distance <= stop) {
+            gain = 0.0;
+          } else if (distance < stop + params.transition_width) {
+            gain = 0.5 *
+                   (1.0 - std::cos(std::acos(-1.0) * (distance - stop) / params.transition_width));
+          }
+          for (int64_t range = 0; range < kDdmRange; ++range) {
+            const auto value = output[(channel * kDdmDoppler + bin) * kDdmRange + range];
+            EXPECT_NEAR(value.real(), 2.0 * gain, 1e-5);
+            EXPECT_NEAR(value.imag(), -gain, 1e-5);
+          }
+        }
+      }
+    }
+  }
 }
 
 }  // namespace

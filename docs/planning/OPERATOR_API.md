@@ -379,7 +379,7 @@ optional array is absent; null is invalid. See
 #### DopplerNotchOp
 
 - **In:** `rd_maps` — complex64 / complex128, one of the named shapes `(num_doppler, num_range_bins)`, `(N_rx, num_doppler, num_range_bins)`, or `(M_tx, N_rx, num_doppler, num_range_bins)`. Doppler is the second-to-last axis; no opaque leading batch is accepted.
-- **In:** `velocity_bins` — float32 / float64 matching the templated precision, `(num_doppler,)`. Required and aligned exactly with `rd_maps`; values are finite, strictly increasing physical radial velocities in m/s.
+- **In:** `velocity_bins` — float32 / float64 matching the templated precision, `(num_doppler,)`. Required and aligned exactly with `rd_maps`; values are finite, strictly monotonic physical radial velocities in m/s, ascending or descending in the same order as the Doppler bins in `rd_maps`.
 - **Out:** `rd_maps_out` — same dtype and shape as `rd_maps`. Every named channel receives the same Doppler gain, preserving relative channel phase.
 - **Ctor:** `MaxTensorExtents` required (`max_doppler_bins`, `max_range_bins`; optional `max_rx` / `max_tx` admit the named leading axes).
 
@@ -390,7 +390,7 @@ The operator acts only on an unfolded physical velocity axis. It must not consum
 - `center_velocity` **[live]** — float, center of the notch in m/s. Cyclic distance is measured over the uniformly spaced aliased velocity interval. Default: `0.0`.
 - `stop_half_width` **[live]** — non-negative float in m/s. Bins at or inside this distance receive zero gain; the nearest bin to `center_velocity` is always included so zero width remains a one-bin hard null. Default: `0.0`.
 - `transition_width` **[live]** — non-negative float in m/s. `0.0` gives a hard notch. Positive values apply a raised-cosine gain from zero at the stopband edge to one at `stop_half_width + transition_width`. Default: `0.0`.
-- `cyclic_velocity_axis` — bool, static. When `true`, distance wraps over `num_doppler × bin_spacing`; when `false`, distance is ordinary absolute velocity difference. Default: `true`.
+- `cyclic_velocity_axis` — bool, static. When `true`, distance wraps over `num_doppler × abs(bin_spacing)`; when `false`, distance is ordinary absolute velocity difference. Default: `true`.
 
 #### FMCWRangeDopplerProcessorOp (fused)
 

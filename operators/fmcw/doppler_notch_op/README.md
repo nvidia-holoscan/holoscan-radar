@@ -23,7 +23,7 @@ rd_maps + velocity_bins -> DopplerNotchOp -> rd_maps_out
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
 | --- | --- | --- | --- | --- | --- |
 | in | `rd_maps` | complex64 / complex128 | `(D,R)`, `(N_rx,D,R)`, or `(M_tx,N_rx,D,R)` | Required trigger/aligned input | Maps with Doppler as the second-to-last axis. |
-| in | `velocity_bins` | float32 / float64 | `(D,)` | Required trigger/aligned input | Finite strictly increasing physical velocity in m/s. |
+| in | `velocity_bins` | float32 / float64 | `(D,)` | Required trigger/aligned input | Finite strictly monotonic physical velocity in m/s, ascending or descending. |
 | live | `center_velocity` | float64 scalar | scalar | Optional Exact one-tick override; Params fallback on miss | Notch center. |
 | live | `stop_half_width` | float64 scalar | scalar | Optional Exact one-tick override; Params fallback on miss | Full-rejection half-width. |
 | live | `transition_width` | float64 scalar | scalar | Optional Exact one-tick override; Params fallback on miss | Raised-cosine transition width. |
@@ -49,11 +49,11 @@ Contract: [`OPERATOR_API.md` section `DopplerNotchOp`](../../../docs/planning/OP
 
 ## Algorithm
 
-Distance from each velocity bin to the center is optionally wrapped over `D * bin_spacing`. The stop interval receives zero gain, a positive transition receives a raised-cosine ramp, and remaining bins receive unity. The CUDA stage broadcasts gain across channel and range axes.
+Distance from each velocity bin to the center is optionally wrapped over `D * abs(bin_spacing)`. Signed spacing locates the nearest bin without reordering the velocity axis or RD maps. The stop interval receives zero gain, a positive transition receives a raised-cosine ramp, and remaining bins receive unity. The CUDA stage broadcasts gain across channel and range axes.
 
 ## Shape, dtype, and timing rules
 
-The velocity axis length equals `D`, matches template precision, and is finite and strictly increasing; cyclic mode also requires uniform spacing. No opaque leading batch is accepted. Live scalars join the map trigger with `Exact{}` and revert to Params after each tick.
+The velocity axis length equals `D`, matches template precision, and is finite and strictly monotonic (ascending or descending, matching the RD map order); cyclic mode also requires uniform spacing. No opaque leading batch is accepted. Live scalars join the map trigger with `Exact{}` and revert to Params after each tick.
 
 ## Configuration and caching
 
