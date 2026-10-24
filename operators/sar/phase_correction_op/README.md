@@ -54,6 +54,7 @@ positive pulse counts within `MaxTensorExtents`. Profile dtype is complex
 `T` and correction dtype real `T`; output dtype and shape match profiles.
 The operator rejects an invalid `sense`, mismatched pulse axes, invalid
 dtypes, or missing CUDA stream. `sense` is static for the instance.
+A full `range_profiles_out` queue fails `compute()`.
 
 ## Use and verification
 

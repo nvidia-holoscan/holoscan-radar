@@ -77,6 +77,8 @@ aperture at emission, optionally with the configured aperture window.
 An explicit `evict` input requests a pulse count to evict; a count above
 occupancy is rejected. A tick-local `sample_geometry` or `sample_points`
 may be staged and passed through to connected outputs.
+A full required-output queue fails `compute()`. Descriptor, points, control,
+and weight outputs stay latched.
 
 `sample_geometry`, `sample_points`, `control`, and `evict` are optional
 same-tick `[live]` inputs; a missing tick uses the static/default behavior.

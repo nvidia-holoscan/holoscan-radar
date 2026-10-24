@@ -24,6 +24,8 @@ flowchart LR
 The solid paths are required data and control flows. Dashed dump and
 visualization branches are enabled by application configuration. The reader's
 typed `stream_boundary` is joined to the aperture manager on the same tick.
+The paced reader, range/manager, and backprojection are separate Graph partitions with dedicated `ThreadPlacement` lanes so collect-vs-wall lag is the live playback clock, not formation GPU time on the controller.
+A required emit onto a full output queue aborts the run. After the operator Error, the Graph driver prints a prominent backpressure banner: lower `cphd_reader.playback_rate` or reduce the image size so the pipeline can keep up.
 The tile stager sends the next lattice on a tile's closing batch, alongside
 `EmitAndReset`. Backprojection forms the closing tile on its current lattice,
 then installs the next one. Its geometry output describes the emitted tile so
@@ -49,7 +51,7 @@ execution; they do not establish focus on real collections.
 
 ## Real collection preset
 
-The preset uses the Capella Imperial Valley collection at `/tmp/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd`. Download it into the host `data/sar/imperial/` directory below; inspect the manifest first with `--list`. The CLI mounts `data/sar/` at `/tmp/sar` in the container. The YAML selects 159,050 pulses, divides them into ten 15,905-pulse tiles, and uses a 4096-pixel cap on each tile. The CPHD is about 3.45 GiB.
+The preset uses the Capella Imperial Valley collection at `data/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd`. Download it into the host `data/sar/imperial/` directory below; inspect the manifest first with `--list`. The YAML selects 159,050 pulses, divides them into ten 15,905-pulse tiles, and uses a 4096-pixel cap on each tile. The CPHD is about 3.45 GiB.
 
 From the repository root **on the host**, with the Holoscan CLI installed,
 run:
@@ -57,21 +59,24 @@ run:
 ```bash
 python3 tools/sar_data/pull_cphd.py --app tiled_strip \
   --dest data/sar/imperial
-./holoscan-radar run tiled_strip \
-  --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
+./holoscan-radar run tiled_strip
 ```
 
-The CLI mounts the host `data/sar/` directory read-only at `/tmp/sar` in the
-container, matching the shipped YAML. A host `/tmp/sar` directory or symlink
-is not visible in the container unless mounted. The shipped [`tiled_strip.yaml`](config/tiled_strip.yaml) is copied beside the
-executable by CMake and is the default real-data preset.
+The shipped [`tiled_strip.yaml`](config/tiled_strip.yaml) is copied beside the
+executable by CMake and is the default real-data preset. Its relative CPHD paths
+resolve under `HOLOHUB_DATA_DIR` (default: the repository's `data/` directory),
+which is already shared with both CLI containers and the DevContainer. No extra
+mount is needed. Inside the DevContainer, run
+`./build/applications/sar/tiled_strip/cpp/tiled_strip` from the repository root
+after building the target. Absolute CPHD paths and existing paths relative to
+the working directory or YAML directory remain supported.
 
 Pass an explicit YAML path as the first argument. For this topology,
 a CPHD path may replace `cphd.path` directly, or follow a YAML path as the second argument.
 
 ## Output and display
 
-Each completed tile produces an image; the mosaic places emitted tiles into a parent canvas. The fixture reports five 15 × 6 mosaic images. Optional dump writes that parent complex mosaic; Holoviz displays its raster with the long along-track `v` axis horizontally. The formed mosaic and dump keep their `(v,u)` layout. The present visualization does not apply the YAML comment's proposed u-axis crop; this gap is tracked in the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md).
+Each completed tile produces an image; the mosaic places emitted tiles into a parent canvas. The fixture reports five 15 × 6 mosaic images. Optional dump writes that parent complex mosaic; Holoviz displays its raster with the long along-track `v` axis horizontally and the source-branch on-image HUD. The formed mosaic and dump keep their `(v,u)` layout. The present visualization does not apply the YAML comment's proposed u-axis crop; this gap is tracked in the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md).
 
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.

@@ -24,6 +24,8 @@
 #include <holoscan/core/tensor_output_loan.hpp>
 #include <holoscan/logger/logger.hpp>
 
+#include "radar_common/sdk/cooperative_sleep.hpp"
+
 namespace holoscan::radar {
 
 // HSDK 5 Tensor port helpers. Ports carry a plain holoscan::Tensor (no
@@ -185,16 +187,19 @@ class LatchedOutput {
   // Emit and absorb. Never fails the activation: a declined optional output
   // must not take the tick's other outputs down with it.
   void emit(Output<Tensor>& port, ExecutionContext& context, TensorOutputLoan loan,
-            std::string_view op_and_port) {
-    const auto emitted = emit_prepared_tensor(port, context, std::move(loan));
+            std::string_view op_and_port, std::optional<EmitOptions> options = {}) {
+    const auto emitted = port.emit(
+        std::move(loan), options.value_or(EmitOptions{.capture_time = context.activation_time()}));
     absorb_emit_result(emitted, op_and_port);
   }
 
   template <typename Payload>
   void emit_schema_tensor(Output<Payload>& port, ExecutionContext& context, TensorOutputLoan loan,
-                          Payload payload, std::string_view op_and_port) {
+                          Payload payload, std::string_view op_and_port,
+                          std::optional<EmitOptions> options = {}) {
     const auto emitted =
-        emit_prepared_schema_tensor(port, context, std::move(loan), std::move(payload));
+        port.emit_tensor(std::move(loan), std::move(payload),
+                         options.value_or(EmitOptions{.capture_time = context.activation_time()}));
     absorb_emit_result(emitted, op_and_port);
   }
 
@@ -249,6 +254,101 @@ inline std::size_t tensor_byte_span(std::span<const int64_t> shape, DLDataType d
     throw std::invalid_argument("tensor_byte_span: invalid or overflowing shape");
   }
   return static_cast<std::size_t>(count) * bytes_per_element;
+}
+
+// CPHDReaderOp is the only library operator that retries a full queue
+// (unmetered playback_rate 0, or wait_for_downstream). Other required emits
+// fail-fast through emit_required_tensor(..., false). A failed Tensor emit
+// consumes the loan, so a wait retry must re-prepare, not re-emit.
+
+template <typename Fn>
+auto retry_transient(ExecutionContext& context, std::string_view what, Fn&& fn) -> decltype(fn()) {
+  bool warned = false;
+  for (;;) {
+    auto result = fn();
+    if (result)
+      return result;
+    const Error err = result.error();
+    if ((err.code != ErrorCode::kResourceExhausted && err.code != ErrorCode::kBackpressured) ||
+        context.cancellation().stop_requested()) {
+      return result;
+    }
+    if (!warned) {
+      HOLOSCAN_LOG_WARN("{}: waiting for tensor pool/queue due to pipeline backpressure ({})", what,
+                        holoscan::error_code_name(err.code));
+      warned = true;
+    }
+    cooperative_sleep(context, 0.01);
+  }
+}
+
+// Fail-fast (wait false): keep the SDK code, replace the message so a
+// RUNTIME_OPERATOR_CALLBACK_FAILED names the port. Log it too: the runtime
+// wrapper can bury the Error. Only CPHDReaderOp retries (unmetered or
+// wait_for_downstream).
+inline Error explain_fail_fast_emit(std::string_view what, ErrorCode code) {
+  const char* detail = code == ErrorCode::kBackpressured
+                           ? "next stage is behind; output queue is full"
+                           : "no free tensor buffer";
+  return Error{code, std::string(what) + ": " + detail + ". The run is stopping."};
+}
+
+template <typename Fn>
+auto emit_required_result(ExecutionContext& context, std::string_view what, bool wait,
+                          Fn&& once) -> decltype(once()) {
+  if (wait)
+    return retry_transient(context, what, std::forward<Fn>(once));
+  auto result = once();
+  if (result)
+    return result;
+  const ErrorCode code = result.error().code;
+  if (code != ErrorCode::kResourceExhausted && code != ErrorCode::kBackpressured)
+    return result;
+  Error explained = explain_fail_fast_emit(what, code);
+  HOLOSCAN_LOG_ERROR("{}", holoscan::runtime_error_message(explained));
+  // HSDK 5 can wait for peer callbacks before propagating a partition failure.
+  // Cancel reader retry loops now so they can retire even after downstream stops.
+  // Return the original error as well: failure takes precedence over requested stop.
+  context.request_stop();
+  return make_unexpected(std::move(explained));
+}
+
+template <typename PrepareFn>
+[[nodiscard]] expected<void, Error> emit_required_tensor(Output<Tensor>& port,
+                                                         ExecutionContext& context,
+                                                         std::string_view what, bool wait,
+                                                         PrepareFn&& prepare,
+                                                         std::optional<EmitOptions> options = {}) {
+  auto once = [&]() -> expected<void, Error> {
+    HOLOSCAN_TRY(auto loan, prepare());
+    const EmitOptions opts =
+        options.value_or(EmitOptions{.capture_time = context.activation_time()});
+    return port.emit(std::move(loan), opts);
+  };
+  return emit_required_result(context, what, wait, once);
+}
+
+template <typename Payload, typename PrepareFn>
+[[nodiscard]] expected<void, Error> emit_required_schema_tensor(
+    Output<Payload>& port, ExecutionContext& context, std::string_view what, bool wait,
+    Payload payload, PrepareFn&& prepare, std::optional<EmitOptions> options = {}) {
+  auto once = [&]() -> expected<void, Error> {
+    HOLOSCAN_TRY(auto loan, prepare());
+    const EmitOptions opts =
+        options.value_or(EmitOptions{.capture_time = context.activation_time()});
+    return port.emit_tensor(std::move(loan), payload, opts);
+  };
+  return emit_required_result(context, what, wait, once);
+}
+
+template <typename Port, typename Value>
+[[nodiscard]] expected<void, Error> emit_required_value(Port& port, ExecutionContext& context,
+                                                        std::string_view what, bool wait,
+                                                        Value value, EmitOptions options) {
+  auto once = [&]() -> expected<void, Error> {
+    return port.emit(value, options);
+  };
+  return emit_required_result(context, what, wait, once);
 }
 
 }  // namespace holoscan::radar

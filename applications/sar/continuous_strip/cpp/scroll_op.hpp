@@ -26,6 +26,7 @@
 #include <holoscan/core/payload_options.hpp>
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
+#include <holoscan/core/tensor_output_loan.hpp>
 
 #include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
@@ -133,15 +134,30 @@ class ScrollGeometryStagerOp : public Operator<> {
                               .axis_v = parent_.axis_v(),
                               .spacing = parent_.spacing(),
                               .counts = {window_.num_v(), parent_.num_u()}};
-      HOLOSCAN_RETURN_IF_ERROR(
-          detail::emit_geometry(sample_geometry, context, SampleGeometry(spec), slice_time));
-      HOLOSCAN_TRY(auto p, slice(range_profiles_out, profiles, first, count, context));
-      HOLOSCAN_TRY(auto x, slice(positions_out, pos, first, count, context));
-      HOLOSCAN_TRY(auto r, slice(reference_position_out, ref, first, count, context));
-      HOLOSCAN_RETURN_IF_ERROR(positions_out.emit(std::move(x), time));
-      HOLOSCAN_RETURN_IF_ERROR(reference_position_out.emit(std::move(r), time));
-      HOLOSCAN_RETURN_IF_ERROR(stream_boundary_out.emit(last ? boundary : uint8_t{0}, time));
-      HOLOSCAN_RETURN_IF_ERROR(range_profiles_out.emit(std::move(p), time));
+      HOLOSCAN_RETURN_IF_ERROR(detail::emit_geometry(sample_geometry, context, SampleGeometry(spec),
+                                                     slice_time,
+                                                     "ScrollGeometryStagerOp.sample_geometry"));
+      HOLOSCAN_RETURN_IF_ERROR(emit_required_tensor(
+          positions_out, context, "ScrollGeometryStagerOp.positions_out", false,
+          [&] {
+            return slice(positions_out, pos, first, count, context);
+          },
+          time));
+      HOLOSCAN_RETURN_IF_ERROR(emit_required_tensor(
+          reference_position_out, context, "ScrollGeometryStagerOp.reference_position_out", false,
+          [&] {
+            return slice(reference_position_out, ref, first, count, context);
+          },
+          time));
+      HOLOSCAN_RETURN_IF_ERROR(emit_required_value(stream_boundary_out, context,
+                                                   "ScrollGeometryStagerOp.stream_boundary_out",
+                                                   false, last ? boundary : uint8_t{0}, time));
+      HOLOSCAN_RETURN_IF_ERROR(emit_required_tensor(
+          range_profiles_out, context, "ScrollGeometryStagerOp.range_profiles_out", false,
+          [&] {
+            return slice(range_profiles_out, profiles, first, count, context);
+          },
+          time));
     }
     return {};
   }

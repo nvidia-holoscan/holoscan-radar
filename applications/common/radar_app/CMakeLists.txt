@@ -21,7 +21,8 @@ target_include_directories(radar_app INTERFACE
 target_link_libraries(radar_app INTERFACE
     holoscan::core
     holoscan::radar_common
-    CUDA::cudart)
+    CUDA::cudart
+    ${CMAKE_DL_LIBS})
 
 # The HSDK 5 dashboard compositor is compiled because its raster path contains
 # CUDA kernels. Graph wiring remains header-only for reuse by FMCW applications.

@@ -22,30 +22,29 @@ export PYTHONPATH="$PWD/.cache/sar-data-python${PYTHONPATH:+:$PYTHONPATH}"
 
 ## Host CLI data layout
 
-Run these commands from the repository root **on the host**. The shipped YAML presets refer to
-`/tmp/sar` **inside the app container**. Save downloads under the ignored host
-`data/sar/` directory, then pass
-`--docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"`
-to `./holoscan-radar run`. The CLI already mounts the repository at `/workspace/holoscan-radar`,
-but it does not mount the host's `/tmp/sar` directory or symlink. `--add-volume`
-mounts under `/workspace/volumes` and does not match the shipped YAML paths.
+Run these commands from the repository root **on the host**. Save downloads
+under the ignored `data/sar/` directory. The shipped YAML presets use paths
+such as `sar/imperial/...`, resolved under the build's `HOLOHUB_DATA_DIR`
+(default: the repository `data/` directory). Both the host CLI and DevContainer
+already mount this tree, so no additional bind mount is required. The paths
+work even when the CLI runs the executable from its build directory.
 
 For example, download the Imperial Valley collect and run continuous strip:
 
 ```bash
 python3 tools/sar_data/pull_cphd.py --app continuous_strip \
   --dest data/sar/imperial
-./holoscan-radar run continuous_strip \
-  --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
+./holoscan-radar run continuous_strip
 ```
 
 The pinned image and Holoscan CLI setup are in the
 [developer guide](../../DEVELOPER.md#holoscan-cli). Each
 [standalone app guide](../../applications/sar/README.md) has its own complete
-download-and-run command block. If your CPHDs live elsewhere, bind that host
-folder to `/tmp/sar` with the same internal layout. The examples use a
-read-only mount; if `dump: true` writes next to a CPHD, set a writable
-`output.path` or use a writable mount.
+download-and-run command block. If your CPHDs live elsewhere, use absolute
+paths in a custom YAML or configure `-DHOLOHUB_DATA_DIR=/path/to/data` inside
+the container, keeping the `sar/` layout beneath it. External host directories
+must also be mounted into the container. Existing paths relative to the working
+directory or YAML directory take precedence over the data-directory fallback.
 
 ## Public collection downloads
 
@@ -56,19 +55,19 @@ python3 tools/sar_data/pull_cphd.py --app tiled_strip --list
 ```
 
 On the **host**, download the Capella Imperial Valley CPHD used by both strip
-apps, or the six Umbra collections used by independent images:
+apps, or the six Umbra collections used by independent images. `--app all`
+downloads both sets. With `--dest data/sar` it writes `data/sar/imperial/` and
+`data/sar/mode5/`. Each transfer prints byte progress, rate, and an ETA on stderr.
 
 ```bash
 python3 tools/sar_data/pull_cphd.py --app tiled_strip --dest data/sar/imperial
 python3 tools/sar_data/pull_cphd.py --app independent_images --dest data/sar/mode5
+python3 tools/sar_data/pull_cphd.py --app all --dest data/sar
 ```
 
 `--app continuous_strip` selects the same Capella key and default directory as
 `tiled_strip`. Without `--dest`, the downloader writes to the host
-`/tmp/sar/imperial/` or `/tmp/sar/mode5/`; those paths are not automatically
-visible inside the CLI container. The explicit `--dest` values above match the
-bind mount and keep the shipped YAML unchanged. If you choose another host
-layout, mount its root at `/tmp/sar` or change the application YAML paths.
+`data/sar/imperial/` or `data/sar/mode5/`, matching the shipped presets.
 Existing readable files are reused unless `--force` is set. The downloader
 checks that independent-image collections have distinct image reference points. These are multi-gigabyte downloads;
 inspect the manifest before running them. Spotlight uses a single Umbra file;
@@ -77,8 +76,8 @@ direct `curl` command.
 
 ## Houston video subset
 
-The video preset expects `/tmp/sar/mode02_houston_1p0m.cphd` inside the
-container. On the **host**, create it under `data/sar/` without downloading
+The video preset expects `data/sar/mode02_houston_1p0m.cphd` in the
+repository. On the **host**, create it under `data/sar/` without downloading
 the full 110 GiB signal block:
 
 ```bash

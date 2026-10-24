@@ -67,8 +67,9 @@ differential-range axis from waveform sample spacing and
 `propagation_speed`. The descriptor output `range_window_out` reports the
 applied window when connected. An unwired optional output is latched after
 its first declined emit, avoiding later dedicated output work. The main `range_profiles` tensor emits
-on every input tick. Each `[live]` port uses same-tick `Exact{}` with Params
-as the safe default; no earlier override persists.
+on every input tick. A full output queue fails `compute()`. Each `[live]`
+port uses same-tick `Exact{}` with Params as the safe default; no earlier
+override persists.
 
 ## Validation and use
 

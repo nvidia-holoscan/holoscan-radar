@@ -37,7 +37,7 @@ struct ApertureManagerParams {
 };
 HOLOSCAN_PARAM_SCHEMA(
     ApertureManagerParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.ApertureManagerParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.ApertureManagerParams", 3),
     holoscan::field<&ApertureManagerParams::max_aperture_pulses>("max_aperture_pulses"),
     holoscan::field<&ApertureManagerParams::emit_interval_pulses>("emit_interval_pulses"),
     holoscan::field<&ApertureManagerParams::emit_mode>("emit_mode"),

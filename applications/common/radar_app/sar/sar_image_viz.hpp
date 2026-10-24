@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
+#include <string>
 
 #include <holoscan/core/domain/tensor.hpp>
 #include <holoscan/core/errors.hpp>
@@ -15,11 +17,20 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/sensor_io/sensor_schema_package.hpp>
 
+#include "radar_app/sar/sar_overlay.hpp"
+
 namespace holoscan::radar::app::sar {
+// GPU LUT of a formed SAR image for Holoviz. `display_side` downsamples the
+// display raster only. Do not sleep here: this operator shares a Graph
+// partition with Holoviz, so a hold would block presentation of the frame it
+// just emitted. Finite `visualize_hold_s` is the session wait in
+// `run_sar_graph_app`. Optional `overlay` fills host Holoviz text (`labels`)
+// and line-list (`overlay`) layers — the source-branch on-image HUD. The
+// Gantt is a separate `TimelineRasterOp` window.
 class SarImageVizOp : public Operator<> {
  public:
-  SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side, double hold_s,
-                bool transpose_axes);
+  SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side, bool transpose_axes,
+                OverlayConfig overlay = {});
   ~SarImageVizOp() override;
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -27,11 +38,17 @@ class SarImageVizOp : public Operator<> {
   [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
   Input<Tensor> image{"image"};
   Output<schema::ImageT> frame{"frame"};
+  Output<Tensor> labels{"labels"};
+  Output<Tensor> overlay{"overlay"};
 
  private:
   int64_t max_v_{0}, max_u_{0}, display_side_{0};
-  double hold_s_{0.0};
   bool transpose_axes_{false};
+  OverlayConfig overlay_{};
+  int overlay_index_{0};
+  std::chrono::steady_clock::time_point overlay_rate_at_{};
+  bool have_overlay_rate_{false};
+  std::string held_rate_line_{};
   float* sampled_magnitude_{nullptr};
 };
 }  // namespace holoscan::radar::app::sar

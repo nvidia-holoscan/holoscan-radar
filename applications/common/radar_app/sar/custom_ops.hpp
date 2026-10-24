@@ -4,8 +4,10 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -20,6 +22,8 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/logger/logger.hpp>
 
+#include "radar_app/sar/hud_format.hpp"
+#include "radar_common/sar/formation_hud.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
@@ -48,18 +52,21 @@ class SarImageSchemaSinkOp : public holoscan::Operator<> {
 
 struct ImageCount {
   std::atomic<int64_t> count{0};
+  std::atomic<int64_t> reported_capture_ns{0};
 };
 
 class SarImageReportOp : public holoscan::Operator<> {
  public:
-  explicit SarImageReportOp(std::shared_ptr<ImageCount> count) : count_(std::move(count)) {}
+  explicit SarImageReportOp(std::shared_ptr<ImageCount> count,
+                            std::shared_ptr<FormationHud> hud = {})
+  : count_(std::move(count)), hud_(std::move(hud)) {}
   void setup(OperatorSpec& spec) override { spec.input(image).queue_depth(4U); }
   [[nodiscard]] Contract contract() const override {
     Contract result;
     result.trigger(OnEach{image});
     return result;
   }
-  [[nodiscard]] expected<void, Error> compute(ExecutionContext&) override {
+  [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override {
     HOLOSCAN_TRY(auto received, receive_tensor(image, "SarImageReportOp"));
     const auto shape = received.shape();
     if (shape.size() != 2U) {
@@ -67,12 +74,52 @@ class SarImageReportOp : public holoscan::Operator<> {
           Error{ErrorCode::kInvalidArgument, "SarImageReportOp: expected (num_v,num_u)"});
     }
     const auto index = count_->count.fetch_add(1) + 1;
-    HOLOSCAN_LOG_INFO("SAR: image {} formed, {}x{}", index, shape[0], shape[1]);
+    const bool shape_changed = !last_num_v_.has_value() || *last_num_v_ != shape[0] ||
+                               !last_num_u_.has_value() || *last_num_u_ != shape[1];
+    log_formed(index, shape[0], shape[1], /*info=*/false);
+    const auto now = std::chrono::steady_clock::now();
+    if (shape_changed || !last_info_at_.has_value() || now - *last_info_at_ >= kHeartbeatPeriod) {
+      log_formed(index, shape[0], shape[1], /*info=*/true);
+      last_info_at_ = now;
+    }
+    last_num_v_ = shape[0];
+    last_num_u_ = shape[1];
+    count_->reported_capture_ns.store(context.activation_time().timestamp_ns,
+                                      std::memory_order_release);
     return {};
   }
   Input<Tensor> image{"image"};
 
  private:
+  static constexpr auto kHeartbeatPeriod = std::chrono::seconds(1);
+
+  void log_formed(int64_t index, int64_t num_v, int64_t num_u, bool info) const {
+    std::string extra;
+    if (hud_) {
+      const auto snap = hud_->snapshot();
+      const auto& bp = snap.bp;
+      const auto& pb = bp.playback;
+      extra =
+          format_bp_rate_line(bp.compute_s, bp.pulses, bp.pixels, bp.num_v, bp.num_u, num_v, num_u);
+      if (info && !extra.empty())
+        hud_->publish_rate_line(extra);
+      if (!extra.empty())
+        extra = "  " + extra;
+      if (pb.valid) {
+        extra += "  " + format_lag_line(pb.behind_s, pb.target_s(), pb.wall_s);
+      }
+    }
+    if (info) {
+      HOLOSCAN_LOG_INFO("SAR: image {} formed, {}x{}{}", index, num_v, num_u, extra);
+    } else {
+      HOLOSCAN_LOG_DEBUG("SAR: image {} formed, {}x{}{}", index, num_v, num_u, extra);
+    }
+  }
+
   std::shared_ptr<ImageCount> count_;
+  std::shared_ptr<FormationHud> hud_{};
+  std::optional<std::chrono::steady_clock::time_point> last_info_at_{};
+  std::optional<int64_t> last_num_v_{};
+  std::optional<int64_t> last_num_u_{};
 };
 }  // namespace holoscan::radar::app::sar
