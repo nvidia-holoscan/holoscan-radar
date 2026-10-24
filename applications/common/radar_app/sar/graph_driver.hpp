@@ -485,36 +485,41 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
         !session.diagnostics().empty()) {
       std::string error = "SAR graph run diagnostics:";
       bool full_queue = false;
+      bool vulkan_failure = false;
       for (const auto& diagnostic : session.diagnostics()) {
         const std::string formatted = holoscan::format_diagnostic(diagnostic, plan.graph());
         error += " [" + formatted + "]";
         full_queue = full_queue || app::sar::is_backpressure_failure(diagnostic);
+        vulkan_failure = vulkan_failure || app::sar::is_vulkan_failure(diagnostic);
       }
       if (session.diagnostics().empty())
         error += " [failed with no diagnostics]";
-      if (full_queue) {
+      if (full_queue || vulkan_failure) {
         const char* term = std::getenv("TERM");
         const bool color = ::isatty(::fileno(stderr)) != 0 && std::getenv("NO_COLOR") == nullptr &&
                            (term == nullptr || std::string(term) != "dumb");
-        error += "\n\n";
-        if (color)
-          error += "\033[1;31m";
-        error += "========================== BACKPRESSURE: RUN STOPPED ===========================";
-        if (color)
-          error += "\033[0;37m";
-        error += "\n";
-        error += "Pipeline cannot keep up - output queue or tensor pool is full.";
-        error += "\nThis is expected when data playback rate is higher than the compute capacity.";
-        error += "\n\nOptions:\n";
-        error += " 1. Lower playback via cphd_reader.playback_rate in " +
-                 config_hint_path(cli.config, name) + "\n" + " 2. Decrease image size\n" +
-                 " 3. Use a platform with a more capable GPU\n";
-        if (color)
-          error += "\033[1;31m";
-        error += std::string(80, '=');
-        if (color)
-          error += "\033[0m";
-        error += "\n";
+        if (vulkan_failure) {
+          error += app::sar::format_failure_banner(
+              "VULKAN: VISUALIZATION FAILED",
+              "Holoviz could not initialize or use the Vulkan graphics device.\n\n"
+              "Checks:\n"
+              " 1. Check host NVIDIA drivers, Vulkan support, and container GPU access.\n"
+              " 2. Check display forwarding and authorization.\n"
+              " 3. On DGX Spark/GB10, check the documented cache/memory-pressure issue.\n"
+              "Troubleshooting: ./applications/sar/README.md (Vulkan/display sections).\n",
+              color);
+        } else {
+          const std::string body =
+              "Pipeline cannot keep up - output queue or tensor pool is full.\n"
+              "This is expected when data playback rate is higher than the compute capacity.\n\n"
+              "Options:\n"
+              " 1. Lower playback via cphd_reader.playback_rate in " +
+              config_hint_path(cli.config, name) +
+              "\n"
+              " 2. Decrease image size\n"
+              " 3. Use a platform with a more capable GPU\n";
+          error += app::sar::format_failure_banner("BACKPRESSURE: RUN STOPPED", body, color);
+        }
       }
       throw std::runtime_error(error);
     }
