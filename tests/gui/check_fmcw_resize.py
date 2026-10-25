@@ -43,9 +43,10 @@ out.mkdir(parents=True, exist_ok=True)
 name = args.app
 language = args.language
 preset = "mimo_ddm_linear" if name == "mimo_ddm" else name
-config = yaml.safe_load((root / f"applications/fmcw/{name}/config/{preset}.yaml").read_text())
-config["app"]["run"]["num_frames"] = 1000
-config["app"]["visualization"]["enabled"] = True
+config = {
+    "extends": str(root / f"applications/fmcw/{name}/config/{preset}.yaml"),
+    "app": {"run": {"num_frames": 1000}, "visualization": {"enabled": True}},
+}
 path = out / f"resize_{name}_{language}.yaml"
 path.write_text(yaml.safe_dump(config))
 x = C.CDLL("libX11.so.6")
