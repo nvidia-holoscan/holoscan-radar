@@ -4,6 +4,28 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-26** — **`AutofocusOp` ported to HSDK 5 (operator only).** The PGA
+  estimator now builds against the templated `Operator<Params>` API with typed
+  ports, a `contract()` whose four `[live]` scalars use
+  `add_live_override_to_contract`, and `MaxTensorExtents`-sized pools;
+  `autofocus_stage.hpp` (the algorithm) is unchanged. `AutofocusAlgorithm` and
+  `AutofocusAzimuthAxis` were added to `radar_common` with their codecs. All 12
+  operator tests and the full 1,172-test suite pass.
+  **Contract change:** the output port is renamed `image` → `image_out`, because
+  HSDK 5 requires unique input/output names and this operator names both
+  `image`. This is the same rename already applied to `range_profiles_out`,
+  `sample_geometry_out`, and `range_window_out`; `AutofocusOp` was missed only
+  because it had not been ported. Recorded in `SAR/OPERATOR_API.md`.
+  **Implementation bound needing review:** `num_iterations` is `[live]` but
+  `sharpness` is `num_iterations + 1` long and pools are sized at graph build,
+  so it is capped at 255 (`kMaxAutofocusIterations`) rather than being made
+  static. **Deferred to the app port:** the estimate-transfer and Figure 2
+  tests, which need the app-owned aux-lattice and resampling operators.
+  **Still open for the team:** the V-shaped estimate where truth is a parabola,
+  and the packed-row `image` output; the Kourou measurements must also be
+  re-established on main, since `PhaseCorrectionOp` was reworked and the
+  `[live]` parameters become real `contract()` joins here for the first time.
+
 - **2026-10-21** — **HSDK 5 GA image adopted.** The Dockerfile, host CLI wrapper,
   and devcontainer now default to
   `nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13`; active setup guides

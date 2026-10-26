@@ -86,6 +86,14 @@ inline constexpr PhaseCorrectionSense kPhaseCorrectionSenses[] = {
     PhaseCorrectionSense::kSubtract,
     PhaseCorrectionSense::kAdd,
 };
+inline constexpr AutofocusAlgorithm kAutofocusAlgorithms[] = {
+    AutofocusAlgorithm::kPga,
+};
+inline constexpr AutofocusAzimuthAxis kAutofocusAzimuthAxes[] = {
+    AutofocusAzimuthAxis::kUnspecified,
+    AutofocusAzimuthAxis::kU,
+    AutofocusAzimuthAxis::kV,
+};
 inline constexpr CoordinateFrameType kCoordinateFrameTypes[] = {
     CoordinateFrameType::kUnspecified, CoordinateFrameType::kEcef,       CoordinateFrameType::kEnu,
     CoordinateFrameType::kNed,         CoordinateFrameType::kSceneLocal,
@@ -193,6 +201,8 @@ using SignedAxisCodec = CanonicalEnumCodec<SignedAxis, kSignedAxes>;
 using ElevationCodec = CanonicalEnumCodec<ElevationReference, kElevationReferences>;
 using PeakCodec = CanonicalEnumCodec<PeakInterpolation, kPeakInterpolations>;
 using PhaseSenseCodec = CanonicalEnumCodec<PhaseCorrectionSense, kPhaseCorrectionSenses>;
+using AutofocusAlgorithmCodec = CanonicalEnumCodec<AutofocusAlgorithm, kAutofocusAlgorithms>;
+using AutofocusAxisCodec = CanonicalEnumCodec<AutofocusAzimuthAxis, kAutofocusAzimuthAxes>;
 using CoordinateFrameTypeCodec = CanonicalEnumCodec<CoordinateFrameType, kCoordinateFrameTypes>;
 using EllipsoidCodec = CanonicalEnumCodec<Ellipsoid, kEllipsoids>;
 using ApertureEmitCodec = CanonicalEnumCodec<ApertureEmitMode, kApertureEmitModes>;
@@ -214,6 +224,8 @@ using SignedAxisStorage = PortableParamStorageTraits<SignedAxis>;
 using ElevationStorage = PortableParamStorageTraits<ElevationReference>;
 using PeakStorage = PortableParamStorageTraits<PeakInterpolation>;
 using PhaseSenseStorage = PortableParamStorageTraits<PhaseCorrectionSense>;
+using AutofocusAlgorithmStorage = PortableParamStorageTraits<AutofocusAlgorithm>;
+using AutofocusAxisStorage = PortableParamStorageTraits<AutofocusAzimuthAxis>;
 using WindowSpecStorage = PortableParamStorageTraits<WindowSpec>;
 using WaveformStorage = PortableParamStorageTraits<FMCWWaveformDescriptor>;
 using LFMWaveformStorage = PortableParamStorageTraits<LFMWaveformDescriptor>;
@@ -289,6 +301,12 @@ struct ConfigCodec<radar::ElevationReference> : radar::config_detail::ElevationC
 
 template <>
 struct ConfigCodec<radar::PhaseCorrectionSense> : radar::config_detail::PhaseSenseCodec {};
+
+template <>
+struct ConfigCodec<radar::AutofocusAlgorithm> : radar::config_detail::AutofocusAlgorithmCodec {};
+
+template <>
+struct ConfigCodec<radar::AutofocusAzimuthAxis> : radar::config_detail::AutofocusAxisCodec {};
 
 template <>
 struct ConfigCodec<radar::CoordinateFrameType> : radar::config_detail::CoordinateFrameTypeCodec {};
@@ -740,6 +758,12 @@ struct ParamStorageTraits<radar::ShiftInvariantSubarrayPair>
 template <>
 struct ParamStorageTraits<radar::PhaseCorrectionSense> : radar::config_detail::PhaseSenseStorage {
 };  // NOLINT
+template <>
+struct ParamStorageTraits<radar::AutofocusAlgorithm>
+: radar::config_detail::AutofocusAlgorithmStorage {};  // NOLINT
+template <>
+struct ParamStorageTraits<radar::AutofocusAzimuthAxis>
+: radar::config_detail::AutofocusAxisStorage {};  // NOLINT
 template <>
 struct ParamStorageTraits<radar::PeakInterpolation> : radar::config_detail::PeakStorage {
 };  // NOLINT(whitespace/indent_namespace)

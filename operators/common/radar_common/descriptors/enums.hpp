@@ -196,6 +196,22 @@ enum class PhaseCorrectionSense {
   kAdd,
 };
 
+// AutofocusOp.algorithm: wave-one estimator slot. Static; sole value
+// is PGA (the stage itself defaults to absent from the spine).
+enum class AutofocusAlgorithm {
+  kPga,
+};
+
+// AutofocusOp.azimuth_axis: which image axis is slow-time-conjugate.
+// Static and required; kUnspecified is the Parameter placeholder and
+// is rejected at initialize (the contract has no default). Naming an
+// axis is also the assertion that the image is conjugate (D20).
+enum class AutofocusAzimuthAxis {
+  kUnspecified,
+  kU,
+  kV,
+};
+
 // Canonical spellings (lowercase snake_case, for logs and future YAML
 // configs).
 constexpr std::string_view to_string(WindowType type) {
@@ -502,6 +518,26 @@ constexpr std::string_view to_string(PhaseCorrectionSense sense) {
       return "subtract";
     case PhaseCorrectionSense::kAdd:
       return "add";
+  }
+  return "unknown";
+}
+
+constexpr std::string_view to_string(AutofocusAlgorithm algorithm) {
+  switch (algorithm) {
+    case AutofocusAlgorithm::kPga:
+      return "pga";
+  }
+  return "unknown";
+}
+
+constexpr std::string_view to_string(AutofocusAzimuthAxis axis) {
+  switch (axis) {
+    case AutofocusAzimuthAxis::kUnspecified:
+      return "unspecified";
+    case AutofocusAzimuthAxis::kU:
+      return "u";
+    case AutofocusAzimuthAxis::kV:
+      return "v";
   }
   return "unknown";
 }

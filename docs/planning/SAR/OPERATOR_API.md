@@ -81,7 +81,7 @@ Formation operators (`SARRangeCompressionOp`, `ApertureManagerOp`, `Backprojecti
 | Typed per-batch `stream_boundary` output and required manager input replace message metadata | HSDK 5 same-tick graph join and explicit collection flush |
 | Named axes replace opaque leading batch; fat outputs capture `MaxTensorExtents` | HSDK 5 tensor-pool sizing and module conventions |
 | `[live]` overrides are per tick, `Exact{}`/`SafeDefault{}`; no sticky value | Matches main-5x temporal contract |
-| Output names `range_window_out`, `sample_geometry_out`, `range_profiles_out` | HSDK 5 unique input/output names |
+| Output names `range_window_out`, `sample_geometry_out`, `range_profiles_out`, and `image_out` on `AutofocusOp` **(2026-10-26)** | HSDK 5 unique input/output names |
 | `CoordinateFrame`, `SampleGeometry`, and `LFMWaveformDescriptor` use HSDK 5 schema-backed wire values | Shared descriptor policy |
 | `wait_for_downstream` optional static Param on `CPHDReaderOp` only (default false; Params schema version 2). Unmetered `playback_rate` 0 waits on a full queue; a positive rate fail-fasts unless the key is true. Formation operators fail-fast (Params schema version 3 after removing the field) | HSDK 5 `kBlocking` emit does not park; unmetered ingest waits. Formation does not |
 
@@ -742,7 +742,7 @@ Such an application wires control from a small operator of its own — fed by th
 Estimates a residual phase correction along the azimuth-conjugate axis, and applies it in-image only when that image is the product. A separate, omittable stage — **absent from the default spine**: the usual product is ground / DEM backprojection without autofocus. Airborne residual phase is the usual reason to opt in (WORKFLOWS Figure 2); spaceborne collections with good ephemeris generally stay on Figure 1.
 
 - **In:** `image` — complex64 / complex128, `(..., num_v, num_u)`. The formed SLC image.
-- **Out:** `image` — complex64 / complex128, same shape. The corrected image.
+- **Out:** `image_out` **[CONTRACT CHANGE 2026-10-26]** — complex64 / complex128, same shape. The corrected image. Renamed from `image` for the same reason as `range_profiles_out` and `sample_geometry_out`: HSDK 5 requires input and output port names to be unique within an operator, and this is the only SAR operator that names both an input and an output `image`. The rename was missed when the others were made because this operator had not been ported.
 - **Out:** `phase_correction` (optional) — float32 / float64, `(..., num_pulses)`. The estimated residual phase, **indexed by pulse**, which is the domain the error physically lives in. Emitted separately so it is composable, testable in isolation, recordable by `SICDWriterOp` in the product's own metadata fields — on the input port of that name, not the message metadata plane — and, the reason the indexing matters, applicable to a *different* formation than the one it was estimated from. See *Notes*.
 - **Out:** `sharpness` (optional) — float32 / float64, `(..., num_iterations + 1)`. The focus metric before each iteration and after the last, so a caller can see whether the estimate converged rather than inferring it from the image.
 
