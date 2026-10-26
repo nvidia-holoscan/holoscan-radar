@@ -11,7 +11,7 @@ add_compile_definitions(HOLOSCAN_RADAR_DATA_DIR="${_sar_data_dir}")
 unset(_sar_data_dir)
 
 if(BUILD_ALL OR APP_spotlight OR APP_video_sar OR APP_tiled_strip OR
-        APP_continuous_strip OR APP_independent_images)
+        APP_continuous_strip OR APP_independent_images OR APP_autofocus)
     find_package(holoscan 5 CONFIG REQUIRED COMPONENTS core visualization)
     if(TARGET holoscan::visualization::op_holoviz)
         add_library(sar_image_viz STATIC
@@ -50,3 +50,9 @@ holoscan_radar_add_application(independent_images
     DIRECTORY independent_images
     DEPENDS OPERATORS cphd_reader_op sar_range_compression_op
         aperture_manager_op backprojection_op tensor_dump_op)
+
+holoscan_radar_add_application(autofocus
+    DIRECTORY autofocus
+    DEPENDS OPERATORS cphd_reader_op sar_range_compression_op
+        aperture_manager_op backprojection_op autofocus_op
+        phase_correction_op tensor_dump_op)

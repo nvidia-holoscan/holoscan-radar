@@ -309,6 +309,13 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       tick_playback = snap.last_batch_playback;
     }
     const bool stage_after = control_value && *control_value == FormationControl::kEmitAndReset;
+    // Whether this emission completes an aperture, which is not the same as
+    // staging a reset after it. A reform replay resets first and then forms
+    // the whole retained aperture in one pass (kResetThenEmit), so its image
+    // is terminal even though nothing is staged behind it. Reported to the
+    // HUD so the end-of-stream drain can recognise that last image.
+    const bool completes_aperture =
+        stage_after || (control_value && *control_value == FormationControl::kResetThenEmit);
     HOLOSCAN_TRY(auto geometry_override_wire, receive_optional_value(sample_geometry));
     SampleGeometry new_geometry = params().sample_geometry;
     if (geometry_override_wire) {
@@ -791,7 +798,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       if (hud_) {
         hud_->publish_bp(FormationHudBp{
             .capture_time_ns = context.activation_time().timestamp_ns,
-            .closes_aperture = stage_after,
+            .closes_aperture = completes_aperture,
             .compute_s = aperture_compute_s_,
             .pulses = emitted_pulses,
             .pixels = emitted_pixels,

@@ -4,6 +4,31 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-26** — **The Figure 2 autofocus application is back, with its
+  validation apparatus.** `applications/sar/autofocus/` builds on main's
+  `run_sar_graph_app`: `reform` aperture replay into an auxiliary conjugate
+  `BackprojectionOp`, `AutofocusOp`, app-owned `PhaseResampleOp`, then
+  `PhaseCorrectionOp` into the product `BackprojectionOp`. The polar
+  (range-bearing) aux lattice rides `sample_points` from the app-owned
+  `AuxPointsSourceOp`, which is now a single-input operator: its HSDK 4 race
+  workaround is unnecessary once `Exact{}` joins on capture time. The three
+  diagnostics (`PerturbPositionsOp`, `OraclePhaseOp`, `AutofocusScoreOp`) are
+  ported too, so the estimate is scored against a known injected error rather
+  than only looked at; the recorded lie crosses from ingest ticks to the single
+  reform tick as a shared host buffer, since no tick joins both.
+  **Shared-code bug found and fixed:** `BackprojectionOp` reported
+  `closes_aperture` only for `kEmitAndReset`, but a `reform` replay resets
+  first and emits second (`kResetThenEmit`), so `sar_eof_drained` could never
+  fire and the app hung for the full 180 s drain. No landed app uses `reform`,
+  which is why this had never been exercised. Three fixture tests
+  (`Sar_autofocus_smoke`/`_lie`/`_oracle`) pin wiring, injection and the apply
+  path; they cannot pin recovery, because a 5-pulse aperture clears no
+  strong-scatterer gate and even the landed `spotlight` dump fixture forms an
+  all-zero 5×5. Recovery stays a real-data measurement.
+  **Still to port:** `tools/sar_image/pga_screen.py` and the Atlanta/Calais
+  configs; the Kourou numbers quoted in the app README are pre-port and must be
+  re-measured before being quoted again.
+
 - **2026-10-26** — **`AutofocusOp` ported to HSDK 5 (operator only).** The PGA
   estimator now builds against the templated `Operator<Params>` API with typed
   ports, a `contract()` whose four `[live]` scalars use

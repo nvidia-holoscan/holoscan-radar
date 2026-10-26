@@ -385,6 +385,37 @@ foreach(index RANGE 0 4)
     endif()
 endforeach()
 
+if(TARGET autofocus)
+    # Figure 2: retained aperture replayed once, auxiliary conjugate estimate,
+    # corrected product. One image, the product lattice.
+    set(af_dir "${PROJECT_BINARY_DIR}/applications/sar/autofocus/cpp")
+    add_test(NAME Sar_autofocus_smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DSAR_EXECUTABLE=$<TARGET_FILE:autofocus>
+            -DSAR_CONFIG=${af_dir}/autofocus_generated_smoke.yaml
+            -DSAR_COUNT=1
+            -DSAR_DIMS=5x5
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_smoke.cmake)
+    set_tests_properties(Sar_autofocus_smoke PROPERTIES
+        FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+
+    # The same graph with a known look-axis error injected, so the estimate is
+    # scored against it rather than only inspected. The 5-pulse fixture is far
+    # too small for PGA to recover anything, so these pin the injection, the
+    # sign convention and the apply path, not the recovery.
+    foreach(af_diag lie oracle)
+        add_test(NAME Sar_autofocus_${af_diag}
+            COMMAND ${CMAKE_COMMAND}
+                -DSAR_EXECUTABLE=$<TARGET_FILE:autofocus>
+                -DSAR_CONFIG=${af_dir}/autofocus_generated_smoke_${af_diag}.yaml
+                -DSAR_COUNT=1
+                -DSAR_DIMS=5x5
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_smoke.cmake)
+        set_tests_properties(Sar_autofocus_${af_diag} PROPERTIES
+            FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+    endforeach()
+endif()
+
 if(TARGET video_sar)
     set(video_dir "${PROJECT_BINARY_DIR}/applications/sar/video_sar/cpp")
     add_test(NAME Sar_video_sar_retention

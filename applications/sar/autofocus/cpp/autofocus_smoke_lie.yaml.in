@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Figure 2 smoke with a known leftover per-pulse phase, so the estimate
+# can be scored instead of merely inspected. PerturbPositionsOp shifts
+# the aperture along the look axis and multiplies the equivalent phase
+# onto the range profiles, because SRP-relative backprojection cancels
+# a pure line-of-sight APC lie in dR on its own.
+#
+# This fixture pins the sign convention and the scoring path, not the
+# recovery: a 5-pulse aperture over a handful of point targets is far
+# too small a scene for PGA to estimate anything from. Use the Kourou
+# config for a real recovery measurement.
+
+cphd:
+  path: @SAR_FIXTURE@
+  sidecar: ""
+enu_origin_ecef: [6378000.0, 0.0, 0.0]
+sample_geometry:
+  origin: [-2.0, 1002.0, 0.0]
+  axis_v: [0.0, -1.0, 0.0]
+  axis_u: [1.0, 0.0, 0.0]
+  spacing: [1.0, 1.0]
+  counts: [5, 5]
+cphd_reader:
+  coordinate_frame: ecef
+  pulses_per_tick: 3
+
+# The whole aperture is retained and replayed once, which is what
+# makes a corrected second pass possible at all.
+aperture_manager:
+  max_aperture_pulses: 5
+  emit_interval_pulses: 0
+  emit_mode: reform
+
+range_compression:
+  propagation_speed: 299792458.0
+
+backprojection:
+  coordinate_frame: enu
+
+# Along-track is axis_u of the derived aux lattice. min_scatterers is
+# 1 because a defocused aux can collapse to a single range row.
+autofocus:
+  azimuth_axis: u
+  min_scatterers: 1
+
+phase_correction:
+  sense: subtract
+
+# Look x slant-plane counts; origin and axes come from CPHD TxPos /
+# SRPPos. u is Nyquist-sampled along the look-perpendicular track.
+aux_lattice:
+  num_v: 32
+
+# Quadratic in s over [-1, 1]: 2 cm of look-axis error at the aperture
+# edges, which PGA sees as the curvature that a constant and a ramp
+# cannot explain away.
+position_error:
+  axis: look
+  polynomial: [0, 0, 0.02]
+  score_warn_rms_rad: 1.0
+
+visualize: false
