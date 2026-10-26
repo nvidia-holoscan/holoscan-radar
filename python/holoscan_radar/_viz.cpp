@@ -16,6 +16,7 @@
 #include <holoscan/visualization/holoviz_op.hpp>
 
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
+#include "radar_app/viz/image_device_bridge_op.hpp"
 #include "radar_app/viz/fmcw_holoviz_op.hpp"
 
 namespace authoring = holoscan::authoring;
@@ -106,9 +107,35 @@ struct ViewerThunks : authoring::ManualOperatorRegistrationThunks<viz::FmcwHolov
   }
 };
 
+template <typename Op>
+void register_transfer(std::string_view name) {
+  using T = SizeThunks<Op>;
+  auto result = authoring::authoring_registry().register_operator({
+      .name = name,
+      .param_type = &holoscan::param_type_descriptor<ImageSize>(),
+      .param_schema = holoscan::param_schema_descriptor<ImageSize>(),
+      .parameter_introspection = authoring::OperatorParameterIntrospection::kConstructorReplay,
+      .add_to_graph = &T::add_to_graph,
+      .add_to_graph_from_assignments = &T::from_assignments,
+      .set_params = &T::set_params,
+      .port = &T::port,
+      .ports = &T::ports,
+      .region_add = &T::region_add,
+      .partition_add = &T::partition_add,
+      .lifecycle_before = &T::lifecycle_before,
+      .lifecycle_allow_self_restart = &T::lifecycle_allow_self_restart,
+      .lifecycle_allow_external_restart = &T::lifecycle_allow_external_restart,
+      .lifecycle_allow_restart_request = &T::lifecycle_allow_restart_request,
+  });
+  if (!result)
+    throw holoscan::RuntimeError{result.error()};
+}
+
 }  // namespace
 
 void register_viz_bindings(nanobind::module_&) {
+  register_transfer<viz::ImageDownloadOp>("holoscan.radar._app.ImageDownload");
+  register_transfer<viz::ImageUploadOp>("holoscan.radar._app.ImageUpload");
   using T = SizeThunks<viz::RgbaImageBridgeOp>;
   auto result = authoring::authoring_registry().register_operator({
       .name = "holoscan.radar._app.ImageBridge",

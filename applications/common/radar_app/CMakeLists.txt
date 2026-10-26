@@ -24,6 +24,18 @@ target_link_libraries(radar_app INTERFACE
     CUDA::cudart
     ${CMAKE_DL_LIBS})
 
+# Cold application device selection is shared by C++, Python and SAR entry points.
+add_library(radar_app_gpu STATIC app/gpu_placement.cpp)
+target_include_directories(radar_app_gpu PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/applications/common>)
+target_link_libraries(radar_app_gpu PUBLIC holoscan::core CUDA::cudart)
+set_target_properties(radar_app_gpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
+    target_compile_definitions(radar_app_gpu PRIVATE HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ=1)
+    target_link_libraries(radar_app_gpu PRIVATE holoscan::visualization::holoviz)
+endif()
+target_link_libraries(radar_app INTERFACE radar_app_gpu)
+
 # Generate GUI copy from the canonical C++ manifests; changes reconfigure the build.
 set(_radar_descriptions "#pragma once\n#include <stdexcept>\n#include <string>\n#include <string_view>\nnamespace holoscan::radar::app {\ninline std::string application_description(std::string_view application, std::string_view mode = \"default\") {\n")
 foreach(_radar_app IN ITEMS siso simo dense_beamforming mimo_tdm mimo_ddm adaptive_aoa multi_waveform)

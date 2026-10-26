@@ -27,12 +27,15 @@
 #include <holoscan/visualization/holoviz_op.hpp>
 
 #include "radar_app/app/angle_presentation.hpp"
+#include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/app/application_descriptions.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
 #include "radar_app/viz/dashboard_text.hpp"
 #include "radar_app/viz/fmcw_holoviz_op.hpp"
+#include "radar_app/viz/image_device_bridge_op.hpp"
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
 #include "utils/tensor_fixtures.hpp"
+#include "utils/fixture_completion.hpp"
 
 namespace {
 
@@ -104,6 +107,7 @@ TEST(FmcwDashboardTest, ConnectsImageAndNativeHostTextToHsdk5Holoviz) {
 TEST(FmcwDashboardTest, ComposesOnlyMatchedImageAndTextIntoOneCudaFrame) {
   using holoscan::testing::frame_at;
   using holoscan::testing::input;
+  const holoscan::DeviceId device{radar::app::select_application_device(false, true)};
   constexpr std::int64_t kWidth = 128;
   constexpr std::int64_t kHeight = 64;
   constexpr DLDataType kRgba{kDLUInt, 8U, 1U};
@@ -131,13 +135,15 @@ TEST(FmcwDashboardTest, ComposesOnlyMatchedImageAndTextIntoOneCudaFrame) {
   harness.push_frame(frame_at(std::chrono::milliseconds{2}, input("text", *text)));
   harness.push_frame(
       frame_at(std::chrono::milliseconds{3}, input("image", image), input("text", *text)));
-  harness.input_source_device("image", holoscan::DeviceId{0});
-  harness.output_device("output", holoscan::DeviceId{0});
+  harness.input_source_device("image", device);
+  harness.output_device("output", device);
   harness.capture_snapshot<holoscan::schema::ImageT>("output", 1U, pixels.size());
-  auto running = harness.run_async({.expect_stop = true});
-  const bool ready = running.wait_for_output("output", 1U, std::chrono::seconds{10});
+  radar::testing::FixtureCompletion completion;
+  auto running = harness.run_async(completion.run_options());
+  const bool ready = completion.wait_for_output(running, "output", 1U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(ready) << result.describe_failure();
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   const auto composed = result.snapshot<holoscan::schema::ImageT>("output");
@@ -156,6 +162,75 @@ TEST(FmcwDashboardTest, ComposesOnlyMatchedImageAndTextIntoOneCudaFrame) {
     }
   }
   EXPECT_TRUE(found_native_text) << "SDK text must be present in the emitted GPU image";
+}
+
+TEST(ImageDeviceBridgeTest, PreservesPixelsAndMetadataThroughHostStaging) {
+  using holoscan::schema::ImageT;
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  constexpr DLDataType kRgba{kDLUInt, 8U, 1U};
+  constexpr int kWidth = 17;
+  constexpr int kHeight = 9;
+  const auto time = std::chrono::milliseconds{123};
+  int original = -1;
+  ASSERT_EQ(cudaGetDevice(&original), cudaSuccess);
+  int count = 0;
+  ASSERT_EQ(cudaGetDeviceCount(&count), cudaSuccess);
+  ASSERT_GT(count, 0);
+  std::vector<std::uint8_t> pixels(kWidth * kHeight * 4);
+  for (std::size_t i = 0; i < pixels.size(); ++i)
+    pixels[i] = static_cast<std::uint8_t>(i * 17U + 3U);
+  ImageT image;
+  image.width = kWidth;
+  image.height = kHeight;
+  image.encoding = holoscan::schema::ImageEncoding_RGBA8;
+  image.color_space = holoscan::schema::ColorSpace_SRGB;
+  image.data = radar::testing::to_device_tensor(pixels, {kHeight, kWidth, 4}, kRgba);
+  auto download =
+      holoscan::testing::create_operator_test<viz::ImageDownloadOp>(kWidth + 5, kHeight + 3);
+  download.push_frame(frame_at(time, input("image_in", image)));
+  download.input_source_device("image_in", holoscan::DeviceId{original});
+  download.capture_snapshot<ImageT>("image_out", 1U, pixels.size());
+  radar::testing::FixtureCompletion download_completion;
+  auto downloading = download.run_async(download_completion.run_options());
+  (void)download_completion.wait_for_output(downloading, "image_out", 1U);
+  downloading.request_stop();
+  const auto downloaded = downloading.finish();
+  download_completion.check(downloaded);
+  ASSERT_TRUE(downloaded.ok()) << downloaded.describe_failure();
+  const auto host_frame = downloaded.snapshot<ImageT>("image_out");
+  const auto host_pixels =
+      radar::testing::to_host(host_frame.tensor(holoscan::schema::ImageTensorFields::data));
+  ASSERT_EQ(host_pixels.data.size(), pixels.size());
+  ASSERT_EQ(std::memcmp(host_pixels.data.data(), pixels.data(), pixels.size()), 0);
+  auto host_image = host_frame.metadata();
+  EXPECT_EQ(host_image.color_space, image.color_space);
+  const auto host_tensor =
+      radar::testing::to_pageable_host_tensor(pixels, {kHeight, kWidth, 4}, kRgba);
+  host_image.data = host_tensor;
+  auto upload =
+      holoscan::testing::create_operator_test<viz::ImageUploadOp>(kWidth + 5, kHeight + 3);
+  upload.push_frame(frame_at(time, input("image_in", host_image)));
+  upload.output_device("image_out", holoscan::DeviceId{count - 1});
+  upload.capture_snapshot<ImageT>("image_out", 1U, pixels.size());
+  radar::testing::FixtureCompletion upload_completion;
+  auto uploading = upload.run_async(upload_completion.run_options());
+  (void)upload_completion.wait_for_output(uploading, "image_out", 1U);
+  uploading.request_stop();
+  const auto uploaded = uploading.finish();
+  upload_completion.check(uploaded);
+  ASSERT_TRUE(uploaded.ok()) << uploaded.describe_failure();
+  const auto result = uploaded.snapshot<ImageT>("image_out");
+  const auto actual =
+      radar::testing::to_host(result.tensor(holoscan::schema::ImageTensorFields::data));
+  ASSERT_EQ(actual.data.size(), pixels.size());
+  EXPECT_EQ(std::memcmp(actual.data.data(), pixels.data(), pixels.size()), 0);
+  EXPECT_EQ(result.metadata().width, kWidth);
+  EXPECT_EQ(result.metadata().height, kHeight);
+  EXPECT_EQ(result.metadata().encoding, image.encoding);
+  EXPECT_EQ(result.metadata().color_space, image.color_space);
+  EXPECT_EQ(result.sample_metadata().capture_time().timestamp_ns,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(time).count());
 }
 
 struct PowerLegendCase {
