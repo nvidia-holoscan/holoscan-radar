@@ -70,67 +70,6 @@ __device__ inline DeviceDirection screen_direction(const AngleConvention& conven
   return {ce * cos(az), ce * sin(az), sin(el)};
 }
 
-template <typename T>
-__global__ void residual_screen_kernel(const cuda::std::complex<T>* snapshot, const T* aoa,
-                                       const unsigned char* valid, const double* positions,
-                                       int64_t num_items, int64_t channels, int64_t snapshots,
-                                       double wavelength, AngleConvention convention, T threshold,
-                                       T* scores, unsigned char* selected) {
-  const int64_t item =
-      static_cast<int64_t>(blockIdx.x) * blockDim.x + static_cast<int64_t>(threadIdx.x);
-  if (item >= num_items) {
-    return;
-  }
-  const double az = static_cast<double>(aoa[item * 2]);
-  const double el = static_cast<double>(aoa[item * 2 + 1]);
-  if (!isfinite(az) || !isfinite(el)) {
-    scores[item] = T{0} / T{0};
-    selected[item] = 0;
-    return;
-  }
-  const auto d = screen_direction(convention, az, el);
-  const double dnorm = d.x * d.x + d.y * d.y + d.z * d.z;
-  if (dnorm < 0.5) {
-    scores[item] = T{0} / T{0};
-    selected[item] = 0;
-    return;
-  }
-  const double wave_number = kTwoPi / wavelength;
-  double projected = 0.0;
-  double total = 0.0;
-  int64_t looks = 0;
-  for (int64_t s = 0; s < snapshots; ++s) {
-    if (valid != nullptr && valid[item * snapshots + s] == 0) {
-      continue;
-    }
-    ++looks;
-    double sum_re = 0.0;
-    double sum_im = 0.0;
-    for (int64_t c = 0; c < channels; ++c) {
-      const auto x = snapshot[(item * channels + c) * snapshots + s];
-      const double xr = static_cast<double>(x.real());
-      const double xi = static_cast<double>(x.imag());
-      total += xr * xr + xi * xi;
-      const double phase = wave_number * (positions[c * 3] * d.x + positions[c * 3 + 1] * d.y +
-                                          positions[c * 3 + 2] * d.z);
-      const double cr = cos(phase);
-      const double ci = -sin(phase);
-      sum_re += cr * xr - ci * xi;
-      sum_im += cr * xi + ci * xr;
-    }
-    projected += sum_re * sum_re + sum_im * sum_im;
-  }
-  if (looks == 0 || total <= 0.0) {
-    scores[item] = T{0} / T{0};
-    selected[item] = 0;
-    return;
-  }
-  double score = 1.0 - projected / (static_cast<double>(channels) * total);
-  score = fmin(1.0, fmax(0.0, score));
-  scores[item] = static_cast<T>(score);
-  selected[item] = score >= static_cast<double>(threshold) ? 1 : 0;
-}
-
 // One item thread computes current double steering once per channel.
 // Invalid items leave scratch unread: the score kernel retains identical guards.
 template <typename T>
