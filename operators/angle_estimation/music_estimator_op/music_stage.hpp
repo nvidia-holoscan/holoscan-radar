@@ -269,23 +269,25 @@ __global__ void music_reduce_kernel(const cuda::std::complex<T>* __restrict__ pr
   int64_t best_beam = -1;
   for (int64_t beam = tid; beam < num_beams; beam += nthreads) {
     const cuda::std::complex<T>* a = manifold + (ChannelMajor ? beam : beam * num_channels);
+    const auto manifold_at = [=](int64_t channel) {
+      return a[ChannelMajor ? channel * num_beams : channel];
+    };
     // Invisible beams (direction-cosine out-of-visible-region) carry an
     // all-zero manifold entry, so a^H a == 0 - guard this BEFORE the
     // denominator floor below, else the zero-vector "peak" (0/eps) would be
     // reported as a huge spurious power instead of the contract's zero.
     T a_norm = T{0};
     for (int64_t c = 0; c < num_channels; ++c) {
-      a_norm +=
-          a[ChannelMajor ? (c)*num_beams : c].real() * a[ChannelMajor ? (c)*num_beams : c].real() +
-          a[ChannelMajor ? (c)*num_beams : c].imag() * a[ChannelMajor ? (c)*num_beams : c].imag();
+      a_norm += manifold_at(c).real() * manifold_at(c).real() +
+                manifold_at(c).imag() * manifold_at(c).imag();
     }
     if (!(a_norm > kMusicDenomFloor<T>)) {
       music_spectrum_at(spec, beam % num_az, beam / num_az, num_el) = T{0};
       continue;
     }
-    // aH_P_n_a = sum_c conj(a[ChannelMajor ? (c) * num_beams : c]) * (sum_c2
-    // Pn[c,c2]*a[ChannelMajor ? (c2) * num_beams : c2]). The inner reduction over c2 is carried in
-    // four independent accumulators so the FMAs pipeline instead of stalling on one serial chain.
+    // aH_P_n_a = sum_c conj(a[c]) * (sum_c2 Pn[c,c2]*a[c2]).
+    // The inner reduction over c2 uses four independent accumulators so the
+    // FMAs pipeline instead of stalling on one serial chain.
     T denom = T{0};
     for (int64_t c = 0; c < num_channels; ++c) {
       const cuda::std::complex<T>* row = Pn + c * num_channels;
@@ -294,23 +296,19 @@ __global__ void music_reduce_kernel(const cuda::std::complex<T>* __restrict__ pr
       int64_t c2 = 0;
       for (; c2 + 3 < num_channels; c2 += 4) {
         const T r0r = row[c2].real(), r0i = row[c2].imag();
-        const T a0r = a[ChannelMajor ? (c2)*num_beams : c2].real(),
-                a0i = a[ChannelMajor ? (c2)*num_beams : c2].imag();
+        const T a0r = manifold_at(c2).real(), a0i = manifold_at(c2).imag();
         q0r += r0r * a0r - r0i * a0i;
         q0i += r0r * a0i + r0i * a0r;
         const T r1r = row[c2 + 1].real(), r1i = row[c2 + 1].imag();
-        const T a1r = a[ChannelMajor ? (c2 + 1) * num_beams : c2 + 1].real(),
-                a1i = a[ChannelMajor ? (c2 + 1) * num_beams : c2 + 1].imag();
+        const T a1r = manifold_at(c2 + 1).real(), a1i = manifold_at(c2 + 1).imag();
         q1r += r1r * a1r - r1i * a1i;
         q1i += r1r * a1i + r1i * a1r;
         const T r2r = row[c2 + 2].real(), r2i = row[c2 + 2].imag();
-        const T a2r = a[ChannelMajor ? (c2 + 2) * num_beams : c2 + 2].real(),
-                a2i = a[ChannelMajor ? (c2 + 2) * num_beams : c2 + 2].imag();
+        const T a2r = manifold_at(c2 + 2).real(), a2i = manifold_at(c2 + 2).imag();
         q2r += r2r * a2r - r2i * a2i;
         q2i += r2r * a2i + r2i * a2r;
         const T r3r = row[c2 + 3].real(), r3i = row[c2 + 3].imag();
-        const T a3r = a[ChannelMajor ? (c2 + 3) * num_beams : c2 + 3].real(),
-                a3i = a[ChannelMajor ? (c2 + 3) * num_beams : c2 + 3].imag();
+        const T a3r = manifold_at(c2 + 3).real(), a3i = manifold_at(c2 + 3).imag();
         q3r += r3r * a3r - r3i * a3i;
         q3i += r3r * a3i + r3i * a3r;
       }
@@ -318,14 +316,12 @@ __global__ void music_reduce_kernel(const cuda::std::complex<T>* __restrict__ pr
       T qi = q0i + q1i + q2i + q3i;
       for (; c2 < num_channels; ++c2) {
         const T rr = row[c2].real(), ri = row[c2].imag();
-        const T ar = a[ChannelMajor ? (c2)*num_beams : c2].real(),
-                ai = a[ChannelMajor ? (c2)*num_beams : c2].imag();
+        const T ar = manifold_at(c2).real(), ai = manifold_at(c2).imag();
         qr += rr * ar - ri * ai;
         qi += rr * ai + ri * ar;
       }
-      // Re(conj(a[ChannelMajor ? (c) * num_beams : c]) * q)
-      denom += a[ChannelMajor ? (c)*num_beams : c].real() * qr +
-               a[ChannelMajor ? (c)*num_beams : c].imag() * qi;
+      // Re(conj(a[c]) * q)
+      denom += manifold_at(c).real() * qr + manifold_at(c).imag() * qi;
     }
     const T floor = kMusicDenomFloor<T>;
     const T power = T{1} / (denom > floor ? denom : floor);

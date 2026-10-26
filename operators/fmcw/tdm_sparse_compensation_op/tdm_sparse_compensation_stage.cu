@@ -43,6 +43,70 @@ __device__ int64_t floor_div(int64_t value, int64_t divisor) {
 }
 
 template <typename T>
+__device__ __forceinline__ void process_sparse_compensation_slot(
+    const Complex<T>* rd_maps, const int64_t* detection_idx, const int64_t* fold_idx, int64_t item,
+    int64_t virt, int64_t slot, int64_t num_tx, int64_t num_rx, int64_t num_doppler,
+    int64_t num_range, int64_t num_virtual, int64_t num_snapshots, int64_t doppler_half,
+    int64_t range_half, int doppler_edge, int range_edge, int overlap_policy,
+    const Complex<T>* correction, const Complex<T>* fold_correction, const int64_t* src_channel,
+    const int64_t* member_offsets, const int64_t* member_indices, Complex<T>* snapshot,
+    uint8_t* is_valid, int* error_flag) {
+  const int64_t doppler_center = detection_idx[item * 2];
+  const int64_t range_center = detection_idx[item * 2 + 1];
+  const int64_t center_fold = fold_idx == nullptr ? 0 : fold_idx[item];
+  if (doppler_center < 0 || doppler_center >= num_doppler || range_center < 0 ||
+      range_center >= num_range) {
+    if (virt == 0 && slot == 0) {
+      atomicMax(error_flag, kSparseTdmErrCellCoord);
+    }
+    return;
+  }
+  if (center_fold < 0 || center_fold >= num_tx) {
+    if (virt == 0 && slot == 0) {
+      atomicMax(error_flag, kSparseTdmErrFold);
+    }
+    return;
+  }
+
+  const int64_t range_len = 2 * range_half + 1;
+  const int64_t od = slot / range_len - doppler_half;
+  const int64_t orng = slot % range_len - range_half;
+  bool valid_d = true;
+  bool valid_r = true;
+  const int64_t doppler =
+      resolve_axis_index(doppler_center, od, doppler_half, num_doppler, doppler_edge, &valid_d);
+  const int64_t range =
+      resolve_axis_index(range_center, orng, range_half, num_range, range_edge, &valid_r);
+  const bool valid = valid_d && valid_r;
+  const int64_t unfolded_doppler = doppler_center + od;
+  const int64_t wrap_count = doppler_edge == edge_mode_id(SnapshotEdgeMode::kWrap)
+                                 ? floor_div(unfolded_doppler, num_doppler)
+                                 : 0;
+  const int64_t fold = positive_mod(center_fold + wrap_count, num_tx);
+  if (virt == 0) {
+    is_valid[item * num_snapshots + slot] = static_cast<uint8_t>(valid);
+  }
+
+  Complex<T> value{};
+  if (valid) {
+    if (overlap_policy == static_cast<int>(OverlapPolicy::kAverage)) {
+      const int64_t begin = member_offsets[virt];
+      const int64_t finish = member_offsets[virt + 1];
+      for (int64_t member = begin; member < finish; ++member) {
+        value += corrected_channel(rd_maps, correction, fold_correction, fold, num_tx,
+                                   member_indices[member], num_rx, num_doppler, num_range, doppler,
+                                   range);
+      }
+      value /= static_cast<T>(finish - begin);
+    } else {
+      value = corrected_channel(rd_maps, correction, fold_correction, fold, num_tx,
+                                src_channel[virt], num_rx, num_doppler, num_range, doppler, range);
+    }
+  }
+  snapshot[(item * num_virtual + virt) * num_snapshots + slot] = value;
+}
+
+template <typename T>
 __global__ void sparse_compensation_kernel(
     const Complex<T>* rd_maps, const int64_t* detection_idx, const int64_t* fold_idx,
     int64_t num_detections, int64_t num_tx, int64_t num_rx, int64_t num_doppler, int64_t num_range,
@@ -55,62 +119,12 @@ __global__ void sparse_compensation_kernel(
   if (item >= num_detections || virt >= num_virtual) {
     return;
   }
-
-  const int64_t doppler_center = detection_idx[item * 2];
-  const int64_t range_center = detection_idx[item * 2 + 1];
-  const int64_t center_fold = fold_idx == nullptr ? 0 : fold_idx[item];
-  if (doppler_center < 0 || doppler_center >= num_doppler || range_center < 0 ||
-      range_center >= num_range) {
-    if (virt == 0 && threadIdx.x == 0) {
-      atomicMax(error_flag, kSparseTdmErrCellCoord);
-    }
-    return;
-  }
-  if (center_fold < 0 || center_fold >= num_tx) {
-    if (virt == 0 && threadIdx.x == 0) {
-      atomicMax(error_flag, kSparseTdmErrFold);
-    }
-    return;
-  }
-
   for (int64_t slot = static_cast<int64_t>(threadIdx.x); slot < num_snapshots; slot += blockDim.x) {
-    const int64_t range_len = 2 * range_half + 1;
-    const int64_t od = slot / range_len - doppler_half;
-    const int64_t orng = slot % range_len - range_half;
-    bool valid_d = true;
-    bool valid_r = true;
-    const int64_t doppler =
-        resolve_axis_index(doppler_center, od, doppler_half, num_doppler, doppler_edge, &valid_d);
-    const int64_t range =
-        resolve_axis_index(range_center, orng, range_half, num_range, range_edge, &valid_r);
-    const bool valid = valid_d && valid_r;
-    const int64_t unfolded_doppler = doppler_center + od;
-    const int64_t wrap_count = doppler_edge == edge_mode_id(SnapshotEdgeMode::kWrap)
-                                   ? floor_div(unfolded_doppler, num_doppler)
-                                   : 0;
-    const int64_t fold = positive_mod(center_fold + wrap_count, num_tx);
-    if (virt == 0) {
-      is_valid[item * num_snapshots + slot] = static_cast<uint8_t>(valid);
-    }
-
-    Complex<T> value{};
-    if (valid) {
-      if (overlap_policy == static_cast<int>(OverlapPolicy::kAverage)) {
-        const int64_t begin = member_offsets[virt];
-        const int64_t finish = member_offsets[virt + 1];
-        for (int64_t member = begin; member < finish; ++member) {
-          value += corrected_channel(rd_maps, correction, fold_correction, fold, num_tx,
-                                     member_indices[member], num_rx, num_doppler, num_range,
-                                     doppler, range);
-        }
-        value /= static_cast<T>(finish - begin);
-      } else {
-        value =
-            corrected_channel(rd_maps, correction, fold_correction, fold, num_tx, src_channel[virt],
-                              num_rx, num_doppler, num_range, doppler, range);
-      }
-    }
-    snapshot[(item * num_virtual + virt) * num_snapshots + slot] = value;
+    process_sparse_compensation_slot(
+        rd_maps, detection_idx, fold_idx, item, virt, slot, num_tx, num_rx, num_doppler, num_range,
+        num_virtual, num_snapshots, doppler_half, range_half, doppler_edge, range_edge,
+        overlap_policy, correction, fold_correction, src_channel, member_offsets, member_indices,
+        snapshot, is_valid, error_flag);
   }
 }
 
@@ -128,63 +142,12 @@ __global__ void sparse_compensation_kernel_point(
   if (item >= num_detections || virt >= num_virtual) {
     return;
   }
-
-  const int64_t doppler_center = detection_idx[item * 2];
-  const int64_t range_center = detection_idx[item * 2 + 1];
-  const int64_t center_fold = fold_idx == nullptr ? 0 : fold_idx[item];
-  if (doppler_center < 0 || doppler_center >= num_doppler || range_center < 0 ||
-      range_center >= num_range) {
-    if (virt == 0) {
-      atomicMax(error_flag, kSparseTdmErrCellCoord);
-    }
-    return;
-  }
-  if (center_fold < 0 || center_fold >= num_tx) {
-    if (virt == 0) {
-      atomicMax(error_flag, kSparseTdmErrFold);
-    }
-    return;
-  }
-
-  for (int64_t slot = 0; slot < 1; ++slot) {
-    const int64_t range_len = 2 * range_half + 1;
-    const int64_t od = slot / range_len - doppler_half;
-    const int64_t orng = slot % range_len - range_half;
-    bool valid_d = true;
-    bool valid_r = true;
-    const int64_t doppler =
-        resolve_axis_index(doppler_center, od, doppler_half, num_doppler, doppler_edge, &valid_d);
-    const int64_t range =
-        resolve_axis_index(range_center, orng, range_half, num_range, range_edge, &valid_r);
-    const bool valid = valid_d && valid_r;
-    const int64_t unfolded_doppler = doppler_center + od;
-    const int64_t wrap_count = doppler_edge == edge_mode_id(SnapshotEdgeMode::kWrap)
-                                   ? floor_div(unfolded_doppler, num_doppler)
-                                   : 0;
-    const int64_t fold = positive_mod(center_fold + wrap_count, num_tx);
-    if (virt == 0) {
-      is_valid[item * num_snapshots + slot] = static_cast<uint8_t>(valid);
-    }
-
-    Complex<T> value{};
-    if (valid) {
-      if (overlap_policy == static_cast<int>(OverlapPolicy::kAverage)) {
-        const int64_t begin = member_offsets[virt];
-        const int64_t finish = member_offsets[virt + 1];
-        for (int64_t member = begin; member < finish; ++member) {
-          value += corrected_channel(rd_maps, correction, fold_correction, fold, num_tx,
-                                     member_indices[member], num_rx, num_doppler, num_range,
-                                     doppler, range);
-        }
-        value /= static_cast<T>(finish - begin);
-      } else {
-        value =
-            corrected_channel(rd_maps, correction, fold_correction, fold, num_tx, src_channel[virt],
-                              num_rx, num_doppler, num_range, doppler, range);
-      }
-    }
-    snapshot[(item * num_virtual + virt) * num_snapshots + slot] = value;
-  }
+  const int64_t slot = 0;
+  process_sparse_compensation_slot(rd_maps, detection_idx, fold_idx, item, virt, slot, num_tx,
+                                   num_rx, num_doppler, num_range, num_virtual, num_snapshots,
+                                   doppler_half, range_half, doppler_edge, range_edge,
+                                   overlap_policy, correction, fold_correction, src_channel,
+                                   member_offsets, member_indices, snapshot, is_valid, error_flag);
 }
 
 }  // namespace

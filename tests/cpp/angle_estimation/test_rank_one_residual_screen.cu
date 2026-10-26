@@ -53,12 +53,14 @@ std::vector<T> run_screen(const std::vector<cuda::std::complex<T>>& snapshot,
                           int64_t looks, T threshold, std::vector<unsigned char>* selected_out,
                           AngleConvention convention = {}) {
   cuda::std::complex<T>* snapshot_device = nullptr;
+  cuda::std::complex<double>* weights_device = nullptr;
   T* aoa_device = nullptr;
   unsigned char* valid_device = nullptr;
   double* positions_device = nullptr;
   T* scores_device = nullptr;
   unsigned char* selected_device = nullptr;
   EXPECT_EQ(cudaMalloc(&snapshot_device, snapshot.size() * sizeof(snapshot[0])), cudaSuccess);
+  EXPECT_EQ(cudaMalloc(&weights_device, items * channels * sizeof(*weights_device)), cudaSuccess);
   EXPECT_EQ(cudaMalloc(&aoa_device, aoa.size() * sizeof(T)), cudaSuccess);
   EXPECT_EQ(cudaMalloc(&positions_device, positions.size() * sizeof(double)), cudaSuccess);
   EXPECT_EQ(cudaMalloc(&scores_device, items * sizeof(T)), cudaSuccess);
@@ -77,9 +79,11 @@ std::vector<T> run_screen(const std::vector<cuda::std::complex<T>>& snapshot,
               cudaSuccess);
   }
 
-  holoscan::radar::detail::residual_screen_kernel<T>
-      <<<1, 64>>>(snapshot_device, aoa_device, valid_device, positions_device, items, channels,
-                  looks, 1.0, convention, threshold, scores_device, selected_device);
+  holoscan::radar::detail::precompute_residual_weights_kernel<T>
+      <<<1, 64>>>(aoa_device, positions_device, items, channels, 1.0, convention, weights_device);
+  holoscan::radar::detail::residual_screen_with_weights_kernel<T>
+      <<<1, 64>>>(snapshot_device, aoa_device, valid_device, weights_device, items, channels, looks,
+                  convention, threshold, scores_device, selected_device);
   EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
   std::vector<T> scores(static_cast<size_t>(items));
@@ -94,6 +98,7 @@ std::vector<T> run_screen(const std::vector<cuda::std::complex<T>>& snapshot,
   cudaFree(scores_device);
   cudaFree(positions_device);
   cudaFree(valid_device);
+  cudaFree(weights_device);
   cudaFree(aoa_device);
   cudaFree(snapshot_device);
   return scores;
