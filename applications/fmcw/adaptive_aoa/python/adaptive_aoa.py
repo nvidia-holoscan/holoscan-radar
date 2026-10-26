@@ -40,6 +40,7 @@ def build_graph(config: str | Path) -> BuiltGraph:
 
     path = str(Path(config).resolve())
     cfg = _radar._load_adaptive(path)
+    device = _radar._select_application_device(cfg["visualize"], cfg["visualize"])
     graph = hs.Graph("adaptive_aoa")
     options = hs.CompileOptions()
     extents = cfg["extents"]
@@ -164,7 +165,9 @@ def build_graph(config: str | Path) -> BuiltGraph:
     for operator_name, port_names in outputs.items():
         for port_name in port_names:
             options.deployment.bind_tensor_output_device(
-                operator_path=operator_name, output_port=port_name, device=hs.execution.DeviceId(0)
+                operator_path=operator_name,
+                output_port=port_name,
+                device=hs.execution.DeviceId(device),
             )
     if cfg["visualize"]:
         add_dashboard(
@@ -182,6 +185,7 @@ def build_graph(config: str | Path) -> BuiltGraph:
                 "range_bins": range_op.range_bins,
                 "velocity_bins": doppler.velocity_bins,
             },
+            device=device,
             clustered=False,
         )
     graph.set_default_clock(graph.add_clock(hs.RealtimeClock, "clock"))

@@ -5,6 +5,8 @@
 
 from typing import Any
 
+from holoscan_radar import _radar
+
 import holoscan as hs
 
 
@@ -18,6 +20,7 @@ def add_dashboard(
     title: str,
     inputs: dict[str, Any],
     *,
+    device: int,
     clustered: bool,
     profiled: bool = False,
     profile_gap: int = 1,
@@ -42,16 +45,18 @@ def add_dashboard(
         title=f"{viz['window_title']} - {title}",
     )
     partition.add(display, bridge)
-    graph.partition("visualization").add(frame, holoviz)
-    for operator_name, port_name in (
-        ("display_compositor", "rgba"),
-        ("dashboard_image", "image"),
-        ("dashboard_frame", "output"),
+    visualization = graph.partition("visualization")
+    visualization.add(frame)
+    composer_device = _radar._application_composer_device()
+    for operator_name, port_name, ordinal in (
+        ("display_compositor", "rgba", device),
+        ("dashboard_image", "image", device),
+        ("dashboard_frame", "output", composer_device),
     ):
         options.deployment.bind_tensor_output_device(
             operator_path=operator_name,
             output_port=port_name,
-            device=hs.execution.DeviceId(0),
+            device=hs.execution.DeviceId(ordinal),
         )
     # Feed the compositor the detected cells and their physical coordinate axes.
     graph.add_flow(
@@ -112,12 +117,71 @@ def add_dashboard(
     graph.add_flow(
         display.rgba, bridge.rgba, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
     )
-    graph.add_flow(
-        bridge.image, frame.image, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+    _connect_image_devices(
+        graph,
+        partition,
+        visualization,
+        options,
+        bridge.image,
+        frame.image,
+        "dashboard_composer",
+        width,
+        height,
+        device,
+        composer_device,
     )
-
     graph.add_flow(display.text, frame.text, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1)
 
-    graph.add_flow(
-        frame.output, holoviz.image, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+    presentation = graph.partition("presentation")
+    presentation.add(holoviz)
+    _connect_image_devices(
+        graph,
+        visualization,
+        presentation,
+        options,
+        frame.output,
+        holoviz.image,
+        "dashboard",
+        width,
+        height,
+        composer_device,
+        _radar._application_display_device(),
     )
+
+
+def _connect_image_devices(
+    graph,
+    source_partition,
+    target_partition,
+    options,
+    source,
+    target,
+    prefix,
+    width,
+    height,
+    source_device,
+    target_device,
+):
+    if source_device == target_device:
+        graph.add_flow(source, target, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1)
+        return
+    download = graph.op(
+        "holoscan.radar._app.ImageDownload", f"{prefix}_download", width=width, height=height
+    )
+    upload = graph.op(
+        "holoscan.radar._app.ImageUpload", f"{prefix}_upload", width=width, height=height
+    )
+    source_partition.add(download)
+    target_partition.add(upload)
+    options.deployment.bind_tensor_output_device(
+        operator_path=f"{prefix}_upload",
+        output_port="image_out",
+        device=hs.execution.DeviceId(target_device),
+    )
+    graph.add_flow(
+        source, download.image_in, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+    )
+    graph.add_flow(
+        download.image_out, upload.image_in, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+    )
+    graph.add_flow(upload.image_out, target, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1)

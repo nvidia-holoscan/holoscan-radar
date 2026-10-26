@@ -62,6 +62,7 @@ def build_graph(config: str | Path) -> BuiltGraph:
 
     path = str(Path(config).resolve())
     cfg = _radar._load_siso(path)
+    device = _radar._select_application_device(cfg["visualize"], cfg["visualize"])
     graph = hs.Graph("siso")
     options = hs.CompileOptions()
     extents = cfg["extents"]
@@ -133,7 +134,7 @@ def build_graph(config: str | Path) -> BuiltGraph:
             options.deployment.bind_tensor_output_device(
                 operator_path=operator_name,
                 output_port=port_name,
-                device=hs.execution.DeviceId(0),
+                device=hs.execution.DeviceId(device),
             )
     if cfg["visualize"]:
         add_dashboard(
@@ -154,6 +155,7 @@ def build_graph(config: str | Path) -> BuiltGraph:
                 "sizes": cluster.sizes,
                 "reduced_points": reduction.reduced_points,
             },
+            device=device,
             clustered=True,
         )
     graph.set_default_clock(graph.add_clock(hs.RealtimeClock, "clock"))

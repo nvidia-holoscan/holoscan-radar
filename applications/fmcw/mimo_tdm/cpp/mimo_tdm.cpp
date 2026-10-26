@@ -19,6 +19,7 @@
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_op.hpp"
 #include "radar_app/app/graph_driver.hpp"
+#include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "config.hpp"  // NOLINT(build/include_subdir)
 #include "radar_app/fmcw/mimo_sources.hpp"
@@ -38,7 +39,7 @@ void bind_output(holoscan::CompileOptions& options, const char* op, const char* 
   options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = op,
       .output_port = port,
-      .device = holoscan::DeviceId{0},
+      .device = app::application_device(),
   });
 }
 

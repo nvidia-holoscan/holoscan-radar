@@ -22,6 +22,7 @@
 #include <holoscan/time/realtime_clock.hpp>
 
 #include "radar_app/app/config_path.hpp"
+#include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/report/cadence_meter.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/viz/display_probe.hpp"
@@ -66,6 +67,11 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
       cfg.visualize = false;
     }
 
+#if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
+    select_application_device(cfg.visualize, cfg.visualize);
+#else
+    select_application_device(false, false);
+#endif
     AppFrameBank::reset(static_cast<int>(cfg.num_frames));
 
     holoscan::Graph graph{log_prefix};

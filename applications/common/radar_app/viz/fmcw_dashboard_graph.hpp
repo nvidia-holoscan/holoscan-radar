@@ -25,6 +25,8 @@
 #include "radar_app/app/visualization_config.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
 #include "radar_app/viz/fmcw_holoviz_op.hpp"
+#include "radar_app/viz/image_device_bridge_op.hpp"
+#include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
 #include "radar_common/sim/scene.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
@@ -148,7 +150,7 @@ inline void add_fmcw_dashboard(
   options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = "display_compositor",
       .output_port = "rgba",
-      .device = holoscan::DeviceId{0},
+      .device = app::application_device(),
   });
 
   auto image_bridge =
@@ -157,15 +159,14 @@ inline void add_fmcw_dashboard(
   options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = "dashboard_image",
       .output_port = "image",
-      .device = holoscan::DeviceId{0},
+      .device = app::application_device(),
   });
+  const holoscan::DeviceId composer_device{app::application_composer_device()};
   auto frame = graph.op<FmcwFrameComposerOp>("dashboard_frame",
                                              static_cast<std::int32_t>(config.window_width),
                                              static_cast<std::int32_t>(config.window_height));
-  options.deployment.bind_tensor_output_device(
-      holoscan::TensorOutputDevicePlacement{.operator_path = "dashboard_frame",
-                                            .output_port = "output",
-                                            .device = holoscan::DeviceId{0}});
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "dashboard_frame", .output_port = "output", .device = composer_device});
   auto holoviz = graph.op<FmcwHolovizOp>("holoviz", static_cast<std::int32_t>(config.window_width),
                                          static_cast<std::int32_t>(config.window_height),
                                          config.window_title + " - " + std::move(workflow_title));
@@ -173,7 +174,8 @@ inline void add_fmcw_dashboard(
   // Keep presentation on its own partition; each completed image drives one render.
   application.add(display);
   application.add(image_bridge);
-  graph.partition("visualization").add(frame).add(holoviz);
+  auto visualization = graph.partition("visualization");
+  visualization.add(frame);
 
   // Visualization is best-effort: discard stale frames instead of
   // backpressuring the radar pipeline when rendering falls behind.
@@ -200,8 +202,16 @@ inline void add_fmcw_dashboard(
   }
   graph.add_flow(display->text, frame->tensor_layer_input(1), display_queue);
   graph.add_flow(display->rgba, image_bridge->rgba, display_queue);
-  graph.add_flow(image_bridge->image, frame->image_layer_input(0), display_queue);
-  graph.add_flow(frame->output(), holoviz->image_layer_input(0), display_queue);
+  connect_image_devices(graph, options, application, visualization, image_bridge->image,
+                        frame->image_layer_input(0), "dashboard_composer", config.window_width,
+                        config.window_height, app::application_device(), composer_device,
+                        display_queue);
+  const holoscan::DeviceId display_device{app::application_display_device()};
+  auto presentation = graph.partition("presentation");
+  presentation.add(holoviz);
+  connect_image_devices(graph, options, visualization, presentation, frame->output(),
+                        holoviz->image_layer_input(0), "dashboard", config.window_width,
+                        config.window_height, composer_device, display_device, display_queue);
 }
 
 }  // namespace holoscan::radar::app::viz

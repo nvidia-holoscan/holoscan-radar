@@ -29,7 +29,11 @@ flowchart LR
   COMP --> ANGLE["BeamscanEstimatorOp"] --> TAIL["features / clusters / report"]
   WAVEFORM -->|Exact| RANGE
   TAIL --> DASHBOARD["FmcwDashboardOp"]
-  DASHBOARD --> IMAGE["RgbaImageBridgeOp"] --> FRAME["FmcwFrameComposerOp"] --> HOLOVIZ["FmcwHolovizOp"]
+  DASHBOARD --> IMAGE["RgbaImageBridgeOp"] -->|Same GPU| FRAME["FmcwFrameComposerOp"] -->|Same GPU| HOLOVIZ["FmcwHolovizOp"]
+  IMAGE -.->|Different GPUs| INPUTDOWNLOAD["ImageDownloadOp"]
+  INPUTDOWNLOAD -.-> INPUTUPLOAD["ImageUploadOp"] -.-> FRAME
+  FRAME -.->|Different GPUs| DOWNLOAD["ImageDownloadOp"]
+  DOWNLOAD -.-> UPLOAD["ImageUploadOp"] -.-> HOLOVIZ
   DASHBOARD -->|Native text| FRAME
   WAVEFORM -->|Exact profile identity| DASHBOARD
 

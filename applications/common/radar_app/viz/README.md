@@ -199,7 +199,15 @@ every admitted radar frame. Display products share a completion timestamp so
 presentation alignment excludes upstream processing latency. Radar data and
 report timestamps retain their existing behavior.
 
-Composition and window presentation run in their own partition. Native CUDA
+Startup discovers the CUDA ordinals selected by offscreen and window rendering.
+When an image producer and its renderer differ, `ImageDownloadOp` and
+`ImageUploadOp` move the image through a bounded host pool into the receiving GPU.
+This covers both the input canvas and completed frame, preserving image metadata
+and timestamps. This path does not require CUDA peer access and adds two copies
+and synchronization per device boundary. Same-device rendering retains
+the direct connection. All seven C++ and Python workflows share this policy.
+
+Composition and window presentation run in separate partitions. Native CUDA
 capture adds a GPU render/resolve stage and one device copy, with bounded SDK
 pools; text remains SDK-rendered rather than drawn by Radar. Depth-one drop-oldest display queues
 bound pending images; processing queues retain their existing aligned-input

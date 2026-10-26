@@ -29,6 +29,7 @@ def build_graph(config: str | Path) -> BuiltGraph:
 
     path = str(Path(config).resolve())
     cfg = _radar._load_multi(path)
+    device = _radar._select_application_device(cfg["visualize"], cfg["visualize"])
     graph = hs.Graph("multi_waveform")
     options = hs.CompileOptions()
     extents = cfg["extents"]
@@ -145,7 +146,7 @@ def build_graph(config: str | Path) -> BuiltGraph:
             options.deployment.bind_tensor_output_device(
                 operator_path=operator_name,
                 output_port=port_name,
-                device=hs.execution.DeviceId(0),
+                device=hs.execution.DeviceId(device),
             )
     if cfg["visualize"]:
         add_dashboard(
@@ -167,6 +168,7 @@ def build_graph(config: str | Path) -> BuiltGraph:
                 "reduced_points": reduction.reduced_points,
                 "waveform": tx.waveform,
             },
+            device=device,
             clustered=True,
             profiled=True,
             profile_gap=cfg["visualization_profile_max_gap_frames"],
