@@ -115,6 +115,29 @@ the selected environment and run its `holoscan` command there.
 
 ---
 
+### GPU placement
+
+All seven FMCW workflows (C++ and Python) and all five SAR applications retain
+the caller's current CUDA device for computation. Visualization independently
+discovers HoloViz's CUDA-backed Vulkan adapters, including the window-surface
+presentation check. Startup logs the computation, composition, and presentation
+devices. CUDA ordinals are relative to the devices visible inside the container.
+
+HSDK 5.0 has no public renderer-device override: the application isolates its
+startup discovery in `radar_app/app/gpu_placement.cpp`, using the installed
+renderer API and the SDK's adapter-selection order. A small temporary window
+queries presentation support before the graph is compiled. When an image
+producer and renderer select different adapters, the graph explicitly copies
+the RGBA image through a bounded host pool to the receiving GPU. This covers
+FMCW's offscreen composer and window, plus SAR's formation and timeline displays.
+It works without CUDA peer access, at the cost of two host/device copies and
+synchronization per device boundary. Same-device connections remain direct.
+
+This fixes visualization placement; it does not add arbitrary computation-device
+selection. Some operators allocate CUDA scratch in construction or `start()`,
+where the installed SDK does not establish the output pool's device scope.
+Moving their output bindings alone to a different device can therefore fail.
+
 ## Inside a development container
 
 For manual CMake work, first open the devcontainer or run
