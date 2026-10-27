@@ -339,6 +339,27 @@ if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     radar_add_test(app/test_fmcw_dashboard holoscan::fmcw_dashboard)
 endif()
 
+if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ AND HOLOSCAN_RADAR_HAS_X11 AND TARGET siso)
+    find_program(RADAR_XVFB_RUN xvfb-run REQUIRED)
+    find_program(RADAR_TEST_PYTHON python3 REQUIRED)
+    add_test(NAME FmcwX11_cpp
+        COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
+            ${CMAKE_CURRENT_SOURCE_DIR}/check_fmcw_x11.py $<TARGET_FILE:siso>
+            ${PROJECT_SOURCE_DIR}/applications/fmcw/siso/config/siso.yaml)
+    set_tests_properties(FmcwX11_cpp PROPERTIES LABELS "integration;visualization")
+    if(HOLOSCAN_RADAR_BUILD_PYTHON)
+        add_test(NAME FmcwX11_pythonTcp
+            COMMAND ${RADAR_XVFB_RUN} -a -l -s "-screen 0 1280x1024x24 -listen tcp"
+                ${RADAR_TEST_PYTHON}
+                ${CMAKE_CURRENT_SOURCE_DIR}/check_fmcw_x11.py $<TARGET_FILE:siso>
+                ${PROJECT_SOURCE_DIR}/applications/fmcw/siso/config/siso.yaml --python --tcp)
+        set_tests_properties(FmcwX11_pythonTcp PROPERTIES
+            LABELS "integration;visualization"
+            ENVIRONMENT
+                "PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT}:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
+    endif()
+endif()
+
 set(SAR_SMOKE_DIR "${PROJECT_BINARY_DIR}/tests/cpp")
 set(SAR_APP_NAMES spotlight video_sar tiled_strip continuous_strip independent_images)
 set(SAR_COUNTS 1 5 5 5 2)
