@@ -68,6 +68,27 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   where truth reaches 5.4, overshoot at centre) — the recorded V-shape, now
   with the shape measured rather than inferred. `AutofocusOp.sharpness` is
   still unwired in the app, so metric 3 was computed from the dumped images.
+  **The estimator shortfall is now diagnosed into two faults, and the PGA core
+  is neither.** At the full azimuth window the core recovers a pure quadratic
+  to 7.7e-05 rad RMS at 2.5 rad and 0.002 rad at 5 rad; the ~0.2 rad that
+  `RecoversQuadraticUpToAffine` reports is the sub-bin remainder of the linear
+  ramp that test also injects, not estimator error. Fault 1 is a narrow-window
+  bias, reproducible on synthetic data: at window-to-azimuth ratios of 1:1,
+  1:2, 1:4, 1:8 the residual on a 5 rad error climbs 0.002 / 0.069 / 0.245 /
+  0.830 rad and it is the aperture *edges* that are lost (edge ratio 0.999 to
+  0.41) while the centre holds (0.999 to 0.843) — the estimate keeps its swing
+  and misplaces it, which is what a gradient estimator does as the per-sample
+  phase step grows. Two new tests pin both
+  (`PureQuadraticIsRecoveredExactlyAtFullWindow`,
+  `NarrowWindowLosesTheApertureEdges`). Fault 2 dominates on Kourou and is
+  **unresolved**: the residual sits at ~15% of injected peak-to-peak and moves
+  with neither amplitude (centre ratio 1.99 / 1.98 / 2.02 across 2 cm, 0.5 cm,
+  0.2 cm) nor window (1.246 / 1.251 / 1.254 / 1.241 rad across widths 350 to
+  2048 of 8000), and fault 1 cannot explain it — at width 2048 the per-sample
+  gradient step is 0.016 rad. The shape points at a factor-of-two scale error
+  between the axis the estimate is indexed by and the pulse axis it is applied
+  on; suspects are the polar aux's bearing-vs-slow-time conjugacy over a
+  23375-pulse dwell, and `PhaseResampleOp`.
   **Still to port:** `tools/sar_image/pga_screen.py` and the Atlanta/Calais
   configs; the Kourou numbers quoted in the app README are pre-port and must be
   re-measured before being quoted again.

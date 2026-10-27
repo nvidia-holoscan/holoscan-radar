@@ -270,6 +270,64 @@ TEST(AutofocusOp, RecoversQuadraticUpToAffine) {
   EXPECT_LT(phase_rms(est, want), 0.25);
 }
 
+// A pure quadratic, with no ramp or offset for `remove_affine` to strip. The
+// canonical test above injects both, and the sub-bin remainder the integer
+// circshift cannot take out costs it ~0.2 rad -- enough to mask how accurate
+// the estimator is, and enough to mask a regression in it.
+std::vector<double> pure_quadratic(double amplitude) {
+  std::vector<double> phi(static_cast<size_t>(kAz));
+  const double mid = 0.5 * static_cast<double>(kAz - 1);
+  for (int64_t k = 0; k < kAz; ++k) {
+    const double x = (static_cast<double>(k) - mid) / std::max(mid, 1.0);
+    phi[static_cast<size_t>(k)] = amplitude * x * x;
+  }
+  return phi;
+}
+
+double residual_rms(const HostTensor& phase, const std::vector<double>& injected) {
+  auto est = phase_as_double(phase);
+  auto want = injected;
+  remove_affine(&est);
+  remove_affine(&want);
+  rd_standin_flip(&est);
+  return phase_rms(est, want);
+}
+
+// At the full azimuth extent the estimator is not merely inside the acceptance
+// target, it is exact to five decimal places. Pinning that is what makes the
+// window-width loss below legible as a defect rather than as how PGA behaves.
+TEST(AutofocusOp, PureQuadraticIsRecoveredExactlyAtFullWindow) {
+  for (double amplitude : {2.5, 5.0}) {
+    const auto phi = pure_quadratic(amplitude);
+    const auto img = make_image<float>(phi, kStrong, true);
+    const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz}, 4, 1.0);
+    ASSERT_TRUE(out.ok) << out.failure;
+    EXPECT_LT(residual_rms(out.phase, phi), 0.01) << "amplitude " << amplitude;
+  }
+}
+
+// Narrowing the window costs accuracy at the aperture edges, where the phase
+// gradient is largest, while the dwell centre stays right -- the estimate keeps
+// its total swing and redistributes it. The bound here is the measured
+// behaviour, not the target: at a 1:8 window the residual is already past the
+// 0.39 rad acceptance target of SAR/TESTING.md on a 5 rad error. Tighten these
+// as the estimator improves; they must never loosen.
+TEST(AutofocusOp, NarrowWindowLosesTheApertureEdges) {
+  const auto phi = pure_quadratic(5.0);
+  const auto img = make_image<float>(phi, kStrong, true);
+  double previous = 0.0;
+  for (double window_fraction : {1.0, 0.5, 0.25, 0.125}) {
+    const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz}, 4, window_fraction);
+    ASSERT_TRUE(out.ok) << out.failure;
+    const double rms = residual_rms(out.phase, phi);
+    EXPECT_GT(rms, previous) << "window_fraction " << window_fraction
+                             << ": the residual is expected to grow as the window narrows; "
+                                "if this now falls, the estimator improved -- retighten the bound";
+    previous = rms;
+  }
+  EXPECT_LT(previous, 1.0) << "the 1:8 window residual regressed beyond its measured 0.83 rad";
+}
+
 TEST(AutofocusOp, AzimuthAxisV) {
   const auto phi = injected_phi();
   const auto img = make_image<float>(phi, kStrong, false);
