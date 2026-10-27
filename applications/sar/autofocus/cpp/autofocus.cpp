@@ -61,6 +61,12 @@ int main(int argc, char** argv) {
         pc.set_params(std::move(pc_params));
         bind_outputs(options, "phase_correction", {"range_profiles_out"});
 
+        // A reform replay emits the whole retained aperture as one tensor, so
+        // every edge carrying it is 9.4 GiB per slot on Kourou. The shared
+        // depth-4 `queue` reserves four of those plus the pool's own slack --
+        // 34.5 GiB on one edge -- while exactly one replay is ever in flight.
+        const holoscan::ConnectionOptions replay{.queue_depth = 1U};
+
         // --- ingest, optionally through the known lie
         graph.add_flow(reader->stream_boundary, manager->stream_boundary, queue);
         // Everything on the ingest edge carries one pulses_per_tick batch, not
@@ -107,7 +113,7 @@ int main(int argc, char** argv) {
               "(skipping AutofocusOp; positions stay lied)");
           auto oracle = graph.template op<app::sar::OraclePhaseOp>("oracle_phase", lies, extents);
           bind_outputs(options, "oracle_phase", {"phase_correction"});
-          graph.add_flow(manager->range_profiles_out, oracle->range_profiles, queue);
+          graph.add_flow(manager->range_profiles_out, oracle->range_profiles, replay);
           graph.add_flow(oracle->phase_correction, pc->phase_correction, queue);
           estimate.add(oracle);
         } else {
@@ -142,12 +148,12 @@ int main(int argc, char** argv) {
             auto aux_points = graph.template op<app::sar::AuxPointsSourceOp>(
                 "aux_points", extras->aux_polar_lattice, aux_extents);
             bind_outputs(options, "aux_points", {"range_profiles_out", "sample_points"});
-            graph.add_flow(manager->range_profiles_out, aux_points->range_profiles, queue);
-            graph.add_flow(aux_points->range_profiles_out, aux_bp->range_profiles, queue);
-            graph.add_flow(aux_points->sample_points, aux_bp->sample_points, queue);
+            graph.add_flow(manager->range_profiles_out, aux_points->range_profiles, replay);
+            graph.add_flow(aux_points->range_profiles_out, aux_bp->range_profiles, replay);
+            graph.add_flow(aux_points->sample_points, aux_bp->sample_points, replay);
             estimate.add(aux_points);
           } else {
-            graph.add_flow(manager->range_profiles_out, aux_bp->range_profiles, queue);
+            graph.add_flow(manager->range_profiles_out, aux_bp->range_profiles, replay);
           }
 
           // PGA's first window is a fraction of the azimuth extent. On a
@@ -211,11 +217,11 @@ int main(int argc, char** argv) {
 
         // The ingest chain is complete only once the estimation branch has had
         // its chance to splice the lattice source onto it.
-        graph.add_flow(*ingest_profiles, manager->range_profiles, queue);
+        graph.add_flow(*ingest_profiles, manager->range_profiles, replay);
 
         // --- correct the same replayed pulses and form the product
-        graph.add_flow(manager->range_profiles_out, pc->range_profiles_in, queue);
-        graph.add_flow(pc->range_profiles_out, bp->range_profiles, queue);
+        graph.add_flow(manager->range_profiles_out, pc->range_profiles_in, replay);
+        graph.add_flow(pc->range_profiles_out, bp->range_profiles, replay);
         graph.add_flow(manager->positions_out, bp->positions, queue);
         graph.add_flow(manager->reference_position_out, bp->reference_position, queue);
         graph.add_flow(manager->control_out, bp->control, queue);

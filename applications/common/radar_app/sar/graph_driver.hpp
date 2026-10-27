@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <initializer_list>
 #include <memory>
 #include <optional>
@@ -419,6 +420,12 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     if (has_timeline)
       options.deployment.bind_thread_placement("timeline", worker_lane);
     const auto plan = holoscan::compile(graph, std::move(options));
+    // Pool sizing is the binding constraint on a retained-aperture run and the
+    // plan is the only place the slot counts are visible: a declared depth of 2
+    // can materialize as 9. SAR_DUMP_PLAN=<file> writes it out.
+    if (const char* plan_dump = std::getenv("SAR_DUMP_PLAN")) {
+      std::ofstream(plan_dump) << plan.json();
+    }
     if (!plan.ok()) {
       const std::string json = std::string(plan.json());
       std::string hint;

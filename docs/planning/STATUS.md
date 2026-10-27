@@ -42,6 +42,20 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   path; they cannot pin recovery, because a 5-pulse aperture clears no
   strong-scatterer gate and even the landed `spotlight` dump fixture forms an
   all-zero 5Ã—5. Recovery stays a real-data measurement.
+  **Kourou does not fit in GPU memory, by a wide margin.** The declared pools
+  come to **169 GiB against 96 GiB** on an RTX PRO 6000, so the run dies at
+  `PROFILE_MATERIALIZATION_FAILED` before `start()`. Read off the compile plan
+  (`SAR_DUMP_PLAN=<file>`, the only place slot counts are visible): the
+  retained aperture is one 8.72 GiB tensor (23375 pulses x 23999 bins x
+  `complex<double>`) and three edges carry it -- `aperture_manager`,
+  `phase_correction`, and `aux_points` -- at 9, 4 and 4 slots for 148 GiB of
+  the total. Two sizing bugs are fixed (the ingest edge was sized for the
+  aperture; the replay edges took the shared depth-4 `queue`, which alone cost
+  42 GiB at 3000 pulses), but a declared depth of 2 still materializes as 9, so
+  the slot inflation and not the edge count is what dominates. The remaining
+  levers -- cutting the inflation, `float` instead of `double`, cropping the
+  range swath to the 512 m scene, or measuring on a shorter `pulse_range` --
+  are **unresolved and need a team decision**; 3000 pulses fits at 31.6 GiB.
   **Still to port:** `tools/sar_image/pga_screen.py` and the Atlanta/Calais
   configs; the Kourou numbers quoted in the app README are pre-port and must be
   re-measured before being quoted again.
