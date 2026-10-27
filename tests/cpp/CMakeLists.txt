@@ -183,6 +183,16 @@ radar_add_test(detection/test_multi_source_expansion
 radar_add_test(integration/test_selective_aoa_operators
     holoscan::rank_one_residual_screen_op
     holoscan::multi_source_expansion_op)
+radar_add_test(integration/test_sar_autofocus_graph
+    holoscan::aperture_manager_op
+    holoscan::autofocus_op
+    holoscan::backprojection_op
+    holoscan::phase_correction_op)
+# The retain/reform cases drive the autofocus app's own azimuth-to-pulse
+# resampler. Reimplementing it here would assert against a copy, so the app
+# directory is an include root for this one target.
+target_include_directories(test_sar_autofocus_graph PRIVATE
+    ${CMAKE_SOURCE_DIR}/applications/sar)
 radar_add_test(detection/test_cfar_detector
     holoscan::cfar_detector_op
     holoscan::feature_assembly_op)
