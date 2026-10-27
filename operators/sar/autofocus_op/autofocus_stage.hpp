@@ -689,12 +689,21 @@ __global__ void copy_n_kernel(const cuda::std::complex<T>* in, cuda::std::comple
   }
 }
 
+// One element per thread: every kernel here indexes with a bare
+// blockIdx.x * blockDim.x + threadIdx.x and no grid-stride loop, so the launch
+// has to cover n exactly. Clamping the grid instead silently drops the tail --
+// on a 2478 x 8000 auxiliary image that was the last 380 range rows, which came
+// back out of image_out as zeros. 65535 is the limit for gridDim.y and .z; .x
+// is capped at 2^31-1 on every GPU this module supports.
 inline int grid_for(int64_t n, int threads) {
   if (n <= 0) {
     return 1;
   }
   const int64_t g = (n + threads - 1) / threads;
-  return static_cast<int>(std::min(g, static_cast<int64_t>(65535)));
+  if (g > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+    throw std::invalid_argument("AutofocusOp: image is too large to launch over");
+  }
+  return static_cast<int>(g);
 }
 
 template <typename T>

@@ -328,6 +328,41 @@ TEST(AutofocusOp, NarrowWindowLosesTheApertureEdges) {
   EXPECT_LT(previous, 1.0) << "the 1:8 window residual regressed beyond its measured 0.83 rad";
 }
 
+// Every kernel in the stage is one element per thread with no grid-stride
+// loop, so a launch grid that does not cover the image silently leaves its tail
+// unwritten -- and the tail of a freshly pooled output is zeros. This image is
+// deliberately just past 65535 blocks of 256 threads, the clamp that used to be
+// applied: on a 2478 x 8000 auxiliary it dropped the last 380 range rows out of
+// image_out and hid them from the peak finder too. min_scatterers forces the
+// pass-through, which exercises the same copy without paying for a formation.
+TEST(AutofocusOp, LargeImageIsNotTruncatedByTheLaunchGrid) {
+  constexpr int64_t kWide = 64;
+  constexpr int64_t kTall = (65535 * 256) / kWide + 64;
+  // One bright pixel per row over a low floor, so every row clears the
+  // peak-to-mean gate and the real PGA path runs. The pass-through is a plain
+  // cudaMemcpy and would not exercise a launch grid at all.
+  std::vector<std::complex<float>> img(static_cast<size_t>(kTall * kWide), {0.01F, 0.F});
+  for (int64_t r = 0; r < kTall; ++r) {
+    img[static_cast<size_t>(r * kWide + (r % kWide))] = {1.F, 0.F};
+  }
+  const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kTall, kWide}, 1);
+  ASSERT_TRUE(out.ok) << out.failure;
+  ASSERT_EQ(out.image.size(), kTall * kWide);
+  const auto* got = out.image.as<std::complex<float>>();
+  int64_t zero_rows = 0;
+  for (int64_t r = 0; r < kTall; ++r) {
+    double row = 0.0;
+    for (int64_t c = 0; c < kWide; ++c) {
+      row += std::abs(got[r * kWide + c]);
+    }
+    if (row == 0.0) {
+      ++zero_rows;
+    }
+  }
+  EXPECT_EQ(zero_rows, 0) << "image_out left " << zero_rows << " of " << kTall
+                          << " rows unwritten; the launch grid does not cover the image";
+}
+
 TEST(AutofocusOp, AzimuthAxisV) {
   const auto phi = injected_phi();
   const auto img = make_image<float>(phi, kStrong, false);

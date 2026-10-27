@@ -14,10 +14,11 @@
 
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/sar/graph_driver.hpp"
-#include "aux_points_op.hpp"      // NOLINT(build/include_subdir)
-#include "config.hpp"             // NOLINT(build/include_subdir)
-#include "phase_resample_op.hpp"  // NOLINT(build/include_subdir)
-#include "position_error_op.hpp"  // NOLINT(build/include_subdir)
+#include "aux_points_op.hpp"        // NOLINT(build/include_subdir)
+#include "config.hpp"               // NOLINT(build/include_subdir)
+#include "phase_resample_op.hpp"    // NOLINT(build/include_subdir)
+#include "position_error_op.hpp"    // NOLINT(build/include_subdir)
+#include "sharpness_report_op.hpp"  // NOLINT(build/include_subdir)
 #include "sar/autofocus_op/autofocus_op.hpp"
 #include "sar/phase_correction_op/phase_correction_op.hpp"
 
@@ -176,6 +177,7 @@ int main(int argc, char** argv) {
           // sharpness stays unwired here, but every declared tensor output
           // needs a device placement before the graph will compile.
           bind_outputs(options, "autofocus", {"image_out", "phase_correction", "sharpness"});
+          // sharpness is a host-side report; the trace is tiny.
 
           auto resample = graph.template op<app::sar::PhaseResampleOp>("phase_resample",
                                                                        extras->aperture_pulses);
@@ -186,6 +188,13 @@ int main(int argc, char** argv) {
           // needs a consumer.
           auto af_drain = graph.template op<app::NullSinkOp>("af_image_drain");
 
+          // sharpness needs a real consumer, not a drain: an unwired optional
+          // output makes the operator skip the work behind it for the whole
+          // run, and the iteration trace is the only thing that distinguishes
+          // PGA converging from PGA declining to improve the image.
+          auto sharp =
+              graph.template op<app::sar::AutofocusSharpnessReportOp>("autofocus_sharpness");
+
           graph.add_flow(manager->positions_out, aux_bp->positions, queue);
           graph.add_flow(manager->reference_position_out, aux_bp->reference_position, queue);
           graph.add_flow(manager->control_out, aux_bp->control, queue);
@@ -194,9 +203,13 @@ int main(int argc, char** argv) {
           }
           graph.add_flow(aux_bp->image, af->image, queue);
           graph.add_flow(af->image_out, af_drain->input, queue);
+          graph.add_flow(af->sharpness, sharp->sharpness, queue);
           graph.add_flow(af->phase_correction, resample->phase_correction, queue);
           graph.add_flow(resample->phase_correction_out, pc->phase_correction, queue);
           estimate.add(aux_bp).add(af).add(resample).add(af_drain);
+          // Each authored partition is one directed chain, and `estimate`
+          // already ends at the resampler, so the sharpness tap is its own.
+          graph.partition("sharpness").add(sharp);
 
           if (lies) {
             // Score the resampled, pulse-indexed estimate rather than the raw
