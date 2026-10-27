@@ -115,6 +115,14 @@ the selected environment and run its `holoscan` command there.
 
 ---
 
+### Application logging
+
+FMCW C++ and Python applications prefix Holoscan app/operator logs with local
+wall-clock date/time, milliseconds and the UTC offset. For example,
+`[2026-10-26 12:34:56.789 +00:00] [info] [report_ops.hpp:461] ...`.
+Set `HOLOSCAN_LOG_FORMAT` to use an SDK preset or custom spdlog format instead.
+HoloViz's separate renderer logger retains its SDK format.
+
 ### GPU placement
 
 All seven FMCW workflows (C++ and Python) and all five SAR applications retain

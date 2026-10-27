@@ -23,6 +23,7 @@
 #include "applications/fmcw/dense_beamforming/cpp/config.hpp"
 #include "radar_app/app/source.hpp"
 #include "radar_app/app/gpu_placement.hpp"
+#include "radar_app/app/logging.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "python/holoscan_radar/viz_bindings.hpp"
 
@@ -407,6 +408,7 @@ void register_siso_bindings(nb::module_& module) {
   register_app_node<SisoSourceThunks>("holoscan.radar._app.SisoSource");
   register_app_node<SisoReportThunks>("holoscan.radar._app.SisoReport");
   module.def("_load_siso", &load_siso);
+  module.def("_configure_fmcw_logging", &app::configure_fmcw_logging);
   module.def("_select_application_device", &app::select_application_device);
   module.def("_application_display_device", &app::application_display_device);
   module.def("_application_composer_device", &app::application_composer_device);

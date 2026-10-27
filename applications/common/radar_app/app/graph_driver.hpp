@@ -23,6 +23,7 @@
 
 #include "radar_app/app/config_path.hpp"
 #include "radar_app/app/gpu_placement.hpp"
+#include "radar_app/app/logging.hpp"
 #include "radar_app/report/cadence_meter.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/viz/display_probe.hpp"
@@ -56,6 +57,7 @@ template <class Config, class BuildFn>
 int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char* default_yaml,
                        std::function<Config(const std::filesystem::path&)> load_config,
                        BuildFn&& build) {
+  configure_fmcw_logging();
   try {
     const std::filesystem::path config_path = resolve_config_path(argc, argv, default_yaml);
     Config cfg = load_config(config_path);
