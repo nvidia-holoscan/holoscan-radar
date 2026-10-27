@@ -12,6 +12,9 @@ namespace holoscan::radar::app {
 // True when an X11 display server is reachable (DISPLAY / XOpenDisplay).
 // Used to downgrade visualize=true on headless hosts without Holoviz.
 inline bool x11_display_available() {
+  static const bool threads_initialized = XInitThreads() != 0;
+  if (!threads_initialized)
+    return false;
   Display* display = XOpenDisplay(nullptr);
   if (display == nullptr) {
     HOLOSCAN_LOG_DEBUG("radar_app: X11 display probe failed (XOpenDisplay)");

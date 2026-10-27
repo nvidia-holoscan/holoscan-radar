@@ -18,6 +18,9 @@
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
 #include "radar_app/viz/image_device_bridge_op.hpp"
 #include "radar_app/viz/fmcw_holoviz_op.hpp"
+#if HOLOSCAN_RADAR_HAS_X11
+#include "radar_app/viz/x11_image_presenter_op.hpp"
+#endif
 
 namespace authoring = holoscan::authoring;
 namespace viz = holoscan::radar::app::viz;
@@ -75,7 +78,8 @@ HOLOSCAN_PARAM_SCHEMA(DashboardWindow,
                       holoscan::field<&DashboardWindow::height>("height"),
                       holoscan::field<&DashboardWindow::title>("title"));
 
-struct ViewerThunks : authoring::ManualOperatorRegistrationThunks<viz::FmcwHolovizOp> {
+template <typename Op>
+struct ViewerThunks : authoring::ManualOperatorRegistrationThunks<Op> {
   static authoring::OpaqueOperatorRef add_to_graph(
       holoscan::Graph& graph, std::string_view name,
       const authoring::MaterializedParameters* params) {
@@ -85,7 +89,7 @@ struct ViewerThunks : authoring::ManualOperatorRegistrationThunks<viz::FmcwHolov
                                    "dashboard image width and height must be positive"};
     }
     return ViewerThunks::make_operator_ref(
-        graph.op<viz::FmcwHolovizOp>(name, input->width, input->height, input->title));
+        graph.op<Op>(name, input->width, input->height, input->title));
   }
   static holoscan::expected<authoring::OpaqueOperatorRef, holoscan::Error> from_assignments(
       holoscan::Graph& graph, std::string_view name,
@@ -129,6 +133,31 @@ void register_transfer(std::string_view name) {
   });
   if (!result)
     throw holoscan::RuntimeError{result.error()};
+}
+
+template <typename Op>
+void register_viewer(std::string_view name) {
+  using V = ViewerThunks<Op>;
+  auto viewer_result = authoring::authoring_registry().register_operator({
+      .name = name,
+      .param_type = &holoscan::param_type_descriptor<DashboardWindow>(),
+      .param_schema = holoscan::param_schema_descriptor<DashboardWindow>(),
+      .parameter_introspection = authoring::OperatorParameterIntrospection::kConstructorReplay,
+      .add_to_graph = &V::add_to_graph,
+      .add_to_graph_from_assignments = &V::from_assignments,
+      .set_params = &V::set_params,
+      .port = &V::port,
+      .ports = &V::ports,
+      .region_add = &V::region_add,
+      .partition_add = &V::partition_add,
+      .lifecycle_before = &V::lifecycle_before,
+      .lifecycle_allow_self_restart = &V::lifecycle_allow_self_restart,
+      .lifecycle_allow_external_restart = &V::lifecycle_allow_external_restart,
+      .lifecycle_allow_restart_request = &V::lifecycle_allow_restart_request,
+  });
+  if (!viewer_result) {
+    throw holoscan::RuntimeError{viewer_result.error()};
+  }
 }
 
 }  // namespace
@@ -178,25 +207,8 @@ void register_viz_bindings(nanobind::module_&) {
   if (!composer_result) {
     throw holoscan::RuntimeError{composer_result.error()};
   }
-  using V = ViewerThunks;
-  auto viewer_result = authoring::authoring_registry().register_operator({
-      .name = "holoscan.radar._app.DashboardViewer",
-      .param_type = &holoscan::param_type_descriptor<DashboardWindow>(),
-      .param_schema = holoscan::param_schema_descriptor<DashboardWindow>(),
-      .parameter_introspection = authoring::OperatorParameterIntrospection::kConstructorReplay,
-      .add_to_graph = &V::add_to_graph,
-      .add_to_graph_from_assignments = &V::from_assignments,
-      .set_params = &V::set_params,
-      .port = &V::port,
-      .ports = &V::ports,
-      .region_add = &V::region_add,
-      .partition_add = &V::partition_add,
-      .lifecycle_before = &V::lifecycle_before,
-      .lifecycle_allow_self_restart = &V::lifecycle_allow_self_restart,
-      .lifecycle_allow_external_restart = &V::lifecycle_allow_external_restart,
-      .lifecycle_allow_restart_request = &V::lifecycle_allow_restart_request,
-  });
-  if (!viewer_result) {
-    throw holoscan::RuntimeError{viewer_result.error()};
-  }
+  register_viewer<viz::FmcwHolovizOp>("holoscan.radar._app.DashboardViewer");
+#if HOLOSCAN_RADAR_HAS_X11
+  register_viewer<viz::X11ImagePresenterOp>("holoscan.radar._app.X11DashboardViewer");
+#endif
 }

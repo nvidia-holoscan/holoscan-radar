@@ -26,6 +26,9 @@
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
 #include "radar_app/viz/fmcw_holoviz_op.hpp"
 #include "radar_app/viz/image_device_bridge_op.hpp"
+#if HOLOSCAN_RADAR_HAS_X11
+#include "radar_app/viz/x11_image_presenter_op.hpp"
+#endif
 #include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
 #include "radar_common/sim/scene.hpp"
@@ -167,9 +170,6 @@ inline void add_fmcw_dashboard(
                                              static_cast<std::int32_t>(config.window_height));
   options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = "dashboard_frame", .output_port = "output", .device = composer_device});
-  auto holoviz = graph.op<FmcwHolovizOp>("holoviz", static_cast<std::int32_t>(config.window_width),
-                                         static_cast<std::int32_t>(config.window_height),
-                                         config.window_title + " - " + std::move(workflow_title));
 
   // Keep presentation on its own partition; each completed image drives one render.
   application.add(display);
@@ -206,8 +206,24 @@ inline void add_fmcw_dashboard(
                         frame->image_layer_input(0), "dashboard_composer", config.window_width,
                         config.window_height, app::application_device(), composer_device,
                         display_queue);
-  const holoscan::DeviceId display_device{app::application_display_device()};
   auto presentation = graph.partition("presentation");
+  const auto title = config.window_title + " - " + std::move(workflow_title);
+#if HOLOSCAN_RADAR_HAS_X11
+  if (app::fmcw_uses_x11_presentation()) {
+    auto viewer =
+        graph.op<X11ImagePresenterOp>("holoviz", config.window_width, config.window_height, title);
+    auto download =
+        graph.op<ImageDownloadOp>("dashboard_download", config.window_width, config.window_height);
+    visualization.add(download);
+    presentation.add(viewer);
+    graph.add_flow(frame->output(), download->image_in, display_queue);
+    graph.add_flow(download->image_out, viewer->image, display_queue);
+    return;
+  }
+#endif
+  auto holoviz =
+      graph.op<FmcwHolovizOp>("holoviz", config.window_width, config.window_height, title);
+  const holoscan::DeviceId display_device{app::application_display_device()};
   presentation.add(holoviz);
   connect_image_devices(graph, options, visualization, presentation, frame->output(),
                         holoviz->image_layer_input(0), "dashboard", config.window_width,

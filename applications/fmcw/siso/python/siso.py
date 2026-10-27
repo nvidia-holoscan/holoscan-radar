@@ -39,7 +39,10 @@ class BuiltGraph:
         seen = 0
         last_progress = monotonic()
         try:
-            while _radar._app_frames_captured() < self.num_frames:
+            while (
+                _radar._app_frames_captured() < self.num_frames
+                and session.termination == hs.RunTermination.RUNNING
+            ):
                 count = _radar._app_frames_captured()
                 if count != seen:
                     seen = count

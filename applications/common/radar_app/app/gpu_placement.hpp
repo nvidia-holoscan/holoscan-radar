@@ -16,6 +16,11 @@ namespace holoscan::radar::app {
 // caller's compute device. Explicit image transfers join different render GPUs.
 int select_application_device(bool window, bool cuda_sink);
 
+// FMCW uses the SDK's offscreen renderer and finished-image X11 transport when
+// an X11 display is available; other window systems retain SDK presentation.
+bool fmcw_uses_x11_presentation();
+int select_fmcw_application_device(bool window, bool cuda_sink);
+
 // Window adapter found by the most recent startup selection on this thread.
 int application_display_device();
 int application_composer_device();

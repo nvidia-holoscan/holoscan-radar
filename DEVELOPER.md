@@ -126,14 +126,22 @@ HoloViz's separate renderer logger retains its SDK format.
 ### GPU placement
 
 All seven FMCW workflows (C++ and Python) and all five SAR applications retain
-the caller's current CUDA device for computation. Visualization independently
-discovers HoloViz's CUDA-backed Vulkan adapters, including the window-surface
-presentation check. Startup logs the computation, composition, and presentation
-devices. CUDA ordinals are relative to the devices visible inside the container.
+the caller's current CUDA device for computation. CUDA ordinals are relative to
+the devices visible inside the container.
+
+On X11, FMCW renders the complete dashboard with the SDK's offscreen CUDA sink,
+downloads it through a bounded host pool, and sends it to the X server with
+`X11ImagePresenterOp`. XRender scales the finished image when the window resizes.
+This supports forwarded SSH displays and unrestricted multi-GPU hosts without
+requiring a Vulkan window swapchain on the display GPU. Startup logs the compute
+and composition devices and `X11 finished-image transport`. All DSP, plot
+composition and native SDK text rendering remain on the GPU; the host only packs
+and transports finished pixels. No GPU visibility setting is required.
 
 HSDK 5.0 has no public renderer-device override: the application isolates its
-startup discovery in `radar_app/app/gpu_placement.cpp`, using the installed
-renderer API and the SDK's adapter-selection order. A small temporary window
+startup discovery for SAR and other window systems in
+`radar_app/app/gpu_placement.cpp`, using the installed renderer API and the SDK's
+adapter-selection order. A small temporary window
 queries presentation support before the graph is compiled. When an image
 producer and renderer select different adapters, the graph explicitly copies
 the RGBA image through a bounded host pool to the receiving GPU. This covers

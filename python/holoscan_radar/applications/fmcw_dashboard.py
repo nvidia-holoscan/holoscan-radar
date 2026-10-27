@@ -37,8 +37,9 @@ def add_dashboard(
     frame = graph.op(
         "holoscan.radar._app.FrameComposer", "dashboard_frame", width=width, height=height
     )
+    x11 = _radar._fmcw_uses_x11_presentation()
     holoviz = graph.op(
-        "holoscan.radar._app.DashboardViewer",
+        "holoscan.radar._app.X11DashboardViewer" if x11 else "holoscan.radar._app.DashboardViewer",
         "holoviz",
         width=width,
         height=height,
@@ -134,6 +135,21 @@ def add_dashboard(
 
     presentation = graph.partition("presentation")
     presentation.add(holoviz)
+    if x11:
+        download = graph.op(
+            "holoscan.radar._app.ImageDownload", "dashboard_download", width=width, height=height
+        )
+        visualization.add(download)
+        graph.add_flow(
+            frame.output, download.image_in, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+        )
+        graph.add_flow(
+            download.image_out,
+            holoviz.image,
+            queue_policy=hs.QueuePolicy.DROP_OLDEST,
+            queue_depth=1,
+        )
+        return
     _connect_image_devices(
         graph,
         visualization,

@@ -91,8 +91,10 @@ if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
 endif()
 
 if(HOLOSCAN_RADAR_HAS_X11)
-    target_link_libraries(radar_app INTERFACE X11)
+    target_link_libraries(radar_app INTERFACE X11 Xrender)
     target_compile_definitions(radar_app INTERFACE HOLOSCAN_RADAR_HAS_X11=1)
+    target_link_libraries(radar_app_gpu PRIVATE X11)
+    target_compile_definitions(radar_app_gpu PRIVATE HOLOSCAN_RADAR_HAS_X11=1)
 endif()
 
 # Python bindings live in python/ but are added from operators/CMakeLists.txt

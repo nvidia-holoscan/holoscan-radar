@@ -409,7 +409,8 @@ void register_siso_bindings(nb::module_& module) {
   register_app_node<SisoReportThunks>("holoscan.radar._app.SisoReport");
   module.def("_load_siso", &load_siso);
   module.def("_configure_fmcw_logging", &app::configure_fmcw_logging);
-  module.def("_select_application_device", &app::select_application_device);
+  module.def("_select_application_device", &app::select_fmcw_application_device);
+  module.def("_fmcw_uses_x11_presentation", &app::fmcw_uses_x11_presentation);
   module.def("_application_display_device", &app::application_display_device);
   module.def("_application_composer_device", &app::application_composer_device);
   module.def("_reset_app_frames", [](int frames) {

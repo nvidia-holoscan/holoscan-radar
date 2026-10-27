@@ -32,11 +32,12 @@ flowchart LR
     Features --> Dashboard
     Range --> Dashboard
     Doppler --> Dashboard
-    Dashboard --> Image[RgbaImageBridgeOp] -->|Same GPU| Frame[FmcwFrameComposerOp] -->|Same GPU| Holoviz[FmcwHolovizOp]
+    Dashboard --> Image[RgbaImageBridgeOp] -->|Same GPU| Frame[FmcwFrameComposerOp] -->|Other window systems, same GPU| Holoviz[FmcwHolovizOp]
     Image -.->|Different GPUs| InputDownload[ImageDownloadOp]
     InputDownload -.-> InputUpload[ImageUploadOp] -.-> Frame
-    Frame -.->|Different GPUs| Download[ImageDownloadOp]
+    Frame -.->|Other window systems, different GPUs| Download[ImageDownloadOp]
     Download -.-> Upload[ImageUploadOp] -.-> Holoviz
+    Frame -->|X11| X11Download[ImageDownloadOp] --> X11Window[X11ImagePresenterOp]
     Dashboard -->|Native text| Frame
 ```
 

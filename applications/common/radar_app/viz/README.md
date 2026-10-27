@@ -189,7 +189,13 @@ The operator's built-in monospace font supports ASCII; longer workflow/profile t
 The app-private `FmcwFrameComposerOp` reuses the SDK renderer and requires image
 and text with one shared completion stamp (`OnAligned` with zero tolerance and
 `Exact` selectors on both inputs). Each completed pair drives one offscreen SDK render.
-The image-only `FmcwHolovizOp` presents the completed frame in a resizable window.
+On X11, `ImageDownloadOp` copies that completed image into a bounded host pool and
+`X11ImagePresenterOp` sends it to a resizable X window. XRender scales the whole
+canvas on the display server. This is finished-image transport: all radar
+processing, plot composition and native text rendering remain on the GPU. It
+works over SSH and with all GPUs visible, without using a Vulkan window swapchain
+on a potentially different GPU. No device index is hardcoded or hidden. Other
+window systems retain the image-only SDK `FmcwHolovizOp` presentation path.
 Joining both inputs lets the viewer recover after resize or remote-display stalls
 have dropped queued frames. An image-driven `OnEach` with an `Exact` text side
 selector can strand a stale image after its matching text is evicted. An independent
@@ -199,7 +205,9 @@ every admitted radar frame. Display products share a completion timestamp so
 presentation alignment excludes upstream processing latency. Radar data and
 report timestamps retain their existing behavior.
 
-Startup discovers the CUDA ordinals selected by offscreen and window rendering.
+Startup discovers the CUDA ordinal selected by offscreen rendering. On X11, no
+window presentation GPU is needed. For other window systems, startup additionally
+queries the SDK's window-surface adapter.
 When an image producer and its renderer differ, `ImageDownloadOp` and
 `ImageUploadOp` move the image through a bounded host pool into the receiving GPU.
 This covers both the input canvas and completed frame, preserving image metadata
