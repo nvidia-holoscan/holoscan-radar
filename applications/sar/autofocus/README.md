@@ -92,6 +92,16 @@ On a persistent target the 2 cm quadratic needs no scaling: it drops the peak to
 
 The conclusion is the same one the pre-port numbers reported, so the port did not regress it: **the correction path is exact** — the oracle restores both the peak and the sharpness to the clean values to five figures — **and the whole remaining gap is the estimator.** PGA gets the sign right and about half the magnitude (1.246 rad of residual against a 5.365 rad injected quadratic), closing roughly a fifth of the peak deficit. Its estimate tracks the parabola through the middle of the dwell and then flattens at both aperture edges, plateauing near 2.5 rad where the truth reaches 5.4, with an overshoot at dwell centre — which is the V-shape the pre-port work recorded, now with the shape visible rather than inferred. That is an open item with the ruled-out causes recorded; see [`docs/planning/STATUS.md`](../../../docs/planning/STATUS.md).
 
+Measured against the acceptance target in [`docs/planning/SAR/TESTING.md`](../../../docs/planning/SAR/TESTING.md) (residual ≤ 0.39 rad RMS, hard floor 0.785 rad, product peak ≥ 0.9), the estimator **fails**: 1.246 rad and 0.523. Three things say that is a defect rather than an under-tuned knob. The residual does not move across a 6x `window_fraction` sweep (350 to 2048 samples: 1.246 / 1.251 / 1.254 / 1.241 rad), where a merely mis-tuned estimator would respond. The error is systematic and symmetric rather than noisy. And the estimate carries almost exactly the right total magnitude — 8.50 rad peak-to-peak against the truth's 8.05 — while putting it on the wrong pulses:
+
+| position in the dwell | truth | estimate | ratio |
+| --- | --- | --- | --- |
+| aperture edge | +4.73 rad | +2.40 rad | 0.51 |
+| quarter point | -0.67 rad | +0.86 rad | sign inverted |
+| dwell centre | -2.68 rad | -5.35 rad | 1.99 |
+
+Double the curvature at the centre, half at the edges, inverted a quarter of the way out: the parabola completes its full swing over roughly the middle half of the aperture and then flattens. That is the signature of a scale error of about two between the aux azimuth axis and the pulse axis, not of gain or convergence. The aux is Nyquist-sampled along the look-perpendicular track with `num_u` set to the pulse count, and the operator estimates on the window then interpolates onto the full azimuth axis, so there are two places such a factor can enter.
+
 ## Scene preconditions are a real constraint
 
 Two earlier collects failed on the scene rather than on the estimator, and both are worth knowing about before picking a new target.
