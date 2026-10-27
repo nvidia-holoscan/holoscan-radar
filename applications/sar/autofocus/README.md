@@ -77,11 +77,20 @@ Three fixture runs: the clean Figure 2 chain, the same chain with the lie inject
 
 The development collect is an Umbra SNAPSHOT over the Guiana Space Centre (`2023-06-24-13-22-56_UMBRA-05`, 5.23 N 52.77 W, 23375 by 23999, 4.19 GiB), configured in [`config/autofocus.yaml`](config/autofocus.yaml) with the download command. It was chosen by screening for PGA's scene preconditions rather than for brightness: the chosen scatterer is isolated 221 times over its annulus and flat to 0.85 of its mean across eight equal dwell blocks.
 
-The product is a 2048-square **0.25 m** east-north patch on that scatterer, and the fine spacing is load-bearing rather than cosmetic. The target is diffraction-limited to one or two samples at 0.25 m, so on a 1 m lattice it falls between pixels: the same peak reads 43468 at 1 m and 160525 at 0.25 m, and adding a quadratic error *raises* the 1 m number by broadening the PSF onto a pixel. **Do not score focus at 1 m here.** The aux is the polar lattice with rows auto-sized about the product centre, 2460 by 23375 as configured.
+The product is a 2048-square **0.25 m** east-north patch on that scatterer, and the fine spacing is load-bearing rather than cosmetic. The target is diffraction-limited to one or two samples at 0.25 m, so on a 1 m lattice it falls between pixels: the same peak reads 43468 at 1 m and 160525 at 0.25 m (both over the full aperture), and adding a quadratic error *raises* the 1 m number by broadening the PSF onto a pixel. **Do not score focus at 1 m here.** The aux is the polar lattice with rows auto-sized about the product centre, 2460 by 23375 at the full aperture (2476 by 8000 at the `pulse_range` the measurements below use).
 
-On a persistent target the 2 cm quadratic needs no scaling: it drops the peak to 48.3% of focused.
+On a persistent target the 2 cm quadratic needs no scaling: it drops the peak to 39.2% of focused.
 
-Where this stands, as measured before the HSDK 5 port: the correction path is exact — the oracle restores the peak to 1.000 — and the remaining gap is the estimator. PGA sharpens its own aux by 1.89 times but takes the product only from 0.483 to roughly 0.55-0.60, and its estimate is V-shaped where the truth is a parabola. That is an open item with the ruled-out causes recorded, so they are not re-run; see [`docs/planning/STATUS.md`](../../../docs/planning/STATUS.md). These numbers have **not** yet been re-established on this branch: `PhaseCorrectionOp` was reworked and the `[live]` parameters became real `contract()` joins for the first time, so they must be re-measured before being quoted again.
+**Where this stands, re-measured on HSDK 5 over an 8000-pulse `pulse_range`** (the full 23375-pulse aperture does not fit in 96 GiB of GPU — see `STATUS.md`), scoring the product peak against the clean image and the resampled estimate against the injected truth:
+
+| config | product peak | ratio | sharpness | affine-removed phase RMS |
+| --- | --- | --- | --- | --- |
+| clean, no lie | 65493.0 | 1.000 | 6.98e19 | n/a |
+| 2 cm lie, uncorrected | 25686.3 | 0.392 | 1.12e19 | 2.400 rad |
+| 2 cm lie, PGA estimate applied | 34229.1 | 0.523 | 1.53e19 | 1.246 rad |
+| 2 cm lie, oracle phase applied | 65492.6 | 1.000 | 6.98e19 | 0 by construction |
+
+The conclusion is the same one the pre-port numbers reported, so the port did not regress it: **the correction path is exact** — the oracle restores both the peak and the sharpness to the clean values to five figures — **and the whole remaining gap is the estimator.** PGA gets the sign right and about half the magnitude (1.246 rad of residual against a 5.365 rad injected quadratic), closing roughly a fifth of the peak deficit. Its estimate tracks the parabola through the middle of the dwell and then flattens at both aperture edges, plateauing near 2.5 rad where the truth reaches 5.4, with an overshoot at dwell centre — which is the V-shape the pre-port work recorded, now with the shape visible rather than inferred. That is an open item with the ruled-out causes recorded; see [`docs/planning/STATUS.md`](../../../docs/planning/STATUS.md).
 
 ## Scene preconditions are a real constraint
 

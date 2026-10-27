@@ -56,6 +56,18 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   levers -- cutting the inflation, `float` instead of `double`, cropping the
   range swath to the 512 m scene, or measuring on a shorter `pulse_range` --
   are **unresolved and need a team decision**; 3000 pulses fits at 31.6 GiB.
+  **Kourou is re-measured on HSDK 5, over an 8000-pulse `pulse_range`.** Four
+  configs on the real collect (clean / 2 cm lie uncorrected / lie with the PGA
+  estimate applied / lie with the oracle phase applied) give product peaks of
+  1.000 / 0.392 / 0.523 / 1.000 and affine-removed phase RMS of n/a / 2.400 /
+  1.246 / 0 against a 5.365 rad injected quadratic. Same conclusion as the
+  pre-port numbers, so the port regressed nothing: the correction path is
+  exact (the oracle restores peak *and* sharpness to the clean values to five
+  figures) and the entire remaining gap is the estimator. The estimate tracks
+  the parabola mid-dwell and flattens at both aperture edges (plateau ~2.5 rad
+  where truth reaches 5.4, overshoot at centre) â€” the recorded V-shape, now
+  with the shape measured rather than inferred. `AutofocusOp.sharpness` is
+  still unwired in the app, so metric 3 was computed from the dumped images.
   **Still to port:** `tools/sar_image/pga_screen.py` and the Atlanta/Calais
   configs; the Kourou numbers quoted in the app README are pre-port and must be
   re-measured before being quoted again.
