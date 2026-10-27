@@ -63,7 +63,12 @@ int main(int argc, char** argv) {
 
         // --- ingest, optionally through the known lie
         graph.add_flow(reader->stream_boundary, manager->stream_boundary, queue);
+        // Everything on the ingest edge carries one pulses_per_tick batch, not
+        // the retained aperture, and must be sized accordingly: at Kourou's
+        // 23k pulses the difference is 17.45 GiB per pool.
+        const radar::MaxTensorExtents ingest_extents = make_ingest_extents(extents, cfg);
         const auto& pe = extras->position_error;
+        const holoscan::Output<holoscan::Tensor>* ingest_profiles = &range->range_profiles;
         std::shared_ptr<app::sar::LieRecord> lies;
         if (pe.enabled) {
           HOLOSCAN_LOG_INFO(
@@ -73,21 +78,20 @@ int main(int argc, char** argv) {
           lies = std::make_shared<app::sar::LieRecord>();
           auto lie = graph.template op<app::sar::PerturbPositionsOp>(
               "perturb_positions", lies, pe.look, pe.polynomial, pe.num_pulses,
-              cfg.reference_frequency, extents);
+              cfg.reference_frequency, ingest_extents);
           bind_outputs(options, "perturb_positions",
                        {"range_profiles_out", "positions_out", "reference_position_out"});
           graph.add_flow(range->range_profiles, lie->range_profiles, queue);
           graph.add_flow(reader->positions, lie->positions, queue);
           graph.add_flow(reader->reference_position, lie->reference_position, queue);
-          graph.add_flow(lie->range_profiles_out, manager->range_profiles, queue);
           graph.add_flow(lie->positions_out, manager->positions, queue);
           graph.add_flow(lie->reference_position_out, manager->reference_position, queue);
           // The liar sits between range compression and the manager, so it
           // belongs on the chain it was spliced into: leaving `application` as
           // two disconnected nodes fails the exact-cover check.
           application.add(lie);
+          ingest_profiles = &lie->range_profiles_out;
         } else {
-          graph.add_flow(range->range_profiles, manager->range_profiles, queue);
           graph.add_flow(reader->positions, manager->positions, queue);
           graph.add_flow(reader->reference_position, manager->reference_position, queue);
         }
@@ -130,6 +134,22 @@ int main(int argc, char** argv) {
           aux_bp.set_params(std::move(aux_params));
           bind_outputs(options, "aux_bp", {"image"});
 
+          // A polar aux is not a SampleGeometry, so it rides sample_points.
+          // The source sits in series on the replay edge so the lattice and the
+          // profiles leave one producer on one tick; a trigger-only tap races
+          // the formation and loses -- see aux_points_op.hpp.
+          if (extras->aux_polar) {
+            auto aux_points = graph.template op<app::sar::AuxPointsSourceOp>(
+                "aux_points", extras->aux_polar_lattice, aux_extents);
+            bind_outputs(options, "aux_points", {"range_profiles_out", "sample_points"});
+            graph.add_flow(manager->range_profiles_out, aux_points->range_profiles, queue);
+            graph.add_flow(aux_points->range_profiles_out, aux_bp->range_profiles, queue);
+            graph.add_flow(aux_points->sample_points, aux_bp->sample_points, queue);
+            estimate.add(aux_points);
+          } else {
+            graph.add_flow(manager->range_profiles_out, aux_bp->range_profiles, queue);
+          }
+
           // PGA's first window is a fraction of the azimuth extent. On a
           // Nyquist aux that extent is the oversampled column count, not the
           // pulse count, so a fraction tuned for one is wrong for the other;
@@ -160,24 +180,9 @@ int main(int argc, char** argv) {
           // needs a consumer.
           auto af_drain = graph.template op<app::NullSinkOp>("af_image_drain");
 
-          graph.add_flow(manager->range_profiles_out, aux_bp->range_profiles, queue);
           graph.add_flow(manager->positions_out, aux_bp->positions, queue);
           graph.add_flow(manager->reference_position_out, aux_bp->reference_position, queue);
           graph.add_flow(manager->control_out, aux_bp->control, queue);
-          if (extras->aux_polar) {
-            // A polar aux is not a SampleGeometry, so it rides sample_points.
-            // BackprojectionOp joins that port with Exact{} on capture time,
-            // and this source is triggered by the same manager emission, so
-            // the lattice and the profiles share the replay tick.
-            auto aux_points = graph.template op<app::sar::AuxPointsSourceOp>(
-                "aux_points", extras->aux_polar_lattice);
-            bind_outputs(options, "aux_points", {"sample_points"});
-            graph.add_flow(manager->range_profiles_out, aux_points->range_profiles, queue);
-            graph.add_flow(aux_points->sample_points, aux_bp->sample_points, queue);
-            // Its own partition: aux_bp would otherwise join two producers
-            // inside `estimate`, which is not a single directed chain.
-            graph.partition("aux_points").add(aux_points);
-          }
           if (cfg.wire_weight) {
             graph.add_flow(manager->weight, aux_bp->weight, queue);
           }
@@ -203,6 +208,10 @@ int main(int argc, char** argv) {
             graph.partition("score").add(score);
           }
         }
+
+        // The ingest chain is complete only once the estimation branch has had
+        // its chance to splice the lattice source onto it.
+        graph.add_flow(*ingest_profiles, manager->range_profiles, queue);
 
         // --- correct the same replayed pulses and form the product
         graph.add_flow(manager->range_profiles_out, pc->range_profiles_in, queue);

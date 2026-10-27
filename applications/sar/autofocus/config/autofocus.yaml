@@ -58,7 +58,8 @@ aperture_manager:
   emit_interval_pulses: 0
   emit_mode: reform
 
-range_compression: {}
+range_compression:
+  propagation_speed: 299792458.0
 
 backprojection:
   coordinate_frame: ecef

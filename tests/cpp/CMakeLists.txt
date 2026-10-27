@@ -403,7 +403,7 @@ if(TARGET autofocus)
     # scored against it rather than only inspected. The 5-pulse fixture is far
     # too small for PGA to recover anything, so these pin the injection, the
     # sign convention and the apply path, not the recovery.
-    foreach(af_diag lie oracle)
+    foreach(af_diag lie oracle polar)
         add_test(NAME Sar_autofocus_${af_diag}
             COMMAND ${CMAKE_COMMAND}
                 -DSAR_EXECUTABLE=$<TARGET_FILE:autofocus>

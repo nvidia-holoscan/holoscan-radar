@@ -166,4 +166,92 @@ TEST(BackprojectionOp, ScrollRetainsRowsAndRepeatedGeometryIsNoOp) {
     }
   }
 }
+// `sample_points` had no coverage at all, and the Figure 2 polar aux is the
+// first caller: a lattice of explicit points is the only way to express rows of
+// constant slant range, which `SampleGeometry`'s two axes and uniform spacing
+// cannot. This pins that the port is honoured at all, independent of any app
+// wiring, and that it overrides the Params geometry for the tick.
+TEST(BackprojectionOp, SamplePointsLatticeOverridesGeometry) {
+  MaxTensorExtents extents;
+  extents.max_pulses = 1;
+  extents.max_range_bins = 64;
+  extents.max_image_v = 5;
+  extents.max_image_u = 5;
+  auto fixture = holoscan::testing::create_operator_test<BackprojectionOp<float>>(extents);
+  BackprojectionParams params;
+  params.coordinate_frame =
+      CoordinateFrame(CoordinateFrameSpec{.frame = CoordinateFrameType::kSceneLocal});
+  // Deliberately a different lattice from the points below, so a formed image
+  // at the expected cell can only come from the points.
+  params.sample_geometry = SampleGeometry(SampleGeometrySpec{.origin = {100.0, 100.0, 0.0},
+                                                             .axis_u = {1.0, 0.0, 0.0},
+                                                             .axis_v = {0.0, 1.0, 0.0},
+                                                             .spacing = {1.0, 1.0},
+                                                             .counts = {5, 5}});
+  params.range_bin_spacing = 0.25;
+  params.range_bin_origin = -8.0;
+  params.reference_frequency = 9.6e9;
+  fixture.set_params(params);
+  std::vector<std::complex<float>> impulse(64U, {0.F, 0.F});
+  impulse[32] = {1.F, 0.F};
+  auto profiles = to_device_tensor(impulse, {1, 64}, complex_dtype<float>());
+  auto positions =
+      to_device_tensor(std::vector<float>{0.F, 0.F, 100.F}, {1, 3}, real_dtype<float>());
+  auto reference = to_device_tensor(std::vector<float>{0.F, 0.F, 0.F}, {1, 3}, real_dtype<float>());
+  auto control = to_device_tensor(std::vector<uint8_t>{1U}, {1}, DLDataType{kDLUInt, 8U, 1U});
+
+  // The same 5x5 unit grid about the scene centre that the other tests build
+  // from SampleGeometry, but handed over as explicit points.
+  std::vector<float> points;
+  points.reserve(5U * 5U * 3U);
+  for (int64_t v = 0; v < 5; ++v) {
+    for (int64_t u = 0; u < 5; ++u) {
+      points.push_back(static_cast<float>(u) - 2.F);
+      points.push_back(static_cast<float>(v) - 2.F);
+      points.push_back(0.F);
+    }
+  }
+  auto lattice = to_device_tensor(points, {5, 5, 3}, real_dtype<float>());
+
+  // Order matters: the harness emits a frame's inputs in argument order and the
+  // operator activates as soon as the OnAligned set is complete, so a `[live]`
+  // override listed after `reference_position` misses the tick it was meant for.
+
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::nanoseconds{1}, holoscan::testing::input("control", *control),
+      holoscan::testing::input("sample_points", *lattice),
+      holoscan::testing::input("range_profiles", *profiles),
+      holoscan::testing::input("positions", *positions),
+      holoscan::testing::input("reference_position", *reference)));
+  for (const char* port :
+       {"range_profiles", "positions", "reference_position", "control", "sample_points"}) {
+    fixture.input_source_device(port, holoscan::DeviceId{0});
+  }
+  fixture.output_device("image", holoscan::DeviceId{0});
+  fixture.capture_snapshot<holoscan::Tensor>("image", 1U, 5U * 5U * sizeof(std::complex<float>));
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "image", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(observed) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto captures = result.snapshots<holoscan::Tensor>("image");
+  ASSERT_EQ(captures.size(), 1U);
+  const auto image = to_host(captures[0]);
+  ASSERT_EQ(image.shape, (std::vector<int64_t>{5, 5}));
+  const auto* data = image.as<std::complex<float>>();
+  double best = 0.0;
+  int64_t best_i = 0;
+  for (int64_t i = 0; i < 25; ++i) {
+    if (std::abs(data[i]) > best) {
+      best = std::abs(data[i]);
+      best_i = i;
+    }
+  }
+  EXPECT_GT(best, 0.0) << "sample_points lattice produced no image";
+  EXPECT_EQ(best_i, 12) << "peak should land on the centre of the supplied lattice";
+}
+
 }  // namespace

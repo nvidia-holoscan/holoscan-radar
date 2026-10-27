@@ -10,8 +10,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   `BackprojectionOp`, `AutofocusOp`, app-owned `PhaseResampleOp`, then
   `PhaseCorrectionOp` into the product `BackprojectionOp`. The polar
   (range-bearing) aux lattice rides `sample_points` from the app-owned
-  `AuxPointsSourceOp`, which is now a single-input operator: its HSDK 4 race
-  workaround is unnecessary once `Exact{}` joins on capture time. The three
+  `AuxPointsSourceOp`, which stays a pass-through on the replay edge: it must
+  emit the lattice **before** the profiles, because the profiles are the
+  consumer's trigger and `sample_points` is a `[live]` override under
+  `on_missing SafeDefault{}`, so the activation does not wait for a lattice
+  that has not been emitted yet. `Exact{}` chooses which sample matches, not
+  whether the consumer blocks â€” it does not retire the ordering requirement.
+  The three
   diagnostics (`PerturbPositionsOp`, `OraclePhaseOp`, `AutofocusScoreOp`) are
   ported too, so the estimate is scored against a known injected error rather
   than only looked at; the recorded lie crosses from ingest ticks to the single
@@ -20,8 +25,20 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   `closes_aperture` only for `kEmitAndReset`, but a `reform` replay resets
   first and emits second (`kResetThenEmit`), so `sar_eof_drained` could never
   fire and the app hung for the full 180 s drain. No landed app uses `reform`,
-  which is why this had never been exercised. Three fixture tests
-  (`Sar_autofocus_smoke`/`_lie`/`_oracle`) pin wiring, injection and the apply
+  which is why this had never been exercised.
+  **Second shared-code bug found and fixed:** `BackprojectionOp.sample_points`
+  was never delivered. Root-caused with a minimal single-operator reproducer
+  (`BackprojectionOp.SamplePointsLatticeOverridesGeometry`) that pushed
+  `control` and `sample_points` in one frame at one timestamp and saw only
+  `control` arrive â€” a producer (or test frame) must emit every `[live]`
+  override *before* the trigger port, since the activation fires the moment the
+  `OnAligned` set completes and `SafeDefault{}` takes over for anything later.
+  Until the fix the operator silently fell back to the Params geometry, which
+  for a polar aux is unset, so the run died with `sample_geometry is required`.
+  The port had no test coverage at all; the Figure 2 polar aux is its first
+  caller. Four fixture tests
+  (`Sar_autofocus_smoke`/`_lie`/`_oracle`/`_polar`) pin wiring, injection and
+  the apply
   path; they cannot pin recovery, because a 5-pulse aperture clears no
   strong-scatterer gate and even the landed `spotlight` dump fixture forms an
   all-zero 5Ã—5. Recovery stays a real-data measurement.

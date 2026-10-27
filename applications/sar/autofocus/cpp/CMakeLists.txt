@@ -35,4 +35,6 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
         ${CMAKE_CURRENT_BINARY_DIR}/autofocus_generated_smoke_lie.yaml @ONLY)
     configure_file(autofocus_smoke_oracle.yaml.in
         ${CMAKE_CURRENT_BINARY_DIR}/autofocus_generated_smoke_oracle.yaml @ONLY)
+    configure_file(autofocus_smoke_polar.yaml.in
+        ${CMAKE_CURRENT_BINARY_DIR}/autofocus_generated_smoke_polar.yaml @ONLY)
 endif()

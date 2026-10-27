@@ -94,6 +94,21 @@ inline radar::MaxTensorExtents make_extents(const AppConfig& cfg,
   return extents;
 }
 
+// The aperture-wide `max_pulses` above bounds what the manager can replay or
+// evict, and every operator downstream of it has to be sized for that. The
+// ingest side never does: the reader emits one `pulses_per_tick` batch and
+// range compression is 1:1 on it. Sizing those pools for the retained aperture
+// costs nothing under a per-tick allocator but is real memory once HSDK 5
+// materializes pools up front — on a 23k-pulse by 24k-sample collect it is
+// 17.45 GiB per pool against 0.73 GiB needed. Apps with their own ingest-edge
+// operators should size them from this, not from the aperture extents.
+inline radar::MaxTensorExtents make_ingest_extents(const radar::MaxTensorExtents& extents,
+                                                   const AppConfig& cfg) {
+  radar::MaxTensorExtents ingest = extents;
+  ingest.max_pulses = cfg.reader_pulses_per_tick;
+  return ingest;
+}
+
 template <typename LoadConfig, typename BuildGraph>
 int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_config,
                       BuildGraph build_graph) {
@@ -136,17 +151,19 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     bp_seed.reference_frequency = cfg.reference_frequency;
     auto bp_params = app::config::decode_params(document, "/backprojection", bp_seed);
     const radar::MaxTensorExtents extents = make_extents(cfg, *manager_params);
+    const radar::MaxTensorExtents ingest_extents = make_ingest_extents(extents, cfg);
 
     holoscan::Graph graph{name};
     holoscan::CompileOptions options;
     const holoscan::ConnectionOptions queue{.queue_depth = 4U};
     auto hud = std::make_shared<radar::FormationHud>();
-    auto reader = graph.op<radar::CPHDReaderOp<double>>("cphd_reader", extents, hud);
+    auto reader = graph.op<radar::CPHDReaderOp<double>>("cphd_reader", ingest_extents, hud);
     reader.set_params(std::move(reader_params));
     bind_outputs(options, "cphd_reader",
                  {"phase_history", "positions", "reference_position", "sample_axis", "pulse_times",
                   "velocities"});
-    auto range = graph.op<radar::SARRangeCompressionOp<double>>("range_compression", extents);
+    auto range =
+        graph.op<radar::SARRangeCompressionOp<double>>("range_compression", ingest_extents);
     range.set_params(std::move(range_params));
     bind_outputs(options, "range_compression", {"range_profiles", "range_bins"});
     auto manager = graph.op<radar::ApertureManagerOp<double>>("aperture_manager", extents);
