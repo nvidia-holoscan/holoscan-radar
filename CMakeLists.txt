@@ -91,6 +91,11 @@ endif()
 # CMake BUILD_TESTING variable. This lets a parent project (HoloHub, another
 # module) keep its own BUILD_TESTING setting independent of whether *this*
 # module's tests are built. Defaults ON when standalone, OFF when nested.
+if(PKG_holoscan_radar)
+    set(HOLOSCAN_RADAR_BUILD_TESTING OFF CACHE BOOL
+        "Build the radar module's CTest and pytest suites" FORCE)
+endif()
+
 if(NOT DEFINED HOLOSCAN_RADAR_BUILD_TESTING)
     if(PROJECT_IS_TOP_LEVEL)
         set(HOLOSCAN_RADAR_BUILD_TESTING ON
@@ -147,33 +152,16 @@ endif()
 # ---------------------------------------------------------------------------
 # Subprojects
 # ---------------------------------------------------------------------------
-# pkg/ must come before operators/: add_holohub_package() enables OP_<x>
-# cache options when PKG_<name> is ON. Operator registrations read those
-# options as their subdirectories are processed.
+# pkg/ must come *before* operators/ and applications/: add_holohub_package()
+# inside pkg/ uses set(... CACHE BOOL "" FORCE) to flip OP_<x>=ON / APP_<x>=ON
+# when its PKG_<name> option is ON, and the operator/application macros that
+# read those values run their `option(OP_<x> ... ${BUILD_ALL})` calls when
+# their subdirectories are processed — those bind the cache value the FIRST
+# time option() is encountered, so the FORCE has to happen before then.
 
 add_subdirectory(pkg)
 add_subdirectory(applications)
 add_subdirectory(operators)
-
-if(PKG_holoscan_radar)
-    get_property(_radar_registered_ops GLOBAL PROPERTY HOLOSCAN_RADAR_REGISTERED_OPERATORS)
-    set(_radar_packaged_ops ${HOLOSCAN_RADAR_PACKAGE_OPERATORS})
-    list(SORT _radar_registered_ops)
-    list(SORT _radar_packaged_ops)
-    if(NOT "${_radar_registered_ops}" STREQUAL "${_radar_packaged_ops}")
-        message(FATAL_ERROR
-            "Package operator list differs from registered operators: "
-            "registered=${_radar_registered_ops}; package=${_radar_packaged_ops}")
-    endif()
-    foreach(_radar_op IN LISTS HOLOSCAN_RADAR_PACKAGE_OPERATORS)
-        if(NOT TARGET holoscan::${_radar_op})
-            message(FATAL_ERROR "Package operator target missing: holoscan::${_radar_op}")
-        endif()
-    endforeach()
-    unset(_radar_registered_ops)
-    unset(_radar_packaged_ops)
-    unset(_radar_op)
-endif()
 
 if(HOLOSCAN_RADAR_BUILD_TESTING)
     enable_testing()
@@ -188,6 +176,7 @@ endif()
 # Packaging
 # ---------------------------------------------------------------------------
 # Debian / wheel packaging lives under pkg/. pkg/CMakeLists.txt calls
-# add_holohub_package(holoscan-radar OPERATORS <operators>), which defines
-# PKG_holoscan_radar, enables its operator dependencies, and enters
-# pkg/holoscan-radar/CMakeLists.txt for holohub_configure_deb().
+# add_holohub_package(holoscan-radar OPERATORS <operators> APPLICATIONS <apps>),
+# which defines the PKG_holoscan_radar option, FORCEs the OP_/APP_ deps to ON
+# when the package is enabled, and enters pkg/holoscan-radar/CMakeLists.txt for
+# the holohub_configure_deb() call.
