@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# add_holohub_package() handles the full cascade for both standalone
+# add_holohub_package() handles the operator cascade for both standalone
 # packaging (`holoscan package holoscan-radar --pkg-generator DEB`, which
 # sets -DPKG_holoscan_radar=ON via the Holoscan CLI) and in-tree
 # HoloHub-monorepo packaging once this module is fetched as an external
@@ -13,27 +13,13 @@
 #   2. add_subdirectory(holoscan-radar) — enters
 #      pkg/holoscan-radar/ where holohub_configure_deb() emits
 #      CPackConfig-holoscan-radar.cmake.
-#   3. set("OP_<x>" ON CACHE BOOL ... FORCE) and the equivalent for
-#      APPLICATIONS — cascades to the operator and application subprojects
-#      so the .deb gets actual content. pkg/ is add_subdirectory()'d
-#      *before* operators/ and applications/, so those see the forced ON
-#      value when their own helpers run option().
+#   3. set("OP_<x>" ON CACHE BOOL ... FORCE) cascades to the operator
+#      subprojects so the .deb gets its libraries. pkg/ is entered before
+#      operators/, so they see the forced ON value at option().
 #
-# These lists must name EVERY operator and application the package should
-# contain. `holoscan package` configures with -DBUILD_ALL=OFF, so anything
-# absent here is never enabled, never built, and never installed — it simply
-# does not appear in the .deb. Nothing warns about the omission.
+# The package contains public operators, not the example applications.
+# `holoscan package` configures with -DBUILD_ALL=OFF; the root CMake file
+# checks this operator list against all registered operators.
 #
-# Package the complete public operator and application surface.
-set(_HOLOSCAN_RADAR_PKG_APPLICATIONS
-    siso
-    simo
-    dense_beamforming
-    mimo_tdm
-    adaptive_aoa
-    multi_waveform
-    mimo_ddm)
-
 add_holohub_package(holoscan-radar
-                    OPERATORS    ${HOLOSCAN_RADAR_OPERATORS}
-                    APPLICATIONS ${_HOLOSCAN_RADAR_PKG_APPLICATIONS})
+                    OPERATORS ${HOLOSCAN_RADAR_PACKAGE_OPERATORS})

@@ -35,6 +35,12 @@ function(radar_add_test NAME)
         set(_RAT_LABELS "unit")
     endif()
     get_filename_component(_tgt ${NAME} NAME_WE)
+    foreach(_dependency IN LISTS _RAT_UNPARSED_ARGUMENTS)
+        if(_dependency MATCHES "^holoscan::" AND NOT TARGET ${_dependency})
+            message(STATUS "Skipping ${_tgt} (missing ${_dependency})")
+            return()
+        endif()
+    endforeach()
     add_executable(${_tgt} ${NAME}${_RAT_EXT})
     target_link_libraries(${_tgt} PRIVATE
         radar_test_utils
@@ -66,16 +72,18 @@ radar_add_test(utils/test_perf_profiles yaml-cpp)
 radar_add_test(utils/test_perf_runner)
 radar_add_test(utils/test_perf_yaml_standard yaml-cpp holoscan::doppler_notch_op
     holoscan::fmcw_range_processor_op holoscan::subarray_selection_op)
-target_include_directories(test_perf_yaml_standard PRIVATE
-    ${PROJECT_SOURCE_DIR}/performance/harness/cpp
-    ${PROJECT_SOURCE_DIR}/operators)
+if(TARGET test_perf_yaml_standard)
+    target_include_directories(test_perf_yaml_standard PRIVATE
+        ${PROJECT_SOURCE_DIR}/performance/harness/cpp
+        ${PROJECT_SOURCE_DIR}/operators)
+    target_compile_definitions(test_perf_yaml_standard PRIVATE
+        HOLOSCAN_RADAR_PERF_OPERATOR_ROOT="${PROJECT_SOURCE_DIR}/performance/operators")
+endif()
 target_include_directories(test_perf_runner PRIVATE ${PROJECT_SOURCE_DIR}/performance/harness/cpp)
 target_include_directories(test_perf_profiles PRIVATE
     ${PROJECT_SOURCE_DIR}/performance/harness/cpp
     ${PROJECT_SOURCE_DIR}/operators)
 target_compile_definitions(test_perf_profiles PRIVATE
-    HOLOSCAN_RADAR_PERF_OPERATOR_ROOT="${PROJECT_SOURCE_DIR}/performance/operators")
-target_compile_definitions(test_perf_yaml_standard PRIVATE
     HOLOSCAN_RADAR_PERF_OPERATOR_ROOT="${PROJECT_SOURCE_DIR}/performance/operators")
 radar_add_test(common/test_sim)
 radar_add_test(sar/test_phase_correction holoscan::phase_correction_op)
@@ -211,11 +219,13 @@ radar_add_test(app/test_fmcw_simo_config
     holoscan::cluster_dbscan_op
     holoscan::feature_assembly_op
     holoscan::detection_reduction_op)
-target_include_directories(test_fmcw_simo_config PRIVATE
-    ${PROJECT_SOURCE_DIR}/applications/common
-    ${PROJECT_SOURCE_DIR}/operators)
-target_compile_definitions(test_fmcw_simo_config PRIVATE
-    HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+if(TARGET test_fmcw_simo_config)
+    target_include_directories(test_fmcw_simo_config PRIVATE
+        ${PROJECT_SOURCE_DIR}/applications/common
+        ${PROJECT_SOURCE_DIR}/operators)
+    target_compile_definitions(test_fmcw_simo_config PRIVATE
+        HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+endif()
 
 radar_add_test(app/test_fmcw_siso_config
     yaml-cpp
@@ -228,12 +238,14 @@ radar_add_test(app/test_fmcw_siso_config
     holoscan::cluster_dbscan_op
     holoscan::feature_assembly_op
     holoscan::detection_reduction_op)
-target_include_directories(test_fmcw_siso_config PRIVATE
-    ${PROJECT_SOURCE_DIR}/applications/fmcw/siso/cpp
-    ${PROJECT_SOURCE_DIR}/applications/common
-    ${PROJECT_SOURCE_DIR}/operators)
-target_compile_definitions(test_fmcw_siso_config PRIVATE
-    HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+if(TARGET test_fmcw_siso_config)
+    target_include_directories(test_fmcw_siso_config PRIVATE
+        ${PROJECT_SOURCE_DIR}/applications/fmcw/siso/cpp
+        ${PROJECT_SOURCE_DIR}/applications/common
+        ${PROJECT_SOURCE_DIR}/operators)
+    target_compile_definitions(test_fmcw_siso_config PRIVATE
+        HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+endif()
 
 radar_add_test(app/test_fmcw_mimo_config
     yaml-cpp
@@ -253,11 +265,13 @@ radar_add_test(app/test_fmcw_mimo_config
     holoscan::cluster_dbscan_op
     holoscan::feature_assembly_op
     holoscan::detection_reduction_op)
-target_include_directories(test_fmcw_mimo_config PRIVATE
-    ${PROJECT_SOURCE_DIR}/applications/common
-    ${PROJECT_SOURCE_DIR}/operators)
-target_compile_definitions(test_fmcw_mimo_config PRIVATE
-    HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+if(TARGET test_fmcw_mimo_config)
+    target_include_directories(test_fmcw_mimo_config PRIVATE
+        ${PROJECT_SOURCE_DIR}/applications/common
+        ${PROJECT_SOURCE_DIR}/operators)
+    target_compile_definitions(test_fmcw_mimo_config PRIVATE
+        HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+endif()
 
 radar_add_test(app/test_adaptive_aoa_config
     yaml-cpp
@@ -277,12 +291,14 @@ radar_add_test(app/test_adaptive_aoa_config
     holoscan::mvdr_estimator_op
     holoscan::feature_assembly_op
     holoscan::multi_source_expansion_op)
-target_include_directories(test_adaptive_aoa_config PRIVATE
-    ${PROJECT_SOURCE_DIR}/applications/common
-    ${PROJECT_SOURCE_DIR}/applications/fmcw/adaptive_aoa/cpp
-    ${PROJECT_SOURCE_DIR}/operators)
-target_compile_definitions(test_adaptive_aoa_config PRIVATE
-    HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+if(TARGET test_adaptive_aoa_config)
+    target_include_directories(test_adaptive_aoa_config PRIVATE
+        ${PROJECT_SOURCE_DIR}/applications/common
+        ${PROJECT_SOURCE_DIR}/applications/fmcw/adaptive_aoa/cpp
+        ${PROJECT_SOURCE_DIR}/operators)
+    target_compile_definitions(test_adaptive_aoa_config PRIVATE
+        HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+endif()
 
 if(TARGET adaptive_aoa)
     add_test(NAME AdaptiveAoASmoke
@@ -307,12 +323,14 @@ radar_add_test(app/test_multi_profile_source
     holoscan::cluster_dbscan_op
     holoscan::feature_assembly_op
     holoscan::detection_reduction_op)
-target_include_directories(test_multi_profile_source PRIVATE
-    ${PROJECT_SOURCE_DIR}/applications/common
-    ${PROJECT_SOURCE_DIR}/applications/fmcw/multi_waveform/cpp
-    ${PROJECT_SOURCE_DIR}/operators)
-target_compile_definitions(test_multi_profile_source PRIVATE
-    HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+if(TARGET test_multi_profile_source)
+    target_include_directories(test_multi_profile_source PRIVATE
+        ${PROJECT_SOURCE_DIR}/applications/common
+        ${PROJECT_SOURCE_DIR}/applications/fmcw/multi_waveform/cpp
+        ${PROJECT_SOURCE_DIR}/operators)
+    target_compile_definitions(test_multi_profile_source PRIVATE
+        HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+endif()
 
 if(TARGET multi_waveform)
     add_test(NAME MultiWaveformSmoke
@@ -324,9 +342,11 @@ endif()
 
 radar_add_test(app/test_fmcw_simo_report
     holoscan::radar_app)
-target_include_directories(test_fmcw_simo_report PRIVATE
-    ${PROJECT_SOURCE_DIR}/applications/common
-    ${PROJECT_SOURCE_DIR}/operators)
+if(TARGET test_fmcw_simo_report)
+    target_include_directories(test_fmcw_simo_report PRIVATE
+        ${PROJECT_SOURCE_DIR}/applications/common
+        ${PROJECT_SOURCE_DIR}/operators)
+endif()
 
 radar_add_test(app/test_report_shapes holoscan::radar_app)
 radar_add_test(app/test_sar_diagnostics holoscan::radar_app)

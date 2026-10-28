@@ -76,7 +76,7 @@ else()
     message(STATUS "Python bindings disabled (HOLOSCAN_RADAR_BUILD_PYTHON=OFF)")
 endif()
 
-# Public operator target names, shared with package configuration.
+# FMCW operators registered by the Python provider.
 set(HOLOSCAN_RADAR_OPERATORS
     clutter_filter_op
     snapshot_gather_op
@@ -106,7 +106,17 @@ set(HOLOSCAN_RADAR_OPERATORS
     fmcw_range_doppler_processor_op
 )
 
+# The Debian package contains every public operator, including SAR and I/O.
+set(HOLOSCAN_RADAR_PACKAGE_OPERATORS ${HOLOSCAN_RADAR_OPERATORS}
+    phase_correction_op
+    sar_range_compression_op
+    aperture_manager_op
+    backprojection_op
+    tensor_dump_op
+    cphd_reader_op)
+
 function(holoscan_radar_add_operator NAME)
+    set_property(GLOBAL APPEND PROPERTY HOLOSCAN_RADAR_REGISTERED_OPERATORS ${NAME})
     add_holohub_operator(${NAME} ${ARGN})
 endfunction()
 

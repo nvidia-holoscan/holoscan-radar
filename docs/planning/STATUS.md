@@ -4,6 +4,12 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-28** — **Debian package graph corrected for operator-only delivery.**
+  A package-only configuration now enables all 32 public FMCW, SAR, and I/O
+  operators without enabling the 12 example applications. A configure-time inventory
+  check catches missing package operators, and C++ tests in selective builds
+  register only when their linked operator targets exist.
+
 - **2026-10-21** — **HSDK 5 GA image adopted.** The Dockerfile, host CLI wrapper,
   and devcontainer now default to
   `nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13`; active setup guides
