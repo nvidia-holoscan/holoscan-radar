@@ -2,5 +2,5 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Register each I/O operator after its HSDK 5 port is complete.
-add_holohub_operator(tensor_dump_op)
-add_holohub_operator(cphd_reader_op)
+holoscan_radar_add_operator(tensor_dump_op)
+holoscan_radar_add_operator(cphd_reader_op)

@@ -10,6 +10,12 @@ From the repository root **on the host**; the CLI builds the package in a contai
 ./holoscan-radar package holoscan-radar --pkg-generator DEB
 ```
 
+For a custom operator subset in a direct CMake package build, configure with
+`-DBUILD_ALL=OFF -DPKG_holoscan_radar=ON` and set
+`-DHOLOSCAN_RADAR_PKG_OPERATORS='clutter_filter_op;cphd_reader_op'` to the desired
+operator names. The default list in [`pkg/CMakeLists.txt`](../CMakeLists.txt)
+includes all 32 public operators.
+
 ## metadata.json
 
 `metadata.json` registers this package with the Holoscan CLI. Two fields matter:

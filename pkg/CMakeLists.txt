@@ -18,8 +18,41 @@
 #      operators/, so they see the forced ON value at option().
 #
 # The package contains public operators, not the example applications.
-# `holoscan package` configures with -DBUILD_ALL=OFF. The root CMake file
-# checks that each selected operator is registered.
-#
-add_holohub_package(holoscan-radar
-                    OPERATORS ${HOLOSCAN_RADAR_PACKAGE_OPERATORS})
+# Keep this selection independent of the Python provider's FMCW operator list.
+# Override HOLOSCAN_RADAR_PKG_OPERATORS at configure time to select a subset.
+set(HOLOSCAN_RADAR_PKG_OPERATORS
+    clutter_filter_op
+    snapshot_gather_op
+    phase_shift_beamformer_op
+    beamscan_estimator_op
+    rank_one_residual_screen_op
+    subarray_selection_op
+    cluster_dbscan_op
+    detection_reduction_op
+    mvdr_estimator_op
+    music_estimator_op
+    feature_assembly_op
+    multi_source_expansion_op
+    cfar_detector_op
+    root_music_estimator_op
+    esprit_estimator_op
+    mimo_deinterleave_op
+    tdm_dense_compensation_op
+    ddm_dense_demultiplex_op
+    doppler_notch_op
+    ddm_power_fold_op
+    ddm_sparse_demultiplex_op
+    tdm_sparse_compensation_op
+    virtual_array_assembly_op
+    fmcw_doppler_processor_op
+    fmcw_range_processor_op
+    fmcw_range_doppler_processor_op
+    phase_correction_op
+    sar_range_compression_op
+    aperture_manager_op
+    backprojection_op
+    tensor_dump_op
+    cphd_reader_op
+    CACHE STRING "Operators included in the holoscan-radar Debian package")
+
+add_holohub_package(holoscan-radar OPERATORS ${HOLOSCAN_RADAR_PKG_OPERATORS})

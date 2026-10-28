@@ -165,7 +165,7 @@ add_subdirectory(operators)
 
 if(PKG_holoscan_radar)
     # A package may intentionally omit operators, but every listed one must exist.
-    foreach(_radar_op IN LISTS HOLOSCAN_RADAR_PACKAGE_OPERATORS)
+    foreach(_radar_op IN LISTS HOLOSCAN_RADAR_PKG_OPERATORS)
         if(NOT TARGET ${_radar_op})
             message(FATAL_ERROR "Package operator is not registered: ${_radar_op}")
         endif()

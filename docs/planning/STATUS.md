@@ -7,7 +7,8 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 - **2026-10-28** â€” **Debian package graph corrected for operator-only delivery.**
   A package-only configuration now enables all 32 public FMCW, SAR, and I/O
   operators without enabling the 12 example applications. The explicit package
-  list allows intentional omissions and rejects unregistered names. Package
+  list in `pkg/CMakeLists.txt` accepts configure-time overrides for intentional
+  omissions and rejects unregistered names. Package
   builds disable tests; C++ tests retain normal CMake target resolution. On Durham IGX Thor 5000,
   the clean arm64 Debian package contains all 32 operator libraries and no demo
   applications; all 1,161 non-performance CTests pass.
