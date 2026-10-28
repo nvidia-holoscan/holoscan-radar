@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
           // the formation and loses -- see aux_points_op.hpp.
           if (extras->aux_polar) {
             auto aux_points = graph.template op<app::sar::AuxPointsSourceOp>(
-                "aux_points", extras->aux_polar_lattice, aux_extents);
+                "aux_points", extras->aux_polar_lattice);
             bind_outputs(options, "aux_points", {"range_profiles_out", "sample_points"});
             graph.add_flow(manager->range_profiles_out, aux_points->range_profiles, replay);
             graph.add_flow(aux_points->range_profiles_out, aux_bp->range_profiles, replay);

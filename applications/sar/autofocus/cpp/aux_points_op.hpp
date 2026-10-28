@@ -5,11 +5,11 @@
 // operator: BackprojectionOp.sample_points is the contract port, and this is
 // the app supplying it, which D20 says is the application's job.
 //
-// It sits in series on the ingest profiles edge and stages the lattice through
-// ApertureManagerOp, which the manager README sanctions: a tick-local
-// `sample_points` is latched and passed through to `sample_points_out` on the
-// same tick as `range_profiles_out`. That co-arrival is what the aux formation
-// needs, and being in series is what guarantees it.
+// It sits in series on the replay edge between the manager and the auxiliary
+// formation, and emits the lattice straight to that formation rather than
+// through the manager. One producer and one tick is what gives the lattice and
+// the profiles it belongs to the same capture time, which is the co-arrival the
+// aux formation needs.
 //
 // Do not reduce this to a trigger-only tap off the manager's replay edge.
 // `BackprojectionOp.sample_points` is a `[live]` override, so a lattice that
@@ -22,9 +22,8 @@
 //
 // The lattice is built once in start() into operator-owned device memory, in
 // row chunks rather than one host-side copy: 23k columns x a couple of
-// thousand rows is a gigabyte-scale tensor. It is re-emitted every ingest tick
-// so the manager re-latches it for each aperture; the manager clears its
-// staged copy at an aperture close.
+// thousand rows is a gigabyte-scale tensor. It is published once, on the first
+// tick -- see compute() for why the consumer needs it only then.
 
 #pragma once
 
@@ -50,7 +49,6 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/logger/logger.hpp>
 
-#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -60,19 +58,12 @@ namespace holoscan::radar::app::sar {
 
 class AuxPointsSourceOp : public holoscan::Operator<> {
  public:
-  AuxPointsSourceOp(AuxPolarLattice lattice, const MaxTensorExtents& ingest_extents)
-  : lattice_(lattice) {
+  explicit AuxPointsSourceOp(AuxPolarLattice lattice) : lattice_(lattice) {
     constexpr const char* kWho = "AuxPointsSourceOp";
     if (lattice_.num_v < 2 || lattice_.num_u < 2) {
       throw std::invalid_argument("AuxPointsSourceOp: lattice was not derived");
     }
     max_byte_span_ = byte_span_real_cube<double>({lattice_.num_v, lattice_.num_u, 3}, kWho);
-    // Ingest extents: this sits ahead of the manager, so it carries one
-    // pulses_per_tick batch and never the retained aperture.
-    profiles_byte_span_ = byte_span_complex_cube<double>(
-        {require_extent(ingest_extents.max_pulses, "max_pulses", kWho),
-         require_extent(ingest_extents.max_range_bins, "max_range_bins", kWho)},
-        kWho);
   }
 
   ~AuxPointsSourceOp() override { cudaFree(points_); }
@@ -81,8 +72,12 @@ class AuxPointsSourceOp : public holoscan::Operator<> {
     constexpr TensorRepresentation device{
         .memory_kind = MemoryKind::kCudaDevice, .dtype = std::nullopt, .rank = std::nullopt};
     spec.input(range_profiles).queue_depth(2U).expects_tensor(tensor_input(device));
-    spec.output(range_profiles_out)
-        .produces_tensor(pooled_tensor_output(device, 2U, profiles_byte_span_));
+    // Pass-through, not a pool. This operator is only here to put the lattice
+    // and the profiles behind one producer; it does not touch the profiles, so
+    // it forwards the sample it was handed rather than allocating a second
+    // copy of the replay. On Kourou that pool was 11.4 GiB of reservation and
+    // an aperture-sized device copy per image, both for a tensor it never read.
+    spec.output(range_profiles_out).produces_tensor(tensor_output(device));
     spec.output(sample_points).produces_tensor(pooled_tensor_output(device, 3U, max_byte_span_));
   }
 
@@ -149,8 +144,12 @@ class AuxPointsSourceOp : public holoscan::Operator<> {
   }
 
   [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override {
-    constexpr const char* kOpName = "AuxPointsSourceOp";
-    HOLOSCAN_TRY(auto profiles, receive_tensor(range_profiles, kOpName));
+    // The whole sample, not just the tensor: forwarding it keeps the replay's
+    // capture time, which is what the lattice below is stamped to match.
+    auto profiles = range_profiles.receive();
+    if (!profiles) {
+      return make_unexpected(std::move(profiles).error());
+    }
     cudaStream_t stream = context.cuda_stream().get();
     if (stream == nullptr) {
       return make_unexpected(Error{ErrorCode::kNotSupported, "AuxPointsSourceOp: no CUDA stream"});
@@ -160,35 +159,34 @@ class AuxPointsSourceOp : public holoscan::Operator<> {
     // joined with `on_missing SafeDefault{}`, so the activation does not wait
     // for the lattice: whatever has not been emitted by the time the trigger
     // set completes is simply missing for that tick.
-    const std::vector<int64_t> shape{lattice_.num_v, lattice_.num_u, 3};
-    HOLOSCAN_TRY(
-        emit_required_tensor(sample_points, context, "AuxPointsSourceOp.sample_points", false, [&] {
-          return prepare_device_tensor(
-              sample_points, context, shape, real_dtype<double>(),
-              [&](void* destination, std::size_t bytes) -> expected<void, Error> {
-                if (cudaMemcpyAsync(destination, points_, bytes, cudaMemcpyDeviceToDevice,
-                                    stream) != cudaSuccess) {
-                  return make_unexpected(
-                      Error{ErrorCode::kFailure, "AuxPointsSourceOp: sample_points copy failed"});
-                }
-                return {};
-              });
-        }));
-    HOLOSCAN_TRY(emit_required_tensor(
-        range_profiles_out, context, "AuxPointsSourceOp.range_profiles_out", false, [&] {
-          return prepare_device_tensor(
-              range_profiles_out, context, profiles.shape(), profiles.dtype(),
-              [&](void* destination, std::size_t bytes) -> expected<void, Error> {
-                if (cudaMemcpyAsync(destination, profiles.data(), bytes, cudaMemcpyDeviceToDevice,
-                                    stream) != cudaSuccess) {
-                  return make_unexpected(
-                      Error{ErrorCode::kFailure, "AuxPointsSourceOp: profile copy failed"});
-                }
-                return {};
-              });
-        }));
-    retained_ = std::move(profiles);
-    return {};
+    //
+    // Once, not every tick. The lattice is fixed for the run and the consumer
+    // caches the first one it is given, holding it across accumulator resets
+    // (it only drops a cached lattice when a `sample_geometry` override
+    // arrives, which a polar aux never sends). Re-sending it cost a
+    // gigabyte-scale device comparison on every tick to conclude nothing had
+    // changed, and under a sliced replay it would also publish one lattice per
+    // batch into a queue sized for far fewer.
+    if (!lattice_sent_) {
+      const std::vector<int64_t> shape{lattice_.num_v, lattice_.num_u, 3};
+      HOLOSCAN_TRY(emit_required_tensor(
+          sample_points, context, "AuxPointsSourceOp.sample_points", false, [&] {
+            return prepare_device_tensor(
+                sample_points, context, shape, real_dtype<double>(),
+                [&](void* destination, std::size_t bytes) -> expected<void, Error> {
+                  if (cudaMemcpyAsync(destination, points_, bytes, cudaMemcpyDeviceToDevice,
+                                      stream) != cudaSuccess) {
+                    return make_unexpected(
+                        Error{ErrorCode::kFailure, "AuxPointsSourceOp: sample_points copy failed"});
+                  }
+                  return {};
+                });
+          }));
+      lattice_sent_ = true;
+    }
+    return emit_required_result(context, "AuxPointsSourceOp.range_profiles_out", false, [&] {
+      return range_profiles_out.emit(*profiles);
+    });
   }
 
   Input<Tensor> range_profiles{"range_profiles"};
@@ -198,9 +196,8 @@ class AuxPointsSourceOp : public holoscan::Operator<> {
  private:
   AuxPolarLattice lattice_;
   std::size_t max_byte_span_{0U};
-  std::size_t profiles_byte_span_{0U};
   double* points_{nullptr};
-  Tensor retained_;
+  bool lattice_sent_{false};
 };
 
 }  // namespace holoscan::radar::app::sar
