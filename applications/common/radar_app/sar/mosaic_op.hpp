@@ -5,6 +5,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -24,6 +25,7 @@
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
 
+#include "radar_app/sar/mosaic_sample.hpp"
 #include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_schemas/sample_geometry_bridge.hpp"
@@ -32,11 +34,46 @@ namespace holoscan::radar::app::sar {
 // Holds tile or scroll windows on the same parent lattice. Geometry is
 // published with every BackprojectionOp image, so no tick-local app state
 // needs to guess which image a geometry describes.
+//
+// The accumulator is resident and always full resolution; `image_out` carries
+// a view of it. `crop_nu` narrows that view to a parent-u window (the walking
+// range-window edge is not scene), and `display_max_side` decimates it to a
+// pixel budget. Both default to off, which republishes the whole parent.
+// Sizing the view matters because the pool holds several slots of it and a
+// strip is large: at 1.03 m on the Imperial collect the parent is 100618 x
+// 15077, so one slot is 22.6 GiB and no pool of them fits on a 96 GiB card.
+// Decimating to a display budget is what makes a high-resolution strip
+// viewable at all; the full-resolution pixels never leave this operator.
+// The decimation multi-looks (see `sample_mosaic_rect`) and so publishes
+// amplitude with zero phase, because a strip's decimation is steep enough
+// that subsampled speckle is noise. A view that is the whole parent at
+// factor 1 is a plain copy and keeps its phase.
 class SarMosaicOp : public Operator<> {
  public:
-  SarMosaicOp(SampleGeometry parent, bool loop) : parent_(std::move(parent)), loop_(loop) {
+  SarMosaicOp(SampleGeometry parent, bool loop, int64_t crop_u0 = 0, int64_t crop_nu = 0,
+              int64_t display_max_side = 0)
+  : parent_(std::move(parent)),
+    loop_(loop),
+    crop_u0_(crop_u0),
+    crop_nu_(crop_nu),
+    display_max_side_(display_max_side) {
     if (!parent_.is_valid())
       throw std::invalid_argument("SarMosaicOp: invalid parent geometry");
+    if (crop_u0_ < 0 || crop_nu_ < 0 || display_max_side_ < 0 ||
+        crop_u0_ + crop_nu_ > parent_.num_u())
+      throw std::invalid_argument("SarMosaicOp: invalid parent-u crop or display budget");
+    if (crop_nu_ == 0) {
+      crop_u0_ = 0;
+      crop_nu_ = parent_.num_u();
+    }
+    factor_ = 1;
+    if (display_max_side_ > 0) {
+      const int64_t longest = std::max(parent_.num_v(), crop_nu_);
+      if (longest > display_max_side_)
+        factor_ = (longest + display_max_side_ - 1) / display_max_side_;
+    }
+    out_v_ = std::max<int64_t>(1, parent_.num_v() / factor_);
+    out_u_ = std::max<int64_t>(1, crop_nu_ / factor_);
   }
   ~SarMosaicOp() override {
     if (canvas_ != nullptr)
@@ -48,8 +85,7 @@ class SarMosaicOp : public Operator<> {
     spec.input(image).queue_depth(8U).expects_tensor(tensor_input(device));
     spec.input(sample_geometry).queue_depth(8U);
     spec.output(image_out).produces_tensor(pooled_tensor_output(
-        device, 2U,
-        static_cast<uint64_t>(parent_.num_v()) * static_cast<uint64_t>(parent_.num_u()) * 16U));
+        device, 2U, static_cast<uint64_t>(out_v_) * static_cast<uint64_t>(out_u_) * 16U));
   }
   [[nodiscard]] Contract contract() const override {
     Contract result;
@@ -115,13 +151,23 @@ class SarMosaicOp : public Operator<> {
       return make_unexpected(Error{ErrorCode::kFailure, "SarMosaicOp: blit failed"});
     }
     last_v0_ = v0;
+    const bool whole_parent = factor_ == 1 && crop_nu_ == pu;
     return emit_required_tensor(image_out, context, "SarMosaicOp.image_out", false, [&] {
       return prepare_device_tensor(
-          image_out, context, std::vector<int64_t>{pv, pu}, dtype,
+          image_out, context, std::vector<int64_t>{out_v_, out_u_}, dtype,
           [&](void* output, std::size_t size) -> expected<void, Error> {
-            if (size != bytes || cudaMemcpyAsync(output, canvas_, bytes, cudaMemcpyDeviceToDevice,
-                                                 stream) != cudaSuccess)
-              return make_unexpected(Error{ErrorCode::kFailure, "SarMosaicOp: parent copy failed"});
+            if (size != static_cast<std::size_t>(out_v_ * out_u_) * elem)
+              return make_unexpected(Error{ErrorCode::kFailure, "SarMosaicOp: view size mismatch"});
+            if (whole_parent) {
+              if (cudaMemcpyAsync(output, canvas_, bytes, cudaMemcpyDeviceToDevice, stream) !=
+                  cudaSuccess)
+                return make_unexpected(
+                    Error{ErrorCode::kFailure, "SarMosaicOp: parent copy failed"});
+              return {};
+            }
+            if (sample_mosaic_rect(canvas_, pu, 0, crop_u0_, output, out_v_, out_u_, factor_,
+                                   dtype.bits, stream) != cudaSuccess)
+              return make_unexpected(Error{ErrorCode::kFailure, "SarMosaicOp: parent view failed"});
             return {};
           });
     });
@@ -133,6 +179,8 @@ class SarMosaicOp : public Operator<> {
  private:
   SampleGeometry parent_;
   bool loop_{false};
+  int64_t crop_u0_{0}, crop_nu_{0}, display_max_side_{0};
+  int64_t factor_{1}, out_v_{0}, out_u_{0};
   void* canvas_{nullptr};
   DLDataType dtype_{};
   int64_t last_v0_{-1};

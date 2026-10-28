@@ -16,6 +16,7 @@ target_link_libraries(tiled_strip PRIVATE
     holoscan::backprojection_op
     holoscan::tensor_dump_op
     holoscan::radar_app
+    sar_mosaic
     holoscan::params_io
     yaml-cpp::yaml-cpp)
 configure_file(../config/tiled_strip.yaml ${CMAKE_CURRENT_BINARY_DIR}/tiled_strip.yaml COPYONLY)

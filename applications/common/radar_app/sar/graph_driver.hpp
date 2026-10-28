@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -78,7 +79,16 @@ inline radar::MaxTensorExtents make_extents(const AppConfig& cfg,
     throw std::invalid_argument("SAR: invalid CPHD pulse/sample extents");
   radar::MaxTensorExtents extents;
   extents.max_samples_per_pulse = max_samples;
-  extents.max_pulses = cfg.reader_pulses_per_tick + manager.max_aperture_pulses;
+  // Reform sends no pulses between boundaries (OPERATOR_API.md step 5a), so
+  // the manager's largest output is the replay alone -- never a tick's
+  // admissions plus the evictions they displace, which is what the sum below
+  // bounds. The reader's batch still has to fit, since ingest arrives on the
+  // same pools. On Kourou that distinction is 6.3 GiB of reservation.
+  if (manager.emit_mode == radar::ApertureEmitMode::kReform) {
+    extents.max_pulses = std::max(cfg.reader_pulses_per_tick, manager.max_aperture_pulses);
+  } else {
+    extents.max_pulses = cfg.reader_pulses_per_tick + manager.max_aperture_pulses;
+  }
   extents.max_range_bins = cfg.nfft > 0 ? cfg.nfft : max_samples;
   int64_t max_v = cfg.sample_geometry.num_v();
   int64_t max_u = cfg.sample_geometry.num_u();
@@ -176,7 +186,14 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     bp.set_params(std::move(bp_params));
     bind_outputs(options, "backprojection", {"image"});
     auto counter = std::make_shared<app::sar::ImageCount>();
-    auto report = graph.op<app::sar::SarImageReportOp>("image_report", counter, hud);
+    // A scroll mosaic publishes a decimated view of its accumulator, so the
+    // tensor reaching the report is not the formed strip. Report the strip.
+    const std::array<int64_t, 2> product_extent =
+        cfg.scroll && cfg.scroll_parent.is_valid()
+            ? std::array<int64_t, 2>{cfg.scroll_parent.num_v(), cfg.scroll_parent.num_u()}
+            : std::array<int64_t, 2>{0, 0};
+    auto report =
+        graph.op<app::sar::SarImageReportOp>("image_report", counter, hud, product_extent);
     // Authored partitions only get independent workers when each one has a
     // thread-placement binding. Without that, HSDK 5 runs callbacks inline on
     // the controller — the HSDK 4 greedy default that cannot overlap
@@ -209,8 +226,15 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     if (visualize) {
       // Visualization is best-effort: discard stale images when rendering falls behind
       // instead of backpressuring formation, reporting, or an optional tensor dump.
+      // The raster edge carries the formed image, which on a mosaic is the whole
+      // parent lattice -- 3.62 GiB a slot on the Imperial strip. Every declared
+      // slot is a full copy of it, and a drop-oldest consumer only ever renders
+      // the newest, so depth beyond 1 is reserved and never read. At depth 4 the
+      // continuous_strip pools come to 100.7 GiB against 95.6 GiB of GPU and the
+      // run dies at PROFILE_MATERIALIZATION_FAILED before start(); depth 1 is
+      // 68.2 GiB. Read the slot counts with SAR_DUMP_PLAN before raising this.
       const holoscan::ConnectionOptions raster_queue{
-          .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 4U};
+          .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 1U};
       const holoscan::ConnectionOptions display_queue{
           .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 8U};
       const holoscan::ConnectionOptions overlay_queue{
@@ -315,9 +339,9 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
       }
       // Hold is session-level after the image, not a sleep in this operator:
       // raster and Holoviz share `visualization`, so a hold here never presents.
-      auto raster =
-          graph.op<app::sar::SarImageVizOp>("sar_image_viz", raster_max_v, raster_max_u, lut_side,
-                                            transpose_display_axes, std::move(overlay));
+      auto raster = graph.op<app::sar::SarImageVizOp>("sar_image_viz", raster_max_v, raster_max_u,
+                                                      lut_side, transpose_display_axes,
+                                                      std::move(overlay), product_extent);
       bind_outputs(options, "sar_image_viz", {"frame"});
       auto make_layers = [&] {
         holoscan::visualization::LayerStack layers;

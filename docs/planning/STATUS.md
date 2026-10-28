@@ -4,6 +4,110 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-28** — **`continuous_strip` could not reach `start()` with
+  visualization on, and the cause is the GA SDK's pool slot inflation rather
+  than anything in the app.** Declared pools came to **100.7 GiB against 95.6
+  GiB** on an RTX PRO 6000 and the run died at
+  `PROFILE_MATERIALIZATION_FAILED`; headless the same binary declares 31.8 GiB
+  and runs. Read off `SAR_DUMP_PLAN`, one pool is 90.4 GiB of it:
+  `sar_mosaic.image_out` is the whole Imperial parent lattice (40247 x 6029 x
+  `complex<double>`, 3.62 GiB a slot) and the rasterizer is a second subscriber
+  to it, which takes the pool from 6 slots to 25. The rasterizer's own pools
+  are 0.26 GiB — the cost is entirely the producer's, because every declared
+  slot on a fanned-out edge is a full copy of the published tensor. The viz
+  edge is now depth 1, which is what a `kDropOldest` display consumer actually
+  reads: 68.2 GiB, and the strip runs on time at 40247 x 6029. This is the same
+  slot inflation as the Kourou entry below, now with a second data point —
+  declared depth 4 on two consumers materializes as 25 slots, not 8.
+  **This app ran at full size on 2026-10-21 and the regression is the SDK**:
+  that run reported the failure path as `run_session_worker.cpp:403` against
+  the staging `v5.0.0.7-cuda13` image, today's is `:568` against GA
+  `v5.0.0-cuda13` (adopted in #64), with the `continuous_strip` graph itself
+  byte-identical in behavior (same `graph_generation=56`). Not yet measured:
+  the staging image's slot counts, since `SAR_DUMP_PLAN` postdates the switch.
+  **Followed by the structural fix, which also makes 1.03 m reachable.**
+  `SarMosaicOp` no longer republishes its accumulator. The parent stays
+  resident and full resolution; `image_out` carries it u-cropped and decimated
+  to a display budget, so the pool went from 90.4 GiB to 256 MiB. That is what
+  makes `lattice.pixel_scale: 2.5` affordable at all — a 100618 x 15073 parent
+  at 1.03 m against the 2.58 m native ground-range GSD, declared pools 17.7 GiB
+  (from 100.7), 44.9 GiB resident including the 22.6 GiB accumulator,
+  backprojection 16-18 ms a window and 95 ms ahead of collect time, all
+  verified. **The preset stays at `pixel_scale: 1`** (40247 x 6029, 3.62 GiB
+  accumulator, BP ~7 ms) by request: 2.5 is a documented knob, not the default.
+  All 37 `Sar*` tests pass and `tiled_strip` is unchanged — it takes the
+  new crop and budget arguments at their defaults, which republish the whole
+  parent as before. **Contract note:** the published tensor is now a view, so
+  `dump: true` writes the decimated raster rather than the strip, and
+  `SarImageReportOp` takes the product extent explicitly to keep the
+  `image N formed` line reporting the strip. `SarImageVizOp` takes it for the
+  same reason — the HUD banner was showing the view's 2794 x 375.
+  **The view must multi-look, not subsample.** A strip decimates 15x at the
+  preset and 36x at 2.5, and point sampling leaves one look of speckle per
+  output pixel, which renders as static; `sample_mosaic_rect` now averages
+  intensity over sixteen samples spread across each box and publishes
+  amplitude with zero phase. Measured at 2.5 on image 22 of the Imperial
+  strip, median local amplitude CV over 32 x 32 blocks falls from **0.589 to
+  0.259** and the drainage network becomes legible. Looks are capped per axis
+  because averaging a 36x box whole would read the entire accumulator every
+  image for a fraction of a dB; at 16 looks the cost does not move the
+  backprojection figure at either spacing. A factor-1 view is still a plain
+  copy and keeps its phase, so `tiled_strip` is unaffected — but `dump: true`
+  on a decimated view now writes multi-look amplitude.
+  **Still open:** full-resolution strip output. It cannot ride a Tensor port
+  (3.62 GiB a copy at the preset and 22.6 GiB at 2.5, against a pool floor of
+  6 slots), so it would have to be written off the accumulator directly. Also
+  unresolved: the lattice derivation applies **one square spacing to both
+  axes** (`counts_for_tiled_extent` takes a scalar `native_spacing`) and
+  `lattice.spacing: [v, u]` is rejected under `scroll`, so an anisotropic grid
+  — e.g. along-track at the finer azimuth resolution — is not reachable from
+  config. Asked for and deferred.
+- **2026-10-28** — **The autofocus memory ceiling is down from 78.6 GiB to 60.9
+  GiB with no contract change, and the obvious-looking fix turned out to be
+  worthless.** Measured on Kourou at 8000 pulses and the native 7150² product
+  (`SAR_DUMP_PLAN`), three independent fixes: (1) `make_extents` sized every
+  pool downstream of the manager for `reader_pulses_per_tick +
+  max_aperture_pulses`, but `reform` sends no pulses between boundaries
+  (`OPERATOR_API.md` step 5a), so the replay alone bounds it — `max` not sum,
+  worth **6.3 GiB**; (2) `AuxPointsSourceOp` republished its fixed polar
+  lattice every tick, costing a gigabyte-scale device comparison in
+  `BackprojectionOp` to conclude nothing had changed — it is now published once
+  and the consumer's cached lattice stands; (3) that operator's
+  `range_profiles_out` was a pooled **copy** of the replay for a tensor it
+  never reads, and is now a `kPassThrough` output forwarding the received
+  sample, which deletes the pool outright — **11.4 GiB**, four whole apertures.
+  (3) is the same shape of fix as the mosaic entry above: on a fanned-out edge
+  every declared slot is a full copy, so the cure is to stop owning the tensor.
+  All 1188 tests pass and the run is bit-identical (1.090× sharpness over 4
+  iterations, 461 ms formation).
+  **The negative result is the more useful half.** Slicing the `reform` replay
+  into consecutive tick-sized batches — the fix this started as, and the one
+  the contract already rejects on observability grounds — was implemented end
+  to end (per-batch capture stamps, split `kResetWithoutEmit`/`kEmitAndReset`
+  control, a `DrainAll{}` phase slicer) and produced a bit-identical image. It
+  is also **exactly memory-neutral**: 72.4 GiB sliced against 72.3 GiB
+  unsliced. That is by construction, not by accident — pools reserve in
+  *items*, and the authored depth must equal the batch count, because the
+  manager publishes every batch from one activation and a full required-output
+  queue fails `compute()` rather than waiting. So every reservation is
+  `item_size × batches`, which is one aperture however finely it is cut (depth
+  1 × 2.861 GiB and depth 8 × 0.366 GiB both reserve two apertures per
+  consumer). `phase_correction`'s queue genuinely must hold the whole aperture
+  — it cannot drain until the estimate exists, which needs every batch to have
+  arrived — so a shallower queue there deadlocks. The work is reverted; this
+  **strengthens** the existing contract rejection in
+  [`SAR/OPERATOR_API.md`](SAR/OPERATOR_API.md) rather than reopening it, and
+  the 54.9 GiB previously read as monolithic-item waste was never waste at all
+  but ~19 genuine aperture reservations.
+  **What is left is a floor, not a bug.** `aperture_manager.range_profiles_out`
+  is 9 slots × 2.861 GiB = 25.75 GiB, and both of its consumer edges are
+  already at the minimum depth 1; the 9 is 4 role-reservation slots
+  (`producer` 1, `transport-retention` 2, `retirement` 1) plus 5 for two edges
+  under the 2× `headroom_ratio`. Nothing in the app can reduce it. **Open and
+  needing a team decision:** `float` retained pulses against `double` geometry
+  would halve the remaining 38.7 GiB of pulse pools and is the only app-side
+  lever left, but it cuts across the compile-time precision invariant; and the
+  per-pool role floor and the unconditional 2× queue headroom are SDK-side.
 - **2026-10-26** — **The Figure 2 autofocus application is back, with its
   validation apparatus.** `applications/sar/autofocus/` builds on main's
   `run_sar_graph_app`: `reform` aperture replay into an auxiliary conjugate
