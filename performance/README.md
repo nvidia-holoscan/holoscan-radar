@@ -46,7 +46,7 @@ a scaled-axis codec declares its source axis in the recipe. A bounded
 `derived_axes` rule supports products and rounded percentages for related
 fixtures. Recipes remain single-operator declarations rather than a general
 Graph wiring language. Case IDs, scope tags, order, and `{profile}` expansion
-retain their earlier behavior. All 26 in-tree C++ suites use schema version 2;
+retain their earlier behavior. All 27 in-tree C++ suites use schema version 2;
 the loader still accepts version 1 for compatibility.
 
 ### Adding a C++ operator

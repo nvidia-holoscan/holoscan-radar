@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Profiles bracket the real estimation auxiliary. The Kourou development
+# collect forms a 2478 x 8000 polar aux over an 8000-pulse aperture, which is
+# `large`; the full 23375-pulse aperture would be 2460 x 23375, beyond what
+# fits alongside the rest of that graph today (SAR/OPEN_ITEMS.md).
+#
+# What the case list is shaped to separate, having measured it: the per-image
+# cost splits into a floor that is paid whatever happens -- the strong-bin scan
+# and the copy to image_out -- and a per-iteration cost that tracks the image
+# area. Neither the window fraction nor the number of range bins the gradient
+# is estimated from moves the total appreciably; the image area and the number
+# of accepted iterations are the whole story. `passthrough-weak` isolates the
+# floor, `one-iteration` against the baseline gives the per-iteration slope.
+#
+# Beware when reading any iteration case: the stage stops as soon as an
+# iteration fails to improve sharpness, so `num_iterations` is an upper bound
+# and a case can quietly measure fewer passes than its name claims. An image
+# that converges in one pass makes the whole sweep read flat.
+version: 2
+operator: autofocus
+axes: [range_bins, azimuth]
+profiles:
+  small: {shape: [128, 512]}
+  medium: {shape: [512, 2048]}
+  large: {shape: [2478, 8000]}
+live_ports: [num_iterations, window_fraction, min_scatterers, max_correction]
+recipe:
+  operator_type: radar.AutofocusOp.float
+  inputs:
+    - {port: image, shape: [range_bins, azimuth], dtype: complex64, memory: device, generator: scatterer_image}
+  constructor: {extents: {max_image_v: range_bins, max_image_u: azimuth}}
+  params:
+    algorithm: pga
+    azimuth_axis: u
+    num_iterations: 4
+    window_fraction: 0.5
+    min_scatterers: 16
+    # Uncapped. A finite ceiling is a pass-through trigger, not a tolerance:
+    # any estimate wider than it copies the image through instead.
+    max_correction: .inf
+  outputs: {timed: image_out, drain: [phase_correction, sharpness], unwired: [], optional_tensor_outputs: []}
+  live:
+    num_iterations: {physical_port: num_iterations, codec: int64}
+    window_fraction: {physical_port: window_fraction, codec: double}
+    min_scatterers: {physical_port: min_scatterers, codec: int64}
+    max_correction: {physical_port: max_correction, codec: double}
+cases:
+  - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
+  # The iteration count is what a caller tunes first, and each iteration is a
+  # full forward/inverse transform of the image plus the gradient transform.
+  - {id: "one-iteration-{profile}", profiles: [small, medium, large], scopes: [limited], parameters: {num_iterations: 1}}
+  - {id: eight-iterations-medium, profile: medium, scopes: [limited], parameters: {num_iterations: 8}}
+  # Widening the selection 32-fold is very nearly free, which is worth having a
+  # case for: it says the per-iteration cost tracks the image, not the number
+  # of range bins the gradient is estimated from. Each iteration corrects and
+  # re-scores the whole image, and that dominates the selected-row gradient.
+  # Medium only -- at `large` the same 512 rows abort the loop on iteration 0,
+  # because the sharpness guard vetoes globally (any one range bin regressing
+  # restores the image and breaks) and a wider selection makes that likelier.
+  # The case would run, but it would time one aborted pass under a name that
+  # says otherwise.
+  - {id: many-scatterers-medium, profile: medium, scopes: [limited], parameters: {min_scatterers: 512}}
+  # A narrow window must not shrink the gradient transform, and these cases
+  # stand as the regression guard for that: they measure within noise of the
+  # baseline at every profile. If a narrow window ever comes out proportionally
+  # cheaper, the transform length has started tracking the window again --
+  # which is cheaper and wrong, and costs up to 5.5x the residual phase error.
+  - {id: "narrow-window-{profile}", profiles: [small, medium, large], scopes: [moderate], parameters: {window_fraction: 0.125}}
+  - {id: full-window-medium, profile: medium, scopes: [moderate], parameters: {window_fraction: 1.0}}
+  # The two guard paths, which cost very different amounts. Too few scatterers
+  # is a true early-out -- it never enters the loop -- so it measures the floor
+  # the estimator is charged against: the strong-bin scan and the copy to
+  # image_out, nothing else. An estimate over `max_correction` is not a saving
+  # at all: the ceiling is checked on the finished estimate, so the iterations
+  # are paid for and then discarded, and the case runs slightly *longer* than
+  # the baseline it rejects.
+  - {id: "passthrough-weak-{profile}", profiles: [small, large], scopes: [moderate], parameters: {min_scatterers: 100000}}
+  - {id: passthrough-capped-medium, profile: medium, scopes: [moderate], parameters: {max_correction: 1.0e-12}}
+  - {id: "iterations-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: num_iterations, value: 8}}
+  - {id: "window-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: window_fraction, value: 0.125}}
+  - {id: "scatterers-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: min_scatterers, value: 64}}
+  - {id: "correction-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: max_correction, value: 1.0e-12}}
+  - id: iterations-{profile}-cached
+    profiles: [small, medium, large]
+    scopes: [thorough]
+    parameters: {}
+    override: {port: num_iterations, value: 8, cache: cached}
+  - id: window-{profile}-cached
+    profiles: [small, medium, large]
+    scopes: [thorough]
+    parameters: {}
+    override: {port: window_fraction, value: 0.125, cache: cached}

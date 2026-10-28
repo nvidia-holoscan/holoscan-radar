@@ -330,7 +330,7 @@ Path(arg('--output')).write_text(json.dumps(report))
         root = Path(__file__).resolve().parents[3]
         inventory = discover(root)
         self.assertEqual(len(inventory), 33)
-        self.assertEqual(sum(x["recipe"] is not None for x in inventory), 26)
+        self.assertEqual(sum(x["recipe"] is not None for x in inventory), 27)
         self.assertTrue(all(x["status"] == "blocked" for x in inventory if not x["recipe"]))
         state = {"operators": [], "config": {}}
         write_json(self.root / "campaign.json", state)

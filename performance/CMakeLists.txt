@@ -65,6 +65,7 @@ set(HOLOSCAN_RADAR_PERF_OPERATORS
     fmcw/tdm_dense_compensation
     fmcw/tdm_sparse_compensation
     fmcw/virtual_array_assembly
+    sar/autofocus
 )
 
 function(radar_configure_perf_target NAME OP_TARGET)
