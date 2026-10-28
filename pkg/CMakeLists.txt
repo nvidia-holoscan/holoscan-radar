@@ -18,8 +18,8 @@
 #      operators/, so they see the forced ON value at option().
 #
 # The package contains public operators, not the example applications.
-# `holoscan package` configures with -DBUILD_ALL=OFF; the root CMake file
-# checks this operator list against all registered operators.
+# `holoscan package` configures with -DBUILD_ALL=OFF. The root CMake file
+# checks that each selected operator is registered.
 #
 add_holohub_package(holoscan-radar
                     OPERATORS ${HOLOSCAN_RADAR_PACKAGE_OPERATORS})

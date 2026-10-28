@@ -6,12 +6,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 - **2026-10-28** — **Debian package graph corrected for operator-only delivery.**
   A package-only configuration now enables all 32 public FMCW, SAR, and I/O
-  operators without enabling the 12 example applications. A configure-time inventory
-  check catches missing package operators, and C++ tests in selective builds
+  operators without enabling the 12 example applications. The explicit package
+  list allows intentional omissions and rejects unregistered names. C++ tests in selective builds
   register only when their linked operator targets exist. On Durham IGX Thor 5000,
   the clean arm64 Debian package contains all 32 operator libraries and no demo
   applications; the selective suite and all 1,161 non-performance CTests pass.
-  A negative configure test confirmed the inventory check rejects a missing operator.
+  Positive and negative configure tests confirm package exclusions work and
+  unregistered package names fail.
 
 - **2026-10-21** — **HSDK 5 GA image adopted.** The Dockerfile, host CLI wrapper,
   and devcontainer now default to

@@ -106,19 +106,41 @@ set(HOLOSCAN_RADAR_OPERATORS
     fmcw_range_doppler_processor_op
 )
 
-# The Debian package contains every public operator, including SAR and I/O.
-set(HOLOSCAN_RADAR_PACKAGE_OPERATORS ${HOLOSCAN_RADAR_OPERATORS}
+# The Debian package selection is independent of the Python provider.
+# Edit this explicit list to include or exclude public operators.
+set(HOLOSCAN_RADAR_PACKAGE_OPERATORS
+    clutter_filter_op
+    snapshot_gather_op
+    phase_shift_beamformer_op
+    beamscan_estimator_op
+    rank_one_residual_screen_op
+    subarray_selection_op
+    cluster_dbscan_op
+    detection_reduction_op
+    mvdr_estimator_op
+    music_estimator_op
+    feature_assembly_op
+    multi_source_expansion_op
+    cfar_detector_op
+    root_music_estimator_op
+    esprit_estimator_op
+    mimo_deinterleave_op
+    tdm_dense_compensation_op
+    ddm_dense_demultiplex_op
+    doppler_notch_op
+    ddm_power_fold_op
+    ddm_sparse_demultiplex_op
+    tdm_sparse_compensation_op
+    virtual_array_assembly_op
+    fmcw_doppler_processor_op
+    fmcw_range_processor_op
+    fmcw_range_doppler_processor_op
     phase_correction_op
     sar_range_compression_op
     aperture_manager_op
     backprojection_op
     tensor_dump_op
     cphd_reader_op)
-
-function(holoscan_radar_add_operator NAME)
-    set_property(GLOBAL APPEND PROPERTY HOLOSCAN_RADAR_REGISTERED_OPERATORS ${NAME})
-    add_holohub_operator(${NAME} ${ARGN})
-endfunction()
 
 function(holoscan_radar_add_application NAME)
     add_holohub_application(${NAME} ${ARGN})

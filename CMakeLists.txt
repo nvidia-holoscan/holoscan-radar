@@ -164,18 +164,13 @@ add_subdirectory(applications)
 add_subdirectory(operators)
 
 if(PKG_holoscan_radar)
-    get_property(_radar_registered_ops GLOBAL PROPERTY HOLOSCAN_RADAR_REGISTERED_OPERATORS)
-    set(_radar_package_ops ${HOLOSCAN_RADAR_PACKAGE_OPERATORS})
-    list(SORT _radar_registered_ops)
-    list(SORT _radar_package_ops)
-    if(NOT "${_radar_registered_ops}" STREQUAL "${_radar_package_ops}")
-        message(FATAL_ERROR
-            "Package operator inventory differs from registered operators.\n"
-            "Registered: ${_radar_registered_ops}\n"
-            "Packaged: ${_radar_package_ops}")
-    endif()
-    unset(_radar_registered_ops)
-    unset(_radar_package_ops)
+    # A package may intentionally omit operators, but every listed one must exist.
+    foreach(_radar_op IN LISTS HOLOSCAN_RADAR_PACKAGE_OPERATORS)
+        if(NOT TARGET ${_radar_op})
+            message(FATAL_ERROR "Package operator is not registered: ${_radar_op}")
+        endif()
+    endforeach()
+    unset(_radar_op)
 endif()
 
 if(HOLOSCAN_RADAR_BUILD_TESTING)

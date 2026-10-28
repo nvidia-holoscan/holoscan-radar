@@ -2,4 +2,4 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Clustering operators (see README.md in this directory).
-holoscan_radar_add_operator(cluster_dbscan_op)
+add_holohub_operator(cluster_dbscan_op)

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Register each operator after its HSDK 5 port is complete.
-holoscan_radar_add_operator(phase_correction_op)
-holoscan_radar_add_operator(sar_range_compression_op)
-holoscan_radar_add_operator(aperture_manager_op)
-holoscan_radar_add_operator(backprojection_op)
+add_holohub_operator(phase_correction_op)
+add_holohub_operator(sar_range_compression_op)
+add_holohub_operator(aperture_manager_op)
+add_holohub_operator(backprojection_op)
