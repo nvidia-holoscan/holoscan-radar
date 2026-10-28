@@ -89,15 +89,30 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   takes the central `num_pulses` samples, correct for a pulse-ordered one.
   Four operator tests and one Graph test compared against the old convention
   and were corrected to shift rather than negate.
-  **Fault 1, the narrow-window bias, is unaffected and remains open.** At
-  window-to-azimuth ratios of 1:1, 1:2, 1:4, 1:8 the residual on a 5 rad error
-  climbs 0.002 / 0.069 / 0.245 / 0.830 rad and it is the aperture *edges* that
-  are lost (edge ratio 0.999 to 0.41) while the centre holds (0.999 to 0.843)
-  — the estimate keeps its swing and misplaces it, which is what a gradient
-  estimator does as the per-sample phase step grows. It does not bind on
-  Kourou, where the configured window is 0.0438 of 8000. Pinned by
-  `PureQuadraticIsRecoveredExactlyAtFullWindow` and
-  `NarrowWindowLosesTheApertureEdges`.
+  **Fault 1, the narrow-window bias, is fixed in the same wave and was the
+  same class of defect.** `window_fraction` narrows the *image* support, to
+  isolate the scatterer from clutter; the gradient FFT behind it must stay at
+  the full azimuth extent. It did not — the window was packed into a
+  `width`-long transform, decimating the phase history by `n_az / width`, so
+  every LUE difference spanned that many phase-history samples instead of one
+  and the small-angle form saturated on steep errors. Transforming the full
+  windowed line instead (zeros included) takes the residual on a 5 rad error
+  from 0.003 / 0.069 / 0.245 / 0.830 to 0.002 / 0.009 / 0.036 / 0.150 rad at
+  window-to-azimuth ratios of 1:1, 1:2, 1:4, 1:8 — every ratio now inside the
+  0.39 rad target. What remains is a *swing* loss (the estimate keeps its shape
+  and under-reports amplitude, 0.86 of truth at 1:8), which is the information
+  cost of fewer image samples. The earlier "loses the aperture edges" reading
+  was an artifact of the index-order defect: re-measured in pulse order the
+  dwell centre degrades first and the edges hold. On Kourou it changes almost
+  nothing (0.146 -> 0.149 rad, peak 1.017 -> 1.011), as the prior diagnosis
+  predicted when it ruled fault 1 out there — a 5.4 rad error over 8000 pulses
+  has a sub-milliradian per-sample step even decimated 23-fold.
+  `NarrowWindowLosesTheApertureEdges` is renamed
+  `NarrowWindowCostsSwingAndStaysInsideTheTarget` and now pins the measured
+  residual *and* swing at each ratio, doubling as the regression guard on the
+  transform length. `pack_window_kernel` and `interpolate_fft_phase_kernel` are
+  deleted with it. **Both autofocus faults are now closed and the estimator
+  meets its acceptance target on the development collect.**
 - **2026-10-27** — **`AutofocusOp` no longer truncates tall images at the
   launch grid.** `grid_for` clamped the block count to 65535, but no kernel in
   `autofocus_stage.hpp` uses a grid-stride loop, so an image needing more

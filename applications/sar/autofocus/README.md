@@ -111,9 +111,20 @@ The shape that was previously described as a scale error of about two between th
 
 **The core estimator is exact.** On a synthetic IFFT-formed image at the full azimuth window it recovers a pure quadratic to 7.7e-05 rad RMS at 2.5 rad of error and 0.002 rad at 5 rad — four orders of magnitude inside the target, pinned by `AutofocusOp.PureQuadraticIsRecoveredExactlyAtFullWindow`. The 0.2 rad that the older `RecoversQuadraticUpToAffine` reports is not estimator error at all: that test injects a linear ramp and an offset alongside the quadratic, and the integer `circshift` cannot remove the sub-bin remainder.
 
-**A narrow-window bias remains, and is reproducible on synthetic data.** Holding a 5 rad error fixed and narrowing the window, the residual climbs monotonically — 0.002, 0.069, 0.245, 0.830 rad at window-to-azimuth ratios of 1:1, 1:2, 1:4 and 1:8 — and it is the aperture *edges* that are lost while the dwell centre stays right (edge ratio 0.999, 0.94, 0.82, 0.41; centre ratio 0.999, 0.988, 0.958, 0.843). The estimate keeps its total swing and puts it in the wrong place.
+**The narrow-window bias is fixed too, and it was the same class of defect.** The window step exists to isolate the scatterer from clutter in the *image*, and it narrows the image support; the gradient FFT behind it has to stay at the full azimuth extent regardless. It did not — the window was packed into a `width`-long transform, which decimates the phase history by `n_az / width`, so every gradient difference spanned that many phase-history samples instead of one and the estimator's small-angle form saturated on steep errors. Transforming the full windowed line instead, zeros included, recovers it:
 
-That is what a gradient estimator does when the per-sample phase step grows: the step scales with both the window ratio and the error amplitude, and at a 1:8 window a 5 rad error is already past the acceptance target. `AutofocusOp.NarrowWindowLosesTheApertureEdges` pins the measured curve. It does not bind on Kourou, where the configured window is 0.0438 of 8000 and the residual is 0.146 rad.
+| window-to-azimuth ratio | residual, packed | residual, full-length | swing retained |
+| --- | --- | --- | --- |
+| 1:1 | 0.003 rad | 0.002 rad | 1.00 |
+| 1:2 | 0.069 rad | 0.009 rad | 1.00 |
+| 1:4 | 0.245 rad | 0.036 rad | 0.96 |
+| 1:8 | 0.830 rad | 0.150 rad | 0.86 |
+
+on a 5 rad error, which brings every window ratio inside the 0.39 rad acceptance target. What a narrow window still costs is *swing*: the estimate keeps its shape and under-reports the amplitude, down to 86% at 1:8. That is the honest information cost of estimating from fewer image samples, and it is now the only window effect. `AutofocusOp.NarrowWindowCostsSwingAndStaysInsideTheTarget` pins both columns and doubles as the regression guard on the transform length.
+
+The earlier reading of this fault — that the aperture *edges* were lost while the dwell centre held — was an artifact of the index-order defect above, since the edge and centre labels were read off a vector that was half a dwell out of position. Re-measured in pulse order it is the opposite: the dwell centre degrades first, to a ratio of 0.86 at 1:8, while the edges hold.
+
+**On Kourou this changes almost nothing** — 0.146 to 0.149 rad, and the product peak 1.017 to 1.011 — and that is the expected result rather than a disappointment. The fault only bites when the per-sample phase step is large, and a 5.4 rad error spread over 8000 pulses has a step of order a milliradian even decimated 23-fold. The prior diagnosis said as much when it ruled fault 1 out as the explanation for Kourou. The table above is where it was ever observable.
 
 ## Scene preconditions are a real constraint
 

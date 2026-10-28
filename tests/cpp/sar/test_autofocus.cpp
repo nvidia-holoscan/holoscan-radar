@@ -310,16 +310,32 @@ TEST(AutofocusOp, PureQuadraticIsRecoveredExactlyAtFullWindow) {
   }
 }
 
-// Narrowing the window costs accuracy at the aperture edges, where the phase
-// gradient is largest, while the dwell centre stays right -- the estimate keeps
-// its total swing and redistributes it. The bound here is the measured
-// behaviour, not the target: at a 1:8 window the residual is already past the
-// 0.39 rad acceptance target of SAR/TESTING.md on a 5 rad error. Tighten these
-// as the estimator improves; they must never loosen.
-TEST(AutofocusOp, NarrowWindowLosesTheApertureEdges) {
+// Narrowing the window costs accuracy, because fewer image samples carry less
+// of the phase history, and what it costs is *swing*: the estimate keeps its
+// shape and under-reports the amplitude, retaining 100%, 100%, 96% and 86% of
+// the true peak-to-peak at window-to-azimuth ratios of 1:1, 1:2, 1:4 and 1:8.
+// Every ratio stays inside the 0.39 rad acceptance target of SAR/TESTING.md on
+// a 5 rad error. The bounds are the measured behaviour, not the target;
+// tighten them as the estimator improves and never loosen them.
+//
+// The 1:8 bound is also the regression guard on the transform length. The
+// window narrows the image support, and the FFT behind the LUE has to stay at
+// the full azimuth extent regardless: packing the window into a `width`-long
+// transform instead decimates the phase history by n_az/width, so each LUE
+// difference spans that many bins and its small-angle form saturates. That is
+// what this test measured at 0.830 rad before 2026-10-27, and it is a 5.5x
+// regression on this bound.
+TEST(AutofocusOp, NarrowWindowCostsSwingAndStaysInsideTheTarget) {
   const auto phi = pure_quadratic(5.0);
   const auto img = make_image<float>(phi, kStrong, true);
+  auto truth = phi;
+  remove_affine(&truth);
+  const double want_peak = peak_abs(truth);
   double previous = 0.0;
+  // Measured 0.0020, 0.0089, 0.0363, 0.1501 rad.
+  const double bounds[] = {0.005, 0.02, 0.06, 0.25};
+  const double swings[] = {0.99, 0.98, 0.93, 0.80};
+  int i = 0;
   for (double window_fraction : {1.0, 0.5, 0.25, 0.125}) {
     const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz}, 4, window_fraction);
     ASSERT_TRUE(out.ok) << out.failure;
@@ -327,9 +343,16 @@ TEST(AutofocusOp, NarrowWindowLosesTheApertureEdges) {
     EXPECT_GT(rms, previous) << "window_fraction " << window_fraction
                              << ": the residual is expected to grow as the window narrows; "
                                 "if this now falls, the estimator improved -- retighten the bound";
+    EXPECT_LT(rms, bounds[i]) << "window_fraction " << window_fraction << ": residual " << rms
+                              << " rad regressed past its measured value";
+    auto est = phase_as_double(out.phase);
+    remove_affine(&est);
+    EXPECT_GT(peak_abs(est) / want_peak, swings[i])
+        << "window_fraction " << window_fraction << ": the estimate lost more swing than measured";
     previous = rms;
+    ++i;
   }
-  EXPECT_LT(previous, 1.0) << "the 1:8 window residual regressed beyond its measured 0.83 rad";
+  EXPECT_LT(previous, 0.393) << "the narrowest window no longer meets the acceptance target";
 }
 
 // Every kernel in the stage is one element per thread with no grid-stride

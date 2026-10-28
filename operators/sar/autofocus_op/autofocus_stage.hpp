@@ -13,13 +13,14 @@
 //   2. Circularly shift each selected scatterer to azimuth index 0
 //      (so the LUE sees a small phase step, not a π checkerboard).
 //   3. Rectangular window of the current width about index 0.
-//   4. Pack the window (length `width`) and FFT that kernel, not
-//      the zero-padded n_az line. LUE + integrate on those `width`
-//      bins (occupied-energy skip still applies there). Interpolate
-//      the spectral phase onto the n_az image FFT for the in-image
-//      apply. PhaseResampleOp then takes the low-frequency n_az
-//      bins onto pulses. A short window zero-padded to n_az made
-//      LUE walk empty interpolated bins.
+//   4. FFT the windowed n_az line -- zeros outside the window
+//      included -- and LUE + integrate on all n_az bins, with the
+//      occupied-energy skip. The window narrows the *image* support;
+//      it must not narrow the transform. Packing the window to
+//      `width` and FFTing that instead decimates the phase history
+//      by n_az/width, so each LUE difference spans that many bins
+//      and the estimator's small-angle form saturates -- which is
+//      the narrow-window edge loss that used to be fault 1.
 //   5. Integrate, drop linear + constant (unobservable), apply the
 //      conjugate to the full (unwindowed) image. Keep the candidate
 //      only when image sharpness does not fall — later geometric
@@ -318,60 +319,6 @@ __global__ void circshift_window_kernel(const cuda::std::complex<T>* in, cuda::s
     src += n_az;
   }
   out[i] = in[bin * n_az + src];
-}
-
-// Tight pack of the circshifted window: [0, half) then the wrap
-// tail, length `width`. FFT this, not the zero-padded n_az line.
-template <typename T>
-__global__ void pack_window_kernel(const cuda::std::complex<T>* win, cuda::std::complex<T>* compact,
-                                   int64_t n_bins, int64_t n_az, int64_t width) {
-  const int64_t n = n_bins * width;
-  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (i >= n) {
-    return;
-  }
-  const int64_t bin = i / width;
-  const int64_t c = i - bin * width;
-  const int64_t half = width / 2;
-  const int64_t src = (c < half) ? c : (n_az - width + c);
-  compact[i] = win[bin * n_az + src];
-}
-
-// Map window-FFT phase onto the n_az image-FFT grid by interpolating
-// at fftfreq(k, n_az). Identity when n_fft == n_az.
-template <typename T>
-__global__ void interpolate_fft_phase_kernel(const T* phi_w, T* phi_n, int64_t batch, int64_t n_fft,
-                                             int64_t n_az) {
-  const int64_t n = batch * n_az;
-  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (i >= n) {
-    return;
-  }
-  const int64_t b = i / n_az;
-  const int64_t k = i - b * n_az;
-  const T* src = phi_w + b * n_fft;
-  if (n_fft == n_az) {
-    phi_n[i] = src[k];
-    return;
-  }
-  const double naz = static_cast<double>(n_az);
-  const double nfft_d = static_cast<double>(n_fft);
-  const double f =
-      (k < (n_az + 1) / 2) ? (static_cast<double>(k) / naz) : (static_cast<double>(k - n_az) / naz);
-  double bin = f * nfft_d;
-  bin -= nfft_d * floor(bin / nfft_d);
-  if (bin < 0.0) {
-    bin += nfft_d;
-  }
-  if (bin >= nfft_d) {
-    bin = 0.0;
-  }
-  const int64_t i0 = static_cast<int64_t>(bin);
-  const double frac = bin - static_cast<double>(i0);
-  const int64_t i1 = (i0 + 1 < n_fft) ? (i0 + 1) : 0;
-  const T a = src[i0];
-  const T c = src[i1];
-  phi_n[i] = a + static_cast<T>(frac) * (c - a);
 }
 
 template <typename T>
@@ -882,42 +829,30 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
 
     const int64_t width = pga_window_width(n_az, cfg.window_fraction, iter);
     circshift_window_kernel<T><<<grid_for(n_pix, kT), kT, 0, stream>>>(
-        work, spec, state.peaks, state.strong, n_bins, n_az, width);
+        work, scratch, state.peaks, state.strong, n_bins, n_az, width);
     check_cuda("circshift window", who);
-    pack_window_kernel<T>
-        <<<grid_for(n_bins * width, kT), kT, 0, stream>>>(spec, scratch, n_bins, n_az, width);
-    check_cuda("pack window", who);
     if (iter == 0) {
-      HOLOSCAN_LOG_INFO(
-          "{}: LUE FFT {} (window) interpolated onto {} azimuth "
-          "bins",
-          who, width, n_az);
+      HOLOSCAN_LOG_INFO("{}: LUE over {} azimuth bins, image windowed to {}", who, n_az, width);
     }
 
-    auto compact_v = make_complex_view3<T>(scratch, batch, n_range, width);
-    (compact_v = matx::fft(compact_v, static_cast<uint64_t>(width), matx::FFTNorm::BACKWARD))
-        .run(exec);
+    // The window narrows the image support, not the transform: FFT the full
+    // n_az line with its zeros so adjacent bins stay one phase-history sample
+    // apart. See the header note on why packing to `width` loses the edges.
+    (scratch_v = matx::fft(scratch_v, nfft, matx::FFTNorm::BACKWARD)).run(exec);
 
-    lue_kernel<T><<<grid_for(batch * (width - 1), kT), kT, 0, stream>>>(scratch, state.grad, batch,
-                                                                        n_range, width);
+    lue_kernel<T><<<grid_for(batch * (n_az - 1), kT), kT, 0, stream>>>(scratch, state.grad, batch,
+                                                                       n_range, n_az);
     check_cuda("LUE gradient", who);
-    bin_power_kernel<T><<<grid_for(batch * width, kT), kT, 0, stream>>>(scratch, state.bin_pwr,
-                                                                        batch, n_range, width);
+    bin_power_kernel<T><<<grid_for(batch * n_az, kT), kT, 0, stream>>>(scratch, state.bin_pwr,
+                                                                       batch, n_range, n_az);
     check_cuda("azimuth-FFT bin power", who);
 
     integrate_detrend_kernel<T><<<static_cast<int>(batch), 1, 0, stream>>>(
-        scratch, state.bin_pwr, state.grad, state.phase_iter, n_range, width);
+        scratch, state.bin_pwr, state.grad, state.phase_iter, n_range, n_az);
     check_cuda("integrate detrend", who);
-    interpolate_fft_phase_kernel<T><<<grid_for(batch * n_az, kT), kT, 0, stream>>>(
-        state.phase_iter, state.grad, batch, width, n_az);
-    check_cuda("interpolate phase onto image FFT", who);
-    if (cudaMemcpyAsync(state.phase_iter, state.grad, static_cast<size_t>(batch * n_az) * sizeof(T),
-                        cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
-      throw std::runtime_error(who + ": phase upsample copy failed");
-    }
 
-    // spec held the windowed image; reuse it as a backup of work
-    // so a sharpness drop can restore the last accepted image.
+    // `spec` is free from here; use it as a backup of work so a sharpness
+    // drop can restore the last accepted image.
     copy_n_kernel<T><<<grid_for(n_pix, kT), kT, 0, stream>>>(work, spec, n_pix);
     check_cuda("backup work", who);
 
