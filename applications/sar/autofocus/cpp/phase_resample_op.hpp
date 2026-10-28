@@ -140,15 +140,13 @@ class PhaseResampleOp : public holoscan::Operator<> {
 
     std::vector<double> out(static_cast<std::size_t>(num_pulses_));
     if (n_az > num_pulses_) {
-      // Oversampled aux: the slow-time history occupies the low-frequency
-      // bins, so take those and drop the empty high-frequency middle.
-      const int64_t half = num_pulses_ / 2;
-      const int64_t tail = num_pulses_ - half;
-      for (int64_t p = 0; p < half; ++p) {
-        out[static_cast<std::size_t>(p)] = phi[static_cast<std::size_t>(p)];
-      }
-      for (int64_t p = 0; p < tail; ++p) {
-        out[static_cast<std::size_t>(half + p)] = phi[static_cast<std::size_t>(n_az - tail + p)];
+      // Oversampled aux: the estimate arrives pulse-ordered over an azimuth
+      // extent wider than the aperture, and only the central `num_pulses`
+      // samples carry real pulses -- the rest is the empty bandwidth the extra
+      // columns bought. Take the centre.
+      const int64_t start = (n_az - num_pulses_) / 2;
+      for (int64_t p = 0; p < num_pulses_; ++p) {
+        out[static_cast<std::size_t>(p)] = phi[static_cast<std::size_t>(start + p)];
       }
     } else {
       const double tmax = static_cast<double>(n_az - 1);

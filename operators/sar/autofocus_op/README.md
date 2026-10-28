@@ -60,6 +60,10 @@ The image must be a contiguous, CUDA-accessible, rank-2 complex `T` tensor withi
 
 `phase_correction` and `sharpness` are optional: the single PGA run writes them to operator-owned device scratch, and each wired port takes a device-to-device copy, so leaving either unwired costs nothing and cannot fail the tick. A full `image_out` queue fails `compute()`.
 
+**`phase_correction` is pulse-indexed, which is not the index PGA works in.** The estimate is accumulated per azimuth-FFT bin with `fftfreq` semantics — bin 0 is DC, which is the *centre* of the dwell — while a pulse index runs monotonically across it, so pulse `p` sits at bin `(p - n/2) mod n` and the emitted vector is `fftshift(phase_acc)`. `image_out` is corrected in the spectrum domain, where the bin order is already right, so only the emitted vector is shifted. The sign is the error, not the correction: `PhaseCorrectionOp` with `sense: subtract` removes it as emitted.
+
+Neither property is dimensionally checkable and both were wrong until 2026-10-27, in opposite directions that largely cancelled — see the app [README](../../../applications/sar/autofocus/README.md) for the measurement and `SarAutofocusGraph.Figure2OversampledDiagnostics` for the test that pins it.
+
 ## Use and verification
 
 ```yaml

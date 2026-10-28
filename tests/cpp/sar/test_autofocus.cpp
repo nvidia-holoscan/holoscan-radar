@@ -237,13 +237,17 @@ int host_strong_count(const std::vector<std::complex<float>>& img, int64_t n_v, 
   return n_strong;
 }
 
-// make_image is IFFT-formed (RD). The emitted port is pulse-signed for a
-// backprojected lattice (Figure 2), which conjugates that stand-in. Flip
-// before comparing to an injected pulse phase.
-void rd_standin_flip(std::vector<double>* phi) {
-  for (double& p : *phi) {
-    p = -p;
+// make_image injects the error in the azimuth-FFT domain, so its `phi` is
+// indexed by FFT bin, while `phase_correction` is indexed by pulse. The two
+// differ by an fftshift -- pulse p sits at bin (p - n/2) mod n -- so put the
+// estimate back in bin order before comparing it to what was injected.
+void to_bin_order(std::vector<double>* phi) {
+  const int64_t n = static_cast<int64_t>(phi->size());
+  std::vector<double> shifted(static_cast<size_t>(n));
+  for (int64_t i = 0; i < n; ++i) {
+    shifted[static_cast<size_t>(i)] = (*phi)[static_cast<size_t>((i + (n + 1) / 2) % n)];
   }
+  phi->swap(shifted);
 }
 
 double peak_abs(const std::vector<double>& v) {
@@ -266,7 +270,7 @@ TEST(AutofocusOp, RecoversQuadraticUpToAffine) {
   auto want = phi;
   remove_affine(&est);
   remove_affine(&want);
-  rd_standin_flip(&est);
+  to_bin_order(&est);
   EXPECT_LT(phase_rms(est, want), 0.25);
 }
 
@@ -289,7 +293,7 @@ double residual_rms(const HostTensor& phase, const std::vector<double>& injected
   auto want = injected;
   remove_affine(&est);
   remove_affine(&want);
-  rd_standin_flip(&est);
+  to_bin_order(&est);
   return phase_rms(est, want);
 }
 
@@ -373,7 +377,7 @@ TEST(AutofocusOp, AzimuthAxisV) {
   auto want = phi;
   remove_affine(&est);
   remove_affine(&want);
-  rd_standin_flip(&est);
+  to_bin_order(&est);
   EXPECT_LT(phase_rms(est, want), 0.25);
 }
 

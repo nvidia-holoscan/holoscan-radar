@@ -543,12 +543,20 @@ __global__ void add_phase_kernel(T* acc, const T* iter, int64_t n) {
   }
 }
 
+// `phase_acc` is indexed by azimuth-FFT bin with fftfreq semantics -- bin 0 is
+// DC, which is the centre of the dwell. The contract's `phase_correction` is
+// indexed by pulse, which runs monotonically across the dwell, so the two
+// differ by an fftshift: pulse p sits at bin (p - n/2) mod n.
 template <typename T>
-__global__ void neg_n_kernel(T* x, int64_t n) {
+__global__ void fftshift_phase_kernel(const T* in, T* out, int64_t batch, int64_t n_az) {
+  const int64_t n = batch * n_az;
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (i < n) {
-    x[i] = -x[i];
+  if (i >= n) {
+    return;
   }
+  const int64_t b = i / n_az;
+  const int64_t p = i - b * n_az;
+  out[i] = in[b * n_az + (p + (n_az + 1) / 2) % n_az];
 }
 
 template <typename T>
@@ -994,13 +1002,17 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
   }
 
   copy_from_work<T>(work, image_out, cfg.azimuth_axis, batch, n_range, n_az, stream, who);
-  const size_t phase_bytes = static_cast<size_t>(batch * n_az) * sizeof(T);
-  if (cudaMemcpyAsync(phase_out, state.phase_acc, phase_bytes, cudaMemcpyDeviceToDevice, stream) !=
-      cudaSuccess) {
-    throw std::runtime_error(who + ": phase_correction copy failed");
-  }
-  neg_n_kernel<T><<<grid_for(batch * n_az, kT), kT, 0, stream>>>(phase_out, batch * n_az);
-  check_cuda("negate pulse-signed phase", who);
+  // `image_out` was corrected in the spectrum domain, where `phase_acc`'s bin
+  // order is already right. Only the emitted vector moves to pulse order, and
+  // it is emitted with the sign of the error so `PhaseCorrectionOp` with
+  // sense=subtract removes it. Both halves of that used to be wrong -- no
+  // shift, and a negate -- and they partially cancel on a symmetric quadratic,
+  // which is why the pair survived a 0.7 peak-recovery gate. On Kourou the
+  // residual against a known injected error is 0.146 rad corrected, 1.246 rad
+  // with the old pair, against a 2.400 rad uncorrected baseline.
+  fftshift_phase_kernel<T>
+      <<<grid_for(batch * n_az, kT), kT, 0, stream>>>(state.phase_acc, phase_out, batch, n_az);
+  check_cuda("fftshift phase onto the pulse axis", who);
 }
 
 }  // namespace holoscan::radar::detail

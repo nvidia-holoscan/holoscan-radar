@@ -87,26 +87,33 @@ On a persistent target the 2 cm quadratic needs no scaling: it drops the peak to
 | --- | --- | --- | --- | --- |
 | clean, no lie | 65493.0 | 1.000 | 6.98e19 | n/a |
 | 2 cm lie, uncorrected | 25686.3 | 0.392 | 1.12e19 | 2.400 rad |
-| 2 cm lie, PGA estimate applied | 34229.1 | 0.523 | 1.53e19 | 1.246 rad |
+| 2 cm lie, PGA estimate applied | 66603.6 | 1.017 | 7.18e19 | 0.146 rad |
 | 2 cm lie, oracle phase applied | 65492.6 | 1.000 | 6.98e19 | 0 by construction |
 
-The conclusion is the same one the pre-port numbers reported, so the port did not regress it: **the correction path is exact** — the oracle restores both the peak and the sharpness to the clean values to five figures — **and the whole remaining gap is the estimator.** PGA gets the sign right and about half the magnitude (1.246 rad of residual against a 5.365 rad injected quadratic), closing roughly a fifth of the peak deficit. Its estimate tracks the parabola through the middle of the dwell and then flattens at both aperture edges, plateauing near 2.5 rad where the truth reaches 5.4, with an overshoot at dwell centre — which is the V-shape the pre-port work recorded, now with the shape visible rather than inferred. That is an open item with the ruled-out causes recorded; see [`docs/planning/STATUS.md`](../../../docs/planning/STATUS.md).
+Measured against the acceptance target in [`docs/planning/SAR/TESTING.md`](../../../docs/planning/SAR/TESTING.md) (residual <= 0.39 rad RMS, hard floor 0.785 rad, product peak >= 0.9 of error-free), the estimator **passes**: 0.146 rad and 1.017. The corrected peak sits slightly above the error-free one because the clean collect is not perfectly focused either — PGA's estimate on it has a 0.96 rad peak-to-peak swing — so correcting the lied collect also removes residual error the clean reference still carries.
 
-Measured against the acceptance target in [`docs/planning/SAR/TESTING.md`](../../../docs/planning/SAR/TESTING.md) (residual ≤ 0.39 rad RMS, hard floor 0.785 rad, product peak ≥ 0.9), the estimator **fails** here: 1.246 rad and 0.523. Diagnosis separated that into two independent faults, and the PGA core is not one of them.
+### The index-order and sign defect, and how it hid
+
+These numbers were 0.523 and 1.246 rad until 2026-10-27. Two independent defects in how `AutofocusOp` emitted its estimate were partially cancelling:
+
+- **Index order.** `phase_acc` is accumulated per azimuth-FFT bin with `fftfreq` semantics — bin 0 is DC, which is the *centre* of the dwell. `phase_correction` is contracted as pulse-indexed, and pulse index runs monotonically across the dwell. The two differ by an fftshift, and the operator emitted the vector unshifted.
+- **Sign.** A `neg_n_kernel` negated the vector on the way out, so what reached `PhaseCorrectionOp` with `sense: subtract` was the correction rather than the error.
+
+A symmetric quadratic circularly shifted by half its length is approximately its own negative plus a constant, so the two errors largely undid each other. What was left recovered about half the error and roughly a fifth of the peak deficit — enough to clear the 0.7 peak-recovery gate the transfer tests used, and enough to look like a weak-but-working estimator rather than a wiring fault.
+
+The fix is one kernel: emit `fftshift(phase_acc)`, with no negate. The contract did not change; the code now matches what [`OPERATOR_API.md`](../../../docs/planning/SAR/OPERATOR_API.md) already said.
+
+The shape that was previously described as a scale error of about two between the estimate's axis and the pulse axis is exactly this: a parabola minus its own half-length circular shift is twice the truth at the dwell centre, about half at the edges, and sign-inverted at the quarter points. That reading was right about the symptom and wrong about the cause.
+
+`PhaseResampleOp` changed with it. Its oversampled branch used to take the low-frequency bins from each end of the vector, which is the correct extraction for a bin-ordered estimate; on a pulse-ordered one it takes the central `num_pulses` samples instead, which is where the real pulses sit in an azimuth extent wider than the aperture. Both branches are now index-consistent and the identity branch is unchanged.
+
+`SarAutofocusGraph.Figure2OversampledDiagnostics` pins the result by applying ten alternative maps of the same estimate by hand and requiring the shipped one to win.
 
 **The core estimator is exact.** On a synthetic IFFT-formed image at the full azimuth window it recovers a pure quadratic to 7.7e-05 rad RMS at 2.5 rad of error and 0.002 rad at 5 rad — four orders of magnitude inside the target, pinned by `AutofocusOp.PureQuadraticIsRecoveredExactlyAtFullWindow`. The 0.2 rad that the older `RecoversQuadraticUpToAffine` reports is not estimator error at all: that test injects a linear ramp and an offset alongside the quadratic, and the integer `circshift` cannot remove the sub-bin remainder.
 
-**Fault 1, a narrow-window bias, is reproducible on synthetic data.** Holding a 5 rad error fixed and narrowing the window, the residual climbs monotonically — 0.002, 0.069, 0.245, 0.830 rad at window-to-azimuth ratios of 1:1, 1:2, 1:4 and 1:8 — and it is the aperture *edges* that are lost while the dwell centre stays right (edge ratio 0.999, 0.94, 0.82, 0.41; centre ratio 0.999, 0.988, 0.958, 0.843). The estimate keeps its total swing and puts it in the wrong place. That is what a gradient estimator does when the per-sample phase step grows: the step scales with both the window ratio and the error amplitude, and at a 1:8 window a 5 rad error is already past the acceptance target. `AutofocusOp.NarrowWindowLosesTheApertureEdges` pins the measured curve.
+**A narrow-window bias remains, and is reproducible on synthetic data.** Holding a 5 rad error fixed and narrowing the window, the residual climbs monotonically — 0.002, 0.069, 0.245, 0.830 rad at window-to-azimuth ratios of 1:1, 1:2, 1:4 and 1:8 — and it is the aperture *edges* that are lost while the dwell centre stays right (edge ratio 0.999, 0.94, 0.82, 0.41; centre ratio 0.999, 0.988, 0.958, 0.843). The estimate keeps its total swing and puts it in the wrong place.
 
-**Fault 2 is specific to this collect and is the one that dominates.** On Kourou the residual sits at about 15% of the injected peak-to-peak and will not move: not with amplitude (the shape ratios are 1.99, 1.98 and 2.02 at the dwell centre for 2 cm, 0.5 cm and 0.2 cm of injected error — a fixed geometric error, not a dynamic-range limit) and not with the window (1.246, 1.251, 1.254 and 1.241 rad at widths of 350, 512, 1024 and 2048 of 8000). Fault 1 cannot explain it: at a width of 2048 the per-sample gradient step is 0.016 rad, nowhere near where a gradient estimator gets into trouble. The shape is the clue — twice the truth at dwell centre, half at the aperture edges, sign-inverted at the quarter points, with the total magnitude very nearly right (8.52 rad peak-to-peak against 8.05):
-
-| position in the dwell | truth | estimate | ratio |
-| --- | --- | --- | --- |
-| aperture edge | +4.73 rad | +2.40 rad | 0.51 |
-| quarter point | -0.67 rad | +0.86 rad | sign inverted |
-| dwell centre | -2.68 rad | -5.35 rad | 1.99 |
-
-The parabola completes its full swing over roughly the middle half of the aperture and then flattens, which is a scale error of about two between the axis the estimate is indexed by and the pulse axis it is applied on. The remaining suspects are the polar aux's bearing axis against slow time — the conjugate relationship [the lattice is built on](#the-auxiliary-lattice) holds only for the small angles a dwell subtends, and 23375 pulses is not obviously small — and `PhaseResampleOp`, although with `num_u` equal to the pulse count that resample should be an identity. Not yet resolved.
+That is what a gradient estimator does when the per-sample phase step grows: the step scales with both the window ratio and the error amplitude, and at a 1:8 window a 5 rad error is already past the acceptance target. `AutofocusOp.NarrowWindowLosesTheApertureEdges` pins the measured curve. It does not bind on Kourou, where the configured window is 0.0438 of 8000 and the residual is 0.146 rad.
 
 ## Scene preconditions are a real constraint
 

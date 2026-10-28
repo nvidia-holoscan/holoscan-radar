@@ -604,13 +604,16 @@ std::vector<std::complex<float>> make_image(const std::vector<double>& phi, int6
   return img;
 }
 
-// make_image is DFT-formed, so its azimuth phase is conjugate to the
-// pulse-signed estimate a backprojected lattice produces. Flip before applying
-// the estimate through PhaseCorrectionOp.
-void rd_standin_flip(std::vector<double>* phi) {
-  for (double& p : *phi) {
-    p = -p;
+// make_image injects its error in the azimuth-FFT domain, so `phi` is indexed
+// by FFT bin. The pulse-domain error that produces that image -- and the index
+// AutofocusOp.phase_correction comes back in -- is its fftshift.
+std::vector<double> to_bin_order(const std::vector<double>& phi) {
+  const int64_t n = static_cast<int64_t>(phi.size());
+  std::vector<double> out(static_cast<size_t>(n));
+  for (int64_t i = 0; i < n; ++i) {
+    out[static_cast<size_t>(i)] = phi[static_cast<size_t>((i + n / 2) % n)];
   }
+  return out;
 }
 
 struct Estimate {
@@ -694,7 +697,8 @@ TEST(SarAutofocusGraph, TransferOntoDifferentGeometry) {
   // The estimation image is range-decimated (32 bins) against the 64-bin
   // product formation, which is the recommended auxiliary pattern.
   constexpr int64_t kEstRange = 32;
-  const auto img = make_image(phi, kEstRange, kPulses, 24, true);
+  // `phi` is the pulse-domain error, so the image carries it in bin order.
+  const auto img = make_image(to_bin_order(phi), kEstRange, kPulses, 24, true);
   const auto estimate = run_estimate(img, {kEstRange, kPulses}, AutofocusAzimuthAxis::kU, 16);
   auto est = as_double(estimate.phase);
   ASSERT_EQ(static_cast<int64_t>(est.size()), kPulses);
@@ -706,7 +710,6 @@ TEST(SarAutofocusGraph, TransferOntoDifferentGeometry) {
   auto injected = phi;
   remove_affine(&injected);
   remove_affine(&est);
-  rd_standin_flip(&est);
 
   const auto grid = grid_geometry(8, 8);
   const double clean = image_peak(run_form({}, {}, grid));
@@ -1108,15 +1111,6 @@ std::vector<double> map_linear(const std::vector<double>& in, int64_t n_out) {
   return out;
 }
 
-std::vector<double> map_fftshift(const std::vector<double>& in) {
-  const int64_t n = static_cast<int64_t>(in.size());
-  std::vector<double> out(static_cast<size_t>(n));
-  for (int64_t i = 0; i < n; ++i) {
-    out[static_cast<size_t>(i)] = in[static_cast<size_t>((i + n / 2) % n)];
-  }
-  return out;
-}
-
 // Take the low-frequency bins from each end, which is where an oversampled
 // auxiliary puts the slow-time history, and drop the empty middle.
 std::vector<double> map_low_freq(const std::vector<double>& in, int64_t n_out) {
@@ -1179,7 +1173,6 @@ TEST(SarAutofocusGraph, Figure2OversampledDiagnostics) {
     }
     return v;
   };
-  const auto shifted = map_fftshift(azimuth);
   auto reversed = azimuth;
   std::reverse(reversed.begin(), reversed.end());
 
@@ -1187,14 +1180,19 @@ TEST(SarAutofocusGraph, Figure2OversampledDiagnostics) {
     const char* name;
     std::vector<double> phi;
   };
+  // `center` is what PhaseResampleOp does. `low_freq` is what it used to do,
+  // which is the right extraction for a bin-ordered vector and the wrong one
+  // now; the negations are there because a sign error is the cheapest way to
+  // get a plausible estimate that defocuses, and `linear` and `decimate`
+  // stretch the whole azimuth extent across the pulses instead of taking the
+  // part of it the aperture actually occupies.
   const std::vector<Candidate> candidates{
-      {"linear", map_linear(azimuth, kPulses)},
-      {"linear_neg", negate(map_linear(azimuth, kPulses))},
+      {"center", map_center(azimuth, kPulses)},
+      {"center_neg", negate(map_center(azimuth, kPulses))},
       {"low_freq", map_low_freq(azimuth, kPulses)},
       {"low_freq_neg", negate(map_low_freq(azimuth, kPulses))},
-      {"fftshift_center", map_center(shifted, kPulses)},
-      {"fftshift_center_neg", negate(map_center(shifted, kPulses))},
-      {"fftshift_linear", map_linear(shifted, kPulses)},
+      {"linear", map_linear(azimuth, kPulses)},
+      {"linear_neg", negate(map_linear(azimuth, kPulses))},
       {"decimate", map_decimate(azimuth, kPulses)},
       {"decimate_neg", negate(map_decimate(azimuth, kPulses))},
       {"linear_rev", map_linear(reversed, kPulses)},
@@ -1219,15 +1217,13 @@ TEST(SarAutofocusGraph, Figure2OversampledDiagnostics) {
   report << "best=" << best_name << " peak=" << best << "\n";
 
   EXPECT_GT(oracle, gate) << "the oracle apply is broken\n" << report.str();
-  EXPECT_GT(best, gate) << "no mapping of the oversampled estimate recovers the product\n"
-                        << report.str();
-  // Deliberately not asserting that the shipped map is the best one. It is
-  // not: measured here, PhaseResampleOp's low-frequency-bin map recovers 0.74
-  // of the error-free peak while fftshift + centre + negate recovers 0.97, and
-  // the gap holds at n_u = 80, 96, 128, 160, and 192. Which map is correct is
-  // an open question for review rather than something to settle in a test, so
-  // this case pins the comparison and prints it.
-  EXPECT_GT(oversampled.peak, gate) << report.str();
+  EXPECT_EQ(best_name, "center") << "a different map of the oversampled estimate now beats the "
+                                    "one PhaseResampleOp uses\n"
+                                 << report.str();
+  // The shipped path has to match the best candidate applied by hand, which is
+  // what proves the estimate survives the resampler rather than merely that
+  // some transform of it would have worked.
+  EXPECT_NEAR(oversampled.peak, best, 1e-3 * clean) << report.str();
 }
 
 TEST(SarAutofocusGraph, Figure2IdentityResample) {

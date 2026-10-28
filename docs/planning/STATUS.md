@@ -59,36 +59,61 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   **Kourou is re-measured on HSDK 5, over an 8000-pulse `pulse_range`.** Four
   configs on the real collect (clean / 2 cm lie uncorrected / lie with the PGA
   estimate applied / lie with the oracle phase applied) give product peaks of
-  1.000 / 0.392 / 0.523 / 1.000 and affine-removed phase RMS of n/a / 2.400 /
-  1.246 / 0 against a 5.365 rad injected quadratic. Same conclusion as the
-  pre-port numbers, so the port regressed nothing: the correction path is
-  exact (the oracle restores peak *and* sharpness to the clean values to five
-  figures) and the entire remaining gap is the estimator. The estimate tracks
-  the parabola mid-dwell and flattens at both aperture edges (plateau ~2.5 rad
-  where truth reaches 5.4, overshoot at centre) — the recorded V-shape, now
-  with the shape measured rather than inferred. `AutofocusOp.sharpness` is
-  still unwired in the app, so metric 3 was computed from the dumped images.
-  **The estimator shortfall is now diagnosed into two faults, and the PGA core
-  is neither.** At the full azimuth window the core recovers a pure quadratic
-  to 7.7e-05 rad RMS at 2.5 rad and 0.002 rad at 5 rad; the ~0.2 rad that
-  `RecoversQuadraticUpToAffine` reports is the sub-bin remainder of the linear
-  ramp that test also injects, not estimator error. Fault 1 is a narrow-window
-  bias, reproducible on synthetic data: at window-to-azimuth ratios of 1:1,
-  1:2, 1:4, 1:8 the residual on a 5 rad error climbs 0.002 / 0.069 / 0.245 /
-  0.830 rad and it is the aperture *edges* that are lost (edge ratio 0.999 to
-  0.41) while the centre holds (0.999 to 0.843) — the estimate keeps its swing
-  and misplaces it, which is what a gradient estimator does as the per-sample
-  phase step grows. Two new tests pin both
-  (`PureQuadraticIsRecoveredExactlyAtFullWindow`,
-  `NarrowWindowLosesTheApertureEdges`). Fault 2 dominates on Kourou and is
-  **unresolved**: the residual sits at ~15% of injected peak-to-peak and moves
-  with neither amplitude (centre ratio 1.99 / 1.98 / 2.02 across 2 cm, 0.5 cm,
-  0.2 cm) nor window (1.246 / 1.251 / 1.254 / 1.241 rad across widths 350 to
-  2048 of 8000), and fault 1 cannot explain it — at width 2048 the per-sample
-  gradient step is 0.016 rad. The shape points at a factor-of-two scale error
-  between the axis the estimate is indexed by and the pulse axis it is applied
-  on; suspects are the polar aux's bearing-vs-slow-time conjugacy over a
-  23375-pulse dwell, and `PhaseResampleOp`.
+  1.000 / 0.392 / 1.017 / 1.000 and affine-removed phase RMS of n/a / 2.400 /
+  0.146 / 0 against a 5.365 rad injected quadratic. That clears the acceptance
+  target in SAR/TESTING.md (<= 0.39 rad, peak >= 0.9). `AutofocusOp.sharpness`
+  is now wired in the app and reports 8.74x over 4 iterations on this collect.
+- **2026-10-27** — **The autofocus estimator shortfall is root-caused and
+  fixed: `AutofocusOp` was emitting its estimate in the wrong index order and
+  with the wrong sign, and the two errors partially cancelled.** `phase_acc` is
+  accumulated per azimuth-FFT bin with `fftfreq` semantics (bin 0 is DC, the
+  centre of the dwell) while `phase_correction` is contracted as pulse-indexed,
+  which runs monotonically across the dwell; the two differ by an fftshift and
+  the operator emitted the vector unshifted. A `neg_n_kernel` then negated it,
+  so `PhaseCorrectionOp` with `sense: subtract` received the correction rather
+  than the error. A symmetric quadratic circularly shifted by half its length
+  is approximately its own negative plus a constant, so the pair largely undid
+  itself and left an estimator that removed about half the error — enough to
+  clear the 0.7 peak-recovery gate the transfer tests used. The fix is one
+  kernel, `fftshift(phase_acc)` with no negate; **the contract did not change**,
+  the code now matches what `OPERATOR_API.md` already specified. Measured:
+  Kourou residual 1.246 -> 0.146 rad and product peak 0.523 -> 1.017; synthetic
+  1:1 transfer 0.714 -> 0.989 and 2:1 oversampled 0.741 -> 0.974 of the
+  error-free peak. This **supersedes the "fault 2" entry below**: the shape
+  recorded there (twice the truth at dwell centre, half at the edges,
+  sign-inverted at the quarter points, total magnitude nearly right) is exactly
+  a parabola minus its own half-length circular shift. The polar aux's
+  bearing-vs-slow-time conjugacy and `PhaseResampleOp` are both cleared.
+  `PhaseResampleOp` changed with it: its oversampled branch took the
+  low-frequency bins from each end, correct for a bin-ordered estimate, and now
+  takes the central `num_pulses` samples, correct for a pulse-ordered one.
+  Four operator tests and one Graph test compared against the old convention
+  and were corrected to shift rather than negate.
+  **Fault 1, the narrow-window bias, is unaffected and remains open.** At
+  window-to-azimuth ratios of 1:1, 1:2, 1:4, 1:8 the residual on a 5 rad error
+  climbs 0.002 / 0.069 / 0.245 / 0.830 rad and it is the aperture *edges* that
+  are lost (edge ratio 0.999 to 0.41) while the centre holds (0.999 to 0.843)
+  — the estimate keeps its swing and misplaces it, which is what a gradient
+  estimator does as the per-sample phase step grows. It does not bind on
+  Kourou, where the configured window is 0.0438 of 8000. Pinned by
+  `PureQuadraticIsRecoveredExactlyAtFullWindow` and
+  `NarrowWindowLosesTheApertureEdges`.
+- **2026-10-27** — **`AutofocusOp` no longer truncates tall images at the
+  launch grid.** `grid_for` clamped the block count to 65535, but no kernel in
+  `autofocus_stage.hpp` uses a grid-stride loop, so an image needing more
+  blocks had its tail left unwritten: on the 2478 x 8000 Kourou auxiliary the
+  last 380 range rows came back out of `image_out` as zeros and the peak finder
+  saw 2098 of 2478 bins. 65535 bounds `gridDim.y` and `.z`; `.x` is capped at
+  2^31-1. `LargeImageIsNotTruncatedByTheLaunchGrid` pins it and was verified to
+  fail against the clamp.
+- **2026-10-27** — **The six deferred autofocus transfer cases are rewritten on
+  HSDK 5 Graph** as `tests/cpp/integration/test_sar_autofocus_graph.cpp`. They
+  could not be restored: they were built on the HSDK 4.x `Application` API and
+  on the wire-capture helpers that the operator-testing landing deleted. They
+  cover transfer onto a differently formed product through two
+  `PhaseCorrectionOp` instances in series, the ground-grid hazard, retain and
+  reform, the oversampled auxiliary, the identity resample, and a comparison of
+  ten alternative maps of the estimate that the shipped one must win.
   **Still to port:** `tools/sar_image/pga_screen.py` and the Atlanta/Calais
   configs; the Kourou numbers quoted in the app README are pre-port and must be
   re-measured before being quoted again.
