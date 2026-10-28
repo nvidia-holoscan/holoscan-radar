@@ -25,6 +25,8 @@
 #include <utility>
 #include <vector>
 
+#include <holoscan/logger/logger.hpp>
+
 #include "io/cphd_reader_op/cphd_file.hpp"
 #include "radar_app/sar/config.hpp"
 #include "radar_common/descriptors/enums.hpp"
@@ -347,6 +349,10 @@ inline radar::SampleGeometry derive_aux_geometry(const AppConfig& cfg, int64_t f
 // 2335 rows of pure overhead, so a 2048-row aux missed a target that a
 // product-anchored 2048 rows covers with margin. Rows are auto-sized to the
 // product's own range span when num_v is not given.
+// Ceiling on auto-sized aux rows. Loose on purpose -- see the clamp below for
+// why cutting it further costs estimate quality rather than only memory.
+inline constexpr int64_t kAuxAutoRowCap = 4096;
+
 inline AuxPolarLattice derive_aux_polar_lattice(const AppConfig& cfg, int64_t first_pulse,
                                                 int64_t last_pulse, int64_t num_v,
                                                 int64_t num_u_request) {
@@ -392,7 +398,22 @@ inline AuxPolarLattice derive_aux_polar_lattice(const AppConfig& cfg, int64_t fi
     throw std::runtime_error("aux lattice: bearing spacing is not finite and > 0");
   }
   // Rows to cover the product's four corners, since those bound its slant-range
-  // span, with 25% headroom for terrain relief the flat lattice ignores.
+  // span, with 25% headroom for terrain relief the flat lattice ignores --
+  // clamped, because that span is the product's requirement and not the
+  // estimator's. The estimator keeps `min_scatterers` range bins (16 by
+  // default) out of however many pass the peak-to-mean gate, so rows past the
+  // point where good candidates are plentiful buy nothing but memory, and the
+  // aux is the second-largest allocation in this graph at roughly 1.09 MiB per
+  // row. A native-sized Kourou product asks for 8658 rows and does not fit in
+  // 96 GiB; it forms and autofocuses identically on 2478.
+  //
+  // The clamp is deliberately loose. Row count is the candidate pool the
+  // scatterer selection draws from, so cutting it too far leaves a worse best
+  // sixteen: measured on Kourou, 4096 and 2478 rows both recover the full
+  // sharpness gain, while 512 and 1024 produce an estimate bad enough that
+  // iteration 0 regresses and the loop aborts. That failure is silent -- the
+  // app still emits an image and exits zero -- so the clamp warns, and an
+  // explicit aux_lattice.num_v is honoured as given rather than clamped.
   out.num_v = num_v;
   if (num_v <= 0) {
     double reach = 0.0;
@@ -404,7 +425,16 @@ inline AuxPolarLattice derive_aux_polar_lattice(const AppConfig& cfg, int64_t fi
       }
     }
     const int64_t rows = static_cast<int64_t>(std::ceil(2.5 * reach / cfg.range_bin_spacing));
-    out.num_v = std::max<int64_t>(64, rows + (rows & 1));
+    const int64_t spanning = std::max<int64_t>(64, rows + (rows & 1));
+    out.num_v = std::min<int64_t>(spanning, kAuxAutoRowCap);
+    if (out.num_v < spanning) {
+      HOLOSCAN_LOG_WARN(
+          "aux lattice: auto-sized rows clamped {} -> {} (saves {} rows, and the graph reserves "
+          "several copies of each). The aux no longer spans the product's slant-range swath, "
+          "which the estimator does not need, but it does narrow the pool its scatterer "
+          "selection draws from. If the sharpness report shows no gain, raise aux_lattice.num_v.",
+          spanning, out.num_v, spanning - out.num_v);
+    }
   }
   if (out.num_v < 2) {
     throw std::runtime_error("aux_lattice.num_v must be >= 2 for a polar lattice");
