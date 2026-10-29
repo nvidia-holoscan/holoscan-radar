@@ -4,6 +4,31 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-29** — **TENTATIVE: the autofocus first window has to be sized to
+  the error magnitude, oversizing is cheap in the regime that matters, and past
+  ~100 rad no width works well.** Asked whether an application can reasonably
+  know its own error budget — it can, from INS grade, dwell time and wavelength
+  — which turned the question from "can the caller know" into "what does sizing
+  for the worst case cost on a typical collect". Measured, at 8 iterations on
+  Kourou / 8000 pulses: a 1000-sample first window costs **40 mrad** against
+  350 on a 5.4 rad error (0.161 → 0.201) and 9 mrad on a clean collect, while
+  rescuing a 107.3 rad error from 1.035 to 0.274 rad. So below ~27 rad,
+  configuring the window generously from the error budget is sound and the
+  operator needs to do nothing — **an earlier framing of this as circular,
+  "the caller cannot know the magnitude", was wrong.** Two findings qualify it.
+  Above ~100 rad the optimum is **sharp rather than a floor**: at 107.3 rad,
+  1000 samples passes at 0.274 and 2000 fails at 1.181, reproducibly at both 4
+  and 8 iterations, and unexplained — a budget known to an order of magnitude
+  does not land inside that. And at **214.6 rad nothing works**: widening 350 →
+  2000 takes the residual from 50.48 to 2.21 rad, a huge gain that is still 3x
+  the hard floor, with 4000 worse again and `sharpness` reporting 11-18x
+  throughout. **Explicitly tentative:** every cell is one collect, one aperture
+  and one pure quadratic — the smoothest error there is and the one a geometric
+  window suits best. Landed as `autofocus_op/OPEN_ITEMS.md` §6 pending the
+  broader sweep over error profiles and the other collects on disk; nothing goes
+  into contract guidance until that lands. Note the autofocus app hard-codes
+  `window_fraction: 0.0438`, the 350-sample column, with a comment calling it
+  tuned — on this table it is the worst cell in two of five rows.
 - **2026-10-29** — **Three candidate runtime quality signals for `AutofocusOp`
   were implemented and measured, and all three are blind to the failure they
   were built to catch.** The open question was whether the operator can tell a

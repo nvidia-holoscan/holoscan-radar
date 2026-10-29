@@ -144,24 +144,68 @@
    guard-and-keep behaviour is still sensible over tens of iterations
    is unknown.
 
-6. **There is an error-magnitude ceiling, and past it the operator
-   fails loudly in the image and silently in its own reporting.** At
-   214.6 rad of injected line-of-sight error (about 34 wavelengths) the
-   residual is **50.48 rad** — the estimate recovers roughly half of a
-   ~96 rad affine-removed baseline and leaves the image unusable —
-   while `sharpness` reports an 11.1× gain and the guard terminates
-   normally at iteration 2. This is the same shape as the 107.3 rad
-   failure in item 1 but an order of magnitude worse, and it is not
-   fixed by iterating (8 iterations, converged) or by the guard. The
-   first window has to be matched to the error: 107.3 rad needs 1000
-   samples where 350 fails, so there is presumably a width that
-   recovers 214.6 rad, and nothing in the operator derives it. **What
-   is open is whether `window_fraction` should be derivable** — from
-   the measured gradient, or from a coarse first pass — rather than
-   left as a parameter a caller must size against an error magnitude
-   they are using autofocus precisely because they do not know. See
-   also the quality-signal finding below: nothing distinguishes this
-   case from a success at runtime.
+6. **The first window must be sized to the error magnitude, and past
+   roughly 100 rad no width works well. TENTATIVE — one collect, one
+   aperture, one error shape.** Residual in radians at 8 iterations on
+   Kourou / 8000 pulses, against the 0.39 rad target and 0.785 rad
+   hard floor:
+
+   | injected | 350-sample window | 1000 | 2000 | 4000 |
+   | --- | --- | --- | --- | --- |
+   | 0 (clean collect) | 0.157 | 0.166 | — | — |
+   | 5.4 rad | 0.161 | 0.201 | 0.176 | — |
+   | 26.8 rad | — | 0.317 | — | — |
+   | 107.3 rad | **1.035** | 0.274 | **1.181** | — |
+   | 214.6 rad | **50.48** | **5.41** | **2.21** | **2.47** |
+
+   Three readings, in descending confidence.
+
+   **Oversizing is cheap below ~27 rad.** A 1000-sample window costs
+   40 mrad against 350 on a 5.4 rad error and 9 mrad on a clean
+   collect, with everything well inside target. So for a system whose
+   error budget sits in that range — and an integrator *does* know
+   their budget from INS grade, dwell time and wavelength — sizing the
+   window generously from the budget is sound and needs nothing from
+   the operator. An earlier framing of this item claimed the caller
+   cannot know the magnitude; that was wrong, and the measurement
+   above is why.
+
+   **Above ~100 rad the optimum is sharp rather than a floor.** At
+   107.3 rad, 1000 samples passes at 0.274 and 2000 fails at 1.181 —
+   one doubling either side of the optimum is the difference. The
+   non-monotonicity reproduces at both 4 and 8 iterations (4-iteration
+   sweep: 1.365 / 0.433 / 1.181 / 1.099 / 0.502 rad at 350 / 1000 /
+   2000 / 4000 / 8000 samples) so it is not run-to-run noise, and it
+   is unexplained. A budget known to an order of magnitude does not
+   land inside a window that tight.
+
+   **At 214.6 rad (about 34 wavelengths) nothing works.** Widening
+   from 350 to 2000 samples improves the residual from 50.48 to 2.21
+   rad, an enormous gain, and 2.21 is still nearly 3x the hard floor;
+   4000 is worse again. `sharpness` reports 11.1x to 17.6x across that
+   whole row and the guard terminates normally, so nothing marks it as
+   a failure (see *no runtime quality signal* below). A caller whose
+   budget reaches this magnitude is not served by PGA as implemented.
+
+   **Why this is tentative and what would settle it.** Every cell is
+   one collect (UMBRA-05 Kourou), one aperture (8000 pulses) and one
+   error shape (a pure quadratic) — the smoothest, most symmetric
+   error there is, and the one a geometric window suits best. The
+   sharp optimum at 107.3 rad in particular could be specific to that
+   shape. Needed before any of this becomes contract guidance: the
+   other error profiles (higher-order, sinusoidal, random-walk) and
+   the other collects on disk.
+
+   **What is open**, pending that: whether the contract should publish
+   a window-sizing relationship against error budget and declare a
+   magnitude precondition, or whether the first width should be
+   *derived* from the measured azimuth extent of the selected
+   scatterers — which is directly observable, the blur being the
+   defocus — rather than configured at all. Deriving it matters most
+   in the above-100 rad regime where the optimum is too sharp to
+   configure. Note our own app config hard-codes `window_fraction:
+   0.0438` (the 350-sample column) with a comment calling it tuned; on
+   this table that is the worst cell in two of five rows.
 
 ## What is not wrong
 
