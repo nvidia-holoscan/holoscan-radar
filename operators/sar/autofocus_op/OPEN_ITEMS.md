@@ -32,6 +32,20 @@
    107 rad entirely inside the target where the shipped one fails above
    roughly 27 rad.
 
+   **What raising the default costs, measured.** On the Kourou-sized
+   auxiliary (2478 x 8000) the perf harness gives 51.8 ms median at 4
+   iterations against 19.5 ms at 1 — about **10.8 ms per iteration**
+   over an 8.7 ms floor (the strong-bin scan and the copy to
+   `image_out`). So 4 → 8 is at most ~43 ms. In practice it is less,
+   because **the guard makes the cost self-limiting**: `num_iterations`
+   is an upper bound, and on the 8000-pulse collect the loop stops at 6
+   whether it is set to 8 or to 16, for ~22 ms. The extra cost is
+   therefore paid mostly where the extra iterations are actually doing
+   something, and is near zero on an image that converges early —
+   which is exactly the small-error case where 4 was already enough.
+   For scale, product formation on that configuration is 37 ms and a
+   video-SAR-rate frame budget would be about 458 ms.
+
    Open question for the team, since it is a default and therefore a
    contract surface: whether `num_iterations` should default higher
    than 4, or the guidance should simply say that an airborne opt-in
