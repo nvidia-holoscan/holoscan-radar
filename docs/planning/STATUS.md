@@ -8,12 +8,17 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   A package-only configuration now enables all 32 public FMCW, SAR, and I/O
   operators without enabling the 12 example applications. The explicit package
   list in `pkg/CMakeLists.txt` accepts configure-time overrides for intentional
-  omissions and rejects unregistered names. Package
+  omissions and rejects names without matching targets. Package
   builds disable tests; C++ tests retain normal CMake target resolution. On Durham IGX Thor 5000,
   the clean arm64 Debian package contains all 32 operator libraries and no demo
   applications; all 1,161 non-performance CTests pass.
   Positive and negative configure tests confirm package exclusions work and
-  unregistered package names fail.
+  package names without matching targets fail.
+  PR review follow-up: preserve the cached test setting across package builds.
+  The explicit list is maintained manually; a same-named unrelated target can
+  satisfy the target check, and omitted operators are not detected.
+  On Durham IGX Thor 5000, SDK 5 CMake checks verified package-to-test
+  reconfiguration and default package test suppression.
 
 - **2026-10-21** â€” **HSDK 5 GA image adopted.** The Dockerfile, host CLI wrapper,
   and devcontainer now default to

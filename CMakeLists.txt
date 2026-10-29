@@ -91,11 +91,6 @@ endif()
 # CMake BUILD_TESTING variable. This lets a parent project (HoloHub, another
 # module) keep its own BUILD_TESTING setting independent of whether *this*
 # module's tests are built. Defaults ON when standalone, OFF when nested.
-if(PKG_holoscan_radar)
-    set(HOLOSCAN_RADAR_BUILD_TESTING OFF CACHE BOOL
-        "Build the radar module's CTest and pytest suites" FORCE)
-endif()
-
 if(NOT DEFINED HOLOSCAN_RADAR_BUILD_TESTING)
     if(PROJECT_IS_TOP_LEVEL)
         set(HOLOSCAN_RADAR_BUILD_TESTING ON
@@ -160,6 +155,10 @@ endif()
 # time option() is encountered, so the FORCE has to happen before then.
 
 add_subdirectory(pkg)
+if(PKG_holoscan_radar)
+    # Disable tests only for this configure; retain the user's cached setting.
+    set(HOLOSCAN_RADAR_BUILD_TESTING OFF)
+endif()
 add_subdirectory(applications)
 add_subdirectory(operators)
 
