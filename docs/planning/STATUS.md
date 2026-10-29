@@ -82,9 +82,12 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   above 4 is a contract surface and is left for the team. Separately, the
   aperture ceiling found earlier is **deprioritised**: every shipped workflow
   forms below it (`video_sar` 8262 pulses, `spotlight` 11500, `tiled_strip`
-  15905), so only the autofocus app's own full-collect preset exceeds it — and no
-  shipped app is wired for Figure 2 at all, since all four use
-  `max_aperture_pulses: 0` or `continue` rather than `reform`. Recorded in
+  15905), so only the autofocus app's own full-collect preset exceeds it. Those
+  three are reference regimes, not wiring targets: autofocus is an opt-in stage
+  "absent from the default spine" per `SAR/OPERATOR_API.md`, and all four
+  shipped apps accordingly use `max_aperture_pulses: 0` or `continue` rather
+  than the `reform` it needs. They are what the operator should be
+  characterized against. Recorded in
   [`operators/sar/autofocus_op/OPEN_ITEMS.md`](../../operators/sar/autofocus_op/OPEN_ITEMS.md)
   §1.
 - **2026-10-29** — **The autofocus "accuracy degrades with aperture length"
