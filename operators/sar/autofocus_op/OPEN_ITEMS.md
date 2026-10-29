@@ -43,10 +43,16 @@
      0.0012–0.0018 rad — 473× to 1518×. The two halves are not offset
      from each other (half-means are ±0.06 rad), so this is a seam in
      one sample rather than a constant. It is narrow enough to barely
-     move the RMS and is almost certainly a fencepost at the dwell
-     centre in the `fftshift(phase_acc)` emit or in `PhaseResampleOp`'s
-     central-`num_pulses` extraction. **Cheapest of the three to chase
-     and the most clearly a bug.**
+     move the RMS. The dwell centre is where the bin-to-pulse
+     `fftshift(phase_acc)` wraps, so that emit is the first suspect,
+     with `PhaseResampleOp`'s central-`num_pulses` extraction second —
+     though on these runs the aux azimuth extent already equals the
+     aperture, so the resample is an identity and the emit is the more
+     likely of the two. **Cheapest of the three to chase.** One
+     explanation is already ruled out: it is not a residual linear term
+     left in bin order, which would map to exactly this sawtooth —
+     detrending the estimate in bin order and mapping back leaves both
+     the residual and the step unchanged to four decimal places.
 
    **The sharpness guard is correct and is not the problem.** Forcing
    the refused iterations through with `SAR_AF_IGNORE_DROP` (see below)
@@ -63,6 +69,18 @@
    recovers (5.697e20) — so the first estimate can only make it worse
    and the guard refuses it. Nothing is wrong at the full aperture on
    clean data; what is wrong is the accuracy trend above.
+
+   **None of this reproduces on a clean synthetic scene**, which is
+   itself a lead. `AutofocusOp.AccuracyIsFlatOverAzimuthExtentOnACleanScene`
+   sweeps the azimuth extent 16× at the same fixed ~64-column window and
+   finds the estimator flat and near-exact — 0.002 to 0.004 rad, swing
+   within 2% — so the trend above is not a property of extent alone. It
+   needs something the synthetic scene lacks: real clutter, range bins
+   of varying scatterer quality, an error that is not a pure quadratic,
+   or the oversampled polar auxiliary. **CI cannot guard these numbers**
+   — it has only the generated 5-pulse fixture, which is far too small
+   for PGA to recover anything — so the collect is the only instrument,
+   and that test is the nearest CI stand-in.
 
    Reproduce with a `position_error` block over the desired
    `pulse_range`; `AutofocusScoreOp` reports the residual and, with

@@ -87,7 +87,7 @@ The product is a 2048-square **0.25 m** east-north patch on that scatterer, and 
 
 On a persistent target the 2 cm quadratic needs no scaling: it drops the peak to 39.2% of focused.
 
-**Where this stands, re-measured on HSDK 5 over an 8000-pulse `pulse_range`** (the full 23375-pulse aperture does not fit in 96 GiB of GPU — see `STATUS.md`), scoring the product peak against the clean image and the resampled estimate against the injected truth:
+**Where this stands, re-measured on HSDK 5 over an 8000-pulse `pulse_range`**, scoring the product peak against the clean image and the resampled estimate against the injected truth. (The full 23375-pulse aperture needed 128.4 GiB against 96 GiB of GPU until samples went to single precision on 2026-10-29; it now fits at 66.9 GiB and is measured in the sweep below.)
 
 | config | product peak | ratio | sharpness | affine-removed phase RMS |
 | --- | --- | --- | --- | --- |
@@ -97,6 +97,22 @@ On a persistent target the 2 cm quadratic needs no scaling: it drops the peak to
 | 2 cm lie, oracle phase applied | 65492.6 | 1.000 | 6.98e19 | 0 by construction |
 
 Measured against the acceptance target in [`docs/planning/SAR/TESTING.md`](../../../docs/planning/SAR/TESTING.md) (residual <= 0.39 rad RMS, hard floor 0.785 rad, product peak >= 0.9 of error-free), the estimator **passes**: 0.146 rad and 1.017. The corrected peak sits slightly above the error-free one because the clean collect is not perfectly focused either — PGA's estimate on it has a 0.96 rad peak-to-peak swing — so correcting the lied collect also removes residual error the clean reference still carries.
+
+### Accuracy over aperture length
+
+The table above is one aperture length. Sweeping `pulse_range` and `max_aperture_pulses` together, with everything else at the preset's settings, the estimator degrades with length and **not monotonically**:
+
+| pulses | residual | swing | sharpness | iterations kept |
+| --- | --- | --- | --- | --- |
+| 8000 | 0.149 rad | 1.09 | 8.66× | all 4 |
+| 12000 | 0.283 rad | — | 8.94× | 3 of 4 |
+| 16000 | **0.692 rad** | 1.31 | 5.28× | all 4 |
+| 20000 | **0.428 rad** | — | 2.73× | 1 of 4 |
+| 23375 (full) | 0.332 rad | 1.25 | 2.84× | 1 of 4 |
+
+**Do not read sharpness gain as image quality here — it is anti-correlated with phase accuracy.** 16000 pulses keeps all four iterations and gains the most after 8000, and it is the *worst* configuration against truth at 0.692 rad, outside the acceptance target. The full aperture keeps one iteration and is more than twice as accurate. Two of these five lengths miss the target. The breakdown of the residual, what was ruled out, and why the sharpness guard is not at fault are in [`operators/sar/autofocus_op/OPEN_ITEMS.md`](../../../operators/sar/autofocus_op/OPEN_ITEMS.md) §1.
+
+To reproduce: uncomment the `position_error` block in [`config/autofocus.yaml`](config/autofocus.yaml), add `cphd_reader.pulse_range: [0, N]` and `aperture_manager.max_aperture_pulses: N`, and run. `AutofocusScoreOp` logs the affine-removed RMS; adding `dump: true` with `output.path` writes `af_expected_phase.npy` and `af_estimated_phase.npy` beside the image, which is what the swing and the error decomposition come from. Note the key is `output.path` — `dump` itself is only a boolean.
 
 ### The index-order and sign defect, and how it hid
 

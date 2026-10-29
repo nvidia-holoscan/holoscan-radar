@@ -104,33 +104,33 @@ double phase_rms(const std::vector<double>& a, const std::vector<double>& b) {
 // scene-common error, which is the space-invariance PGA assumes.
 template <typename T>
 std::vector<std::complex<T>> make_image(const std::vector<double>& phi, int64_t n_strong,
-                                        bool az_is_u) {
-  const int64_t n_v = az_is_u ? kRg : kAz;
-  const int64_t n_u = az_is_u ? kAz : kRg;
+                                        bool az_is_u, int64_t n_az = kAz, int64_t n_rg = kRg) {
+  const int64_t n_v = az_is_u ? n_rg : n_az;
+  const int64_t n_u = az_is_u ? n_az : n_rg;
   std::vector<std::complex<T>> img(static_cast<size_t>(n_v * n_u),
                                    {static_cast<T>(0), static_cast<T>(0)});
-  for (int64_t r = 0; r < kRg; ++r) {
-    std::vector<std::complex<double>> row(static_cast<size_t>(kAz), {0.0, 0.0});
+  for (int64_t r = 0; r < n_rg; ++r) {
+    std::vector<std::complex<double>> row(static_cast<size_t>(n_az), {0.0, 0.0});
     if (r < n_strong) {
-      row[static_cast<size_t>(kAz / 2)] = {1.0, 0.0};
+      row[static_cast<size_t>(n_az / 2)] = {1.0, 0.0};
     } else {
-      for (int64_t a = 0; a < kAz; ++a) {
+      for (int64_t a = 0; a < n_az; ++a) {
         row[static_cast<size_t>(a)] = {0.01, 0.0};
       }
     }
     host_dft(&row, false);
-    for (int64_t k = 0; k < kAz; ++k) {
+    for (int64_t k = 0; k < n_az; ++k) {
       const double p = phi.empty() ? 0.0 : phi[static_cast<size_t>(k)];
       row[static_cast<size_t>(k)] *= std::complex<double>(std::cos(p), std::sin(p));
     }
     host_dft(&row, true);
-    for (int64_t a = 0; a < kAz; ++a) {
+    for (int64_t a = 0; a < n_az; ++a) {
       const auto z = row[static_cast<size_t>(a)];
       const std::complex<T> c(static_cast<T>(z.real()), static_cast<T>(z.imag()));
       if (az_is_u) {
-        img[static_cast<size_t>(r * kAz + a)] = c;
+        img[static_cast<size_t>(r * n_az + a)] = c;
       } else {
-        img[static_cast<size_t>(a * kRg + r)] = c;
+        img[static_cast<size_t>(a * n_rg + r)] = c;
       }
     }
   }
@@ -147,8 +147,8 @@ struct AfOut {
 
 MaxTensorExtents extents_for(const std::vector<int64_t>& shape) {
   MaxTensorExtents extents;
-  extents.max_image_v = std::max<int64_t>(shape.size() > 0 ? shape[0] : 1, kAz);
-  extents.max_image_u = std::max<int64_t>(shape.size() > 1 ? shape[1] : 1, kAz);
+  extents.max_image_v = std::max<int64_t>(shape.size() > 0 ? shape[0] : 1, 1);
+  extents.max_image_u = std::max<int64_t>(shape.size() > 1 ? shape[1] : 1, 1);
   return extents;
 }
 
@@ -167,7 +167,9 @@ AfOut run_af(AutofocusAzimuthAxis axis, const std::vector<std::complex<T>>& img,
   auto input = to_device_tensor(img, shape, complex_dtype<T>());
   fixture.push_frame(holoscan::testing::frame_at(std::chrono::nanoseconds{1},
                                                  holoscan::testing::input("image", *input)));
-  const std::size_t vector_bytes = static_cast<std::size_t>(kAz + num_iterations + 2) * sizeof(T);
+  const int64_t n_az_out = std::max<int64_t>(shape[0], shape.size() > 1 ? shape[1] : 1);
+  const std::size_t vector_bytes =
+      static_cast<std::size_t>(n_az_out + num_iterations + 2) * sizeof(T);
   fixture.template capture_snapshot<holoscan::Tensor>("image_out", 1U, input->nbytes());
   fixture.template capture_snapshot<holoscan::Tensor>("phase_correction", 1U, vector_bytes);
   fixture.template capture_snapshot<holoscan::Tensor>("sharpness", 1U, vector_bytes);
@@ -278,10 +280,10 @@ TEST(AutofocusOp, RecoversQuadraticUpToAffine) {
 // canonical test above injects both, and the sub-bin remainder the integer
 // circshift cannot take out costs it ~0.2 rad -- enough to mask how accurate
 // the estimator is, and enough to mask a regression in it.
-std::vector<double> pure_quadratic(double amplitude) {
-  std::vector<double> phi(static_cast<size_t>(kAz));
-  const double mid = 0.5 * static_cast<double>(kAz - 1);
-  for (int64_t k = 0; k < kAz; ++k) {
+std::vector<double> pure_quadratic(double amplitude, int64_t n_az = kAz) {
+  std::vector<double> phi(static_cast<size_t>(n_az));
+  const double mid = 0.5 * static_cast<double>(n_az - 1);
+  for (int64_t k = 0; k < n_az; ++k) {
     const double x = (static_cast<double>(k) - mid) / std::max(mid, 1.0);
     phi[static_cast<size_t>(k)] = amplitude * x * x;
   }
@@ -353,6 +355,62 @@ TEST(AutofocusOp, NarrowWindowCostsSwingAndStaysInsideTheTarget) {
     ++i;
   }
   EXPECT_LT(previous, 0.393) << "the narrowest window no longer meets the acceptance target";
+}
+
+// Accuracy over azimuth extent, at a fixed absolute window width -- the way
+// the autofocus application sizes `window_fraction`, which targets ~64 columns
+// rather than a fraction of the aperture.
+//
+// **On a clean synthetic scene the estimator is flat in extent and essentially
+// exact, and that is the point of pinning it.** On Kourou the affine-removed
+// residual against injected truth grows with aperture length and is not
+// monotonic -- 0.149 / 0.283 / 0.692 / 0.428 / 0.332 rad at 8000 / 12000 /
+// 16000 / 20000 / 23375 pulses against a 0.39 rad target -- and the estimate
+// over-reports swing by up to 31%. None of that reproduces here, at 0.002 to
+// 0.004 rad and swing within 2% across a 16x range of extents. So the real
+// trend is **not** a property of extent alone: it needs something this scene
+// does not have (real clutter, range bins of varying scatterer quality, an
+// error that is not a pure quadratic, or the oversampled polar auxiliary).
+// That is why the bounds below are tight. They cannot catch the real-data
+// defect -- only the collect can, and the recipe for it is in
+// `operators/sar/autofocus_op/OPEN_ITEMS.md` -- but they do catch the
+// estimator acquiring an extent dependence on a clean scene, which is the
+// nearest thing CI can observe and would be the first sign the cause is
+// simpler than it looks.
+//
+// Bounds are measured behaviour, not the acceptance target; tighten them as
+// the estimator improves and never loosen them.
+TEST(AutofocusOp, AccuracyIsFlatOverAzimuthExtentOnACleanScene) {
+  constexpr int64_t kWindowColumns = 64;
+  // Measured 0.0020, 0.0040, 0.0043 rad and swing 1.003, 0.991, 0.984. The
+  // extents stop at 1024 because make_image injects through an O(n^2) host
+  // DFT; 16x of extent is enough to show a dependence if one appears.
+  const double bounds[] = {0.004, 0.006, 0.006};
+  const double swing_floor[] = {0.99, 0.98, 0.97};
+  int i = 0;
+  for (int64_t n_az : {64, 256, 1024}) {
+    const auto phi = pure_quadratic(5.0, n_az);
+    const auto img = make_image<float>(phi, kStrong, true, n_az);
+    auto truth = phi;
+    remove_affine(&truth);
+    const double window_fraction =
+        std::min(1.0, static_cast<double>(kWindowColumns) / static_cast<double>(n_az));
+    const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, n_az}, 4, window_fraction);
+    ASSERT_TRUE(out.ok) << "n_az " << n_az << ": " << out.failure;
+    ASSERT_EQ(out.phase.size(), n_az);
+    const double rms = residual_rms(out.phase, phi);
+    auto est = phase_as_double(out.phase);
+    remove_affine(&est);
+    const double swing = peak_abs(est) / peak_abs(truth);
+    EXPECT_LT(rms, bounds[i]) << "n_az " << n_az << ": residual " << rms
+                              << " rad regressed past its measured value";
+    EXPECT_GT(swing, swing_floor[i]) << "n_az " << n_az << ": swing " << swing
+                                     << " -- the estimate lost more amplitude than measured";
+    EXPECT_LT(swing, 1.02) << "n_az " << n_az << ": swing " << swing
+                           << " -- over-reporting swing is the dominant error on a long real "
+                              "aperture, and it must not start here";
+    ++i;
+  }
 }
 
 // Every kernel in the stage is one element per thread with no grid-stride
