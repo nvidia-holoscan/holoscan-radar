@@ -62,6 +62,31 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   `lattice.spacing: [v, u]` is rejected under `scroll`, so an anisotropic grid
   — e.g. along-track at the finer azimuth resolution — is not reachable from
   config. Asked for and deferred.
+- **2026-10-29** — **Asked how `AutofocusOp` will actually be used, the answer
+  moved the defect: the shipped `num_iterations: 4` fails on airborne-magnitude
+  errors, and the long-aperture ceiling turns out to matter to nothing.** The
+  contract names airborne residual phase as the reason to opt in — "spaceborne
+  collections with good ephemeris generally stay on Figure 1" — while every
+  measurement to date used one 2 cm quadratic, 5.4 rad, on spaceborne collects.
+  Sweeping magnitude at 8000 pulses, the shipped settings give 0.149 rad at 5.4
+  rad, 0.275 at 26.8 and **1.365 at 107.3**, the last missing not just the 0.39
+  rad target but the 0.785 hard floor — **while sharpness reports a 17.1× gain**,
+  so nothing in the operator's output says it failed. 107 rad is roughly 17
+  wavelengths of line-of-sight error, ordinary for an airborne platform on a
+  modest INS. Widening the first window alone does not fix it (1.365 / 0.433 /
+  1.181 / 1.099 / 0.502 rad at 350 / 1000 / 2000 / 4000 / 8000 samples,
+  non-monotonic); **iterating does** — a 1000-sample window with 8 iterations
+  gives 0.274 rad and is identical at 16 and 32, so it converges. One setting
+  then covers 5 to 107 rad inside the target, for 0.149 → 0.201 rad of peak
+  accuracy given up on small errors. Whether `num_iterations` should default
+  above 4 is a contract surface and is left for the team. Separately, the
+  aperture ceiling found earlier is **deprioritised**: every shipped workflow
+  forms below it (`video_sar` 8262 pulses, `spotlight` 11500, `tiled_strip`
+  15905), so only the autofocus app's own full-collect preset exceeds it — and no
+  shipped app is wired for Figure 2 at all, since all four use
+  `max_aperture_pulses: 0` or `continue` rather than `reform`. Recorded in
+  [`operators/sar/autofocus_op/OPEN_ITEMS.md`](../../operators/sar/autofocus_op/OPEN_ITEMS.md)
+  §1.
 - **2026-10-29** — **The autofocus "accuracy degrades with aperture length"
   finding was itself a measurement artifact; the real defect is narrower and the
   estimator is much better than reported.** `AutofocusScoreOp` scores the

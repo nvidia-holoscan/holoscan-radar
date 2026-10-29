@@ -2,12 +2,52 @@
 
 ## Implementation follow-ups
 
-1. **Beyond roughly 16000 pulses PGA produces an estimate that lowers
+1. **The shipped `num_iterations: 4` fails on the error magnitudes this
+   operator exists for.** The contract names airborne residual phase as
+   the reason to opt in at all — "spaceborne collections with good
+   ephemeris generally stay on Figure 1" (`SAR/OPERATOR_API.md`) — but
+   every measurement to date used a single 2 cm quadratic, 5.4 rad, on
+   spaceborne collects. Sweeping magnitude at 8000 pulses:
+
+   | injected | shipped (350-sample window, 4 iter) | 1000-sample window, 8 iter |
+   | --- | --- | --- |
+   | 5.4 rad | 0.149 rad | 0.201 rad |
+   | 26.8 rad | 0.275 rad | 0.317 rad |
+   | 107.3 rad | **1.365 rad** | **0.274 rad** |
+
+   107 rad is about 17 wavelengths of line-of-sight error, which is
+   ordinary for an airborne platform on a modest INS. At the shipped
+   settings it misses not just the 0.39 rad target but the 0.785 rad
+   hard floor — **while sharpness still reports a 17.1× gain**, so
+   nothing in the operator's own output says it failed.
+
+   Widening the first window alone does not fix it (1.365 / 0.433 /
+   1.181 / 1.099 / 0.502 rad at 350 / 1000 / 2000 / 4000 / 8000
+   samples — non-monotonic, and the best is still outside the target).
+   **Iterating does:** at a 1000-sample first window, 8 iterations
+   takes it to 0.274 rad, and 16 and 32 are identical to 8, so it
+   converges rather than drifting. The cost is a little peak accuracy
+   on small errors, 0.149 → 0.201 rad, which is the right trade when
+   the magnitude is not known in advance — one setting then covers 5 to
+   107 rad entirely inside the target where the shipped one fails above
+   roughly 27 rad.
+
+   Open question for the team, since it is a default and therefore a
+   contract surface: whether `num_iterations` should default higher
+   than 4, or the guidance should simply say that an airborne opt-in
+   must raise it. This is also what makes open item 5's 255 ceiling
+   worth checking rather than theoretical.
+
+2. **Beyond roughly 16000 pulses PGA produces an estimate that lowers
    sharpness, so the guard refuses it and autofocus contributes
    nothing.** This is the one real defect against how the operator will
    be used: an operator cannot hand-pick `pulse_range` per collect, and
    on Kourou (UMBRA-05) the useful aperture ceiling sits somewhere
-   between 16000 and 20000 of the collect's 23375 pulses.
+   between 16000 and 20000 of the collect's 23375 pulses. **Lower
+   priority than it looks:** every shipped workflow forms below that
+   ceiling — `video_sar` at 8262 pulses, `spotlight` at 11500,
+   `tiled_strip` at 15905 — so only this app's own full-collect preset
+   exceeds it.
 
    Measured on the clean collect — no injected error, so the number is
    the magnitude of what PGA estimates for the collect's own residual
@@ -40,7 +80,7 @@
    it either, so there is no setting of the shipped parameters that
    makes a long aperture work.
 
-2. **`AutofocusScoreOp`'s residual conflates the injected error with the
+3. **`AutofocusScoreOp`'s residual conflates the injected error with the
    collect's own, and that invalidated an earlier reading of this
    file.** The score is taken against the injected truth alone, but PGA
    also estimates whatever real error the collect carries — correctly
@@ -62,7 +102,7 @@
    subtract it rather than leaving this to be rediscovered; until it
    does, read any single residual as an upper bound on estimator error.
 
-3. **A one-sample step at exactly `floor(n_pulses/2)` in the emitted
+4. **A one-sample step at exactly `floor(n_pulses/2)` in the emitted
    estimate, at every aperture length.** 1.832 rad at 8000, 0.700 at
    16000 and 1.799 at 23375, against a median sample-to-sample step of
    0.0012–0.0018 rad — 473× to 1518×. The two halves are not offset
@@ -77,7 +117,7 @@
    bin order and mapping back leaves the residual and the step
    unchanged to four decimal places.
 
-4. **`num_iterations` is bounded at 255 by the contract's `uint8`,
+5. **`num_iterations` is bounded at 255 by the contract's `uint8`,
    which has not been exercised anywhere near that.** The preset uses 4
    and the sweeps above use 4 except where noted. Whether the
    guard-and-keep behaviour is still sensible over tens of iterations
