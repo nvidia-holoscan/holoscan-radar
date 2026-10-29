@@ -110,7 +110,14 @@ The table above is one aperture length. Sweeping `pulse_range` and `max_aperture
 | 20000 | **0.428 rad** | — | 2.73× | 1 of 4 |
 | 23375 (full) | 0.332 rad | 1.25 | 2.84× | 1 of 4 |
 
-**Do not read sharpness gain as image quality here — it is anti-correlated with phase accuracy.** 16000 pulses keeps all four iterations and gains the most after 8000, and it is the *worst* configuration against truth at 0.692 rad, outside the acceptance target. The full aperture keeps one iteration and is more than twice as accurate. Two of these five lengths miss the target. The breakdown of the residual, what was ruled out, and why the sharpness guard is not at fault are in [`operators/sar/autofocus_op/OPEN_ITEMS.md`](../../../operators/sar/autofocus_op/OPEN_ITEMS.md) §1.
+**Most of that spread is not the estimator.** The score is taken against the injected truth alone, while PGA also estimates whatever real error the collect carries — correctly — and is charged for it. Re-running each length with `polynomial: [0, 0, 0.0]` measures the collect's own error by itself, and subtracting it separates the two:
+
+| pulses | residual vs injected truth | the collect's own | estimator alone |
+| --- | --- | --- | --- |
+| 8000 | 0.149 rad | 0.142 rad | **0.042 rad** |
+| 16000 | 0.692 rad | 0.507 rad | **0.346 rad** |
+
+Both are inside the 0.39 rad target once the baseline is removed. **Read any single residual in the table above as an upper bound on estimator error, not as the estimator's accuracy.** What is left after that correction is a genuine aperture ceiling: beyond roughly 16000 pulses PGA produces an estimate that lowers sharpness and the guard refuses it, so autofocus contributes nothing. See [`operators/sar/autofocus_op/OPEN_ITEMS.md`](../../../operators/sar/autofocus_op/OPEN_ITEMS.md) for the ruled-out causes and the measured refused estimates.
 
 To reproduce: uncomment the `position_error` block in [`config/autofocus.yaml`](config/autofocus.yaml), add `cphd_reader.pulse_range: [0, N]` and `aperture_manager.max_aperture_pulses: N`, and run. `AutofocusScoreOp` logs the affine-removed RMS; adding `dump: true` with `output.path` writes `af_expected_phase.npy` and `af_estimated_phase.npy` beside the image, which is what the swing and the error decomposition come from. Note the key is `output.path` — `dump` itself is only a boolean.
 

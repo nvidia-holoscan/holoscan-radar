@@ -2,95 +2,106 @@
 
 ## Implementation follow-ups
 
-1. **The estimate degrades with aperture length, non-monotonically, and
-   at 16000 pulses it leaves the acceptance target.** Measured on
-   Kourou (UMBRA-05) with a known 2 cm look-axis quadratic injected
-   (`position_error`, 5.365 rad peak-to-peak of truth), 2048² product,
-   4 iterations, varying only `pulse_range` / `max_aperture_pulses`.
-   Residual is `AutofocusScoreOp`'s affine-removed RMS against the
-   injected truth; the target is ≤ 0.39 rad (`SAR/TESTING.md`).
+1. **Beyond roughly 16000 pulses PGA produces an estimate that lowers
+   sharpness, so the guard refuses it and autofocus contributes
+   nothing.** This is the one real defect against how the operator will
+   be used: an operator cannot hand-pick `pulse_range` per collect, and
+   on Kourou (UMBRA-05) the useful aperture ceiling sits somewhere
+   between 16000 and 20000 of the collect's 23375 pulses.
 
-   | pulses | residual | swing | sharpness | iterations kept |
-   | --- | --- | --- | --- | --- |
-   | 8000 | 0.149 rad | 1.09 | 8.66× | all 4 |
-   | 12000 | 0.283 rad | — | 8.94× | 3 of 4 |
-   | 16000 | **0.692 rad** | 1.31 | 5.28× | all 4 |
-   | 20000 | **0.428 rad** | — | 2.73× | 1 of 4 |
-   | 23375 (full) | 0.332 rad | 1.25 | 2.84× | 1 of 4 |
+   Measured on the clean collect — no injected error, so the number is
+   the magnitude of what PGA estimates for the collect's own residual
+   motion, and `SAR_AF_IGNORE_DROP` (below) exposes the estimate the
+   guard refuses:
 
-   **Sharpness gain is anti-correlated with phase accuracy here, so it
-   must not be read as a quality metric.** 16000 pulses accepts all
-   four iterations and is the worst configuration by phase truth;
-   the full aperture accepts one and is more than twice as accurate.
+   | pulses | as shipped | with the guard bypassed | sharpness |
+   | --- | --- | --- | --- |
+   | 8000 | 0.142 rad, accepted | — | 1.10× |
+   | 12000 | 0.000, refused | 0.265 rad | 1.00× |
+   | 16000 | 0.507 rad, accepted | — | 1.49× |
+   | 20000 | 0.000, refused | 1.166 rad | 1.00× |
+   | 23375 (full) | 0.000, refused | 1.335 rad | 1.00× |
 
-   Decomposing the residual separates three distinct defects:
+   Where the guard accepts, the estimate is real: at 16000 applying it
+   raises sharpness 1.49× on an already-formed clean image, so there
+   genuinely was that much error. Where it refuses, applying the
+   estimate lowers sharpness, and the refused estimate is large
+   (1.17–1.34 rad) rather than marginal — PGA is not failing to find a
+   small error, it is confidently finding a wrong one.
 
-   - **A curvature over-estimate that appears at some aperture lengths
-     and not others.** At 16000 the estimate over-curves by 31% and a
-     best-fit quadratic accounts for **85%** of the residual (0.636 of
-     0.692 rad); remove it and 0.272 rad of ripple is left. At 8000 and
-     23375 the quadratic term is ~0.01 rad, i.e. the curvature is
-     right. Note the sign: PGA *over*-reports swing here, where the
-     narrow-window operator tests under-report it (0.80–0.99 of truth),
-     so this is not the same effect as `window_fraction` swing loss.
-   - **Broadband ripple that grows with aperture length** — 0.145 /
-     0.272 / 0.331 rad at 8000 / 16000 / 23375. At the full aperture
-     this *is* the entire residual and consumes most of the 0.39 rad
-     budget, so the full-aperture pass is not comfortable.
-   - **A one-sample step discontinuity at exactly `floor(n_pulses/2)`,
-     at every aperture length.** 1.832 rad at 8000, 0.700 at 16000 and
-     1.799 at 23375, against a median sample-to-sample step of
-     0.0012–0.0018 rad — 473× to 1518×. The two halves are not offset
-     from each other (half-means are ±0.06 rad), so this is a seam in
-     one sample rather than a constant. It is narrow enough to barely
-     move the RMS. The dwell centre is where the bin-to-pulse
-     `fftshift(phase_acc)` wraps, so that emit is the first suspect,
-     with `PhaseResampleOp`'s central-`num_pulses` extraction second —
-     though on these runs the aux azimuth extent already equals the
-     aperture, so the resample is an identity and the emit is the more
-     likely of the two. **Cheapest of the three to chase.** One
-     explanation is already ruled out: it is not a residual linear term
-     left in bin order, which would map to exactly this sawtooth —
-     detrending the estimate in bin order and mapping back leaves both
-     the residual and the step unchanged to four decimal places.
+   **The shape of this is the standard long-aperture PGA problem**: one
+   estimate across a very long dwell, with a single geometrically
+   shrinking window, rather than a coarse-to-fine or sub-aperture
+   schedule whose estimates are composed. Fixing it is an algorithm
+   decision for the team, not a parameter change — `min_scatterers`
+   (16 / 64 / 256 / 718) and `window_fraction` (512 / 1024 / 2048 /
+   4096 absolute samples) each move the result by less than they move
+   each other, and `num_iterations` 1 / 2 / 3 / 4 / 6 does not rescue
+   it either, so there is no setting of the shipped parameters that
+   makes a long aperture work.
 
-   **The sharpness guard is correct and is not the problem.** Forcing
-   the refused iterations through with `SAR_AF_IGNORE_DROP` (see below)
-   at the full aperture takes the residual from 0.332 to 1.295 rad and
-   sharpness from 2.84× to 2.02×, so the iterations it declines really
-   do diverge. The operator is behaving as specified.
+2. **`AutofocusScoreOp`'s residual conflates the injected error with the
+   collect's own, and that invalidated an earlier reading of this
+   file.** The score is taken against the injected truth alone, but PGA
+   also estimates whatever real error the collect carries — correctly
+   — and is charged for it. Subtracting a clean-collect baseline
+   separates the two, and the estimator is far better than the raw
+   number suggests:
 
-   **Supersedes the earlier reading of this item, which was measured
-   without ground truth and drew the wrong conclusion.** That sweep ran
-   the *clean* collect, where no error is injected, and read the
-   1.000× sharpness results as the estimator failing. They are correct
-   behaviour: the clean full-aperture image is already focused — its
-   sharpness (6.159e20) is higher than the best the injected-error run
-   recovers (5.697e20) — so the first estimate can only make it worse
-   and the guard refuses it. Nothing is wrong at the full aperture on
-   clean data; what is wrong is the accuracy trend above.
+   | pulses | residual vs injected truth | the collect's own | estimator alone |
+   | --- | --- | --- | --- |
+   | 8000 | 0.149 rad | 0.142 rad | **0.042 rad** |
+   | 16000 | 0.692 rad | 0.507 rad | **0.346 rad** |
 
-   **None of this reproduces on a clean synthetic scene**, which is
-   itself a lead. `AutofocusOp.AccuracyIsFlatOverAzimuthExtentOnACleanScene`
-   sweeps the azimuth extent 16× at the same fixed ~64-column window and
-   finds the estimator flat and near-exact — 0.002 to 0.004 rad, swing
-   within 2% — so the trend above is not a property of extent alone. It
-   needs something the synthetic scene lacks: real clutter, range bins
-   of varying scatterer quality, an error that is not a pure quadratic,
-   or the oversampled polar auxiliary. **CI cannot guard these numbers**
-   — it has only the generated 5-pulse fixture, which is far too small
-   for PGA to recover anything — so the collect is the only instrument,
-   and that test is the nearest CI stand-in.
+   Both are inside the 0.39 rad target of `SAR/TESTING.md` once the
+   collect's own error is removed, where the raw 0.692 reads as a clear
+   failure. **So the apparent "accuracy degrades with aperture length"
+   is mostly the collect's uncompensated motion growing with aperture
+   length, which is physically expected, not the estimator decaying.**
+   The app's validation apparatus should run the clean baseline and
+   subtract it rather than leaving this to be rediscovered; until it
+   does, read any single residual as an upper bound on estimator error.
 
-   Reproduce with a `position_error` block over the desired
-   `pulse_range`; `AutofocusScoreOp` reports the residual and, with
-   `dump: true` plus `output.path`, writes `af_expected_phase.npy` and
-   `af_estimated_phase.npy` beside the image for the comparison above.
+3. **A one-sample step at exactly `floor(n_pulses/2)` in the emitted
+   estimate, at every aperture length.** 1.832 rad at 8000, 0.700 at
+   16000 and 1.799 at 23375, against a median sample-to-sample step of
+   0.0012–0.0018 rad — 473× to 1518×. The two halves are not offset
+   from each other (half-means are within ±0.06 rad), so it is a seam
+   in one sample rather than a constant. It is narrow enough to barely
+   move the RMS. The dwell centre is where the bin-to-pulse
+   `fftshift(phase_acc)` wraps, so that emit is the first suspect;
+   `PhaseResampleOp` is second but the aux azimuth extent equals the
+   aperture on these runs, which makes it an identity copy. One
+   explanation is ruled out: it is not a residual linear term left in
+   bin order, which would map to exactly this sawtooth — detrending in
+   bin order and mapping back leaves the residual and the step
+   unchanged to four decimal places.
 
-2. **`num_iterations` is bounded at 255 by the contract's `uint8`,
-   which has not been exercised anywhere near that.** The preset
-   uses 4 and the sweeps above use 4. Whether the guard-and-keep
-   behaviour is still sensible over tens of iterations is unknown.
+4. **`num_iterations` is bounded at 255 by the contract's `uint8`,
+   which has not been exercised anywhere near that.** The preset uses 4
+   and the sweeps above use 4 except where noted. Whether the
+   guard-and-keep behaviour is still sensible over tens of iterations
+   is unknown.
+
+## What is not wrong
+
+**The sharpness guard.** Forcing the refused iterations through at the
+full aperture takes the residual from 0.332 to 1.295 rad, so the
+iterations it declines really do diverge. It is doing its job.
+
+**The estimator on a clean synthetic scene.**
+`AutofocusOp.AccuracyIsFlatOverAzimuthExtentOnACleanScene` sweeps the
+azimuth extent 16× at a fixed ~64-column window and finds it flat and
+near-exact, 0.002 to 0.004 rad with swing within 2%. The long-aperture
+defect needs a real collect to see: CI has only the generated 5-pulse
+fixture, far too small for PGA to recover anything.
+
+**Sharpness as a *safety* signal, though not as a quality metric.**
+Across every configuration measured, the guard either accepted an
+estimate that was real or refused one that was harmful. What sharpness
+cannot do is rank two accepted estimates: at 16000 pulses it reads
+1.49× on the clean collect, the best of any length, while that same
+configuration carries the largest real error.
 
 ## Diagnostics
 
@@ -102,3 +113,13 @@ emitted correction is zero and anything scoring it downstream sees the
 uncorrected error rather than the estimate that was refused. It is a
 diagnostic, not a tuning knob: the contract says the guard holds, and
 setting this will leave the image worse.
+
+To reproduce any of the above, uncomment the `position_error` block in
+the [autofocus app config](../../../applications/sar/autofocus/config/autofocus.yaml),
+set `cphd_reader.pulse_range: [0, N]` and
+`aperture_manager.max_aperture_pulses: N`, and run. A `polynomial` of
+`[0, 0, 0.0]` injects nothing and scores PGA's estimate of the
+collect's own error. `AutofocusScoreOp` logs the affine-removed RMS,
+and `dump: true` with `output.path` writes `af_expected_phase.npy` and
+`af_estimated_phase.npy` beside the image. Note the key is
+`output.path`; `dump` itself is only a boolean.

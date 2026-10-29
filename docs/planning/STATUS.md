@@ -62,6 +62,35 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   `lattice.spacing: [v, u]` is rejected under `scroll`, so an anisotropic grid
   — e.g. along-track at the finer azimuth resolution — is not reachable from
   config. Asked for and deferred.
+- **2026-10-29** — **The autofocus "accuracy degrades with aperture length"
+  finding was itself a measurement artifact; the real defect is narrower and the
+  estimator is much better than reported.** `AutofocusScoreOp` scores the
+  estimate against the *injected* truth alone, but PGA also estimates whatever
+  real error the collect carries, correctly, and is charged for it. Running the
+  same configurations with `polynomial: [0, 0, 0.0]` measures the collect's own
+  error on its own: 0.142 rad at 8000 pulses and 0.507 at 16000, against raw
+  residuals of 0.149 and 0.692. Subtracting that baseline, **the estimator
+  recovers a known 2 cm quadratic to 0.042 rad at 8000 and 0.346 at 16000** —
+  both inside the 0.39 rad target, where the raw 0.692 reads as a clear failure.
+  So most of the apparent degradation is the collect's uncompensated motion
+  growing with aperture, which is physically expected. Three candidate causes
+  were measured and ruled out along the way: scatterer count (`min_scatterers` 16
+  / 64 / 256 / 718 gives 0.69 / 0.56 / 0.64 / 0.75 rad), window width (512 / 1024
+  / 2048 / 4096 absolute samples gives 0.66 / 0.70 / 0.52 / 0.66), and iteration
+  count (1 / 2 / 3 / 4 / 6 gives 0.50 / 0.73 / 0.74 / 0.69 / 0.43 — the *first*
+  estimate is already off, so it is not over-accumulation). **What remains is a
+  genuine aperture ceiling:** beyond roughly 16000 of Kourou's 23375 pulses PGA
+  produces an estimate that lowers sharpness, the guard refuses it, and autofocus
+  contributes nothing. With the guard bypassed those refused estimates are large,
+  1.166 rad at 20000 and 1.335 at 23375, so PGA is confidently finding a wrong
+  error rather than failing to find a small one — the shape of the standard
+  long-aperture PGA problem, wanting a coarse-to-fine or sub-aperture schedule
+  instead of one estimate across the whole dwell. **That is an algorithm decision
+  for the team**, since no setting of the shipped parameters rescues it.
+  Rewritten in
+  [`operators/sar/autofocus_op/OPEN_ITEMS.md`](../../operators/sar/autofocus_op/OPEN_ITEMS.md),
+  which **supersedes both earlier readings of this item**; still needs the Jira
+  entry on board 41309.
 - **2026-10-29** — **The full-aperture autofocus result was measured without
   ground truth and the conclusion was wrong; re-measured against injected truth,
   the guard is right and the real defect is an accuracy trend.** Re-running
