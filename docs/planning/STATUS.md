@@ -62,6 +62,33 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   `lattice.spacing: [v, u]` is rejected under `scroll`, so an anisotropic grid
   — e.g. along-track at the finer azimuth resolution — is not reachable from
   config. Asked for and deferred.
+- **2026-10-29** — **The full-aperture autofocus result was measured without
+  ground truth and the conclusion was wrong; re-measured against injected truth,
+  the guard is right and the real defect is an accuracy trend.** Re-running
+  Kourou with a known 2 cm look-axis quadratic (5.365 rad) at the preset's
+  settings, `AutofocusScoreOp`'s affine-removed residual over aperture length is
+  0.149 rad at 8000, 0.283 at 12000, **0.692** at 16000, **0.428** at 20000 and
+  0.332 at 23375, against a 0.39 rad target. **Sharpness gain is anti-correlated
+  with phase accuracy** and must not be read as a quality metric: 16000 pulses
+  keeps all four iterations and is the worst configuration by truth, the full
+  aperture keeps one and is twice as accurate. The residual decomposes into three
+  separate defects — a curvature *over*-estimate that appears at some lengths and
+  not others (at 16000 a best-fit quadratic is 85% of the residual, swing 1.31;
+  the narrow-window tests under-report swing, so this is a different effect),
+  broadband ripple growing with aperture (0.145 / 0.272 / 0.331 rad) which at the
+  full aperture is the whole residual, and **a one-sample step at exactly
+  `floor(n/2)`** of 1.832 / 0.700 / 1.799 rad against a 0.0012–0.0018 rad median
+  step, 473× to 1518×, which smells like a dwell-centre fencepost in the
+  `fftshift(phase_acc)` emit or `PhaseResampleOp`. **The sharpness guard is
+  correct**: forcing the refused iterations through takes the residual 0.332 →
+  1.295 rad. Added `SAR_AF_IGNORE_DROP`, an environment-gated diagnostic that
+  keeps a rejected estimate so it can be scored — the guard otherwise leaves a
+  rejection unobservable, since `phase_acc` is never accumulated and the emitted
+  correction is zero. No contract change and no behaviour change with it unset.
+  Full detail and the reproduction recipe in
+  [`operators/sar/autofocus_op/OPEN_ITEMS.md`](../../operators/sar/autofocus_op/OPEN_ITEMS.md)
+  §1; **still needs the Jira entry on board 41309**, which cannot be filed from
+  this environment.
 - **2026-10-29** — **Float samples with float64 geometry halve the SAR pools and
   cost nothing measurable, so the precision axis is now two parameters.**
   `CPHDReaderOp`, `ApertureManagerOp` and `BackprojectionOp` take
@@ -135,6 +162,9 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   §1 and the SAR roll-up; **needs a Jira entry on board 41309**, which could not
   be filed from this environment. With single the default, the preset now runs
   unmodified — the estimator result is what remains open, not the graph.
+  **The estimator reading here is superseded by the entry above**, which
+  re-measured it against injected truth: the 1.000× clean-collect results are
+  correct behaviour on an already-focused image, not a failure.
   **Latent:** `downcast_vph_kernel` is only reachable from the fp32 backends
   and is correctly `if constexpr`-guarded, but the fp32 family has not been
   exercised at `<float, double>`. A trap worth knowing: the mixed instantiation

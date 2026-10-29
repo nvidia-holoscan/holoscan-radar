@@ -46,6 +46,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -721,6 +722,19 @@ void passthrough_outputs(const void* in, void* image_out, T* phase_out, T* sharp
 }
 
 // in / image_out: native (batch, rows, cols) = (..., v, u).
+// Diagnostic escape hatch for the sharpness guard, off unless the environment
+// sets it. When an estimate lowers sharpness the guard discards it and stops,
+// which is correct but leaves the rejected estimate unobservable: phase_acc is
+// never accumulated, so the emitted correction is zero and anything scoring it
+// downstream sees the uncorrected error rather than the estimate that was
+// refused. Setting SAR_AF_IGNORE_DROP keeps the estimate so it can be scored
+// against a known truth. It is not a tuning knob and not a parameter -- the
+// contract says the guard holds -- and it will leave the image worse.
+inline bool autofocus_ignore_drop() {
+  static const bool ignore = std::getenv("SAR_AF_IGNORE_DROP") != nullptr;
+  return ignore;
+}
+
 // phase_out: (batch, n_az). sharpness_out: (batch, n_iter+1).
 template <typename T>
 void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const void* in,
@@ -878,6 +892,13 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
       if (host_sharp_new[static_cast<size_t>(b)] < host_sharp[static_cast<size_t>(b)]) {
         drop = true;
       }
+    }
+    if (drop && autofocus_ignore_drop()) {
+      HOLOSCAN_LOG_WARN(
+          "{}: iteration {} sharpness dropped ({:g} -> {:g}); keeping it anyway "
+          "(SAR_AF_IGNORE_DROP) -- diagnostic only, the image will be worse",
+          who, iter, static_cast<double>(host_sharp[0]), static_cast<double>(host_sharp_new[0]));
+      drop = false;
     }
     if (drop) {
       HOLOSCAN_LOG_WARN(
