@@ -18,6 +18,15 @@ Use this source for recorded monostatic CPHD collections. It decodes selected pu
 There are no input ports: this is a clock-triggered source. `T=float` means
 complex64/float32; `T=double` means complex128/float64.
 
+A second parameter sets the geometry precision: `CPHDReaderOp<T, TGeom>`
+defaults `TGeom` to `T`, and `positions`, `reference_position` and
+`velocities` take `TGeom` while the phase history takes `T`. `<float, double>` halves the retained aperture while
+keeping positions in float64, which they need: ECEF coordinates do not survive
+float32, where one ulp at a 6.4e6 m radius is 0.76 m -- some 25 wavelengths at
+X band. `sample_axis` stays on `T` because it belongs to the fast-time sample data,
+and `pulse_times` was already float64 regardless of `T` -- the same reasoning,
+conceded earlier for one field. `TGeom` may not be coarser than `T`.
+
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
 | --- | --- | --- | --- | --- | --- |
 | Out | `phase_history` | complex `T` | `(num_pulses,num_samples)` | Every batch | required data |

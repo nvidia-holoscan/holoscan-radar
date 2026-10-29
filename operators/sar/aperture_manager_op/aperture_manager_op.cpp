@@ -121,14 +121,15 @@ expected<TensorOutputLoan, Error> prepare_geometry(Output<WireSampleGeometry>& o
 }
 }  // namespace
 
-template <typename T>
-ApertureManagerOp<T>::ApertureManagerOp(const MaxTensorExtents& extents) : extents_(extents) {
+template <typename T, typename TGeom>
+ApertureManagerOp<T, TGeom>::ApertureManagerOp(const MaxTensorExtents& extents)
+: extents_(extents) {
   require_extent(extents.max_pulses, "max_pulses", kWho);
   require_extent(extents.max_range_bins, "max_range_bins", kWho);
 }
 
-template <typename T>
-void ApertureManagerOp<T>::setup(OperatorSpec& spec) {
+template <typename T, typename TGeom>
+void ApertureManagerOp<T, TGeom>::setup(OperatorSpec& spec) {
   const auto pulses = *extents_.max_pulses;
   const auto bins = *extents_.max_range_bins;
   // Setup default 16: continuous strip fans 4 slices per reader cube. Per-edge
@@ -146,7 +147,7 @@ void ApertureManagerOp<T>::setup(OperatorSpec& spec) {
           kDevice, 2U, tensor_byte_span(std::vector<int64_t>{pulses, bins}, complex_dtype<T>())));
   for (Output<Tensor>* port : {&positions_out, &reference_position_out}) {
     spec.output(*port).produces_tensor(pooled_tensor_output(
-        kDevice, 2U, tensor_byte_span(std::vector<int64_t>{pulses, 3}, real_dtype<T>())));
+        kDevice, 2U, tensor_byte_span(std::vector<int64_t>{pulses, 3}, real_dtype<TGeom>())));
   }
   spec.output(weight).produces_tensor(pooled_tensor_output(
       kDevice, 1U, tensor_byte_span(std::vector<int64_t>{pulses}, real_dtype<T>())));
@@ -156,12 +157,12 @@ void ApertureManagerOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(pooled_tensor_output(
           kDevice, 3U,
           tensor_byte_span(std::vector<int64_t>{*extents_.max_image_v, *extents_.max_image_u, 3},
-                           real_dtype<T>())));
+                           real_dtype<TGeom>())));
   spec.output(control_out).produces_tensor(pooled_tensor_output(kDevice, 1U, sizeof(uint8_t)));
 }
 
-template <typename T>
-Contract ApertureManagerOp<T>::contract() const {
+template <typename T, typename TGeom>
+Contract ApertureManagerOp<T, TGeom>::contract() const {
   Contract result;
   result
       .trigger(
@@ -178,8 +179,8 @@ Contract ApertureManagerOp<T>::contract() const {
   return result;
 }
 
-template <typename T>
-void ApertureManagerOp<T>::start() {
+template <typename T, typename TGeom>
+void ApertureManagerOp<T, TGeom>::start() {
   const auto& p = params();
   if (p.max_aperture_pulses < 0 || p.emit_interval_pulses < 0 ||
       (p.emit_mode == ApertureEmitMode::kReform && p.max_aperture_pulses == 0)) {
@@ -195,8 +196,8 @@ void ApertureManagerOp<T>::start() {
   }
 }
 
-template <typename T>
-expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
+template <typename T, typename TGeom>
+expected<void, Error> ApertureManagerOp<T, TGeom>::compute(ExecutionContext& context) {
   keep_.clear();
   HOLOSCAN_TRY(auto raw_profiles, receive_tensor(range_profiles, kWho));
   HOLOSCAN_TRY(auto raw_positions, receive_tensor(positions, kWho));
@@ -208,8 +209,8 @@ expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
   HOLOSCAN_TRY(auto points_tensor, receive_optional_value(sample_points));
   try {
     require_complex<T>(raw_profiles, "range_profiles");
-    require_dtype(raw_positions, real_dtype<T>(), "positions", kWho);
-    require_dtype(raw_reference, real_dtype<T>(), "reference_position", kWho);
+    require_dtype(raw_positions, real_dtype<TGeom>(), "positions", kWho);
+    require_dtype(raw_reference, real_dtype<TGeom>(), "reference_position", kWho);
     require_contiguous(raw_profiles, "range_profiles", kWho);
     require_contiguous(raw_positions, "positions", kWho);
     require_contiguous(raw_reference, "reference_position", kWho);
@@ -405,6 +406,7 @@ expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
   return {};
 }
 
-template class ApertureManagerOp<float>;
-template class ApertureManagerOp<double>;
+template class ApertureManagerOp<float, float>;
+template class ApertureManagerOp<double, double>;
+template class ApertureManagerOp<float, double>;
 }  // namespace holoscan::radar

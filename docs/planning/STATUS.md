@@ -62,6 +62,38 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   `lattice.spacing: [v, u]` is rejected under `scroll`, so an anisotropic grid
   — e.g. along-track at the finer azimuth resolution — is not reachable from
   config. Asked for and deferred.
+- **2026-10-29** — **Float samples with float64 geometry halve the SAR pools and
+  cost nothing measurable, so the precision axis is now two parameters.**
+  `CPHDReaderOp`, `ApertureManagerOp` and `BackprojectionOp` take
+  `<T, TGeom>` with `TGeom` defaulting to `T`; `TGeom` governs `positions`,
+  `reference_position`, `sample_points` and `velocities`, `T` governs samples
+  and the image, and `TGeom` may not be coarser than `T`. **Contract change**,
+  written up in [`SAR/OPERATOR_API.md`](SAR/OPERATOR_API.md) — note it makes
+  `AGENTS.md` invariant 3 ("an instance's inputs and outputs match its
+  templated precision") imprecise as worded, and that wording needs a decision.
+  On Kourou at 8000 pulses and the native 7150² product, `<float, double>`
+  declares **33.1 GiB against 60.9 GiB** and reproduces the double run to five
+  significant figures in peak, total energy and Σ|z|⁴ — RMS difference 3.3e-6
+  relative, the identical 1.090× autofocus gain over 4 iterations, 457 ms
+  against 461 ms. Reached from `applications/sar/autofocus` with
+  `sample_precision: single`; the driver (`run_sar_graph_app<T, TGeom>`) is
+  templated so the other five SAR apps are unchanged at the defaults, and all
+  1188 tests pass.
+  **Why it has to be two parameters and not one.** The memory is entirely in
+  the sample data (55.7 GiB of the 60.9), but ECEF positions cannot be carried
+  in float32: one ulp at a 6.4e6 m radius is 0.76 m, ~25 wavelengths at X band,
+  so a plain `T=float` run destroys the phase history before sample precision
+  matters at all. The split is shallow to implement because the kernels already
+  promote geometry to double on entry (`apc` / `mcp` / `r0` / the x/y/z planes
+  are `double*` whatever `T` is) and the NVRadar family already consumes
+  float32 profiles — so `<float, double>` is close to what the arithmetic was
+  doing anyway. `pulse_times` was already float64 regardless of `T`, so this
+  generalizes a conceded exception rather than inventing a kind.
+  **Not yet decided:** whether `single` becomes a supported mode (presets still
+  default to double everywhere), and whether the other SAR apps should expose
+  the knob. Also latent: `downcast_vph_kernel` is only reachable from the fp32
+  backends and is correctly `if constexpr`-guarded, but the fp32 family has not
+  been exercised at `<float, double>`.
 - **2026-10-28** — **The autofocus memory ceiling is down from 78.6 GiB to 60.9
   GiB with no contract change, and the obvious-looking fix turned out to be
   worthless.** Measured on Kourou at 8000 pulses and the native 7150² product

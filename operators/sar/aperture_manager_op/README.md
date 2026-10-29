@@ -16,6 +16,13 @@ Use between range compression and backprojection when apertures span ticks or ne
 ## Ports
 
 `T=float` means complex64/float32; `T=double` means complex128/float64.
+
+A second parameter sets the geometry precision: `ApertureManagerOp<T, TGeom>`
+defaults `TGeom` to `T`, and the geometry ports take `TGeom` while the retained
+pulses take `T`. `<float, double>` halves the retained aperture while
+keeping positions in float64, which they need: ECEF coordinates do not survive
+float32, where one ulp at a 6.4e6 m radius is 0.76 m -- some 25 wavelengths at
+X band. `weight` stays on `T`: it is a per-pulse amplitude taper, not geometry. `TGeom` may not be coarser than `T`.
 The four required inputs join with `Exact{}` at the same capture time.
 Optional `[live]` inputs also use same-tick `Exact{}`/`SafeDefault{}`.
 

@@ -101,7 +101,28 @@ Design conventions carry over unchanged: plain-tensor data ports (bridge with sm
 
 Two conventions are **extended** and are specified here rather than assumed: precision (below) and cross-tick accumulation (§ *Cross-tick accumulation*).
 
-**Precision (all operators).** Every operator supports both **single** (`complex64` / `float32`) and **double** (`complex128` / `float64`) precision floating-point I/O. Precision is fixed at compile time by the operator's template instantiation — neither a runtime parameter nor inferred from the data — and an instance's inputs and outputs match that precision. The per-operator dtype labels list both forms. SAR adds a second, **orthogonal** axis on `BackprojectionOp` alone: the internal arithmetic strategy for the range computation, which is not a binary and is not the same question as the I/O dtype. See `BackprojectionOp.backend`.
+**Precision (all operators).** Every operator supports both **single** (`complex64` / `float32`) and
+**double** (`complex128` / `float64`) precision floating-point I/O. Precision is fixed at compile
+time by the operator's template instantiation — neither a runtime parameter nor inferred from the
+data — and an instance's inputs and outputs match that precision. **Three operators carry a second
+precision parameter for geometry**: `CPHDReaderOp<T, TGeom>`, `ApertureManagerOp<T, TGeom>`, and
+`BackprojectionOp<T, TGeom>`, where `TGeom` defaults to `T` and governs `positions`,
+`reference_position`, `sample_points`, and `velocities` while `T` governs samples and the image.
+`TGeom` may not be coarser than `T`. This exists because the two cannot be one choice: the sample
+data is where the memory is (on Kourou, 55.7 GiB of 60.9 GiB of declared pools), but ECEF positions
+cannot be carried in float32, where one ulp at a 6.4e6 m radius is 0.76 m — some 25 wavelengths at X
+band, which destroys the phase history before the samples' own precision matters. `<float, double>`
+therefore halves the dominant pools at no measurable cost to the image: on Kourou at 8000 pulses and
+a 7150² product it declares 33.1 GiB against 60.9 GiB and reproduces the double result to five
+significant figures in peak, total energy, and Σ|z|⁴, with an RMS difference of 3.3e-6 relative and
+the identical 1.090× autofocus gain. `pulse_times` was already float64 regardless of `T` for the
+same class of reason; this generalizes that exception rather than introducing a new kind. Ports that
+ride the sample precision keep `T` even when they are metre-valued (`range_bins`, `sample_axis`)
+because their producers are sample-precision, as does `weight`, which is an amplitude taper. The
+per-operator dtype labels list both forms.
+SAR adds a second, **orthogonal** axis on `BackprojectionOp` alone: the internal arithmetic strategy
+for the range computation, which is not a binary and is not the same question as the I/O dtype. See
+`BackprojectionOp.backend`.
 
 **Nothing here is locked yet, so nothing is tagged as proposed.** This document is a proposal in its entirety, and R1 — indexed in [TEAM_BLOCKED.md](TEAM_BLOCKED.md) — *is* the question of accepting it. That inverts the FMCW [OPERATOR_API.md](../OPERATOR_API.md) one level up, where the surrounding text is accepted lockdown and a **[PROPOSED]** tag marks the exceptions to it; tagging individual passages here would imply the untagged remainder is settled, which is the opposite of true. Once R1 accepts this contract, later amendments take the FMCW convention. Which questions are still genuinely open is a separate matter from acceptance: § *Open items* enumerates them by class, and the team-blocked ones are R1 itself and the metadata key namespace (R10).
 

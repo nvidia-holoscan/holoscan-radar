@@ -16,6 +16,14 @@ Use after aperture management to form a monostatic image on a SampleGeometry lat
 ## Ports
 
 `T=float` means complex64/float32; `T=double` means complex128/float64.
+
+A second parameter sets the geometry precision: `BackprojectionOp<T, TGeom>`
+defaults `TGeom` to `T`, and the geometry ports take `TGeom` while samples and
+the image take `T`. `<float, double>` halves the retained aperture while
+keeping positions in float64, which they need: ECEF coordinates do not survive
+float32, where one ulp at a 6.4e6 m radius is 0.76 m -- some 25 wavelengths at
+X band. `range_bins` and `weight` stay on `T`, because their producers are
+sample-precision. `TGeom` may not be coarser than `T`.
 The three pulse tensors are required and aligned. All optional `[live]`
 inputs are per-tick `Exact{}`/`SafeDefault{}` joins; `control` is the optional
 emit trigger and is normally supplied by `ApertureManagerOp.control_out`.

@@ -120,7 +120,18 @@ inline radar::MaxTensorExtents make_ingest_extents(const radar::MaxTensorExtents
   return ingest;
 }
 
-template <typename LoadConfig, typename BuildGraph>
+// Handed to the graph-building callback so an app can name the precisions the
+// driver instantiated. Apps that form at one precision ignore it.
+template <typename TSample, typename TGeometry>
+struct Precision {
+  using Sample = TSample;
+  using Geometry = TGeometry;
+};
+
+// `T` is the sample and image precision, `TGeom` the geometry precision. They
+// default to double, which is what every landed preset uses; `<float, double>`
+// halves the retained aperture while leaving ECEF positions in float64.
+template <typename T = double, typename TGeom = T, typename LoadConfig, typename BuildGraph>
 int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_config,
                       BuildGraph build_graph) {
   try {
@@ -168,21 +179,20 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     holoscan::CompileOptions options;
     const holoscan::ConnectionOptions queue{.queue_depth = 4U};
     auto hud = std::make_shared<radar::FormationHud>();
-    auto reader = graph.op<radar::CPHDReaderOp<double>>("cphd_reader", ingest_extents, hud);
+    auto reader = graph.op<radar::CPHDReaderOp<T, TGeom>>("cphd_reader", ingest_extents, hud);
     reader.set_params(std::move(reader_params));
     bind_outputs(options, "cphd_reader",
                  {"phase_history", "positions", "reference_position", "sample_axis", "pulse_times",
                   "velocities"});
-    auto range =
-        graph.op<radar::SARRangeCompressionOp<double>>("range_compression", ingest_extents);
+    auto range = graph.op<radar::SARRangeCompressionOp<T>>("range_compression", ingest_extents);
     range.set_params(std::move(range_params));
     bind_outputs(options, "range_compression", {"range_profiles", "range_bins"});
-    auto manager = graph.op<radar::ApertureManagerOp<double>>("aperture_manager", extents);
+    auto manager = graph.op<radar::ApertureManagerOp<T, TGeom>>("aperture_manager", extents);
     manager.set_params(std::move(manager_params));
     bind_outputs(options, "aperture_manager",
                  {"range_profiles_out", "positions_out", "reference_position_out", "weight",
                   "sample_points_out", "control_out"});
-    auto bp = graph.op<radar::BackprojectionOp<double>>("backprojection", extents, hud);
+    auto bp = graph.op<radar::BackprojectionOp<T, TGeom>>("backprojection", extents, hud);
     bp.set_params(std::move(bp_params));
     bind_outputs(options, "backprojection", {"image"});
     auto counter = std::make_shared<app::sar::ImageCount>();
@@ -212,8 +222,8 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     bool has_visualization = false;
     bool has_timeline = false;
     graph.add_flow(reader->phase_history, range->phase_history, queue);
-    const auto* formed = build_graph(graph, options, queue, cfg, reader, range, manager, bp, source,
-                                     application, formation, extents);
+    const auto* formed = build_graph(Precision<T, TGeom>{}, graph, options, queue, cfg, reader,
+                                     range, manager, bp, source, application, formation, extents);
     graph.add_flow(*formed, report->image, queue);
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
     bool visualize = cfg.visualize;

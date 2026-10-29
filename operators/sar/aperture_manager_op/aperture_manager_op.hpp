@@ -43,7 +43,11 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&ApertureManagerParams::emit_mode>("emit_mode"),
     holoscan::field<&ApertureManagerParams::aperture_window>("aperture_window"));
 
-template <typename T>
+// `T` is the retained-sample precision; `TGeom` is the precision of the
+// geometry ports (`positions`, `reference_position`, `sample_points`). They
+// default to the same type. `<float, double>` keeps ECEF geometry in float64
+// while halving the retained aperture -- see the operator README.
+template <typename T, typename TGeom = T>
 class ApertureManagerOp : public holoscan::Operator<ApertureManagerParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
 
@@ -88,6 +92,7 @@ class ApertureManagerOp : public holoscan::Operator<ApertureManagerParams> {
   std::vector<std::shared_ptr<Tensor>> keep_;
 };
 
-extern template class ApertureManagerOp<float>;
-extern template class ApertureManagerOp<double>;
+extern template class ApertureManagerOp<float, float>;
+extern template class ApertureManagerOp<double, double>;
+extern template class ApertureManagerOp<float, double>;
 }  // namespace holoscan::radar

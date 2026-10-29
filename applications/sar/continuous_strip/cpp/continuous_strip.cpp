@@ -14,9 +14,9 @@ namespace app = holoscan::radar::app;
 int main(int argc, char** argv) {
   return run_sar_graph_app(
       argc, argv, "continuous_strip", load_config,
-      [](auto& graph, auto& options, const auto& queue, const auto& cfg, auto& reader, auto& range,
-         auto& manager, auto& bp, auto& /*source*/, auto& application, auto& formation,
-         const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {
+      [](auto precision, auto& graph, auto& options, const auto& queue, const auto& cfg,
+         auto& reader, auto& range, auto& manager, auto& bp, auto& /*source*/, auto& application,
+         auto& formation, const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {
         const int64_t slice =
             cfg.emit_interval_pulses > 0 && cfg.reader_pulses_per_tick > cfg.emit_interval_pulses
                 ? cfg.emit_interval_pulses
