@@ -131,7 +131,7 @@ struct Precision {
 // `T` is the sample and image precision, `TGeom` the geometry precision. They
 // default to double, which is what every landed preset uses; `<float, double>`
 // halves the retained aperture while leaving ECEF positions in float64.
-template <typename T = double, typename TGeom = T, typename LoadConfig, typename BuildGraph>
+template <typename T = float, typename TGeom = double, typename LoadConfig, typename BuildGraph>
 int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig load_config,
                          BuildGraph build_graph) {
   try {
@@ -593,16 +593,20 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
   }
 }
 
-// `sample_precision: single` forms at complex64 while keeping geometry in
-// float64, which halves the dominant pools -- the sample and image tensors are
-// where SAR's memory is, and geometry is a few per cent of it. It is not a free
-// choice on both axes: ECEF positions cannot go to float32, where one ulp at a
-// 6.4e6 m radius is 0.76 m, some 25 wavelengths at X band, so only the sample
-// side moves. See the precision section of SAR/OPERATOR_API.md.
+// Samples default to complex64 with geometry in float64, which is what the
+// sensors produce: very few radar systems deliver more than single-precision
+// samples, and the FMCW applications have always instantiated at `float`. It is
+// also where SAR's memory is -- the sample and image tensors are the dominant
+// pools and geometry is a few per cent of them, so this roughly halves every
+// SAR graph. The two axes are not one choice: ECEF positions cannot go to
+// float32, where one ulp at a 6.4e6 m radius is 0.76 m, some 25 wavelengths at
+// X band, so only the sample side moves. `sample_precision: double` opts back
+// in for a collect that genuinely carries more. See the precision section of
+// SAR/OPERATOR_API.md.
 inline bool single_sample_precision(const std::filesystem::path& config) {
   const YAML::Node root = YAML::LoadFile(config.string());
   if (!root["sample_precision"]) {
-    return false;
+    return true;
   }
   const auto value = root["sample_precision"].as<std::string>();
   if (value == "single") {

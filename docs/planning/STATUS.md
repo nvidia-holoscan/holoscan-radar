@@ -89,14 +89,17 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   float32 profiles — so `<float, double>` is close to what the arithmetic was
   doing anyway. `pulse_times` was already float64 regardless of `T`, so this
   generalizes a conceded exception rather than inventing a kind.
-  **All five other SAR apps now ship at `sample_precision: single`.** The
-  precision peek moved out of the autofocus app into the driver
-  (`run_sar_graph_app` reads the key and dispatches to
-  `run_sar_graph_app_at<T, TGeom>`), so every SAR app takes the knob and the
-  presets set it. `AGENTS.md` invariant 3 is reworded to match the two-parameter
-  contract. Measured pools, each app run at both settings on its own collect,
-  with output verified identical (same image indices, geometry, and timing to
-  within noise):
+  **Single-precision samples are now the default for every SAR application, not
+  an opt-in.** Few radar systems deliver more than single-precision samples, and
+  the FMCW applications have always instantiated at `float` (67 `Op<float>`
+  sites, no `Op<double>`); SAR was the outlier. `run_sar_graph_app` reads
+  `sample_precision` and dispatches to `run_sar_graph_app_at<T, TGeom>`,
+  defaulting to `<float, double>` when the key is absent, so the presets carry no
+  key at all and `sample_precision: double` is the opt-back-in for a collect that
+  genuinely holds more. `AGENTS.md` invariant 3 is reworded for both the
+  two-parameter contract and this default. Measured pools, each app run at both
+  settings on its own collect, with output verified identical (same image
+  indices, geometry, and timing to within noise):
 
   | app | double | single | saved |
   | --- | --- | --- | --- |
@@ -113,6 +116,25 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   it now takes `T` for sizing and keeps the runtime check as a safety net,
   which is what takes the app to 48%. `independent_images` is untested here
   because its preset carries no `cphd.path`.
+  **The autofocus preset now runs for the first time, and that exposed an
+  estimator problem.** The preset ships with the full 23375-pulse aperture,
+  which declares **128.4 GiB against 95.6 GiB of GPU** and dies at
+  `PROFILE_MATERIALIZATION_FAILED` before `start()` — it has never been
+  runnable on this hardware. At single it declares 66.9 GiB, fits, and forms
+  2048² in 109 ms at 9.01e11 px·pls/s, 3.5 s ahead of its 4.5 s collect-time
+  target. But the estimator returns **1.000× at the full aperture**: the first
+  estimate lowers sharpness by 34% and the guard refuses it, so nothing is ever
+  applied. Sweeping only the aperture length at the preset's settings gives
+  1.096× at 8000, 1.000× at 12000, **1.491×** at 16000, 1.000× at 20000 and
+  1.000× at 23375 — not monotonic, and not `window_fraction` (256 / 1023 /
+  2047 / 4096 / 8181 samples all give 1.000× at the full aperture). **Not a
+  precision artifact:** at 8000 pulses with the preset's own settings single and
+  double agree to four significant figures at every iteration (1.096× both, 37
+  ms against 40). Recorded as an algorithm follow-up in
+  [`operators/sar/autofocus_op/OPEN_ITEMS.md`](../../operators/sar/autofocus_op/OPEN_ITEMS.md)
+  §1 and the SAR roll-up; **needs a Jira entry on board 41309**, which could not
+  be filed from this environment. With single the default, the preset now runs
+  unmodified — the estimator result is what remains open, not the graph.
   **Latent:** `downcast_vph_kernel` is only reachable from the fp32 backends
   and is correctly `if constexpr`-guarded, but the fp32 family has not been
   exercised at `<float, double>`. A trap worth knowing: the mixed instantiation

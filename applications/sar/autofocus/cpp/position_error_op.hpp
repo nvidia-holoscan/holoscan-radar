@@ -118,6 +118,11 @@ struct LieRecord {
 // profiles. SRP-relative backprojection cancels a pure line-of-sight APC lie
 // in dR, so the leftover that PGA has to estimate is applied to the profiles
 // (4 pi f delta / c, sense add) rather than left in the geometry alone.
+// `T` is the sample precision and `TGeom` the geometry precision, matching the
+// formation operators this sits in front of. The three publications already
+// carry the dtype they received, so only the declared pools, the profile
+// check, and the host staging buffer follow the parameters.
+template <typename T, typename TGeom = T>
 class PerturbPositionsOp : public holoscan::Operator<> {
  public:
   PerturbPositionsOp(std::shared_ptr<LieRecord> record, std::array<double, 3> look,
@@ -131,8 +136,8 @@ class PerturbPositionsOp : public holoscan::Operator<> {
     constexpr const char* kWho = "PerturbPositionsOp";
     const auto pulses = require_extent(extents.max_pulses, "max_pulses", kWho);
     const auto bins = require_extent(extents.max_range_bins, "max_range_bins", kWho);
-    profiles_span_ = byte_span_complex_cube<double>({pulses, bins}, kWho);
-    positions_span_ = byte_span_real_cube<double>({pulses, 3}, kWho);
+    profiles_span_ = byte_span_complex_cube<T>({pulses, bins}, kWho);
+    positions_span_ = byte_span_real_cube<TGeom>({pulses, 3}, kWho);
   }
 
   void setup(OperatorSpec& spec) override {
@@ -226,10 +231,7 @@ class PerturbPositionsOp : public holoscan::Operator<> {
           Error{ErrorCode::kInvalidArgument,
                 "PerturbPositionsOp: range_profiles (num_pulses,num_bins) must match positions"});
     }
-    if (profiles.dtype().code != kDLComplex || profiles.dtype().bits != 128) {
-      return make_unexpected(Error{ErrorCode::kInvalidArgument,
-                                   "PerturbPositionsOp: expected complex128 range_profiles"});
-    }
+    require_dtype(profiles, complex_dtype<T>(), "range_profiles", "PerturbPositionsOp");
 
     // Record the lie for this batch first: both outputs read it, and the
     // scorer reads it again on the reform tick.
@@ -259,7 +261,7 @@ class PerturbPositionsOp : public holoscan::Operator<> {
     HOLOSCAN_TRY(auto host_prof, read_profiles(profiles, count, prof_shape[1], stream));
     for (int64_t i = 0; i < count; ++i) {
       const double phi = record_->expected_phase[static_cast<std::size_t>(p0 + i)];
-      const std::complex<double> phasor{std::cos(phi), std::sin(phi)};
+      const std::complex<T> phasor{static_cast<T>(std::cos(phi)), static_cast<T>(std::sin(phi))};
       const std::size_t row = static_cast<std::size_t>(i) * static_cast<std::size_t>(prof_shape[1]);
       for (int64_t b = 0; b < prof_shape[1]; ++b) {
         host_prof[row + static_cast<std::size_t>(b)] *= phasor;
@@ -323,12 +325,11 @@ class PerturbPositionsOp : public holoscan::Operator<> {
     return host;
   }
 
-  static expected<std::vector<std::complex<double>>, Error> read_profiles(const Tensor& in,
-                                                                          int64_t pulses,
-                                                                          int64_t bins,
-                                                                          cudaStream_t stream) {
-    std::vector<std::complex<double>> host(static_cast<std::size_t>(pulses * bins));
-    if (cudaMemcpyAsync(host.data(), in.data(), host.size() * sizeof(std::complex<double>),
+  static expected<std::vector<std::complex<T>>, Error> read_profiles(const Tensor& in,
+                                                                     int64_t pulses, int64_t bins,
+                                                                     cudaStream_t stream) {
+    std::vector<std::complex<T>> host(static_cast<std::size_t>(pulses * bins));
+    if (cudaMemcpyAsync(host.data(), in.data(), host.size() * sizeof(std::complex<T>),
                         cudaMemcpyDeviceToHost, stream) != cudaSuccess ||
         cudaStreamSynchronize(stream) != cudaSuccess) {
       return make_unexpected(Error{ErrorCode::kFailure, "PerturbPositionsOp: profile D2H failed"});
@@ -354,11 +355,14 @@ class PerturbPositionsOp : public holoscan::Operator<> {
 // dR is supposed to cancel a pure look-axis APC shift. If the product comes
 // back focused, the correction path is exact and any shortfall in the full
 // run belongs to the estimator.
+// `T` matches the PhaseCorrectionOp it feeds, which requires the phase at its
+// own precision.
+template <typename T>
 class OraclePhaseOp : public holoscan::Operator<> {
  public:
   OraclePhaseOp(std::shared_ptr<LieRecord> record, const MaxTensorExtents& extents)
   : record_(std::move(record)) {
-    phase_span_ = byte_span_real_cube<double>(
+    phase_span_ = byte_span_real_cube<T>(
         {require_extent(extents.max_pulses, "max_pulses", "OraclePhaseOp")}, "OraclePhaseOp");
   }
 
@@ -407,7 +411,7 @@ class OraclePhaseOp : public holoscan::Operator<> {
     return emit_required_tensor(
         phase_correction, context, "OraclePhaseOp.phase_correction", false, [&] {
           return prepare_device_tensor(
-              phase_correction, context, std::vector<int64_t>{n_pulses}, real_dtype<double>(),
+              phase_correction, context, std::vector<int64_t>{n_pulses}, real_dtype<T>(),
               [&](void* destination, std::size_t bytes) -> expected<void, Error> {
                 if (cudaMemcpyAsync(destination, record_->expected_phase.data(), bytes,
                                     cudaMemcpyHostToDevice, stream) != cudaSuccess ||

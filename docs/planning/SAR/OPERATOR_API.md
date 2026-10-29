@@ -108,7 +108,7 @@ data — and an instance's inputs and outputs match that precision. **Three oper
 precision parameter for geometry**: `CPHDReaderOp<T, TGeom>`, `ApertureManagerOp<T, TGeom>`, and
 `BackprojectionOp<T, TGeom>`, where `TGeom` defaults to `T` and governs `positions`,
 `reference_position`, `sample_points`, and `velocities` while `T` governs samples and the image.
-`TGeom` may not be coarser than `T`. This exists because the two cannot be one choice: the sample
+`TGeom` may not be coarser than `T`. The SAR applications default to `<float, double>` and take `sample_precision: double` to opt back in, matching FMCW, which has always instantiated at `float`: very few radar systems deliver more than single-precision samples. This exists because the two cannot be one choice: the sample
 data is where the memory is (on Kourou, 55.7 GiB of 60.9 GiB of declared pools), but ECEF positions
 cannot be carried in float32, where one ulp at a 6.4e6 m radius is 0.76 m — some 25 wavelengths at X
 band, which destroys the phase history before the samples' own precision matters. `<float, double>`

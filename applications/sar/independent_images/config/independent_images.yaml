@@ -26,12 +26,6 @@
 # skip sleep while behind). 0 = unconstrained.
 # duty_cycle 1 = no gap; <1 sleeps T_c*(1/D-1) between collections.
 
-# Samples at complex64, geometry at float64. The sample and image
-# tensors are where this graph's memory is; halving them reproduces the
-# double result to five significant figures (SAR/OPERATOR_API.md). ECEF
-# positions stay float64 -- they cannot survive float32.
-sample_precision: single
-
 cphd:
   path:
     - sar/mode5/2023-09-12-02-36-33_UMBRA-04_CPHD.cphd

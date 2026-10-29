@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
           "(profile phase; dR cancels LOS APC)",
           pe.num_pulses);
       lies = std::make_shared<app::sar::LieRecord>();
-      auto lie = graph.template op<app::sar::PerturbPositionsOp>(
+      auto lie = graph.template op<app::sar::PerturbPositionsOp<T, TGeom>>(
           "perturb_positions", lies, pe.look, pe.polynomial, pe.num_pulses, cfg.reference_frequency,
           ingest_extents);
       bind_outputs(options, "perturb_positions",
@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
       HOLOSCAN_LOG_INFO(
           "autofocus: oracle leftover -> PhaseCorrectionOp "
           "(skipping AutofocusOp; positions stay lied)");
-      auto oracle = graph.template op<app::sar::OraclePhaseOp>("oracle_phase", lies, extents);
+      auto oracle = graph.template op<app::sar::OraclePhaseOp<T>>("oracle_phase", lies, extents);
       bind_outputs(options, "oracle_phase", {"phase_correction"});
       graph.add_flow(manager->range_profiles_out, oracle->range_profiles, replay);
       graph.add_flow(oracle->phase_correction, pc->phase_correction, queue);
