@@ -144,6 +144,25 @@
    guard-and-keep behaviour is still sensible over tens of iterations
    is unknown.
 
+6. **There is an error-magnitude ceiling, and past it the operator
+   fails loudly in the image and silently in its own reporting.** At
+   214.6 rad of injected line-of-sight error (about 34 wavelengths) the
+   residual is **50.48 rad** — the estimate recovers roughly half of a
+   ~96 rad affine-removed baseline and leaves the image unusable —
+   while `sharpness` reports an 11.1× gain and the guard terminates
+   normally at iteration 2. This is the same shape as the 107.3 rad
+   failure in item 1 but an order of magnitude worse, and it is not
+   fixed by iterating (8 iterations, converged) or by the guard. The
+   first window has to be matched to the error: 107.3 rad needs 1000
+   samples where 350 fails, so there is presumably a width that
+   recovers 214.6 rad, and nothing in the operator derives it. **What
+   is open is whether `window_fraction` should be derivable** — from
+   the measured gradient, or from a coarse first pass — rather than
+   left as a parameter a caller must size against an error magnitude
+   they are using autofocus precisely because they do not know. See
+   also the quality-signal finding below: nothing distinguishes this
+   case from a success at runtime.
+
 ## What is not wrong
 
 **The sharpness guard.** Forcing the refused iterations through at the
@@ -163,6 +182,59 @@ estimate that was real or refused one that was harmful. What sharpness
 cannot do is rank two accepted estimates: at 16000 pulses it reads
 1.49× on the clean collect, the best of any length, while that same
 configuration carries the largest real error.
+
+## There is no runtime quality signal, and that looks structural
+
+The operator cannot tell a caller whether its estimate is good. Three
+candidate signals were implemented and measured against injected truth
+at 8000 Kourou pulses, and all three are blind to the failure:
+
+| injected | iter | first window | residual | verdict | coherence | converged? | max&#124;grad&#124; |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 5.4 rad | 4 | 350 | 0.149 rad | pass | 1.0000 | yes | 0.017 |
+| 26.8 rad | 4 | 350 | 0.275 rad | pass | 1.0000 | yes | — |
+| 53.6 rad | 4 | 350 | 0.342 rad | pass | — | **no** | — |
+| 53.6 rad | 8 | 350 | 0.194 rad | pass | — | yes | 0.093 |
+| 107.3 rad | 4 | 350 | **1.365 rad** | **fail** | 0.9993 | **no** | 0.152 |
+| 107.3 rad | 8 | 350 | **1.035 rad** | **fail** | 0.9993 | yes | 0.152 |
+| 107.3 rad | 8 | 1000 | 0.274 rad | pass | 0.9990 | yes | — |
+| 214.6 rad | 8 | 350 | **50.48 rad** | **fail** | 0.9993 | yes | 0.109 |
+
+1. **Phase-gradient coherence** — `|Σ_r g₁ conj(g₀)| / Σ_r |g₁||g₀|`
+   over the selected range bins, the standard measure of whether the
+   scatterers agree about the gradient. It saturates: 1.0000 on the
+   passing cases and 0.9993 on the 50 rad catastrophe. The scatterers
+   agree perfectly *and are perfectly wrong* — the error is a
+   systematic bias common to all of them, which is exactly what a
+   coherence statistic is constructed to be insensitive to.
+2. **Convergence** — whether the loop stopped on the guard or ran out
+   of budget. Falsified in both directions by the table: 107.3 rad at 8
+   iterations converges and still fails at 1.035 rad, while 53.6 rad at
+   4 iterations does not converge and passes at 0.342 rad.
+3. **LUE gradient against its unambiguous limit** — the aliasing
+   hypothesis, that a large error wraps the small-angle gradient
+   estimate. Measured max |grad| is 0.001–0.152 rad/bin against a π
+   limit, so nothing is near wrapping, on the failures included. Not
+   the mechanism.
+
+**Why this is unlikely to yield to a better metric.** Candidate 2
+generalizes: the next iteration's estimate *is* a fresh PGA pass on the
+corrected image, so "does a second opinion agree" and "did it
+converge" are the same question. On the 107.3 rad / 8-iteration row
+the last two iterations estimate essentially nothing left to find
+(max |grad| 0.0039 then 0.0010) with 1.035 rad still on the table. PGA
+converges to a fixed point of its own sharpness-and-gradient
+objective, and that fixed point is not the truth. The residual lives in
+the null space of everything the estimator measures, which is why no
+internal quantity sees it. Establishing accuracy appears to need
+information the operator does not have — an independent phase
+reference, a second estimator of a different family, or the known
+truth the validation app injects.
+
+None of the three was shipped; the measurement code was reverted. What
+a caller has is `sharpness` as a safety signal, `max_correction` as a
+blunt magnitude gate, and the guidance that a first window must be
+wide enough for the error magnitude expected.
 
 ## Diagnostics
 

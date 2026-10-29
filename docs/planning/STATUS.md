@@ -4,6 +4,39 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-29** — **Three candidate runtime quality signals for `AutofocusOp`
+  were implemented and measured, and all three are blind to the failure they
+  were built to catch.** The open question was whether the operator can tell a
+  caller that its estimate is wrong, since `sharpness` reported a 17.1× gain on
+  an estimate that missed the hard floor. (1) **Phase-gradient coherence**, the
+  normalized vector sum of `g₁ conj(g₀)` over the selected range bins, reads
+  **1.0000 on every passing case and 0.9993 on a 50 rad catastrophe** — the
+  scatterers agree perfectly and are perfectly wrong, because the error is a
+  systematic bias and coherence is constructed to ignore exactly that. (2)
+  **Convergence** (did the loop stop on the guard or run out of budget) is
+  falsified in both directions: 107.3 rad at 8 iterations converges and still
+  fails at 1.035 rad, while 53.6 rad at 4 iterations does not converge and
+  passes at 0.342 rad. (3) **The LUE gradient against its π aliasing limit**
+  peaks at 0.152 rad/bin, so wrapping is not the mechanism. Candidate 2
+  generalizes to any self-consistency test, because the next iteration's
+  estimate *is* a second PGA opinion on the corrected image: on the failing
+  107.3 rad row the last two iterations find essentially nothing left (max
+  |grad| 0.0039 then 0.0010) with 1.035 rad still outstanding. **PGA converges
+  to a fixed point of its own objective that is not the truth, and the gap lies
+  in the null space of everything the estimator measures** — so this reads as a
+  property of the algorithm rather than a missing metric, and establishing
+  accuracy needs information the operator does not have. No port was added and
+  the measurement code was reverted; invariant 2's contract surface is
+  unchanged. **Two findings fell out.** A new and worse failure: at **214.6 rad
+  (about 34 wavelengths) the residual is 50.48 rad**, roughly half of a ~96 rad
+  baseline, with `sharpness` reporting 11.1× and the guard terminating normally
+  — recorded as `autofocus_op/OPEN_ITEMS.md` §6, where the open question is
+  whether `window_fraction` should be *derived* rather than configured, since a
+  caller reaches for autofocus precisely because the magnitude is unknown. And
+  a correction to yesterday's contract text: **8 iterations alone do not
+  recover 107.3 rad** (1.035 rad, still failing); the 0.274 rad figure needs the
+  wider 1000-sample first window as well, and `SAR/OPERATOR_API.md` said
+  otherwise.
 - **2026-10-29** — **`AutofocusOp.num_iterations` now defaults to 8, a contract
   change.** The prior default of 4 is what fails on the error magnitudes the
   operator exists for (entry below): 1.365 rad residual at 107 rad of injected
