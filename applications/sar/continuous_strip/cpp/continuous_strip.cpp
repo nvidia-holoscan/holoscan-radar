@@ -17,6 +17,8 @@ int main(int argc, char** argv) {
       [](auto precision, auto& graph, auto& options, const auto& queue, const auto& cfg,
          auto& reader, auto& range, auto& manager, auto& bp, auto& /*source*/, auto& application,
          auto& formation, const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {
+        // The mosaic's declared pool follows the formed image's precision.
+        using T = typename decltype(precision)::Sample;
         const int64_t slice =
             cfg.emit_interval_pulses > 0 && cfg.reader_pulses_per_tick > cfg.emit_interval_pulses
                 ? cfg.emit_interval_pulses
@@ -49,7 +51,7 @@ int main(int argc, char** argv) {
         // Holoviz window is fitted to the desktop work area and can be wider
         // than that key, and a view narrower than the window would be upscaled
         // at the raster. Twice is a few MiB a slot either way.
-        auto mosaic = graph.template op<app::sar::SarMosaicOp>(
+        auto mosaic = graph.template op<app::sar::SarMosaicOp<T>>(
             "sar_mosaic", cfg.scroll_parent, cfg.reader_loop, cfg.viz_crop_u0, cfg.viz_crop_nu,
             2 * cfg.visualize_size);
         formation.add(mosaic);

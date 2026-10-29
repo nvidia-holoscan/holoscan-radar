@@ -89,11 +89,38 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   float32 profiles — so `<float, double>` is close to what the arithmetic was
   doing anyway. `pulse_times` was already float64 regardless of `T`, so this
   generalizes a conceded exception rather than inventing a kind.
-  **Not yet decided:** whether `single` becomes a supported mode (presets still
-  default to double everywhere), and whether the other SAR apps should expose
-  the knob. Also latent: `downcast_vph_kernel` is only reachable from the fp32
-  backends and is correctly `if constexpr`-guarded, but the fp32 family has not
-  been exercised at `<float, double>`.
+  **All five other SAR apps now ship at `sample_precision: single`.** The
+  precision peek moved out of the autofocus app into the driver
+  (`run_sar_graph_app` reads the key and dispatches to
+  `run_sar_graph_app_at<T, TGeom>`), so every SAR app takes the knob and the
+  presets set it. `AGENTS.md` invariant 3 is reworded to match the two-parameter
+  contract. Measured pools, each app run at both settings on its own collect,
+  with output verified identical (same image indices, geometry, and timing to
+  within noise):
+
+  | app | double | single | saved |
+  | --- | --- | --- | --- |
+  | `spotlight` | 10.4 GiB | 6.7 GiB | 36% |
+  | `video_sar` | 31.7 GiB | 16.6 GiB | 48% |
+  | `tiled_strip` | 33.5 GiB | 17.3 GiB | 48% |
+  | `continuous_strip` | 10.1 GiB | 6.1 GiB | 40% |
+  | `autofocus` (Kourou) | 60.9 GiB | 33.1 GiB | 46% |
+
+  `tiled_strip` first came in at only 16%, because `SarMosaicOp` was declaring
+  its output pool at a hardcoded 16 bytes an element — 3.62 GiB a slot on the
+  Imperial parent, six slots. The operator was already dtype-agnostic at
+  runtime (it latches the incoming dtype), so only the declared span was wrong;
+  it now takes `T` for sizing and keeps the runtime check as a safety net,
+  which is what takes the app to 48%. `independent_images` is untested here
+  because its preset carries no `cphd.path`.
+  **Latent:** `downcast_vph_kernel` is only reachable from the fp32 backends
+  and is correctly `if constexpr`-guarded, but the fp32 family has not been
+  exercised at `<float, double>`. A trap worth knowing: the mixed instantiation
+  is easy to get subtly wrong where a buffer is sized by one precision and
+  copied by the other — `copy_sample_points_lattice` allocated with `TGeom` and
+  copied with `T`, which half-filled the auxiliary lattice and looked exactly
+  like "float samples defocus the image" (1.000x instead of 1.090x) rather than
+  like a one-character bug.
 - **2026-10-28** — **The autofocus memory ceiling is down from 78.6 GiB to 60.9
   GiB with no contract change, and the obvious-looking fix turned out to be
   worthless.** Measured on Kourou at 8000 pulses and the native 7150² product

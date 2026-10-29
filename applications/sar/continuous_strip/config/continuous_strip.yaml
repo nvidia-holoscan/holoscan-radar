@@ -46,6 +46,12 @@
 # horizontal, so the long strip fits a landscape window.
 # visualize_size caps that long display axis in pixels.
 
+# Samples at complex64, geometry at float64. The sample and image
+# tensors are where this graph's memory is; halving them reproduces the
+# double result to five significant figures (SAR/OPERATOR_API.md). ECEF
+# positions stay float64 -- they cannot survive float32.
+sample_precision: single
+
 cphd:
   path: sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
   names:

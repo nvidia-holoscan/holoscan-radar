@@ -24,6 +24,12 @@
 # the last pulses and the first, so the window cannot
 # straddle it.
 
+# Samples at complex64, geometry at float64. The sample and image
+# tensors are where this graph's memory is; halving them reproduces the
+# double result to five significant figures (SAR/OPERATOR_API.md). ECEF
+# positions stay float64 -- they cannot survive float32.
+sample_precision: single
+
 cphd:
   path: sar/mode02_houston_1p0m.cphd
   names:

@@ -132,8 +132,8 @@ struct Precision {
 // default to double, which is what every landed preset uses; `<float, double>`
 // halves the retained aperture while leaving ECEF positions in float64.
 template <typename T = double, typename TGeom = T, typename LoadConfig, typename BuildGraph>
-int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_config,
-                      BuildGraph build_graph) {
+int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig load_config,
+                         BuildGraph build_graph) {
   try {
     // Own SIGINT/SIGTERM before Holoviz or the runtime start threads. Host
     // `holoscan run` maps Ctrl-C to `docker stop` (SIGTERM); without this
@@ -591,4 +591,37 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     HOLOSCAN_LOG_ERROR("{}: {}", name, error.what());
     return 1;
   }
+}
+
+// `sample_precision: single` forms at complex64 while keeping geometry in
+// float64, which halves the dominant pools -- the sample and image tensors are
+// where SAR's memory is, and geometry is a few per cent of it. It is not a free
+// choice on both axes: ECEF positions cannot go to float32, where one ulp at a
+// 6.4e6 m radius is 0.76 m, some 25 wavelengths at X band, so only the sample
+// side moves. See the precision section of SAR/OPERATOR_API.md.
+inline bool single_sample_precision(const std::filesystem::path& config) {
+  const YAML::Node root = YAML::LoadFile(config.string());
+  if (!root["sample_precision"]) {
+    return false;
+  }
+  const auto value = root["sample_precision"].as<std::string>();
+  if (value == "single") {
+    return true;
+  }
+  if (value != "double") {
+    throw std::runtime_error("SAR: sample_precision must be 'single' or 'double'");
+  }
+  return false;
+}
+
+// The precision has to be chosen before the driver is instantiated, so this one
+// key is read here rather than waiting for `load_config` to run inside it.
+template <typename LoadConfig, typename BuildGraph>
+int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_config,
+                      BuildGraph build_graph) {
+  const CliPaths cli = parse_cli(argc, argv, (std::string(name) + ".yaml").c_str());
+  if (single_sample_precision(cli.config)) {
+    return run_sar_graph_app_at<float, double>(argc, argv, name, load_config, build_graph);
+  }
+  return run_sar_graph_app_at<double, double>(argc, argv, name, load_config, build_graph);
 }

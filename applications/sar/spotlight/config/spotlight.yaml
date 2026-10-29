@@ -21,6 +21,12 @@
 # range compression's ifftshift), not SC0. Range-bin spacing is
 # derived from CPHD SCSS; range_bins is not wired.
 
+# Samples at complex64, geometry at float64. The sample and image
+# tensors are where this graph's memory is; halving them reproduces the
+# double result to five significant figures (SAR/OPERATOR_API.md). ECEF
+# positions stay float64 -- they cannot survive float32.
+sample_precision: single
+
 cphd:
   path: sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd
   names:

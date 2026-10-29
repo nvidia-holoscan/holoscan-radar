@@ -25,25 +25,6 @@
 namespace app = holoscan::radar::app;
 namespace radar = holoscan::radar;
 
-// `sample_precision: single` forms at complex64 while keeping geometry in
-// float64, which halves the retained aperture. It is a measurement knob, not a
-// supported mode: ECEF positions cannot go with it (one ulp at a 6.4e6 m radius
-// is 0.76 m, ~25 wavelengths at X band), so only the sample side moves.
-bool single_sample_precision(const std::filesystem::path& config) {
-  const YAML::Node root = YAML::LoadFile(config.string());
-  if (!root["sample_precision"]) {
-    return false;
-  }
-  const auto value = root["sample_precision"].as<std::string>();
-  if (value == "single") {
-    return true;
-  }
-  if (value != "double") {
-    throw std::runtime_error("autofocus: sample_precision must be 'single' or 'double'");
-  }
-  return false;
-}
-
 int main(int argc, char** argv) {
   auto extras = std::make_shared<AutofocusExtras>();
   auto load = [extras](const std::filesystem::path& path,
@@ -269,11 +250,5 @@ int main(int argc, char** argv) {
     graph.partition("correction").add(pc);
     return &bp->image;
   };
-  // The precision has to be known before the driver is instantiated, so the
-  // one key is read here rather than waiting for `load` to run inside it.
-  const CliPaths cli = parse_cli(argc, argv, "autofocus.yaml");
-  if (single_sample_precision(cli.config)) {
-    return run_sar_graph_app<float, double>(argc, argv, "autofocus", load, build);
-  }
-  return run_sar_graph_app<double, double>(argc, argv, "autofocus", load, build);
+  return run_sar_graph_app(argc, argv, "autofocus", load, build);
 }

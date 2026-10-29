@@ -48,6 +48,12 @@ namespace holoscan::radar::app::sar {
 // amplitude with zero phase, because a strip's decimation is steep enough
 // that subsampled speckle is noise. A view that is the whole parent at
 // factor 1 is a plain copy and keeps its phase.
+// `T` sizes the declared output pool only: on the Imperial parent that span is
+// 3.62 GiB at complex128 against 1.81 at complex64, and six declared slots make
+// the difference 10.8 GiB. The accumulator and the publication stay dtype-
+// agnostic at runtime -- the incoming dtype is latched and honoured either way,
+// so `T` being wrong costs a rejected tile rather than a silent misread.
+template <typename T = double>
 class SarMosaicOp : public Operator<> {
  public:
   SarMosaicOp(SampleGeometry parent, bool loop, int64_t crop_u0 = 0, int64_t crop_nu = 0,
@@ -85,7 +91,8 @@ class SarMosaicOp : public Operator<> {
     spec.input(image).queue_depth(8U).expects_tensor(tensor_input(device));
     spec.input(sample_geometry).queue_depth(8U);
     spec.output(image_out).produces_tensor(pooled_tensor_output(
-        device, 2U, static_cast<uint64_t>(out_v_) * static_cast<uint64_t>(out_u_) * 16U));
+        device, 2U,
+        static_cast<uint64_t>(out_v_) * static_cast<uint64_t>(out_u_) * 2U * sizeof(T)));
   }
   [[nodiscard]] Contract contract() const override {
     Contract result;
