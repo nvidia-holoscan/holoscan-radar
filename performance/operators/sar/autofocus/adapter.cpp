@@ -20,7 +20,7 @@ namespace {
 using Op = hr::AutofocusOp<perf::Scalar>;
 
 struct Scenario : perf::RecipeScenario {
-  int64_t num_iterations{4};
+  int64_t num_iterations{8};
   double window_fraction{0.5};
   int64_t min_scatterers{16};
   double max_correction{0.0};

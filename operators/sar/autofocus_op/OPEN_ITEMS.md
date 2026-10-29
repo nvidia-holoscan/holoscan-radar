@@ -2,8 +2,8 @@
 
 ## Implementation follow-ups
 
-1. **The shipped `num_iterations: 4` fails on the error magnitudes this
-   operator exists for.** The contract names airborne residual phase as
+1. **~~The shipped `num_iterations: 4` fails on the error magnitudes
+   this operator exists for.~~ Resolved — the default is now 8.** The contract names airborne residual phase as
    the reason to opt in at all — "spaceborne collections with good
    ephemeris generally stay on Figure 1" (`SAR/OPERATOR_API.md`) — but
    every measurement to date used a single 2 cm quadratic, 5.4 rad, on
@@ -46,11 +46,18 @@
    For scale, product formation on that configuration is 37 ms and a
    video-SAR-rate frame budget would be about 458 ms.
 
-   Open question for the team, since it is a default and therefore a
-   contract surface: whether `num_iterations` should default higher
-   than 4, or the guidance should simply say that an airborne opt-in
-   must raise it. This is also what makes open item 5's 255 ceiling
-   worth checking rather than theoretical.
+   **Resolved 2026-10-29: the default is now 8**, a contract change
+   carried in `SAR/OPERATOR_API.md` and the operator README in the same
+   commit. The alternative — leaving it at 4 and requiring an airborne
+   opt-in to raise it in guidance — was rejected because it only
+   protects a caller who reads the guidance, and the failure mode for
+   one who does not is the bad one: a wrong estimate that `sharpness`
+   reports as a 17x success. An app that needs a tighter latency bound
+   still sets its own ceiling, statically or through the `[live]`
+   `num_iterations` port. On the shipped 8000-pulse configuration the
+   new default moves the residual 0.149 -> 0.161 rad and sharpness
+   8.66x -> 8.78x. This is also what makes item 5's 255 ceiling worth
+   checking rather than theoretical.
 
 2. **Beyond roughly 16000 pulses PGA produces an estimate that lowers
    sharpness, so the guard refuses it and autofocus contributes
@@ -132,7 +139,7 @@
    unchanged to four decimal places.
 
 5. **`num_iterations` is bounded at 255 by the contract's `uint8`,
-   which has not been exercised anywhere near that.** The preset uses 4
+   which has not been exercised anywhere near that.** The default is 8
    and the sweeps above use 4 except where noted. Whether the
    guard-and-keep behaviour is still sensible over tens of iterations
    is unknown.

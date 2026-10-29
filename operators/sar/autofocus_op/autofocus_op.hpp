@@ -49,7 +49,7 @@ namespace holoscan::radar {
 struct AutofocusParams {
   AutofocusAlgorithm algorithm{AutofocusAlgorithm::kPga};
   AutofocusAzimuthAxis azimuth_axis{AutofocusAzimuthAxis::kUnspecified};
-  std::int64_t num_iterations{4};
+  std::int64_t num_iterations{8};
   double window_fraction{0.5};
   std::int64_t min_scatterers{16};
   double max_correction{std::numeric_limits<double>::infinity()};
@@ -63,7 +63,8 @@ HOLOSCAN_PARAM_SCHEMA(
         .description("Which trailing image axis is slow-time-conjugate (u or v). "
                      "Static and required; naming it asserts the image is conjugate."),
     holoscan::field<&AutofocusParams::num_iterations>("num_iterations")
-        .description("Refinement iterations. Live. Default 4."),
+        .description("Refinement iterations, an upper bound rather than a count: the stage stops "
+                     "early once an iteration fails to improve sharpness. Live. Default 8."),
     holoscan::field<&AutofocusParams::window_fraction>("window_fraction")
         .description("Fraction of the azimuth extent in the first window; shrinks "
                      "geometrically across iterations. Live. Default 0.5."),

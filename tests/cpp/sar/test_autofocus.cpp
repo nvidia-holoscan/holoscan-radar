@@ -596,7 +596,9 @@ TEST(AutofocusOp, LiveWindowFractionAppliesForOneTick) {
                                                  holoscan::testing::input("image", *frame1)));
   fixture.capture_snapshot<holoscan::Tensor>("phase_correction", 2U, kAz * sizeof(float));
   fixture.capture_snapshot<holoscan::Tensor>("image_out", 2U, frame0->nbytes());
-  fixture.capture_snapshot<holoscan::Tensor>("sharpness", 2U, 8U * sizeof(float));
+  fixture.capture_snapshot<holoscan::Tensor>(
+      "sharpness", 2U,
+      static_cast<std::size_t>(AutofocusParams{}.num_iterations + 2) * sizeof(float));
   fixture.input_source_device("image", holoscan::DeviceId{0});
   fixture.output_device("image_out", holoscan::DeviceId{0});
   fixture.output_device("phase_correction", holoscan::DeviceId{0});

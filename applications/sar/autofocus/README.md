@@ -110,6 +110,8 @@ The table above is one aperture length. Sweeping `pulse_range` and `max_aperture
 | 20000 | **0.428 rad** | — | 2.73× | 1 of 4 |
 | 23375 (full) | 0.332 rad | 1.25 | 2.84× | 1 of 4 |
 
+**The table above was measured at the old `num_iterations: 4`.** The default became 8 on 2026-10-29 (see the operator [README](../../../operators/sar/autofocus_op/README.md)); on this configuration that moves the 8000-pulse residual from 0.149 to 0.161 rad and sharpness from 8.66× to 8.78×, and it is what makes a 107 rad error recoverable at all.
+
 **Most of that spread is not the estimator.** The score is taken against the injected truth alone, while PGA also estimates whatever real error the collect carries — correctly — and is charged for it. Re-running each length with `polynomial: [0, 0, 0.0]` measures the collect's own error by itself, and subtracting it separates the two:
 
 | pulses | residual vs injected truth | the collect's own | estimator alone |

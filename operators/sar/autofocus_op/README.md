@@ -43,7 +43,7 @@ Set `max_image_v` and `max_image_u` to cover the largest image. The azimuth axis
 | --- | --- | --- | --- | --- |
 | `algorithm` | `AutofocusAlgorithm` | `pga` | Static | Estimator selection; `pga` is the sole value |
 | `azimuth_axis` | `AutofocusAzimuthAxis` | required | Static | Which trailing axis is slow-time-conjugate |
-| `num_iterations` | `int64` | 4 | `[live]` | Refinement iterations |
+| `num_iterations` | `int64` | 8 | `[live]` | Refinement iterations (an upper bound; the stage stops early) |
 | `window_fraction` | `float64` | 0.5 | `[live]` | Fraction of azimuth extent in the first window |
 | `min_scatterers` | `int64` | 16 | `[live]` | Minimum strong scatterers before estimating |
 | `max_correction` | `float64` | uncapped | `[live]` | Peak-to-peak ceiling in radians |
@@ -75,7 +75,7 @@ Neither property is dimensionally checkable and both were wrong until 2026-10-27
 ```yaml
 autofocus:
   azimuth_axis: u
-  num_iterations: 4
+  num_iterations: 8
   window_fraction: 0.5
   min_scatterers: 16
 ```

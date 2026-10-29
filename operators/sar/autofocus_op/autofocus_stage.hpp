@@ -71,7 +71,7 @@ inline constexpr double kPgaAllBinsFrac = 0.85;
 
 struct AutofocusConfig {
   AutofocusAzimuthAxis azimuth_axis{AutofocusAzimuthAxis::kUnspecified};
-  int64_t num_iterations{4};
+  int64_t num_iterations{8};
   double window_fraction{0.5};
   int64_t min_scatterers{16};
   double max_correction{std::numeric_limits<double>::infinity()};

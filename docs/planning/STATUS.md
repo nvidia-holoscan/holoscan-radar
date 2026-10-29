@@ -4,6 +4,28 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-29** — **`AutofocusOp.num_iterations` now defaults to 8, a contract
+  change.** The prior default of 4 is what fails on the error magnitudes the
+  operator exists for (entry below): 1.365 rad residual at 107 rad of injected
+  error, missing even the 0.785 rad hard floor, while reporting a 17.1×
+  sharpness gain. Eight iterations give 0.274 rad on the same case and are
+  identical at 16 and 32. It costs little because `num_iterations` is an upper
+  bound rather than a count — the sharpness guard stops the loop as soon as an
+  iteration fails to improve — so a converged image never pays for the
+  headroom. Measured on the Kourou-sized aux (2478 × 8000) with the existing
+  perf recipe, an iteration is **~10.8 ms over an 8.7 ms fixed floor** (51.8 ms
+  at 4 iterations against 19.5 ms at 1); the shipped 8000-pulse app run
+  terminates at 6 either way, so ~22 ms against 37 ms of product formation and
+  a ~458 ms video-SAR frame budget. That run's residual moves 0.149 → 0.161 rad
+  and sharpness 8.66 → 8.78× — a little peak accuracy on small errors, bought
+  against a hard failure on large ones. The alternative, leaving the default at
+  4 and documenting that airborne callers should raise it, was rejected: it
+  protects only a caller who reads the guidance, and the failure mode for one
+  who does not is a wrong estimate the operator reports as a success. Callers
+  who want the latency back still set the parameter, including `[live]` per
+  tick. `SAR/OPERATOR_API.md`, the operator README, and the perf recipe move
+  with it; no test asserted the old default, and the one that sized a snapshot
+  bound from it now derives the bound from `AutofocusParams{}`.
 - **2026-10-28** — **`continuous_strip` could not reach `start()` with
   visualization on, and the cause is the GA SDK's pool slot inflation rather
   than anything in the app.** Declared pools came to **100.7 GiB against 95.6
