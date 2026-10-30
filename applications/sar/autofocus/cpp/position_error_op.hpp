@@ -390,13 +390,37 @@ class OraclePhaseOp : public holoscan::Operator<> {
     if (stream == nullptr) {
       return make_unexpected(Error{ErrorCode::kNotSupported, "OraclePhaseOp: no CUDA stream"});
     }
+    // LieRecord keeps the truth in double because the geometry that produced
+    // it is double; the port is real_dtype<T>. Narrow through a staging buffer
+    // rather than copying the record's bytes straight out: at T=float the two
+    // byte counts differ by two, so the device would receive the first half of
+    // a double array reinterpreted as floats, which lands on bit patterns that
+    // decode to inf and NaN and takes the whole image with them.
+    const std::vector<T> staging(record_->expected_phase.begin(), record_->expected_phase.end());
+    // The oracle is the reference every other path is scored against, so it
+    // must not be the thing that is quietly wrong. A non-finite phase makes the
+    // whole corrected image NaN, which the smoke tests cannot see because they
+    // read the log rather than the pixels; failing the tick instead turns that
+    // into a non-zero exit they do check.
+    if (!std::all_of(staging.begin(), staging.end(), [](T value) {
+          return std::isfinite(value);
+        })) {
+      return make_unexpected(
+          Error{ErrorCode::kFailure, "OraclePhaseOp: staged phase is not finite"});
+    }
     return emit_required_tensor(
         phase_correction, context, "OraclePhaseOp.phase_correction", false, [&] {
           return prepare_device_tensor(
               phase_correction, context, std::vector<int64_t>{n_pulses}, real_dtype<T>(),
               [&](void* destination, std::size_t bytes) -> expected<void, Error> {
-                if (cudaMemcpyAsync(destination, record_->expected_phase.data(), bytes,
-                                    cudaMemcpyHostToDevice, stream) != cudaSuccess ||
+                if (bytes != staging.size() * sizeof(T)) {
+                  return make_unexpected(
+                      Error{ErrorCode::kFailure, "OraclePhaseOp: phase_correction is " +
+                                                     std::to_string(bytes) + " bytes, staged " +
+                                                     std::to_string(staging.size() * sizeof(T))});
+                }
+                if (cudaMemcpyAsync(destination, staging.data(), bytes, cudaMemcpyHostToDevice,
+                                    stream) != cudaSuccess ||
                     cudaStreamSynchronize(stream) != cudaSuccess) {
                   return make_unexpected(Error{ErrorCode::kFailure, "OraclePhaseOp: H2D failed"});
                 }

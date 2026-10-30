@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cuda_runtime_api.h>
+#include <fmt/format.h>
 
 #include <chrono>
 #include <cstddef>
