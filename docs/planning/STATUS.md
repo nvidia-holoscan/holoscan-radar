@@ -1042,6 +1042,20 @@ Contract, SDK, and signal-processing questions that need a team decision are tra
 New operators should follow [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md)
 and [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md).
 
+**Exception, and it is a known one: SAR does not follow this yet.** Six
+operator-local `OPEN_ITEMS.md` files are tracked in the repository — under
+`io/cphd_reader_op`, `io/tensor_dump_op`, `sar/aperture_manager_op`,
+`sar/autofocus_op`, `sar/backprojection_op` and `sar/sar_range_compression_op`
+— plus the [SAR roll-up](SAR/OPEN_ITEMS.md). They were written during the SAR
+port, when the board was not reachable from the development environment, and
+they carry measured evidence (sweep tables, residuals, rejected alternatives)
+that is the reason the open question is open; a Jira summary of a number is not
+a substitute for the measurement that produced it. Treat them as the current
+source of truth for SAR open items, and the rule above as the direction of
+travel: new non-SAR work files on the board, and the SAR files migrate when
+someone can reconcile them against it. Do not add operator-local backlog files
+outside SAR.
+
 Temporal contracts — how the data plane joins the config plane, what the SDK
 selectors and triggers actually do, and the adopted Exact + unconditional-entry
 shape (L16 / L17): [`TEMPORAL_CONTRACTS.md`](TEMPORAL_CONTRACTS.md).
