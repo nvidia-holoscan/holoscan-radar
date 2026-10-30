@@ -13,11 +13,22 @@ this script is how they are reproduced or refuted.
 
 The grid axes are the ones that have been found to matter, in order: the error
 *shape* (a pure quadratic is the easiest case and flatters the estimator), the
-magnitude, the first window width, and the aperture length.
+magnitude, the first window width, the aperture length, and the scene.
 
   python3 tools/sar_autofocus/sweep.py --grid shapes
   python3 tools/sar_autofocus/sweep.py --grid windows --pulses 8000
+  python3 tools/sar_autofocus/sweep.py --grid symmetry --scenes all
   python3 tools/sar_autofocus/sweep.py --grid shapes --base config/other.yaml
+
+The scene axis matters for a reason worth stating plainly: Kourou, which
+produced every accuracy number through 2026-10-30, was *screened* for PGA --
+an isolated corner reflector lit across the whole dwell. The operator's
+precondition is therefore satisfied there by construction, and a number
+measured only on it describes the estimator under ideal conditions rather than
+the estimator. `--scenes all` spans from that screened case to agriculture,
+which has no dominant scatterer anywhere in it and is expected to fail; the
+negative control is what separates "this shape breaks the estimator" from
+"this scene does not meet the precondition".
 
 Residuals are read against the targets in `docs/planning/SAR/TESTING.md`: pi/8
 (0.39 rad) to pass, pi/4 (0.785 rad) as the hard floor.
@@ -43,6 +54,19 @@ FLOOR_RAD = 0.7854  # pi/4, the hard floor
 SCORE_RE = re.compile(r"affine-removed RMS ([-\d.eE+]+) rad .*?baseline ([-\d.eE+]+) rad RMS")
 SHARP_RE = re.compile(r"\(([\d.eE+]+)x over (\d+) iteration")
 
+CONFIG_DIR = pathlib.Path("applications/sar/autofocus/config")
+
+# One config per scene, ordered easiest-to-hardest for PGA's precondition. The
+# configs carry the reasoning for each choice of scene; what matters here is
+# that they describe the same experiment on different ground, so the only thing
+# a row-to-row difference can be attributed to is the scene.
+SCENES = {
+    "kourou": CONFIG_DIR / "autofocus.yaml",
+    "atlanta": CONFIG_DIR / "autofocus_atlanta.yaml",
+    "houston": CONFIG_DIR / "autofocus_houston.yaml",
+    "imperial": CONFIG_DIR / "autofocus_imperial.yaml",
+}
+
 
 @dataclasses.dataclass
 class Case:
@@ -50,13 +74,18 @@ class Case:
 
     label: str
     error: dict
-    window_fraction: float | None = None
+    # Window width in aux samples rather than as a fraction: the fraction is of
+    # the aux width, which tracks the aperture, so a fixed fraction means
+    # different sample counts at different --pulses and the two grids that
+    # sweep width would silently stop sweeping what they say they do.
+    window_samples: int | None = None
     num_iterations: int | None = None
     pulses: int | None = None
 
 
 @dataclasses.dataclass
 class Result:
+    scene: str
     label: str
     baseline_rad: float
     residual_rad: float
@@ -64,12 +93,33 @@ class Result:
     iterations: int
 
     @property
+    def refused(self) -> bool:
+        """The sharpness guard kept the identity, so the image is untouched.
+
+        It shows up as a residual equal to the baseline to several digits: the
+        correction applied was a no-op, so what is left is exactly what was
+        injected. Worth separating from a bad estimate, because refusing is the
+        designed response to a scene PGA cannot work on -- the operator
+        declining to act is not the same failure as it acting wrongly, even
+        though both leave the image unfocused.
+
+        Undetectable on a clean collect: with nothing injected the baseline is
+        zero, and so is the residual of a refusal *and* of a perfect estimate.
+        Those rows need the operator's own log, not the score.
+        """
+        return self.baseline_rad > 0.0 and (
+            abs(self.residual_rad - self.baseline_rad) <= 1e-3 * self.baseline_rad
+        )
+
+    @property
     def verdict(self) -> str:
         if self.residual_rad <= PASS_RAD:
             return "pass"
+        if self.refused:
+            return "refused"
         if self.residual_rad <= FLOOR_RAD:
             return "marginal"
-        if self.residual_rad >= self.baseline_rad:
+        if self.residual_rad > self.baseline_rad:
             return "HARMFUL"
         return "FAIL"
 
@@ -82,8 +132,35 @@ def sinusoid(metres: float, cycles: float) -> dict:
     return {"sinusoids": [{"amplitude": metres, "cycles": cycles, "phase_deg": 0}]}
 
 
+def sinusoid_at(metres: float, cycles: float, phase_deg: float) -> dict:
+    return {"sinusoids": [{"amplitude": metres, "cycles": cycles, "phase_deg": phase_deg}]}
+
+
 def walk(metres: float, seed: int = 7) -> dict:
     return {"random_walk": {"rms": metres, "seed": seed}}
+
+
+def symmetry_grid() -> list[Case]:
+    """The five shapes that tell an estimator bug from a shape limit.
+
+    Symmetry about the dwell centre is the axis the quadratic-only sweeps held
+    fixed, and it is the one that found both 2026-10-30 defects. A quadratic
+    (s^2) and a 90-degree sinusoid are even; a cubic (s^3) and a 0-degree
+    sinusoid are odd; 45 degrees is neither. Reversing an even error is a
+    no-op, and on an odd error it is indistinguishable from a global negation,
+    which AutofocusScoreOp's sign search absorbs -- so only the last row can
+    fail an axis-handedness bug outright.
+
+    This is the regression set for the emit path: all five inside the target,
+    on a scene that meets the precondition, or the mapping is wrong again.
+    """
+    return [
+        Case("quadratic (even)", {"polynomial": [0, 0, 0.02]}),
+        Case("cosine 1 cyc (even)", sinusoid_at(0.02, 1.0, 90.0)),
+        Case("cubic (odd)", {"polynomial": [0, 0, 0, 0.02]}),
+        Case("sine 1 cyc (odd)", sinusoid_at(0.02, 1.0, 0.0)),
+        Case("sinusoid 45 deg", sinusoid_at(0.02, 1.0, 45.0)),
+    ]
 
 
 def shape_grid() -> list[Case]:
@@ -104,6 +181,26 @@ def shape_grid() -> list[Case]:
     return cases
 
 
+def aperture_grid() -> list[Case]:
+    """Aperture length at a fixed error and a fixed window *fraction*.
+
+    The fraction is held rather than the sample count because PGA's window
+    schedule is scale-relative: it shrinks geometrically from a fraction of the
+    aux width, so holding samples would change the schedule's starting point as
+    well as the aperture. Only Kourou's 23375-vector collect spans the top of
+    this range; the other scene configs have shorter usable windows.
+    """
+    return [
+        Case(
+            f"quadratic 0.02 m / {pulses} pulses",
+            quadratic(0.02),
+            pulses=pulses,
+            window_samples=pulses // 8,
+        )
+        for pulses in (2000, 4000, 8000, 12000, 16000, 23375)
+    ]
+
+
 def window_grid() -> list[Case]:
     """First window width against error magnitude, the 2026-10-29 tentative table."""
     cases: list[Case] = []
@@ -113,7 +210,7 @@ def window_grid() -> list[Case]:
                 Case(
                     f"quadratic {metres} m / {width} samples",
                     quadratic(metres) if metres else {"polynomial": [0, 0, 0.0]},
-                    window_fraction=width / 8000.0,
+                    window_samples=width,
                 )
             )
     return cases
@@ -138,11 +235,17 @@ def shape_window_grid() -> list[Case]:
     ]
     for name, error in shapes:
         for width in (350, 1000, 2000, 4000, 8000):
-            cases.append(Case(f"{name} / {width} samples", error, window_fraction=width / 8000.0))
+            cases.append(Case(f"{name} / {width} samples", error, window_samples=width))
     return cases
 
 
-GRIDS = {"shapes": shape_grid, "windows": window_grid, "shape-windows": shape_window_grid}
+GRIDS = {
+    "apertures": aperture_grid,
+    "shapes": shape_grid,
+    "symmetry": symmetry_grid,
+    "windows": window_grid,
+    "shape-windows": shape_window_grid,
+}
 
 
 def render(base: dict, case: Case) -> dict:
@@ -150,19 +253,29 @@ def render(base: dict, case: Case) -> dict:
     pe = {"axis": "look", "score_warn_rms_rad": 1.0e9}
     pe.update(case.error)
     cfg["position_error"] = pe
+    reader = cfg.setdefault("cphd_reader", {})
+    first, last = reader.get("pulse_range", [0, 0])
+    if case.pulses is not None:
+        # Trim from the config's own first pulse, not from 0: a scene config
+        # picks its window because that is where the scene is lit (Atlanta's
+        # closest-approach frame starts at pulse 91273), and restarting at 0
+        # would silently image a different part of every pass.
+        last = first + case.pulses
+        reader["pulse_range"] = [first, last]
+        cfg.setdefault("aperture_manager", {})["max_aperture_pulses"] = case.pulses
     af = cfg.setdefault("autofocus", {})
-    if case.window_fraction is not None:
-        af["window_fraction"] = case.window_fraction
+    if case.window_samples is not None:
+        aperture = last - first
+        if aperture <= 0:
+            raise ValueError("a window-width grid needs a known aperture: pass --pulses")
+        af["window_fraction"] = case.window_samples / aperture
     if case.num_iterations is not None:
         af["num_iterations"] = case.num_iterations
-    if case.pulses is not None:
-        cfg.setdefault("cphd_reader", {})["pulse_range"] = [0, case.pulses]
-        cfg.setdefault("aperture_manager", {})["max_aperture_pulses"] = case.pulses
     cfg["visualize"] = False
     return cfg
 
 
-def run_one(binary: pathlib.Path, cfg: dict, label: str) -> Result | None:
+def run_one(binary: pathlib.Path, cfg: dict, scene: str, label: str) -> Result | None:
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
         yaml.safe_dump(cfg, handle, sort_keys=False)
         path = handle.name
@@ -175,9 +288,13 @@ def run_one(binary: pathlib.Path, cfg: dict, label: str) -> Result | None:
     sharp = SHARP_RE.search(text)
     if not score:
         tail = "\n".join(text.strip().splitlines()[-6:])
-        print(f"  !! {label}: no score line (exit {proc.returncode})\n{tail}", file=sys.stderr)
+        print(
+            f"  !! {scene}/{label}: no score line (exit {proc.returncode})\n{tail}",
+            file=sys.stderr,
+        )
         return None
     return Result(
+        scene=scene,
         label=label,
         residual_rad=float(score.group(1)),
         baseline_rad=float(score.group(2)),
@@ -190,9 +307,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--grid", choices=sorted(GRIDS), default="shapes")
     parser.add_argument(
+        "--scenes",
+        default="kourou",
+        help="comma-separated scene names, or 'all' (" + ", ".join(SCENES) + ")",
+    )
+    parser.add_argument(
         "--base",
         type=pathlib.Path,
-        default=pathlib.Path("applications/sar/autofocus/config/autofocus.yaml"),
+        default=None,
+        help="a config path, bypassing --scenes (one scene, labelled by file stem)",
     )
     parser.add_argument(
         "--binary",
@@ -201,13 +324,28 @@ def main() -> int:
     )
     parser.add_argument("--pulses", type=int, default=None, help="override the aperture")
     parser.add_argument("--iterations", type=int, default=None)
-    parser.add_argument("--window-fraction", type=float, default=None)
+    parser.add_argument("--window-samples", type=int, default=None)
     args = parser.parse_args()
 
     if not args.binary.exists():
         print(f"no autofocus binary at {args.binary}", file=sys.stderr)
         return 2
-    base = yaml.safe_load(args.base.read_text())
+
+    if args.base is not None:
+        scenes = {args.base.stem: args.base}
+    elif args.scenes == "all":
+        scenes = dict(SCENES)
+    else:
+        scenes = {}
+        for name in args.scenes.split(","):
+            if name not in SCENES:
+                print(f"unknown scene {name!r}; have {', '.join(SCENES)}", file=sys.stderr)
+                return 2
+            scenes[name] = SCENES[name]
+    missing = [str(p) for p in scenes.values() if not p.exists()]
+    if missing:
+        print("no config at " + ", ".join(missing), file=sys.stderr)
+        return 2
 
     cases = GRIDS[args.grid]()
     for case in cases:
@@ -215,29 +353,51 @@ def main() -> int:
             case.pulses = args.pulses
         if args.iterations is not None and case.num_iterations is None:
             case.num_iterations = args.iterations
-        if args.window_fraction is not None and case.window_fraction is None:
-            case.window_fraction = args.window_fraction
+        if args.window_samples is not None and case.window_samples is None:
+            case.window_samples = args.window_samples
 
+    scene_w = max(len(s) for s in scenes)
     width = max(len(c.label) for c in cases)
     print(
-        f"{'case'.ljust(width)}  {'baseline':>9}  {'residual':>9}  {'removed':>8}  "
-        f"{'sharp':>8}  verdict"
+        f"{'scene'.ljust(scene_w)}  {'case'.ljust(width)}  {'baseline':>9}  {'residual':>9}  "
+        f"{'removed':>8}  {'sharp':>8}  verdict"
     )
-    print("-" * (width + 50))
+    print("-" * (scene_w + width + 52))
     results: list[Result] = []
-    for case in cases:
-        result = run_one(args.binary, render(base, case), case.label)
-        if result is None:
-            continue
-        results.append(result)
-        removed = result.baseline_rad / result.residual_rad if result.residual_rad else 0.0
-        print(
-            f"{result.label.ljust(width)}  {result.baseline_rad:9.3f}  "
-            f"{result.residual_rad:9.3f}  {removed:7.1f}x  {result.sharpness:7.2f}x  "
-            f"{result.verdict}"
-        )
-    bad = [r for r in results if r.verdict in ("FAIL", "HARMFUL")]
-    print(f"\n{len(results) - len(bad)} of {len(results)} inside the {FLOOR_RAD:.3f} rad floor")
+    for scene, config in scenes.items():
+        base = yaml.safe_load(config.read_text())
+        for case in cases:
+            result = run_one(args.binary, render(base, case), scene, case.label)
+            if result is None:
+                continue
+            results.append(result)
+            removed = result.baseline_rad / result.residual_rad if result.residual_rad else 0.0
+            print(
+                f"{scene.ljust(scene_w)}  {result.label.ljust(width)}  "
+                f"{result.baseline_rad:9.3f}  {result.residual_rad:9.3f}  {removed:7.1f}x  "
+                f"{result.sharpness:7.2f}x  {result.verdict}"
+            )
+
+    inside = [r for r in results if r.residual_rad <= FLOOR_RAD]
+    refused = [r for r in results if r.refused]
+    print(f"\n{len(inside)} of {len(results)} inside the {FLOOR_RAD:.3f} rad floor")
+    if refused:
+        print(f"{len(refused)} of {len(results)} refused by the sharpness guard (image untouched)")
+    if len(scenes) > 1:
+        # Per scene as well as overall: the whole point of the scene axis is
+        # that a shape failing everywhere and a shape failing on one scene are
+        # different findings, and a pooled count hides which one happened.
+        for scene in scenes:
+            rows = [r for r in results if r.scene == scene]
+            if rows:
+                ok = sum(1 for r in rows if r.residual_rad <= FLOOR_RAD)
+                gave_up = sum(1 for r in rows if r.refused)
+                worst = max(rows, key=lambda r: r.residual_rad)
+                note = f", {gave_up} refused" if gave_up else ""
+                print(
+                    f"  {scene.ljust(scene_w)}  {ok}/{len(rows)} inside the floor{note}, "
+                    f"worst {worst.residual_rad:.3f} rad ({worst.label})"
+                )
     return 0
 
 

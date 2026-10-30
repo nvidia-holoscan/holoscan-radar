@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# WORKFLOWS Figure 2 on Hartsfield-Jackson Atlanta -- one of the
+# scene-axis configs for tools/sar_autofocus/sweep.py, which is the
+# only place PGA accuracy can be measured (CI fixtures are 5-pulse
+# generated CPHDs, far too small). The sweep's scene axis exists
+# because every accuracy number in OPEN_ITEMS.md through 2026-10-30
+# came from Kourou alone, and Kourou was *screened* for PGA: an
+# isolated corner reflector lit across the whole dwell. A result
+# that only holds on a screened scene is not a result about the
+# operator.
+#
+# Atlanta is the easy end of the unscreened range: a spotlight
+# collect over an airport, so terminal roofs and aircraft give
+# strong, well-separated returns without anyone having picked a
+# specific reflector. Compare with autofocus_houston.yaml (dense
+# urban, many competing scatterers) and autofocus_imperial.yaml
+# (agriculture, no dominant scatterer at all).
+#
+# Download once (28.59 GiB); the app never reaches the network.
+# Paths resolve under the build data directory (default: data/).
+#
+#   mkdir -p data/sar
+#   curl -L -o data/sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd \
+#     https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com/sar-data/task-data/0f1231be-26d3-4b98-96ab-f675a5375c14/2026-02-20-03-03-38_UMBRA-07/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd
+
+cphd:
+  path: sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd
+  names:
+    - Atlanta
+  sidecar: ""
+
+# An IARP-centred ECEF grid, derived rather than transcribed:
+# `lattice` takes the IARP and collection physics from the CPHD, and
+# reference_frequency comes from SC0/SCSS the same way. spotlight.yaml
+# hardcodes an 8192-square NVRadar-parity grid in scene ENU; none of
+# that parity matters here and the sweep wants every scene described
+# the same way, so the only scene-specific number is the spacing.
+#
+# 0.5 m: Umbra spotlight is ~0.25-0.35 m slant, so this samples the
+# PSF without scalloping. The product lattice does not feed the
+# estimator -- PGA runs on the polar aux below -- but it does set the
+# aux's slant-range span, hence the pool of candidate range bins.
+lattice:
+  counts: 2048
+  spacing: 0.5
+
+cphd_reader:
+  coordinate_frame: ecef
+  pulses_per_tick: 1024
+  # The 1-degree closest-approach frame is [91273, 102839); taking
+  # the aperture from its *start* rather than the collect's keeps the
+  # dwell on the part of the pass the scene is squarely lit through.
+  # The sweep's --pulses trims from this first index, so 8000 pulses
+  # here is the same 8000 the other scene configs mean.
+  pulse_range: [91273, 102839]
+
+# Figure 2 needs a retained aperture: an emit-and-reset spotlight has
+# nothing left to replay once the estimate exists.
+aperture_manager:
+  max_aperture_pulses: 11566
+  emit_interval_pulses: 0
+  emit_mode: reform
+
+range_compression:
+  propagation_speed: 299792458.0
+
+backprojection:
+  coordinate_frame: ecef
+
+autofocus:
+  azimuth_axis: u
+  min_scatterers: 16
+  # 0.125 of the aux width = 1000 samples at an 8000-pulse aperture,
+  # the width the 2026-10-29 sizing sweep measured as better than the
+  # 350 Kourou ships. That table predates the seam and reversal fixes
+  # and is still flagged tentative, so this is a sweep starting point,
+  # not guidance.
+  window_fraction: 0.125
+
+phase_correction:
+  sense: subtract
+
+aux_lattice:
+  mode: polar
+
+# Add a position_error block to inject a known error and score the
+# estimate against it; sweep.py writes that block per grid point.
+
+visualize: false

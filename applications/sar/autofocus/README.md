@@ -164,3 +164,20 @@ Two earlier collects failed on the scene rather than on the estimator, and both 
 PGA assumes each selected range bin is dominated by one strong scatterer that persists across the *full* synthetic aperture (Wahl, Eichel, Ghiglia and Jakowatz, *IEEE T-AES* 30(3), 1994), and that one phase error is common to the whole scene.
 
 A Strait of Dover collect looked ideal on amplitude — isolated bright returns on dark water — but its brightest scatterer is a glint, not a persistent one: the middle quarter of the dwell carries 72% of the coherent peak and the outer half of the aperture adds 5%. Ships also violate space-invariance, since one swinging in wind and waves gives every scattering point its own error; there is a maritime sub-literature (SV-PGA, Mosaic PGA, IPGRA) whose premise is precisely that classical PGA cannot focus swing ships. An urban Atlanta collect failed the isolation half instead. Neither result is an estimator defect, and a 2 cm quadratic centred on the dwell is flattest exactly where a glint is bright, so it costs such a target about 1% of peak and cannot be used as a stimulus at all.
+
+### Three more scenes, and what screening actually buys
+
+Three further collects now have configs beside the Kourou default — [`autofocus_atlanta.yaml`](config/autofocus_atlanta.yaml), [`autofocus_houston.yaml`](config/autofocus_houston.yaml) and [`autofocus_imperial.yaml`](config/autofocus_imperial.yaml) — so an estimator result can be separated from a Kourou result. `python3 tools/sar_autofocus/sweep.py --grid symmetry --scenes all --pulses 8000 --window-samples 1000` runs all four. Worst affine-removed residual over the five injected error symmetries, in radians:
+
+| scene | collect | scene type | worst of five |
+| --- | --- | --- | --- |
+| Kourou | UMBRA-05 | screened isolated reflector | 0.219 |
+| Atlanta | UMBRA-07 | airport | 0.177 |
+| Houston | mode02 | dense urban | 0.107 |
+| Imperial Valley | Capella SM | irrigated agriculture | refused, all five |
+
+**This refines the Atlanta result above rather than contradicting it.** Atlanta does fail the isolation screen — no scatterer there is isolated 221× over its annulus the way Kourou's is — and it still supports more accurate autofocus than Kourou does. The two are not in tension because they measure different things. Isolation screening asks whether a *single* scatterer can carry the estimate and be used to verify focus afterwards; the estimator itself averages a phase gradient over `min_scatterers` range bins, and a city supplies hundreds of usable bins where Kourou supplies the one good one. So screening buys a scene you can *check*, and a dependable worst case, rather than a lower residual.
+
+**Agriculture is the floor, and the guard finds it.** All five shapes hit the sharpness guard at iteration 0 on Imperial Valley and the image comes back untouched — distributed clutter has no dominant scatterer in any range bin, which is the precondition stated at the top of this section, and the operator declines rather than applying a wrong correction. It is worth running as the negative control for exactly that reason: without a scene that *should* fail, a per-scene failure elsewhere cannot be attributed.
+
+One caveat on all four: they are spaceborne X-band collects with good ephemeris, which is the regime [`SAR/OPERATOR_API.md`](../../../docs/planning/SAR/OPERATOR_API.md) says should stay on Figure 1, and the error is injected rather than real. None of this tests an uncompensated airborne platform.

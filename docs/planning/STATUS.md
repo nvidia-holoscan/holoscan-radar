@@ -4,6 +4,46 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-30** — **The autofocus fixes below hold on three more collects, and
+  measuring the scene axis corrected three claims that were resting on Kourou
+  alone.** `AutofocusOp` accuracy had only ever been measured on Kourou, which
+  was *screened* for PGA — an isolated reflector lit across the whole dwell — so
+  the operator's precondition was satisfied there by construction. Atlanta
+  (UMBRA-07 airport), Houston (mode02 dense urban) and Imperial Valley (Capella
+  stripmap over agriculture) now have configs beside it and
+  `tools/sar_autofocus/sweep.py --scenes all` sweeps across them. **The fixes
+  generalize:** all five injected symmetries recover to 0.04–0.22 rad on the
+  three scenes with scatterers. **Kourou is the worst of those three**, by a
+  factor of two to four — screening bought a verifiable, dependable scene, not
+  accuracy, because the estimator averages a gradient over many range bins and a
+  city supplies hundreds where Kourou supplies one. The app README recorded
+  Atlanta as a scene *failure*; it fails the isolation screen and still
+  autofocuses better than Kourou, and the README now reconciles the two.
+  **Imperial Valley refuses all five** at iteration 0 and returns the image
+  untouched, which is the designed response to distributed clutter and the first
+  evidence the guard works on real clutter rather than synthetic overreach — so
+  the sweep now reports `refused` separately from `HARMFUL`, since a residual
+  equal to its baseline means the operator declined rather than did damage.
+  Three corrections fell out of re-measuring from the committed tree: (1) the
+  **random walks are not harmful at every magnitude** — `OPEN_ITEMS.md` §7 had
+  published numbers measured *between* the two fixes, and the walk is the shape
+  least protected by symmetry so the reversal hit it hardest; re-measured, only
+  the 20 rad walk is harmful and the shape sweep is 10 of 11 rather than 8.
+  (2) The **window-sizing table's sharp non-monotone optimum was the reversal
+  bug** — 0.274 passing beside 1.181 failing one doubling away is now 0.305
+  beside 0.485, which removes the main argument for *deriving* `window_fraction`
+  rather than configuring it. (3) The **long-aperture ceiling is two failures at
+  two lengths, and the worse one is nearer than recorded**: past ~16000 pulses on
+  a clean collect the guard refuses and autofocus does nothing, which is safe,
+  but past ~12000 with a real error present it *accepts* an estimate that is only
+  half right (0.181 rad at 8000, 0.292 at 12000, 0.442 at 16000, all with
+  sharpness rising 2.9–8.9x), which sharpness cannot distinguish. The entry's
+  own "every shipped workflow forms below that ceiling" excused this app's
+  full-collect preset, which lands at 0.436 rad on the easiest shape there is.
+  **Open:** the band-limited walk (§7), the width grid re-run across scenes, and
+  whether the aperture ceiling becomes a documented limitation or an algorithm
+  change (sub-aperture or coarse-to-fine composition).
+
 - **2026-10-30** — **Sweeping autofocus over error *shape* — the axis every
   prior measurement held fixed — found two real defects in `AutofocusOp`, both
   structurally invisible to a quadratic.** Asked to test more broadly, the first

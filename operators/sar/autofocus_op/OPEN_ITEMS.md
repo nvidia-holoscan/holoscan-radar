@@ -47,10 +47,13 @@ against a 4.75 rad baseline**, no recovery at all, reported with a normal sign.
 | sine, 1 cycle (odd) | 3.564 rad | **3.818 rad** | 0.186 rad |
 | sinusoid, 45° | 4.748 rad | **4.922 rad** | 0.178 rad |
 
-Over the broader shape sweep (`tools/sar_autofocus/sweep.py --grid shapes`),
-**3 of 11 rows were inside the 0.785 rad hard floor before and 8 of 11 after**;
-every polynomial and every sinusoid to 6 cycles now passes, 12 cycles is
-marginal at 0.689 rad, and random walks remain harmful (see §7).
+Over the broader shape sweep (`--grid shapes --scenes kourou --pulses 8000
+--window-samples 1000`), **3 of 11 rows were inside the 0.785 rad hard floor
+before and 10 of 11 after**: every polynomial and every sinusoid to 6 cycles
+passes, 12 cycles is marginal at 0.689 rad, and of the random walks only the
+0.05 m one (a 20 rad baseline) is still harmful. An earlier revision of this
+file said 8 of 11 with all three walks harmful; those three rows were measured
+between the two fixes and are superseded — see §7.
 
 Two tests changed with the fix, both because they encoded the first defect.
 `injected_phi()` built its "quadratic" against the raw bin index, which put a
@@ -62,6 +65,60 @@ wrong mapping cancel out of its own comparison; they now assert in pulse order,
 the domain the port is indexed by. `RecoversOddAndEvenErrorsAlike` is the new
 gate: it asserts that the estimator has no symmetry preference, which is what
 a pass/fail on one shape cannot pin.
+
+## The scene axis: the fixes hold on three more collects (2026-10-30)
+
+Every number above and below came from Kourou, and Kourou was **screened** for
+PGA — `applications/sar/autofocus/config/autofocus.yaml` says so: an isolated
+corner reflector (221× over its annulus) lit across the whole dwell, picked
+with a tool that was never ported. The operator's precondition is satisfied
+there by construction, so a number measured only on it describes the estimator
+under ideal conditions rather than the estimator. Three more collects now have
+configs beside it, and `sweep.py --scenes all` runs the grid across them.
+
+Symmetry grid, 8000 pulses, 1000-sample first window, 0.02 m injected:
+
+| scene | collect | quadratic | cosine | cubic | sine | 45° |
+| --- | --- | --- | --- | --- | --- | --- |
+| Kourou (screened reflector) | UMBRA-05 | 0.181 | 0.183 | 0.219 | 0.186 | 0.178 |
+| Atlanta (airport) | UMBRA-07 | 0.093 | 0.101 | 0.081 | 0.177 | 0.165 |
+| Houston (dense urban) | mode02 | 0.065 | 0.099 | 0.044 | 0.059 | 0.107 |
+| Imperial Valley (agriculture) | Capella SM | refused | refused | refused | refused | refused |
+
+Three readings, in descending confidence:
+
+1. **The two fixes are not a Kourou artifact.** Three independent collects, at
+   two frequencies and three scene types, recover all five symmetries to
+   0.04–0.22 rad. Before the fixes the 45° column was no recovery at all.
+2. **Screening bought reliability, not accuracy — Kourou is the *worst* of the
+   three that work.** Urban scenes beat it by a factor of two to four. A single
+   isolated reflector gives the gradient estimate one range bin's worth of
+   phase history to average; a city gives it hundreds. This is worth saying
+   because the config comment presents Kourou as the favourable case, and for
+   accuracy it is not — which also means the residuals quoted throughout this
+   file are not flattered by the scene.
+3. **Agriculture is refused outright, not mis-corrected.** All five shapes hit
+   the sharpness guard at iteration 0 and the image is returned untouched.
+   That is the designed response to a scene with no dominant scatterer, and it
+   is the first evidence that the guard does its job on real clutter rather
+   than only on synthetic overreach. Note the asymmetry it creates in any
+   tally: a refusal leaves the full injected error in the image, so it counts
+   as outside the floor, but the operator did not do the damage — it declined.
+   `sweep.py` reports those rows as `refused` rather than `HARMFUL` for that
+   reason, and the distinction is only visible because the residual comes back
+   *equal to the baseline* to several digits.
+
+   At 2000 pulses the same scene partially works (quadratic 0.169, cosine
+   0.293) and only the cubic is refused, so the refusal is not a property of
+   the scene alone but of scene and aperture together: the longer the dwell,
+   the further distributed clutter decorrelates.
+
+**What this does not establish.** All four are spaceborne X-band collects with
+good ephemeris — the regime the contract says should stay on Figure 1. The
+error is injected, so none of this tests a real uncompensated airborne platform,
+which is the case autofocus exists for. And Imperial Valley is the only
+distributed-clutter scene here, so "agriculture is refused" rests on one
+collect.
 
 ## Implementation follow-ups
 
@@ -153,6 +210,36 @@ a pass/fail on one shape cannot pin.
    (1.17–1.34 rad) rather than marginal — PGA is not failing to find a
    small error, it is confidently finding a wrong one.
 
+   **With an error actually present the guard does not refuse — it accepts a
+   partly-wrong estimate, and accuracy decays well before the refusal
+   ceiling.** The table above is the clean collect, where the only thing to
+   find is the collect's own small residual. Injecting a 0.02 m quadratic and
+   holding the window at 1/8 of the aux width (`--grid apertures`) separates
+   the two effects:
+
+   | pulses | residual | removed | sharpness |
+   | --- | --- | --- | --- |
+   | 2000 | 0.194 rad | 12.4× | 5.06× |
+   | 4000 | 0.184 rad | 13.0× | 4.17× |
+   | 8000 | 0.181 rad | 13.2× | 8.90× |
+   | 12000 | 0.292 rad | 8.2× | 7.73× |
+   | 16000 | 0.442 rad | 5.4× | 4.70× |
+   | 23375 (full) | 0.436 rad | 5.5× | 2.89× |
+
+   Flat to 8000, then a knee: the π/8 acceptance target is left somewhere
+   between 12000 and 16000 pulses, and every one of these is *accepted* —
+   sharpness rises 2.9–8.9×, so the guard sees a genuine improvement and has no
+   reason to refuse. The ceiling is therefore two different failures at two
+   different lengths. Past ~16000 on a clean collect the guard refuses and
+   autofocus contributes nothing, which is safe; past ~12000 with a real error
+   it silently returns an estimate that is only half right, which is not. The
+   second is the one that matters for a caller, and it is not visible from
+   sharpness.
+
+   **This also makes the priority note above wrong about the one workflow it
+   excused.** The shipped preset for this app forms the full 23375 and lands at
+   0.436 rad, outside the target on the easiest shape there is.
+
    **The shape of this is the standard long-aperture PGA problem**: one
    estimate across a very long dwell, with a single geometrically
    shrinking window, rather than a coarse-to-fine or sub-aperture
@@ -204,67 +291,111 @@ a pass/fail on one shape cannot pin.
    is unknown.
 
 6. **The first window must be sized to the error magnitude, and past
-   roughly 100 rad no width works well. TENTATIVE — one collect, one
-   aperture, one error shape.** Residual in radians at 8 iterations on
-   Kourou / 8000 pulses, against the 0.39 rad target and 0.785 rad
-   hard floor:
+   roughly 100 rad no width works well.** Residual in radians at 8
+   iterations on Kourou / 8000 pulses (`--grid windows`), against the
+   0.39 rad target and 0.785 rad hard floor. Magnitudes are the
+   affine-removed RMS the scorer reports; an earlier revision of this
+   table labelled the same five errors by their peak (5.4 / 26.8 /
+   107.3 / 214.6 rad), which is 2.24× the RMS:
 
    | injected | 350-sample window | 1000 | 2000 | 4000 |
    | --- | --- | --- | --- | --- |
-   | 0 (clean collect) | 0.157 | 0.166 | — | — |
-   | 5.4 rad | 0.161 | 0.201 | 0.176 | — |
-   | 26.8 rad | — | 0.317 | — | — |
-   | 107.3 rad | **1.035** | 0.274 | **1.181** | — |
-   | 214.6 rad | **50.48** | **5.41** | **2.21** | **2.47** |
+   | 0 (clean collect) | 0.150 | 0.168 | 0.169 | refused |
+   | 2.400 rad | 0.142 | 0.181 | 0.184 | refused |
+   | 12.000 rad | 0.274 | 0.203 | 0.239 | 0.366 |
+   | 48.001 rad | 0.618 | **0.305** | 0.485 | 0.787 |
+   | 96.002 rad | **45.73** | **6.57** | **2.87** | **2.04** |
 
-   Three readings, in descending confidence.
+   Four readings, in descending confidence.
 
-   **Oversizing is cheap below ~27 rad.** A 1000-sample window costs
-   40 mrad against 350 on a 5.4 rad error and 9 mrad on a clean
-   collect, with everything well inside target. So for a system whose
-   error budget sits in that range — and an integrator *does* know
-   their budget from INS grade, dwell time and wavelength — sizing the
-   window generously from the budget is sound and needs nothing from
-   the operator. An earlier framing of this item claimed the caller
-   cannot know the magnitude; that was wrong, and the measurement
-   above is why.
+   **The optimum width tracks the error magnitude, monotonically.**
+   350 samples is best at 0 and 2.4 rad, 1000 at 12 and 48 rad, and
+   4000 at 96 rad, with a shallow penalty either side. That is the
+   relationship the item name asserts, and it is the first measurement
+   of it that is a complete grid rather than a diagonal.
 
-   **Above ~100 rad the optimum is sharp rather than a floor.** At
-   107.3 rad, 1000 samples passes at 0.274 and 2000 fails at 1.181 —
-   one doubling either side of the optimum is the difference. The
-   non-monotonicity reproduces at both 4 and 8 iterations (4-iteration
-   sweep: 1.365 / 0.433 / 1.181 / 1.099 / 0.502 rad at 350 / 1000 /
-   2000 / 4000 / 8000 samples) so it is not run-to-run noise, and it
-   is unexplained. A budget known to an order of magnitude does not
-   land inside a window that tight.
+   **Oversizing is cheap, undersizing is not.** Across the four rows
+   that work at all, going one step too wide costs at most 160 mrad
+   while going one step too narrow costs up to 39 rad (the 96 rad row,
+   350 vs 1000). Since an integrator *does* know their error budget
+   from INS grade, dwell time and wavelength, sizing generously from
+   the budget is sound and needs nothing from the operator. An earlier
+   framing of this item claimed the caller cannot know the magnitude;
+   that was wrong, and this is why.
 
-   **At 214.6 rad (about 34 wavelengths) nothing works.** Widening
-   from 350 to 2000 samples improves the residual from 50.48 to 2.21
-   rad, an enormous gain, and 2.21 is still nearly 3x the hard floor;
-   4000 is worse again. `sharpness` reports 11.1x to 17.6x across that
-   whole row and the guard terminates normally, so nothing marks it as
-   a failure (see *no runtime quality signal* below). A caller whose
-   budget reaches this magnitude is not served by PGA as implemented.
+   **The sharp non-monotone optimum is gone — it was the reversal
+   bug.** The previous revision found 1000 samples passing at 0.274
+   and 2000 failing at 1.181 one doubling away, called it unexplained,
+   and made it the main argument for *deriving* the width rather than
+   configuring it, on the grounds that no budget lands inside a window
+   that tight. On the fixed estimator that row is 0.305 / 0.485 — a
+   gentle penalty, not a cliff — and the argument goes with it.
 
-   **Why this is tentative and what would settle it.** Every cell is
-   one collect (UMBRA-05 Kourou), one aperture (8000 pulses) and one
-   error shape (a pure quadratic) — the smoothest, most symmetric
-   error there is, and the one a geometric window suits best. The
-   sharp optimum at 107.3 rad in particular could be specific to that
-   shape. Needed before any of this becomes contract guidance: the
-   other error profiles (higher-order, sinusoidal, random-walk) and
-   the other collects on disk.
+   **At 96 rad (about 15 wavelengths RMS) nothing works.** The best
+   cell is 2.04 rad, still 2.6× the hard floor, and `sharpness`
+   reports 14–19× across the whole row with the guard terminating
+   normally, so nothing marks it as a failure (see *no runtime quality
+   signal* below). A caller whose budget reaches this magnitude is not
+   served by PGA as implemented. This is the one conclusion the fixes
+   did not move.
 
-   **What is open**, pending that: whether the contract should publish
-   a window-sizing relationship against error budget and declare a
-   magnitude precondition, or whether the first width should be
-   *derived* from the measured azimuth extent of the selected
-   scatterers — which is directly observable, the blur being the
-   defocus — rather than configured at all. Deriving it matters most
-   in the above-100 rad regime where the optimum is too sharp to
-   configure. Note our own app config hard-codes `window_fraction:
-   0.0438` (the 350-sample column) with a comment calling it tuned; on
-   this table that is the worst cell in two of five rows.
+   **Where 4000 samples "refuses"** on the two smallest rows, the
+   guard is catching the oversizing rather than the estimator
+   degrading quietly — the right failure of the two, and the reason
+   the top-left of this table is safer than it looks.
+
+   **What is still thin.** Every cell is one collect (UMBRA-05
+   Kourou), one aperture (8000 pulses) and one error shape (a pure
+   quadratic). The scene axis above shows the *symmetry* results hold
+   on three more collects, but this width grid has not been re-run
+   across them, and the shape × width grid (`--grid shape-windows`)
+   has not been re-run since the fixes at all.
+
+   **What is open:** whether the contract should publish a
+   window-sizing relationship against error budget and declare a
+   magnitude precondition. Deriving the width from the measured
+   azimuth extent of the selected scatterers remains possible, but the
+   measurement that motivated it no longer stands, so configured
+   guidance is now the cheaper answer. Note our app config hard-codes
+   `window_fraction: 0.0438` (the 350-sample column) with a comment
+   calling it tuned; on this table that is the *best* cell for the
+   clean collect it ships against, and the worst for everything above
+   12 rad.
+
+7. **Random-walk error is recoverable up to about 4 rad and harmful beyond
+   it.** Re-measured on Kourou at 8000 pulses after both fixes:
+
+   | injected | baseline | 350-sample window | 1000-sample window |
+   | --- | --- | --- | --- |
+   | 0.002 m rms | 0.805 rad | 0.245 rad | 0.242 rad |
+   | 0.01 m rms | 4.024 rad | 0.569 rad | 0.587 rad |
+   | 0.05 m rms | 20.120 rad | 17.057 rad (FAIL) | 23.547 rad (HARMFUL) |
+
+   **An earlier revision of this file reported 0.964 / 4.961 / 22.674 rad here
+   and concluded that walks are harmful at every magnitude. That was wrong.**
+   The baselines match these to three decimals, so the injected truth was
+   identical and the estimator is what changed: those residuals sat at
+   1.13–1.23× their baselines, between leaving the image alone (1.0×) and
+   applying a wholly uncorrelated correction of the same size (1.41×), which is
+   what a *reversed* estimate does to an error that is neither even nor odd.
+   They were measured between the two fixes above. A random walk is the shape
+   least protected by symmetry, so it was hit hardest and recovered most.
+
+   What survives is the top row, and the open question narrows to the same two
+   candidates as before, now for 20 rad of broadband error rather than all of
+   it. The error model may be unphysical: `ErrorProfile` drives the walk with
+   white noise, so it carries content down to the pulse-to-pulse scale, whereas
+   a real platform is a mass on a spring and its INS error is heavily
+   band-limited. Or PGA's geometrically shrinking window genuinely cannot
+   represent broadband error of that magnitude. **Next step is a band-limited
+   walk**, which distinguishes the two: if accuracy tracks the cutoff, the
+   model was the problem.
+
+   The lesson about method is worth keeping separate from the finding: this
+   number was published from a working tree mid-fix, and it stood in the file
+   as the one known remaining defect. Sweep rows are cheap to re-run and
+   expensive to trust; the re-measured ones above all come from the committed
+   tree.
 
 ## What is not wrong
 
@@ -359,19 +490,3 @@ collect's own error. `AutofocusScoreOp` logs the affine-removed RMS,
 and `dump: true` with `output.path` writes `af_expected_phase.npy` and
 `af_estimated_phase.npy` beside the image. Note the key is
 `output.path`; `dump` itself is only a boolean.
-
-1. **Random-walk error is still harmful at every magnitude and window
-   width tested.** After the two fixes above, the shape sweep leaves
-   this one row failing: 0.805 / 4.024 / 20.120 rad baselines score
-   0.964 / 4.961 / 22.674 rad residuals, i.e. **PGA makes the image
-   worse than leaving it alone**, and widening the first window makes
-   it monotonically worse (0.8x at 350 samples down to 0.4x at 8000).
-   Two candidate explanations, not yet separated. The error model may
-   be unphysical: `ErrorProfile` drives the walk with white noise, so
-   it carries content down to the pulse-to-pulse scale, whereas a real
-   platform is a mass on a spring and its INS error is heavily
-   band-limited. Or PGA's geometrically shrinking window genuinely
-   cannot represent broadband error, which would be a real limitation
-   worth stating. **Next step is a band-limited walk**, which
-   distinguishes the two: if accuracy tracks the cutoff, the model was
-   the problem.
