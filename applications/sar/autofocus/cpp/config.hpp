@@ -27,6 +27,7 @@
 
 #include <holoscan/logger/logger.hpp>
 
+#include "error_profile.hpp"  // NOLINT(build/include_subdir)
 #include "io/cphd_reader_op/cphd_file.hpp"
 #include "radar_app/sar/config.hpp"
 #include "radar_common/descriptors/enums.hpp"
@@ -241,12 +242,12 @@ struct AuxPolarLattice {
   }
 };
 
-// The known lie: a polynomial position error along the look axis, injected so
-// autofocus has something to find. Lives here rather than in the shared
+// The known lie: a line-of-sight position error along the look axis, injected
+// so autofocus has something to find. Lives here rather than in the shared
 // AppConfig because it is a diagnostic of this app alone.
 struct PositionErrorConfig {
   bool enabled{false};
-  std::vector<double> polynomial;  // metres vs s in [-1, 1]
+  app::sar::ErrorProfile profile;  // polynomial + sinusoids + random walk
   std::array<double, 3> look{};    // unit look axis, mid-aperture
   int64_t num_pulses{0};
   double warn_rms_rad{1.0};
@@ -453,17 +454,48 @@ inline void load_position_error(const YAML::Node& root, const AppConfig& cfg,
   if (axis != "look") {
     throw std::runtime_error("position_error.axis must be look (mid-aperture APC to SRP)");
   }
-  if (!pe["polynomial"]) {
-    throw std::runtime_error("position_error.polynomial is required (metres vs s in [-1, 1])");
-  }
-  out->polynomial = pe["polynomial"].as<std::vector<double>>();
-  if (out->polynomial.empty()) {
-    throw std::runtime_error("position_error.polynomial must have at least one coefficient");
-  }
-  for (const double c : out->polynomial) {
-    if (!std::isfinite(c)) {
-      throw std::runtime_error("position_error.polynomial must be finite");
+  // The three shapes are additive, so any one of them on its own is a
+  // complete profile and a block with none of them is an error rather than a
+  // silent no-op.
+  if (const YAML::Node poly = pe["polynomial"]) {
+    out->profile.polynomial = poly.as<std::vector<double>>();
+    for (const double c : out->profile.polynomial) {
+      if (!std::isfinite(c)) {
+        throw std::runtime_error("position_error.polynomial must be finite");
+      }
     }
+  }
+  if (const YAML::Node sines = pe["sinusoids"]) {
+    if (!sines.IsSequence()) {
+      throw std::runtime_error("position_error.sinusoids must be a sequence");
+    }
+    for (const auto& node : sines) {
+      app::sar::ErrorSinusoid sine;
+      sine.amplitude = node["amplitude"] ? node["amplitude"].as<double>() : 0.0;
+      sine.cycles = node["cycles"] ? node["cycles"].as<double>() : 0.0;
+      sine.phase_deg = node["phase_deg"] ? node["phase_deg"].as<double>() : 0.0;
+      if (!std::isfinite(sine.amplitude) || !std::isfinite(sine.cycles) ||
+          !std::isfinite(sine.phase_deg)) {
+        throw std::runtime_error("position_error.sinusoids entries must be finite");
+      }
+      if (!(sine.cycles > 0.0)) {
+        throw std::runtime_error("position_error.sinusoids[].cycles must be > 0");
+      }
+      out->profile.sinusoids.push_back(sine);
+    }
+  }
+  if (const YAML::Node rw = pe["random_walk"]) {
+    out->profile.random_walk_rms = rw["rms"] ? rw["rms"].as<double>() : 0.0;
+    if (!std::isfinite(out->profile.random_walk_rms)) {
+      throw std::runtime_error("position_error.random_walk.rms must be finite");
+    }
+    if (const YAML::Node seed = rw["seed"]) {
+      out->profile.random_walk_seed = seed.as<std::uint64_t>();
+    }
+  }
+  if (out->profile.empty()) {
+    throw std::runtime_error(
+        "position_error needs one of polynomial, sinusoids or random_walk (metres)");
   }
   if (const YAML::Node w = pe["score_warn_rms_rad"]) {
     out->warn_rms_rad = w.as<double>();

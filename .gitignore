@@ -26,3 +26,7 @@ core
 
 # Generated performance-run dumps (measurement output, not source)
 perf_results/
+perf_reports_full/
+Testing/
+.cursor-export/
+.git-hooks/

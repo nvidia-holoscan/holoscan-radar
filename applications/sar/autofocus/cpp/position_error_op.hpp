@@ -38,6 +38,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/logger/logger.hpp>
 
+#include "error_profile.hpp"  // NOLINT(build/include_subdir)
 #include "io/tensor_dump_op/npy_writer.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/math/constants.hpp"
@@ -46,38 +47,6 @@
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar::app::sar {
-
-inline double poly_eval(const std::vector<double>& coeffs, double s) {
-  double acc = 0.0;
-  for (std::size_t i = coeffs.size(); i > 0; --i) {
-    acc = acc * s + coeffs[i - 1];
-  }
-  return acc;
-}
-
-// PGA is blind to a constant and a linear ramp: they translate the image
-// rather than blur it. Scoring an estimate against a truth is only meaningful
-// once both have had an affine fit removed.
-inline void remove_affine(std::vector<double>* phi) {
-  const int64_t n = static_cast<int64_t>(phi->size());
-  if (n < 2) {
-    return;
-  }
-  double sum = 0.0;
-  double sumk = 0.0;
-  for (int64_t k = 0; k < n; ++k) {
-    sum += (*phi)[static_cast<std::size_t>(k)];
-    sumk += static_cast<double>(k) * (*phi)[static_cast<std::size_t>(k)];
-  }
-  const double xmean = 0.5 * static_cast<double>(n - 1);
-  const double denom =
-      static_cast<double>(n) * (static_cast<double>(n) * static_cast<double>(n) - 1.0) / 12.0;
-  const double slope = (sumk - xmean * sum) / denom;
-  const double intercept = sum / static_cast<double>(n) - slope * xmean;
-  for (int64_t k = 0; k < n; ++k) {
-    (*phi)[static_cast<std::size_t>(k)] -= intercept + slope * static_cast<double>(k);
-  }
-}
 
 inline double phase_rms(const std::vector<double>& a, const std::vector<double>& b) {
   if (a.size() != b.size() || a.empty()) {
@@ -114,7 +83,7 @@ struct LieRecord {
   }
 };
 
-// Look-direction APC polynomial plus the equivalent per-pulse phase on range
+// Look-direction APC displacement plus the equivalent per-pulse phase on range
 // profiles. SRP-relative backprojection cancels a pure line-of-sight APC lie
 // in dR, so the leftover that PGA has to estimate is applied to the profiles
 // (4 pi f delta / c, sense add) rather than left in the geometry alone.
@@ -126,11 +95,11 @@ template <typename T, typename TGeom = T>
 class PerturbPositionsOp : public holoscan::Operator<> {
  public:
   PerturbPositionsOp(std::shared_ptr<LieRecord> record, std::array<double, 3> look,
-                     std::vector<double> polynomial, int64_t num_pulses, double reference_frequency,
+                     ErrorProfile profile, int64_t num_pulses, double reference_frequency,
                      const MaxTensorExtents& extents)
   : record_(std::move(record)),
     look_(look),
-    polynomial_(std::move(polynomial)),
+    profile_(std::move(profile)),
     num_pulses_(num_pulses),
     reference_frequency_(reference_frequency) {
     constexpr const char* kWho = "PerturbPositionsOp";
@@ -171,8 +140,8 @@ class PerturbPositionsOp : public holoscan::Operator<> {
     if (num_pulses_ < 1) {
       throw std::invalid_argument("PerturbPositionsOp: num_pulses must be >= 1");
     }
-    if (polynomial_.empty()) {
-      throw std::invalid_argument("PerturbPositionsOp: polynomial is empty");
+    if (profile_.empty()) {
+      throw std::invalid_argument("PerturbPositionsOp: error profile is empty");
     }
     if (!(reference_frequency_ > 0.0) || !std::isfinite(reference_frequency_)) {
       throw std::invalid_argument("PerturbPositionsOp: reference_frequency must be finite and > 0");
@@ -184,10 +153,24 @@ class PerturbPositionsOp : public holoscan::Operator<> {
     record_->resize(num_pulses_);
     rad_per_metre_ = 4.0 * kPi * reference_frequency_ / kSpeedOfLight;
     next_pulse_ = 0;
+    // The whole sequence is generated once rather than per pulse: the random
+    // walk is cumulative, so it cannot be evaluated from a pulse index alone,
+    // and compute() sees the aperture in batches across ticks.
+    metres_ = profile_metres(profile_, num_pulses_);
+    std::vector<double> observable(metres_);
+    remove_affine(&observable);
+    double sq = 0.0;
+    double peak = 0.0;
+    for (const double v : observable) {
+      sq += v * v;
+      peak = std::max(peak, std::abs(v));
+    }
+    const double rms_m = std::sqrt(sq / static_cast<double>(observable.size()));
     HOLOSCAN_LOG_INFO(
         "PerturbPositionsOp: look [{:.6f}, {:.6f}, {:.6f}]  {} pulses  {:.3f} rad/m  "
-        "poly degree {}  (profile phase; dR cancels LOS APC)",
-        look_[0], look_[1], look_[2], num_pulses_, rad_per_metre_, polynomial_.size() - 1);
+        "{}  affine-removed {:.4f} rad RMS / {:.4f} rad peak  (profile phase; dR cancels LOS APC)",
+        look_[0], look_[1], look_[2], num_pulses_, rad_per_metre_, describe(profile_),
+        rms_m * rad_per_metre_, peak * rad_per_metre_);
   }
 
   [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override {
@@ -236,11 +219,9 @@ class PerturbPositionsOp : public holoscan::Operator<> {
     // Record the lie for this batch first: both outputs read it, and the
     // scorer reads it again on the reform tick.
     HOLOSCAN_TRY(auto host_pos, read_positions(pos, count, stream));
-    const double denom = static_cast<double>(std::max(num_pulses_ - 1, int64_t{1}));
     for (int64_t i = 0; i < count; ++i) {
       const int64_t p = p0 + i;
-      const double s = 2.0 * static_cast<double>(p) / denom - 1.0;
-      const double delta = poly_eval(polynomial_, s);
+      const double delta = metres_[static_cast<std::size_t>(p)];
       host_pos[static_cast<std::size_t>(i) * 3 + 0] += look_[0] * delta;
       host_pos[static_cast<std::size_t>(i) * 3 + 1] += look_[1] * delta;
       host_pos[static_cast<std::size_t>(i) * 3 + 2] += look_[2] * delta;
@@ -339,7 +320,8 @@ class PerturbPositionsOp : public holoscan::Operator<> {
 
   std::shared_ptr<LieRecord> record_;
   std::array<double, 3> look_{};
-  std::vector<double> polynomial_;
+  ErrorProfile profile_;
+  std::vector<double> metres_;
   int64_t num_pulses_{0};
   double reference_frequency_{0.0};
   std::size_t profiles_span_{0U};
@@ -522,14 +504,22 @@ class AutofocusScoreOp : public holoscan::Operator<> {
     const double p2p = use_neg ? peak_to_peak(est_neg, want_neg) : peak_to_peak(est_pos, want_pos);
     const double rad_per_m = 4.0 * kPi * reference_frequency_ / kSpeedOfLight;
     const double rms_mm = (rad_per_m > 0.0) ? (rms / rad_per_m) * 1.0e3 : 0.0;
-    double quad_amp = 0.0;
+    // The baseline is the affine-removed RMS of the truth alone -- what PGA
+    // had to remove. Reporting it beside the leftover makes a sweep row
+    // self-describing and comparable across error shapes, where a peak
+    // amplitude is only meaningful for a polynomial.
+    double peak = 0.0;
+    double base_sq = 0.0;
     for (const double v : want_pos) {
-      quad_amp = std::max(quad_amp, std::abs(v));
+      peak = std::max(peak, std::abs(v));
+      base_sq += v * v;
     }
+    const double baseline = std::sqrt(base_sq / static_cast<double>(want_pos.size()));
     HOLOSCAN_LOG_INFO(
         "AutofocusScoreOp: affine-removed RMS {:.4f} rad ({:.3f} mm LOS)  p2p {:.4f} rad  "
-        "sign {}  quadratic amp {:.4f} rad",
-        rms, rms_mm, p2p, use_neg ? "-4pi f d / c" : "+4pi f d / c", quad_amp);
+        "sign {}  baseline {:.4f} rad RMS / {:.4f} rad peak  removed {:.1f}x",
+        rms, rms_mm, p2p, use_neg ? "-4pi f d / c" : "+4pi f d / c", baseline, peak,
+        (rms > 0.0) ? (baseline / rms) : 0.0);
     if (rms > warn_rms_rad_) {
       HOLOSCAN_LOG_WARN(
           "AutofocusScoreOp: RMS {:.4f} rad exceeds warn threshold {:.4f} rad "

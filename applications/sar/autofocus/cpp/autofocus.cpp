@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
           pe.num_pulses);
       lies = std::make_shared<app::sar::LieRecord>();
       auto lie = graph.template op<app::sar::PerturbPositionsOp<T, TGeom>>(
-          "perturb_positions", lies, pe.look, pe.polynomial, pe.num_pulses, cfg.reference_frequency,
+          "perturb_positions", lies, pe.look, pe.profile, pe.num_pulses, cfg.reference_frequency,
           ingest_extents);
       bind_outputs(options, "perturb_positions",
                    {"range_profiles_out", "positions_out", "reference_position_out"});

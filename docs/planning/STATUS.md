@@ -4,6 +4,49 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-30** — **Sweeping autofocus over error *shape* — the axis every
+  prior measurement held fixed — found two real defects in `AutofocusOp`, both
+  structurally invisible to a quadratic.** Asked to test more broadly, the first
+  shape sweep was damning: every polynomial passed and **every non-polynomial
+  shape failed**, with random walks and a 1-cycle sinusoid actively *harmful*
+  at 2 mm RMS. No window width rescued any of them, so it was not the sizing
+  question from the entry below. The discriminating test was symmetry: the
+  **same sinusoid shifted a quarter cycle**, odd to even about the dwell
+  centre, went from no recovery to 35.6x. **(1) The emitted phase had a
+  constant offset between the two halves of the aperture.** The gradient was
+  integrated straight up the azimuth-FFT bin axis, but that axis is the pulse
+  axis rotated by half the aperture — bins `n/2-1` and `n/2` are *not* adjacent
+  pulses, while bins `n-1` and `0` are and were being skipped — so the second
+  half took its constant of integration across the wrap. Measured on the dumped
+  estimate as a **17.34 rad step at pulse n/2** with the two half-means equal
+  and opposite. This is the "one-sample step at `floor(n/2)`" carried as
+  unexplained since 2026-10-29, which was recorded as too narrow to matter; it
+  was the whole error on any non-even shape. **(2) The emitted phase was
+  time-reversed** — azimuth is the Fourier conjugate of slow time and runs the
+  other way. Pinned by testing four candidate mappings against injected truth
+  over four shapes; plain reversal wins on all four and nothing else wins on
+  any. Only the *exported* vector was wrong, the in-image path never consulting
+  the mapping, so **Figure 3 was always right while Figure 2 handed
+  `PhaseCorrectionOp` a reversed correction.** Both hid behind the same blind
+  spot, and a 2026-10-27 fix in the same code said so at the time: its note
+  records that its two halves "partially cancel on a symmetric quadratic".
+  **Result:** five shapes on Kourou that scored 0.16 to 4.92 rad now all score
+  0.18 to 0.22; the shape sweep goes from **3 of 11 inside the hard floor to 8
+  of 11**. 1190/1190 tests pass. Two tests moved with the fix because they
+  encoded defect 1 — `injected_phi()` built its quadratic against the raw bin
+  index, putting a **7.56 rad jump between adjacent pulses 31 and 32**, and the
+  accuracy assertions ran in bin order, which round-trips through the mapping
+  under test and lets a wrong mapping cancel out of its own comparison. They
+  now assert in pulse order, and `RecoversOddAndEvenErrorsAlike` gates the
+  symmetry directly. New: `tools/sar_autofocus/sweep.py` makes the grid
+  reproducible, `PerturbPositionsOp` injects sinusoids and random walks beside
+  polynomials, and `AutofocusScoreOp` reports the baseline it had to remove so
+  a row is self-describing across shapes. **Still open:** random-walk error
+  remains harmful at every magnitude and width (`OPEN_ITEMS.md` §7) — either
+  the white-driven walk is unphysical for a platform whose INS error is
+  band-limited, or PGA cannot represent broadband error; a band-limited walk
+  separates the two. The window-sizing table below predates these fixes and
+  needs re-measuring.
 - **2026-10-29** — **TENTATIVE: the autofocus first window has to be sized to
   the error magnitude, oversizing is cheap in the regime that matters, and past
   ~100 rad no width works well.** Asked whether an application can reasonably

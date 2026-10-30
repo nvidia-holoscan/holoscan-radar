@@ -57,12 +57,60 @@ void host_dft(std::vector<std::complex<double>>* x, bool inverse) {
   x->swap(out);
 }
 
-std::vector<double> injected_phi() {
+// Inverse of the operator's bin-to-pulse mapping, so an emitted
+// pulse-indexed estimate can be compared against a bin-indexed injection.
+// The operator emits pulse p from bin (n - 1 - p + n/2) mod n -- an fftshift
+// *and* an axis reversal, azimuth being the Fourier conjugate of slow time --
+// so bin k came from pulse (n - 1 + n/2 - k) mod n. This used to invert a
+// bare fftshift, which matched the operator before the reversal was added on
+// 2026-10-30 and silently mismatches it after.
+void to_bin_order(std::vector<double>* phi) {
+  const int64_t n = static_cast<int64_t>(phi->size());
+  std::vector<double> shifted(static_cast<size_t>(n));
+  for (int64_t k = 0; k < n; ++k) {
+    const int64_t p = ((n - 1 + (n + 1) / 2 - k) % n + n) % n;
+    shifted[static_cast<size_t>(k)] = (*phi)[static_cast<size_t>(p)];
+  }
+  phi->swap(shifted);
+}
+
+// A quadratic plus a ramp and an offset, in *pulse* order -- the domain a
+// phase error physically lives in and the one `phase_correction` is indexed
+// by. This used to be built against the raw bin index instead, which put a
+// 7.56 rad jump between adjacent pulses 31 and 32 (0.125 rad median
+// elsewhere): a phase error that teleports most of a wavelength between
+// consecutive pulses. The estimator reproduced that jump, because it
+// integrated the gradient up the bin axis straight through the point where
+// pulse adjacency breaks, so the test passed by pinning the bug. See
+// autofocus_stage.hpp integrate_detrend_kernel.
+std::vector<double> injected_phi_pulse() {
   std::vector<double> phi(static_cast<size_t>(kAz));
-  const double mid = 0.5 * static_cast<double>(kAz - 1);
-  for (int64_t k = 0; k < kAz; ++k) {
-    const double x = (static_cast<double>(k) - mid) / std::max(mid, 1.0);
-    phi[static_cast<size_t>(k)] = 2.5 * x * x + 0.12 * static_cast<double>(k) + 0.4;
+  const double half = 0.5 * static_cast<double>(kAz);
+  for (int64_t p = 0; p < kAz; ++p) {
+    const double x = (static_cast<double>(p) - half) / half;
+    phi[static_cast<size_t>(p)] = 2.5 * x * x + 3.8 * x + 0.4;
+  }
+  return phi;
+}
+
+// The same error in bin order, ready to inject on an azimuth spectrum.
+std::vector<double> injected_phi() {
+  auto phi = injected_phi_pulse();
+  to_bin_order(&phi);
+  return phi;
+}
+
+// The same magnitude as an even function and as an odd one about the dwell
+// centre. PGA has no reason to prefer either, and until 2026-10-29 it
+// recovered only the even part.
+std::vector<double> sinusoidal_phi(double amplitude, double cycles, bool odd, int64_t n_az = kAz) {
+  std::vector<double> phi(static_cast<size_t>(n_az));
+  const double two_pi = 2.0 * kPi;
+  for (int64_t k = 0; k < n_az; ++k) {
+    const double freq = (k < n_az / 2) ? static_cast<double>(k) : static_cast<double>(k - n_az);
+    const double turns = cycles * freq / static_cast<double>(n_az);
+    phi[static_cast<size_t>(k)] =
+        amplitude * (odd ? std::sin(two_pi * turns) : std::cos(two_pi * turns));
   }
   return phi;
 }
@@ -243,15 +291,6 @@ int host_strong_count(const std::vector<std::complex<float>>& img, int64_t n_v, 
 // indexed by FFT bin, while `phase_correction` is indexed by pulse. The two
 // differ by an fftshift -- pulse p sits at bin (p - n/2) mod n -- so put the
 // estimate back in bin order before comparing it to what was injected.
-void to_bin_order(std::vector<double>* phi) {
-  const int64_t n = static_cast<int64_t>(phi->size());
-  std::vector<double> shifted(static_cast<size_t>(n));
-  for (int64_t i = 0; i < n; ++i) {
-    shifted[static_cast<size_t>(i)] = (*phi)[static_cast<size_t>((i + (n + 1) / 2) % n)];
-  }
-  phi->swap(shifted);
-}
-
 double peak_abs(const std::vector<double>& v) {
   double peak = 0.0;
   for (double x : v) {
@@ -269,11 +308,51 @@ TEST(AutofocusOp, RecoversQuadraticUpToAffine) {
   ASSERT_TRUE(out.ok) << out.failure;
   ASSERT_EQ(out.phase.size(), kAz);
   auto est = phase_as_double(out.phase);
-  auto want = phi;
+  auto want = injected_phi_pulse();
   remove_affine(&est);
   remove_affine(&want);
-  to_bin_order(&est);
   EXPECT_LT(phase_rms(est, want), 0.25);
+}
+
+// The estimator must not care whether the error is even or odd about the dwell
+// centre. It used to: integrating the phase gradient up the azimuth-FFT bin
+// axis ran straight through the bin pair where pulse adjacency breaks, which
+// handed the second half of the aperture a constant taken across the wrap and
+// emitted the two halves offset from each other. An even error barely notices
+// -- which is why every sweep of quadratics looked healthy -- and an odd one is
+// destroyed. On the Kourou collect the same 1-cycle sinusoid shifted a quarter
+// cycle scored 0.160 rad even against 3.818 rad odd; both are ~0.18 rad now.
+TEST(AutofocusOp, RecoversOddAndEvenErrorsAlike) {
+  const double amplitude = 2.0;
+  const int64_t n_az = 1024;
+  double worst = 0.0;
+  std::array<double, 2> rms{};
+  for (int which = 0; which < 2; ++which) {
+    const bool odd = which == 1;
+    // Built and asserted in *pulse* order, which is the domain the error
+    // physically lives in and the domain the port is indexed by. The injection
+    // is the only thing that moves to bin order, through the same inverse the
+    // operator's own mapping defines -- so a wrong mapping cannot cancel
+    // itself out of the comparison the way it does when the assertion is made
+    // in bin order.
+    auto want = sinusoidal_phi(amplitude, 1.0, odd, n_az);
+    auto phi = want;
+    to_bin_order(&phi);
+    const auto img = make_image<float>(phi, kStrong, true, n_az);
+    const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, n_az});
+    ASSERT_TRUE(out.ok) << (odd ? "odd: " : "even: ") << out.failure;
+    auto est = phase_as_double(out.phase);
+    remove_affine(&est);
+    remove_affine(&want);
+    rms[static_cast<size_t>(which)] = phase_rms(est, want);
+    worst = std::max(worst, rms[static_cast<size_t>(which)]);
+  }
+  // Both inside the pi/8 acceptance target of SAR/TESTING.md, and within a
+  // factor of two of each other: the point is the absence of a symmetry
+  // preference, which a pass/fail on the odd case alone would not pin.
+  EXPECT_LT(worst, 0.3927) << "even " << rms[0] << " rad, odd " << rms[1] << " rad";
+  EXPECT_LT(std::max(rms[0], rms[1]), 2.0 * std::min(rms[0], rms[1]) + 0.05)
+      << "even " << rms[0] << " rad, odd " << rms[1] << " rad";
 }
 
 // A pure quadratic, with no ramp or offset for `remove_affine` to strip. The
@@ -455,10 +534,9 @@ TEST(AutofocusOp, AzimuthAxisV) {
   ASSERT_TRUE(out.ok) << out.failure;
   ASSERT_EQ(out.phase.size(), kAz);
   auto est = phase_as_double(out.phase);
-  auto want = phi;
+  auto want = injected_phi_pulse();
   remove_affine(&est);
   remove_affine(&want);
-  to_bin_order(&est);
   EXPECT_LT(phase_rms(est, want), 0.25);
 }
 

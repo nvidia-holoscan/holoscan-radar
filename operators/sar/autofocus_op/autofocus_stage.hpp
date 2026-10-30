@@ -322,30 +322,33 @@ __global__ void circshift_window_kernel(const cuda::std::complex<T>* in, cuda::s
   out[i] = in[bin * n_az + src];
 }
 
+// The pair at k = n_fft-1 wraps to bin 0. Those two bins are adjacent *pulses*
+// -- the azimuth-FFT axis is the pulse axis rotated by half the aperture, so
+// bin n-1 and bin 0 straddle the dwell centre -- and zeroing that gradient
+// instead of estimating it left the integration below without the one link it
+// genuinely needed. See integrate_detrend_kernel.
 template <typename T>
 __global__ void lue_kernel(const cuda::std::complex<T>* spec, T* grad, int64_t batch,
                            int64_t n_range, int64_t n_fft) {
-  const int64_t n = batch * (n_fft - 1);
+  const int64_t n = batch * n_fft;
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
   }
-  const int64_t b = i / (n_fft - 1);
-  const int64_t k = i - b * (n_fft - 1);
+  const int64_t b = i / n_fft;
+  const int64_t k = i - b * n_fft;
+  const int64_t k1 = (k + 1) % n_fft;
   T num = static_cast<T>(0);
   T den = static_cast<T>(0);
   for (int64_t r = 0; r < n_range; ++r) {
     const int64_t row = (b * n_range + r) * n_fft;
     const auto g0 = spec[row + k];
-    const auto g1 = spec[row + k + 1];
+    const auto g1 = spec[row + k1];
     num += g1.imag() * g0.real() - g1.real() * g0.imag();
     den += g0.real() * g0.real() + g0.imag() * g0.imag();
   }
   const T eps = static_cast<T>(1e-20);
   grad[b * n_fft + k] = (den > eps) ? (num / den) : static_cast<T>(0);
-  if (k == 0) {
-    grad[b * n_fft + (n_fft - 1)] = static_cast<T>(0);
-  }
 }
 
 template <typename T>
@@ -438,48 +441,64 @@ __global__ void integrate_detrend_kernel(const cuda::std::complex<T>* spec, cons
   if (threadIdx.x != 0) {
     return;
   }
-  const int64_t n_keep = pga_occupied_nkeep(bp, n_az);
+  const int64_t keep = min(pga_occupied_nkeep(bp, n_az), n_az);
   for (int64_t k = 0; k < n_az; ++k) {
     phi[k] = static_cast<T>(0);
   }
-  if (n_keep >= n_az) {
-    phi[0] = static_cast<T>(0);
-    for (int64_t k = 0; k < n_az - 1; ++k) {
-      phi[k + 1] = phi[k] + g[k];
-    }
-  } else {
-    phi[occupied_chain_index(0, n_keep, n_az)] = static_cast<T>(0);
-    for (int64_t i = 0; i < n_keep - 1; ++i) {
-      const int64_t k0 = occupied_chain_index(i, n_keep, n_az);
-      const int64_t k1 = occupied_chain_index(i + 1, n_keep, n_az);
-      T step = static_cast<T>(0);
-      if (k1 == k0 + 1) {
-        step = g[k0];
-      } else {
-        step = lue_pair(spec, b, n_range, n_az, k0, k1);
-      }
-      phi[k1] = phi[k0] + step;
-    }
+  // Integrate outward from DC, never along the bin axis. The azimuth-FFT bin
+  // axis is the pulse axis rotated by half the aperture: bins 0..n/2-1 run
+  // from the dwell centre to its end, bins n/2..n-1 from its start back to
+  // the centre. So bins n/2-1 and n/2 are *not* adjacent pulses and the
+  // gradient between them carries no information, while bins n-1 and 0 are
+  // adjacent and were being skipped entirely.
+  //
+  // Integrating straight up the bin axis therefore took the second half of the
+  // aperture's constant of integration across that wrap, and emitted the two
+  // halves offset from each other by a step at the dwell centre. The step is
+  // small when the error is even about the centre -- a quadratic, a cosine --
+  // and is the whole error when it is odd -- a cubic, a sine. Every sweep
+  // before 2026-10-29 injected a quadratic, which is why this looked healthy:
+  // the same sinusoid shifted a quarter cycle went from 0.160 rad residual to
+  // 5.079 rad, with a 17.34 rad step at pulse n/2 against a 0.008 rad median
+  // step elsewhere.
+  const int64_t n_pos = (keep + 1) / 2;
+  const int64_t n_neg = keep - n_pos;
+  for (int64_t k = 0; k + 1 < n_pos; ++k) {
+    phi[k + 1] = phi[k] + g[k];
   }
+  for (int64_t j = 0; j < n_neg; ++j) {
+    const int64_t k = n_az - 1 - j;
+    phi[k] = phi[(k + 1) % n_az] - g[k];
+  }
+  // Detrend against signed frequency rather than position along the chain,
+  // for the same reason: a line in bin index is not a line in pulse index, and
+  // removing one would reintroduce a step at the centre. Signed frequency runs
+  // -n_neg..n_pos-1 contiguously and is the pulse offset from the dwell
+  // centre, so a line in it is the image shift PGA is blind to.
   T sum_p = static_cast<T>(0);
-  T sum_kp = static_cast<T>(0);
-  for (int64_t i = 0; i < n_keep; ++i) {
-    const int64_t k = occupied_chain_index(i, n_keep, n_az);
+  T sum_x = static_cast<T>(0);
+  T sum_xp = static_cast<T>(0);
+  T sum_xx = static_cast<T>(0);
+  for (int64_t i = 0; i < keep; ++i) {
+    const int64_t k = (i < n_pos) ? i : (n_az - 1 - (i - n_pos));
+    const T x = static_cast<T>((i < n_pos) ? i : (k - n_az));
     const T p = phi[k];
     sum_p += p;
-    sum_kp += static_cast<T>(i) * p;
+    sum_x += x;
+    sum_xp += x * p;
+    sum_xx += x * x;
   }
-  const T n = static_cast<T>(n_keep);
-  const T xmean = static_cast<T>(0.5) * (n - static_cast<T>(1));
-  const T denom = n * (n * n - static_cast<T>(1)) / static_cast<T>(12);
+  const T n = static_cast<T>(keep);
+  const T denom = sum_xx - sum_x * sum_x / n;
   T slope = static_cast<T>(0);
   if (denom != static_cast<T>(0)) {
-    slope = (sum_kp - xmean * sum_p) / denom;
+    slope = (sum_xp - sum_x * sum_p / n) / denom;
   }
-  const T intercept = sum_p / n - slope * xmean;
-  for (int64_t i = 0; i < n_keep; ++i) {
-    const int64_t k = occupied_chain_index(i, n_keep, n_az);
-    phi[k] -= intercept + slope * static_cast<T>(i);
+  const T intercept = (sum_p - slope * sum_x) / n;
+  for (int64_t i = 0; i < keep; ++i) {
+    const int64_t k = (i < n_pos) ? i : (n_az - 1 - (i - n_pos));
+    const T x = static_cast<T>((i < n_pos) ? i : (k - n_az));
+    phi[k] -= intercept + slope * x;
   }
 }
 
@@ -494,7 +513,24 @@ __global__ void add_phase_kernel(T* acc, const T* iter, int64_t n) {
 // `phase_acc` is indexed by azimuth-FFT bin with fftfreq semantics -- bin 0 is
 // DC, which is the centre of the dwell. The contract's `phase_correction` is
 // indexed by pulse, which runs monotonically across the dwell, so the two
-// differ by an fftshift: pulse p sits at bin (p - n/2) mod n.
+// differ by an fftshift *and by the handedness of the axis*: the image's
+// azimuth axis is the Fourier conjugate of slow time, which runs the opposite
+// way, so pulse p reads bin (n - 1 - p + n/2) mod n.
+//
+// The reversal was missing until 2026-10-30 and is invisible on an error that
+// is even about the dwell centre, because reversing an even function is a
+// no-op -- and reversing an odd one is indistinguishable from negating it, so
+// `AutofocusScoreOp`'s sign search absorbed those too. Only an error that is
+// neither exposed it: a sinusoid at 45 degrees scored 4.92 rad as emitted
+// against a 4.75 rad baseline (no recovery at all, reported with a normal
+// sign) and 0.178 rad reversed. Measured against injected truth on Kourou over
+// a quadratic, a cubic, a sine and that 45-degree sinusoid, this mapping wins
+// on every one; see autofocus_op/OPEN_ITEMS.md.
+//
+// Only the exported vector was affected. The in-image correction multiplies
+// bin k by phase_acc[k] in the spectrum domain and never consults this
+// mapping, so WORKFLOWS Figure 3 was always right while Figure 2 handed
+// `PhaseCorrectionOp` a time-reversed correction.
 template <typename T>
 __global__ void fftshift_phase_kernel(const T* in, T* out, int64_t batch, int64_t n_az) {
   const int64_t n = batch * n_az;
@@ -504,7 +540,7 @@ __global__ void fftshift_phase_kernel(const T* in, T* out, int64_t batch, int64_
   }
   const int64_t b = i / n_az;
   const int64_t p = i - b * n_az;
-  out[i] = in[b * n_az + (p + (n_az + 1) / 2) % n_az];
+  out[i] = in[b * n_az + (n_az - 1 - p + (n_az + 1) / 2) % n_az];
 }
 
 template <typename T>
@@ -854,8 +890,8 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
     // apart. See the header note on why packing to `width` loses the edges.
     (scratch_v = matx::fft(scratch_v, nfft, matx::FFTNorm::BACKWARD)).run(exec);
 
-    lue_kernel<T><<<grid_for(batch * (n_az - 1), kT), kT, 0, stream>>>(scratch, state.grad, batch,
-                                                                       n_range, n_az);
+    lue_kernel<T>
+        <<<grid_for(batch * n_az, kT), kT, 0, stream>>>(scratch, state.grad, batch, n_range, n_az);
     check_cuda("LUE gradient", who);
     bin_power_kernel<T><<<grid_for(batch * n_az, kT), kT, 0, stream>>>(scratch, state.bin_pwr,
                                                                        batch, n_range, n_az);

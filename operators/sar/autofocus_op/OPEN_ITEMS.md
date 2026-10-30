@@ -1,5 +1,68 @@
 # AutofocusOp — open items
 
+## Two defects the quadratic-only sweeps could not see (fixed 2026-10-30)
+
+Every accuracy measurement before 2026-10-29 injected a **pure quadratic**, and
+a quadratic is **even about the dwell centre**. Both of the following are
+invisible on an even error, and on an odd one they are indistinguishable from a
+global sign flip, which `AutofocusScoreOp`'s sign search absorbs. Only an error
+that is neither even nor odd exposes them — a sinusoid at 45° scored **4.92 rad
+against a 4.75 rad baseline**, no recovery at all, reported with a normal sign.
+
+1. **The emitted phase had a constant offset between the two halves of the
+   aperture.** The gradient was integrated straight up the azimuth-FFT bin
+   axis, but that axis is the pulse axis rotated by half the aperture: bins
+   `n/2-1` and `n/2` are *not* adjacent pulses, so the gradient between them
+   carries nothing, while bins `n-1` and `0` are adjacent and were being
+   skipped (`lue_kernel` zeroed that pair). Integrating through the wrap gave
+   the second half of the aperture a constant of integration taken across it.
+   Measured directly on the dumped estimate: a **17.34 rad step at pulse
+   n/2** on an odd error and 2.33 rad on an even one, against a 0.008 rad
+   median step elsewhere, with the two half-means equal and opposite. Fixed by
+   integrating outward from DC in both directions and computing the wrap pair.
+   This is also the "one-sample step at `floor(n_pulses/2)`" recorded below as
+   unexplained — not a cosmetic seam but the signature of the offset.
+
+2. **The emitted phase was time-reversed.** Azimuth is the Fourier conjugate of
+   slow time and runs the opposite way, so pulse `p` reads bin
+   `(n - 1 - p + n/2) mod n`; the mapping had the shift but not the reversal.
+   Established by testing four candidate mappings against injected truth over
+   a quadratic, a cubic, a sine and the 45° sinusoid — plain reversal wins on
+   all four (0.181 / 0.219 / 0.186 / 0.178 rad) and no other candidate wins on
+   any. **Only the exported vector was wrong:** the in-image correction
+   multiplies bin `k` by `phase_acc[k]` in the spectrum domain and never
+   consults the mapping, so WORKFLOWS Figure 3 was always right while Figure 2
+   handed `PhaseCorrectionOp` a reversed correction. A prior fix
+   (`f371b008`) removed a spurious negate and added the shift, and its own note
+   recorded that the two "partially cancel on a symmetric quadratic" — which is
+   exactly the blind spot that let the reversal survive.
+
+**Effect, on Kourou at 8000 pulses, 8 iterations, 1000-sample first window:**
+
+| injected shape | baseline | before | after |
+| --- | --- | --- | --- |
+| quadratic (even) | 2.400 rad | 0.201 rad | 0.181 rad |
+| cosine, 1 cycle (even) | 5.691 rad | 0.160 rad | 0.183 rad |
+| cubic (odd) | 1.217 rad | **1.602 rad** | 0.219 rad |
+| sine, 1 cycle (odd) | 3.564 rad | **3.818 rad** | 0.186 rad |
+| sinusoid, 45° | 4.748 rad | **4.922 rad** | 0.178 rad |
+
+Over the broader shape sweep (`tools/sar_autofocus/sweep.py --grid shapes`),
+**3 of 11 rows were inside the 0.785 rad hard floor before and 8 of 11 after**;
+every polynomial and every sinusoid to 6 cycles now passes, 12 cycles is
+marginal at 0.689 rad, and random walks remain harmful (see §7).
+
+Two tests changed with the fix, both because they encoded the first defect.
+`injected_phi()` built its "quadratic" against the raw bin index, which put a
+**7.56 rad jump between adjacent pulses 31 and 32** against a 0.125 rad median
+— a phase error that teleports most of a wavelength between consecutive pulses
+— and the estimator passed by reproducing it. The accuracy assertions also ran
+in bin order, which round-trips through the very mapping under test and lets a
+wrong mapping cancel out of its own comparison; they now assert in pulse order,
+the domain the port is indexed by. `RecoversOddAndEvenErrorsAlike` is the new
+gate: it asserts that the estimator has no symmetry preference, which is what
+a pass/fail on one shape cannot pin.
+
 ## Implementation follow-ups
 
 1. **~~The shipped `num_iterations: 4` fails on the error magnitudes
@@ -123,20 +186,16 @@
    subtract it rather than leaving this to be rediscovered; until it
    does, read any single residual as an upper bound on estimator error.
 
-4. **A one-sample step at exactly `floor(n_pulses/2)` in the emitted
-   estimate, at every aperture length.** 1.832 rad at 8000, 0.700 at
+4. **~~A one-sample step at exactly `floor(n_pulses/2)`.~~ Resolved —
+   that step was defect 1 above.** 1.832 rad at 8000 pulses, 0.700 at
    16000 and 1.799 at 23375, against a median sample-to-sample step of
-   0.0012–0.0018 rad — 473× to 1518×. The two halves are not offset
-   from each other (half-means are within ±0.06 rad), so it is a seam
-   in one sample rather than a constant. It is narrow enough to barely
-   move the RMS. The dwell centre is where the bin-to-pulse
-   `fftshift(phase_acc)` wraps, so that emit is the first suspect;
-   `PhaseResampleOp` is second but the aux azimuth extent equals the
-   aperture on these runs, which makes it an identity copy. One
-   explanation is ruled out: it is not a residual linear term left in
-   bin order, which would map to exactly this sawtooth — detrending in
-   bin order and mapping back leaves the residual and the step
-   unchanged to four decimal places.
+   0.0012–0.0018 rad. It was recorded here as narrow enough to barely
+   move the RMS and therefore low priority, which was the wrong read:
+   a one-sample seam at the dwell centre is what a constant offset
+   between the two aperture halves looks like, and on an error that is
+   not even about that centre the offset *is* the whole error. Noted
+   at the time that the `fftshift(phase_acc)` emit was the first
+   suspect; it was, along with the integration feeding it.
 
 5. **`num_iterations` is bounded at 255 by the contract's `uint8`,
    which has not been exercised anywhere near that.** The default is 8
@@ -300,3 +359,19 @@ collect's own error. `AutofocusScoreOp` logs the affine-removed RMS,
 and `dump: true` with `output.path` writes `af_expected_phase.npy` and
 `af_estimated_phase.npy` beside the image. Note the key is
 `output.path`; `dump` itself is only a boolean.
+
+1. **Random-walk error is still harmful at every magnitude and window
+   width tested.** After the two fixes above, the shape sweep leaves
+   this one row failing: 0.805 / 4.024 / 20.120 rad baselines score
+   0.964 / 4.961 / 22.674 rad residuals, i.e. **PGA makes the image
+   worse than leaving it alone**, and widening the first window makes
+   it monotonically worse (0.8x at 350 samples down to 0.4x at 8000).
+   Two candidate explanations, not yet separated. The error model may
+   be unphysical: `ErrorProfile` drives the walk with white noise, so
+   it carries content down to the pulse-to-pulse scale, whereas a real
+   platform is a mass on a spring and its INS error is heavily
+   band-limited. Or PGA's geometrically shrinking window genuinely
+   cannot represent broadband error, which would be a real limitation
+   worth stating. **Next step is a band-limited walk**, which
+   distinguishes the two: if accuracy tracks the cutoff, the model was
+   the problem.
