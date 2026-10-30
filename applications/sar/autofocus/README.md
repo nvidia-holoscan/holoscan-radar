@@ -81,7 +81,7 @@ Three fixture runs: the clean Figure 2 chain, the same chain with the lie inject
 
 ## Kourou (the PGA vehicle)
 
-The development collect is an Umbra SNAPSHOT over the Guiana Space Centre (`2023-06-24-13-22-56_UMBRA-05`, 5.23 N 52.77 W, 23375 by 23999, 4.19 GiB), configured in [`config/autofocus.yaml`](config/autofocus.yaml) with the download command. It was chosen by screening for PGA's scene preconditions rather than for brightness: the chosen scatterer is isolated 221 times over its annulus and flat to 0.85 of its mean across eight equal dwell blocks.
+The development collect is an Umbra SNAPSHOT over the Guiana Space Centre (`2023-06-24-13-22-56_UMBRA-05`, 5.23 N 52.77 W, 23375 by 23999, 4.19 GiB), configured in [`config/autofocus.yaml`](config/autofocus.yaml) with the download command. It was chosen by screening for PGA's scene preconditions rather than for brightness: `python3 tools/sar_autofocus/pga_screen.py data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd` finds six persistent candidates, the brightest isolated 135 times over its annulus and holding 0.68 of its mean in its worst of eight equal dwell blocks. Two of the scene's brightest returns collapse to 0.07 and 0.09 across the dwell, which is the glint case the screen exists to reject.
 
 The product is a 2048-square **0.25 m** east-north patch on that scatterer, and the fine spacing is load-bearing rather than cosmetic. The target is diffraction-limited to one or two samples at 0.25 m, so on a 1 m lattice it falls between pixels: the same peak reads 43468 at 1 m and 160525 at 0.25 m (both over the full aperture), and adding a quadratic error *raises* the 1 m number by broadening the PSF onto a pixel. **Do not score focus at 1 m here.** The aux is the polar lattice with rows auto-sized about the product centre, 2460 by 23375 at the full aperture (2476 by 8000 at the `pulse_range` the measurements below use).
 
@@ -163,7 +163,9 @@ Two earlier collects failed on the scene rather than on the estimator, and both 
 
 PGA assumes each selected range bin is dominated by one strong scatterer that persists across the *full* synthetic aperture (Wahl, Eichel, Ghiglia and Jakowatz, *IEEE T-AES* 30(3), 1994), and that one phase error is common to the whole scene.
 
-A Strait of Dover collect looked ideal on amplitude — isolated bright returns on dark water — but its brightest scatterer is a glint, not a persistent one: the middle quarter of the dwell carries 72% of the coherent peak and the outer half of the aperture adds 5%. Ships also violate space-invariance, since one swinging in wind and waves gives every scattering point its own error; there is a maritime sub-literature (SV-PGA, Mosaic PGA, IPGRA) whose premise is precisely that classical PGA cannot focus swing ships. An urban Atlanta collect failed the isolation half instead. Neither result is an estimator defect, and a 2 cm quadratic centred on the dwell is flattest exactly where a glint is bright, so it costs such a target about 1% of peak and cannot be used as a stimulus at all.
+A Strait of Dover collect looked ideal on amplitude — isolated bright returns on dark water — but its brightest scatterer is a glint, not a persistent one: the middle quarter of the dwell carries 72% of the coherent peak and the outer half of the aperture adds 5%. Ships also violate space-invariance, since one swinging in wind and waves gives every scattering point its own error; there is a maritime sub-literature (SV-PGA, Mosaic PGA, IPGRA) whose premise is precisely that classical PGA cannot focus swing ships. The Dover result is not an estimator defect, and a 2 cm quadratic centred on the dwell is flattest exactly where a glint is bright, so it costs such a target about 1% of peak and cannot be used as a stimulus at all.
+
+An urban Atlanta collect was recorded here as failing the isolation half instead. **That verdict is superseded** — see the measured screen below, where Atlanta passes both halves more cleanly than Kourou does.
 
 ### Three more scenes, and what screening actually buys
 
@@ -176,7 +178,18 @@ Three further collects now have configs beside the Kourou default — [`autofocu
 | Houston | mode02 | dense urban | 0.107 |
 | Imperial Valley | Capella SM | irrigated agriculture | refused, all five |
 
-**This refines the Atlanta result above rather than contradicting it.** Atlanta does fail the isolation screen — no scatterer there is isolated 221× over its annulus the way Kourou's is — and it still supports more accurate autofocus than Kourou does. The two are not in tension because they measure different things. Isolation screening asks whether a *single* scatterer can carry the estimate and be used to verify focus afterwards; the estimator itself averages a phase gradient over `min_scatterers` range bins, and a city supplies hundreds of usable bins where Kourou supplies the one good one. So screening buys a scene you can *check*, and a dependable worst case, rather than a lower residual.
+**Screening every scene the same way says the Kourou collect is the weakest of the three that work.** `python3 tools/sar_autofocus/pga_screen.py <collect> --spacing 1.0` forms the scene and its eight disjoint dwell blocks and scores both halves of PGA's precondition; run over each config's own pulse range on a matched 2048² lattice at 1.0 m, the best candidate in each scene is:
+
+| scene | isolation (peak / annulus median) | persistence (worst block / mean) | persistent of 8 candidates |
+| --- | --- | --- | --- |
+| Kourou | 135× | 0.68 | 6 |
+| Atlanta | 661× | 0.96 | 8 |
+| Houston | 585× | 0.85 | 7 |
+| Imperial Valley | no cell cleared 30× | — | 0 |
+
+This **corrects the Atlanta claim above**, which predates the tool being restored: Atlanta does not fail the isolation half. It clears it by a wider margin than Kourou on both halves, and the earlier verdict cannot be reproduced at any setting tried here. Read the two measurements together and the screen is broadly predictive — the three scenes with an isolated, persistent scatterer all autofocus to 0.11–0.22 rad, and the one with none is refused outright — but it does not rank them, since Atlanta screens best and Houston focuses best. Compare isolation across scenes with care: the ratio depends on how concentrated a point target is relative to the lattice, and these collects have different native resolutions, so a common 1.0 m lattice oversamples them differently.
+
+What screening still buys is a scene you can *check*: a single dominant scatterer lets you verify focus afterwards by looking at one impulse response. It does not buy the lowest residual, because the estimator averages a phase gradient over `min_scatterers` range bins and a city supplies hundreds of usable bins where Kourou supplies a handful.
 
 **Agriculture is the floor, and the guard finds it.** All five shapes hit the sharpness guard at iteration 0 on Imperial Valley and the image comes back untouched — distributed clutter has no dominant scatterer in any range bin, which is the precondition stated at the top of this section, and the operator declines rather than applying a wrong correction. It is worth running as the negative control for exactly that reason: without a scene that *should* fail, a per-scene failure elsewhere cannot be attributed.
 

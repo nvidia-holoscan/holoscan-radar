@@ -4,6 +4,29 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-30** — **The PGA scene screen is ported as
+  [`tools/sar_autofocus/pga_screen.py`](../../tools/sar_autofocus/pga_screen.py),
+  and running it falsified a claim this branch had already committed.** The tool
+  was the last item outstanding from the 2026-10-27 HSDK 5 port note. It no
+  longer builds an ECEF grid in Python or transcribes `reference_frequency`:
+  formation runs through the `spotlight` app on the shared IARP-centred
+  `lattice` block, so a verdict is expressed in the same terms the scene configs
+  use, and the only dependencies are numpy and PyYAML. It scores both halves of
+  PGA's precondition — isolation (peak over an annulus median) and persistence
+  (the candidate across eight disjoint dwell blocks, compared between blocks
+  rather than against the full aperture, so sub-aperture cell-merging is
+  common-mode). **The correction:** the app README recorded Atlanta as failing
+  the isolation half, and this branch repeated it. On a matched 2048² lattice at
+  1.0 m, Atlanta's best candidate is isolated 661× and holds 0.96 of its mean,
+  against Kourou's 135× and 0.68 — Atlanta passes both halves *more cleanly than
+  the collect that screening chose*, and the old verdict did not reproduce at
+  any setting tried. Houston sits at 585× / 0.85, and Imperial Valley has no
+  cell clearing 30×, which independently corroborates the operator refusing it
+  at iteration 0. So the screen is broadly predictive — the three scenes with a
+  persistent isolated scatterer autofocus to 0.11–0.22 rad, the one without is
+  refused — but it does not rank them, since Atlanta screens best and Houston
+  focuses best. Kourou's README and config numbers (previously 221× / 0.85,
+  unreproducible) are re-measured and now cite the command that produces them.
 - **2026-10-30** — **`AutofocusOp` gained two optional provenance outputs,
   `termination` and `iterations` (CONTRACT CHANGE,
   [`SAR/OPERATOR_API.md`](SAR/OPERATOR_API.md)).** The Imperial Valley result
@@ -586,6 +609,9 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   **Still to port:** `tools/sar_image/pga_screen.py` and the Atlanta/Calais
   configs; the Kourou numbers quoted in the app README are pre-port and must be
   re-measured before being quoted again.
+  *(Closed 2026-10-30: the screen is ported as
+  `tools/sar_autofocus/pga_screen.py`, the Atlanta/Houston/Imperial configs
+  landed, and the Kourou numbers were re-measured — see the entry at the top.)*
 
 - **2026-10-26** — **`AutofocusOp` ported to HSDK 5 (operator only).** The PGA
   estimator now builds against the templated `Operator<Params>` API with typed

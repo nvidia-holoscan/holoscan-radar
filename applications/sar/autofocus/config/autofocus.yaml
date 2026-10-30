@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # WORKFLOWS Figure 2 on Kourou / Guiana Space Centre -- the PGA
-# vehicle, picked because it meets PGA's scene preconditions where
-# the other public collects do not: an isolated (221x over its
-# annulus), stationary hard target that stays lit across the whole
-# dwell (amplitude flat to 0.85 of its mean over 8 dwell blocks).
-# Selected with tools/sar_image/pga_screen.py. The whole snapshot is
-# retained (~23.4k profiles) so it can be replayed once, corrected.
+# vehicle, picked because it meets PGA's scene preconditions: a
+# stationary hard target, isolated 135x over its annulus, that stays
+# lit across the whole dwell (worst of 8 dwell blocks holds 0.68 of
+# its mean). Selected with tools/sar_autofocus/pga_screen.py, which
+# re-measures those two numbers on demand. Screening picked this
+# collect, but it does not make it the best of the four: Atlanta and
+# Houston both score higher on the same screen (see the app README).
+# The whole snapshot is retained (~23.4k profiles) so it can be
+# replayed once, corrected.
 #
 # Download once (4.19 GiB), then form. The app never reaches the
 # network. Paths resolve under the build data directory (default:

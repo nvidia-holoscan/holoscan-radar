@@ -28,5 +28,3 @@ core
 perf_results/
 perf_reports_full/
 Testing/
-.cursor-export/
-.git-hooks/
