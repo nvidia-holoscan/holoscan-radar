@@ -27,6 +27,8 @@ The image drives the tick. The four scalar inputs are `[live]` overrides: each j
 | Out | `image_out` | complex `T` | `(num_v,num_u)` | Every tick | Corrected image |
 | Out | `phase_correction` | real `T`, radians | `(num_pulses)` | Every tick, optional | Pulse-indexed estimate |
 | Out | `sharpness` | real `T` | `(num_iterations + 1)` | Every tick, optional | Focus metric per iteration |
+| Out | `termination` | `int32` | `(1)` | Every tick, optional | Why the loop stopped |
+| Out | `iterations` | `int32` | `(1)` | Every tick, optional | Iterations actually accepted |
 
 ## Construction
 

@@ -635,6 +635,17 @@ TEST(AutofocusOp, TerminationSeparatesRefusalFromAnUneventfulRun) {
   EXPECT_FALSE(autofocus_refused(termination_of(ok)));
 }
 
+// SAR/OPERATOR_API.md states the AutofocusTermination values are contract:
+// append, never renumber. They leave the operator as a bare int32 with no
+// accompanying name, so a consumer decoding them has nothing but the number,
+// and a reordering of the enum would change their meaning silently.
+static_assert(static_cast<int>(AutofocusTermination::kConverged) == 0);
+static_assert(static_cast<int>(AutofocusTermination::kBudgetExhausted) == 1);
+static_assert(static_cast<int>(AutofocusTermination::kRefusedSharpness) == 2);
+static_assert(static_cast<int>(AutofocusTermination::kRefusedScatterers) == 3);
+static_assert(static_cast<int>(AutofocusTermination::kRefusedMaxCorrection) == 4);
+static_assert(static_cast<int>(AutofocusTermination::kStoppedScatterers) == 5);
+
 TEST(AutofocusOp, IterationsCountsOnlyAcceptedIterations) {
   const auto img = make_image<float>(injected_phi(), kStrong, true);
   // A budget far beyond what this image needs: the guard stops the loop early,
