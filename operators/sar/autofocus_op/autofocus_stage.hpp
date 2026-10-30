@@ -77,6 +77,19 @@ struct AutofocusConfig {
   double max_correction{std::numeric_limits<double>::infinity()};
 };
 
+// What the run did, for the `termination` and `iterations` ports. Host-side
+// because every branch that decides it is already a host-side decision taken
+// after a device-to-host sync, so there is nothing to bring back.
+//
+// `iterations_accepted` is the number whose phase is in `phase_correction`,
+// which is not the number attempted: the loop applies an iteration, scores it,
+// and discards it if sharpness fell, so the last attempt is routinely not in
+// the estimate.
+struct AutofocusOutcome {
+  AutofocusTermination termination{AutofocusTermination::kConverged};
+  int64_t iterations_accepted{0};
+};
+
 template <typename T>
 struct AutofocusState {
   std::string key;
@@ -771,11 +784,15 @@ inline bool autofocus_ignore_drop() {
   return ignore;
 }
 
-// phase_out: (batch, n_az). sharpness_out: (batch, n_iter+1).
+// phase_out: (batch, n_az). sharpness_out: (batch, n_iter+1). outcome: what
+// the run did, for the provenance ports; never null.
 template <typename T>
 void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const void* in,
                    int64_t batch, int64_t rows, int64_t cols, void* image_out, T* phase_out,
-                   T* sharpness_out, cudaStream_t stream, const std::string& who) {
+                   T* sharpness_out, AutofocusOutcome* outcome, cudaStream_t stream,
+                   const std::string& who) {
+  // Set on every exit below, including the three that return early.
+  *outcome = AutofocusOutcome{};
   const bool az_u = cfg.azimuth_axis == AutofocusAzimuthAxis::kU;
   const int64_t n_range = az_u ? rows : cols;
   const int64_t n_az = az_u ? cols : rows;
@@ -861,6 +878,7 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
             "{}: fewer than {} strong scatterers (saw {}); passing "
             "the image through unchanged",
             who, cfg.min_scatterers, seen);
+        outcome->termination = AutofocusTermination::kRefusedScatterers;
         passthrough_outputs<T>(in, image_out, phase_out, sharpness_out, batch, rows, cols, n_az,
                                n_slots, stream, state, who);
         return;
@@ -869,6 +887,7 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
           "{}: fewer than {} strong scatterers (saw {}) on "
           "iteration {}; keeping the estimate from prior iterations",
           who, cfg.min_scatterers, seen, iter);
+      outcome->termination = AutofocusTermination::kStoppedScatterers;
       for (int64_t s = iter + 1; s < n_slots; ++s) {
         fill_sharpness_kernel<T><<<grid_for(batch, kT), kT, 0, stream>>>(
             sharpness_out, state.sharp_tmp, batch, n_slots, s);
@@ -941,6 +960,10 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
           "{}: iteration {} sharpness dropped ({:g} -> {:g}); "
           "keeping the prior estimate",
           who, iter, static_cast<double>(host_sharp[0]), static_cast<double>(host_sharp_new[0]));
+      // Nothing accepted yet means nothing applied at all, which is a refusal;
+      // a drop after at least one accepted iteration is ordinary convergence.
+      outcome->termination =
+          (iter == 0) ? AutofocusTermination::kRefusedSharpness : AutofocusTermination::kConverged;
       copy_n_kernel<T><<<grid_for(n_pix, kT), kT, 0, stream>>>(spec, work, n_pix);
       check_cuda("restore work", who);
       if (cudaMemcpyAsync(state.sharp_tmp, host_sharp.data(),
@@ -959,6 +982,12 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
     add_phase_kernel<T><<<grid_for(batch * n_az, kT), kT, 0, stream>>>(
         state.phase_acc, state.phase_iter, batch * n_az);
     check_cuda("accumulate phase", who);
+    // Counted here rather than from the loop index: this is the only point an
+    // iteration's phase enters the estimate.
+    ++outcome->iterations_accepted;
+    if (outcome->iterations_accepted == cfg.num_iterations) {
+      outcome->termination = AutofocusTermination::kBudgetExhausted;
+    }
     fill_sharpness_kernel<T><<<grid_for(batch, kT), kT, 0, stream>>>(sharpness_out, state.sharp_tmp,
                                                                      batch, n_slots, iter + 1);
     check_cuda("store sharpness iter", who);
@@ -987,6 +1016,10 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
           "{}: estimated correction peak-to-peak {} rad exceeds "
           "max_correction {}; passing the image through unchanged",
           who, static_cast<double>(peak), cfg.max_correction);
+      // The estimate is discarded along with the iterations that built it, so
+      // the count goes back to zero to match the zero phase_correction emitted.
+      outcome->termination = AutofocusTermination::kRefusedMaxCorrection;
+      outcome->iterations_accepted = 0;
       passthrough_outputs<T>(in, image_out, phase_out, sharpness_out, batch, rows, cols, n_az,
                              n_slots, stream, state, who);
       return;

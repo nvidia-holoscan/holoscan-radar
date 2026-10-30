@@ -29,7 +29,9 @@ namespace {
 using holoscan::radar::AutofocusAzimuthAxis;
 using holoscan::radar::AutofocusOp;
 using holoscan::radar::AutofocusParams;
+using holoscan::radar::AutofocusTermination;
 using holoscan::radar::MaxTensorExtents;
+using holoscan::radar::autofocus_refused;
 using holoscan::radar::complex_dtype;
 using holoscan::radar::testing::HostTensor;
 using holoscan::radar::testing::to_device_tensor;
@@ -191,6 +193,8 @@ struct AfOut {
   HostTensor image;
   HostTensor phase;
   HostTensor sharpness;
+  HostTensor termination;
+  HostTensor iterations;
 };
 
 MaxTensorExtents extents_for(const std::vector<int64_t>& shape) {
@@ -221,15 +225,24 @@ AfOut run_af(AutofocusAzimuthAxis axis, const std::vector<std::complex<T>>& img,
   fixture.template capture_snapshot<holoscan::Tensor>("image_out", 1U, input->nbytes());
   fixture.template capture_snapshot<holoscan::Tensor>("phase_correction", 1U, vector_bytes);
   fixture.template capture_snapshot<holoscan::Tensor>("sharpness", 1U, vector_bytes);
+  fixture.template capture_snapshot<holoscan::Tensor>("termination", 1U, sizeof(std::int32_t));
+  fixture.template capture_snapshot<holoscan::Tensor>("iterations", 1U, sizeof(std::int32_t));
   fixture.input_source_device("image", holoscan::DeviceId{0});
   fixture.output_device("image_out", holoscan::DeviceId{0});
   fixture.output_device("phase_correction", holoscan::DeviceId{0});
   fixture.output_device("sharpness", holoscan::DeviceId{0});
+  fixture.output_device("termination", holoscan::DeviceId{0});
+  fixture.output_device("iterations", holoscan::DeviceId{0});
   holoscan::radar::testing::FixtureCompletion completion;
   auto running = fixture.run_async(completion.run_options());
-  // sharpness is emitted last, so observing it means all three ports have
-  // landed; waiting on image_out instead races the stop against the vectors.
-  const bool observed = completion.wait_for_output(running, "sharpness", 1U);
+  // Wait on every captured port rather than on whichever is emitted last.
+  // Observation order is not emit order: the two int32 status ports are
+  // observed *before* the larger vectors despite being emitted after them, so
+  // waiting on the final emit stopped the run with sharpness unrecorded.
+  bool observed = true;
+  for (const char* port : {"phase_correction", "sharpness", "termination", "iterations"}) {
+    observed = completion.wait_for_output(running, port, 1U) && observed;
+  }
   running.request_stop();
   const auto result = running.finish();
 
@@ -243,7 +256,17 @@ AfOut run_af(AutofocusAzimuthAxis axis, const std::vector<std::complex<T>>& img,
   out.image = to_host(result.template snapshot<holoscan::Tensor>("image_out"));
   out.phase = to_host(result.template snapshot<holoscan::Tensor>("phase_correction"));
   out.sharpness = to_host(result.template snapshot<holoscan::Tensor>("sharpness"));
+  out.termination = to_host(result.template snapshot<holoscan::Tensor>("termination"));
+  out.iterations = to_host(result.template snapshot<holoscan::Tensor>("iterations"));
   return out;
+}
+
+AutofocusTermination termination_of(const AfOut& out) {
+  return static_cast<AutofocusTermination>(out.termination.as<std::int32_t>()[0]);
+}
+
+int64_t iterations_of(const AfOut& out) {
+  return out.iterations.as<std::int32_t>()[0];
 }
 
 std::vector<double> phase_as_double(const HostTensor& t) {
@@ -572,6 +595,8 @@ TEST(AutofocusOp, MinScatterersPassesThrough) {
     max_err = std::max(max_err, static_cast<double>(std::abs(got[i] - img[i])));
   }
   EXPECT_LT(max_err, 1e-5);
+  EXPECT_EQ(termination_of(out), AutofocusTermination::kRefusedScatterers);
+  EXPECT_EQ(iterations_of(out), 0);
 }
 
 TEST(AutofocusOp, MaxCorrectionPassesThrough) {
@@ -580,6 +605,51 @@ TEST(AutofocusOp, MaxCorrectionPassesThrough) {
   const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz}, 4, 0.5, 16, 0.05);
   ASSERT_TRUE(out.ok) << out.failure;
   EXPECT_LT(peak_abs(phase_as_double(out.phase)), 1e-6);
+  EXPECT_EQ(termination_of(out), AutofocusTermination::kRefusedMaxCorrection);
+  // Iterations ran and were accepted before the ceiling rejected the total, but
+  // none of them survive into phase_correction, so the count reports zero
+  // rather than the work done.
+  EXPECT_EQ(iterations_of(out), 0);
+}
+
+// The reason these ports exist: on every pre-existing port a refusal and a
+// clean no-op image are the same tick -- zero phase_correction, flat sharpness
+// -- so a consumer could not tell "I declined" from "there was nothing to do".
+TEST(AutofocusOp, TerminationSeparatesRefusalFromAnUneventfulRun) {
+  const std::vector<double> zero;
+  const auto clean = make_image<float>(zero, kStrong, true);
+  const auto ok = run_af<float>(AutofocusAzimuthAxis::kU, clean, {kRg, kAz});
+  ASSERT_TRUE(ok.ok) << ok.failure;
+
+  const auto starved = make_image<float>(injected_phi(), 4, true);
+  const auto refused = run_af<float>(AutofocusAzimuthAxis::kU, starved, {kRg, kAz}, 4, 0.5, 16);
+  ASSERT_TRUE(refused.ok) << refused.failure;
+
+  // Indistinguishable on the old ports...
+  EXPECT_LT(peak_abs(phase_as_double(refused.phase)), 1e-6);
+  const auto refused_sharp = phase_as_double(refused.sharpness);
+  EXPECT_NEAR(refused_sharp.back(), refused_sharp.front(), 1e-3 * refused_sharp.front());
+  // ...and distinguishable on the new ones.
+  EXPECT_EQ(termination_of(refused), AutofocusTermination::kRefusedScatterers);
+  EXPECT_TRUE(autofocus_refused(termination_of(refused)));
+  EXPECT_FALSE(autofocus_refused(termination_of(ok)));
+}
+
+TEST(AutofocusOp, IterationsCountsOnlyAcceptedIterations) {
+  const auto img = make_image<float>(injected_phi(), kStrong, true);
+  // A budget far beyond what this image needs: the guard stops the loop early,
+  // so the count must be the accepted iterations and not the budget.
+  const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz}, 32);
+  ASSERT_TRUE(out.ok) << out.failure;
+  EXPECT_EQ(termination_of(out), AutofocusTermination::kConverged);
+  EXPECT_GE(iterations_of(out), 1);
+  EXPECT_LT(iterations_of(out), 32);
+
+  // A budget of one cannot stop early, so it reports exhaustion instead.
+  const auto capped = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz}, 1);
+  ASSERT_TRUE(capped.ok) << capped.failure;
+  EXPECT_EQ(termination_of(capped), AutofocusTermination::kBudgetExhausted);
+  EXPECT_EQ(iterations_of(capped), 1);
 }
 
 TEST(AutofocusOp, WellFocusedStaysSharp) {
@@ -681,6 +751,10 @@ TEST(AutofocusOp, LiveWindowFractionAppliesForOneTick) {
   fixture.output_device("image_out", holoscan::DeviceId{0});
   fixture.output_device("phase_correction", holoscan::DeviceId{0});
   fixture.output_device("sharpness", holoscan::DeviceId{0});
+  // Routed but not snapshotted: this test is about the [live] override, and the
+  // fixture requires every declared output to have a device.
+  fixture.output_device("termination", holoscan::DeviceId{0});
+  fixture.output_device("iterations", holoscan::DeviceId{0});
   holoscan::radar::testing::FixtureCompletion completion;
   auto running =
       fixture.run_async(completion.run_options(holoscan::testing::FrameRelease::kManual));

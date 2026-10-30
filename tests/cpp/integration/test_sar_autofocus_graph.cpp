@@ -658,7 +658,8 @@ Estimate run_estimate(const std::vector<std::complex<float>>& img,
                            "inject_phase", "correct_phase"}) {
     bind_output(&options, "source", port);
   }
-  for (const char* port : {"image_out", "phase_correction", "sharpness"}) {
+  for (const char* port :
+       {"image_out", "phase_correction", "sharpness", "termination", "iterations"}) {
     bind_output(&options, "af", port);
   }
 
@@ -957,7 +958,8 @@ Figure2Result run_fig2(bool inject, bool autofocus, const std::vector<double>& a
     }
     auto af = graph.op<AutofocusOp<float>>("af", extents);
     af.set_params(af_params);
-    for (const char* port : {"image_out", "phase_correction", "sharpness"}) {
+    for (const char* port :
+         {"image_out", "phase_correction", "sharpness", "termination", "iterations"}) {
       bind_output(&options, "af", port);
     }
     const auto aux_sink = graph.op<AuxImageCollectOp>("aux_sink");

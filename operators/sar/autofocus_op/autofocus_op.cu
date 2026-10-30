@@ -73,6 +73,9 @@ AutofocusOp<T>::AutofocusOp(const MaxTensorExtents& extents) : extents_(extents)
   max_azimuth_ = v > u ? v : u;
   max_phase_byte_span_ = byte_span_real_cube<T>({max_azimuth_}, who);
   max_sharpness_byte_span_ = byte_span_real_cube<T>({kMaxAutofocusSharpnessSlots}, who);
+  // termination and iterations are one int32 each, independent of precision:
+  // they describe control flow, not samples.
+  max_status_byte_span_ = byte_span_elems(1U, sizeof(std::int32_t), who);
 }
 
 template <typename T>
@@ -109,6 +112,8 @@ void AutofocusOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(pooled_tensor_output(device, 1U, max_phase_byte_span_));
   spec.output(sharpness).produces_tensor(
       pooled_tensor_output(device, 1U, max_sharpness_byte_span_));
+  spec.output(termination).produces_tensor(pooled_tensor_output(device, 1U, max_status_byte_span_));
+  spec.output(iterations).produces_tensor(pooled_tensor_output(device, 1U, max_status_byte_span_));
 }
 
 template <typename T>
@@ -182,18 +187,20 @@ expected<void, Error> AutofocusOp<T>::compute(ExecutionContext& context) {
 
   // The run happens inside the image fill, writing the two vectors to the
   // op-owned scratch on the way past; the optional ports then copy from it.
+  detail::AutofocusOutcome outcome;
   HOLOSCAN_TRY(emit_required_tensor(image_out, context, "AutofocusOp.image_out", false, [&] {
-    return prepare_device_tensor(
-        image_out, context, shape, formed.dtype(),
-        [&](void* destination, std::size_t) -> expected<void, Error> {
-          try {
-            detail::run_autofocus<T>(cfg, *state_, formed.data(), 1, shape[0], shape[1],
-                                     destination, phase_scratch_, sharpness_scratch_, stream, who);
-          } catch (const std::exception& e) {
-            return make_unexpected(Error{ErrorCode::kFailure, e.what()});
-          }
-          return {};
-        });
+    return prepare_device_tensor(image_out, context, shape, formed.dtype(),
+                                 [&](void* destination, std::size_t) -> expected<void, Error> {
+                                   try {
+                                     detail::run_autofocus<T>(cfg, *state_, formed.data(), 1,
+                                                              shape[0], shape[1], destination,
+                                                              phase_scratch_, sharpness_scratch_,
+                                                              &outcome, stream, who);
+                                   } catch (const std::exception& e) {
+                                     return make_unexpected(Error{ErrorCode::kFailure, e.what()});
+                                   }
+                                   return {};
+                                 });
   }));
 
   const auto copy_out = [&](Output<Tensor>& port, LatchedOutput& latch, const T* source,
@@ -218,6 +225,36 @@ expected<void, Error> AutofocusOp<T>::compute(ExecutionContext& context) {
   copy_out(phase_correction, phase_correction_latch_, phase_scratch_, n_az,
            "AutofocusOp.phase_correction");
   copy_out(sharpness, sharpness_latch_, sharpness_scratch_, n_slots, "AutofocusOp.sharpness");
+
+  // Provenance: what the run did, never whether it was right. Host-to-device
+  // because the value was decided on the host; one int32 on the compute stream,
+  // so it stays ordered behind the image without a sync.
+  const auto emit_status = [&](Output<Tensor>& port, LatchedOutput& latch, std::int32_t& staging,
+                               std::int32_t value, const char* label) {
+    if (!latch.active()) {
+      return;
+    }
+    // Each port stages into its own member: the copy is asynchronous, so a
+    // shared slot would let the second emit overwrite the first in flight.
+    staging = value;
+    auto loan = prepare_device_tensor(
+        port, context, std::vector<int64_t>{1}, DLDataType{kDLInt, 32, 1},
+        [&](void* destination, std::size_t bytes) -> expected<void, Error> {
+          if (cudaMemcpyAsync(destination, &staging, bytes, cudaMemcpyHostToDevice, stream) !=
+              cudaSuccess) {
+            return make_unexpected(
+                Error{ErrorCode::kFailure, who + ": " + label + " device copy failed"});
+          }
+          return {};
+        });
+    if (loan) {
+      latch.emit(port, context, std::move(*loan), label);
+    }
+  };
+  emit_status(termination, termination_latch_, termination_staging_,
+              static_cast<std::int32_t>(outcome.termination), "AutofocusOp.termination");
+  emit_status(iterations, iterations_latch_, iterations_staging_,
+              static_cast<std::int32_t>(outcome.iterations_accepted), "AutofocusOp.iterations");
 
   retained_input_ = std::move(formed);
   return {};

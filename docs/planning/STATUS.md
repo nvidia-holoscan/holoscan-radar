@@ -4,6 +4,25 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-30** — **`AutofocusOp` gained two optional provenance outputs,
+  `termination` and `iterations` (CONTRACT CHANGE,
+  [`SAR/OPERATOR_API.md`](SAR/OPERATOR_API.md)).** The Imperial Valley result
+  below made a latent ambiguity concrete: three paths return the image
+  untouched — iteration 0 lowering sharpness, too few scatterers, and the
+  `max_correction` ceiling — and on every existing port all three look
+  identical to an uneventful run, because a zero `phase_correction` and a flat
+  `sharpness` trace are also what a correctly focused image produces. The only
+  statement of what happened was a log line. `termination` carries an
+  `AutofocusTermination` code and `iterations` counts *accepted* iterations,
+  which separates a refusal from an early stop that kept most of its
+  correction. Both are int32 `(1,)` and optional; existing graphs need only the
+  `bind_tensor_output_device` the graph driver requires for every declared GPU
+  tensor output. **These report provenance, not quality** — the quality question
+  recorded below stays closed, and a residual output was rejected for exactly
+  that reason. One SDK note for anyone joining a tensor port: the `[live]`
+  spelling (`Exact{}` + `on_missing SafeDefault{}`) never matches there, since
+  `SafeDefault{}` means "fall back to the Params seed" and a tensor port has
+  none; use `OnAligned` on the shared stamp.
 - **2026-10-30** — **The autofocus fixes below hold on three more collects, and
   measuring the scene axis corrected three claims that were resting on Kourou
   alone.** `AutofocusOp` accuracy had only ever been measured on Kourou, which

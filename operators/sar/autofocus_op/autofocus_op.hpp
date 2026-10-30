@@ -36,6 +36,10 @@
 //                       axis.
 // Out: sharpness        float32/float64, (num_iterations + 1). Optional. Focus
 //                       metric before each iteration and after the last.
+// Out: termination      int32, (1). Optional. Why the loop stopped
+//                       (AutofocusTermination). Provenance, not quality.
+// Out: iterations       int32, (1). Optional. Iterations whose phase is in
+//                       phase_correction; 0 when the estimate was refused.
 //
 // algorithm is Static (default pga, sole value). azimuth_axis is Static and
 // required (no default) — PGA is meaningless on the wrong axis and a mismatch
@@ -115,6 +119,8 @@ class AutofocusOp : public holoscan::Operator<AutofocusParams> {
   Output<Tensor> image_out{"image_out"};
   Output<Tensor> phase_correction{"phase_correction"};
   Output<Tensor> sharpness{"sharpness"};
+  Output<Tensor> termination{"termination"};
+  Output<Tensor> iterations{"iterations"};
 
  private:
   MaxTensorExtents extents_;
@@ -122,6 +128,7 @@ class AutofocusOp : public holoscan::Operator<AutofocusParams> {
   std::size_t max_image_byte_span_{0U};
   std::size_t max_phase_byte_span_{0U};
   std::size_t max_sharpness_byte_span_{0U};
+  std::size_t max_status_byte_span_{0U};
 
   std::shared_ptr<detail::AutofocusState<T>> state_;
 
@@ -138,11 +145,19 @@ class AutofocusOp : public holoscan::Operator<AutofocusParams> {
   // Stream-ordered lifetime of this tick's input.
   Tensor retained_input_;
 
-  // phase_correction and sharpness are optional outputs; an application may
-  // leave either unwired, and an emit to an unconsumed port must not take the
-  // corrected image down with it.
+  // Host staging for the two int32 status ports. Members rather than locals
+  // because the host-to-device copy is asynchronous on the compute stream and
+  // must not read a dead stack slot; one each, so the two emits cannot race.
+  std::int32_t termination_staging_{0};
+  std::int32_t iterations_staging_{0};
+
+  // phase_correction, sharpness, termination and iterations are optional
+  // outputs; an application may leave any unwired, and an emit to an unconsumed
+  // port must not take the corrected image down with it.
   LatchedOutput phase_correction_latch_;
   LatchedOutput sharpness_latch_;
+  LatchedOutput termination_latch_;
+  LatchedOutput iterations_latch_;
 };
 
 extern template class AutofocusOp<float>;

@@ -10,8 +10,10 @@
 
 #include <cuda_runtime_api.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,6 +28,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/logger/logger.hpp>
 
+#include "radar_common/descriptors/enums.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
@@ -47,15 +50,36 @@ using holoscan::Tensor;
 // between iterations means anything; a trace that is flat after iteration 0 is
 // PGA declining to improve the image, which reads identically in the image
 // metrics to PGA having nothing to improve.
+//
+// `termination` and `iterations` resolve exactly that ambiguity, which is why
+// they are taken here: the trace says what happened to the metric, and those
+// two say what the operator did about it.
+//
+// All three are required and aligned rather than optional joins. The `[live]`
+// spelling (`Exact{}` + `on_missing SafeDefault{}`) does not work for them:
+// SafeDefault means "fall back to the Params seed", and a tensor port has no
+// seed, so the join never matches and the ports read as permanently absent.
+// AutofocusOp emits all four outputs from one compute() with
+// `capture_time = activation_time()`, so they share a stamp exactly and a
+// zero-window alignment is the right join.
 class AutofocusSharpnessReportOp : public holoscan::Operator<> {
  public:
   AutofocusSharpnessReportOp() = default;
 
-  void setup(OperatorSpec& spec) override { spec.input(sharpness).queue_depth(2U); }
+  void setup(OperatorSpec& spec) override {
+    spec.input(sharpness).queue_depth(2U);
+    spec.input(termination).queue_depth(2U);
+    spec.input(iterations).queue_depth(2U);
+  }
 
   [[nodiscard]] Contract contract() const override {
     Contract result;
-    result.trigger(OnEach{sharpness});
+    result
+        .trigger(holoscan::OnAligned{.ports = holoscan::ports(sharpness, termination, iterations),
+                                     .window = std::chrono::nanoseconds{0}})
+        .input(sharpness, holoscan::Exact{})
+        .input(termination, holoscan::Exact{})
+        .input(iterations, holoscan::Exact{});
     return result;
   }
 
@@ -125,10 +149,53 @@ class AutofocusSharpnessReportOp : public holoscan::Operator<> {
           "AutofocusSharpnessReportOp: sharpness did not improve monotonically; an iteration was "
           "rejected by the acceptance gate");
     }
+
+    // The provenance half, when the graph wires it. A gain of 1.000x above is
+    // the ambiguous case this resolves: it reads the same whether PGA refused
+    // or had nothing to do, and only these say which.
+    const auto reason = read_status(termination, stream);
+    const auto accepted = read_status(iterations, stream);
+    if (reason.has_value()) {
+      const auto code = static_cast<AutofocusTermination>(*reason);
+      if (autofocus_refused(code)) {
+        HOLOSCAN_LOG_WARN(
+            "AutofocusSharpnessReportOp: autofocus REFUSED ({}); the image was returned "
+            "uncorrected and phase_correction is zero",
+            to_string(code));
+      } else {
+        HOLOSCAN_LOG_INFO("AutofocusSharpnessReportOp: termination {}, {} iteration(s) accepted",
+                          to_string(code), accepted.value_or(-1));
+      }
+    }
     return {};
   }
 
   Input<Tensor> sharpness{"sharpness"};
+  Input<Tensor> termination{"termination"};
+  Input<Tensor> iterations{"iterations"};
+
+ private:
+  // One int32 off the device, or nothing when the port is unwired or had no
+  // match this tick. A read failure is reported as absent rather than failing
+  // the tick: this operator is a report, and losing the log line must not take
+  // the run down.
+  static std::optional<std::int32_t> read_status(Input<Tensor>& port, cudaStream_t stream) {
+    auto received = port.receive_data();
+    if (!received) {
+      return std::nullopt;
+    }
+    const Tensor& t = *received;
+    if (t.size() < 1 || t.dtype().code != kDLInt || t.dtype().bits != 32) {
+      return std::nullopt;
+    }
+    std::int32_t value = 0;
+    if (cudaMemcpyAsync(&value, t.data(), sizeof(value), cudaMemcpyDeviceToHost, stream) !=
+            cudaSuccess ||
+        cudaStreamSynchronize(stream) != cudaSuccess) {
+      return std::nullopt;
+    }
+    return value;
+  }
 };
 
 }  // namespace holoscan::radar::app::sar

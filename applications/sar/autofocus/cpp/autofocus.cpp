@@ -178,10 +178,11 @@ int main(int argc, char** argv) {
       auto decoded_af = app::config::decode_params(document, "/autofocus", af_seed);
       auto af = graph.template op<radar::AutofocusOp<T>>("autofocus", aux_extents);
       af.set_params(std::move(decoded_af));
-      // sharpness stays unwired here, but every declared tensor output
-      // needs a device placement before the graph will compile.
-      bind_outputs(options, "autofocus", {"image_out", "phase_correction", "sharpness"});
-      // sharpness is a host-side report; the trace is tiny.
+      // Every declared tensor output needs a device placement before the
+      // graph will compile, wired or not.
+      bind_outputs(options, "autofocus",
+                   {"image_out", "phase_correction", "sharpness", "termination", "iterations"});
+      // All three reports are host-side; each is one scalar or a tiny trace.
 
       auto resample =
           graph.template op<app::sar::PhaseResampleOp>("phase_resample", extras->aperture_pulses);
@@ -194,8 +195,9 @@ int main(int argc, char** argv) {
 
       // sharpness needs a real consumer, not a drain: an unwired optional
       // output makes the operator skip the work behind it for the whole
-      // run, and the iteration trace is the only thing that distinguishes
-      // PGA converging from PGA declining to improve the image.
+      // run. The same report takes termination and iterations, which say
+      // whether a flat trace was PGA refusing or PGA having nothing to do --
+      // the one thing sharpness cannot distinguish.
       auto sharp = graph.template op<app::sar::AutofocusSharpnessReportOp>("autofocus_sharpness");
 
       graph.add_flow(manager->positions_out, aux_bp->positions, queue);
@@ -207,6 +209,8 @@ int main(int argc, char** argv) {
       graph.add_flow(aux_bp->image, af->image, queue);
       graph.add_flow(af->image_out, af_drain->input, queue);
       graph.add_flow(af->sharpness, sharp->sharpness, queue);
+      graph.add_flow(af->termination, sharp->termination, queue);
+      graph.add_flow(af->iterations, sharp->iterations, queue);
       graph.add_flow(af->phase_correction, resample->phase_correction, queue);
       graph.add_flow(resample->phase_correction_out, pc->phase_correction, queue);
       estimate.add(aux_bp).add(af).add(resample).add(af_drain);

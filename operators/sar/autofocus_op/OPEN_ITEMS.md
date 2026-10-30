@@ -470,6 +470,27 @@ a caller has is `sharpness` as a safety signal, `max_correction` as a
 blunt magnitude gate, and the guidance that a first window must be
 wide enough for the error magnitude expected.
 
+**What *was* shipped, 2026-10-30, is the provenance half of the
+question.** "Is this estimate good?" is the structurally unanswerable
+one above. "Did you apply an estimate at all, and how much of one?" is
+not, and the operator knew the answer all along without saying it on
+any port. Three paths return the image untouched — iteration 0
+lowering sharpness, too few scatterers, and the `max_correction`
+ceiling — and all three emitted a zero `phase_correction` and a flat
+`sharpness` trace, which is also what a correctly focused image
+produces, so a consumer could not distinguish a refusal from an
+uneventful success. The only record was a warning log. `AutofocusOp`
+now carries optional int32 `termination` and `iterations` outputs
+(`SAR/OPERATOR_API.md`); `autofocus_refused()` collapses the three
+refusal codes for a caller that only needs the boolean.
+
+This closes nothing above. A refusal is the *safe* failure; the one
+that matters is item 2's long aperture, where the operator accepts an
+estimate that is half right, reports `converged`, and raises sharpness
+2.9–8.9× while doing it. `termination` will say `converged` there, as
+it should, and that is exactly why it must not be read as a quality
+signal.
+
 ## Diagnostics
 
 `SAR_AF_IGNORE_DROP` (environment, unset by default) makes the stage

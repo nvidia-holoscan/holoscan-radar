@@ -212,6 +212,36 @@ enum class AutofocusAzimuthAxis {
   kV,
 };
 
+// AutofocusOp.termination: why the refinement loop stopped, emitted as
+// int32 on the port of that name. Provenance, not quality -- it says
+// what the operator did, never whether the estimate is right (see
+// autofocus_op/OPEN_ITEMS.md, which measures three candidate quality
+// signals and falsifies all three). Three of these mean the image was
+// returned untouched, and before this port existed they were
+// indistinguishable from success on every wired port: all three emit a
+// zero phase_correction and a flat sharpness trace, and said so only in
+// a log line. The values are contract, so append rather than renumber.
+enum class AutofocusTermination {
+  // An iteration stopped improving sharpness with at least one already
+  // accepted. The ordinary, healthy stop.
+  kConverged = 0,
+  // Ran the full num_iterations with every one accepted, so the estimate
+  // may still have been improving when the budget ran out.
+  kBudgetExhausted = 1,
+  // Iteration 0 lowered sharpness: nothing accepted, phase_correction is
+  // zero, image_out is the input.
+  kRefusedSharpness = 2,
+  // Fewer than min_scatterers bins passed the gate on iteration 0:
+  // passthrough.
+  kRefusedScatterers = 3,
+  // The estimate's peak-to-peak exceeded max_correction: passthrough,
+  // and the refused magnitude survives only in the warning.
+  kRefusedMaxCorrection = 4,
+  // Scatterers fell below the gate after iteration 0. A partial estimate
+  // from the accepted iterations is kept and applied.
+  kStoppedScatterers = 5,
+};
+
 // Canonical spellings (lowercase snake_case, for logs and future YAML
 // configs).
 constexpr std::string_view to_string(WindowType type) {
@@ -540,6 +570,33 @@ constexpr std::string_view to_string(AutofocusAzimuthAxis axis) {
       return "v";
   }
   return "unknown";
+}
+
+constexpr std::string_view to_string(AutofocusTermination termination) {
+  switch (termination) {
+    case AutofocusTermination::kConverged:
+      return "converged";
+    case AutofocusTermination::kBudgetExhausted:
+      return "budget_exhausted";
+    case AutofocusTermination::kRefusedSharpness:
+      return "refused_sharpness";
+    case AutofocusTermination::kRefusedScatterers:
+      return "refused_scatterers";
+    case AutofocusTermination::kRefusedMaxCorrection:
+      return "refused_max_correction";
+    case AutofocusTermination::kStoppedScatterers:
+      return "stopped_scatterers";
+  }
+  return "unknown";
+}
+
+// Did the operator return the image untouched? True for the three
+// refusals: a caller that only needs "was anything applied" branches on
+// this rather than enumerating codes.
+constexpr bool autofocus_refused(AutofocusTermination termination) {
+  return termination == AutofocusTermination::kRefusedSharpness ||
+         termination == AutofocusTermination::kRefusedScatterers ||
+         termination == AutofocusTermination::kRefusedMaxCorrection;
 }
 
 // Taylor expansion backends: every nvradar_block_anchored* value and
