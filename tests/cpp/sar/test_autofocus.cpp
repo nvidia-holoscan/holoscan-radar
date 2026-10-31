@@ -4,9 +4,11 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -14,6 +16,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "sar/autofocus_phase_support.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "sar/autofocus_op/autofocus_op.hpp"
 #include "utils/fixture_completion.hpp"
@@ -25,6 +28,8 @@
 // which owns the resampling and aux-lattice operators those cases need.
 
 namespace {
+using holoscan::radar::sar_test::remove_affine;
+using holoscan::radar::sar_test::to_bin_order;
 
 using holoscan::radar::AutofocusAzimuthAxis;
 using holoscan::radar::AutofocusOp;
@@ -42,39 +47,6 @@ constexpr int64_t kRg = 32;
 constexpr int64_t kStrong = 24;
 
 const double kPi = std::acos(-1.0);
-
-void host_dft(std::vector<std::complex<double>>* x, bool inverse) {
-  const int64_t n = static_cast<int64_t>(x->size());
-  std::vector<std::complex<double>> out(static_cast<size_t>(n));
-  const double sign = inverse ? 1.0 : -1.0;
-  const double scale = inverse ? (1.0 / static_cast<double>(n)) : 1.0;
-  for (int64_t k = 0; k < n; ++k) {
-    std::complex<double> s{0.0, 0.0};
-    for (int64_t t = 0; t < n; ++t) {
-      const double ang = sign * 2.0 * kPi * static_cast<double>(t * k) / static_cast<double>(n);
-      s += (*x)[static_cast<size_t>(t)] * std::complex<double>(std::cos(ang), std::sin(ang));
-    }
-    out[static_cast<size_t>(k)] = s * scale;
-  }
-  x->swap(out);
-}
-
-// Inverse of the operator's bin-to-pulse mapping, so an emitted
-// pulse-indexed estimate can be compared against a bin-indexed injection.
-// The operator emits pulse p from bin (n - 1 - p + n/2) mod n -- an fftshift
-// *and* an axis reversal, azimuth being the Fourier conjugate of slow time --
-// so bin k came from pulse (n - 1 + n/2 - k) mod n. This used to invert a
-// bare fftshift, which matched the operator before the reversal was added on
-// 2026-10-30 and silently mismatches it after.
-void to_bin_order(std::vector<double>* phi) {
-  const int64_t n = static_cast<int64_t>(phi->size());
-  std::vector<double> shifted(static_cast<size_t>(n));
-  for (int64_t k = 0; k < n; ++k) {
-    const int64_t p = ((n - 1 + (n + 1) / 2 - k) % n + n) % n;
-    shifted[static_cast<size_t>(k)] = (*phi)[static_cast<size_t>(p)];
-  }
-  phi->swap(shifted);
-}
 
 // A quadratic plus a ramp and an offset, in *pulse* order -- the domain a
 // phase error physically lives in and the one `phase_correction` is indexed
@@ -98,7 +70,7 @@ std::vector<double> injected_phi_pulse() {
 // The same error in bin order, ready to inject on an azimuth spectrum.
 std::vector<double> injected_phi() {
   auto phi = injected_phi_pulse();
-  to_bin_order(&phi);
+  phi = to_bin_order(phi);
   return phi;
 }
 
@@ -117,29 +89,6 @@ std::vector<double> sinusoidal_phi(double amplitude, double cycles, bool odd, in
   return phi;
 }
 
-// PGA is blind to a constant and a linear ramp: they shift the image rather
-// than blur it, so only the residual is recoverable and comparisons strip both.
-void remove_affine(std::vector<double>* phi) {
-  const int64_t n = static_cast<int64_t>(phi->size());
-  if (n < 2) {
-    return;
-  }
-  double sum = 0.0;
-  double sumk = 0.0;
-  for (int64_t k = 0; k < n; ++k) {
-    sum += (*phi)[static_cast<size_t>(k)];
-    sumk += static_cast<double>(k) * (*phi)[static_cast<size_t>(k)];
-  }
-  const double xmean = 0.5 * static_cast<double>(n - 1);
-  const double denom =
-      static_cast<double>(n) * (static_cast<double>(n) * static_cast<double>(n) - 1.0) / 12.0;
-  const double slope = (sumk - xmean * sum) / denom;
-  const double intercept = sum / static_cast<double>(n) - slope * xmean;
-  for (int64_t k = 0; k < n; ++k) {
-    (*phi)[static_cast<size_t>(k)] -= intercept + slope * static_cast<double>(k);
-  }
-}
-
 double phase_rms(const std::vector<double>& a, const std::vector<double>& b) {
   double acc = 0.0;
   for (size_t i = 0; i < a.size(); ++i) {
@@ -149,42 +98,12 @@ double phase_rms(const std::vector<double>& a, const std::vector<double>& b) {
   return std::sqrt(acc / static_cast<double>(a.size()));
 }
 
-// A range-Doppler stand-in: point scatterers in n_strong rows, clutter in the
-// rest, with phi injected on the azimuth spectrum of every row -- one
-// scene-common error, which is the space-invariance PGA assumes.
+// Thin wrapper over the shared builder so the many call sites below keep the
+// file's default extents. The model itself lives in the shared header.
 template <typename T>
 std::vector<std::complex<T>> make_image(const std::vector<double>& phi, int64_t n_strong,
                                         bool az_is_u, int64_t n_az = kAz, int64_t n_rg = kRg) {
-  const int64_t n_v = az_is_u ? n_rg : n_az;
-  const int64_t n_u = az_is_u ? n_az : n_rg;
-  std::vector<std::complex<T>> img(static_cast<size_t>(n_v * n_u),
-                                   {static_cast<T>(0), static_cast<T>(0)});
-  for (int64_t r = 0; r < n_rg; ++r) {
-    std::vector<std::complex<double>> row(static_cast<size_t>(n_az), {0.0, 0.0});
-    if (r < n_strong) {
-      row[static_cast<size_t>(n_az / 2)] = {1.0, 0.0};
-    } else {
-      for (int64_t a = 0; a < n_az; ++a) {
-        row[static_cast<size_t>(a)] = {0.01, 0.0};
-      }
-    }
-    host_dft(&row, false);
-    for (int64_t k = 0; k < n_az; ++k) {
-      const double p = phi.empty() ? 0.0 : phi[static_cast<size_t>(k)];
-      row[static_cast<size_t>(k)] *= std::complex<double>(std::cos(p), std::sin(p));
-    }
-    host_dft(&row, true);
-    for (int64_t a = 0; a < n_az; ++a) {
-      const auto z = row[static_cast<size_t>(a)];
-      const std::complex<T> c(static_cast<T>(z.real()), static_cast<T>(z.imag()));
-      if (az_is_u) {
-        img[static_cast<size_t>(r * n_az + a)] = c;
-      } else {
-        img[static_cast<size_t>(a * n_rg + r)] = c;
-      }
-    }
-  }
-  return img;
+  return holoscan::radar::sar_test::make_image<T>(phi, n_strong, az_is_u, n_az, n_rg);
 }
 
 struct AfOut {
@@ -360,7 +279,7 @@ TEST(AutofocusOp, RecoversOddAndEvenErrorsAlike) {
     // in bin order.
     auto want = sinusoidal_phi(amplitude, 1.0, odd, n_az);
     auto phi = want;
-    to_bin_order(&phi);
+    phi = to_bin_order(phi);
     const auto img = make_image<float>(phi, kStrong, true, n_az);
     const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, n_az});
     ASSERT_TRUE(out.ok) << (odd ? "odd: " : "even: ") << out.failure;
@@ -397,7 +316,7 @@ double residual_rms(const HostTensor& phase, const std::vector<double>& injected
   auto want = injected;
   remove_affine(&est);
   remove_affine(&want);
-  to_bin_order(&est);
+  est = to_bin_order(est);
   return phase_rms(est, want);
 }
 
@@ -520,8 +439,7 @@ TEST(AutofocusOp, AccuracyIsFlatOverAzimuthExtentOnACleanScene) {
 // unwritten -- and the tail of a freshly pooled output is zeros. This image is
 // deliberately just past 65535 blocks of 256 threads, the clamp that used to be
 // applied: on a 2478 x 8000 auxiliary it dropped the last 380 range rows out of
-// image_out and hid them from the peak finder too. min_scatterers forces the
-// pass-through, which exercises the same copy without paying for a formation.
+// image_out and hid them from the peak finder too.
 TEST(AutofocusOp, LargeImageIsNotTruncatedByTheLaunchGrid) {
   constexpr int64_t kWide = 64;
   constexpr int64_t kTall = (65535 * 256) / kWide + 64;
@@ -537,17 +455,25 @@ TEST(AutofocusOp, LargeImageIsNotTruncatedByTheLaunchGrid) {
   ASSERT_EQ(out.image.size(), kTall * kWide);
   const auto* got = out.image.as<std::complex<float>>();
   int64_t zero_rows = 0;
+  // A non-finite row has to be counted separately: a NaN row sum is not 0.0, so
+  // testing only for zeros would report a fully covered grid on an all-NaN
+  // image -- the same blindness that let a NaN product pass this suite once.
+  int64_t nonfinite_rows = 0;
   for (int64_t r = 0; r < kTall; ++r) {
     double row = 0.0;
     for (int64_t c = 0; c < kWide; ++c) {
       row += std::abs(got[r * kWide + c]);
     }
-    if (row == 0.0) {
+    if (!std::isfinite(row)) {
+      ++nonfinite_rows;
+    } else if (row == 0.0) {
       ++zero_rows;
     }
   }
   EXPECT_EQ(zero_rows, 0) << "image_out left " << zero_rows << " of " << kTall
                           << " rows unwritten; the launch grid does not cover the image";
+  EXPECT_EQ(nonfinite_rows, 0) << "image_out has " << nonfinite_rows << " of " << kTall
+                               << " non-finite rows";
 }
 
 TEST(AutofocusOp, AzimuthAxisV) {
@@ -734,6 +660,14 @@ TEST(AutofocusOp, FloatDoubleAgree) {
   remove_affine(&pf);
   remove_affine(&pd);
   EXPECT_LT(phase_rms(pf, pd), 0.05);
+  // Agreeing with each other is not the same as being right: two pass-throughs
+  // agree perfectly. Score both against the injected truth, which is also the
+  // only coverage anywhere that the double instantiation recovers a phase at
+  // all -- run_af<double> appears nowhere else in this file.
+  auto want = injected_phi_pulse();
+  remove_affine(&want);
+  EXPECT_LT(phase_rms(pf, want), 0.25) << "float estimate does not recover the injected phase";
+  EXPECT_LT(phase_rms(pd, want), 0.25) << "double estimate does not recover the injected phase";
 }
 
 // The [live] convention is per-tick with no latch: the override holds for the
@@ -789,8 +723,23 @@ TEST(AutofocusOp, LiveWindowFractionAppliesForOneTick) {
   ASSERT_EQ(overridden.size(), static_cast<size_t>(kAz));
   ASSERT_EQ(fell_back.size(), static_cast<size_t>(kAz));
 
-  const auto reference = run_af<float>(AutofocusAzimuthAxis::kU, img, shape, 4, 0.5);
+  // The reference has to be a genuinely Params-only run, so it takes the
+  // AutofocusParams defaults rather than run_af's own (which differ: run_af
+  // defaults to 4 iterations, the operator to 8).
+  const AutofocusParams defaults{};
+  const auto reference =
+      run_af<float>(AutofocusAzimuthAxis::kU, img, shape, defaults.num_iterations,
+                    defaults.window_fraction, defaults.min_scatterers, defaults.max_correction);
   ASSERT_TRUE(reference.ok) << reference.failure;
-  EXPECT_LT(phase_rms(fell_back, phase_as_double(reference.phase)), 1e-6);
+  const auto params_only = phase_as_double(reference.phase);
+  // Tick 2 fell back to Params.
+  EXPECT_LT(phase_rms(fell_back, params_only), 1e-6);
+  // ...and tick 1 did not. Without this the test passes just as happily when
+  // the override is wired but ignored entirely, which is the failure it exists
+  // to catch. A different window is a different estimate; asserting only that
+  // they are not bit-identical keeps the claim robust to retuning.
+  EXPECT_GT(phase_rms(overridden, params_only), 1e-6)
+      << "window_fraction=0.25 produced the same estimate as the Params 0.5: "
+         "the [live] override had no effect";
 }
 }  // namespace

@@ -350,8 +350,11 @@ set(SAR_SMOKE_DIR "${PROJECT_BINARY_DIR}/tests/cpp")
 set(SAR_APP_NAMES spotlight video_sar tiled_strip continuous_strip independent_images)
 set(SAR_COUNTS 1 5 5 5 2)
 set(SAR_DIMS "5x5" "5x5" "15x6" "15x6" "5x5")
+# `autofocus` is not in SAR_APP_NAMES -- it drives its own smoke block below
+# rather than the generic count/dims loop -- but it consumes the same fixture,
+# so an autofocus-only build still needs the CPHD generated.
 if(TARGET spotlight OR TARGET video_sar OR TARGET tiled_strip OR
-        TARGET continuous_strip OR TARGET independent_images)
+        TARGET continuous_strip OR TARGET independent_images OR TARGET autofocus)
     add_test(NAME SarFixture
         COMMAND $<TARGET_FILE:generate_cphd_fixture>
             "${SAR_SMOKE_DIR}/generated_sar_smoke.cphd")
@@ -409,17 +412,30 @@ if(TARGET autofocus)
     set_tests_properties(Sar_autofocus_smoke PROPERTIES
         FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
 
-    # The same graph with a known look-axis error injected, so the estimate is
-    # scored against it rather than only inspected. The 5-pulse fixture is far
-    # too small for PGA to recover anything, so these pin the injection, the
-    # sign convention and the apply path, not the recovery.
-    foreach(af_diag lie oracle polar)
+    # The same graph with a known look-axis error injected. The 5-pulse fixture
+    # is far too small for PGA to recover anything, so these pin the injection,
+    # the sign convention and the apply path, not the recovery. The scoring is
+    # reported, not enforced: AutofocusScoreOp only warns past its threshold and
+    # does not affect the exit code, so what each variant actually asserts is
+    # the required line below.
+    # Each variant must state a number or a verdict of its own, or it asserts
+    # nothing the plain smoke test above does not. The regexes match digits so
+    # that a "nan" or "inf" fails instead of counting as output.
+    set(AF_DIAG_NAMES lie oracle polar)
+    set(AF_DIAG_REQUIRE
+        "AutofocusScoreOp: affine-removed RMS [0-9]+\\.[0-9]+ rad"
+        "OraclePhaseOp: published [0-9]+ pulses  [0-9]+\\.[0-9]+ rad RMS"
+        "autofocus REFUSED .refused_scatterers.")
+    foreach(af_index RANGE 0 2)
+        list(GET AF_DIAG_NAMES ${af_index} af_diag)
+        list(GET AF_DIAG_REQUIRE ${af_index} af_require)
         add_test(NAME Sar_autofocus_${af_diag}
             COMMAND ${CMAKE_COMMAND}
                 -DSAR_EXECUTABLE=$<TARGET_FILE:autofocus>
                 -DSAR_CONFIG=${af_dir}/autofocus_generated_smoke_${af_diag}.yaml
                 -DSAR_COUNT=1
                 -DSAR_DIMS=5x5
+                "-DSAR_REQUIRE_REGEX=${af_require}"
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_smoke.cmake)
         set_tests_properties(Sar_autofocus_${af_diag} PROPERTIES
             FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")

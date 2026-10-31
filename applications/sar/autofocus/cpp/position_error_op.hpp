@@ -408,6 +408,21 @@ class OraclePhaseOp : public holoscan::Operator<> {
       return make_unexpected(
           Error{ErrorCode::kFailure, "OraclePhaseOp: staged phase is not finite"});
     }
+    // Report what was published, once per tick. The oracle path skips
+    // AutofocusOp entirely, so without this line the whole run emits no number
+    // at all and its smoke test cannot assert anything the plain one does not.
+    if (!reported_) {
+      reported_ = true;
+      double sq = 0.0;
+      double peak = 0.0;
+      for (const T value : staging) {
+        const double v = static_cast<double>(value);
+        sq += v * v;
+        peak = std::max(peak, std::abs(v));
+      }
+      HOLOSCAN_LOG_INFO("OraclePhaseOp: published {} pulses  {:.4f} rad RMS / {:.4f} rad peak",
+                        n_pulses, std::sqrt(sq / static_cast<double>(staging.size())), peak);
+    }
     return emit_required_tensor(
         phase_correction, context, "OraclePhaseOp.phase_correction", false, [&] {
           return prepare_device_tensor(
@@ -435,6 +450,7 @@ class OraclePhaseOp : public holoscan::Operator<> {
  private:
   std::shared_ptr<LieRecord> record_;
   std::size_t phase_span_{0U};
+  bool reported_{false};
 };
 
 // Compares the estimate to the liar's recorded leftover phase, after dropping

@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -49,6 +50,7 @@
 #include <holoscan/core/tensor_output_loan.hpp>
 #include <holoscan/time/realtime_clock.hpp>
 
+#include "sar/autofocus_phase_support.hpp"
 #include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/sample_geometry.hpp"
@@ -66,6 +68,8 @@
 namespace {
 
 namespace hr = holoscan::radar;
+using holoscan::radar::sar_test::remove_affine;
+using holoscan::radar::sar_test::to_bin_order;
 namespace test = holoscan::radar::testing;
 
 using hr::ApertureEmitMode;
@@ -109,32 +113,6 @@ CoordinateFrame scene_frame() {
   return CoordinateFrame(spec);
 }
 
-void remove_affine(std::vector<double>* phi) {
-  const int64_t n = static_cast<int64_t>(phi->size());
-  if (n < 2) {
-    return;
-  }
-  double sum_x = 0.0;
-  double sum_y = 0.0;
-  double sum_xx = 0.0;
-  double sum_xy = 0.0;
-  for (int64_t k = 0; k < n; ++k) {
-    const double x = static_cast<double>(k);
-    const double y = (*phi)[static_cast<size_t>(k)];
-    sum_x += x;
-    sum_y += y;
-    sum_xx += x * x;
-    sum_xy += x * y;
-  }
-  const double dn = static_cast<double>(n);
-  const double denom = dn * sum_xx - sum_x * sum_x;
-  const double slope = (denom != 0.0) ? ((dn * sum_xy - sum_x * sum_y) / denom) : 0.0;
-  const double offset = (sum_y - slope * sum_x) / dn;
-  for (int64_t k = 0; k < n; ++k) {
-    (*phi)[static_cast<size_t>(k)] -= slope * static_cast<double>(k) + offset;
-  }
-}
-
 std::vector<double> as_double(const HostTensor& t) {
   std::vector<double> out(static_cast<size_t>(t.size()));
   if (t.dtype.bits == 64) {
@@ -151,11 +129,37 @@ std::vector<double> as_double(const HostTensor& t) {
   return out;
 }
 
+// The recovery acceptance number, from docs/planning/SAR/TESTING.md: "the
+// corrected product peak must reach >= 0.9 of the error-free peak". Every
+// assertion that a correction *worked* uses this.
+constexpr double kRecoveryFraction = 0.9;
+// A separate and deliberately looser statement: the *uncorrected* product must
+// be visibly worse than clean. Not a contract number, and not the same claim --
+// sharing one constant for both let a run that recovered 71% read as a success.
+constexpr double kDefocusFraction = 0.7;
+
+// Returns NaN on a non-finite pixel rather than skipping it. `std::max` returns
+// its first argument when the second is NaN, so folding NaNs into `best` would
+// report a peak of exactly 0.0 for an all-NaN image -- which *satisfies* every
+// `EXPECT_LT(defocused, ...)` below instead of failing it. That is how
+// a NaN product reached a green suite once already; a NaN must now fail loudly
+// at the first test that looks at the image.
 double image_peak(const HostTensor& image) {
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  if (image.dtype.code != kDLComplex || image.dtype.bits != 64) {
+    ADD_FAILURE() << "image_peak: expected complex64, got code " << int{image.dtype.code}
+                  << " bits " << int{image.dtype.bits};
+    return kNaN;
+  }
   double best = 0.0;
   const auto* z = image.as<std::complex<float>>();
   for (int64_t i = 0; i < image.size(); ++i) {
-    best = std::max(best, static_cast<double>(std::abs(z[i])));
+    const double magnitude = static_cast<double>(std::abs(z[i]));
+    if (!std::isfinite(magnitude)) {
+      ADD_FAILURE() << "image_peak: non-finite pixel at linear index " << i;
+      return kNaN;
+    }
+    best = std::max(best, magnitude);
   }
   return best;
 }
@@ -557,65 +561,6 @@ HostTensor run_form(const std::vector<double>& inject, const std::vector<double>
 
 // --- the estimate under test -------------------------------------------
 
-void host_dft(std::vector<std::complex<double>>* x, bool inverse) {
-  const int64_t n = static_cast<int64_t>(x->size());
-  std::vector<std::complex<double>> out(static_cast<size_t>(n));
-  const double sign = inverse ? 1.0 : -1.0;
-  const double scale = inverse ? (1.0 / static_cast<double>(n)) : 1.0;
-  for (int64_t k = 0; k < n; ++k) {
-    std::complex<double> s{0.0, 0.0};
-    for (int64_t t = 0; t < n; ++t) {
-      const double ang = sign * 2.0 * kPi * static_cast<double>(t * k) / static_cast<double>(n);
-      s += (*x)[static_cast<size_t>(t)] * std::complex<double>(std::cos(ang), std::sin(ang));
-    }
-    out[static_cast<size_t>(k)] = s * scale;
-  }
-  x->swap(out);
-}
-
-// An estimation image with `n_strong` bright range bins carrying `phi` along
-// azimuth, formed by round-tripping each row through the DFT.
-std::vector<std::complex<float>> make_image(const std::vector<double>& phi, int64_t n_range,
-                                            int64_t n_az, int64_t n_strong, bool az_is_u) {
-  const int64_t n_v = az_is_u ? n_range : n_az;
-  const int64_t n_u = az_is_u ? n_az : n_range;
-  std::vector<std::complex<float>> img(static_cast<size_t>(n_v * n_u), {0.F, 0.F});
-  for (int64_t r = 0; r < n_range; ++r) {
-    std::vector<std::complex<double>> row(static_cast<size_t>(n_az), {0.0, 0.0});
-    if (r < n_strong) {
-      row[static_cast<size_t>(n_az / 2)] = {1.0, 0.0};
-    } else {
-      for (auto& value : row) {
-        value = {0.01, 0.0};
-      }
-    }
-    host_dft(&row, false);
-    for (int64_t k = 0; k < n_az; ++k) {
-      const double p = phi.empty() ? 0.0 : phi[static_cast<size_t>(k)];
-      row[static_cast<size_t>(k)] *= std::complex<double>(std::cos(p), std::sin(p));
-    }
-    host_dft(&row, true);
-    for (int64_t a = 0; a < n_az; ++a) {
-      const auto z = row[static_cast<size_t>(a)];
-      const std::complex<float> c(static_cast<float>(z.real()), static_cast<float>(z.imag()));
-      img[static_cast<size_t>(az_is_u ? (r * n_az + a) : (a * n_range + r))] = c;
-    }
-  }
-  return img;
-}
-
-// make_image injects its error in the azimuth-FFT domain, so `phi` is indexed
-// by FFT bin. The pulse-domain error that produces that image -- and the index
-// AutofocusOp.phase_correction comes back in -- is its fftshift.
-std::vector<double> to_bin_order(const std::vector<double>& phi) {
-  const int64_t n = static_cast<int64_t>(phi.size());
-  std::vector<double> out(static_cast<size_t>(n));
-  for (int64_t i = 0; i < n; ++i) {
-    out[static_cast<size_t>(i)] = phi[static_cast<size_t>((i + n / 2) % n)];
-  }
-  return out;
-}
-
 struct Estimate {
   HostTensor phase;
   HostTensor image;
@@ -699,7 +644,7 @@ TEST(SarAutofocusGraph, TransferOntoDifferentGeometry) {
   // product formation, which is the recommended auxiliary pattern.
   constexpr int64_t kEstRange = 32;
   // `phi` is the pulse-domain error, so the image carries it in bin order.
-  const auto img = make_image(to_bin_order(phi), kEstRange, kPulses, 24, true);
+  const auto img = hr::sar_test::make_image<float>(to_bin_order(phi), 24, true, kPulses, kEstRange);
   const auto estimate = run_estimate(img, {kEstRange, kPulses}, AutofocusAzimuthAxis::kU, 16);
   auto est = as_double(estimate.phase);
   ASSERT_EQ(static_cast<int64_t>(est.size()), kPulses);
@@ -717,8 +662,8 @@ TEST(SarAutofocusGraph, TransferOntoDifferentGeometry) {
   const double defocused = image_peak(run_form(injected, {}, grid));
   const double restored = image_peak(run_form(injected, est, grid));
   ASSERT_GT(clean, 1.0);
-  EXPECT_LT(defocused, 0.7 * clean) << "clean=" << clean << " defocused=" << defocused;
-  EXPECT_GT(restored, 0.7 * clean)
+  EXPECT_LT(defocused, kDefocusFraction * clean) << "clean=" << clean << " defocused=" << defocused;
+  EXPECT_GT(restored, kRecoveryFraction * clean)
       << "clean=" << clean << " defocused=" << defocused << " restored=" << restored
       << " corr=" << phase_corr(est, injected);
 }
@@ -744,9 +689,24 @@ TEST(SarAutofocusGraph, GroundGridIsAHazard) {
   }
 
   const auto estimate = run_estimate(host, formed.shape, AutofocusAzimuthAxis::kV, 4, 0.5, 4);
-  const auto est = as_double(estimate.phase);
+  auto est = as_double(estimate.phase);
   EXPECT_EQ(static_cast<int64_t>(est.size()), 16);
-  EXPECT_NE(static_cast<int64_t>(est.size()), kPulses);
+  for (size_t i = 0; i < est.size(); ++i) {
+    ASSERT_TRUE(std::isfinite(est[i])) << "non-finite estimate at " << i;
+  }
+
+  // TESTING.md requires showing the recovered phase does *not* match the
+  // injected one -- the length alone was the only thing asserted here, and an
+  // all-zero or all-NaN estimate satisfied that just as well. There is no
+  // correct way to line a 16-long estimate up against a 64-pulse truth, which
+  // is the hazard; comparing the leading samples of each after removing the
+  // affine part PGA cannot see is enough to show they are unrelated.
+  auto truth = phi;
+  remove_affine(&est);
+  remove_affine(&truth);
+  const double corr = phase_corr(est, truth);
+  EXPECT_LT(std::abs(corr), 0.5) << "a ground-grid estimate tracked the injected phase (corr="
+                                 << corr << "); the hazard this test documents may no longer hold";
 }
 
 // --- retain, reform, estimate on the auxiliary, correct the product ----
@@ -1053,11 +1013,11 @@ TEST(SarAutofocusGraph, Figure2RetainAndReform) {
   remove_affine(&truth);
   remove_affine(&est);
 
-  EXPECT_LT(defocused, 0.7 * clean) << "clean=" << clean << " defocused=" << defocused;
-  EXPECT_GT(known, 0.7 * clean)
+  EXPECT_LT(defocused, kDefocusFraction * clean) << "clean=" << clean << " defocused=" << defocused;
+  EXPECT_GT(known, kRecoveryFraction * clean)
       << "the known-phase splice failed, so the correction path itself is broken: clean=" << clean
       << " known=" << known;
-  EXPECT_GT(restored.peak, 0.7 * clean)
+  EXPECT_GT(restored.peak, kRecoveryFraction * clean)
       << "clean=" << clean << " defocused=" << defocused << " restored=" << restored.peak
       << " known=" << known << " corr=" << phase_corr(est, truth);
 
@@ -1087,8 +1047,8 @@ TEST(SarAutofocusGraph, Figure2OversampledAuxTransfer) {
   EXPECT_EQ(static_cast<int64_t>(est.size()), kPulses)
       << "the estimate reached PhaseCorrectionOp still azimuth-indexed";
 
-  EXPECT_LT(defocused, 0.7 * clean) << "clean=" << clean << " defocused=" << defocused;
-  EXPECT_GT(restored.peak, 0.7 * clean)
+  EXPECT_LT(defocused, kDefocusFraction * clean) << "clean=" << clean << " defocused=" << defocused;
+  EXPECT_GT(restored.peak, kRecoveryFraction * clean)
       << "clean=" << clean << " defocused=" << defocused << " restored=" << restored.peak;
 }
 
@@ -1155,7 +1115,7 @@ TEST(SarAutofocusGraph, Figure2OversampledDiagnostics) {
   // has to beat the alternatives rather than merely run.
   constexpr int64_t kOverU = 2 * kPulses;
   const double clean = run_fig2(false, false, {}).peak;
-  const double gate = 0.7 * clean;
+  const double gate = kRecoveryFraction * clean;
   ASSERT_GT(clean, 1.0);
   const auto leftover = fig_phi();
 
@@ -1234,7 +1194,7 @@ TEST(SarAutofocusGraph, Figure2IdentityResample) {
   // produces a plausible estimate and only shows up as lost peak.
   const double clean = run_fig2(false, false, {}).peak;
   const double restored = run_fig2(true, true, {}, kPulses, true).peak;
-  EXPECT_GT(restored, 0.7 * clean)
+  EXPECT_GT(restored, kRecoveryFraction * clean)
       << "the identity resample broke 1:1 transfer: clean=" << clean << " restored=" << restored;
 }
 
