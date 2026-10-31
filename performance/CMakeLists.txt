@@ -148,7 +148,8 @@ if(HOLOSCAN_RADAR_BUILD_TESTING)
     # Representative live paths exercise POD, host Tensor, descriptor, and
     # three-input sources. Reports are checked for completeness by perf_main.
     foreach(_perf_name IN ITEMS
-            clutter_filter cfar_detector beamscan_estimator detection_reduction)
+            clutter_filter cfar_detector beamscan_estimator detection_reduction
+            autofocus)
         if(TARGET perf_${_perf_name})
             add_test(NAME perf_${_perf_name}_overrides_smoke
                 COMMAND perf_${_perf_name} --scope overrides --sizes small

@@ -23,6 +23,8 @@ struct Scenario : perf::RecipeScenario {
   int64_t num_iterations{8};
   double window_fraction{0.5};
   int64_t min_scatterers{16};
+  // 0.0 is "uncapped", matching the operator's default of no ceiling -- not a
+  // ceiling of zero radians. Every read of this field tests `> 0.0` first.
   double max_correction{0.0};
 };
 
@@ -142,7 +144,7 @@ struct Traits : perf::PerfDriverDefaults {
     (void)perf::validate_pilot_suite<Op>(
         suite, "radar.AutofocusOp.float", "",
         {{"image", {"range_bins", "azimuth"}, "complex64", "device", "scatterer_image", {}}},
-        {"image_out", {"phase_correction", "sharpness"}, {}, 4U},
+        {"image_out", {"phase_correction", "sharpness", "termination", "iterations"}, {}, 4U},
         {{"num_iterations", "num_iterations"},
          {"window_fraction", "window_fraction"},
          {"min_scatterers", "min_scatterers"},

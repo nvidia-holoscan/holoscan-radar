@@ -40,7 +40,7 @@ recipe:
     # Uncapped. A finite ceiling is a pass-through trigger, not a tolerance:
     # any estimate wider than it copies the image through instead.
     max_correction: .inf
-  outputs: {timed: image_out, drain: [phase_correction, sharpness], unwired: [], optional_tensor_outputs: []}
+  outputs: {timed: image_out, drain: [phase_correction, sharpness, termination, iterations], unwired: [], optional_tensor_outputs: [phase_correction, sharpness, termination, iterations]}
   live:
     num_iterations: {physical_port: num_iterations, codec: int64}
     window_fraction: {physical_port: window_fraction, codec: double}
