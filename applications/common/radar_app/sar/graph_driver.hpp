@@ -4,6 +4,7 @@
 #pragma once
 
 #include <unistd.h>
+#include <yaml-cpp/yaml.h>
 
 #include <algorithm>
 #include <array>
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <fstream>
 #include <initializer_list>
 #include <memory>
@@ -128,9 +130,10 @@ struct Precision {
   using Geometry = TGeometry;
 };
 
-// `T` is the sample and image precision, `TGeom` the geometry precision. They
-// default to double, which is what every landed preset uses; `<float, double>`
-// halves the retained aperture while leaving ECEF positions in float64.
+// `T` is the sample and image precision, `TGeom` the geometry precision. The
+// default pair is `<float, double>`: samples are single in every application
+// because few radar systems deliver more, which halves the retained aperture,
+// while ECEF positions stay in float64 because float32 cannot carry them.
 template <typename T = float, typename TGeom = double, typename LoadConfig, typename BuildGraph>
 int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig load_config,
                          BuildGraph build_graph) {
@@ -236,13 +239,17 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
     if (visualize) {
       // Visualization is best-effort: discard stale images when rendering falls behind
       // instead of backpressuring formation, reporting, or an optional tensor dump.
-      // The raster edge carries the formed image, which on a mosaic is the whole
-      // parent lattice -- 3.62 GiB a slot on the Imperial strip. Every declared
-      // slot is a full copy of it, and a drop-oldest consumer only ever renders
-      // the newest, so depth beyond 1 is reserved and never read. At depth 4 the
-      // continuous_strip pools come to 100.7 GiB against 95.6 GiB of GPU and the
-      // run dies at PROFILE_MATERIALIZATION_FAILED before start(); depth 1 is
-      // 68.2 GiB. Read the slot counts with SAR_DUMP_PLAN before raising this.
+      // The raster edge carries the formed image, which on tiled_strip is the
+      // whole parent lattice -- 3.62 GiB a slot on the Imperial strip. Every
+      // declared slot is a full copy of it, and a drop-oldest consumer only ever
+      // renders the newest, so depth beyond 1 is reserved and never read. At
+      // depth 4 the continuous_strip pools came to 100.7 GiB against 95.6 GiB of
+      // GPU and the run died at PROFILE_MATERIALIZATION_FAILED before start();
+      // depth 1 was 68.2 GiB. Those two figures predate continuous_strip's
+      // decimated mosaic view, which is now ~16 MiB a slot, so they now bound
+      // tiled_strip rather than both. Depth 1 still holds for the reason above:
+      // the extra slots are never read. Read the slot counts with SAR_DUMP_PLAN
+      // before raising this.
       const holoscan::ConnectionOptions raster_queue{
           .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 1U};
       const holoscan::ConnectionOptions display_queue{
@@ -623,8 +630,18 @@ inline bool single_sample_precision(const std::filesystem::path& config) {
 template <typename LoadConfig, typename BuildGraph>
 int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_config,
                       BuildGraph build_graph) {
-  const CliPaths cli = parse_cli(argc, argv, (std::string(name) + ".yaml").c_str());
-  if (single_sample_precision(cli.config)) {
+  // These two run before the driver, so they are outside its own handler: an
+  // unreadable config path or a bad `sample_precision` would otherwise leave
+  // main() to terminate on the exception instead of reporting it.
+  bool single = true;
+  try {
+    const CliPaths cli = parse_cli(argc, argv, (std::string(name) + ".yaml").c_str());
+    single = single_sample_precision(cli.config);
+  } catch (const std::exception& error) {
+    HOLOSCAN_LOG_ERROR("{}: {}", name, error.what());
+    return 1;
+  }
+  if (single) {
     return run_sar_graph_app_at<float, double>(argc, argv, name, load_config, build_graph);
   }
   return run_sar_graph_app_at<double, double>(argc, argv, name, load_config, build_graph);
