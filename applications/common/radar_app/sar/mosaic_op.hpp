@@ -46,14 +46,16 @@ namespace holoscan::radar::app::sar {
 // viewable at all; the full-resolution pixels never leave this operator.
 // The decimation multi-looks (see `sample_mosaic_rect`) and so publishes
 // amplitude with zero phase, because a strip's decimation is steep enough
-// that subsampled speckle is noise. A view that is the whole parent at
-// factor 1 is a plain copy and keeps its phase.
+// that subsampled speckle is noise. A view at factor 1 is a plain copy and
+// keeps its phase, cropped or not.
 // `T` sizes the declared output pool only: on the Imperial parent that span is
 // 3.62 GiB at complex128 against 1.81 at complex64, and six declared slots make
 // the difference 10.8 GiB. The accumulator and the publication stay dtype-
 // agnostic at runtime -- the incoming dtype is latched and honoured either way,
-// so `T` being wrong costs a rejected tile rather than a silent misread.
-template <typename T = double>
+// so `T` being wrong costs a rejected tile rather than a silent misread. It is
+// deliberately not defaulted: pass the app's sample precision, which is single
+// unless the collect asked for double, so the pool tracks what actually arrives.
+template <typename T>
 class SarMosaicOp : public Operator<> {
  public:
   SarMosaicOp(SampleGeometry parent, bool loop, int64_t crop_u0 = 0, int64_t crop_nu = 0,
@@ -77,9 +79,16 @@ class SarMosaicOp : public Operator<> {
       const int64_t longest = std::max(parent_.num_v(), crop_nu_);
       if (longest > display_max_side_)
         factor_ = (longest + display_max_side_ - 1) / display_max_side_;
+      // A factor wider than the shorter axis leaves that axis under one whole
+      // box. Capping keeps every box inside the canvas; clamping the output
+      // extent up to 1 instead does not, because the kernel still reads
+      // `factor_` rows and columns for the sample it was told to write, off
+      // the end of the short axis. The budget then binds on the long axis
+      // only, which is the honest outcome for a view that degenerate.
+      factor_ = std::min(factor_, std::min(parent_.num_v(), crop_nu_));
     }
-    out_v_ = std::max<int64_t>(1, parent_.num_v() / factor_);
-    out_u_ = std::max<int64_t>(1, crop_nu_ / factor_);
+    out_v_ = parent_.num_v() / factor_;
+    out_u_ = crop_nu_ / factor_;
   }
   ~SarMosaicOp() override {
     if (canvas_ != nullptr)
@@ -158,16 +167,26 @@ class SarMosaicOp : public Operator<> {
       return make_unexpected(Error{ErrorCode::kFailure, "SarMosaicOp: blit failed"});
     }
     last_v0_ = v0;
-    const bool whole_parent = factor_ == 1 && crop_nu_ == pu;
     return emit_required_tensor(image_out, context, "SarMosaicOp.image_out", false, [&] {
       return prepare_device_tensor(
           image_out, context, std::vector<int64_t>{out_v_, out_u_}, dtype,
           [&](void* output, std::size_t size) -> expected<void, Error> {
             if (size != static_cast<std::size_t>(out_v_ * out_u_) * elem)
               return make_unexpected(Error{ErrorCode::kFailure, "SarMosaicOp: view size mismatch"});
-            if (whole_parent) {
-              if (cudaMemcpyAsync(output, canvas_, bytes, cudaMemcpyDeviceToDevice, stream) !=
-                  cudaSuccess)
+            // Keyed on the factor alone. `sample_mosaic_rect` multi-looks
+            // unconditionally, so it publishes amplitude with a zeroed
+            // imaginary part even for the single sample a factor-1 box holds;
+            // requiring `crop_nu_ == pu` here as well sent an undecimated crop
+            // down that path and discarded its phase on the way to the dump.
+            // A crop is a strided copy, and the whole parent is the same copy
+            // with `crop_u0_ == 0` and matching pitches.
+            if (factor_ == 1) {
+              const std::size_t row = static_cast<std::size_t>(out_u_) * elem;
+              if (cudaMemcpy2DAsync(
+                      output, row,
+                      static_cast<const char*>(canvas_) + static_cast<std::size_t>(crop_u0_) * elem,
+                      static_cast<std::size_t>(pu) * elem, row, static_cast<std::size_t>(out_v_),
+                      cudaMemcpyDeviceToDevice, stream) != cudaSuccess)
                 return make_unexpected(
                     Error{ErrorCode::kFailure, "SarMosaicOp: parent copy failed"});
               return {};
