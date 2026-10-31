@@ -929,11 +929,60 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   bars, per-tick last-pulse latency labels, 1 Hz lag HUD). Strip crop and
   indefinite display hold remain open in the [SAR open-items roll-up](SAR/OPEN_ITEMS.md).
 
+### `dpc/sar-autofocus` push review (2026-10-31)
+
+All 37 commits reviewed against the push protocol. Fixed on the branch:
+
+- **Nine branch-introduced defects.** The perf recipe never bound the two new
+  `termination` / `iterations` outputs; `autofocus` was missing from the
+  `SarFixture` guard, so its four tests required a CPHD that an
+  autofocus-only build does not generate; `TGeom` drift across three operator
+  READMEs and the `OPERATOR_API.md` summary rows; an unguarded config parse in
+  the SAR graph driver that terminated the process on a bad path; and two in
+  `SarMosaicOp` — a crop at decimation factor 1 fell through to the multi-look
+  path, which publishes amplitude with a zeroed imaginary part, so an
+  undecimated crop reached `TensorDumpOp` with its phase discarded; and the
+  decimation factor was not capped to the shorter axis, so a narrow crop read
+  past the end of the canvas. Both are latent — no landed config sets a crop
+  with a parent small enough to leave the factor at 1.
+- **Five test-blindness findings.** Chiefly `image_peak` folding NaN through
+  `std::max`, which returns its first argument against a NaN: an all-NaN image
+  reported a peak of exactly 0.0, which *satisfies* every `EXPECT_LT` against
+  the clean peak instead of failing it. That is how the `OraclePhaseOp` NaN
+  reached a green suite. Also the recovery gates, which used 0.7 where
+  [TESTING.md](SAR/TESTING.md) requires 0.9 and shared one constant with the
+  looser *defocus* threshold; raised and split, and all six integration tests
+  already met the stricter number.
+- **`AutofocusOp` added to both authoritative `SAR/OPERATOR_API.md` tables**,
+  which it had been missing since it was ported. Documentation catching up to
+  reviewed code, not a contract change.
+
+- **The review's nits, worked to zero** and summarised in
+  [`autofocus_op/OPEN_ITEMS.md`](../../operators/sar/autofocus_op/OPEN_ITEMS.md)
+  item 8. One of them stopped being a nit: `perf_autofocus` was missing from
+  both `--scope overrides` lists, and adding it showed **all three
+  `perf_autofocus` tests already failing**, the two pre-existing ones included.
+  The adapter's locked output manifest still named only `phase_correction` and
+  `sharpness`, so it disagreed with the recipe once `termination` and
+  `iterations` landed. Every perf test carries the `performance` label and the
+  suite is normally run as `ctest -LE performance`, which is why a green
+  1193/1193 hid it. Fixed; all 75 performance tests pass. **Run
+  `ctest -L performance` explicitly when a push touches an operator's ports.**
+  The two autofocus test suites' shared helpers were also extracted to
+  `tests/cpp/sar/autofocus_phase_support.hpp` — `to_bin_order` had already
+  drifted between the copies, which is what hid the azimuth handedness.
+
+Recorded rather than fixed, to keep the branch's scope: eleven pre-existing
+bugs in `ApertureManagerOp`, `CPHDReaderOp` and `BackprojectionOp`, each in
+that operator's `OPEN_ITEMS.md`; R11 (below); and two with no operator home —
+`SarMosaicOp` has no unit test at all, and twelve `metadata.json` manifests
+still declare SDK 4.3.0.
+
 ## In flight / claims
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
-| SAR autofocus | dpc | `dpc/sar-autofocus` | **verified locally, ready to push:** `AutofocusOp` and the Figure 2 workflow are on the HSDK 5 Graph API, five estimator faults are fixed (launch-grid truncation, shift-and-negate, window-narrowed LUE transform, half-aperture seam, time reversal), and accuracy is pinned against injected truth on four real collects rather than Kourou alone: all five injected symmetries recover to 0.04-0.22 rad on Kourou/Atlanta/Houston, and Imperial Valley agriculture is refused rather than mis-corrected. Adds the `termination`/`iterations` provenance outputs (**contract change**), `tools/sar_autofocus/sweep.py`, and the first SAR perf suite. 1192/1192 CTests and every pinned hook pass in-container; **`metadata.json` needs a host run**. |
+| SAR autofocus | dpc | `dpc/sar-autofocus` | **verified locally, ready to push:** `AutofocusOp` and the Figure 2 workflow are on the HSDK 5 Graph API, five estimator faults are fixed (launch-grid truncation, shift-and-negate, window-narrowed LUE transform, half-aperture seam, time reversal), and accuracy is pinned against injected truth on four real collects rather than Kourou alone: all five injected symmetries recover to 0.04-0.22 rad on Kourou/Atlanta/Houston, and Imperial Valley agriculture is refused rather than mis-corrected. Adds the `termination`/`iterations` provenance outputs (**contract change**), `tools/sar_autofocus/sweep.py`, and the first SAR perf suite. Push-reviewed 2026-10-31. 1193/1193 CTests and pinned hooks pass in-container; **`metadata.json` needs a host run**. |
 | Performance delivery scope | Codex | `deustice/optimization-skills` | **verified locally:** distinguish integrated operator changes from external comparison/benchmark candidates; keep experiment tools and evidence local by default while committing requested implementation, integration and focused regression coverage. Both performance skills and reporting references align; skill validation and pinned all-file lint pass. |
 | PR 67 merge conflict resolution | Codex | `deustice/optimization-skills` | **verified locally:** merged `main` at `38ba5ef5`, retained both status histories, and combined the CPHD reader explicit-stop lifecycle with the shared fixture observation deadline. All 13 reader/file and six fixture-completion GPU tests, 127 host optimization-tool tests, and pinned all-file lint pass. |
 | PR 67 CI 207 fixture completion policy | Codex | `deustice/optimization-skills` | **verified:** replaced the Beamscan-only workaround across all 85 native asynchronous fixture runs in 38 existing suites with a configurable shared observation deadline, checked capture completion and native error preservation. Optional outputs and manual frame sequencing remain explicit. All 1,142 registered non-performance checks pass on HSDK 5 GA, including six policy regressions, application smoke tests and tooling/native verification; container Git ownership was handled with process-local configuration. The controlled 12-second BLAS-delay reproducer passes; the actual CI startup delay remains unconfirmed. |

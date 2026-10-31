@@ -31,11 +31,11 @@ emit trigger and is normally supplied by `ApertureManagerOp.control_out`.
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
 | --- | --- | --- | --- | --- | --- |
 | In | `range_profiles` | complex `T` | `(num_pulses,num_range_bins)` | Required, aligned | Pulse data |
-| In | `positions` | real `T` | `(num_pulses,3)` | Required, aligned | Antenna phase-centre coordinates |
-| In | `reference_position` | real `T` | `(num_pulses,3)` | Required, aligned | Per-pulse scene reference point |
+| In | `positions` | real `TGeom` | `(num_pulses,3)` | Required, aligned | Antenna phase-centre coordinates |
+| In | `reference_position` | real `TGeom` | `(num_pulses,3)` | Required, aligned | Per-pulse scene reference point |
 | In | `control` | `uint8` Tensor | `(1)` | Optional `[live]` | emit/reset command |
 | In | `range_bins` | real `T` | `(num_range_bins)` | Optional `[live]` | uniform explicit axis |
-| In | `sample_points` | real `T` | `(num_v,num_u,3)` | Optional `[live]` | explicit pixel positions |
+| In | `sample_points` | real `TGeom` | `(num_v,num_u,3)` | Optional `[live]` | explicit pixel positions |
 | In | `weight` | real `T` | `(num_pulses)` | Optional `[live]` | signed pulse weights |
 | In | `initial_image` | complex `T` | `(num_v,num_u)` | Declared `[live]` but rejected | Reserved, unsupported initializer |
 | In | `sample_geometry` | `SampleGeometry` descriptor | descriptor | Optional `[live]` | regular lattice |
@@ -58,7 +58,7 @@ Set `max_pulses`, `max_range_bins`, `max_image_v`, and `max_image_u` for the lar
 ## Parameters
 
 | Parameter | Type | Default | Mutability | Responsibility |
-| --- | --- | --- | --- |
+| --- | --- | --- | --- | --- |
 | `coordinate_frame` | `CoordinateFrame` | required | Static | Cartesian frame declaration |
 | `sample_geometry` | `SampleGeometry` | required for lattice | [live] | Image grid |
 | `range_bin_spacing` | `optional<double>` | unset | [live] | Differential-range bin spacing |
@@ -91,7 +91,8 @@ otherwise spacing/origin come from `[live]` inputs or Params. The optional
 `sample_geometry_out` is emitted only when an image is emitted, a lattice
 was used, and the output is connected.
 
-The template precision fixes complex profile/image and real geometry types.
+`T` fixes the complex profile/image types; `TGeom` fixes the real geometry
+types on `positions`, `reference_position` and `sample_points`.
 All `[live]` inputs are joined per tick with `Exact{}` and a Params fallback
 when absent. `sample_geometry`, range spacing/origin, and frequency changes
 on a closing `emit_and_reset` tick are staged for the next aperture, so that

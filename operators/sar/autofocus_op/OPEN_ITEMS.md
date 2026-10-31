@@ -397,6 +397,53 @@ collect.
    expensive to trust; the re-measured ones above all come from the committed
    tree.
 
+8. **Nits from the 2026-10-30 push review — all closed 2026-10-31.**
+   Recorded because one of them stopped being a nit on inspection.
+
+   Fixed: the unread `spec_v` view in `autofocus_stage.hpp`; the
+   `emit_status` comment, which justified one staging member per port
+   with a reason that does not apply to a pageable host-to-device copy
+   (the separate members are still right, for the lifetime reason now
+   stated); missing pool-size guards in `image_out`, `copy_out` and
+   `emit_status` here and in `backprojection_op.cu` — in `copy_out` the
+   pool's `bytes` is also the copy length, so an oversized slot would
+   have read past the end of the scratch; `autofocus_refused` in
+   `enums.hpp`, now a `switch` so a new `AutofocusTermination` code
+   fails to compile rather than silently reading as "not refused"; the
+   undocumented `0.0`-means-uncapped sentinel in the perf adapter; the
+   write-only `range_bins_connected_` in `BackprojectionOp`; and the
+   five-column-header-over-four-cell-delimiter Parameters tables in six
+   operator READMEs, which hid the `Responsibility` column (`markdownlint`
+   MD060 does not check cell counts).
+
+   The two test suites' duplicated helpers — `to_bin_order`,
+   `remove_affine`, `host_dft` and `make_image` — now live in
+   [`tests/cpp/sar/autofocus_phase_support.hpp`](../../../tests/cpp/sar/autofocus_phase_support.hpp).
+   This was the nit worth doing: `to_bin_order` had already drifted
+   between the copies, and the whole integration suite went on agreeing
+   with a stale convention. Note that breaking the shared mapping
+   deliberately fails only `RecoversOddAndEvenErrorsAlike` — handedness
+   is invisible to every test whose injected truth is even about the
+   dwell centre, so that one test is the entire guard.
+
+   **`perf_autofocus` was not a nit.** It was listed as a coverage gap
+   (absent from both `--scope overrides` lists in
+   `performance/CMakeLists.txt`). Adding it showed all three
+   `perf_autofocus` tests failing, including the two that already
+   existed: `adapter.cpp`'s locked output manifest still named only
+   `phase_correction` and `sharpness`, so it disagreed with the recipe
+   once `termination` and `iterations` were added. Every perf test
+   carries the `performance` label, and the suite is normally run as
+   `ctest -LE performance`, so this never showed up. Fixed in the
+   adapter; all 75 performance tests now pass. **Run `ctest -L performance`
+   explicitly before a push that touches an operator's ports.**
+
+   Withdrawn as non-defects: the integration suite's O(n²) host DFT — the
+   whole suite is 3.5 s, and a naive transform is the right thing for a
+   reference the injected truth is built from, so it is now commented as
+   deliberate; and `run_af`'s `min_scatterers`, which is passed
+   explicitly only in the tests that are about that threshold.
+
 ## What is not wrong
 
 **The sharpness guard.** Forcing the refused iterations through at the

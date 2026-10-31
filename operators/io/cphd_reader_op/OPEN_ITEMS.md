@@ -440,3 +440,43 @@ Note this is separate from **R10**, the open team question about the key's
 (`holoscan.radar.sar.stream_boundary`) per
 [`SIGPROC_PLAN.md`](../../../docs/planning/SAR/SIGPROC_PLAN.md). R10 governs
 the prefix; this item governs the value.
+
+## 12. The mean APC accumulates the downcast position, not the computed one
+
+Found in the 2026-10-30 `dpc/sar-autofocus` push review; predates that branch
+(`38ba5ef5`) and was not touched by it.
+
+`cphd_reader_op.cu:477` computes the phase centre as a `double`, stores it
+through a `TGeom` cast, and then accumulates the **stored** value:
+
+```text
+const double value = 0.5 * (tx[i] + rx[i]);
+apc[i] = static_cast<TGeom>(value);
+...
+mean[axis] += apc[3 * pulse + axis];
+```
+
+`mean` is a `double[3]`, so the intent is clearly a full-precision running sum;
+reading it back out of `apc` throws that away before adding. On `TGeom = float`
+each term is quantised to about 0.76 m at a 6.4e6 m ECEF radius, and the error
+is systematic rather than averaging out, because every term is rounded by the
+same `float` representation of nearby coordinates.
+
+Harmless at the default instantiation: every SAR app runs `TGeom = double`,
+where the cast is the identity. It bites a `<float, float>` build, which the
+template still permits. The fix is `mean[axis] += value;` inside the existing
+axis loop — the variable is already in scope.
+
+## 13. The AmpSF upload is the one H2D with no byte-count assertion
+
+Same review and same provenance as item 12. Hardening, not a live defect.
+
+`cphd_reader_op.cu:137` copies `amp.size() * sizeof(double)` into `device_amp`,
+which `start()` allocated at `pulses * sizeof(double)` for the configured
+pulses-per-tick. The signal copy immediately above it checks `bytes` against
+the computed `out_bytes` and returns `kInvalidArgument` on a mismatch; this one
+trusts that `amplitude_scale(&pvp, count)` returns no more than `count`
+entries. It does today, so nothing is wrong at runtime — but the destination is
+a fixed device allocation, so the failure mode if that ever stops holding is a
+silent heap overrun rather than a rejected batch. Assert the length against the
+allocation the same way the signal path does.

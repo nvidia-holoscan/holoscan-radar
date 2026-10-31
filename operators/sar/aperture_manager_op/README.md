@@ -29,19 +29,19 @@ Optional `[live]` inputs also use same-tick `Exact{}`/`SafeDefault{}`.
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
 | --- | --- | --- | --- | --- | --- |
 | In | `range_profiles` | complex `T` | `(num_pulses,num_range_bins)` | Required, aligned | Pulse data |
-| In | `positions` | real `T` | `(num_pulses,3)` | Required, aligned | Antenna phase-centre coordinates |
-| In | `reference_position` | real `T` | `(num_pulses,3)` | Required, aligned | Per-pulse scene reference point |
+| In | `positions` | real `TGeom` | `(num_pulses,3)` | Required, aligned | Antenna phase-centre coordinates |
+| In | `reference_position` | real `TGeom` | `(num_pulses,3)` | Required, aligned | Per-pulse scene reference point |
 | In | `stream_boundary` | `uint8` | scalar | Required, aligned | `0`, `1`, or `2` |
 | In | `sample_geometry` | `SampleGeometry` descriptor | descriptor | Optional `[live]` | staged lattice |
-| In | `sample_points` | real `T` | `(num_v,num_u,3)` | Optional `[live]` | staged points |
+| In | `sample_points` | real `TGeom` | `(num_v,num_u,3)` | Optional `[live]` | staged points |
 | In | `control` | `uint8` Tensor | `(1)` | Optional `[live]` | formation request |
 | In | `evict` | `uint32` Tensor | scalar | Optional `[live]` | pulse count |
 | Out | `range_profiles_out` | complex `T` | `(num_output_pulses,num_range_bins)` | Managed additions/departures or replay | Phase-rotated profiles |
-| Out | `positions_out` | real `T` | `(num_output_pulses,3)` | Aligned with output profiles | Managed antenna positions |
-| Out | `reference_position_out` | real `T` | `(num_output_pulses,3)` | Aligned with output profiles | Managed scene reference points |
+| Out | `positions_out` | real `TGeom` | `(num_output_pulses,3)` | Aligned with output profiles | Managed antenna positions |
+| Out | `reference_position_out` | real `TGeom` | `(num_output_pulses,3)` | Aligned with output profiles | Managed scene reference points |
 | Out | `weight` | real `T` | `(num_output_pulses)` | Optional, latched | signed contribution |
 | Out | `sample_geometry_out` | `SampleGeometry` descriptor | descriptor | Optional, latched | staged geometry |
-| Out | `sample_points_out` | real `T` | `(num_v,num_u,3)` | Optional, latched | staged points |
+| Out | `sample_points_out` | real `TGeom` | `(num_v,num_u,3)` | Optional, latched | staged points |
 | Out | `control_out` | `uint8` Tensor | `(1)` | Optional, latched | only on emit |
 
 ## Construction
@@ -56,11 +56,11 @@ Set `max_pulses` for the **largest managed output batch**, including arrivals pl
 ## Parameters
 
 | Parameter | Type | Default | Mutability | Responsibility |
-| --- | --- | --- | --- |
+| --- | --- | --- | --- | --- |
 | `max_aperture_pulses` | `int64` | 0 | Static | Retention capacity |
 | `emit_interval_pulses` | `int64` | 0 | Static | Automatic emit cadence |
 | `emit_mode` | `ApertureEmitMode` | continue | Static | Continue, reset, or reform |
-| `aperture_window` | `WindowSpec` | rectangular | Static | Pulse weights for an aperture |
+| `aperture_window` | `WindowSpec` | none (rectangular, all +1) | Static | Pulse weights for an aperture |
 
 ## Membership and emit rules
 

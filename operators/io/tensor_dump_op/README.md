@@ -31,7 +31,7 @@ There are no outputs. The sink writes a file only for selected ticks.
 ## Parameters
 
 | Parameter | Type | Default | Mutability | Responsibility |
-| --- | --- | --- | --- |
+| --- | --- | --- | --- | --- |
 | `path` | `string` | required | Static | Output path pattern |
 | `format` | `TensorDumpFormat` | npy | Static | NumPy or raw bytes |
 | `every_n` | `int64` | 1 | [live] | Tick throttle |

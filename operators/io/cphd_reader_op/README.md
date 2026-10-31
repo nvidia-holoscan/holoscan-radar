@@ -30,11 +30,11 @@ conceded earlier for one field. `TGeom` may not be coarser than `T`.
 | Kind | Port | Payload type / dtype | Shape | Timing / optionality | Responsibility |
 | --- | --- | --- | --- | --- | --- |
 | Out | `phase_history` | complex `T` | `(num_pulses,num_samples)` | Every batch | required data |
-| Out | `positions` | real `T` | `(num_pulses,3)` | Every batch | antenna phase centre |
-| Out | `reference_position` | real `T` | `(num_pulses,3)` | Every batch | per-pulse SRP |
+| Out | `positions` | real `TGeom` | `(num_pulses,3)` | Every batch | antenna phase centre |
+| Out | `reference_position` | real `TGeom` | `(num_pulses,3)` | Every batch | per-pulse SRP |
 | Out | `sample_axis` | real `T` | `(num_samples)` | Optional, latched | frequency samples |
 | Out | `pulse_times` | float64 | `(num_pulses)` | Optional, latched | transmit times |
-| Out | `velocities` | real `T` | `(num_pulses,3)` | Optional, latched | only when both Tx/Rx velocities exist |
+| Out | `velocities` | real `TGeom` | `(num_pulses,3)` | Optional, latched | only when both Tx/Rx velocities exist |
 | Out | `coordinate_frame` | `CoordinateFrame` descriptor | descriptor | Optional, latched | configured ECEF frame |
 | Out | `stream_boundary` | `uint8` | scalar | Every batch | `0` none, `1` collection, `2` EOS |
 
@@ -50,7 +50,7 @@ conceded earlier for one field. `TGeom` may not be coarser than `T`.
 ## Parameters
 
 | Parameter | Type | Default | Mutability | Responsibility |
-| --- | --- | --- | --- |
+| --- | --- | --- | --- | --- |
 | `path` | `CollectionPaths` | required | Static | CPHD file, directory, or ordered list |
 | `coordinate_frame` | `CoordinateFrame` | required | Static | Validate position frame |
 | `pulses_per_tick` | `int64` | required | Static | Pulse batch limit |
@@ -115,8 +115,8 @@ reference position is `SRPPos`. `sample_axis[i] = SC0 + i * SCSS` when that
 output is connected. `pulse_times` remains float64 even for a `float` reader.
 `velocities` emits only if both transmit and receive velocity fields exist.
 The optional coordinate-frame output carries the configured ECEF declaration.
-All tensors are device tensors; each template instance fixes complex and real
-precision together. CF8 collections read stored bytes into reused pinned
+All tensors are device tensors; each template instance fixes sample precision
+with `T` and geometry precision with `TGeom`, which may be wider. CF8 collections read stored bytes into reused pinned
 scratch, H2D 8 bytes/sample, and byte-swap / widen / apply AmpSF on the
 device; integer formats still decode on the host through `read_signal_into`.
 

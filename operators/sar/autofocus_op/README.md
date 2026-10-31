@@ -47,7 +47,7 @@ Set `max_image_v` and `max_image_u` to cover the largest image. The azimuth axis
 | `azimuth_axis` | `AutofocusAzimuthAxis` | required | Static | Which trailing axis is slow-time-conjugate |
 | `num_iterations` | `int64` | 8 | `[live]` | Refinement iterations (an upper bound; the stage stops early) |
 | `window_fraction` | `float64` | 0.5 | `[live]` | Fraction of azimuth extent in the first window |
-| `min_scatterers` | `int64` | 16 | `[live]` | Minimum strong scatterers before estimating |
+| `min_scatterers` | `int64` | 16 | `[live]` | Strong range bins used: the brightest N are kept, and fewer than N refuses |
 | `max_correction` | `float64` | uncapped | `[live]` | Peak-to-peak ceiling in radians |
 
 ## Operation and synchronization
