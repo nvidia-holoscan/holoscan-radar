@@ -189,18 +189,20 @@ expected<void, Error> AutofocusOp<T>::compute(ExecutionContext& context) {
   // op-owned scratch on the way past; the optional ports then copy from it.
   detail::AutofocusOutcome outcome;
   HOLOSCAN_TRY(emit_required_tensor(image_out, context, "AutofocusOp.image_out", false, [&] {
-    return prepare_device_tensor(image_out, context, shape, formed.dtype(),
-                                 [&](void* destination, std::size_t) -> expected<void, Error> {
-                                   try {
-                                     detail::run_autofocus<T>(cfg, *state_, formed.data(), 1,
-                                                              shape[0], shape[1], destination,
-                                                              phase_scratch_, sharpness_scratch_,
-                                                              &outcome, stream, who);
-                                   } catch (const std::exception& e) {
-                                     return make_unexpected(Error{ErrorCode::kFailure, e.what()});
-                                   }
-                                   return {};
-                                 });
+    return prepare_device_tensor(
+        image_out, context, shape, formed.dtype(),
+        [&](void* destination, std::size_t bytes) -> expected<void, Error> {
+          if (bytes != formed.nbytes())
+            return make_unexpected(Error{ErrorCode::kFailure, who + ": image_out size mismatch"});
+          try {
+            detail::run_autofocus<T>(cfg, *state_, formed.data(), 1, shape[0], shape[1],
+                                     destination, phase_scratch_, sharpness_scratch_, &outcome,
+                                     stream, who);
+          } catch (const std::exception& e) {
+            return make_unexpected(Error{ErrorCode::kFailure, e.what()});
+          }
+          return {};
+        });
   }));
 
   const auto copy_out = [&](Output<Tensor>& port, LatchedOutput& latch, const T* source,
@@ -211,6 +213,13 @@ expected<void, Error> AutofocusOp<T>::compute(ExecutionContext& context) {
     auto loan = prepare_device_tensor(
         port, context, std::vector<int64_t>{length}, real_dtype<T>(),
         [&](void* destination, std::size_t bytes) -> expected<void, Error> {
+          // `bytes` is also the copy length, so a pool slot larger than the
+          // tensor would read past the end of the scratch rather than
+          // short-copy into it.
+          if (bytes != static_cast<std::size_t>(length) * sizeof(T)) {
+            return make_unexpected(
+                Error{ErrorCode::kFailure, who + ": " + label + " size mismatch"});
+          }
           if (cudaMemcpyAsync(destination, source, bytes, cudaMemcpyDeviceToDevice, stream) !=
               cudaSuccess) {
             return make_unexpected(
@@ -234,12 +243,18 @@ expected<void, Error> AutofocusOp<T>::compute(ExecutionContext& context) {
     if (!latch.active()) {
       return;
     }
-    // Each port stages into its own member: the copy is asynchronous, so a
-    // shared slot would let the second emit overwrite the first in flight.
+    // Each port stages into its own member so the value outlives this call:
+    // the emit is ordered on the compute stream, and the staging slot has to
+    // stay valid and unmodified until that copy runs.
     staging = value;
     auto loan = prepare_device_tensor(
         port, context, std::vector<int64_t>{1}, DLDataType{kDLInt, 32, 1},
         [&](void* destination, std::size_t bytes) -> expected<void, Error> {
+          // `staging` is a single int32, and `bytes` is the copy length.
+          if (bytes != sizeof(std::int32_t)) {
+            return make_unexpected(
+                Error{ErrorCode::kFailure, who + ": " + label + " size mismatch"});
+          }
           if (cudaMemcpyAsync(destination, &staging, bytes, cudaMemcpyHostToDevice, stream) !=
               cudaSuccess) {
             return make_unexpected(

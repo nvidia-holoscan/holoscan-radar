@@ -839,7 +839,6 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
   matx::cudaExecutor exec{stream};
   const uint64_t nfft = static_cast<uint64_t>(n_az);
   auto work_v = make_complex_view3<T>(work, batch, n_range, n_az);
-  auto spec_v = make_complex_view3<T>(spec, batch, n_range, n_az);
   auto scratch_v = make_complex_view3<T>(scratch, batch, n_range, n_az);
 
   std::vector<int32_t> host_counts(static_cast<size_t>(batch));

@@ -593,10 +593,21 @@ constexpr std::string_view to_string(AutofocusTermination termination) {
 // Did the operator return the image untouched? True for the three
 // refusals: a caller that only needs "was anything applied" branches on
 // this rather than enumerating codes.
+// A switch rather than an `||` chain so that adding a code to
+// `AutofocusTermination` fails to compile here instead of silently
+// defaulting to "not refused".
 constexpr bool autofocus_refused(AutofocusTermination termination) {
-  return termination == AutofocusTermination::kRefusedSharpness ||
-         termination == AutofocusTermination::kRefusedScatterers ||
-         termination == AutofocusTermination::kRefusedMaxCorrection;
+  switch (termination) {
+    case AutofocusTermination::kRefusedSharpness:
+    case AutofocusTermination::kRefusedScatterers:
+    case AutofocusTermination::kRefusedMaxCorrection:
+      return true;
+    case AutofocusTermination::kConverged:
+    case AutofocusTermination::kBudgetExhausted:
+    case AutofocusTermination::kStoppedScatterers:
+      return false;
+  }
+  return false;
 }
 
 // Taylor expansion backends: every nvradar_block_anchored* value and

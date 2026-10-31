@@ -124,7 +124,7 @@ class BackprojectionOp : public holoscan::Operator<BackprojectionParams> {
   RangeInterpolation effective_interpolation_{RangeInterpolation::kLinear};
   BackprojectionBackend backend_value_{kDefaultBackprojectionBackend};
   GeometryChange geometry_change_value_{GeometryChange::kReset};
-  bool sample_points_connected_{false}, range_bins_connected_{false}, weight_connected_{false};
+  bool sample_points_connected_{false}, weight_connected_{false};
   int64_t unemitted_pulses_{0};
   bool locality_warned_{false};
   double aperture_compute_s_{0.0};

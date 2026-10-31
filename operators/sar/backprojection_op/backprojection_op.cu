@@ -295,8 +295,6 @@ expected<void, Error> BackprojectionOp<T, TGeom>::compute(ExecutionContext& cont
       throw std::invalid_argument(who + ": initial_image is not implemented");
     if (sample_points)
       sample_points_connected_ = true;
-    if (range_bins)
-      range_bins_connected_ = true;
     if (weight)
       weight_connected_ = true;
     if (weight_connected_ && geometry_change_value_ == GeometryChange::kScroll)
@@ -820,7 +818,12 @@ expected<void, Error> BackprojectionOp<T, TGeom>::compute(ExecutionContext& cont
           emit_required_tensor(image, context, "BackprojectionOp.image", false, [&] {
             return prepare_device_tensor(
                 image, context, std::vector<int64_t>{num_v, num_u}, complex_dtype<T>(),
-                [&](void* dst, std::size_t) -> expected<void, Error> {
+                [&](void* dst, std::size_t bytes) -> expected<void, Error> {
+                  if (bytes != static_cast<std::size_t>(num_v) * static_cast<std::size_t>(num_u) *
+                                   2U * sizeof(T)) {
+                    return make_unexpected(
+                        Error{ErrorCode::kFailure, who + ": image size mismatch"});
+                  }
                   if (detail::backend_is_matx(backend_value_)) {
 #if __has_include("matx/kernels/sar_bp.cuh")
                     detail::emit_matx_accum(*state_, static_cast<T*>(dst), 1, num_v, num_u, stream);
