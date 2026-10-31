@@ -331,10 +331,23 @@ expected<void, Error> ApertureManagerOp<T, TGeom>::compute(ExecutionContext& con
     PulseGroup batch = concat_pulse_groups(output_groups, stream, kWho);
     keep_.insert(keep_.end(), {batch.profiles, batch.positions, batch.reference});
     weights.assign(static_cast<size_t>(n_out), T{1});
-    if (reform && p.aperture_window.type != WindowType::kNone) {
-      const auto coeff = generate_window(p.aperture_window, n_out);
-      for (int64_t i = 0; i < n_out; ++i)
-        weights[i] = static_cast<T>(coeff[i]);
+    if (reform) {
+      // A reform resets and replays the whole retained aperture, so every
+      // pulse is an admission: +1, or the taper where one is configured
+      // (D15 -- reform is the sanctioned tapered path, and unweighted is an
+      // honest ~-13 dB rather than a placeholder). The additions/departures
+      // layout below must not be reached: it would mark everything from `np`
+      // on as a departure and tell the backprojector to subtract most of the
+      // replay, and its index split does not even line up here, since
+      // `retained()` is ordered oldest-first while `np` counts this tick's
+      // arrivals. Keyed on `reform` rather than on the window type, which is
+      // how an unwindowed reform used to fall through -- WindowSpec defaults
+      // to kNone, so that was the default reform configuration.
+      if (p.aperture_window.type != WindowType::kNone) {
+        const auto coeff = generate_window(p.aperture_window, n_out);
+        for (int64_t i = 0; i < n_out; ++i)
+          weights[i] = static_cast<T>(coeff[i]);
+      }
     } else {
       for (int64_t i = 0; i < np; ++i) {
         if (!stamp_window_.empty() && slot0 + i < static_cast<int64_t>(stamp_window_.size()))
