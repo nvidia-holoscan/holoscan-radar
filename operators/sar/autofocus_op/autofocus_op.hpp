@@ -130,7 +130,7 @@ class AutofocusOp : public holoscan::Operator<AutofocusParams> {
   std::size_t max_sharpness_byte_span_{0U};
   std::size_t max_status_byte_span_{0U};
 
-  std::shared_ptr<detail::AutofocusState<T>> state_;
+  std::unique_ptr<detail::AutofocusState<T>> state_;
 
   // One PGA run produces the image, the phase vector and the sharpness trace
   // together, and writes all three to device memory. The image goes straight

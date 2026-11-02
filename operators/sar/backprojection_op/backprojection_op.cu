@@ -627,7 +627,12 @@ expected<void, Error> BackprojectionOp<T, TGeom>::compute(ExecutionContext& cont
         }
       }
       state_->ring_offset = (phys0 + k) % num_v;
-      locality_warned_ = false;
+      // Deliberately *not* re-arming `locality_warned_` here. A scroll
+      // advances the lattice by whole rows and does not change the locality
+      // property the warning reports, so clearing it every tick turned a
+      // warn-once into a warn-forever -- and, worse, re-ran the check itself,
+      // which costs two blocking device-to-host synchronizations per tick on
+      // the default Taylor backend. `continuous_strip` scrolls every tick.
     }
 
     const T* profile_ptr = static_cast<const T*>(profiles->data());

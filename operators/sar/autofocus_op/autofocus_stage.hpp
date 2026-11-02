@@ -105,7 +105,12 @@ struct AutofocusState {
   T* phase_acc{nullptr};
   int32_t* counts{nullptr};
   T* p2p{nullptr};
-  T* sharp_tmp{nullptr};
+  // Sharpness is accumulated and compared in double even when `T` is float:
+  // see `sharpness_kernel`. Only the emitted `sharpness` port is `T`.
+  double* sharp_tmp{nullptr};
+  // Set after the first run's informational lines. The per-iteration logs are
+  // guarded on `iter == 0`, which is true on every tick, not once per run.
+  bool logged_once{false};
 
   AutofocusState() = default;
   AutofocusState(const AutofocusState&) = delete;
@@ -155,6 +160,14 @@ U* autofocus_malloc(size_t n, const char* what) {
   return ptr;
 }
 
+// Block width for every kernel in this file, and specifically for the two
+// that reduce in shared memory: `sharpness_kernel` and `p2p_kernel` size
+// their `__shared__` arrays from it and halve it to seed the tree. The three
+// used to be written as a bare 256 and 128 in six places, so changing the
+// launch would have silently overrun the shared arrays.
+inline constexpr int kAutofocusBlock = 256;
+inline constexpr int kAutofocusReduceSeed = kAutofocusBlock / 2;
+
 inline int64_t pga_window_width(int64_t n_az, double fraction, int iter) {
   double width = fraction * static_cast<double>(n_az);
   for (int i = 0; i < iter; ++i) {
@@ -193,7 +206,7 @@ void ensure_autofocus_workspace(AutofocusState<T>& state, int64_t batch, int64_t
   state.phase_acc = autofocus_malloc<T>(static_cast<size_t>(batch * n_az), "phase_acc");
   state.counts = autofocus_malloc<int32_t>(static_cast<size_t>(batch), "counts");
   state.p2p = autofocus_malloc<T>(static_cast<size_t>(batch), "p2p");
-  state.sharp_tmp = autofocus_malloc<T>(static_cast<size_t>(batch), "sharp_tmp");
+  state.sharp_tmp = autofocus_malloc<double>(static_cast<size_t>(batch), "sharp_tmp");
   state.key = key;
 }
 
@@ -244,7 +257,7 @@ __global__ void peak_find_kernel(const cuda::std::complex<T>* in, int32_t* peaks
 template <typename T>
 void cap_strong_scatterers(uint8_t* strong, const T* peak_pwr, int32_t* host_counts, int64_t batch,
                            int64_t n_range, int64_t keep, cudaStream_t stream,
-                           const std::string& who, int iter) {
+                           const std::string& who, int iter, bool first_run) {
   if (keep < 1) {
     return;
   }
@@ -300,7 +313,16 @@ void cap_strong_scatterers(uint8_t* strong, const T* peak_pwr, int32_t* host_cou
                       cudaMemcpyHostToDevice, stream) != cudaSuccess) {
     throw std::runtime_error(who + ": strong H2D failed");
   }
-  if (iter == 0) {
+  // `mask` dies at the end of this call. The copy is only safe today because
+  // CUDA stages a pageable source before returning; sync so it does not
+  // depend on that, as every sibling copy in this file already does.
+  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+    throw std::runtime_error(who + ": strong H2D sync failed");
+  }
+  // `iter == 0` is true on every tick, not once per run; a video-SAR or
+  // continuous-strip graph would otherwise emit this from the hot path for
+  // every frame.
+  if (iter == 0 && first_run) {
     HOLOSCAN_LOG_INFO("{}: using {} of {} strong range bins", who, keep, saw);
   }
 }
@@ -383,22 +405,6 @@ __global__ void bin_power_kernel(const cuda::std::complex<T>* spec, T* pwr, int6
 }
 
 template <typename T>
-__device__ T lue_pair(const cuda::std::complex<T>* spec, int64_t b, int64_t n_range, int64_t n_az,
-                      int64_t k0, int64_t k1) {
-  T num = static_cast<T>(0);
-  T den = static_cast<T>(0);
-  for (int64_t r = 0; r < n_range; ++r) {
-    const int64_t row = (b * n_range + r) * n_az;
-    const auto g0 = spec[row + k0];
-    const auto g1 = spec[row + k1];
-    num += g1.imag() * g0.real() - g1.real() * g0.imag();
-    den += g0.real() * g0.real() + g0.imag() * g0.imag();
-  }
-  const T eps = static_cast<T>(1e-20);
-  return (den > eps) ? (num / den) : static_cast<T>(0);
-}
-
-template <typename T>
 __device__ int64_t pga_occupied_nkeep(const T* pwr, int64_t n_az) {
   T tot = static_cast<T>(0);
   for (int64_t k = 0; k < n_az; ++k) {
@@ -435,22 +441,16 @@ __device__ int64_t pga_occupied_nkeep(const T* pwr, int64_t n_az) {
   return n_keep;
 }
 
-__device__ inline int64_t occupied_chain_index(int64_t i, int64_t n_keep, int64_t n_az) {
-  const int64_t half = n_keep / 2;
-  if (i < half) {
-    return i;
-  }
-  const int64_t tail = n_keep - half;
-  return n_az - tail + (i - half);
-}
-
 template <typename T>
-__global__ void integrate_detrend_kernel(const cuda::std::complex<T>* spec, const T* pwr,
-                                         const T* grad, T* phase, int64_t n_range, int64_t n_az) {
+__global__ void integrate_detrend_kernel(const T* pwr, const T* grad, T* phase, int64_t n_az) {
   const int64_t b = static_cast<int64_t>(blockIdx.x);
   T* phi = phase + b * n_az;
   const T* g = grad + b * n_az;
   const T* bp = pwr + b * n_az;
+  // Launched `<<<batch, 1>>>`: the integration is a sequential scan outward
+  // from DC and has no parallel form that keeps the anchor. The guard is
+  // therefore unreachable today and is kept deliberately, so that widening
+  // the launch degrades to "slow but correct" rather than to a race.
   if (threadIdx.x != 0) {
     return;
   }
@@ -528,7 +528,7 @@ __global__ void add_phase_kernel(T* acc, const T* iter, int64_t n) {
 // indexed by pulse, which runs monotonically across the dwell, so the two
 // differ by an fftshift *and by the handedness of the axis*: the image's
 // azimuth axis is the Fourier conjugate of slow time, which runs the opposite
-// way, so pulse p reads bin (n - 1 - p + n/2) mod n.
+// way, so pulse p reads bin (n - 1 - p + (n + 1) / 2) mod n.
 //
 // The reversal was missing until 2026-10-30 and is invisible on an error that
 // is even about the dwell centre, because reversing an even function is a
@@ -575,21 +575,30 @@ __global__ void mul_phasor_kernel(cuda::std::complex<T>* spec, const T* phase, i
 }
 
 template <typename T>
-__global__ void sharpness_kernel(const cuda::std::complex<T>* in, T* out, int64_t batch,
+__global__ void sharpness_kernel(const cuda::std::complex<T>* in, double* out, int64_t batch,
                                  int64_t pixels) {
   const int64_t b = static_cast<int64_t>(blockIdx.x);
   const cuda::std::complex<T>* row = in + b * pixels;
-  T acc = static_cast<T>(0);
+  // |z|^4 in double regardless of `T`. A backprojected pixel of ~3e7 -- well
+  // inside the range these images reach -- overflows float32 on a single
+  // term, and once two iterations both read `inf` the accept/reject guard in
+  // `run_autofocus` compares equal and stops rejecting anything. That guard
+  // is the only thing holding the Kourou result at 0.332 rad instead of
+  // 1.295. Summing ~77k wildly-scaled terms per thread also makes a near-tie
+  // noise-dominated in single precision, which the same guard then reads as
+  // a real improvement.
+  double acc = 0.0;
   for (int64_t i = static_cast<int64_t>(threadIdx.x); i < pixels;
        i += static_cast<int64_t>(blockDim.x)) {
     const auto z = row[i];
-    const T p = z.real() * z.real() + z.imag() * z.imag();
+    const double p = static_cast<double>(z.real()) * static_cast<double>(z.real()) +
+                     static_cast<double>(z.imag()) * static_cast<double>(z.imag());
     acc += p * p;
   }
-  __shared__ T smem[256];
+  __shared__ double smem[kAutofocusBlock];
   smem[threadIdx.x] = acc;
   __syncthreads();
-  for (int offset = 128; offset > 0; offset >>= 1) {
+  for (int offset = kAutofocusReduceSeed; offset > 0; offset >>= 1) {
     if (static_cast<int>(threadIdx.x) < offset) {
       smem[threadIdx.x] += smem[threadIdx.x + offset];
     }
@@ -612,12 +621,12 @@ __global__ void p2p_kernel(const T* phase, T* out, int64_t n_az) {
     lo = (v < lo) ? v : lo;
     hi = (v > hi) ? v : hi;
   }
-  __shared__ T slo[256];
-  __shared__ T shi[256];
+  __shared__ T slo[kAutofocusBlock];
+  __shared__ T shi[kAutofocusBlock];
   slo[threadIdx.x] = lo;
   shi[threadIdx.x] = hi;
   __syncthreads();
-  for (int offset = 128; offset > 0; offset >>= 1) {
+  for (int offset = kAutofocusReduceSeed; offset > 0; offset >>= 1) {
     if (static_cast<int>(threadIdx.x) < offset) {
       slo[threadIdx.x] = (slo[threadIdx.x + offset] < slo[threadIdx.x]) ? slo[threadIdx.x + offset]
                                                                         : slo[threadIdx.x];
@@ -631,21 +640,22 @@ __global__ void p2p_kernel(const T* phase, T* out, int64_t n_az) {
   }
 }
 
-template <typename T>
-__global__ void fill_sharpness_kernel(T* dest, const T* src, int64_t batch, int64_t n_slots,
+template <typename TOut, typename TIn>
+__global__ void fill_sharpness_kernel(TOut* dest, const TIn* src, int64_t batch, int64_t n_slots,
                                       int64_t slot) {
   const int64_t b = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (b < batch) {
-    dest[b * n_slots + slot] = src[b];
+    dest[b * n_slots + slot] = static_cast<TOut>(src[b]);
   }
 }
 
-template <typename T>
-__global__ void broadcast_sharpness_kernel(T* dest, const T* src, int64_t batch, int64_t n_slots) {
+template <typename TOut, typename TIn>
+__global__ void broadcast_sharpness_kernel(TOut* dest, const TIn* src, int64_t batch,
+                                           int64_t n_slots) {
   const int64_t n = batch * n_slots;
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i < n) {
-    dest[i] = src[i / n_slots];
+    dest[i] = static_cast<TOut>(src[i / n_slots]);
   }
 }
 
@@ -715,7 +725,7 @@ template <typename T>
 void copy_to_work(const void* in, AutofocusAzimuthAxis axis, int64_t batch, int64_t rows,
                   int64_t cols, cuda::std::complex<T>* work, int64_t n_range, int64_t n_az,
                   cudaStream_t stream, const std::string& who) {
-  constexpr int kT = 256;
+  constexpr int kT = kAutofocusBlock;
   const int64_t n = batch * n_range * n_az;
   if (axis == AutofocusAzimuthAxis::kU) {
     copy_n_kernel<T><<<grid_for(n, kT), kT, 0, stream>>>(
@@ -734,7 +744,7 @@ template <typename T>
 void copy_from_work(const cuda::std::complex<T>* work, void* out, AutofocusAzimuthAxis axis,
                     int64_t batch, int64_t n_range, int64_t n_az, cudaStream_t stream,
                     const std::string& who) {
-  constexpr int kT = 256;
+  constexpr int kT = kAutofocusBlock;
   const int64_t n = batch * n_range * n_az;
   if (axis == AutofocusAzimuthAxis::kU) {
     copy_n_kernel<T>
@@ -761,11 +771,11 @@ void passthrough_outputs(const void* in, void* image_out, T* phase_out, T* sharp
       cudaSuccess) {
     throw std::runtime_error(who + ": zero phase_correction failed");
   }
-  constexpr int kT = 256;
+  constexpr int kT = kAutofocusBlock;
   sharpness_kernel<T><<<static_cast<int>(batch), kT, 0, stream>>>(
       static_cast<const cuda::std::complex<T>*>(in), state.sharp_tmp, batch, rows * cols);
   check_cuda("passthrough sharpness", who);
-  broadcast_sharpness_kernel<T><<<grid_for(batch * n_slots, kT), kT, 0, stream>>>(
+  broadcast_sharpness_kernel<T, double><<<grid_for(batch * n_slots, kT), kT, 0, stream>>>(
       sharpness_out, state.sharp_tmp, batch, n_slots);
   check_cuda("broadcast sharpness", who);
 }
@@ -793,6 +803,11 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
                    const std::string& who) {
   // Set on every exit below, including the three that return early.
   *outcome = AutofocusOutcome{};
+  // Latched here rather than at the logging sites so it holds on every exit
+  // path: the per-iteration lines are guarded on `iter == 0`, which is true
+  // on every tick, and a refusal returns before reaching the later of them.
+  const bool first_run = !state.logged_once;
+  state.logged_once = true;
   const bool az_u = cfg.azimuth_axis == AutofocusAzimuthAxis::kU;
   const int64_t n_range = az_u ? rows : cols;
   const int64_t n_az = az_u ? cols : rows;
@@ -810,7 +825,7 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
   const int64_t n_bins = batch * n_range;
   const int64_t n_pix = n_bins * n_az;
   const int64_t n_slots = cfg.num_iterations + 1;
-  constexpr int kT = 256;
+  constexpr int kT = kAutofocusBlock;
 
   copy_to_work<T>(in, cfg.azimuth_axis, batch, rows, cols, work, n_range, n_az, stream, who);
 
@@ -822,14 +837,15 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
   sharpness_kernel<T>
       <<<static_cast<int>(batch), kT, 0, stream>>>(work, state.sharp_tmp, batch, n_range * n_az);
   check_cuda("sharpness 0", who);
-  fill_sharpness_kernel<T>
+  fill_sharpness_kernel<T, double>
       <<<grid_for(batch, kT), kT, 0, stream>>>(sharpness_out, state.sharp_tmp, batch, n_slots, 0);
   check_cuda("store sharpness 0", who);
 
-  std::vector<T> host_sharp(static_cast<size_t>(batch));
-  std::vector<T> host_sharp_new(static_cast<size_t>(batch));
-  if (cudaMemcpyAsync(host_sharp.data(), state.sharp_tmp, static_cast<size_t>(batch) * sizeof(T),
-                      cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
+  std::vector<double> host_sharp(static_cast<size_t>(batch));
+  std::vector<double> host_sharp_new(static_cast<size_t>(batch));
+  if (cudaMemcpyAsync(host_sharp.data(), state.sharp_tmp,
+                      static_cast<size_t>(batch) * sizeof(double), cudaMemcpyDeviceToHost,
+                      stream) != cudaSuccess) {
     throw std::runtime_error(who + ": sharpness D2H failed");
   }
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
@@ -862,7 +878,7 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
       throw std::runtime_error(who + ": counts sync failed");
     }
     cap_strong_scatterers<T>(state.strong, state.peak_pwr, host_counts.data(), batch, n_range,
-                             cfg.min_scatterers, stream, who, iter);
+                             cfg.min_scatterers, stream, who, iter, first_run);
     bool weak = false;
     int32_t seen = host_counts[0];
     for (int64_t b = 0; b < batch; ++b) {
@@ -888,7 +904,7 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
           who, cfg.min_scatterers, seen, iter);
       outcome->termination = AutofocusTermination::kStoppedScatterers;
       for (int64_t s = iter + 1; s < n_slots; ++s) {
-        fill_sharpness_kernel<T><<<grid_for(batch, kT), kT, 0, stream>>>(
+        fill_sharpness_kernel<T, double><<<grid_for(batch, kT), kT, 0, stream>>>(
             sharpness_out, state.sharp_tmp, batch, n_slots, s);
       }
       check_cuda("fill remaining sharpness", who);
@@ -899,7 +915,7 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
     circshift_window_kernel<T><<<grid_for(n_pix, kT), kT, 0, stream>>>(
         work, scratch, state.peaks, state.strong, n_bins, n_az, width);
     check_cuda("circshift window", who);
-    if (iter == 0) {
+    if (iter == 0 && first_run) {
       HOLOSCAN_LOG_INFO("{}: LUE over {} azimuth bins, image windowed to {}", who, n_az, width);
     }
 
@@ -916,7 +932,7 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
     check_cuda("azimuth-FFT bin power", who);
 
     integrate_detrend_kernel<T><<<static_cast<int>(batch), 1, 0, stream>>>(
-        scratch, state.bin_pwr, state.grad, state.phase_iter, n_range, n_az);
+        state.bin_pwr, state.grad, state.phase_iter, n_az);
     check_cuda("integrate detrend", who);
 
     // `spec` is free from here; use it as a backup of work so a sharpness
@@ -934,7 +950,7 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
         <<<static_cast<int>(batch), kT, 0, stream>>>(work, state.sharp_tmp, batch, n_range * n_az);
     check_cuda("sharpness iter", who);
     if (cudaMemcpyAsync(host_sharp_new.data(), state.sharp_tmp,
-                        static_cast<size_t>(batch) * sizeof(T), cudaMemcpyDeviceToHost,
+                        static_cast<size_t>(batch) * sizeof(double), cudaMemcpyDeviceToHost,
                         stream) != cudaSuccess) {
       throw std::runtime_error(who + ": sharpness-new D2H failed");
     }
@@ -966,12 +982,12 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
       copy_n_kernel<T><<<grid_for(n_pix, kT), kT, 0, stream>>>(spec, work, n_pix);
       check_cuda("restore work", who);
       if (cudaMemcpyAsync(state.sharp_tmp, host_sharp.data(),
-                          static_cast<size_t>(batch) * sizeof(T), cudaMemcpyHostToDevice,
+                          static_cast<size_t>(batch) * sizeof(double), cudaMemcpyHostToDevice,
                           stream) != cudaSuccess) {
         throw std::runtime_error(who + ": restore sharpness H2D failed");
       }
       for (int64_t s = iter + 1; s < n_slots; ++s) {
-        fill_sharpness_kernel<T><<<grid_for(batch, kT), kT, 0, stream>>>(
+        fill_sharpness_kernel<T, double><<<grid_for(batch, kT), kT, 0, stream>>>(
             sharpness_out, state.sharp_tmp, batch, n_slots, s);
       }
       check_cuda("fill remaining sharpness", who);
@@ -987,8 +1003,8 @@ void run_autofocus(const AutofocusConfig& cfg, AutofocusState<T>& state, const v
     if (outcome->iterations_accepted == cfg.num_iterations) {
       outcome->termination = AutofocusTermination::kBudgetExhausted;
     }
-    fill_sharpness_kernel<T><<<grid_for(batch, kT), kT, 0, stream>>>(sharpness_out, state.sharp_tmp,
-                                                                     batch, n_slots, iter + 1);
+    fill_sharpness_kernel<T, double><<<grid_for(batch, kT), kT, 0, stream>>>(
+        sharpness_out, state.sharp_tmp, batch, n_slots, iter + 1);
     check_cuda("store sharpness iter", who);
   }
 

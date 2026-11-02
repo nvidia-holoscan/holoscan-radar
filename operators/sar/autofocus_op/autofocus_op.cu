@@ -53,6 +53,13 @@ expected<void, Error> validate_live(const detail::AutofocusConfig& cfg, const st
   if (cfg.min_scatterers < 1) {
     return fail_invalid(who + ": min_scatterers must be >= 1");
   }
+  // NaN is tested separately: it is not finite, so the positivity test below
+  // short-circuits past it, and a NaN ceiling then makes every comparison
+  // against it false -- the guard is silently never applied. Infinity is the
+  // documented "uncapped" default and stays legal.
+  if (std::isnan(cfg.max_correction)) {
+    return fail_invalid(who + ": max_correction must not be NaN");
+  }
   if (std::isfinite(cfg.max_correction) && cfg.max_correction <= 0.0) {
     return fail_invalid(who + ": max_correction must be positive when set");
   }
@@ -170,11 +177,13 @@ expected<void, Error> AutofocusOp<T>::compute(ExecutionContext& context) {
   }
   const bool az_u = cfg.azimuth_axis == AutofocusAzimuthAxis::kU;
   const int64_t n_az = az_u ? shape[1] : shape[0];
-  const int64_t n_slots = cfg.num_iterations + 1;
+  // Bound before arithmetic: `num_iterations` is `[live]`, so an override of
+  // INT64_MAX makes the `+ 1` signed-overflow UB before the check can run.
   if (cfg.num_iterations > kMaxAutofocusIterations) {
     return fail_invalid(who + ": num_iterations exceeds the sharpness pool bound (" +
                         std::to_string(kMaxAutofocusIterations) + ")");
   }
+  const int64_t n_slots = cfg.num_iterations + 1;
 
   cudaStream_t stream = context.cuda_stream().get();
   if (stream == nullptr) {
@@ -182,7 +191,7 @@ expected<void, Error> AutofocusOp<T>::compute(ExecutionContext& context) {
   }
 
   if (!state_) {
-    state_ = std::make_shared<detail::AutofocusState<T>>();
+    state_ = std::make_unique<detail::AutofocusState<T>>();
   }
 
   // The run happens inside the image fill, writing the two vectors to the
@@ -206,9 +215,9 @@ expected<void, Error> AutofocusOp<T>::compute(ExecutionContext& context) {
   }));
 
   const auto copy_out = [&](Output<Tensor>& port, LatchedOutput& latch, const T* source,
-                            std::int64_t length, const char* label) {
+                            std::int64_t length, const char* label) -> expected<void, Error> {
     if (!latch.active()) {
-      return;
+      return {};
     }
     auto loan = prepare_device_tensor(
         port, context, std::vector<int64_t>{length}, real_dtype<T>(),
@@ -227,21 +236,29 @@ expected<void, Error> AutofocusOp<T>::compute(ExecutionContext& context) {
           }
           return {};
         });
-    if (loan) {
-      latch.emit(port, context, std::move(*loan), label);
+    // Propagate rather than drop. Letting a failed loan fall through here
+    // emits `image_out` and silently omits this port, which is exactly the
+    // partially-emitted output set the prepare-then-emit split exists to
+    // prevent -- and `LatchedOutput` only latches on *emit* failure, so a
+    // pool exhaustion or a size mismatch would recur every tick unseen.
+    if (!loan) {
+      return make_unexpected(loan.error());
     }
+    latch.emit(port, context, std::move(*loan), label);
+    return {};
   };
-  copy_out(phase_correction, phase_correction_latch_, phase_scratch_, n_az,
-           "AutofocusOp.phase_correction");
-  copy_out(sharpness, sharpness_latch_, sharpness_scratch_, n_slots, "AutofocusOp.sharpness");
+  HOLOSCAN_TRY(copy_out(phase_correction, phase_correction_latch_, phase_scratch_, n_az,
+                        "AutofocusOp.phase_correction"));
+  HOLOSCAN_TRY(
+      copy_out(sharpness, sharpness_latch_, sharpness_scratch_, n_slots, "AutofocusOp.sharpness"));
 
   // Provenance: what the run did, never whether it was right. Host-to-device
   // because the value was decided on the host; one int32 on the compute stream,
   // so it stays ordered behind the image without a sync.
   const auto emit_status = [&](Output<Tensor>& port, LatchedOutput& latch, std::int32_t& staging,
-                               std::int32_t value, const char* label) {
+                               std::int32_t value, const char* label) -> expected<void, Error> {
     if (!latch.active()) {
-      return;
+      return {};
     }
     // Each port stages into its own member so the value outlives this call:
     // the emit is ordered on the compute stream, and the staging slot has to
@@ -262,14 +279,18 @@ expected<void, Error> AutofocusOp<T>::compute(ExecutionContext& context) {
           }
           return {};
         });
-    if (loan) {
-      latch.emit(port, context, std::move(*loan), label);
+    if (!loan) {
+      return make_unexpected(loan.error());
     }
+    latch.emit(port, context, std::move(*loan), label);
+    return {};
   };
-  emit_status(termination, termination_latch_, termination_staging_,
-              static_cast<std::int32_t>(outcome.termination), "AutofocusOp.termination");
-  emit_status(iterations, iterations_latch_, iterations_staging_,
-              static_cast<std::int32_t>(outcome.iterations_accepted), "AutofocusOp.iterations");
+  HOLOSCAN_TRY(emit_status(termination, termination_latch_, termination_staging_,
+                           static_cast<std::int32_t>(outcome.termination),
+                           "AutofocusOp.termination"));
+  HOLOSCAN_TRY(emit_status(iterations, iterations_latch_, iterations_staging_,
+                           static_cast<std::int32_t>(outcome.iterations_accepted),
+                           "AutofocusOp.iterations"));
 
   retained_input_ = std::move(formed);
   return {};

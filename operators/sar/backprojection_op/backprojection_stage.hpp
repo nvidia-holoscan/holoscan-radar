@@ -507,24 +507,24 @@ __global__ void downcast_real_kernel(const double* src, float* dst, int n) {
   dst[i] = static_cast<float>(src[i]);
 }
 
-__global__ void zero_float_kernel(float* dst, int n) {
-  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+__global__ void zero_float_kernel(float* dst, int64_t n) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
   }
   dst[i] = 0.0f;
 }
 
-__global__ void promote_image_kernel(const float* src, float* dst, int n) {
-  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+__global__ void promote_image_kernel(const float* src, float* dst, int64_t n) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
   }
   dst[i] = src[i];
 }
 
-__global__ void promote_image_kernel(const float* src, double* dst, int n) {
-  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+__global__ void promote_image_kernel(const float* src, double* dst, int64_t n) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
   }
@@ -555,8 +555,7 @@ void ensure_accum(BackprojectionState<T, TGeom>& state, int64_t batch, int64_t n
   if (resize) {
     const int threads = 256;
     const int blocks = static_cast<int>((n + threads - 1) / threads);
-    zero_float_kernel<<<blocks, threads, 0, stream>>>(state.accum.template as<float>(),
-                                                      static_cast<int>(n));
+    zero_float_kernel<<<blocks, threads, 0, stream>>>(state.accum.template as<float>(), n);
     state.cached_batch = batch;
     state.cached_num_v = num_v;
     state.cached_num_u = num_u;
@@ -573,8 +572,7 @@ void reset_accum(BackprojectionState<T, TGeom>& state, cudaStream_t stream) {
   const int64_t n = state.cached_batch * state.cached_num_v * state.cached_num_u * 2;
   const int threads = 256;
   const int blocks = static_cast<int>((n + threads - 1) / threads);
-  zero_float_kernel<<<blocks, threads, 0, stream>>>(state.accum.template as<float>(),
-                                                    static_cast<int>(n));
+  zero_float_kernel<<<blocks, threads, 0, stream>>>(state.accum.template as<float>(), n);
   state.ring_offset = 0;
   state.launch_row0 = 0;
 }
@@ -1101,7 +1099,7 @@ void emit_accum(BackprojectionState<T, TGeom>& state, T* dst, int64_t batch, int
   const int threads = 256;
   auto promote = [&](const float* src, T* out, int64_t n) {
     const int blocks = static_cast<int>((n + threads - 1) / threads);
-    promote_image_kernel<<<blocks, threads, 0, stream>>>(src, out, static_cast<int>(n));
+    promote_image_kernel<<<blocks, threads, 0, stream>>>(src, out, n);
   };
   const int64_t off = state.ring_offset;
   if (off <= 0 || off >= num_v) {

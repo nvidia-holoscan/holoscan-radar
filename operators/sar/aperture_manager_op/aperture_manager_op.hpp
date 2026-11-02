@@ -50,6 +50,8 @@ HOLOSCAN_PARAM_SCHEMA(
 template <typename T, typename TGeom = T>
 class ApertureManagerOp : public holoscan::Operator<ApertureManagerParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
+  static_assert(std::is_same_v<TGeom, float> || std::is_same_v<TGeom, double>);
+  static_assert(sizeof(TGeom) >= sizeof(T), "geometry may not be coarser than samples");
 
  public:
   explicit ApertureManagerOp(const MaxTensorExtents& extents);

@@ -125,7 +125,7 @@ expected<void, Error> cuda_ok(cudaError_t status, const char* what) {
 template <typename T>
 expected<void, Error> fill_history(void* dst, std::size_t bytes, std::size_t nsamp,
                                    int64_t num_samples, bool cf8, const char* pinned,
-                                   void* device_cf8, double* device_amp,
+                                   void* device_cf8, double* device_amp, std::size_t amp_capacity,
                                    const std::vector<double>& amp, cudaStream_t stream) {
   const std::size_t out_bytes = nsamp * sizeof(std::complex<T>);
   if (bytes != out_bytes) {
@@ -134,6 +134,13 @@ expected<void, Error> fill_history(void* dst, std::size_t bytes, std::size_t nsa
   }
   const double* d_amp = nullptr;
   if (!amp.empty()) {
+    // `device_amp` is a fixed `pulses_per_tick` allocation made in `start()`,
+    // so an oversized AmpSF would overrun it rather than be rejected. Every
+    // other host-to-device copy in this file checks its byte count first.
+    if (amp.size() > amp_capacity) {
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument, "CPHDReaderOp: AmpSF longer than the pulse batch"});
+    }
     HOLOSCAN_TRY(cuda_ok(cudaMemcpyAsync(device_amp, amp.data(), amp.size() * sizeof(double),
                                          cudaMemcpyHostToDevice, stream),
                          "AmpSF H2D failed"));
@@ -480,8 +487,12 @@ std::unique_ptr<typename CPHDReaderOp<T, TGeom>::Batch> CPHDReaderOp<T, TGeom>::
       finite = finite && std::isfinite(value);
     }
     if (finite) {
+      // Accumulate the full-precision value, not the `TGeom` store above:
+      // `mean` is double, and reading it back through `apc[]` throws away the
+      // precision for a `<float, float>` build.
       for (int axis = 0; axis < 3; ++axis)
-        mean[axis] += apc[3 * pulse + axis];
+        mean[axis] += 0.5 * (tx[static_cast<size_t>(3 * pulse + axis)] +
+                             rx[static_cast<size_t>(3 * pulse + axis)]);
       ++finite_count;
     } else {
       nonfinite = true;
@@ -739,13 +750,14 @@ expected<void, Error> CPHDReaderOp<T, TGeom>::compute(ExecutionContext& context)
         batch.published |= 8U;
       }
       HOLOSCAN_RETURN_IF_ERROR(required(phase_history, 16U, [&] {
-        return prepare_device_tensor(phase_history, context, std::vector<int64_t>{count, samples},
-                                     complex_dtype<T>(), [&](void* dst, std::size_t bytes) {
-                                       return fill_history<T>(
-                                           dst, bytes, nsamp, samples, batch.cf8, pinned,
-                                           reinterpret_cast<void*>(device_cf8_),
-                                           reinterpret_cast<double*>(device_amp_), batch.amp, h2d);
-                                     });
+        return prepare_device_tensor(
+            phase_history, context, std::vector<int64_t>{count, samples}, complex_dtype<T>(),
+            [&](void* dst, std::size_t bytes) {
+              return fill_history<T>(
+                  dst, bytes, nsamp, samples, batch.cf8, pinned,
+                  reinterpret_cast<void*>(device_cf8_), reinterpret_cast<double*>(device_amp_),
+                  static_cast<std::size_t>(params().pulses_per_tick), batch.amp, h2d);
+            });
       }));
       HOLOSCAN_RETURN_IF_ERROR(required(positions, 32U, [&] {
         return upload(positions, context, batch.apc, {count, 3}, real_dtype<TGeom>(), h2d);
