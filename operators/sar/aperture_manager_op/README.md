@@ -81,6 +81,11 @@ followed by evictions. The optional `weight` is `+1` for additions and `-1`
 for evictions, so a continuing backprojector can remove their contribution.
 `reset` closes the aperture after emission. `reform` replays its retained
 aperture at emission, optionally with the configured aperture window.
+`aperture_window` is legal only where final membership is known: under
+`reform`, or stamped at admission with `max_aperture_pulses: 0`,
+`emit_mode: reset` and `emit_interval_pulses > 0`. Anywhere else, including
+every sliding window, `start()` rejects it. A stamped aperture that closes
+short of `emit_interval_pulses` warns that its window was truncated.
 An explicit `evict` input requests a pulse count to evict; a count above
 occupancy is rejected. A tick-local `sample_geometry` or `sample_points`
 may be staged and passed through to connected outputs.

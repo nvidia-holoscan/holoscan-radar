@@ -224,4 +224,49 @@ TEST(ApertureManagerOp, ReformWeightsTheWholeReplayPositively) {
     EXPECT_FLOAT_EQ(replay.as<float>()[i], 1.F) << "replayed pulse " << i << " is not an admission";
   }
 }
+
+// A taper over an incrementally slid window would change every retained
+// pulse's weight each tick, so the contract refuses it at initialization. The
+// manager used to accept it and emit all +1, an untapered image with no word.
+TEST(ApertureManagerOp, RejectsTaperOnSlidingWindow) {
+  MaxTensorExtents extents;
+  extents.max_pulses = 2;
+  extents.max_range_bins = 2;
+  extents.max_image_v = 1;
+  extents.max_image_u = 1;
+  auto fixture = holoscan::testing::create_operator_test<ApertureManagerOp<float>>(extents);
+  ApertureManagerParams params{.max_aperture_pulses = 2, .emit_interval_pulses = 1};
+  params.emit_mode = holoscan::radar::ApertureEmitMode::kContinue;
+  params.aperture_window.type = holoscan::radar::WindowType::kHann;
+  fixture.set_params(params);
+  auto profile = to_device_tensor(std::vector<std::complex<float>>{{1.F, 0.F}, {1.F, 0.F}}, {1, 2},
+                                  complex_dtype<float>());
+  auto position = to_device_tensor(std::vector<float>{0.F, 0.F, 0.F}, {1, 3}, real_dtype<float>());
+  auto reference = to_device_tensor(std::vector<float>{0.F, 0.F, 0.F}, {1, 3}, real_dtype<float>());
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::nanoseconds{1}, holoscan::testing::input("range_profiles", *profile),
+      holoscan::testing::input("positions", *position),
+      holoscan::testing::input("reference_position", *reference),
+      holoscan::testing::input("stream_boundary", static_cast<uint8_t>(2))));
+  for (const char* port : {"range_profiles", "positions", "reference_position"}) {
+    fixture.input_source_device(port, holoscan::DeviceId{0});
+  }
+  for (const char* port : {"range_profiles_out", "positions_out", "reference_position_out",
+                           "weight", "sample_points_out", "control_out"}) {
+    fixture.output_device(port, holoscan::DeviceId{0});
+  }
+  fixture.capture_snapshot<holoscan::Tensor>("range_profiles_out", 1U, 2U * 8U);
+  fixture.capture_snapshot<holoscan::Tensor>("positions_out", 1U, 3U * 4U);
+  fixture.capture_snapshot<holoscan::Tensor>("reference_position_out", 1U, 3U * 4U);
+  fixture.capture_snapshot<holoscan::Tensor>("weight", 1U, 2U * sizeof(float));
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "weight", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  EXPECT_FALSE(observed);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("weight").empty());
+  EXPECT_FALSE(result.diagnostics().empty());
+}
 }  // namespace

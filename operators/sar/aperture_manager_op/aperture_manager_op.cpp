@@ -17,6 +17,7 @@
 #include <vector>
 
 #include <holoscan/core/expected_macros.hpp>
+#include <holoscan/logger/logger.hpp>
 
 #include "radar_common/dsp/window.hpp"
 #include "radar_common/sdk/override_param.hpp"
@@ -190,9 +191,19 @@ void ApertureManagerOp<T, TGeom>::start() {
     throw std::invalid_argument("ApertureManagerOp: max_aperture_pulses exceeds Tensor pool");
   }
   buffer_ = ApertureBuffer(p.max_aperture_pulses);
-  if (p.aperture_window.type != WindowType::kNone && p.max_aperture_pulses == 0 &&
-      p.emit_mode == ApertureEmitMode::kReset && p.emit_interval_pulses > 0) {
-    stamp_window_ = generate_window(p.aperture_window, p.emit_interval_pulses);
+  stamp_window_.clear();
+  const bool stamped = p.max_aperture_pulses == 0 && p.emit_mode == ApertureEmitMode::kReset &&
+                       p.emit_interval_pulses > 0;
+  if (p.aperture_window.type != WindowType::kNone) {
+    // A taper needs final membership: known at admission (stamped) or at the
+    // boundary (reform). Anywhere else it would weight against the wrong slots.
+    if (!stamped && p.emit_mode != ApertureEmitMode::kReform) {
+      throw std::invalid_argument(
+          "ApertureManagerOp: aperture_window requires emit_mode reform, or "
+          "max_aperture_pulses 0 with emit_mode reset and emit_interval_pulses > 0");
+    }
+    if (stamped)
+      stamp_window_ = generate_window(p.aperture_window, p.emit_interval_pulses);
   }
 }
 
@@ -410,6 +421,14 @@ expected<void, Error> ApertureManagerOp<T, TGeom>::compute(ExecutionContext& con
   }
   // A collection seam closes the aperture after its final output is published.
   if (end_aperture) {
+    const bool emits_image = emit_now && output_control != FormationControl::kResetWithoutEmit;
+    if (emits_image && !stamp_window_.empty() &&
+        slot_ < static_cast<int64_t>(stamp_window_.size())) {
+      HOLOSCAN_LOG_WARN(
+          "{}: aperture closed after {} of {} pulses; its aperture_window was truncated "
+          "(use emit_mode reform for an exact taper on a short aperture)",
+          kWho, slot_, stamp_window_.size());
+    }
     dropped_ += buffer_.occupancy();
     buffer_.clear();
     slot_ = admitted_since_emit_ = 0;
