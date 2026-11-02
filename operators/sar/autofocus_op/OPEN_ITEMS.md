@@ -25,7 +25,9 @@ against a 4.75 rad baseline**, no recovery at all, reported with a normal sign.
 
 2. **The emitted phase was time-reversed.** Azimuth is the Fourier conjugate of
    slow time and runs the opposite way, so pulse `p` reads bin
-   `(n - 1 - p + n/2) mod n`; the mapping had the shift but not the reversal.
+   `(n - 1 - p + (n + 1) / 2) mod n`; the mapping had the shift but not the
+   reversal. (`n/2` here would differ for odd `n`; the kernel, the operator
+   README and `tests/cpp/sar/autofocus_phase_support.hpp` all use `(n + 1) / 2`.)
    Established by testing four candidate mappings against injected truth over
    a quadratic, a cubic, a sine and the 45° sinusoid — plain reversal wins on
    all four (0.181 / 0.219 / 0.186 / 0.178 rad) and no other candidate wins on
@@ -70,8 +72,9 @@ a pass/fail on one shape cannot pin.
 
 Every number above and below came from Kourou, and Kourou was **screened** for
 PGA — `applications/sar/autofocus/config/autofocus.yaml` says so: an isolated
-corner reflector (221× over its annulus) lit across the whole dwell, picked
-with a tool that was never ported. The operator's precondition is satisfied
+corner reflector (135× over its annulus, the worst of eight dwell blocks still
+holding 0.68 of its mean) lit across the whole dwell, picked with
+`tools/sar_autofocus/pga_screen.py`. The operator's precondition is satisfied
 there by construction, so a number measured only on it describes the estimator
 under ideal conditions rather than the estimator. Three more collects now have
 configs beside it, and `sweep.py --scenes all` runs the grid across them.
@@ -121,6 +124,29 @@ distributed-clutter scene here, so "agriculture is refused" rests on one
 collect.
 
 ## Implementation follow-ups
+
+0. **The estimate is hard-zeroed outside the occupied support, which puts a
+   step at both dwell edges.** `integrate_detrend_kernel`
+   (`autofocus_stage.hpp:450`) zeroes all `n_az` bins and then writes only the
+   `keep` bins of the occupied-energy chain. When `pga_occupied_nkeep` returns
+   less than `n_az` — reachable whenever the 99%-energy support falls under
+   `kPgaAllBinsFrac = 0.85`, which is what a *successfully focusing* image
+   looks like — the chain covers the low-|frequency| bins and the excluded
+   middle bins stay at exactly 0. Under the `fftshift_phase_kernel` mapping
+   low |frequency| is the dwell **centre**, so the zeros land on the first and
+   last pulses: the emitted `phase_correction` carries the estimate across the
+   middle of the aperture and a hard zero block at both ends, with a step
+   discontinuity at the boundary. For `n_az = 8, keep = 4` the zeros are at
+   pulses 0, 1, 6, 7. This is the same class as the `n/2` seam in §1 above,
+   moved to the aperture ends.
+
+   **Not resolved in code deliberately.** Zero, hold-the-edge-value, and
+   linear extrapolation are three different answers with different effects on
+   a real collect, and the sweeps that would discriminate between them all run
+   against scenes we have. Picking one here would be exactly the silent
+   algorithm change `AGENTS.md` says to bring to the team instead. Needs a
+   measurement on Kourou plus the three 2026-10-30 collects before anyone
+   chooses.
 
 1. **~~The shipped `num_iterations: 4` fails on the error magnitudes
    this operator exists for.~~ Resolved — the default is now 8.** The contract names airborne residual phase as
@@ -413,8 +439,10 @@ collect.
    undocumented `0.0`-means-uncapped sentinel in the perf adapter; the
    write-only `range_bins_connected_` in `BackprojectionOp`; and the
    five-column-header-over-four-cell-delimiter Parameters tables in six
-   operator READMEs, which hid the `Responsibility` column (`markdownlint`
-   MD060 does not check cell counts).
+   operator READMEs, which hid the `Responsibility` column. The cell-count
+   rule is `MD056`, not `MD060` (which checks table padding), and it is
+   enabled — it does not fire because GFM drops header cells past the
+   delimiter row's width, so `MD056` sees a consistent four-column table.
 
    The two test suites' duplicated helpers — `to_bin_order`,
    `remove_affine`, `host_dft` and `make_image` — now live in
@@ -558,3 +586,15 @@ collect's own error. `AutofocusScoreOp` logs the affine-removed RMS,
 and `dump: true` with `output.path` writes `af_expected_phase.npy` and
 `af_estimated_phase.npy` beside the image. Note the key is
 `output.path`; `dump` itself is only a boolean.
+
+## Test coverage deferred off this branch
+
+Three [TESTING.md](../../../docs/planning/SAR/TESTING.md) requirements for
+`AutofocusOp` are still asserted nowhere. They were reviewed and deliberately
+deferred rather than missed; each needs a Jira item on board 41309.
+
+| Gap | TESTING.md | Why it was deferred |
+| --- | --- | --- |
+| **The trajectory-error leg.** Perturb the trajectory, form with the erroneous positions, and assert autofocus recovers the resulting phase and restores the impulse response to near its error-free metrics. Today only the injected-phase leg is tested, and that leg impresses the error on the phase history directly. | Line 282 | The largest single item left. The simulator's separable trajectory-error input exists in the contract but is not wired into a fixture, so this is new simulator plumbing rather than a new assertion. It is also the only leg that tests the path a real collection takes. |
+| **Points-mode conjugate lattice.** Nothing asserts the estimate holds up when the auxiliary image is formed on an explicit `sample_points` lattice rather than a derived one. | D20 precondition, line 280 | Moderate. The polar aux fixture exercises the wiring but not the estimate's accuracy against truth on that geometry. |
+| **Warn on refusal.** No test asserts the operator logs a warning on any of the three refusal paths. | Line 288 (`min_scatterers`) | Cheapest of the three and the lowest value now that `termination` carries the same information in a form a consumer can read, which `TerminationSeparatesRefusalFromAnUneventfulRun` does assert. A log-capture assertion would pin the human-facing half. |

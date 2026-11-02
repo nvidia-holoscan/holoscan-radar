@@ -19,7 +19,7 @@ Use after aperture management to form a monostatic image on a SampleGeometry lat
 
 A second parameter sets the geometry precision: `BackprojectionOp<T, TGeom>`
 defaults `TGeom` to `T`, and the geometry ports take `TGeom` while samples and
-the image take `T`. `<float, double>` halves the retained aperture while
+the image take `T`. `<float, double>` keeps ECEF geometry in float64 while
 keeping positions in float64, which they need: ECEF coordinates do not survive
 float32, where one ulp at a 6.4e6 m radius is 0.76 m -- some 25 wavelengths at
 X band. `range_bins` and `weight` stay on `T`, because their producers are

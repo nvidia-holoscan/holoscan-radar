@@ -2,7 +2,7 @@
 
 ## HSDK 5 C++/CUDA port contract (2026-09-28)
 
-This section is the **current implementation contract** for the six ported
+This section is the **current implementation contract** for the seven ported
 operators. The source branch's detailed design below remains as algorithm and
 future-operator reference. Its HSDK 4 transport statements, proposed/acceptance
 labels, opaque `...` axes, sticky overrides, and metadata stream boundary are
@@ -28,7 +28,7 @@ input and output names within an operator.
 | `ApertureManagerOp<T, TGeom>` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; `positions`, `reference_position`: real TGeom `(num_pulses,3)`; `stream_boundary`: uint8 scalar; optional `[live]` `sample_geometry`, `sample_points`, `control`, `evict` | `range_profiles_out`, `positions_out`, `reference_position_out`: matching pulse tensors; optional `weight`: real T `(num_output_pulses)`; optional `sample_geometry_out`: descriptor; optional `sample_points_out`: real TGeom `(num_v,num_u,3)`; `control_out`: uint8 `(1)` |
 | `BackprojectionOp<T, TGeom>` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; `positions`, `reference_position`: real TGeom `(num_pulses,3)`; optional `[live]` `control`, `range_bins`, `sample_points`, `weight`, `initial_image`, `sample_geometry`, `range_bin_spacing`, `range_bin_origin`, `reference_frequency`, `interpolation` | `image`: complex T `(num_v,num_u)` on an emit; optional `sample_geometry_out`: descriptor on an emit |
 | `PhaseCorrectionOp<T>` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; `phase_correction`: real T `(num_pulses)` | `range_profiles_out`: complex T `(num_pulses,num_range_bins)` |
-| `AutofocusOp<T>` | `image`: complex T `(num_v,num_u)`; optional `[live]` `num_iterations`, `window_fraction`, `min_scatterers`, `max_correction` | `image_out`: complex T `(num_v,num_u)`; optional `phase_correction`: real T `(num_pulses)`; optional `sharpness`: real T `(num_iterations+1)`; optional `termination`, `iterations`: int32 `(1)` |
+| `AutofocusOp<T>` | `image`: complex T `(num_v,num_u)`; optional `[live]` `num_iterations`, `window_fraction`, `min_scatterers`, `max_correction` | `image_out`: complex T `(num_v,num_u)`; optional `phase_correction`: real T `(num_az)`; optional `sharpness`: real T `(num_iterations+1)`; optional `termination`, `iterations`: int32 `(1)` |
 | `TensorDumpOp` | `tensor`: any dtype/rank; optional `[live]` `every_n`: int64 scalar | sink, no outputs |
 
 `CPHDReaderOp` publishes `stream_boundary` on **every** pulse batch: `0 = none`,
@@ -774,7 +774,7 @@ Estimates a residual phase correction along the azimuth-conjugate axis, and appl
 
 - **In:** `image` — complex64 / complex128, `(..., num_v, num_u)`. The formed SLC image.
 - **Out:** `image_out` **[CONTRACT CHANGE 2026-10-26]** — complex64 / complex128, same shape. The corrected image. Renamed from `image` for the same reason as `range_profiles_out` and `sample_geometry_out`: HSDK 5 requires input and output port names to be unique within an operator, and this is the only SAR operator that names both an input and an output `image`. The rename was missed when the others were made because this operator had not been ported.
-- **Out:** `phase_correction` (optional) — float32 / float64, `(..., num_pulses)`. The estimated residual phase, **indexed by pulse**, which is the domain the error physically lives in. Emitted separately so it is composable, testable in isolation, recordable by `SICDWriterOp` in the product's own metadata fields — on the input port of that name, not the message metadata plane — and, the reason the indexing matters, applicable to a *different* formation than the one it was estimated from. See *Notes*.
+- **Out:** `phase_correction` (optional) **[CONTRACT CHANGE 2026-10-31]** — float32 / float64, `(..., num_az)`, the extent of the image's `azimuth_axis`. **Ordered by pulse** — the operator un-shifts the azimuth-FFT bin axis before emitting, so it runs monotonically across the dwell — **but its length is the azimuth extent, not the pulse count.** The old `(..., num_pulses)` was right about the ordering and wrong about the extent: the operator sees an `image` and nothing else, so the pulse count is not available to it. The two agree only on a grid formed at one azimuth sample per pulse. `PhaseCorrectionOp` takes `(num_pulses)`, so an app whose extents differ must resample the length; this one uses an app-owned `PhaseResampleOp`. No library operator for it is specified; see [OPEN_ITEMS.md](OPEN_ITEMS.md).
 - **Out:** `sharpness` (optional) — float32 / float64, `(..., num_iterations + 1)`. The focus metric before each iteration and after the last, so a caller can see whether the estimate converged rather than inferring it from the image.
 - **Out:** `termination` (optional) **[CONTRACT CHANGE 2026-10-30]** — int32, `(1,)`. Why the refinement loop stopped: `0 converged`, `1 budget_exhausted`, `2 refused_sharpness`, `3 refused_scatterers`, `4 refused_max_correction`, `5 stopped_scatterers`. **Provenance, not quality** — it reports what the operator did and never whether the estimate is right; see *Notes*. Codes 2–4 mean the image was returned untouched. int32 rather than the instance precision because it encodes control flow, not samples.
 - **Out:** `iterations` (optional) **[CONTRACT CHANGE 2026-10-30]** — int32, `(1,)`. How many iterations' phase is in `phase_correction`, which is **not** how many were attempted: each iteration is applied, scored, and discarded if sharpness fell, so the last attempt is routinely absent. `0` whenever the estimate was refused.
@@ -794,7 +794,7 @@ Estimates a residual phase correction along the azimuth-conjugate axis, and appl
 2. Circularly shift each selected scatterer to the azimuth centre, removing its linear phase.
 3. Apply a window of the current `window_fraction` about the centre.
 4. Transform along `azimuth_axis` to the conjugate domain and estimate the phase gradient across azimuth samples (the linear-unbiased-estimator form).
-5. Integrate the gradient to a phase, apply its conjugate, and shrink the window for the next iteration.
+5. Integrate the gradient to a phase **[CONTRACT CHANGE 2026-10-31]** — outward from DC in both directions, anchored at bin 0, never as a running sum up the bin axis. The step previously said only "integrate the gradient", which reads as the latter. The anchor is not a free choice of constant: the bin axis is the pulse axis rotated by half the aperture, so bins `n/2 - 1` and `n/2` are not adjacent pulses and the gradient between them is meaningless, while bins `n - 1` and `0` are adjacent. Summing up the axis carries the second half's constant of integration across that seam, offsetting the halves by a step at the dwell centre — small for an error even about the centre, the whole error for an odd one. Then apply the conjugate and shrink the window.
 6. Accumulate the per-iteration corrections into `phase_correction`.
 
 **Notes:**

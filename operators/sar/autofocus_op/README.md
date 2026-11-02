@@ -58,9 +58,9 @@ Each iteration selects range bins whose azimuth peak stands well above the row m
 
 PGA is blind to a constant and a linear phase ramp: both translate the image rather than blur it. Compare an estimate against a truth only after removing an affine fit from each.
 
-A third guard discards an iteration whose estimate lowers sharpness and stops there, keeping the last accepted estimate. It is a faithful proxy: forcing the refused iterations through on Kourou at the full aperture takes the residual against injected truth from 0.332 to 1.295 rad. Because it stops before accumulating, a rejection at iteration 0 emits a zero correction and the refused estimate cannot be seen from outside — set `SAR_AF_IGNORE_DROP` in the environment to keep it anyway and score it. That is a diagnostic, not a tuning knob; it will leave the image worse.
-
 Two guards cause a pass-through, in which the image is copied unchanged and `phase_correction` is all zeros: fewer strong scatterers than `min_scatterers`, and an estimate whose peak-to-peak span exceeds `max_correction`. Naming `azimuth_axis` also asserts that the image is conjugate along that axis; that assertion is not dimensionally checkable, so a wrong axis is not an error — it simply fails to recover, which is why the parameter is required and has no default.
+
+A third guard discards an iteration whose estimate lowers sharpness and stops there, keeping the last accepted estimate. It is a faithful proxy: forcing the refused iterations through on Kourou at the full aperture takes the residual against injected truth from 0.332 to 1.295 rad. Because it stops before accumulating, a rejection at iteration 0 emits a zero correction and the refused estimate cannot be seen from outside — set `SAR_AF_IGNORE_DROP` in the environment to keep it anyway and score it. That is a diagnostic, not a tuning knob; it will leave the image worse.
 
 The image must be a contiguous, CUDA-accessible, rank-2 complex `T` tensor within `MaxTensorExtents`. A leading batch axis is not accepted: multi-image throughput is an application concern. The operator rejects a non-`pga` algorithm, an unset `azimuth_axis`, a non-conforming image, a missing CUDA stream, and `[live]` values outside their valid ranges. Because `num_iterations` is `[live]` while pools are sized at graph build, it is capped at `kMaxAutofocusIterations` (255) and an override beyond that is refused.
 
@@ -76,7 +76,7 @@ What they deliberately do not do is tell a caller whether the estimate is *good*
 
 The reversal half of that was missing until 2026-10-30, along with a seam in the integration that fed it; both were invisible on a quadratic because a quadratic is even about the dwell centre. The **one-sample step at exactly `floor(n/2)`** previously recorded here as an open item was the seam, and is resolved — see [`OPEN_ITEMS.md`](OPEN_ITEMS.md).
 
-Neither property is dimensionally checkable and both were wrong until 2026-10-27, in opposite directions that largely cancelled — see the app [README](../../../applications/sar/autofocus/README.md) for the measurement and `SarAutofocusGraph.Figure2OversampledDiagnostics` for the test that pins it.
+Neither property is dimensionally checkable and both were wrong until 2026-10-28, in opposite directions that largely cancelled — see the app [README](../../../applications/sar/autofocus/README.md) for the measurement and `SarAutofocusGraph.Figure2OversampledDiagnostics` for the test that pins it.
 
 ## Use and verification
 

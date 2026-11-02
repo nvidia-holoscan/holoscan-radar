@@ -8,18 +8,22 @@ Phase gradient autofocus on a ground / DEM product: retain the whole aperture, f
 flowchart LR
     R[CPHDReaderOp] --> RC[SARRangeCompressionOp]
     R -- boundary --> A[ApertureManagerOp]
-    RC -- profiles --> L[PerturbPositionsOp]
-    R -- positions / reference --> L
-    L -- profiles / positions / reference --> A
-    A -- profiles / positions / control --> AB[aux BackprojectionOp]
-    P[AuxPointsSourceOp] -. polar lattice .-> AB
-    A -- profiles --> P
+    R -- positions / reference --> E[EcefToSceneEnuOp]
+    E -. scene positions .-> L[PerturbPositionsOp]
+    E -. scene positions .-> A
+    RC -- profiles --> L
+    L -. profiles / positions / reference .-> A
+    A -- profiles --> P[AuxPointsSourceOp]
+    P -- profiles + polar lattice --> AB[aux BackprojectionOp]
+    A -- profiles / positions / control --> AB
     AB -- aux image --> AF[AutofocusOp]
     AF -- phase_correction --> PR[PhaseResampleOp]
     AF -- image_out --> Drain[NullSinkOp]
+    AF -- sharpness / termination / iterations --> SR[AutofocusSharpnessReportOp]
     PR --> PC[PhaseCorrectionOp]
     PR -. score .-> S[AutofocusScoreOp]
-    O[OraclePhaseOp] -. oracle .-> PC
+    A -. profiles .-> O[OraclePhaseOp]
+    O -. oracle .-> PC
     A -- profiles --> PC
     PC -- corrected profiles --> B[product BackprojectionOp]
     A -- positions / reference / control --> B
@@ -28,7 +32,7 @@ flowchart LR
     B -. visualize .-> Viz[HolovizOp]
 ```
 
-Solid paths are the required flows. `PerturbPositionsOp`, `OraclePhaseOp` and `AutofocusScoreOp` appear only when the `position_error` block is present, and `OraclePhaseOp` replaces the whole estimation branch rather than adding to it. `AuxPointsSourceOp` appears only for a polar aux lattice.
+Solid paths are the required flows. `PerturbPositionsOp`, `OraclePhaseOp` and `AutofocusScoreOp` appear only when the `position_error` block is present, and `OraclePhaseOp` replaces the whole estimation branch rather than adding to it. `AuxPointsSourceOp` appears only for a polar aux lattice, and sits *in series* on the replay edge rather than beside it — profiles in, profiles and lattice out — so both carry the same capture time. `EcefToSceneEnuOp` appears only when `enu_origin_ecef` is set; without it the reader's positions and reference go straight to `PerturbPositionsOp` or the manager.
 
 `ApertureManagerOp` runs with `emit_mode: reform`: the retained aperture is replayed once as a whole, which is what makes a corrected second pass possible at all. Nothing is staged behind that emission, so the manager emits `kResetThenEmit` and the product image is terminal even though no reset follows it. `weight` stays unconnected unless `aperture_window` is set — retention here is replay, not eviction. The aperture is never staged through `ApertureManagerOp.sample_geometry`; that port belongs to the product lattice and Figure 2 does not wire it.
 
@@ -47,7 +51,7 @@ The bearing step is `rho_az / R`, whose `num_u`-column span is exactly the unali
 The clamp is deliberately loose because row count *is* the candidate pool the scatterer selection draws from, and cutting it too far leaves a worse best sixteen: measured on Kourou, 4096 and 2478 rows both recover the full gain, while 512 and 1024 produce an estimate bad enough that iteration 0 regresses sharpness and the loop aborts. That failure is silent — the app still emits an image and exits zero, and only the sharpness report's `1.000x` gives it away — so the clamp warns whenever it fires. An explicit `aux_lattice.num_v` is honoured as given and never clamped.
 
 The clamp is a guard against the aux tracking product size, not a memory strategy: it is worth about 5 GiB, and the graph's ceiling is set by the retained aperture, which reserves seventeen copies of the pulse block and accounts for roughly 71% of the footprint. Products past Kourou's native size still exceed 96 GiB.
-Any set of constant-range rows is a valid polar grid, so the anchor is free, and the SRP is the wrong end of it: a product centred away from the IARP would need `num_v` to span the whole IARP-to-scene distance before covering the scene at all — on Kourou that is 638 m at 0.273 m bins, 2335 rows of pure overhead. The application logs where the product's centre and its four corners land on the aux, and warns if the product does not fit.
+Any set of constant-range rows is a valid polar grid, so the anchor is free, and the SRP is the wrong end of it: a product centred away from the IARP would need `num_v` to span the whole IARP-to-scene distance before covering the scene at all — on Kourou that is 638 m at 0.273 m bins, 2335 rows of pure overhead. The derivation uses the product's four corners to pick the row count; it does not report where they land, and the only warning it raises is the row clamp above.
 
 A polar grid is not a `SampleGeometry` — two unit axes and a uniform metre spacing cannot express it — so the app-owned `AuxPointsSourceOp` supplies it on `BackprojectionOp.sample_points` in points mode, with no contract change. `BackprojectionOp` joins that port on capture time with `Exact{}`, so the source sits in series on the replay edge — profiles in, profiles and lattice out — giving both the same capture time. It emits the lattice first on purpose: the profiles are the consumer's trigger, and because `sample_points` is a `[live]` override under `on_missing SafeDefault{}` the activation fires as soon as the trigger set completes rather than waiting for the lattice. `Exact{}` decides which sample matches, not whether the consumer blocks.
 
@@ -77,13 +81,13 @@ cmake --build build --target autofocus generate_cphd_fixture
 ctest --test-dir build -R '^Sar_autofocus_' --output-on-failure
 ```
 
-Three fixture runs: the clean Figure 2 chain, the same chain with the lie injected and scored, and the oracle apply path. They check graph wiring, the injection and the scoring plumbing — not recovery. A five-pulse aperture over a handful of point targets is far too small a scene for PGA to estimate anything from, and the generated fixture is already focused; the estimator passes the image straight through because no range bin clears the strong-scatterer gate. Recovery is measured on real data.
+Four fixture runs: the clean Figure 2 chain, the same chain with the lie injected and scored, the oracle apply path, and the polar auxiliary. They check graph wiring, the injection and the scoring plumbing — not recovery. A five-pulse aperture over a handful of point targets is far too small a scene for PGA to estimate anything from, and the generated fixture is already focused; the estimator passes the image straight through because no range bin clears the strong-scatterer gate. Recovery is measured on real data.
 
 ## Kourou (the PGA vehicle)
 
 The development collect is an Umbra SNAPSHOT over the Guiana Space Centre (`2023-06-24-13-22-56_UMBRA-05`, 5.23 N 52.77 W, 23375 by 23999, 4.19 GiB), configured in [`config/autofocus.yaml`](config/autofocus.yaml) with the download command. It was chosen by screening for PGA's scene preconditions rather than for brightness: `python3 tools/sar_autofocus/pga_screen.py data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd` finds six persistent candidates, the brightest isolated 135 times over its annulus and holding 0.68 of its mean in its worst of eight equal dwell blocks. Two of the scene's brightest returns collapse to 0.07 and 0.09 across the dwell, which is the glint case the screen exists to reject.
 
-The product is a 2048-square **0.25 m** east-north patch on that scatterer, and the fine spacing is load-bearing rather than cosmetic. The target is diffraction-limited to one or two samples at 0.25 m, so on a 1 m lattice it falls between pixels: the same peak reads 43468 at 1 m and 160525 at 0.25 m (both over the full aperture), and adding a quadratic error *raises* the 1 m number by broadening the PSF onto a pixel. **Do not score focus at 1 m here.** The aux is the polar lattice with rows auto-sized about the product centre, 2460 by 23375 at the full aperture (2476 by 8000 at the `pulse_range` the measurements below use).
+The product is a 2048-square **0.25 m** east-north patch on that scatterer, and the fine spacing is load-bearing rather than cosmetic. The target is diffraction-limited to one or two samples at 0.25 m, so on a 1 m lattice it falls between pixels: the same peak reads 43468 at 1 m and 160525 at 0.25 m (both over the full aperture), and adding a quadratic error *raises* the 1 m number by broadening the PSF onto a pixel. **Do not score focus at 1 m here.** The aux is the polar lattice with rows auto-sized about the product centre, 2460 by 23375 at the full aperture (2478 by 8000 at the `pulse_range` the measurements below use).
 
 On a persistent target the 2 cm quadratic needs no scaling: it drops the peak to 39.2% of focused.
 
@@ -125,7 +129,7 @@ To reproduce: uncomment the `position_error` block in [`config/autofocus.yaml`](
 
 ### The index-order and sign defect, and how it hid
 
-These numbers were 0.523 and 1.246 rad until 2026-10-27. Two independent defects in how `AutofocusOp` emitted its estimate were partially cancelling:
+These numbers were 0.523 and 1.246 rad until 2026-10-28. Two independent defects in how `AutofocusOp` emitted its estimate were partially cancelling:
 
 - **Index order.** `phase_acc` is accumulated per azimuth-FFT bin with `fftfreq` semantics — bin 0 is DC, which is the *centre* of the dwell. `phase_correction` is contracted as pulse-indexed, and pulse index runs monotonically across the dwell. The two differ by an fftshift, and the operator emitted the vector unshifted.
 - **Sign.** A `neg_n_kernel` negated the vector on the way out, so what reached `PhaseCorrectionOp` with `sense: subtract` was the correction rather than the error.

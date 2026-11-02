@@ -65,9 +65,12 @@ harness (checklist Performance section skipped).
      (`aperture_manager_op.cpp:381`). `admitted_since_emit_ = 0` sits
      inside `if (emit_now && control_output_.active())`. With
      `emit_interval_pulses > 0` and `control_out` unwired, the counter
-     never returns to zero, so the `>=` test at `:301` latches true and
-     every subsequent tick emits. The reset paths at `:265` and `:415`
-     are unaffected. Move the assignment out of the `active()` branch.
+     never returns to zero and the `>=` test at `:301` latches true. The
+     latch is currently unobservable rather than harmful: `end_aperture`
+     zeroes the counter at `:415` in `reset` and `reform`, and in
+     `continue` mode `emit_now` feeds nothing but the disabled
+     `control_out`. Move the assignment out of the `active()` branch
+     anyway — the reset does not belong behind a port's wiring.
 
 ## Not ours to close
 

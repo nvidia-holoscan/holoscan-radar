@@ -110,7 +110,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   any. Only the *exported* vector was wrong, the in-image path never consulting
   the mapping, so **Figure 3 was always right while Figure 2 handed
   `PhaseCorrectionOp` a reversed correction.** Both hid behind the same blind
-  spot, and a 2026-10-27 fix in the same code said so at the time: its note
+  spot, and a 2026-10-28 fix in the same code said so at the time: its note
   records that its two halves "partially cancel on a symmetric quadratic".
   **Result:** five shapes on Kourou that scored 0.16 to 4.92 rad now all score
   0.18 to 0.22; the shape sweep goes from **3 of 11 inside the hard floor to 8
@@ -960,7 +960,9 @@ All 37 commits reviewed against the push protocol. Fixed on the branch:
 - **The review's nits, worked to zero** and summarised in
   [`autofocus_op/OPEN_ITEMS.md`](../../operators/sar/autofocus_op/OPEN_ITEMS.md)
   item 8. One of them stopped being a nit: `perf_autofocus` was missing from
-  both `--scope overrides` lists, and adding it showed **all three
+  the `--scope overrides` registration list (the second list in that file is
+  the recipe-dispatch group and correctly does not carry it), and adding it
+  showed **all three
   `perf_autofocus` tests already failing**, the two pre-existing ones included.
   The adapter's locked output manifest still named only `phase_correction` and
   `sharpness`, so it disagreed with the recipe once `termination` and

@@ -20,7 +20,7 @@ complex64/float32; `T=double` means complex128/float64.
 
 A second parameter sets the geometry precision: `CPHDReaderOp<T, TGeom>`
 defaults `TGeom` to `T`, and `positions`, `reference_position` and
-`velocities` take `TGeom` while the phase history takes `T`. `<float, double>` halves the retained aperture while
+`velocities` take `TGeom` while the phase history takes `T`. `<float, double>` keeps ECEF geometry in float64 while
 keeping positions in float64, which they need: ECEF coordinates do not survive
 float32, where one ulp at a 6.4e6 m radius is 0.76 m -- some 25 wavelengths at
 X band. `sample_axis` stays on `T` because it belongs to the fast-time sample data,
