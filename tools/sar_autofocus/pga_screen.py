@@ -186,7 +186,11 @@ def isolated_candidates(
     idx = np.argpartition(flat, -pool)[-pool:]
     idx = idx[np.argsort(flat[idx])[::-1]]
     out: list[tuple[int, int, float, float]] = []
-    taken: list[tuple[int, int]] = []
+    # A mask rather than a list of claimed cells. The list was scanned
+    # linearly for every pooled cell and grew on every candidate, so a scene
+    # with no isolated scatterers -- the case this pool exists to make quick --
+    # cost roughly pool x pool comparisons in Python.
+    blocked = np.zeros((n_v, n_u), dtype=bool)
     for position in idx:
         if len(out) >= count:
             break
@@ -196,9 +200,14 @@ def isolated_candidates(
             break
         # Keep candidates apart, so each pick is a different scatterer
         # rather than another cell of the same mainlobe.
-        if any(abs(v - pv) <= outer and abs(u - pu) <= outer for pv, pu in taken):
+        if blocked[v, u]:
             continue
-        taken.append((v, u))
+        # Claimed before the isolation gate below on purpose: a candidate that
+        # fails isolation is still a mainlobe, and its neighbours are the same
+        # scatterer, so they should not be picked up as separate candidates.
+        bv0, bv1 = max(0, v - outer), min(n_v, v + outer + 1)
+        bu0, bu1 = max(0, u - outer), min(n_u, u + outer + 1)
+        blocked[bv0:bv1, bu0:bu1] = True
         v0, v1 = max(0, v - outer), min(n_v, v + outer + 1)
         u0, u1 = max(0, u - outer), min(n_u, u + outer + 1)
         patch = mag[v0:v1, u0:u1].astype(np.float64)

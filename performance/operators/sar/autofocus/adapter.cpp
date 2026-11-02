@@ -3,6 +3,7 @@
 
 #include <complex>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -23,9 +24,13 @@ struct Scenario : perf::RecipeScenario {
   int64_t num_iterations{8};
   double window_fraction{0.5};
   int64_t min_scatterers{16};
-  // 0.0 is "uncapped", matching the operator's default of no ceiling -- not a
-  // ceiling of zero radians. Every read of this field tests `> 0.0` first.
-  double max_correction{0.0};
+  // Infinity is "uncapped", matching `AutofocusParams::max_correction`. A
+  // finite value <= 0 is not a sentinel here: `validate_live` rejects it as
+  // "must be positive when set", and `params_for` passes this field through
+  // untested, so a zero would reach the operator as a real zero-radian
+  // ceiling. Every recipe case sets the key explicitly, so this initialiser
+  // only has to agree with the operator rather than carry a meaning of its own.
+  double max_correction{std::numeric_limits<double>::infinity()};
 };
 
 hr::AutofocusAzimuthAxis parse_axis(const std::string& name) {

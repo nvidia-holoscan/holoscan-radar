@@ -113,10 +113,13 @@ class Result:
 
     @property
     def verdict(self) -> str:
-        if self.residual_rad <= PASS_RAD:
-            return "pass"
+        # Refusal first. A refusal leaves the residual at the baseline, so on
+        # any case whose injected error is already under PASS_RAD the old
+        # ordering reported the operator declining to act as a "pass".
         if self.refused:
             return "refused"
+        if self.residual_rad <= PASS_RAD:
+            return "pass"
         if self.residual_rad <= FLOOR_RAD:
             return "marginal"
         if self.residual_rad > self.baseline_rad:
@@ -284,8 +287,18 @@ def run_one(binary: pathlib.Path, cfg: dict, scene: str, label: str) -> Result |
     finally:
         pathlib.Path(path).unlink(missing_ok=True)
     text = proc.stdout + proc.stderr
-    score = SCORE_RE.search(text)
-    sharp = SHARP_RE.search(text)
+    # Last match, not first. A configuration that forms more than one image
+    # emits a score per tick, and taking the first silently reported tick 0
+    # for the whole run with no indication the others existed.
+    scores = list(SCORE_RE.finditer(text))
+    sharps = list(SHARP_RE.finditer(text))
+    if len(scores) > 1:
+        print(
+            f"  .. {scene}/{label}: {len(scores)} scored images, reporting the last",
+            file=sys.stderr,
+        )
+    score = scores[-1] if scores else None
+    sharp = sharps[-1] if sharps else None
     if not score:
         tail = "\n".join(text.strip().splitlines()[-6:])
         print(
@@ -322,7 +335,9 @@ def main() -> int:
         type=pathlib.Path,
         default=pathlib.Path("build/applications/sar/autofocus/cpp/autofocus"),
     )
-    parser.add_argument("--pulses", type=int, default=None, help="override the aperture")
+    parser.add_argument(
+        "--pulses", type=int, default=None, help="aperture for grids that do not set one"
+    )
     parser.add_argument("--iterations", type=int, default=None)
     parser.add_argument("--window-samples", type=int, default=None)
     args = parser.parse_args()
@@ -349,7 +364,12 @@ def main() -> int:
 
     cases = GRIDS[args.grid]()
     for case in cases:
-        if args.pulses is not None:
+        # Fill, never overwrite -- same rule as the two below. The apertures
+        # grid varies `pulses` per case, so overwriting it collapsed six rows
+        # onto one configuration while still labelling them 2000..23375, and
+        # left each case's `window_samples = pulses // 8` describing an
+        # aperture that was no longer being run.
+        if args.pulses is not None and case.pulses is None:
             case.pulses = args.pulses
         if args.iterations is not None and case.num_iterations is None:
             case.num_iterations = args.iterations
