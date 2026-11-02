@@ -1000,7 +1000,7 @@ Figure2Result run_fig2(bool inject, bool autofocus, const std::vector<double>& a
         return !SceneBank::images.empty() && !SceneBank::controls.empty() &&
                !SceneBank::profiles.empty() &&
                (!wants_aux || (!SceneBank::aux_images.empty() && !SceneBank::phases.empty() &&
-                               !SceneBank::raw_phases.empty()));
+                               !SceneBank::raw_phases.empty() && !SceneBank::sharpness.empty()));
       },
       "the product image");
 
