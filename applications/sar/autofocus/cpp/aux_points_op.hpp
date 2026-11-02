@@ -78,6 +78,13 @@ class AuxPointsSourceOp : public holoscan::Operator<> {
     // copy of the replay. On Kourou that pool was 11.4 GiB of reservation and
     // an aperture-sized device copy per image, both for a tensor it never read.
     spec.output(range_profiles_out).produces_tensor(tensor_output(device));
+    // Depth 3 even though the lattice is emitted exactly once, on the first
+    // tick. On the Kourou polar aux that is ~1.4 GiB per slot, so trimming it
+    // looks attractive -- but depth 1 makes the first `aux_points` compute
+    // fail with kInvalidArgument (measured, `Sar_autofocus_polar`): the
+    // consumer still holds the loan when the pool is asked for the slot. If
+    // this is worth reclaiming, it needs the holding side understood first,
+    // not a smaller number.
     spec.output(sample_points).produces_tensor(pooled_tensor_output(device, 3U, max_byte_span_));
   }
 
@@ -183,6 +190,17 @@ class AuxPointsSourceOp : public holoscan::Operator<> {
                 });
           }));
       lattice_sent_ = true;
+      // The staging buffer is dead once the copy above has run: the consumer
+      // takes its own device copy of the lattice, and nothing re-sends. At
+      // Kourou polar extents that is ~1.4 GiB held for the rest of the run.
+      // Sync first -- the copy is async on `stream`, so freeing on enqueue
+      // would be a use-after-free.
+      if (cudaStreamSynchronize(stream) != cudaSuccess) {
+        return make_unexpected(
+            Error{ErrorCode::kFailure, "AuxPointsSourceOp: sample_points sync failed"});
+      }
+      cudaFree(points_);
+      points_ = nullptr;
     }
     return emit_required_result(context, "AuxPointsSourceOp.range_profiles_out", false, [&] {
       return range_profiles_out.emit(*profiles);

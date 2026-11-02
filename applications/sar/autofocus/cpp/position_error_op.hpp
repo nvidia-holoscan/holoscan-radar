@@ -21,6 +21,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -48,9 +49,13 @@
 
 namespace holoscan::radar::app::sar {
 
+// NaN, not 0.0, when the two sides do not line up. This is a scorer: 0.0 is
+// its *best* result, so returning it for a size mismatch reported a perfect
+// score for a comparison that never happened, and both the log line and the
+// `rms > warn_rms_rad_` gate read that as success.
 inline double phase_rms(const std::vector<double>& a, const std::vector<double>& b) {
   if (a.size() != b.size() || a.empty()) {
-    return 0.0;
+    return std::numeric_limits<double>::quiet_NaN();
   }
   double acc = 0.0;
   for (std::size_t i = 0; i < a.size(); ++i) {
@@ -61,6 +66,9 @@ inline double phase_rms(const std::vector<double>& a, const std::vector<double>&
 }
 
 inline double peak_to_peak(const std::vector<double>& a, const std::vector<double>& b) {
+  if (a.size() != b.size() || a.empty()) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
   double lo = 0.0;
   double hi = 0.0;
   for (std::size_t i = 0; i < a.size(); ++i) {
@@ -184,6 +192,7 @@ class PerturbPositionsOp : public holoscan::Operator<> {
       require_contiguous(reference, "reference_position", kWho);
       require_cuda_accessible(profiles, "range_profiles", kWho);
       require_cuda_accessible(pos, "positions", kWho);
+      require_dtype(profiles, complex_dtype<T>(), "range_profiles", kWho);
     } catch (const std::invalid_argument& e) {
       return make_unexpected(Error{ErrorCode::kInvalidArgument, e.what()});
     }
@@ -214,8 +223,6 @@ class PerturbPositionsOp : public holoscan::Operator<> {
           Error{ErrorCode::kInvalidArgument,
                 "PerturbPositionsOp: range_profiles (num_pulses,num_bins) must match positions"});
     }
-    require_dtype(profiles, complex_dtype<T>(), "range_profiles", "PerturbPositionsOp");
-
     // Record the lie for this batch first: both outputs read it, and the
     // scorer reads it again on the reform tick.
     HOLOSCAN_TRY(auto host_pos, read_positions(pos, count, stream));
@@ -272,7 +279,12 @@ class PerturbPositionsOp : public holoscan::Operator<> {
                 return {};
               });
         }));
-    retained_ = std::move(profiles);
+    // `reference` is the one that needs holding: its device-to-device copy
+    // above is async on the compute stream and nothing synchronizes after it,
+    // so the tensor has to outlive this call. `profiles` does not -- its only
+    // device read, `read_profiles`, ends in a `cudaStreamSynchronize` -- and
+    // retaining it pinned an ingest-pool slot for an extra tick for nothing.
+    retained_reference_ = std::move(reference);
     return {};
   }
 
@@ -328,7 +340,7 @@ class PerturbPositionsOp : public holoscan::Operator<> {
   std::size_t positions_span_{0U};
   double rad_per_metre_{0.0};
   int64_t next_pulse_{0};
-  Tensor retained_;
+  Tensor retained_reference_;
 };
 
 // Figure 2 apply-path diagnostic: emit the liar's recorded leftover as
@@ -570,11 +582,17 @@ class AutofocusScoreOp : public holoscan::Operator<> {
       const std::string exp_path = dump_dir_ + "/af_expected_phase.npy";
       const std::string est_path = dump_dir_ + "/af_estimated_phase.npy";
       const std::vector<int64_t> shp{n};
-      npy::write(exp_path, real_dtype<double>(), shp, record_->expected_phase.data(),
-                 static_cast<std::size_t>(n) * sizeof(double));
-      npy::write(est_path, real_dtype<double>(), shp, est.data(),
-                 static_cast<std::size_t>(n) * sizeof(double));
-      HOLOSCAN_LOG_INFO("AutofocusScoreOp: wrote {} and {}", exp_path, est_path);
+      // A diagnostic dump must not take the graph down: `npy::write` throws
+      // on an unwritable directory, and this runs inside compute().
+      try {
+        npy::write(exp_path, real_dtype<double>(), shp, record_->expected_phase.data(),
+                   static_cast<std::size_t>(n) * sizeof(double));
+        npy::write(est_path, real_dtype<double>(), shp, est.data(),
+                   static_cast<std::size_t>(n) * sizeof(double));
+        HOLOSCAN_LOG_INFO("AutofocusScoreOp: wrote {} and {}", exp_path, est_path);
+      } catch (const std::exception& e) {
+        HOLOSCAN_LOG_WARN("AutofocusScoreOp: phase dump failed ({})", e.what());
+      }
     }
     return {};
   }

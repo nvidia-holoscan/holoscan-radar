@@ -79,7 +79,12 @@ autofocus:
   # for a much narrower aux. Swept 64/256/1024/4096/11688 samples:
   # 1024 recovers an injected quadratic almost exactly, 4096 gives
   # the best peak, and 11688 is all clutter and collapses to a
-  # pass-through.
+  # pass-through. The shipped 0.0438 is ~350 samples, below that
+  # sweep's floor: it is the best cell of the later per-magnitude
+  # sweep (autofocus_op/OPEN_ITEMS.md section 6), where the first
+  # window has to match the error magnitude and 350 wins at the
+  # small end. The two sweeps disagree because they score different
+  # things -- peak here, affine-removed residual there.
   window_fraction: 0.0438
 
 phase_correction:
@@ -87,8 +92,8 @@ phase_correction:
 
 # Range-bearing (polar) aux, anchored on the product lattice centre.
 # num_v is left out so the rows are auto-sized to the product's own
-# slant-range span; the app logs where the product's centre and
-# corners land on the aux and warns if they do not fit.
+# slant-range span, derived from where its four corners land; the only
+# warning raised here is the 4096-row clamp.
 aux_lattice:
   mode: polar
 

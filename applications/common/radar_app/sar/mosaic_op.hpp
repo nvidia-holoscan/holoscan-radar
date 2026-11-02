@@ -83,8 +83,17 @@ class SarMosaicOp : public Operator<> {
       // box. Capping keeps every box inside the canvas; clamping the output
       // extent up to 1 instead does not, because the kernel still reads
       // `factor_` rows and columns for the sample it was told to write, off
-      // the end of the short axis. The budget then binds on the long axis
-      // only, which is the honest outcome for a view that degenerate.
+      // the end of the short axis.
+      //
+      // The cap is about that read, not about the budget: on a view whose
+      // aspect ratio exceeds `display_max_side_` the capped factor cannot
+      // bring the long axis under budget either, so the published extent --
+      // and the pool `setup()` sizes from it -- overshoots by whatever the cap
+      // removed. No shipped configuration is that degenerate (a display crop
+      // is always more than half the parent width), so this is a latent
+      // ceiling rather than a live one; honouring the budget on both axes
+      // would mean cropping the long axis, which is a different decision than
+      // decimating and belongs with whoever chooses the view.
       factor_ = std::min(factor_, std::min(parent_.num_v(), crop_nu_));
     }
     out_v_ = parent_.num_v() / factor_;

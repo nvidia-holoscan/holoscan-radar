@@ -15,13 +15,18 @@ if(BUILD_ALL OR APP_spotlight OR APP_video_sar OR APP_tiled_strip OR
     find_package(holoscan 5 CONFIG REQUIRED COMPONENTS core visualization)
     # SarMosaicOp decimates its parent view with a CUDA kernel, and it is used
     # by the dump and report paths as well as the display, so unlike
-    # sar_image_viz this cannot be gated on Holoviz being present.
-    add_library(sar_mosaic STATIC
-        ${PROJECT_SOURCE_DIR}/applications/common/radar_app/sar/mosaic_sample.cu)
-    target_include_directories(sar_mosaic PRIVATE
-        ${PROJECT_SOURCE_DIR}/applications/common)
-    target_link_libraries(sar_mosaic PUBLIC CUDA::cudart)
-    set_property(TARGET sar_mosaic PROPERTY POSITION_INDEPENDENT_CODE ON)
+    # sar_image_viz this cannot be gated on Holoviz being present. Only the
+    # two strip apps build a mosaic at all, so it is gated on them rather than
+    # on any SAR app -- a spotlight-only configure was compiling a translation
+    # unit nothing linked.
+    if(BUILD_ALL OR APP_tiled_strip OR APP_continuous_strip)
+        add_library(sar_mosaic STATIC
+            ${PROJECT_SOURCE_DIR}/applications/common/radar_app/sar/mosaic_sample.cu)
+        target_include_directories(sar_mosaic PRIVATE
+            ${PROJECT_SOURCE_DIR}/applications/common)
+        target_link_libraries(sar_mosaic PUBLIC CUDA::cudart)
+        set_property(TARGET sar_mosaic PROPERTY POSITION_INDEPENDENT_CODE ON)
+    endif()
     if(TARGET holoscan::visualization::op_holoviz)
         add_library(sar_image_viz STATIC
         ${PROJECT_SOURCE_DIR}/applications/common/radar_app/sar/sar_image_viz.cu

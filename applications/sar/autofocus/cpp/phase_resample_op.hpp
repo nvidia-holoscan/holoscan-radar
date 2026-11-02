@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
@@ -90,7 +91,7 @@ class PhaseResampleOp : public holoscan::Operator<> {
       return make_unexpected(Error{ErrorCode::kNotSupported, "PhaseResampleOp: no CUDA stream"});
     }
 
-    return emit_required_tensor(
+    auto emitted = emit_required_tensor(
         phase_correction_out, context, "PhaseResampleOp.phase_correction_out", false, [&] {
           return prepare_device_tensor(
               phase_correction_out, context, std::vector<int64_t>{num_pulses_}, dtype,
@@ -111,12 +112,23 @@ class PhaseResampleOp : public holoscan::Operator<> {
                 return resample(phase, n_az, f64, destination, stream);
               });
         });
+
+    // The identity branch's device-to-device copy is issued async on the
+    // compute stream and nothing synchronizes after it, so the source has to
+    // outlive this call -- and it is the branch the default polar auxiliary
+    // always takes. `resample` synchronizes internally and would not need
+    // this, but holding the tensor unconditionally is cheaper to reason about
+    // than holding it on one branch only.
+    retained_phase_ = std::move(phase);
+    return emitted;
   }
 
   Input<Tensor> phase_correction{"phase_correction"};
   Output<Tensor> phase_correction_out{"phase_correction_out"};
 
  private:
+  Tensor retained_phase_;
+
   expected<void, Error> resample(const Tensor& phase, int64_t n_az, bool f64, void* destination,
                                  cudaStream_t stream) const {
     std::vector<double> phi(static_cast<std::size_t>(n_az));

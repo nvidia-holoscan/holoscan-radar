@@ -13,6 +13,7 @@
 #include <holoscan/core/graph.hpp>
 
 #include "radar_app/report/report_ops.hpp"
+#include "radar_app/sar/coordinate_ops.hpp"
 #include "radar_app/sar/graph_driver.hpp"
 #include "aux_points_op.hpp"        // NOLINT(build/include_subdir)
 #include "config.hpp"               // NOLINT(build/include_subdir)
@@ -80,6 +81,27 @@ int main(int argc, char** argv) {
     // 23k pulses the difference is 17.45 GiB per pool.
     const radar::MaxTensorExtents ingest_extents = make_ingest_extents(extents, cfg);
     const auto& pe = extras->position_error;
+
+    // Positions reach the manager in the scene frame, exactly as in every
+    // sibling SAR app. This app needs the transform more than they do, not
+    // less: `config.hpp` computes the look axis and the auxiliary lattice in
+    // scene ENU whenever `transform_to_scene_enu` is set, so leaving the
+    // runtime positions in ECEF puts the host-side geometry and the data an
+    // Earth radius apart. All four smoke fixtures set `enu_origin_ecef`.
+    const holoscan::Output<holoscan::Tensor>* src_positions = &reader->positions;
+    const holoscan::Output<holoscan::Tensor>* src_reference = &reader->reference_position;
+    if (cfg.transform_to_scene_enu) {
+      auto enu = graph.template op<app::sar::EcefToSceneEnuOp>("ecef_to_enu", cfg.enu_origin_ecef,
+                                                               cfg.quantize_phase_center_f32,
+                                                               cfg.reader_pulses_per_tick);
+      source.add(enu);
+      bind_outputs(options, "ecef_to_enu", {"positions_out", "reference_position_out"});
+      graph.add_flow(reader->positions, enu->positions, queue);
+      graph.add_flow(reader->reference_position, enu->reference_position, queue);
+      src_positions = &enu->positions_out;
+      src_reference = &enu->reference_position_out;
+    }
+
     const holoscan::Output<holoscan::Tensor>* ingest_profiles = &range->range_profiles;
     std::shared_ptr<app::sar::LieRecord> lies;
     if (pe.enabled) {
@@ -94,8 +116,8 @@ int main(int argc, char** argv) {
       bind_outputs(options, "perturb_positions",
                    {"range_profiles_out", "positions_out", "reference_position_out"});
       graph.add_flow(range->range_profiles, lie->range_profiles, queue);
-      graph.add_flow(reader->positions, lie->positions, queue);
-      graph.add_flow(reader->reference_position, lie->reference_position, queue);
+      graph.add_flow(*src_positions, lie->positions, queue);
+      graph.add_flow(*src_reference, lie->reference_position, queue);
       graph.add_flow(lie->positions_out, manager->positions, queue);
       graph.add_flow(lie->reference_position_out, manager->reference_position, queue);
       // The liar sits between range compression and the manager, so it
@@ -104,8 +126,8 @@ int main(int argc, char** argv) {
       application.add(lie);
       ingest_profiles = &lie->range_profiles_out;
     } else {
-      graph.add_flow(reader->positions, manager->positions, queue);
-      graph.add_flow(reader->reference_position, manager->reference_position, queue);
+      graph.add_flow(*src_positions, manager->positions, queue);
+      graph.add_flow(*src_reference, manager->reference_position, queue);
     }
 
     auto estimate = graph.partition("estimate");
@@ -237,7 +259,12 @@ int main(int argc, char** argv) {
 
     // The ingest chain is complete only once the estimation branch has had
     // its chance to splice the lattice source onto it.
-    graph.add_flow(*ingest_profiles, manager->range_profiles, replay);
+    // The shared depth-4 `queue`, not `replay`: this edge carries one
+    // `pulses_per_tick` batch into the manager, not the retained aperture
+    // that `replay` exists to keep to a single slot. The hop immediately
+    // before it is already wired with `queue`, and every sibling app wires
+    // this one the same way.
+    graph.add_flow(*ingest_profiles, manager->range_profiles, queue);
 
     // --- correct the same replayed pulses and form the product
     graph.add_flow(manager->range_profiles_out, pc->range_profiles_in, replay);

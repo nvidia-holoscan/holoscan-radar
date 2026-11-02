@@ -30,6 +30,7 @@
 #include "error_profile.hpp"  // NOLINT(build/include_subdir)
 #include "io/cphd_reader_op/cphd_file.hpp"
 #include "radar_app/sar/config.hpp"
+#include "radar_common/sar/geodesy.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
@@ -62,35 +63,10 @@ inline double vec_dot(const std::array<double, 3>& a, const std::array<double, 3
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-inline std::array<double, 3> vec_cross(const std::array<double, 3>& a,
-                                       const std::array<double, 3>& b) {
-  return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
-}
-
-inline std::array<double, 3> ecef_to_scene_enu(const std::array<double, 3>& ecef,
-                                               const std::array<double, 3>& origin) {
-  constexpr double kA = 6378137.0;
-  constexpr double kF = 1.0 / 298.257223563;
-  const double b = kA * (1.0 - kF);
-  const double e2 = 1.0 - (b * b) / (kA * kA);
-  const double lon = std::atan2(origin[1], origin[0]);
-  const double p = std::hypot(origin[0], origin[1]);
-  const double theta = std::atan2(origin[2] * kA, p * b);
-  const double slt = std::sin(theta);
-  const double clt = std::cos(theta);
-  const double ep2 = (kA * kA - b * b) / (b * b);
-  const double lat =
-      std::atan2(origin[2] + ep2 * b * slt * slt * slt, p - e2 * kA * clt * clt * clt);
-  const double sl = std::sin(lat);
-  const double cl = std::cos(lat);
-  const double so = std::sin(lon);
-  const double co = std::cos(lon);
-  const double dx = ecef[0] - origin[0];
-  const double dy = ecef[1] - origin[1];
-  const double dz = ecef[2] - origin[2];
-  return {-so * dx + co * dy, -sl * co * dx - sl * so * dy + cl * dz,
-          cl * co * dx + cl * so * dy + sl * dz};
-}
+// The scalar geodesy lives in `radar_common` so the configuration-time
+// transform here and `EcefToSceneEnuOp`'s per-pulse one cannot drift apart;
+// they used to carry two spellings of the same formula.
+using holoscan::radar::geodesy::ecef_to_scene_enu;
 
 inline std::array<double, 3> read_xyz(const radar::cphd::CphdFile& file, const char* field,
                                       int64_t pulse) {
@@ -182,6 +158,12 @@ inline std::pair<int64_t, int64_t> pulse_range_from_yaml(const YAML::Node& root,
   if (last <= first) {
     throw std::runtime_error("pulse_range must be a non-empty half-open interval");
   }
+  // Both ends against the file, not just the ordering: these indices are fed
+  // straight to `read_xyz(file, "TxPos", pulse)` and used to size the
+  // aperture, so an out-of-range bound would be read as data.
+  if (first < 0 || last > file.channel(0).num_vectors) {
+    throw std::runtime_error("cphd_reader.pulse_range lies outside the channel's pulses");
+  }
   return {first, last};
 }
 
@@ -221,25 +203,6 @@ struct AuxPolarLattice {
   // Row / column of a point, as a real-valued index. Row num_v / 2 is the
   // anchor range and column num_u / 2 the anchor bearing, so the anchor lands
   // exactly on (num_v / 2, num_u / 2).
-  struct Cell {
-    double row{0.0};
-    double col{0.0};
-    double range{0.0};
-    double out_of_plane{0.0};  // signed metres off the slant plane
-  };
-
-  Cell locate(const std::array<double, 3>& ecef) const {
-    const auto d = af_detail::vec_sub(ecef, apc);
-    const auto normal = af_detail::vec_cross(look_hat, uhat);
-    Cell c;
-    c.range = af_detail::vec_norm(d);
-    c.row = (c.range - range0) / range_spacing + static_cast<double>(num_v / 2);
-    c.col =
-        std::atan2(af_detail::vec_dot(d, uhat), af_detail::vec_dot(d, look_hat)) / bearing_spacing +
-        static_cast<double>(num_u / 2);
-    c.out_of_plane = af_detail::vec_dot(d, normal);
-    return c;
-  }
 };
 
 // The known lie: a line-of-sight position error along the look axis, injected
