@@ -94,6 +94,93 @@ TEST(BackprojectionOp, PointTargetFormsAtSceneCentreAndResets) {
   }
 }
 
+// Form the point target above under an explicit `<T, TGeom>` pair, returning
+// the image magnitudes. Every other test in this file names the one-argument
+// form, which defaults `TGeom` to `T`; the pair applications actually run is
+// `<float, double>` -- samples in single, geometry in double, because ECEF
+// coordinates do not survive float32 -- and nothing here constructed it, so
+// the split-precision path was exercised only by the app smoke tests.
+template <typename T, typename TGeom>
+std::vector<double> form_point_target() {
+  MaxTensorExtents extents;
+  extents.max_pulses = 1;
+  extents.max_range_bins = 64;
+  extents.max_image_v = 5;
+  extents.max_image_u = 5;
+  auto fixture = holoscan::testing::create_operator_test<BackprojectionOp<T, TGeom>>(extents);
+  BackprojectionParams params;
+  params.coordinate_frame =
+      CoordinateFrame(CoordinateFrameSpec{.frame = CoordinateFrameType::kSceneLocal});
+  params.sample_geometry = SampleGeometry(SampleGeometrySpec{.origin = {-2.0, -2.0, 0.0},
+                                                             .axis_u = {1.0, 0.0, 0.0},
+                                                             .axis_v = {0.0, 1.0, 0.0},
+                                                             .spacing = {1.0, 1.0},
+                                                             .counts = {5, 5}});
+  params.range_bin_spacing = 0.25;
+  params.range_bin_origin = -8.0;
+  params.reference_frequency = 9.6e9;
+  fixture.set_params(params);
+  std::vector<std::complex<T>> impulse(64U, {T{0}, T{0}});
+  impulse[32] = {T{1}, T{0}};
+  auto profiles = to_device_tensor(impulse, {1, 64}, complex_dtype<T>());
+  auto positions = to_device_tensor(std::vector<TGeom>{TGeom{0}, TGeom{0}, TGeom{100}}, {1, 3},
+                                    real_dtype<TGeom>());
+  auto reference = to_device_tensor(std::vector<TGeom>{TGeom{0}, TGeom{0}, TGeom{0}}, {1, 3},
+                                    real_dtype<TGeom>());
+  auto control = to_device_tensor(std::vector<uint8_t>{1U}, {1}, DLDataType{kDLUInt, 8U, 1U});
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::nanoseconds{1}, holoscan::testing::input("control", *control),
+      holoscan::testing::input("range_profiles", *profiles),
+      holoscan::testing::input("positions", *positions),
+      holoscan::testing::input("reference_position", *reference)));
+  for (const char* port : {"range_profiles", "positions", "reference_position", "control"}) {
+    fixture.input_source_device(port, holoscan::DeviceId{0});
+  }
+  fixture.output_device("image", holoscan::DeviceId{0});
+  fixture.template capture_snapshot<holoscan::Tensor>("image", 1U,
+                                                      5U * 5U * sizeof(std::complex<T>));
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "image", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  EXPECT_TRUE(observed) << result.describe_failure();
+  EXPECT_TRUE(result.ok()) << result.describe_failure();
+  const auto captures = result.template snapshots<holoscan::Tensor>("image");
+  EXPECT_EQ(captures.size(), 1U);
+  if (captures.size() != 1U) {
+    return {};
+  }
+  const auto image = to_host(captures[0]);
+  EXPECT_EQ(image.shape, (std::vector<int64_t>{5, 5}));
+  const auto* data = image.template as<std::complex<T>>();
+  std::vector<double> magnitudes(25U);
+  for (int64_t i = 0; i < 25; ++i) {
+    magnitudes[static_cast<size_t>(i)] = static_cast<double>(std::abs(data[i]));
+  }
+  return magnitudes;
+}
+
+// The application pair, `<float, double>`, forms the same image as the uniform
+// one on a scene-local lattice. It has to: scene-local coordinates are small
+// enough that double geometry buys nothing here, so any disagreement would be
+// the split-precision plumbing -- a geometry port read at the wrong width, or
+// a position narrowed to T on its way into the kernel -- and not arithmetic.
+// Agreement on this scene is therefore the strong claim, and the reason this
+// test does not use ECEF: on ECEF the two *should* differ, which tests the
+// arithmetic rather than the plumbing this operator owns.
+TEST(BackprojectionOp, MixedGeometryPrecisionMatchesUniform) {
+  const auto uniform = form_point_target<float, float>();
+  const auto mixed = form_point_target<float, double>();
+  ASSERT_EQ(uniform.size(), 25U);
+  ASSERT_EQ(mixed.size(), 25U);
+  EXPECT_NEAR(mixed[12], 1.0, 1e-3) << "the mixed pair did not form the point target";
+  for (size_t i = 0; i < 25U; ++i) {
+    EXPECT_NEAR(mixed[i], uniform[i], 1e-3) << "pixel " << i;
+  }
+}
+
 TEST(BackprojectionOp, ScrollRetainsRowsAndRepeatedGeometryIsNoOp) {
   using holoscan::radar::GeometryChange;
   using holoscan::radar::to_wire;

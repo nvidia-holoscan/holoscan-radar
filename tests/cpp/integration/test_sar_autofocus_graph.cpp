@@ -50,13 +50,13 @@
 #include <holoscan/core/tensor_output_loan.hpp>
 #include <holoscan/time/realtime_clock.hpp>
 
-#include "sar/autofocus_phase_support.hpp"
 #include "radar_common/descriptors/coordinate_frame.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/sim/sar_phase_history_sim.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
+#include "sar/autofocus_phase_support.hpp"
 #include "autofocus/cpp/phase_resample_op.hpp"
 #include "io/cphd_reader_op/cphd_reader_op.hpp"
 #include "sar/aperture_manager_op/aperture_manager_op.hpp"
@@ -94,8 +94,6 @@ using hr::SampleGeometrySpec;
 using hr::sim::sar_differential_range;
 using hr::sim::sar_matched_phase;
 using test::HostTensor;
-
-const double kPi = std::acos(-1.0);
 
 // --- shared scene ------------------------------------------------------
 
@@ -688,7 +686,12 @@ TEST(SarAutofocusGraph, GroundGridIsAHazard) {
     host[static_cast<size_t>(i)] = z[i];
   }
 
-  const auto estimate = run_estimate(host, formed.shape, AutofocusAzimuthAxis::kV, 4, 0.5, 4);
+  // The floor has to be 1 for the hazard to appear at all: a 16x16 grid yields
+  // a single strong scatterer, so the floor of four this test used to pass
+  // made the operator refuse, and a refusal is the one outcome this test is
+  // not about -- it produces a zero estimate, which scores a perfect
+  // correlation and makes the whole test vacuous.
+  const auto estimate = run_estimate(host, formed.shape, AutofocusAzimuthAxis::kV, 1, 0.5, 4);
   auto est = as_double(estimate.phase);
   EXPECT_EQ(static_cast<int64_t>(est.size()), 16);
   for (size_t i = 0; i < est.size(); ++i) {
@@ -696,14 +699,27 @@ TEST(SarAutofocusGraph, GroundGridIsAHazard) {
   }
 
   // TESTING.md requires showing the recovered phase does *not* match the
-  // injected one -- the length alone was the only thing asserted here, and an
-  // all-zero or all-NaN estimate satisfied that just as well. There is no
-  // correct way to line a 16-long estimate up against a 64-pulse truth, which
-  // is the hazard; comparing the leading samples of each after removing the
-  // affine part PGA cannot see is enough to show they are unrelated.
+  // injected one. Correlation alone cannot carry that claim: `phase_corr`
+  // returns 0.0 when either input has no energy, and `remove_affine` zeroes an
+  // affine estimate, so a run that produced nothing at all scores a perfect
+  // 0.0. Establish that there is a real estimate to judge before judging it.
   auto truth = phi;
   remove_affine(&est);
   remove_affine(&truth);
+
+  double est_rms = 0.0;
+  for (const double v : est) {
+    est_rms += v * v;
+  }
+  est_rms = std::sqrt(est_rms / static_cast<double>(est.size()));
+  ASSERT_GT(est_rms, 1e-6) << "the estimator returned a degenerate vector (rms=" << est_rms
+                           << "); the correlation below cannot tell a wrong estimate from no "
+                              "estimate, so this test would pass vacuously";
+
+  // There is no correct way to line a 16-long estimate up against a 64-pulse
+  // truth, which is the hazard; comparing the leading samples of each after
+  // removing the affine part PGA cannot see is enough to show they are
+  // unrelated.
   const double corr = phase_corr(est, truth);
   EXPECT_LT(std::abs(corr), 0.5) << "a ground-grid estimate tracked the injected phase (corr="
                                  << corr << "); the hazard this test documents may no longer hold";
@@ -869,6 +885,15 @@ Figure2Result run_fig2(bool inject, bool autofocus, const std::vector<double>& a
   const MaxTensorExtents extents = fig_extents(aux_num_u);
   holoscan::Graph graph{"sar-figure2"};
   const auto source = graph.op<SceneSourceOp>("source");
+  // Uniform `<float>` rather than the applications' `<float, double>`, and
+  // deliberately so. The pair only varies the three geometry-carrying
+  // operators; `AutofocusOp` and `PhaseCorrectionOp` -- the whole of what this
+  // file tests -- take `<T>` alone and have no TGeom to get wrong. The mixed
+  // pair is covered per-operator in `test_backprojection`, `test_aperture_
+  // manager` and `test_cphd_reader`, and at graph level by the autofocus
+  // application fixtures, whose driver defaults to `<float, double>`.
+  // Templating this file on TGeom would add a scene source in double to
+  // re-cover ground those tests already hold.
   auto manager = graph.op<ApertureManagerOp<float>>("manager", extents);
   manager.set_params(ApertureManagerParams{.max_aperture_pulses = kPulses,
                                            .emit_interval_pulses = 0,
@@ -966,9 +991,16 @@ Figure2Result run_fig2(bool inject, bool autofocus, const std::vector<double>& a
 
   run_until(
       &graph, std::move(options),
+      // Name every collector a caller reads. `control_sink` and
+      // `profile_sink` are wired unconditionally and `raw_phase_sink`
+      // alongside the aux chain, and tests assert on all three -- waiting
+      // only for the product image lets the run return before they have
+      // landed, which is a flake under load rather than a failure.
       [wants_aux] {
-        return !SceneBank::images.empty() &&
-               (!wants_aux || (!SceneBank::aux_images.empty() && !SceneBank::phases.empty()));
+        return !SceneBank::images.empty() && !SceneBank::controls.empty() &&
+               !SceneBank::profiles.empty() &&
+               (!wants_aux || (!SceneBank::aux_images.empty() && !SceneBank::phases.empty() &&
+                               !SceneBank::raw_phases.empty()));
       },
       "the product image");
 
@@ -1021,10 +1053,21 @@ TEST(SarAutofocusGraph, Figure2RetainAndReform) {
       << "clean=" << clean << " defocused=" << defocused << " restored=" << restored.peak
       << " known=" << known << " corr=" << phase_corr(est, truth);
 
+  // The estimate itself, not just the peak it produced. `truth` and `est`
+  // were computed above and then used only inside a failure message, so the
+  // residual TESTING.md asks this case to report was never actually checked:
+  // the whole numeric claim rested on the product peak.
+  ASSERT_EQ(est.size(), truth.size());
+  EXPECT_GT(phase_corr(est, truth), 0.9)
+      << "the recovered phase does not track the injected one (corr=" << phase_corr(est, truth)
+      << ")";
+
   // Reform holds the aperture until the boundary: two admission ticks, one
-  // replay of all 64 pulses.
+  // replay of all 64 pulses, and nothing in between.
   ASSERT_FALSE(restored.replayed_profiles.shape.empty());
   EXPECT_EQ(restored.replayed_profiles.shape[0], kPulses);
+  EXPECT_EQ(SceneBank::profiles.size(), 1U)
+      << "a pulse batch left the manager outside the boundary replay";
   ASSERT_FALSE(restored.control.data.empty());
   EXPECT_EQ(restored.control.as<uint8_t>()[0],
             static_cast<uint8_t>(FormationControl::kResetThenEmit));

@@ -80,15 +80,31 @@ std::vector<std::complex<T>> make_image(const std::vector<double>& phi, int64_t 
 
 // Inverse of the operator's bin-to-pulse mapping, so an emitted pulse-indexed
 // estimate can be compared against a bin-indexed injection. The operator emits
-// pulse p from bin (n - 1 - p + n/2) mod n -- an fftshift *and* an axis
+// pulse p from bin (n - 1 - p + (n + 1) / 2) mod n -- an fftshift *and* an axis
 // reversal, azimuth being the Fourier conjugate of slow time -- so bin k came
-// from pulse (n - 1 + n/2 - k) mod n.
+// from pulse (n - 1 + (n + 1) / 2 - k) mod n.
 inline std::vector<double> to_bin_order(const std::vector<double>& phi) {
   const int64_t n = static_cast<int64_t>(phi.size());
   std::vector<double> out(static_cast<size_t>(n));
   for (int64_t k = 0; k < n; ++k) {
     const int64_t p = ((n - 1 + (n + 1) / 2 - k) % n + n) % n;
     out[static_cast<size_t>(k)] = phi[static_cast<size_t>(p)];
+  }
+  return out;
+}
+
+// The other direction: a bin-indexed injection put into pulse order, so that
+// both sides of a comparison can be detrended in the domain PGA is actually
+// blind in. A linear ramp in *pulse* index is the image shift PGA cannot see;
+// a linear ramp in bin index is not the same thing, and removing one from each
+// side only cancels when the injected error happens to be symmetric about the
+// dwell centre.
+inline std::vector<double> to_pulse_order(const std::vector<double>& phi) {
+  const int64_t n = static_cast<int64_t>(phi.size());
+  std::vector<double> out(static_cast<size_t>(n));
+  for (int64_t k = 0; k < n; ++k) {
+    const int64_t p = ((n - 1 + (n + 1) / 2 - k) % n + n) % n;
+    out[static_cast<size_t>(p)] = phi[static_cast<size_t>(k)];
   }
   return out;
 }

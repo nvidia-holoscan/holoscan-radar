@@ -16,9 +16,9 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
-#include "sar/autofocus_phase_support.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "sar/autofocus_op/autofocus_op.hpp"
+#include "sar/autofocus_phase_support.hpp"
 #include "utils/fixture_completion.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -28,6 +28,7 @@
 // which owns the resampling and aux-lattice operators those cases need.
 
 namespace {
+using holoscan::radar::sar_test::kPi;
 using holoscan::radar::sar_test::remove_affine;
 using holoscan::radar::sar_test::to_bin_order;
 
@@ -45,8 +46,6 @@ using holoscan::radar::testing::to_host;
 constexpr int64_t kAz = 64;
 constexpr int64_t kRg = 32;
 constexpr int64_t kStrong = 24;
-
-const double kPi = std::acos(-1.0);
 
 // A quadratic plus a ramp and an offset, in *pulse* order -- the domain a
 // phase error physically lives in and the one `phase_correction` is indexed
@@ -107,6 +106,13 @@ std::vector<std::complex<T>> make_image(const std::vector<double>& phi, int64_t 
 }
 
 struct AfOut {
+  // `ran_ok` is the operator's own verdict and `observed` is whether the
+  // captured ports produced anything. `ok` is the conjunction, which is what
+  // the positive tests want -- but a negative test must assert on `ran_ok`:
+  // asserting `!ok` also passes when the operator ran perfectly and simply
+  // emitted nothing, which is the failure mode those tests exist to catch.
+  bool ran_ok{false};
+  bool observed{false};
   bool ok{false};
   std::string failure;
   HostTensor image;
@@ -167,7 +173,9 @@ AfOut run_af(AutofocusAzimuthAxis axis, const std::vector<std::complex<T>>& img,
 
   AfOut out;
   out.failure = result.describe_failure();
-  out.ok = result.ok() && observed;
+  out.ran_ok = result.ok();
+  out.observed = observed;
+  out.ok = out.ran_ok && observed;
   if (!out.ok) {
     return out;
   }
@@ -229,13 +237,17 @@ int host_strong_count(const std::vector<std::complex<float>>& img, int64_t n_v, 
   return n_strong;
 }
 
-// make_image injects the error in the azimuth-FFT domain, so its `phi` is
-// indexed by FFT bin, while `phase_correction` is indexed by pulse. The two
-// differ by an fftshift -- pulse p sits at bin (p - n/2) mod n -- so put the
-// estimate back in bin order before comparing it to what was injected.
+// Folding with `std::max` would drop a NaN silently -- `std::max(a, b)` returns
+// `a` when `b` is NaN -- so an all-NaN vector would report a peak of 0.0 and
+// *satisfy* the `EXPECT_LT(peak_abs(...), 1e-6)` pass-through assertions below
+// instead of failing them. Report the non-finite value instead of hiding it.
 double peak_abs(const std::vector<double>& v) {
   double peak = 0.0;
   for (double x : v) {
+    if (!std::isfinite(x)) {
+      ADD_FAILURE() << "peak_abs: non-finite phase sample (" << x << ")";
+      return std::numeric_limits<double>::quiet_NaN();
+    }
     peak = std::max(peak, std::abs(x));
   }
   return peak;
@@ -311,12 +323,51 @@ std::vector<double> pure_quadratic(double amplitude, int64_t n_az = kAz) {
   return phi;
 }
 
+// `pure_quadratic` is built in *bin* index and is even about the dwell centre
+// once converted: bin 0 carries the peak and the two aperture edges meet at
+// zero. So the three tests that use it agree on one symmetry class, and the
+// odd half of the bin-to-pulse mapping -- the half that produced both of the
+// faults this file guards -- is exercised only by the sinusoid pair above, at
+// their much looser bound. This is the odd counterpart at the tight bound: a
+// cubic across the dwell in pulse order, which survives `remove_affine`
+// because only its constant and linear terms are blind to PGA.
+std::vector<double> odd_cubic(double amplitude, int64_t n_az = kAz) {
+  std::vector<double> phi(static_cast<size_t>(n_az));
+  const double half = 0.5 * static_cast<double>(n_az);
+  for (int64_t p = 0; p < n_az; ++p) {
+    const double x = (static_cast<double>(p) - half) / half;
+    phi[static_cast<size_t>(p)] = amplitude * x * x * x;
+  }
+  return holoscan::radar::sar_test::to_bin_order(phi);
+}
+
+// The odd counterpart to `pure_quadratic`. That one is written in bin index
+// and reads as even about the dwell centre once converted -- bin 0 is the
+// centre and the two halves mirror -- and so does every other shape the
+// accuracy tests below inject. So all of their bounds were measured on the
+// one symmetry class the integration seam cannot perturb: a step at the dwell
+// centre is small for an even error and is the whole error for an odd one.
+// A cubic in pulse index is odd about the centre and survives `remove_affine`.
+std::vector<double> pure_cubic(double amplitude, int64_t n_az = kAz) {
+  std::vector<double> phi(static_cast<size_t>(n_az));
+  const double half = 0.5 * static_cast<double>(n_az);
+  for (int64_t p = 0; p < n_az; ++p) {
+    const double x = (static_cast<double>(p) - half) / half;
+    phi[static_cast<size_t>(p)] = amplitude * x * x * x;
+  }
+  return holoscan::radar::sar_test::to_bin_order(phi);
+}
+
+// Both sides are detrended in *pulse* order, which is the domain PGA's blind
+// affine term lives in. This used to strip the estimate's affine part in pulse
+// order and the injection's in bin order, which are different operations; they
+// cancel only when the injected error is symmetric about the dwell centre, and
+// every caller below happens to pass exactly that.
 double residual_rms(const HostTensor& phase, const std::vector<double>& injected) {
   auto est = phase_as_double(phase);
-  auto want = injected;
+  auto want = holoscan::radar::sar_test::to_pulse_order(injected);
   remove_affine(&est);
   remove_affine(&want);
-  est = to_bin_order(est);
   return phase_rms(est, want);
 }
 
@@ -329,6 +380,91 @@ TEST(AutofocusOp, PureQuadraticIsRecoveredExactlyAtFullWindow) {
     const auto img = make_image<float>(phi, kStrong, true);
     const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz}, 4, 1.0);
     ASSERT_TRUE(out.ok) << out.failure;
+    EXPECT_LT(residual_rms(out.phase, phi), 0.01) << "amplitude " << amplitude;
+  }
+}
+
+// SAR/TESTING.md asks for the residual's *shape*, not only its RMS: an
+// estimate can carry the right total magnitude and still place it on the
+// wrong pulses, and an RMS averages that away. Sampling the dwell centre, the
+// quarter points and both edges localizes a sign inversion partway out or a
+// flattening at the edges to the bin-to-pulse mapping, which is what an RMS
+// cannot do. Positions are read in **pulse** order, as TESTING.md requires --
+// reading them in bin order once inverted the diagnosis of the window fault
+// and sent it after the wrong cause. The cubic is the stimulus because an
+// error even about the centre reads the same forwards and backwards, so it
+// cannot catch a reversal of the azimuth axis.
+TEST(AutofocusOp, ResidualShapeMatchesTruthAcrossTheDwell) {
+  const auto phi = pure_cubic(5.0);
+  const auto img = make_image<float>(phi, kStrong, true);
+  const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz}, 4, 1.0);
+  ASSERT_TRUE(out.ok) << out.failure;
+
+  auto est = phase_as_double(out.phase);
+  auto want = holoscan::radar::sar_test::to_pulse_order(phi);
+  ASSERT_EQ(est.size(), want.size());
+  remove_affine(&est);
+  remove_affine(&want);
+
+  // Both edges, both quarter points, and the centre. The edges are where a
+  // window that is too narrow flattens the estimate and where the integration
+  // constant lands if it is taken at the wrong end.
+  const int64_t last = kAz - 1;
+  const std::array<std::pair<const char*, int64_t>, 5> probes{{{"leading edge", 0},
+                                                               {"first quarter", kAz / 4},
+                                                               {"dwell centre", kAz / 2},
+                                                               {"third quarter", 3 * kAz / 4},
+                                                               {"trailing edge", last}}};
+  // Absolute, not relative: the truth passes through zero at the centre and a
+  // relative bound there would be unsatisfiable. 0.39 rad is the acceptance
+  // target of SAR/TESTING.md, applied pointwise rather than in aggregate.
+  for (const auto& [label, k] : probes) {
+    const auto i = static_cast<size_t>(k);
+    EXPECT_NEAR(est[i], want[i], 0.3927) << label << " (pulse " << k << "): estimate " << est[i]
+                                         << " rad, truth " << want[i] << " rad";
+  }
+
+  // The shape probes above are blind to a global sign flip at the two edges
+  // alone, so pin the swing as well: an estimate that is correct pointwise but
+  // half the amplitude would pass every bound above on a shallow stimulus.
+  EXPECT_GT(peak_abs(est), 0.9 * peak_abs(want))
+      << "estimate peak-to-peak " << peak_abs(est) << " rad against truth " << peak_abs(want);
+}
+
+// The odd-error leg of the test above, and the one that actually exercises
+// the bin-to-pulse seam. Held to the same bound: there is no reason for PGA
+// to recover an odd error less exactly than an even one at the full window,
+// so a split between the two legs is the signature of an integration or
+// mapping fault rather than of estimator accuracy.
+TEST(AutofocusOp, PureCubicIsRecoveredExactlyAtFullWindow) {
+  for (double amplitude : {2.5, 5.0}) {
+    const auto phi = pure_cubic(amplitude);
+    const auto img = make_image<float>(phi, kStrong, true);
+    const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz}, 4, 1.0);
+    ASSERT_TRUE(out.ok) << out.failure;
+    EXPECT_LT(residual_rms(out.phase, phi), 0.01) << "amplitude " << amplitude;
+  }
+}
+
+// The odd counterpart of the test above, at the same bound. An integration
+// that anchors anywhere but DC, or that runs up the bin axis, splits the
+// aperture's two halves by a step at the dwell centre -- which is nearly free
+// on an even error and is the whole error on an odd one, so the quadratic
+// above cannot see it.
+TEST(AutofocusOp, OddCubicIsRecoveredExactlyAtFullWindow) {
+  for (double amplitude : {2.5, 5.0}) {
+    const auto phi = odd_cubic(amplitude);
+    const auto img = make_image<float>(phi, kStrong, true);
+    const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz}, 4, 1.0);
+    ASSERT_TRUE(out.ok) << out.failure;
+    // The estimate must carry the error, not merely sit near zero: a refusal
+    // emits zeros, so the truth has to retain real swing after detrending for
+    // the bound below to mean anything. Detrending `x^3` over [-1, 1) removes
+    // its best-fit `0.6x`, leaving `x^3 - 0.6x` with a peak of 0.4 at the
+    // aperture edges; 0.3 is that with margin for the discrete grid.
+    auto truth = holoscan::radar::sar_test::to_pulse_order(phi);
+    remove_affine(&truth);
+    EXPECT_GT(peak_abs(truth), 0.3 * amplitude) << "stimulus is degenerate";
     EXPECT_LT(residual_rms(out.phase, phi), 0.01) << "amplitude " << amplitude;
   }
 }
@@ -531,6 +667,15 @@ TEST(AutofocusOp, MaxCorrectionPassesThrough) {
   const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz}, 4, 0.5, 16, 0.05);
   ASSERT_TRUE(out.ok) << out.failure;
   EXPECT_LT(peak_abs(phase_as_double(out.phase)), 1e-6);
+  // Pass-through is the behaviour under test, so check the image as well as
+  // the phase -- a zero `phase_correction` alongside a *corrected* image
+  // would satisfy the line above and still be wrong.
+  const auto* got = out.image.as<std::complex<float>>();
+  double max_err = 0.0;
+  for (size_t i = 0; i < img.size(); ++i) {
+    max_err = std::max(max_err, static_cast<double>(std::abs(got[i] - img[i])));
+  }
+  EXPECT_LT(max_err, 1e-5) << "image_out differs from the input on a refused tick";
   EXPECT_EQ(termination_of(out), AutofocusTermination::kRefusedMaxCorrection);
   // Iterations ran and were accepted before the ceiling rejected the total, but
   // none of them survive into phase_correction, so the count reports zero
@@ -614,15 +759,20 @@ TEST(AutofocusOp, SharpnessImprovesWhenDefocused) {
   const auto sharp = phase_as_double(out.sharpness);
   ASSERT_EQ(sharp.size(), 5U);
   EXPECT_GT(sharp.back(), sharp.front());
+  // Strictly non-decreasing, which is what TESTING.md asks for and what the
+  // operator's own accept/reject guard enforces: an iteration that lowers
+  // sharpness is discarded and the previous value is restored. The 2% slack
+  // this used to allow let a trace lose ~8% across four iterations and still
+  // pass a test named for monotonic improvement.
   for (size_t i = 1; i < sharp.size(); ++i) {
-    EXPECT_GE(sharp[i], 0.98 * sharp[i - 1]);
+    EXPECT_GE(sharp[i], sharp[i - 1]) << "sharpness dropped at iteration " << i;
   }
 }
 
 TEST(AutofocusOp, AzimuthAxisRequired) {
   const auto img = make_image<float>(injected_phi(), kStrong, true);
   const auto out = run_af<float>(AutofocusAzimuthAxis::kUnspecified, img, {kRg, kAz});
-  ASSERT_FALSE(out.ok);
+  ASSERT_FALSE(out.ran_ok) << "the operator did not reject this configuration";
   EXPECT_NE(out.failure.find("azimuth_axis"), std::string::npos) << out.failure;
 }
 
@@ -635,7 +785,7 @@ TEST(AutofocusOp, RejectsNonMatrixImage) {
   // (num_v, num_u) only: a leading batch axis is an application concern, not
   // an opaque module axis this operator silently loops over.
   const auto out = run_af<float>(AutofocusAzimuthAxis::kU, cube, {2, kRg, kAz});
-  ASSERT_FALSE(out.ok);
+  ASSERT_FALSE(out.ran_ok) << "the operator did not reject this configuration";
   EXPECT_NE(out.failure.find("num_v"), std::string::npos) << out.failure;
 }
 
@@ -643,7 +793,7 @@ TEST(AutofocusOp, RejectsIterationsBeyondPoolBound) {
   const auto img = make_image<float>(injected_phi(), kStrong, true);
   const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz},
                                  holoscan::radar::kMaxAutofocusIterations + 1);
-  ASSERT_FALSE(out.ok);
+  ASSERT_FALSE(out.ran_ok) << "the operator did not reject this configuration";
   EXPECT_NE(out.failure.find("num_iterations"), std::string::npos) << out.failure;
 }
 

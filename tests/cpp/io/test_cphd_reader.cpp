@@ -646,6 +646,71 @@ TEST(CphdReaderOp, EmitsEachBatchAndTypedEndBoundary) {
   }
   fs::remove(path);
 }
+// The pair every application runs is `<float, double>`: samples in single,
+// geometry in double, because ECEF coordinates do not survive float32. Every
+// other reader test names the one-argument form, which collapses `TGeom` to
+// `T`, so nothing asserted that the reader puts the two sides on separate
+// widths -- the case where narrowing positions would cost metres on a real
+// collection. The assertion is on the emitted dtypes and not on values: this
+// fixture's coordinates are single digits, which float32 holds exactly, so a
+// narrowed position would be numerically indistinguishable here. Catching
+// that by value needs an ECEF-magnitude fixture, which does not exist yet.
+TEST(CphdReaderOp, MixedPrecisionEmitsGeometryInTGeomAndSamplesInT) {
+  using holoscan::radar::CPHDReaderOp;
+  using holoscan::radar::CphdReaderParams;
+  using holoscan::radar::CoordinateFrame;
+  using holoscan::radar::CoordinateFrameSpec;
+  using holoscan::radar::CoordinateFrameType;
+  using holoscan::radar::MaxTensorExtents;
+  const fs::path path = fs::temp_directory_path() / "holoscan_sar_reader_mixed.cphd";
+  make_fixture(path);
+  MaxTensorExtents extents;
+  extents.max_pulses = 2;
+  extents.max_samples_per_pulse = 8;
+  auto fixture = holoscan::testing::create_operator_test<CPHDReaderOp<float, double>>(extents);
+  CphdReaderParams params;
+  params.path = holoscan::radar::CollectionPaths(path.string());
+  params.coordinate_frame =
+      CoordinateFrame(CoordinateFrameSpec{.frame = CoordinateFrameType::kEcef});
+  params.pulses_per_tick = 2;
+  fixture.set_params(params);
+  // Three batches: the fixture holds five pulses at two per tick. Sizing the
+  // capture for one makes the run fail outright rather than simply capturing
+  // less, so this has to match the emit count, not the number read below.
+  fixture.capture_snapshot<holoscan::Tensor>("phase_history", 3U,
+                                             2U * 8U * sizeof(std::complex<float>));
+  fixture.capture_snapshot<holoscan::Tensor>("positions", 3U, 2U * 3U * sizeof(double));
+  fixture.capture_snapshot<holoscan::Tensor>("reference_position", 3U, 2U * 3U * sizeof(double));
+  // `stream_boundary` is not optional, so it needs a consumer or the reader
+  // fails its emit and the run terminates before any assertion below.
+  fixture.capture<uint8_t>("stream_boundary", 3U);
+  for (const char* port : {"phase_history", "positions", "reference_position", "sample_axis",
+                           "pulse_times", "velocities"}) {
+    fixture.output_device(port, holoscan::DeviceId{0});
+  }
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "stream_boundary", 3U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(observed) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto positions = result.snapshots<holoscan::Tensor>("positions");
+  const auto reference = result.snapshots<holoscan::Tensor>("reference_position");
+  const auto history = result.snapshots<holoscan::Tensor>("phase_history");
+  ASSERT_FALSE(positions.empty());
+  ASSERT_FALSE(reference.empty());
+  ASSERT_FALSE(history.empty());
+  // DLDataType has no operator==, so compare the fields that define it.
+  const auto same_dtype = [](const DLDataType& a, const DLDataType& b) {
+    return a.code == b.code && a.bits == b.bits && a.lanes == b.lanes;
+  };
+  EXPECT_TRUE(same_dtype(positions[0].dtype(), holoscan::radar::real_dtype<double>()));
+  EXPECT_TRUE(same_dtype(reference[0].dtype(), holoscan::radar::real_dtype<double>()));
+  EXPECT_TRUE(same_dtype(history[0].dtype(), holoscan::radar::complex_dtype<float>()));
+  fs::remove(path);
+}
 TEST(CphdReaderOp, MarksFinalBatchOfEachCollection) {
   using holoscan::radar::CPHDReaderOp;
   using holoscan::radar::CphdReaderParams;

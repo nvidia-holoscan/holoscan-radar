@@ -192,7 +192,7 @@ radar_add_test(integration/test_sar_autofocus_graph
 # resampler. Reimplementing it here would assert against a copy, so the app
 # directory is an include root for this one target.
 target_include_directories(test_sar_autofocus_graph PRIVATE
-    ${CMAKE_SOURCE_DIR}/applications/sar)
+    ${PROJECT_SOURCE_DIR}/applications/sar)
 radar_add_test(detection/test_cfar_detector
     holoscan::cfar_detector_op
     holoscan::feature_assembly_op)
@@ -360,7 +360,11 @@ if(TARGET spotlight OR TARGET video_sar OR TARGET tiled_strip OR
             "${SAR_SMOKE_DIR}/generated_sar_smoke.cphd")
     set_tests_properties(SarFixture PROPERTIES FIXTURES_SETUP sar_cphd)
 endif()
-foreach(index RANGE 0 4)
+# Derived, not a literal 0..4: the three lists above must stay the same
+# length, and a hardcoded bound silently drops an app appended to them.
+list(LENGTH SAR_APP_NAMES sar_app_count)
+math(EXPR sar_app_last "${sar_app_count} - 1")
+foreach(index RANGE 0 ${sar_app_last})
     list(GET SAR_APP_NAMES ${index} name)
     list(GET SAR_COUNTS ${index} count)
     list(GET SAR_DIMS ${index} dims)
@@ -421,12 +425,21 @@ if(TARGET autofocus)
     # Each variant must state a number or a verdict of its own, or it asserts
     # nothing the plain smoke test above does not. The regexes match digits so
     # that a "nan" or "inf" fails instead of counting as output.
+    #
+    # Every required line is chosen to be neutral about estimate quality. A
+    # regex that only passes while the operator declines to act -- the polar
+    # variant used to require `autofocus REFUSED` -- is a tripwire pointing
+    # the wrong way: a genuine improvement turns it red. `lie` additionally
+    # pins the sign convention, which is what the comment above claims these
+    # variants are for and what the bare RMS number did not check.
     set(AF_DIAG_NAMES lie oracle polar)
     set(AF_DIAG_REQUIRE
-        "AutofocusScoreOp: affine-removed RMS [0-9]+\\.[0-9]+ rad"
+        "AutofocusScoreOp: affine-removed RMS [0-9]+\\.[0-9]+ rad.*sign .4pi f d / c"
         "OraclePhaseOp: published [0-9]+ pulses  [0-9]+\\.[0-9]+ rad RMS"
-        "autofocus REFUSED .refused_scatterers.")
-    foreach(af_index RANGE 0 2)
+        "AuxPointsSourceOp: staged [0-9]+x[0-9]+ range-bearing points")
+    list(LENGTH AF_DIAG_NAMES af_diag_count)
+    math(EXPR af_diag_last "${af_diag_count} - 1")
+    foreach(af_index RANGE 0 ${af_diag_last})
         list(GET AF_DIAG_NAMES ${af_index} af_diag)
         list(GET AF_DIAG_REQUIRE ${af_index} af_require)
         add_test(NAME Sar_autofocus_${af_diag}

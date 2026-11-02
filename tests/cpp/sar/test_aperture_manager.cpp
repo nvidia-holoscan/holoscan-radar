@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -79,6 +80,77 @@ TEST(ApertureManagerOp, RetainsEvictsAndFlushesOnTypedBoundary) {
   auto controls = result.snapshots<holoscan::Tensor>("control_out");
   ASSERT_EQ(controls.size(), 1U);
   EXPECT_EQ(to_host(controls[0]).as<uint8_t>()[0], 1U);
+}
+
+// The pair every application runs is `<float, double>`: samples in single,
+// geometry in double, because ECEF coordinates do not survive float32. Both
+// tests here name the one-argument form, which collapses `TGeom` to `T`, so
+// nothing asserted that the two sides stay on their own widths through the
+// manager. That is the whole of this operator's precision responsibility --
+// it retains and replays the geometry ports, it does not compute on them --
+// so the assertion is on the emitted dtypes, not on values.
+TEST(ApertureManagerOp, MixedPrecisionKeepsGeometryAndSamplesOnTheirOwnWidths) {
+  MaxTensorExtents extents;
+  extents.max_pulses = 2;
+  extents.max_range_bins = 2;
+  extents.max_image_v = 1;
+  extents.max_image_u = 1;
+  auto fixture = holoscan::testing::create_operator_test<ApertureManagerOp<float, double>>(extents);
+  fixture.set_params(ApertureManagerParams{.max_aperture_pulses = 2, .emit_interval_pulses = 0});
+  auto profile = to_device_tensor(std::vector<std::complex<float>>{{1.F, 0.F}, {2.F, 0.F}}, {1, 2},
+                                  complex_dtype<float>());
+  auto position =
+      to_device_tensor(std::vector<double>{1.0, 2.0, 3.0}, {1, 3}, real_dtype<double>());
+  auto reference =
+      to_device_tensor(std::vector<double>{0.0, 0.0, 0.0}, {1, 3}, real_dtype<double>());
+  // Terminate on the first tick so the manager flushes what it holds.
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::nanoseconds{1}, holoscan::testing::input("range_profiles", *profile),
+      holoscan::testing::input("positions", *position),
+      holoscan::testing::input("reference_position", *reference),
+      holoscan::testing::input("stream_boundary", static_cast<uint8_t>(2))));
+  for (const char* port : {"range_profiles", "positions", "reference_position"}) {
+    fixture.input_source_device(port, holoscan::DeviceId{0});
+  }
+  for (const char* port : {"range_profiles_out", "positions_out", "reference_position_out",
+                           "weight", "sample_points_out", "control_out"}) {
+    fixture.output_device(port, holoscan::DeviceId{0});
+  }
+  fixture.capture_snapshot<holoscan::Tensor>("range_profiles_out", 1U, 2U * 8U);
+  fixture.capture_snapshot<holoscan::Tensor>("positions_out", 1U, 3U * 8U);
+  fixture.capture_snapshot<holoscan::Tensor>("reference_position_out", 1U, 3U * 8U);
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  // Wait on every port read below, not just one: the emits are independent, so
+  // waiting on `positions_out` alone returns while the others are still in
+  // flight and their snapshot lists come back empty.
+  const bool observed = completion.wait_for_output(running, "positions_out", 1U) &&
+                        completion.wait_for_output(running, "reference_position_out", 1U) &&
+                        completion.wait_for_output(running, "range_profiles_out", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(observed) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  auto positions_out = result.snapshots<holoscan::Tensor>("positions_out");
+  auto reference_out = result.snapshots<holoscan::Tensor>("reference_position_out");
+  auto profiles_out = result.snapshots<holoscan::Tensor>("range_profiles_out");
+  ASSERT_EQ(positions_out.size(), 1U);
+  ASSERT_EQ(reference_out.size(), 1U);
+  ASSERT_EQ(profiles_out.size(), 1U);
+  // DLDataType has no operator==, so compare the fields that define it.
+  const auto same_dtype = [](const DLDataType& a, const DLDataType& b) {
+    return a.code == b.code && a.bits == b.bits && a.lanes == b.lanes;
+  };
+  EXPECT_TRUE(same_dtype(positions_out[0].dtype(), real_dtype<double>()));
+  EXPECT_TRUE(same_dtype(reference_out[0].dtype(), real_dtype<double>()));
+  EXPECT_TRUE(same_dtype(profiles_out[0].dtype(), complex_dtype<float>()));
+  // Value too, so the test fails on a reinterpreted buffer rather than only on
+  // a mislabeled one -- the two are indistinguishable from the dtype alone.
+  const auto host_positions = to_host(positions_out[0]);
+  ASSERT_EQ(host_positions.shape, (std::vector<int64_t>{1, 3}));
+  EXPECT_DOUBLE_EQ(host_positions.as<double>()[0], 1.0);
+  EXPECT_DOUBLE_EQ(host_positions.as<double>()[2], 3.0);
 }
 
 // A reform resets and replays the whole retained aperture, so every pulse is
