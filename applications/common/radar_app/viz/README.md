@@ -155,6 +155,22 @@ projections, and stored detection/truth coordinates retain radians.
 
 ## Native text and presentation
 
+FMCW applications select X11 finished-image presentation when X11/XRender support
+is built, `DISPLAY` is nonempty, and `app.visualization.x11_presentation` is
+`true` (the default). Set it to `false` to use the native HoloViz window path:
+
+```yaml
+app:
+  visualization:
+    x11_presentation: false
+```
+
+This setting applies to both C++ and Python. It controls window presentation;
+HoloViz still composes the image and native text offscreen in either case.
+The native window path requires a compatible Vulkan presentation surface.
+Startup logs `Radar presentation: X11 finished-image transport` for X11,
+or `Radar presentation: CUDA device <N>` for the native window path.
+
 HSDK 5.0.0.7 provides `TextLayerDesc` and `TextRunHeader`. The compositor emits
 an owned, host-resident uint8 tensor of SDK text records separately from the
 CUDA RGBA image. Holoviz renders labels, ticks, titles, counters, and legends;

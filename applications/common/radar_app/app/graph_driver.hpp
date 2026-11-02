@@ -71,7 +71,8 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
     }
 
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
-    select_fmcw_application_device(cfg.visualize, cfg.visualize);
+    select_fmcw_application_device(cfg.visualize, cfg.visualize,
+                                   cfg.visualization.x11_presentation);
 #else
     select_application_device(false, false);
 #endif

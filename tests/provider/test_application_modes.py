@@ -59,9 +59,9 @@ def test_mode_manifests_match_languages_and_presets_exist(name):
 def test_inherited_aoa_algorithm_presets_compile(algorithm, monkeypatch):
     # Compile-only coverage: a real window is only needed when running the graph.
     select = _radar._select_application_device
-    monkeypatch.setattr(_radar, "_select_application_device", lambda *_: select(False, False))
-    monkeypatch.setattr(_radar, "_application_display_device", lambda: select(False, False))
-    monkeypatch.setattr(_radar, "_application_composer_device", lambda: select(False, False))
+    monkeypatch.setattr(_radar, "_select_application_device", lambda *_: select(False, False, True))
+    monkeypatch.setattr(_radar, "_application_display_device", lambda: select(False, False, True))
+    monkeypatch.setattr(_radar, "_application_composer_device", lambda: select(False, False, True))
     module = import_module("holoscan_radar.applications.adaptive_aoa")
     preset = _ROOT / "adaptive_aoa" / "config" / f"adaptive_aoa_{algorithm}.yaml"
     workflow = module.build_graph(preset)

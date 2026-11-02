@@ -134,6 +134,14 @@ TEST(FmcwMimoConfig, DecodesTdmDefault) {
   expect_common_geometry_and_tail(config, 13, 32);
 }
 
+TEST(FmcwMimoConfig, DecodesX11PresentationSwitch) {
+  EXPECT_TRUE(mimo::load_tdm_config(config_path("mimo_tdm/config/mimo_tdm.yaml"))
+                  .visualization.x11_presentation);
+  const MutatedConfig file("mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
+                           "display_rate_hz: 20.0\n        x11_presentation: false");
+  EXPECT_FALSE(mimo::load_tdm_config(file.path()).visualization.x11_presentation);
+}
+
 TEST(FmcwMimoConfig, DecodesDashboardWidthAndRejectsInvalidPercentages) {
   for (const double percent : {25.0, 37.5, 70.0}) {
     const MutatedConfig file(

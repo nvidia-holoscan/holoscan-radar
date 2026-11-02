@@ -37,7 +37,7 @@ def add_dashboard(
     frame = graph.op(
         "holoscan.radar._app.FrameComposer", "dashboard_frame", width=width, height=height
     )
-    x11 = _radar._fmcw_uses_x11_presentation()
+    x11 = _radar._fmcw_uses_x11_presentation(viz["x11_presentation"])
     holoviz = graph.op(
         "holoscan.radar._app.X11DashboardViewer" if x11 else "holoscan.radar._app.DashboardViewer",
         "holoviz",

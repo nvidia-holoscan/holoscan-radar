@@ -125,6 +125,22 @@ HoloViz's separate renderer logger retains its SDK format.
 
 ### GPU placement
 
+FMCW applications select X11 finished-image presentation when X11/XRender support
+is built, `DISPLAY` is nonempty, and `app.visualization.x11_presentation` is
+`true` (the default). Set it to `false` to use the native HoloViz window path:
+
+```yaml
+app:
+  visualization:
+    x11_presentation: false
+```
+
+This setting applies to both C++ and Python. It controls window presentation;
+HoloViz still composes the image and native text offscreen in either case.
+The native window path requires a compatible Vulkan presentation surface.
+Startup logs `Radar presentation: X11 finished-image transport` for X11,
+or `Radar presentation: CUDA device <N>` for the native window path.
+
 All seven FMCW workflows (C++ and Python) and all five SAR applications retain
 the caller's current CUDA device for computation. CUDA ordinals are relative to
 the devices visible inside the container.

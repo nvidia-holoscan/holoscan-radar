@@ -25,7 +25,9 @@ def build_graph(config: str | Path) -> BuiltGraph:
 
     path = str(Path(config).resolve())
     cfg = _radar._load_dense(path)
-    device = _radar._select_application_device(cfg["visualize"], cfg["visualize"])
+    device = _radar._select_application_device(
+        cfg["visualize"], cfg["visualize"], cfg["visualization"]["x11_presentation"]
+    )
     graph = hs.Graph("dense_beamforming")
     options = hs.CompileOptions()
     extents = cfg["extents"]

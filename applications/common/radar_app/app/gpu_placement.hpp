@@ -17,9 +17,9 @@ namespace holoscan::radar::app {
 int select_application_device(bool window, bool cuda_sink);
 
 // FMCW uses the SDK's offscreen renderer and finished-image X11 transport when
-// an X11 display is available; other window systems retain SDK presentation.
-bool fmcw_uses_x11_presentation();
-int select_fmcw_application_device(bool window, bool cuda_sink);
+// enabled and an X11 display is available; otherwise use SDK presentation.
+bool fmcw_uses_x11_presentation(bool enabled);
+int select_fmcw_application_device(bool window, bool cuda_sink, bool x11_presentation);
 
 // Window adapter found by the most recent startup selection on this thread.
 int application_display_device();

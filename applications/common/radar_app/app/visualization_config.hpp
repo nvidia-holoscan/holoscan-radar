@@ -17,6 +17,7 @@ namespace holoscan::radar::app {
 
 struct VisualizationConfig {
   bool enabled{true};
+  bool x11_presentation{true};
   int64_t window_width{1280};
   int64_t window_height{720};
   std::string window_title{"FMCW Radar"};
@@ -70,6 +71,7 @@ struct ConfigCodec<radar::app::VisualizationConfig>
   using Config = radar::app::VisualizationConfig;
   static constexpr auto fields = std::make_tuple(
       defaulted_object_field("enabled", &Config::enabled),
+      defaulted_object_field("x11_presentation", &Config::x11_presentation),
       defaulted_object_field("window_width", &Config::window_width),
       defaulted_object_field("window_height", &Config::window_height),
       defaulted_object_field("window_title", &Config::window_title),

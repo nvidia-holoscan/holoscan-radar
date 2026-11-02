@@ -30,7 +30,9 @@ def build_graph(config: str | Path) -> BuiltGraph:
 
     path = str(Path(config).resolve())
     cfg = _radar._load_ddm(path)
-    device = _radar._select_application_device(cfg["visualize"], cfg["visualize"])
+    device = _radar._select_application_device(
+        cfg["visualize"], cfg["visualize"], cfg["visualization"]["x11_presentation"]
+    )
     graph = hs.Graph("mimo_ddm")
     options = hs.CompileOptions()
     extents = cfg["extents"]

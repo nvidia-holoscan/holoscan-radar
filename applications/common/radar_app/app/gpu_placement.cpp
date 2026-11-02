@@ -98,17 +98,18 @@ int application_display_device() {
   return display_device_ordinal.value_or(application_device().value);
 }
 
-bool fmcw_uses_x11_presentation() {
+bool fmcw_uses_x11_presentation(bool enabled) {
 #if HOLOSCAN_RADAR_HAS_X11
   const char* display = std::getenv("DISPLAY");
-  return display && display[0] != '\0';
+  return enabled && display && display[0] != '\0';
 #else
+  static_cast<void>(enabled);
   return false;
 #endif
 }
 
-int select_fmcw_application_device(bool window, bool cuda_sink) {
-  const bool x11 = window && fmcw_uses_x11_presentation();
+int select_fmcw_application_device(bool window, bool cuda_sink, bool x11_presentation) {
+  const bool x11 = window && fmcw_uses_x11_presentation(x11_presentation);
 #if HOLOSCAN_RADAR_HAS_X11
   // Initialize before either the main-thread probe or the SDK's GLFW opens X11.
   if (x11 && XInitThreads() == 0)

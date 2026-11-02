@@ -55,9 +55,9 @@ def test_smoke_preset_reaches_all_report_frames(module, directory, preset, capfd
 def test_visualization_preset_compiles(module, directory, preset, monkeypatch):
     # This test checks Graph admission without creating a native display surface.
     select = _radar._select_application_device
-    monkeypatch.setattr(_radar, "_select_application_device", lambda *_: select(False, False))
-    monkeypatch.setattr(_radar, "_application_display_device", lambda: select(False, False))
-    monkeypatch.setattr(_radar, "_application_composer_device", lambda: select(False, False))
+    monkeypatch.setattr(_radar, "_select_application_device", lambda *_: select(False, False, True))
+    monkeypatch.setattr(_radar, "_application_display_device", lambda: select(False, False, True))
+    monkeypatch.setattr(_radar, "_application_composer_device", lambda: select(False, False, True))
     path = _ROOT / directory / "config" / f"{preset}.yaml"
     workflow = module.build_graph(path)
     assert hs.compile(workflow.graph, workflow.options).ok
@@ -73,8 +73,8 @@ def test_all_tensor_placements_follow_selected_nonzero_device(
     placements = []
     queries = []
 
-    def select_device(window, cuda_sink):
-        queries.append((window, cuda_sink))
+    def select_device(window, cuda_sink, x11_presentation):
+        queries.append((window, cuda_sink, x11_presentation))
         return 3
 
     def bind_output(**placement):
@@ -89,7 +89,7 @@ def test_all_tensor_placements_follow_selected_nonzero_device(
     path = _ROOT / directory / "config" / f"{preset}{suffix}.yaml"
     workflow = module.build_graph(path)
     assert workflow.options is options
-    assert queries == [(visualize, visualize)]
+    assert queries == [(visualize, visualize, True)]
     assert placements
     assert all(placement["device"].value == 3 for placement in placements)
     if visualize:
@@ -103,28 +103,41 @@ def test_all_tensor_placements_follow_selected_nonzero_device(
 @pytest.mark.parametrize("module,directory,preset", _CASES, ids=[item[2] for item in _CASES])
 @pytest.mark.parametrize("composer_device", (0, 2))
 @pytest.mark.parametrize("x11", (False, True))
+@pytest.mark.parametrize("x11_enabled", (False, True))
 def test_distinct_display_device_adds_explicit_image_transfer(
-    module, directory, preset, composer_device, x11, monkeypatch
+    module, directory, preset, composer_device, x11, x11_enabled, monkeypatch, tmp_path
 ):
     placements = []
     options = SimpleNamespace(
         deployment=SimpleNamespace(bind_tensor_output_device=lambda **item: placements.append(item))
     )
     monkeypatch.setattr(hs, "CompileOptions", lambda: options)
-    monkeypatch.setattr(_radar, "_select_application_device", lambda *_: 0)
+
+    def select_device(window, cuda_sink, enabled):
+        assert window and cuda_sink
+        assert enabled is x11_enabled
+        return 0
+
+    monkeypatch.setattr(_radar, "_select_application_device", select_device)
     monkeypatch.setattr(_radar, "_application_display_device", lambda: 3)
     monkeypatch.setattr(_radar, "_application_composer_device", lambda: composer_device)
-    monkeypatch.setattr(_radar, "_fmcw_uses_x11_presentation", lambda: x11)
-    if x11:
+    monkeypatch.setattr(_radar, "_fmcw_uses_x11_presentation", lambda enabled: enabled and x11)
+    uses_x11 = x11 and x11_enabled
+    if uses_x11:
 
         def unexpected_display_query():
             raise AssertionError("X11 transport must not depend on a window presentation GPU")
 
         monkeypatch.setattr(_radar, "_application_display_device", unexpected_display_query)
-    module.build_graph(_ROOT / directory / "config" / f"{preset}.yaml")
+    config_path = tmp_path / "presentation.yaml"
+    base = _ROOT / directory / "config" / f"{preset}.yaml"
+    config_path.write_text(
+        f'extends: "{base}"\napp:\n  visualization:\n    x11_presentation: {str(x11_enabled).lower()}\n'
+    )
+    module.build_graph(config_path)
     upload = [item for item in placements if item["operator_path"] == "dashboard_upload"]
     expected_devices = {"dashboard_frame": composer_device}
-    if x11:
+    if uses_x11:
         assert not upload
     else:
         assert len(upload) == 1
@@ -140,3 +153,12 @@ def test_distinct_display_device_adds_explicit_image_transfer(
         item["device"].value == expected_devices.get(item["operator_path"], 0)
         for item in placements
     )
+
+
+@pytest.mark.parametrize("display", (None, "", ":99"))
+def test_disabled_x11_presentation_ignores_display(display, monkeypatch):
+    if display is None:
+        monkeypatch.delenv("DISPLAY", raising=False)
+    else:
+        monkeypatch.setenv("DISPLAY", display)
+    assert not _radar._fmcw_uses_x11_presentation(False)
