@@ -36,7 +36,7 @@ Solid paths are the required flows. `PerturbPositionsOp`, `OraclePhaseOp` and `A
 
 `ApertureManagerOp` runs with `emit_mode: reform`: the retained aperture is replayed once as a whole, which is what makes a corrected second pass possible at all. Nothing is staged behind that emission, so the manager emits `kResetThenEmit` and the product image is terminal even though no reset follows it. `weight` stays unconnected unless `aperture_window` is set — retention here is replay, not eviction. The aperture is never staged through `ApertureManagerOp.sample_geometry`; that port belongs to the product lattice and Figure 2 does not wire it.
 
-`AutofocusOp.image_out` is emitted every tick whether or not anyone wants it, so it needs a consumer; Figure 2 wants the pulse-indexed `phase_correction` instead.
+`AutofocusOp.image_out` is emitted every tick whether or not anyone wants it, so it needs a consumer; Figure 2 wants the pulse-ordered `phase_correction` instead.
 
 ## The auxiliary lattice
 
@@ -131,7 +131,7 @@ To reproduce: uncomment the `position_error` block in [`config/autofocus.yaml`](
 
 These numbers were 0.523 and 1.246 rad until 2026-10-28. Two independent defects in how `AutofocusOp` emitted its estimate were partially cancelling:
 
-- **Index order.** `phase_acc` is accumulated per azimuth-FFT bin with `fftfreq` semantics — bin 0 is DC, which is the *centre* of the dwell. `phase_correction` is contracted as pulse-indexed, and pulse index runs monotonically across the dwell. The two differ by an fftshift, and the operator emitted the vector unshifted.
+- **Index order.** `phase_acc` is accumulated per azimuth-FFT bin with `fftfreq` semantics — bin 0 is DC, which is the *centre* of the dwell. `phase_correction` is contracted as pulse-ordered, and pulse index runs monotonically across the dwell. The two differ by an fftshift, and the operator emitted the vector unshifted.
 - **Sign.** A `neg_n_kernel` negated the vector on the way out, so what reached `PhaseCorrectionOp` with `sense: subtract` was the correction rather than the error.
 
 A symmetric quadratic circularly shifted by half its length is approximately its own negative plus a constant, so the two errors largely undid each other. What was left recovered about half the error and roughly a fifth of the peak deficit — enough to clear the 0.7 peak-recovery gate the transfer tests used, and enough to look like a weak-but-working estimator rather than a wiring fault.

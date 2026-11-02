@@ -1,7 +1,9 @@
 # Standalone SAR applications
 
-The five HSDK 5 C++ SAR formation workflows share the CPHD reader, range
-compression, aperture manager, and backprojection operators. Each executable
+The six HSDK 5 C++ SAR workflows share the CPHD reader, range compression,
+aperture manager, and backprojection operators. Five are formation modes; the
+sixth, autofocus, adds the opt-in phase gradient autofocus chain (WORKFLOWS
+Figure 2) over a retained, replayed aperture. Each executable
 owns its graph wiring, config validation, build gate, YAML, metadata, and
 fixture smoke. Shared Graph driving, geometry conversion, reporting, mosaics,
 and CUDA visualization live in `applications/common/radar_app/sar/`.
@@ -13,12 +15,13 @@ and CUDA visualization live in `applications/common/radar_app/sar/`.
 | [tiled_strip](tiled_strip/README.md) | 3 | Staged tile lattices and parent mosaic |
 | [continuous_strip](continuous_strip/README.md) | 4 | Batch slicing, scroll geometry, and mosaic |
 | [independent_images](independent_images/README.md) | 5 | Per-collection geometry, spacing, and frequency |
+| [autofocus](autofocus/README.md) | — | Retained aperture, conjugate-grid PGA estimate, corrected product formation |
 
 ## Choose a run path
 
 For immediate offline validation, run `./holoscan-radar test` from the
 repository root **on the host**. The CLI builds the module in a container and
-runs the registered suite, including all five SAR fixture smokes and headless
+runs the registered suite, including the fixture smokes for all six SAR apps and headless
 visualization checks. CTest generates the CPHD fixture in C++ and checks image
 counts and dimensions. These are wiring and numerical smokes, not validation
 of image quality on a real collection. For targeted SAR CTest commands inside
@@ -52,7 +55,8 @@ geometry layers. A second `SAR timeline` window is a 20 s scrolling Gantt of
 collection dwells, image-emit ticks with last-pulse latency labels, and a 1 Hz lag HUD.
 
 The former `applications/sar_formation/` path and `sar_formation` executable
-were replaced by these five entries. There is no compatibility launcher.
+were replaced by the five formation-mode entries above; autofocus is a new
+workflow, not a former mode. There is no compatibility launcher.
 The host `./holoscan-radar test` command includes generated CPHD smokes and
 headless visualization. The CPHD fixture is generated once by C++.
 See the [SAR open-items roll-up](../../docs/planning/SAR/OPEN_ITEMS.md) for

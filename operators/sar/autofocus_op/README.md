@@ -25,7 +25,7 @@ The image drives the tick. The four scalar inputs are `[live]` overrides: each j
 | In | `min_scatterers` | `int64` | scalar | `[live]`, optional | Override scatterer floor |
 | In | `max_correction` | `float64`, radians | scalar | `[live]`, optional | Override peak-to-peak ceiling |
 | Out | `image_out` | complex `T` | `(num_v,num_u)` | Every tick | Corrected image |
-| Out | `phase_correction` | real `T`, radians | `(num_pulses)` | Every tick, optional | Pulse-indexed estimate |
+| Out | `phase_correction` | real `T`, radians | `(num_az)` | Every tick, optional | Pulse-ordered estimate, one value per azimuth sample |
 | Out | `sharpness` | real `T` | `(num_iterations + 1)` | Every tick, optional | Focus metric per iteration |
 | Out | `termination` | `int32` | `(1)` | Every tick, optional | Why the loop stopped |
 | Out | `iterations` | `int32` | `(1)` | Every tick, optional | Iterations actually accepted |
@@ -72,7 +72,9 @@ They exist because **three independent paths return the image untouched and were
 
 What they deliberately do not do is tell a caller whether the estimate is *good*. That is measured to be impossible from inside the operator, not merely unimplemented: coherence, convergence and gradient-against-limit were all built and scored against injected truth, and all three are blind — see [`OPEN_ITEMS.md`](OPEN_ITEMS.md). A `converged` code is not an accuracy claim.
 
-**`phase_correction` is pulse-indexed, which is not the index PGA works in.** The estimate is accumulated per azimuth-FFT bin with `fftfreq` semantics — bin 0 is DC, which is the *centre* of the dwell — while a pulse index runs monotonically across it. The two differ by a half-aperture shift *and by the handedness of the axis*, because azimuth is the Fourier conjugate of slow time and runs the opposite way, so pulse `p` reads bin `(n - 1 - p + (n + 1) / 2) mod n`. `image_out` is corrected in the spectrum domain, where the bin order is already right, so only the emitted vector is remapped. The sign is the error, not the correction: `PhaseCorrectionOp` with `sense: subtract` removes it as emitted.
+**`phase_correction` is pulse-ordered, which is not the order PGA works in.** Its length is `num_az`, the extent of `azimuth_axis`: the operator sees only the image, so the pulse count is not available to it. The two lengths agree only on a grid formed at one azimuth sample per pulse; otherwise the caller resamples onto `num_pulses` before `PhaseCorrectionOp` (the autofocus app uses `PhaseResampleOp`).
+The estimate is accumulated per azimuth-FFT bin with `fftfreq` semantics — bin 0 is DC, which is the *centre* of the dwell — while a pulse index runs monotonically across it.
+The two differ by a half-aperture shift *and by the handedness of the axis*, because azimuth is the Fourier conjugate of slow time and runs the opposite way, so pulse `p` reads bin `(n - 1 - p + (n + 1) / 2) mod n`. `image_out` is corrected in the spectrum domain, where the bin order is already right, so only the emitted vector is remapped. The sign is the error, not the correction: `PhaseCorrectionOp` with `sense: subtract` removes it as emitted.
 
 The reversal half of that was missing until 2026-10-30, along with a seam in the integration that fed it; both were invisible on a quadratic because a quadratic is even about the dwell centre. The **one-sample step at exactly `floor(n/2)`** previously recorded here as an open item was the seam, and is resolved — see [`OPEN_ITEMS.md`](OPEN_ITEMS.md).
 

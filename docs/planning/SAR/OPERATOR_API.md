@@ -922,7 +922,7 @@ What is offered instead is an escape hatch for a caller who wants agreement by c
 One file per emitted image — the image is the product, so there is nothing to accumulate.
 
 - **In:** `image` — complex64 / complex128, `(..., num_v, num_u)`.
-- **In:** `phase_correction` (optional) — float32 / float64, `(..., num_pulses)`. Recorded where autofocus ran. Per pulse, matching `AutofocusOp`'s output (D20), so what is recorded is the correction applied to the collection rather than a resampling of it onto this product's azimuth axis.
+- **In:** `phase_correction` (optional) — float32 / float64, `(..., num_pulses)`. Recorded where autofocus ran. Per pulse (D20), so what is recorded is the correction applied to the collection rather than a resampling of it onto this product's azimuth axis. That is `AutofocusOp`'s output directly when its estimation image has one azimuth sample per pulse, and the application's resample of it otherwise — the same vector `PhaseCorrectionOp` consumed.
 - No outputs — a sink.
 
 **Parameters:**

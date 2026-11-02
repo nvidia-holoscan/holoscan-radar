@@ -23,9 +23,11 @@ magnitude, the first window width, the aperture length, and the scene.
 The scene axis matters for a reason worth stating plainly: Kourou, which
 produced every accuracy number through 2026-10-30, was *screened* for PGA --
 an isolated corner reflector lit across the whole dwell. The operator's
-precondition is therefore satisfied there by construction, and a number
-measured only on it describes the estimator under ideal conditions rather than
-the estimator. `--scenes all` spans from that screened case to agriculture,
+precondition is therefore satisfied there by construction. That buys
+reliability, not accuracy: measured across scenes, Kourou is the least accurate
+of the three that focus, because one reflector gives the gradient estimate one
+range bin to average where a city gives it hundreds. `--scenes all` spans from
+that screened case to agriculture,
 which has no dominant scatterer anywhere in it and is expected to fail; the
 negative control is what separates "this shape breaks the estimator" from
 "this scene does not meet the precondition".

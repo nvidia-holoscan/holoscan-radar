@@ -1075,7 +1075,7 @@ TEST(SarAutofocusGraph, Figure2RetainAndReform) {
 
 TEST(SarAutofocusGraph, Figure2OversampledAuxTransfer) {
   // The same conjugate auxiliary with twice the along-track samples, so the
-  // estimate is azimuth-bin indexed at a length the pulses do not share and
+  // estimate is pulse-ordered at a length the pulses do not share and
   // PhaseResampleOp has to map it down. The 1:1 case never exercises that map.
   constexpr int64_t kOverU = 2 * kPulses;
   const double clean = run_fig2(false, false, {}).peak;

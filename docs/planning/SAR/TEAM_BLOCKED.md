@@ -406,6 +406,9 @@ restrict formation to conjugate grids (a); geometry-agnostic AF as only
 wave-one answer (c). Costs: app builds conjugate estimation geometry;
 conjugacy declared via `azimuth_axis`, not checked; AF discards
 linear/constant phase. Figure 2 needs `emit_mode = reform` + retention.
+Amended 2026-10-31: the emitted vector is pulse-ordered but `num_az` long,
+since the operator sees only the image; a grid with one azimuth sample per
+pulse makes it per-pulse, and any other grid needs an app-owned resample.
 
 **Detail:** [OPERATOR_API.md](OPERATOR_API.md) → AutofocusOp → Notes
 

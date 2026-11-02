@@ -4,6 +4,36 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-02** — **Autofocus handoff note added, and the docs now agree on
+  what `phase_correction` is.**
+  [`SAR/AUTOFOCUS_HANDOFF.md`](SAR/AUTOFOCUS_HANDOFF.md) explains the operator
+  for a developer who knows the module and its SAR side but not this
+  operator, and records three pre-push
+  review warnings left unfixed. The 2026-10-31 contract change made the port
+  pulse-ordered and `num_az` long. The operator README, the autofocus app
+  README, `WORKFLOWS.md` (prose and Figures 2 and 3, which now show the
+  app-owned resample), `TESTING.md`, the D20 record and the `SICDWriterOp`
+  input note still said pulse-indexed or `(num_pulses)`; they are corrected to
+  match the code. The SAR app and operator indexes, `AGENTS.md` and
+  `DEVELOPER.md` now list the autofocus app and `AutofocusOp`, which were
+  missing or described as planned.
+- **2026-11-02** — **The SAR overviews now describe HSDK 5, and
+  `ApertureManagerOp` refuses a taper it cannot compute.** Both overviews,
+  their regeneration prompts and the `WORKFLOWS.md` body still described the
+  source branch's end-of-stream metadata key and a required `control`
+  connection. In HSDK 5 the boundary is a typed `stream_boundary` port and an
+  unwired `control` initializes but never emits. They also said "nothing is
+  built yet" and listed autofocus as planned. Prompts A and B are corrected,
+  and both overviews are brought current. `DEVELOPER_OVERVIEW.md` also gains
+  `<T, TGeom>` precision and the Figure 2 resample. The contract says an
+  `aperture_window` outside `reform` or a stamped block is rejected at
+  initialization, but the manager instead silently dropped the window on a
+  sliding aperture. It now throws in `start()` (new test
+  `RejectsTaperOnSlidingWindow`, checked to fail without the fix), and it warns
+  when a stamped window closes short, as the contract also requires. No
+  contract change. Separately, `SarAutofocusGraph.Figure2RetainAndReform`
+  failed about four runs in five because its wait condition omitted the
+  `sharpness` collector it asserts on; it now waits for it (10 of 10 pass).
 - **2026-10-30** — **The PGA scene screen is ported as
   [`tools/sar_autofocus/pga_screen.py`](../../tools/sar_autofocus/pga_screen.py),
   and running it falsified a claim this branch had already committed.** The tool

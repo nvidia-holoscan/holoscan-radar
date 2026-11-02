@@ -4,15 +4,15 @@
 
 What this SAR processor forms, what you have to hand it, what comes out, and where it stops. It assumes you know SAR and assumes nothing about the software framework underneath: where that framework shows through, it is described as behaviour rather than as API, and no interface detail appears anywhere below.
 
-**Status (HSDK 5, 2026-09-29):** The first five image-formation modes are
+**Status (HSDK 5, 2026-11-02):** The first five image-formation modes are
 implemented as [standalone C++ applications](../../../applications/sar/README.md)
-with CPHD ingress, range compression, aperture management, and backprojection.
-They emit complex images and can display or dump them. SICD writing,
-multilook, geocoding, autofocus, and later modes remain design scope only.
-The discussion below preserves the original proposed product vision; a
-"supports" claim there does not mean the feature is shipped. Use the
-[current operator contract](OPERATOR_API.md) and individual app guides for
-working behavior.
+with CPHD ingress, range compression, aperture management, and backprojection,
+and a sixth application runs phase gradient autofocus on a ground product.
+They emit complex images and can display or dump them. SICD and CPHD writing,
+multilook, geocoding, in-place autofocus, and modes 6–9 remain design scope only.
+A "supported" mode below means the design expresses it, not that it is shipped.
+Use the [current operator contract](OPERATOR_API.md) and individual app guides
+for working behavior.
 
 It is a shortened, re-aimed version of [WORKFLOWS.md](WORKFLOWS.md), which carries the same material plus the software contract; where the two disagree, that one is correct.
 
@@ -24,7 +24,7 @@ It is a shortened, re-aimed version of [WORKFLOWS.md](WORKFLOWS.md), which carri
 - **Monostatic, single-polarization.**
 - **Streaming.** Pulses arrive continuously and images come out while collection continues. The processor is not handed a finished collection and asked to form it; nothing anywhere assumes the whole aperture is in memory.
 - **Phase history in, complex image out.** CPHD is the input format; the single-look complex image is the primary product, available as a tensor or diagnostic NumPy dump in the implementation; SICD writing is planned.
-- **It forms onto arbitrary sample positions.** You can give it a uniform lattice, or a position per pixel. A DEM-conformal or map-projected grid is therefore formed *directly*, at the geometry you want, rather than formed in radar geometry and resampled afterwards. The proposed geocoding stage is optional in this design, and and skipping it costs you one interpolation loss you would otherwise pay.
+- **It forms onto arbitrary sample positions.** You can give it a uniform lattice, or a position per pixel. A DEM-conformal or map-projected grid is therefore formed *directly*, at the geometry you want, rather than formed in radar geometry and resampled afterwards. The planned geocoding stage is optional in this design, and skipping it costs you one interpolation loss you would otherwise pay.
 
 Airborne and spaceborne are not different modes. They differ in navigation quality, in range scale, and therefore in which internal arithmetic is required — all of which are settings. Autofocus is a separate opt-in (off by default); see *What you get, and what it costs*.
 
@@ -57,7 +57,7 @@ flowchart TD
 
 **Historical product goal:** the phase-preserving complex image is primary, with a future multilooked/geocoded secondary product. The implemented apps emit the complex image and an optional display raster.
 
-**Aperture management is a stage in its own right, and that is what makes the modes below one pipeline.** Which pulses belong to the image currently forming, and when an image comes out, are decided ahead of formation rather than inside it, so formation sums what it is handed and holds no opinion about where an aperture begins or ends. The implemented first five modes use five standalone graph entry points sharing these library stages.
+**Aperture management is a stage in its own right, and that is what makes the modes below one pipeline.** Which pulses belong to the image currently forming, and when an image comes out, are decided ahead of formation rather than inside it, so formation sums what it is handed and holds no opinion about where an aperture begins or ends. The six implemented applications are separate entry points sharing these library stages.
 
 It is also where a change of scene is timed. You push a new sample geometry whenever it suits you and it takes effect at the next aperture boundary, never part-way through an image, so re-tasking never has to be aligned against an emit by hand.
 
@@ -127,7 +127,7 @@ Each sub-swath yields its own tiled strip, so this is mode 3 run once per sub-sw
 
 #### 7. Sub-aperture looks
 
-One dwell is split into several apertures, each forming its own image of the same scene. Because each views the scene over a different span of look angles, their speckle patterns are partly decorrelated, so combining them trades azimuth resolution for radiometric quality. **Combining them is absent**, and it is not the same technique as multilooking within one image, which is provided.
+One dwell is split into several apertures, each forming its own image of the same scene. Because each views the scene over a different span of look angles, their speckle patterns are partly decorrelated, so combining them trades azimuth resolution for radiometric quality. **Combining them is absent**, and it is not the same technique as multilooking within one image, which is planned.
 
 Disjoint looks are mode 5 with the scene held fixed; overlapping looks are mode 2.
 
@@ -185,7 +185,7 @@ Two conveniences follow from a cadence that do not follow from signalling: a cro
 
 **Range interpolation is two-tap, and that is a considered choice rather than a limitation.** The envelope is interpolated while the carrier phase is applied separately from the exact computed range, so a two-tap envelope error never becomes a phase error. Impulse-response quality is bought by oversampling the range profile during compression, which is the conventional place to pay for it.
 
-**Autofocus is off by default**, and that matches this processor's usual product: form straight onto a ground / DEM lattice. Phase gradient autofocus is wave one's opt-in estimator when residual phase requires it — not the standard mode. PGA assumes the image's azimuth axis is the Fourier conjugate of slow time, which is true of a polar or range-Doppler grid and false of a ground / DEM image, so it cannot estimate on the product this processor exists to form.
+**Autofocus is off by default**, and that matches this processor's usual product: form straight onto a ground / DEM lattice. Phase gradient autofocus is the opt-in estimator when residual phase requires it — implemented for the ground-product route below, and not the standard mode. PGA assumes the image's azimuth axis is the Fourier conjugate of slow time, which is true of a polar or range-Doppler grid and false of a ground / DEM image, so it cannot estimate on the product this processor exists to form.
 
 When you opt in on a map product: the processor retains the aperture, forms a small radar-geometry image from that full aperture only to estimate on, publishes a **phase per pulse**, applies it to those same pulses, then forms the real product once — on one replay of the aperture, not as pulses trickle in. That costs aperture-sized memory retention plus a few percent of formation for the small estimation image. This is a whole-aperture sequence, not a sliding incremental update. In-place autofocus is a footnote for when you deliberately deliver a radar-geometry SLC instead.
 
@@ -222,7 +222,7 @@ Everything here is a stage *after* an image exists, and none of it bears on whet
 - **Target detection.** A CFAR detector exists in this library for automotive radar and **does not carry over**: it is calibrated against an exponential cell statistic, the right model for receiver noise, whereas SAR clutter is heavy-tailed. Applied to real imagery it would miss its false-alarm target by orders of magnitude while appearing configured.
 - **Multi-channel GMTI**, which is a different sensor configuration and a different product.
 
-Standard formats: **CPHD** read and write in the first wave, **SICD** write in the first wave. **SIDD** for the detected product and **CRSD** for raw signal data are planned and follow their respective stages.
+Standard formats: **CPHD** read is implemented; **CPHD** and **SICD** write are planned for the first wave. **SIDD** for the detected product and **CRSD** for raw signal data are planned and follow their respective stages.
 
 ---
 
@@ -232,6 +232,6 @@ Stated plainly, because these are the points worth arguing with.
 
 - **Operational strip products want a tapered seam-free strip**, and you must currently choose seams or sidelobes.
 - **Opting into autofocus on a ground or DEM product costs you a second geometry to build and some absolute geolocation**, and nothing can check that you built the estimation grid correctly. The default path skips autofocus.
-- **The first wave is CPHD in, SICD out.** A raw or live front end is a later wave, and the front end itself would be yours regardless.
+- **The first wave is CPHD in, SICD out, and SICD writing is not built yet**: today the output is the complex image as a tensor or NumPy dump. A raw or live front end is a later wave, and the front end itself would be yours regardless.
 - **Trajectory accuracy is entirely yours** and is the dominant error term for the image. Nothing in the chain can check it, and every way of getting it wrong looks like a marginal collection.
 - **Wide swath and sub-aperture looks stop one stage short** of the product you would actually deliver.
