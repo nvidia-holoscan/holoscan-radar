@@ -34,6 +34,17 @@ _CASES = [
 _ROOT = Path(__file__).resolve().parents[2] / "applications" / "fmcw"
 
 
+@pytest.fixture(autouse=True)
+def isolate_presenter_choice(monkeypatch):
+    monkeypatch.setattr(
+        _radar,
+        "_resolve_x11_presentation",
+        lambda window, configured, choose_again=False, config_path="": (
+            True if configured is None else configured
+        ),
+    )
+
+
 @pytest.mark.parametrize("module,directory,preset", _CASES, ids=[item[2] for item in _CASES])
 def test_smoke_preset_reaches_all_report_frames(module, directory, preset, capfd):
     path = _ROOT / directory / "config" / f"{preset}_smoke.yaml"
@@ -162,3 +173,19 @@ def test_disabled_x11_presentation_ignores_display(display, monkeypatch):
     else:
         monkeypatch.setenv("DISPLAY", display)
     assert not _radar._fmcw_uses_x11_presentation(False)
+
+
+@pytest.mark.parametrize("module,directory,preset", _CASES, ids=[item[2] for item in _CASES])
+def test_choose_presenter_reaches_shared_selector(module, directory, preset, monkeypatch):
+    calls = []
+
+    def choose(window, configured, choose_again, config_path):
+        calls.append((window, configured, choose_again, config_path))
+        return False
+
+    monkeypatch.setattr(_radar, "_resolve_x11_presentation", choose)
+    monkeypatch.setattr(_radar, "_select_application_device", lambda *_: 0)
+    monkeypatch.setattr(_radar, "_application_display_device", lambda: 0)
+    monkeypatch.setattr(_radar, "_application_composer_device", lambda: 0)
+    module.build_graph(_ROOT / directory / "config" / f"{preset}.yaml", choose_presenter=True)
+    assert calls == [(True, None, True, str(_ROOT / directory / "config" / f"{preset}.yaml"))]

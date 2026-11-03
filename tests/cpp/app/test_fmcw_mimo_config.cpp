@@ -17,6 +17,7 @@
 
 #include "radar_app/fmcw/mimo_config.hpp"
 #include "radar_app/app/presentation_choice.hpp"
+#include "radar_app/app/config_path.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 
 #include "app/config_fixture.hpp"
@@ -138,11 +139,11 @@ TEST(FmcwMimoConfig, DecodesTdmDefault) {
 }
 
 TEST(FmcwMimoConfig, DecodesX11PresentationSwitch) {
-  EXPECT_TRUE(mimo::load_tdm_config(config_path("mimo_tdm/config/mimo_tdm.yaml"))
-                  .visualization.x11_presentation);
+  EXPECT_FALSE(mimo::load_tdm_config(config_path("mimo_tdm/config/mimo_tdm.yaml"))
+                   .visualization.x11_presentation.has_value());
   const MutatedConfig file("mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
                            "display_rate_hz: 20.0\n        x11_presentation: false");
-  EXPECT_FALSE(mimo::load_tdm_config(file.path()).visualization.x11_presentation);
+  EXPECT_EQ(mimo::load_tdm_config(file.path()).visualization.x11_presentation, false);
 }
 
 radar::app::detail::PresentationChoice presenter_choice(const std::filesystem::path& path) {
@@ -297,6 +298,20 @@ TEST(FmcwPresentationChoice, CacheWriteFailureKeepsSelectedPresenter) {
   std::ostringstream output;
   EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, input, output));
   EXPECT_NE(output.str().find("Could not remember"), std::string::npos);
+}
+
+TEST(FmcwPresentationChoice, ParsesChoosePresenterBeforeOrAfterConfig) {
+  for (auto args : {std::vector<std::string>{"/tmp/radar", "--choose-presenter", "custom.yaml"},
+                    std::vector<std::string>{"/tmp/radar", "custom.yaml", "--choose-presenter"},
+                    std::vector<std::string>{"/tmp/radar", "--choose-presenter"}}) {
+    std::vector<char*> argv;
+    for (auto& arg : args)
+      argv.push_back(arg.data());
+    const auto launch =
+        radar::app::parse_fmcw_launch_options(argv.size(), argv.data(), "default.yaml");
+    EXPECT_TRUE(launch.choose_presenter);
+    EXPECT_EQ(launch.config_path.filename(), args.size() == 3U ? "custom.yaml" : "default.yaml");
+  }
 }
 
 TEST(FmcwMimoConfig, DecodesDashboardWidthAndRejectsInvalidPercentages) {

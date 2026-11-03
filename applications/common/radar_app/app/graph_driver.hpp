@@ -60,8 +60,8 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
                        BuildFn&& build) {
   configure_fmcw_logging();
   try {
-    const std::filesystem::path config_path = resolve_config_path(argc, argv, default_yaml);
-    Config cfg = load_config(config_path);
+    const auto launch = parse_fmcw_launch_options(argc, argv, default_yaml);
+    Config cfg = load_config(launch.config_path);
     if (cfg.visualize && !cfg.headless && !cfg.skip_display_check && !gui_available()) {
       HOLOSCAN_LOG_WARN(
           "{}: visualize is enabled but no usable display was detected; "
@@ -71,8 +71,11 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
     }
 
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
+    cfg.visualization.x11_presentation =
+        resolve_fmcw_x11_presentation(cfg.visualize, cfg.visualization.x11_presentation,
+                                      launch.choose_presenter, launch.config_path.string());
     select_fmcw_application_device(cfg.visualize, cfg.visualize,
-                                   cfg.visualization.x11_presentation);
+                                   cfg.visualization.x11_presentation.value());
 #else
     select_application_device(false, false);
 #endif

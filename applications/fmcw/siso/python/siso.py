@@ -60,11 +60,14 @@ class BuiltGraph:
         return session
 
 
-def build_graph(config: str | Path) -> BuiltGraph:
+def build_graph(config: str | Path, *, choose_presenter: bool = False) -> BuiltGraph:
     """Load the shipped YAML through the C++ loader and compose its SISO Graph."""
 
     path = str(Path(config).resolve())
     cfg = _radar._load_siso(path)
+    cfg["visualization"]["x11_presentation"] = _radar._resolve_x11_presentation(
+        cfg["visualize"], cfg["visualization"]["x11_presentation"], choose_presenter, path
+    )
     device = _radar._select_application_device(
         cfg["visualize"], cfg["visualize"], cfg["visualization"]["x11_presentation"]
     )

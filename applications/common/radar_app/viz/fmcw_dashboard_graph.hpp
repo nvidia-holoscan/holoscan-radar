@@ -209,7 +209,7 @@ inline void add_fmcw_dashboard(
   auto presentation = graph.partition("presentation");
   const auto title = config.window_title + " - " + std::move(workflow_title);
 #if HOLOSCAN_RADAR_HAS_X11
-  if (app::fmcw_uses_x11_presentation(config.x11_presentation)) {
+  if (app::fmcw_uses_x11_presentation(config.x11_presentation.value_or(true))) {
     auto viewer =
         graph.op<X11ImagePresenterOp>("holoviz", config.window_width, config.window_height, title);
     auto download =

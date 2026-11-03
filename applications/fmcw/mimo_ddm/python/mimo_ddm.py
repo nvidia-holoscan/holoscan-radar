@@ -25,11 +25,14 @@ from holoscan_radar.applications.siso import BuiltGraph
 import holoscan as hs
 
 
-def build_graph(config: str | Path) -> BuiltGraph:
+def build_graph(config: str | Path, *, choose_presenter: bool = False) -> BuiltGraph:
     """Compose a MIMO DDM graph from a validated linear or nonlinear preset."""
 
     path = str(Path(config).resolve())
     cfg = _radar._load_ddm(path)
+    cfg["visualization"]["x11_presentation"] = _radar._resolve_x11_presentation(
+        cfg["visualize"], cfg["visualization"]["x11_presentation"], choose_presenter, path
+    )
     device = _radar._select_application_device(
         cfg["visualize"], cfg["visualize"], cfg["visualization"]["x11_presentation"]
     )

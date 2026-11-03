@@ -35,11 +35,14 @@ _ESTIMATORS = {
 }
 
 
-def build_graph(config: str | Path) -> BuiltGraph:
+def build_graph(config: str | Path, *, choose_presenter: bool = False) -> BuiltGraph:
     """Compose the selected adaptive AoA graph from the C++ config loader."""
 
     path = str(Path(config).resolve())
     cfg = _radar._load_adaptive(path)
+    cfg["visualization"]["x11_presentation"] = _radar._resolve_x11_presentation(
+        cfg["visualize"], cfg["visualization"]["x11_presentation"], choose_presenter, path
+    )
     device = _radar._select_application_device(
         cfg["visualize"], cfg["visualize"], cfg["visualization"]["x11_presentation"]
     )

@@ -5,27 +5,40 @@
 
 #pragma once
 
+#include <stdexcept>
+#include <string_view>
+
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 
 namespace holoscan::radar::app {
 
-// Resolve the config path: the first CLI argument if given, otherwise
-// `default_yaml` staged next to the executable. A bare alternate filename also
-// resolves beside the binary when that YAML was staged by the application.
-inline std::filesystem::path resolve_config_path(int argc, char** argv, const char* default_yaml) {
+struct FmcwLaunchOptions {
+  std::filesystem::path config_path;
+  bool choose_presenter{false};
+};
+
+// Accept the presenter flag before or after the optional YAML path.
+inline FmcwLaunchOptions parse_fmcw_launch_options(int argc, char** argv,
+                                                   const char* default_yaml) {
   const auto bin_dir = std::filesystem::path(argv[0]).parent_path();
-  if (argc > 1) {
-    std::filesystem::path given(argv[1]);
-    if (std::filesystem::is_regular_file(given)) {
-      return given;
+  FmcwLaunchOptions options{.config_path = bin_dir / default_yaml};
+  bool has_config = false;
+  for (int i = 1; i < argc; ++i) {
+    const std::string_view arg(argv[i]);
+    if (arg == "--choose-presenter") {
+      options.choose_presenter = true;
+      continue;
     }
+    if (arg.starts_with("-") || has_config)
+      throw std::invalid_argument("Usage: <application> [config.yaml] [--choose-presenter]");
+    has_config = true;
+    const std::filesystem::path given(arg);
     const auto beside_bin = bin_dir / given.filename();
-    if (std::filesystem::is_regular_file(beside_bin)) {
-      return beside_bin;
-    }
-    return given;  // load_config will report the original path
+    options.config_path = std::filesystem::is_regular_file(given)        ? given
+                          : std::filesystem::is_regular_file(beside_bin) ? beside_bin
+                                                                         : given;
   }
-  return bin_dir / default_yaml;
+  return options;
 }
 
 }  // namespace holoscan::radar::app

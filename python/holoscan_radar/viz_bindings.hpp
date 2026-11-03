@@ -128,7 +128,8 @@ viz::FmcwDashboardConfig dashboard_config(const Config& cfg, std::string title, 
 inline nb::dict visualization_settings(const app::VisualizationConfig& config,
                                        double frame_period) {
   nb::dict result;
-  result["x11_presentation"] = config.x11_presentation;
+  result["x11_presentation"] =
+      config.x11_presentation ? nb::cast(*config.x11_presentation) : nb::none();
   result["window_width"] = config.window_width;
   result["window_height"] = config.window_height;
   result["window_title"] = config.window_title;

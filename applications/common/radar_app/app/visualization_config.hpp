@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -17,7 +18,7 @@ namespace holoscan::radar::app {
 
 struct VisualizationConfig {
   bool enabled{true};
-  bool x11_presentation{true};
+  std::optional<bool> x11_presentation;
   int64_t window_width{1280};
   int64_t window_height{720};
   std::string window_title{"FMCW Radar"};
