@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -344,9 +345,10 @@ struct LiveMusicWiring {
   bool max_sources{false};
 };
 
+template <typename T = double>
 holoscan::testing::TestResult run_live_music(std::vector<LiveMusicTick> ticks, MUSICParams params,
                                              [[maybe_unused]] LiveMusicWiring wiring) {
-  using Op = MUSICEstimatorOp<double>;
+  using Op = MUSICEstimatorOp<T>;
   auto fixture =
       holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
   fixture.set_params(std::move(params));
@@ -428,7 +430,7 @@ holoscan::testing::TestResult run_live_music(std::vector<LiveMusicTick> ticks, M
   constexpr const char* kOutputs[] = {"aoa_estimates", "angle_spectrum", "doa_multi",
                                       "source_count", "eigenvalues"};
   for (const char* output : kOutputs) {
-    fixture.capture_snapshot<holoscan::Tensor>(output, ticks.size(), kMaximumBytes);
+    fixture.template capture_snapshot<holoscan::Tensor>(output, ticks.size(), kMaximumBytes);
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
@@ -1441,6 +1443,108 @@ TEST(MUSICEstimatorOpTest, LiveMaxSourcesAppliesForOneTickAndReallocates) {
             (std::vector<int64_t>{1, kLiveMaxSources, 2}));
   // Tick 2 reverts to the Params max_sources, narrowing doa_multi back.
   EXPECT_EQ(music_frames(result, "doa_multi")[2].shape, (std::vector<int64_t>{1, 1, 2}));
+}
+
+// Cache-lifetime coverage uses the existing SDK fixture in both precisions.
+// A/B/A changes tensor content while revisiting the same eig configuration;
+// smoothing additionally revisits an earlier eig-size key after a shape change.
+template <typename T>
+class MUSICCacheLifecycle : public ::testing::Test {};
+using MusicCachePrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(MUSICCacheLifecycle, MusicCachePrecisions);
+
+void expect_exact_music_revisit(const holoscan::testing::TestResult& result) {
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  for (const char* port :
+       {"aoa_estimates", "angle_spectrum", "doa_multi", "source_count", "eigenvalues"}) {
+    const auto outputs = result.snapshots<holoscan::Tensor>(port);
+    ASSERT_EQ(outputs.size(), 3U) << port;
+    EXPECT_EQ(outputs[0].shape(), outputs[2].shape()) << port;
+    EXPECT_TRUE(holoscan::radar::dldatatype_equals(outputs[0].dtype(), outputs[2].dtype())) << port;
+    EXPECT_EQ(outputs[0].bytes(), outputs[2].bytes()) << port;
+    for (std::size_t tick = 0; tick < outputs.size(); ++tick) {
+      EXPECT_EQ(outputs[tick].source_device().device_type, kDLCUDA) << port;
+      EXPECT_EQ(outputs[tick].sample_metadata().capture_time().timestamp_ns,
+                static_cast<int64_t>(tick + 1U) * 100000000)
+          << port;
+    }
+  }
+}
+
+TYPED_TEST(MUSICCacheLifecycle, ChangedValuesReturnExactlyAndFreshFixtureRestarts) {
+  using T = TypeParam;
+  constexpr int64_t kChannels = 8;
+  constexpr int64_t kSnapshots = 32;
+  const auto geometry = make_ula_geometry(kChannels, 0.5, 1.0);
+  const auto a = make_block(geometry, AngleConvention{}, 0.12, 0.0, kSnapshots, 1e-4, 931u);
+  const auto b = make_block(geometry, AngleConvention{}, -0.17, 0.0, kSnapshots, 1e-4, 932u);
+  const std::vector<int64_t> shape{1, kChannels, kSnapshots};
+  auto params = make_params(geometry, AngleConvention{}, linspace(-0.3, 0.3, 61), {0.0},
+                            /*num_sources=*/1, 1e-2, /*max_sources=*/2);
+  const auto result = run_live_music<T>({{block_to_device<T>(a, shape)},
+                                         {block_to_device<T>(b, shape)},
+                                         {block_to_device<T>(a, shape)}},
+                                        params, {});
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  expect_exact_music_revisit(result);
+  const auto aoa = music_frames(result, "aoa_estimates");
+  const auto counts = music_frames(result, "source_count");
+  ASSERT_EQ(aoa.size(), 3U);
+  ASSERT_EQ(counts.size(), 3U);
+  for (std::size_t tick = 0; tick < aoa.size(); ++tick) {
+    EXPECT_NEAR(aoa[tick].template as<T>()[0], tick == 1 ? -0.17 : 0.12, 0.011);
+    EXPECT_EQ(counts[tick].template as<int32_t>()[0], 1);
+  }
+  EXPECT_NE(aoa[0].data, aoa[1].data);
+  EXPECT_NE(music_frames(result, "angle_spectrum")[0].data,
+            music_frames(result, "angle_spectrum")[1].data);
+  // The previous helper has stopped and joined before a new fixture is armed.
+  const auto fresh = run_music<T>(block_to_device<T>(a, shape), std::move(params));
+  const std::array<HostTensor, 5> outputs{fresh.aoa, fresh.spectrum, fresh.doa_multi,
+                                          fresh.source_count, fresh.eigenvalues};
+  const std::array<const char*, 5> ports{"aoa_estimates", "angle_spectrum", "doa_multi",
+                                         "source_count", "eigenvalues"};
+  for (std::size_t index = 0; index < ports.size(); ++index) {
+    const auto previous = music_frames(result, ports[index]);
+    ASSERT_EQ(previous.size(), 3U);
+    EXPECT_EQ(outputs[index].shape, previous[0].shape) << ports[index];
+    EXPECT_EQ(outputs[index].data, previous[0].data) << ports[index];
+  }
+}
+
+TYPED_TEST(MUSICCacheLifecycle, SmoothingChangesEigSizeThenRevisitsExactOutputs) {
+  using T = TypeParam;
+  constexpr int64_t kChannels = 8;
+  constexpr int64_t kSnapshots = 32;
+  AngleConvention convention;
+  convention.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kChannels, 0.5, 1.0);
+  const auto block = make_block(geometry, convention, 0.1, 0.0, kSnapshots, 1e-4, 923u);
+  const std::vector<int64_t> shape{1, kChannels, kSnapshots};
+  LiveMusicTick first{.snapshot = block_to_device<T>(block, shape)};
+  LiveMusicTick smoothed{.snapshot = block_to_device<T>(block, shape),
+                         .smoothing = SpatialSmoothingOverride{.count = 1, .first = 2}};
+  LiveMusicTick last{.snapshot = block_to_device<T>(block, shape)};
+  const auto result =
+      run_live_music<T>({std::move(first), std::move(smoothed), std::move(last)},
+                        make_params(geometry, convention, linspace(-0.3, 0.3, 61), {0.0},
+                                    /*num_sources=*/1, 1e-2, /*max_sources=*/2),
+                        {.smoothing = true});
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  expect_exact_music_revisit(result);
+  const auto eigenvalues = music_frames(result, "eigenvalues");
+  const auto aoa = music_frames(result, "aoa_estimates");
+  const auto counts = music_frames(result, "source_count");
+  ASSERT_EQ(eigenvalues.size(), 3U);
+  ASSERT_EQ(aoa.size(), 3U);
+  ASSERT_EQ(counts.size(), 3U);
+  EXPECT_EQ(eigenvalues[0].shape, (std::vector<int64_t>{1, 8}));
+  EXPECT_EQ(eigenvalues[1].shape, (std::vector<int64_t>{1, 7}));
+  EXPECT_EQ(eigenvalues[2].shape, (std::vector<int64_t>{1, 8}));
+  for (std::size_t tick = 0; tick < aoa.size(); ++tick) {
+    EXPECT_NEAR(aoa[tick].template as<T>()[0], 0.1, 0.03);
+    EXPECT_EQ(counts[tick].template as<int32_t>()[0], 1);
+  }
 }
 
 }  // namespace

@@ -564,32 +564,57 @@ void run_cfar_stage(const CfarStageConfig& config, const void* in, bool input_is
   const dim3 block(16, 16, 1);
   const dim3 grid(static_cast<unsigned>((num_range + block.x - 1) / block.x),
                   static_cast<unsigned>((num_doppler + block.y - 1) / block.y), 1);
-  for (int64_t b = 0; b < out_batch; ++b) {
-    const int64_t plane = num_doppler * num_range;
+  if (out_batch > 0 && out_batch <= 65535) {
+    const dim3 batch_grid(grid.x, grid.y, static_cast<unsigned>(out_batch));
     if (variant == CfarVariant::kCA) {
-      cfar_ca_kernel<T><<<grid, block, 0, stream>>>(
-          cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r, train_d, train_r,
+      cfar_ca_kernel<T><<<batch_grid, block, 0, stream>>>(
+          cfar_power, out_batch, num_doppler, num_range, guard_d, guard_r, train_d, train_r,
           static_cast<T>(config.threshold_scale), alpha_lut_t, alpha_lut_size,
-          static_cast<T*>(score) + b * plane, static_cast<T*>(noise) + b * plane,
-          static_cast<bool*>(mask) + b * plane);
+          static_cast<T*>(score), static_cast<T*>(noise), static_cast<bool*>(mask));
     } else if (variant == CfarVariant::kGO) {
-      cfar_goso_kernel<T, true><<<grid, block, 0, stream>>>(
-          cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r, train_d, train_r,
+      cfar_goso_kernel<T, true><<<batch_grid, block, 0, stream>>>(
+          cfar_power, out_batch, num_doppler, num_range, guard_d, guard_r, train_d, train_r,
           static_cast<T>(config.threshold_scale), alpha_lut_t, alpha_lut_size,
-          static_cast<T*>(score) + b * plane, static_cast<T*>(noise) + b * plane,
-          static_cast<bool*>(mask) + b * plane);
+          static_cast<T*>(score), static_cast<T*>(noise), static_cast<bool*>(mask));
     } else if (variant == CfarVariant::kSO) {
-      cfar_goso_kernel<T, false><<<grid, block, 0, stream>>>(
-          cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r, train_d, train_r,
+      cfar_goso_kernel<T, false><<<batch_grid, block, 0, stream>>>(
+          cfar_power, out_batch, num_doppler, num_range, guard_d, guard_r, train_d, train_r,
           static_cast<T>(config.threshold_scale), alpha_lut_t, alpha_lut_size,
-          static_cast<T*>(score) + b * plane, static_cast<T*>(noise) + b * plane,
-          static_cast<bool*>(mask) + b * plane);
+          static_cast<T*>(score), static_cast<T*>(noise), static_cast<bool*>(mask));
     } else {
-      cfar_os_kernel<T><<<grid, block, 0, stream>>>(
-          cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r, train_d, train_r,
+      cfar_os_kernel<T><<<batch_grid, block, 0, stream>>>(
+          cfar_power, out_batch, num_doppler, num_range, guard_d, guard_r, train_d, train_r,
           config.os_rank, static_cast<T>(config.threshold_scale), alpha_lut_t, alpha_lut_size,
-          static_cast<T*>(score) + b * plane, static_cast<T*>(noise) + b * plane,
-          static_cast<bool*>(mask) + b * plane);
+          static_cast<T*>(score), static_cast<T*>(noise), static_cast<bool*>(mask));
+    }
+  } else {
+    for (int64_t b = 0; b < out_batch; ++b) {
+      const int64_t plane = num_doppler * num_range;
+      if (variant == CfarVariant::kCA) {
+        cfar_ca_kernel<T><<<grid, block, 0, stream>>>(
+            cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r, train_d, train_r,
+            static_cast<T>(config.threshold_scale), alpha_lut_t, alpha_lut_size,
+            static_cast<T*>(score) + b * plane, static_cast<T*>(noise) + b * plane,
+            static_cast<bool*>(mask) + b * plane);
+      } else if (variant == CfarVariant::kGO) {
+        cfar_goso_kernel<T, true><<<grid, block, 0, stream>>>(
+            cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r, train_d, train_r,
+            static_cast<T>(config.threshold_scale), alpha_lut_t, alpha_lut_size,
+            static_cast<T*>(score) + b * plane, static_cast<T*>(noise) + b * plane,
+            static_cast<bool*>(mask) + b * plane);
+      } else if (variant == CfarVariant::kSO) {
+        cfar_goso_kernel<T, false><<<grid, block, 0, stream>>>(
+            cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r, train_d, train_r,
+            static_cast<T>(config.threshold_scale), alpha_lut_t, alpha_lut_size,
+            static_cast<T*>(score) + b * plane, static_cast<T*>(noise) + b * plane,
+            static_cast<bool*>(mask) + b * plane);
+      } else {
+        cfar_os_kernel<T><<<grid, block, 0, stream>>>(
+            cfar_power + b * plane, 1, num_doppler, num_range, guard_d, guard_r, train_d, train_r,
+            config.os_rank, static_cast<T>(config.threshold_scale), alpha_lut_t, alpha_lut_size,
+            static_cast<T*>(score) + b * plane, static_cast<T*>(noise) + b * plane,
+            static_cast<bool*>(mask) + b * plane);
+      }
     }
   }
 

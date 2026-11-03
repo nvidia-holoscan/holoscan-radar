@@ -24,6 +24,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <type_traits>
 
 #include "radar_common/dsp/source_count_device.hpp"
 #include "radar_common/tensor/matx_utils.hpp"
@@ -223,7 +224,7 @@ __device__ inline T& music_spectrum_at(T* spec, int64_t ia, int64_t ie, int64_t 
 // Staged=false when P_n does not
 // fit the shared-memory budget. The inner reduction over c2 is carried in
 // four independent accumulators so the FMAs pipeline.
-template <typename T, bool Staged>
+template <typename T, bool Staged, bool ChannelMajor = false>
 __global__ void music_reduce_kernel(const cuda::std::complex<T>* __restrict__ proj,
                                     const cuda::std::complex<T>* __restrict__ manifold,
                                     int64_t num_items, int64_t num_channels, int64_t num_az,
@@ -267,21 +268,25 @@ __global__ void music_reduce_kernel(const cuda::std::complex<T>* __restrict__ pr
   T best_power = T{0};
   int64_t best_beam = -1;
   for (int64_t beam = tid; beam < num_beams; beam += nthreads) {
-    const cuda::std::complex<T>* a = manifold + beam * num_channels;
+    const cuda::std::complex<T>* a = manifold + (ChannelMajor ? beam : beam * num_channels);
+    const auto manifold_at = [=](int64_t channel) {
+      return a[ChannelMajor ? channel * num_beams : channel];
+    };
     // Invisible beams (direction-cosine out-of-visible-region) carry an
     // all-zero manifold entry, so a^H a == 0 - guard this BEFORE the
     // denominator floor below, else the zero-vector "peak" (0/eps) would be
     // reported as a huge spurious power instead of the contract's zero.
     T a_norm = T{0};
     for (int64_t c = 0; c < num_channels; ++c) {
-      a_norm += a[c].real() * a[c].real() + a[c].imag() * a[c].imag();
+      a_norm += manifold_at(c).real() * manifold_at(c).real() +
+                manifold_at(c).imag() * manifold_at(c).imag();
     }
     if (!(a_norm > kMusicDenomFloor<T>)) {
       music_spectrum_at(spec, beam % num_az, beam / num_az, num_el) = T{0};
       continue;
     }
-    // aH_P_n_a = sum_c conj(a[c]) * (sum_c2 Pn[c,c2]*a[c2]). The inner
-    // reduction over c2 is carried in four independent accumulators so the
+    // aH_P_n_a = sum_c conj(a[c]) * (sum_c2 Pn[c,c2]*a[c2]).
+    // The inner reduction over c2 uses four independent accumulators so the
     // FMAs pipeline instead of stalling on one serial chain.
     T denom = T{0};
     for (int64_t c = 0; c < num_channels; ++c) {
@@ -291,19 +296,19 @@ __global__ void music_reduce_kernel(const cuda::std::complex<T>* __restrict__ pr
       int64_t c2 = 0;
       for (; c2 + 3 < num_channels; c2 += 4) {
         const T r0r = row[c2].real(), r0i = row[c2].imag();
-        const T a0r = a[c2].real(), a0i = a[c2].imag();
+        const T a0r = manifold_at(c2).real(), a0i = manifold_at(c2).imag();
         q0r += r0r * a0r - r0i * a0i;
         q0i += r0r * a0i + r0i * a0r;
         const T r1r = row[c2 + 1].real(), r1i = row[c2 + 1].imag();
-        const T a1r = a[c2 + 1].real(), a1i = a[c2 + 1].imag();
+        const T a1r = manifold_at(c2 + 1).real(), a1i = manifold_at(c2 + 1).imag();
         q1r += r1r * a1r - r1i * a1i;
         q1i += r1r * a1i + r1i * a1r;
         const T r2r = row[c2 + 2].real(), r2i = row[c2 + 2].imag();
-        const T a2r = a[c2 + 2].real(), a2i = a[c2 + 2].imag();
+        const T a2r = manifold_at(c2 + 2).real(), a2i = manifold_at(c2 + 2).imag();
         q2r += r2r * a2r - r2i * a2i;
         q2i += r2r * a2i + r2i * a2r;
         const T r3r = row[c2 + 3].real(), r3i = row[c2 + 3].imag();
-        const T a3r = a[c2 + 3].real(), a3i = a[c2 + 3].imag();
+        const T a3r = manifold_at(c2 + 3).real(), a3i = manifold_at(c2 + 3).imag();
         q3r += r3r * a3r - r3i * a3i;
         q3i += r3r * a3i + r3i * a3r;
       }
@@ -311,12 +316,12 @@ __global__ void music_reduce_kernel(const cuda::std::complex<T>* __restrict__ pr
       T qi = q0i + q1i + q2i + q3i;
       for (; c2 < num_channels; ++c2) {
         const T rr = row[c2].real(), ri = row[c2].imag();
-        const T ar = a[c2].real(), ai = a[c2].imag();
+        const T ar = manifold_at(c2).real(), ai = manifold_at(c2).imag();
         qr += rr * ar - ri * ai;
         qi += rr * ai + ri * ar;
       }
       // Re(conj(a[c]) * q)
-      denom += a[c].real() * qr + a[c].imag() * qi;
+      denom += manifold_at(c).real() * qr + manifold_at(c).imag() * qi;
     }
     const T floor = kMusicDenomFloor<T>;
     const T power = T{1} / (denom > floor ? denom : floor);
@@ -552,8 +557,10 @@ __global__ void music_blank_empty_items_kernel(const int64_t* __restrict__ k_cou
 //   snapshots — device ptr, [num_items, num_channels, num_snapshots]
 //               cuda::std::complex<T>.
 //   mask      — device ptr, [num_items, num_snapshots] uint8/bool, or nullptr.
-//   manifold  — device ptr, [num_beams, num_channels] cuda::std::complex<T>
-//               untapered steering vectors, beam el-major.
+//   manifold  — device ptr, cuda::std::complex<T> untapered steering vectors.
+//               float: channel-major [num_channels, num_beams];
+//               double: beam-major [num_beams, num_channels].
+//               Beams are ordered el-major in both layouts.
 //   eigenvalues — device ptr, [num_items, num_channels] T. Ascending.
 //   model_order — device ptr, [num_items] int32 scratch (resolved order).
 //   doa_multi   — device ptr, [num_items, max_sources, 2] T.
@@ -626,17 +633,21 @@ inline void run_music_stage(const cuda::std::complex<T>* snapshots, const unsign
       return n > 0 ? n : 1;
     }();
     int blocks_per_sm = 0;
-    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, music_reduce_kernel<T, true>,
-                                                  reduce_block, pn_smem + red_smem);
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &blocks_per_sm, music_reduce_kernel<T, true, std::is_same_v<T, float>>, reduce_block,
+        pn_smem + red_smem);
     const int64_t full_wave = static_cast<int64_t>(blocks_per_sm) * sm_count;
     stage = blocks_per_sm > 0 && num_items >= full_wave;
   }
   if (stage) {
-    music_reduce_kernel<T, true><<<grid, reduce_block, pn_smem + red_smem, stream>>>(
-        proj, manifold, num_items, num_channels, num_az, num_el, az_grid, el_grid, spectrum, aoa);
+    music_reduce_kernel<T, true, std::is_same_v<T, float>>
+        <<<grid, reduce_block, pn_smem + red_smem, stream>>>(proj, manifold, num_items,
+                                                             num_channels, num_az, num_el, az_grid,
+                                                             el_grid, spectrum, aoa);
   } else {
-    music_reduce_kernel<T, false><<<grid, reduce_block, red_smem, stream>>>(
-        proj, manifold, num_items, num_channels, num_az, num_el, az_grid, el_grid, spectrum, aoa);
+    music_reduce_kernel<T, false, std::is_same_v<T, float>>
+        <<<grid, reduce_block, red_smem, stream>>>(proj, manifold, num_items, num_channels, num_az,
+                                                   num_el, az_grid, el_grid, spectrum, aoa);
   }
 
   // doa_multi and source_count back latched optional ports and may be null;
@@ -654,8 +665,8 @@ inline void run_music_stage(const cuda::std::complex<T>* snapshots, const unsign
   music_blank_empty_items_kernel<T><<<grid, blank_block, 0, stream>>>(
       k_counts, num_items, num_az, num_el, max_sources, spectrum, aoa, doa_multi, source_count);
 
+  // Reuse dimension/stream-keyed eig plans; stop() retires their owned workspaces.
   mark_music_eig_cache_live();
-  clear_music_matx_caches();
 }
 
 }  // namespace holoscan::radar::detail

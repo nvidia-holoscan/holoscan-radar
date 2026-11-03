@@ -143,7 +143,11 @@ A ULA `∥` canonical `+x` is rejected by the shift-invariant planner (same embe
 
 **Cold.** First tick: `matx::eig` plan, optional smoothing plan, and (auto URA) dual-invariance index H2D + sync. First unseen geometry revalidates the pair.
 
-**Steady.** Covariance + eig + EFT run on stable constructor-created workspace; then one CUDA block per item (thread 0) handles the `d×d` LS solve / QR or Schur. `d` is small (`≤ max_sources ≤ 64`). No per-item host `geev`.
+**Steady.** Covariance + eig + EFT run on stable constructor-created workspace; then each item runs its serial `d×d` LS solve / QR or Schur. Double precision packs 32 independent items per block, one item per thread; float retains one block per item (thread 0). `d` is small (`≤ max_sources ≤ 64`). No per-item host `geev`. MatX eig plans are retained across matching configurations instead of being cleared each tick; existing live markers and stop-time retirement remain. Plan workspaces can persist until eviction/stop.
+
+On the selected Thor HSDK 5 image, a paired engineering check (5 warmup frames, 50 steady frames, three screen pairs and three fresh pairs) measured double baseline-medium at 12.848 → 9.262 ms (paired saving 3.586 ms, 27.91%) and baseline-large at 26.008 → 11.803 ms (14.205 ms, 54.62%). Fresh pair gains ranged 27.87–27.92% and 54.58–54.63%. All eight other case/precision endpoints in the five-case check met the declared risk allowance of max(5 microseconds, 5%). This is scoped evidence for these existing workloads, not a general speed guarantee. Both builds passed 62 native tests and exact comparisons of all four outputs in six cases, in both precisions, including new 33-item mixed-mask/model-order ULA and URA tests.
+
+Startup and tails remain separate tradeoffs: fresh large-double setup increased 0.172 ms; float cold medians increased 0.834 ms (small), 0.686 ms (large) and 1.013 ms (cached smoothing). Optional-medium float p99 increased 0.058 ms. The cached smoothing event changed 0.388 → 0.402 ms in float and 20.055 → 14.238 ms in double. These diagnostics do not establish startup or tail guarantees; the retained benefit targets streaming double precision.
 
 **`[live]` cost.** Scalar overrides are cheap; `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the pair, rebuilds the smoothing plan, and (auto URA) re-uploads the invariance tables on the tick it arrives. The Graph harness isolates all five live inputs.
 

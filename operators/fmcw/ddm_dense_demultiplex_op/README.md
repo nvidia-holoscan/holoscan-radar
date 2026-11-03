@@ -53,3 +53,16 @@ Linear mode validates integer-bin offsets, builds a band-gather table, gathers t
 ## Configuration and caching
 
 Linear gather/phase tables and nonlinear correlation weights use separate caches keyed by validated code and Doppler extent. Static `ddm_code` means rotating layouts require separate instances.
+
+## Nonlinear packing performance
+
+Nonlinear correlation uses a shared-memory transpose for packing and scattering 32×32 tiles. Original scalar kernels remain the fallback beyond the tiled grid limits; FFT dimensions, correlation weights, sample arithmetic and output layout are unchanged. Both precisions pass 32 public DDM tests, including RX 65535/65536 fallback boundaries, and the shared TDM suite. Exact exports cover seven existing cases, including full nonlinear-large outputs and optional velocity axes.
+
+On the current Thor deployment, a fresh three-pair comparison of `nonlinear-large` (`M_tx=8`, `N_rx=32`, `D=256`, `R=1024`) measured the following steady compute latencies after five warmups with 50 frames/run:
+
+| Precision | Original median (ms) | Tiled median (ms) | Median paired reduction | Paired range |
+| --- | --- | --- | --- | --- |
+| float | 24.924 | 16.612 | 33.27% (8.293 ms) | 32.95–33.80% |
+| double | 92.998 | 74.691 | 19.68% (18.305 ms) | 19.48–20.68% |
+
+The independent screen also passed. Smaller and axis-bearing selected cases stayed within the predeclared median allowance of max(0.01 ms, 3%); medium nonlinear cases improved. Small-case timing can vary by microseconds, and setup/cold results vary across runs. These are scoped engineering observations, not a guarantee for other shapes, startup or population tails.

@@ -105,9 +105,13 @@ Rejected combinations and messages include:
 
 ## Performance
 
-Planning is `O(num_items + num_selected × source_count)` and scatter is `O(num_output × num_index_columns)`. One synchronization validates and exact-sizes the output.
+One synchronization validates and exact-sizes the output. Scatter is `O(num_output × num_index_columns)`: one thread per input item copies its disjoint output span, preserving original row order and angle values. Validation, planning, scan and output ownership are unchanged.
 
 `performance/operators/detection/multi_source_expansion/adapter.cpp` sweeps original rows, selected fraction, sources per selected row, and index width while draining both outputs and reporting warmup, setup/cold, and steady timing.
+
+A paired Thor HSDK 5 check (5 warmups, 50 measured frames, three fresh pairs) measured full-selected-large paired median reductions of 24.911µs/9.975% float and 30.884µs/11.835% double. Two of three target pairs per precision exceeded the useful-gain floor; every target pair still improved in both median and all-frame mean. All 150 fresh target compute samples summed to 9.426%/8.652% lower time. All selected protected endpoint rules passed, alongside 122 native tests and exact both-output checks across eight cases in both precisions.
+
+Costs remain: fresh small-float total sampled time was 0.031% higher, with paired p99/max increases of about 18/25µs. Isolated p99 increases reached 0.280ms on fresh baseline-large float and 0.301ms on screened four-source float; those process means still improved. Full-selected double setup increased about 0.199ms fresh (0.475ms screened paired median). Weak target pairs and these costs are retained; individual-process, tail, startup and live-event latency are not guaranteed to improve.
 
 Run this performance smoke **inside a development container**, after
 configuring the named build tree with performance enabled (see the

@@ -253,6 +253,41 @@ TEST(ClusterDBSCANOpTest, MinPointsSeparatesCoreFromNoise) {
   }
 }
 
+template <typename T>
+class DbscanCoreThresholdBoundary : public ::testing::Test {};
+using DbscanCoreThresholdPrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(DbscanCoreThresholdBoundary, DbscanCoreThresholdPrecisions);
+
+TYPED_TEST(DbscanCoreThresholdBoundary, DenseExactThresholdAndNoCoreKeepExpectedLabels) {
+  using T = TypeParam;
+  // Five early neighbors, three insufficient neighbors, then four late neighbors.
+  // At min_points=4, the final group reaches its threshold only at the last input row.
+  const std::vector<double> points{0.0,  0.0, 0.0625,  0.0, 0.125,   0.0, 0.1875,  0.0,
+                                   0.25, 0.0, 16.0,    0.0, 16.0625, 0.0, 16.125,  0.0,
+                                   32.0, 0.0, 32.0625, 0.0, 32.125,  0.0, 32.1875, 0.0};
+  for (const int64_t min_points : {int64_t{1}, int64_t{4}, int64_t{0}, int64_t{13}}) {
+    SCOPED_TRACE(::testing::Message() << "min_points=" << min_points);
+    const auto output =
+        run_dbscan<T>(points_tensor<T>(points, 12, 2), make_params({1.0}, min_points));
+    ASSERT_EQ(output.labels.shape, (std::vector<int64_t>{12}));
+    const bool no_core = min_points > 12;
+    const bool all_groups = min_points == 1;
+    const std::vector<int64_t> expected_sizes =
+        no_core ? std::vector<int64_t>{}
+                : (all_groups ? std::vector<int64_t>{5, 4, 3} : std::vector<int64_t>{5, 4});
+    ASSERT_EQ(output.sizes.shape,
+              (std::vector<int64_t>{static_cast<int64_t>(expected_sizes.size())}));
+    for (size_t cluster = 0; cluster < expected_sizes.size(); ++cluster) {
+      EXPECT_EQ(output.sizes.template as<int64_t>()[cluster], expected_sizes[cluster]);
+    }
+    for (int64_t row = 0; row < 12; ++row) {
+      const int64_t expected =
+          no_core ? -1 : (row < 5 ? 0 : (row >= 8 ? 1 : (all_groups ? 2 : -1)));
+      EXPECT_EQ(output.labels.template as<int64_t>()[row], expected) << "row=" << row;
+    }
+  }
+}
+
 TEST(ClusterDBSCANOpTest, DefaultMinPointsIsTwiceNumFeatures) {
   // num_features=2 → default min_points=4. A triple cannot form a cluster.
   std::vector<double> pts = {0.0, 0.0, 0.1, 0.0, 0.2, 0.0};
@@ -263,6 +298,37 @@ TEST(ClusterDBSCANOpTest, DefaultMinPointsIsTwiceNumFeatures) {
   EXPECT_EQ(lab[1], -1);
   EXPECT_EQ(lab[2], -1);
   EXPECT_EQ(out.sizes.shape[0], 0);
+}
+
+TYPED_TEST(DbscanCoreThresholdBoundary, ShuffledEqualChainsPreserveRootTiesAndNoise) {
+  using T = TypeParam;
+  // Binary-exact spacing creates two multihop chains, interleaved in input-row order.
+  // Their lowest member rows are 0 and 1, not their lowest coordinate positions.
+  const std::vector<double> positions{2.25, 0.0, 4.5, 0.75, 3.0, 5.25, 1.5, 3.75};
+  std::vector<double> points;
+  points.reserve(17U);
+  for (const double position : positions) {
+    points.push_back(position);
+    points.push_back(position + 16.0);
+  }
+  points.push_back(48.0);
+  for (const int64_t min_points : {int64_t{1}, int64_t{2}}) {
+    SCOPED_TRACE(::testing::Message() << "min_points=" << min_points);
+    const auto output =
+        run_dbscan<T>(points_tensor<T>(points, 17, 1), make_params({1.0}, min_points));
+    ASSERT_EQ(output.labels.shape, (std::vector<int64_t>{17}));
+    const std::vector<int64_t> expected_sizes =
+        min_points == 1 ? std::vector<int64_t>{8, 8, 1} : std::vector<int64_t>{8, 8};
+    ASSERT_EQ(output.sizes.shape,
+              (std::vector<int64_t>{static_cast<int64_t>(expected_sizes.size())}));
+    for (size_t cluster = 0; cluster < expected_sizes.size(); ++cluster) {
+      EXPECT_EQ(output.sizes.template as<int64_t>()[cluster], expected_sizes[cluster]);
+    }
+    for (int64_t row = 0; row < 16; ++row) {
+      EXPECT_EQ(output.labels.template as<int64_t>()[row], row % 2) << "row=" << row;
+    }
+    EXPECT_EQ(output.labels.template as<int64_t>()[16], min_points == 1 ? 2 : -1);
+  }
 }
 
 TEST(ClusterDBSCANOpTest, DefaultMinPointsCountsOnlyActiveFeatures) {
@@ -683,6 +749,77 @@ TEST(ClusterDBSCANOpTest, LiveMaxClustersRevertsToParamsAfterMiss) {
   // and tick 1 publishes nothing so the open cap is back.
   EXPECT_EQ(sizes[0].shape[0], 2);
   EXPECT_EQ(sizes[1].shape[0], 3);
+}
+
+template <typename T>
+class DbscanScratchReuseNative : public ::testing::Test {};
+using DbscanScratchPrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(DbscanScratchReuseNative, DbscanScratchPrecisions);
+
+TYPED_TEST(DbscanScratchReuseNative, ShrinkNoiseExpandAndFreshInstancePreserveAllRows) {
+  using T = TypeParam;
+  using Op = ClusterDBSCANOp<T>;
+  const std::vector<std::vector<double>> points{
+      {0, 0, 0.125, 0, 0, 0.125, 5, 5, 10, 10, 10.125, 10, 20, 20, 30, 30},
+      {0, 0, 5, 5, 10, 10},
+      {20, 20, 20.125, 20},
+      {0, 0, 0.125, 0, 0, 0.125, 5, 5, 10, 10, 10.125, 10, 20, 20, 30, 30}};
+  const std::vector<std::vector<int64_t>> expected_labels{
+      {0, 0, 0, -1, 1, 1, -1, -1}, {-1, -1, -1}, {0, 0}, {0, 0, 0, -1, 1, 1, -1, -1}};
+  const std::vector<std::vector<int64_t>> expected_sizes{{3, 2}, {}, {2}, {3, 2}};
+  const auto run_sequence = [&](std::size_t count) {
+    auto extents = holoscan::radar::testing::default_test_extents();
+    extents.max_points = 8;
+    extents.max_features = 2;
+    extents.max_clusters = 8;
+    std::vector<std::shared_ptr<holoscan::Tensor>> owners;
+    auto fixture = holoscan::testing::create_operator_test<Op>(extents);
+    fixture.set_params(make_params({0.5}, 2));
+    for (std::size_t frame = 0; frame < count; ++frame) {
+      owners.push_back(points_tensor<T>(points[frame], points[frame].size() / 2, 2));
+      fixture.push(&Op::points, *owners.back());
+    }
+    fixture.template capture_snapshot<holoscan::Tensor>("labels", count, 4096U);
+    fixture.template capture_snapshot<holoscan::Tensor>("sizes", count, 4096U);
+    fixture.input_source_device("points", holoscan::DeviceId{0});
+    fixture.output_device("labels", holoscan::DeviceId{0});
+    fixture.output_device("sizes", holoscan::DeviceId{0});
+    auto running = fixture.run_async({.expect_stop = true});
+    const bool labels_ready = running.wait_for_output("labels", count, std::chrono::seconds{5});
+    const bool sizes_ready = running.wait_for_output("sizes", count, std::chrono::seconds{5});
+    running.request_stop();
+    auto result = running.finish();
+    EXPECT_TRUE(labels_ready && sizes_ready) << result.describe_failure();
+    return result;
+  };
+  for (const std::size_t count : {points.size(), std::size_t{1}}) {
+    const auto result = run_sequence(count);
+    ASSERT_TRUE(result.ok()) << result.describe_failure();
+    const auto labels = result.template snapshots<holoscan::Tensor>("labels");
+    const auto sizes = result.template snapshots<holoscan::Tensor>("sizes");
+    ASSERT_EQ(labels.size(), count);
+    ASSERT_EQ(sizes.size(), count);
+    for (std::size_t frame = 0; frame < count; ++frame) {
+      const auto lab = holoscan::radar::testing::to_host(labels[frame]);
+      const auto size = holoscan::radar::testing::to_host(sizes[frame]);
+      ASSERT_EQ(lab.shape,
+                (std::vector<int64_t>{static_cast<int64_t>(expected_labels[frame].size())}));
+      ASSERT_EQ(size.shape,
+                (std::vector<int64_t>{static_cast<int64_t>(expected_sizes[frame].size())}));
+      for (std::size_t i = 0; i < expected_labels[frame].size(); ++i) {
+        EXPECT_EQ(lab.template as<int64_t>()[i], expected_labels[frame][i]);
+      }
+      for (std::size_t i = 0; i < expected_sizes[frame].size(); ++i) {
+        EXPECT_EQ(size.template as<int64_t>()[i], expected_sizes[frame][i]);
+      }
+    }
+    if (count > 1) {
+      EXPECT_EQ(holoscan::radar::testing::to_host(labels.front()).data,
+                holoscan::radar::testing::to_host(labels.back()).data);
+      EXPECT_EQ(holoscan::radar::testing::to_host(sizes.front()).data,
+                holoscan::radar::testing::to_host(sizes.back()).data);
+    }
+  }
 }
 
 }  // namespace

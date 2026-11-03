@@ -23,6 +23,7 @@
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
+#include <type_traits>
 
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/tensor/matx_utils.hpp"
@@ -203,7 +204,7 @@ inline void run_beamscan_stage(const cuda::std::complex<T>* snapshots, int64_t n
 // subset of beams. For every valid look it forms the conventional beam output,
 // accumulates power, and writes the mean power before the same deterministic
 // block argmax and optional interpolation used by the one-look path.
-template <typename T>
+template <typename T, bool Staged>
 __global__ void beamscan_multilook_kernel(const cuda::std::complex<T>* __restrict__ snapshots,
                                           const unsigned char* __restrict__ mask, int64_t num_items,
                                           int64_t num_channels, int64_t num_snapshots,
@@ -222,6 +223,15 @@ __global__ void beamscan_multilook_kernel(const cuda::std::complex<T>* __restric
   const int tid = static_cast<int>(threadIdx.x);
   const int nthreads = static_cast<int>(blockDim.x);
   T* spec = spectrum + item * num_beams;
+  const cuda::std::complex<T>* item_snapshots = snapshots + item * num_channels * num_snapshots;
+  if constexpr (Staged) {
+    auto* shared_snapshots = reinterpret_cast<cuda::std::complex<T>*>(red_idx + nthreads);
+    for (int64_t cell = tid; cell < num_channels * num_snapshots; cell += nthreads) {
+      shared_snapshots[cell] = item_snapshots[cell];
+    }
+    __syncthreads();
+    item_snapshots = shared_snapshots;
+  }
 
   int64_t valid_count = 0;
   for (int64_t s = 0; s < num_snapshots; ++s) {
@@ -238,7 +248,8 @@ __global__ void beamscan_multilook_kernel(const cuda::std::complex<T>* __restric
       }
       cuda::std::complex<T> sum{T{0}, T{0}};
       for (int64_t c = 0; c < num_channels; ++c) {
-        const auto x = snapshots[(item * num_channels + c) * num_snapshots + s];
+        const auto x = Staged ? item_snapshots[c * num_snapshots + s]
+                              : snapshots[(item * num_channels + c) * num_snapshots + s];
         const auto w = weights_ct[c * num_beams + beam];
         sum += x * w;
       }
@@ -315,9 +326,28 @@ inline void run_beamscan_multilook_stage(const cuda::std::complex<T>* snapshots,
   }
   constexpr int block = 256;
   const size_t smem = static_cast<size_t>(block) * (sizeof(T) + sizeof(int64_t));
-  beamscan_multilook_kernel<T><<<static_cast<int>(num_items), block, smem, stream>>>(
-      snapshots, mask, num_items, num_channels, num_snapshots, weights_ct, num_az * num_el, num_az,
-      num_el, az_grid, el_grid, peak_interp_id(peak_interp), spectrum, aoa);
+  if constexpr (std::is_same_v<T, float>) {
+    const bool stage =
+        num_snapshots > 0 && num_snapshots <= 2048 && num_channels <= 2048 / num_snapshots &&
+        smem + static_cast<size_t>(num_channels * num_snapshots) * sizeof(cuda::std::complex<T>) <=
+            32U * 1024U;
+    if (stage) {
+      const size_t staged_smem =
+          smem + static_cast<size_t>(num_channels * num_snapshots) * sizeof(cuda::std::complex<T>);
+      beamscan_multilook_kernel<T, true>
+          <<<static_cast<int>(num_items), block, staged_smem, stream>>>(
+              snapshots, mask, num_items, num_channels, num_snapshots, weights_ct, num_az * num_el,
+              num_az, num_el, az_grid, el_grid, peak_interp_id(peak_interp), spectrum, aoa);
+    } else {
+      beamscan_multilook_kernel<T, false><<<static_cast<int>(num_items), block, smem, stream>>>(
+          snapshots, mask, num_items, num_channels, num_snapshots, weights_ct, num_az * num_el,
+          num_az, num_el, az_grid, el_grid, peak_interp_id(peak_interp), spectrum, aoa);
+    }
+  } else {
+    beamscan_multilook_kernel<T, false><<<static_cast<int>(num_items), block, smem, stream>>>(
+        snapshots, mask, num_items, num_channels, num_snapshots, weights_ct, num_az * num_el,
+        num_az, num_el, az_grid, el_grid, peak_interp_id(peak_interp), spectrum, aoa);
+  }
 }
 
 // Blank AOA / spectrum for items with no valid snapshot slots (K_i == 0).

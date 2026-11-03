@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -158,11 +159,11 @@ EspritOutputs run_esprit(std::shared_ptr<holoscan::Tensor> snapshot, ESPRITParam
       holoscan::radar::testing::to_host(result.template snapshot<holoscan::Tensor>("eigenvalues"))};
 }
 
-template <typename Override>
+template <typename Override, typename T = double>
 holoscan::testing::TestResult run_esprit_override(
     std::vector<std::shared_ptr<holoscan::Tensor>> frames,
     std::vector<std::optional<Override>> payloads, ESPRITParams params, const char* override_port) {
-  using Op = ESPRITEstimatorOp<double>;
+  using Op = ESPRITEstimatorOp<T>;
   auto fixture =
       holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
   fixture.set_params(std::move(params));
@@ -180,7 +181,7 @@ holoscan::testing::TestResult run_esprit_override(
   constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
   constexpr const char* kOutputs[] = {"aoa_estimates", "doa_multi", "source_count", "eigenvalues"};
   for (const char* output : kOutputs) {
-    fixture.capture_snapshot<holoscan::Tensor>(output, frames.size(), kMaximumBytes);
+    fixture.template capture_snapshot<holoscan::Tensor>(output, frames.size(), kMaximumBytes);
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
@@ -195,10 +196,11 @@ holoscan::testing::TestResult run_esprit_override(
   return fixture_result;
 }
 
+template <typename T = double>
 holoscan::testing::TestResult run_esprit_with_mask(std::shared_ptr<holoscan::Tensor> mask,
                                                    std::shared_ptr<holoscan::Tensor> snapshot,
                                                    ESPRITParams params) {
-  using Op = ESPRITEstimatorOp<double>;
+  using Op = ESPRITEstimatorOp<T>;
   auto fixture =
       holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
   fixture.set_params(std::move(params));
@@ -208,7 +210,7 @@ holoscan::testing::TestResult run_esprit_with_mask(std::shared_ptr<holoscan::Ten
   constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
   constexpr const char* kOutputs[] = {"aoa_estimates", "doa_multi", "source_count", "eigenvalues"};
   for (const char* output : kOutputs) {
-    fixture.capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
+    fixture.template capture_snapshot<holoscan::Tensor>(output, 1U, kMaximumBytes);
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
@@ -971,6 +973,12 @@ TEST(ESPRITEstimatorOpTest, LiveSpatialSmoothingAppliesForOneTick) {
             esprit_frames(result, "eigenvalues")[0].shape);
   EXPECT_EQ(esprit_frames(result, "eigenvalues")[2].shape,
             esprit_frames(result, "eigenvalues")[0].shape);
+  for (const char* port : {"aoa_estimates", "doa_multi", "source_count", "eigenvalues"}) {
+    const auto outputs = esprit_frames(result, port);
+    ASSERT_EQ(outputs.size(), 3U) << port;
+    EXPECT_EQ(outputs[0].shape, outputs[2].shape) << port;
+    EXPECT_EQ(outputs[0].data, outputs[2].data) << port;
+  }
 
   ESPRITParams invalid_params = make_params(geometry, conv, /*num_sources=*/1);
   const auto invalid = run_esprit_override(
@@ -1314,6 +1322,12 @@ TEST(ESPRITEstimatorOpTest, FixedSourceCountWorksWithFewSnapshots) {
 
 TEST(ESPRITEstimatorOpTest, ReducedSubarrayDirectlyDrivesEstimator) {
   namespace detail = holoscan::radar::testing::integration;
+  // Outlive Graph/session locals so device inputs are released before SDK
+  // static shutdown, including early ASSERT returns.
+  struct BankCleanup {
+    ~BankCleanup() { detail::FrameBank::reset(); }
+  };
+  const BankCleanup cleanup;
   constexpr int64_t kChannels = 6;
   constexpr int64_t kSnapshots = 32;
   constexpr double kTruthAz = 0.12;
@@ -1402,6 +1416,254 @@ TEST(ESPRITEstimatorOpTest, DoubleInstantiationSmoke) {
   const auto out = run_esprit<double>(block_to_device<double>(block, {1, kN, kS}),
                                       make_params(geom, conv, /*num_sources=*/1));
   EXPECT_NEAR(out.aoa.as<double>()[0], -0.06, 0.02);
+}
+
+// Cache-lifetime coverage uses the existing SDK fixture in both precisions.
+// A/B/A changes tensor content while revisiting the same eig configuration;
+// smoothing additionally revisits an earlier eig-size key after a shape change.
+template <typename T>
+class ESPRITCacheLifecycle : public ::testing::Test {};
+using EspritCachePrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(ESPRITCacheLifecycle, EspritCachePrecisions);
+
+void expect_exact_esprit_revisit(const holoscan::testing::TestResult& result) {
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  for (const char* port : {"aoa_estimates", "doa_multi", "source_count", "eigenvalues"}) {
+    const auto outputs = result.snapshots<holoscan::Tensor>(port);
+    ASSERT_EQ(outputs.size(), 3U) << port;
+    EXPECT_EQ(outputs[0].shape(), outputs[2].shape()) << port;
+    EXPECT_TRUE(holoscan::radar::dldatatype_equals(outputs[0].dtype(), outputs[2].dtype())) << port;
+    EXPECT_EQ(outputs[0].bytes(), outputs[2].bytes()) << port;
+    for (std::size_t tick = 0; tick < outputs.size(); ++tick) {
+      EXPECT_EQ(outputs[tick].source_device().device_type, kDLCUDA) << port;
+      EXPECT_EQ(outputs[tick].sample_metadata().capture_time().timestamp_ns,
+                static_cast<int64_t>(tick + 1U) * 100000000)
+          << port;
+    }
+  }
+}
+
+template <typename T>
+void check_changed_value_esprit_revisit(bool planar) {
+  constexpr int64_t kSnapshots = 32;
+  constexpr double kAzA = 0.12;
+  constexpr double kAzB = -0.17;
+  const double el_a = planar ? 0.08 : 0.0;
+  const double el_b = planar ? -0.09 : 0.0;
+  AngleConvention convention;
+  convention.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry =
+      planar ? make_planar_ura_geometry(3, 3, 0.5, 1.0) : make_ula_geometry(8, 0.5, 1.0);
+  const auto a = make_block(geometry, convention, kAzA, el_a, kSnapshots, 1e-4, 921u);
+  const auto b = make_block(geometry, convention, kAzB, el_b, kSnapshots, 1e-4, 922u);
+  const std::vector<int64_t> shape{1, geometry.num_elements(), kSnapshots};
+  auto params = make_params(geometry, convention, /*num_sources=*/1, 1e-2, /*max_sources=*/2);
+  const auto result = run_esprit_override<int64_t, T>(
+      {block_to_device<T>(a, shape), block_to_device<T>(b, shape), block_to_device<T>(a, shape)},
+      {std::nullopt, std::nullopt, std::nullopt}, params, "num_sources");
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  expect_exact_esprit_revisit(result);
+  const auto aoa = esprit_frames(result, "aoa_estimates");
+  const auto counts = esprit_frames(result, "source_count");
+  ASSERT_EQ(aoa.size(), 3U);
+  ASSERT_EQ(counts.size(), 3U);
+  for (std::size_t tick = 0; tick < aoa.size(); ++tick) {
+    ASSERT_EQ(aoa[tick].shape, (std::vector<int64_t>{1, 2}));
+    EXPECT_EQ(counts[tick].template as<int32_t>()[0], 1);
+    EXPECT_NEAR(aoa[tick].template as<T>()[0], tick == 1 ? kAzB : kAzA, 0.03);
+    if (planar) {
+      EXPECT_NEAR(aoa[tick].template as<T>()[1], tick == 1 ? el_b : el_a, 0.03);
+    }
+  }
+  EXPECT_NE(aoa[0].data, aoa[1].data);
+
+  // The first helper has already stopped and joined its native session.
+  // A new fixture in the same process checks solver cleanup/recreation;
+  // copied old snapshots are kept alive while the fresh instance runs.
+  const auto fresh = run_esprit<T>(block_to_device<T>(a, shape), std::move(params));
+  const std::array<HostTensor, 4> fresh_outputs{fresh.aoa, fresh.doa_multi, fresh.source_count,
+                                                fresh.eigenvalues};
+  const std::array<const char*, 4> ports{"aoa_estimates", "doa_multi", "source_count",
+                                         "eigenvalues"};
+  for (std::size_t index = 0; index < ports.size(); ++index) {
+    const auto previous = esprit_frames(result, ports[index]);
+    ASSERT_EQ(previous.size(), 3U);
+    EXPECT_EQ(fresh_outputs[index].shape, previous[0].shape) << ports[index];
+    EXPECT_EQ(fresh_outputs[index].data, previous[0].data) << ports[index];
+  }
+}
+
+TYPED_TEST(ESPRITCacheLifecycle, UlaChangedValuesReturnExactlyAndFreshFixtureRestarts) {
+  check_changed_value_esprit_revisit<TypeParam>(false);
+}
+
+TYPED_TEST(ESPRITCacheLifecycle, UraChangedValuesReturnExactlyAndFreshFixtureRestarts) {
+  check_changed_value_esprit_revisit<TypeParam>(true);
+}
+
+TYPED_TEST(ESPRITCacheLifecycle, SmoothingChangesEigSizeThenRevisitsExactOutputs) {
+  using T = TypeParam;
+  constexpr int64_t kChannels = 8;
+  constexpr int64_t kSnapshots = 32;
+  AngleConvention convention;
+  convention.preset = AngleConventionPreset::kRadarBoresight;
+  const auto geometry = make_ula_geometry(kChannels, 0.5, 1.0);
+  const auto block = make_block(geometry, convention, 0.1, 0.0, kSnapshots, 1e-4, 923u);
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (int tick = 0; tick < 3; ++tick) {
+    frames.push_back(block_to_device<T>(block, {1, kChannels, kSnapshots}));
+  }
+  const auto result = run_esprit_override<SpatialSmoothingOverride, T>(
+      std::move(frames),
+      {std::nullopt, SpatialSmoothingOverride{.count = 1, .first = 2}, std::nullopt},
+      make_params(geometry, convention, /*num_sources=*/1, 1e-2, /*max_sources=*/2),
+      "spatial_smoothing");
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  expect_exact_esprit_revisit(result);
+  const auto eigenvalues = esprit_frames(result, "eigenvalues");
+  const auto aoa = esprit_frames(result, "aoa_estimates");
+  const auto counts = esprit_frames(result, "source_count");
+  ASSERT_EQ(eigenvalues.size(), 3U);
+  ASSERT_EQ(aoa.size(), 3U);
+  ASSERT_EQ(counts.size(), 3U);
+  EXPECT_EQ(eigenvalues[0].shape, (std::vector<int64_t>{1, 8}));
+  EXPECT_EQ(eigenvalues[1].shape, (std::vector<int64_t>{1, 7}));
+  EXPECT_EQ(eigenvalues[2].shape, (std::vector<int64_t>{1, 8}));
+  for (std::size_t tick = 0; tick < aoa.size(); ++tick) {
+    EXPECT_NEAR(aoa[tick].template as<T>()[0], 0.1, 0.03);
+    EXPECT_EQ(counts[tick].template as<int32_t>()[0], 1);
+  }
+}
+
+// Thirty-three items cross the proposed 32-thread solve grouping. Adjacent
+// threads independently take empty, one-source and two-source solve paths.
+// Orthogonal source snapshots give a known covariance spectrum; masks arrive
+// before the aligned data input, preserving the existing SafeDefault contract.
+TYPED_TEST(ESPRITCacheLifecycle, PackedItemsKeepMixedOrdersAndEmptyMasksIndependent) {
+  using T = TypeParam;
+  constexpr int64_t kItems = 33;
+  constexpr int64_t kChannels = 6;
+  constexpr int64_t kLooks = 12;
+  AngleConvention convention;
+  convention.preset = AngleConventionPreset::kDirectionCosine;
+  const auto geometry = make_ula_geometry(kChannels, 0.5, 1.0);
+  const std::vector<double> cosines{-5.0 / 6.0, -0.5, -1.0 / 6.0, 1.0 / 6.0, 0.5, 5.0 / 6.0};
+  const std::array<std::vector<double>, 2> spectra{
+      std::vector<double>{0.90, 0.95, 1.00, 1.05, 1.10, 100.0},
+      std::vector<double>{0.90, 0.95, 1.00, 1.05, 50.0, 100.0}};
+  std::array<std::vector<std::complex<double>>, 2> basis{
+      make_orthogonal_source_block(geometry, convention, cosines, spectra[0]),
+      make_orthogonal_source_block(geometry, convention, cosines, spectra[1])};
+  std::vector<std::complex<double>> values(static_cast<size_t>(kItems * kChannels * kLooks));
+  std::vector<uint8_t> valid(static_cast<size_t>(kItems * kLooks), uint8_t{1});
+  for (int64_t item = 0; item < kItems; ++item) {
+    const size_t scene = item % 3 == 2 ? 1U : 0U;
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+      for (int64_t look = 0; look < kLooks; ++look) {
+        values[static_cast<size_t>((item * kChannels + channel) * kLooks + look)] =
+            basis[scene][static_cast<size_t>(channel * kChannels + look % kChannels)];
+      }
+    }
+    if (item % 3 == 0) {
+      std::fill_n(valid.begin() + item * kLooks, static_cast<size_t>(kLooks), uint8_t{0});
+    }
+  }
+  const auto result = run_esprit_with_mask<T>(
+      to_device_tensor(valid, {kItems, kLooks}, DLDataType{kDLUInt, 8, 1}),
+      block_to_device<T>(values, {kItems, kChannels, kLooks}),
+      make_params(geometry, convention, /*num_sources=*/-1, /*pfa=*/0.1, /*max_sources=*/2,
+                  /*smoothing=*/{}, /*fb=*/false));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto aoa_frames = esprit_frames(result, "aoa_estimates");
+  const auto doa_frames = esprit_frames(result, "doa_multi");
+  const auto count_frames = esprit_frames(result, "source_count");
+  const auto eigenvalue_frames = esprit_frames(result, "eigenvalues");
+  ASSERT_EQ(aoa_frames.size(), 1U);
+  ASSERT_EQ(doa_frames.size(), 1U);
+  ASSERT_EQ(count_frames.size(), 1U);
+  ASSERT_EQ(eigenvalue_frames.size(), 1U);
+  ASSERT_EQ(aoa_frames[0].shape, (std::vector<int64_t>{kItems, 2}));
+  ASSERT_EQ(doa_frames[0].shape, (std::vector<int64_t>{kItems, 2, 2}));
+  ASSERT_EQ(count_frames[0].shape, (std::vector<int64_t>{kItems}));
+  ASSERT_EQ(eigenvalue_frames[0].shape, (std::vector<int64_t>{kItems, kChannels}));
+  const T* aoa = aoa_frames[0].template as<T>();
+  const T* doa = doa_frames[0].template as<T>();
+  const auto* count = count_frames[0].template as<int32_t>();
+  const T* eigenvalues = eigenvalue_frames[0].template as<T>();
+  for (int64_t item = 0; item < kItems; ++item) {
+    const int expected = static_cast<int>(item % 3);
+    ASSERT_EQ(count[item], expected) << item;
+    if (expected == 0) {
+      EXPECT_TRUE(std::isnan(aoa[item * 2])) << item;
+      EXPECT_TRUE(std::isnan(aoa[item * 2 + 1])) << item;
+    } else {
+      EXPECT_NEAR(aoa[item * 2 + 1], 0.0, 0.03) << item;
+      if (expected == 1) {
+        EXPECT_NEAR(doa[item * 4], 5.0 / 6.0, 0.03) << item;
+      } else {
+        const double first = static_cast<double>(doa[item * 4]);
+        const double second = static_cast<double>(doa[item * 4 + 2]);
+        EXPECT_NEAR(std::min(first, second), 0.5, 0.03) << item;
+        EXPECT_NEAR(std::max(first, second), 5.0 / 6.0, 0.03) << item;
+      }
+    }
+    for (int64_t source = expected; source < 2; ++source) {
+      EXPECT_TRUE(std::isnan(doa[item * 4 + source * 2])) << item << ',' << source;
+      EXPECT_TRUE(std::isnan(doa[item * 4 + source * 2 + 1])) << item << ',' << source;
+    }
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+      const double expected_eigenvalue =
+          expected == 0 ? 0.0 : spectra[expected == 2 ? 1U : 0U][static_cast<size_t>(channel)];
+      EXPECT_NEAR(eigenvalues[item * kChannels + channel], expected_eigenvalue, 1e-3) << item;
+    }
+  }
+}
+
+// The 2-D solver has separate workspaces and a separate launch. Exercise a
+// full packed group plus its one-item tail, with invalid neighbors interleaved.
+TYPED_TEST(ESPRITCacheLifecycle, PackedUraItemsKeepIndependentDirectionsAndEmptyMasks) {
+  using T = TypeParam;
+  constexpr int64_t kItems = 33;
+  constexpr int64_t kLooks = 16;
+  const auto geometry = make_planar_ura_geometry(3, 3, 0.5, 1.0);
+  const int64_t channels = geometry.num_elements();
+  AngleConvention convention;
+  convention.preset = AngleConventionPreset::kRadarBoresight;
+  std::vector<std::complex<double>> values;
+  values.reserve(static_cast<size_t>(kItems * channels * kLooks));
+  std::vector<uint8_t> valid(static_cast<size_t>(kItems * kLooks), uint8_t{1});
+  for (int64_t item = 0; item < kItems; ++item) {
+    const double az = item % 2 == 0 ? 0.12 : -0.17;
+    const double el = item % 2 == 0 ? 0.08 : -0.09;
+    const auto block = make_block(geometry, convention, az, el, kLooks, 1e-4,
+                                  static_cast<unsigned int>(940 + item));
+    values.insert(values.end(), block.begin(), block.end());
+    if (item % 3 == 0) {
+      std::fill_n(valid.begin() + item * kLooks, static_cast<size_t>(kLooks), uint8_t{0});
+    }
+  }
+  const auto result = run_esprit_with_mask<T>(
+      to_device_tensor(valid, {kItems, kLooks}, DLDataType{kDLUInt, 8, 1}),
+      block_to_device<T>(values, {kItems, channels, kLooks}),
+      make_params(geometry, convention, /*num_sources=*/1, 1e-2, /*max_sources=*/2));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto aoa_frames = esprit_frames(result, "aoa_estimates");
+  const auto count_frames = esprit_frames(result, "source_count");
+  ASSERT_EQ(aoa_frames.size(), 1U);
+  ASSERT_EQ(count_frames.size(), 1U);
+  const T* aoa = aoa_frames[0].template as<T>();
+  const auto* count = count_frames[0].template as<int32_t>();
+  for (int64_t item = 0; item < kItems; ++item) {
+    const bool empty = item % 3 == 0;
+    EXPECT_EQ(count[item], empty ? 0 : 1) << item;
+    if (empty) {
+      EXPECT_TRUE(std::isnan(aoa[item * 2])) << item;
+      EXPECT_TRUE(std::isnan(aoa[item * 2 + 1])) << item;
+    } else {
+      EXPECT_NEAR(aoa[item * 2], item % 2 == 0 ? 0.12 : -0.17, 0.03) << item;
+      EXPECT_NEAR(aoa[item * 2 + 1], item % 2 == 0 ? 0.08 : -0.09, 0.03) << item;
+    }
+  }
 }
 
 }  // namespace

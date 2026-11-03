@@ -6,6 +6,7 @@
 #include <cuda/std/complex>
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -16,6 +17,7 @@ namespace holoscan::radar::detail {
 namespace {
 
 constexpr int64_t kBlock = 256;
+constexpr int64_t kCellsPerAverageTile = 4096;
 
 template <typename T>
 using Complex = cuda::std::complex<T>;
@@ -34,7 +36,7 @@ __global__ void gather_single_source_kernel(const Complex<T>* input, Complex<T>*
   }
 }
 
-template <typename T>
+template <typename T, bool Tiled>
 __global__ void gather_average_kernel(const Complex<T>* input, Complex<T>* output,
                                       int64_t num_doppler, int64_t num_range,
                                       const int64_t* member_offsets,
@@ -49,7 +51,10 @@ __global__ void gather_average_kernel(const Complex<T>* input, Complex<T>* outpu
   }
 
   const int64_t out_base = v * plane;
-  for (int64_t i = static_cast<int64_t>(threadIdx.x); i < plane; i += blockDim.x) {
+  const int64_t first = static_cast<int64_t>(threadIdx.x) +
+                        (Tiled ? static_cast<int64_t>(blockIdx.y) * blockDim.x : 0);
+  const int64_t stride = static_cast<int64_t>(blockDim.x) * (Tiled ? gridDim.y : 1);
+  for (int64_t i = first; i < plane; i += stride) {
     Complex<T> sum{};
     for (int64_t m = begin; m < end; ++m) {
       const int64_t src = member_indices[m];
@@ -94,8 +99,18 @@ void run_virtual_assembly_stage(const void* input, void* output, const RdMapsLay
   auto* out = static_cast<Complex<T>*>(output);
 
   if (plan.policy == OverlapPolicy::kAverage) {
-    gather_average_kernel<T><<<grid, kBlock, 0, stream>>>(
-        in, out, layout.num_doppler, layout.num_range, d_member_offsets, d_member_indices);
+    const int64_t plane = layout.num_doppler * layout.num_range;
+    if (plane > kCellsPerAverageTile) {
+      // Tiles cover disjoint stripes without changing a cell's member order.
+      // The stride still covers larger planes when grid.y reaches its limit.
+      const auto tiles = std::min<int64_t>(65535, 1 + (plane - 1) / kCellsPerAverageTile);
+      const dim3 tiled_grid(static_cast<unsigned int>(grid), static_cast<unsigned int>(tiles));
+      gather_average_kernel<T, true><<<tiled_grid, kBlock, 0, stream>>>(
+          in, out, layout.num_doppler, layout.num_range, d_member_offsets, d_member_indices);
+    } else {
+      gather_average_kernel<T, false><<<grid, kBlock, 0, stream>>>(
+          in, out, layout.num_doppler, layout.num_range, d_member_offsets, d_member_indices);
+    }
   } else {
     gather_single_source_kernel<T>
         <<<grid, kBlock, 0, stream>>>(in, out, layout.num_doppler, layout.num_range, d_src_channel);

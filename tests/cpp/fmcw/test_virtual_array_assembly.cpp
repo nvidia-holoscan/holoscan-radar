@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -276,6 +277,15 @@ TEST(VirtualArrayAssemblyOp, EmittedGeometryMatchesAnalyticLayout) {
 TEST(VirtualArrayAssemblyOp, GeometryDirectlyDrivesBeamscan) {
   namespace detail = holoscan::radar::testing::integration;
 
+  // Construct before Graph/RunSession so native input handles are released
+  // after their teardown, including ASSERT exits, rather than at static exit.
+  struct BankCleanup {
+    ~BankCleanup() {
+      detail::FrameBank::reset();
+      detail::FrameBankB::reset();
+    }
+  };
+  const BankCleanup cleanup;
   detail::FrameBank::reset();
   detail::FrameBankB::reset();
   const std::vector<int64_t> rd_shape{2, 2, 3, 1};
@@ -630,6 +640,131 @@ TEST(VirtualArrayAssemblyOp, RejectsRankTooSmall) {
   EXPECT_FALSE(result.ok());
   EXPECT_TRUE(assembly_maps(result).empty());
   EXPECT_FALSE(result.diagnostics().empty());
+}
+
+// Cell and channel markers are integers below 2^24 even during summation,
+// so both precisions have an exact analytic answer, including averaging the
+// three coincident channels in the centre of the 3-by-3 aperture. Expected
+// groups are authored here, independently of the production virtual plan.
+template <typename T>
+class VirtualArrayAssemblyTileBoundary : public ::testing::Test {};
+using AssemblyTilePrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(VirtualArrayAssemblyTileBoundary, AssemblyTilePrecisions);
+
+struct AssemblyPlane {
+  int64_t doppler;
+  int64_t range;
+};
+
+std::vector<double> linear_positions(int64_t elements, int64_t spacing = 1) {
+  std::vector<double> positions;
+  for (int64_t element = 0; element < elements; ++element) {
+    positions.insert(positions.end(), {static_cast<double>(element * spacing), 0.0, 0.0});
+  }
+  return positions;
+}
+
+template <typename T>
+void check_analytic_tile(const AssemblyPlane& shape, const std::vector<double>& tx_positions,
+                         const std::vector<double>& rx_positions,
+                         const std::vector<std::vector<int64_t>>& collision_groups,
+                         OverlapPolicy policy) {
+  const int64_t tx = static_cast<int64_t>(tx_positions.size() / 3);
+  const int64_t rx = static_cast<int64_t>(rx_positions.size() / 3);
+  const int64_t channels = tx * rx;
+  const int64_t plane = shape.doppler * shape.range;
+  std::vector<std::complex<T>> input(static_cast<std::size_t>(channels * plane));
+  for (int64_t channel = 0; channel < channels; ++channel) {
+    for (int64_t cell = 0; cell < plane; ++cell) {
+      input[static_cast<std::size_t>(channel * plane + cell)] = {
+          static_cast<T>(8192 * channel + cell + 1), static_cast<T>(3 * cell - 4096 * channel - 1)};
+    }
+  }
+  const auto result = run_assembly<T>(input, {tx, rx, shape.doppler, shape.range}, tx_positions,
+                                      rx_positions, kWavelength, policy);
+  const int64_t output_channels =
+      policy == OverlapPolicy::kKeepAll ? channels : static_cast<int64_t>(collision_groups.size());
+  ASSERT_EQ(result.rd_maps.shape,
+            (std::vector<int64_t>{output_channels, shape.doppler, shape.range}));
+  ASSERT_TRUE(holoscan::radar::dldatatype_equals(result.rd_maps.dtype, complex_dtype<T>()));
+  ASSERT_EQ(result.geometry.num_elements(), output_channels);
+  const auto* output = result.rd_maps.template as<std::complex<T>>();
+  std::vector<double> expected_positions;
+  for (int64_t channel = 0; channel < output_channels; ++channel) {
+    int64_t representative = channel;
+    int64_t mean_source = channel;
+    if (policy != OverlapPolicy::kKeepAll) {
+      const auto& group = collision_groups[static_cast<std::size_t>(channel)];
+      ASSERT_FALSE(group.empty());
+      representative = group.front();
+      mean_source = representative;
+      if (policy == OverlapPolicy::kAverage) {
+        int64_t sum = 0;
+        for (const int64_t member : group) {
+          sum += member;
+        }
+        const int64_t members = static_cast<int64_t>(group.size());
+        ASSERT_EQ(sum % members, 0) << "Fixture requires an exactly integral mean channel";
+        mean_source = sum / members;
+      }
+    }
+    const std::size_t tx_offset = static_cast<std::size_t>((representative / rx) * 3);
+    const std::size_t rx_offset = static_cast<std::size_t>((representative % rx) * 3);
+    expected_positions.insert(expected_positions.end(),
+                              {tx_positions[tx_offset] + rx_positions[rx_offset], 0.0, 0.0});
+    for (int64_t cell = 0; cell < plane; ++cell) {
+      const std::complex<T> expected{static_cast<T>(8192 * mean_source + cell + 1),
+                                     static_cast<T>(3 * cell - 4096 * mean_source - 1)};
+      ASSERT_EQ(output[channel * plane + cell], expected)
+          << "policy=" << static_cast<int>(policy) << " plane=" << plane
+          << " output_channel=" << channel << " cell=" << cell;
+    }
+  }
+  EXPECT_EQ(result.geometry.element_positions, expected_positions);
+  EXPECT_EQ(result.geometry.wavelength, kWavelength);
+}
+
+template <typename T>
+void check_plane_boundaries(OverlapPolicy policy) {
+  // Factor large planes to remain within the existing fixture's D/R bounds;
+  // 257/4097 exercise partial tiles and 255/4095 leave one cell short.
+  const std::vector<AssemblyPlane> planes{{1, 1},   {3, 85},   {4, 64},  {1, 257},
+                                          {9, 455}, {16, 256}, {17, 241}};
+  const auto positions = linear_positions(3);
+  const std::vector<std::vector<int64_t>> groups{{0}, {1, 3}, {2, 4, 6}, {5, 7}, {8}};
+  for (const auto& plane : planes) {
+    SCOPED_TRACE(::testing::Message() << "D=" << plane.doppler << " R=" << plane.range);
+    check_analytic_tile<T>(plane, positions, positions, groups, policy);
+  }
+}
+
+TYPED_TEST(VirtualArrayAssemblyTileBoundary, KeepAllPreservesEveryComplexCellAtPlaneBoundaries) {
+  check_plane_boundaries<TypeParam>(OverlapPolicy::kKeepAll);
+}
+
+TYPED_TEST(VirtualArrayAssemblyTileBoundary, DedupKeepsFirstComplexCellAtPlaneBoundaries) {
+  check_plane_boundaries<TypeParam>(OverlapPolicy::kDedup);
+}
+
+TYPED_TEST(VirtualArrayAssemblyTileBoundary, AverageCombinesAllMembersAtPlaneBoundaries) {
+  check_plane_boundaries<TypeParam>(OverlapPolicy::kAverage);
+}
+
+TYPED_TEST(VirtualArrayAssemblyTileBoundary, UniqueChannelCountsAroundEightPreservePartialPlanes) {
+  for (const int64_t channels : {1, 7, 8, 9}) {
+    // Nine channels use 3 TX by 3 RX, rather than exceeding max_rx=8.
+    const auto tx = linear_positions(channels == 9 ? 3 : 1, 3);
+    const auto rx = linear_positions(channels == 9 ? 3 : channels);
+    std::vector<std::vector<int64_t>> groups;
+    for (int64_t channel = 0; channel < channels; ++channel) {
+      groups.push_back({channel});
+    }
+    for (const auto policy :
+         {OverlapPolicy::kKeepAll, OverlapPolicy::kDedup, OverlapPolicy::kAverage}) {
+      SCOPED_TRACE(::testing::Message() << "channels=" << channels);
+      check_analytic_tile<TypeParam>({1, 257}, tx, rx, groups, policy);
+    }
+  }
 }
 
 }  // namespace
