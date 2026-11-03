@@ -31,9 +31,9 @@
 //
 // In:  image            complex64/complex128, (num_v, num_u). The formed SLC.
 // Out: image_out        complex64/complex128, same shape. Corrected image.
-// Out: phase_correction float32/float64, (num_pulses). Optional. Indexed by
-//                       pulse, not azimuth bin; length is the named azimuth
-//                       axis.
+// Out: phase_correction float32/float64, (num_az). Optional. Ordered by
+//                       pulse, not azimuth bin; num_az is the extent of the
+//                       named azimuth axis, which need not be num_pulses.
 // Out: sharpness        float32/float64, (num_iterations + 1). Optional. Focus
 //                       metric before each iteration and after the last.
 // Out: termination      int32, (1). Optional. Why the loop stopped

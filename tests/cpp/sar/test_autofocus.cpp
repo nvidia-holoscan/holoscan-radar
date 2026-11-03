@@ -797,6 +797,16 @@ TEST(AutofocusOp, RejectsIterationsBeyondPoolBound) {
   EXPECT_NE(out.failure.find("num_iterations"), std::string::npos) << out.failure;
 }
 
+// +inf is the uncapped default, but -inf used to pass validation too, and the
+// stage skips a non-finite ceiling, so the guard silently never applied.
+TEST(AutofocusOp, RejectsNegativeInfiniteMaxCorrection) {
+  const auto img = make_image<float>(injected_phi(), kStrong, true);
+  const auto out = run_af<float>(AutofocusAzimuthAxis::kU, img, {kRg, kAz}, 4, 0.5, 16,
+                                 -std::numeric_limits<double>::infinity());
+  ASSERT_FALSE(out.ran_ok) << "the operator did not reject this configuration";
+  EXPECT_NE(out.failure.find("max_correction"), std::string::npos) << out.failure;
+}
+
 TEST(AutofocusOp, FloatDoubleAgree) {
   const auto phi = injected_phi();
   const auto img_f = make_image<float>(phi, kStrong, true);
