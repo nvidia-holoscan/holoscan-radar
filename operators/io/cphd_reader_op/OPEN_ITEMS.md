@@ -441,10 +441,14 @@ Note this is separate from **R10**, the open team question about the key's
 [`SIGPROC_PLAN.md`](../../../docs/planning/SAR/SIGPROC_PLAN.md). R10 governs
 the prefix; this item governs the value.
 
-## 12. The mean APC accumulates the downcast position, not the computed one
+## 12. The mean APC accumulates the downcast position, not the computed one — closed
+
+**Fixed on `dpc/sar-autofocus`:** the mean now accumulates `0.5 * (tx + rx)` in
+`double` (`cphd_reader_op.cu`, the APC loop). The record below is the defect as
+found.
 
 Found in the 2026-10-30 `dpc/sar-autofocus` push review; predates that branch
-(`38ba5ef5`) and was not touched by it.
+(`38ba5ef5`).
 
 `cphd_reader_op.cu:477` computes the phase centre as a `double`, stores it
 through a `TGeom` cast, and then accumulates the **stored** value:
@@ -467,7 +471,11 @@ where the cast is the identity. It bites a `<float, float>` build, which the
 template still permits. The fix is `mean[axis] += value;` inside the existing
 axis loop — the variable is already in scope.
 
-## 13. The AmpSF upload is the one H2D with no byte-count assertion
+## 13. The AmpSF upload is the one H2D with no byte-count assertion — closed
+
+**Fixed on `dpc/sar-autofocus`:** `fill_history` now rejects an AmpSF longer
+than the pulse batch with `kInvalidArgument` before the copy. The record below
+is the gap as found.
 
 Same review and same provenance as item 12. Hardening, not a live defect.
 

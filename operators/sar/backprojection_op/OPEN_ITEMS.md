@@ -56,16 +56,9 @@ Do not resolve team-blocked items here.
 9. **Four items found in the 2026-10-30 `dpc/sar-autofocus` push
    review.** All predate that branch (`b591e829`). The write-only
    `range_bins_connected_` member was removed on 2026-10-31 with the rest
-   of the review's nits; these three were left. Only the first has a
-   measured runtime cost.
+   of the review's nits, and the `locality_warned_` re-arm is fixed (item
+   11). These two remain.
 
-   - **`locality_warned_` is cleared on every scroll tick**
-     (`backprojection_op.cu:630` / `:711`), so the Taylor locality check
-     re-arms continuously instead of warning once. The check costs two
-     blocking device-to-host synchronisations, which on the default
-     Taylor backend therefore run every tick of a scrolling collect
-     rather than on the first. Measured, not inferred. Latch it per
-     geometry instead of per emit.
    - **`sample_points_connected_` latches on arrival, not on wiring**
      (`backprojection_op.cu:296`): `if (sample_points) sample_points_connected_ = true;`.
      The port is `[live]` with `SafeDefault{}`, so a tick with no match
@@ -87,12 +80,11 @@ Do not resolve team-blocked items here.
      The whole point of `SafeDefault{}` is that a missed tick is legal,
      so a scrolling instance should treat a miss as "no change" rather
      than as a reversion to Params.
-10. **Element counts are narrowed to `int` in three places**
-    (`backprojection_stage.hpp:558`, `:576`, `:1104`). The counts are
-    `int64_t` and the lattices they describe are large — Atlanta is
-    8192x8192 — so these sit closer to the 2^31 element ceiling than
-    anything else in the operator. Not reached by any current
-    configuration.
+10. **Element counts narrowed to `int` — closed.** `zero_float_kernel`,
+    `promote_image_kernel` and their callers in `backprojection_stage.hpp`
+    now take and pass the `int64_t` count. Only the launch's `blocks`
+    computation is still an `int`, which overflows above roughly
+    5.5e11 elements, far past any lattice the pools can hold.
 
 11. **`locality_warned_` is no longer re-armed on every scroll tick**
     (fixed 2026-11-01). A scroll advances the lattice by whole rows and

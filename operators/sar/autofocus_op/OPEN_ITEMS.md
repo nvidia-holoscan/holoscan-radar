@@ -310,8 +310,11 @@ collect.
    at the time that the `fftshift(phase_acc)` emit was the first
    suspect; it was, along with the integration feeding it.
 
-5. **`num_iterations` is bounded at 255 by the contract's `uint8`,
-   which has not been exercised anywhere near that.** The default is 8
+5. **`num_iterations` is bounded at 255 by `kMaxAutofocusIterations`
+   (`autofocus_op.hpp`), which has not been exercised anywhere near
+   that.** The parameter is `int64`; the ceiling exists because the
+   `sharpness` pool is sized at graph build and the parameter is
+   `[live]`, so an override beyond it is refused. The default is 8
    and the sweeps above use 4 except where noted. Whether the
    guard-and-keep behaviour is still sensible over tens of iterations
    is unknown.

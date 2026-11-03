@@ -103,7 +103,7 @@ a valid contract value or sizing rule.
 
 ## Precision and native recipe snapshots
 
-Each of the 26 typed adapters builds two executables: `perf_<operator>` for
+Each of the 27 typed adapters builds two executables: `perf_<operator>` for
 float and `perf_<operator>_double` for double. Precision remains a compile-time
 operator instantiation. Both executables consume the same canonical recipe;
 the double build selects paired float64/complex128 input representations and
@@ -197,7 +197,7 @@ Example in the pinned HSDK 5 GPU container:
 scope, steady sample count, changed live port, achieved frames/s, and source
 cadence; old schema-version-2 readers must be updated.
 
-All 26 C++ operator tools use these YAML suites. The legacy Python operator
+All 27 C++ operator tools use these YAML suites. The legacy Python operator
 performance tools were removed because their separate scenario matrices could
 not run against the pinned HSDK 5 image, which does not build the Python
 bindings. The production Python package and its tests are separate from this
