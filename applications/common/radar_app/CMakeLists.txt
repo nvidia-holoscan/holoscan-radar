@@ -28,7 +28,7 @@ target_link_libraries(radar_app INTERFACE
 add_library(radar_app_gpu STATIC app/gpu_placement.cpp)
 target_include_directories(radar_app_gpu PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/applications/common>)
-target_link_libraries(radar_app_gpu PUBLIC holoscan::core CUDA::cudart)
+target_link_libraries(radar_app_gpu PUBLIC holoscan::core holoscan::params_io CUDA::cudart)
 set_target_properties(radar_app_gpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     target_compile_definitions(radar_app_gpu PRIVATE HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ=1)

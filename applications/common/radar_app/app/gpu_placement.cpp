@@ -3,11 +3,19 @@
 
 #include "radar_app/app/gpu_placement.hpp"
 
+#include <unistd.h>
+
+#include <cstdint>
 #include <cstdlib>
+#include <filesystem>  // NOLINT(build/c++17)
+#include <iostream>
+#include <string>
 #include <optional>
 #include <stdexcept>
 
 #include <holoscan/logger/logger.hpp>
+
+#include "radar_app/app/presentation_choice.hpp"
 
 #if HOLOSCAN_RADAR_HAS_X11
 #include <X11/Xlib.h>
@@ -106,6 +114,41 @@ bool fmcw_uses_x11_presentation(bool enabled) {
   static_cast<void>(enabled);
   return false;
 #endif
+}
+
+bool resolve_fmcw_x11_presentation(bool window, std::optional<bool> configured, bool choose_again,
+                                   const std::string& config_path) {
+  // Cache per display and session type, rather than treating DISPLAY as proof
+  // of SSH forwarding. Avoid SSH connection addresses so reconnects reuse it.
+  const auto env = [](const char* name) {
+    const char* value = std::getenv(name);
+    return value ? std::string(value) : std::string{};
+  };
+  std::filesystem::path root = env("XDG_CACHE_HOME");
+  if (root.empty() && !env("HOME").empty())
+    root = std::filesystem::path(env("HOME")) / ".cache";
+  const std::string setup =
+      env("DISPLAY") + "\n" + env("WAYLAND_DISPLAY") + "\n" +
+      (env("SSH_CONNECTION").empty() && env("SSH_TTY").empty() ? "local" : "ssh");
+  // Stable FNV-1a keeps display names out of filenames across C++/Python runs.
+  std::uint64_t key = 14695981039346656037ULL;
+  for (const unsigned char byte : setup) {
+    key ^= byte;
+    key *= 1099511628211ULL;
+  }
+  const auto cache =
+      root.empty() ? std::filesystem::path{}
+                   : root / "holoscan-radar" / "presentation-v2" / (std::to_string(key) + ".json");
+  return detail::choose_x11_presentation(
+      detail::PresentationChoice{.window = window,
+                                 .x11_available = fmcw_uses_x11_presentation(true),
+                                 .interactive = ::isatty(STDIN_FILENO) && ::isatty(STDERR_FILENO),
+                                 .configured = configured,
+                                 .cache_file = cache,
+                                 .setup_key = std::to_string(key),
+                                 .choose_again = choose_again,
+                                 .config_path = config_path},
+      std::cin, std::cerr);
 }
 
 int select_fmcw_application_device(bool window, bool cuda_sink, bool x11_presentation) {

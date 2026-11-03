@@ -8,12 +8,15 @@
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <fstream>
 #include <iterator>
+#include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "radar_app/fmcw/mimo_config.hpp"
+#include "radar_app/app/presentation_choice.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 
 #include "app/config_fixture.hpp"
@@ -140,6 +143,160 @@ TEST(FmcwMimoConfig, DecodesX11PresentationSwitch) {
   const MutatedConfig file("mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
                            "display_rate_hz: 20.0\n        x11_presentation: false");
   EXPECT_FALSE(mimo::load_tdm_config(file.path()).visualization.x11_presentation);
+}
+
+radar::app::detail::PresentationChoice presenter_choice(const std::filesystem::path& path) {
+  return {.window = true,
+          .x11_available = true,
+          .interactive = true,
+          .configured = std::nullopt,
+          .cache_file = path,
+          .setup_key = "123",
+          .choose_again = false,
+          .now_seconds = 1700000000,
+          .config_path = "custom_preset.yaml"};
+}
+
+TEST(FmcwPresentationChoice, DefaultsToThisRunOnly) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  const auto path = directory.write("choice", "invalid\n");
+  std::filesystem::remove(path);
+  const auto choice = presenter_choice(path);
+  std::istringstream input("n\n\n");
+  std::ostringstream output;
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_NE(output.str().find("This run only (default)"), std::string::npos);
+  EXPECT_NE(output.str().find("in \"custom_preset.yaml\"."), std::string::npos);
+}
+
+TEST(FmcwPresentationChoice, SevenDayChoiceExpiresAtBoundary) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  auto choice = presenter_choice(directory.write("choice", "invalid\n"));
+  std::istringstream input("unknown\n n \ninvalid\n2\n");
+  std::ostringstream output;
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  EXPECT_NE(output.str().find("Please choose"), std::string::npos);
+  const auto saved = radar::app::detail::read_presentation(choice);
+  ASSERT_TRUE(saved);
+  EXPECT_EQ(saved->expires_at, choice.now_seconds + 604800);
+
+  choice.interactive = false;
+  choice.now_seconds += 604799;
+  std::istringstream no_input;
+  output.str("");
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, no_input, output));
+  EXPECT_NE(output.str().find("expires"), std::string::npos);
+  EXPECT_NE(output.str().find("--choose-presenter"), std::string::npos);
+  ++choice.now_seconds;
+  EXPECT_FALSE(radar::app::detail::read_presentation(choice));
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, no_input, output));
+}
+
+TEST(FmcwPresentationChoice, IndefiniteChoiceSurvivesAndExplicitConfigWins) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  auto choice = presenter_choice(directory.write("choice", "invalid\n"));
+  std::istringstream input("n\n3\n");
+  std::ostringstream output;
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  choice.now_seconds += 100 * 604800;
+  choice.interactive = false;
+  std::istringstream no_input;
+  output.str("");
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, no_input, output));
+  EXPECT_NE(output.str().find("until changed"), std::string::npos);
+  choice.configured = true;
+  output.str("");
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, no_input, output));
+  EXPECT_TRUE(output.str().empty());
+  choice.configured = false;
+  choice.choose_again = true;
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, no_input, output));
+  EXPECT_NE(output.str().find("takes priority"), std::string::npos);
+  EXPECT_TRUE(radar::app::detail::read_presentation(choice));
+}
+
+TEST(FmcwPresentationChoice, RejectsWrongSetupClockRollbackAndInvalidMetadata) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  auto choice = presenter_choice(directory.write("choice", "invalid\n"));
+  std::ostringstream output;
+  radar::app::detail::remember_presentation(choice, false, true, output);
+  choice.setup_key = "456";
+  EXPECT_FALSE(radar::app::detail::read_presentation(choice));
+  choice.setup_key = "123";
+  --choice.now_seconds;
+  EXPECT_FALSE(radar::app::detail::read_presentation(choice));
+  ++choice.now_seconds;
+  const std::vector<std::string> invalid{
+      "native\n",
+      "{broken",
+      "{}",
+      R"({"version":1,"presenter":"native","setup_key":"123","saved_at":1,"expires_at":null})",
+      R"({"version":2,"presenter":"other","setup_key":"123","saved_at":1,"expires_at":null})",
+      R"({"version":2,"presenter":"native","setup_key":"123","saved_at":0,"expires_at":null})",
+      R"({"version":2,"presenter":"native","setup_key":"123","saved_at":1,"expires_at":0})",
+      R"({"version":2,"presenter":"native","setup_key":"123","saved_at":1,"expires_at":"never"})",
+      R"({"version":2,"presenter":"native","setup_key":"123","saved_at":1})"};
+  for (const auto& text : invalid) {
+    SCOPED_TRACE(text);
+    choice.cache_file = directory.write("choice", text);
+    EXPECT_FALSE(radar::app::detail::read_presentation(choice));
+  }
+}
+
+TEST(FmcwPresentationChoice, ChooseAgainClearsOldPreferenceEvenForOneRunChoice) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  auto choice = presenter_choice(directory.write("choice", "invalid\n"));
+  std::ostringstream output;
+  radar::app::detail::remember_presentation(choice, false, true, output);
+  choice.choose_again = true;
+  choice.interactive = false;
+  std::istringstream input("x\n1\n");
+  EXPECT_THROW(radar::app::detail::choose_x11_presentation(choice, input, output),
+               std::runtime_error);
+  EXPECT_TRUE(radar::app::detail::read_presentation(choice));
+  choice.interactive = true;
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  EXPECT_FALSE(std::filesystem::exists(choice.cache_file));
+}
+
+TEST(FmcwPresentationChoice, EofAndUnattendedRunsDoNotSavePreferences) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  const auto path = directory.write("choice", "invalid\n");
+  std::filesystem::remove(path);
+  auto choice = presenter_choice(path);
+  std::istringstream empty;
+  std::ostringstream output;
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, empty, output));
+  std::istringstream native("n\n");
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, native, output));
+  choice.interactive = false;
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, empty, output));
+  EXPECT_FALSE(std::filesystem::exists(path));
+}
+
+TEST(FmcwPresentationChoice, NonvisualAndUnavailableX11NeverPromptOrReadCache) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  auto choice = presenter_choice(directory.write("choice", "invalid\n"));
+  std::ostringstream output;
+  radar::app::detail::remember_presentation(choice, false, true, output);
+  choice.window = false;
+  std::istringstream input("n\n");
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  choice.window = true;
+  choice.x11_available = false;
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  EXPECT_TRUE(output.str().empty());
+  EXPECT_EQ(input.peek(), 'n');
+}
+
+TEST(FmcwPresentationChoice, CacheWriteFailureKeepsSelectedPresenter) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  const auto choice = presenter_choice(directory.write("blocking-file", "data") / "choice");
+  std::istringstream input("n\n2\n");
+  std::ostringstream output;
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  EXPECT_NE(output.str().find("Could not remember"), std::string::npos);
 }
 
 TEST(FmcwMimoConfig, DecodesDashboardWidthAndRejectsInvalidPercentages) {
