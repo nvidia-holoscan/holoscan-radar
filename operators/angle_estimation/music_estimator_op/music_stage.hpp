@@ -557,8 +557,10 @@ __global__ void music_blank_empty_items_kernel(const int64_t* __restrict__ k_cou
 //   snapshots — device ptr, [num_items, num_channels, num_snapshots]
 //               cuda::std::complex<T>.
 //   mask      — device ptr, [num_items, num_snapshots] uint8/bool, or nullptr.
-//   manifold  — device ptr, [num_beams, num_channels] cuda::std::complex<T>
-//               untapered steering vectors, beam el-major.
+//   manifold  — device ptr, cuda::std::complex<T> untapered steering vectors.
+//               float: channel-major [num_channels, num_beams];
+//               double: beam-major [num_beams, num_channels].
+//               Beams are ordered el-major in both layouts.
 //   eigenvalues — device ptr, [num_items, num_channels] T. Ascending.
 //   model_order — device ptr, [num_items] int32 scratch (resolved order).
 //   doa_multi   — device ptr, [num_items, max_sources, 2] T.
