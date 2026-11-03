@@ -70,6 +70,8 @@ class SarMosaicOp : public Operator<> {
     if (crop_u0_ < 0 || crop_nu_ < 0 || display_max_side_ < 0 ||
         crop_u0_ + crop_nu_ > parent_.num_u())
       throw std::invalid_argument("SarMosaicOp: invalid parent-u crop or display budget");
+    if (crop_nu_ == 0 && crop_u0_ != 0)
+      throw std::invalid_argument("SarMosaicOp: a parent-u crop offset needs a crop width");
     if (crop_nu_ == 0) {
       crop_u0_ = 0;
       crop_nu_ = parent_.num_u();
