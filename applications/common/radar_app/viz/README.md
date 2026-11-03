@@ -155,9 +155,12 @@ projections, and stored detection/truth coordinates retain radians.
 
 ## Native text and presentation
 
-FMCW applications select X11 finished-image presentation when X11/XRender support
-is built, `DISPLAY` is nonempty, and `app.visualization.x11_presentation` is
-`true` (the default). Set it to `false` to use the native HoloViz window path:
+FMCW applications offer a presenter choice when X11/XRender support is built,
+`DISPLAY` is nonempty, visualization is enabled, and
+`app.visualization.x11_presentation` is omitted. At startup, an interactive terminal
+asks whether the setup needs X11 image transport (for example SSH/X11 forwarding)
+or a native HoloViz window on a local desktop. Enter selects X11.
+An explicit boolean bypasses both the question and any remembered answer:
 
 ```yaml
 app:
@@ -165,10 +168,49 @@ app:
     x11_presentation: false
 ```
 
-This setting applies to both C++ and Python. It controls window presentation;
-HoloViz still composes the image and native text offscreen in either case.
-The native window path requires a compatible Vulkan presentation surface.
-Startup logs `Radar presentation: X11 finished-image transport` for X11,
+Set `true` to select X11 without asking, or `false` to select native HoloViz.
+Both C++ and Python then ask how long to remember the choice:
+
+- **This run only** (default): no preference is saved.
+- **Remember for 7 days**: expires exactly seven days after selection.
+- **Remember until changed**: no expiration.
+
+Preferences are keyed by `DISPLAY`, `WAYLAND_DISPLAY`, and local/SSH session type,
+under `$XDG_CACHE_HOME/holoscan-radar/presentation-v2`, or
+`$HOME/.cache/holoscan-radar/presentation-v2` when `XDG_CACHE_HOME` is unset.
+Version-2 JSON records store the presenter, setup key, save time, and expiration
+as UTC Unix seconds (`expires_at: null` means until changed). Each load checks
+version, field types, presenter, setup identity, timestamps, and expiration.
+Expired, malformed, wrong-setup, or future-dated records are ignored. Old
+`presentation-v1` files are not reused. Display variables identify a setup;
+they do not prove that SSH forwarding is in use.
+
+The host CLI mounts the project as the container home, so its default cache is
+`.cache/holoscan-radar/presentation-v2` in the host checkout and survives container
+restarts. Direct runs use their own environment's cache location. Every reused
+answer prints its expiration (or "until changed") and how to choose again.
+Use `--choose-presenter` to clear the current setup's saved answer and ask again;
+selecting "this run only" then leaves no saved answer. Explicit YAML still wins:
+omit `x11_presentation` to use the interactive choice. For example, on the host:
+
+```bash
+./holoscan-radar run mimo_tdm --language cpp --run-args=--choose-presenter
+./holoscan-radar run mimo_tdm --language python --run-args=--choose-presenter
+```
+
+Direct executables accept `[config.yaml] --choose-presenter`; Python's
+`build_graph(path, choose_presenter=True)` exposes the same behavior.
+The reset option requires an interactive terminal when a choice is needed.
+Without a terminal, a valid saved answer is used; otherwise X11 remains the
+default and no answer is cached. EOF at the presenter question defaults to X11;
+EOF at the remember question keeps the selected presenter for this run only.
+Nonvisual runs and configurations without X11 never ask. Cache write failures
+are reported but do not prevent the selected presenter from running.
+
+This setting controls window presentation; HoloViz still composes the image and
+native text offscreen in either case. The native window path requires a
+compatible Vulkan presentation surface. Startup logs
+`Radar presentation: X11 finished-image transport` for X11,
 or `Radar presentation: CUDA device <N>` for the native window path.
 
 HSDK 5.0.0.7 provides `TextLayerDesc` and `TextRunHeader`. The compositor emits
