@@ -286,6 +286,10 @@ def run_one(binary: pathlib.Path, cfg: dict, scene: str, label: str) -> Result |
         path = handle.name
     try:
         proc = subprocess.run([str(binary), path], capture_output=True, text=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        # One stalled case must not end a multi-hour multi-scene sweep.
+        print(f"  !! {scene}/{label}: timed out after 1800 s", file=sys.stderr)
+        return None
     finally:
         pathlib.Path(path).unlink(missing_ok=True)
     text = proc.stdout + proc.stderr
