@@ -6,6 +6,7 @@
 #include <cuda_runtime_api.h>
 
 #include <cmath>
+#include <cstddef>
 #include <chrono>
 #include <complex>
 #include <cstdint>
@@ -368,6 +369,99 @@ TEST(TDMSparseCompensationOp, RejectsFoldRowCountMismatch) {
   EXPECT_FALSE(result.ok());
   EXPECT_TRUE(sparse_snapshots(result).empty());
   EXPECT_FALSE(result.diagnostics().empty());
+}
+
+template <typename T>
+class TDMSparsePointTail : public ::testing::Test {};
+using TDMSparsePointPrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(TDMSparsePointTail, TDMSparsePointPrecisions);
+
+TYPED_TEST(TDMSparsePointTail, DistinctCellsAndFoldMarkersCrossFlatBlockBoundary) {
+  using T = TypeParam;
+  constexpr int64_t kItems = 33;
+  constexpr int64_t kChannels = 4;
+  std::vector<std::complex<T>> host(static_cast<std::size_t>(kChannels * kDoppler * kRange));
+  for (int64_t channel = 0; channel < kChannels; ++channel) {
+    for (int64_t d = 0; d < kDoppler; ++d) {
+      for (int64_t r = 0; r < kRange; ++r) {
+        host[static_cast<std::size_t>((channel * kDoppler + d) * kRange + r)] = {
+            static_cast<T>(100 * channel + 10 * d + r + 1),
+            static_cast<T>(-8 * channel - 2 * d - r - 1)};
+      }
+    }
+  }
+  std::vector<int64_t> cells;
+  std::vector<int64_t> folds;
+  for (int64_t item = 0; item < kItems; ++item) {
+    cells.push_back((item * 3) % kDoppler);
+    cells.push_back(item % kRange);
+    folds.push_back(item % kNumTx);
+  }
+  auto rd = device_tensor(host, {kNumTx, kNumRx, kDoppler, kRange}, hr::complex_dtype<T>());
+  auto detection = device_tensor(cells, {kItems, 2}, DLDataType{kDLInt, 64, 1});
+  auto fold = device_tensor(folds, {kItems}, DLDataType{kDLInt, 64, 1});
+  std::vector<std::complex<T>> corrections;
+  for (const auto& value : hr::detail::build_tdm_correction_table(waveform(), kNumTx, kDoppler)) {
+    corrections.emplace_back(static_cast<T>(value.real()), static_cast<T>(value.imag()));
+  }
+  std::vector<std::complex<T>> fold_corrections;
+  for (const auto& value : hr::detail::build_tdm_fold_correction_table(kNumTx)) {
+    fold_corrections.emplace_back(static_cast<T>(value.real()), static_cast<T>(value.imag()));
+  }
+  auto correction = device_tensor(corrections, {kNumTx, kDoppler}, hr::complex_dtype<T>());
+  auto fold_correction = device_tensor(fold_corrections, {kNumTx, kNumTx}, hr::complex_dtype<T>());
+  const auto plan = hr::detail::build_virtual_plan(
+      {0.0, 0.0, 0.0, 2.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 1.0, 0.0, 0.0}, kNumTx, kNumRx,
+      hr::OverlapPolicy::kKeepAll, "TDMSparseCompensationOp");
+  ASSERT_EQ(plan.num_virtual, kChannels);
+  auto src = device_tensor(plan.src_channel, {kChannels}, DLDataType{kDLInt, 64, 1});
+  auto unused = device_tensor(std::vector<int64_t>{0}, {1}, DLDataType{kDLInt, 64, 1});
+  auto output = hr::make_device_tensor({kItems, kChannels, 1}, hr::complex_dtype<T>());
+  auto valid_output = hr::make_device_tensor({kItems, 1}, DLDataType{kDLUInt, 8, 1});
+  auto error = hr::make_device_tensor({1}, DLDataType{kDLInt, 32, 1});
+  ASSERT_EQ(cudaMemset(const_cast<void*>(error->data()), 0, sizeof(int)), cudaSuccess);
+  const hr::detail::TdmRdMapsLayout layout{
+      .num_tx = kNumTx, .num_rx = kNumRx, .num_doppler = kDoppler, .num_range = kRange};
+  hr::detail::run_tdm_sparse_compensation_stage<T>(
+      rd->data(), static_cast<const int64_t*>(detection->data()),
+      static_cast<const int64_t*>(fold->data()), kItems, layout, 1, 0, 0,
+      hr::SnapshotEdgeMode::kWrap, hr::SnapshotEdgeMode::kShift, plan, correction->data(),
+      fold_correction->data(), static_cast<const int64_t*>(src->data()),
+      static_cast<const int64_t*>(unused->data()), static_cast<const int64_t*>(unused->data()),
+      const_cast<void*>(output->data()),
+      static_cast<uint8_t*>(const_cast<void*>(valid_output->data())),
+      static_cast<int*>(const_cast<void*>(error->data())), nullptr);
+  ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+  ASSERT_EQ(copy_to_host<int>(*error, 1), (std::vector<int>{0}));
+  const auto actual_values = copy_to_host<std::complex<T>>(*output, kItems * kChannels);
+  const auto* actual = actual_values.data();
+  for (int64_t item = 0; item < kItems; ++item) {
+    const int64_t d = cells[static_cast<std::size_t>(item * 2)];
+    const int64_t r = cells[static_cast<std::size_t>(item * 2 + 1)];
+    for (int64_t channel = 0; channel < kChannels; ++channel) {
+      const int64_t tx = channel / kNumRx;
+      // Independent centered-Doppler phase and TDM fold phase, natural firing order.
+      const double phase = -hr::kTwoPi * static_cast<double>((d - kDoppler / 2) * tx) /
+                           static_cast<double>(kDoppler * kNumTx);
+      const double fold_phase =
+          -hr::kTwoPi * static_cast<double>(folds[item] * tx) / static_cast<double>(kNumTx);
+      const auto marker = host[static_cast<std::size_t>((channel * kDoppler + d) * kRange + r)];
+      const std::complex<double> expected =
+          std::complex<double>(marker.real(), marker.imag()) *
+          std::complex<double>(std::cos(phase), std::sin(phase)) *
+          std::complex<double>(std::cos(fold_phase), std::sin(fold_phase));
+      const auto value = actual[item * kChannels + channel];
+      const double tolerance = sizeof(T) == sizeof(float) ? 2e-5 : 1e-12;
+      EXPECT_LE(std::abs(std::complex<double>(value.real(), value.imag()) - expected),
+                tolerance * (1.0 + std::abs(expected)))
+          << item << ":" << channel;
+    }
+  }
+  const auto valid = copy_to_host<uint8_t>(*valid_output, kItems);
+  ASSERT_EQ(valid.size(), static_cast<std::size_t>(kItems));
+  for (int64_t item = 0; item < kItems; ++item) {
+    EXPECT_EQ(valid[static_cast<std::size_t>(item)], 1U);
+  }
 }
 
 }  // namespace

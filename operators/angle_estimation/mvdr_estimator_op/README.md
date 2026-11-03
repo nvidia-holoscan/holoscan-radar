@@ -85,7 +85,7 @@ If auto `δ` is not `> 0` (all-zero / empty covariance), the kernel uses the abs
 
 **4. Hermitian inverse.** Batched `matx::inv(R̂)`.
 
-**5. Capon scan** (`capon_reduce_kernel`). Untapered steering `a(θ)` from `build_steering_weights_device` (`WindowSpec{}`, el-major, beam-major, `conjugate=false`):
+**5. Capon scan** (`capon_reduce_kernel`). Untapered steering `a(θ)` from `build_steering_weights_device` (`WindowSpec{}`, el-major beams, `conjugate=false`). The cached private tensor is channel-major for float with effective `C >= 8` (including smoothing), with matching scan read stride `num_beams`; smaller float apertures and all double use the original beam-major layout/read stride 1:
 
 ```text
 a_m(θ) = exp(j · k · (p_m · dir(θ))),   k = 2π / λ
@@ -131,6 +131,12 @@ Rejected combinations:
 **Cold.** First unseen geometry / grid / smoothing key builds the steering manifold and (if enabled) the smoothing plan. First `matx::eig` and `matx::inv` create plans.
 
 **Steady.** Covariance, load, inv, and Capon scan run every tick using stable constructor-created workspace and retained MatX plans. The steering artifact caches its manifold and device scan grids. Eigen decomposition and peak extraction drop out after their optional outputs latch unwired. MatX 1.0.0's cached single-matrix cuSolver inverse is not repeatable, so a one-item tick duplicates its loaded covariance internally and inverts a two-matrix batch; public and downstream item counts remain one.
+
+For float instances whose eigenvalue output has latched unwired, covariance and diagonal loading share one kernel while preserving the original accumulation and loading order. Double instances retain the separate kernels.
+
+On Thor, `optional-minimal-medium` (8 channels, 128 items, 32 snapshots, 41 × 21 scan grid) measured 0.193560 → 0.184654 ms: a median paired saving of 10.27 µs / 5.31%, with three screen and three fresh pairs, five warmups and 50 frames. All 41 native tests and established exact output policies across seven cases in both precisions passed. This is a scoped steady-state result, with no double-speedup claim.
+
+Startup and tails varied: fresh cached-smoothing double cold time increased 1.830 ms, medium float cold time increased 0.679 ms, and large double median p99 increased 0.246 ms (worst maximum +1.208 ms). One target pair also had slightly worse tails despite a better median. Fifty-frame p99 is descriptive; these results provide no startup, tail, arbitrary-shape or multi-GPU guarantee.
 
 **`[live]` cost.** `diagonal_loading` is free. `max_sources` reallocates `doa_multi`. A geometry / grid / smoothing override costs a steering-manifold rebuild (plus the smoothing plan and its index H2D) on the tick it arrives. The Graph harness isolates all six live inputs.
 

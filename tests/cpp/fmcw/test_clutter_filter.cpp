@@ -542,8 +542,9 @@ struct WindowOverrideTick {
   std::optional<WindowSpec> window;
 };
 
+template <typename T = float>
 holoscan::testing::TestResult run_window_override_graph(std::vector<WindowOverrideTick> ticks) {
-  using Op = ClutterFilterOp<float>;
+  using Op = ClutterFilterOp<T>;
   auto fixture =
       holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
   fixture.set_params(ClutterFilterParams{});
@@ -561,7 +562,8 @@ holoscan::testing::TestResult run_window_override_graph(std::vector<WindowOverri
     }
   }
   constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
-  fixture.capture_snapshot<holoscan::Tensor>("range_profiles_out", ticks.size(), kMaximumBytes);
+  fixture.template capture_snapshot<holoscan::Tensor>("range_profiles_out", ticks.size(),
+                                                      kMaximumBytes);
   fixture.input_source_device("range_profiles", holoscan::DeviceId{0});
   fixture.output_device("range_profiles_out", holoscan::DeviceId{0});
   holoscan::radar::testing::FixtureCompletion completion;
@@ -657,6 +659,130 @@ TEST(ClutterFilterOpTest, FloatAndDoubleAgree) {
           << "method " << holoscan::radar::to_string(method) << " index " << i;
     }
   }
+}
+
+template <typename T>
+class ClutterMeanScratchReuse : public ::testing::Test {};
+using ClutterScratchPrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(ClutterMeanScratchReuse, ClutterScratchPrecisions);
+
+template <typename T>
+std::vector<std::complex<T>> clutter_markers(const std::vector<int64_t>& shape, int seed) {
+  const int64_t chirps = shape[shape.size() - 2];
+  const int64_t bins = shape.back();
+  int64_t batch = 1;
+  for (size_t axis = 0; axis + 2 < shape.size(); ++axis)
+    batch *= shape[axis];
+  std::vector<std::complex<T>> input(static_cast<size_t>(batch * chirps * bins));
+  for (int64_t b = 0; b < batch; ++b) {
+    for (int64_t k = 0; k < chirps; ++k) {
+      for (int64_t r = 0; r < bins; ++r) {
+        const double dc = static_cast<double>(7 * b + 3 * r + seed);
+        const double varying = static_cast<double>(seed * (k + 1) * (r + 1)) / 8.0;
+        input[static_cast<size_t>((b * chirps + k) * bins + r)] = {
+            static_cast<T>(dc + varying),
+            static_cast<T>(-dc / 4.0 + (k % 2 == 0 ? varying : -varying))};
+      }
+    }
+  }
+  return input;
+}
+
+template <typename T>
+void expect_clutter_marker_reference(const HostTensor& output,
+                                     const std::vector<std::complex<T>>& input,
+                                     const std::vector<int64_t>& shape,
+                                     const std::vector<double>& taps) {
+  ASSERT_EQ(output.shape, shape);
+  EXPECT_TRUE(holoscan::radar::dldatatype_equals(output.dtype, complex_dtype<T>()));
+  const int64_t chirps = shape[shape.size() - 2];
+  const int64_t bins = shape.back();
+  const int64_t batch = static_cast<int64_t>(input.size()) / (chirps * bins);
+  ASSERT_EQ(taps.size(), static_cast<size_t>(chirps));
+  const double sum = std::accumulate(taps.begin(), taps.end(), 0.0);
+  ASSERT_GT(sum, 0.0);
+  const double tolerance = std::is_same_v<T, float> ? 2e-5 : 5e-12;
+  const auto* actual = output.template as<std::complex<T>>();
+  for (int64_t b = 0; b < batch; ++b) {
+    for (int64_t r = 0; r < bins; ++r) {
+      std::complex<double> mean{};
+      for (int64_t k = 0; k < chirps; ++k) {
+        mean += std::complex<double>(input[static_cast<size_t>((b * chirps + k) * bins + r)]) *
+                taps[static_cast<size_t>(k)];
+      }
+      mean /= sum;
+      for (int64_t k = 0; k < chirps; ++k) {
+        const size_t index = static_cast<size_t>((b * chirps + k) * bins + r);
+        const auto expected = std::complex<double>(input[index]) - mean;
+        EXPECT_LE(std::abs(std::complex<double>(actual[index]) - expected),
+                  tolerance * std::max(1.0, std::abs(expected)))
+            << "cell=" << index;
+      }
+    }
+  }
+}
+
+TYPED_TEST(ClutterMeanScratchReuse, ChangedShapesOverwriteMeansAndFreshFixtureRestarts) {
+  using T = TypeParam;
+  const std::vector<std::vector<int64_t>> shapes{
+      {2, 3, 8, 5}, {1, 2, 5, 3}, {2, 3, 8, 5}, {2, 3, 7, 5}, {2, 3, 8, 5}};
+  const std::array<int, 5> seeds{1, 3, 1, 5, 1};
+  std::vector<std::vector<std::complex<T>>> inputs;
+  std::vector<std::shared_ptr<holoscan::Tensor>> tensors;
+  for (size_t tick = 0; tick < shapes.size(); ++tick) {
+    inputs.push_back(clutter_markers<T>(shapes[tick], seeds[tick]));
+    tensors.push_back(to_device_tensor(inputs.back(), shapes[tick], complex_dtype<T>()));
+  }
+  auto extents = holoscan::radar::testing::default_test_extents();
+  extents.max_tx = 2;
+  extents.max_rx = 3;
+  extents.max_chirps = 8;
+  extents.max_range_bins = 5;
+  const auto result = run_clutter_result<T>(std::move(tensors), {}, extents);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto outputs = clutter_outputs(result);
+  ASSERT_EQ(outputs.size(), shapes.size());
+  for (size_t tick = 0; tick < shapes.size(); ++tick) {
+    expect_clutter_marker_reference<T>(
+        outputs[tick], inputs[tick], shapes[tick],
+        std::vector<double>(static_cast<size_t>(shapes[tick][2]), 1.0));
+  }
+  EXPECT_EQ(outputs[0].data, outputs[2].data);
+  EXPECT_EQ(outputs[0].data, outputs[4].data);
+  // The previous helper has finished its native session before this new fixture.
+  const auto fresh = run_clutter_result<T>(
+      {to_device_tensor(inputs[0], shapes[0], complex_dtype<T>())}, {}, extents);
+  ASSERT_TRUE(fresh.ok()) << fresh.describe_failure();
+  const auto restarted = clutter_outputs(fresh);
+  ASSERT_EQ(restarted.size(), 1U);
+  EXPECT_EQ(restarted[0].shape, outputs[0].shape);
+  EXPECT_EQ(restarted[0].data, outputs[0].data);
+}
+
+TYPED_TEST(ClutterMeanScratchReuse, ChangedLiveWindowBypassReturnsToFreshUniformMean) {
+  using T = TypeParam;
+  const std::vector<std::vector<int64_t>> shapes{
+      {2, 3, 8, 5}, {1, 2, 5, 3}, {2, 3, 7, 5}, {2, 3, 8, 5}};
+  const std::array<int, 4> seeds{1, 3, 5, 1};
+  WindowSpec hann;
+  hann.type = WindowType::kHann;
+  std::vector<std::vector<std::complex<T>>> inputs;
+  std::vector<WindowOverrideTick> ticks;
+  for (size_t tick = 0; tick < shapes.size(); ++tick) {
+    inputs.push_back(clutter_markers<T>(shapes[tick], seeds[tick]));
+    ticks.push_back({to_device_tensor(inputs.back(), shapes[tick], complex_dtype<T>()),
+                     tick == 1U ? std::optional<WindowSpec>{hann} : std::nullopt});
+  }
+  const auto result = run_window_override_graph<T>(std::move(ticks));
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto outputs = clutter_outputs(result);
+  ASSERT_EQ(outputs.size(), shapes.size());
+  for (size_t tick = 0; tick < shapes.size(); ++tick) {
+    const auto taps = tick == 1U ? reference_window(WindowType::kHann, shapes[tick][2])
+                                 : std::vector<double>(static_cast<size_t>(shapes[tick][2]), 1.0);
+    expect_clutter_marker_reference<T>(outputs[tick], inputs[tick], shapes[tick], taps);
+  }
+  EXPECT_EQ(outputs[0].data, outputs[3].data);
 }
 
 }  // namespace

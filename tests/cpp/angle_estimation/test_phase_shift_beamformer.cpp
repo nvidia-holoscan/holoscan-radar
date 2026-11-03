@@ -880,4 +880,69 @@ TEST(PhaseShiftBeamformerOpTest, LiveOverridesRejectMalformedAndBounds) {
   EXPECT_FALSE(bounded.diagnostics().empty());
 }
 
+template <typename T>
+void expect_signed_zero_grid_cache_returns_to_pinned() {
+  using Op = PhaseShiftBeamformerOp<T>;
+  auto geometry = make_ula_geometry(2, 0.5, 1.0);
+  auto params = make_params(geometry, AngleConvention{}, {0.0}, {0.0});
+  auto rd = vector_to_rd_maps<T>({{1.0, 2.0}, {3.0, -1.0}}, {2, 1, 1});
+  auto negative_zero = holoscan::radar::testing::to_pageable_host_tensor<double>(
+      {-0.0}, {1}, holoscan::radar::real_dtype<double>());
+  auto fixture = holoscan::testing::create_operator_test<Op>(
+      holoscan::radar::testing::extents_for_scan_grid(1, 1, 1, 1));
+  fixture.set_params(params);
+  constexpr size_t kTicks = 4;
+  for (size_t tick = 0; tick < kTicks; ++tick) {
+    const auto stamp = std::chrono::milliseconds{static_cast<int64_t>((tick + 1) * 100)};
+    if (tick == 1) {
+      fixture.push_frame(holoscan::testing::frame_at(
+          stamp, holoscan::testing::input("az_coordinates", *negative_zero),
+          holoscan::testing::input("rd_maps", *rd)));
+    } else {
+      fixture.push_frame(
+          holoscan::testing::frame_at(stamp, holoscan::testing::input("rd_maps", *rd)));
+    }
+  }
+  constexpr const char* kOutputs[] = {"rda_cube", "az_grid", "el_grid"};
+  for (const char* port : kOutputs) {
+    fixture.template capture_snapshot<holoscan::Tensor>(port, kTicks, 64U);
+    fixture.output_device(port, holoscan::DeviceId{0});
+  }
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  for (const char* port : kOutputs) {
+    EXPECT_TRUE(running.wait_for_output(port, kTicks, std::chrono::seconds{5}));
+  }
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto cubes = beamformer_frames(result, "rda_cube");
+  const auto az = beamformer_frames(result, "az_grid");
+  const auto el = beamformer_frames(result, "el_grid");
+  ASSERT_EQ(cubes.size(), kTicks);
+  ASSERT_EQ(az.size(), kTicks);
+  ASSERT_EQ(el.size(), kTicks);
+  for (size_t tick = 0; tick < kTicks; ++tick) {
+    ASSERT_EQ(cubes[tick].shape, (std::vector<int64_t>{1, 1, 1, 1}));
+    ASSERT_EQ(az[tick].shape, (std::vector<int64_t>{1}));
+    ASSERT_EQ(el[tick].shape, (std::vector<int64_t>{1}));
+    EXPECT_EQ(az[tick].template as<T>()[0], T{0});
+    EXPECT_EQ(std::signbit(az[tick].template as<T>()[0]), tick == 1);
+    EXPECT_EQ(el[tick].template as<T>()[0], T{0});
+    EXPECT_FALSE(std::signbit(el[tick].template as<T>()[0]));
+    const auto value = cubes[tick].template as<std::complex<T>>()[0];
+    constexpr double kTolerance = std::is_same_v<T, float> ? 1e-5 : 1e-12;
+    EXPECT_NEAR(value.real(), 4.0, kTolerance);
+    EXPECT_NEAR(value.imag(), 1.0, kTolerance);
+  }
+}
+
+TEST(PhaseShiftBeamformerOpTest, SignedZeroGridCacheReturnsToPinnedFloat) {
+  expect_signed_zero_grid_cache_returns_to_pinned<float>();
+}
+
+TEST(PhaseShiftBeamformerOpTest, SignedZeroGridCacheReturnsToPinnedDouble) {
+  expect_signed_zero_grid_cache_returns_to_pinned<double>();
+}
+
 }  // namespace

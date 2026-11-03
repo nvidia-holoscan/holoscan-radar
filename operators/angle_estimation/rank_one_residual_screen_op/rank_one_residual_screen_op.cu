@@ -37,6 +37,7 @@ struct RankOneResidualScreenOp<T>::RuntimeState {
   bool has_geometry{false};
   ArrayGeometry geometry_key{};
   std::shared_ptr<Tensor> positions;
+  std::shared_ptr<Tensor> weights;
 };
 
 namespace {
@@ -104,6 +105,7 @@ RankOneResidualScreenOp<T>::RankOneResidualScreenOp(const MaxTensorExtents& exte
   score_max_byte_span_ = tensor_byte_span(item_bounds, real_dtype<T>());
   mask_max_byte_span_ = tensor_byte_span(item_bounds, DLDataType{kDLUInt, 8U, 1U});
   state_ = std::make_shared<RuntimeState>();
+  state_->weights = make_device_tensor({max_items_, max_channels_}, complex_dtype<double>());
 }
 
 template <typename T>
@@ -218,12 +220,17 @@ expected<void, Error> RankOneResidualScreenOp<T>::compute(ExecutionContext& cont
   if (items > 0) {
     constexpr int block = 128;
     const int grid = static_cast<int>((items + block - 1) / block);
-    detail::residual_screen_kernel<T><<<grid, block, 0, stream>>>(
+    HOLOSCAN_TRY(auto weight_ptr, writable(*state_->weights, "steering weights"));
+    detail::precompute_residual_weights_kernel<T><<<grid, block, 0, stream>>>(
+        static_cast<const T*>(aoa.data()), static_cast<const double*>(state_->positions->data()),
+        items, channels, geometry.wavelength, params.angle_convention,
+        static_cast<cuda::std::complex<double>*>(weight_ptr));
+    check_cuda("residual weight precompute", kOpName);
+    detail::residual_screen_with_weights_kernel<T><<<grid, block, 0, stream>>>(
         static_cast<const cuda::std::complex<T>*>(snap.data()), static_cast<const T*>(aoa.data()),
-        valid_ptr, static_cast<const double*>(state_->positions->data()), items, channels,
-        snapshots, geometry.wavelength, params.angle_convention,
-        static_cast<T>(params.residual_threshold), static_cast<T*>(score_writer.data()),
-        static_cast<unsigned char*>(mask_writer.data()));
+        valid_ptr, static_cast<const cuda::std::complex<double>*>(weight_ptr), items, channels,
+        snapshots, params.angle_convention, static_cast<T>(params.residual_threshold),
+        static_cast<T*>(score_writer.data()), static_cast<unsigned char*>(mask_writer.data()));
   }
   check_cuda("residual screen", kOpName);
 

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // ESPRIT GPU stage. The covariance/eigenspace/EFT front-end is shared with
-// MUSIC. One block per item then forms the source-space least-squares rotation
-// and solves its small general complex eigenproblem in-device.
+// MUSIC. Each item independently forms the source-space least-squares rotation
+// and solves its small general complex eigenproblem in-device. Double solves
+// share blocks; float keeps one block per item.
 
 #pragma once
 
@@ -340,11 +341,11 @@ __device__ bool esprit_schur_vectors(cuda::std::complex<T>* matrix, cuda::std::c
   return false;
 }
 
-// One block per item (thread 0). Solves the two invariance rotations Psi_y,
+// Each active thread independently solves the two invariance rotations Psi_y,
 // Psi_z from the signal subspace, joint-diagonalizes them (Schur of Psi_y with
 // vectors, applied to Psi_z), and maps the paired eigenvalues to (u, v) and
 // then to boundary angles through the aperture-axis frame.
-template <typename T>
+template <typename T, bool Packed = false>
 __global__ void esprit_solve_2d_kernel(
     const cuda::std::complex<T>* __restrict__ eigenvectors, const int32_t* __restrict__ model_order,
     const int64_t* __restrict__ valid_counts, const int32_t* __restrict__ y_reference,
@@ -357,8 +358,11 @@ __global__ void esprit_solve_2d_kernel(
     cuda::std::complex<T>* __restrict__ r_ws, cuda::std::complex<T>* __restrict__ tmp_ws,
     T* __restrict__ aoa, T* __restrict__ doa_multi, int64_t max_sources,
     int32_t* __restrict__ source_count) {
-  const int64_t item = static_cast<int64_t>(blockIdx.x);
-  if (threadIdx.x != 0 || item >= num_items) {
+  int64_t item = static_cast<int64_t>(blockIdx.x);
+  if constexpr (Packed) {
+    item = item * blockDim.x + threadIdx.x;
+  }
+  if ((!Packed && threadIdx.x != 0) || item >= num_items) {
     return;
   }
   const T nan = T{0} / T{0};
@@ -450,7 +454,7 @@ __global__ void esprit_solve_2d_kernel(
   source_count[item] = static_cast<int32_t>(found);
 }
 
-template <typename T>
+template <typename T, bool Packed = false>
 __global__ void esprit_solve_kernel(
     const cuda::std::complex<T>* __restrict__ eigenvectors, const int32_t* __restrict__ model_order,
     const int64_t* __restrict__ valid_counts, const int32_t* __restrict__ reference_indices,
@@ -461,8 +465,11 @@ __global__ void esprit_solve_kernel(
     cuda::std::complex<T>* __restrict__ q_workspace,
     cuda::std::complex<T>* __restrict__ r_workspace, T* __restrict__ aoa, T* __restrict__ doa_multi,
     int64_t max_sources, int32_t* __restrict__ source_count) {
-  const int64_t item = static_cast<int64_t>(blockIdx.x);
-  if (threadIdx.x != 0 || item >= num_items) {
+  int64_t item = static_cast<int64_t>(blockIdx.x);
+  if constexpr (Packed) {
+    item = item * blockDim.x + threadIdx.x;
+  }
+  if ((!Packed && threadIdx.x != 0) || item >= num_items) {
     return;
   }
 
@@ -642,14 +649,18 @@ inline void run_esprit_stage(
         model_order, num_items, static_cast<int32_t>(fixed_num_sources));
   }
 
-  esprit_solve_kernel<T><<<grid, 1, 0, stream>>>(
+  constexpr bool kPackSolve = std::is_same_v<T, double>;
+  constexpr int kSolveBlock = kPackSolve ? 32 : 1;
+  const int solve_grid =
+      kPackSolve ? static_cast<int>(num_items / 32 + (num_items % 32 != 0)) : grid;
+  esprit_solve_kernel<T, kPackSolve><<<solve_grid, kSolveBlock, 0, stream>>>(
       eigenvectors, model_order, valid_counts, reference_indices, shifted_indices, num_items,
       channels, pair_size, workspace_dim, wave_number_spacing, axis_x, axis_y, axis_z, broadside_x,
       broadside_y, broadside_z, convention, matrix_workspace, q_workspace, r_workspace, aoa,
       doa_multi, max_sources, source_count);
 
+  // Reuse dimension/stream-keyed eig plans; stop() retires their owned workspaces.
   mark_music_eig_cache_live();
-  clear_music_matx_caches();
 }
 
 // Full 2-D URA ESPRIT for one tick: shared covariance / Hermitian eig / model
@@ -699,14 +710,18 @@ inline void run_esprit_2d_stage(
         model_order, num_items, static_cast<int32_t>(fixed_num_sources));
   }
 
-  esprit_solve_2d_kernel<T><<<grid, 1, 0, stream>>>(
+  constexpr bool kPackSolve = std::is_same_v<T, double>;
+  constexpr int kSolveBlock = kPackSolve ? 32 : 1;
+  const int solve_grid =
+      kPackSolve ? static_cast<int>(num_items / 32 + (num_items % 32 != 0)) : grid;
+  esprit_solve_2d_kernel<T, kPackSolve><<<solve_grid, kSolveBlock, 0, stream>>>(
       eigenvectors, model_order, valid_counts, y_reference, y_shifted, y_pairs, z_reference,
       z_shifted, z_pairs, num_items, channels, model_order_cap, workspace_dim, ky_spacing,
       kz_spacing, yax_x, yax_y, yax_z, zax_x, zax_y, zax_z, nrm_x, nrm_y, nrm_z, convention,
       psi_y_ws, psi_z_ws, z_ws, q_ws, r_ws, tmp_ws, aoa, doa_multi, max_sources, source_count);
 
+  // Reuse dimension/stream-keyed eig plans; stop() retires their owned workspaces.
   mark_music_eig_cache_live();
-  clear_music_matx_caches();
 }
 
 }  // namespace holoscan::radar::detail

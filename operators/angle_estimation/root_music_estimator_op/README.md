@@ -151,7 +151,7 @@ Rejected combinations (operator’s message unless noted):
 
 **Cold.** The constructor creates both cuSOLVER states and bounded core workspace. First use initializes solver internals, an optional smoothing plan, and the first `matx::eig` plan. A new geometry key revalidates the aperture.
 
-**Steady.** Covariance + eig + projector every tick on stable operator-owned workspace; then one serial `cusolverDnXgeev` per item per rooted polynomial (ULA: one of degree `2(C−1)`; URA: two smaller companions plus pairing). The serial hybrid dominates latency; a batched device root solver is postponed, not a contract gap. Per-tick MatX eig-plan clear matches MUSIC (`cudaDeviceSynchronize` inside `clear_music_matx_caches`).
+**Steady.** Covariance + eig + projector every tick on stable operator-owned workspace; then one serial `cusolverDnXgeev` per item per rooted polynomial (ULA: one of degree `2(C−1)`; URA: two smaller companions plus pairing). The serial hybrid dominates latency; a batched device root solver is postponed, not a contract gap. The private ULA/URA end-clear sites have been removed (one alternate site per nonempty tick); matching MatX eig plans are retained until eviction/stop, with both live marks and existing stop retirement unchanged. Distinct configuration keys can retain workspace; current serialized device 0 scope does not establish memory bounds across arbitrary CUDA contexts or configuration histories.
 
 **`[live]` cost.** Scalar overrides are cheap. `max_sources` reallocates `doa_multi`. A geometry / smoothing override revalidates the aperture and rebuilds the smoothing plan (and can resize the cuSOLVER workspace) on the tick it arrives. The Graph harness isolates all five live inputs.
 
