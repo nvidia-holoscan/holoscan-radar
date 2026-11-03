@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check real FMCW window pixels, resize and cooperative close under Xvfb."""
+"""Check FMCW window pixels and shutdown with X11 or native HoloViz under Xvfb."""
 
 from __future__ import annotations
 
@@ -42,6 +42,8 @@ def xlib():
     signatures = {
         "XOpenDisplay": (c.c_void_p, [c.c_char_p]),
         "XDefaultRootWindow": (c.c_ulong, [c.c_void_p]),
+        "XGrabServer": (c.c_int, [c.c_void_p]),
+        "XUngrabServer": (c.c_int, [c.c_void_p]),
         "XQueryTree": (
             c.c_int,
             [
@@ -89,25 +91,37 @@ def xlib():
 
 
 def find_window(lib, display, root):
-    parent, returned_root, count = c.c_ulong(), c.c_ulong(), c.c_uint()
-    children = c.POINTER(c.c_ulong)()
-    lib.XQueryTree(
-        display, root, c.byref(returned_root), c.byref(parent), c.byref(children), c.byref(count)
-    )
+    # Native renderer discovery creates a short-lived probe window. Keep the
+    # tree/name snapshot atomic so it cannot disappear during XFetchName.
+    lib.XGrabServer(display)
     try:
-        for index in range(count.value):
-            name = c.c_void_p()
-            lib.XFetchName(display, children[index], c.byref(name))
-            if name.value:
-                try:
-                    if c.string_at(name).startswith(b"FMCW SISO"):
-                        return children[index]
-                finally:
-                    lib.XFree(name)
+        parent, returned_root, count = c.c_ulong(), c.c_ulong(), c.c_uint()
+        children = c.POINTER(c.c_ulong)()
+        lib.XQueryTree(
+            display,
+            root,
+            c.byref(returned_root),
+            c.byref(parent),
+            c.byref(children),
+            c.byref(count),
+        )
+        try:
+            for index in range(count.value):
+                name = c.c_void_p()
+                lib.XFetchName(display, children[index], c.byref(name))
+                if name.value:
+                    try:
+                        if c.string_at(name).startswith(b"Radar CI dashboard"):
+                            return children[index]
+                    finally:
+                        lib.XFree(name)
+        finally:
+            if children:
+                lib.XFree(children)
+        return None
     finally:
-        if children:
-            lib.XFree(children)
-    return None
+        lib.XUngrabServer(display)
+        lib.XFlush(display)
 
 
 def geometry(lib, display, window):
@@ -145,7 +159,15 @@ def colors(lib, display, root, size):
         lib.XDestroyImage(image)
 
 
-def check(executable: str, config: str, python: bool, tcp: bool):
+def check(
+    executable: str,
+    config: str,
+    python: bool,
+    tcp: bool,
+    application: str,
+    presenter: str,
+    smoke: bool,
+):
     if tcp:
         os.environ["DISPLAY"] = "localhost:" + os.environ["DISPLAY"].lstrip(":")
     lib = xlib()
@@ -156,14 +178,22 @@ def check(executable: str, config: str, python: bool, tcp: bool):
     deadline = time.monotonic() + int(os.environ.get("HOLOSCAN_RADAR_TEST_TIMEOUT_SECONDS", "30"))
     with tempfile.TemporaryDirectory(prefix="radar-x11-test-") as directory:
         preset = Path(directory) / "window.yaml"
-        preset.write_text(f"extends: {json.dumps(config)}\napp:\n  run:\n    num_frames: 1000\n")
+        preset.write_text(
+            f"extends: {json.dumps(config)}\napp:\n  run:\n    num_frames: 1000\n"
+            "  visualization:\n    enabled: true\n"
+            f"    x11_presentation: {str(presenter == 'x11').lower()}\n"
+            "    window_title: Radar CI dashboard\n"
+        )
+        environment = dict(os.environ, XDG_CACHE_HOME=str(Path(directory) / "cache"))
         command = (
-            [sys.executable, "-m", "holoscan_radar.applications.cli", "siso"]
+            [sys.executable, "-m", "holoscan_radar.applications.cli", application]
             if python
             else [executable]
         ) + [str(preset)]
         with (Path(directory) / "run.log").open("w+") as log:
-            process = subprocess.Popen(command, stdout=log, stderr=log)
+            process = subprocess.Popen(
+                command, stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=environment
+            )
             try:
 
                 def wait(predicate):
@@ -181,10 +211,11 @@ def check(executable: str, config: str, python: bool, tcp: bool):
                 root_size = geometry(lib, display, root)
                 size = tuple(min(a, b) for a, b in zip(size, root_size, strict=True))
                 wait(lambda: colors(lib, display, root, size) > 32)
-                lib.XResizeWindow(display, window, 640, 360)
-                lib.XFlush(display)
-                wait(lambda: geometry(lib, display, window) == (640, 360))
-                wait(lambda: colors(lib, display, root, (640, 360)) > 32)
+                if not smoke:
+                    lib.XResizeWindow(display, window, 640, 360)
+                    lib.XFlush(display)
+                    wait(lambda: geometry(lib, display, window) == (640, 360))
+                    wait(lambda: colors(lib, display, root, (640, 360)) > 32)
 
                 event = Event()
                 event.client.type = 33  # ClientMessage
@@ -199,9 +230,20 @@ def check(executable: str, config: str, python: bool, tcp: bool):
                 assert result == 0, f"window close returned {result}"
                 log.seek(0)
                 output = log.read()
-                assert "X11 finished-image transport" in output
+                if presenter == "x11":
+                    assert "X11 finished-image transport" in output
+                else:
+                    assert "Radar presentation: CUDA device" in output
+                    assert "X11 finished-image transport" not in output
+                assert "Choose how to display" not in output
+                assert "Using remembered" not in output
                 assert "VK_ERROR" not in output
-                print("PASS: rendered pixels, resize and cooperative close", flush=True)
+                print(
+                    f"PASS: {application} {presenter} rendered pixels, "
+                    + ("" if smoke else "resize and ")
+                    + "cooperative close",
+                    flush=True,
+                )
             except BaseException:
                 log.seek(0)
                 print(log.read()[-8000:], file=sys.stderr)
@@ -219,5 +261,18 @@ if __name__ == "__main__":
     parser.add_argument("config")
     parser.add_argument("--python", action="store_true")
     parser.add_argument("--tcp", action="store_true")
+    parser.add_argument("--application", default="siso")
+    parser.add_argument("--presenter", choices=("x11", "native"), default="x11")
+    parser.add_argument(
+        "--smoke", action="store_true", help="Check pixels and close without resize"
+    )
     arguments = parser.parse_args()
-    check(arguments.executable, arguments.config, arguments.python, arguments.tcp)
+    check(
+        arguments.executable,
+        arguments.config,
+        arguments.python,
+        arguments.tcp,
+        arguments.application,
+        arguments.presenter,
+        arguments.smoke,
+    )
