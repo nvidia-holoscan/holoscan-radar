@@ -17,12 +17,20 @@ text layers, or custom HoloViz subclasses.
    to device N does **not** request that HoloViz render on device N. The renderer
    makes a separate adapter choice. There is no public explicit-device setting.
 
-The program emits a white 64 by 64 RGBA CUDA image at 10 Hz. Its only argument
-choices are the sink (`cuda` or `window`) and the tensor device (ordinal or
-`discover`). Both the source pool and, for offscreen rendering, the capture pool
-are bound to that device. It prints native compile/runtime diagnostics unchanged.
-After two seconds of runtime it requests shutdown. This is an observation interval,
-not a hard timeout on SDK startup, GPU work, or teardown.
+Two source files make the comparison explicit; there is no discovery build flag:
+
+- [`broken.cpp`](broken.cpp) builds `holoviz_broken`. It uses only the public SDK
+  API and binds tensors to the supplied device. It fails when that device differs
+  from the adapter HoloViz selects; a matching-device run is a successful control.
+- [`workaround.cpp`](workaround.cpp) builds `holoviz_workaround`. It discovers the
+  adapter with unsupported renderer APIs, then binds tensors to that device.
+- [`image_graph.hpp`](image_graph.hpp) holds the identical image source, graph,
+  and runtime checks used by both examples. It contains no discovery logic.
+
+Both emit a white 64 by 64 RGBA CUDA image at 10 Hz and print native
+compile/runtime diagnostics unchanged. After two seconds of runtime they request
+shutdown. This is an observation interval, not a hard timeout on SDK startup,
+GPU work, or teardown.
 
 ```mermaid
 flowchart LR
@@ -61,15 +69,15 @@ Ordinals are process-local; do not compare them to host ordinals without checkin
 visibility/remapping.
 
 ```bash
-build/holoviz-device/holoviz_device cuda 0
-build/holoviz-device/holoviz_device window 0
+build/holoviz-device/holoviz_broken cuda 0
+build/holoviz-device/holoviz_broken window 0
 ```
 
 On a multi-GPU host, repeat with another valid ordinal:
 
 ```bash
-build/holoviz-device/holoviz_device cuda 1
-build/holoviz-device/holoviz_device window 1
+build/holoviz-device/holoviz_broken cuda 1
+build/holoviz-device/holoviz_broken window 1
 ```
 
 | Configuration | Current expected observation |
@@ -89,7 +97,7 @@ HolovizOp::compute: activation stream is on CUDA device 0, but the HoloViz devic
 
 That is historical ticket evidence, not a guarantee that every host selects those
 ordinals. Changing `DEVICE` changes CUDA current-device/pool placement, never a
-sink descriptor's renderer-device request. The default executable deliberately
+sink descriptor's renderer-device request. The broken example deliberately
 has no pre-compilation knowledge of the renderer's choice.
 Exit 0 requires emitted input, no runtime diagnostics, and a clean requested stop;
 offscreen runs additionally require at least one received capture. A window run
@@ -97,14 +105,12 @@ is a runtime-admission check, not an automated pixel/scanout correctness test.
 
 ## Demonstrate the discovery workaround
 
-This opt-in build exposes the extra dependency the public query would eliminate:
+The same build produces the workaround executable, with its extra renderer
+linkage isolated to that target:
 
 ```bash
-cmake -S reproducers/holoviz_device -B build/holoviz-device-internal \
-  -Dholoscan_DIR=/usr/lib/cmake/holoscan -DREPRO_INTERNAL_DISCOVERY=ON
-cmake --build build/holoviz-device-internal -j2
-build/holoviz-device-internal/holoviz_device cuda discover
-build/holoviz-device-internal/holoviz_device window discover
+build/holoviz-device/holoviz_workaround cuda
+build/holoviz-device/holoviz_workaround window
 ```
 
 `discover_device()` uses lower-level renderer headers and duplicates the GA
@@ -128,7 +134,7 @@ if (!resolved) {
   return report(resolved.error());
 }
 const holoscan::DeviceId device = *resolved;
-// Use device for the same native placement bindings shown in main.cpp.
+// Use device for the same native placement bindings shown in image_graph.hpp.
 ```
 
 Replace `discover_device()` with this call. Query the **actual sink description**;
@@ -163,22 +169,22 @@ automatic image transport, or arbitrary GPU presentation support.
 
 ## Validation record
 
-Verified 2026-11-02 on one NVIDIA GB10 GPU, using the installed HSDK 5.0.0
-packages in the `holoscan-radar:ngc-v5.0.0-cuda13` development image:
+Both split examples were verified on one NVIDIA GB10 GPU using the installed
+HSDK 5.0.0 packages in the `holoscan-radar:ngc-v5.0.0-cuda13` development image.
 
 | Check | Result |
 | --- | --- |
-| Public-API-only configure/build | Pass |
-| Internal-discovery configure/build | Pass |
-| `cuda 0` | Exit 0; 15 captured frames |
-| `cuda discover`, internal build | Exit 0; 19 captured frames |
-| `window 0`, under Xvfb | Exit 0; no runtime diagnostics |
-| `window discover`, internal build under Xvfb | Exit 0; no runtime diagnostics |
-| `cuda discover`, baseline build | Exit 1 with explicit opt-in-build error |
-| `cuda 1`, single-GPU host | Exit 1 with ordinal-range error |
+| Configure/build both targets | Pass |
+| `holoviz_broken cuda 0` | Exit 0; 18 captured frames |
+| `holoviz_workaround cuda` | Exit 0; 19 captured frames |
+| `holoviz_broken window 0`, under Xvfb | Exit 0; no runtime diagnostics |
+| `holoviz_workaround window`, under Xvfb | Exit 0; no runtime diagnostics |
+| `holoviz_broken cuda 1`, single-GPU host | Exit 1 with ordinal-range error |
+| `holoviz_workaround invalid` | Exit 1 with sink-name error |
 
-Pinned file and repository-wide lint pass. Xvfb checks exercise the native
-Vulkan window path, not Radar's custom presenter. The single-GPU controls and
-successful internal discovery do not validate either unimplemented API or the
-multi-GPU mismatch. That mismatch still needs a run on a host with at least two
-visible CUDA/Vulkan adapters; window tests need a presentable adapter too.
+Pinned file and repository-wide lint pass.
+
+The single-GPU controls and successful internal discovery do not validate either
+unimplemented API or the multi-GPU mismatch. That mismatch still needs a run on a
+host with at least two visible CUDA/Vulkan adapters; window tests need a
+presentable adapter too.

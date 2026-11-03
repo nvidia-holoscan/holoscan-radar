@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cuda_runtime_api.h>
 #include <dlpack/dlpack.h>
 
@@ -8,7 +10,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <exception>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -32,17 +33,12 @@
 #include <holoscan/time/realtime_clock.hpp>
 #include <holoscan/visualization/holoviz_op.hpp>
 
-#if REPRO_INTERNAL_DISCOVERY
-#include <holoviz/adapter.hpp>
-#include <holoviz/window.hpp>
-#endif
-
-namespace {
+namespace repro {
 namespace hs = holoscan;
 namespace viz = holoscan::visualization;
 constexpr std::uint32_t kSize = 64;
-std::atomic<int> rendered{0};
-std::atomic<int> emitted{0};
+inline std::atomic<int> rendered{0};
+inline std::atomic<int> emitted{0};
 
 // One bounded GPU image pool; no radar code, CUDA kernels, or constructor-time GPU allocation.
 class ImageSource final : public hs::Operator<> {
@@ -106,40 +102,12 @@ class CaptureSink final : public hs::Operator<> {
   hs::Input<hs::schema::ImageT> image{"image"};
 };
 
-#if REPRO_INTERNAL_DISCOVERY
-// Unsupported workaround: duplicate the GA operator's adapter-selection policy before compile().
-// A supported resolve_render_device(sink) would replace this entire function and renderer linkage.
-int discover_device(bool window) {
-  const auto adapters = holoviz::enumerate_adapters();
-  if (!adapters)
-    throw std::runtime_error(adapters.error().message);
-  if (!window) {
-    for (const auto& adapter : *adapters)
-      if (adapter.cuda_device_index >= 0)
-        return adapter.cuda_device_index;
-  } else {
-    auto probe = holoviz::create_window({.title = "Device probe", .size = {kSize, kSize}});
-    if (!probe)
-      throw std::runtime_error(probe.error().message);
-    auto surface = probe->create_surface();
-    if (!surface)
-      throw std::runtime_error(surface.error().message);
-    for (const auto& adapter : *adapters) {
-      auto supported = adapter.supports_surface(*surface);
-      if (!supported)
-        throw std::runtime_error(supported.error().message);
-      if (*supported) {
-        if (adapter.cuda_device_index < 0)
-          throw std::runtime_error("First presentable adapter has no CUDA device");
-        return adapter.cuda_device_index;
-      }
-    }
-  }
-  throw std::runtime_error("No suitable CUDA-backed Vulkan adapter");
-}
-#endif
-
-int run(bool window, int device) {
+inline int run(bool window, int device) {
+  int count = 0;
+  if (cudaGetDeviceCount(&count) != cudaSuccess || device < 0 || device >= count)
+    throw std::invalid_argument("DEVICE is outside the process-visible CUDA device range");
+  if (cudaSetDevice(device) != cudaSuccess)
+    throw std::runtime_error("cudaSetDevice failed");
   hs::Graph graph{"holoviz-device-repro"};
   auto source = graph.op<ImageSource>("source");
   viz::LayerStack layers;
@@ -191,40 +159,4 @@ int run(bool window, int device) {
              ? 0
              : 1;
 }
-}  // namespace
-
-int main(int argc, char** argv) {
-  try {
-    if (argc != 3)
-      throw std::invalid_argument("usage: holoviz_device cuda|window DEVICE|discover");
-    const std::string sink_name = argv[1];
-    const std::string device_name = argv[2];
-    if (sink_name != "cuda" && sink_name != "window")
-      throw std::invalid_argument("sink must be cuda or window");
-    const bool window = sink_name == "window";
-    int device = -1;
-    if (device_name == "discover") {
-#if REPRO_INTERNAL_DISCOVERY
-      device = discover_device(window);
-      std::cout << "Internal discovery: CUDA device " << device << '\n';
-#else
-      throw std::invalid_argument("discover requires -DREPRO_INTERNAL_DISCOVERY=ON");
-#endif
-    } else {
-      std::size_t end = 0;
-      device = std::stoi(device_name, &end);
-      if (end != device_name.size())
-        throw std::invalid_argument("DEVICE must be a CUDA ordinal");
-    }
-    int count = 0;
-    if (cudaGetDeviceCount(&count) != cudaSuccess || device < 0 || device >= count)
-      throw std::invalid_argument("DEVICE is outside the process-visible CUDA device range");
-    // Keep this minimal source's current device and pool device aligned.
-    if (cudaSetDevice(device) != cudaSuccess)
-      throw std::runtime_error("cudaSetDevice failed");
-    return run(window, device);
-  } catch (const std::exception& error) {
-    std::cerr << error.what() << '\n';
-    return 1;
-  }
-}
+}  // namespace repro
