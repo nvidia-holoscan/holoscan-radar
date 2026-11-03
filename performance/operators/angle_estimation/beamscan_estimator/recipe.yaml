@@ -19,7 +19,7 @@ recipe:
     el_coordinates: {factory: linspace, start: -0.3, stop: 0.3, count: el}
     array_taper: {type: none}
     peak_interpolation: none
-  outputs: {timed: aoa_estimates, drain: [angle_spectrum], unwired: [], queue_depth: 8}
+  outputs: {timed: aoa_estimates, drain: [angle_spectrum], unwired: [], queue_depth: 8, optional_tensor_outputs: [angle_spectrum]}
   live:
     array_geometry: {physical_port: array_geometry, codec: ula_geometry_patch}
     az_coordinates: {physical_port: az_coordinates, codec: shifted_linspace}
@@ -36,3 +36,87 @@ cases:
   - {id: "taper-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: array_taper, value: {type: hann}}}
   - {id: "peak-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: peak_interpolation, value: parabolic}}
   - {id: tapered-peak-medium, profile: medium, scopes: [thorough], parameters: {array_taper: {type: hann}}, override: {port: peak_interpolation, value: parabolic}}
+  - id: geometry-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: array_geometry
+      value:
+        spacing_wavelengths: 0.45
+      cache: cached
+  - id: az-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: az_coordinates
+      value:
+        shift: 0.05
+      cache: cached
+  - id: el-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: el_coordinates
+      value:
+        shift: 0.05
+      cache: cached
+  - id: taper-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: array_taper
+      value:
+        type: hann
+      cache: cached
+  - id: peak-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: peak_interpolation
+      value: parabolic
+      cache: cached
+  - id: tapered-peak-medium-cached
+    profile: medium
+    scopes:
+    - thorough
+    parameters:
+      array_taper:
+        type: hann
+    override:
+      port: peak_interpolation
+      value: parabolic
+      cache: cached
+  - id: optional-minimal-{profile}
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    output_mode: minimal

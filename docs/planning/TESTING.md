@@ -108,10 +108,10 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 
 #### DopplerNotchOp
 
-- Hard mode (`transition_width = 0`) zeros the nearest bin to `center_velocity` plus every bin inside `stop_half_width`, preserving all bins outside.
+- Hard mode (`transition_width = 0`) zeros the nearest bin to `center_velocity` plus every bin inside `stop_half_width`, preserving all bins outside. Ascending and descending velocity axes produce the same physical gains, including cyclic boundaries and centers outside one period; descending DDM axes must preserve the highest positive-velocity passband bin.
 - Positive `transition_width` matches an independent cyclic-distance raised-cosine reference, reaches exactly zero/one at the stop/transition boundaries, and never changes relative channel phase.
 - Named rank-2 SISO, rank-3 SIMO, and rank-4 MIMO layouts agree; unexpected leading axes reject. Float/double agree within tolerance.
-- Live center/width overrides apply to one exactly paired activation; a following miss reverts to Params. Malformed axis shape/dtype, non-finite or non-increasing values, precision mismatch, and exceeded extents fail predictably.
+- Live center/width overrides apply to one exactly paired activation; a following miss reverts to Params. Malformed axis shape/dtype, non-finite or non-monotonic values, precision mismatch, and exceeded extents fail predictably.
 - Linear-offset and nonlinear-code dense DDM integrations suppress a stationary target at physical zero velocity, preserve targets outside the transition, and introduce no range-aligned pedestal. Folded sparse-DDM input is outside the contract.
 - `tests/cpp/fmcw/test_doppler_notch_pipeline.cpp` supplies simulator-backed ADC cubes to the real range → Doppler → dense-demux → notch GPU chain. The independent one-factor/Monte Carlo reference under `studies/ddm_doppler_notch/` cross-checks physical scaling, window leakage, near-static target loss, confidence intervals, and CA-CFAR training bias; its checked-in report is guidance, not a production-default change.
 
@@ -190,7 +190,8 @@ Each operator lists the I/O-level properties to validate. Unless noted, all also
 - Every `rep_idx` addresses a real detected cell (a subset of `detection_idx`); one per cluster; noise (`−1`) excluded.
 - `points` is always a required exact-aligned input, including for `representative=first`; an unwired graph is rejected for every policy.
 - A caller-instantiated compile-time `ScoreFn` is exercised through the Graph harness from a CUDA translation unit.
-- Exact peak/medoid ties choose the lowest input row; opaque leading batch rank is rejected.
+- Computed exact peak/medoid/weighted-index ties choose the lowest input row; opaque leading batch rank is rejected.
+- Unordered floating-point medoid/weighted-mean accumulation can vary across runs. Validate means with input-derived precision-aware rounding bounds and representatives with an independent admissible-distance set; gathered features must exactly match the selected real member. Clearly separated winners, `first` and `peak` remain deterministic. Preserve dedicated computed-tie fixtures; interval overlap is not an exact tie. See [semantic validation policy](../performance/optimizations/detection-reduction-validation.md).
 
 ### Angle estimation
 
@@ -315,7 +316,7 @@ Common check (all five): default-constructed Params select `radar_boresight`; `s
 - **`[live]` override behavior.** An Exact-matched override mid-stream changes the output accordingly; a following tick with no match reverts to the Params value, since an override applies to one tick only. Warn only when a genuine rebuild is triggered (FFT plan, window coefficients, CFAR window kernel); previously-seen configurations are reused from cache.
 - **Precision.** Single- and double-precision instantiations agree within their respective tolerances.
 - **Memory spaces.** Operators accept tensors in each CUDA-accessible memory space (device, managed, pinned host) and reject pageable-host input with a clear error; outputs are always device memory. `test_tensor` directly covers the shared `require_cuda_accessible()` rejection and diagnostic. Graph sources materialize data through device-bound output loans, so do not duplicate an unreachable pageable-host case as a skipped test in every operator suite.
-- **Determinism.** A fixed seed reproduces identical outputs across runs.
+- **Determinism.** A fixed seed reproduces identical outputs across runs, except the documented DetectionReduction unordered-accumulation cases, which require semantic validation and dedicated exact-tie fixtures.
 
 ---
 

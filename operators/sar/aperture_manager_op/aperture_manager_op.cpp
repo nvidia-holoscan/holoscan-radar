@@ -12,6 +12,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -130,10 +131,12 @@ template <typename T>
 void ApertureManagerOp<T>::setup(OperatorSpec& spec) {
   const auto pulses = *extents_.max_pulses;
   const auto bins = *extents_.max_range_bins;
-  spec.input(range_profiles).queue_depth(4U).expects_tensor(tensor_input(kDevice));
-  spec.input(positions).queue_depth(4U).expects_tensor(tensor_input(kDevice));
-  spec.input(reference_position).queue_depth(4U).expects_tensor(tensor_input(kDevice));
-  spec.input(stream_boundary).queue_depth(4U);
+  // Setup default 16: continuous strip fans 4 slices per reader cube. Per-edge
+  // ConnectionOptions still set destination depth (other apps keep 4).
+  spec.input(range_profiles).queue_depth(16U).expects_tensor(tensor_input(kDevice));
+  spec.input(positions).queue_depth(16U).expects_tensor(tensor_input(kDevice));
+  spec.input(reference_position).queue_depth(16U).expects_tensor(tensor_input(kDevice));
+  spec.input(stream_boundary).queue_depth(16U);
   spec.input(sample_geometry).optional().queue_depth(4U);
   spec.input(sample_points).optional().queue_depth(4U);
   spec.input(control).optional().queue_depth(4U);
@@ -316,10 +319,8 @@ expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
     output_groups.push_back(incoming);
     output_groups.insert(output_groups.end(), departing.begin(), departing.end());
   }
-  std::optional<TensorOutputLoan> profile_loan_out;
-  std::optional<TensorOutputLoan> position_loan_out;
-  std::optional<TensorOutputLoan> reference_loan_out;
-  std::optional<TensorOutputLoan> weight_loan_out;
+  std::optional<PulseGroup> output_batch;
+  std::vector<T> weights;
   if (!output_groups.empty()) {
     const int64_t n_out = pulse_group_total(output_groups);
     if (n_out > *extents_.max_pulses) {
@@ -328,7 +329,7 @@ expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
     }
     PulseGroup batch = concat_pulse_groups(output_groups, stream, kWho);
     keep_.insert(keep_.end(), {batch.profiles, batch.positions, batch.reference});
-    std::vector<T> weights(static_cast<size_t>(n_out), T{1});
+    weights.assign(static_cast<size_t>(n_out), T{1});
     if (reform && p.aperture_window.type != WindowType::kNone) {
       const auto coeff = generate_window(p.aperture_window, n_out);
       for (int64_t i = 0; i < n_out; ++i)
@@ -341,17 +342,9 @@ expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
       for (int64_t i = np; i < n_out; ++i)
         weights[i] = T{-1};
     }
-    HOLOSCAN_TRY(auto profile_loan, prepare_copy(range_profiles_out, context, *batch.profiles));
-    HOLOSCAN_TRY(auto position_loan, prepare_copy(positions_out, context, *batch.positions));
-    HOLOSCAN_TRY(auto reference_loan,
-                 prepare_copy(reference_position_out, context, *batch.reference));
-    HOLOSCAN_TRY(auto weight_loan, prepare_values(weight, context, weights, real_dtype<T>()));
     if (cudaStreamSynchronize(stream) != cudaSuccess)
       return make_unexpected(Error{ErrorCode::kFailure, "ApertureManagerOp: stream sync failed"});
-    profile_loan_out.emplace(std::move(profile_loan));
-    position_loan_out.emplace(std::move(position_loan));
-    reference_loan_out.emplace(std::move(reference_loan));
-    weight_loan_out.emplace(std::move(weight_loan));
+    output_batch.emplace(std::move(batch));
   }
   if (pending_geometry_ && geometry_output_.active()) {
     HOLOSCAN_TRY(auto loan, prepare_geometry(sample_geometry_out, *pending_geometry_));
@@ -373,15 +366,33 @@ expected<void, Error> ApertureManagerOp<T>::compute(ExecutionContext& context) {
     control_output_.emit(control_out, context, std::move(loan), "ApertureManagerOp.control_out");
     admitted_since_emit_ = 0;
   }
-  if (profile_loan_out) {
-    if (weight_output_.active())
-      weight_output_.emit(weight, context, std::move(*weight_loan_out), "ApertureManagerOp.weight");
-    HOLOSCAN_RETURN_IF_ERROR(
-        emit_prepared_tensor(positions_out, context, std::move(*position_loan_out)));
-    HOLOSCAN_RETURN_IF_ERROR(
-        emit_prepared_tensor(reference_position_out, context, std::move(*reference_loan_out)));
-    HOLOSCAN_RETURN_IF_ERROR(
-        emit_prepared_tensor(range_profiles_out, context, std::move(*profile_loan_out)));
+  if (output_batch) {
+    auto emit_copy = [&](Output<Tensor>& port, const Tensor& source,
+                         std::string_view what) -> expected<void, Error> {
+      return emit_required_tensor(
+          port, context, what, false, [&]() -> expected<TensorOutputLoan, Error> {
+            HOLOSCAN_TRY(auto loan, prepare_copy(port, context, source));
+            if (cudaStreamSynchronize(stream) != cudaSuccess) {
+              return make_unexpected(
+                  Error{ErrorCode::kFailure, "ApertureManagerOp: device copy failed"});
+            }
+            return loan;
+          });
+    };
+    if (weight_output_.active()) {
+      HOLOSCAN_TRY(auto weight_loan, prepare_values(weight, context, weights, real_dtype<T>()));
+      if (cudaStreamSynchronize(stream) != cudaSuccess) {
+        return make_unexpected(
+            Error{ErrorCode::kFailure, "ApertureManagerOp: weight/control H2D failed"});
+      }
+      weight_output_.emit(weight, context, std::move(weight_loan), "ApertureManagerOp.weight");
+    }
+    HOLOSCAN_TRY(
+        emit_copy(positions_out, *output_batch->positions, "ApertureManagerOp.positions_out"));
+    HOLOSCAN_TRY(emit_copy(reference_position_out, *output_batch->reference,
+                           "ApertureManagerOp.reference_position_out"));
+    HOLOSCAN_TRY(emit_copy(range_profiles_out, *output_batch->profiles,
+                           "ApertureManagerOp.range_profiles_out"));
   }
   // A collection seam closes the aperture after its final output is published.
   if (end_aperture) {

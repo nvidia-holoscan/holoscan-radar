@@ -43,6 +43,7 @@
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/array_geometry_bridge.hpp"
 #include "radar_schemas/window_spec_bridge.hpp"
+#include "utils/fixture_completion.hpp"
 #include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
 
@@ -179,13 +180,16 @@ holoscan::testing::TestResult run_beamscan_result(
   fixture.output_device("aoa_estimates", holoscan::DeviceId{0});
   fixture.output_device("angle_spectrum", holoscan::DeviceId{0});
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("aoa_estimates", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  completion.wait_for_output(running, "aoa_estimates", 1U);
   if (capture_spectrum) {
-    (void)running.wait_for_output("angle_spectrum", 1U, std::chrono::seconds{5});
+    completion.wait_for_output(running, "angle_spectrum", 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto result = running.finish();
+  completion.check(result);
+  return result;
 }
 
 std::vector<HostTensor> beamscan_frames(const holoscan::testing::TestResult& result,
@@ -228,12 +232,15 @@ holoscan::testing::TestResult run_beamscan_with_mask_result(
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
   fixture.input_source_device("is_valid", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, 1U, std::chrono::seconds{5});
+    completion.wait_for_output(running, output, 1U);
   }
   running.request_stop();
-  return running.finish();
+  auto result = running.finish();
+  completion.check(result);
+  return result;
 }
 struct LiveBeamscanTick {
   std::shared_ptr<holoscan::Tensor> snapshot;
@@ -294,12 +301,15 @@ holoscan::testing::TestResult run_live_beamscan_graph(
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* output : kOutputs) {
-    (void)running.wait_for_output(output, ticks.size(), std::chrono::seconds{5});
+    completion.wait_for_output(running, output, ticks.size());
   }
   running.request_stop();
-  return running.finish();
+  auto result = running.finish();
+  completion.check(result);
+  return result;
 }
 TEST(BeamscanEstimatorOpTest, DefaultsToRadarBoresightConvention) {
   EXPECT_EQ(BeamscanParams{}.angle_convention.preset, AngleConventionPreset::kRadarBoresight);

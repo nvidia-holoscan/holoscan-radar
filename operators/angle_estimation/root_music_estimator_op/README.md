@@ -70,7 +70,7 @@ degree = 2 · (C_est − 1)
 c[ℓ + (C−1)] = Σ_row P_n[row, row+ℓ]     for ℓ ∈ [1−C, C−1]
 ```
 
-The companion matrix of `c` (`root_music_companion_kernel`, last column `−c[row]/c[degree]`) is solved per item with `cusolverDnXgeev` (`CUSOLVER_EIG_MODE_NOVECTOR`). Empty items leave a zero companion; a vanishing leading coefficient writes a NaN matrix so `geev` non-convergence (`info > 0`) blanks that item’s roots rather than aborting the tick. `info < 0` throws:
+The companion matrix of `c` (`root_music_companion_kernel`, last column `−c[row]/c[degree]`) is solved per item with `cusolverDnXgeev` (`CUSOLVER_EIG_MODE_NOVECTOR`). Empty items leave a zero companion; a vanishing leading coefficient writes a NaN matrix, which is detected and blanks that item’s roots before calling `geev`. Finite companions that do not converge (`info > 0`) also blank only that item’s roots. `info < 0` throws:
 
 ```text
 RootMUSICEstimatorOp: cusolverDnXgeev illegal argument for item {i} (info {info})

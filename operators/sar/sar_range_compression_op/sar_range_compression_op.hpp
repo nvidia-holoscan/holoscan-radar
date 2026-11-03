@@ -43,7 +43,7 @@ struct SARRangeCompressionParams {
 
 HOLOSCAN_PARAM_SCHEMA(
     SARRangeCompressionParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.SARRangeCompressionParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.SARRangeCompressionParams", 3),
     holoscan::field<&SARRangeCompressionParams::range_window>("range_window"),
     holoscan::field<&SARRangeCompressionParams::waveform>("waveform"),
     holoscan::field<&SARRangeCompressionParams::fft_norm>("fft_norm"),

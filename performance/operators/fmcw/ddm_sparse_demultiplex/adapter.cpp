@@ -17,7 +17,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::DDMSparseDemultiplexOp<float>;
+using Op = hr::DDMSparseDemultiplexOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 hr::DDMCodeDescriptor linear_code(int64_t tx) {

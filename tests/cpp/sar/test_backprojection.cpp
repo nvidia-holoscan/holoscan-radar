@@ -11,6 +11,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "sar/backprojection_op/backprojection_op.hpp"
 #include "radar_schemas/sample_geometry_bridge.hpp"
@@ -71,10 +72,12 @@ TEST(BackprojectionOp, PointTargetFormsAtSceneCentreAndResets) {
   }
   fixture.output_device("image", holoscan::DeviceId{0});
   fixture.capture_snapshot<holoscan::Tensor>("image", 2U, 5U * 5U * sizeof(std::complex<float>));
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("image", 2U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "image", 2U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(observed) << result.describe_failure();
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   const auto captures = result.snapshots<holoscan::Tensor>("image");
@@ -139,10 +142,12 @@ TEST(BackprojectionOp, ScrollRetainsRowsAndRepeatedGeometryIsNoOp) {
     fixture.input_source_device(port, holoscan::DeviceId{0});
   fixture.output_device("image", holoscan::DeviceId{0});
   fixture.capture_snapshot<holoscan::Tensor>("image", 3U, 5U * 5U * sizeof(std::complex<float>));
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("image", 3U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "image", 3U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(observed) << result.describe_failure();
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   const auto captures = result.snapshots<holoscan::Tensor>("image");

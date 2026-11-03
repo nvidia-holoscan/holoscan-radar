@@ -55,7 +55,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace perf_cfar_detector_adapter {
 
-using PerfPrecision = float;
+using PerfPrecision = perf::Scalar;
 
 struct Footprint {
   std::vector<int64_t> guard;
@@ -300,11 +300,11 @@ struct CfarTraits : perf::PerfDriverDefaults {
     const auto recipe = perf::validate_pilot_suite<hr::CFARDetectorOp<PerfPrecision>>(
         suite, "radar.CFARDetectorOp.float", "cfar_bounds",
         {{"rd_maps",
-          {"channels", "doppler", "range"},
+          {"tx", "channels", "doppler", "range"},
           "float32",
           "device",
           "power_map",
-          {"channels"}}},
+          {"tx", "channels"}}},
         {"detection_idx",
          {"detection_mask", "detection_score", "noise_estimate", "cfar_power"},
          {},
@@ -345,7 +345,6 @@ struct CfarTraits : perf::PerfDriverDefaults {
          "os_rank", "nci_axes", "alpha_lut", "max_detections"},
         {"cfar_variant", "guard_cells", "training_cells", "pfa", "peak_mode", "threshold_scale"});
     const auto variant = params["cfar_variant"].as<std::string>();
-    const auto channels = scenario.values.at("channels");
     const auto peak = params["peak_mode"].as<std::string>();
     const auto guard_pair = perf::recipe_pair<int64_t>(params["guard_cells"], "guard_cells");
     const auto training_pair =
@@ -353,7 +352,7 @@ struct CfarTraits : perf::PerfDriverDefaults {
     const std::vector<int64_t> guard(guard_pair.begin(), guard_pair.end());
     const std::vector<int64_t> training(training_pair.begin(), training_pair.end());
     if ((variant != "CA" && variant != "GO" && variant != "SO" && variant != "OS") ||
-        (peak != "none" && peak != "range_doppler"))
+        (peak != "none" && peak != "range_doppler" && peak != "all"))
       throw std::invalid_argument("CFAR invalid parameter choice");
     const auto v = variant == "GO"   ? hr::CfarVariant::kGO
                    : variant == "SO" ? hr::CfarVariant::kSO
@@ -366,12 +365,12 @@ struct CfarTraits : perf::PerfDriverDefaults {
         throw std::invalid_argument("CFAR footprint exceeds profile plane");
     scenario.variant = v;
     scenario.footprint = fp;
-    scenario.input_shape =
-        channels > 1 ? std::vector<int64_t>{channels, shape[0], shape[1]} : shape;
+    scenario.input_shape = perf::recipe_shape(scenario.recipe.inputs.at(0), scenario.values);
     scenario.pfa = params["pfa"].as<double>();
     scenario.threshold_scale = params["threshold_scale"].as<double>();
-    scenario.peak_mode =
-        peak == "range_doppler" ? hr::CfarPeakMode::kRangeDoppler : hr::CfarPeakMode::kNone;
+    scenario.peak_mode = peak == "range_doppler" ? hr::CfarPeakMode::kRangeDoppler
+                         : peak == "all"         ? hr::CfarPeakMode::kAll
+                                                 : hr::CfarPeakMode::kNone;
     if (v == hr::CfarVariant::kOS) {
       const auto rank = params["os_rank"];
       if (!rank || rank["factory"].as<std::string>() != "three_quarter_training_rank")
@@ -409,9 +408,9 @@ struct CfarTraits : perf::PerfDriverDefaults {
         throw std::invalid_argument("CFAR live threshold scale must be positive");
     } else if (scenario.live_port == "nci_axes") {
       const auto axes = scenario.live_value.as<std::vector<int64_t>>();
-      if (axes.size() > (channels > 1 ? 1U : 0U) ||
-          std::any_of(axes.begin(), axes.end(), [](int64_t axis) {
-            return axis != 0;
+      if (axes.size() > scenario.input_shape.size() - 2U ||
+          std::any_of(axes.begin(), axes.end(), [&](int64_t axis) {
+            return axis < 0 || static_cast<std::size_t>(axis) >= scenario.input_shape.size() - 2U;
           }))
         throw std::invalid_argument("CFAR live NCI axes must name a leading input axis");
     } else if (scenario.live_port == "max_detections") {

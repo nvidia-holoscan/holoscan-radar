@@ -105,7 +105,9 @@ void SARRangeCompressionOp<T>::setup(OperatorSpec& spec) {
       .memory_kind = MemoryKind::kCudaDevice, .dtype = std::nullopt, .rank = std::nullopt};
   constexpr TensorRepresentation host_window{
       .memory_kind = MemoryKind::kHost, .dtype = DLDataType{kDLFloat, 64U, 1U}, .rank = 1U};
-  spec.input(phase_history).queue_depth(2U).expects_tensor(tensor_input(device));
+  spec.input(phase_history)
+      .queue_depth(4U)
+      .expects_tensor(tensor_input(device));  // match SAR graph queues
   spec.output(range_profiles).produces_tensor(pooled_tensor_output(device, 2U, max_byte_span_));
   spec.output(range_bins).produces_tensor(pooled_tensor_output(device, 1U, bins_byte_span_));
   spec.output(range_window_out)
@@ -164,21 +166,6 @@ expected<void, Error> SARRangeCompressionOp<T>::compute(ExecutionContext& contex
   }
   const std::vector<int64_t> out_shape{shape[0], bins};
   const bool warn_on_rebuild = !range_window_in.is_missing() || !nfft_in.is_missing();
-  HOLOSCAN_TRY(
-      auto profiles_loan,
-      prepare_device_tensor(range_profiles, context, out_shape, complex_dtype<T>(),
-                            [&](void* dst, std::size_t) -> expected<void, Error> {
-                              try {
-                                detail::run_range_compression<T>(cfg, *state_, input.data(), 1,
-                                                                 shape[0], shape[1], dst, bins,
-                                                                 warn_on_rebuild, stream);
-                              } catch (const std::invalid_argument& e) {
-                                return fail_invalid(e.what());
-                              } catch (const std::exception& e) {
-                                return make_unexpected(Error{ErrorCode::kFailure, e.what()});
-                              }
-                              return {};
-                            }));
 
   // Physical range bins and the applied window are computed only for wired taps.
   if (cfg.waveform.has_value() && range_bins_out_.active()) {
@@ -203,7 +190,22 @@ expected<void, Error> SARRangeCompressionOp<T>::compute(ExecutionContext& contex
                                          to_wire(cfg.window),
                                          "SARRangeCompressionOp.range_window_out");
   }
-  HOLOSCAN_TRY(emit_prepared_tensor(range_profiles, context, std::move(profiles_loan)));
+  HOLOSCAN_TRY(emit_required_tensor(
+      range_profiles, context, "SARRangeCompressionOp.range_profiles", false, [&] {
+        return prepare_device_tensor(
+            range_profiles, context, out_shape, complex_dtype<T>(),
+            [&](void* dst, std::size_t) -> expected<void, Error> {
+              try {
+                detail::run_range_compression<T>(cfg, *state_, input.data(), 1, shape[0], shape[1],
+                                                 dst, bins, warn_on_rebuild, stream);
+              } catch (const std::invalid_argument& e) {
+                return fail_invalid(e.what());
+              } catch (const std::exception& e) {
+                return make_unexpected(Error{ErrorCode::kFailure, e.what()});
+              }
+              return {};
+            });
+      }));
   retained_input_ = std::move(input);
   return {};
 }

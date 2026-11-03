@@ -17,6 +17,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "angle_estimation/rank_one_residual_screen_op/rank_one_residual_screen_op.hpp"
 #include "angle_estimation/rank_one_residual_screen_op/rank_one_residual_screen_stage.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
@@ -269,13 +270,16 @@ holoscan::testing::TestResult run_screen_graph(
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
   fixture.input_source_device("baseline_aoa", holoscan::DeviceId{0});
   fixture.input_source_device("is_valid", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* port :
        {"residual_score", "snapshot_out", "selected_idx", "is_valid_out", "selection_mask"}) {
-    (void)running.wait_for_output(port, count, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, port, count);
   }
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 TEST(RankOneResidualScreenOpTest, LiveGeometryMatchThenParamsFallback) {
@@ -322,13 +326,15 @@ TEST(RankOneResidualScreenOpTest, LiveGeometryMatchThenParamsFallback) {
   fixture.input_source_device("snapshot", holoscan::DeviceId{0});
   fixture.input_source_device("baseline_aoa", holoscan::DeviceId{0});
   fixture.input_source_device("is_valid", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   for (const char* port :
        {"residual_score", "snapshot_out", "selected_idx", "is_valid_out", "selection_mask"}) {
-    (void)running.wait_for_output(port, 2U, std::chrono::seconds{5});
+    (void)completion.wait_for_output(running, port, 2U);
   }
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   const auto frames = result.snapshots<holoscan::Tensor>("residual_score");
   ASSERT_EQ(frames.size(), 2U);

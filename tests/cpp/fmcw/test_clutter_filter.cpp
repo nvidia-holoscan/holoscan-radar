@@ -33,6 +33,7 @@
 #include "radar_common/math/constants.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "radar_schemas/window_spec_bridge.hpp"
+#include "utils/fixture_completion.hpp"
 #include "utils/test_extents.hpp"
 #include "utils/sim_reference.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -86,10 +87,13 @@ holoscan::testing::TestResult run_clutter_result(
                                                       kMaximumBytes);
   fixture.input_source_device("range_profiles", holoscan::DeviceId{0});
   fixture.output_device("range_profiles_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("range_profiles_out", inputs.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  completion.wait_for_output(running, "range_profiles_out", inputs.size());
   running.request_stop();
-  return running.finish();
+  auto result = running.finish();
+  completion.check(result);
+  return result;
 }
 
 std::vector<HostTensor> clutter_outputs(const holoscan::testing::TestResult& result) {
@@ -487,10 +491,13 @@ holoscan::testing::TestResult run_method_override(
   fixture.capture_snapshot<holoscan::Tensor>("range_profiles_out", cubes.size(), kMaximumBytes);
   fixture.input_source_device("range_profiles", holoscan::DeviceId{0});
   fixture.output_device("range_profiles_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("range_profiles_out", cubes.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  completion.wait_for_output(running, "range_profiles_out", cubes.size());
   running.request_stop();
-  return running.finish();
+  auto result = running.finish();
+  completion.check(result);
+  return result;
 }
 
 TEST(ClutterFilterOpTest, LiveMethodOverrideAppliesForOneTick) {
@@ -557,10 +564,13 @@ holoscan::testing::TestResult run_window_override_graph(std::vector<WindowOverri
   fixture.capture_snapshot<holoscan::Tensor>("range_profiles_out", ticks.size(), kMaximumBytes);
   fixture.input_source_device("range_profiles", holoscan::DeviceId{0});
   fixture.output_device("range_profiles_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("range_profiles_out", ticks.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  completion.wait_for_output(running, "range_profiles_out", ticks.size());
   running.request_stop();
-  return running.finish();
+  auto result = running.finish();
+  completion.check(result);
+  return result;
 }
 
 TEST(ClutterFilterOpTest, LiveDopplerWindowAppliesOneTickThenReverts) {

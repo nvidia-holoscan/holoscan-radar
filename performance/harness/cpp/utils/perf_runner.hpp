@@ -53,6 +53,7 @@ inline RunPlan make_run_plan(const RunSettings& rs, bool has_override) {
 
 // Per-frame samples pooled across independent runs of one scenario.
 struct ScenarioSamples {
+  std::vector<int64_t> raw_steady_run_offsets;
   std::vector<double> setup;   // ready-to-tick time per repeat
   std::vector<double> cold;    // first frame latency per repeat
   std::vector<double> steady;  // post-warmup, pre-override frames
@@ -72,6 +73,8 @@ ScenarioSamples collect_scenario_samples(const RunSettings& rs, const RunPlan& p
                                          RunRepFn run_rep, bool expect_prime = false) {
   ScenarioSamples s;
   for (int rep = 0; rep < rs.repeats; ++rep) {
+    if (rs.raw_frame_times)
+      s.raw_steady_run_offsets.push_back(static_cast<int64_t>(s.steady.size()));
     TimingCollector collector = run_rep(rep, plan);
     // Cached-plan scenarios prime the changed value on frame zero, then
     // emit it once more on the measured changed frame.
@@ -112,6 +115,8 @@ ScenarioSamples collect_scenario_samples(const RunSettings& rs, const RunPlan& p
       }
     }
   }
+  if (rs.raw_frame_times)
+    s.raw_steady_run_offsets.push_back(static_cast<int64_t>(s.steady.size()));
   return s;
 }
 
@@ -130,6 +135,10 @@ inline void fill_compute_row(ResultRow* row, const ScenarioSamples& s) {
   row->bucket = "compute";
   row->cold_ms = summarize(s.cold).median_ms;
   row->latency = summarize(s.steady);
+  if (!s.raw_steady_run_offsets.empty()) {
+    row->raw_steady_ms = s.steady;
+    row->raw_steady_run_offsets = s.raw_steady_run_offsets;
+  }
   row->override_ms = summarize(s.override).median_ms;
   row->achieved_frames_per_second = summarize(s.achieved_fps).median_ms;
   row->source_frames_per_second = summarize(s.source_fps).median_ms;

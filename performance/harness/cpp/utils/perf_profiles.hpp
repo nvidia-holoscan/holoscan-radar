@@ -101,6 +101,7 @@ struct ProfileCase {
   YAML::Node fixture;
   std::optional<YAML::Node> override_value;
   int source_line{0};
+  std::string output_mode{"configured"};
 };
 
 struct ProfileSuite {
@@ -225,7 +226,8 @@ inline ProfileSuite load_profile_suite(const std::filesystem::path& path,
   for (const auto& item : cases) {
     if (version == 2) {
       require_keys(item,
-                   {"id", "profile", "profiles", "scopes", "parameters", "fixture", "override"},
+                   {"id", "profile", "profiles", "scopes", "parameters", "fixture", "override",
+                    "output_mode"},
                    "case");
     } else {
       require_keys(item, {"id", "profile", "profiles", "scopes", "parameters", "override"}, "case");
@@ -255,6 +257,11 @@ inline ProfileSuite load_profile_suite(const std::filesystem::path& path,
       c.scopes.push_back(name);
     }
     c.parameters = item["parameters"];
+    if (item["output_mode"]) {
+      c.output_mode = item["output_mode"].as<std::string>();
+      if (c.output_mode != "configured" && c.output_mode != "all" && c.output_mode != "minimal")
+        throw std::invalid_argument("output_mode must be configured, all, or minimal");
+    }
     if (item["fixture"]) {
       c.fixture = item["fixture"];
       if (!c.fixture.IsMap())

@@ -1,9 +1,12 @@
 # Temporal contracts: findings and decisions
 
 How this module joins a **data plane** (ADC cubes and their derivatives) to a
-**config plane** (`[live]` descriptor overrides) on HSDK 5. Everything below was
-measured against EA `v5.0.0.1` with the probes in `tmp-app/` (indexed at the
-bottom); nothing here is inferred from HSDK 4.x or from the preview docs alone.
+**config plane** (`[live]` descriptor overrides) on HSDK 5. The original probes
+measured pre-release SDK `v5.0.0.1`; later SDK measurements and superseding decisions are
+identified below. These version references record measurement provenance, not
+a build requirement. The current GA image is documented in
+[`SDK_DEVELOPMENT.md`](../../SDK_DEVELOPMENT.md). Nothing here is inferred from
+HSDK 4.x or from the preview docs alone.
 
 Precedence: [`OPERATOR_API.md`](OPERATOR_API.md) remains the locked contract.
 This document is the reasoning and the measured facts *behind* the temporal
@@ -130,7 +133,7 @@ does not replay `contract()`. Anything structural is a recompile.
 | `LatestWithin::max_age` is measured on `capture_time`, not arrival time. | **Verified** — `selector_probe.cpp --backdate`. |
 | `LatestWithin` retires one sample per activation and backpressures the producer when full; `DrainAll` retires the whole backlog. | **Verified** — `selector_probe.cpp`. |
 | `QueuePolicy::kDropOldest` on an edge (`ConnectionOptions` / `FlowConfigurator`) retains the newest depth and evicts instead of blocking; at depth 1 it is a freshest-only mailbox. Rejected with `BracketedWindow` (`TEMPORAL_WINDOW_QUEUE_POLICY_DROP_OLDEST`). | **Documented, not yet probed.** If it holds it is a second answer to the `LatestWithin` backpressure failure and worth revisiting decision 3's fallback. |
-| An operator cannot discover its own connectivity: `contract()` sees only `params()` and its port handles, no operator-facing header exposes a connection query, and `SelectionReason::kNotConnected` is declared but never raised in the SDK sources. `on_missing` does not exempt an unwired declared input — it is still `TEMPORAL_INPUT_UNCONNECTED` at compile. | **Verified on the EA tag** — `wiring_inference.cpp --mismatch`. Superseded on SDK branch `deustice/5x/optional-port-contracts`: an unwired non-trigger `Exact{}` + `SafeDefault{}` input compiles (warning) and raises `kNotConnected` every activation, for POD and Tensor payloads alike. `OnAligned` / `OnWindow` / predicate inputs still reject. |
+| An operator cannot discover its own connectivity: `contract()` sees only `params()` and its port handles, no operator-facing header exposes a connection query, and `SelectionReason::kNotConnected` is declared but never raised in the SDK sources. `on_missing` does not exempt an unwired declared input — it is still `TEMPORAL_INPUT_UNCONNECTED` at compile. | **Verified on the original SDK tag** — `wiring_inference.cpp --mismatch`. Superseded on SDK branch `deustice/5x/optional-port-contracts`: an unwired non-trigger `Exact{}` + `SafeDefault{}` input compiles (warning) and raises `kNotConnected` every activation, for POD and Tensor payloads alike. `OnAligned` / `OnWindow` / predicate inputs still reject. |
 | The *application* can infer it: `Graph::view()` exposes frozen vertex/port/edge records by name, so "is this input the target of any edge?" is a lookup after wiring. | **Verified** — `wiring_inference.cpp --wired` / `--unwired`. Now moot for `OnEach` operators, since the entry needs no gate to derive; still the only route for the two `OnAligned` ones. |
 | An output port with no consumer fails its `emit` at runtime (`RUNTIME_OPERATOR_CALLBACK_FAILED`), so an application without a control plane must not instantiate one. | **Verified** — `wiring_inference.cpp`. |
 | Whether a `capture_time` that no `Exact{}` activation ever matches is retired or retained forever. | **Unknown.** A single skewed frame recovered cleanly; a *sustained* skew may walk the queue to its depth. Probe before relying on `Skip{}` in a system that can drift. |
@@ -206,7 +209,8 @@ equivalent configured maximum number of frames in flight plus one.
 | `tmp-app/optional_live_port.cpp` | The superseded gated form, kept for the two facts it isolates: a parameter may vary a `contract()` entry and a selector bound, and mid-run `set_params` is a no-op. |
 | `tmp-app/wiring_inference.cpp` | The same operator in two hand-written compositions, override wired and absent, as the reference for how an optional `[live]` port is declared. Earlier revisions of this probe also measured the results recorded above: `expect_*` derivable from `Graph::view()`, a declared-but-unwired entry rejected even with `on_missing`, a never-emitting producer accepted, input fan-in rejected (`GRAPH_INPUT_FANIN_UNSUPPORTED`), and an unconsumed output failing its emit. |
 | `tmp-app/optional_input_ports.cpp` | The adopted pattern on SDK branch `deustice/5x/optional-port-contracts`: wired and unwired POD overrides, an unwired optional Tensor input, and the `OnAligned` exclusion, with the compile diagnostics printed for each. Re-measured unchanged on tip `906fc1247`. |
-| The operator suites | The operator-level confirmation of the row above, now module-wide including the two `OnAligned` operators: the `fmcw`, `angle_estimation`, `detection`, and `clustering` suites pass with no `expect_*` anywhere, against the EA tag's `TEMPORAL_INPUT_UNCONNECTED` for the same graphs. `DetectionReductionOp`'s live suite wires all three override ports in every case, including cases that never emit on one, so an enabled-but-silent port is shown not to stall the aligned trigger. |
+| The operator suites | The operator-level confirmation of the row above, now module-wide including the two `OnAligned` operators: the `fmcw`, `angle_estimation`, `detection`, and `clustering` suites pass with no `expect_*` anywhere, against the original SDK tag's `TEMPORAL_INPUT_UNCONNECTED` for the same graphs. `DetectionReductionOp`'s live suite wires all three override ports in every case, including cases that never emit on one, so an enabled-but-silent port is shown not to stall the aligned trigger. |
 
 Re-verify all of the above if the SDK changes activation-time, selector, or
-retention semantics; the EA is under active development.
+retention semantics. Preserve the SDK version attached to each measurement;
+a successful current operator-suite run does not remeasure every original probe.

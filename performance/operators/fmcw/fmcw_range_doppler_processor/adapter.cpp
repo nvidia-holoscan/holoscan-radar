@@ -19,7 +19,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::FMCWRangeDopplerProcessorOp<float>;
+using Op = hr::FMCWRangeDopplerProcessorOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 hr::ClutterFilterMethod clutter(std::string_view value) {
@@ -127,7 +127,7 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   const double samples = static_cast<double>(scen.axis("samples"));
   const double cells = batch * chirps * samples;
   const double bytes =
-      2.0 * cells * sizeof(std::complex<float>) + (chirps + samples) * sizeof(float);
+      2.0 * cells * sizeof(std::complex<perf::Scalar>) + (chirps + samples) * sizeof(perf::Scalar);
   perf::set_recipe_throughput(row, cells, batch, bytes);
   row.notes = "end-to-end Graph latency; cells/s is complex RD-map cells/s";
   if (!scen.live_port.empty())

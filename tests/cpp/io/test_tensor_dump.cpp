@@ -15,6 +15,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "io/tensor_dump_op/tensor_dump_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -35,12 +36,15 @@ TEST(TensorDumpOp, WritesNpyHeaderAndInputBytes) {
       holoscan::radar::testing::to_device_tensor(values, {3}, holoscan::radar::real_dtype<float>());
   fixture.push(&holoscan::radar::TensorDumpOp::tensor, *input);
   fixture.input_source_device("tensor", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  for (int attempt = 0; attempt < 500 && !std::filesystem::exists(path); ++attempt) {
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  while (!std::filesystem::exists(path) &&
+         completion.remaining() > std::chrono::milliseconds::zero()) {
     std::this_thread::sleep_for(std::chrono::milliseconds{10});
   }
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   ASSERT_TRUE(std::filesystem::exists(path));
   std::ifstream stream(path, std::ios::binary);

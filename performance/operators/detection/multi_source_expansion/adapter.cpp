@@ -21,7 +21,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::MultiSourceExpansionOp<float>;
+using Op = hr::MultiSourceExpansionOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 template <typename Element>
@@ -42,28 +42,28 @@ std::array<std::shared_ptr<holoscan::Tensor>, 6> stage_inputs(const Scenario& sc
   const auto sources = scen.axis("sources");
   const auto columns = scen.axis("index_columns");
   std::vector<int64_t> indices(static_cast<std::size_t>(rows * columns));
-  std::vector<float> baseline(static_cast<std::size_t>(rows * 2));
+  std::vector<perf::Scalar> baseline(static_cast<std::size_t>(rows * 2));
   for (int64_t row = 0; row < rows; ++row) {
     for (int64_t column = 0; column < columns; ++column)
       indices[static_cast<std::size_t>(row * columns + column)] = row * 11 + column;
-    baseline[static_cast<std::size_t>(row * 2)] = static_cast<float>((row % 101) * 0.001);
+    baseline[static_cast<std::size_t>(row * 2)] = static_cast<perf::Scalar>((row % 101) * 0.001);
   }
   std::vector<int64_t> selected_idx(static_cast<std::size_t>(selected));
-  std::vector<float> resolved(static_cast<std::size_t>(selected * 2));
-  std::vector<float> multi(static_cast<std::size_t>(selected * sources * 2));
+  std::vector<perf::Scalar> resolved(static_cast<std::size_t>(selected * 2));
+  std::vector<perf::Scalar> multi(static_cast<std::size_t>(selected * sources * 2));
   std::vector<int32_t> counts(static_cast<std::size_t>(selected), static_cast<int32_t>(sources));
   for (int64_t row = 0; row < selected; ++row) {
     selected_idx[static_cast<std::size_t>(row)] = row;
     resolved[static_cast<std::size_t>(row * 2)] = -0.1F;
     for (int64_t source = 0; source < sources; ++source)
       multi[static_cast<std::size_t>((row * sources + source) * 2)] =
-          -0.1F + 0.05F * static_cast<float>(source);
+          -0.1F + 0.05F * static_cast<perf::Scalar>(source);
   }
   return {upload(indices, {rows, columns}, DLDataType{kDLInt, 64, 1}),
-          upload(baseline, {rows, 2}, DLDataType{kDLFloat, 32, 1}),
+          upload(baseline, {rows, 2}, hr::real_dtype<perf::Scalar>()),
           upload(selected_idx, {selected}, DLDataType{kDLInt, 64, 1}),
-          upload(resolved, {selected, 2}, DLDataType{kDLFloat, 32, 1}),
-          upload(multi, {selected, sources, 2}, DLDataType{kDLFloat, 32, 1}),
+          upload(resolved, {selected, 2}, hr::real_dtype<perf::Scalar>()),
+          upload(multi, {selected, sources, 2}, hr::real_dtype<perf::Scalar>()),
           upload(counts, {selected}, DLDataType{kDLInt, 32, 1})};
 }
 

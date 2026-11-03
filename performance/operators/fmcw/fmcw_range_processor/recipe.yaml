@@ -20,7 +20,7 @@ recipe:
     fft_norm: backward
     waveform: {factory: valid_fmcw_waveform, carrier_frequency: 77000000000, bandwidth: 150000000, chirp_duration: 0.000020, sample_rate: 12800000, pri_seconds: 0.000025}
     nfft: 0
-  outputs: {timed: range_profiles, drain: [range_bins], unwired: []}
+  outputs: {timed: range_profiles, drain: [range_bins], unwired: [], optional_tensor_outputs: [range_bins]}
   live:
     range_window: {physical_port: range_window, codec: window_spec}
     apply_dechirp: {physical_port: apply_dechirp, codec: bool}
@@ -40,3 +40,88 @@ cases:
   - {id: dechirp-hann-medium, profile: medium, scopes: [moderate], parameters: {range_window: {type: hann}, apply_dechirp: true}}
   - {id: hamming-window-medium, profile: medium, scopes: [thorough], parameters: {range_window: {type: hann}, fft_norm: ortho}, override: {port: range_window, value: {type: hamming}}}
   - {id: nfft-cached-medium, profile: medium, scopes: [thorough], parameters: {}, override: {port: nfft, value: {scale: 2}, cache: cached}}
+  - id: window-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: range_window
+      value:
+        type: hann
+      cache: cached
+  - id: dechirp-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: apply_dechirp
+      value: true
+      cache: cached
+  - id: waveform-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: waveform
+      value:
+        pri_seconds: 3.0e-05
+      cache: cached
+  - id: norm-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: fft_norm
+      value: ortho
+      cache: cached
+  - id: nfft-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: nfft
+      value:
+        scale: 2
+      cache: cached
+  - id: hamming-window-medium-cached
+    profile: medium
+    scopes:
+    - thorough
+    parameters:
+      range_window:
+        type: hann
+      fft_norm: ortho
+    override:
+      port: range_window
+      value:
+        type: hamming
+      cache: cached
+  - id: optional-minimal-{profile}
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    output_mode: minimal

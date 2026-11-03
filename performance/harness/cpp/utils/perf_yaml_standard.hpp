@@ -228,7 +228,7 @@ struct YamlStandardTraits : PerfDriverDefaults {
   static Scenario parse_case(const ProfileCase& profile_case, const std::vector<int64_t>&,
                              const ProfileSuite& suite) {
     validate_recipe_case(suite, profile_case);
-    const auto recipe = parse_yaml_recipe(suite);
+    const auto recipe = case_recipe(suite, profile_case);
     const auto params = merge_recipe_map(recipe.params, profile_case.parameters);
     const auto values = recipe_values(suite, profile_case);
     auto registered = holoscan::authoring::authoring_registry().operator_type(recipe.operator_type);

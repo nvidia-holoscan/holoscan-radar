@@ -29,6 +29,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "fmcw/tdm_dense_compensation_op/tdm_dense_compensation_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
@@ -158,11 +159,14 @@ holoscan::testing::TestResult run_tdm_result(std::vector<std::shared_ptr<holosca
   fixture.template capture_snapshot<holoscan::Tensor>("rd_maps_out", expected, kMaximumBytes);
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
   fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("rd_maps_out", expected, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "rd_maps_out", expected);
   (void)observed;
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -217,12 +221,14 @@ holoscan::testing::TestResult run_live_waveform_graph(std::vector<LiveWaveformTi
   fixture.template capture_snapshot<holoscan::Tensor>("rd_maps_out", ticks.size(), kMaximumBytes);
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
   fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed =
-      running.wait_for_output("rd_maps_out", ticks.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "rd_maps_out", ticks.size());
   (void)observed;
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<HostTensor> captured_frames(const holoscan::testing::TestResult& result) {

@@ -20,6 +20,7 @@
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/max_byte_span.hpp"
 #include <holoscan/core/expected_macros.hpp>
+#include <holoscan/logger/logger.hpp>
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "sar/backprojection_op/backprojection_stage.hpp"
@@ -176,7 +177,9 @@ void copy_sample_points_lattice(detail::BackprojectionState<T>& state,
 }  // namespace
 
 template <typename T>
-BackprojectionOp<T>::BackprojectionOp(const MaxTensorExtents& extents) : extents_(extents) {
+BackprojectionOp<T>::BackprojectionOp(const MaxTensorExtents& extents,
+                                      std::shared_ptr<FormationHud> hud)
+: extents_(extents), hud_(std::move(hud)) {
   require_extent(extents.max_pulses, "max_pulses", "BackprojectionOp");
   require_extent(extents.max_range_bins, "max_range_bins", "BackprojectionOp");
   require_extent(extents.max_image_v, "max_image_v", "BackprojectionOp");
@@ -191,15 +194,17 @@ void BackprojectionOp<T>::setup(OperatorSpec& spec) {
       .memory_kind = MemoryKind::kCudaDevice, .dtype = std::nullopt, .rank = std::nullopt};
   constexpr TensorRepresentation host{
       .memory_kind = MemoryKind::kHost, .dtype = DLDataType{kDLFloat, 64U, 1U}, .rank = 1U};
-  spec.input(range_profiles).queue_depth(4U).expects_tensor(tensor_input(device));
-  spec.input(positions).queue_depth(4U).expects_tensor(tensor_input(device));
-  spec.input(reference_position).queue_depth(4U).expects_tensor(tensor_input(device));
-  spec.input(control).optional().queue_depth(4U);
+  // Setup default 16: continuous strip fans 4 BP ticks per reader cube. Per-edge
+  // ConnectionOptions still set destination depth (other apps keep 4).
+  spec.input(range_profiles).queue_depth(16U).expects_tensor(tensor_input(device));
+  spec.input(positions).queue_depth(16U).expects_tensor(tensor_input(device));
+  spec.input(reference_position).queue_depth(16U).expects_tensor(tensor_input(device));
+  spec.input(control).optional().queue_depth(16U);
   spec.input(range_bins).optional().queue_depth(4U);
   spec.input(sample_points).optional().queue_depth(4U);
   spec.input(weight).optional().queue_depth(4U);
   spec.input(initial_image).optional().queue_depth(4U);
-  spec.input(sample_geometry).optional().queue_depth(4U);
+  spec.input(sample_geometry).optional().queue_depth(16U);
   spec.input(range_bin_spacing).optional().queue_depth(4U);
   spec.input(range_bin_origin).optional().queue_depth(4U);
   spec.input(reference_frequency).optional().queue_depth(4U);
@@ -258,7 +263,6 @@ void BackprojectionOp<T>::start() {
 template <typename T>
 expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
   try {
-    const auto t0 = std::chrono::steady_clock::now();
     const std::string& who = op_name<T>();
 
     // Join this pulse block with same-tick controls and geometry overrides.
@@ -295,6 +299,15 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
     std::optional<FormationControl> control_value;
     if (control_tensor)
       control_value = read_control(*control_tensor, who);
+    // Latch the reader's last packet now: this tick's pulses are in hand, and
+    // the live mailbox moves into the next collect while this emit is on GPU.
+    std::optional<std::chrono::steady_clock::time_point> tick_last_packet;
+    PlaybackStatus tick_playback{};
+    if (hud_) {
+      const auto snap = hud_->snapshot();
+      tick_last_packet = snap.last_packet_at;
+      tick_playback = snap.last_batch_playback;
+    }
     const bool stage_after = control_value && *control_value == FormationControl::kEmitAndReset;
     HOLOSCAN_TRY(auto geometry_override_wire, receive_optional_value(sample_geometry));
     SampleGeometry new_geometry = params().sample_geometry;
@@ -469,6 +482,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       }
       unemitted_pulses_ = 0;
       aperture_compute_s_ = 0.0;
+      state_->discard_tick_gpu_timing();
     }
 
     const int64_t num_bins = cube.cols;
@@ -655,6 +669,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       }
     }
 
+    state_->record_tick_gpu_start(stream);
     const double pc_partial = 4.0 * kPi * effective_frequency_ / kSpeedOfLight;
     const int64_t pulse_stride = num_pulses * 3;
     const int64_t profile_stride = num_pulses * num_bins * 2;
@@ -715,7 +730,6 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
     bool emitted = false;
     int64_t emitted_pulses = 0;
     int64_t emitted_pixels = 0;
-    std::optional<TensorOutputLoan> image_loan;
     std::optional<SampleGeometry> emitted_geometry;
     if (control_value.has_value() && is_emit(*control_value)) {
       // Keep the lattice of this image before EmitAndReset installs the next one.
@@ -723,32 +737,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       emitted = true;
       emitted_pulses = unemitted_pulses_;
       emitted_pixels = num_v * num_u;
-      HOLOSCAN_TRY(
-          auto loan,
-          prepare_device_tensor(
-              image, context, std::vector<int64_t>{num_v, num_u}, complex_dtype<T>(),
-              [&](void* dst, std::size_t) -> expected<void, Error> {
-                if (detail::backend_is_matx(backend_value_)) {
-#if __has_include("matx/kernels/sar_bp.cuh")
-                  detail::emit_matx_accum(*state_, static_cast<T*>(dst), 1, num_v, num_u, stream);
-#endif
-                } else {
-                  detail::emit_accum(*state_, static_cast<T*>(dst), 1, num_v, num_u, stream);
-                }
-                return {};
-              }));
-      image_loan.emplace(std::move(loan));
       unemitted_pulses_ = 0;
-    }
-
-    if (control_value.has_value() && *control_value == FormationControl::kEmitAndReset) {
-      if (detail::backend_is_matx(backend_value_)) {
-#if __has_include("matx/kernels/sar_bp.cuh")
-        detail::reset_matx_accum(*state_, stream);
-#endif
-      } else {
-        detail::reset_accum(*state_, stream);
-      }
     }
 
     if (apply_after) {
@@ -776,14 +765,16 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       retained_weight_ = std::move(weight);
     }
 
+    state_->record_tick_gpu_stop(stream);
+
     // Synchronize only at an image boundary, when downstream reads the result.
     if (emitted) {
       if (cudaStreamSynchronize(stream) != cudaSuccess) {
         throw std::runtime_error(who + ": emit stream sync failed");
       }
+      aperture_compute_s_ = state_->take_tick_gpu_s();
     }
     const auto now = std::chrono::steady_clock::now();
-    aperture_compute_s_ += std::chrono::duration<double>(now - t0).count();
     if (emitted) {
       // Timing is published before the image port so EventBased
       // downstream host code (the overlay) reads this emit, not the
@@ -797,7 +788,50 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
           std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
       last_image_emit_ns_.store(ns, std::memory_order_relaxed);
       last_image_emit_valid_.store(true, std::memory_order_release);
-      HOLOSCAN_RETURN_IF_ERROR(emit_prepared_tensor(image, context, std::move(*image_loan)));
+      if (hud_) {
+        hud_->publish_bp(FormationHudBp{
+            .capture_time_ns = context.activation_time().timestamp_ns,
+            .closes_aperture = stage_after,
+            .compute_s = aperture_compute_s_,
+            .pulses = emitted_pulses,
+            .pixels = emitted_pixels,
+            .num_v = num_v,
+            .num_u = num_u,
+            .emit_at = now,
+            .last_packet_at = tick_last_packet,
+            .playback = tick_playback,
+        });
+      }
+      // Copy after GPU work is synced, and reset only after a successful
+      // image emit: a failed Tensor emit consumes the loan.
+      HOLOSCAN_RETURN_IF_ERROR(
+          emit_required_tensor(image, context, "BackprojectionOp.image", false, [&] {
+            return prepare_device_tensor(
+                image, context, std::vector<int64_t>{num_v, num_u}, complex_dtype<T>(),
+                [&](void* dst, std::size_t) -> expected<void, Error> {
+                  if (detail::backend_is_matx(backend_value_)) {
+#if __has_include("matx/kernels/sar_bp.cuh")
+                    detail::emit_matx_accum(*state_, static_cast<T*>(dst), 1, num_v, num_u, stream);
+#endif
+                  } else {
+                    detail::emit_accum(*state_, static_cast<T*>(dst), 1, num_v, num_u, stream);
+                  }
+                  if (cudaStreamSynchronize(stream) != cudaSuccess) {
+                    return make_unexpected(
+                        Error{ErrorCode::kFailure, who + ": image copy sync failed"});
+                  }
+                  return {};
+                });
+          }));
+      if (control_value.has_value() && *control_value == FormationControl::kEmitAndReset) {
+        if (detail::backend_is_matx(backend_value_)) {
+#if __has_include("matx/kernels/sar_bp.cuh")
+          detail::reset_matx_accum(*state_, stream);
+#endif
+        } else {
+          detail::reset_accum(*state_, stream);
+        }
+      }
       if (!sample_points_connected_ && emitted_geometry->is_valid()) {
         if (geometry_output_.active()) {
           const auto packed = pack_sample_geometry(*emitted_geometry);
@@ -819,8 +853,8 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
                               ? static_cast<double>(emitted_pixels) *
                                     static_cast<double>(emitted_pulses) / aperture_compute_s_
                               : 0.0;
-      HOLOSCAN_LOG_INFO("{}: {}x{} in {:.3f} s ({:.3e} px*pls/s, {} pulses)", who, num_v, num_u,
-                        aperture_compute_s_, rate, emitted_pulses);
+      HOLOSCAN_LOG_DEBUG("{}: {}x{} in {:.3f} s ({:.3e} px*pls/s, {} pulses)", who, num_v, num_u,
+                         aperture_compute_s_, rate, emitted_pulses);
       aperture_compute_s_ = 0.0;
     }
     return {};

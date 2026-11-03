@@ -21,6 +21,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "detection/detection_reduction_op/detection_reduction_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/test_extents.hpp"
@@ -88,16 +89,19 @@ holoscan::testing::TestResult run_reduction_result(std::shared_ptr<holoscan::Ten
   }
   fixture.output_device("rep_idx", holoscan::DeviceId{0});
   fixture.output_device("reduced_points", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool rep = running.wait_for_output("rep_idx", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool rep = completion.wait_for_output(running, "rep_idx", 1U);
   bool reduced = true;
   if (capture_reduced) {
-    reduced = running.wait_for_output("reduced_points", 1U, std::chrono::seconds{5});
+    reduced = completion.wait_for_output(running, "reduced_points", 1U);
   }
   (void)rep;
   (void)reduced;
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -171,10 +175,12 @@ TEST(DetectionReductionOpTest, UnwiredReducedPointsDoesNotSuppressRepIdxAcrossFr
   fixture.input_source_device("points", holoscan::DeviceId{0});
   fixture.output_device("rep_idx", holoscan::DeviceId{0});
   fixture.output_device("reduced_points", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("rep_idx", 4U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "rep_idx", 4U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(observed) << result.describe_failure();
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   const auto frames = result.snapshots<holoscan::Tensor>("rep_idx");
@@ -735,11 +741,14 @@ holoscan::testing::TestResult run_weights_override_graph(std::vector<LiveWeights
   fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
   fixture.output_device("rep_idx", holoscan::DeviceId{0});
   fixture.output_device("reduced_points", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("rep_idx", ticks.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "rep_idx", ticks.size());
   (void)observed;
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<HostTensor> captured_rep_idx(const holoscan::testing::TestResult& result) {

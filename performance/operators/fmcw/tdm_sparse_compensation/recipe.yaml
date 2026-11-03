@@ -21,7 +21,7 @@ recipe:
     rx_positions: {factory: linear_positions, spacing: 0.002, coordinate: 0}
     overlap_policy: keep_all
     snapshot_window: [0, 0]
-  outputs: {timed: snapshot, drain: [is_valid, array_geometry], drain_codecs: {array_geometry: array_geometry}, unwired: []}
+  outputs: {timed: snapshot, drain: [is_valid, array_geometry], drain_codecs: {array_geometry: array_geometry}, unwired: [], optional_tensor_outputs: [is_valid]}
   live:
     waveform: {physical_port: waveform, codec: waveform_descriptor}
     snapshot_window: {physical_port: snapshot_window, codec: sparse_window}
@@ -33,3 +33,54 @@ cases:
   - {id: "waveform-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: waveform, value: {pri_seconds: 0.0011}}}
   - {id: "window-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: snapshot_window, value: [1, 1]}}
   - {id: average-window-medium, profile: medium, scopes: [thorough], parameters: {snapshot_window: [1, 1], overlap_policy: average}, override: {port: snapshot_window, value: [2, 2]}}
+  - id: waveform-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: waveform
+      value:
+        pri_seconds: 0.0011
+      cache: cached
+  - id: window-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: snapshot_window
+      value:
+      - 1
+      - 1
+      cache: cached
+  - id: average-window-medium-cached
+    profile: medium
+    scopes:
+    - thorough
+    parameters:
+      snapshot_window:
+      - 1
+      - 1
+      overlap_policy: average
+    override:
+      port: snapshot_window
+      value:
+      - 2
+      - 2
+      cache: cached
+  - id: optional-minimal-{profile}
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    output_mode: minimal

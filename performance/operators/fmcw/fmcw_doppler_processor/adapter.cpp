@@ -18,7 +18,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::FMCWDopplerProcessorOp<float>;
+using Op = hr::FMCWDopplerProcessorOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 hr::FMCWDopplerProcessorParams parameters(const Scenario& scen) {
@@ -78,7 +78,8 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   const double chirps = static_cast<double>(scen.axis("chirps"));
   const double bins = static_cast<double>(scen.axis("range_bins"));
   const double cells = batch * chirps * bins;
-  const double bytes = 2.0 * cells * sizeof(std::complex<float>) + chirps * sizeof(float);
+  const double bytes =
+      2.0 * cells * sizeof(std::complex<perf::Scalar>) + chirps * sizeof(perf::Scalar);
   perf::set_recipe_throughput(row, cells, batch * bins, bytes);
   row.notes = "end-to-end Graph latency; cells/s is complex RD-map cells/s";
   if (!scen.live_port.empty())
@@ -132,8 +133,6 @@ struct Traits : perf::PerfDriverDefaults {
                                        scen.live_value["pri_seconds"].as<double>());
     if (scen.live_port == "fft_norm")
       (void)perf::recipe_fft_norm(scen.live_value.as<std::string>());
-    if (scen.cached_override && scen.live_port != "nfft")
-      throw std::invalid_argument("cached transition only applies to nfft");
     return scen;
   }
   static void validate_run_settings(const Scenario& scen, const perf::RunSettings& rs) {

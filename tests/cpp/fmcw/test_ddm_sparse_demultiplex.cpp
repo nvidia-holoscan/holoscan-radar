@@ -21,6 +21,7 @@
 #include <holoscan/core/connection_options.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "fmcw/ddm_sparse_demultiplex_op/ddm_sparse_demultiplex_op.hpp"
 #include "fmcw/ddm_sparse_demultiplex_op/ddm_sparse_demultiplex_stage.hpp"
 #include "radar_common/dsp/mimo_coherent_compensation_stage.hpp"
@@ -190,11 +191,14 @@ holoscan::testing::TestResult run_sparse_operator(
   }
   fixture.output_device("snapshot", holoscan::DeviceId{0});
   fixture.output_device("is_valid", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("snapshot", rd_maps.size(), std::chrono::seconds{5});
-  (void)running.wait_for_output("array_geometry", rd_maps.size(), std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "snapshot", rd_maps.size());
+  (void)completion.wait_for_output(running, "array_geometry", rd_maps.size());
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 std::vector<hr::testing::HostTensor> sparse_snapshots(const holoscan::testing::TestResult& result) {

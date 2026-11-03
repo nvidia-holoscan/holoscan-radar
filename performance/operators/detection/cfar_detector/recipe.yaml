@@ -11,11 +11,11 @@ live_ports: [os_rank, guard_cells, training_cells, pfa, alpha_lut, threshold_sca
 recipe:
   operator_type: radar.CFARDetectorOp.float
   inputs:
-    - {port: rd_maps, shape: [channels, doppler, range], omit_if_one: [channels], dtype: float32, memory: device, generator: power_map}
-  fixtures: {channels: 1}
+    - {port: rd_maps, shape: [tx, channels, doppler, range], omit_if_one: [tx, channels], dtype: float32, memory: device, generator: power_map}
+  fixtures: {tx: 1, channels: 1}
   constructor: {bounds_policy: cfar_bounds}
   params: {cfar_variant: CA, guard_cells: [1, 1], training_cells: [2, 2], pfa: 0.000001, peak_mode: none, threshold_scale: 1.0}
-  outputs: {timed: detection_idx, drain: [detection_mask, detection_score, noise_estimate, cfar_power], unwired: []}
+  outputs: {timed: detection_idx, drain: [detection_mask, detection_score, noise_estimate, cfar_power], unwired: [], optional_tensor_outputs: [detection_mask, detection_score, noise_estimate, cfar_power]}
   live:
     os_rank: {codec: rank_decrement, physical_port: os_rank}
     guard_cells: {codec: cfar_cell_window, physical_port: guard_cells}
@@ -41,3 +41,137 @@ cases:
   - {id: 'nci_axes-{profile}', profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, override: {port: nci_axes, value: [0]}, fixture: {channels: 4}}
   - {id: 'max_detections-{profile}', profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: max_detections, value: 100}}
   - {id: footprint-pfa-medium, profile: medium, scopes: [thorough], parameters: {guard_cells: [2, 2], training_cells: [4, 4]}, override: {port: pfa, value: 0.001}}
+  - {id: "peak-all-rank4-{profile}", profiles: [small, medium, large], scopes: [limited], parameters: {peak_mode: all}, fixture: {tx: 2, channels: 4}}
+  - id: os_rank-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters:
+      cfar_variant: OS
+      os_rank:
+        factory: three_quarter_training_rank
+    override:
+      port: os_rank
+      value:
+        decrement: 1
+      cache: cached
+  - id: guard_cells-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: guard_cells
+      value:
+      - 0
+      - 0
+      cache: cached
+  - id: training_cells-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: training_cells
+      value:
+      - 3
+      - 3
+      cache: cached
+  - id: pfa-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: pfa
+      value: 0.001
+      cache: cached
+  - id: alpha_lut-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: alpha_lut
+      value:
+        factory: scaled_alpha_lut
+        factor: 1.1
+      cache: cached
+  - id: threshold_scale-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: threshold_scale
+      value: 1.1
+      cache: cached
+  - id: nci_axes-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: nci_axes
+      value:
+      - 0
+      cache: cached
+    fixture:
+      channels: 4
+  - id: max_detections-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: max_detections
+      value: 100
+      cache: cached
+  - id: footprint-pfa-medium-cached
+    profile: medium
+    scopes:
+    - thorough
+    parameters:
+      guard_cells:
+      - 2
+      - 2
+      training_cells:
+      - 4
+      - 4
+    override:
+      port: pfa
+      value: 0.001
+      cache: cached
+  - id: optional-minimal-{profile}
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    output_mode: minimal

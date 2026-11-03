@@ -24,6 +24,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/sample_geometry.hpp"
+#include "radar_common/sar/formation_hud.hpp"
 #include "radar_common/sdk/config_codecs.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_schemas/sample_geometry_bridge.hpp"
@@ -46,7 +47,7 @@ struct BackprojectionParams {
 };
 HOLOSCAN_PARAM_SCHEMA(
     BackprojectionParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.BackprojectionParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.BackprojectionParams", 3),
     holoscan::field<&BackprojectionParams::coordinate_frame>("coordinate_frame"),
     holoscan::field<&BackprojectionParams::sample_geometry>("sample_geometry"),
     holoscan::field<&BackprojectionParams::range_bin_spacing>("range_bin_spacing"),
@@ -61,7 +62,8 @@ class BackprojectionOp : public holoscan::Operator<BackprojectionParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
 
  public:
-  explicit BackprojectionOp(const MaxTensorExtents& extents);
+  explicit BackprojectionOp(const MaxTensorExtents& extents,
+                            std::shared_ptr<FormationHud> hud = {});
   ~BackprojectionOp() override;
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -122,6 +124,7 @@ class BackprojectionOp : public holoscan::Operator<BackprojectionParams> {
   std::atomic<int64_t> last_image_num_v_{0}, last_image_num_u_{0};
   std::atomic<int64_t> last_image_emit_ns_{0};
   std::atomic<bool> last_image_emit_valid_{false};
+  std::shared_ptr<FormationHud> hud_{};
   std::shared_ptr<detail::BackprojectionState<T>> state_;
   std::shared_ptr<Tensor> retained_profiles_, retained_positions_, retained_reference_;
   std::shared_ptr<Tensor> retained_sample_points_, retained_weight_;

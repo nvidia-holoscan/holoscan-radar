@@ -32,8 +32,12 @@ radar_app/
 
 The base `holoscan::radar_app` target is header-only. When the SDK exports the Graph-native Holoviz operator,
 `holoscan::fmcw_dashboard` adds the compiled CUDA dashboard compositor.
-The SAR support builds a CUDA image raster and optional Graph-native Holoviz
-branch; the five app entrypoints keep their own mode-specific wiring.
+The SAR support builds a CUDA image raster, an on-image Holoviz HUD, a 20 s
+Gantt timeline window, and optional Graph-native Holoviz branch; the five app
+entrypoints keep their own mode-specific wiring. The Graph driver puts the paced CPHD reader, range/manager, and backprojection in
+separate partitions and binds a dedicated `ThreadPlacement` lane on each so
+collect-vs-wall lag is the live playback clock rather than formation GPU time
+on the controller thread.
 
 ## Configuration boundary
 

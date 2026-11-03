@@ -24,6 +24,8 @@ flowchart LR
 The solid paths are required data and control flows. Dashed dump and
 visualization branches are enabled by application configuration. The reader's
 typed `stream_boundary` is joined to the aperture manager on the same tick.
+The paced reader, range/manager, and backprojection are separate Graph partitions with dedicated `ThreadPlacement` lanes so collect-vs-wall lag is the live playback clock, not formation GPU time on the controller.
+A required emit onto a full output queue aborts the run. After the operator Error, the Graph driver prints a prominent backpressure banner: lower `cphd_reader.playback_rate` or reduce the image size so the pipeline can keep up.
 The stager places the *next* collection's geometry, range spacing, and
 frequency on the closing batch. Backprojection forms the closing image using
 the current values, then installs the next values after `EmitAndReset`.
@@ -47,29 +49,32 @@ real collections.
 
 ## Real collection preset
 
-The preset rotates six distinct Umbra SNAPSHOT CPHDs under `/tmp/sar/mode5/`. Run `python3 tools/sar_data/pull_cphd.py --app independent_images --list` to inspect their paths, then use the commands below to download about 10.5 GiB to the host `data/sar/mode5/` directory and mount it at `/tmp/sar`. It derives an IARP-centred ENU grid per file and chooses a common padded FFT length. The ordered `cphd.path` list and `pixel_scale` list correspond by index. A single-CPHD CLI override is rejected because the topology requires multiple collections.
+The preset rotates six distinct Umbra SNAPSHOT CPHDs under `data/sar/mode5/`. Run `python3 tools/sar_data/pull_cphd.py --app independent_images --list` to inspect their paths, then use the commands below to download about 10.5 GiB to the host `data/sar/mode5/` directory. It derives an IARP-centred ENU grid per file and chooses a common padded FFT length. The ordered `cphd.path` list and `pixel_scale` list correspond by index. A single-CPHD CLI override is rejected because the topology requires multiple collections.
 
-From the repository root **on the host**, with the Holoscan CLI installed
-and NGC staging access configured, run:
+From the repository root **on the host**, with the Holoscan CLI installed,
+run:
 
 ```bash
 python3 tools/sar_data/pull_cphd.py --app independent_images \
   --dest data/sar/mode5
-./holoscan-radar run independent_images \
-  --docker-opts="--mount=type=bind,src=$PWD/data/sar,dst=/tmp/sar,readonly"
+./holoscan-radar run independent_images
 ```
 
-The CLI mounts the host `data/sar/` directory read-only at `/tmp/sar` in the
-container, matching the shipped YAML. A host `/tmp/sar` directory or symlink
-is not visible in the container unless mounted. The shipped [`independent_images.yaml`](config/independent_images.yaml) is copied beside the
-executable by CMake and is the default real-data preset.
+The shipped [`independent_images.yaml`](config/independent_images.yaml) is copied beside the
+executable by CMake and is the default real-data preset. Its relative CPHD paths
+resolve under `HOLOHUB_DATA_DIR` (default: the repository's `data/` directory),
+which is already shared with both CLI containers and the DevContainer. No extra
+mount is needed. Inside the DevContainer, run
+`./build/applications/sar/independent_images/cpp/independent_images` from the repository root
+after building the target. Absolute CPHD paths and existing paths relative to
+the working directory or YAML directory remain supported.
 
 Pass an explicit YAML path as the first argument. For this topology,
 the application requires the YAML collection list and rejects a single-CPHD override.
 
 ## Output and display
 
-One complex image is reported per collection boundary, with geometry and frequency restaged for the next file. The fixture uses two local collections and reports two 5 × 5 images. Optional dump writes each image; Holoviz shows the current raster. Collection names are parsed but are not currently shown in the report or display; see the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md).
+One complex image is reported per collection boundary, with geometry and frequency restaged for the next file. The fixture uses two local collections and reports two 5 × 5 images. Optional dump writes each image; Holoviz shows the current raster with the active collection name on the on-image HUD. `SarImageReportOp` logs index, HxW, and the formed image's collect/wall/behind latched at backprojection emit. Scene names are still omitted from that log; see the [SAR open-items roll-up](../../../docs/planning/SAR/OPEN_ITEMS.md).
 
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.

@@ -17,7 +17,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::RankOneResidualScreenOp<float>;
+using Op = hr::RankOneResidualScreenOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 hr::RankOneResidualScreenParams parameters(const Scenario& scen) {

@@ -151,7 +151,7 @@ preparation. All five SAR GUI apps have been visually checked with their
 current presets. That check does not establish full-resolution image quality
 or validate every public collection and backprojection backend.
 
-The HSDK 5 staging image supplies Python Core and Visualization. Configure the
+The HSDK 5 GA image supplies Python Core and Visualization. Configure the
 FMCW provider with nanobind and run its Graph suite inside the container:
 
 ```bash
@@ -198,7 +198,7 @@ configures and builds the module, and runs the suite in a container:
 ./holoscan-radar test --dryrun --verbose
 ```
 
-The wrapper selects the staging base image and handles the sibling SDK
+The wrapper selects the GA base image and handles the sibling SDK
 checkout when one exists. The CLI finds the image SDK's CMake package without
 an explicit `holoscan_DIR` override.
 
@@ -281,7 +281,7 @@ Key fields to update before publishing:
 | `[tool.scikit-build].cmake.args` | Extra CMake flags passed during `pip install` |
 
 The FMCW provider uses the SDK's Python Core and Visualization packages and
-nanobind 3.0.1. Build its CPython 3.12 stable ABI wheel inside the staging
+nanobind 3.0.1. Build its CPython 3.12 stable ABI wheel inside the GA
 development container with:
 
 ```bash

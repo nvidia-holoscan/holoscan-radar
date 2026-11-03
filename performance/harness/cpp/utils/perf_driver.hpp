@@ -36,8 +36,12 @@
 #include <utility>
 #include <vector>
 
+#include <holoscan/profiler/nvtx3.hpp>
+
 #include "utils/perf_app.hpp"
+#include "utils/perf_native_capture.hpp"
 #include "utils/perf_platform.hpp"
+#include "utils/perf_precision.hpp"
 #include "utils/perf_profiles.hpp"
 #include "utils/perf_report.hpp"
 #include "utils/perf_runner.hpp"
@@ -55,12 +59,15 @@ struct PerfDriverDefaults {
 // through the scenario matrix the flags select, never through new flags.
 struct Options {
   std::string output;
+  std::string verify_output;
   std::string text;
   bool quiet{false};
   bool validate_only{false};
   bool list_cases{false};
   std::string scope{"limited"};
   std::vector<std::string> sizes;  // empty = tier default
+  std::vector<std::string> cases;
+  bool reverse_order{false};
   bool sizes_all{false};
   double stop_after_s{0.0};  // 0 = disabled; per-scenario wall-clock cap
   RunSettings rs;
@@ -86,8 +93,10 @@ void print_help() {
             << "Usage: " << Traits::tool_name() << " [options]\n\n"
             << "  --validate        Validate every YAML case without running a Graph\n"
             << "  --list-cases      Validate and list selected cases without a GPU\n"
+            << "  --verify-output <path>  Export native snapshots without timing\n"
             << "  --output <path>   Write machine-readable JSON report\n"
                "  --text <path>     Also write the text summary to a file\n"
+               "  --raw-frame-times  Export chronological steady samples and run boundaries\n"
                "  --quiet           Suppress the stdout text summary\n"
                "  --warmup N        Warmup frames excluded from stats "
                "(default 5)\n"
@@ -97,6 +106,8 @@ void print_help() {
             << "  --scope NAME      minimal|limited|overrides|moderate|thorough\n"
             << "  --sizes all       Use all YAML size profiles\n"
             << "  --sizes a,b,c     Limit to named YAML profiles\n"
+            << "  --cases a,b,c     Select exact expanded scenario IDs\n"
+            << "  --reverse-order   Reverse selected scenario order for position probes\n"
             << "  --full            Alias for --scope thorough\n"
             << "  --stop-after-s S  Stop after first scenario whose wall time "
                "exceeds S seconds\n"
@@ -121,12 +132,16 @@ bool parse_args(int argc, char** argv, Options* opt) {
       opt->validate_only = true;
     } else if (a == "--list-cases") {
       opt->list_cases = true;
+    } else if (a == "--verify-output") {
+      opt->verify_output = next("--verify-output");
     } else if (a == "--output") {
       opt->output = next("--output");
     } else if (a == "--text") {
       opt->text = next("--text");
     } else if (a == "--quiet") {
       opt->quiet = true;
+    } else if (a == "--raw-frame-times") {
+      opt->rs.raw_frame_times = true;
     } else if (a == "--full") {
       opt->scope = "thorough";
     } else if (a == "--scope") {
@@ -147,6 +162,12 @@ bool parse_args(int argc, char** argv, Options* opt) {
         std::cerr << "error: --stop-after-s must be positive\n";
         return false;
       }
+    } else if (a == "--cases") {
+      opt->cases = split_csv(next("--cases"));
+      if (opt->cases.empty())
+        return false;
+    } else if (a == "--reverse-order") {
+      opt->reverse_order = true;
     } else if (a == "--sizes") {
       const std::string v = next("--sizes");
       if (v == "all") {
@@ -215,7 +236,7 @@ ProfileSuite load_adapter_suite(const std::filesystem::path& path) {
 template <typename Traits>
 std::vector<SelectedScenario<typename Traits::Scenario>> select_scenarios(const ProfileSuite& suite,
                                                                           const Options& opt) {
-  return select_validated_scenarios<typename Traits::Scenario>(
+  auto selected = select_validated_scenarios<typename Traits::Scenario>(
       suite, opt.scope, opt.sizes_all ? std::vector<std::string>{} : opt.sizes,
       [&suite](const ProfileCase& c, const std::vector<int64_t>& shape) {
         auto scenario = [&] {
@@ -231,6 +252,31 @@ std::vector<SelectedScenario<typename Traits::Scenario>> select_scenarios(const 
           throw std::invalid_argument("adapter live port disagrees with YAML");
         return scenario;
       });
+  if (!opt.cases.empty()) {
+    for (const auto& id : opt.cases) {
+      if (std::none_of(selected.begin(), selected.end(), [&](const auto& entry) {
+            return entry.scenario.id == id;
+          }))
+        throw std::invalid_argument("unknown/unselected scenario ID: " + id);
+    }
+    // YAML::Node assignment mutates shared handles. Construct entries instead
+    // of moving them over existing scenarios during filtering or reversal.
+    std::vector<SelectedScenario<typename Traits::Scenario>> filtered;
+    filtered.reserve(selected.size());
+    for (auto& entry : selected) {
+      if (std::find(opt.cases.begin(), opt.cases.end(), entry.scenario.id) != opt.cases.end())
+        filtered.push_back(std::move(entry));
+    }
+    selected.swap(filtered);
+  }
+  if (opt.reverse_order) {
+    std::vector<SelectedScenario<typename Traits::Scenario>> reversed;
+    reversed.reserve(selected.size());
+    for (auto entry = selected.rbegin(); entry != selected.rend(); ++entry)
+      reversed.push_back(std::move(*entry));
+    selected.swap(reversed);
+  }
+  return selected;
 }
 
 // The YAML suite owns the size ladder. Each adapter only translates one shape
@@ -258,20 +304,36 @@ void record_exercised_sizes(
 // live-frame plan, and both report rows for every operator.
 template <typename Traits>
 void run_adapter_case(const SelectedScenario<typename Traits::Scenario>& selected,
-                      const RunSettings& settings, PerfReport* report) {
+                      const RunSettings& settings, PerfReport* report,
+                      bool process_warmup = false) {
+  if (selected.cached && settings.warmup_frames < 1) {
+    throw std::invalid_argument("cached cases require at least one warmup frame");
+  }
   const auto& scenario = selected.scenario;
   if constexpr (requires { validate_run_settings(scenario, settings); }) {
     validate_run_settings(scenario, settings);
   }
   ResultRow row = base_row(scenario);
+  row.precision = kPrecision;
   row.scenario_id = scenario.id;
   row.size_id = scenario.size_id;
   if (row.live_port != selected.live_port)
     throw std::invalid_argument("adapter live port disagrees with YAML case: " + scenario.id);
   row.live_port = selected.live_port;
+  if (!selected.live_port.empty()) {
+    row.override_context =
+        selected.cached ? "cached_configuration" : "first_changed_configuration_after_baseline";
+  }
   measure_scenario(
       settings, !selected.live_port.empty(),
-      [&](int /*repeat*/, const RunPlan& plan) {
+      [&](int repeat, const RunPlan& plan) {
+        const std::string label =
+            std::string(process_warmup ? "radar-perf:warmup:" : "radar-perf:case:") + scenario.id +
+            ":repeat=" + std::to_string(repeat);
+        nvtxRangePushA(label.c_str());
+        struct PopRange {
+          ~PopRange() { nvtxRangePop(); }
+        } pop_range;
         if constexpr (requires { run_graph(scenario, plan, *selected.suite); }) {
           if (!selected.suite)
             throw std::invalid_argument("selected recipe suite is missing");
@@ -398,11 +460,46 @@ int perf_main(int argc, char** argv) {
     return 1;
   detail::default_log_level();
 
+  if (!opt.verify_output.empty()) {
+    std::ofstream output(opt.verify_output);
+    if (!output) {
+      std::cerr << "error: cannot open native snapshot output\n";
+      return 1;
+    }
+    output << "{\"schema_version\":1,\"byte_order\":\"little\",\"fixture_id\":\"recipe-native-v1\","
+              "\"operator\":\""
+           << std::string(Traits::tool_name()).substr(5) << "\",\"cases\":[";
+    NativeCaptureState::stream = &output;
+    NativeCaptureState::first = true;
+    try {
+      for (const auto& selected : scenarios) {
+        NativeCaptureState::case_id = selected.scenario.id;
+        RunPlan plan{.total_frames = 3, .override_at = selected.live_port.empty() ? -1 : 1};
+        if constexpr (requires { run_graph(selected.scenario, plan, *selected.suite); }) {
+          (void)run_graph(selected.scenario, plan, *selected.suite);
+        } else {
+          (void)run_graph(selected.scenario, plan);
+        }
+      }
+      if (NativeCaptureState::first)
+        throw std::runtime_error("selected adapter lacks native snapshot support");
+      NativeCaptureState::stream = nullptr;
+      output << "]}";
+      return 0;
+    } catch (const std::exception& error) {
+      NativeCaptureState::stream = nullptr;
+      std::cerr << "native verification error: " << error.what() << "\n";
+      return 1;
+    }
+  }
+
   PerfReport report;
   report.provenance = capture_provenance();
   report.platform = capture_platform();
   report.run_settings = opt.rs;
   report.run_settings.scope = opt.scope;
+  report.run_settings.selected_cases = opt.cases;
+  report.run_settings.case_order = opt.reverse_order ? "reverse" : "forward";
   report.run_settings.stop_after_s = opt.stop_after_s;
   report.run_settings.scenarios_planned = static_cast<int>(scenarios.size());
 
@@ -423,7 +520,7 @@ int perf_main(int argc, char** argv) {
             return Traits::parse_case(c, shape);
           }
         });
-    detail::run_adapter_case<Traits>(baseline.front(), warm, &discarded);
+    detail::run_adapter_case<Traits>(baseline.front(), warm, &discarded, true);
   });
   try {
     detail::run_all_scenarios<Traits>(scenarios, opt, &report);

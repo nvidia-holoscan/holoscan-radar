@@ -18,7 +18,7 @@ recipe:
   params:
     array_geometry: {factory: ula_geometry, spacing_wavelengths: 0.5, wavelength: 1.0}
     residual_threshold: 0.03
-  outputs: {timed: snapshot_out, drain: [selected_idx, is_valid_out, residual_score, selection_mask], unwired: []}
+  outputs: {timed: snapshot_out, drain: [selected_idx, is_valid_out, residual_score, selection_mask], unwired: [], optional_tensor_outputs: [is_valid_out, residual_score, selection_mask]}
   live:
     array_geometry: {physical_port: array_geometry, codec: ula_geometry_patch}
 cases:
@@ -28,3 +28,41 @@ cases:
   - {id: "geometry-{profile}", profiles: [small, medium, large], scopes: [overrides, moderate], parameters: {}, fixture: {selection_percent: 25}, override: {port: array_geometry, value: {spacing_wavelengths: 0.49}}}
   - {id: all-selected-medium, profile: medium, scopes: [moderate], parameters: {}, fixture: {selection_percent: 100}}
   - {id: geometry-most-selected-large, profile: large, scopes: [thorough], parameters: {}, fixture: {selection_percent: 75}, override: {port: array_geometry, value: {spacing_wavelengths: 0.45}}}
+  - id: geometry-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    fixture:
+      selection_percent: 25
+    override:
+      port: array_geometry
+      value:
+        spacing_wavelengths: 0.49
+      cache: cached
+  - id: geometry-most-selected-large-cached
+    profile: large
+    scopes:
+    - thorough
+    parameters: {}
+    fixture:
+      selection_percent: 75
+    override:
+      port: array_geometry
+      value:
+        spacing_wavelengths: 0.45
+      cache: cached
+  - id: optional-minimal-{profile}
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    fixture:
+      selection_percent: 25
+    output_mode: minimal

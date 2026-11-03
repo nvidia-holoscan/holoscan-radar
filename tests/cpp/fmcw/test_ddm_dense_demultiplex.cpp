@@ -42,6 +42,7 @@
 #include <holoscan/testing/operator_test_harness.hpp>
 #include <holoscan/time/realtime_clock.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "fmcw/ddm_dense_demultiplex_op/ddm_dense_demultiplex_op.hpp"
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
@@ -169,11 +170,14 @@ holoscan::testing::TestResult run_ddm_result(std::vector<std::shared_ptr<holosca
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
   fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
   fixture.output_device("velocity_bins_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("rd_maps_out", expected, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "rd_maps_out", expected);
   (void)observed;
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -210,13 +214,16 @@ holoscan::testing::TestResult run_ddm_with_axis(std::shared_ptr<holoscan::Tensor
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
   fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
   fixture.output_device("velocity_bins_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool maps = running.wait_for_output("rd_maps_out", 1U, std::chrono::seconds{5});
-  const bool axis = running.wait_for_output("velocity_bins_out", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool maps = completion.wait_for_output(running, "rd_maps_out", 1U);
+  const bool axis = completion.wait_for_output(running, "velocity_bins_out", 1U);
   (void)maps;
   (void)axis;
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 template <typename T>
@@ -1003,10 +1010,12 @@ TEST(DDMDenseDemultiplexOp, UnwiredVelocityAxisDoesNotSuppressMaps) {
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
   fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
   fixture.output_device("velocity_bins_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("rd_maps_out", 4U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "rd_maps_out", 4U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   EXPECT_TRUE(observed) << result.describe_failure();
   EXPECT_TRUE(result.ok()) << result.describe_failure();
   EXPECT_EQ(result.snapshots<holoscan::Tensor>("rd_maps_out").size(), 4U);

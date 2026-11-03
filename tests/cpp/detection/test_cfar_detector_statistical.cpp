@@ -25,6 +25,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/test_extents.hpp"
@@ -190,13 +191,15 @@ std::vector<HostTensor> run_cfar_scores(std::vector<std::shared_ptr<holoscan::Te
     fixture.output_device(output, holoscan::DeviceId{0});
   }
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
   bool observed = true;
   for (const char* output : kOutputs) {
-    observed = running.wait_for_output(output, expected, std::chrono::seconds{30}) && observed;
+    observed = completion.wait_for_output(running, output, expected) && observed;
   }
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   if (!observed || !result.ok()) {
     throw std::runtime_error(result.describe_failure());
   }

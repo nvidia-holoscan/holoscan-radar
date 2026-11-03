@@ -311,8 +311,8 @@ the logical Params/YAML types. Those types do not change to satisfy
 These control-plane Tensors are the sole pageable-host exception to the data
 Tensor memory-space rule. The physical payload does not alter Exact /
 SafeDefault joining, wiring, validation, defaults, or
-shape-change semantics. Schema identity/evolution, generated-artifact, EA
-generator-workaround, and C++-only limitations are locked in
+shape-change semantics. Schema identity/evolution, generated-artifact,
+generator-compatibility, and C++-only limitations are locked in
 [`SCHEMA_PAYLOADS.md`](SCHEMA_PAYLOADS.md).
 
 **Bridge operators.** The workflows also use small add-on operators to connect detection, clustering, and the sparse angle estimators. Per the plain-tensor-ports convention, bridging is done by explicit add-on operators (never shared structs). Each carries a **delivery-model** decision — a mainstream library operator, a per-application implementation, or a shared helper called inside another operator's `compute()` — recorded per bridge. Three exist — `SnapshotGatherOp`, `DetectionReductionOp`, and `FeatureAssemblyOp` — grouped into the functional sections below alongside the operators they connect (each flagged in its own Notes).
@@ -379,7 +379,7 @@ optional array is absent; null is invalid. See
 #### DopplerNotchOp
 
 - **In:** `rd_maps` — complex64 / complex128, one of the named shapes `(num_doppler, num_range_bins)`, `(N_rx, num_doppler, num_range_bins)`, or `(M_tx, N_rx, num_doppler, num_range_bins)`. Doppler is the second-to-last axis; no opaque leading batch is accepted.
-- **In:** `velocity_bins` — float32 / float64 matching the templated precision, `(num_doppler,)`. Required and aligned exactly with `rd_maps`; values are finite, strictly increasing physical radial velocities in m/s.
+- **In:** `velocity_bins` — float32 / float64 matching the templated precision, `(num_doppler,)`. Required and aligned exactly with `rd_maps`; values are finite, strictly monotonic physical radial velocities in m/s, ascending or descending in the same order as the Doppler bins in `rd_maps`.
 - **Out:** `rd_maps_out` — same dtype and shape as `rd_maps`. Every named channel receives the same Doppler gain, preserving relative channel phase.
 - **Ctor:** `MaxTensorExtents` required (`max_doppler_bins`, `max_range_bins`; optional `max_rx` / `max_tx` admit the named leading axes).
 
@@ -390,7 +390,7 @@ The operator acts only on an unfolded physical velocity axis. It must not consum
 - `center_velocity` **[live]** — float, center of the notch in m/s. Cyclic distance is measured over the uniformly spaced aliased velocity interval. Default: `0.0`.
 - `stop_half_width` **[live]** — non-negative float in m/s. Bins at or inside this distance receive zero gain; the nearest bin to `center_velocity` is always included so zero width remains a one-bin hard null. Default: `0.0`.
 - `transition_width` **[live]** — non-negative float in m/s. `0.0` gives a hard notch. Positive values apply a raised-cosine gain from zero at the stopband edge to one at `stop_half_width + transition_width`. Default: `0.0`.
-- `cyclic_velocity_axis` — bool, static. When `true`, distance wraps over `num_doppler × bin_spacing`; when `false`, distance is ordinary absolute velocity difference. Default: `true`.
+- `cyclic_velocity_axis` — bool, static. When `true`, distance wraps over `num_doppler × abs(bin_spacing)`; when `false`, distance is ordinary absolute velocity difference. Default: `true`.
 
 #### FMCWRangeDopplerProcessorOp (fused)
 
@@ -546,6 +546,7 @@ Reduces each cluster to one **representative detection** and, optionally, one re
 - *Score source:* the `peak` score and non-uniform `weighted_mean` row weights are derived from `points` columns (via `feature_weights` / `score_method`), so any selection attribute — power, SNR — must be present in a row-aligned feature matrix. Supplying it is the feature-assembly bridge's job. The natural strength column is CFAR's positive `detection_score`, gathered per detection by feature assembly; a caller may provide a row-aligned superset to reduction without forcing that strength column into DBSCAN's clustering metric.
 - *Custom scoring:* `score_method = custom` uses a compile-time device functor (`score_fn`) — the module's template-based customization, GPU-callable — not a runtime callback. `weighted_mean` applies the same finite, non-negative row-weight requirement to custom scores.
 - *Feature centroid (medoid only):* the centroid is computed **inside the operator** — the per-cluster mean of the `feature_weights`-scaled `points` — and the medoid is the member nearest it (min scaled distance). It is never emitted (not a real cell). Matching `feature_weights` to the upstream DBSCAN `epsilon` keeps "nearest to centroid" consistent with the metric that formed the cluster. Both `peak` and `medoid` read `points` now; only `first` is feature-free.
+- *Floating-point accumulation:* medoid and weighted-mean sums have no prescribed accumulation order. Rounding can perturb means and reverse near-tie member decisions across runs; computed exact ties still choose the lowest input row. Semantic validation must bound rounding from inputs and preserve selected-member/output consistency; downstream equivalence requires separate validation.
 - *Weighted index centroid:* all `detection_idx` columns participate in the nearest-real-member calculation, including named preserved coordinates. No index normalization is inferred; callers that need a different real-member metric should use `medoid` over appropriately scaled physical features.
 - *Preserved-index bound:* `detection_idx` / `rep_idx` admit at most eight preserved-index columns in addition to the two cell coordinates, matching the module's CFAR/feature-assembly bound. `MaxTensorExtents.max_features` bounds the optional `reduced_points` pool and is required at construction.
 - *Carried over:* plain-tensor ports; precision by template instantiation; device tensors on the Holoscan CUDA stream (custom CUDA reduction/compact kernels).

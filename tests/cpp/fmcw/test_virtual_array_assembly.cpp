@@ -27,6 +27,7 @@
 #include <holoscan/core/graph.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "angle_estimation/beamscan_estimator_op/beamscan_estimator_op.hpp"
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
@@ -152,11 +153,14 @@ holoscan::testing::TestResult run_assembly_result_t(std::shared_ptr<holoscan::Te
   fixture.template capture_snapshot<WireArrayGeometry>("array_geometry", 1U, kMaximumBytes);
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
   fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("rd_maps_out", 1U, std::chrono::seconds{5});
-  (void)running.wait_for_output("array_geometry", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "rd_maps_out", 1U);
+  (void)completion.wait_for_output(running, "array_geometry", 1U);
   running.request_stop();
-  return running.finish();
+  auto fixture_result = running.finish();
+  completion.check(fixture_result);
+  return fixture_result;
 }
 
 holoscan::testing::TestResult run_assembly_result(std::shared_ptr<holoscan::Tensor> input,
@@ -525,11 +529,13 @@ TEST(VirtualArrayAssemblyOp, LiveWavelengthAppliesOneTickThenReverts) {
   fixture.capture_snapshot<WireArrayGeometry>("array_geometry", 3U, kMaximumBytes);
   fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
   fixture.output_device("rd_maps_out", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  (void)running.wait_for_output("rd_maps_out", 3U, std::chrono::seconds{5});
-  (void)running.wait_for_output("array_geometry", 3U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  (void)completion.wait_for_output(running, "rd_maps_out", 3U);
+  (void)completion.wait_for_output(running, "array_geometry", 3U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   ASSERT_EQ(assembly_maps(result).size(), 3U);
 

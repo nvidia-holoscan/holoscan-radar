@@ -16,13 +16,15 @@ namespace perf = holoscan::radar::perf;
 
 namespace {
 
-using Op = hr::DopplerNotchOp<float>;
+using Op = hr::DopplerNotchOp<perf::Scalar>;
 struct Scenario : perf::RecipeScenario {};
 
 perf::TimingCollector run_graph(const Scenario& scen, const perf::RunPlan& plan) {
   hr::MaxTensorExtents extents;
   extents.max_doppler_bins = scen.axis("doppler");
   extents.max_range_bins = scen.axis("range");
+  if (scen.axis("rx") > 1)
+    extents.max_rx = scen.axis("rx");
   if (scen.axis("tx") > 1) {
     extents.max_tx = scen.axis("tx");
     extents.max_rx = scen.axis("rx");
@@ -39,7 +41,7 @@ perf::ResultRow base_row(const Scenario& scen) {
   perf::ResultRow row;
   row.op_name = "DopplerNotchOp";
   row.variant = scen.params["transition_width"].as<double>() > 0.0 ? "cosine" : "hard";
-  row.variant += scen.axis("tx") > 1 ? "_mimo" : "_siso";
+  row.variant += scen.axis("tx") > 1 ? "_mimo" : (scen.axis("rx") > 1 ? "_simo" : "_siso");
   row.input_shape = perf::recipe_shape(scen.recipe.inputs.at(1), scen.values);
   row.k = scen.axis("doppler");
   row.live_port = scen.live_port;
@@ -52,7 +54,7 @@ void decorate_row(perf::ResultRow& row, const Scenario& scen) {
   for (const auto extent : row.input_shape)
     elements *= static_cast<double>(extent);
   perf::set_recipe_throughput(row, elements, std::nullopt,
-                              2.0 * elements * sizeof(std::complex<float>));
+                              2.0 * elements * sizeof(std::complex<perf::Scalar>));
 }
 
 struct Traits : perf::PerfDriverDefaults {
@@ -65,7 +67,7 @@ struct Traits : perf::PerfDriverDefaults {
   static void validate_suite(const perf::ProfileSuite& suite) {
     (void)perf::validate_pilot_suite<Op>(
         suite, "radar.DopplerNotchOp.float", "doppler_notch_bounds",
-        {{"velocity_bins", {"doppler"}, "float32", "device", "power_map", {}},
+        {{"velocity_bins", {"doppler"}, "float32", "device", "centered_axis_ramp", {}},
          {"rd_maps",
           {"tx", "rx", "doppler", "range"},
           "complex64",

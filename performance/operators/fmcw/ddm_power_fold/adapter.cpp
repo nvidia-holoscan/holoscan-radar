@@ -42,7 +42,8 @@ hr::DDMCodeDescriptor code(int64_t tx) {
 perf::TimingCollector run_graph(const Scenario& scenario, const perf::RunPlan& plan) {
   const auto extents = perf::direct_recipe_extents(scenario.recipe, scenario.values);
   const hr::DDMPowerFoldParams params{.ddm_code = code(scenario.axis("tx"))};
-  return perf::run_recipe_case<hr::DDMPowerFoldOp<float>, 1>(scenario, plan, extents, params);
+  return perf::run_recipe_case<hr::DDMPowerFoldOp<perf::Scalar>, 1>(scenario, plan, extents,
+                                                                    params);
 }
 
 perf::ResultRow base_row(const Scenario& scenario) {
@@ -72,7 +73,7 @@ struct Traits : perf::PerfDriverDefaults {
     return {id, {shape[2], shape[3]}, shape[2] * shape[3], id};
   }
   static void validate_suite(const perf::ProfileSuite& suite) {
-    (void)perf::validate_pilot_suite<hr::DDMPowerFoldOp<float>>(
+    (void)perf::validate_pilot_suite<hr::DDMPowerFoldOp<perf::Scalar>>(
         suite, "radar.DDMPowerFoldOp.float", "",
         {{"rd_maps", {"rx", "doppler", "range"}, "complex64", "device", "iq_cube", {}}},
         {"power_map", {}, {}, 4U}, {});

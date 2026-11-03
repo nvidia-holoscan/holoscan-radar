@@ -11,13 +11,13 @@ live_ports: []
 recipe:
   operator_type: radar.DDMDenseDemultiplexOp.float
   inputs:
-    - {port: velocity_bins, shape: [doppler], dtype: float32, memory: device, generator: power_map}
+    - {port: velocity_bins, shape: [doppler], dtype: float32, memory: device, generator: centered_axis_ramp}
     - {port: rd_maps, shape: [rx, doppler, range], dtype: complex64, memory: device, generator: iq_cube}
   fixtures: {velocity_axis: 0}
   constructor: {extents: {max_tx: tx, max_rx: rx, max_doppler_bins: doppler, max_range_bins: range}}
   params:
     ddm_code: {factory: linear_exact_ddm_code}
-  outputs: {timed: rd_maps_out, drain: [velocity_bins_out], unwired: []}
+  outputs: {timed: rd_maps_out, drain: [velocity_bins_out], unwired: [], optional_tensor_outputs: [velocity_bins_out]}
   extension: {optional_velocity_axis: velocity_axis}
 cases:
   - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}
@@ -26,3 +26,12 @@ cases:
   - {id: nonlinear-axis-medium, profile: medium, scopes: [moderate], parameters: {ddm_code: {factory: nonlinear_phase_code}}, fixture: {velocity_axis: 1}}
   - {id: nonlinear-small, profile: small, scopes: [thorough], parameters: {ddm_code: {factory: nonlinear_phase_code}}}
   - {id: nonlinear-large, profile: large, scopes: [thorough], parameters: {ddm_code: {factory: nonlinear_phase_code}}}
+  - id: optional-minimal-{profile}
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    output_mode: minimal

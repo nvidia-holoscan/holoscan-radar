@@ -12,6 +12,7 @@
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
+#include "utils/fixture_completion.hpp"
 #include "detection/detection_reduction_op/detection_reduction_op_impl.cuh"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/test_extents.hpp"
@@ -77,10 +78,12 @@ TEST(DetectionReductionOpCustomTest, CustomScoreFnSelectsPeak) {
   fixture.input_source_device("points", holoscan::DeviceId{0});
   fixture.output_device("reduced_points", holoscan::DeviceId{0});
   fixture.output_device("rep_idx", holoscan::DeviceId{0});
-  auto running = fixture.run_async({.expect_stop = true});
-  const bool observed = running.wait_for_output("rep_idx", 1U, std::chrono::seconds{5});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  const bool observed = completion.wait_for_output(running, "rep_idx", 1U);
   running.request_stop();
   const auto result = running.finish();
+  completion.check(result);
 
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   ASSERT_TRUE(observed);

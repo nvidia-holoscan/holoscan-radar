@@ -48,7 +48,7 @@ namespace perf = holoscan::radar::perf;
 
 namespace perf_snapshot_gather_adapter {
 
-using PerfPrecision = float;
+using PerfPrecision = perf::Scalar;
 
 constexpr DLDataType kInt64Dtype{kDLInt, 64, 1};
 

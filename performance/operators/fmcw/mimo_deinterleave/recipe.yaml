@@ -15,6 +15,6 @@ recipe:
     - {port: adc_cube, shape: [rx, slow_time, samples], dtype: complex64, memory: device, generator: iq_cube}
   constructor: {extents: {max_tx: tx, max_rx: rx, max_chirps: chirps_per_tx, max_samples_per_chirp: samples}}
   params: {tx_schedule: {factory: round_robin}}
-  outputs: {timed: adc_cube_out, drain: [], unwired: []}
+  outputs: {timed: adc_cube_out, drain: [], unwired: [], optional_tensor_outputs: []}
 cases:
   - {id: "baseline-{profile}", profiles: [small, medium, large], scopes: [minimal], parameters: {}}

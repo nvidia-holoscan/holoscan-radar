@@ -17,7 +17,7 @@ recipe:
     epsilon: [0.5]
     min_points: {factory: scaled_axis, axis: features, scale: 2}
     max_clusters: 0
-  outputs: {timed: labels, drain: [sizes], unwired: []}
+  outputs: {timed: labels, drain: [sizes], unwired: [], optional_tensor_outputs: [sizes]}
   live:
     epsilon: {physical_port: epsilon, codec: host_float64_vector}
     min_points: {physical_port: min_points, codec: int64}
@@ -32,3 +32,49 @@ cases:
   - {id: "max-clusters-{profile}", profiles: [small, medium, large], scopes: [overrides], parameters: {}, override: {port: max_clusters, value: 4}}
   - {id: wide-core-medium, profile: medium, scopes: [moderate], parameters: {epsilon: [0.8], min_points: 12}}
   - {id: tight-cap-large, profile: large, scopes: [thorough], parameters: {min_points: 12, max_clusters: 8}}
+  - id: epsilon-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: epsilon
+      value:
+      - 0.8
+      cache: cached
+  - id: min-points-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: min_points
+      value: 8
+      cache: cached
+  - id: max-clusters-{profile}-cached
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    override:
+      port: max_clusters
+      value: 4
+      cache: cached
+  - id: optional-minimal-{profile}
+    profiles:
+    - small
+    - medium
+    - large
+    scopes:
+    - thorough
+    parameters: {}
+    output_mode: minimal
