@@ -107,7 +107,7 @@ TEST(FmcwDashboardTest, ConnectsImageAndNativeHostTextToHsdk5Holoviz) {
 TEST(FmcwDashboardTest, ComposesOnlyMatchedImageAndTextIntoOneCudaFrame) {
   using holoscan::testing::frame_at;
   using holoscan::testing::input;
-  const holoscan::DeviceId device{radar::app::select_application_device(false, true)};
+  const holoscan::DeviceId device{radar::app::application_device()};
   constexpr std::int64_t kWidth = 128;
   constexpr std::int64_t kHeight = 64;
   constexpr DLDataType kRgba{kDLUInt, 8U, 1U};
