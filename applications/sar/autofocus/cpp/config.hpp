@@ -515,6 +515,7 @@ inline AppConfig load_autofocus_config(const std::filesystem::path& path,
   // for before the graph exists.
   const YAML::Node root = YAML::LoadFile(path.string());
   int64_t max_ap = 0;
+  int64_t emit_interval = 0;
   bool has_window = false;
   std::string emit(radar::to_string(radar::ApertureEmitMode::kContinue));
   if (const YAML::Node am = root["aperture_manager"]) {
@@ -523,6 +524,9 @@ inline AppConfig load_autofocus_config(const std::filesystem::path& path,
     }
     if (const YAML::Node e = am["emit_mode"]) {
       emit = e.as<std::string>();
+    }
+    if (const YAML::Node i = am["emit_interval_pulses"]) {
+      emit_interval = i.as<int64_t>();
     }
     if (const YAML::Node w = am["aperture_window"]) {
       if (const YAML::Node t = w["type"]) {
@@ -554,6 +558,12 @@ inline AppConfig load_autofocus_config(const std::filesystem::path& path,
   extras->aperture_pulses = last_pulse - first_pulse;
   if (max_ap < extras->aperture_pulses) {
     throw std::runtime_error("aperture_manager.max_aperture_pulses must be >= the aperture (" +
+                             std::to_string(extras->aperture_pulses) + " pulses)");
+  }
+  // PhaseResampleOp is sized to the whole window, so the reform must replay
+  // the whole window once; an earlier cadence emit replays fewer pulses.
+  if (emit_interval != 0 && emit_interval != extras->aperture_pulses) {
+    throw std::runtime_error("aperture_manager.emit_interval_pulses must be 0 or the aperture (" +
                              std::to_string(extras->aperture_pulses) + " pulses)");
   }
 
