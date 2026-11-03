@@ -9,12 +9,20 @@
 #include <filesystem>  // NOLINT(build/c++17)
 #include <stdexcept>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 #include <array>
 
 namespace holoscan::radar::testing::cphd_fixture {
 namespace fs = std::filesystem;
+
+struct PvpFieldOverride {
+  std::string name;
+  int64_t offset_words;
+  int64_t size_words;
+};
+
 inline void write_be64(std::ofstream& out, double value) {
   uint64_t bits;
   std::memcpy(&bits, &value, sizeof(bits));
@@ -31,7 +39,8 @@ inline void write_be32(std::ofstream& out, float value) {
 // Standalone C++ CPHD 1.x fixture; CI needs no Python or external collection.
 inline fs::path make_fixture(const fs::path& path, double sc0_per_pulse = 0.0,
                              double scss_per_pulse = 0.0, double iarp_x = 6378000.0,
-                             bool wide_swath = false, int64_t pulses = 5) {
+                             bool wide_swath = false, int64_t pulses = 5,
+                             const std::optional<PvpFieldOverride>& pvp_override = std::nullopt) {
   if (pulses <= 0 || pulses * 104 > 8192 - 4096)
     throw std::invalid_argument("CPHD fixture: pulse count exceeds the fixed PVP block");
   const int64_t kPulses = pulses;
@@ -68,13 +77,21 @@ inline fs::path make_fixture(const fs::path& path, double sc0_per_pulse = 0.0,
                                                            {"SC0", 10},
                                                            {"SCSS", 11},
                                                            {"SIGNAL", 12}}};
-  for (const auto& [name, offset] : fields) {
-    const int size = (std::string(name) == "TxTime" || std::string(name) == "SC0" ||
-                      std::string(name) == "SCSS" || std::string(name) == "SIGNAL")
-                         ? 1
-                         : 3;
+  bool override_applied = false;
+  for (const auto& [name, default_offset] : fields) {
+    const int64_t default_size = (std::string(name) == "TxTime" || std::string(name) == "SC0" ||
+                                  std::string(name) == "SCSS" || std::string(name) == "SIGNAL")
+                                     ? 1
+                                     : 3;
+    const bool override_this_field = pvp_override && pvp_override->name == name;
+    const int64_t offset = override_this_field ? pvp_override->offset_words : default_offset;
+    const int64_t size = override_this_field ? pvp_override->size_words : default_size;
+    override_applied = override_applied || override_this_field;
     xml += "<" + std::string(name) + "><Offset>" + std::to_string(offset) + "</Offset><Size>" +
            std::to_string(size) + "</Size><Format>F8</Format></" + name + ">";
+  }
+  if (pvp_override && !override_applied) {
+    throw std::invalid_argument("CPHD fixture: PVP override names an unknown field");
   }
   xml += "</PVP></CPHD>";
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
