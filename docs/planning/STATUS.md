@@ -4,6 +4,83 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-10-21** — **FMCW subplots reclaim excess gutter space** on
+  `deustice/gui-updates`. Smaller outer insets and tighter tick/caption rows
+  give default MIMO Cartesian panels about 20% more data area (33% in the
+  compact layout), while preserving endpoint-label alignment and minor ticks.
+  The sector also grows. All 37 focused checks, nine GUI runs, C++ MIMO TDM,
+  matching captures, and full lint pass. DSP contracts are unchanged.
+
+- **2026-10-21** — **FMCW axes have roomier gutters and minor ticks** on
+  `deustice/gui-updates`. Endpoint X labels stay within the plot width; centered
+  Y labels, bottom ticks, and captions have separate space. Short inward ticks
+  mark Cartesian axes and sector edges without adding minor grid lines; compact
+  canvases use fewer ticks. All 37 focused checks, nine GUI runs, the C++ MIMO TDM
+  run, matching captures, and full lint pass. DSP contracts are unchanged.
+
+- **2026-10-21** — **ASCII FMCW labels retained** on `deustice/gui-updates`.
+  Removed the UTF-8/TrueType experiments and visualization-assessment scripts,
+  report, and measurement data. The sector title is `Azimuth / range (deg)`;
+  its ticks omit repeated units. Boresight and azimuth/elevation history ticks
+  and titles use degrees; stored angle coordinates and projections retain radians.
+  All 37 focused checks, MIMO TDM and compact SIMO GUI checks, the C++ MIMO
+  TDM run, matching native ASCII captures, and full lint pass.
+
+- **2026-10-20** — **Cleaner FMCW sector ticks and a moving power legend** on
+  `deustice/gui-updates`. Whole-meter range labels sit outside the wedge,
+  degree ticks replace the azimuth legend, and subplot title spacing is tighter.
+  Colorbar endpoints now follow the same-frame peak in input-power dB, retaining
+  the configured span and color mapping. Peak readback shares the annotation
+  barrier. All 37 focused CTests including provider and three GPU power-level
+  cases, nine GUI checks, the C++ MIMO TDM run, matched captures, and full lint
+  pass. DSP contracts and native font selection are unchanged.
+
+- **2026-10-20** — **Configurable FMCW dashboard split and simpler subtitle** on
+  `deustice/gui-updates`. `app.visualization.range_doppler_width_percent` defaults
+  to 45, with compact-panel minimum widths and finite 25–70 validation. The
+  subtitle reads `Frame <N> (<t> s) | <M> detections`. All 64 focused tests,
+  provider CTest, nine GUI checks, a custom-width C++/Python run, matched
+  before/after captures, and full lint pass. DSP contracts are unchanged.
+
+- **2026-10-20** — **FMCW window resizing preserves text alignment** on
+  `deustice/gui-updates`. The SDK composes text and plots into one CUDA image,
+  then the image-only window scales the complete canvas. Joint image/text
+  admission also fixes a stalled display reproduced under delayed X11 traffic.
+  Layout scales rather than reflowing; native font selection is unchanged.
+  All 33 dashboard regressions (including headless native-text composition),
+  provider CTest, nine GUI checks, and five-size C++/Python resize probes with
+  20 ms injected X11 delay pass. Full lint passes; DSP contracts are unchanged.
+
+- **2026-10-20** — **Centered FMCW subplot titles and captions** on
+  `deustice/gui-updates`. Panel titles share centered placement; time, azimuth,
+  and sector-scale captions align with their plots. The footer now reads
+  `Dots: detections | Lines: truth`. All 32 dashboard regressions, SISO/MIMO TDM
+  and compact GUI checks, and full lint pass. Matching frame-30 before/after
+  captures verify the updated placement; production font selection is unchanged.
+
+- **2026-10-20** — **Refined FMCW dashboard spacing and contrast** on
+  `deustice/gui-updates`: tighter axis gutters, compact text-width measurements,
+  brighter titles, subdued secondary text/grids, and refined target accents.
+  All 32 dashboard regressions, nine Python GUI checks, a five-target C++ MIMO TDM
+  preview, and full lint pass.
+
+- **2026-10-20** — **FMCW azimuth/range sectors fill their panels** on
+  `deustice/gui-updates`. Independent axis scaling expands narrow scans, with
+  an explicit scale caption and labeled range rings (reduced in compact windows).
+  Grid, truth, and detections share one projection; out-of-view samples are
+  omitted and truth trails break at the boundary. All 32 dashboard regressions,
+  two application smoke tests, nine Python GUI checks, and full lint pass.
+
+- **2026-10-20** — **FMCW dashboards use native HSDK 5 text** on
+  `deustice/gui-updates`. Shared C++/Python presentation adds exact image/text
+  pairing, display-rate gating, compact layouts, physical velocity orientation,
+  and a sequential power palette with a dB legend. CUDA canvas composition is
+  fused into one pass. All 1,098 baseline CTests, 28 dashboard regressions,
+  eight Python workflow visual checks plus the compact layout, and full lint
+  pass in the staging image. Delayed-input SISO/SIMO visualization also passes.
+  DSP contracts are unchanged; pixel-coordinate resizing limits are documented
+  in the shared dashboard guide.
+
 - **2026-10-21** — **HSDK 5 GA image adopted.** The Dockerfile, host CLI wrapper,
   and devcontainer now default to
   `nvcr.io/nvidia/clara-holoscan/holoscan:v5.0.0-cuda13`; active setup guides
@@ -302,6 +379,16 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| FMCW CI application and GUI coverage | Codex | `deustice/gui-updates` | **verified locally:** eight C++ smoke presets, sixteen X11 workflow/language cases, and two native SISO window cases are registered with explicit backends/private caches. The probe handles transient native discovery windows. All 26 cases pass in three final runs; native cases pass 20 extra executions; pinned all-file lint passes. GB10 serial test-stage median rises from 3.78 s (4 cases) to 32.54 s (26 cases), about 28.77 s added. No compiled targets/dependencies added; CI host timing may differ. Details: `tests/gui/README.md`. |
+| GUI branch main merge | Codex | `deustice/gui-updates` | **verified locally:** merged `origin/main` at `76dc53ce` and retained both coordination histories. Incoming CPHD offset-overflow hardening, MUSIC layout documentation, and pinned CI actions are preserved. All 14 CPHD, 47 MUSIC, 42 dashboard, 28 config/choice, and 122 provider/CLI/terminal checks pass (253 total); pinned all-file lint passes. No public contract changes. |
+| GUI automated review follow-up | Codex | `deustice/gui-updates` | **verified locally:** native composition fixture reads the active CUDA device directly, removing redundant renderer discovery. All 42 dashboard tests and repository-wide pinned lint pass. Negative-adapter finding skipped: the current SDK Vulkan enumerator already excludes non-CUDA adapters, so that reported path is unreachable. |
+| Presenter prompt config filename | Codex | `deustice/gui-updates` | **verified locally:** C++ and Python pass the loaded YAML path into presenter prompts, unattended override guidance, and explicit-YAML priority messages. Native/provider builds, 28 config/choice tests, 122 provider/CLI/terminal checks (including the actual prompt filename), and repository-wide pinned lint pass. |
+| FMCW presenter preference lifetime | Codex | `deustice/gui-updates` | **verified locally:** this-run-only is the remember default; seven-day and until-changed choices use bounded version-2 JSON with setup/save/expiry validation. `--choose-presenter` clears the current setup preference and asks again; explicit YAML wins. Native/provider builds, 28 config/choice tests, 122 provider/CLI/terminal checks, C++ reset-flag smoke, and pinned lint pass. Old v1 answers are ignored. |
+| Remembered FMCW presenter choice | Codex | `deustice/gui-updates` | **verified locally:** omitted `x11_presentation` prompts interactive C++/Python users when X11 is available and remembers the answer per display setup in the persistent cache; explicit booleans bypass the question/cache. Unattended runs use a saved answer or default to X11. Native workflow/provider build, 24 config/choice tests, 109 provider workflow/mode checks, a real terminal/cache probe, and pinned lint pass. |
+| Explicit FMCW X11 presentation switch | Codex | `deustice/gui-updates` | **verified locally:** `app.visualization.x11_presentation` defaults to true in C++ and Python; false selects the native SDK window in both pre-compilation device discovery and Graph wiring. C++ MIMO TDM and the provider build; all 19 MIMO config checks, 109 provider workflow/mode checks, and repository-wide pinned lint pass. SSH/X11 presentation stays repository-owned and is excluded from the current upstream feature requests. |
+| Unrestricted multi-GPU presentation | Codex | `deustice/gui-updates` | **verified locally:** FMCW C++/Python automatically present the GPU-composed dashboard through X11/XRender, avoiding the reproduced GPU 2 Vulkan surface failure without visibility overrides or hardcoded GPU indices. All eight presets pass in both languages with all eight GPUs visible; both default SISO runs complete 250 frames over TCP X11. Pixel, resize and close regressions, 37 existing dashboard/transfer tests and all 139 provider tests pass. DSP and public operator contracts are unchanged. |
+| FMCW log timestamps | Codex | `deustice/gui-updates` | **verified locally:** shared C++/Python app logging includes wall-clock date/time, milliseconds and UTC offset; explicit `HOLOSCAN_LOG_FORMAT` overrides remain supported. All seven C++ apps build; all seven C++ and Python smoke runs, both format-override checks and pinned lint pass on GPU 7. |
+| Multi-GPU application placement | Codex | `deustice/gui-updates` | **implemented, visual validation limited (2026-10-26):** seven FMCW C++/Python workflows and five SAR apps retain compute placement and discover each renderer's adapter; explicit bounded host transfers join differing GPUs. All 12 apps build; 58 provider checks, eight C++ FMCW smoke modes, 13 SAR smoke/topology checks and 29 focused native checks pass, including exact image/metadata transfer. Original HEAD compositor also times out; live visual runs stall or report Vulkan device loss after formation, so clean presentation remains unverified here. Renderer-device API request: [CLARAHOLOS-3592](https://nvidia.atlassian.net/browse/CLARAHOLOS-3592). Logs: `/tmp/holoscan-radar-gpu-placement/siso`. |
 | PR 58 main merge | Codex | `tbirdsong/aivo/cphd-pvp-offset-overflow` | **verified locally:** merged `main` at `d54bfdad` after PR 68 landed; retained both status histories. CPHD code and tests merge cleanly; all 14 focused CPHD file/reader GPU CTests and pinned all-file lint pass. The earlier merge combined CPHD test headers and preserved the overflow regression and reader lifecycle tests. No public contract changes. |
 | CPHD PVP offset-overflow hardening | Codex | `tbirdsong/aivo/cphd-pvp-offset-overflow` | **ready for review:** PVP field placement now uses a word-domain subtraction proof, rejecting negative, overflowing, and past-record layouts before pointer arithmetic while preserving an exact-boundary field. The focused parser regression passes under host ASan/UBSan, and changed-file pinned hooks pass; PR #58 now includes current `main`; the staging HSDK 5 clean build and all 1,088 non-performance CTests pass with zero failures or skips, including the overflow regression and SAR application smokes. Pinned all-file lint passes. |
 | PR 68 review follow-up | Codex | `deustice/operator-opt` | **verified locally:** all five findings remain valid. Both Doppler boundary tests use FixtureCompletion; MUSIC uses one manifold accessor; MVDR and sparse TDM share device calculations; residual direct tests use production weight kernels and the legacy kernel is removed. All 132 GPU CTests across six focused suites and pinned all-file lint pass (Node 22). No public contract changes. |
@@ -320,6 +407,28 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 | Portable SAR data defaults | Codex | `dpc/main-5x-catchup` | **verified locally:** all nine CPHD downloads have valid XML and complete declared block extents. Presets resolve relative paths under `HOLOHUB_DATA_DIR` (repository `data/` by default); downloader defaults and guides match. All five real-data configs load from outside the repository, all five CLI targets build, 20 SAR CTests pass, and a finite real-data CLI strip run emits 16 images without an extra data mount. Pinned all-file lint passes. |
 | DopplerNotch descending velocity axis | Codex | `deustice/doppler-notch-axis-order` | **verified locally:** signed nearest-bin indexing and positive cyclic periods preserve descending-axis passbands; contract now permits either monotonic direction. Both new axis-order tests fail before the fix; all 15 focused GPU CTests pass afterward on Thor with HSDK 5 GA. Jira duplicate search/P0 awaits MaaS access. |
 | PR 66 non-uniform non-cyclic nearest bin | Codex | `deustice/doppler-notch-axis-order` | **verified locally:** non-cyclic nearest-bin selection searches actual physical coordinates, supporting non-uniform axes in either direction. Both precision regressions fail before the fix; all 17 focused GPU unit/pipeline CTests pass afterward on HSDK 5 GA. PR 68 restacking also applies the corrected selection in its shared row-kernel gain helper; all 21 downstream GPU unit/pipeline CTests pass. Pinned all-file lint passes with Node 22 for markdownlint. |
+| MIMO TDM visualization resource assessment | Codex | `deustice/gui-updates` | **verified locally:** 12 resource runs / 1,800 report frames, four Nsight profiles, and a degree-symbol preview; current GUI and native SDK UTF-8/TrueType costs documented in `performance/reports/2026-10-21-mimo-tdm-visualization.md`. Production renderer unchanged; full lint passes. |
+| FMCW ASCII labels and experiment cleanup | Codex | `deustice/gui-updates` | **verified locally:** sector title units, boresight degree ticks, and removal of renderer/profiling experiments and reports. All 37 focused checks, nine GUI runs, C++ MIMO TDM, native ASCII captures, and full lint pass. |
+| FMCW noise-anchored color scaling | Codex | `deustice/gui-updates` | **done:** bounded detection-cross background sampling, smoothed dB limits and peak fallback; 58 focused tests, nine GUI checks and C++ TDM passed. Matched GB10 compositor median 0.677→0.699 ms; added GPU kernels ~4.4 us/frame. See `applications/common/radar_app/viz/README.md`. |
+| FMCW noise-anchored color scaling | Codex | `deustice/gui-updates` | **done:** corrected lower limit to mean minus sigma offset so background noise remains visible; bounded detection-cross background sampling, smoothed dB limits and peak fallback; 58 focused tests, nine GUI checks and C++ TDM passed. Matched GB10 compositor median 0.677→0.699 ms; added GPU kernels ~4.4 us/frame. See `applications/common/radar_app/viz/README.md`. |
+| FMCW noise-anchored color scaling | Codex | `deustice/gui-updates` | **done:** symmetric smoothed noise sigma limits with configurable upper dB headroom (default zero), bounded detection-cross sampling and peak fallback; 60 focused checks, matched Python GUI capture, C++ TDM and full lint passed. Earlier GB10 sampling cost ~4.4 us/frame; see `applications/common/radar_app/viz/README.md`. |
+| FMCW title and mode subtitle | Codex | `deustice/gui-updates` | **done:** green title at 20 px (17 px compact), native one-pixel overdraw for a bold appearance, muted metadata subtitle and brighter frame status in C++/Python. All apps build; 38 dashboard/provider checks, normal/compact before/after captures and full lint pass. |
+| FMCW inherited presets and modes | Codex | `deustice/gui-updates` | **done:** SDK-backed single-base YAML inheritance across all FMCW apps, migrated smoke/DDM presets and matching C++/Python modes with standalone AoA/DDM descriptions. Default launch behavior preserved; 52 config/provider checks, 16 smoke-mode baseline comparisons, staged-file isolation and all-mode CLI dry runs pass. |
+| FMCW lateral target motion | Codex | `deustice/gui-updates` | **done:** lateral motion on every target in 14 angle-capable presets, preserving initial radial speed; normal azimuth sweeps 8–22 deg stay inside scan bounds and the Adaptive AoA pair stays coherent. Analytic trajectory checks, 37 config/provider tests, matched 15 s GUI captures and full lint pass. |
+| FMCW target YAML formatting | Codex | `deustice/gui-updates` | **done:** consistent inline Cartesian velocity arrays and target mappings across 16 normal/smoke presets; noise SNR defaults at 5 dB. Parsed comparison confirms all other values unchanged; 34 config/provider checks and full lint pass. |
+| Dense beamforming config cleanup | Codex | `deustice/gui-updates` | **done:** top-level dense operator YAML blocks in normal/smoke presets; shared C++/Python loader and diagnostics updated. Config/provider tests, identical before/after C++ smoke detection reports and full lint pass. |
+| FMCW main title style | Codex | `deustice/gui-updates` | **done:** approved regular #76B900 main title at native 13 px in normal/compact layouts across C++/Python dashboards. All FMCW apps build; 46 focused checks, matched normal/compact captures, C++ MUSIC and full lint pass. |
+| FMCW ASCII title audit | Codex | `deustice/gui-updates` | **done:** ASCII separator for every adaptive AoA algorithm in both C++ and Python; no other unsupported built-in FMCW dashboard text found. Matching captures, 46 dashboard/provider/config checks, 30-frame C++ MUSIC run and full lint pass against HSDK 5 GA. |
+| FMCW noise-anchored color scaling | Codex | `deustice/gui-updates` | **done:** symmetric smoothed noise sigma limits with configurable upper dB headroom (default 6 dB), bounded detection-cross sampling and peak fallback; 60 focused checks, matched Python GUI capture, C++ TDM and full lint passed. Earlier GB10 sampling cost ~4.4 us/frame; see `applications/common/radar_app/viz/README.md`. |
+| FMCW subplot area refinement | Codex | `deustice/gui-updates` | **verified locally:** smaller subplot gutters/caption rows reclaim about 20% of Cartesian data area in default MIMO (33% compact); endpoint labels and minor ticks retained. All 37 focused checks, nine GUI runs, C++ MIMO TDM, matching captures, and full lint pass. |
+| FMCW axis gutters and minor ticks | Codex | `deustice/gui-updates` | **verified locally:** contained endpoint X labels, roomier gutters/caption rows, centered Y labels, and subtle minor ticks with lower compact-layout density. All 37 focused checks, nine GUI runs, C++ MIMO TDM, matching captures, and full lint pass. |
+| FMCW ASCII labels and experiment cleanup | Codex | `deustice/gui-updates` | **verified locally:** all angular plot labels use degrees; ASCII renderer and internal radian coordinates retained. Experiments removed. All 37 focused checks, MIMO TDM and compact GUI checks, C++ MIMO TDM, matching captures, and full lint pass. |
+| FMCW axis labels and power legend | Codex | `deustice/gui-updates` | **verified locally:** outside-edge meter labels, azimuth ticks, tighter titles, and same-frame dB limits. All 37 focused CTests including provider, nine GUI checks, C++ MIMO TDM, matched captures, and full lint pass. |
+| FMCW dashboard width and subtitle | Codex | `deustice/gui-updates` | **verified locally:** configurable range-Doppler width defaults to 45%, subtitle simplified; 64 focused tests, provider CTest, nine GUI checks, custom-width C++/Python runs, matched before/after captures, and full lint pass. |
+| FMCW dashboard styling refinement | Codex | `deustice/gui-updates` | **verified locally:** tighter axis gutters, text-size-aware label placement, brighter titles, subdued secondary text/grids, and refined target accents. All 32 dashboard regressions, nine Python GUI checks, a five-target C++ MIMO TDM preview, and full lint pass. |
+| FMCW GUI resize investigation | Codex | `deustice/gui-updates` | **verified locally:** SDK CUDA frame composition keeps text and plots aligned while resizing; joint image/text admission recovers from delayed-display pressure. All 33 dashboard regressions, provider CTest, nine GUI checks, and repeated five-size C++/Python resize probes with 20 ms X11 delay pass; full lint passes. |
+| FMCW sector plot expansion | Codex | `deustice/gui-updates` | **verified locally:** fitted sectors, explicit axis scale, labeled range rings, and shared grid/truth/detection projection. All 32 dashboard regressions, two application smoke tests, nine Python GUI checks, and full lint pass. |
+| FMCW native text and dashboard refresh | Codex | `deustice/gui-updates` | **verified locally:** native SDK text, exact frame pairing, rate-gated and fused rendering, updated layout/palette/axes, and matching C++/Python wiring. All 1,098 baseline CTests, 28 dashboard regressions, nine Xvfb visual checks, delayed SISO/SIMO rendering, host CLI SISO build, and full lint pass. |
 | GA migration review corrections | Codex | `deustice/hsdk-ga-image` | **complete:** aligned tutorial SDK minimum, unconditional aligned-input guidance, and L18 implementation status; restored the helper diagnostic's documented EA attribution from Git history. Exact original SDK/reproducer unavailable, so no new reproduction claimed. Documentation/comment-only; pinned focused and all-file lint pass. |
 | EA-only source and documentation qualifiers | Codex | `deustice/hsdk-ga-image` | **complete:** audited identifiers, feature gates, type/schema comments, test labels, and planning guidance across tracked files. Removed stale qualifiers from schema/test comments and current guidance; no active HSDK5-EA identifiers or EA-only gates remain. Schema fields and executable code are unchanged; historical measurements retain their SDK versions. All-file pinned lint passes. |
 | Repository-wide EA reference sweep | Codex | `deustice/hsdk-ga-image` | **complete:** audited all 743 tracked paths, hidden configuration, and ignored local `uv.lock`; no active EA/RC image or dependency pins remain. Refreshed local CLI/lock from rc1 to GA 5.0.0, corrected the tutorial image tag, and clarified temporal measurement provenance. Historical records and workaround rationale retained. GA CLI Python SISO smoke, lock consistency, and all-file pinned lint pass. |

@@ -198,6 +198,9 @@ radar_add_test(detection/test_cfar_detector_statistical
     LABELS statistical
     holoscan::cfar_detector_op)
 
+radar_add_test(app/test_gpu_placement holoscan::radar_app)
+radar_add_test(app/test_fmcw_config_loader yaml-cpp holoscan::params_io holoscan::radar_app)
+
 radar_add_test(app/test_fmcw_simo_config
     yaml-cpp
     holoscan::params_io
@@ -285,13 +288,6 @@ target_include_directories(test_adaptive_aoa_config PRIVATE
 target_compile_definitions(test_adaptive_aoa_config PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
-if(TARGET adaptive_aoa)
-    add_test(NAME AdaptiveAoASmoke
-        COMMAND $<TARGET_FILE:adaptive_aoa>
-            ${PROJECT_SOURCE_DIR}/applications/fmcw/adaptive_aoa/config/adaptive_aoa_smoke.yaml)
-    set_tests_properties(AdaptiveAoASmoke
-        PROPERTIES LABELS "application;smoke")
-endif()
 
 radar_add_test(app/test_multi_profile_source
     yaml-cpp
@@ -315,13 +311,6 @@ target_include_directories(test_multi_profile_source PRIVATE
 target_compile_definitions(test_multi_profile_source PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
-if(TARGET multi_waveform)
-    add_test(NAME MultiWaveformSmoke
-        COMMAND $<TARGET_FILE:multi_waveform>
-            ${PROJECT_SOURCE_DIR}/applications/fmcw/multi_waveform/config/multi_waveform_smoke.yaml)
-    set_tests_properties(MultiWaveformSmoke
-        PROPERTIES LABELS "application;smoke")
-endif()
 
 radar_add_test(app/test_fmcw_simo_report
     holoscan::radar_app)
@@ -335,6 +324,88 @@ radar_add_test(app/test_sar_diagnostics holoscan::radar_app)
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     radar_add_test(app/test_fmcw_dashboard holoscan::fmcw_dashboard)
 endif()
+
+# All enabled applications get a real executable smoke. Window tests explicitly
+# choose their presenter and use private preference caches in the shared probe.
+if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ AND HOLOSCAN_RADAR_HAS_X11)
+    find_program(RADAR_XVFB_RUN xvfb-run REQUIRED)
+    find_program(RADAR_TEST_PYTHON python3 REQUIRED)
+endif()
+
+function(radar_add_fmcw_workflow_checks application preset smoke_name)
+    if(NOT TARGET ${application})
+        return()
+    endif()
+    set(config_dir "${PROJECT_SOURCE_DIR}/applications/fmcw/${application}/config")
+    add_test(NAME ${smoke_name}
+        COMMAND $<TARGET_FILE:${application}> "${config_dir}/${preset}_smoke.yaml")
+    set_tests_properties(${smoke_name} PROPERTIES LABELS "application;smoke" TIMEOUT 60)
+
+    if(NOT HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ OR NOT HOLOSCAN_RADAR_HAS_X11)
+        return()
+    endif()
+    foreach(language IN ITEMS cpp python)
+        if(language STREQUAL "python" AND NOT HOLOSCAN_RADAR_BUILD_PYTHON)
+            continue()
+        endif()
+        set(probe_args --application ${application} --presenter x11)
+        set(xvfb_args -a)
+        set(name "FmcwX11_${preset}_${language}")
+        if(language STREQUAL "python")
+            list(APPEND probe_args --python)
+        endif()
+        if(preset STREQUAL "siso")
+            # Retain detailed SISO checks, including Python's TCP display path.
+            set(name "FmcwX11_cpp")
+            if(language STREQUAL "python")
+                set(name "FmcwX11_pythonTcp")
+                list(APPEND probe_args --tcp)
+                list(APPEND xvfb_args -l -s "-screen 0 1280x1024x24 -listen tcp")
+            endif()
+        else()
+            list(APPEND probe_args --smoke)
+        endif()
+        add_test(NAME ${name}
+            COMMAND ${RADAR_XVFB_RUN} ${xvfb_args} ${RADAR_TEST_PYTHON}
+                ${CMAKE_CURRENT_SOURCE_DIR}/check_fmcw_x11.py $<TARGET_FILE:${application}>
+                "${config_dir}/${preset}.yaml" ${probe_args})
+        set_tests_properties(${name} PROPERTIES
+            LABELS "application;smoke;integration;visualization"
+            RESOURCE_LOCK fmcw_gui TIMEOUT 60)
+        if(language STREQUAL "python")
+            set_tests_properties(${name} PROPERTIES ENVIRONMENT
+                "PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT}:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
+        endif()
+
+        if(preset STREQUAL "siso")
+            set(name "FmcwNative_siso_${language}")
+            set(native_args --application siso --presenter native)
+            if(language STREQUAL "python")
+                list(APPEND native_args --python)
+            endif()
+            add_test(NAME ${name}
+                COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/check_fmcw_x11.py $<TARGET_FILE:siso>
+                    "${config_dir}/${preset}.yaml" ${native_args})
+            set_tests_properties(${name} PROPERTIES
+                LABELS "application;smoke;integration;visualization"
+                RESOURCE_LOCK fmcw_gui TIMEOUT 60)
+            if(language STREQUAL "python")
+                set_tests_properties(${name} PROPERTIES ENVIRONMENT
+                    "PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT}:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
+            endif()
+        endif()
+    endforeach()
+endfunction()
+
+radar_add_fmcw_workflow_checks(siso siso SisoSmoke)
+radar_add_fmcw_workflow_checks(simo simo SimoSmoke)
+radar_add_fmcw_workflow_checks(dense_beamforming dense_beamforming DenseBeamformingSmoke)
+radar_add_fmcw_workflow_checks(mimo_tdm mimo_tdm MimoTdmSmoke)
+radar_add_fmcw_workflow_checks(mimo_ddm mimo_ddm_linear MimoDdmLinearSmoke)
+radar_add_fmcw_workflow_checks(mimo_ddm mimo_ddm_nonlinear MimoDdmNonlinearSmoke)
+radar_add_fmcw_workflow_checks(adaptive_aoa adaptive_aoa AdaptiveAoASmoke)
+radar_add_fmcw_workflow_checks(multi_waveform multi_waveform MultiWaveformSmoke)
 
 set(SAR_SMOKE_DIR "${PROJECT_BINARY_DIR}/tests/cpp")
 set(SAR_APP_NAMES spotlight video_sar tiled_strip continuous_strip independent_images)

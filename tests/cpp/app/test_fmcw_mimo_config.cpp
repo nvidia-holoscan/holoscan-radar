@@ -8,15 +8,24 @@
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <fstream>
 #include <iterator>
+#include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "radar_app/fmcw/mimo_config.hpp"
+#include "radar_app/app/presentation_choice.hpp"
+#include "radar_app/app/config_path.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 
+#include "app/config_fixture.hpp"
+
 namespace {
+
+using holoscan::radar::testing::PresetOverride;
+using holoscan::radar::testing::resolved_yaml;
 
 namespace mimo = holoscan::radar::app::mimo;
 namespace radar = holoscan::radar;
@@ -26,12 +35,11 @@ std::filesystem::path config_path(const char* name) {
 }
 
 void expect_smoke_matches_production(const char* production_name, const char* smoke_name) {
-  YAML::Node expected = YAML::LoadFile(config_path(production_name).string());
-  const YAML::Node smoke = YAML::LoadFile(config_path(smoke_name).string());
+  YAML::Node expected = resolved_yaml(config_path(production_name));
+  const YAML::Node smoke = resolved_yaml(config_path(smoke_name));
   expected["app"]["run"]["num_frames"] = 2;
   expected["app"]["visualization"]["enabled"] = false;
-  expected["app"].remove("range_loss");
-  expected["app"].remove("scene_visibility");
+  expected["app"]["range_loss"] = YAML::Node(YAML::NodeType::Null);
   YAML::Node targets(YAML::NodeType::Sequence);
   targets.push_back(expected["app"]["targets"][0]);
   expected["app"]["targets"] = targets;
@@ -99,6 +107,8 @@ TEST(FmcwMimoConfig, DecodesTdmDefault) {
   const auto config = mimo::load_tdm_config(config_path("mimo_tdm/config/mimo_tdm.yaml"));
 
   EXPECT_EQ(config.num_frames, 250);
+  EXPECT_DOUBLE_EQ(config.visualization.range_doppler_width_percent, 45.0);
+  EXPECT_DOUBLE_EQ(config.visualization.noise_headroom_db, 6.0);
   EXPECT_EQ(config.scene.range_loss.model, radar::sim::RangeLossModel::kMonostaticFreeSpace);
   EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 100.0);
   EXPECT_EQ(config.scene_visibility.model, radar::sim::SceneVisibilityModel::kFrontHalfSpace);
@@ -126,6 +136,223 @@ TEST(FmcwMimoConfig, DecodesTdmDefault) {
   EXPECT_EQ(config.extents.max_doppler_bins, 64);
   EXPECT_EQ(config.extents.max_detections, 64 * 256);
   expect_common_geometry_and_tail(config, 13, 32);
+}
+
+TEST(FmcwMimoConfig, DecodesX11PresentationSwitch) {
+  EXPECT_FALSE(mimo::load_tdm_config(config_path("mimo_tdm/config/mimo_tdm.yaml"))
+                   .visualization.x11_presentation.has_value());
+  const MutatedConfig file("mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
+                           "display_rate_hz: 20.0\n        x11_presentation: false");
+  EXPECT_EQ(mimo::load_tdm_config(file.path()).visualization.x11_presentation, false);
+}
+
+radar::app::detail::PresentationChoice presenter_choice(const std::filesystem::path& path) {
+  return {.window = true,
+          .x11_available = true,
+          .interactive = true,
+          .configured = std::nullopt,
+          .cache_file = path,
+          .setup_key = "123",
+          .choose_again = false,
+          .now_seconds = 1700000000,
+          .config_path = "custom_preset.yaml"};
+}
+
+TEST(FmcwPresentationChoice, DefaultsToThisRunOnly) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  const auto path = directory.write("choice", "invalid\n");
+  std::filesystem::remove(path);
+  const auto choice = presenter_choice(path);
+  std::istringstream input("n\n\n");
+  std::ostringstream output;
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_NE(output.str().find("This run only (default)"), std::string::npos);
+  EXPECT_NE(output.str().find("in \"custom_preset.yaml\"."), std::string::npos);
+}
+
+TEST(FmcwPresentationChoice, SevenDayChoiceExpiresAtBoundary) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  auto choice = presenter_choice(directory.write("choice", "invalid\n"));
+  std::istringstream input("unknown\n n \ninvalid\n2\n");
+  std::ostringstream output;
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  EXPECT_NE(output.str().find("Please choose"), std::string::npos);
+  const auto saved = radar::app::detail::read_presentation(choice);
+  ASSERT_TRUE(saved);
+  EXPECT_EQ(saved->expires_at, choice.now_seconds + 604800);
+
+  choice.interactive = false;
+  choice.now_seconds += 604799;
+  std::istringstream no_input;
+  output.str("");
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, no_input, output));
+  EXPECT_NE(output.str().find("expires"), std::string::npos);
+  EXPECT_NE(output.str().find("--choose-presenter"), std::string::npos);
+  ++choice.now_seconds;
+  EXPECT_FALSE(radar::app::detail::read_presentation(choice));
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, no_input, output));
+}
+
+TEST(FmcwPresentationChoice, IndefiniteChoiceSurvivesAndExplicitConfigWins) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  auto choice = presenter_choice(directory.write("choice", "invalid\n"));
+  std::istringstream input("n\n3\n");
+  std::ostringstream output;
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  choice.now_seconds += 100 * 604800;
+  choice.interactive = false;
+  std::istringstream no_input;
+  output.str("");
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, no_input, output));
+  EXPECT_NE(output.str().find("until changed"), std::string::npos);
+  choice.configured = true;
+  output.str("");
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, no_input, output));
+  EXPECT_TRUE(output.str().empty());
+  choice.configured = false;
+  choice.choose_again = true;
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, no_input, output));
+  EXPECT_NE(output.str().find("takes priority"), std::string::npos);
+  EXPECT_TRUE(radar::app::detail::read_presentation(choice));
+}
+
+TEST(FmcwPresentationChoice, RejectsWrongSetupClockRollbackAndInvalidMetadata) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  auto choice = presenter_choice(directory.write("choice", "invalid\n"));
+  std::ostringstream output;
+  radar::app::detail::remember_presentation(choice, false, true, output);
+  choice.setup_key = "456";
+  EXPECT_FALSE(radar::app::detail::read_presentation(choice));
+  choice.setup_key = "123";
+  --choice.now_seconds;
+  EXPECT_FALSE(radar::app::detail::read_presentation(choice));
+  ++choice.now_seconds;
+  const std::vector<std::string> invalid{
+      "native\n",
+      "{broken",
+      "{}",
+      R"({"version":1,"presenter":"native","setup_key":"123","saved_at":1,"expires_at":null})",
+      R"({"version":2,"presenter":"other","setup_key":"123","saved_at":1,"expires_at":null})",
+      R"({"version":2,"presenter":"native","setup_key":"123","saved_at":0,"expires_at":null})",
+      R"({"version":2,"presenter":"native","setup_key":"123","saved_at":1,"expires_at":0})",
+      R"({"version":2,"presenter":"native","setup_key":"123","saved_at":1,"expires_at":"never"})",
+      R"({"version":2,"presenter":"native","setup_key":"123","saved_at":1})"};
+  for (const auto& text : invalid) {
+    SCOPED_TRACE(text);
+    choice.cache_file = directory.write("choice", text);
+    EXPECT_FALSE(radar::app::detail::read_presentation(choice));
+  }
+}
+
+TEST(FmcwPresentationChoice, ChooseAgainClearsOldPreferenceEvenForOneRunChoice) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  auto choice = presenter_choice(directory.write("choice", "invalid\n"));
+  std::ostringstream output;
+  radar::app::detail::remember_presentation(choice, false, true, output);
+  choice.choose_again = true;
+  choice.interactive = false;
+  std::istringstream input("x\n1\n");
+  EXPECT_THROW(radar::app::detail::choose_x11_presentation(choice, input, output),
+               std::runtime_error);
+  EXPECT_TRUE(radar::app::detail::read_presentation(choice));
+  choice.interactive = true;
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  EXPECT_FALSE(std::filesystem::exists(choice.cache_file));
+}
+
+TEST(FmcwPresentationChoice, EofAndUnattendedRunsDoNotSavePreferences) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  const auto path = directory.write("choice", "invalid\n");
+  std::filesystem::remove(path);
+  auto choice = presenter_choice(path);
+  std::istringstream empty;
+  std::ostringstream output;
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, empty, output));
+  std::istringstream native("n\n");
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, native, output));
+  choice.interactive = false;
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, empty, output));
+  EXPECT_FALSE(std::filesystem::exists(path));
+}
+
+TEST(FmcwPresentationChoice, NonvisualAndUnavailableX11NeverPromptOrReadCache) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  auto choice = presenter_choice(directory.write("choice", "invalid\n"));
+  std::ostringstream output;
+  radar::app::detail::remember_presentation(choice, false, true, output);
+  choice.window = false;
+  std::istringstream input("n\n");
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  choice.window = true;
+  choice.x11_available = false;
+  EXPECT_TRUE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  EXPECT_TRUE(output.str().empty());
+  EXPECT_EQ(input.peek(), 'n');
+}
+
+TEST(FmcwPresentationChoice, CacheWriteFailureKeepsSelectedPresenter) {
+  holoscan::radar::testing::ConfigDirectory directory;
+  const auto choice = presenter_choice(directory.write("blocking-file", "data") / "choice");
+  std::istringstream input("n\n2\n");
+  std::ostringstream output;
+  EXPECT_FALSE(radar::app::detail::choose_x11_presentation(choice, input, output));
+  EXPECT_NE(output.str().find("Could not remember"), std::string::npos);
+}
+
+TEST(FmcwPresentationChoice, ParsesChoosePresenterBeforeOrAfterConfig) {
+  for (auto args : {std::vector<std::string>{"/tmp/radar", "--choose-presenter", "custom.yaml"},
+                    std::vector<std::string>{"/tmp/radar", "custom.yaml", "--choose-presenter"},
+                    std::vector<std::string>{"/tmp/radar", "--choose-presenter"}}) {
+    std::vector<char*> argv;
+    for (auto& arg : args)
+      argv.push_back(arg.data());
+    const auto launch =
+        radar::app::parse_fmcw_launch_options(argv.size(), argv.data(), "default.yaml");
+    EXPECT_TRUE(launch.choose_presenter);
+    EXPECT_EQ(launch.config_path.filename(), args.size() == 3U ? "custom.yaml" : "default.yaml");
+  }
+}
+
+TEST(FmcwMimoConfig, DecodesDashboardWidthAndRejectsInvalidPercentages) {
+  for (const double percent : {25.0, 37.5, 70.0}) {
+    const MutatedConfig file(
+        "mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
+        "display_rate_hz: 20.0\n        range_doppler_width_percent: " + std::to_string(percent));
+    const auto config = mimo::load_tdm_config(file.path());
+    EXPECT_DOUBLE_EQ(config.visualization.range_doppler_width_percent, percent);
+  }
+  for (const auto* percent : {"24.9", "70.1", ".nan", ".inf"}) {
+    SCOPED_TRACE(percent);
+    const MutatedConfig file(
+        "mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
+        std::string("display_rate_hz: 20.0\n        range_doppler_width_percent: ") + percent);
+    EXPECT_THROW(mimo::load_tdm_config(file.path()), std::runtime_error);
+  }
+}
+
+TEST(FmcwMimoConfig, DecodesBackgroundScalingAndRejectsInvalidSettings) {
+  const MutatedConfig file(
+      "mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
+      "display_rate_hz: 20.0\n        noise_scaling: false\n        noise_sample_limit: 512"
+      "\n        noise_range_half_width: 2\n        noise_doppler_half_width: 4"
+      "\n        noise_sigma: 1.5\n        noise_headroom_db: 12.5");
+  const auto config = mimo::load_tdm_config(file.path());
+  EXPECT_FALSE(config.visualization.noise_scaling);
+  EXPECT_EQ(config.visualization.noise_sample_limit, 512);
+  EXPECT_EQ(config.visualization.noise_range_half_width, 2);
+  EXPECT_EQ(config.visualization.noise_doppler_half_width, 4);
+  EXPECT_DOUBLE_EQ(config.visualization.noise_sigma, 1.5);
+  EXPECT_DOUBLE_EQ(config.visualization.noise_headroom_db, 12.5);
+  for (const auto* setting :
+       {"noise_sample_limit: 63", "noise_sample_limit: 65537", "noise_range_half_width: -1",
+        "noise_doppler_half_width: 65", "noise_sigma: .nan", "noise_sigma: 10.1",
+        "noise_headroom_db: -0.1", "noise_headroom_db: .nan", "noise_headroom_db: .inf"}) {
+    SCOPED_TRACE(setting);
+    const MutatedConfig invalid("mimo_tdm/config/mimo_tdm.yaml", "display_rate_hz: 20.0",
+                                std::string("display_rate_hz: 20.0\n        ") + setting);
+    EXPECT_THROW(mimo::load_tdm_config(invalid.path()), std::runtime_error);
+  }
 }
 
 TEST(FmcwMimoConfig, DecodesTdmSmoke) {
@@ -210,9 +437,8 @@ TEST(FmcwMimoConfig, DecodesDocumentedNonlinearDdmPreset) {
 
 TEST(FmcwMimoConfig, DecodesNonlinearDdmGeneratorAliases) {
   for (const char* generator : {"zc", "sin"}) {
-    const MutatedConfig preset("mimo_ddm/config/mimo_ddm_nonlinear_smoke.yaml",
-                               "generate_phase_codes: zadoff_chu",
-                               "generate_phase_codes: " + std::string(generator));
+    const PresetOverride preset(config_path("mimo_ddm/config/mimo_ddm_nonlinear_smoke.yaml"),
+                                "ddm:\n    generate_phase_codes: " + std::string(generator));
     const auto config = mimo::load_ddm_config(preset.path());
 
     EXPECT_TRUE(config.correlate);
@@ -240,82 +466,55 @@ TEST(FmcwMimoConfig, RejectsWrongLoaderSection) {
 }
 
 TEST(FmcwMimoConfig, RejectsAuthoredDeinterleaveSchedule) {
-  const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml", "mimo_deinterleave: {}",
-                             "mimo_deinterleave: {tx_schedule: {num_tx: 2}}");
+  const PresetOverride config(config_path("mimo_tdm/config/mimo_tdm_smoke.yaml"),
+                              "mimo_deinterleave: {tx_schedule: {num_tx: 2}}\n");
   EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
 }
 
 TEST(FmcwMimoConfig, RejectsAuthoredDerivedSparseFields) {
-  {
-    const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml",
-                               "    overlap_policy: keep_all",
-                               "    waveform: {}\n    overlap_policy: keep_all");
-    EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
-  }
-  {
-    const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml",
-                               "    overlap_policy: keep_all",
-                               "    tx_schedule: {num_tx: 2}\n    overlap_policy: keep_all");
-    EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
-  }
-  {
-    const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml",
-                               "    overlap_policy: keep_all",
-                               "    tx_positions: [0.0, 0.0, 0.0]\n"
-                               "    overlap_policy: keep_all");
-    EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
-  }
-  {
-    const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml",
-                               "    overlap_policy: keep_all",
-                               "    rx_positions: [0.0, 0.0, 0.0]\n"
-                               "    overlap_policy: keep_all");
+  for (const auto* field : {"waveform: {}", "tx_schedule: {num_tx: 2}",
+                            "tx_positions: [0.0, 0.0, 0.0]", "rx_positions: [0.0, 0.0, 0.0]"}) {
+    const PresetOverride config(config_path("mimo_tdm/config/mimo_tdm_smoke.yaml"),
+                                "tdm_sparse_compensation:\n    " + std::string(field));
     EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
   }
 }
 
 TEST(FmcwMimoConfig, RejectsTdmPriMismatch) {
-  const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml",
-                             "chirp_repetition_interval: 50.0e-6",
-                             "chirp_repetition_interval: 51.0e-6");
+  const PresetOverride config(config_path("mimo_tdm/config/mimo_tdm_smoke.yaml"),
+                              "app:\n    waveform:\n        chirp_repetition_interval: 51.0e-6\n");
   EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
 }
 
 TEST(FmcwMimoConfig, RejectsDdmTxMismatch) {
-  const MutatedConfig config("mimo_ddm/config/mimo_ddm_linear_smoke.yaml",
-                             "ddm_code:\n        num_tx: 2", "ddm_code:\n        num_tx: 3");
+  const PresetOverride config(config_path("mimo_ddm/config/mimo_ddm_linear_smoke.yaml"),
+                              "ddm_dense_demultiplex:\n    ddm_code:\n        num_tx: 3\n");
   EXPECT_THROW(mimo::load_ddm_config(config.path()), std::runtime_error);
 }
 
 TEST(FmcwMimoConfig, RejectsDdmClutterFilter) {
-  const MutatedConfig config("mimo_ddm/config/mimo_ddm_linear_smoke.yaml",
-                             "virtual_array_assembly:\n",
-                             "clutter_filter:\n    method: mean_subtraction\n"
-                             "virtual_array_assembly:\n");
+  const PresetOverride config(config_path("mimo_ddm/config/mimo_ddm_linear_smoke.yaml"),
+                              "clutter_filter:\n    method: mean_subtraction\n");
   EXPECT_THROW(mimo::load_ddm_config(config.path()), std::runtime_error);
 }
 
 TEST(FmcwMimoConfig, RejectsMalformedSchemeSpecificConfig) {
-  const MutatedConfig config("mimo_ddm/config/mimo_ddm_linear.yaml", "    targets:\n",
-                             "    ddm:\n"
-                             "        generate_phase_codes: zadoff_chu\n"
-                             "    targets:\n");
+  const PresetOverride config(config_path("mimo_ddm/config/mimo_ddm_linear.yaml"),
+                              "ddm:\n    generate_phase_codes: zadoff_chu\n");
   EXPECT_THROW(mimo::load_ddm_config(config.path()), std::runtime_error);
 }
 
 TEST(FmcwMimoConfig, RejectsInvalidClusteredTailShape) {
-  const MutatedConfig config("mimo_tdm/config/mimo_tdm_smoke.yaml",
-                             "        - score\n        - range_bin\n        - doppler_bin\n",
-                             "        - score\n        - doppler_bin\n        - range_bin\n");
+  const PresetOverride config(config_path("mimo_tdm/config/mimo_tdm_smoke.yaml"),
+                              "feature_assembly:\n    features: [range, velocity, az_estimate, "
+                              "el_estimate, score, doppler_bin, range_bin]\n");
   EXPECT_THROW(mimo::load_tdm_config(config.path()), std::runtime_error);
 }
 
 TEST(FmcwMimoConfig, DecodesSharedRangeLossBlock) {
-  const MutatedConfig preset("mimo_tdm/config/mimo_tdm_smoke.yaml", "    tx_array:\n",
-                             "    range_loss:\n"
-                             "        model: monostatic_free_space\n"
-                             "        reference_range: 40.0\n"
-                             "    tx_array:\n");
+  const PresetOverride preset(
+      config_path("mimo_tdm/config/mimo_tdm_smoke.yaml"),
+      "app:\n    range_loss: {model: monostatic_free_space, reference_range: 40.0}\n");
   const auto config = mimo::load_tdm_config(preset.path());
   EXPECT_EQ(config.scene.range_loss.model, radar::sim::RangeLossModel::kMonostaticFreeSpace);
   EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 40.0);

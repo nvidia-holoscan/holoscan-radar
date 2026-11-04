@@ -66,6 +66,7 @@ RUN apt-get update \
         libgtest-dev \
         libyaml-cpp-dev \
         libtinyxml2-dev \
+        libxrender-dev \
         openssh-client \
         clang-format \
         sudo \

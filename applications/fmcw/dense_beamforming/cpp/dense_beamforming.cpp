@@ -15,6 +15,7 @@
 #include "fmcw/fmcw_doppler_processor_op/fmcw_doppler_processor_op.hpp"
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "radar_app/app/graph_driver.hpp"
+#include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/app/source.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "config.hpp"  // NOLINT(build/include_subdir)
@@ -33,7 +34,7 @@ void bind_output(holoscan::CompileOptions& options, const char* op, const char* 
   options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = op,
       .output_port = port,
-      .device = holoscan::DeviceId{0},
+      .device = app::application_device(),
   });
 }
 
@@ -157,7 +158,8 @@ int main(int argc, char** argv) {
               cfg.beamformer_params->angle_convention, cfg.scene.targets, cfg.scene_visibility,
               "SIMO Dense Beamforming",
               app::viz::RawDashboardInputs{cfar->cfar_power, cfar->detection_idx, features->points,
-                                           range->range_bins, doppler->velocity_bins});
+                                           range->range_bins, doppler->velocity_bins},
+              app::application_description("dense_beamforming"));
         }
 #endif
       });

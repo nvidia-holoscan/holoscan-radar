@@ -1,5 +1,7 @@
 # Dense beamforming
 
+See [shared preset inheritance and launch modes](../README.md).
+
 Beamform-then-detect FMCW example. This implementation happens to use a SIMO
 array, but the application is named for the processing approach it demonstrates. It forms the full range-Doppler-angle cube, applies N-D CFAR peak suppression, resolves physical coordinates, and reports the retained detections directly.
 
@@ -14,22 +16,40 @@ flowchart LR
     Features --> Dashboard
     Range --> Dashboard
     Doppler --> Dashboard
-    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
+    Dashboard --> Image[RgbaImageBridgeOp] -->|Same GPU| Frame[FmcwFrameComposerOp] -->|Other window systems, same GPU| Holoviz[FmcwHolovizOp]
+    Image -.->|Different GPUs| InputDownload[ImageDownloadOp]
+    InputDownload -.-> InputUpload[ImageUploadOp] -.-> Frame
+    Frame -.->|Other window systems, different GPUs| Download[ImageDownloadOp]
+    Download -.-> Upload[ImageUploadOp] -.-> Holoviz
+    Frame -->|X11| X11Download[ImageDownloadOp] --> X11Window[X11ImagePresenterOp]
+    Dashboard -->|Native text| Frame
 ```
+
+The [shared dashboard](../../common/radar_app/viz/README.md) uses native SDK text,
+a relative-power legend, and frame-driven presentation capped by
+`visualization.display_rate_hz`.
+
+## Configuration
+
+Operator settings are top-level YAML blocks: `range_processor`, `clutter_filter`,
+`doppler_processor`, `phase_shift_beamformer`, `cfar_detector`, and
+`feature_assembly`. Scenario and visualization settings remain under `app`.
+For existing presets, remove the former `beamform_then_detect:` wrapper and
+unindent its three operator blocks by one level. Both languages use this layout.
 
 ## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run dense_beamforming --language cpp --run-args=dense_beamforming_smoke.yaml
+./holoscan-radar run dense_beamforming smoke --language cpp
 ```
 
 This runs the two-frame headless smoke preset. Run
 `./holoscan-radar run dense_beamforming --language cpp` on a host with a
 display for the normal preset. The CLI selects Python if `--language` is omitted.
 
-The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset intentionally omits it, uses the constant-amplitude analytic model, and emits a warning.
+The normal preset enables relative monostatic free-space range loss with a 100 m reference. The smoke preset explicitly disables it, uses the constant-amplitude analytic model, and emits a warning.
 
 Simulator-backed sources default `app.scene_visibility` to `front_half_space`, with radar-local `+x` as boresight. Select `frustum` with explicit horizontal/vertical FOVs in radians, or `all` to restore isotropic target synthesis. This binary coverage gate is separate from relative range loss and does not model antenna gain.
 
@@ -41,7 +61,7 @@ From the repository root, the host CLI builds and runs the colocated
 `python/` graph with the pinned development image:
 
 ```bash
-./holoscan-radar run dense_beamforming --language python --run-args=dense_beamforming_smoke.yaml
+./holoscan-radar run dense_beamforming smoke --language python
 ```
 
 After building or installing the Python wheel, call the graph directly:

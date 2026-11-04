@@ -14,7 +14,11 @@
 #include "config.hpp"  // NOLINT(build/include_subdir): app-private header
 #include "radar_common/math/constants.hpp"
 
+#include "app/config_fixture.hpp"
+
 namespace {
+
+using holoscan::radar::testing::resolved_yaml;
 
 namespace siso = holoscan::radar::app::siso;
 namespace radar = holoscan::radar;
@@ -31,7 +35,7 @@ TEST(FmcwSisoConfig, DecodesProductionAndDerivesRankTwoExtents) {
   EXPECT_EQ(config.scene.samples_per_chirp, 256);
   EXPECT_EQ(config.scene.targets.size(), 5U);
   ASSERT_TRUE(config.scene.snr_db.has_value());
-  EXPECT_DOUBLE_EQ(*config.scene.snr_db, 20.0);
+  EXPECT_DOUBLE_EQ(*config.scene.snr_db, 5.0);
   EXPECT_EQ(config.scene.range_loss.model, radar::sim::RangeLossModel::kMonostaticFreeSpace);
   EXPECT_DOUBLE_EQ(config.scene.range_loss.reference_range, 100.0);
   ASSERT_EQ(config.scene.rx_positions.size(), 1U);
@@ -66,12 +70,11 @@ TEST(FmcwSisoConfig, DecodesSmoke) {
 }
 
 TEST(FmcwSisoConfig, SmokeOnlyAppliesAllowedOverrides) {
-  YAML::Node expected = YAML::LoadFile(config_path("siso.yaml").string());
-  const YAML::Node smoke = YAML::LoadFile(config_path("siso_smoke.yaml").string());
+  YAML::Node expected = resolved_yaml(config_path("siso.yaml"));
+  const YAML::Node smoke = resolved_yaml(config_path("siso_smoke.yaml"));
   expected["app"]["run"]["num_frames"] = 2;
   expected["app"]["visualization"]["enabled"] = false;
-  expected["app"].remove("range_loss");
-  expected["app"].remove("scene_visibility");
+  expected["app"]["range_loss"] = YAML::Node(YAML::NodeType::Null);
   expected["app"]["targets"] = smoke["app"]["targets"];
   EXPECT_EQ(YAML::Dump(expected), YAML::Dump(smoke));
 }

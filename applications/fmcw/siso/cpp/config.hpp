@@ -26,6 +26,7 @@
 #include "fmcw/fmcw_range_processor_op/params_config.hpp"
 #include "radar_app/app/run_config.hpp"
 #include "radar_app/app/config_utils.hpp"
+#include "radar_app/fmcw/config_loader.hpp"
 #include "config_schema.hpp"  // NOLINT(build/include_subdir)
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/sim/scene.hpp"
@@ -33,7 +34,7 @@
 namespace holoscan::radar::app::siso {
 
 using config::decode_params;
-using config::load_document;
+using config::load_inherited_document;
 using config::normalize_enum_field;
 using config::require_positive;
 using config::validate_frame_period;
@@ -87,6 +88,7 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored) {
   }
   require_positive("app.cube.num_chirps", authored.cube.num_chirps);
   require_positive("app.cube.samples_per_chirp", authored.cube.samples_per_chirp);
+  result.visualization.validate_layout();
   require_positive("app.visualization.window_width", result.visualization.window_width);
   require_positive("app.visualization.window_height", result.visualization.window_height);
   if (result.visualization.window_width > std::numeric_limits<std::uint32_t>::max() ||
@@ -167,7 +169,7 @@ inline MaxTensorExtents make_extents(const RuntimeConfig& runtime,
 }
 
 inline Config load_config(const std::filesystem::path& path) {
-  auto document = normalize_operator_enums(load_document(path));
+  auto document = normalize_operator_enums(load_inherited_document(path));
   const auto app_params = decode_params<AppParams>(document, "/app");
   RuntimeConfig runtime = make_runtime_config(*app_params);
   auto range = decode_params<FMCWRangeProcessorParams>(document, "/range_processor");

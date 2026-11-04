@@ -22,6 +22,8 @@
 #include <holoscan/time/realtime_clock.hpp>
 
 #include "radar_app/app/config_path.hpp"
+#include "radar_app/app/gpu_placement.hpp"
+#include "radar_app/app/logging.hpp"
 #include "radar_app/report/cadence_meter.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/viz/display_probe.hpp"
@@ -37,7 +39,8 @@ inline void wait_for_app_frames(holoscan::RunSession& session, int total_frames)
   auto last_progress = std::chrono::steady_clock::now();
   int seen = 0;
   std::unique_lock lock(AppFrameBank::mutex);
-  while (AppFrameBank::captured < total_frames && session.diagnostics().empty()) {
+  while (AppFrameBank::captured < total_frames && session.diagnostics().empty() &&
+         session.termination() == holoscan::RunTermination::kRunning) {
     AppFrameBank::ready.wait_for(lock, kAppPoll);
     const auto now = std::chrono::steady_clock::now();
     if (AppFrameBank::captured != seen) {
@@ -55,9 +58,10 @@ template <class Config, class BuildFn>
 int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char* default_yaml,
                        std::function<Config(const std::filesystem::path&)> load_config,
                        BuildFn&& build) {
+  configure_fmcw_logging();
   try {
-    const std::filesystem::path config_path = resolve_config_path(argc, argv, default_yaml);
-    Config cfg = load_config(config_path);
+    const auto launch = parse_fmcw_launch_options(argc, argv, default_yaml);
+    Config cfg = load_config(launch.config_path);
     if (cfg.visualize && !cfg.headless && !cfg.skip_display_check && !gui_available()) {
       HOLOSCAN_LOG_WARN(
           "{}: visualize is enabled but no usable display was detected; "
@@ -66,6 +70,15 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
       cfg.visualize = false;
     }
 
+#if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
+    cfg.visualization.x11_presentation =
+        resolve_fmcw_x11_presentation(cfg.visualize, cfg.visualization.x11_presentation,
+                                      launch.choose_presenter, launch.config_path.string());
+    select_fmcw_application_device(cfg.visualize, cfg.visualize,
+                                   cfg.visualization.x11_presentation.value());
+#else
+    select_application_device(false, false);
+#endif
     AppFrameBank::reset(static_cast<int>(cfg.num_frames));
 
     holoscan::Graph graph{log_prefix};
@@ -82,6 +95,7 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
 
     holoscan::RunSession session = holoscan::run_async(plan);
     wait_for_app_frames(session, static_cast<int>(cfg.num_frames));
+    const bool already_stopped = session.termination() == holoscan::RunTermination::kStopped;
     session.request_stop();
     session.wait();
     if (!session.diagnostics().empty()) {
@@ -93,7 +107,7 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
       }
       throw std::runtime_error(msg);
     }
-    if (AppFrameBank::captured < static_cast<int>(cfg.num_frames)) {
+    if (AppFrameBank::captured < static_cast<int>(cfg.num_frames) && !already_stopped) {
       throw std::runtime_error(std::string(log_prefix) + " stalled after " +
                                std::to_string(AppFrameBank::captured) + " / " +
                                std::to_string(cfg.num_frames) + " frames");

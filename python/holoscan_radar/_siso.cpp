@@ -3,6 +3,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/optional.h>
 
 #include <filesystem>  // NOLINT(build/c++17)
 #include <memory>
@@ -22,6 +23,8 @@
 #include "applications/fmcw/simo/cpp/config.hpp"
 #include "applications/fmcw/dense_beamforming/cpp/config.hpp"
 #include "radar_app/app/source.hpp"
+#include "radar_app/app/gpu_placement.hpp"
+#include "radar_app/app/logging.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "python/holoscan_radar/viz_bindings.hpp"
 
@@ -373,7 +376,8 @@ struct SisoDashboardLoader {
   static auto load(const std::filesystem::path& path) { return app::siso::load_config(path); }
   static app::viz::FmcwDashboardConfig dashboard(const app::siso::Config& cfg) {
     return radar::python_viz::dashboard_config(cfg, "SISO", true, false, {}, {},
-                                               radar::AngleConvention{});
+                                               radar::AngleConvention{},
+                                               app::application_description("siso"));
   }
 };
 
@@ -382,7 +386,8 @@ struct SimoDashboardLoader {
   static app::viz::FmcwDashboardConfig dashboard(const app::simo::Config& cfg) {
     return radar::python_viz::dashboard_config(
         cfg, "SIMO", true, true, cfg.beamscan_params->az_coordinates,
-        cfg.beamscan_params->el_coordinates, cfg.beamscan_params->angle_convention);
+        cfg.beamscan_params->el_coordinates, cfg.beamscan_params->angle_convention,
+        app::application_description("simo"));
   }
 };
 
@@ -393,7 +398,8 @@ struct DenseDashboardLoader {
   static app::viz::FmcwDashboardConfig dashboard(const app::dense_beamforming::Config& cfg) {
     return radar::python_viz::dashboard_config(
         cfg, "SIMO Dense Beamforming", false, true, cfg.beamformer_params->az_coordinates,
-        cfg.beamformer_params->el_coordinates, cfg.beamformer_params->angle_convention);
+        cfg.beamformer_params->el_coordinates, cfg.beamformer_params->angle_convention,
+        app::application_description("dense_beamforming"));
   }
 };
 
@@ -403,6 +409,13 @@ void register_siso_bindings(nb::module_& module) {
   register_app_node<SisoSourceThunks>("holoscan.radar._app.SisoSource");
   register_app_node<SisoReportThunks>("holoscan.radar._app.SisoReport");
   module.def("_load_siso", &load_siso);
+  module.def("_configure_fmcw_logging", &app::configure_fmcw_logging);
+  module.def("_resolve_x11_presentation", &app::resolve_fmcw_x11_presentation, nb::arg("window"),
+             nb::arg("configured"), nb::arg("choose_again") = false, nb::arg("config_path") = "");
+  module.def("_select_application_device", &app::select_fmcw_application_device);
+  module.def("_fmcw_uses_x11_presentation", &app::fmcw_uses_x11_presentation);
+  module.def("_application_display_device", &app::application_display_device);
+  module.def("_application_composer_device", &app::application_composer_device);
   module.def("_reset_app_frames", [](int frames) {
     app::AppFrameBank::reset(frames);
   });

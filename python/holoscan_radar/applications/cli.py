@@ -38,11 +38,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run a Holoscan Radar FMCW Graph application")
     parser.add_argument("application", choices=tuple(_DEFAULT_CONFIG))
     parser.add_argument("config", nargs="?", help="YAML preset or path to an application config")
+    parser.add_argument(
+        "--choose-presenter",
+        action="store_true",
+        help="Forget the saved presenter for this display setup and ask again (explicit YAML wins)",
+    )
     args = parser.parse_args(argv)
     config = _config_path(args.application, args.config or _DEFAULT_CONFIG[args.application])
     if not config.is_file():
         parser.error(f"configuration file not found: {config}")
-    workflow = import_module(f"holoscan_radar.applications.{args.application}").build_graph(config)
+    workflow = import_module(f"holoscan_radar.applications.{args.application}").build_graph(
+        config, choose_presenter=args.choose_presenter
+    )
     workflow.run()
     return 0
 

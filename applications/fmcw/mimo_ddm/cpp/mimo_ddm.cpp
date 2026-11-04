@@ -20,6 +20,7 @@
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "fmcw/virtual_array_assembly_op/virtual_array_assembly_op.hpp"
 #include "radar_app/app/graph_driver.hpp"
+#include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "config.hpp"  // NOLINT(build/include_subdir)
 #include "radar_app/fmcw/mimo_sources.hpp"
@@ -39,7 +40,7 @@ void bind_output(holoscan::CompileOptions& options, const char* op, const char* 
   options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = op,
       .output_port = port,
-      .device = holoscan::DeviceId{0},
+      .device = app::application_device(),
   });
 }
 
@@ -220,7 +221,9 @@ int main(int argc, char** argv) {
               app::viz::ClusterDashboardInputs{cfar->cfar_power, cfar->detection_idx,
                                                features->points, cluster->labels, cluster->sizes,
                                                range->range_bins, demultiplex->velocity_bins_out,
-                                               reduction->reduced_points});
+                                               reduction->reduced_points},
+              app::application_description("mimo_ddm",
+                                           cfg.correlate ? "nonlinear_ddm" : "default"));
         }
 #endif
       });

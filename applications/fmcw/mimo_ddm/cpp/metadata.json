@@ -39,9 +39,30 @@
     "default_mode": "default",
     "modes": {
       "default": {
-        "description": "Dense-demultiplex MIMO DDM processing with sparse angle estimation",
+        "description": "Linear MIMO DDM with sparse angle estimation",
         "run": {
           "command": "<holohub_app_bin>/mimo_ddm",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "smoke": {
+        "description": "Run the short headless smoke preset",
+        "run": {
+          "command": "<holohub_app_bin>/mimo_ddm mimo_ddm_linear_smoke.yaml",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "nonlinear_ddm": {
+        "description": "Nonlinear MIMO DDM with sparse angle estimation",
+        "run": {
+          "command": "<holohub_app_bin>/mimo_ddm mimo_ddm_nonlinear.yaml",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "nonlinear_ddm_smoke": {
+        "description": "Run the nonlinear DDM headless smoke preset",
+        "run": {
+          "command": "<holohub_app_bin>/mimo_ddm mimo_ddm_nonlinear_smoke.yaml",
           "workdir": "holohub_app_bin"
         }
       }
