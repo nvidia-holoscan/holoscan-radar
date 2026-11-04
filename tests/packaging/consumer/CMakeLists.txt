@@ -5,6 +5,9 @@ cmake_minimum_required(VERSION 4.0)
 project(RadarPackageConsumer LANGUAGES CXX CUDA)
 
 find_package(holoscan REQUIRED COMPONENTS core params_io)
+# MatX is a separate package; prioritize the selected SDK over other prefixes.
+get_filename_component(_radar_sdk_prefix "${holoscan_DIR}/../../.." ABSOLUTE)
+list(PREPEND CMAKE_PREFIX_PATH "${_radar_sdk_prefix}")
 find_package(CUDAToolkit REQUIRED)
 find_package(matx REQUIRED)
 

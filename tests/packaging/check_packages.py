@@ -148,6 +148,11 @@ def check_debian(args):
         raise RuntimeError("C++-only Debian artifact unexpectedly includes Python bindings")
     # Build against the extracted artifact, with no source/build include paths.
     consumer = args.work / "consumer"
+    # Keep a competing MatX ahead of an already-listed SDK to catch mixed installs.
+    competing = args.work / "competing-sdk"
+    matx_config = competing / "lib/cmake/matx/matx-config.cmake"
+    matx_config.parent.mkdir(parents=True)
+    matx_config.write_text('message(FATAL_ERROR "MatX selected from a different SDK")\n')
     run(
         "cmake",
         "-S",
@@ -155,6 +160,7 @@ def check_debian(args):
         "-B",
         consumer,
         f"-DRADAR_PREFIX={prefix}",
+        f"-DCMAKE_PREFIX_PATH={competing};{args.sdk_dir.parents[2]}",
         f"-Dholoscan_DIR={args.sdk_dir}",
         f"-DCMAKE_CUDA_ARCHITECTURES={args.architectures}",
         cwd=args.work,
