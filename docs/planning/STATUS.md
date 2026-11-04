@@ -9,7 +9,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   operators without enabling the 12 example applications. The explicit package
   list in `pkg/CMakeLists.txt` accepts configure-time overrides for intentional
   omissions. Package
-  builds disable tests; C++ tests retain normal CMake target resolution. On Durham IGX Thor 5000,
+  builds default tests off; explicit and cached settings take precedence. C++ tests retain normal CMake target resolution. On Durham IGX Thor 5000,
   the clean arm64 Debian package contains all 32 operator libraries and no demo
   applications; all 1,161 non-performance CTests pass.
   Configure tests confirm package exclusions work.
@@ -317,6 +317,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| PR #70 test configuration | Codex | `tbirdsong/5x/package-operator-graph` | **verified locally:** replaced unconditional package test suppression with a package-only default; explicit and cached test settings take precedence. All eight HSDK 5 GA configure checks pass, covering standalone defaults, explicit ON/OFF, package defaults, cached preferences, and package-to-test reconfiguration. No DSP contracts changed. |
 | Performance delivery scope | Codex | `deustice/optimization-skills` | **verified locally:** distinguish integrated operator changes from external comparison/benchmark candidates; keep experiment tools and evidence local by default while committing requested implementation, integration and focused regression coverage. Both performance skills and reporting references align; skill validation and pinned all-file lint pass. |
 | PR 67 merge conflict resolution | Codex | `deustice/optimization-skills` | **verified locally:** merged `main` at `38ba5ef5`, retained both status histories, and combined the CPHD reader explicit-stop lifecycle with the shared fixture observation deadline. All 13 reader/file and six fixture-completion GPU tests, 127 host optimization-tool tests, and pinned all-file lint pass. |
 | PR 67 CI 207 fixture completion policy | Codex | `deustice/optimization-skills` | **verified:** replaced the Beamscan-only workaround across all 85 native asynchronous fixture runs in 38 existing suites with a configurable shared observation deadline, checked capture completion and native error preservation. Optional outputs and manual frame sequencing remain explicit. All 1,142 registered non-performance checks pass on HSDK 5 GA, including six policy regressions, application smoke tests and tooling/native verification; container Git ownership was handled with process-local configuration. The controlled 12-second BLAS-delay reproducer passes; the actual CI startup delay remains unconfirmed. |
