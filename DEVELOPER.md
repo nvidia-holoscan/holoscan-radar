@@ -318,8 +318,9 @@ What it does, and where to change it:
   checks configure fresh package trees, build real artifacts, verify Debian
   operator coverage, compile/run a C++ consumer against the extracted Debian
   package, and install/import the wheel in a separate Python environment.
-  Configure checks cover subsets, invalid names, and explicit/cached test
-  preferences. No packages are published or installed system-wide.
+  Configure checks cover the curated package selection, subsets, and
+  explicit/cached test preferences; missing expected libraries fail artifact
+  verification. No packages are published or installed system-wide.
   Artifacts remain under `build-test/tests/packaging/<mode>/run-*/artifacts/`
   until the next dashboard run. Build parallelism defaults to two; set
   `CMAKE_BUILD_PARALLEL_LEVEL` to adjust it. To run just these checks, pass

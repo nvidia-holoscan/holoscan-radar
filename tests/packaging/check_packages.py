@@ -19,18 +19,6 @@ def run(*command, cwd, env=None):
     subprocess.run(list(map(str, command)), cwd=cwd, env=env, check=True)
 
 
-def registered_operators(source):
-    """Use operator registrations, independently of the package's selection list."""
-    names = set()
-    for path in (source / "operators").rglob("CMakeLists.txt"):
-        names.update(
-            re.findall(r"^holoscan_radar_add_operator\(\s*(\w+)", path.read_text(), re.MULTILINE)
-        )
-    if not names:
-        raise RuntimeError("No Radar operator registrations found")
-    return names
-
-
 def cache_values(build):
     return dict(
         re.findall(
@@ -41,7 +29,7 @@ def cache_values(build):
     )
 
 
-def configure(args, name, *options, error=None):
+def configure(args, name, *options):
     build = args.work / name
     command = [
         "cmake",
@@ -68,10 +56,7 @@ def configure(args, name, *options, error=None):
     print(f"Configuring {name}", flush=True)
     result = subprocess.run(command, cwd=args.work, text=True, capture_output=True, check=False)
     output = result.stdout + result.stderr
-    if error:
-        if result.returncode == 0 or f"Unknown Radar package operator: {error}" not in output:
-            raise RuntimeError(f"Expected rejection of {error}:\n{output}")
-    elif result.returncode:
+    if result.returncode:
         raise RuntimeError(output)
     return build
 
@@ -79,7 +64,8 @@ def configure(args, name, *options, error=None):
 def check_configuration(args):
     full = configure(args, "full")
     values = cache_values(full)
-    expected = registered_operators(args.source)
+    # CMake evaluates the curated package list; registrations do not set policy.
+    expected = set(filter(None, values["HOLOSCAN_RADAR_PKG_OPERATORS"].split(";")))
     enabled = {
         name.removeprefix("OP_")
         for name, value in values.items()
@@ -101,8 +87,6 @@ def check_configuration(args):
     }
     if selected != {"clutter_filter_op", "cphd_reader_op"}:
         raise RuntimeError(f"Unexpected subset selection: {selected}")
-    for name in ("cphd_reder_op", "radar_common"):
-        configure(args, f"invalid-{name}", f"-DHOLOSCAN_RADAR_PKG_OPERATORS={name}", error=name)
     configure(
         args,
         "package-disabled",
@@ -118,6 +102,13 @@ def check_configuration(args):
     if cache_values(explicit)["HOLOSCAN_RADAR_BUILD_TESTING"] != "ON":
         raise RuntimeError("Package reconfiguration lost the cached test setting")
     return full, expected
+
+
+def check_operator_libraries(prefix, expected):
+    """Check curated contents in the artifact, including missing/typo entries."""
+    for name in expected:
+        if not any(path.is_file() for path in prefix.rglob(f"lib{name}.*")):
+            raise RuntimeError(f"Debian artifact missing operator library: {name}")
 
 
 def check_debian(args):
@@ -139,9 +130,7 @@ def check_debian(args):
     unpacked = args.work / "unpacked"
     run("dpkg-deb", "--extract", packages[0], unpacked, cwd=args.work)
     prefix = unpacked / "opt/nvidia/holoscan"
-    for name in expected:
-        if not any(prefix.rglob(f"lib{name}.*")):
-            raise RuntimeError(f"Debian artifact missing operator library: {name}")
+    check_operator_libraries(prefix, expected)
     if (prefix / "bin").exists() and any((prefix / "bin").iterdir()):
         raise RuntimeError("Operator-only Debian artifact contains executables")
     if (prefix / "holoscan_radar").exists():

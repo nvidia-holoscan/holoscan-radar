@@ -32,17 +32,21 @@ class PackagingMetadata(unittest.TestCase):
                 },
             )
 
-    def test_inventory_uses_registrations_instead_of_package_defaults(self):
+    def test_artifact_check_allows_contents_outside_curated_selection(self):
         with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory)
-            operators = source / "operators/example"
-            operators.mkdir(parents=True)
-            (operators / "CMakeLists.txt").write_text(
-                "# holoscan_radar_add_operator(commented_op)\n"
-                "holoscan_radar_add_operator(first_op)\n"
-                "holoscan_radar_add_operator(second_op\n DIRECTORY elsewhere)\n"
-            )
-            self.assertEqual(packaging.registered_operators(source), {"first_op", "second_op"})
+            prefix = Path(directory)
+            (prefix / "lib").mkdir()
+            (prefix / "lib/libselected_op.a").touch()
+            (prefix / "lib/libother_op.a").touch()
+            packaging.check_operator_libraries(prefix, {"selected_op"})
+
+    def test_artifact_check_rejects_missing_curated_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory)
+            (prefix / "lib").mkdir()
+            (prefix / "lib/libselected_op.a").touch()
+            with self.assertRaisesRegex(RuntimeError, "missing operator library: typo_op"):
+                packaging.check_operator_libraries(prefix, {"selected_op", "typo_op"})
 
 
 if __name__ == "__main__":

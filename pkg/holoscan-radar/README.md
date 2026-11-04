@@ -15,8 +15,9 @@ directory, configure with
 `-DBUILD_ALL=OFF -DPKG_holoscan_radar=ON` and set
 `-DHOLOSCAN_RADAR_PKG_OPERATORS='clutter_filter_op;cphd_reader_op'` to the desired
 operator names. The default list in [`pkg/CMakeLists.txt`](../CMakeLists.txt)
-includes all 32 public operators. When the Radar package is enabled, unknown
-operator names cause a configuration error; intentional subsets are allowed.
+includes all 32 public operators. This curated list defines the expected package
+contents; intentional subsets are allowed. CI verifies these selected libraries
+in the Debian artifact.
 
 The package list enables operators; it does not disable operators enabled by
 other build options or clear cached `OP_*` settings. Reducing the list in an
@@ -34,8 +35,9 @@ Normal standalone builds keep tests enabled by default.
 The GPU-backed `./holoscan-radar test` driver builds and checks Debian and wheel
 artifacts. Run only the packaging tests with
 `./holoscan-radar test --ctest-options='-DINCLUDE_LABELS=packaging'`. The Debian
-check verifies all registered operators are present and builds a separate C++
-consumer using the extracted package. The wheel check installs into a separate
+check verifies all operators selected by the curated package list are present
+and builds a separate C++ consumer using the extracted package. The wheel check
+installs into a separate
 Python environment and verifies imports, the provider entry point, and Graph
 authoring in both precisions. See [DEVELOPER.md](../../DEVELOPER.md) for options
 and artifact locations. These checks do not publish artifacts.
