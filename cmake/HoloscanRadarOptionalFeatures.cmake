@@ -78,7 +78,7 @@ else()
     message(STATUS "Python bindings disabled (HOLOSCAN_RADAR_BUILD_PYTHON=OFF)")
 endif()
 
-# Public operator target names, shared with package configuration.
+# FMCW operators registered by the Python provider.
 set(HOLOSCAN_RADAR_OPERATORS
     clutter_filter_op
     snapshot_gather_op

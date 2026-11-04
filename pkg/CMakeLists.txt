@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# add_holohub_package() handles the full cascade for both standalone
+# add_holohub_package() handles the operator cascade for both standalone
 # packaging (`holoscan package holoscan-radar --pkg-generator DEB`, which
 # sets -DPKG_holoscan_radar=ON via the Holoscan CLI) and in-tree
 # HoloHub-monorepo packaging once this module is fetched as an external
@@ -13,27 +13,46 @@
 #   2. add_subdirectory(holoscan-radar) — enters
 #      pkg/holoscan-radar/ where holohub_configure_deb() emits
 #      CPackConfig-holoscan-radar.cmake.
-#   3. set("OP_<x>" ON CACHE BOOL ... FORCE) and the equivalent for
-#      APPLICATIONS — cascades to the operator and application subprojects
-#      so the .deb gets actual content. pkg/ is add_subdirectory()'d
-#      *before* operators/ and applications/, so those see the forced ON
-#      value when their own helpers run option().
+#   3. set("OP_<x>" ON CACHE BOOL ... FORCE) cascades to the operator
+#      subprojects so the .deb gets its libraries. pkg/ is entered before
+#      operators/, so they see the forced ON value at option().
 #
-# These lists must name EVERY operator and application the package should
-# contain. `holoscan package` configures with -DBUILD_ALL=OFF, so anything
-# absent here is never enabled, never built, and never installed — it simply
-# does not appear in the .deb. Nothing warns about the omission.
-#
-# Package the complete public operator and application surface.
-set(_HOLOSCAN_RADAR_PKG_APPLICATIONS
-    siso
-    simo
-    dense_beamforming
-    mimo_tdm
-    adaptive_aoa
-    multi_waveform
-    mimo_ddm)
+# The package contains public operators, not the example applications.
+# Keep this selection independent of the Python provider's FMCW operator list.
+# Override HOLOSCAN_RADAR_PKG_OPERATORS at configure time to select a subset.
+set(HOLOSCAN_RADAR_PKG_OPERATORS
+    clutter_filter_op
+    snapshot_gather_op
+    phase_shift_beamformer_op
+    beamscan_estimator_op
+    rank_one_residual_screen_op
+    subarray_selection_op
+    cluster_dbscan_op
+    detection_reduction_op
+    mvdr_estimator_op
+    music_estimator_op
+    feature_assembly_op
+    multi_source_expansion_op
+    cfar_detector_op
+    root_music_estimator_op
+    esprit_estimator_op
+    mimo_deinterleave_op
+    tdm_dense_compensation_op
+    ddm_dense_demultiplex_op
+    doppler_notch_op
+    ddm_power_fold_op
+    ddm_sparse_demultiplex_op
+    tdm_sparse_compensation_op
+    virtual_array_assembly_op
+    fmcw_doppler_processor_op
+    fmcw_range_processor_op
+    fmcw_range_doppler_processor_op
+    phase_correction_op
+    sar_range_compression_op
+    aperture_manager_op
+    backprojection_op
+    tensor_dump_op
+    cphd_reader_op
+    CACHE STRING "Operators included in the holoscan-radar Debian package")
 
-add_holohub_package(holoscan-radar
-                    OPERATORS    ${HOLOSCAN_RADAR_OPERATORS}
-                    APPLICATIONS ${_HOLOSCAN_RADAR_PKG_APPLICATIONS})
+add_holohub_package(holoscan-radar OPERATORS ${HOLOSCAN_RADAR_PKG_OPERATORS})
