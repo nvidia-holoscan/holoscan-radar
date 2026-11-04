@@ -10,11 +10,18 @@ From the repository root **on the host**; the CLI builds the package in a contai
 ./holoscan-radar package holoscan-radar --pkg-generator DEB
 ```
 
-For a custom operator subset in a direct CMake package build, configure with
+For a custom operator subset in a direct CMake package build, use a fresh build
+directory, configure with
 `-DBUILD_ALL=OFF -DPKG_holoscan_radar=ON` and set
 `-DHOLOSCAN_RADAR_PKG_OPERATORS='clutter_filter_op;cphd_reader_op'` to the desired
 operator names. The default list in [`pkg/CMakeLists.txt`](../CMakeLists.txt)
 includes all 32 public operators.
+
+The package list enables operators; it does not disable operators enabled by
+other build options or clear cached `OP_*` settings. Reducing the list in an
+existing build directory can therefore leave previously enabled operators in
+the package. For an exact subset, keep `BUILD_ALL=OFF` and avoid enabling
+applications, the Python provider, or extra operators that expand the selection.
 
 Package-only configurations default tests to off. Explicit or cached
 `HOLOSCAN_RADAR_BUILD_TESTING` settings take precedence; pass
