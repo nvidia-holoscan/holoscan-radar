@@ -43,6 +43,19 @@ extracted package. The wheel check installs into a separate Python environment a
 authoring in both precisions. See [DEVELOPER.md](../../DEVELOPER.md) for options
 and artifact locations. These checks do not publish artifacts.
 
+## Reuse the wheel smoke check
+
+Inside the SDK container, use the Python environment where the wheel is installed:
+
+```bash
+python tests/packaging/wheel_smoke.py --sdk-site /usr/lib/python3.12/site-packages
+```
+
+Omit `--sdk-site` when the SDK is already importable. The check requires Radar's
+Python facade and native extension to come from the active Python environment;
+`--expected-prefix` can explicitly select a different expected install prefix.
+CI calls this same file with Python's `-I` isolation flag after installing the wheel.
+
 ## metadata.json
 
 `metadata.json` registers this package with the Holoscan CLI. Two fields matter:

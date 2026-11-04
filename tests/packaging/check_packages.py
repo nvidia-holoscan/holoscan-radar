@@ -228,29 +228,8 @@ def check_wheel(args):
     run(
         python,
         "-I",
-        "-c",
-        """
-import importlib.metadata
-import pathlib
-import sys
-sys.path.append(sys.argv[1])
-import holoscan as hs
-import holoscan_radar as radar
-root = pathlib.Path(sys.prefix)
-assert pathlib.Path(radar.__file__).is_relative_to(root), radar.__file__
-assert pathlib.Path(radar._radar.__file__).is_relative_to(root), radar._radar.__file__
-entry = importlib.metadata.distribution('holoscan-radar').entry_points
-assert any(e.group == 'holoscan.modules' and e.name == 'radar' for e in entry)
-assert radar._REGISTRY_NAMES
-assert all(callable(getattr(radar, name)) for name in radar._REGISTRY_NAMES)
-graph = hs.Graph('installed_radar')
-extents = dict(max_chirps=4, max_samples_per_chirp=16, max_range_bins=16)
-radar.FMCWRangeProcessorOpF32(graph, 'single', extents=extents)
-radar.FMCWRangeProcessorOpF64(graph, 'dual', extents=extents)
-from holoscan_radar.applications.siso import build_graph
-assert callable(build_graph)
-print('Installed wheel import, provider discovery, and Graph authoring passed')
-""",
+        Path(__file__).resolve().with_name("wheel_smoke.py"),
+        "--sdk-site",
         sdk_site,
         cwd=args.work,
     )
