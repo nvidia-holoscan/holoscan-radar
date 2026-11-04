@@ -89,13 +89,6 @@ def check_configuration(args, full):
     }
     if selected != {"clutter_filter_op", "cphd_reader_op"}:
         raise RuntimeError(f"Unexpected subset selection: {selected}")
-    configure(
-        args,
-        "package-disabled",
-        "-DPKG_holoscan_radar=OFF",
-        "-DHOLOSCAN_RADAR_PKG_OPERATORS=not_a_radar_operator",
-        "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
-    )
     explicit = configure(args, "explicit-tests", "-DHOLOSCAN_RADAR_BUILD_TESTING=ON")
     if not (explicit / "tests/CTestTestfile.cmake").exists():
         raise RuntimeError("Explicit tests ON was overridden by packaging")
