@@ -313,6 +313,19 @@ What it does, and where to change it:
   for a C++-only run. Narrow to one tier with
   `--ctest-options='-DINCLUDE_LABELS=statistical'`, or widen the exclusion with
   `-DEXCLUDE_LABELS='performance|statistical'`.
+- Enables `HOLOSCAN_RADAR_TEST_PACKAGING` and runs `Packaging_debian` plus
+  `Packaging_wheel` (the latter when Python is enabled). These serial integration
+  checks configure fresh package trees, build real artifacts, verify Debian
+  operator coverage, compile/run a C++ consumer against the extracted Debian
+  package, and install/import the wheel in a separate Python environment.
+  Configure checks cover subsets, invalid names, and explicit/cached test
+  preferences. No packages are published or installed system-wide.
+  Artifacts remain under `build-test/tests/packaging/<mode>/run-*/artifacts/`
+  until the next dashboard run. Build parallelism defaults to two; set
+  `CMAKE_BUILD_PARALLEL_LEVEL` to adjust it. To run just these checks, pass
+  `--ctest-options='-DINCLUDE_LABELS=packaging'`. To omit artifact builds, pass
+  `--cmake-options=-DHOLOSCAN_RADAR_TEST_PACKAGING=OFF`. Ordinary direct CMake
+  builds default this additional suite to off.
 - The selection is **exclude-based on purpose**: an include list silently drops any label
   nobody remembered to add, which is how the `integration` tier went unrun in CI for the
   life of the suite. A new tier now runs the day it is added.

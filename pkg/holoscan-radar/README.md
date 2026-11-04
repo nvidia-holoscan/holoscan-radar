@@ -29,6 +29,17 @@ Package-only configurations default tests to off. Explicit or cached
 `-DHOLOSCAN_RADAR_BUILD_TESTING=OFF` to disable tests in a reused build tree.
 Normal standalone builds keep tests enabled by default.
 
+## CI coverage
+
+The GPU-backed `./holoscan-radar test` driver builds and checks Debian and wheel
+artifacts. Run only the packaging tests with
+`./holoscan-radar test --ctest-options='-DINCLUDE_LABELS=packaging'`. The Debian
+check verifies all registered operators are present and builds a separate C++
+consumer using the extracted package. The wheel check installs into a separate
+Python environment and verifies imports, the provider entry point, and Graph
+authoring in both precisions. See [DEVELOPER.md](../../DEVELOPER.md) for options
+and artifact locations. These checks do not publish artifacts.
+
 ## metadata.json
 
 `metadata.json` registers this package with the Holoscan CLI. Two fields matter:

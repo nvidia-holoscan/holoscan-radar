@@ -103,6 +103,9 @@ if(NOT DEFINED HOLOSCAN_RADAR_BUILD_TESTING)
     endif()
 endif()
 
+# Artifact checks build fresh packages and are enabled by the CI test driver.
+option(HOLOSCAN_RADAR_TEST_PACKAGING "Test Debian and Python wheel artifacts" OFF)
+
 # Performance characterization suite (performance/). Off by default; it builds
 # standalone benchmark executables (not part of the operator libraries or the
 # CTest unit/statistical suites) that measure setup, steady-state compute, and
