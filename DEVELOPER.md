@@ -318,11 +318,18 @@ What it does, and where to change it:
   checks build fresh artifacts through `holoscan package holoscan-radar`
   (`DEB,TGZ` and `WHEEL`, using `--local` inside the SDK container), verify selected
   operator libraries in both native formats, compile/run a C++ consumer against
-  the extracted Debian package, and install/import the wheel in a separate
+  both extracted native packages, and install/import the wheel in a separate
   Python environment.
   Configure checks cover the curated package selection, subsets, and
   explicit/cached test preferences; missing expected libraries fail artifact
-  verification. No packages are published or installed system-wide.
+  verification. `HOLOSCAN_RADAR_PKG_OPERATORS` entries are operator subdirectory
+  selection keys, not CMake target names. By the existing library naming convention,
+  each selected key produces an installed `lib<key>.*`; the artifact check relies
+  on this convention and allows additional libraries. If an operator changes its
+  output name or produces multiple libraries, update the artifact check to verify
+  the intended outputs. File presence alone does not prove an operator is usable;
+  the separate C++ consumer checks representative headers, exports, and linking.
+  No packages are published or installed system-wide.
   Artifacts remain under `build-test/tests/packaging/<mode>/run-*/artifacts/`
   until the next dashboard run. Build parallelism defaults to two; set
   `CMAKE_BUILD_PARALLEL_LEVEL` to adjust it. To run just these checks, pass

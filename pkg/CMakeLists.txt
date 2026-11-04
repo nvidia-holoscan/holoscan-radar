@@ -19,6 +19,11 @@
 #
 # The package contains public operators, not the example applications.
 # Keep this selection independent of the Python provider's FMCW operator list.
+# Entries are operator subdirectory selection keys (OP_<key>), not CMake targets.
+# Existing operators use the same key for their library target and output basename;
+# packaging CI expects an installed lib<key>.* for each selected entry. If an
+# operator changes that naming or emits multiple libraries, update the artifact
+# check in tests/packaging/check_packages.py to reflect its intended outputs.
 # Override HOLOSCAN_RADAR_PKG_OPERATORS at configure time to select a subset.
 set(HOLOSCAN_RADAR_PKG_OPERATORS
     clutter_filter_op

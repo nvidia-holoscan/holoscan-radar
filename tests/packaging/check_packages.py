@@ -100,7 +100,11 @@ def check_configuration(args, full):
 
 
 def check_operator_libraries(prefix, expected):
-    """Check curated contents in the artifact, including missing/typo entries."""
+    """Require lib<selection-key>.* per the convention documented in pkg/CMakeLists.txt.
+
+    Selection keys name operator subdirectories, not targets. This checks library
+    presence only; the external consumer separately checks representative usability.
+    """
     for name in expected:
         if not any(path.is_file() for path in prefix.rglob(f"lib{name}.*")):
             raise RuntimeError(f"Package artifact missing operator library: {name}")
