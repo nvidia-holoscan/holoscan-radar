@@ -23,9 +23,7 @@ def check_installed_wheel(expected_prefix):
     entries = importlib.metadata.distribution("holoscan-radar").entry_points
     if not any(entry.group == "holoscan.modules" and entry.name == "radar" for entry in entries):
         raise RuntimeError("Installed wheel is missing the Radar provider entry point")
-    if not radar._REGISTRY_NAMES or not all(
-        callable(getattr(radar, name)) for name in radar._REGISTRY_NAMES
-    ):
+    if not radar.__all__ or not all(callable(getattr(radar, name)) for name in radar.__all__):
         raise RuntimeError("Installed wheel is missing public operator factories")
     graph = hs.Graph("installed_radar")
     extents = dict(max_chirps=4, max_samples_per_chirp=16, max_range_bins=16)
