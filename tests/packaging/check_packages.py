@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import tomllib
 import venv
 from pathlib import Path
 
@@ -174,15 +175,54 @@ def check_debian(args):
     archive_root = args.work / "archive"
     with tarfile.open(archives[0]) as archive:
         archive.extractall(archive_root, filter="data")
-    exports = list(archive_root.rglob("holoscan_radar_common_targets.cmake"))
+    exports = list(archive_root.rglob("holoscan_radar_targets.cmake"))
     if len(exports) != 1:
         raise RuntimeError(f"Expected one Radar export tree in TGZ, found {exports}")
     check_operator_libraries(exports[0].parents[3], expected)
-    check_native_consumer(args, prefix, "debian")
-    check_native_consumer(args, exports[0].parents[3], "tgz")
+    check_cmake_package(prefix, expected)
+    check_native_consumer(args, prefix, "debian", expected=expected)
+    check_cmake_package(exports[0].parents[3], expected)
+    check_native_consumer(args, exports[0].parents[3], "tgz", expected=expected)
+    # Ordinary installs must support discovery with the Debian option disabled.
+    subset = configure(
+        args,
+        "install-subset",
+        "-DPKG_holoscan_radar=OFF",
+        "-DOP_fmcw_range_processor_op=ON",
+        "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+    )
+    run("cmake", "--build", subset, "--parallel", args.parallel, cwd=args.work)
+    installed = args.work / "installed-subset"
+    run("cmake", "--install", subset, "--prefix", installed, cwd=args.work)
+    relocated = args.work / "relocated-subset"
+    installed.rename(relocated)
+    check_cmake_package(relocated, {"fmcw_range_processor_op"})
+    check_native_consumer(
+        args,
+        relocated,
+        "subset",
+        expected={"fmcw_range_processor_op"},
+        absent={"cphd_reader_op", "fmcw_doppler_processor_op"},
+    )
 
 
-def check_native_consumer(args, prefix, name):
+def check_cmake_package(prefix, expected):
+    configs = list(prefix.rglob("holoscan-radar-config.cmake"))
+    if len(configs) != 1:
+        raise RuntimeError(f"Expected one Radar config, found {configs}")
+    directory = configs[0].parent
+    if not (directory / "holoscan-radar-config-version.cmake").is_file():
+        raise RuntimeError("Missing Radar version config")
+    exports = list(prefix.rglob("holoscan_*_targets.cmake"))
+    if exports != [directory / "holoscan_radar_targets.cmake"]:
+        raise RuntimeError(f"Unexpected Radar exports: {exports}")
+    content = exports[0].read_text()
+    for target in expected:
+        if f"holoscan::{target}" not in content:
+            raise RuntimeError(f"Missing exported target: {target}")
+
+
+def check_native_consumer(args, prefix, name, expected=(), absent=()):
     # Build against the extracted artifact, with no source/build include paths.
     consumer = args.work / f"consumer-{name}"
     # Keep a competing MatX ahead of an already-listed SDK to catch mixed installs.
@@ -190,20 +230,40 @@ def check_native_consumer(args, prefix, name):
     matx_config = competing / "lib/cmake/matx/matx-config.cmake"
     matx_config.parent.mkdir(parents=True)
     matx_config.write_text('message(FATAL_ERROR "MatX selected from a different SDK")\n')
-    run(
+    command = [
         "cmake",
         "-S",
         args.source / "tests/packaging/consumer",
         "-B",
         consumer,
-        f"-DRADAR_PREFIX={prefix}",
-        f"-DCMAKE_PREFIX_PATH={competing};{args.sdk_dir.parents[2]}",
+        f"-DCMAKE_PREFIX_PATH={prefix};{competing};{args.sdk_dir.parents[2]}",
         f"-Dholoscan_DIR={args.sdk_dir}",
+        f"-DRADAR_EXPECT_TARGETS={';'.join(sorted(expected))}",
+        f"-DRADAR_ABSENT_TARGETS={';'.join(sorted(absent))}",
         f"-DCMAKE_CUDA_ARCHITECTURES={args.architectures}",
-        cwd=args.work,
-    )
+    ]
+    run(*command, cwd=args.work)
     run("cmake", "--build", consumer, "--parallel", args.parallel, cwd=args.work)
     run(consumer / "radar_package_consumer", cwd=args.work)
+
+    version = tomllib.loads((args.source / "pyproject.toml").read_text())["project"]["version"]
+    # Probe discovery failures in separate build trees, never stale caches.
+    for label, options, success in (
+        ("exact", [f"-DRADAR_VERSION={version};EXACT"], True),
+        ("future", ["-DRADAR_VERSION=999.0"], False),
+        ("component", ["-DRADAR_COMPONENT_ARGS=COMPONENTS;unsupported"], False),
+    ):
+        probe = command.copy()
+        probe[probe.index("-B") + 1] = args.work / f"consumer-{name}-{label}"
+        if name == "subset":
+            probe.append("-DCMAKE_DISABLE_FIND_PACKAGE_tinyxml2=TRUE")
+        result = subprocess.run(
+            [*map(str, probe), *options], cwd=args.work, text=True, capture_output=True, check=False
+        )
+        if (result.returncode == 0) != success:
+            raise RuntimeError(
+                f"Unexpected {label} discovery result: {result.stdout}{result.stderr}"
+            )
 
 
 def check_wheel(args):

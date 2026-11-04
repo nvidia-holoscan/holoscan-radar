@@ -20,12 +20,7 @@ set_property(TARGET subarray_selection_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS subarray_selection_op
-    EXPORT holoscan_subarray_selection_op_targets
-)
-
-install(EXPORT holoscan_subarray_selection_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 include(GNUInstallDirs)

@@ -14,10 +14,7 @@ target_link_libraries(ddm_power_fold_op PUBLIC
 set_property(TARGET ddm_power_fold_op PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS ddm_power_fold_op
-    EXPORT holoscan_ddm_power_fold_op_targets)
-install(EXPORT holoscan_ddm_power_fold_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar)
+    EXPORT holoscan_radar_targets)
 include(GNUInstallDirs)
 install(FILES ddm_power_fold_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw)

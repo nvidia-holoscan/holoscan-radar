@@ -19,12 +19,7 @@ set_property(TARGET aperture_manager_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS aperture_manager_op
-    EXPORT holoscan_aperture_manager_op_targets
-)
-
-install(EXPORT holoscan_aperture_manager_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 include(GNUInstallDirs)

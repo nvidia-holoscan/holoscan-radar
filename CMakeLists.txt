@@ -180,3 +180,28 @@ endif()
 # which defines the PKG_holoscan_radar option, FORCEs the OP_/APP_ deps to ON
 # when the package is enabled, and enters pkg/holoscan-radar/CMakeLists.txt for
 # the holohub_configure_deb() call.
+
+# Installed discovery is available independently of Debian packaging.
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+set(_radar_config_dir "${CMAKE_INSTALL_LIBDIR}/cmake/holoscan-radar")
+set(HOLOSCAN_RADAR_CONFIG_HAS_CPHD OFF)
+if(TARGET cphd_reader_op)
+    set(HOLOSCAN_RADAR_CONFIG_HAS_CPHD ON)
+endif()
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/holoscan-radar-config.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/holoscan-radar-config.cmake"
+    INSTALL_DESTINATION "${_radar_config_dir}"
+    NO_SET_AND_CHECK_MACRO)
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/holoscan-radar-config-version.cmake"
+    VERSION "${PROJECT_VERSION}"
+    COMPATIBILITY AnyNewerVersion)
+install(EXPORT holoscan_radar_targets
+    NAMESPACE holoscan::
+    DESTINATION "${_radar_config_dir}")
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/holoscan-radar-config.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/holoscan-radar-config-version.cmake"
+    DESTINATION "${_radar_config_dir}")

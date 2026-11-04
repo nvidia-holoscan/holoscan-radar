@@ -128,10 +128,7 @@ target_link_libraries(radar_schemas INTERFACE
     holoscan::radar_common)
 
 install(TARGETS radar_schemas
-    EXPORT holoscan_radar_schemas_targets)
-install(EXPORT holoscan_radar_schemas_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar)
+    EXPORT holoscan_radar_targets)
 install(DIRECTORY "${RADAR_SCHEMAS_GENERATED_DIR}/"
     DESTINATION
         "${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/radar_schemas"

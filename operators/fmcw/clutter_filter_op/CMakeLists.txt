@@ -20,12 +20,7 @@ set_property(TARGET clutter_filter_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS clutter_filter_op
-    EXPORT holoscan_clutter_filter_op_targets
-)
-
-install(EXPORT holoscan_clutter_filter_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 include(GNUInstallDirs)
