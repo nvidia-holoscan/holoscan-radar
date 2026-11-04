@@ -315,9 +315,11 @@ What it does, and where to change it:
   `-DEXCLUDE_LABELS='performance|statistical'`.
 - Enables `HOLOSCAN_RADAR_TEST_PACKAGING` and runs `Packaging_debian` plus
   `Packaging_wheel` (the latter when Python is enabled). These serial integration
-  checks configure fresh package trees, build real artifacts, verify Debian
-  operator coverage, compile/run a C++ consumer against the extracted Debian
-  package, and install/import the wheel in a separate Python environment.
+  checks build fresh artifacts through `holoscan package holoscan-radar`
+  (`DEB,TGZ` and `WHEEL`, using `--local` inside the SDK container), verify selected
+  operator libraries in both native formats, compile/run a C++ consumer against
+  the extracted Debian package, and install/import the wheel in a separate
+  Python environment.
   Configure checks cover the curated package selection, subsets, and
   explicit/cached test preferences; missing expected libraries fail artifact
   verification. No packages are published or installed system-wide.

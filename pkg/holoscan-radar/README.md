@@ -32,13 +32,14 @@ Normal standalone builds keep tests enabled by default.
 
 ## CI coverage
 
-The GPU-backed `./holoscan-radar test` driver builds and checks Debian and wheel
-artifacts. Run only the packaging tests with
+The GPU-backed `./holoscan-radar test` driver builds and checks DEB, TGZ, and
+wheel artifacts through `holoscan package holoscan-radar --pkg-generator=...`.
+The command runs with `--local` inside the existing SDK container. Run only the
+packaging tests with
 `./holoscan-radar test --ctest-options='-DINCLUDE_LABELS=packaging'`. The Debian
 check verifies all operators selected by the curated package list are present
-and builds a separate C++ consumer using the extracted package. The wheel check
-installs into a separate
-Python environment and verifies imports, the provider entry point, and Graph
+in both the DEB and TGZ artifacts and builds a separate C++ consumer using the
+extracted package. The wheel check installs into a separate Python environment and verifies imports, the provider entry point, and Graph
 authoring in both precisions. See [DEVELOPER.md](../../DEVELOPER.md) for options
 and artifact locations. These checks do not publish artifacts.
 

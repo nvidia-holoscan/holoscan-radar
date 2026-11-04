@@ -6,9 +6,11 @@
 import argparse
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import venv
 from pathlib import Path
@@ -30,6 +32,7 @@ def cache_values(build):
 
 
 def configure(args, name, *options):
+    """Probe CMake configuration semantics; artifacts use the public package CLI."""
     build = args.work / name
     command = [
         "cmake",
@@ -61,8 +64,7 @@ def configure(args, name, *options):
     return build
 
 
-def check_configuration(args):
-    full = configure(args, "full")
+def check_configuration(args, full):
     values = cache_values(full)
     # CMake evaluates the curated package list; registrations do not set policy.
     expected = set(filter(None, values["HOLOSCAN_RADAR_PKG_OPERATORS"].split(";")))
@@ -108,22 +110,56 @@ def check_operator_libraries(prefix, expected):
     """Check curated contents in the artifact, including missing/typo entries."""
     for name in expected:
         if not any(path.is_file() for path in prefix.rglob(f"lib{name}.*")):
-            raise RuntimeError(f"Debian artifact missing operator library: {name}")
+            raise RuntimeError(f"Package artifact missing operator library: {name}")
+
+
+def package_with_cli(args, generators):
+    artifacts = args.work / "artifacts"
+    artifacts.mkdir()
+    build_parent = args.work / "cli-build"
+    env = os.environ.copy()
+    env["HOLOSCAN_CLI_BUILD_PARENT_DIR"] = str(build_parent)
+    env["CMAKE_BUILD_PARALLEL_LEVEL"] = args.parallel
+    # The CLI delegates wheel builds to the production backend, with isolation.
+    env["SKBUILD_BUILD_DIR"] = str(build_parent / "wheel")
+    env["CMAKE_ARGS"] = shlex.join(
+        [
+            *shlex.split(env.get("CMAKE_ARGS", "")),
+            f"-Dholoscan_DIR={args.sdk_dir}",
+            f"-DCMAKE_CUDA_ARCHITECTURES={args.architectures}",
+        ]
+    )
+    if shutil.which("ccache"):
+        env["CMAKE_CXX_COMPILER_LAUNCHER"] = "ccache"
+        env["CMAKE_CUDA_COMPILER_LAUNCHER"] = "ccache"
+    run(
+        sys.executable,
+        "-m",
+        "holoscan_cli",
+        "--project-root",
+        args.source,
+        "package",
+        "holoscan-radar",
+        f"--pkg-generator={generators}",
+        "--language",
+        "python" if generators == "WHEEL" else "cpp",
+        # Already inside the SDK/GPU container; do not start nested containers.
+        "--local",
+        "--local-sdk-root",
+        args.sdk_dir.parents[2],
+        cwd=artifacts,
+        env=env,
+    )
+    if generators == "WHEEL":
+        for wheel in (build_parent / "dist").glob("*.whl"):
+            shutil.copy2(wheel, artifacts)
+    return build_parent, artifacts
 
 
 def check_debian(args):
-    build, expected = check_configuration(args)
-    run("cmake", "--build", build, "--parallel", args.parallel, cwd=args.work)
-    artifacts = args.work / "artifacts"
-    artifacts.mkdir()
-    run(
-        "cpack",
-        "--config",
-        build / "pkg/CPackConfig-holoscan-radar.cmake",
-        "-B",
-        artifacts,
-        cwd=build,
-    )
+    build_parent, artifacts = package_with_cli(args, "DEB,TGZ")
+    build = build_parent / "holoscan_radar/package"
+    _, expected = check_configuration(args, build)
     packages = list(artifacts.glob("*.deb"))
     if len(packages) != 1:
         raise RuntimeError(f"Expected one Debian artifact, found {packages}")
@@ -135,6 +171,16 @@ def check_debian(args):
         raise RuntimeError("Operator-only Debian artifact contains executables")
     if (prefix / "holoscan_radar").exists():
         raise RuntimeError("C++-only Debian artifact unexpectedly includes Python bindings")
+    archives = list(artifacts.glob("*.tar.gz"))
+    if len(archives) != 1:
+        raise RuntimeError(f"Expected one TGZ artifact, found {archives}")
+    archive_root = args.work / "archive"
+    with tarfile.open(archives[0]) as archive:
+        archive.extractall(archive_root, filter="data")
+    exports = list(archive_root.rglob("holoscan_radar_common_targets.cmake"))
+    if len(exports) != 1:
+        raise RuntimeError(f"Expected one Radar export tree in TGZ, found {exports}")
+    check_operator_libraries(exports[0].parents[3], expected)
     # Build against the extracted artifact, with no source/build include paths.
     consumer = args.work / "consumer"
     # Keep a competing MatX ahead of an already-listed SDK to catch mixed installs.
@@ -159,28 +205,7 @@ def check_debian(args):
 
 
 def check_wheel(args):
-    artifacts = args.work / "artifacts"
-    env = os.environ.copy()
-    env["CMAKE_BUILD_PARALLEL_LEVEL"] = args.parallel
-    # Backend options preserve pyproject.toml's production wheel selection.
-    command = [
-        sys.executable,
-        "-m",
-        "build",
-        "--wheel",
-        "--no-isolation",
-        "--outdir",
-        artifacts,
-        f"-Cbuild-dir={args.work / 'build'}",
-        f"-Ccmake.define.holoscan_DIR={args.sdk_dir}",
-        f"-Ccmake.define.CMAKE_CUDA_ARCHITECTURES={args.architectures}",
-    ]
-    if shutil.which("ccache"):
-        command += [
-            "-Ccmake.define.CMAKE_CXX_COMPILER_LAUNCHER=ccache",
-            "-Ccmake.define.CMAKE_CUDA_COMPILER_LAUNCHER=ccache",
-        ]
-    run(*command, args.source, cwd=args.work, env=env)
+    _, artifacts = package_with_cli(args, "WHEEL")
     wheels = list(artifacts.glob("*.whl"))
     if len(wheels) != 1:
         raise RuntimeError(f"Expected one wheel artifact, found {wheels}")
