@@ -70,12 +70,46 @@ __device__ inline DeviceDirection screen_direction(const AngleConvention& conven
   return {ce * cos(az), ce * sin(az), sin(el)};
 }
 
+// One item thread computes current double steering once per channel.
+// Invalid items leave scratch unread: the score kernel retains identical guards.
 template <typename T>
-__global__ void residual_screen_kernel(const cuda::std::complex<T>* snapshot, const T* aoa,
-                                       const unsigned char* valid, const double* positions,
-                                       int64_t num_items, int64_t channels, int64_t snapshots,
-                                       double wavelength, AngleConvention convention, T threshold,
-                                       T* scores, unsigned char* selected) {
+__global__ void precompute_residual_weights_kernel(const T* aoa, const double* positions,
+                                                   int64_t num_items, int64_t channels,
+                                                   double wavelength, AngleConvention convention,
+                                                   cuda::std::complex<double>* weights) {
+  const int64_t item =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + static_cast<int64_t>(threadIdx.x);
+  if (item >= num_items) {
+    return;
+  }
+  const double az = static_cast<double>(aoa[item * 2]);
+  const double el = static_cast<double>(aoa[item * 2 + 1]);
+  if (!isfinite(az) || !isfinite(el)) {
+    return;
+  }
+  const auto d = screen_direction(convention, az, el);
+  const double dnorm = d.x * d.x + d.y * d.y + d.z * d.z;
+  if (dnorm < 0.5) {
+    return;
+  }
+  const double wave_number = kTwoPi / wavelength;
+  for (int64_t c = 0; c < channels; ++c) {
+    const double phase = wave_number * (positions[c * 3] * d.x + positions[c * 3 + 1] * d.y +
+                                        positions[c * 3 + 2] * d.z);
+    const double cr = cos(phase);
+    const double ci = -sin(phase);
+    weights[item * channels + c] = {cr, ci};
+  }
+}
+
+template <typename T>
+__global__ void residual_screen_with_weights_kernel(const cuda::std::complex<T>* snapshot,
+                                                    const T* aoa, const unsigned char* valid,
+                                                    const cuda::std::complex<double>* weights,
+                                                    int64_t num_items, int64_t channels,
+                                                    int64_t snapshots, AngleConvention convention,
+                                                    T threshold, T* scores,
+                                                    unsigned char* selected) {
   const int64_t item =
       static_cast<int64_t>(blockIdx.x) * blockDim.x + static_cast<int64_t>(threadIdx.x);
   if (item >= num_items) {
@@ -95,7 +129,6 @@ __global__ void residual_screen_kernel(const cuda::std::complex<T>* snapshot, co
     selected[item] = 0;
     return;
   }
-  const double wave_number = kTwoPi / wavelength;
   double projected = 0.0;
   double total = 0.0;
   int64_t looks = 0;
@@ -111,10 +144,9 @@ __global__ void residual_screen_kernel(const cuda::std::complex<T>* snapshot, co
       const double xr = static_cast<double>(x.real());
       const double xi = static_cast<double>(x.imag());
       total += xr * xr + xi * xi;
-      const double phase = wave_number * (positions[c * 3] * d.x + positions[c * 3 + 1] * d.y +
-                                          positions[c * 3 + 2] * d.z);
-      const double cr = cos(phase);
-      const double ci = -sin(phase);
+      const auto weight = weights[item * channels + c];
+      const double cr = weight.real();
+      const double ci = weight.imag();
       sum_re += cr * xr - ci * xi;
       sum_im += cr * xi + ci * xr;
     }

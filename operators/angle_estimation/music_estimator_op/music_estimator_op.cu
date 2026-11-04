@@ -15,6 +15,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -458,14 +459,15 @@ expected<std::shared_ptr<MUSICSteeringArtifact>, Error> prepare_music_steering(
     int64_t num_el, cudaStream_t stream) {
   const DLDataType output_dtype = real_dtype<T>();
   const std::string cache_key =
+      (std::is_same_v<T, float> ? std::string("channel-major|") : std::string{}) +
       steering_cache_key(geometry, convention, azimuth, elevation, WindowSpec{});
   const std::shared_ptr<MUSICSteeringArtifact>& steering =
       state.steering_cache.get_or_build(cache_key, "steering manifold and scan grids", [&] {
         auto artifact = std::make_shared<MUSICSteeringArtifact>();
-        artifact->manifold =
-            build_steering_weights_device<T>(geometry, convention, azimuth, elevation, WindowSpec{},
-                                             BeamOrder::kElMajor, SteeringLayout::kBeamMajor,
-                                             /*conjugate=*/false, stream);
+        artifact->manifold = build_steering_weights_device<T>(
+            geometry, convention, azimuth, elevation, WindowSpec{}, BeamOrder::kElMajor,
+            std::is_same_v<T, float> ? SteeringLayout::kChannelMajor : SteeringLayout::kBeamMajor,
+            /*conjugate=*/false, stream);
         const auto azimuth_host = cast_vector<T>(azimuth);
         const auto elevation_host = cast_vector<T>(elevation);
         artifact->az_grid = make_device_tensor({num_az}, output_dtype);

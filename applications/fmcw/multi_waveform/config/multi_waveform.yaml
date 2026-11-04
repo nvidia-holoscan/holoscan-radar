@@ -59,14 +59,14 @@ app:
         - range: 50.0
           azimuth: 0.15
           elevation: 0.10
-          velocity: [-1.0, -0.15, -0.1]
+          velocity: [-0.95618, -0.43992, -0.1]
           amplitude: 0.02
         - range: 80.0
           azimuth: -0.10
           elevation: -0.12
-          velocity: [2.0, -0.2, 0.1]
+          velocity: [2.12666, 1.06233, 0.1]
           amplitude: 0.7
-    noise_snr_db: 18.0
+    noise_snr_db: 5.0
 
 mimo_deinterleave: {}
 range_processor:

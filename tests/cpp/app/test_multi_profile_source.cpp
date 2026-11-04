@@ -3,17 +3,18 @@
 
 #include <gtest/gtest.h>
 
+#include <yaml-cpp/yaml.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
-#include <fstream>
-#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "config.hpp"  // NOLINT(build/include_subdir)
 #include "radar_app/app/multi_profile_source.hpp"
+#include "app/config_fixture.hpp"
 
 namespace {
 
@@ -24,33 +25,21 @@ holoscan::TimePoint time_at(int64_t timestamp) {
   return holoscan::TimePoint{timestamp, holoscan::ClockId{7}};
 }
 
-class MutatedConfig {
- public:
-  MutatedConfig(const std::string& old_text, const std::string& new_text) {
-    const auto source = std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) /
-                        "applications/fmcw/multi_waveform/config/"
-                        "multi_waveform_smoke.yaml";
-    std::ifstream input(source);
-    std::string contents{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-    const std::size_t position = contents.find(old_text);
-    if (position == std::string::npos ||
-        contents.find(old_text, position + old_text.size()) != std::string::npos) {
-      throw std::runtime_error("mutation anchor must occur exactly once");
-    }
-    contents.replace(position, old_text.size(), new_text);
-    path_ = std::filesystem::temp_directory_path() /
-            ("multi_profile_config_" + std::to_string(next_id_++) + ".yaml");
-    std::ofstream output(path_);
-    output << contents;
-  }
+using holoscan::radar::testing::PresetOverride;
 
-  ~MutatedConfig() { std::filesystem::remove(path_); }
-  const std::filesystem::path& path() const { return path_; }
+std::filesystem::path smoke_config() {
+  return std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) /
+         "applications/fmcw/multi_waveform/config/multi_waveform_smoke.yaml";
+}
 
- private:
-  inline static int64_t next_id_{0};
-  std::filesystem::path path_;
-};
+std::string profile_patch(const char* field, const char* value) {
+  auto resolved = holoscan::radar::testing::resolved_yaml(smoke_config());
+  auto profiles = resolved["app"]["profiles"];
+  profiles[1][field] = YAML::Load(value);
+  YAML::Node patch;
+  patch["app"]["profiles"] = profiles;
+  return YAML::Dump(patch);
+}
 
 TEST(TransmitFrameCoordinator, PreservesTransmitStampAcrossDifferentSourceActivations) {
   app::TransmitFrameCoordinator coordinator(2U);
@@ -148,7 +137,7 @@ TEST(MultiProfileConfig, DecodesProfilesAndMaximumExtents) {
 }
 
 TEST(MultiProfileConfig, DefaultsVisualizationToFirstScheduledProfile) {
-  const MutatedConfig authored("        profile: near\n", "");
+  const PresetOverride authored(smoke_config(), "app:\n    visualization: {profile: ''}\n");
   const workflow::Config config = workflow::load_config(authored.path());
   EXPECT_EQ(config.visualization.profile, "near");
   EXPECT_EQ(config.visualization_profile_index, 0U);
@@ -156,7 +145,7 @@ TEST(MultiProfileConfig, DefaultsVisualizationToFirstScheduledProfile) {
 }
 
 TEST(MultiProfileConfig, SelectsNamedVisualizationProfile) {
-  const MutatedConfig authored("profile: near", "profile: far");
+  const PresetOverride authored(smoke_config(), "app:\n    visualization: {profile: far}\n");
   const workflow::Config config = workflow::load_config(authored.path());
   EXPECT_EQ(config.visualization.profile, "far");
   EXPECT_EQ(config.visualization_profile_index, 1U);
@@ -164,7 +153,7 @@ TEST(MultiProfileConfig, SelectsNamedVisualizationProfile) {
 }
 
 TEST(MultiProfileConfig, RejectsUnknownVisualizationProfileWhenDisabled) {
-  const MutatedConfig authored("profile: near", "profile: missing");
+  const PresetOverride authored(smoke_config(), "app:\n    visualization: {profile: missing}\n");
   EXPECT_THROW(workflow::load_config(authored.path()), std::runtime_error);
 }
 
@@ -174,22 +163,22 @@ TEST(MultiProfileConfig, ComputesMaximumCyclicVisualizationGap) {
 }
 
 TEST(MultiProfileConfig, RejectsDuplicateNames) {
-  const MutatedConfig config("name: far, carrier_frequency", "name: near, carrier_frequency");
+  const PresetOverride config(smoke_config(), profile_patch("name", "near"));
   EXPECT_THROW(workflow::load_config(config.path()), std::runtime_error);
 }
 
 TEST(MultiProfileConfig, RejectsUnknownSequenceProfile) {
-  const MutatedConfig config("profile_sequence: [near, far]", "profile_sequence: [near, missing]");
+  const PresetOverride config(smoke_config(), "app:\n    profile_sequence: [near, missing]\n");
   EXPECT_THROW(workflow::load_config(config.path()), std::runtime_error);
 }
 
 TEST(MultiProfileConfig, RejectsNonIntegralSamples) {
-  const MutatedConfig config("samples_per_chirp: 512}", "samples_per_chirp: 511}");
+  const PresetOverride config(smoke_config(), profile_patch("samples_per_chirp", "511"));
   EXPECT_THROW(workflow::load_config(config.path()), std::runtime_error);
 }
 
 TEST(MultiProfileConfig, RejectsDuplicatedLegacyWaveformAuthoring) {
-  const MutatedConfig config("app:\n", "app:\n    waveform: {carrier_frequency: 77.0e9}\n");
+  const PresetOverride config(smoke_config(), "app:\n    waveform: {carrier_frequency: 77.0e9}\n");
   EXPECT_THROW(workflow::load_config(config.path()), std::runtime_error);
 }
 

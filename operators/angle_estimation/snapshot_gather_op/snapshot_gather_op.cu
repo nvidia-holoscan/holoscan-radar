@@ -279,9 +279,7 @@ expected<void, Error> run_snapshot_gather(const Tensor& rd, const Tensor& idx,
                                           const detail::SnapshotGatherState& state,
                                           void* snapshot_ptr, void* valid_ptr,
                                           std::size_t snapshot_bytes, cudaStream_t stream) {
-  if (cudaMemsetAsync(snapshot_ptr, 0, snapshot_bytes, stream) != cudaSuccess) {
-    return fail_runtime("SnapshotGatherOp: snapshot zero failed");
-  }
+  (void)snapshot_bytes;
   try {
     detail::launch_gather_snapshots<T>(
         static_cast<const cuda::std::complex<T>*>(rd.data()),

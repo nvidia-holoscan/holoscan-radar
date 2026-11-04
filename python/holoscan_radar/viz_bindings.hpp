@@ -92,7 +92,8 @@ template <typename Config>
 viz::FmcwDashboardConfig dashboard_config(const Config& cfg, std::string title, bool clustered,
                                           bool show_angles, const std::vector<double>& az_grid,
                                           const std::vector<double>& el_grid,
-                                          const AngleConvention& angle_convention) {
+                                          const AngleConvention& angle_convention,
+                                          std::string description = {}) {
   const auto bounds = show_angles
                           ? app::physical_scan_grid_bounds(angle_convention, az_grid, el_grid)
                           : app::PhysicalAngleBounds{{-1.0, 1.0}, {-1.0, 1.0}};
@@ -100,8 +101,16 @@ viz::FmcwDashboardConfig dashboard_config(const Config& cfg, std::string title, 
   result.mode = clustered ? viz::DashboardMode::kClusters : viz::DashboardMode::kRawDetections;
   result.show_angles = show_angles;
   result.dynamic_range_db = static_cast<float>(cfg.visualization.dynamic_range_db);
+  result.noise_scaling = cfg.visualization.noise_scaling;
+  result.noise_sample_limit = cfg.visualization.noise_sample_limit;
+  result.noise_range_half_width = cfg.visualization.noise_range_half_width;
+  result.noise_doppler_half_width = cfg.visualization.noise_doppler_half_width;
+  result.noise_sigma = cfg.visualization.noise_sigma;
+  result.noise_headroom_db = cfg.visualization.noise_headroom_db;
+  result.range_doppler_width_percent = cfg.visualization.range_doppler_width_percent;
   result.detection_radius = static_cast<float>(cfg.visualization.detection_radius);
   result.frame_period = cfg.frame_period;
+  result.display_rate_hz = cfg.visualization.display_rate_hz;
   result.history_frames = cfg.visualization.history_frames;
   result.detection_trail_frames = cfg.visualization.detection_trail_frames;
   result.width = cfg.visualization.window_width;
@@ -110,6 +119,7 @@ viz::FmcwDashboardConfig dashboard_config(const Config& cfg, std::string title, 
   result.el_bounds = viz::display_bounds(bounds.el);
   result.angle_convention = angle_convention;
   result.title = std::move(title);
+  result.description = std::move(description);
   result.truth_targets = viz::make_truth_targets(cfg.scene.targets);
   result.scene_visibility = cfg.scene_visibility;
   return result;
@@ -118,6 +128,8 @@ viz::FmcwDashboardConfig dashboard_config(const Config& cfg, std::string title, 
 inline nb::dict visualization_settings(const app::VisualizationConfig& config,
                                        double frame_period) {
   nb::dict result;
+  result["x11_presentation"] =
+      config.x11_presentation ? nb::cast(*config.x11_presentation) : nb::none();
   result["window_width"] = config.window_width;
   result["window_height"] = config.window_height;
   result["window_title"] = config.window_title;

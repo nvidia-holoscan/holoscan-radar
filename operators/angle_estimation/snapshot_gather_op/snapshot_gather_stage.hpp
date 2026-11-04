@@ -114,33 +114,35 @@ static __global__ void gather_snapshots_kernel(
   const int64_t range_center = idx_row[n_preserved + 1];
   const int64_t batch_base = batch_linear[row] * slice_elems;
 
-  int64_t snap_slot = 0;
-  for (int64_t od = -d_half; od <= d_half; ++od) {
-    for (int64_t orng = -r_half; orng <= r_half; ++orng) {
-      bool valid_d = true;
-      bool valid_r = true;
-      const int64_t d =
-          resolve_axis_index(doppler_center, od, d_half, num_doppler, doppler_edge, &valid_d);
-      const int64_t r =
-          resolve_axis_index(range_center, orng, r_half, num_range, range_edge, &valid_r);
-      const bool valid = valid_d && valid_r;
-      if (is_valid != nullptr) {
-        is_valid[row * num_snapshots + snap_slot] = static_cast<uint8_t>(valid);
-      }
-      const int64_t plane_offset = d * num_range + r;
-      // snapshot is (num_detections, num_channels, num_snapshots) row-major
-      // (channel-major, snapshot-minor), matching the estimators' covariance
-      // indexing xi[c * num_snapshots + s]. Write channel c's slot at
-      // c * num_snapshots + snap_slot — NOT snap_slot * num_channels + c, which
-      // transposes to (num_snapshots, num_channels) and only agrees for K == 1.
-      cuda::std::complex<T>* out = snapshot + row * num_channels * num_snapshots;
+  const int64_t range_len = 2 * r_half + 1;
+  for (int64_t snap_slot = static_cast<int64_t>(threadIdx.x); snap_slot < num_snapshots;
+       snap_slot += static_cast<int64_t>(blockDim.x)) {
+    const int64_t od = snap_slot / range_len - d_half;
+    const int64_t orng = snap_slot % range_len - r_half;
+    bool valid_d = true;
+    bool valid_r = true;
+    const int64_t d =
+        resolve_axis_index(doppler_center, od, d_half, num_doppler, doppler_edge, &valid_d);
+    const int64_t r =
+        resolve_axis_index(range_center, orng, r_half, num_range, range_edge, &valid_r);
+    const bool valid = valid_d && valid_r;
+    if (is_valid != nullptr) {
+      is_valid[row * num_snapshots + snap_slot] = static_cast<uint8_t>(valid);
+    }
+    const int64_t plane_offset = d * num_range + r;
+    // snapshot is (num_detections, num_channels, num_snapshots) row-major
+    // (channel-major, snapshot-minor), matching the estimators' covariance
+    // indexing xi[c * num_snapshots + s]. Write channel c's slot at
+    // c * num_snapshots + snap_slot — NOT snap_slot * num_channels + c, which
+    // transposes to (num_snapshots, num_channels) and only agrees for K == 1.
+    cuda::std::complex<T>* out = snapshot + row * num_channels * num_snapshots;
+    for (int64_t c = 0; c < num_channels; ++c) {
       if (valid) {
-        for (int64_t c = 0; c < num_channels; ++c) {
-          const int64_t src = batch_base + c * (num_doppler * num_range) + plane_offset;
-          out[c * num_snapshots + snap_slot] = rd_maps[src];
-        }
+        const int64_t src = batch_base + c * (num_doppler * num_range) + plane_offset;
+        out[c * num_snapshots + snap_slot] = rd_maps[src];
+      } else {
+        out[c * num_snapshots + snap_slot] = cuda::std::complex<T>{T{0}, T{0}};
       }
-      ++snap_slot;
     }
   }
 }
@@ -172,7 +174,8 @@ void launch_gather_snapshots(const cuda::std::complex<T>* rd_maps, const int64_t
     return;
   }
   const int grid = static_cast<int>(num_detections);
-  gather_snapshots_kernel<T><<<grid, 1, 0, stream>>>(
+  const int block = num_snapshots == 1 ? 1 : (num_snapshots <= 32 ? 32 : 128);
+  gather_snapshots_kernel<T><<<grid, block, 0, stream>>>(
       rd_maps, detection_idx, num_detections, idx_cols, n_preserved, batch_linear, num_channels,
       num_doppler, num_range, d_half, r_half, edge_mode_id(d_edge), edge_mode_id(r_edge),
       num_snapshots, slice_elems, snapshot, is_valid);

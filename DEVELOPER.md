@@ -115,6 +115,103 @@ the selected environment and run its `holoscan` command there.
 
 ---
 
+### Application logging
+
+FMCW C++ and Python applications prefix Holoscan app/operator logs with local
+wall-clock date/time, milliseconds and the UTC offset. For example,
+`[2026-10-26 12:34:56.789 +00:00] [info] [report_ops.hpp:461] ...`.
+Set `HOLOSCAN_LOG_FORMAT` to use an SDK preset or custom spdlog format instead.
+HoloViz's separate renderer logger retains its SDK format.
+
+### GPU placement
+
+FMCW applications offer a presenter choice when X11/XRender support is built,
+`DISPLAY` is nonempty, visualization is enabled, and
+`app.visualization.x11_presentation` is omitted. At startup, an interactive terminal
+asks whether the setup needs X11 image transport (for example SSH/X11 forwarding)
+or a native HoloViz window on a local desktop. Enter selects X11.
+An explicit boolean bypasses both the question and any remembered answer:
+
+```yaml
+app:
+  visualization:
+    x11_presentation: false
+```
+
+Set `true` to select X11 without asking, or `false` to select native HoloViz.
+Both C++ and Python then ask how long to remember the choice:
+
+- **This run only** (default): no preference is saved.
+- **Remember for 7 days**: expires exactly seven days after selection.
+- **Remember until changed**: no expiration.
+
+Preferences are keyed by `DISPLAY`, `WAYLAND_DISPLAY`, and local/SSH session type,
+under `$XDG_CACHE_HOME/holoscan-radar/presentation-v2`, or
+`$HOME/.cache/holoscan-radar/presentation-v2` when `XDG_CACHE_HOME` is unset.
+Version-2 JSON records store the presenter, setup key, save time, and expiration
+as UTC Unix seconds (`expires_at: null` means until changed). Each load checks
+version, field types, presenter, setup identity, timestamps, and expiration.
+Expired, malformed, wrong-setup, or future-dated records are ignored. Old
+`presentation-v1` files are not reused. Display variables identify a setup;
+they do not prove that SSH forwarding is in use.
+
+The host CLI mounts the project as the container home, so its default cache is
+`.cache/holoscan-radar/presentation-v2` in the host checkout and survives container
+restarts. Direct runs use their own environment's cache location. Every reused
+answer prints its expiration (or "until changed") and how to choose again.
+Use `--choose-presenter` to clear the current setup's saved answer and ask again;
+selecting "this run only" then leaves no saved answer. Explicit YAML still wins:
+omit `x11_presentation` to use the interactive choice. For example, on the host:
+
+```bash
+./holoscan-radar run mimo_tdm --language cpp --run-args=--choose-presenter
+./holoscan-radar run mimo_tdm --language python --run-args=--choose-presenter
+```
+
+Direct executables accept `[config.yaml] --choose-presenter`; Python's
+`build_graph(path, choose_presenter=True)` exposes the same behavior.
+The reset option requires an interactive terminal when a choice is needed.
+Without a terminal, a valid saved answer is used; otherwise X11 remains the
+default and no answer is cached. EOF at the presenter question defaults to X11;
+EOF at the remember question keeps the selected presenter for this run only.
+Nonvisual runs and configurations without X11 never ask. Cache write failures
+are reported but do not prevent the selected presenter from running.
+
+This setting controls window presentation; HoloViz still composes the image and
+native text offscreen in either case. The native window path requires a
+compatible Vulkan presentation surface. Startup logs
+`Radar presentation: X11 finished-image transport` for X11,
+or `Radar presentation: CUDA device <N>` for the native window path.
+
+All seven FMCW workflows (C++ and Python) and all five SAR applications retain
+the caller's current CUDA device for computation. CUDA ordinals are relative to
+the devices visible inside the container.
+
+On X11, FMCW renders the complete dashboard with the SDK's offscreen CUDA sink,
+downloads it through a bounded host pool, and sends it to the X server with
+`X11ImagePresenterOp`. XRender scales the finished image when the window resizes.
+This supports forwarded SSH displays and unrestricted multi-GPU hosts without
+requiring a Vulkan window swapchain on the display GPU. Startup logs the compute
+and composition devices and `X11 finished-image transport`. All DSP, plot
+composition and native SDK text rendering remain on the GPU; the host only packs
+and transports finished pixels. No GPU visibility setting is required.
+
+HSDK 5.0 has no public renderer-device override: the application isolates its
+startup discovery for SAR and other window systems in
+`radar_app/app/gpu_placement.cpp`, using the installed renderer API and the SDK's
+adapter-selection order. A small temporary window
+queries presentation support before the graph is compiled. When an image
+producer and renderer select different adapters, the graph explicitly copies
+the RGBA image through a bounded host pool to the receiving GPU. This covers
+FMCW's offscreen composer and window, plus SAR's formation and timeline displays.
+It works without CUDA peer access, at the cost of two host/device copies and
+synchronization per device boundary. Same-device connections remain direct.
+
+This fixes visualization placement; it does not add arbitrary computation-device
+selection. Some operators allocate CUDA scratch in construction or `start()`,
+where the installed SDK does not establish the output pool's device scope.
+Moving their output bindings alone to a different device can therefore fail.
+
 ## Inside a development container
 
 For manual CMake work, first open the devcontainer or run

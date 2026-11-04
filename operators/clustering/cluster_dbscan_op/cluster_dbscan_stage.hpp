@@ -31,6 +31,7 @@
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
+#include <type_traits>
 
 namespace holoscan::radar::cluster_dbscan {
 
@@ -63,6 +64,24 @@ __device__ inline bool dbscan_neighbor(const T* __restrict__ pi, const T* __rest
   return true;
 }
 
+// Fixed feature loop used only by the separate float mark-core kernel.
+template <typename T, int Features>
+__device__ inline bool dbscan_neighbor_fixed(const T* __restrict__ pi, const T* __restrict__ pj,
+                                             const T* __restrict__ eps_inv2) {
+  T d2 = static_cast<T>(0);
+  for (int64_t a = 0; a < Features; ++a) {
+    if (eps_inv2[a] == static_cast<T>(0)) {
+      continue;
+    }
+    const T diff = pi[a] - pj[a];
+    d2 += diff * diff * eps_inv2[a];
+    if (d2 > static_cast<T>(1)) {
+      return false;  // early out; distance is monotonically accumulating
+    }
+  }
+  return true;
+}
+
 // Count neighbors of each point (self included) over all points → is_core when
 // the count reaches min_points. Seed cc: core → its own row index (a candidate
 // component root), non-core → the noise sentinel.
@@ -79,6 +98,35 @@ __global__ void mark_core_kernel(const T* __restrict__ points, const T* __restri
   for (int64_t j = 0; j < n; ++j) {
     if (dbscan_neighbor<T>(pi, points + j * f, eps_inv2, f)) {
       ++count;
+      // Only the core predicate is consumed; later neighbors cannot change it.
+      if (count >= min_points) {
+        break;
+      }
+    }
+  }
+  const bool core = count >= min_points;
+  is_core[i] = core ? uint8_t{1} : uint8_t{0};
+  cc[i] = core ? i : kNoiseRoot;
+}
+
+// Preserve the original kernel above for double and unmatched feature counts.
+template <typename T, int Features>
+__global__ void mark_core_fixed_kernel(const T* __restrict__ points, const T* __restrict__ eps_inv2,
+                                       int64_t n, int64_t f, int64_t min_points,
+                                       uint8_t* __restrict__ is_core, int64_t* __restrict__ cc) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i >= n) {
+    return;
+  }
+  const T* pi = points + i * f;
+  int64_t count = 0;
+  for (int64_t j = 0; j < n; ++j) {
+    if (dbscan_neighbor_fixed<T, Features>(pi, points + j * f, eps_inv2)) {
+      ++count;
+      // Only the core predicate is consumed; later neighbors cannot change it.
+      if (count >= min_points) {
+        break;
+      }
     }
   }
   const bool core = count >= min_points;
@@ -115,11 +163,13 @@ __global__ void cc_step_kernel(const T* __restrict__ points, const T* __restrict
     if (j == i || is_core[j] == 0) {
       continue;
     }
+    const int64_t lj = cc_in[j];
+    // This snapshot label cannot improve the current minimum, regardless of distance.
+    if (lj >= m) {
+      continue;
+    }
     if (dbscan_neighbor<T>(pi, points + j * f, eps_inv2, f)) {
-      const int64_t lj = cc_in[j];
-      if (lj < m) {
-        m = lj;
-      }
+      m = lj;
     }
   }
   cc_out[i] = m;
@@ -223,6 +273,23 @@ __global__ inline void histogram_kernel(const int64_t* __restrict__ labels,
 template <typename T>
 void launch_mark_core(const T* points, const T* eps_inv2, int64_t n, int64_t f, int64_t min_points,
                       uint8_t* is_core, int64_t* cc, cudaStream_t stream) {
+  if constexpr (std::is_same_v<T, float>) {
+    if (f == 2) {
+      mark_core_fixed_kernel<T, 2>
+          <<<grid_for(n), 256, 0, stream>>>(points, eps_inv2, n, f, min_points, is_core, cc);
+      return;
+    }
+    if (f == 3) {
+      mark_core_fixed_kernel<T, 3>
+          <<<grid_for(n), 256, 0, stream>>>(points, eps_inv2, n, f, min_points, is_core, cc);
+      return;
+    }
+    if (f == 5) {
+      mark_core_fixed_kernel<T, 5>
+          <<<grid_for(n), 256, 0, stream>>>(points, eps_inv2, n, f, min_points, is_core, cc);
+      return;
+    }
+  }
   mark_core_kernel<T>
       <<<grid_for(n), 256, 0, stream>>>(points, eps_inv2, n, f, min_points, is_core, cc);
 }

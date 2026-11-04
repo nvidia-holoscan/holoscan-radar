@@ -1,5 +1,7 @@
 # Adaptive AoA
 
+See [shared preset inheritance and launch modes](../README.md).
+
 Selective angular super-resolution on a single-waveform FMCW MIMO-TDM
 stream. The application keeps conventional Beamscan on every peak-CFAR cell,
 uses a rank-one residual as a cheap routing screen, and runs one configured
@@ -30,7 +32,13 @@ flowchart LR
     Features --> Dashboard
     Range --> Dashboard
     Doppler --> Dashboard
-    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
+    Dashboard --> Image[RgbaImageBridgeOp] -->|Same GPU| Frame[FmcwFrameComposerOp] -->|Other window systems, same GPU| Holoviz[FmcwHolovizOp]
+    Image -.->|Different GPUs| InputDownload[ImageDownloadOp]
+    InputDownload -.-> InputUpload[ImageUploadOp] -.-> Frame
+    Frame -.->|Other window systems, different GPUs| Download[ImageDownloadOp]
+    Download -.-> Upload[ImageUploadOp] -.-> Holoviz
+    Frame -->|X11| X11Download[ImageDownloadOp] --> X11Window[X11ImagePresenterOp]
+    Dashboard -->|Native text| Frame
 ```
 
 There is deliberately no clustering or detection reduction. CFAR emits one
@@ -41,12 +49,16 @@ also falls back to Beamscan. Repeated range-Doppler indices therefore
 intentionally gather the same range, velocity, and score for each resolved
 angle.
 
+The [shared dashboard](../../common/radar_app/viz/README.md) uses native SDK text,
+a relative-power legend, and frame-driven presentation capped by
+`visualization.display_rate_hz`.
+
 ## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run adaptive_aoa --language cpp --run-args=adaptive_aoa_smoke.yaml
+./holoscan-radar run adaptive_aoa smoke --language cpp
 ```
 
 This runs the two-frame headless smoke preset. Run
@@ -109,7 +121,7 @@ From the repository root, the host CLI builds and runs the colocated
 `python/` graph with the pinned development image:
 
 ```bash
-./holoscan-radar run adaptive_aoa --language python --run-args=adaptive_aoa_smoke.yaml
+./holoscan-radar run adaptive_aoa smoke --language python
 ```
 
 After building or installing the Python wheel, call the graph directly:

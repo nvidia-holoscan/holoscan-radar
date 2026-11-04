@@ -1,5 +1,7 @@
 # MIMO DDM
 
+See [shared preset inheritance and launch modes](../README.md).
+
 FMCW MIMO Doppler-division multiplexing example. Doppler processing precedes TX separation; the demultiplexer uses either offset-based linear band gathering or periodic phase-code correlation. The separated channels then pass through a Doppler notch, virtual-array assembly, sparse angle estimation, clustering, and reporting.
 
 ```mermaid
@@ -15,7 +17,13 @@ flowchart LR
     Features --> Dashboard
     Range --> Dashboard
     Doppler --> Dashboard
-    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
+    Dashboard --> Image[RgbaImageBridgeOp] -->|Same GPU| Frame[FmcwFrameComposerOp] -->|Other window systems, same GPU| Holoviz[FmcwHolovizOp]
+    Image -.->|Different GPUs| InputDownload[ImageDownloadOp]
+    InputDownload -.-> InputUpload[ImageUploadOp] -.-> Frame
+    Frame -.->|Other window systems, different GPUs| Download[ImageDownloadOp]
+    Download -.-> Upload[ImageUploadOp] -.-> Holoviz
+    Frame -->|X11| X11Download[ImageDownloadOp] --> X11Window[X11ImagePresenterOp]
+    Dashboard -->|Native text| Frame
 ```
 
 ## Configurations
@@ -30,15 +38,19 @@ ddm:
 ddm_dense_demultiplex: {}
 ```
 
-The normal linear and nonlinear presets enable relative monostatic free-space range loss with a 100 m reference. The matching `_smoke.yaml` files omit range loss, use the constant-amplitude analytic model with a warning, and otherwise retain the same waveform and DSP tuning while changing only the frame count, visualization enablement, and target list.
+The normal linear and nonlinear presets enable relative monostatic free-space range loss with a 100 m reference. The matching `_smoke.yaml` files disable range loss, use the constant-amplitude analytic model with a warning, and otherwise retain the same waveform and DSP tuning while changing only the frame count, visualization enablement, and target list.
+
+The [shared dashboard](../../common/radar_app/viz/README.md) uses native SDK text,
+a relative-power legend, and frame-driven presentation capped by
+`visualization.display_rate_hz`.
 
 ## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run mimo_ddm --language cpp --run-args=mimo_ddm_linear_smoke.yaml
-./holoscan-radar run mimo_ddm --language cpp --run-args=mimo_ddm_nonlinear_smoke.yaml
+./holoscan-radar run mimo_ddm smoke --language cpp
+./holoscan-radar run mimo_ddm nonlinear_ddm_smoke --language cpp
 ```
 
 These headless presets run two frames. For the visual normal presets, use
@@ -56,7 +68,7 @@ From the repository root, the host CLI builds and runs the colocated
 `python/` graph with the pinned development image:
 
 ```bash
-./holoscan-radar run mimo_ddm --language python --run-args=mimo_ddm_linear_smoke.yaml
+./holoscan-radar run mimo_ddm smoke --language python
 ```
 
 After building or installing the Python wheel, call the graph directly:

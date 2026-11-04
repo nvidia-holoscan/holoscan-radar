@@ -258,6 +258,79 @@ TEST(TDMDenseCompensationOp, FourTxLanesAlignAfterCompensation) {
   expect_tx_lanes_aligned<float>(out, kTx, kNumRx, kDoppler, kRange);
 }
 
+template <typename T>
+class TDMDenseDecodeMarkers : public ::testing::Test {};
+using TdmDecodePrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(TDMDenseDecodeMarkers, TdmDecodePrecisions);
+
+TYPED_TEST(TDMDenseDecodeMarkers, EveryCellMatchesIndependentPhaseAcrossDecodeShapes) {
+  using T = TypeParam;
+  const std::array<std::array<int64_t, 4>, 6> shapes{{
+      {4, 2, 8, 257},   // Power-of-two decode; non-power range crosses block256.
+      {3, 5, 7, 3},     // Generic decode, including odd centered Doppler.
+      {4, 3, 8, 5},     // Mixed extents must retain generic decode.
+      {2, 1, 8, 3},     // Singleton RX with nontrivial phase correction.
+      {1, 1, 1, 1},     // Singleton masks and shifts are all zero.
+      {8, 32, 256, 1},  // 65536 rows cross the grid cap without a large range axis.
+  }};
+  const auto waveform = make_test_waveform();
+  const double pri = waveform.chirp_repetition_interval();
+  const double relative_tolerance = std::is_same_v<T, float> ? 5e-6 : 5e-12;
+  for (const auto& dims : shapes) {
+    const auto [num_tx, num_rx, num_doppler, num_range] = dims;
+    SCOPED_TRACE(::testing::Message() << "tx=" << num_tx << " rx=" << num_rx
+                                      << " doppler=" << num_doppler << " range=" << num_range);
+    const std::vector<int64_t> shape(dims.begin(), dims.end());
+    std::vector<std::complex<T>> input(static_cast<size_t>(tensor_count(shape)));
+    for (size_t index = 0; index < input.size(); ++index) {
+      // Integers and binary fractions are exact in both input precisions.
+      const T marker = static_cast<T>(index + 1U);
+      input[index] = {marker, (index % 2U == 0U ? marker : -marker) / T{8}};
+    }
+    auto extents = holoscan::radar::testing::default_test_extents();
+    extents.max_tx = std::max<int64_t>(*extents.max_tx, num_tx);
+    extents.max_rx = std::max<int64_t>(*extents.max_rx, num_rx);
+    extents.max_doppler_bins = std::max<int64_t>(*extents.max_doppler_bins, num_doppler);
+    extents.max_range_bins = std::max<int64_t>(*extents.max_range_bins, num_range);
+    const auto result = run_tdm_result<T>({to_device_tensor(input, shape, complex_dtype<T>())},
+                                          tdm_params(waveform), extents);
+    ASSERT_TRUE(result.ok()) << result.describe_failure();
+    const auto snapshots = result.template snapshots<holoscan::Tensor>("rd_maps_out");
+    ASSERT_EQ(snapshots.size(), 1U);
+    const auto& snapshot = snapshots[0];
+    EXPECT_EQ(snapshot.shape(), shape);
+    EXPECT_TRUE(dldatatype_equals(snapshot.dtype(), complex_dtype<T>()));
+    EXPECT_EQ(snapshot.source_device().device_type, kDLCUDA);
+    EXPECT_EQ(snapshot.source_device().device_id, 0);
+    const auto output = holoscan::radar::testing::to_host(snapshot);
+    const auto* actual = output.template as<std::complex<T>>();
+    for (int64_t tx = 0; tx < num_tx; ++tx) {
+      // Identity schedule: TX id is its firing slot. Derive phase from the
+      // physical centered Doppler frequency and firing-time offset, without
+      // consulting the production correction-table builder.
+      const double offset = pri * static_cast<double>(tx) / static_cast<double>(num_tx);
+      for (int64_t rx = 0; rx < num_rx; ++rx) {
+        for (int64_t d = 0; d < num_doppler; ++d) {
+          const double frequency =
+              static_cast<double>(d - num_doppler / 2) / (static_cast<double>(num_doppler) * pri);
+          const double phase = -kTwoPi * frequency * offset;
+          const std::complex<double> factor{std::cos(phase), std::sin(phase)};
+          for (int64_t range = 0; range < num_range; ++range) {
+            const auto index =
+                static_cast<size_t>(((tx * num_rx + rx) * num_doppler + d) * num_range + range);
+            const std::complex<double> marker{static_cast<double>(input[index].real()),
+                                              static_cast<double>(input[index].imag())};
+            const auto expected = marker * factor;
+            const double tolerance = relative_tolerance * std::max(1.0, std::abs(expected));
+            EXPECT_NEAR(actual[index].real(), expected.real(), tolerance) << "cell=" << index;
+            EXPECT_NEAR(actual[index].imag(), expected.imag(), tolerance) << "cell=" << index;
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST(TDMDenseCompensationOp, TdmCorrectionTableIsUnitMagnitude) {
   const auto table =
       holoscan::radar::detail::build_tdm_correction_table(make_test_waveform(), kNumTx, kDoppler);

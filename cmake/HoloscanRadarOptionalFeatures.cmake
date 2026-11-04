@@ -35,22 +35,24 @@ else()
         "Graph-native dashboard disabled")
 endif()
 
-# X11 is used only to probe whether the HSDK 5 dashboard can open a display.
+# X11 transports SDK-composed images; XRender scales the complete canvas.
 set(_HOLOSCAN_RADAR_X11_PROBE_SAVE_LIBS "${CMAKE_REQUIRED_LIBRARIES}")
-set(CMAKE_REQUIRED_LIBRARIES X11)
+set(CMAKE_REQUIRED_LIBRARIES X11 Xrender)
 check_cxx_source_compiles("
 #include <X11/Xlib.h>
+#include <X11/extensions/Xrender.h>
 int main() {
   Display* d = XOpenDisplay(nullptr);
-  if (d) { XCloseDisplay(d); }
+  if (d) { int e, r; XRenderQueryExtension(d, &e, &r); XCloseDisplay(d); }
   return 0;
 }
-" HOLOSCAN_RADAR_HAS_X11)
+" HOLOSCAN_RADAR_HAS_X11_IMAGE_PRESENTATION)
+set(HOLOSCAN_RADAR_HAS_X11 "${HOLOSCAN_RADAR_HAS_X11_IMAGE_PRESENTATION}")
 set(CMAKE_REQUIRED_LIBRARIES "${_HOLOSCAN_RADAR_X11_PROBE_SAVE_LIBS}")
 unset(_HOLOSCAN_RADAR_X11_PROBE_SAVE_LIBS)
 
 if(HOLOSCAN_RADAR_HAS_X11)
-    message(STATUS "X11: found (dashboard display probing enabled)")
+    message(STATUS "X11/XRender: found (finished-image dashboard presentation enabled)")
 else()
     message(STATUS "X11: not found (dashboard display probing disabled)")
 endif()

@@ -3,24 +3,39 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <optional>
+#include <limits>
+#include <ostream>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include <holoscan/core/compile.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/sensor_io/schemas/image_schema_traits.hpp>
 #include <holoscan/time/realtime_clock.hpp>
+#include <holoscan/testing/operator_test_harness.hpp>
 #include <holoscan/visualization/holoviz_op.hpp>
 
 #include "radar_app/app/angle_presentation.hpp"
+#include "radar_app/app/gpu_placement.hpp"
+#include "radar_app/app/application_descriptions.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
+#include "radar_app/viz/dashboard_text.hpp"
+#include "radar_app/viz/fmcw_holoviz_op.hpp"
+#include "radar_app/viz/image_device_bridge_op.hpp"
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
+#include "utils/tensor_fixtures.hpp"
+#include "utils/fixture_completion.hpp"
 
 namespace {
 
@@ -30,6 +45,13 @@ namespace radar = holoscan::radar;
 class RgbaGraphSourceOp final : public holoscan::Operator<> {
  public:
   void setup(holoscan::OperatorSpec& spec) override {
+    spec.output(text).produces_tensor(holoscan::TensorOutputSpec{
+        .representation = {.memory_kind = holoscan::MemoryKind::kHost,
+                           .dtype = DLDataType{kDLUInt, 8U, 1U},
+                           .rank = 2U,
+                           .strides = holoscan::TensorStridePolicy::kContiguousOnly},
+        .bounds = holoscan::TensorBounds{.max_rank = 2U, .max_byte_span = 208U},
+    });
     spec.output(rgba).produces_tensor(holoscan::TensorOutputSpec{
         .representation =
             holoscan::TensorRepresentation{
@@ -54,25 +76,21 @@ class RgbaGraphSourceOp final : public holoscan::Operator<> {
   }
 
   holoscan::Output<holoscan::Tensor> rgba{"rgba"};
+  holoscan::Output<holoscan::Tensor> text{"text"};
 };
 
-TEST(FmcwDashboardTest, ConnectsRgbaTensorToHsdk5HolovizImageLayer) {
+TEST(FmcwDashboardTest, ConnectsImageAndNativeHostTextToHsdk5Holoviz) {
   holoscan::Graph graph{"dashboard-image-bridge-test"};
   auto source = graph.op<RgbaGraphSourceOp>("source");
   auto bridge = graph.op<viz::RgbaImageBridgeOp>("bridge", 2, 2);
-  holoscan::visualization::LayerStack layers;
-  layers.add_image_layer("image",
-                         holoscan::visualization::ImageLayerDesc{
-                             .format = holoscan::visualization::ImageFormat::kR8G8B8A8Unorm,
-                             .max_width = 2U,
-                             .max_height = 2U});
-  auto sink = graph.op<holoscan::visualization::HolovizOp>(
-      "holoviz", std::move(layers),
-      holoscan::visualization::WindowSinkDesc{.title = "test", .width = 2U, .height = 2U});
+  auto frame = graph.op<viz::FmcwFrameComposerOp>("frame", 2, 2);
+  auto sink = graph.op<viz::FmcwHolovizOp>("holoviz", 2, 2, "test");
   graph.partition("application").add(source).add(bridge);
-  graph.partition("visualization").add(sink);
+  graph.partition("visualization").add(frame).add(sink);
   graph.add_flow(source->rgba, bridge->rgba);
-  graph.add_flow(bridge->image, sink->image_layer_input(0));
+  graph.add_flow(bridge->image, frame->image_layer_input(0));
+  graph.add_flow(frame->output(), sink->image_layer_input(0));
+  graph.add_flow(source->text, frame->tensor_layer_input(1));
   graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
 
   holoscan::CompileOptions options;
@@ -80,8 +98,404 @@ TEST(FmcwDashboardTest, ConnectsRgbaTensorToHsdk5HolovizImageLayer) {
       .operator_path = "source", .output_port = "rgba", .device = holoscan::DeviceId{0}});
   options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = "bridge", .output_port = "image", .device = holoscan::DeviceId{0}});
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "frame", .output_port = "output", .device = holoscan::DeviceId{0}});
   const holoscan::ExecutionPlan plan = holoscan::compile(graph, std::move(options));
   EXPECT_TRUE(plan.ok()) << plan.json();
+}
+
+TEST(FmcwDashboardTest, ComposesOnlyMatchedImageAndTextIntoOneCudaFrame) {
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  const holoscan::DeviceId device{radar::app::application_device()};
+  constexpr std::int64_t kWidth = 128;
+  constexpr std::int64_t kHeight = 64;
+  constexpr DLDataType kRgba{kDLUInt, 8U, 1U};
+  std::vector<std::uint8_t> pixels(kWidth * kHeight * 4U);
+  for (std::size_t i = 0; i < pixels.size(); i += 4U) {
+    pixels[i] = 10U;
+    pixels[i + 1U] = 20U;
+    pixels[i + 2U] = 30U;
+    pixels[i + 3U] = 255U;
+  }
+  holoscan::schema::ImageT image;
+  image.width = kWidth;
+  image.height = kHeight;
+  image.encoding = holoscan::schema::ImageEncoding_RGBA8;
+  image.data = radar::testing::to_device_tensor(pixels, {kHeight, kWidth, 4}, kRgba);
+  std::vector<std::uint8_t> records;
+  viz::detail::append_dashboard_text(&records, kWidth, kHeight, 8.0F, 8.0F, "123", 13.0F);
+  const auto text = radar::testing::to_pageable_host_tensor(
+      records, {1, static_cast<std::int64_t>(viz::detail::kDashboardTextRowBytes)}, kRgba);
+  auto harness = holoscan::testing::create_operator_test<viz::FmcwFrameComposerOp>(
+      static_cast<std::int32_t>(kWidth), static_cast<std::int32_t>(kHeight));
+  // Unmatched samples must not render. The matched frame deliberately publishes
+  // its image first, so rendering cannot rely on sideband-before-driver order.
+  harness.push_frame(frame_at(std::chrono::milliseconds{1}, input("image", image)));
+  harness.push_frame(frame_at(std::chrono::milliseconds{2}, input("text", *text)));
+  harness.push_frame(
+      frame_at(std::chrono::milliseconds{3}, input("image", image), input("text", *text)));
+  harness.input_source_device("image", device);
+  harness.output_device("output", device);
+  harness.capture_snapshot<holoscan::schema::ImageT>("output", 1U, pixels.size());
+  radar::testing::FixtureCompletion completion;
+  auto running = harness.run_async(completion.run_options());
+  const bool ready = completion.wait_for_output(running, "output", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto composed = result.snapshot<holoscan::schema::ImageT>("output");
+  const auto output =
+      radar::testing::to_host(composed.tensor(holoscan::schema::ImageTensorFields::data));
+  ASSERT_EQ(output.shape, (std::vector<std::int64_t>{kHeight, kWidth, 4}));
+  const auto* rgba = output.as<std::uint8_t>();
+  const std::size_t corner = 4U * (kWidth * kHeight - 1U);
+  for (std::size_t channel = 0; channel < 4U; ++channel) {
+    EXPECT_EQ(rgba[corner + channel], pixels[corner + channel]);
+  }
+  bool found_native_text = false;
+  for (std::size_t row = 8U; row < 24U; ++row) {
+    for (std::size_t col = 8U; col < 40U; ++col) {
+      found_native_text = found_native_text || rgba[4U * (row * kWidth + col)] > 128U;
+    }
+  }
+  EXPECT_TRUE(found_native_text) << "SDK text must be present in the emitted GPU image";
+}
+
+TEST(ImageDeviceBridgeTest, PreservesPixelsAndMetadataThroughHostStaging) {
+  using holoscan::schema::ImageT;
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  constexpr DLDataType kRgba{kDLUInt, 8U, 1U};
+  constexpr int kWidth = 17;
+  constexpr int kHeight = 9;
+  const auto time = std::chrono::milliseconds{123};
+  int original = -1;
+  ASSERT_EQ(cudaGetDevice(&original), cudaSuccess);
+  int count = 0;
+  ASSERT_EQ(cudaGetDeviceCount(&count), cudaSuccess);
+  ASSERT_GT(count, 0);
+  std::vector<std::uint8_t> pixels(kWidth * kHeight * 4);
+  for (std::size_t i = 0; i < pixels.size(); ++i)
+    pixels[i] = static_cast<std::uint8_t>(i * 17U + 3U);
+  ImageT image;
+  image.width = kWidth;
+  image.height = kHeight;
+  image.encoding = holoscan::schema::ImageEncoding_RGBA8;
+  image.color_space = holoscan::schema::ColorSpace_SRGB;
+  image.data = radar::testing::to_device_tensor(pixels, {kHeight, kWidth, 4}, kRgba);
+  auto download =
+      holoscan::testing::create_operator_test<viz::ImageDownloadOp>(kWidth + 5, kHeight + 3);
+  download.push_frame(frame_at(time, input("image_in", image)));
+  download.input_source_device("image_in", holoscan::DeviceId{original});
+  download.capture_snapshot<ImageT>("image_out", 1U, pixels.size());
+  radar::testing::FixtureCompletion download_completion;
+  auto downloading = download.run_async(download_completion.run_options());
+  (void)download_completion.wait_for_output(downloading, "image_out", 1U);
+  downloading.request_stop();
+  const auto downloaded = downloading.finish();
+  download_completion.check(downloaded);
+  ASSERT_TRUE(downloaded.ok()) << downloaded.describe_failure();
+  const auto host_frame = downloaded.snapshot<ImageT>("image_out");
+  const auto host_pixels =
+      radar::testing::to_host(host_frame.tensor(holoscan::schema::ImageTensorFields::data));
+  ASSERT_EQ(host_pixels.data.size(), pixels.size());
+  ASSERT_EQ(std::memcmp(host_pixels.data.data(), pixels.data(), pixels.size()), 0);
+  auto host_image = host_frame.metadata();
+  EXPECT_EQ(host_image.color_space, image.color_space);
+  const auto host_tensor =
+      radar::testing::to_pageable_host_tensor(pixels, {kHeight, kWidth, 4}, kRgba);
+  host_image.data = host_tensor;
+  auto upload =
+      holoscan::testing::create_operator_test<viz::ImageUploadOp>(kWidth + 5, kHeight + 3);
+  upload.push_frame(frame_at(time, input("image_in", host_image)));
+  upload.output_device("image_out", holoscan::DeviceId{count - 1});
+  upload.capture_snapshot<ImageT>("image_out", 1U, pixels.size());
+  radar::testing::FixtureCompletion upload_completion;
+  auto uploading = upload.run_async(upload_completion.run_options());
+  (void)upload_completion.wait_for_output(uploading, "image_out", 1U);
+  uploading.request_stop();
+  const auto uploaded = uploading.finish();
+  upload_completion.check(uploaded);
+  ASSERT_TRUE(uploaded.ok()) << uploaded.describe_failure();
+  const auto result = uploaded.snapshot<ImageT>("image_out");
+  const auto actual =
+      radar::testing::to_host(result.tensor(holoscan::schema::ImageTensorFields::data));
+  ASSERT_EQ(actual.data.size(), pixels.size());
+  EXPECT_EQ(std::memcmp(actual.data.data(), pixels.data(), pixels.size()), 0);
+  EXPECT_EQ(result.metadata().width, kWidth);
+  EXPECT_EQ(result.metadata().height, kHeight);
+  EXPECT_EQ(result.metadata().encoding, image.encoding);
+  EXPECT_EQ(result.metadata().color_space, image.color_space);
+  EXPECT_EQ(result.sample_metadata().capture_time().timestamp_ns,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(time).count());
+}
+
+struct PowerLegendCase {
+  float power;
+  const char* lower;
+  const char* upper;
+};
+
+void PrintTo(const PowerLegendCase& value, std::ostream* stream) {
+  *stream << value.power;
+}
+
+class FmcwDashboardPowerTest : public ::testing::TestWithParam<PowerLegendCase> {};
+
+TEST_P(FmcwDashboardPowerTest, ComposesHeatmapWithMatchingPowerLegend) {
+  using Op = viz::FmcwDashboardOp;
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  using radar::testing::to_device_tensor;
+  constexpr DLDataType kFloat{kDLFloat, 32U, 1U};
+  constexpr DLDataType kInt{kDLInt, 64U, 1U};
+  viz::FmcwDashboardConfig config;
+  config.show_angles = false;
+  config.title = "FMCW test";
+  config.description = radar::app::application_description("adaptive_aoa", "root_music");
+  auto harness = holoscan::testing::create_operator_test<Op>(config);
+  harness.push_frame(frame_at(
+      std::chrono::milliseconds{1},
+      input("cfar_power",
+            *to_device_tensor(std::vector<float>(4U, GetParam().power), {2, 2}, kFloat)),
+      input("detection_idx", *to_device_tensor(std::vector<std::int64_t>{}, {0, 2}, kInt)),
+      input("points", *to_device_tensor(std::vector<float>{}, {0, 2}, kFloat)),
+      input("range_bins", *to_device_tensor(std::vector<float>{0.0F, 100.0F}, {2}, kFloat)),
+      input("velocity_bins", *to_device_tensor(std::vector<float>{-10.0F, 10.0F}, {2}, kFloat))));
+  harness.capture_snapshot<holoscan::Tensor>("rgba", 1U, 1280U * 720U * 4U);
+  harness.capture_snapshot<holoscan::Tensor>(
+      "text", 1U, viz::detail::kDashboardTextRows * viz::detail::kDashboardTextRowBytes);
+  for (const auto* port :
+       {"cfar_power", "detection_idx", "points", "range_bins", "velocity_bins"}) {
+    harness.input_source_device(port, holoscan::DeviceId{0});
+  }
+  harness.output_device("rgba", holoscan::DeviceId{0});
+  auto running = harness.run_async({.expect_stop = true});
+  const bool image_ready = running.wait_for_output("rgba", 1U, std::chrono::seconds{5});
+  const bool text_ready = running.wait_for_output("text", 1U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(image_ready && text_ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto image = radar::testing::to_host(result.snapshot<holoscan::Tensor>("rgba"));
+  const auto* pixels = image.as<std::uint8_t>();
+  EXPECT_EQ(image.shape, (std::vector<std::int64_t>{720, 1280, 4}));
+  // Equal positive power reaches the palette maximum throughout the RD interior.
+  const std::size_t center = 4U * (300U * 1280U + 300U);
+  EXPECT_EQ(pixels[center], 253U);
+  EXPECT_EQ(pixels[center + 1U], 231U);
+  EXPECT_EQ(pixels[center + 2U], 37U);
+  for (std::size_t i = 3U; i < image.data.size(); i += 4U) {
+    ASSERT_EQ(pixels[i], 255U) << "transparent canvas pixel " << i / 4U;
+  }
+  const auto text = radar::testing::to_host(result.snapshot<holoscan::Tensor>("text"));
+  ASSERT_EQ(text.shape.size(), 2U);
+  EXPECT_EQ(text.shape[1], viz::detail::kDashboardTextRowBytes);
+  EXPECT_GT(text.shape[0], 10);
+  EXPECT_STREQ(reinterpret_cast<const char*>(text.data.data() +
+                                             holoscan::visualization::kTextRunHeaderBytes),
+               "FMCW test");
+  std::vector<std::string> labels;
+  for (std::size_t offset = 0; offset < text.data.size();
+       offset += viz::detail::kDashboardTextRowBytes) {
+    labels.emplace_back(reinterpret_cast<const char*>(
+        text.data.data() + offset + holoscan::visualization::kTextRunHeaderBytes));
+  }
+  ASSERT_GT(labels.size(), 2U);
+  EXPECT_NE(std::find(labels.begin(), labels.end(), config.description), labels.end());
+  EXPECT_NE(std::find(labels.begin(), labels.end(), "Frame 1 (0.0 s) | 0 detections"),
+            labels.end());
+  EXPECT_NE(std::find(labels.begin(), labels.end(), GetParam().lower), labels.end());
+  EXPECT_NE(std::find(labels.begin(), labels.end(), GetParam().upper), labels.end());
+}
+
+// A 100x power change moves both legend endpoints by 20 dB while retaining
+// the same 60 dB span and peak color in the CUDA image.
+INSTANTIATE_TEST_SUITE_P(PowerLevels, FmcwDashboardPowerTest,
+                         ::testing::Values(PowerLegendCase{1.0F, "-60.0", "0.0 dB"},
+                                           PowerLegendCase{100.0F, "-40.0", "20.0 dB"},
+                                           PowerLegendCase{0.01F, "-80.0", "-20.0 dB"}));
+
+class FmcwDashboardBackgroundTest : public ::testing::TestWithParam<int> {};
+
+TEST_P(FmcwDashboardBackgroundTest, MasksDetectionCrossesAndProjectsLeadingPlanes) {
+  using Op = viz::FmcwDashboardOp;
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  using radar::testing::to_device_tensor;
+  constexpr DLDataType kFloat{kDLFloat, 32U, 1U};
+  constexpr DLDataType kInt{kDLInt, 64U, 1U};
+  viz::FmcwDashboardConfig config;
+  config.show_angles = false;
+  config.title = "FMCW test";
+  config.noise_sample_limit = 256;
+  config.noise_doppler_half_width = 1;
+  config.noise_range_half_width = 1;
+  const int planes = GetParam();
+  std::vector<float> powers(planes * 256, 100.0F);
+  for (int plane = 0; plane < planes; ++plane) {
+    for (int d = 0; d < 16; ++d) {
+      for (int r = 0; r < 16; ++r) {
+        powers[plane * 256 + d * 16 + r] =
+            d == 4 || r == 5 ? 1.0e12F
+                             : (plane + 1) * std::pow(10.0F, ((d + r) % 2 ? 23.0F : 17.0F) / 10.0F);
+      }
+    }
+  }
+  std::vector<float> bins(16);
+  for (int i = 0; i < 16; ++i)
+    bins[i] = static_cast<float>(i);
+  auto harness = holoscan::testing::create_operator_test<Op>(config);
+  harness.push_frame(frame_at(
+      std::chrono::milliseconds{1},
+      input("cfar_power", *to_device_tensor(powers, {planes, 16, 16}, kFloat)),
+      input("detection_idx", *to_device_tensor(std::vector<std::int64_t>{0, 4, 5}, {1, 3}, kInt)),
+      input("points", *to_device_tensor(std::vector<float>{5.0F, 4.0F}, {1, 2}, kFloat)),
+      input("range_bins", *to_device_tensor(bins, {16}, kFloat)),
+      input("velocity_bins", *to_device_tensor(bins, {16}, kFloat))));
+  harness.capture_snapshot<holoscan::Tensor>("rgba", 1U, 1280U * 720U * 4U);
+  harness.capture_snapshot<holoscan::Tensor>(
+      "text", 1U, viz::detail::kDashboardTextRows * viz::detail::kDashboardTextRowBytes);
+  for (const auto* port :
+       {"cfar_power", "detection_idx", "points", "range_bins", "velocity_bins"}) {
+    harness.input_source_device(port, holoscan::DeviceId{0});
+  }
+  harness.output_device("rgba", holoscan::DeviceId{0});
+  auto running = harness.run_async({.expect_stop = true});
+  const bool image_ready = running.wait_for_output("rgba", 1U, std::chrono::seconds{5});
+  const bool text_ready = running.wait_for_output("text", 1U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(image_ready && text_ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto image = radar::testing::to_host(result.snapshot<holoscan::Tensor>("rgba"));
+  const auto* pixels = image.as<std::uint8_t>();
+  // Ordinary background away from the detection cross must retain color,
+  // rather than clipping to the palette minimum (green = 1).
+  const std::size_t center = 4U * (300U * 1280U + 300U);
+  EXPECT_GT(pixels[center + 1U], 1U);
+  EXPECT_LT(pixels[center + 1U], 231U);
+  const auto text = radar::testing::to_host(result.snapshot<holoscan::Tensor>("text"));
+  ASSERT_EQ(text.shape.size(), 2U);
+  EXPECT_EQ(text.shape[1], viz::detail::kDashboardTextRowBytes);
+  EXPECT_GT(text.shape[0], 10);
+  EXPECT_STREQ(reinterpret_cast<const char*>(text.data.data() +
+                                             holoscan::visualization::kTextRunHeaderBytes),
+               "FMCW test");
+  std::vector<std::string> labels;
+  for (std::size_t offset = 0; offset < text.data.size();
+       offset += viz::detail::kDashboardTextRowBytes) {
+    labels.emplace_back(reinterpret_cast<const char*>(
+        text.data.data() + offset + holoscan::visualization::kTextRunHeaderBytes));
+  }
+  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "14.0" : "17.0"), labels.end());
+  EXPECT_NE(std::find(labels.begin(), labels.end(), planes == 1 ? "32.0 dB" : "35.0 dB"),
+            labels.end());
+}
+
+INSTANTIATE_TEST_SUITE_P(Projection, FmcwDashboardBackgroundTest, ::testing::Values(1, 2));
+
+TEST(FmcwDashboardBackgroundStatsTest, EstimatesDbMomentsAndRejectsOutliers) {
+  std::vector<float> samples(256);
+  for (std::size_t i = 0; i < samples.size(); ++i)
+    samples[i] = i % 2 ? 19.0F : 21.0F;
+  samples.push_back(1000.0F);
+  samples.push_back(std::numeric_limits<float>::quiet_NaN());
+  const auto stats = viz::detail::background_statistics(samples);
+  ASSERT_TRUE(stats);
+  EXPECT_NEAR(stats->mean_db, 20.0F, 1e-5F);
+  EXPECT_NEAR(stats->stddev_db, 1.0F, 1e-5F);
+  EXPECT_EQ(stats->count, 256U);
+  EXPECT_FALSE(viz::detail::background_statistics(std::vector<float>(63, 20.0F)));
+  EXPECT_FALSE(viz::detail::background_statistics(
+      std::vector<float>(2048, std::numeric_limits<float>::quiet_NaN())));
+}
+
+TEST(FmcwDashboardBackgroundStatsTest, SmoothsHoldsAndExpiresToPeakFallback) {
+  viz::detail::BackgroundScaleState state;
+  const viz::detail::BackgroundStatistics background{20.0F, 1.0F, 256};
+  EXPECT_EQ(state.limits(std::nullopt, 100.0F, 60.0F, 2.0F, 0.0F, 0),
+            (std::array<float, 2>{-40.0F, 20.0F}));
+  EXPECT_EQ(state.limits(background, 1e12F, 60.0F, 2.0F, 0.0F, 0),
+            (std::array<float, 2>{18.0F, 22.0F}));
+  const auto moved = state.limits(viz::detail::BackgroundStatistics{30.0F, 1.0F, 256}, 1e12F, 60.0F,
+                                  2.0F, 0.0F, 250000000);
+  EXPECT_NEAR(moved[0], 18.0F + 10.0F * (1.0F - std::exp(-1.0F)), 1e-5F);
+  EXPECT_NEAR(moved[1], 22.0F + 10.0F * (1.0F - std::exp(-1.0F)), 1e-5F);
+  EXPECT_EQ(state.limits(std::nullopt, 1e12F, 60.0F, 2.0F, 0.0F, 750000000), moved);
+  EXPECT_EQ(state.limits(std::nullopt, 100.0F, 60.0F, 2.0F, 0.0F, 1250000001),
+            (std::array<float, 2>{-40.0F, 20.0F}));
+  EXPECT_EQ(state.limits(std::nullopt, 0.0F, 60.0F, 2.0F, 0.0F, 1500000000),
+            (std::array<float, 2>{-60.0F, 0.0F}));
+}
+
+TEST(FmcwDashboardBackgroundStatsTest, UsesSymmetricSigmaBandAndUpperOnlyHeadroom) {
+  const viz::detail::BackgroundStatistics background{20.0F, 3.0F, 256};
+  viz::detail::BackgroundScaleState symmetric;
+  EXPECT_EQ(symmetric.limits(background, 1e12F, 60.0F, 2.0F, 0.0F, 0),
+            (std::array<float, 2>{14.0F, 26.0F}));
+  viz::detail::BackgroundScaleState headroom;
+  EXPECT_EQ(headroom.limits(background, 1e12F, 60.0F, 2.0F, 12.0F, 0),
+            (std::array<float, 2>{14.0F, 38.0F}));
+  viz::detail::BackgroundScaleState narrower;
+  EXPECT_EQ(narrower.limits(background, 1e12F, 60.0F, 1.0F, 0.0F, 0),
+            (std::array<float, 2>{17.0F, 23.0F}));
+}
+
+TEST(FmcwDashboardBackgroundStatsTest, KeepsFlatBackgroundAndZeroSigmaLimitsFinite) {
+  for (const float deviation : {0.0F, 3.0F}) {
+    viz::detail::BackgroundScaleState state;
+    const auto limits = state.limits(viz::detail::BackgroundStatistics{20.0F, deviation, 256},
+                                     1e12F, 60.0F, 0.0F, 0.0F, 0);
+    EXPECT_TRUE(std::isfinite(limits[0]) && std::isfinite(limits[1]));
+    EXPECT_NEAR(limits[1] - limits[0], 0.1F, 1e-5F);
+    EXPECT_NEAR(0.5F * (limits[0] + limits[1]), 20.0F, 1e-5F);
+  }
+  viz::detail::BackgroundScaleState headroom;
+  EXPECT_EQ(headroom.limits(viz::detail::BackgroundStatistics{20.0F, 0.0F, 256}, 1e12F, 60.0F, 2.0F,
+                            12.0F, 0),
+            (std::array<float, 2>{20.0F, 32.0F}));
+}
+
+TEST(FmcwDashboardTextTest, EncodesNativeSdkRowsWithOwnedTextAndPixelPositions) {
+  std::vector<std::uint8_t> records;
+  std::string label = "Range (m)";
+  viz::detail::append_dashboard_text(&records, 1280, 720, 640.0F, 180.0F, label, 13.0F);
+  label = "changed";
+  viz::detail::append_dashboard_text(&records, 1280, 720, 20.0F, 43.0F, "Frame 2", 13.0F);
+  ASSERT_EQ(records.size(), 2U * viz::detail::kDashboardTextRowBytes);
+  holoscan::visualization::TextRunHeader header;
+  std::memcpy(&header, records.data(), sizeof(header));
+  EXPECT_FLOAT_EQ(header.x, 640.0F);
+  EXPECT_FLOAT_EQ(header.y, 180.0F);
+  EXPECT_FLOAT_EQ(header.size_px, 13.0F);
+  EXPECT_EQ(header.color >> 24U, 255U);
+  const auto* text = reinterpret_cast<const char*>(records.data() + sizeof(header));
+  EXPECT_STREQ(text, "Range (m)");
+  for (std::size_t i = sizeof(header) + 9U; i < viz::detail::kDashboardTextRowBytes; ++i) {
+    EXPECT_EQ(records[i], 0U);
+  }
+}
+
+TEST(FmcwDashboardTextTest, FitsLongWorkflowNamesAndEnforcesThePerFrameBudget) {
+  std::vector<std::uint8_t> records;
+  viz::detail::append_dashboard_text(&records, 640, 360, 20.0F, 15.0F, std::string(400U, 'A'),
+                                     20.0F);
+  const auto* text =
+      reinterpret_cast<const char*>(records.data() + holoscan::visualization::kTextRunHeaderBytes);
+  const std::string displayed(text);
+  EXPECT_LT(displayed.size(), viz::detail::kDashboardTextBytes);
+  EXPECT_TRUE(displayed.ends_with("..."));
+  EXPECT_LE(20.0F + displayed.size() * 20.0F * 7.0F / 13.0F, 628.0F);
+  for (std::size_t i = 1U; i < viz::detail::kDashboardTextRows; ++i) {
+    viz::detail::append_dashboard_text(&records, 640, 360, 20.0F, 15.0F, "x", 13.0F);
+  }
+  EXPECT_THROW(
+      viz::detail::append_dashboard_text(&records, 640, 360, 20.0F, 15.0F, "overflow", 13.0F),
+      std::invalid_argument);
 }
 
 TEST(AnglePresentationTest, ConvertsDirectionCosinesToPhysicalAngles) {
@@ -164,13 +578,13 @@ TEST(FmcwRdHeatmapTest, MapsPeakAndDynamicRange) {
   const std::vector<std::uint8_t> rgba =
       viz::detail::make_heatmap_rgba_reference({1.0F, 1000000.0F}, {1, 2}, 60.0F);
   ASSERT_EQ(rgba.size(), 8U);
-  EXPECT_EQ(rgba[0], 0U);
-  EXPECT_EQ(rgba[1], 0U);
-  EXPECT_EQ(rgba[2], 255U);
+  EXPECT_EQ(rgba[0], 68U);
+  EXPECT_EQ(rgba[1], 1U);
+  EXPECT_EQ(rgba[2], 84U);
   EXPECT_EQ(rgba[3], 255U);
-  EXPECT_EQ(rgba[4], 255U);
-  EXPECT_EQ(rgba[5], 0U);
-  EXPECT_EQ(rgba[6], 0U);
+  EXPECT_EQ(rgba[4], 253U);
+  EXPECT_EQ(rgba[5], 231U);
+  EXPECT_EQ(rgba[6], 37U);
   EXPECT_EQ(rgba[7], 255U);
 }
 
@@ -190,12 +604,80 @@ TEST(FmcwRdHeatmapTest, MapsDopplerToXAndRangeUpward) {
   EXPECT_GT(low_range[1], high_range[1]);
 }
 
+TEST(FmcwRdHeatmapTest, ReversesMarkersWithDescendingPhysicalVelocityBins) {
+  const auto normal = viz::detail::rd_plot_position(1.0F, 2.0F, 8, 4);
+  const auto reversed = viz::detail::rd_plot_position(1.0F, 2.0F, 8, 4, true);
+  EXPECT_FLOAT_EQ(reversed[0], 1.0F - normal[0]);
+  EXPECT_FLOAT_EQ(reversed[1], normal[1]);
+}
+
 TEST(FmcwDashboardTest, UsesUpwardSemicircleForAtMost180DegreeCoverage) {
   constexpr float kHalfPi = 1.57079632679489661923F;
   EXPECT_TRUE(viz::detail::use_azimuth_sector({-0.3F, 0.3F}));
   EXPECT_TRUE(viz::detail::use_azimuth_sector({-kHalfPi, kHalfPi}));
   EXPECT_TRUE(viz::detail::use_azimuth_sector({-2.0F, 0.0F}));
   EXPECT_FALSE(viz::detail::use_azimuth_sector({-2.0F, 2.0F}));
+}
+
+TEST(FmcwDashboardTest, NarrowSectorFillsPanelWidthAndHeight) {
+  const std::array<float, 2> bounds{-0.3F, 0.3F};
+  const auto left = viz::detail::sector_plot_position(1.0F, bounds[0], bounds);
+  const auto right = viz::detail::sector_plot_position(1.0F, bounds[1], bounds);
+  const auto far = viz::detail::sector_plot_position(1.0F, 0.0F, bounds);
+  const auto near = viz::detail::sector_plot_position(0.0F, 0.0F, bounds);
+  ASSERT_TRUE(left && right && far && near);
+  EXPECT_NEAR((*left)[0], 0.0F, 1.0e-6F);
+  EXPECT_NEAR((*right)[0], 1.0F, 1.0e-6F);
+  EXPECT_NEAR((*left)[1], 1.0F - std::cos(0.3F), 1.0e-6F);
+  EXPECT_EQ(*far, (std::array<float, 2>{0.5F, 0.0F}));
+  EXPECT_EQ(*near, (std::array<float, 2>{0.5F, 1.0F}));
+  const auto halfway = viz::detail::sector_plot_position(0.5F, 0.0F, bounds);
+  ASSERT_TRUE(halfway);
+  EXPECT_EQ(*halfway, (std::array<float, 2>{0.5F, 0.5F}));
+}
+
+TEST(FmcwDashboardTest, FittedSectorHandlesOffCenterAndWrappedAzimuths) {
+  const std::array<float, 2> bounds{2.8F, 3.4F};
+  constexpr float kTwoPi = 6.28318530717958647692F;
+  const auto right = viz::detail::sector_plot_position(1.0F, bounds[1] - kTwoPi, bounds);
+  ASSERT_TRUE(right);
+  EXPECT_NEAR((*right)[0], 1.0F, 1.0e-6F);
+  const auto center = viz::detail::sector_plot_position(0.5F, 3.1F, bounds);
+  ASSERT_TRUE(center);
+  EXPECT_NEAR((*center)[0], 0.5F, 1.0e-6F);
+  EXPECT_NEAR((*center)[1], 0.5F, 1.0e-6F);
+}
+
+TEST(FmcwDashboardTest, FittedSectorContainsAllRangesForNarrowAndWideScans) {
+  constexpr float kHalfPi = 1.57079632679489661923F;
+  for (const auto& bounds :
+       {std::array<float, 2>{-1.0e-7F, 1.0e-7F}, std::array<float, 2>{-kHalfPi, kHalfPi},
+        std::array<float, 2>{-2.0F, 0.0F}}) {
+    for (int step = 0; step <= 100; ++step) {
+      const float azimuth = bounds[0] + (bounds[1] - bounds[0]) * step / 100.0F;
+      for (float range : {0.0F, 0.25F, 0.5F, 1.0F}) {
+        const auto position = viz::detail::sector_plot_position(range, azimuth, bounds);
+        ASSERT_TRUE(position);
+        for (float coordinate : *position) {
+          EXPECT_GE(coordinate, 0.0F);
+          EXPECT_LE(coordinate, 1.0F);
+        }
+      }
+    }
+  }
+}
+
+TEST(FmcwDashboardTest, FittedSectorRejectsOutOfViewAndInvalidSamples) {
+  const std::array<float, 2> bounds{-0.3F, 0.3F};
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, 0.4F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, -0.4F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(-0.1F, 0.0F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(1.1F, 0.0F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(std::nanf(""), 0.0F, bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, std::nanf(""), bounds));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, 0.0F, {0.0F, 0.0F}));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, 0.0F, {0.3F, -0.3F}));
+  EXPECT_FALSE(viz::detail::sector_plot_position(0.5F, 0.0F, {-3.14F, 3.14F}));
 }
 
 TEST(FmcwDashboardTest, ComputesClusterCentroids) {

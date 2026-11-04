@@ -58,3 +58,11 @@ The velocity axis length equals `D`, matches template precision, and is finite a
 ## Configuration and caching
 
 The plan contains validated layout and scalar notch values; no coefficient cache is required. Constructor extents determine admitted named leading rank and output pool capacity.
+
+## Performance
+
+The CUDA stage computes the original gain once per contiguous range row, casts it to the selected precision, and shares it within the block. Row-grid striding preserves larger extents, with barriers protecting reuse between rows. Per-cell multiplication and live-value resolution are unchanged; no persistent coefficient cache or device allocation was added. The original generic private stage remains available for partial rows.
+
+A bounded Thor run on the pinned HSDK 5 deployment measured `noncyclic-mimo-large` (4 TX, 4 RX, 256 Doppler bins, 2048 range bins): fresh median latency fell from 5.8773 to 1.2034 ms in float and 6.2586 to 2.4958 ms in double. Median paired savings were 79.53% and 60.13%, respectively. Three paired screening runs and one fresh three-pair confirmation used five warmups and 50 frames per process. Six native recipe exports matched exactly in both precisions; public analytic tests cover capped row-grid striding, odd ranges, changing axes, and live overrides followed by Params fallback.
+
+Small-case medians stayed within the declared max(1 microsecond, 3%) risk allowance with at least two of three pairs passing per phase. One fresh small-float process had a 48.898 microsecond median versus 40.949 microseconds for its paired original; this observation is retained rather than discarded. Setup, cold, and sampled tail results vary, so these scoped engineering measurements do not guarantee zero slowdown or population-tail behavior on every shape or deployment.

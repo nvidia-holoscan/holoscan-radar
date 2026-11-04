@@ -2,24 +2,74 @@
   "$schema": "urn:holohub:application:v1",
   "application": {
     "name": "adaptive_aoa",
-    "authors": [{"name": "Holoscan Team", "affiliation": "NVIDIA"}],
-    "language": ["C++"],
+    "authors": [
+      {
+        "name": "Holoscan Team",
+        "affiliation": "NVIDIA"
+      }
+    ],
+    "language": [
+      "C++"
+    ],
     "version": "0.1.0",
-    "changelog": {"0.1.0": "Selective super-resolution AoA demonstration"},
+    "changelog": {
+      "0.1.0": "Selective super-resolution AoA demonstration"
+    },
     "holoscan_sdk": {
       "minimum_required_version": "5.0.0",
-      "tested_versions": ["5.0.0"]
+      "tested_versions": [
+        "5.0.0"
+      ]
     },
-    "platforms": ["x86_64", "aarch64"],
-    "tags": ["Radar", "Signal Processing", "GPU", "FMCW", "MIMO", "TDM", "AoA"],
+    "platforms": [
+      "x86_64",
+      "aarch64"
+    ],
+    "tags": [
+      "Radar",
+      "Signal Processing",
+      "GPU",
+      "FMCW",
+      "MIMO",
+      "TDM",
+      "AoA"
+    ],
     "ranking": 3,
     "requirements": {},
     "default_mode": "default",
     "modes": {
       "default": {
-        "description": "Selective super-resolution angle estimation",
+        "description": "Adaptive angle estimation with MUSIC",
         "run": {
           "command": "<holohub_app_bin>/adaptive_aoa",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "smoke": {
+        "description": "Run the short headless smoke preset",
+        "run": {
+          "command": "<holohub_app_bin>/adaptive_aoa adaptive_aoa_smoke.yaml",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "root_music": {
+        "description": "Adaptive angle estimation with Root-MUSIC",
+        "run": {
+          "command": "<holohub_app_bin>/adaptive_aoa adaptive_aoa_root_music.yaml",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "esprit": {
+        "description": "Adaptive angle estimation with ESPRIT",
+        "run": {
+          "command": "<holohub_app_bin>/adaptive_aoa adaptive_aoa_esprit.yaml",
+          "workdir": "holohub_app_bin"
+        }
+      },
+      "mvdr": {
+        "description": "Adaptive angle estimation with MVDR",
+        "run": {
+          "command": "<holohub_app_bin>/adaptive_aoa adaptive_aoa_mvdr.yaml",
           "workdir": "holohub_app_bin"
         }
       }

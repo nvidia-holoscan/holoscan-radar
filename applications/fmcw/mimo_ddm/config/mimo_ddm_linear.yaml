@@ -1,165 +1,40 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+extends: mimo_ddm_base.yaml
 app:
-    waveform: &waveform
-        carrier_frequency: 77.0e9
-        bandwidth: 150.0e6
-        chirp_duration: 20.0e-6
-        sample_rate: 12.8e6
-        chirp_repetition_interval: 25.0e-6
-    # DDM semantics: total coded chirps.
-    cube:
-        num_chirps: 128
-        samples_per_chirp: 256
-    run:
-        num_frames: 250
-        frame_period: 0.1
-        meter_cadence: true
-        meter_log_every: 0
-    visualization:
-        enabled: true
-        window_width: 1280
-        window_height: 720
-        window_title: FMCW MIMO DDM
-        display_rate_hz: 20.0
-        dynamic_range_db: 60.0
-        detection_radius: 0.010
-        history_frames: 120
-        detection_trail_frames: 50
-    tx_array:
-        num_tx: 2
-        spacing: 0.5
-    rx_array:
-        az_elements: 4
-        el_elements: 4
-        spacing: 0.5
-    # Binary geometric coverage; forward is +x in the radar-local frame.
-    scene_visibility:
-        model: front_half_space
-        boresight_direction: [1.0, 0.0, 0.0]
-    range_loss:
-        model: monostatic_free_space
-        reference_range: 100.0
     targets:
         - range: 245.0
           azimuth: 0.15
-          elevation: 0.10
-          velocity:
-              - -6.5262  # x
-              - -1.4415  # y
-              - -0.5686  # z
+          elevation: 0.1
+          velocity: [-6.45598, -1.90609, -0.5686]
           amplitude: 0.8
         - range: 132.0
-          azimuth: -0.10
+          azimuth: -0.1
           elevation: -0.12
-          velocity:
-              - -2.0  # x
-              - 0.0  # y
-              - 0.0  # z
+          velocity: [-1.90062, 0.99052, 0.0]
           amplitude: 0.6
         - range: 22.0
           azimuth: 0.0
           elevation: 0.08
-          velocity:
-              - 8.4896  # x
-              - 0.0  # y
-              - 0.6806  # z
+          velocity: [8.4896, 1.31999, 0.6806]
           amplitude: 0.7
         - range: 117.0
-          azimuth: 0.20
-          elevation: 0.10
-          velocity:
-              - 2.9717  # x
-              - 0.7248  # y
-              - 0.0052  # z
+          azimuth: 0.2
+          elevation: 0.1
+          velocity: [3.53758, -2.06679, 0.0052]
           amplitude: 0.55
         - range: 218.0
           azimuth: 0.17
           elevation: 0.04
-          velocity:
-              - -4.7264  # x
-              - -1.2375  # y
-              - -0.0747  # z
+          velocity: [-4.58907, -2.03755, -0.0747]
           amplitude: 0.7
-    noise_snr_db: 18.0
-
-range_processor:
-    waveform: *waveform
-    # Common options: none, hann, hamming.
-    range_window: hann
 doppler_processor:
-    waveform: *waveform
-    # Common options: none, hann, hamming.
     doppler_window: hann
-
 ddm_dense_demultiplex:
     ddm_code:
         num_tx: 2
-        doppler_offsets:
-            - 0.0  # TX 0, normalized Doppler
-            - 0.5  # TX 1, normalized Doppler
+        doppler_offsets: [0.0, 0.5]
         guard_bands: 4
-
-doppler_notch:
-    center_velocity: 0.0
-    stop_half_width: 0.61
-    transition_width: 1.22
-    cyclic_velocity_axis: true
-virtual_array_assembly:
-    overlap_policy: keep_all
 cfar_detector:
-    # Options: CA, GO, SO, OS.
-    cfar_variant: CA
-    guard_cells:
-        - 3  # Doppler
-        - 3  # Range
-    training_cells:
-        - 3  # Doppler
-        - 3  # Range
-    pfa: 1.0e-9
     threshold_scale: 4.0
-    peak_mode: none
-    nci_axes:
-        - 0  # RX channel
-snapshot_gather:
-    snapshot_window:
-        - 0  # Doppler
-        - 0  # Range
-beamscan_estimator:
-    angle_convention:
-        preset: radar_boresight
-    az_coordinates: {min: -0.3, max: 0.3, step: 0.05}
-    el_coordinates: {min: -0.3, max: 0.3, step: 0.05}
-    peak_interpolation: parabolic
-feature_assembly:
-    features:
-        - range
-        - velocity
-        - az_estimate
-        - el_estimate
-        - score
-        - range_bin
-        - doppler_bin
-cluster_dbscan:
-    epsilon:
-        - 0.0  # Range (ignored)
-        - 0.0  # Velocity (ignored)
-        - 0.0  # Azimuth estimate (ignored)
-        - 0.0  # Elevation estimate (ignored)
-        - 0.0  # Score (ignored)
-        - 1.5  # Range bin
-        - 1.5  # Doppler bin
-    min_points: 1
-    max_clusters: 32
-reduction:
-    representative: weighted_mean
-    score_method: weighted_sum
-    feature_weights:
-        - 0.0  # Range (ignored)
-        - 0.0  # Velocity (ignored)
-        - 0.0  # Azimuth estimate (ignored)
-        - 0.0  # Elevation estimate (ignored)
-        - 1.0  # Score
-        - 0.0  # Range bin (ignored)
-        - 0.0  # Doppler bin (ignored)

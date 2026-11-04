@@ -3,6 +3,8 @@
 
 #include "radar_common/reduce/group_by_label.hpp"
 
+#include <cub/block/block_scan.cuh>
+
 #include <cmath>
 #include <cstdint>
 
@@ -218,21 +220,28 @@ __global__ void count_occupied_rows_kernel(const int64_t* best_rows, int64_t n_s
 
 __global__ void compact_and_gather_kernel(const int64_t* best_rows, const int64_t* detection_idx,
                                           int64_t n_slots, int64_t idx_cols, int64_t* rep_idx) {
-  if (blockIdx.x != 0 || threadIdx.x != 0) {
-    return;
-  }
-  int64_t out = 0;
-  for (int64_t lab = 0; lab < n_slots; ++lab) {
-    if (best_rows[lab] == kEmptyRow) {
-      continue;
+  using Scan = cub::BlockScan<int, 256>;
+  __shared__ typename Scan::TempStorage scan;
+  __shared__ int64_t base;
+  if (threadIdx.x == 0)
+    base = 0;
+  __syncthreads();
+  for (int64_t tile = 0; tile < n_slots; tile += 256) {
+    const int64_t lab = tile + threadIdx.x;
+    const bool occupied = lab < n_slots && best_rows[lab] != kEmptyRow;
+    int offset = 0;
+    int total = 0;
+    Scan(scan).ExclusiveSum(occupied ? 1 : 0, offset, total);
+    if (occupied) {
+      const int64_t row = best_rows[lab];
+      for (int64_t c = 0; c < idx_cols; ++c) {
+        rep_idx[(base + offset) * idx_cols + c] = detection_idx[row * idx_cols + c];
+      }
     }
-    const int64_t row = best_rows[lab];
-    const int64_t* src = detection_idx + row * idx_cols;
-    int64_t* dst = rep_idx + out * idx_cols;
-    for (int64_t c = 0; c < idx_cols; ++c) {
-      dst[c] = src[c];
-    }
-    ++out;
+    __syncthreads();
+    if (threadIdx.x == 0)
+      base += total;
+    __syncthreads();
   }
 }
 
@@ -240,21 +249,29 @@ template <typename T>
 __global__ void compact_points_kernel(const int64_t* best_rows, const T* points,
                                       const T* slot_points, int64_t n_slots, int64_t num_features,
                                       bool use_slot_points, T* reduced_points) {
-  if (blockIdx.x != 0 || threadIdx.x != 0) {
-    return;
-  }
-  int64_t out = 0;
-  for (int64_t lab = 0; lab < n_slots; ++lab) {
-    if (best_rows[lab] == kEmptyRow) {
-      continue;
+  using Scan = cub::BlockScan<int, 256>;
+  __shared__ typename Scan::TempStorage scan;
+  __shared__ int64_t base;
+  if (threadIdx.x == 0)
+    base = 0;
+  __syncthreads();
+  for (int64_t tile = 0; tile < n_slots; tile += 256) {
+    const int64_t lab = tile + threadIdx.x;
+    const bool occupied = lab < n_slots && best_rows[lab] != kEmptyRow;
+    int offset = 0;
+    int total = 0;
+    Scan(scan).ExclusiveSum(occupied ? 1 : 0, offset, total);
+    if (occupied) {
+      const T* row = use_slot_points ? slot_points + lab * num_features
+                                     : points + best_rows[lab] * num_features;
+      for (int64_t f = 0; f < num_features; ++f) {
+        reduced_points[(base + offset) * num_features + f] = row[f];
+      }
     }
-    const T* src =
-        use_slot_points ? slot_points + lab * num_features : points + best_rows[lab] * num_features;
-    T* dst = reduced_points + out * num_features;
-    for (int64_t f = 0; f < num_features; ++f) {
-      dst[f] = src[f];
-    }
-    ++out;
+    __syncthreads();
+    if (threadIdx.x == 0)
+      base += total;
+    __syncthreads();
   }
 }
 
@@ -322,16 +339,16 @@ void launch_count_occupied(const int64_t* best_rows, int64_t n_slots, int64_t* c
 void launch_compact_and_gather(const int64_t* best_rows, const int64_t* detection_idx,
                                int64_t n_slots, int64_t idx_cols, int64_t* rep_idx,
                                cudaStream_t stream) {
-  compact_and_gather_kernel<<<1, 1, 0, stream>>>(best_rows, detection_idx, n_slots, idx_cols,
-                                                 rep_idx);
+  compact_and_gather_kernel<<<1, 256, 0, stream>>>(best_rows, detection_idx, n_slots, idx_cols,
+                                                   rep_idx);
 }
 
 template <typename T>
 void launch_compact_points(const int64_t* best_rows, const T* points, const T* slot_points,
                            int64_t n_slots, int64_t num_features, bool use_slot_points,
                            T* reduced_points, cudaStream_t stream) {
-  compact_points_kernel<T><<<1, 1, 0, stream>>>(best_rows, points, slot_points, n_slots,
-                                                num_features, use_slot_points, reduced_points);
+  compact_points_kernel<T><<<1, 256, 0, stream>>>(best_rows, points, slot_points, n_slots,
+                                                  num_features, use_slot_points, reduced_points);
 }
 
 template void launch_init_t_zero<float>(float*, int64_t, cudaStream_t);

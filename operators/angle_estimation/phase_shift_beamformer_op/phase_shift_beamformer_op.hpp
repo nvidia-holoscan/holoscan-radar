@@ -129,6 +129,12 @@ class PhaseShiftBeamformerOp : public holoscan::Operator<PhaseShiftBeamformerPar
   // Conjugated steering weights and their physical axes, built on device and
   // cached by the complete geometry/convention/grid/taper configuration.
   ConfigCache<detail::PhaseShiftBeamformerArtifacts> artifact_cache_;
+  ArrayGeometry last_steering_geometry_{};
+  AngleConvention last_steering_convention_{};
+  std::vector<double> last_steering_az_{};
+  std::vector<double> last_steering_el_{};
+  WindowSpec last_steering_taper_{};
+  const detail::PhaseShiftBeamformerArtifacts* last_steering_artifact_{nullptr};
 
   // The physical axes are optional/latched outputs.
   LatchedOutput az_grid_out_;

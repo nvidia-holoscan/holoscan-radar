@@ -8,11 +8,12 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
-#include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <limits>
 #include <stdexcept>
@@ -26,8 +27,10 @@
 #include <holoscan/core/payload_options.hpp>
 #include <holoscan/core/tensor_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
+#include <holoscan/time/clock_registry.hpp>
 
 #include "radar_app/app/angle_presentation.hpp"
+#include "radar_app/viz/dashboard_text.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -51,54 +54,127 @@ __global__ void reduce_positive_peak(const float* values, std::int64_t count,
   }
 }
 
+// Two compact bitsets mark full Doppler/range strips around every raw detection.
+__global__ void mark_detection_crosses(const std::int64_t* indices, std::int64_t detections,
+                                       std::int64_t rank, std::int64_t rows, std::int64_t cols,
+                                       int doppler_radius, int range_radius, unsigned int* mask) {
+  const auto i = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i >= detections)
+    return;
+  const auto d = indices[i * rank + rank - 2];
+  const auto r = indices[i * rank + rank - 1];
+  if (d < 0 || d >= rows || r < 0 || r >= cols)
+    return;
+  for (int offset = -doppler_radius; offset <= doppler_radius; ++offset) {
+    const auto bin = ((d + offset) % rows + rows) % rows;
+    atomicOr(mask + bin / 32, 1U << (bin % 32));
+  }
+  const auto range_mask = mask + (rows + 31) / 32;
+  for (int offset = -range_radius; offset <= range_radius; ++offset) {
+    const auto bin = r + offset;
+    if (bin >= 0 && bin < cols)
+      atomicOr(range_mask + bin / 32, 1U << (bin % 32));
+  }
+}
+
+__global__ void sample_background(const float* power, std::int64_t planes, std::int64_t rows,
+                                  std::int64_t cols, const unsigned int* mask, int samples,
+                                  unsigned int frame, float* result) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= samples)
+    return;
+  // One jittered candidate per disjoint stratum: bounded work, no rejection loop.
+  unsigned int hash = static_cast<unsigned int>(i) ^ (frame * 0x9e3779b9U);
+  hash = (hash ^ (hash >> 16)) * 0x7feb352dU;
+  hash = (hash ^ (hash >> 15)) * 0x846ca68bU;
+  hash ^= hash >> 16;
+  const auto pixels = rows * cols;
+  const auto begin = i * pixels / samples;
+  const auto end = (i + 1) * pixels / samples;
+  const auto pixel = begin + hash % (end - begin);
+  const auto d = pixel / cols;
+  const auto r = pixel % cols;
+  result[i] = nanf("");
+  if ((mask[d / 32] & (1U << (d % 32))) || (mask[(rows + 31) / 32 + r / 32] & (1U << (r % 32))))
+    return;
+  float value = 0.0F;
+  for (std::int64_t plane = 0; plane < planes; ++plane) {
+    const float candidate = power[plane * pixels + pixel];
+    if (isfinite(candidate))
+      value = fmaxf(value, candidate);
+  }
+  if (value > 0.0F)
+    result[i] = 10.0F * log10f(value);
+}
+
+// Five anchors of a sequential viridis palette. Interpolation keeps the same
+// scale for the CUDA heatmap, CPU reference, and displayed color legend.
+__host__ __device__ float heatmap_channel(float t, int component) {
+  constexpr float colors[5][3] = {{68.0F, 1.0F, 84.0F},
+                                  {59.0F, 82.0F, 139.0F},
+                                  {33.0F, 145.0F, 140.0F},
+                                  {94.0F, 201.0F, 98.0F},
+                                  {253.0F, 231.0F, 37.0F}};
+  const float position = fminf(fmaxf(t, 0.0F), 1.0F) * 4.0F;
+  const int index = static_cast<int>(fminf(position, 3.0F));
+  const float fraction = position - index;
+  return (colors[index][component] +
+          fraction * (colors[index + 1][component] - colors[index][component])) /
+         255.0F;
+}
+
 __device__ unsigned char channel(float value) {
   return static_cast<unsigned char>(fminf(fmaxf(value * 255.0F, 0.0F), 255.0F));
 }
 
 __global__ void power_to_rgba(const float* power, std::int64_t num_planes, std::int64_t source_rows,
-                              std::int64_t source_cols, const float* peak, float dynamic_range_db,
-                              std::int64_t canvas_width, int plot_x, int plot_y, int plot_width,
-                              int plot_height, std::uint8_t* rgba) {
+                              std::int64_t source_cols, float lower_db, float upper_db,
+                              std::int64_t canvas_width, std::int64_t canvas_pixels,
+                              const std::uint8_t* annotation, int plot_x, int plot_y,
+                              int plot_width, int plot_height, bool reverse_velocity,
+                              std::uint8_t* rgba) {
   const std::int64_t output_pixel =
       static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  const std::int64_t output_pixels = static_cast<std::int64_t>(plot_width) * plot_height;
-  if (output_pixel >= output_pixels) {
+  if (output_pixel >= canvas_pixels) {
     return;
   }
-  const std::int64_t output_row = output_pixel / plot_width;
-  const std::int64_t output_col = output_pixel % plot_width;
-  const std::int64_t source_row = output_col * source_rows / plot_width;
+  const std::int64_t out = 4 * output_pixel;
+  if (annotation[out + 3] != 0U) {
+    for (int c = 0; c < 4; ++c) {
+      rgba[out + c] = annotation[out + c];
+    }
+    return;
+  }
+  const std::int64_t output_row = output_pixel / canvas_width - plot_y;
+  const std::int64_t output_col = output_pixel % canvas_width - plot_x;
+  if (output_row < 0 || output_row >= plot_height || output_col < 0 || output_col >= plot_width) {
+    rgba[out] = 8U;
+    rgba[out + 1] = 12U;
+    rgba[out + 2] = 20U;
+    rgba[out + 3] = 255U;
+    return;
+  }
+  const std::int64_t column_bin = output_col * source_rows / plot_width;
+  const std::int64_t source_row = reverse_velocity ? source_rows - 1 - column_bin : column_bin;
   const std::int64_t source_col = (plot_height - 1 - output_row) * source_cols / plot_height;
   const std::int64_t source_pixel = source_row * source_cols + source_col;
   const std::int64_t source_pixels = source_rows * source_cols;
   float value = 0.0F;
   for (std::int64_t plane = 0; plane < num_planes; ++plane) {
-    value = fmaxf(value, power[plane * source_pixels + source_pixel]);
+    const float candidate = power[plane * source_pixels + source_pixel];
+    if (isfinite(candidate))
+      value = fmaxf(value, candidate);
   }
-  const float reference = fmaxf(*peak, FLT_MIN);
-  const float db = 10.0F * log10f(fmaxf(value, FLT_MIN) / reference);
-  const float t = fminf(fmaxf(1.0F + db / dynamic_range_db, 0.0F), 1.0F);
+  const float db = 10.0F * log10f(fmaxf(value, FLT_MIN));
+  const float t = fminf(fmaxf((db - lower_db) / (upper_db - lower_db), 0.0F), 1.0F);
 
-  // Compact perceptual-style blue -> cyan -> yellow -> red ramp.
-  const float red = fminf(fmaxf(3.0F * t - 1.0F, 0.0F), 1.0F);
-  const float green = fminf(fmaxf(1.5F - fabsf(3.0F * t - 1.5F), 0.0F), 1.0F);
-  const float blue = fminf(fmaxf(2.0F - 3.0F * t, 0.0F), 1.0F);
-  const std::int64_t out = 4 * ((output_row + plot_y) * canvas_width + output_col + plot_x);
+  const float red = heatmap_channel(t, 0);
+  const float green = heatmap_channel(t, 1);
+  const float blue = heatmap_channel(t, 2);
   rgba[out] = channel(red);
   rgba[out + 1] = channel(green);
   rgba[out + 2] = channel(blue);
   rgba[out + 3] = 255U;
-}
-
-__global__ void apply_annotation(const std::uint8_t* annotation, std::int64_t pixels,
-                                 std::uint8_t* rgba) {
-  const std::int64_t pixel = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (pixel < pixels && annotation[4 * pixel + 3] != 0U) {
-    rgba[4 * pixel] = annotation[4 * pixel];
-    rgba[4 * pixel + 1] = annotation[4 * pixel + 1];
-    rgba[4 * pixel + 2] = annotation[4 * pixel + 2];
-    rgba[4 * pixel + 3] = annotation[4 * pixel + 3];
-  }
 }
 
 expected<void, Error> cuda_failure(const char* who, const char* step) {
@@ -170,158 +246,38 @@ void validate_detection_inputs(const Tensor& detection_idx, const Tensor& points
   }
 }
 
-std::array<std::uint8_t, 7> glyph(char value) {
-  switch (static_cast<char>(std::toupper(static_cast<unsigned char>(value)))) {
-    case 'A':
-      return {14, 17, 17, 31, 17, 17, 17};
-    case 'B':
-      return {30, 17, 17, 30, 17, 17, 30};
-    case 'C':
-      return {14, 17, 16, 16, 16, 17, 14};
-    case 'D':
-      return {30, 17, 17, 17, 17, 17, 30};
-    case 'E':
-      return {31, 16, 16, 30, 16, 16, 31};
-    case 'F':
-      return {31, 16, 16, 30, 16, 16, 16};
-    case 'G':
-      return {14, 17, 16, 23, 17, 17, 15};
-    case 'H':
-      return {17, 17, 17, 31, 17, 17, 17};
-    case 'I':
-      return {14, 4, 4, 4, 4, 4, 14};
-    case 'J':
-      return {7, 2, 2, 2, 18, 18, 12};
-    case 'K':
-      return {17, 18, 20, 24, 20, 18, 17};
-    case 'L':
-      return {16, 16, 16, 16, 16, 16, 31};
-    case 'M':
-      return {17, 27, 21, 21, 17, 17, 17};
-    case 'N':
-      return {17, 25, 21, 19, 17, 17, 17};
-    case 'O':
-      return {14, 17, 17, 17, 17, 17, 14};
-    case 'P':
-      return {30, 17, 17, 30, 16, 16, 16};
-    case 'Q':
-      return {14, 17, 17, 17, 21, 18, 13};
-    case 'R':
-      return {30, 17, 17, 30, 20, 18, 17};
-    case 'S':
-      return {15, 16, 16, 14, 1, 1, 30};
-    case 'T':
-      return {31, 4, 4, 4, 4, 4, 4};
-    case 'U':
-      return {17, 17, 17, 17, 17, 17, 14};
-    case 'V':
-      return {17, 17, 17, 17, 17, 10, 4};
-    case 'W':
-      return {17, 17, 17, 21, 21, 21, 10};
-    case 'X':
-      return {17, 17, 10, 4, 10, 17, 17};
-    case 'Y':
-      return {17, 17, 10, 4, 4, 4, 4};
-    case 'Z':
-      return {31, 1, 2, 4, 8, 16, 31};
-    case '0':
-      return {14, 17, 19, 21, 25, 17, 14};
-    case '1':
-      return {4, 12, 4, 4, 4, 4, 14};
-    case '2':
-      return {14, 17, 1, 2, 4, 8, 31};
-    case '3':
-      return {30, 1, 1, 14, 1, 1, 30};
-    case '4':
-      return {2, 6, 10, 18, 31, 2, 2};
-    case '5':
-      return {31, 16, 16, 30, 1, 1, 30};
-    case '6':
-      return {14, 16, 16, 30, 17, 17, 14};
-    case '7':
-      return {31, 1, 2, 4, 8, 8, 8};
-    case '8':
-      return {14, 17, 17, 14, 17, 17, 14};
-    case '9':
-      return {14, 17, 17, 15, 1, 1, 14};
-    case '-':
-      return {0, 0, 0, 31, 0, 0, 0};
-    case '=':
-      return {0, 31, 0, 31, 0, 0, 0};
-    case '.':
-      return {0, 0, 0, 0, 0, 12, 12};
-    case '/':
-      return {1, 2, 2, 4, 8, 8, 16};
-    case '(':
-      return {2, 4, 8, 8, 8, 4, 2};
-    case ')':
-      return {8, 4, 2, 2, 2, 4, 8};
-    case '+':
-      return {0, 4, 4, 31, 4, 4, 0};
-    case ':':
-      return {0, 12, 12, 0, 12, 12, 0};
-    default:
-      return {};
-  }
-}
+struct AnnotationCanvas {
+  std::vector<std::uint8_t> pixels;
+  std::vector<std::uint8_t> text;
+};
 
-void set_pixel(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_t height,
-               std::int64_t x, std::int64_t y, const std::array<std::uint8_t, 4>& color) {
+void set_pixel(AnnotationCanvas* image, std::int64_t width, std::int64_t height, std::int64_t x,
+               std::int64_t y, const std::array<std::uint8_t, 4>& color) {
   if (x < 0 || x >= width || y < 0 || y >= height) {
     return;
   }
   const std::size_t offset = 4U * static_cast<std::size_t>(y * width + x);
-  std::copy(color.begin(), color.end(), image->begin() + offset);
+  std::copy(color.begin(), color.end(), image->pixels.begin() + offset);
 }
 
-void draw_text(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_t height,
-               std::int64_t x, std::int64_t y, std::string_view text, int scale) {
-  constexpr std::array<std::uint8_t, 4> kWhite{255U, 255U, 255U, 255U};
-  for (std::size_t i = 0; i < text.size(); ++i) {
-    const auto rows = glyph(text[i]);
-    for (int row = 0; row < 7; ++row) {
-      for (int col = 0; col < 5; ++col) {
-        if ((rows[row] & (1U << (4 - col))) == 0U) {
-          continue;
-        }
-        for (int sy = 0; sy < scale; ++sy) {
-          for (int sx = 0; sx < scale; ++sx) {
-            set_pixel(image, width, height,
-                      x + static_cast<std::int64_t>(i) * 6 * scale + col * scale + sx,
-                      y + row * scale + sy, kWhite);
-          }
-        }
-      }
-    }
-  }
+float text_size(std::int64_t height, int scale) {
+  return scale == 2 ? (height < 540 ? 17.0F : 20.0F) : (height < 540 ? 10.0F : 13.0F);
 }
 
-void draw_text_ccw(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_t height,
-                   std::int64_t x, std::int64_t y, std::string_view text, int scale) {
-  constexpr std::array<std::uint8_t, 4> kWhite{255U, 255U, 255U, 255U};
-  const std::int64_t text_width = static_cast<std::int64_t>(text.size()) * 6 * scale;
-  for (std::size_t i = 0; i < text.size(); ++i) {
-    const auto rows = glyph(text[i]);
-    for (int row = 0; row < 7; ++row) {
-      for (int col = 0; col < 5; ++col) {
-        if ((rows[row] & (1U << (4 - col))) == 0U) {
-          continue;
-        }
-        for (int sy = 0; sy < scale; ++sy) {
-          for (int sx = 0; sx < scale; ++sx) {
-            const std::int64_t normal_x =
-                static_cast<std::int64_t>(i) * 6 * scale + col * scale + sx;
-            set_pixel(image, width, height, x + row * scale + sy, y + text_width - 1 - normal_x,
-                      kWhite);
-          }
-        }
-      }
-    }
-  }
+int text_width(std::string_view text, std::int64_t height, int scale = 1) {
+  return static_cast<int>(std::ceil(text.size() * text_size(height, scale) * 7.0F / 13.0F));
 }
 
-void draw_line(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_t height, int x0,
-               int y0, int x1, int y1, const std::array<std::uint8_t, 4>& color) {
+void draw_text(AnnotationCanvas* image, std::int64_t width, std::int64_t height, std::int64_t x,
+               std::int64_t y, std::string_view text, int scale,
+               std::uint32_t color = detail::kDashboardTextSecondary) {
+  // SDK text uses framebuffer pixels; the layout targets the configured canvas.
+  detail::append_dashboard_text(&image->text, width, height, static_cast<float>(x),
+                                static_cast<float>(y), text, text_size(height, scale), color);
+}
+
+void draw_line(AnnotationCanvas* image, std::int64_t width, std::int64_t height, int x0, int y0,
+               int x1, int y1, const std::array<std::uint8_t, 4>& color) {
   const int dx = std::abs(x1 - x0);
   const int sx = x0 < x1 ? 1 : -1;
   const int dy = -std::abs(y1 - y0);
@@ -346,7 +302,8 @@ void draw_line(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_
 
 std::string format_value(float value) {
   char buffer[32];
-  std::snprintf(buffer, sizeof(buffer), "%.1f", static_cast<double>(value));
+  std::snprintf(buffer, sizeof(buffer), "%.1f",
+                static_cast<double>(std::abs(value) < 0.05F ? 0.0F : value));
   return buffer;
 }
 
@@ -369,6 +326,62 @@ struct PixelRect {
   int height{0};
 };
 
+void draw_centered_text(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
+                        const PixelRect& panel, int y, std::string_view text,
+                        std::uint32_t color = detail::kDashboardTextPrimary) {
+  const auto available = static_cast<std::size_t>(std::max(0, panel.width - 24) /
+                                                  (text_size(height, 1) * 7.0F / 13.0F));
+  const auto label = text.substr(0, available);
+  draw_text(image, width, height, panel.x + (panel.width - text_width(label, height)) / 2, y, label,
+            1, color);
+}
+
+// Keep tick/caption rows separate without reserving excess space around the data.
+PixelRect cartesian_plot_rect(const PixelRect& panel, std::int64_t height) {
+  const bool compact = height < 540;
+  return PixelRect{.x = panel.x + (compact ? 36 : 46),
+                   .y = panel.y + (compact ? 22 : 26),
+                   .width = panel.width - (compact ? 46 : 58),
+                   .height = panel.height - (compact ? 42 : 62)};
+}
+
+void draw_x_tick_label(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
+                       const PixelRect& plot, int x, std::string_view label) {
+  const int label_width = text_width(label, height);
+  const int left =
+      std::clamp(x - label_width / 2, plot.x, plot.x + std::max(0, plot.width - label_width));
+  draw_text(image, width, height, left, plot.y + plot.height + 5, label, 1);
+}
+
+void draw_y_tick_label(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
+                       const PixelRect& plot, int y, std::string_view label) {
+  const int label_height = static_cast<int>(std::ceil(text_size(height, 1)));
+  const int top = y - label_height / 2;
+  draw_text(image, width, height, plot.x - (height < 540 ? 5 : 6) - text_width(label, height), top,
+            label, 1);
+}
+
+void draw_axis_ticks(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
+                     const PixelRect& plot) {
+  constexpr std::array<std::uint8_t, 4> kMajor{72U, 93U, 120U, 255U};
+  constexpr std::array<std::uint8_t, 4> kMinor{48U, 64U, 84U, 255U};
+  const bool compact = height < 540;
+  const int divisions = compact ? 4 : 10;
+  const int right = plot.x + plot.width - 1;
+  const int bottom = plot.y + plot.height - 1;
+  for (int tick = 0; tick <= divisions; ++tick) {
+    const bool major = tick % (divisions / 2) == 0;
+    const int length = major ? (compact ? 3 : 5) : (compact ? 2 : 3);
+    const auto& color = major ? kMajor : kMinor;
+    const int x = plot.x + tick * (plot.width - 1) / divisions;
+    const int y = plot.y + tick * (plot.height - 1) / divisions;
+    draw_line(image, width, height, x, plot.y, x, plot.y + length, color);
+    draw_line(image, width, height, x, bottom - length, x, bottom, color);
+    draw_line(image, width, height, plot.x, y, plot.x + length, y, color);
+    draw_line(image, width, height, right - length, y, right, y, color);
+  }
+}
+
 struct DashboardLayout {
   PixelRect rd_plot;
   PixelRect azimuth_range_panel;
@@ -376,63 +389,70 @@ struct DashboardLayout {
   std::array<PixelRect, 4> history_panels;
 };
 
-DashboardLayout make_dashboard_layout(std::int64_t width, std::int64_t height, bool show_angles) {
-  constexpr int kOuter = 10;
-  constexpr int kGap = 10;
+DashboardLayout make_dashboard_layout(std::int64_t width, std::int64_t height, bool show_angles,
+                                      double range_doppler_width_percent) {
+  constexpr int kOuter = 16;
+  const bool compact = height < 540;
+  const int gap = compact ? 8 : 12;
   const int canvas_width = static_cast<int>(width);
   const int canvas_height = static_cast<int>(height);
-  const int side_width = std::max(360, canvas_width * 38 / 100);
+  const int available_width = canvas_width - 2 * kOuter - gap;
+  const int rd_width = std::clamp(
+      static_cast<int>(std::lround(available_width * range_doppler_width_percent / 100.0)), 240,
+      available_width - (show_angles ? 280 : 240));
+  const int side_width = available_width - rd_width;
   const int side_x = canvas_width - kOuter - side_width;
-  const int rd_right = side_x - kGap;
+  const int rd_right = side_x - gap;
 
   DashboardLayout result;
   result.rd_plot = PixelRect{
-      .x = 58,
-      .y = 38,
-      .width = rd_right - 66,
-      .height = canvas_height - 82,
+      .x = compact ? 60 : 72,
+      .y = compact ? 72 : 92,
+      .width = rd_right - (compact ? 68 : 80),
+      .height = canvas_height - (compact ? 134 : 160),
   };
-  const int panel_width = (side_width - kGap) / 2;
-  const int available_height = canvas_height - 2 * kOuter;
-  const int panel_height = (available_height - 2 * kGap) / 3;
-  result.azimuth_range_panel = PixelRect{side_x, kOuter, panel_width, panel_height};
+  const int panel_width = (side_width - gap) / 2;
+  const int panel_top = compact ? 66 : 72;
+  const int available_height = canvas_height - panel_top - (compact ? 24 : 36);
+  const int panel_height = (available_height - 2 * gap) / 3;
+  result.azimuth_range_panel = PixelRect{side_x, panel_top, panel_width, panel_height};
   result.boresight_panel =
-      PixelRect{side_x + panel_width + kGap, kOuter, panel_width, panel_height};
+      PixelRect{side_x + panel_width + gap, panel_top, panel_width, panel_height};
 
   if (!show_angles) {
-    const int history_height = (available_height - kGap) / 2;
+    const int history_height = (available_height - gap) / 2;
     result.history_panels = {
-        PixelRect{side_x, kOuter, side_width, history_height},
-        PixelRect{side_x, kOuter + history_height + kGap, side_width, history_height},
+        PixelRect{side_x, panel_top, side_width, history_height},
+        PixelRect{side_x, panel_top + history_height + gap, side_width, history_height},
         PixelRect{},
         PixelRect{},
     };
     return result;
   }
 
-  const int second_row_y = kOuter + panel_height + kGap;
-  const int third_row_y = second_row_y + panel_height + kGap;
+  const int second_row_y = panel_top + panel_height + gap;
+  const int third_row_y = second_row_y + panel_height + gap;
   result.history_panels = {
       PixelRect{side_x, second_row_y, panel_width, panel_height},
-      PixelRect{side_x + panel_width + kGap, second_row_y, panel_width, panel_height},
+      PixelRect{side_x + panel_width + gap, second_row_y, panel_width, panel_height},
       PixelRect{side_x, third_row_y, panel_width, panel_height},
-      PixelRect{side_x + panel_width + kGap, third_row_y, panel_width, panel_height},
+      PixelRect{side_x + panel_width + gap, third_row_y, panel_width, panel_height},
   };
   return result;
 }
 
 constexpr std::array<std::array<std::uint8_t, 4>, 8> kClusterColors{{
-    {0U, 255U, 255U, 255U},
-    {255U, 210U, 0U, 255U},
-    {255U, 90U, 180U, 255U},
-    {100U, 255U, 100U, 255U},
-    {255U, 130U, 60U, 255U},
-    {120U, 170U, 255U, 255U},
-    {220U, 120U, 255U, 255U},
+    {59U, 232U, 255U, 255U},
+    {255U, 209U, 102U, 255U},
+    {255U, 98U, 159U, 255U},
+    {141U, 233U, 105U, 255U},
+    {255U, 155U, 84U, 255U},
+    {123U, 170U, 255U, 255U},
+    {197U, 149U, 255U, 255U},
     {255U, 255U, 255U, 255U},
 }};
 
-void fill_rect(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_t height,
+void fill_rect(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
                const PixelRect& rect, const std::array<std::uint8_t, 4>& color) {
   for (int y = rect.y; y < rect.y + rect.height; ++y) {
     for (int x = rect.x; x < rect.x + rect.width; ++x) {
@@ -441,8 +461,8 @@ void fill_rect(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_
   }
 }
 
-void draw_disc(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_t height, int cx,
-               int cy, int radius, const std::array<std::uint8_t, 4>& color) {
+void draw_disc(AnnotationCanvas* image, std::int64_t width, std::int64_t height, int cx, int cy,
+               int radius, const std::array<std::uint8_t, 4>& color) {
   for (int y = -radius; y <= radius; ++y) {
     for (int x = -radius; x <= radius; ++x) {
       if (x * x + y * y <= radius * radius) {
@@ -452,8 +472,8 @@ void draw_disc(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_
   }
 }
 
-void fill_oval(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_t height, float cx,
-               float cy, float rx, float ry, const std::array<std::uint8_t, 4>& color) {
+void fill_oval(AnnotationCanvas* image, std::int64_t width, std::int64_t height, float cx, float cy,
+               float rx, float ry, const std::array<std::uint8_t, 4>& color) {
   const int x_radius = static_cast<int>(std::ceil(rx));
   const int y_radius = static_cast<int>(std::ceil(ry));
   for (int y = -y_radius; y <= y_radius; ++y) {
@@ -468,9 +488,8 @@ void fill_oval(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_
   }
 }
 
-void draw_oval(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_t height, float cx,
-               float cy, float rx, float ry, const std::array<std::uint8_t, 4>& color,
-               int segments) {
+void draw_oval(AnnotationCanvas* image, std::int64_t width, std::int64_t height, float cx, float cy,
+               float rx, float ry, const std::array<std::uint8_t, 4>& color, int segments) {
   constexpr float kTau = 6.28318530717958647692F;
   for (int segment = 0; segment < segments; ++segment) {
     const float a0 = kTau * segment / segments;
@@ -479,21 +498,6 @@ void draw_oval(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_
               static_cast<int>(std::lround(cy + ry * std::sin(a0))),
               static_cast<int>(std::lround(cx + rx * std::cos(a1))),
               static_cast<int>(std::lround(cy + ry * std::sin(a1))), color);
-  }
-}
-
-void draw_polar_arc(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_t height,
-                    float cx, float cy, float radius, float start_azimuth, float end_azimuth,
-                    const std::array<std::uint8_t, 4>& color, int segments) {
-  for (int segment = 0; segment < segments; ++segment) {
-    const float fraction0 = static_cast<float>(segment) / segments;
-    const float fraction1 = static_cast<float>(segment + 1) / segments;
-    const float azimuth0 = start_azimuth + fraction0 * (end_azimuth - start_azimuth);
-    const float azimuth1 = start_azimuth + fraction1 * (end_azimuth - start_azimuth);
-    draw_line(image, width, height, static_cast<int>(std::lround(cx + radius * std::sin(azimuth0))),
-              static_cast<int>(std::lround(cy - radius * std::cos(azimuth0))),
-              static_cast<int>(std::lround(cx + radius * std::sin(azimuth1))),
-              static_cast<int>(std::lround(cy - radius * std::cos(azimuth1))), color);
   }
 }
 
@@ -516,78 +520,129 @@ enum class SpatialView {
   kBoresight,
 };
 
-void draw_spatial_panel(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_t height,
+void draw_spatial_panel(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
                         const PixelRect& panel, std::string_view title, SpatialView view,
                         const std::deque<HistorySample>& history,
                         const std::array<float, 2>& range_bounds, std::int64_t frame_index,
                         const FmcwDashboardConfig& config) {
-  constexpr std::array<std::uint8_t, 4> kBackground{12U, 12U, 18U, 255U};
-  constexpr std::array<std::uint8_t, 4> kGrid{70U, 70U, 82U, 255U};
-  constexpr std::array<std::uint8_t, 4> kWhite{255U, 255U, 255U, 255U};
+  constexpr std::array<std::uint8_t, 4> kBackground{14U, 21U, 33U, 255U};
+  constexpr std::array<std::uint8_t, 4> kGrid{34U, 47U, 65U, 255U};
+  constexpr std::array<std::uint8_t, 4> kWhite{72U, 93U, 120U, 255U};
   fill_rect(image, width, height, panel, kBackground);
   const bool is_polar = view == SpatialView::kAzimuthRange;
-  const PixelRect plot{
-      .x = panel.x + (is_polar ? 12 : 38),
-      .y = panel.y + 22,
-      .width = panel.width - (is_polar ? 24 : 46),
-      .height = panel.height - 48,
-  };
+  const bool compact = height < 540;
+  const PixelRect plot = is_polar ? PixelRect{.x = panel.x + (compact ? 38 : 48),
+                                              .y = panel.y + (compact ? 28 : 38),
+                                              .width = panel.width - (compact ? 46 : 58),
+                                              .height = panel.height - (compact ? 44 : 56)}
+                                  : cartesian_plot_rect(panel, height);
   if (plot.width <= 1 || plot.height <= 1) {
     return;
   }
-  draw_text(image, width, height, panel.x + (panel.width - static_cast<int>(title.size()) * 6) / 2,
-            panel.y + 5, title, 1);
-  if (!is_polar) {
-    constexpr std::string_view kXLabel = "AZ (RAD)";
-    constexpr std::string_view kYLabel = "EL (RAD)";
-    draw_text(image, width, height,
-              plot.x + (plot.width - static_cast<int>(kXLabel.size()) * 6) / 2,
-              plot.y + plot.height + 4, kXLabel, 1);
-    draw_text_ccw(image, width, height, panel.x + 2,
-                  plot.y + (plot.height - static_cast<int>(kYLabel.size()) * 6) / 2, kYLabel, 1);
+  draw_centered_text(image, width, height, panel, panel.y + (height < 540 ? 5 : 6), title);
+  if (!is_polar && !compact) {
+    draw_centered_text(image, width, height, plot, plot.y + plot.height + 19, "Azimuth",
+                       detail::kDashboardTextSecondary);
   }
 
   const float max_range = std::max(1.0F, range_bounds[1]);
   const float circle_cx = plot.x + 0.5F * (plot.width - 1);
   const bool use_sector = is_polar && detail::use_azimuth_sector(config.az_bounds);
   const float display_center_azimuth =
-      use_sector ? 0.5F * (config.az_bounds[0] + config.az_bounds[1]) : 0.0F;
+      use_sector ? std::lerp(config.az_bounds[0], config.az_bounds[1], 0.5F) : 0.0F;
   const float display_half_span =
       use_sector ? 0.5F * (config.az_bounds[1] - config.az_bounds[0]) : 0.0F;
-  const float circle_cy = use_sector ? static_cast<float>(plot.y + plot.height - 12)
-                                     : plot.y + 0.5F * (plot.height - 1);
-  const float projected_half_width = std::max(0.001F, std::sin(display_half_span));
-  const float circle_radius =
-      use_sector ? std::min(0.5F * (plot.width - 2) / projected_half_width,
-                            static_cast<float>(plot.height - 20))
-                 : 0.5F * static_cast<float>(std::min(plot.width, plot.height) - 2);
+  const float circle_cy = plot.y + 0.5F * (plot.height - 1);
+  const float circle_radius = 0.5F * static_cast<float>(std::min(plot.width, plot.height) - 2);
+  const auto sector_pixel = [&](float range_fraction, float azimuth) {
+    const auto position = detail::sector_plot_position(range_fraction, azimuth, config.az_bounds);
+    if (!position) {
+      return std::optional<std::array<int, 2>>{};
+    }
+    return std::optional<std::array<int, 2>>{{
+        plot.x + static_cast<int>(std::lround((*position)[0] * (plot.width - 1))),
+        plot.y + static_cast<int>(std::lround((*position)[1] * (plot.height - 1))),
+    }};
+  };
   if (view == SpatialView::kAzimuthRange) {
     if (use_sector) {
-      draw_polar_arc(image, width, height, circle_cx, circle_cy, circle_radius, -display_half_span,
-                     display_half_span, kGrid, 48);
-      draw_polar_arc(image, width, height, circle_cx, circle_cy, 0.5F * circle_radius,
-                     -display_half_span, display_half_span, kGrid, 32);
-      const std::string left_label = format_degrees(config.az_bounds[0]);
-      const std::string center_label = format_degrees(display_center_azimuth);
-      const std::string right_label = format_degrees(config.az_bounds[1]);
-      const std::string degree_legend =
-          "AZ: " + left_label + " / " + center_label + " / " + right_label + " DEG";
-      draw_text(image, width, height,
-                panel.x + (panel.width - static_cast<int>(degree_legend.size()) * 6) / 2,
-                panel.y + 14, degree_legend, 1);
+      // Fit x and y independently, retaining the actual azimuth and range in
+      // every grid line and sample. Equal-distance aspect would waste most of
+      // this short, wide panel for a narrow field of view.
+      const int ring_count = compact ? 2 : 4;
+      for (int ring = 1; ring <= ring_count; ++ring) {
+        const float fraction = static_cast<float>(ring) / ring_count;
+        auto previous = *sector_pixel(fraction, config.az_bounds[0]);
+        for (int segment = 1; segment <= 48; ++segment) {
+          const float azimuth =
+              std::lerp(config.az_bounds[0], config.az_bounds[1], segment / 48.0F);
+          const auto pixel = *sector_pixel(fraction, azimuth);
+          draw_line(image, width, height, previous[0], previous[1], pixel[0], pixel[1], kGrid);
+          previous = pixel;
+        }
+        const auto label = *sector_pixel(fraction, config.az_bounds[0]);
+        char range_label[32];
+        std::snprintf(range_label, sizeof(range_label), "%.0f m",
+                      static_cast<double>(fraction * max_range));
+        draw_text(image, width, height, label[0] - text_width(range_label, height) - 7,
+                  label[1] - (compact ? 4 : 5), range_label, 1, detail::kDashboardTextSecondary);
+      }
+      const auto origin = *sector_pixel(0.0F, display_center_azimuth);
+      for (int ray = 0; ray <= 4; ++ray) {
+        const float azimuth = std::lerp(config.az_bounds[0], config.az_bounds[1], ray / 4.0F);
+        const auto edge = *sector_pixel(1.0F, azimuth);
+        draw_line(image, width, height, origin[0], origin[1], edge[0], edge[1], kGrid);
+      }
+      for (int tick = 0; tick < 3; ++tick) {
+        if (compact && tick == 1) {
+          continue;
+        }
+        const float fraction = tick / 2.0F;
+        const std::string label =
+            format_degrees(std::lerp(config.az_bounds[0], config.az_bounds[1], fraction));
+        const int x = plot.x + static_cast<int>(fraction * (plot.width - 1));
+        const int offset = static_cast<int>(fraction * text_width(label, height));
+        draw_text(image, width, height, x - offset, plot.y - (compact ? 13 : 16), label, 1,
+                  detail::kDashboardTextSecondary);
+      }
+      // Minor marks follow the same sector projection as the grid and data.
+      constexpr std::array<std::uint8_t, 4> kMinor{48U, 64U, 84U, 255U};
+      const int divisions = compact ? 4 : 10;
+      const float inset = (compact ? 2.0F : 3.0F) / (plot.height - 1);
+      for (int tick = 1; tick < divisions; ++tick) {
+        if (tick == divisions / 2)
+          continue;
+        const float azimuth =
+            std::lerp(config.az_bounds[0], config.az_bounds[1], tick / float(divisions));
+        const auto edge = *sector_pixel(1.0F, azimuth);
+        const auto inner = *sector_pixel(1.0F - inset, azimuth);
+        draw_line(image, width, height, edge[0], edge[1], inner[0], inner[1], kMinor);
+      }
+      for (int ring = 0; ring < ring_count; ++ring) {
+        const float fraction = (ring + 0.5F) / ring_count;
+        const auto left = *sector_pixel(fraction, config.az_bounds[0]);
+        const auto right = *sector_pixel(fraction, config.az_bounds[1]);
+        draw_line(image, width, height, left[0], left[1], left[0] + 3, left[1], kMinor);
+        draw_line(image, width, height, right[0] - 3, right[1], right[0], right[1], kMinor);
+      }
+      const float aspect =
+          0.5F * (plot.width - 1) / (std::sin(display_half_span) * (plot.height - 1));
+      const std::string caption = "X scale " + format_value(aspect) + "x";
+      draw_centered_text(image, width, height, panel, panel.y + panel.height - (compact ? 15 : 18),
+                         caption, detail::kDashboardTextMuted);
     } else {
       draw_oval(image, width, height, circle_cx, circle_cy, circle_radius, circle_radius, kGrid,
                 48);
       draw_oval(image, width, height, circle_cx, circle_cy, 0.5F * circle_radius,
                 0.5F * circle_radius, kGrid, 32);
-    }
-    draw_line(image, width, height, static_cast<int>(circle_cx), static_cast<int>(circle_cy),
-              static_cast<int>(circle_cx), static_cast<int>(circle_cy - circle_radius), kGrid);
-    for (float azimuth : config.az_bounds) {
-      const float display_azimuth = azimuth - display_center_azimuth;
       draw_line(image, width, height, static_cast<int>(circle_cx), static_cast<int>(circle_cy),
-                static_cast<int>(circle_cx + circle_radius * std::sin(display_azimuth)),
-                static_cast<int>(circle_cy - circle_radius * std::cos(display_azimuth)), kGrid);
+                static_cast<int>(circle_cx), static_cast<int>(circle_cy - circle_radius), kGrid);
+      for (float azimuth : config.az_bounds) {
+        const float display_azimuth = azimuth - display_center_azimuth;
+        draw_line(image, width, height, static_cast<int>(circle_cx), static_cast<int>(circle_cy),
+                  static_cast<int>(circle_cx + circle_radius * std::sin(display_azimuth)),
+                  static_cast<int>(circle_cy - circle_radius * std::cos(display_azimuth)), kGrid);
+      }
     }
   } else {
     for (int tick = 0; tick < 3; ++tick) {
@@ -596,10 +651,21 @@ void draw_spatial_panel(std::vector<std::uint8_t>* image, std::int64_t width, st
       const int y = plot.y + static_cast<int>(fraction * (plot.height - 1));
       draw_line(image, width, height, x, plot.y, x, plot.y + plot.height - 1, kGrid);
       draw_line(image, width, height, plot.x, y, plot.x + plot.width - 1, y, kGrid);
+      const std::string az = format_degrees(config.az_bounds[0] +
+                                            fraction * (config.az_bounds[1] - config.az_bounds[0]));
+      const std::string el = format_degrees(config.el_bounds[1] -
+                                            fraction * (config.el_bounds[1] - config.el_bounds[0]));
+      draw_x_tick_label(image, width, height, plot, x, az);
+      draw_y_tick_label(image, width, height, plot, y, el);
     }
+    draw_axis_ticks(image, width, height, plot);
   }
 
-  const auto to_pixel = [&](const std::array<float, 4>& features) {
+  const auto to_pixel =
+      [&](const std::array<float, 4>& features) -> std::optional<std::array<int, 2>> {
+    if (use_sector) {
+      return sector_pixel(features[0] / max_range, features[2]);
+    }
     if (view == SpatialView::kAzimuthRange) {
       const float normalized_range = std::clamp(features[0] / max_range, 0.0F, 1.0F);
       const float display_azimuth = features[2] - display_center_azimuth;
@@ -636,10 +702,14 @@ void draw_spatial_panel(std::vector<std::uint8_t>* image, std::int64_t width, st
         continue;
       }
       const auto pixel = to_pixel(detail::truth_features_at_time(target, truth_time));
-      if (have_previous) {
-        draw_line(image, width, height, previous[0], previous[1], pixel[0], pixel[1], color);
+      if (!pixel) {
+        have_previous = false;
+        continue;
       }
-      previous = pixel;
+      if (have_previous) {
+        draw_line(image, width, height, previous[0], previous[1], (*pixel)[0], (*pixel)[1], color);
+      }
+      previous = *pixel;
       have_previous = true;
     }
   }
@@ -649,7 +719,11 @@ void draw_spatial_panel(std::vector<std::uint8_t>* image, std::int64_t width, st
         kClusterColors[static_cast<std::size_t>(sample.color_bucket) % kClusterColors.size()];
     const std::int64_t age = frame_index - sample.frame;
     const auto color = aged_color(base_color, age, config.detection_trail_frames);
-    const auto pixel = to_pixel(sample.features);
+    const auto position = to_pixel(sample.features);
+    if (!position) {
+      continue;
+    }
+    const auto pixel = *position;
     const int radius = age == 0 ? 4 : 2;
     draw_disc(image, width, height, pixel[0], pixel[1], radius, color);
     if (age == 0) {
@@ -659,25 +733,19 @@ void draw_spatial_panel(std::vector<std::uint8_t>* image, std::int64_t width, st
   }
 }
 
-void draw_history_panel(std::vector<std::uint8_t>* image, std::int64_t width, std::int64_t height,
+void draw_history_panel(AnnotationCanvas* image, std::int64_t width, std::int64_t height,
                         const PixelRect& panel, std::string_view title, int feature,
                         std::array<float, 2> bounds, const std::deque<HistorySample>& history,
                         std::int64_t frame_index, const FmcwDashboardConfig& config) {
-  constexpr std::array<std::uint8_t, 4> kBackground{12U, 12U, 18U, 255U};
-  constexpr std::array<std::uint8_t, 4> kGrid{70U, 70U, 82U, 255U};
+  constexpr std::array<std::uint8_t, 4> kBackground{14U, 21U, 33U, 255U};
+  constexpr std::array<std::uint8_t, 4> kGrid{34U, 47U, 65U, 255U};
   fill_rect(image, width, height, panel, kBackground);
 
-  const PixelRect plot{
-      .x = panel.x + 38,
-      .y = panel.y + 22,
-      .width = panel.width - 46,
-      .height = panel.height - 48,
-  };
+  const PixelRect plot = cartesian_plot_rect(panel, height);
   if (plot.width <= 1 || plot.height <= 1) {
     return;
   }
-  draw_text(image, width, height, panel.x + (panel.width - static_cast<int>(title.size()) * 6) / 2,
-            panel.y + 5, title, 1);
+  draw_centered_text(image, width, height, panel, panel.y + (height < 540 ? 5 : 6), title);
 
   for (int tick = 0; tick < 3; ++tick) {
     const float fraction = static_cast<float>(tick) / 2.0F;
@@ -687,15 +755,19 @@ void draw_history_panel(std::vector<std::uint8_t>* image, std::int64_t width, st
     draw_line(image, width, height, plot.x, y, plot.x + plot.width - 1, y, kGrid);
 
     const float value = bounds[1] - fraction * (bounds[1] - bounds[0]);
-    const std::string y_label = format_value(value);
-    draw_text(image, width, height, plot.x - 4 - static_cast<int>(y_label.size()) * 6, y - 3,
-              y_label, 1);
+    const std::string y_label = feature >= 2 ? format_degrees(value) : format_value(value);
+    draw_y_tick_label(image, width, height, plot, y, y_label);
 
     const double seconds =
         -(1.0 - fraction) * static_cast<double>(config.history_frames - 1) * config.frame_period;
     const std::string x_label = format_value(static_cast<float>(seconds));
-    draw_text(image, width, height, x - static_cast<int>(x_label.size()) * 3,
-              plot.y + plot.height + 4, x_label, 1);
+    draw_x_tick_label(image, width, height, plot, x, x_label);
+  }
+
+  draw_axis_ticks(image, width, height, plot);
+  if (height >= 540) {
+    draw_centered_text(image, width, height, plot, plot.y + plot.height + 19, "Time (s)",
+                       detail::kDashboardTextSecondary);
   }
 
   const std::int64_t first_truth_frame =
@@ -740,17 +812,23 @@ void draw_history_panel(std::vector<std::uint8_t>* image, std::int64_t width, st
   }
 }
 
-std::vector<std::uint8_t> make_annotation(
-    std::int64_t rows, std::int64_t cols, const std::vector<DetectionMarker>& markers,
-    const std::deque<HistorySample>& history, const std::deque<HistorySample>& detection_history,
-    const std::vector<float>& ranges, const std::vector<float>& velocities,
-    const FmcwDashboardConfig& config, std::int64_t frame_index) {
+AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
+                                 const std::vector<DetectionMarker>& markers,
+                                 const std::deque<HistorySample>& history,
+                                 const std::deque<HistorySample>& detection_history,
+                                 const std::vector<float>& ranges,
+                                 const std::vector<float>& velocities,
+                                 const FmcwDashboardConfig& config, std::int64_t frame_index,
+                                 const std::array<float, 2>& power_limits) {
   const std::int64_t width = config.width;
   const std::int64_t height = config.height;
-  const DashboardLayout layout = make_dashboard_layout(width, height, config.show_angles);
+  const DashboardLayout layout =
+      make_dashboard_layout(width, height, config.show_angles, config.range_doppler_width_percent);
   const PixelRect& plot = layout.rd_plot;
-  std::vector<std::uint8_t> image(static_cast<std::size_t>(width * height * 4), 0U);
-  constexpr std::array<std::uint8_t, 4> kWhite{255U, 255U, 255U, 255U};
+  const bool reverse_velocity = velocities.front() > velocities.back();
+  AnnotationCanvas image{
+      .pixels = std::vector<std::uint8_t>(static_cast<std::size_t>(width * height * 4), 0U)};
+  constexpr std::array<std::uint8_t, 4> kWhite{72U, 93U, 120U, 255U};
 
   draw_line(&image, width, height, plot.x - 1, plot.y - 1, plot.x + plot.width, plot.y - 1, kWhite);
   draw_line(&image, width, height, plot.x - 1, plot.y + plot.height, plot.x + plot.width,
@@ -760,46 +838,67 @@ std::vector<std::uint8_t> make_annotation(
   draw_line(&image, width, height, plot.x + plot.width, plot.y - 1, plot.x + plot.width,
             plot.y + plot.height, kWhite);
 
-  const std::string title =
-      config.title +
-      " | DT: " + format_value(static_cast<float>(frame_index * config.frame_period)) + " S";
-  const std::int64_t title_width = static_cast<std::int64_t>(title.size()) * 12;
-  draw_text(&image, width, height,
-            std::max<std::int64_t>(2, plot.x + (plot.width - title_width) / 2), 9, title, 2);
-  constexpr std::string_view kDopplerLabel = "VELOCITY (M/S)";
-  draw_text(&image, width, height,
-            plot.x + (plot.width - static_cast<std::int64_t>(kDopplerLabel.size()) * 6) / 2,
-            plot.y + plot.height + 25, kDopplerLabel, 1);
-  constexpr std::string_view kRangeLabel = "RANGE (M)";
-  draw_text_ccw(
-      &image, width, height, 2,
-      std::max<std::int64_t>(
-          0, plot.y + (plot.height - static_cast<std::int64_t>(kRangeLabel.size()) * 6) / 2),
-      kRangeLabel, 1);
+  draw_text(&image, width, height, 20, height < 540 ? 5 : 10, config.title, 2,
+            detail::kDashboardTextTitle);
+  // Native text has no font-weight option; a one-pixel overdraw thickens the title.
+  draw_text(&image, width, height, 21, height < 540 ? 5 : 10, config.title, 2,
+            detail::kDashboardTextTitle);
+  draw_text(&image, width, height, 20, height < 540 ? 25 : 34, config.description, 1,
+            detail::kDashboardTextMuted);
+  const std::string status = "Frame " + std::to_string(frame_index + 1) + " (" +
+                             format_value(static_cast<float>(frame_index * config.frame_period)) +
+                             " s) | " + std::to_string(markers.size()) + " detections";
+  draw_text(&image, width, height, 20, height < 540 ? 39 : 52, status, 1);
+  draw_text(&image, width, height, 20, height - 22, "Dots: detections | Lines: truth", 1,
+            detail::kDashboardTextMuted);
+  constexpr std::string_view kDopplerLabel = "Velocity (m/s)";
+  draw_text(&image, width, height, plot.x + (plot.width - text_width(kDopplerLabel, height)) / 2,
+            plot.y + plot.height + (height < 540 ? 21 : 25), kDopplerLabel, 1);
+  draw_text(&image, width, height, plot.x, plot.y - (height < 540 ? 15 : 20), "Range (m)", 1);
+
+  // Show the same moving power window used by the per-frame peak normalization.
+  // The input power has no calibrated physical reference; these are not dBm.
+  const std::string lower_label = format_value(power_limits[0]);
+  const std::string upper_label = format_value(power_limits[1]) + " dB";
+  const int bar_width = std::min(100, plot.width / 3);
+  const int bar_x = plot.x + plot.width - bar_width - text_width(upper_label, height) - 5;
+  for (int x = 0; x < bar_width; ++x) {
+    const float t = static_cast<float>(x) / std::max(1, bar_width - 1);
+    const std::array<std::uint8_t, 4> color{
+        static_cast<std::uint8_t>(255.0F * heatmap_channel(t, 0)),
+        static_cast<std::uint8_t>(255.0F * heatmap_channel(t, 1)),
+        static_cast<std::uint8_t>(255.0F * heatmap_channel(t, 2)), 255U};
+    for (int y = 0; y < 6; ++y) {
+      set_pixel(&image, width, height, bar_x + x, plot.y - 16 + y, color);
+    }
+  }
+  draw_text(&image, width, height, bar_x - text_width(lower_label, height) - 5, plot.y - 20,
+            lower_label, 1);
+  draw_text(&image, width, height, bar_x + bar_width + 5, plot.y - 20, upper_label, 1);
 
   const std::array<std::int64_t, 3> x_positions{plot.x, plot.x + plot.width / 2,
                                                 plot.x + plot.width - 1};
   const std::array<std::size_t, 3> x_indices{0U, velocities.size() / 2U, velocities.size() - 1U};
   for (std::size_t i = 0; i < x_positions.size(); ++i) {
-    const std::string tick = format_value(velocities[x_indices[i]]);
-    draw_text(&image, width, height, x_positions[i] - static_cast<std::int64_t>(tick.size()) * 3,
-              plot.y + plot.height + 5, tick, 1);
+    const std::string tick = format_value(
+        velocities[reverse_velocity ? velocities.size() - 1U - x_indices[i] : x_indices[i]]);
+    draw_x_tick_label(&image, width, height, plot, x_positions[i], tick);
   }
   const std::array<std::int64_t, 3> y_positions{plot.y, plot.y + plot.height / 2,
-                                                plot.y + plot.height - 7};
+                                                plot.y + plot.height - 1};
   const std::array<std::size_t, 3> y_indices{ranges.size() - 1U, ranges.size() / 2U, 0U};
   for (std::size_t i = 0; i < y_positions.size(); ++i) {
     const std::string tick = format_value(ranges[y_indices[i]]);
-    draw_text(&image, width, height, plot.x - 4 - static_cast<std::int64_t>(tick.size()) * 6,
-              y_positions[i], tick, 1);
+    draw_y_tick_label(&image, width, height, plot, y_positions[i], tick);
   }
 
+  draw_axis_ticks(&image, width, height, plot);
   constexpr std::array<std::uint8_t, 4> kBlack{0U, 0U, 0U, 255U};
   for (const DetectionMarker& marker : markers) {
     const auto& color =
         kClusterColors[static_cast<std::size_t>(marker.color_bucket) % kClusterColors.size()];
-    const auto position =
-        detail::rd_plot_position(marker.doppler_bin, marker.range_bin, rows, cols);
+    const auto position = detail::rd_plot_position(marker.doppler_bin, marker.range_bin, rows, cols,
+                                                   reverse_velocity);
     const float x = plot.x + position[0] * plot.width;
     const float y = plot.y + position[1] * plot.height;
     const float outer_rx = std::max(4.0F, 0.65F * config.detection_radius * plot.width);
@@ -813,22 +912,23 @@ std::vector<std::uint8_t> make_annotation(
   const auto velocity_bounds = std::minmax_element(velocities.begin(), velocities.end());
   const std::array<float, 2> physical_range_bounds{*range_bounds.first, *range_bounds.second};
   if (config.show_angles) {
-    draw_spatial_panel(&image, width, height, layout.azimuth_range_panel, "AZIMUTH-RANGE",
+    draw_spatial_panel(&image, width, height, layout.azimuth_range_panel, "Azimuth / range (deg)",
                        SpatialView::kAzimuthRange, detection_history, physical_range_bounds,
                        frame_index, config);
-    draw_spatial_panel(&image, width, height, layout.boresight_panel, "BORESIGHT",
+    draw_spatial_panel(&image, width, height, layout.boresight_panel,
+                       config.height < 540 ? "Az / el (deg)" : "Boresight - el / az (deg)",
                        SpatialView::kBoresight, detection_history, physical_range_bounds,
                        frame_index, config);
   }
-  draw_history_panel(&image, width, height, layout.history_panels[0], "RANGE (M)", 0,
+  draw_history_panel(&image, width, height, layout.history_panels[0], "Range (m)", 0,
                      physical_range_bounds, history, frame_index, config);
-  draw_history_panel(&image, width, height, layout.history_panels[1], "VELOCITY (M/S)", 1,
+  draw_history_panel(&image, width, height, layout.history_panels[1], "Velocity (m/s)", 1,
                      {*velocity_bounds.first, *velocity_bounds.second}, history, frame_index,
                      config);
   if (config.show_angles) {
-    draw_history_panel(&image, width, height, layout.history_panels[2], "AZIMUTH (RAD)", 2,
+    draw_history_panel(&image, width, height, layout.history_panels[2], "Azimuth (deg)", 2,
                        config.az_bounds, history, frame_index, config);
-    draw_history_panel(&image, width, height, layout.history_panels[3], "ELEVATION (RAD)", 3,
+    draw_history_panel(&image, width, height, layout.history_panels[3], "Elevation (deg)", 3,
                        config.el_bounds, history, frame_index, config);
   }
   return image;
@@ -838,15 +938,29 @@ std::vector<std::uint8_t> make_annotation(
 
 FmcwDashboardOp::FmcwDashboardOp(FmcwDashboardConfig config) : config_(std::move(config)) {
   sim::validate_scene_visibility(config_.scene_visibility);
-  if (!std::isfinite(config_.dynamic_range_db) || config_.dynamic_range_db <= 0.0F ||
+  if (!std::isfinite(config_.range_doppler_width_percent) ||
+      config_.range_doppler_width_percent < 25.0 || config_.range_doppler_width_percent > 70.0 ||
+      !std::isfinite(config_.dynamic_range_db) || config_.dynamic_range_db <= 0.0F ||
       !std::isfinite(config_.detection_radius) || config_.detection_radius <= 0.0F ||
       !std::isfinite(config_.frame_period) || config_.frame_period <= 0.0 ||
+      !std::isfinite(config_.display_rate_hz) || config_.display_rate_hz <= 0.0 ||
       config_.history_frames < 2 || config_.detection_trail_frames < 1 || config_.width < 640 ||
       config_.height < 360 ||
       (config_.selected_profile.empty() == config_.selected_waveform.is_valid()) ||
       (config_.show_angles && (!(config_.az_bounds[0] < config_.az_bounds[1]) ||
                                !(config_.el_bounds[0] < config_.el_bounds[1])))) {
     throw std::invalid_argument("FmcwDashboardOp: invalid scales, history, bounds, or canvas size");
+  }
+  if (config_.noise_sample_limit < 64 || config_.noise_sample_limit > 65536 ||
+      config_.noise_range_half_width < 0 || config_.noise_range_half_width > 64 ||
+      config_.noise_doppler_half_width < 0 || config_.noise_doppler_half_width > 64 ||
+      !std::isfinite(config_.noise_sigma) || config_.noise_sigma < 0.0 ||
+      config_.noise_sigma > 10.0 || !std::isfinite(static_cast<float>(config_.noise_headroom_db)) ||
+      config_.noise_headroom_db < 0.0) {
+    throw std::invalid_argument("FmcwDashboardOp: invalid background sampling settings");
+  }
+  if (config_.noise_scaling) {
+    noise_samples_ = make_device_tensor({config_.noise_sample_limit}, kFloat32);
   }
   const std::vector<std::int64_t> max_shape{config_.height, config_.width, 4};
   max_byte_span_ = tensor_byte_span(max_shape, kRgba8);
@@ -887,6 +1001,14 @@ void FmcwDashboardOp::setup(holoscan::OperatorSpec& spec) {
     spec.input(waveform_in).queue_depth(2U);
   }
   spec.output(rgba).produces_tensor(pooled_tensor_output(kImage, 3U, max_byte_span_));
+  constexpr TensorRepresentation kText{
+      .memory_kind = MemoryKind::kHost,
+      .dtype = kRgba8,
+      .rank = 2U,
+      .strides = TensorStridePolicy::kContiguousOnly,
+  };
+  spec.output(text).produces_tensor(
+      pooled_tensor_output(kText, 2U, detail::kDashboardTextRows * detail::kDashboardTextRowBytes));
 }
 
 holoscan::Contract FmcwDashboardOp::contract() const {
@@ -970,6 +1092,65 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
     return make_unexpected(Error{ErrorCode::kNotSupported, std::string(kWho) + ": no CUDA stream"});
   }
 
+  HOLOSCAN_TRY(auto render_time, context.clock().now());
+  const bool should_render = !last_render_ns_ || render_time.timestamp_ns - *last_render_ns_ >=
+                                                     1.0e9 / config_.display_rate_hz;
+  constexpr int kBlock = 256;
+  float host_peak = 0.0F;
+  std::vector<float> background_samples;
+  if (should_render) {
+    const std::int64_t pixels = layout.rows * layout.cols;
+    const std::int64_t count = layout.batch * pixels;
+    if (cudaMemsetAsync(peak_power_->mutable_data().value(), 0, sizeof(float), stream) !=
+        cudaSuccess) {
+      return cuda_failure(kWho, "peak reset");
+    }
+    const int reduce_grid = static_cast<int>((count + kBlock - 1) / kBlock);
+    reduce_positive_peak<<<reduce_grid, kBlock, 0, stream>>>(
+        static_cast<const float*>(power.data()), count,
+        static_cast<unsigned int*>(peak_power_->mutable_data().value()));
+    if (cudaGetLastError() != cudaSuccess) {
+      return cuda_failure(kWho, "peak reduction launch");
+    }
+    // Piggyback the scalar readback on the existing annotation input barrier.
+    if (cudaMemcpyAsync(&host_peak, peak_power_->data(), sizeof(host_peak), cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
+      return cuda_failure(kWho, "peak readback");
+    }
+  }
+
+  if (should_render && config_.noise_scaling && idx.shape()[0] <= 4096) {
+    if (!dldatatype_equals(idx.dtype(), kInt64) || !idx.is_contiguous()) {
+      return make_unexpected(Error{ErrorCode::kInvalidArgument,
+                                   "FmcwDashboardOp: expected compact int64 detection indices"});
+    }
+    const auto words = (layout.rows + 31) / 32 + (layout.cols + 31) / 32;
+    if (!noise_mask_ || noise_mask_->nbytes() < words * sizeof(unsigned int)) {
+      noise_mask_ = make_device_tensor({words}, DLDataType{kDLUInt, 32U, 1U});
+    }
+    auto* mask = static_cast<unsigned int*>(noise_mask_->mutable_data().value());
+    if (cudaMemsetAsync(mask, 0, words * sizeof(unsigned int), stream) != cudaSuccess) {
+      return cuda_failure(kWho, "background mask reset");
+    }
+    if (idx.shape()[0] > 0) {
+      mark_detection_crosses<<<(idx.shape()[0] + kBlock - 1) / kBlock, kBlock, 0, stream>>>(
+          static_cast<const std::int64_t*>(idx.data()), idx.shape()[0], idx.shape()[1], layout.rows,
+          layout.cols, config_.noise_doppler_half_width, config_.noise_range_half_width, mask);
+    }
+    const int samples =
+        static_cast<int>(std::min(config_.noise_sample_limit, layout.rows * layout.cols));
+    background_samples.resize(samples);
+    sample_background<<<(samples + kBlock - 1) / kBlock, kBlock, 0, stream>>>(
+        static_cast<const float*>(power.data()), layout.batch, layout.rows, layout.cols, mask,
+        samples, static_cast<unsigned int>(current_frame),
+        static_cast<float*>(noise_samples_->mutable_data().value()));
+    if (cudaGetLastError() != cudaSuccess ||
+        cudaMemcpyAsync(background_samples.data(), noise_samples_->data(), samples * sizeof(float),
+                        cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
+      return cuda_failure(kWho, "background sampling/readback");
+    }
+  }
+
   HOLOSCAN_TRY(auto host_idx, copy_int64_to_host(idx, stream, "detection_idx"));
   HOLOSCAN_TRY(auto host_points, copy_float_to_host(feature_points, stream, "points"));
   HOLOSCAN_TRY(auto host_ranges, copy_float_to_host(ranges, stream, "range_bins"));
@@ -986,7 +1167,11 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
     return cuda_failure(kWho, "annotation input synchronization");
   }
 
-  std::vector<std::uint8_t> host_annotation;
+  const auto power_limits =
+      noise_scale_.limits(detail::background_statistics(background_samples), host_peak,
+                          config_.dynamic_range_db, static_cast<float>(config_.noise_sigma),
+                          static_cast<float>(config_.noise_headroom_db), render_time.timestamp_ns);
+  AnnotationCanvas host_annotation;
   try {
     std::vector<DetectionMarker> markers;
     if (config_.mode == DashboardMode::kClusters) {
@@ -1003,62 +1188,42 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
     detail::append_history(&history_, markers, current_frame, config_.history_frames);
     detail::append_history(&detection_history_, markers, current_frame,
                            config_.detection_trail_frames);
+    // Maintain every admitted detection in the histories, but only rasterize at
+    // the requested display rate. No display clock repeatedly redraws old frames.
+    if (!should_render) {
+      return {};
+    }
     host_annotation =
         make_annotation(layout.rows, layout.cols, markers, history_, detection_history_,
-                        host_ranges, host_velocities, config_, current_frame);
+                        host_ranges, host_velocities, config_, current_frame, power_limits);
   } catch (const std::invalid_argument& e) {
     return make_unexpected(Error{ErrorCode::kInvalidArgument, std::string(e.what())});
   }
-  if (cudaMemcpyAsync(annotation_->mutable_data().value(), host_annotation.data(),
-                      host_annotation.size(), cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+  if (cudaMemcpyAsync(annotation_->mutable_data().value(), host_annotation.pixels.data(),
+                      host_annotation.pixels.size(), cudaMemcpyHostToDevice,
+                      stream) != cudaSuccess) {
     return cuda_failure(kWho, "annotation upload");
-  }
-
-  const std::int64_t pixels = layout.rows * layout.cols;
-  const std::int64_t count = layout.batch * pixels;
-  if (cudaMemsetAsync(peak_power_->mutable_data().value(), 0, sizeof(float), stream) !=
-      cudaSuccess) {
-    return cuda_failure(kWho, "peak reset");
-  }
-  constexpr int kBlock = 256;
-  const int reduce_grid = static_cast<int>((count + kBlock - 1) / kBlock);
-  reduce_positive_peak<<<reduce_grid, kBlock, 0, stream>>>(
-      static_cast<const float*>(power.data()), count,
-      static_cast<unsigned int*>(peak_power_->mutable_data().value()));
-  if (cudaGetLastError() != cudaSuccess) {
-    return cuda_failure(kWho, "peak reduction launch");
   }
 
   const std::int64_t canvas_width = config_.width;
   const std::int64_t canvas_height = config_.height;
   const std::int64_t canvas_pixels = canvas_width * canvas_height;
-  const DashboardLayout dashboard =
-      make_dashboard_layout(canvas_width, canvas_height, config_.show_angles);
-  const std::int64_t plot_pixels =
-      static_cast<std::int64_t>(dashboard.rd_plot.width) * dashboard.rd_plot.height;
+  const DashboardLayout dashboard = make_dashboard_layout(
+      canvas_width, canvas_height, config_.show_angles, config_.range_doppler_width_percent);
   const std::vector<std::int64_t> shape{canvas_height, canvas_width, 4};
   HOLOSCAN_TRY(
       auto loan,
       prepare_device_tensor(
-          rgba, context, shape, kRgba8, [&](void* dst, std::size_t bytes) -> expected<void, Error> {
-            if (cudaMemsetAsync(dst, 0, bytes, stream) != cudaSuccess) {
-              return cuda_failure(kWho, "canvas reset");
-            }
-            const int grid = static_cast<int>((plot_pixels + kBlock - 1) / kBlock);
+          rgba, context, shape, kRgba8, [&](void* dst, std::size_t) -> expected<void, Error> {
+            const int grid = static_cast<int>((canvas_pixels + kBlock - 1) / kBlock);
             power_to_rgba<<<grid, kBlock, 0, stream>>>(
                 static_cast<const float*>(power.data()), layout.batch, layout.rows, layout.cols,
-                static_cast<const float*>(peak_power_->data()), config_.dynamic_range_db,
-                canvas_width, dashboard.rd_plot.x, dashboard.rd_plot.y, dashboard.rd_plot.width,
-                dashboard.rd_plot.height, static_cast<std::uint8_t*>(dst));
+                power_limits[0], power_limits[1], canvas_width, canvas_pixels,
+                static_cast<const std::uint8_t*>(annotation_->data()), dashboard.rd_plot.x,
+                dashboard.rd_plot.y, dashboard.rd_plot.width, dashboard.rd_plot.height,
+                host_velocities.front() > host_velocities.back(), static_cast<std::uint8_t*>(dst));
             if (cudaGetLastError() != cudaSuccess) {
               return cuda_failure(kWho, "color mapping launch");
-            }
-            const int annotation_grid = static_cast<int>((canvas_pixels + kBlock - 1) / kBlock);
-            apply_annotation<<<annotation_grid, kBlock, 0, stream>>>(
-                static_cast<const std::uint8_t*>(annotation_->data()), canvas_pixels,
-                static_cast<std::uint8_t*>(dst));
-            if (cudaGetLastError() != cudaSuccess) {
-              return cuda_failure(kWho, "annotation launch");
             }
             return {};
           }));
@@ -1067,11 +1232,84 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
     return cuda_failure(kWho, "composition synchronization");
   }
+  const std::array<std::int64_t, 2> text_shape{
+      static_cast<std::int64_t>(host_annotation.text.size() / detail::kDashboardTextRowBytes),
+      static_cast<std::int64_t>(detail::kDashboardTextRowBytes)};
+  HOLOSCAN_TRY(auto text_loan,
+               text.allocate_tensor(TensorLoanRequest{.shape = text_shape, .dtype = kRgba8}));
+  HOLOSCAN_TRY(text_loan.write_host_and_commit([&](const auto& writer) {
+    std::memcpy(writer.data(), host_annotation.text.data(), host_annotation.text.size());
+  }));
   retained_input_ = std::move(power);
-  return emit_prepared_tensor(rgba, context, std::move(loan));
+  // These outputs are presentation products, not radar data. Stamp both when
+  // composition completes so the viewer aligns text and image by presentation freshness
+  // rather than rejecting a correctly formed frame for upstream processing time.
+  HOLOSCAN_TRY(auto presentation_time, context.clock().now());
+  last_render_ns_ = render_time.timestamp_ns;
+  const EmitOptions presentation{.capture_time = presentation_time};
+  HOLOSCAN_TRY(text.emit(std::move(text_loan), presentation));
+  return rgba.emit(std::move(loan), presentation);
 }
 
 namespace detail {
+
+std::optional<BackgroundStatistics> background_statistics(const std::vector<float>& samples_db) {
+  const std::size_t minimum = std::max<std::size_t>(64, samples_db.size() / 16);
+  auto moments = [&](double center, double radius) {
+    std::size_t count = 0;
+    double mean = 0.0;
+    double m2 = 0.0;
+    for (const float value : samples_db) {
+      if (!std::isfinite(value) || std::abs(value - center) > radius)
+        continue;
+      ++count;
+      const double delta = value - mean;
+      mean += delta / count;
+      m2 += delta * (value - mean);
+    }
+    return BackgroundStatistics{static_cast<float>(mean),
+                                static_cast<float>(std::sqrt(m2 / std::max<std::size_t>(count, 1))),
+                                count};
+  };
+  const auto initial = moments(0.0, INFINITY);
+  if (initial.count < minimum)
+    return std::nullopt;
+  const auto clipped = moments(initial.mean_db, std::max(3.0F * initial.stddev_db, 0.0001F));
+  if (clipped.count < minimum)
+    return std::nullopt;
+  return clipped;
+}
+
+std::array<float, 2> BackgroundScaleState::limits(
+    const std::optional<BackgroundStatistics>& background, float peak_power, float span_db,
+    float sigma, float headroom_db, std::int64_t now_ns) {
+  if (background) {
+    const float offset = sigma * background->stddev_db;
+    std::array<float, 2> target{background->mean_db - offset,
+                                background->mean_db + offset + headroom_db};
+    // Flat backgrounds or sigma=0 must still yield a finite, nonzero color span.
+    if (target[1] - target[0] < 0.1F) {
+      const float center = 0.5F * (target[0] + target[1]);
+      target = {center - 0.05F, center + 0.05F};
+    }
+    const double elapsed = last_valid_ns ? std::max<std::int64_t>(0, now_ns - *last_valid_ns) : 0;
+    const float alpha = static_cast<float>(-std::expm1(-elapsed / 250000000.0));
+    if (noise_limits_db && last_valid_ns && elapsed <= 1000000000.0) {
+      for (std::size_t i = 0; i < target.size(); ++i) {
+        target[i] = (*noise_limits_db)[i] + alpha * (target[i] - (*noise_limits_db)[i]);
+      }
+    }
+    noise_limits_db = target;
+    last_valid_ns = now_ns;
+  }
+  if (noise_limits_db && last_valid_ns && now_ns - *last_valid_ns <= 1000000000) {
+    return *noise_limits_db;
+  }
+  noise_limits_db.reset();
+  const float upper =
+      std::isfinite(peak_power) && peak_power > 0.0F ? 10.0F * std::log10(peak_power) : 0.0F;
+  return {upper - span_db, upper};
+}
 
 expected<bool, Error> selected_profile_matches(
     const std::optional<wire::FMCWWaveformT>& applied_waveform, std::string_view selected_profile,
@@ -1118,9 +1356,9 @@ std::vector<std::uint8_t> make_heatmap_rgba_reference(const std::vector<float>& 
     }
     const float db = 10.0F * std::log10(std::max(value, FLT_MIN) / reference);
     const float t = std::clamp(1.0F + db / dynamic_range_db, 0.0F, 1.0F);
-    const float red = std::clamp(3.0F * t - 1.0F, 0.0F, 1.0F);
-    const float green = std::clamp(1.5F - std::abs(3.0F * t - 1.5F), 0.0F, 1.0F);
-    const float blue = std::clamp(2.0F - 3.0F * t, 0.0F, 1.0F);
+    const float red = heatmap_channel(t, 0);
+    const float green = heatmap_channel(t, 1);
+    const float blue = heatmap_channel(t, 2);
     const std::size_t out = static_cast<std::size_t>(pixel) * 4U;
     result[out] = static_cast<std::uint8_t>(red * 255.0F);
     result[out + 1] = static_cast<std::uint8_t>(green * 255.0F);
@@ -1303,20 +1541,41 @@ void append_history(std::deque<HistorySample>* history, const std::vector<Detect
 }
 
 std::array<float, 2> rd_plot_position(float doppler_bin, float range_bin, std::int64_t rows,
-                                      std::int64_t cols) {
+                                      std::int64_t cols, bool reverse_velocity) {
   if (rows <= 0 || cols <= 0) {
     throw std::invalid_argument("rd_plot_position: invalid map shape");
   }
   const float x = (doppler_bin + 0.5F) / static_cast<float>(rows);
   const float y = 1.0F - (range_bin + 0.5F) / static_cast<float>(cols);
-  return {std::clamp(x, 0.0F, 1.0F), std::clamp(y, 0.0F, 1.0F)};
+  return {std::clamp(reverse_velocity ? 1.0F - x : x, 0.0F, 1.0F), std::clamp(y, 0.0F, 1.0F)};
 }
 
 bool use_azimuth_sector(const std::array<float, 2>& az_bounds) {
   constexpr float kPi = 3.14159265358979323846F;
   constexpr float kTolerance = 1.0e-5F;
   return std::isfinite(az_bounds[0]) && std::isfinite(az_bounds[1]) &&
-         az_bounds[0] <= az_bounds[1] && az_bounds[1] - az_bounds[0] <= kPi + kTolerance;
+         az_bounds[0] < az_bounds[1] && az_bounds[1] - az_bounds[0] <= kPi + kTolerance;
+}
+
+std::optional<std::array<float, 2>> sector_plot_position(float range_fraction, float azimuth,
+                                                         const std::array<float, 2>& az_bounds) {
+  if (!use_azimuth_sector(az_bounds) || !std::isfinite(range_fraction) || !std::isfinite(azimuth) ||
+      range_fraction < 0.0F || range_fraction > 1.0F) {
+    return std::nullopt;
+  }
+  constexpr double kTwoPi = 6.28318530717958647692;
+  const double half_span = 0.5 * (static_cast<double>(az_bounds[1]) - az_bounds[0]);
+  const double center = 0.5 * (static_cast<double>(az_bounds[1]) + az_bounds[0]);
+  const double delta = std::remainder(static_cast<double>(azimuth) - center, kTwoPi);
+  if (std::abs(delta) > half_span * (1.0 + 1.0e-5)) {
+    return std::nullopt;
+  }
+  return std::array<float, 2>{
+      std::clamp(
+          static_cast<float>(0.5 + 0.5 * range_fraction * std::sin(delta) / std::sin(half_span)),
+          0.0F, 1.0F),
+      std::clamp(static_cast<float>(1.0 - range_fraction * std::cos(delta)), 0.0F, 1.0F),
+  };
 }
 
 std::array<float, 2> history_plot_position(const HistorySample& sample, std::int64_t current_frame,
