@@ -325,7 +325,9 @@ What it does, and where to change it:
   `CMAKE_BUILD_PARALLEL_LEVEL` to adjust it. To run just these checks, pass
   `--ctest-options='-DINCLUDE_LABELS=packaging'`. To omit artifact builds, pass
   `--cmake-options=-DHOLOSCAN_RADAR_TEST_PACKAGING=OFF`. Ordinary direct CMake
-  builds default this additional suite to off.
+  builds default this additional suite to off. CI-driver and package-metadata
+  fixtures run alongside the artifact tests as `Packaging_ci_helpers`; the lint
+  workflow keeps its existing checks.
 - The selection is **exclude-based on purpose**: an include list silently drops any label
   nobody remembered to add, which is how the `integration` tier went unrun in CI for the
   life of the suite. A new tier now runs the day it is added.

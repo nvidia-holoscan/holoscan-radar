@@ -3,6 +3,13 @@
 
 find_package(Python3 3.12 REQUIRED COMPONENTS Interpreter)
 
+add_test(NAME Packaging_ci_helpers
+    COMMAND ${Python3_EXECUTABLE} -m unittest discover
+        -s ${PROJECT_SOURCE_DIR}/ci/tests -v)
+set_tests_properties(Packaging_ci_helpers PROPERTIES
+    LABELS "packaging;unit"
+    TIMEOUT 120)
+
 set(_radar_package_modes debian)
 if(HOLOSCAN_RADAR_BUILD_PYTHON)
     list(APPEND _radar_package_modes wheel)
