@@ -181,10 +181,15 @@ def check_debian(args):
     if len(exports) != 1:
         raise RuntimeError(f"Expected one Radar export tree in TGZ, found {exports}")
     check_operator_libraries(exports[0].parents[3], expected)
+    check_native_consumer(args, prefix, "debian")
+    check_native_consumer(args, exports[0].parents[3], "tgz")
+
+
+def check_native_consumer(args, prefix, name):
     # Build against the extracted artifact, with no source/build include paths.
-    consumer = args.work / "consumer"
+    consumer = args.work / f"consumer-{name}"
     # Keep a competing MatX ahead of an already-listed SDK to catch mixed installs.
-    competing = args.work / "competing-sdk"
+    competing = args.work / f"competing-sdk-{name}"
     matx_config = competing / "lib/cmake/matx/matx-config.cmake"
     matx_config.parent.mkdir(parents=True)
     matx_config.write_text('message(FATAL_ERROR "MatX selected from a different SDK")\n')
