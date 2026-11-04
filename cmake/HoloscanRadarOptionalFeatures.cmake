@@ -109,6 +109,8 @@ set(HOLOSCAN_RADAR_OPERATORS
 )
 
 function(holoscan_radar_add_operator NAME)
+    # Record registrations even when the operator is disabled.
+    set_property(GLOBAL APPEND PROPERTY HOLOSCAN_RADAR_REGISTERED_OPERATORS "${NAME}")
     add_holohub_operator(${NAME} ${ARGN})
 endfunction()
 

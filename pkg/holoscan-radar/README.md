@@ -15,7 +15,8 @@ directory, configure with
 `-DBUILD_ALL=OFF -DPKG_holoscan_radar=ON` and set
 `-DHOLOSCAN_RADAR_PKG_OPERATORS='clutter_filter_op;cphd_reader_op'` to the desired
 operator names. The default list in [`pkg/CMakeLists.txt`](../CMakeLists.txt)
-includes all 32 public operators.
+includes all 32 public operators. When the Radar package is enabled, unknown
+operator names cause a configuration error; intentional subsets are allowed.
 
 The package list enables operators; it does not disable operators enabled by
 other build options or clear cached `OP_*` settings. Reducing the list in an

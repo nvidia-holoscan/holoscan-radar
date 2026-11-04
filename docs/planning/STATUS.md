@@ -14,8 +14,8 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   applications; all 1,161 non-performance CTests pass.
   Configure tests confirm package exclusions work.
   PR review follow-up: preserve the cached test setting across package builds.
-  The explicit list is maintained manually; misspelled and omitted operators
-  are not detected during configuration.
+  The explicit list is maintained manually. Unknown names cause a configuration
+  error; omissions are allowed for intentional subsets.
   On Durham IGX Thor 5000, SDK 5 CMake checks verified package-to-test
   reconfiguration and default package test suppression.
 
@@ -394,6 +394,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| PR #70 package operator validation | Codex | `tbirdsong/5x/package-operator-graph` | **verified locally:** validate package entries against Radar registrations after processing operators, preserving intentional subsets and cache behavior. All five HSDK 5 GA configure checks pass: full package, valid subset, unknown name, unrelated target, and disabled package. An isolated check confirms registered names work independently of target names and enabled state. No public contracts changed. |
 | PR #70 test configuration | Codex | `tbirdsong/5x/package-operator-graph` | **verified locally:** replaced unconditional package test suppression with a package-only default; explicit and cached test settings take precedence. All eight HSDK 5 GA configure checks pass, covering standalone defaults, explicit ON/OFF, package defaults, cached preferences, and package-to-test reconfiguration. Merged `main` at `9cebac3c`, retained both status histories, and passed three merged SDK configuration checks plus full pinned lint. No DSP contracts changed. |
 | FMCW CI application and GUI coverage | Codex | `deustice/gui-updates` | **verified locally:** eight C++ smoke presets, sixteen X11 workflow/language cases, and two native SISO window cases are registered with explicit backends/private caches. The probe handles transient native discovery windows. All 26 cases pass in three final runs; native cases pass 20 extra executions; pinned all-file lint passes. GB10 serial test-stage median rises from 3.78 s (4 cases) to 32.54 s (26 cases), about 28.77 s added. No compiled targets/dependencies added; CI host timing may differ. Details: `tests/gui/README.md`. |
 | GUI branch main merge | Codex | `deustice/gui-updates` | **verified locally:** merged `origin/main` at `76dc53ce` and retained both coordination histories. Incoming CPHD offset-overflow hardening, MUSIC layout documentation, and pinned CI actions are preserved. All 14 CPHD, 47 MUSIC, 42 dashboard, 28 config/choice, and 122 provider/CLI/terminal checks pass (253 total); pinned all-file lint passes. No public contract changes. |

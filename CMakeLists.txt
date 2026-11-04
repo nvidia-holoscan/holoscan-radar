@@ -160,6 +160,18 @@ add_subdirectory(pkg)
 add_subdirectory(applications)
 add_subdirectory(operators)
 
+if(PKG_holoscan_radar)
+    # Validate Radar registrations, independently of CMake target names.
+    get_property(_radar_registered_ops GLOBAL PROPERTY HOLOSCAN_RADAR_REGISTERED_OPERATORS)
+    foreach(_radar_package_op IN LISTS HOLOSCAN_RADAR_PKG_OPERATORS)
+        if(NOT "${_radar_package_op}" IN_LIST _radar_registered_ops)
+            message(FATAL_ERROR "Unknown Radar package operator: ${_radar_package_op}")
+        endif()
+    endforeach()
+    unset(_radar_package_op)
+    unset(_radar_registered_ops)
+endif()
+
 if(HOLOSCAN_RADAR_BUILD_TESTING)
     enable_testing()
     add_subdirectory(tests)
