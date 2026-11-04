@@ -500,7 +500,7 @@ TEST(FmcwMimoConfig, RejectsDdmClutterFilter) {
 
 TEST(FmcwMimoConfig, RejectsMalformedSchemeSpecificConfig) {
   const PresetOverride config(config_path("mimo_ddm/config/mimo_ddm_linear.yaml"),
-                              "app:\n    ddm:\n        generate_phase_codes: zadoff_chu\n");
+                              "ddm:\n    generate_phase_codes: zadoff_chu\n");
   EXPECT_THROW(mimo::load_ddm_config(config.path()), std::runtime_error);
 }
 
