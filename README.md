@@ -98,8 +98,10 @@ It registers the 26 FMCW operators in both precisions under `holoscan.radar`
 and exposes seven Python Graph workflows through `holoscan_radar.applications`.
 
 For manual CMake and targeted CTest work **inside** a development container,
-see [`DEVELOPER.md`](DEVELOPER.md#inside-a-development-container). The same
-guide covers host-side lint. Performance measurements and their container-side
+see [`DEVELOPER.md`](DEVELOPER.md#inside-a-development-container). To build
+and package on a CUDA devel image with the Holoscan SDK from the CUDA APT
+repository, see [`DEVELOPER.md`](DEVELOPER.md#cuda-devel-image-with-the-apt-sdk).
+The same guide covers host-side lint. Performance measurements and their container-side
 build commands are documented in [`DEVELOPER.md`](DEVELOPER.md#performance-characterization)
 and [performance/README.md](performance/README.md).
 

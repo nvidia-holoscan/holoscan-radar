@@ -10,6 +10,10 @@ From the repository root **on the host**; the CLI builds the package in a contai
 ./holoscan-radar package holoscan-radar --pkg-generator DEB
 ```
 
+To build on a CUDA devel image with the Holoscan SDK from the CUDA APT
+repository instead, see
+[CUDA devel image with the APT SDK](../../DEVELOPER.md#cuda-devel-image-with-the-apt-sdk).
+
 For a custom operator subset in a direct CMake package build, use a fresh build
 directory, configure with
 `-DBUILD_ALL=OFF -DPKG_holoscan_radar=ON` and set

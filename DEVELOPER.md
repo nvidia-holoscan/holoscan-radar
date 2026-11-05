@@ -286,6 +286,63 @@ recipes, and output formats.
 
 ---
 
+## CUDA devel image with the APT SDK
+
+The default workflow builds on the HSDK GA image. To build and package Radar
+on a plain CUDA devel image with the Holoscan SDK from the CUDA APT repository
+instead, start the container from the repository root **on the host**:
+
+```bash
+docker run --rm -it --gpus all -v "$PWD":/work -w /work \
+  nvcr.io/nvidia/cuda:13.0.2-devel-ubuntu24.04
+```
+
+On a host without the NVIDIA container runtime, replace `--gpus all` with
+`--runtime=runc`; builds and packaging still work, but tests and apps need a GPU.
+Then run the following commands **inside the container**. The script installs
+the prerequisites; it is safe to re-run:
+
+```bash
+ci/install_cuda_apt_deps.sh
+export PATH=/opt/holoscan-radar-tools/bin:$PATH
+```
+
+The script installs:
+
+- `holoscan` (>= 5.0.0) from the CUDA APT repository, which CUDA images
+  already configure. On other Ubuntu hosts, the script first installs NVIDIA's
+  `cuda-keyring` package.
+- `libyaml-cpp-dev`, `libtinyxml2-dev`, `libgtest-dev`, `ninja-build`, and `git`.
+- CMake 4 and the pinned Holoscan CLI in the `/opt/holoscan-radar-tools` venv.
+  Ubuntu 24.04 ships CMake 3.28, which is too old.
+- MatX v1.0.0, the version in the HSDK 5.0 GA image. MatX has no APT package,
+  so the script builds its header-only CMake package from source and installs
+  it under `/usr/local`.
+
+Set `TOOLS_VENV`, `MATX_VERSION`, or `MATX_PREFIX` to override the defaults.
+Build and install the module:
+
+```bash
+cmake -S . -B build-apt -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_ALL=OFF -DPKG_holoscan_radar=ON
+cmake --build build-apt -j"$(nproc)"
+cmake --install build-apt --prefix /opt/holoscan-radar
+```
+
+Without a GPU, CMake cannot detect the `native` CUDA architecture. Add
+`-DCMAKE_CUDA_ARCHITECTURES=<arch>` to the configure command, for example `75`.
+To build the Debian package inside the same container, run the CLI with
+`--local`:
+
+```bash
+./holoscan-radar package holoscan-radar --pkg-generator=DEB --local
+```
+
+When you run `./holoscan-radar package` on a host without the NVIDIA container
+runtime, also pass `--docker-opts=--runtime=runc`.
+
+---
+
 ## From the host: full test suite
 
 From the host, `./holoscan-radar test` builds the project image if needed,
