@@ -2,6 +2,13 @@
 
 The collection stager supplies a new lattice, range spacing, and first fast-time sample frequency for each CPHD. Each collection boundary emits and resets its image.
 
+> **Prerequisite: download data before running the application.**
+> Download all six Umbra CPHD collections using the
+> [download script below](#real-collection-preset).
+> Downloads run on the host from the repository root; save files under `data/sar/`
+> as instructed. Data is not bundled, and the application does not download it.
+> Generated-fixture tests in this guide require no external data downloads.
+
 ## Graph
 
 ```mermaid

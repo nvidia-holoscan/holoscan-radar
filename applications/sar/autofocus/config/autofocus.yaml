@@ -16,9 +16,10 @@
 # network. Paths resolve under the build data directory (default:
 # data/).
 #
-#   mkdir -p data/sar
-#   curl -L -o data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd \
-#     https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com/sar-data/task-data/1378d9a4-8eb3-4d5c-96ce-15797a5a8d27/2023-06-24-13-22-56_UMBRA-05/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd
+#   python3 tools/sar_data/pull_cphd.py --app autofocus
+#
+# Dependency setup and the complete download-and-run quick-start:
+# applications/sar/autofocus/README.md
 #
 # On this clean collect autofocus should do no harm: the scene is
 # already focused, so a correct estimator returns essentially zero.

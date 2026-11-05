@@ -2,6 +2,37 @@
 
 Phase gradient autofocus on a ground / DEM product: retain the whole aperture, form a small conjugate-grid image from it, estimate a per-pulse phase, apply that phase to the same retained pulses, and form the product once. This is the WORKFLOWS Figure 2 chain. The five sibling SAR applications all form directly and leave autofocus out.
 
+> **Prerequisite: download data before running the application.**
+> The default preset requires the Kourou Umbra CPHD (about 4.19 GiB).
+> Data is not bundled, and the application does not download it.
+> Generated-fixture tests require no external data downloads.
+
+## Download and run
+
+Run these commands from the repository root **on the host**:
+
+```bash
+uv sync
+uv pip install --python .venv/bin/python -r tools/sar_data/requirements.txt
+source .venv/bin/activate
+python3 tools/sar_data/pull_cphd.py --app autofocus --list
+python3 tools/sar_data/pull_cphd.py --app autofocus
+./holoscan-radar run autofocus --language cpp
+```
+
+The download writes
+`data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd`, matching the
+[default preset](config/autofocus.yaml). Existing readable files are reused.
+Omit `--dest` to use this location; `data/sar/imperial/` is for the alternate
+Imperial Valley collect and does not match the default Kourou preset.
+All paths here are relative to the repository root.
+
+The [SAR data guide](../../../tools/sar_data/README.md#public-collection-downloads)
+lists supported downloads, destinations, and preparation commands for alternate
+scenes. `--app autofocus` selects Kourou only; it does not download Atlanta,
+Houston, or Imperial Valley. For recovery measurements after downloading, see
+[Kourou](#kourou-the-pga-vehicle) below.
+
 ## Graph
 
 ```mermaid
@@ -85,7 +116,7 @@ Four fixture runs: the clean Figure 2 chain, the same chain with the lie injecte
 
 ## Kourou (the PGA vehicle)
 
-The development collect is an Umbra SNAPSHOT over the Guiana Space Centre (`2023-06-24-13-22-56_UMBRA-05`, 5.23 N 52.77 W, 23375 by 23999, 4.19 GiB), configured in [`config/autofocus.yaml`](config/autofocus.yaml) with the download command. It was chosen by screening for PGA's scene preconditions rather than for brightness: `python3 tools/sar_autofocus/pga_screen.py data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd` finds six persistent candidates, the brightest isolated 135 times over its annulus and holding 0.68 of its mean in its worst of eight equal dwell blocks. Two of the scene's brightest returns collapse to 0.07 and 0.09 across the dwell, which is the glint case the screen exists to reject.
+The development collect is an Umbra SNAPSHOT over the Guiana Space Centre (`2023-06-24-13-22-56_UMBRA-05`, 5.23 N 52.77 W, 23375 by 23999, 4.19 GiB), configured in [`config/autofocus.yaml`](config/autofocus.yaml). Download it using the [quick-start above](#download-and-run). It was chosen by screening for PGA's scene preconditions rather than for brightness: `python3 tools/sar_autofocus/pga_screen.py data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd` finds six persistent candidates, the brightest isolated 135 times over its annulus and holding 0.68 of its mean in its worst of eight equal dwell blocks. Two of the scene's brightest returns collapse to 0.07 and 0.09 across the dwell, which is the glint case the screen exists to reject.
 
 The product is a 2048-square **0.25 m** east-north patch on that scatterer, and the fine spacing is load-bearing rather than cosmetic. The target is diffraction-limited to one or two samples at 0.25 m, so on a 1 m lattice it falls between pixels: the same peak reads 43468 at 1 m and 160525 at 0.25 m (both over the full aperture), and adding a quadratic error *raises* the 1 m number by broadening the PSF onto a pixel. **Do not score focus at 1 m here.** The aux is the polar lattice with rows auto-sized about the product centre, 2460 by 23375 at the full aperture (2478 by 8000 at the `pulse_range` the measurements below use).
 

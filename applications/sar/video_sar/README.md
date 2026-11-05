@@ -2,6 +2,13 @@
 
 A retained pulse window emits repeatedly. Signed weights subtract evicted pulses from the continuing backprojection accumulator; the collection seam resets it.
 
+> **Prerequisite: download data before running the application.**
+> Download and prepare the Houston CPHD using the
+> [subset recipe below](#real-collection-preset).
+> Downloads run on the host from the repository root; save files under `data/sar/`
+> as instructed. Data is not bundled, and the application does not download it.
+> Generated-fixture tests in this guide require no external data downloads.
+
 ## Graph
 
 ```mermaid

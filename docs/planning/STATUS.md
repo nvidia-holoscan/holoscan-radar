@@ -4,6 +4,22 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-05** — **Autofocus has a matching data download command.**
+  `tools/sar_data/pull_cphd.py --app autofocus` downloads the default Kourou
+  collect into `data/sar/`. `--app all` includes it, preserves the `imperial/`
+  and `mode5/` layout under an overridden root, and deduplicates shared
+  Imperial Valley downloads. The autofocus and SAR data guides share a
+  uv-based setup/download/run quick-start and distinguish the separate Atlanta
+  download and Houston subset recipe. Offline CLI manifests match the eight
+  preset collection paths, including custom destinations. A user-reported 404
+  exposed a stale Kourou catalog prefix: corrected it to
+  `sar-data/tasks/Kourou, French Guiana/` and verified all eight objects with
+  HTTP HEAD. A 64 KiB range read confirms Kourou's 23375 by 23999 dimensions.
+  Transfer failures now report the source and destination without a traceback;
+  `--app all` rejects the known per-collection destinations. Four offline
+  downloader regressions pass. No full collections downloaded or operator
+  contracts changed.
+
 - **2026-11-05** — Merged `origin/main` at `9310b259` into
   `dpc/sar-autofocus`. Preserved the autofocus product-extent sizing alongside
   main's GPU/display placement, both integration-test dependencies, and both
@@ -1113,6 +1129,7 @@ still declare SDK 4.3.0.
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| SAR autofocus data download | Codex | `dpc/sar-autofocus` | Verified offline: `pull_cphd.py --app autofocus` selects the default Kourou collect and destination; `--app all` includes it and preserves preset subdirectories with shared-collection deduplication. Both guides use the same uv-based quick-start and document alternate-scene preparation. CLI manifests match all eight shipped collection paths with default and custom roots; all eight URLs return HTTP 200. Corrected the Kourou catalog prefix and verified its dimensions with a bounded range read. Four offline regressions cover destinations and HTTP failure reporting; no full collections downloaded. Pinned lint passes. |
 | PR #70 test configuration | Codex | `tbirdsong/5x/package-operator-graph` | **verified locally:** replaced unconditional package test suppression with a package-only default; explicit and cached test settings take precedence. All eight HSDK 5 GA configure checks pass, covering standalone defaults, explicit ON/OFF, package defaults, cached preferences, and package-to-test reconfiguration. Merged `main` at `9cebac3c`, retained both status histories, and passed three merged SDK configuration checks plus full pinned lint. No DSP contracts changed. |
 | FMCW CI application and GUI coverage | Codex | `deustice/gui-updates` | **verified locally:** eight C++ smoke presets, sixteen X11 workflow/language cases, and two native SISO window cases are registered with explicit backends/private caches. The probe handles transient native discovery windows. All 26 cases pass in three final runs; native cases pass 20 extra executions; pinned all-file lint passes. GB10 serial test-stage median rises from 3.78 s (4 cases) to 32.54 s (26 cases), about 28.77 s added. No compiled targets/dependencies added; CI host timing may differ. Details: `tests/gui/README.md`. |
 | GUI branch main merge | Codex | `deustice/gui-updates` | **verified locally:** merged `origin/main` at `76dc53ce` and retained both coordination histories. Incoming CPHD offset-overflow hardening, MUSIC layout documentation, and pinned CI actions are preserved. All 14 CPHD, 47 MUSIC, 42 dashboard, 28 config/choice, and 122 provider/CLI/terminal checks pass (253 total); pinned all-file lint passes. No public contract changes. |

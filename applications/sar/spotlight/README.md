@@ -2,6 +2,13 @@
 
 One collection produces one reset image. The optional ECEF-to-ENU stage rotates CPHD pulse geometry into the fixed Atlanta lattice frame.
 
+> **Prerequisite: download data before running the application.**
+> Download the Atlanta Umbra CPHD using the
+> [download commands below](#real-collection-preset).
+> Downloads run on the host from the repository root; save files under `data/sar/`
+> as instructed. Data is not bundled, and the application does not download it.
+> Generated-fixture tests in this guide require no external data downloads.
+
 ## Graph
 
 ```mermaid

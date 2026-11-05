@@ -2,6 +2,13 @@
 
 The scroll stager splits each reader batch at the emission cadence and forwards its boundary only on the last slice. Backprojection retains overlapping rows as its lattice advances, and a mosaic places emitted windows in the parent strip.
 
+> **Prerequisite: download data before running the application.**
+> Download the Imperial Valley Capella CPHD using the
+> [download script below](#real-collection-preset). The same file serves both strip apps.
+> Downloads run on the host from the repository root; save files under `data/sar/`
+> as instructed. Data is not bundled, and the application does not download it.
+> Generated-fixture tests in this guide require no external data downloads.
+
 ## Graph
 
 ```mermaid
