@@ -356,7 +356,7 @@ def content_length(headers: object) -> int | None:
         size = int(raw)
     except (TypeError, ValueError):
         return None
-    return size if size > 0 else None
+    return size if size >= 0 else None
 
 
 def https_size(url: str) -> int | None:
@@ -409,14 +409,22 @@ def download_https(url: str, dest: Path, progress: DownloadProgress) -> None:
             urllib.request.urlopen(url, timeout=HTTPS_TIMEOUT_S) as response,
             partial.open("wb") as out,
         ):
+            expected_bytes = content_length(response.headers)
+            received_bytes = 0
             if progress.total is None:
-                progress.total = content_length(response.headers)
+                progress.total = expected_bytes or None
             while True:
                 block = response.read(CHUNK_BYTES)
                 if not block:
                     break
                 out.write(block)
+                received_bytes += len(block)
                 progress.add(len(block))
+            if expected_bytes is not None and received_bytes != expected_bytes:
+                raise RuntimeError(
+                    f"HTTPS download size mismatch: received {received_bytes} bytes, "
+                    f"expected {expected_bytes} bytes"
+                )
         partial.replace(dest)
         progress.finish()
     except BaseException:

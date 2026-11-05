@@ -4,6 +4,14 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-05** — Download publication review follow-up on
+  `dpc/sar-autofocus`: the spotlight quick-start stops on failed transfers
+  without publishing the partial file or launching the app. HTTPS downloads
+  verify bytes received against the GET response length before replacing a
+  CPHD destination. Six offline downloader tests and three mocked quick-start
+  scenarios pass; length mismatches preserve existing destinations and clean
+  failed partial files. No operator contracts changed.
+
 - **2026-11-05** — **Autofocus has a matching data download command.**
   `tools/sar_data/pull_cphd.py --app autofocus` downloads the default Kourou
   collect into `data/sar/`. `--app all` includes it, preserves the `imperial/`

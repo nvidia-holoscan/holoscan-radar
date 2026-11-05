@@ -62,6 +62,54 @@ class DownloadCliTest(unittest.TestCase):
                 self.assertIn("--app all --dest data/sar", output.getvalue())
                 pull.assert_not_called()
 
+    def test_https_length_mismatch_preserves_destination(self):
+        for expected in (0, 2, 8):
+            for existing in (None, b"original collect"):
+                with self.subTest(expected=expected, existing=existing):
+                    with tempfile.TemporaryDirectory() as temp:
+                        dest = Path(temp) / "collect.cphd"
+                        if existing is not None:
+                            dest.write_bytes(existing)
+                        response = io.BytesIO(b"data")
+                        response.headers = {"Content-Length": str(expected)}
+                        # A prior HEAD length must not override the GET length.
+                        progress = pull_cphd.DownloadProgress("test", 4)
+                        with (
+                            mock.patch.object(
+                                pull_cphd.urllib.request, "urlopen", return_value=response
+                            ),
+                            contextlib.redirect_stderr(io.StringIO()),
+                            self.assertRaisesRegex(RuntimeError, "download size mismatch"),
+                        ):
+                            pull_cphd.download_https("https://example.test/collect", dest, progress)
+                        if existing is None:
+                            self.assertFalse(dest.exists())
+                        else:
+                            self.assertEqual(dest.read_bytes(), existing)
+                        self.assertFalse(pull_cphd.partial_path(dest).exists())
+
+    def test_https_complete_response_publishes_destination(self):
+        for headers in ({"Content-Length": "4"}, {}):
+            with self.subTest(headers=headers):
+                with tempfile.TemporaryDirectory() as temp:
+                    dest = Path(temp) / "collect.cphd"
+                    dest.write_bytes(b"original collect")
+                    response = io.BytesIO(b"data")
+                    response.headers = headers
+                    with (
+                        mock.patch.object(
+                            pull_cphd.urllib.request, "urlopen", return_value=response
+                        ),
+                        contextlib.redirect_stderr(io.StringIO()),
+                    ):
+                        pull_cphd.download_https(
+                            "https://example.test/collect",
+                            dest,
+                            pull_cphd.DownloadProgress("test", None),
+                        )
+                    self.assertEqual(dest.read_bytes(), b"data")
+                    self.assertFalse(pull_cphd.partial_path(dest).exists())
+
     def test_http_404_reports_source_and_cleans_partial_file(self):
         with tempfile.TemporaryDirectory() as temp:
             dest = Path(temp) / "2023-06-24-13-22-56_UMBRA-05_CPHD.cphd"
