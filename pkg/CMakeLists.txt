@@ -53,6 +53,7 @@ set(HOLOSCAN_RADAR_PKG_OPERATORS
     fmcw_range_processor_op
     fmcw_range_doppler_processor_op
     phase_correction_op
+    autofocus_op
     sar_range_compression_op
     aperture_manager_op
     backprojection_op
