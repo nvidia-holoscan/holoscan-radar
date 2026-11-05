@@ -18,7 +18,7 @@ def report(reason="converged", accepted=2, residual=0.1, baseline=2.0):
     return (
         f"AutofocusScoreOp: affine-removed RMS {residual} rad (1 mm LOS) "
         f"baseline {baseline} rad RMS\n"
-        "AutofocusSharpnessReportOp: sharpness 1 -> 2 (2.000x over 8 iteration(s))\n"
+        f"AutofocusSharpnessReportOp: sharpness 1 -> 2 (2.000x; {accepted} iteration(s) accepted; budget 8)\n"
         f"AutofocusSharpnessReportOp: termination {reason}, {accepted} iteration(s) accepted\n"
     )
 

@@ -143,8 +143,11 @@ class AutofocusSharpnessReportOp : public holoscan::Operator<> {
       trace_text += fmt::format("{:.4g}", values[i]);
     }
     const double gain = values[0] > 0.0 ? values[n - 1] / values[0] : 0.0;
-    HOLOSCAN_LOG_INFO("AutofocusSharpnessReportOp: sharpness {} ({:.3f}x over {} iteration(s))",
-                      trace_text, gain, n - 1U);
+    const auto reason = read_status(termination, stream);
+    const auto accepted = read_status(iterations, stream);
+    HOLOSCAN_LOG_INFO(
+        "AutofocusSharpnessReportOp: sharpness {} ({:.3f}x; {} iteration(s) accepted; budget {})",
+        trace_text, gain, accepted.value_or(-1), n - 1U);
     if (!monotone) {
       HOLOSCAN_LOG_WARN(
           "AutofocusSharpnessReportOp: sharpness did not improve monotonically; an iteration was "
@@ -154,18 +157,16 @@ class AutofocusSharpnessReportOp : public holoscan::Operator<> {
     // The provenance half, when the graph wires it. A gain of 1.000x above is
     // the ambiguous case this resolves: it reads the same whether PGA refused
     // or had nothing to do, and only these say which.
-    const auto reason = read_status(termination, stream);
-    const auto accepted = read_status(iterations, stream);
     if (reason.has_value()) {
       const auto code = static_cast<AutofocusTermination>(*reason);
+      HOLOSCAN_LOG_INFO(
+          "AutofocusSharpnessReportOp: termination {}, {} iteration(s) accepted (budget {})",
+          to_string(code), accepted.value_or(-1), n - 1U);
       if (autofocus_refused(code)) {
         HOLOSCAN_LOG_WARN(
             "AutofocusSharpnessReportOp: autofocus REFUSED ({}); the image was returned "
             "uncorrected and phase_correction is zero",
             to_string(code));
-      } else {
-        HOLOSCAN_LOG_INFO("AutofocusSharpnessReportOp: termination {}, {} iteration(s) accepted",
-                          to_string(code), accepted.value_or(-1));
       }
     }
     return {};

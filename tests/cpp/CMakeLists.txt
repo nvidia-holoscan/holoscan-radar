@@ -484,6 +484,7 @@ if(TARGET autofocus)
             -DSAR_CONFIG=${af_dir}/autofocus_generated_smoke.yaml
             -DSAR_COUNT=1
             -DSAR_DIMS=5x5
+            "-DSAR_REQUIRE_REGEX=sharpness .*x; [0-9]+ iteration.s. accepted; budget 8"
             -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_smoke.cmake)
     set_tests_properties(Sar_autofocus_smoke PROPERTIES
         FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")

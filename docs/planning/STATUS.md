@@ -10,7 +10,10 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   being addressed as four separate commits. Sweep execution failures now
   invalidate evidence and propagate a nonzero campaign exit; explicit
   termination provenance determines refusals and accepted iterations. Nine
-  offline report regressions pass. No operator contract changes.
+  offline report regressions pass. The report now labels accepted iterations
+  and the configured budget separately, including refusal paths; the app smoke
+  requires the new wording. All four autofocus application smokes pass in the
+  SDK container after rebuilding the app. No operator contract changes.
 
 - **2026-11-05** â€” Download publication review follow-up on
   `dpc/sar-autofocus`: the spotlight quick-start stops on failed transfers
