@@ -6,7 +6,9 @@
 #include <cuda/std/complex>
 #include <cuda_runtime_api.h>
 
+#include <bit>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -42,6 +44,30 @@ expected<void, Error> fail_invalid(const std::string& message) {
 
 expected<void, Error> fail_runtime(const std::string& message) {
   return make_unexpected(Error{ErrorCode::kFailure, message});
+}
+
+bool same_double_bytes(double a, double b) {
+  return std::bit_cast<uint64_t>(a) == std::bit_cast<uint64_t>(b);
+}
+
+bool same_double_vector_bytes(const std::vector<double>& a, const std::vector<double>& b) {
+  return a.size() == b.size() &&
+         (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(double)) == 0);
+}
+
+bool same_geometry_bytes(const ArrayGeometry& a, const ArrayGeometry& b) {
+  return a.geometry_type == b.geometry_type && same_double_bytes(a.wavelength, b.wavelength) &&
+         same_double_vector_bytes(a.element_positions, b.element_positions);
+}
+
+bool same_window_bytes(const WindowSpec& a, const WindowSpec& b) {
+  return a.type == b.type &&
+         same_double_bytes(a.sidelobe_attenuation_db, b.sidelobe_attenuation_db) &&
+         a.kaiser_beta.has_value() == b.kaiser_beta.has_value() &&
+         (!a.kaiser_beta.has_value() || same_double_bytes(*a.kaiser_beta, *b.kaiser_beta)) &&
+         a.taylor_nbar == b.taylor_nbar && same_double_bytes(a.tukey_alpha, b.tukey_alpha) &&
+         same_double_vector_bytes(a.coefficients, b.coefficients) &&
+         a.coherent_gain_normalization == b.coherent_gain_normalization;
 }
 
 struct PhaseShiftBeamformerStageConfig {
@@ -308,7 +334,24 @@ expected<void, Error> PhaseShiftBeamformerOp<T>::compute(ExecutionContext& conte
         Error{ErrorCode::kNotSupported, "PhaseShiftBeamformerOp: no CUDA compute stream"});
   }
   // Prepare or reuse cached artifacts without changing tick coherence.
-  HOLOSCAN_TRY(auto artifacts, prepare_steering_artifacts<T>(artifact_cache_, plan.stage, stream));
+  const bool last_steering_hit =
+      last_steering_artifact_ != nullptr &&
+      same_geometry_bytes(last_steering_geometry_, plan.stage.geometry) &&
+      last_steering_convention_ == plan.stage.convention &&
+      same_double_vector_bytes(last_steering_az_, plan.stage.az_coordinates) &&
+      same_double_vector_bytes(last_steering_el_, plan.stage.el_coordinates) &&
+      same_window_bytes(last_steering_taper_, plan.stage.taper);
+  const detail::PhaseShiftBeamformerArtifacts* artifacts = last_steering_artifact_;
+  if (!last_steering_hit) {
+    HOLOSCAN_TRY(auto rebuilt, prepare_steering_artifacts<T>(artifact_cache_, plan.stage, stream));
+    artifacts = rebuilt;
+    last_steering_geometry_ = plan.stage.geometry;
+    last_steering_convention_ = plan.stage.convention;
+    last_steering_az_ = plan.stage.az_coordinates;
+    last_steering_el_ = plan.stage.el_coordinates;
+    last_steering_taper_ = plan.stage.taper;
+    last_steering_artifact_ = artifacts;
+  }
 
   // Prepare the required dense cube before publishing optional sidebands.
   const void* input_ptr = rd.data();

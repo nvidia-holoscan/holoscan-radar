@@ -1291,3 +1291,116 @@ TEST(RootMUSICEstimatorOpTest, FloatScaledRankOneFramesDoNotAbort) {
     }
   }
 }
+
+// Each case reuses eig cache keys with independent inputs, changes dimensions
+// when requested, and starts a new fixture after stop with a different scene.
+// Exact A returns cover every public output; analytic B checks reject stale data.
+template <typename T>
+void check_root_music_cache_lifecycle(bool ura, bool smoothing) {
+  constexpr int64_t kSnapshots = 128;
+  constexpr int64_t kMaxSources = 2;
+  const auto geometry =
+      ura ? make_planar_ura_geometry(4, 4, 0.5, 1.0) : make_ula_geometry(8, 0.5, 1.0);
+  const int64_t channels = geometry.num_elements();
+  const int64_t first_channels = smoothing && !ura ? 7 : channels;
+  const int64_t middle_channels = smoothing ? (ura ? 9 : 5) : channels;
+  const AngleConvention convention{};
+  for (int restart = 0; restart < 2; ++restart) {
+    const double first_az = restart == 0 ? 0.12 : -0.10;
+    const double middle_az = restart == 0 ? -0.17 : 0.19;
+    const double first_el = ura ? (restart == 0 ? -0.08 : 0.09) : 0.0;
+    const double middle_el = ura ? (restart == 0 ? 0.13 : -0.12) : 0.0;
+    const auto first = make_block(geometry, convention, first_az, first_el, kSnapshots, 0.01,
+                                  static_cast<uint32_t>(1701 + restart));
+    auto middle = make_block(geometry, convention, middle_az, middle_el, kSnapshots, 0.01,
+                             static_cast<uint32_t>(1711 + restart));
+    for (auto& value : middle) {
+      value *= 2.0;
+    }
+    std::vector<std::shared_ptr<holoscan::Tensor>> frames{
+        block_to_device<T>(first, {1, channels, kSnapshots}),
+        block_to_device<T>(middle, {1, channels, kSnapshots}),
+        block_to_device<T>(first, {1, channels, kSnapshots})};
+    std::vector<std::optional<SpatialSmoothingOverride>> overrides(3);
+    std::vector<int64_t> counts;
+    if (smoothing) {
+      counts = ura ? std::vector<int64_t>{1, 1} : std::vector<int64_t>{2};
+      overrides[1] = ura ? SpatialSmoothingOverride{.count = 2, .first = 2, .second = 2}
+                         : SpatialSmoothingOverride{.count = 1, .first = 4};
+    }
+    auto params =
+        make_params(geometry, convention, /*num_sources=*/1, 1e-2, kMaxSources, std::move(counts));
+    const auto result = run_root_music_override<SpatialSmoothingOverride, T>(
+        std::move(frames), std::move(overrides), std::move(params), "spatial_smoothing");
+    ASSERT_TRUE(result.ok()) << result.describe_failure();
+    const auto aoa = root_music_frames(result, "aoa_estimates");
+    const auto doa = root_music_frames(result, "doa_multi");
+    const auto sources = root_music_frames(result, "source_count");
+    const auto eigenvalues = root_music_frames(result, "eigenvalues");
+    ASSERT_EQ(aoa.size(), 3U);
+    ASSERT_EQ(doa.size(), 3U);
+    ASSERT_EQ(sources.size(), 3U);
+    ASSERT_EQ(eigenvalues.size(), 3U);
+    for (std::size_t tick = 0; tick < 3U; ++tick) {
+      const double expected_az = tick == 1U ? middle_az : first_az;
+      const double expected_el = tick == 1U ? middle_el : first_el;
+      const int64_t effective_channels = tick == 1U ? middle_channels : first_channels;
+      EXPECT_EQ(aoa[tick].shape, (std::vector<int64_t>{1, 2}));
+      EXPECT_EQ(doa[tick].shape, (std::vector<int64_t>{1, kMaxSources, 2}));
+      EXPECT_EQ(sources[tick].shape, (std::vector<int64_t>{1}));
+      EXPECT_EQ(eigenvalues[tick].shape, (std::vector<int64_t>{1, effective_channels}));
+      for (const auto* output : {&aoa[tick], &doa[tick], &eigenvalues[tick]}) {
+        EXPECT_EQ(output->dtype.code, real_dtype<T>().code);
+        EXPECT_EQ(output->dtype.bits, real_dtype<T>().bits);
+        EXPECT_EQ(output->dtype.lanes, 1);
+      }
+      EXPECT_EQ(sources[tick].dtype.code, kDLInt);
+      EXPECT_EQ(sources[tick].dtype.bits, 32);
+      EXPECT_EQ(sources[tick].dtype.lanes, 1);
+      EXPECT_EQ(sources[tick].template as<int32_t>()[0], 1);
+      const T* estimate = aoa[tick].template as<T>();
+      const T* multiple = doa[tick].template as<T>();
+      EXPECT_NEAR(estimate[0], expected_az, 0.03);
+      EXPECT_NEAR(estimate[1], expected_el, ura ? 0.03 : 1e-6);
+      EXPECT_NEAR(multiple[0], expected_az, 0.03);
+      EXPECT_NEAR(multiple[1], expected_el, ura ? 0.03 : 1e-6);
+      EXPECT_TRUE(std::isnan(multiple[2]));
+      EXPECT_TRUE(std::isnan(multiple[3]));
+      const T* values = eigenvalues[tick].template as<T>();
+      for (int64_t channel = 0; channel < effective_channels; ++channel) {
+        EXPECT_TRUE(std::isfinite(values[channel]));
+        EXPECT_GE(values[channel], -1e-3);
+        if (channel > 0) {
+          EXPECT_LE(values[channel - 1], values[channel]);
+        }
+      }
+    }
+    for (const auto* output : {&aoa, &doa, &sources, &eigenvalues}) {
+      EXPECT_EQ((*output)[0].shape, (*output)[2].shape);
+      EXPECT_EQ((*output)[0].data, (*output)[2].data);
+    }
+    EXPECT_NE(aoa[0].data, aoa[1].data);
+    EXPECT_NE(eigenvalues[0].data, eigenvalues[1].data);
+  }
+}
+
+template <typename T>
+class RootMusicCacheLifecycleTest : public ::testing::Test {};
+using RootMusicCachePrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(RootMusicCacheLifecycleTest, RootMusicCachePrecisions);
+
+TYPED_TEST(RootMusicCacheLifecycleTest, UlaChangedInputReturnsAllOutputsAndRestarts) {
+  check_root_music_cache_lifecycle<TypeParam>(false, false);
+}
+
+TYPED_TEST(RootMusicCacheLifecycleTest, UraChangedInputReturnsAllOutputsAndRestarts) {
+  check_root_music_cache_lifecycle<TypeParam>(true, false);
+}
+
+TYPED_TEST(RootMusicCacheLifecycleTest, UlaSmoothingReturnsEffectiveApertureAndRestarts) {
+  check_root_music_cache_lifecycle<TypeParam>(false, true);
+}
+
+TYPED_TEST(RootMusicCacheLifecycleTest, UraSmoothingReturnsEffectiveApertureAndRestarts) {
+  check_root_music_cache_lifecycle<TypeParam>(true, true);
+}

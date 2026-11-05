@@ -16,6 +16,7 @@
 #include <cstring>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <fstream>
+#include <limits>
 #include <future>
 #include <stdexcept>
 #include <exception>
@@ -47,6 +48,7 @@ namespace {
 namespace fs = std::filesystem;
 using holoscan::radar::cphd::CphdFile;
 using holoscan::radar::testing::cphd_fixture::make_fixture;
+using holoscan::radar::testing::cphd_fixture::PvpFieldOverride;
 
 TEST(CphdReaderOp, AbsolutePlaybackAndQuietDeadlines) {
   using holoscan::radar::cphd::PlaybackClock;
@@ -490,6 +492,37 @@ TEST(CphdFile, CppFixtureDecodesHeaderPvpAndSignal) {
   EXPECT_NEAR(signal[23].real(), std::cos(1.7), 1e-6);
   fs::remove(path);
 }
+
+TEST(CphdFile, ValidatesPvpFieldLayoutWithoutOverflow) {
+  const fs::path exact = fs::temp_directory_path() / "holoscan_sar_cphd_pvp_exact.cphd";
+  make_fixture(exact, 0.0, 0.0, 6378000.0, false, 5, PvpFieldOverride{"SIGNAL", 12, 1});
+  EXPECT_NO_THROW((void)CphdFile(exact.string()));
+  fs::remove(exact);
+
+  struct InvalidLayout {
+    const char* label;
+    int64_t offset_words;
+    int64_t size_words;
+  };
+  const std::array<InvalidLayout, 6> invalid_layouts{{
+      {"negative_offset", -1, 1},
+      {"zero_size", 0, 0},
+      {"negative_size", 0, -1},
+      {"past_record", 12, 2},
+      {"addition_overflow", std::numeric_limits<int64_t>::max(), 3},
+      {"multiplication_overflow", 0, std::numeric_limits<int64_t>::max()},
+  }};
+
+  for (const auto& layout : invalid_layouts) {
+    const fs::path path = fs::temp_directory_path() /
+                          (std::string("holoscan_sar_cphd_pvp_") + layout.label + ".cphd");
+    make_fixture(path, 0.0, 0.0, 6378000.0, false, 5,
+                 PvpFieldOverride{"SIGNAL", layout.offset_words, layout.size_words});
+    EXPECT_THROW((void)CphdFile(path.string()), std::runtime_error) << layout.label;
+    fs::remove(path);
+  }
+}
+
 TEST(CphdReaderOp, AcceptsRecordedGridRampButRejectsFrequencyStep) {
   using holoscan::radar::CPHDReaderOp;
   using holoscan::radar::CphdReaderParams;

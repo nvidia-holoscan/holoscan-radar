@@ -21,8 +21,15 @@
 #include <holoscan/visualization/holoviz_op.hpp>
 
 #include "radar_app/app/angle_presentation.hpp"
+#include "radar_app/app/application_descriptions.hpp"
 #include "radar_app/app/visualization_config.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
+#include "radar_app/viz/fmcw_holoviz_op.hpp"
+#include "radar_app/viz/image_device_bridge_op.hpp"
+#if HOLOSCAN_RADAR_HAS_X11
+#include "radar_app/viz/x11_image_presenter_op.hpp"
+#endif
+#include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
 #include "radar_common/sim/scene.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
@@ -87,15 +94,13 @@ struct ProfiledClusterDashboardInputs {
 };
 
 template <typename Inputs>
-inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle& application,
-                               holoscan::CompileOptions& options, const VisualizationConfig& config,
-                               double frame_period, bool show_angles,
-                               const std::vector<double>& az_grid,
-                               const std::vector<double>& el_grid,
-                               const AngleConvention& angle_convention,
-                               const std::vector<sim::PointTarget>& truth_targets,
-                               const sim::SceneVisibility& scene_visibility,
-                               std::string workflow_title, const Inputs& inputs) {
+inline void add_fmcw_dashboard(
+    holoscan::Graph& graph, holoscan::PartitionHandle& application,
+    holoscan::CompileOptions& options, const VisualizationConfig& config, double frame_period,
+    bool show_angles, const std::vector<double>& az_grid, const std::vector<double>& el_grid,
+    const AngleConvention& angle_convention, const std::vector<sim::PointTarget>& truth_targets,
+    const sim::SceneVisibility& scene_visibility, std::string workflow_title, const Inputs& inputs,
+    std::string description = {}) {
   static_assert(std::is_same_v<Inputs, RawDashboardInputs> ||
                     std::is_same_v<Inputs, ClusterDashboardInputs> ||
                     std::is_same_v<Inputs, ProfiledClusterDashboardInputs>,
@@ -120,8 +125,16 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
           .mode = kClustered ? DashboardMode::kClusters : DashboardMode::kRawDetections,
           .show_angles = show_angles,
           .dynamic_range_db = static_cast<float>(config.dynamic_range_db),
+          .noise_scaling = config.noise_scaling,
+          .noise_sample_limit = config.noise_sample_limit,
+          .noise_range_half_width = config.noise_range_half_width,
+          .noise_doppler_half_width = config.noise_doppler_half_width,
+          .noise_sigma = config.noise_sigma,
+          .noise_headroom_db = config.noise_headroom_db,
+          .range_doppler_width_percent = config.range_doppler_width_percent,
           .detection_radius = static_cast<float>(config.detection_radius),
           .frame_period = frame_period,
+          .display_rate_hz = config.display_rate_hz,
           .history_frames = config.history_frames,
           .detection_trail_frames = config.detection_trail_frames,
           .width = config.window_width,
@@ -131,6 +144,7 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
           .angle_convention = angle_convention,
           .title =
               workflow_title + (selected_profile.empty() ? "" : " | PROFILE: " + selected_profile),
+          .description = std::move(description),
           .selected_profile = std::move(selected_profile),
           .selected_waveform = std::move(selected_waveform),
           .truth_targets = make_truth_targets(truth_targets),
@@ -139,49 +153,36 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
   options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = "display_compositor",
       .output_port = "rgba",
-      .device = holoscan::DeviceId{0},
+      .device = app::application_device(),
   });
 
-  holoscan::visualization::LayerStack layers;
-  layers.add_image_layer("image",
-                         holoscan::visualization::ImageLayerDesc{
-                             .format = holoscan::visualization::ImageFormat::kR8G8B8A8Unorm,
-                             .max_width = static_cast<std::uint32_t>(config.window_width),
-                             .max_height = static_cast<std::uint32_t>(config.window_height)});
-
-  const auto display_period = std::chrono::duration_cast<std::chrono::nanoseconds>(
-      std::chrono::duration<double>{1.0 / config.display_rate_hz});
-  const auto max_input_age =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>{
-          std::max(static_cast<double>(max_profile_gap_frames + 1U) * frame_period,
-                   2.0 / config.display_rate_hz)});
   auto image_bridge =
       graph.op<RgbaImageBridgeOp>("dashboard_image", static_cast<std::int32_t>(config.window_width),
                                   static_cast<std::int32_t>(config.window_height));
   options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = "dashboard_image",
       .output_port = "image",
-      .device = holoscan::DeviceId{0},
+      .device = app::application_device(),
   });
-  auto holoviz = graph.op<holoscan::visualization::HolovizOp>(
-      "holoviz", std::move(layers),
-      holoscan::visualization::WindowSinkDesc{
-          .title = config.window_title + " - " + std::move(workflow_title),
-          .width = static_cast<std::uint32_t>(config.window_width),
-          .height = static_cast<std::uint32_t>(config.window_height)},
-      holoscan::visualization::ClockTrigger{display_period}, max_input_age);
+  const holoscan::DeviceId composer_device{app::application_composer_device()};
+  auto frame = graph.op<FmcwFrameComposerOp>("dashboard_frame",
+                                             static_cast<std::int32_t>(config.window_width),
+                                             static_cast<std::int32_t>(config.window_height));
+  options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+      .operator_path = "dashboard_frame", .output_port = "output", .device = composer_device});
 
-  // Keep the independently clock-driven display in its own partition.
+  // Keep presentation on its own partition; each completed image drives one render.
   application.add(display);
   application.add(image_bridge);
-  graph.partition("visualization").add(holoviz);
+  auto visualization = graph.partition("visualization");
+  visualization.add(frame);
 
   // Visualization is best-effort: discard stale frames instead of
   // backpressuring the radar pipeline when rendering falls behind.
   const holoscan::ConnectionOptions processing_queue{
       .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 4U};
   const holoscan::ConnectionOptions display_queue{
-      .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 8U};
+      .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 1U};
 
   graph.add_flow(inputs.cfar_power, display->cfar_power, processing_queue);
   graph.add_flow(inputs.detection_idx, display->detection_idx, processing_queue);
@@ -199,8 +200,34 @@ inline void add_fmcw_dashboard(holoscan::Graph& graph, holoscan::PartitionHandle
     const holoscan::ConnectionOptions waveform_queue{.queue_depth = max_profile_gap_frames + 2U};
     graph.add_flow(inputs.waveform, display->waveform_in, waveform_queue);
   }
+  graph.add_flow(display->text, frame->tensor_layer_input(1), display_queue);
   graph.add_flow(display->rgba, image_bridge->rgba, display_queue);
-  graph.add_flow(image_bridge->image, holoviz->image_layer_input(0), display_queue);
+  connect_image_devices(graph, options, application, visualization, image_bridge->image,
+                        frame->image_layer_input(0), "dashboard_composer", config.window_width,
+                        config.window_height, app::application_device(), composer_device,
+                        display_queue);
+  auto presentation = graph.partition("presentation");
+  const auto title = config.window_title + " - " + std::move(workflow_title);
+#if HOLOSCAN_RADAR_HAS_X11
+  if (app::fmcw_uses_x11_presentation(config.x11_presentation.value_or(true))) {
+    auto viewer =
+        graph.op<X11ImagePresenterOp>("holoviz", config.window_width, config.window_height, title);
+    auto download =
+        graph.op<ImageDownloadOp>("dashboard_download", config.window_width, config.window_height);
+    visualization.add(download);
+    presentation.add(viewer);
+    graph.add_flow(frame->output(), download->image_in, display_queue);
+    graph.add_flow(download->image_out, viewer->image, display_queue);
+    return;
+  }
+#endif
+  auto holoviz =
+      graph.op<FmcwHolovizOp>("holoviz", config.window_width, config.window_height, title);
+  const holoscan::DeviceId display_device{app::application_display_device()};
+  presentation.add(holoviz);
+  connect_image_devices(graph, options, visualization, presentation, frame->output(),
+                        holoviz->image_layer_input(0), "dashboard", config.window_width,
+                        config.window_height, composer_device, display_device, display_queue);
 }
 
 }  // namespace holoscan::radar::app::viz

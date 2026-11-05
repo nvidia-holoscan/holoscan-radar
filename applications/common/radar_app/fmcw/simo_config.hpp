@@ -31,6 +31,7 @@
 #include "fmcw/fmcw_range_processor_op/params_config.hpp"
 #include "radar_app/app/run_config.hpp"
 #include "radar_app/app/config_utils.hpp"
+#include "radar_app/fmcw/config_loader.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/math/uniform_grid.hpp"
@@ -41,7 +42,7 @@
 namespace holoscan::radar::app::simo {
 
 using config::decode_params;
-using config::load_document;
+using config::load_inherited_document;
 using config::normalize_enum_field;
 using config::normalize_scan_coordinate_field;
 using config::reject_authored;
@@ -126,6 +127,7 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored, const char* 
   if (result.meter_log_every < 0) {
     throw std::runtime_error("app.run.meter_log_every must be >= 0");
   }
+  result.visualization.validate_layout();
   require_positive("app.visualization.window_width", result.visualization.window_width);
   require_positive("app.visualization.window_height", result.visualization.window_height);
   if (result.visualization.window_width > std::numeric_limits<std::uint32_t>::max() ||
@@ -251,8 +253,7 @@ inline holoscan::config::Document normalize_operator_enums(holoscan::config::Doc
   document =
       normalize_enum_field<ClutterFilterMethod>(std::move(document), "/clutter_filter/method");
   document = normalize_enum_field<FftNorm>(std::move(document), "/doppler_processor/fft_norm");
-  const std::string base =
-      workflow == Workflow::kDetectThenBeamform ? "/detect_then_beamform" : "/beamform_then_detect";
+  const std::string base = workflow == Workflow::kDetectThenBeamform ? "/detect_then_beamform" : "";
   document =
       normalize_enum_field<CfarVariant>(std::move(document), base + "/cfar_detector/cfar_variant");
   document =
@@ -283,7 +284,8 @@ inline holoscan::config::Document normalize_operator_enums(holoscan::config::Doc
 
 inline DetectThenBeamformConfig load_detect_then_beamform_config(
     const std::filesystem::path& path) {
-  auto document = normalize_operator_enums(load_document(path), Workflow::kDetectThenBeamform);
+  auto document =
+      normalize_operator_enums(load_inherited_document(path), Workflow::kDetectThenBeamform);
   const auto app_params = decode_params<AppParams>(document, "/app");
   RuntimeConfig runtime = make_runtime_config(*app_params, "detect_then_beamform");
 
@@ -333,32 +335,30 @@ inline DetectThenBeamformConfig load_detect_then_beamform_config(
 
 inline BeamformThenDetectConfig load_beamform_then_detect_config(
     const std::filesystem::path& path) {
-  auto document = normalize_operator_enums(load_document(path), Workflow::kBeamformThenDetect);
+  auto document =
+      normalize_operator_enums(load_inherited_document(path), Workflow::kBeamformThenDetect);
   const auto app_params = decode_params<AppParams>(document, "/app");
   RuntimeConfig runtime = make_runtime_config(*app_params, "beamform_then_detect");
 
   auto range = decode_params<FMCWRangeProcessorParams>(document, "/range_processor");
   auto clutter = decode_params<ClutterFilterParams>(document, "/clutter_filter");
   auto doppler = decode_params<FMCWDopplerProcessorParams>(document, "/doppler_processor");
-  reject_authored(document, "/beamform_then_detect/phase_shift_beamformer/array_geometry");
+  reject_authored(document, "/phase_shift_beamformer/array_geometry");
   PhaseShiftBeamformerParams beamformer_baseline;
   beamformer_baseline.array_geometry = runtime.array_geometry;
-  auto beamformer = decode_params<PhaseShiftBeamformerParams>(
-      document, "/beamform_then_detect/phase_shift_beamformer", std::move(beamformer_baseline));
-  auto cfar = decode_params<CFARParams>(document, "/beamform_then_detect/cfar_detector");
-  auto assembly =
-      decode_params<FeatureAssemblyParams>(document, "/beamform_then_detect/feature_assembly");
+  auto beamformer = decode_params<PhaseShiftBeamformerParams>(document, "/phase_shift_beamformer",
+                                                              std::move(beamformer_baseline));
+  auto cfar = decode_params<CFARParams>(document, "/cfar_detector");
+  auto assembly = decode_params<FeatureAssemblyParams>(document, "/feature_assembly");
   if (cfar->peak_mode != CfarPeakMode::kAll) {
-    throw std::runtime_error("beamform_then_detect.cfar_detector.peak_mode must be all");
+    throw std::runtime_error("cfar_detector.peak_mode must be all");
   }
   if (!cfar->nci_axes.empty()) {
-    throw std::runtime_error("beamform_then_detect.cfar_detector.nci_axes must be empty");
+    throw std::runtime_error("cfar_detector.nci_axes must be empty");
   }
-  require_scan_coordinates("beamform_then_detect.phase_shift_beamformer.az_coordinates",
-                           beamformer->az_coordinates);
-  require_scan_coordinates("beamform_then_detect.phase_shift_beamformer.el_coordinates",
-                           beamformer->el_coordinates);
-  require_assembly_features("beamform_then_detect.feature_assembly.features", *assembly);
+  require_scan_coordinates("phase_shift_beamformer.az_coordinates", beamformer->az_coordinates);
+  require_scan_coordinates("phase_shift_beamformer.el_coordinates", beamformer->el_coordinates);
+  require_assembly_features("feature_assembly.features", *assembly);
   runtime.extents =
       make_extents(runtime, Workflow::kBeamformThenDetect, *range, *doppler, *beamformer, nullptr,
                    nullptr, static_cast<int64_t>(assembly->features.size()));

@@ -3,8 +3,6 @@
 
 #pragma once
 
-#include <yaml-cpp/yaml.h>
-
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -28,8 +26,10 @@ enum class Algorithm { kMusic, kRootMusic, kEsprit, kMvdr };
 
 // Decode the one structural choice owned by this application. Estimator
 // selection is fixed at graph construction; it is not a live operator option.
-inline Algorithm parse_algorithm(const YAML::Node& app) {
-  const std::string value = app["aoa_algorithm"] ? app["aoa_algorithm"].as<std::string>() : "music";
+inline Algorithm parse_algorithm(const holoscan::config::Document& document) {
+  const std::string value = document.find("/app/aoa_algorithm")
+                                ? document.get<std::string>("/app/aoa_algorithm")
+                                : "music";
   if (value == "music")
     return Algorithm::kMusic;
   if (value == "root_music")
@@ -39,6 +39,20 @@ inline Algorithm parse_algorithm(const YAML::Node& app) {
   if (value == "mvdr")
     return Algorithm::kMvdr;
   throw std::runtime_error("app.aoa_algorithm must be music, root_music, esprit, or mvdr");
+}
+
+inline const char* algorithm_mode(Algorithm value) {
+  switch (value) {
+    case Algorithm::kMusic:
+      return "default";
+    case Algorithm::kRootMusic:
+      return "root_music";
+    case Algorithm::kEsprit:
+      return "esprit";
+    case Algorithm::kMvdr:
+      return "mvdr";
+  }
+  throw std::runtime_error("unknown Adaptive AoA algorithm");
 }
 
 inline const char* algorithm_name(Algorithm value) {
@@ -130,9 +144,9 @@ inline void validate_covariance_params(const Params& params, const BeamscanParam
 inline Config load_config(const std::filesystem::path& path) {
   // The app section owns estimator selection. Operator blocks remain decoded
   // through Holoscan Params rather than being parsed by application code.
-  const YAML::Node yaml = YAML::LoadFile(path.string());
-  const Algorithm algorithm = parse_algorithm(yaml["app"]);
-  auto document = mimo::normalize_operator_fields(mimo::load_document(path), true);
+  auto document = mimo::load_inherited_document(path);
+  const Algorithm algorithm = parse_algorithm(document);
+  document = mimo::normalize_operator_fields(std::move(document), true);
   const auto app_params = mimo::decode_params<mimo::AppParams>(document, "/app");
   if (!app_params->tdm.has_value()) {
     throw std::runtime_error(

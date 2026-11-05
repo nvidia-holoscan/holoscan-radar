@@ -38,9 +38,28 @@
     "default_mode": "default",
     "modes": {
       "default": {
-        "description": "Run the Python multi_waveform Graph workflow",
+        "description": "Coherent alternating near/far MIMO TDM processing",
         "run": {
           "command": "python3.12 -m holoscan_radar.applications.cli multi_waveform",
+          "workdir": "<holohub_app_source>/../config",
+          "env": {
+            "PYTHONPATH": "/usr/lib/python3.12/site-packages:<holohub_bin>/python/lib:<PYTHONPATH>",
+            "HOLOSCAN_LIB_PATH": "/usr/lib"
+          }
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
+            "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
+          ]
+        }
+      },
+      "smoke": {
+        "description": "Run the short headless smoke preset",
+        "run": {
+          "command": "python3.12 -m holoscan_radar.applications.cli multi_waveform multi_waveform_smoke.yaml",
           "workdir": "<holohub_app_source>/../config",
           "env": {
             "PYTHONPATH": "/usr/lib/python3.12/site-packages:<holohub_bin>/python/lib:<PYTHONPATH>",

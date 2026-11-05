@@ -115,7 +115,7 @@ Consumers receive the coherent descriptor with `from_wire`; direct angle operato
 
 ## Performance
 
-**Cold.** First `(tx_positions, rx_positions, overlap_policy, M_tx, N_rx)`: host plan (`p_tx+p_rx`, grouping) + async H2D of index tables into the ctor-sized buffers, then gather/average kernel + host wire preparation. **Steady.** Same plan key: kernel + per-tick host wire preparation (wavelength may change without a plan rebuild). No FFT. A cache miss does not `cudaMalloc`.
+**Cold.** First `(tx_positions, rx_positions, overlap_policy, M_tx, N_rx)`: host plan (`p_tx+p_rx`, grouping) + async H2D of index tables into the ctor-sized buffers, then gather/average kernel + host wire preparation. **Steady.** Same plan key: kernel + per-tick host wire preparation (wavelength may change without a plan rebuild). No FFT. A cache miss does not `cudaMalloc`. Averaging planes larger than 4096 cells use the retained 4096-cell target tiling (bounded second grid axis); smaller averaging planes and the dedup/keep_all copy path remain original. Member accumulation order is unchanged.
 
 Harness `performance/operators/fmcw/virtual_array_assembly/adapter.cpp`: size rungs `xs`–`xl` over `(M_tx, N_rx, num_doppler, num_range)`, overlap-policy variants. `array_geometry` is drained by a typed schema sink. No leading-batch rung. Every compute run inlines a mid-session `[live] wavelength` flip and reports `override_ms` / `override_delta_ms`.
 

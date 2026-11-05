@@ -25,6 +25,7 @@
 #include "fmcw/mimo_deinterleave_op/mimo_deinterleave_op.hpp"
 #include "fmcw/tdm_sparse_compensation_op/tdm_sparse_compensation_op.hpp"
 #include "radar_app/app/graph_driver.hpp"
+#include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/fmcw/mimo_sources.hpp"
 
@@ -43,7 +44,7 @@ void bind_output(holoscan::CompileOptions& options, const char* op, const char* 
   options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
       .operator_path = op,
       .output_port = port,
-      .device = holoscan::DeviceId{0},
+      .device = app::application_device(),
   });
 }
 
@@ -254,10 +255,12 @@ int main(int argc, char** argv) {
               graph, application, options, cfg.visualization, cfg.frame_period, true,
               cfg.beamscan_params->az_coordinates, cfg.beamscan_params->el_coordinates,
               cfg.beamscan_params->angle_convention, cfg.scene.targets, cfg.scene_visibility,
-              std::string("Adaptive AoA — ") + adaptive::algorithm_name(cfg.algorithm),
+              std::string("Adaptive AoA | ") + adaptive::algorithm_name(cfg.algorithm),
               app::viz::RawDashboardInputs{cfar->cfar_power, expansion->detection_idx_out,
                                            features->points, range->range_bins,
-                                           doppler->velocity_bins});
+                                           doppler->velocity_bins},
+              app::application_description("adaptive_aoa",
+                                           adaptive::algorithm_mode(cfg.algorithm)));
         }
 #endif
       });

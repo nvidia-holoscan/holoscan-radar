@@ -107,7 +107,18 @@ Rejected combinations and the operator's own messages:
 
 Constructor-created state reuses the leading-dimension vector, batch-linear table, and one-int error flag. With constructor extents the tables never allocate on the hot path; the non-pooled path grows the batch-linear table only when a larger detection count arrives. Each non-empty tick H2D-copies the used leading extents and host-syncs the validation flag. A `[live] snapshot_window` change rebuilds no cached artifact; it only changes gather and output extents.
 
-Harness: `performance/operators/angle_estimation/snapshot_gather/adapter.cpp` (Graph dual-input runner). Size ladder `xs`…`xl` (channels × RD map × detection count) and windows `{0,0}`, `{1,1}`, `{2,2}`. It records cold, steady, and inline Exact `snapshot_window` override timing. No measured numbers are recorded in-repo for this operator; run the harness:
+The gather explicitly writes complex zero to each invalid slot and copies every valid cell, so it fills the whole output without a preceding full-output memset. Validation synchronization, channel-major output order and optional validity-mask behavior are unchanged.
+
+On Thor, `baseline-large` (32 channels, 512 × 1024 RD cells, 4096 detections, nine slots) measured these fresh steady results. Each precision used three screen and three fresh pairs, five warmups and 50 frames; all 23 native tests and established exact two-output policies across six cases in both precisions passed.
+
+| Precision | Original median | Fused median | Median paired saving |
+| --- | --- | --- | --- |
+| Float | 1.713638 ms | 1.646456 ms | 67.18 µs / 3.92% |
+| Double | 3.136229 ms | 2.985085 ms | 151.14 µs / 4.82% |
+
+These are scoped steady gains with tradeoffs. Fresh small-double p99 increased 30.43 µs and optional-output-minimal float p99 increased 35.56 µs; both also worsened in the screen. One large-double fresh frame reached 5.177 ms versus its original pair's maximum 3.195 ms despite a useful median. Fresh medium-double setup increased 0.835 ms and optional-minimal float cold time increased 18.41 µs. Fifty-frame p99 is descriptive; no startup, tail, arbitrary-shape, multi-GPU or direct consumer-chain guarantee is implied.
+
+Harness: `performance/operators/angle_estimation/snapshot_gather/adapter.cpp` (Graph dual-input runner). Size ladder `xs`…`xl` (channels × RD map × detection count) and windows `{0,0}`, `{1,1}`, `{2,2}`. It records cold, steady, and inline Exact `snapshot_window` override timing. Run the harness on the target deployment:
 
 Run this performance smoke **inside a development container**, after
 configuring the named build tree with performance enabled (see the

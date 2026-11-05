@@ -28,6 +28,7 @@ if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
 endif()
 
 foreach(_config IN ITEMS
+        mimo_ddm_base.yaml
         mimo_ddm_linear.yaml
         mimo_ddm_linear_smoke.yaml
         mimo_ddm_nonlinear.yaml

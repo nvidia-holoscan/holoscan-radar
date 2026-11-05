@@ -90,9 +90,11 @@ endif()
 # Module tests live behind a module-namespaced flag rather than the standard
 # CMake BUILD_TESTING variable. This lets a parent project (HoloHub, another
 # module) keep its own BUILD_TESTING setting independent of whether *this*
-# module's tests are built. Defaults ON when standalone, OFF when nested.
+# module's tests are built. Defaults ON when standalone, except for an explicit
+# package-only configuration (BUILD_ALL=OFF and PKG_holoscan_radar=ON). Nested
+# builds default OFF. Explicit and cached test settings always take precedence.
 if(NOT DEFINED HOLOSCAN_RADAR_BUILD_TESTING)
-    if(PROJECT_IS_TOP_LEVEL)
+    if(PROJECT_IS_TOP_LEVEL AND (BUILD_ALL OR NOT PKG_holoscan_radar))
         set(HOLOSCAN_RADAR_BUILD_TESTING ON
             CACHE BOOL "Build the radar module's CTest and pytest suites")
     else()

@@ -7,8 +7,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -21,6 +23,7 @@
 #include "utils/fixture_completion.hpp"
 #include "angle_estimation/snapshot_gather_op/snapshot_gather_op.hpp"
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/test_extents.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -87,13 +90,13 @@ struct GatherOutputs {
 };
 
 template <typename T>
-holoscan::testing::TestResult run_gather_result(std::shared_ptr<holoscan::Tensor> rd_maps,
-                                                std::shared_ptr<holoscan::Tensor> detection_idx,
-                                                SnapshotGatherParams params = {},
-                                                bool capture_validity = true) {
+holoscan::testing::TestResult run_gather_result(
+    std::shared_ptr<holoscan::Tensor> rd_maps, std::shared_ptr<holoscan::Tensor> detection_idx,
+    SnapshotGatherParams params = {}, bool capture_validity = true,
+    const holoscan::radar::MaxTensorExtents& extents =
+        holoscan::radar::testing::default_test_extents()) {
   using Op = SnapshotGatherOp<T>;
-  auto fixture =
-      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  auto fixture = holoscan::testing::create_operator_test<Op>(extents);
   fixture.set_params(std::move(params));
   fixture.push_frame(holoscan::testing::frame_at(
       std::chrono::nanoseconds{0}, holoscan::testing::input("rd_maps", *rd_maps),
@@ -120,9 +123,11 @@ holoscan::testing::TestResult run_gather_result(std::shared_ptr<holoscan::Tensor
 template <typename T>
 GatherOutputs run_gather(std::shared_ptr<holoscan::Tensor> rd_maps,
                          std::shared_ptr<holoscan::Tensor> detection_idx,
-                         SnapshotGatherParams params = {}) {
-  const auto result =
-      run_gather_result<T>(std::move(rd_maps), std::move(detection_idx), std::move(params));
+                         SnapshotGatherParams params = {},
+                         const holoscan::radar::MaxTensorExtents& extents =
+                             holoscan::radar::testing::default_test_extents()) {
+  const auto result = run_gather_result<T>(std::move(rd_maps), std::move(detection_idx),
+                                           std::move(params), true, extents);
   if (!result.ok()) {
     throw std::runtime_error(result.describe_failure());
   }
@@ -419,6 +424,155 @@ TEST(SnapshotGatherOpTest, RejectsCellCoordOutOfRange) {
   EXPECT_FALSE(result.ok());
   EXPECT_TRUE(result.snapshots<holoscan::Tensor>("snapshot").empty());
   EXPECT_FALSE(result.diagnostics().empty());
+}
+
+// Copy-only changed path: independently enumerate the ordered neighborhood,
+// including slots above the 128-thread block and all three edge policies.
+template <typename T>
+class SnapshotGatherSlotParallel : public ::testing::Test {};
+using SnapshotGatherSlotTypes = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(SnapshotGatherSlotParallel, SnapshotGatherSlotTypes);
+
+TYPED_TEST(SnapshotGatherSlotParallel, AsymmetricWideWindowPreservesEveryCellAndMask) {
+  using T = TypeParam;
+  constexpr int64_t channels = 3;
+  constexpr int64_t doppler = 11;
+  constexpr int64_t range = 21;
+  constexpr int64_t d_half = 4;
+  constexpr int64_t r_half = 8;
+  constexpr int64_t slots = 153;
+  const std::vector<int64_t> centers{0, 0, 5, 10, 10, 20};
+  std::vector<std::complex<T>> input(static_cast<size_t>(channels * doppler * range));
+  for (int64_t c = 0; c < channels; ++c) {
+    for (int64_t d = 0; d < doppler; ++d) {
+      for (int64_t r = 0; r < range; ++r) {
+        const int64_t marker = 10000 * c + 100 * d + r + 1;
+        const int64_t sign = (c + d + r) % 2 == 0 ? 1 : -1;
+        input[static_cast<size_t>((c * doppler + d) * range + r)] = {
+            static_cast<T>(sign * marker), static_cast<T>(-sign * (marker + 17))};
+      }
+    }
+  }
+  auto extents = holoscan::radar::testing::default_test_extents();
+  extents.max_channels = channels;
+  extents.max_snapshots = slots;
+  extents.max_detections = 3;
+  extents.max_items = 3;
+  for (const auto mode :
+       {SnapshotEdgeMode::kWrap, SnapshotEdgeMode::kClamp, SnapshotEdgeMode::kShift}) {
+    SnapshotGatherParams params{};
+    params.snapshot_window = {d_half, r_half};
+    params.doppler_edge = mode;
+    params.range_edge = mode;
+    const auto result = run_gather<T>(
+        to_device_tensor(input, {channels, doppler, range}, complex_dtype<T>()),
+        to_device_tensor(centers, {3, 2}, DLDataType{kDLInt, 64, 1}), params, extents);
+    ASSERT_EQ(result.snapshot.shape, (std::vector<int64_t>{3, channels, slots}));
+    ASSERT_EQ(result.is_valid.shape, (std::vector<int64_t>{3, slots}));
+    const auto* data = result.snapshot.template as<std::complex<T>>();
+    const auto* valid = result.is_valid.template as<uint8_t>();
+    // Host coordinate lists enumerate the contract independently of flattened GPU indexing.
+    const auto axis = [mode](int64_t center, int64_t half, int64_t size) {
+      std::vector<int64_t> coordinates;
+      if (mode == SnapshotEdgeMode::kShift) {
+        const int64_t start = std::min(std::max(center - half, int64_t{0}), size - (2 * half + 1));
+        for (int64_t value = start; value <= start + 2 * half; ++value) {
+          coordinates.push_back(value);
+        }
+      } else {
+        for (int64_t value = center - half; value <= center + half; ++value) {
+          coordinates.push_back(mode == SnapshotEdgeMode::kWrap
+                                    ? (value % size + size) % size
+                                    : (value < 0 || value >= size ? -1 : value));
+        }
+      }
+      return coordinates;
+    };
+    for (int64_t row = 0; row < 3; ++row) {
+      const auto ds = axis(centers[static_cast<size_t>(2 * row)], d_half, doppler);
+      const auto rs = axis(centers[static_cast<size_t>(2 * row + 1)], r_half, range);
+      int64_t slot = 0;
+      for (const int64_t d : ds) {
+        for (const int64_t r : rs) {
+          const bool present = d >= 0 && r >= 0;
+          EXPECT_EQ(valid[row * slots + slot], static_cast<uint8_t>(present));
+          for (int64_t c = 0; c < channels; ++c) {
+            const std::complex<T> expected =
+                present ? input[static_cast<size_t>((c * doppler + d) * range + r)]
+                        : std::complex<T>{};
+            EXPECT_EQ(data[(row * channels + c) * slots + slot], expected)
+                << "row=" << row << " channel=" << c << " slot=" << slot;
+          }
+          ++slot;
+        }
+      }
+      EXPECT_EQ(slot, slots);
+    }
+  }
+}
+
+TYPED_TEST(SnapshotGatherSlotParallel, LiveWindowPointNeighborhoodPointUsesCurrentTick) {
+  using T = TypeParam;
+  using Op = SnapshotGatherOp<T>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  fixture.set_params(SnapshotGatherParams{});
+  std::vector<std::shared_ptr<holoscan::Tensor>> maps;
+  std::vector<std::shared_ptr<holoscan::Tensor>> indices;
+  for (int tick = 0; tick < 3; ++tick) {
+    maps.push_back(make_rd_maps<T>());
+    indices.push_back(
+        to_device_tensor(std::vector<int64_t>{3, 5}, {1, 2}, DLDataType{kDLInt, 64, 1}));
+  }
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::milliseconds{100}, holoscan::testing::input("rd_maps", *maps[0]),
+      holoscan::testing::input("detection_idx", *indices[0])));
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::milliseconds{200},
+      holoscan::testing::input("snapshot_window", SnapshotWindowOverride{1, 0}),
+      holoscan::testing::input("rd_maps", *maps[1]),
+      holoscan::testing::input("detection_idx", *indices[1])));
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::milliseconds{300}, holoscan::testing::input("rd_maps", *maps[2]),
+      holoscan::testing::input("detection_idx", *indices[2])));
+  constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
+  fixture.template capture_snapshot<holoscan::Tensor>("snapshot", 3U, kMaximumBytes);
+  fixture.template capture_snapshot<holoscan::Tensor>("is_valid", 3U, kMaximumBytes);
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
+  fixture.output_device("snapshot", holoscan::DeviceId{0});
+  fixture.output_device("is_valid", holoscan::DeviceId{0});
+  auto running =
+      fixture.run_async({.expect_stop = true, .frames = holoscan::testing::FrameRelease::kManual});
+  for (std::size_t count = 1; count <= 3; ++count) {
+    const auto released = running.release_frame(std::chrono::seconds{5});
+    ASSERT_TRUE(released) << released.error().message;
+    ASSERT_TRUE(running.wait_for_output("snapshot", count, std::chrono::seconds{5}));
+    ASSERT_TRUE(running.wait_for_output("is_valid", count, std::chrono::seconds{5}));
+  }
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frames = result.template snapshots<holoscan::Tensor>("snapshot");
+  const auto masks = result.template snapshots<holoscan::Tensor>("is_valid");
+  ASSERT_EQ(frames.size(), 3U);
+  ASSERT_EQ(masks.size(), 3U);
+  for (size_t tick = 0; tick < 3; ++tick) {
+    const int64_t looks = tick == 1 ? 3 : 1;
+    const auto host = holoscan::radar::testing::to_host(frames[tick]);
+    const auto mask = holoscan::radar::testing::to_host(masks[tick]);
+    ASSERT_EQ(host.shape, (std::vector<int64_t>{1, kC, looks}));
+    ASSERT_EQ(mask.shape, (std::vector<int64_t>{1, looks}));
+    for (int64_t slot = 0; slot < looks; ++slot) {
+      EXPECT_EQ(mask.template as<uint8_t>()[slot], 1);
+      const int64_t d = tick == 1 ? 2 + slot : 3;
+      for (int64_t c = 0; c < kC; ++c) {
+        const auto v = cell_value(c, d, 5);
+        EXPECT_EQ(host.template as<std::complex<T>>()[c * looks + slot],
+                  (std::complex<T>{static_cast<T>(v.real()), static_cast<T>(v.imag())}));
+      }
+    }
+  }
 }
 
 }  // namespace

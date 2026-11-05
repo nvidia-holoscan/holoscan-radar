@@ -1,5 +1,7 @@
 # SISO
 
+See [shared preset inheritance and launch modes](../README.md).
+
 Baseline FMCW SISO example. It forms a range-Doppler map, applies CFAR, groups neighboring detections in physical range and velocity, and reports one medoid representative per cluster.
 
 ```mermaid
@@ -13,17 +15,27 @@ flowchart LR
     Features --> Dashboard
     Range --> Dashboard
     Doppler --> Dashboard
-    Dashboard --> Image[RgbaImageBridgeOp] --> Holoviz[HSDK 5 HolovizOp]
+    Dashboard --> Image[RgbaImageBridgeOp] -->|Same GPU| Frame[FmcwFrameComposerOp] -->|Other window systems, same GPU| Holoviz[FmcwHolovizOp]
+    Image -.->|Different GPUs| InputDownload[ImageDownloadOp]
+    InputDownload -.-> InputUpload[ImageUploadOp] -.-> Frame
+    Frame -.->|Other window systems, different GPUs| Download[ImageDownloadOp]
+    Download -.-> Upload[ImageUploadOp] -.-> Holoviz
+    Frame -->|X11| X11Download[ImageDownloadOp] --> X11Window[X11ImagePresenterOp]
+    Dashboard -->|Native text| Frame
 ```
 
 The optional dashboard displays the range-Doppler heatmap and rolling range and velocity histories. SISO has no angle products, so the spatial and angle-history panels are omitted.
+
+The [shared dashboard](../../common/radar_app/viz/README.md) uses native SDK text,
+a relative-power legend, and frame-driven presentation capped by
+`visualization.display_rate_hz`.
 
 ## Run the C++ app from the host
 
 From the repository root, the CLI builds the app and runs it in a container:
 
 ```bash
-./holoscan-radar run siso --language cpp --run-args=siso_smoke.yaml
+./holoscan-radar run siso smoke --language cpp
 ```
 
 This runs the two-frame headless smoke preset. Run
@@ -32,7 +44,7 @@ normal preset. The CLI selects Python if `--language` is omitted because both
 implementations use the `siso` app name.
 
 The normal preset enables relative monostatic free-space range loss with a
-100 m reference. The smoke preset omits range loss and retains the
+100 m reference. The smoke preset disables range loss and retains the
 constant-amplitude analytic mode.
 
 Simulator-backed sources default `app.scene_visibility` to `front_half_space`, with radar-local `+x` as boresight. Select `frustum` with explicit horizontal/vertical FOVs in radians, or `all` to restore isotropic target synthesis. This binary coverage gate is separate from relative range loss and does not model antenna gain.
@@ -45,7 +57,7 @@ From the repository root, the host CLI builds and runs the colocated
 `python/` graph with the pinned development image:
 
 ```bash
-./holoscan-radar run siso --language python --run-args=siso_smoke.yaml
+./holoscan-radar run siso smoke --language python
 ```
 
 After building or installing the Python wheel, call the graph directly:

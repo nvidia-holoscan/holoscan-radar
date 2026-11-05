@@ -15,7 +15,13 @@ flowchart LR
     B --> Report[Image report]
     B -. dump .-> Dump[TensorDumpOp]
     B -. visualize .-> Raster[CUDA SAR raster]
-    Raster --> Viz[HolovizOp]
+    Raster -->|Same GPU| Viz[HolovizOp]
+    Raster -.->|Different GPUs| Download[ImageDownloadOp]
+    Download -.-> Upload[ImageUploadOp] -.-> Viz
+    Raster -->|Host overlay and labels| Viz
+    Timeline[TimelineRasterOp - window mode] -->|Same GPU| TimelineViz[Timeline HolovizOp]
+    Timeline -.->|Different GPUs| TimelineDownload[ImageDownloadOp]
+    TimelineDownload -.-> TimelineUpload[ImageUploadOp] -.-> TimelineViz
 ```
 
 The solid paths are required data and control flows. Dashed dump and

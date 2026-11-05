@@ -44,6 +44,13 @@
           "command": "<holohub_app_bin>/mimo_tdm",
           "workdir": "holohub_app_bin"
         }
+      },
+      "smoke": {
+        "description": "Run the short headless smoke preset",
+        "run": {
+          "command": "<holohub_app_bin>/mimo_tdm mimo_tdm_smoke.yaml",
+          "workdir": "holohub_app_bin"
+        }
       }
     }
   }

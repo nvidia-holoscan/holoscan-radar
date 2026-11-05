@@ -42,6 +42,13 @@
           "command": "<holohub_app_bin>/siso",
           "workdir": "holohub_app_bin"
         }
+      },
+      "smoke": {
+        "description": "Run the short headless smoke preset",
+        "run": {
+          "command": "<holohub_app_bin>/siso siso_smoke.yaml",
+          "workdir": "holohub_app_bin"
+        }
       }
     }
   }

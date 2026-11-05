@@ -3,10 +3,9 @@
 
 """Shared HSDK 5 visualization graph wiring for FMCW workflows."""
 
-from datetime import timedelta
 from typing import Any
 
-from holoscan_visualization.operators import HolovizOp
+from holoscan_radar import _radar
 
 import holoscan as hs
 
@@ -21,6 +20,7 @@ def add_dashboard(
     title: str,
     inputs: dict[str, Any],
     *,
+    device: int,
     clustered: bool,
     profiled: bool = False,
     profile_gap: int = 1,
@@ -34,41 +34,30 @@ def add_dashboard(
     bridge = graph.op(
         "holoscan.radar._app.ImageBridge", "dashboard_image", width=width, height=height
     )
-    period = timedelta(seconds=1.0 / viz["display_rate_hz"])
-    max_age = timedelta(
-        seconds=max((profile_gap + 1) * viz["frame_period"], 2.0 / viz["display_rate_hz"])
+    frame = graph.op(
+        "holoscan.radar._app.FrameComposer", "dashboard_frame", width=width, height=height
     )
-    holoviz = HolovizOp(
-        graph,
+    x11 = _radar._fmcw_uses_x11_presentation(viz["x11_presentation"])
+    holoviz = graph.op(
+        "holoscan.radar._app.X11DashboardViewer" if x11 else "holoscan.radar._app.DashboardViewer",
         "holoviz",
-        layers=[
-            {
-                "port_name": "image",
-                "kind": "image",
-                "format": "rgba8_unorm",
-                "max_width": width,
-                "max_height": height,
-            }
-        ],
-        sink={
-            "kind": "window",
-            "title": f"{viz['window_title']} - {title}",
-            "width": width,
-            "height": height,
-        },
-        trigger={"kind": "clock", "period": period},
-        max_input_age=max_age,
+        width=width,
+        height=height,
+        title=f"{viz['window_title']} - {title}",
     )
     partition.add(display, bridge)
-    graph.partition("visualization").add(holoviz)
-    for operator_name, port_name in (
-        ("display_compositor", "rgba"),
-        ("dashboard_image", "image"),
+    visualization = graph.partition("visualization")
+    visualization.add(frame)
+    composer_device = _radar._application_composer_device()
+    for operator_name, port_name, ordinal in (
+        ("display_compositor", "rgba", device),
+        ("dashboard_image", "image", device),
+        ("dashboard_frame", "output", composer_device),
     ):
         options.deployment.bind_tensor_output_device(
             operator_path=operator_name,
             output_port=port_name,
-            device=hs.execution.DeviceId(0),
+            device=hs.execution.DeviceId(ordinal),
         )
     # Feed the compositor the detected cells and their physical coordinate axes.
     graph.add_flow(
@@ -127,8 +116,88 @@ def add_dashboard(
         graph.add_flow(inputs["waveform"], display.waveform, queue_depth=profile_gap + 2)
     # Convert the rendered Tensor to an ImageT for the SDK viewer.
     graph.add_flow(
-        display.rgba, bridge.rgba, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=8
+        display.rgba, bridge.rgba, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+    )
+    _connect_image_devices(
+        graph,
+        partition,
+        visualization,
+        options,
+        bridge.image,
+        frame.image,
+        "dashboard_composer",
+        width,
+        height,
+        device,
+        composer_device,
+    )
+    graph.add_flow(display.text, frame.text, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1)
+
+    presentation = graph.partition("presentation")
+    presentation.add(holoviz)
+    if x11:
+        download = graph.op(
+            "holoscan.radar._app.ImageDownload", "dashboard_download", width=width, height=height
+        )
+        visualization.add(download)
+        graph.add_flow(
+            frame.output, download.image_in, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+        )
+        graph.add_flow(
+            download.image_out,
+            holoviz.image,
+            queue_policy=hs.QueuePolicy.DROP_OLDEST,
+            queue_depth=1,
+        )
+        return
+    _connect_image_devices(
+        graph,
+        visualization,
+        presentation,
+        options,
+        frame.output,
+        holoviz.image,
+        "dashboard",
+        width,
+        height,
+        composer_device,
+        _radar._application_display_device(),
+    )
+
+
+def _connect_image_devices(
+    graph,
+    source_partition,
+    target_partition,
+    options,
+    source,
+    target,
+    prefix,
+    width,
+    height,
+    source_device,
+    target_device,
+):
+    if source_device == target_device:
+        graph.add_flow(source, target, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1)
+        return
+    download = graph.op(
+        "holoscan.radar._app.ImageDownload", f"{prefix}_download", width=width, height=height
+    )
+    upload = graph.op(
+        "holoscan.radar._app.ImageUpload", f"{prefix}_upload", width=width, height=height
+    )
+    source_partition.add(download)
+    target_partition.add(upload)
+    options.deployment.bind_tensor_output_device(
+        operator_path=f"{prefix}_upload",
+        output_port="image_out",
+        device=hs.execution.DeviceId(target_device),
     )
     graph.add_flow(
-        bridge.image, holoviz.image, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=8
+        source, download.image_in, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
     )
+    graph.add_flow(
+        download.image_out, upload.image_in, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+    )
+    graph.add_flow(upload.image_out, target, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1)

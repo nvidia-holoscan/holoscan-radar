@@ -11,19 +11,25 @@
 #include <cuda_runtime_api.h>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
+#include <holoscan/core/errors.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
 
 #include "utils/fixture_completion.hpp"
 #include "detection/feature_assembly_op/feature_assembly_op.hpp"
 #include "detection/feature_assembly_op/feature_assembly_stage.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/test_extents.hpp"
@@ -51,9 +57,10 @@ HostTensor require_one_frame(holoscan::testing::TestResult result);
 template <typename T>
 holoscan::testing::TestResult run_assembly_frame(
     std::vector<AssemblyFeature> features, const holoscan::testing::TestFrame& frame,
-    std::initializer_list<std::string_view> device_inputs) {
+    std::initializer_list<std::string_view> device_inputs,
+    const holoscan::radar::MaxTensorExtents& extents =
+        holoscan::radar::testing::default_test_extents()) {
   using Op = FeatureAssemblyOp<T>;
-  const auto extents = holoscan::radar::testing::default_test_extents();
   const std::size_t max_bytes =
       static_cast<std::size_t>(extents.max_points.value_or(1) * extents.max_features.value_or(1) *
                                static_cast<std::int64_t>(sizeof(T)));
@@ -621,14 +628,17 @@ TEST(FeatureAssemblyOpTest, DenseAzElWithRangeVelocity) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsAzWithTooFewPreservedColumns) {
-  // Graph path rejects dense az when n_preserved < 2.
-  std::vector<int64_t> idx = {0, 0};
-  auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
-  // Wire would need az_grid; without it Graph already fails for missing
-  // grid. Stage path with n_preserved=0 simply skips az lookup (value 0);
-  // the operator-level guard is what matters for the contract.
-  const auto result = run_assembly_result<double>(idx_t, make_features({AssemblyFeature::kAz}));
+  auto idx = to_device_tensor(std::vector<int64_t>{0, 0}, {1, 2}, kInt64Dtype);
+  auto az = upload_real(std::vector<double>{0.0}, {1});
+  const auto result = run_assembly_frame<double>(
+      make_features({AssemblyFeature::kAz}),
+      holoscan::testing::frame_at(std::chrono::nanoseconds{0},
+                                  holoscan::testing::input("detection_idx", *idx),
+                                  holoscan::testing::input("az_grid", *az)),
+      {"detection_idx", "az_grid"});
   EXPECT_TRUE(run_failed_with_diagnostic(result));
+  EXPECT_NE(result.describe_failure().find("at least two"), std::string::npos);
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("points").empty());
 }
 
 TEST(FeatureAssemblyOpTest, RejectsAzBinWithTooFewPreservedColumns) {
@@ -649,13 +659,301 @@ TEST(FeatureAssemblyOpTest, RejectsOutOfRangeAzBin) {
 }
 
 TEST(FeatureAssemblyOpTest, RejectsScoreLeadingRankMismatch) {
-  // Operator-level: score leading rank must match preserved cols. Covered
-  // when optional Graph wiring returns; stage path requires matching offsets
-  // by construction. Keep a Graph-side absent-score reject as the stand-in.
-  std::vector<int64_t> idx = {0, 1};
-  auto idx_t = to_device_tensor(idx, {1, 2}, kInt64Dtype);
-  const auto result = run_assembly_result<double>(idx_t, make_features({AssemblyFeature::kScore}));
+  auto idx = to_device_tensor(std::vector<int64_t>{0, 1}, {1, 2}, kInt64Dtype);
+  auto score = upload_real(std::vector<double>(8, 1.0), {2, 2, 2});
+  const auto result = run_assembly_frame<double>(
+      make_features({AssemblyFeature::kScore}),
+      holoscan::testing::frame_at(std::chrono::nanoseconds{0},
+                                  holoscan::testing::input("detection_idx", *idx),
+                                  holoscan::testing::input("detection_score", *score)),
+      {"detection_idx", "detection_score"});
   EXPECT_TRUE(run_failed_with_diagnostic(result));
+  EXPECT_NE(result.describe_failure().find("leading rank must match"), std::string::npos);
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("points").empty());
+}
+
+// Native public-port coverage for the expansion consumer in both precisions.
+// These owning snapshots verify values and errors; retained-loan ownership is
+// exercised separately by the whole selective-angle integration graph.
+template <typename T>
+class FeatureAssemblyNative : public ::testing::Test {};
+using AssemblyPrecisions = ::testing::Types<float, double>;
+TYPED_TEST_SUITE(FeatureAssemblyNative, AssemblyPrecisions);
+
+void expect_rejected_without_points(const holoscan::testing::TestResult& result,
+                                    const char* message) {
+  ASSERT_FALSE(result.ok()) << "Invalid input unexpectedly succeeded";
+  EXPECT_FALSE(result.diagnostics().empty());
+  EXPECT_NE(result.describe_failure().find(message), std::string::npos)
+      << result.describe_failure();
+  EXPECT_TRUE(result.snapshots<holoscan::Tensor>("points").empty());
+}
+
+TYPED_TEST(FeatureAssemblyNative, PreservesSparseAnglesRowAndFeatureOrder) {
+  using T = TypeParam;
+  auto idx = to_device_tensor(std::vector<int64_t>{2, 3, 0, 1}, {2, 2}, kInt64Dtype);
+  auto aoa = upload_real(std::vector<T>{T{0.25}, T{-0.5}, T{-0.75}, T{0.125}}, {2, 2});
+  const auto result = run_assembly_frame<T>(
+      make_features({AssemblyFeature::kElEstimate, AssemblyFeature::kRangeBin,
+                     AssemblyFeature::kAzEstimate, AssemblyFeature::kDopplerBin}),
+      holoscan::testing::frame_at(std::chrono::milliseconds{1},
+                                  holoscan::testing::input("detection_idx", *idx),
+                                  holoscan::testing::input("aoa_estimates", *aoa)),
+      {"detection_idx", "aoa_estimates"});
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto snapshot = result.template snapshot<holoscan::Tensor>("points");
+  const auto points = to_host(snapshot);
+  ASSERT_EQ(points.shape, (std::vector<int64_t>{2, 4}));
+  const std::vector<T> expected{T{-0.5}, T{3}, T{0.25}, T{2}, T{0.125}, T{1}, T{-0.75}, T{0}};
+  EXPECT_EQ(std::vector<T>(points.template as<T>(), points.template as<T>() + expected.size()),
+            expected);
+  EXPECT_EQ(snapshot.sample_metadata().capture_time().timestamp_ns, 1000000);
+  EXPECT_EQ(snapshot.source_device().device_type, kDLCUDA);
+}
+
+TYPED_TEST(FeatureAssemblyNative, RejectsMismatchedAoaShapeWithoutPublication) {
+  using T = TypeParam;
+  for (const auto& shape : {std::vector<int64_t>{1, 3}, std::vector<int64_t>{2, 2}}) {
+    auto idx = to_device_tensor(std::vector<int64_t>{0, 1}, {1, 2}, kInt64Dtype);
+    auto aoa = upload_real(std::vector<T>(static_cast<std::size_t>(shape[0] * shape[1])), shape);
+    const auto result = run_assembly_frame<T>(
+        make_features({AssemblyFeature::kAzEstimate}),
+        holoscan::testing::frame_at(std::chrono::milliseconds{1},
+                                    holoscan::testing::input("detection_idx", *idx),
+                                    holoscan::testing::input("aoa_estimates", *aoa)),
+        {"detection_idx", "aoa_estimates"});
+    expect_rejected_without_points(result, "aoa_estimates");
+  }
+}
+
+TYPED_TEST(FeatureAssemblyNative, RejectsNonVectorPhysicalAxisWithoutPublication) {
+  using T = TypeParam;
+  auto idx = to_device_tensor(std::vector<int64_t>{0, 1}, {1, 2}, kInt64Dtype);
+  auto ranges = upload_real(std::vector<T>{T{0}, T{10}}, {1, 2});
+  const auto result = run_assembly_frame<T>(
+      make_features({AssemblyFeature::kRange}),
+      holoscan::testing::frame_at(std::chrono::milliseconds{1},
+                                  holoscan::testing::input("detection_idx", *idx),
+                                  holoscan::testing::input("range_bins", *ranges)),
+      {"detection_idx", "range_bins"});
+  expect_rejected_without_points(result, "rank-1");
+}
+
+TYPED_TEST(FeatureAssemblyNative, RejectsWrongPrecisionAoaWithoutPublication) {
+  using T = TypeParam;
+  auto idx = to_device_tensor(std::vector<int64_t>{0, 1}, {1, 2}, kInt64Dtype);
+  using Other = std::conditional_t<std::is_same_v<T, float>, double, float>;
+  auto aoa = upload_real(std::vector<Other>{Other{0}, Other{0}}, {1, 2});
+  const auto result = run_assembly_frame<T>(
+      make_features({AssemblyFeature::kAzEstimate}),
+      holoscan::testing::frame_at(std::chrono::milliseconds{1},
+                                  holoscan::testing::input("detection_idx", *idx),
+                                  holoscan::testing::input("aoa_estimates", *aoa)),
+      {"detection_idx", "aoa_estimates"});
+  expect_rejected_without_points(result, "dtype");
+}
+
+TYPED_TEST(FeatureAssemblyNative, RejectsPointAndFeatureCapacityOverflowWithoutPublication) {
+  using T = TypeParam;
+  auto idx = to_device_tensor(std::vector<int64_t>{0, 1, 2, 3}, {2, 2}, kInt64Dtype);
+  for (const bool point_overflow : {true, false}) {
+    auto extents = holoscan::radar::testing::default_test_extents();
+    extents.max_points = point_overflow ? 1 : 2;
+    extents.max_features = point_overflow ? 2 : 1;
+    const auto result = run_assembly_frame<T>(
+        make_features({AssemblyFeature::kDopplerBin, AssemblyFeature::kRangeBin}),
+        holoscan::testing::frame_at(std::chrono::milliseconds{1},
+                                    holoscan::testing::input("detection_idx", *idx)),
+        {"detection_idx"}, extents);
+    expect_rejected_without_points(result, point_overflow ? "max_points" : "max_features");
+  }
+}
+
+TYPED_TEST(FeatureAssemblyNative, RejectsNegativeAndEndExclusiveRangeIndices) {
+  using T = TypeParam;
+  auto ranges = upload_real(std::vector<T>{T{0}, T{10}}, {2});
+  for (const int64_t range : {-1, 2}) {
+    auto idx = to_device_tensor(std::vector<int64_t>{0, range}, {1, 2}, kInt64Dtype);
+    const auto result = run_assembly_frame<T>(
+        make_features({AssemblyFeature::kRange}),
+        holoscan::testing::frame_at(std::chrono::milliseconds{1},
+                                    holoscan::testing::input("detection_idx", *idx),
+                                    holoscan::testing::input("range_bins", *ranges)),
+        {"detection_idx", "range_bins"});
+    expect_rejected_without_points(result, "range_bin out of range");
+  }
+}
+
+TYPED_TEST(FeatureAssemblyNative, SelectedAoaTracksEachExactFrameAndChangedRowCount) {
+  using T = TypeParam;
+  using Op = FeatureAssemblyOp<T>;
+  auto fixture = holoscan::testing::create_operator_test<Op>(
+      holoscan::radar::testing::default_test_extents(),
+      make_features({AssemblyFeature::kAzEstimate, AssemblyFeature::kRangeBin}));
+  auto first_idx = to_device_tensor(std::vector<int64_t>{0, 1, 2, 3}, {2, 2}, kInt64Dtype);
+  auto first_aoa = upload_real(std::vector<T>{T{0.25}, T{0}, T{0.5}, T{0}}, {2, 2});
+  auto second_idx = to_device_tensor(std::vector<int64_t>{4, 5}, {1, 2}, kInt64Dtype);
+  auto second_aoa = upload_real(std::vector<T>{T{-0.75}, T{0}}, {1, 2});
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::milliseconds{1}, holoscan::testing::input("detection_idx", *first_idx),
+      holoscan::testing::input("aoa_estimates", *first_aoa)));
+  fixture.push_frame(holoscan::testing::frame_at(
+      std::chrono::milliseconds{2}, holoscan::testing::input("detection_idx", *second_idx),
+      holoscan::testing::input("aoa_estimates", *second_aoa)));
+  fixture.template capture_snapshot<holoscan::Tensor>("points", 2U, 4U * sizeof(T));
+  fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
+  fixture.input_source_device("aoa_estimates", holoscan::DeviceId{0});
+  fixture.output_device("points", holoscan::DeviceId{0});
+  auto running = fixture.run_async({.expect_stop = true});
+  const bool observed = running.wait_for_output("points", 2U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(observed) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto snapshots = result.template snapshots<holoscan::Tensor>("points");
+  ASSERT_EQ(snapshots.size(), 2U);
+  const auto first = to_host(snapshots[0]);
+  const auto second = to_host(snapshots[1]);
+  ASSERT_EQ(first.shape, (std::vector<int64_t>{2, 2}));
+  ASSERT_EQ(second.shape, (std::vector<int64_t>{1, 2}));
+  EXPECT_EQ(first.template as<T>()[0], T{0.25});
+  EXPECT_EQ(first.template as<T>()[1], T{1});
+  EXPECT_EQ(first.template as<T>()[2], T{0.5});
+  EXPECT_EQ(first.template as<T>()[3], T{3});
+  EXPECT_EQ(second.template as<T>()[0], T{-0.75});
+  EXPECT_EQ(second.template as<T>()[1], T{5});
+  EXPECT_EQ(snapshots[0].sample_metadata().capture_time().timestamp_ns, 1000000);
+  EXPECT_EQ(snapshots[1].sample_metadata().capture_time().timestamp_ns, 2000000);
+}
+
+// Admission of one manual notification does not mean the source callback has
+// retired. Retry only the documented transient admission errors; finish() owns
+// shutdown and diagnostic collection even if a test assertion fails.
+bool release_assembly_frame(holoscan::testing::RunningFixture& running) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto released = running.release_frame();
+    if (released) {
+      return true;
+    }
+    if (released.error().code != holoscan::ErrorCode::kNotReady &&
+        released.error().code != holoscan::ErrorCode::kBackpressured) {
+      return false;
+    }
+    std::this_thread::yield();
+  }
+  return false;
+}
+
+TYPED_TEST(FeatureAssemblyNative, SelectedAoaRejectsMissingAndSkewedFramesThenRecoversExactly) {
+  using T = TypeParam;
+  using Op = FeatureAssemblyOp<T>;
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  auto fixture = holoscan::testing::create_operator_test<Op>(
+      holoscan::radar::testing::default_test_extents(),
+      make_features({AssemblyFeature::kAzEstimate, AssemblyFeature::kRangeBin}));
+  auto first_idx = to_device_tensor(std::vector<int64_t>{1, 10}, {1, 2}, kInt64Dtype);
+  auto missing_idx = to_device_tensor(std::vector<int64_t>{2, 20}, {1, 2}, kInt64Dtype);
+  auto skewed_idx = to_device_tensor(std::vector<int64_t>{3, 30}, {1, 2}, kInt64Dtype);
+  auto final_idx = to_device_tensor(std::vector<int64_t>{5, 50}, {1, 2}, kInt64Dtype);
+  auto first_aoa = upload_real(std::vector<T>{T{0.125}, T{0}}, {1, 2});
+  auto skewed_aoa = upload_real(std::vector<T>{T{0.75}, T{0}}, {1, 2});
+  auto final_aoa = upload_real(std::vector<T>{T{-0.5}, T{0}}, {1, 2});
+  fixture.push_frame(frame_at(std::chrono::milliseconds{1}, input("detection_idx", *first_idx),
+                              input("aoa_estimates", *first_aoa)));
+  fixture.push_frame(frame_at(std::chrono::milliseconds{2}, input("detection_idx", *missing_idx)));
+  auto skewed = frame_at(std::chrono::milliseconds{3}, input("detection_idx", *skewed_idx));
+  auto later_aoa = frame_at(std::chrono::milliseconds{4}, input("aoa_estimates", *skewed_aoa));
+  skewed.fields.push_back(std::move(later_aoa.fields.front()));
+  fixture.push_frame(skewed);
+  fixture.push_frame(frame_at(std::chrono::milliseconds{5}, input("detection_idx", *final_idx),
+                              input("aoa_estimates", *final_aoa)));
+  fixture.template capture_snapshot<holoscan::Tensor>("points", 4U, 2U * sizeof(T));
+  fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
+  fixture.input_source_device("aoa_estimates", holoscan::DeviceId{0});
+  fixture.output_device("points", holoscan::DeviceId{0});
+  auto running =
+      fixture.run_async({.expect_stop = true, .frames = holoscan::testing::FrameRelease::kManual});
+  ASSERT_TRUE(release_assembly_frame(running));
+  ASSERT_TRUE(running.wait_for_output("points", 1U, std::chrono::seconds{5}));
+  ASSERT_TRUE(release_assembly_frame(running));
+  EXPECT_FALSE(running.wait_for_output("points", 2U, std::chrono::milliseconds{50}));
+  ASSERT_TRUE(release_assembly_frame(running));
+  EXPECT_FALSE(running.wait_for_output("points", 2U, std::chrono::milliseconds{50}));
+  ASSERT_TRUE(release_assembly_frame(running));
+  const bool recovered = running.wait_for_output("points", 2U, std::chrono::seconds{5});
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(recovered) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto snapshots = result.template snapshots<holoscan::Tensor>("points");
+  // Recovery with the t5 values is a positive progress witness, not merely a
+  // timeout interpreted as success. Extra cross-tick outputs fail this count.
+  ASSERT_EQ(snapshots.size(), 2U);
+  const auto first = to_host(snapshots[0]);
+  const auto final = to_host(snapshots[1]);
+  ASSERT_EQ(first.shape, (std::vector<int64_t>{1, 2}));
+  ASSERT_EQ(final.shape, (std::vector<int64_t>{1, 2}));
+  EXPECT_EQ(first.template as<T>()[0], T{0.125});
+  EXPECT_EQ(first.template as<T>()[1], T{10});
+  EXPECT_EQ(final.template as<T>()[0], T{-0.5});
+  EXPECT_EQ(final.template as<T>()[1], T{50});
+  EXPECT_EQ(snapshots[0].sample_metadata().capture_time().timestamp_ns, 1000000);
+  EXPECT_EQ(snapshots[1].sample_metadata().capture_time().timestamp_ns, 5000000);
+}
+
+TYPED_TEST(FeatureAssemblyNative, WiredUnselectedAoaCannotStallMissingOrSkewedFrames) {
+  using T = TypeParam;
+  using Op = FeatureAssemblyOp<T>;
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  auto fixture = holoscan::testing::create_operator_test<Op>(
+      holoscan::radar::testing::default_test_extents(),
+      make_features({AssemblyFeature::kRangeBin, AssemblyFeature::kDopplerBin}));
+  const std::vector<std::vector<int64_t>> indices{{1, 10}, {2, 20, 3, 30}, {4, 40}, {5, 50, 6, 60}};
+  std::vector<std::shared_ptr<holoscan::Tensor>> frames;
+  for (const auto& values : indices) {
+    frames.push_back(
+        to_device_tensor(values, {static_cast<int64_t>(values.size() / 2), 2}, kInt64Dtype));
+  }
+  auto first_aoa = upload_real(std::vector<T>{T{0.125}, T{0}}, {1, 2});
+  auto skewed_aoa = upload_real(std::vector<T>{T{0.75}, T{0}}, {1, 2});
+  fixture.push_frame(frame_at(std::chrono::milliseconds{1}, input("detection_idx", *frames[0]),
+                              input("aoa_estimates", *first_aoa)));
+  fixture.push_frame(frame_at(std::chrono::milliseconds{2}, input("detection_idx", *frames[1])));
+  auto skewed = frame_at(std::chrono::milliseconds{3}, input("detection_idx", *frames[2]));
+  auto later_aoa = frame_at(std::chrono::milliseconds{4}, input("aoa_estimates", *skewed_aoa));
+  skewed.fields.push_back(std::move(later_aoa.fields.front()));
+  fixture.push_frame(skewed);
+  fixture.push_frame(frame_at(std::chrono::milliseconds{5}, input("detection_idx", *frames[3])));
+  fixture.template capture_snapshot<holoscan::Tensor>("points", 4U, 4U * sizeof(T));
+  fixture.input_source_device("detection_idx", holoscan::DeviceId{0});
+  fixture.input_source_device("aoa_estimates", holoscan::DeviceId{0});
+  fixture.output_device("points", holoscan::DeviceId{0});
+  auto running =
+      fixture.run_async({.expect_stop = true, .frames = holoscan::testing::FrameRelease::kManual});
+  for (std::size_t index = 0; index < indices.size(); ++index) {
+    ASSERT_TRUE(release_assembly_frame(running));
+    ASSERT_TRUE(running.wait_for_output("points", index + 1, std::chrono::seconds{5}));
+  }
+  running.request_stop();
+  const auto result = running.finish();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto snapshots = result.template snapshots<holoscan::Tensor>("points");
+  ASSERT_EQ(snapshots.size(), indices.size());
+  for (std::size_t index = 0; index < indices.size(); ++index) {
+    const auto points = to_host(snapshots[index]);
+    ASSERT_EQ(points.shape,
+              (std::vector<int64_t>{static_cast<int64_t>(indices[index].size() / 2), 2}));
+    for (std::size_t row = 0; row < indices[index].size() / 2; ++row) {
+      EXPECT_EQ(points.template as<T>()[row * 2], static_cast<T>(indices[index][row * 2 + 1]));
+      EXPECT_EQ(points.template as<T>()[row * 2 + 1], static_cast<T>(indices[index][row * 2]));
+    }
+    const int64_t timestamp_ms = index < 3 ? static_cast<int64_t>(index + 1) : 5;
+    EXPECT_EQ(snapshots[index].sample_metadata().capture_time().timestamp_ns,
+              timestamp_ms * 1000000);
+  }
 }
 
 }  // namespace

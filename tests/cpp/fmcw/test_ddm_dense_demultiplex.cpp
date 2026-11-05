@@ -1021,4 +1021,68 @@ TEST(DDMDenseDemultiplexOp, UnwiredVelocityAxisDoesNotSuppressMaps) {
   EXPECT_EQ(result.snapshots<holoscan::Tensor>("rd_maps_out").size(), 4U);
 }
 
+// Exercise both sides of the tiled transpose's CUDA grid.z limit with tiny
+// Doppler/range axes. Host vectors and each output are at most 3 MiB in double.
+template <typename T>
+void check_nonlinear_rx_grid_boundary() {
+  constexpr int64_t kDoppler = 3;
+  DDMCodeDescriptor code;
+  code.num_tx = 1;
+  code.phase_codes = {{1.0, 0.0}, {1.0, 0.0}, {0.0, 1.0}};
+  std::array<std::complex<double>, kDoppler> impulse_response{};
+  for (int64_t k = 0; k < kDoppler; ++k) {
+    for (int64_t p = 0; p < kDoppler; ++p) {
+      const double angle = kTwoPi * static_cast<double>(p * k) / kDoppler;
+      impulse_response[static_cast<size_t>(k)] +=
+          std::conj(code.phase_codes[static_cast<size_t>((kDoppler - p) % kDoppler)]) *
+          std::complex<double>{std::cos(angle), std::sin(angle)};
+    }
+    impulse_response[static_cast<size_t>(k)] /= static_cast<double>(kDoppler);
+  }
+  for (const int64_t receivers : {int64_t{65535}, int64_t{65536}}) {
+    auto extents = holoscan::radar::testing::default_test_extents();
+    extents.max_tx = 1;
+    extents.max_rx = receivers;
+    extents.max_doppler_bins = kDoppler;
+    extents.max_range_bins = 1;
+    std::vector<std::complex<T>> input(static_cast<size_t>(receivers * kDoppler));
+    for (int64_t rx = 0; rx < receivers; ++rx) {
+      const std::complex<T> amplitude{T{1} + static_cast<T>(rx % 97) / T{128},
+                                      static_cast<T>(rx % 13 - 6) / T{32}};
+      input[static_cast<size_t>(rx * kDoppler + kDoppler / 2)] = amplitude;
+    }
+    const auto result =
+        run_ddm_result<T>({to_device_tensor(input, {receivers, kDoppler, 1}, complex_dtype<T>())},
+                          ddm_params(code), extents);
+    ASSERT_TRUE(result.ok()) << result.describe_failure();
+    ASSERT_EQ(result.template snapshots<holoscan::Tensor>("rd_maps_out").size(), 1U);
+    const HostTensor output = holoscan::radar::testing::to_host(
+        result.template snapshot<holoscan::Tensor>("rd_maps_out"));
+    ASSERT_EQ(output.shape, (std::vector<int64_t>{1, receivers, kDoppler, 1}));
+    const auto* values = output.as<std::complex<T>>();
+    const double tolerance = std::is_same_v<T, float> ? 5e-6 : 1e-11;
+    for (int64_t rx = 0; rx < receivers; ++rx) {
+      const std::complex<double> amplitude{1.0 + static_cast<double>(rx % 97) / 128.0,
+                                           static_cast<double>(rx % 13 - 6) / 32.0};
+      for (int64_t k = 0; k < kDoppler; ++k) {
+        const int64_t center_zero = (k - fft_center(kDoppler) + kDoppler) % kDoppler;
+        const auto expected = amplitude * impulse_response[static_cast<size_t>(k)];
+        const auto actual = values[static_cast<size_t>(rx * kDoppler + center_zero)];
+        EXPECT_NEAR(actual.real(), expected.real(), tolerance)
+            << receivers << ',' << rx << ',' << k;
+        EXPECT_NEAR(actual.imag(), expected.imag(), tolerance)
+            << receivers << ',' << rx << ',' << k;
+      }
+    }
+  }
+}
+
+TEST(DDMDenseDemultiplexOp, FloatNonlinearRxGridBoundaryPreservesEveryRow) {
+  check_nonlinear_rx_grid_boundary<float>();
+}
+
+TEST(DDMDenseDemultiplexOp, DoubleNonlinearRxGridBoundaryPreservesEveryRow) {
+  check_nonlinear_rx_grid_boundary<double>();
+}
+
 }  // namespace

@@ -43,6 +43,13 @@
           "command": "<holohub_app_bin>/simo",
           "workdir": "holohub_app_bin"
         }
+      },
+      "smoke": {
+        "description": "Run the short headless smoke preset",
+        "run": {
+          "command": "<holohub_app_bin>/simo simo_smoke.yaml",
+          "workdir": "holohub_app_bin"
+        }
       }
     }
   }

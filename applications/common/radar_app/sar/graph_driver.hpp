@@ -40,6 +40,7 @@
 #include "io/cphd_reader_op/params_config.hpp"
 #include "io/tensor_dump_op/tensor_dump_op.hpp"
 #include "radar_app/app/config_utils.hpp"
+#include "radar_app/app/gpu_placement.hpp"
 #ifdef HOLOSCAN_RADAR_HAS_X11
 #include "radar_app/viz/x11_display.hpp"
 #endif
@@ -55,6 +56,7 @@
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
 #include <holoscan/visualization/holoviz_op.hpp>
 #include "radar_app/sar/sar_image_viz.hpp"
+#include "radar_app/viz/image_device_bridge_op.hpp"
 #include "radar_app/sar/timeline_raster.hpp"
 #include "radar_app/sar/window_place.hpp"
 #endif
@@ -66,7 +68,7 @@ inline void bind_outputs(holoscan::CompileOptions& options, const char* op,
                          std::initializer_list<const char*> names) {
   for (const char* port : names) {
     options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
-        .operator_path = op, .output_port = port, .device = holoscan::DeviceId{0}});
+        .operator_path = op, .output_port = port, .device = app::application_device()});
   }
 }
 
@@ -178,6 +180,19 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
     const radar::MaxTensorExtents extents = make_extents(cfg, *manager_params);
     const radar::MaxTensorExtents ingest_extents = make_ingest_extents(extents, cfg);
 
+#ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
+    bool visualize = cfg.visualize;
+#ifdef HOLOSCAN_RADAR_HAS_X11
+    if (visualize && !cfg.headless && !cfg.skip_display_check && !app::gui_available()) {
+      HOLOSCAN_LOG_WARN("SAR: no X11 display; skipping visualization");
+      visualize = false;
+    }
+#endif
+    app::select_application_device(visualize && !cfg.headless, visualize && cfg.headless);
+#else
+    app::select_application_device(false, false);
+#endif
+
     holoscan::Graph graph{name};
     holoscan::CompileOptions options;
     const holoscan::ConnectionOptions queue{.queue_depth = 4U};
@@ -229,13 +244,6 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
                                      range, manager, bp, source, application, formation, extents);
     graph.add_flow(*formed, report->image, queue);
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
-    bool visualize = cfg.visualize;
-#ifdef HOLOSCAN_RADAR_HAS_X11
-    if (visualize && !cfg.headless && !cfg.skip_display_check && !app::gui_available()) {
-      HOLOSCAN_LOG_WARN("SAR: no X11 display; skipping visualization");
-      visualize = false;
-    }
-#endif
     if (visualize) {
       // Visualization is best-effort: discard stale images when rendering falls behind
       // instead of backpressuring formation, reporting, or an optional tensor dump.
@@ -377,12 +385,20 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
                                                              .normalized_coordinates = true});
         return layers;
       };
+      auto raster_partition = graph.partition("raster");
+      raster_partition.add(raster);
+      auto visualization = graph.partition("visualization");
+      const holoscan::DeviceId renderer_device{cfg.headless ? app::application_composer_device()
+                                                            : app::application_display_device()};
       const auto hud_age = std::chrono::seconds{5};
       auto wire_overlay = [&](auto& viz) {
         graph.add_flow(*formed, raster->image, raster_queue);
         graph.add_flow(raster->overlay, viz->tensor_layer_input(1), overlay_queue);
         graph.add_flow(raster->labels, viz->tensor_layer_input(2), overlay_queue);
-        graph.add_flow(raster->frame, viz->image_layer_input(0), display_queue);
+        app::viz::connect_image_devices(graph, options, raster_partition, visualization,
+                                        raster->frame, viz->image_layer_input(0), "sar_display",
+                                        lut_side, lut_side, app::application_device(),
+                                        renderer_device, display_queue);
       };
       if (cfg.headless) {
         auto viz = graph.op<holoscan::visualization::HolovizOp>(
@@ -393,10 +409,10 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
                 .format = holoscan::visualization::ImageFormat::kR8G8B8A8Unorm},
             holoscan::visualization::LayerTrigger{}, hud_age);
         auto sink = graph.op<app::sar::SarImageSchemaSinkOp>("viz_sink");
-        auto visualization = graph.partition("visualization");
-        visualization.add(raster).add(viz).add(sink);
+        visualization.add(viz).add(sink);
         has_visualization = true;
-        bind_outputs(options, "holoviz", {"output"});
+        options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+            .operator_path = "holoviz", .output_port = "output", .device = renderer_device});
         wire_overlay(viz);
         graph.add_flow(viz->output(), sink->frame, queue);
       } else {
@@ -407,8 +423,7 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
                                                     .height = height,
                                                     .close_on_escape = true},
             holoscan::visualization::LayerTrigger{}, hud_age);
-        auto visualization = graph.partition("visualization");
-        visualization.add(raster).add(viz);
+        visualization.add(viz);
         has_visualization = true;
         wire_overlay(viz);
         auto timeline = graph.op<app::sar::TimelineRasterOp>(
@@ -432,9 +447,15 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
         // serial_baseline exact-cover: one connected chain per authored partition.
         // The Gantt is an OnClock producer + window, independent of formation Holoviz.
         auto timeline_part = graph.partition("timeline");
-        timeline_part.add(timeline).add(timeline_viz);
+        timeline_part.add(timeline);
+        auto timeline_display = graph.partition("timeline_display");
+        timeline_display.add(timeline_viz);
         has_timeline = true;
-        graph.add_flow(timeline->frame, timeline_viz->image_layer_input(0), overlay_queue);
+        app::viz::connect_image_devices(graph, options, timeline_part, timeline_display,
+                                        timeline->frame, timeline_viz->image_layer_input(0),
+                                        "timeline_display", app::sar::TimelineRasterOp::kWidth,
+                                        app::sar::TimelineRasterOp::kHeight,
+                                        app::application_device(), renderer_device, overlay_queue);
       }
     }
 #else
@@ -457,9 +478,11 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
         .bind_thread_placement("application", worker_lane)
         .bind_thread_placement("formation", worker_lane);
     if (has_visualization)
-      options.deployment.bind_thread_placement("visualization", worker_lane);
+      options.deployment.bind_thread_placement("visualization", worker_lane)
+          .bind_thread_placement("raster", worker_lane);
     if (has_timeline)
-      options.deployment.bind_thread_placement("timeline", worker_lane);
+      options.deployment.bind_thread_placement("timeline", worker_lane)
+          .bind_thread_placement("timeline_display", worker_lane);
     const auto plan = holoscan::compile(graph, std::move(options));
     // Pool sizing is the binding constraint on a retained-aperture run and the
     // plan is the only place the slot counts are visible: a declared depth of 2

@@ -10,8 +10,9 @@
 //   4. R̂⁻¹_i = inv(R̂_i)                                  (batched matx::inv)
 //   5. P_i(θ) = 1 / (a(θ)ᴴ R̂⁻¹_i a(θ)), argmax over θ    (capon_reduce_kernel)
 //   6. top-max_sources peaks of P_i(θ)                   (peak_extract_kernel)
-// where a(θ) is the untapered steering manifold (num_beams, num_channels),
-// beam el-major (beam = ie·num_az + ia). δ_i is either a fixed absolute value
+// where a(θ) is the untapered steering manifold; float C >= 8 is channel-major,
+// otherwise beam-major. Beams are el-major (beam = ie·num_az + ia).
+// δ_i is either a fixed absolute value
 // or, in auto mode, a small multiple of the per-item noise-floor proxy
 // trace(R̂_i)/num_channels.
 //
@@ -23,6 +24,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <type_traits>
 
 #include "radar_common/tensor/matx_utils.hpp"
 
@@ -33,6 +35,13 @@ namespace holoscan::radar::detail {
 // K < C / single-snapshot case) without dominating a well-conditioned R̂.
 template <typename T>
 inline constexpr T kAutoLoadingFactor = static_cast<T>(1e-2);
+
+// Keep small apertures and double on the original layout. The builder and scan
+// use this same effective-channel policy, including after spatial smoothing.
+template <typename T>
+constexpr bool use_channel_major_mvdr(int64_t num_channels) {
+  return std::is_same_v<T, float> && num_channels >= 8;
+}
 
 // MatX caches inv plans by (A, A_inv) device pointers (eig by shape/stream).
 // MVDR's covariance and inverse buffers have stable, operator-owned addresses,
@@ -95,16 +104,12 @@ inline void retire_matx_solver_caches() {
 // items (K_i == 0) yield a zero matrix; `k_counts[item]` records K_i so the
 // stage can blank Capon / DOA outputs after a safe absolute load + inv.
 template <typename T>
-__global__ void covariance_kernel(const cuda::std::complex<T>* __restrict__ x,
-                                  const unsigned char* __restrict__ mask, int64_t num_items,
-                                  int64_t num_channels, int64_t num_snapshots,
-                                  cuda::std::complex<T>* __restrict__ cov,
-                                  int64_t* __restrict__ k_counts) {
-  const int64_t item = static_cast<int64_t>(blockIdx.x);
-  if (item >= num_items) {
-    return;
-  }
-
+__device__ __forceinline__ void accumulate_covariance(const cuda::std::complex<T>* __restrict__ x,
+                                                      const unsigned char* __restrict__ mask,
+                                                      int64_t item, int64_t num_channels,
+                                                      int64_t num_snapshots,
+                                                      cuda::std::complex<T>* __restrict__ cov,
+                                                      int64_t* __restrict__ k_counts) {
   __shared__ int64_t k_valid;
   if (threadIdx.x == 0) {
     int64_t count = 0;
@@ -151,12 +156,9 @@ __global__ void covariance_kernel(const cuda::std::complex<T>* __restrict__ x,
 // (loading < 0) δ_i = kAutoLoadingFactor · trace(R̂_i)/C; otherwise δ_i is the
 // fixed absolute `loading`. Block reduces the real diagonal to get the trace.
 template <typename T>
-__global__ void load_diagonal_kernel(cuda::std::complex<T>* __restrict__ cov, int64_t num_items,
-                                     int64_t num_channels, double loading) {
-  const int64_t item = static_cast<int64_t>(blockIdx.x);
-  if (item >= num_items) {
-    return;
-  }
+__device__ __forceinline__ void load_covariance_diagonal(cuda::std::complex<T>* __restrict__ cov,
+                                                         int64_t item, int64_t num_channels,
+                                                         double loading) {
   const int64_t stride = num_channels * num_channels;
   cuda::std::complex<T>* R = cov + item * stride;
 
@@ -197,6 +199,44 @@ __global__ void load_diagonal_kernel(cuda::std::complex<T>* __restrict__ cov, in
   }
 }
 
+template <typename T>
+__global__ void covariance_kernel(const cuda::std::complex<T>* __restrict__ x,
+                                  const unsigned char* __restrict__ mask, int64_t num_items,
+                                  int64_t num_channels, int64_t num_snapshots,
+                                  cuda::std::complex<T>* __restrict__ cov,
+                                  int64_t* __restrict__ k_counts) {
+  const int64_t item = static_cast<int64_t>(blockIdx.x);
+  if (item >= num_items) {
+    return;
+  }
+  accumulate_covariance(x, mask, item, num_channels, num_snapshots, cov, k_counts);
+}
+
+template <typename T>
+__global__ void load_diagonal_kernel(cuda::std::complex<T>* __restrict__ cov, int64_t num_items,
+                                     int64_t num_channels, double loading) {
+  const int64_t item = static_cast<int64_t>(blockIdx.x);
+  if (item >= num_items) {
+    return;
+  }
+  load_covariance_diagonal(cov, item, num_channels, loading);
+}
+
+template <typename T>
+__global__ void covariance_loaded_kernel(const cuda::std::complex<T>* __restrict__ x,
+                                         const unsigned char* __restrict__ mask, int64_t num_items,
+                                         int64_t num_channels, int64_t num_snapshots,
+                                         cuda::std::complex<T>* __restrict__ cov,
+                                         int64_t* __restrict__ k_counts, double loading) {
+  const int64_t item = static_cast<int64_t>(blockIdx.x);
+  if (item >= num_items) {
+    return;
+  }
+  accumulate_covariance(x, mask, item, num_channels, num_snapshots, cov, k_counts);
+  __syncthreads();
+  load_covariance_diagonal(cov, item, num_channels, loading);
+}
+
 // spectrum is stored (num_az, num_el) per item; beams are el-major
 // (beam = ie·num_az + ia) matching the steering-manifold build.
 template <typename T>
@@ -213,7 +253,7 @@ __device__ inline T& mvdr_spectrum_at(T* spec, int64_t ia, int64_t ie, int64_t n
 // R̂⁻¹ is read from global; because every thread reads the same R̂⁻¹[c,c2] in
 // lockstep it broadcasts from L1/L2 and is not the limiter (staging it in
 // shared measured slower — occupancy loss outweighs the already-cached reads).
-template <typename T>
+template <typename T, bool ChannelMajor>
 __global__ void capon_reduce_kernel(const cuda::std::complex<T>* __restrict__ rinv,
                                     const cuda::std::complex<T>* __restrict__ manifold,
                                     int64_t num_items, int64_t num_channels, int64_t num_az,
@@ -239,12 +279,13 @@ __global__ void capon_reduce_kernel(const cuda::std::complex<T>* __restrict__ ri
   T best_power = T{0};
   int64_t best_beam = -1;
   for (int64_t beam = tid; beam < num_beams; beam += nthreads) {
-    const cuda::std::complex<T>* a = manifold + beam * num_channels;
-    // denom = aᴴ R̂⁻¹ a = Σ_c conj(a[c]) · (Σ_c2 R̂⁻¹[c,c2]·a[c2]). The inner
-    // reduction over c2 is carried in four independent accumulators so the
-    // FMAs pipeline instead of stalling on one serial chain (this kernel is
-    // latency-bound: warps resident but not issuing; DRAM idle). Real scalar
-    // accumulators keep the register allocation tight.
+    // Channel-major steering keeps adjacent beam lanes on adjacent coefficients.
+    const cuda::std::complex<T>* a = manifold + (ChannelMajor ? beam : beam * num_channels);
+    const int64_t channel_stride = ChannelMajor ? num_beams : 1;
+    // denom = aᴴ R̂⁻¹ a. The inner reduction over c2 is carried in four
+    // independent accumulators so the FMAs pipeline instead of stalling on one
+    // serial chain (this kernel is latency-bound: warps resident but not issuing;
+    // DRAM idle). Real scalar accumulators keep the register allocation tight.
     T denom = T{0};
     for (int64_t c = 0; c < num_channels; ++c) {
       const cuda::std::complex<T>* row = Ri + c * num_channels;
@@ -253,19 +294,22 @@ __global__ void capon_reduce_kernel(const cuda::std::complex<T>* __restrict__ ri
       int64_t c2 = 0;
       for (; c2 + 3 < num_channels; c2 += 4) {
         const T r0r = row[c2].real(), r0i = row[c2].imag();
-        const T a0r = a[c2].real(), a0i = a[c2].imag();
+        const T a0r = a[c2 * channel_stride].real(), a0i = a[c2 * channel_stride].imag();
         q0r += r0r * a0r - r0i * a0i;
         q0i += r0r * a0i + r0i * a0r;
         const T r1r = row[c2 + 1].real(), r1i = row[c2 + 1].imag();
-        const T a1r = a[c2 + 1].real(), a1i = a[c2 + 1].imag();
+        const T a1r = a[(c2 + 1) * channel_stride].real(),
+                a1i = a[(c2 + 1) * channel_stride].imag();
         q1r += r1r * a1r - r1i * a1i;
         q1i += r1r * a1i + r1i * a1r;
         const T r2r = row[c2 + 2].real(), r2i = row[c2 + 2].imag();
-        const T a2r = a[c2 + 2].real(), a2i = a[c2 + 2].imag();
+        const T a2r = a[(c2 + 2) * channel_stride].real(),
+                a2i = a[(c2 + 2) * channel_stride].imag();
         q2r += r2r * a2r - r2i * a2i;
         q2i += r2r * a2i + r2i * a2r;
         const T r3r = row[c2 + 3].real(), r3i = row[c2 + 3].imag();
-        const T a3r = a[c2 + 3].real(), a3i = a[c2 + 3].imag();
+        const T a3r = a[(c2 + 3) * channel_stride].real(),
+                a3i = a[(c2 + 3) * channel_stride].imag();
         q3r += r3r * a3r - r3i * a3i;
         q3i += r3r * a3i + r3i * a3r;
       }
@@ -273,12 +317,12 @@ __global__ void capon_reduce_kernel(const cuda::std::complex<T>* __restrict__ ri
       T qi = q0i + q1i + q2i + q3i;
       for (; c2 < num_channels; ++c2) {
         const T rr = row[c2].real(), ri = row[c2].imag();
-        const T ar = a[c2].real(), ai = a[c2].imag();
+        const T ar = a[c2 * channel_stride].real(), ai = a[c2 * channel_stride].imag();
         qr += rr * ar - ri * ai;
         qi += rr * ai + ri * ar;
       }
-      // Re(conj(a[c]) · q)
-      denom += a[c].real() * qr + a[c].imag() * qi;
+      // Re(conj(a[c * channel_stride]) · q)
+      denom += a[c * channel_stride].real() * qr + a[c * channel_stride].imag() * qi;
     }
     const T power = denom > T{0} ? T{1} / denom : T{0};
     const int64_t ia = beam % num_az;
@@ -513,7 +557,8 @@ __global__ void blank_empty_items_kernel(const int64_t* __restrict__ k_counts, i
 //   snapshots — device ptr, [num_items, num_channels, num_snapshots]
 //               cuda::std::complex<T>; a single look uses a trailing extent 1.
 //   mask      — device ptr, [num_items, num_snapshots] uint8/bool, or nullptr.
-//   manifold  — device ptr, [num_beams, num_channels] cuda::std::complex<T>
+//   manifold  — device ptr, cuda::std::complex<T>, layout selected by
+//               use_channel_major_mvdr<T>(num_channels).
 //               untapered steering vectors, beam el-major (invalid beams zero).
 //   eigenvalues — device ptr, [num_items, num_channels] T. Ascending eigenvalue
 //                 spectrum of the RAW (pre-loading) sample covariance.
@@ -539,8 +584,18 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots, const unsigne
 
   constexpr int cov_block = 256;
   const int grid = static_cast<int>(num_items);
-  covariance_kernel<T><<<grid, cov_block, 0, stream>>>(snapshots, mask, num_items, num_channels,
-                                                       num_snapshots, cov, k_counts);
+  if constexpr (std::is_same_v<T, float>) {
+    if (eigenvalues == nullptr) {
+      covariance_loaded_kernel<T><<<grid, 256, static_cast<size_t>(256) * sizeof(T), stream>>>(
+          snapshots, mask, num_items, num_channels, num_snapshots, cov, k_counts, loading);
+    } else {
+      covariance_kernel<T><<<grid, cov_block, 0, stream>>>(snapshots, mask, num_items, num_channels,
+                                                           num_snapshots, cov, k_counts);
+    }
+  } else {
+    covariance_kernel<T><<<grid, cov_block, 0, stream>>>(snapshots, mask, num_items, num_channels,
+                                                         num_snapshots, cov, k_counts);
+  }
 
   // The solver plans reference stable operator-owned covariance/inverse
   // buffers. Mark them before first use so stop() retires any plan that MatX
@@ -567,8 +622,15 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots, const unsigne
 
   const int dl_block = 256;
   const size_t dl_smem = static_cast<size_t>(dl_block) * sizeof(T);
-  load_diagonal_kernel<T>
-      <<<grid, dl_block, dl_smem, stream>>>(cov, num_items, num_channels, loading);
+  if constexpr (std::is_same_v<T, float>) {
+    if (eigenvalues != nullptr) {
+      load_diagonal_kernel<T>
+          <<<grid, dl_block, dl_smem, stream>>>(cov, num_items, num_channels, loading);
+    }
+  } else {
+    load_diagonal_kernel<T>
+        <<<grid, dl_block, dl_smem, stream>>>(cov, num_items, num_channels, loading);
+  }
 
   // MatX 1.0's cached batch_size==1 inverse selects a cuSolver getrf/getrs
   // path that is not repeatable across executions. Promote only that inverse
@@ -593,8 +655,13 @@ inline void run_mvdr_stage(const cuda::std::complex<T>* snapshots, const unsigne
 
   constexpr int capon_block = 256;
   const size_t capon_smem = static_cast<size_t>(capon_block) * (sizeof(T) + sizeof(int64_t));
-  capon_reduce_kernel<T><<<grid, capon_block, capon_smem, stream>>>(
-      rinv, manifold, num_items, num_channels, num_az, num_el, az_grid, el_grid, spectrum, aoa);
+  if (use_channel_major_mvdr<T>(num_channels)) {
+    capon_reduce_kernel<T, true><<<grid, capon_block, capon_smem, stream>>>(
+        rinv, manifold, num_items, num_channels, num_az, num_el, az_grid, el_grid, spectrum, aoa);
+  } else {
+    capon_reduce_kernel<T, false><<<grid, capon_block, capon_smem, stream>>>(
+        rinv, manifold, num_items, num_channels, num_az, num_el, az_grid, el_grid, spectrum, aoa);
+  }
 
   // Multi-source: top-max_sources Capon peaks → doa_multi + source_count.
   // One pass writes both, so it runs unless both are null.

@@ -57,12 +57,42 @@ enum class DashboardMode {
   kClusters,
 };
 
+namespace detail {
+
+struct BackgroundStatistics {
+  float mean_db;
+  float stddev_db;
+  std::size_t count;
+};
+
+// A clipped display-background estimate, not a thermal-noise calibration.
+std::optional<BackgroundStatistics> background_statistics(const std::vector<float>& samples_db);
+
+struct BackgroundScaleState {
+  std::optional<std::array<float, 2>> noise_limits_db;
+  std::optional<std::int64_t> last_valid_ns;
+
+  std::array<float, 2> limits(const std::optional<BackgroundStatistics>& background,
+                              float peak_power, float span_db, float sigma, float headroom_db,
+                              std::int64_t now_ns);
+};
+
+}  // namespace detail
+
 struct FmcwDashboardConfig {
   DashboardMode mode{DashboardMode::kRawDetections};
   bool show_angles{true};
   float dynamic_range_db{60.0F};
+  bool noise_scaling{true};
+  std::int64_t noise_sample_limit{2048};
+  std::int64_t noise_range_half_width{3};
+  std::int64_t noise_doppler_half_width{3};
+  double noise_sigma{2.0};
+  double noise_headroom_db{6.0};
+  double range_doppler_width_percent{45.0};
   float detection_radius{0.010F};
   double frame_period{0.1};
+  double display_rate_hz{60.0};
   std::int64_t history_frames{120};
   std::int64_t detection_trail_frames{12};
   std::int64_t width{1280};
@@ -71,6 +101,7 @@ struct FmcwDashboardConfig {
   std::array<float, 2> el_bounds{};
   AngleConvention angle_convention;
   std::string title;
+  std::string description;
   std::string selected_profile;
   FMCWWaveformDescriptor selected_waveform;
   std::vector<TruthTarget> truth_targets;
@@ -96,14 +127,19 @@ class FmcwDashboardOp : public holoscan::Operator<> {
   holoscan::Input<holoscan::Tensor> reduced_points{"reduced_points"};
   holoscan::Input<wire::FMCWWaveformT> waveform_in{"waveform"};
   holoscan::Output<holoscan::Tensor> rgba{"rgba"};
+  holoscan::Output<holoscan::Tensor> text{"text"};
 
  private:
   FmcwDashboardConfig config_;
   std::size_t max_byte_span_{0U};
   std::shared_ptr<holoscan::Tensor> peak_power_;
   std::shared_ptr<holoscan::Tensor> annotation_;
+  std::shared_ptr<holoscan::Tensor> noise_mask_;
+  std::shared_ptr<holoscan::Tensor> noise_samples_;
+  detail::BackgroundScaleState noise_scale_;
   holoscan::Tensor retained_input_;
   std::int64_t frame_index_{0};
+  std::optional<std::int64_t> last_render_ns_;
   std::deque<HistorySample> history_;
   std::deque<HistorySample> detection_history_;
 };
@@ -138,9 +174,14 @@ void append_history(std::deque<HistorySample>* history, const std::vector<Detect
                     std::int64_t frame, std::int64_t history_frames);
 
 std::array<float, 2> rd_plot_position(float doppler_bin, float range_bin, std::int64_t rows,
-                                      std::int64_t cols);
+                                      std::int64_t cols, bool reverse_velocity = false);
 
 bool use_azimuth_sector(const std::array<float, 2>& az_bounds);
+
+// Unit-panel coordinates for an aspect-fitted polar sector. Out-of-view samples
+// have no position, so histories cannot draw across neighboring panels.
+std::optional<std::array<float, 2>> sector_plot_position(float range_fraction, float azimuth,
+                                                         const std::array<float, 2>& az_bounds);
 
 std::array<float, 2> history_plot_position(const HistorySample& sample, std::int64_t current_frame,
                                            std::int64_t history_frames, int feature,
