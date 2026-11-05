@@ -161,6 +161,12 @@ def check_debian(args):
     packages = list(artifacts.glob("*.deb"))
     if len(packages) != 1:
         raise RuntimeError(f"Expected one Debian artifact, found {packages}")
+    depends = subprocess.check_output(
+        ["dpkg-deb", "--field", str(packages[0]), "Depends"], text=True
+    )
+    has_tinyxml2 = any(dep.strip().split()[0] == "libtinyxml2-dev" for dep in depends.split(","))
+    if has_tinyxml2 != ("cphd_reader_op" in expected):
+        raise RuntimeError(f"Debian tinyxml2 dependency does not match CPHD selection: {depends}")
     unpacked = args.work / "unpacked"
     run("dpkg-deb", "--extract", packages[0], unpacked, cwd=args.work)
     prefix = unpacked / "opt/nvidia/holoscan"

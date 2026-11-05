@@ -85,3 +85,16 @@ Consumers that manually included the old per-target export files must migrate
 to `find_package`; those files are no longer installed. Use a fresh installation
 prefix when upgrading to avoid retaining stale exports. CUDA, MatX, and the SDK
 remain required; installations containing CPHD also resolve tinyxml2 and Threads.
+
+For Debian packages containing CPHD, the package dependency on `libtinyxml2-dev`
+installs tinyxml2's CMake configuration and runtime library. A CPHD-free build
+omits this dependency. The full package resolves tinyxml2 during `find_package`,
+even when the application uses only FMCW operators.
+
+TGZ archives do not install system dependencies. Before using an archive that
+contains CPHD, install tinyxml2's development package yourself, in addition to
+the matching Holoscan SDK and CUDA toolkit. On Debian/Ubuntu:
+
+```bash
+sudo apt-get install libtinyxml2-dev
+```

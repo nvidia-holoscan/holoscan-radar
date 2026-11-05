@@ -12,6 +12,62 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class InstalledConfig(unittest.TestCase):
+    def test_debian_dependencies_follow_final_cphd_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            (source / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 4.0)\n"
+                "project(holoscan_radar VERSION 0.2.0 LANGUAGES NONE)\n"
+                'set(PROJECT_DESCRIPTION "Package dependency fixture")\n'
+                f'list(PREPEND CMAKE_MODULE_PATH "{ROOT}/cmake")\n'
+                # Match production order: package registration precedes operators.
+                f'add_subdirectory("{ROOT}/pkg/holoscan-radar" pkg)\n'
+                "if(BUILD_CPHD)\nadd_library(cphd_reader_op INTERFACE)\nendif()\n"
+                f'install(FILES "{ROOT}/pkg/holoscan-radar/README.md" DESTINATION share)\n'
+            )
+            build = root / "build"
+            # Reuse the tree to verify both adding and removing the dependency.
+            for enabled in (False, True, False):
+                with self.subTest(cphd=enabled):
+                    subprocess.run(
+                        [
+                            "cmake",
+                            "-S",
+                            str(source),
+                            "-B",
+                            str(build),
+                            f"-DBUILD_CPHD={'ON' if enabled else 'OFF'}",
+                        ],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    subprocess.run(
+                        [
+                            "cpack",
+                            "--config",
+                            str(build / "pkg/CPackConfig-holoscan-radar.cmake"),
+                            "-G",
+                            "DEB",
+                            "-B",
+                            str(root / "artifacts"),
+                        ],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    package = next((root / "artifacts").glob("*.deb"))
+                    depends = subprocess.check_output(
+                        ["dpkg-deb", "--field", str(package), "Depends"],
+                        text=True,
+                    ).strip()
+                    expected = "holoscan (>= 5.0.0)"
+                    if enabled:
+                        expected += ", libtinyxml2-dev"
+                    self.assertEqual(depends, expected)
+
     def test_relocated_config_dependencies_versions_and_components(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
