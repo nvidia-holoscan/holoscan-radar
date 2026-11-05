@@ -47,9 +47,15 @@ install(TARGETS radar_common
     EXPORT holoscan_radar_targets
 )
 
+# Like the SDK, keep yaml-cpp out of the installed package: no operator header
+# or exported target uses the in-tree YAML helpers, so they stay uninstalled.
 install(DIRECTORY radar_common
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar
     FILES_MATCHING PATTERN "*.hpp"
+    PATTERN "arg_setters.hpp" EXCLUDE
+    PATTERN "max_tensor_extents_yaml.hpp" EXCLUDE
+    PATTERN "sar_yaml_converters.hpp" EXCLUDE
+    PATTERN "yaml_converters.hpp" EXCLUDE
 )
 
 # CUDA TDM/DDM coherent-compensation stages shared by the dense MIMO operator,

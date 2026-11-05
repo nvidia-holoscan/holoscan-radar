@@ -45,7 +45,9 @@ size Tensor pools before `arm()`. The field list in
 each operator README Construction table identifies the fields that operator
 requires. Applications may construct the value directly or decode the same
 `max_*` keys with `MaxTensorExtentsFromYaml` from
-`radar_common/sdk/max_tensor_extents_yaml.hpp`.
+`radar_common/sdk/max_tensor_extents_yaml.hpp`. That header and the other
+yaml-cpp helpers in `radar_common/sdk/` are in-tree only; the installed package
+does not ship them, so it needs no yaml-cpp.
 
 The values are maxima for the graph lifetime, not fixed per-tick shapes.
 Operators continue to infer named extents from each input and accept shape

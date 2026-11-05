@@ -111,6 +111,17 @@ def check_operator_libraries(prefix, expected):
             raise RuntimeError(f"Package artifact missing operator library: {name}")
 
 
+def check_headers_without_yaml_cpp(prefix):
+    """Installed headers must compile without yaml-cpp, which the package does not declare."""
+    offenders = [
+        str(path.relative_to(prefix))
+        for path in (prefix / "include").rglob("*.hpp")
+        if re.search(r"^\s*#\s*include\s*[<\"]yaml-cpp/", path.read_text(), re.M)
+    ]
+    if offenders:
+        raise RuntimeError(f"Installed headers include yaml-cpp: {offenders}")
+
+
 def package_with_cli(args, generators):
     artifacts = args.work / "artifacts"
     artifacts.mkdir()
@@ -171,6 +182,7 @@ def check_debian(args):
     run("dpkg-deb", "--extract", packages[0], unpacked, cwd=args.work)
     prefix = unpacked / "opt/nvidia/holoscan"
     check_operator_libraries(prefix, expected)
+    check_headers_without_yaml_cpp(prefix)
     if (prefix / "bin").exists() and any((prefix / "bin").iterdir()):
         raise RuntimeError("Operator-only Debian artifact contains executables")
     if (prefix / "holoscan_radar").exists():
