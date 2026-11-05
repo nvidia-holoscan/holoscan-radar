@@ -1,85 +1,184 @@
-# SAR autofocus (Figure 2)
+# SAR autofocus
 
-Phase gradient autofocus on a ground / DEM product: retain the whole aperture, form a small conjugate-grid image from it, estimate a per-pulse phase, apply that phase to the same retained pulses, and form the product once. This is the WORKFLOWS Figure 2 chain. The five sibling SAR applications all form directly and leave autofocus out.
+Phase gradient autofocus (PGA) estimates phase errors that blur a synthetic
+aperture radar (SAR) image. This application retains the received pulses,
+forms an auxiliary image for estimating the error, applies the estimated phase
+correction to those pulses, and forms the final image on a ground or terrain grid.
 
 > **Prerequisite: download data before running the application.**
-> The default preset requires the Kourou Umbra CPHD (about 4.19 GiB).
+> The default preset requires Kourou Umbra Compensated Phase History (CPHD) data
+> (about 4.19 GiB).
 > Data is not bundled, and the application does not download it.
 > Generated-fixture tests require no external data downloads.
 
-## Download and run
+## Generate and compare three images
 
-Run these commands from the repository root **on the host**:
+This walkthrough produces three final images of the same scene on a matching
+ground grid:
+
+| Image | Added position error | PGA correction | Purpose |
+| --- | --- | --- | --- |
+| **Blurred** | 2 cm quadratic line-of-sight error | None | See the effect of the injected error |
+| **Corrected** | The same 2 cm error | Estimated by PGA | See how much focus PGA recovers |
+| **Clean** | None | None | Reference image from the original collect |
+
+The Kourou collect is already well focused. Here, "clean" means no **added**
+error and no autofocus correction; it does not claim the original collect is
+free of all residual error. All three runs use the same first 8000 pulses,
+2048-by-2048 product grid, and 0.25 m spacing. The GUI is disabled and each run
+saves a complex NumPy image.
+
+### 1. Set up and download Kourou
+
+Run all commands below from the repository root **on the host**, in the same
+terminal:
 
 ```bash
 uv sync
 uv pip install --python .venv/bin/python -r tools/sar_data/requirements.txt
 source .venv/bin/activate
-python3 tools/sar_data/pull_cphd.py --app autofocus --list
 python3 tools/sar_data/pull_cphd.py --app autofocus
-./holoscan-radar run autofocus --language cpp
 ```
 
-The download writes
-`data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd`, matching the
-[default preset](config/autofocus.yaml). Existing readable files are reused.
-Omit `--dest` to use this location; `data/sar/imperial/` is for the alternate
-Imperial Valley collect and does not match the default Kourou preset.
-All paths here are relative to the repository root.
+Wait for the download to succeed before continuing. It writes
+`data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd` (about 4.19 GiB).
+Existing readable files are reused. This command downloads Kourou only; see
+the [SAR data guide](../../../tools/sar_data/README.md#public-collection-downloads)
+for other scenes.
 
-The [SAR data guide](../../../tools/sar_data/README.md#public-collection-downloads)
-lists supported downloads, destinations, and preparation commands for alternate
-scenes. `--app autofocus` selects Kourou only; it does not download Atlanta,
-Houston, or Imperial Valley. For recovery measurements after downloading, see
-[Kourou](#kourou-the-pga-vehicle) below.
+The three comparison presets are included with the application; no config
+generation or editing is needed:
 
-## What to expect and how to test recovery
+- [autofocus_blurred.yaml](config/autofocus_blurred.yaml): added error, no correction.
+- [autofocus_corrected.yaml](config/autofocus_corrected.yaml): added error, PGA correction.
+- [autofocus_reference.yaml](config/autofocus_reference.yaml): no added error, no correction.
 
-The default Kourou input is already well focused. The default run forms one
-image and exits; a visible improvement is not expected. PGA may reject a
-correction that lowers sharpness and leave the product uncorrected. That
-refusal is different from recovering an injected error. Startup logs identify
-whether an error is injected, the aperture length, correction method, effective
-display mode, and whether images are being saved.
+Both uncorrected presets deliberately set `min_scatterers` above the auxiliary
+image's row count. This makes PGA refuse estimation and emit zero correction.
+The reference preset also omits `position_error`, disabling error injection.
 
-After downloading Kourou, run the known-answer preset on the host:
+### 2. Generate the blurred, uncorrected image
 
 ```bash
-./holoscan-radar run autofocus --language cpp --run-args=autofocus_recovery.yaml
+./holoscan-radar run autofocus --language cpp --run-args=autofocus_blurred.yaml
 ```
 
-This preset retains the first 8000 pulses, injects a 2 cm quadratic line-of-sight
-error, uses a polar auxiliary and a 1000-sample first PGA window, and saves the
-complex product. It disables the GUI so it also runs without a display. Judge
-`AutofocusScoreOp`'s affine-removed RMS against the 0.39 rad target; sharpness
-gain and `converged` alone do not establish recovery. The report distinguishes
-accepted iterations from the configured budget.
+Expect `termination refused_scatterers, 0 iteration(s) accepted` in the log:
+this is intentional for this baseline. The injected position error remains
+uncorrected. The saved image is:
 
-The host CLI runs beside the executable. The preset writes:
+```text
+build/autofocus/applications/sar/autofocus/cpp/outputs/blurred/autofocus_blurred_0.npy
+```
 
-- `build/autofocus/applications/sar/autofocus/cpp/autofocus_recovery_0.npy`
-- `af_expected_phase.npy` and `af_estimated_phase.npy` in the same directory.
+### 3. Generate the corrected image
 
-These are NumPy arrays, not PNG screenshots: the product retains complex samples
-for magnitude, phase, and focus measurements. Startup reports the absolute output
-template; `TensorDumpOp: wrote ...` confirms the actual file was saved. For a
-custom config, `dump: true` enables saving, `output.path` chooses the filename
-(template token `{index}`), and `visualize: true` independently enables the GUI.
-Without `output.path`, the image is saved beside the input CPHD. Existing output
-filenames are overwritten on subsequent runs.
+```bash
+./holoscan-radar run autofocus --language cpp --run-args=autofocus_corrected.yaml
+```
 
-For comparisons, copy `autofocus_recovery.yaml`, choose a distinct `output.path`
-for each run, and change only:
+This run injects the **same error**, then estimates and applies a PGA correction.
+Check that iterations were accepted and that `AutofocusScoreOp` reports a
+phase-error RMS (root mean square) below the 0.39 rad target after removing a
+constant offset and linear trend, which PGA cannot determine. The log calls this
+`affine-removed RMS`. The measured recovery is about
+0.1813 rad with seven accepted iterations; small numerical differences are
+expected. Sharpness gain or `converged` alone does not establish accuracy.
+The saved image is:
 
-| Experiment | Change to the recovery preset | Expected evidence |
+```text
+build/autofocus/applications/sar/autofocus/cpp/outputs/corrected/autofocus_corrected_0.npy
+```
+
+### 4. Generate the clean, uncorrected reference
+
+```bash
+./holoscan-radar run autofocus --language cpp --run-args=autofocus_reference.yaml
+```
+
+This run has **no injected position error and no applied autofocus correction**.
+Expect the startup log to identify input-data mode, followed by the same
+intentional `refused_scatterers` and zero accepted iterations as the blurred
+baseline. No injected-error score is produced. The saved image is:
+
+```text
+build/autofocus/applications/sar/autofocus/cpp/outputs/reference/autofocus_reference_0.npy
+```
+
+### 5. View all three results together
+
+```bash
+results=build/autofocus/applications/sar/autofocus/cpp/outputs
+uv run tools/sar_data/view_image.py \
+  "$results/blurred/autofocus_blurred_0.npy" \
+  "$results/corrected/autofocus_corrected_0.npy" \
+  "$results/reference/autofocus_reference_0.npy" \
+  --compare -o "$results/comparison.png"
+```
+
+Open `build/autofocus/applications/sar/autofocus/cpp/outputs/comparison.png`. From left to right, the panels
+are **blurred**, **corrected**, and **clean**, all on the same intensity scale.
+Compare isolated bright targets: the corrected image should recover much of
+the focus visible in the clean reference. It need not match the clean image
+pixel for pixel because PGA estimates the correction from the scene.
+The sharpness log measures the internal auxiliary image, so its gain need not
+equal a measurement of these final products.
+
+The viewer writes a PNG without needing a display; `uv` supplies NumPy and
+Matplotlib automatically. Add `--show` to the same command for an interactive
+plot when a desktop backend is available, where you can zoom into targets.
+To view any one image separately:
+
+```bash
+uv run tools/sar_data/view_image.py build/autofocus/applications/sar/autofocus/cpp/outputs/reference/autofocus_reference_0.npy
+```
+
+This writes `autofocus_reference_0.png` beside its `.npy`. See the
+[saved-image viewer guide](../../../tools/sar_data/README.md#view-saved-images)
+for display range and output options.
+
+## Saved files and other runs
+
+The `.npy` products contain complex samples for magnitude, phase, and focus
+measurements. PNGs are magnitude previews; the viewer preserves the arrays.
+`TensorDumpOp: saved image ...` confirms each successful save and logs a viewer
+command. Checkout paths in these logs are relative to the repository root;
+outputs outside the checkout use absolute paths.
+
+The host CLI runs beside the executable, so the relative `outputs/` paths in
+the presets appear on the host under
+`build/autofocus/applications/sar/autofocus/cpp/outputs/`.
+The blurred and corrected output directories also contain
+`af_expected_phase.npy` and `af_estimated_phase.npy`; these are 1-D diagnostic
+vectors, not images. Separate directories preserve each run's diagnostics.
+Re-running a config overwrites its existing outputs.
+
+For custom configs, `dump: true` enables saving and `output.path` sets the
+filename, with `{index}` expanded to `0` for the first image. Without an
+explicit path, the product is saved beside the CPHD. `output.max_files: 0`
+disables saving. `visualize: true` independently enables the GUI.
+
+The [default preset](config/autofocus.yaml) runs on the original Kourou data
+without injected error but **does enable PGA**, so it is different from the
+uncorrected clean reference above. Since Kourou is already well focused, a
+visible improvement on that default run is not expected.
+
+### Other autofocus presets
+
+The three comparison presets above use the same Kourou data, 8000-pulse
+aperture, and final image grid. The other presets serve different purposes:
+
+| Preset | Purpose | Differences from the comparison presets |
 | --- | --- | --- |
-| Clean reference | Set `position_error.polynomial: [0, 0, 0]` | No added error; PGA can still estimate the collect's own residual |
-| Estimated recovery | Use the preset unchanged | Estimate versus injected truth and corrected product |
-| Oracle recovery | Add `position_error.oracle: true` | Exact injected phase bypasses PGA and checks the correction path |
+| [autofocus.yaml](config/autofocus.yaml) | Default Kourou run | Uses all 23,375 pulses, a different PGA window, no injected error, and saving off by default |
+| [autofocus_atlanta.yaml](config/autofocus_atlanta.yaml) | Airport scene | Different CPHD, derived image grid, 0.5 m spacing, and selected pulse range |
+| [autofocus_houston.yaml](config/autofocus_houston.yaml) | Dense urban scene | Different CPHD and frequency, derived image grid, 1 m spacing, and selected pulse range |
+| [autofocus_imperial.yaml](config/autofocus_imperial.yaml) | Agricultural scene where correction is expected to be refused | Different CPHD, derived image grid, 0.5 m spacing, and selected pulse range |
 
-Run copies with `--run-args=/workspace/holoscan-radar/<your-config>.yaml` when
-using the host CLI. Keep the 0.25 m product spacing for peak comparisons; the
-[Kourou measurements](#kourou-the-pga-vehicle) explain the sampling requirement.
+These presets use the same processing graph, with settings matched to each
+collection. They do not inject errors or save images by default. The alternate
+scenes support broader algorithm testing, including the sweep tool below;
+use the three comparison presets for the blurred/corrected/reference walkthrough.
 
 `tools/sar_autofocus/pga_screen.py` helps select isolated, persistent targets in
 new data; it is a heuristic, not a recovery test. `sweep.py` repeats injected-error
@@ -87,7 +186,11 @@ experiments across settings and scenes. Neither is used by a normal app run.
 The sweep exits nonzero for failed or incomplete cases; numerical verdicts
 remain characterization results, with explicit operator provenance for refusals.
 
-## Graph
+## Application graph
+
+The following sections describe implementation details and development
+measurements. The walkthrough above contains the steps needed to run and view
+the three-image comparison.
 
 ```mermaid
 flowchart LR
@@ -119,13 +222,17 @@ flowchart LR
 
 Solid paths are the required flows. `PerturbPositionsOp`, `OraclePhaseOp` and `AutofocusScoreOp` appear only when the `position_error` block is present, and `OraclePhaseOp` replaces the whole estimation branch rather than adding to it. `AuxPointsSourceOp` appears only for a polar aux lattice, and sits *in series* on the replay edge rather than beside it — profiles in, profiles and lattice out — so both carry the same capture time. `EcefToSceneEnuOp` appears only when `enu_origin_ecef` is set; without it the reader's positions and reference go straight to `PerturbPositionsOp` or the manager.
 
-`ApertureManagerOp` runs with `emit_mode: reform`: the retained aperture is replayed once as a whole, which is what makes a corrected second pass possible at all. Nothing is staged behind that emission, so the manager emits `kResetThenEmit` and the product image is terminal even though no reset follows it. `weight` stays unconnected unless `aperture_window` is set — retention here is replay, not eviction. The aperture is never staged through `ApertureManagerOp.sample_geometry`; that port belongs to the product lattice and Figure 2 does not wire it.
+`ApertureManagerOp` runs with `emit_mode: reform`: the retained aperture is replayed once as a whole, which is what makes a corrected second pass possible at all. Nothing is staged behind that emission, so the manager emits `kResetThenEmit` and the product image is terminal even though no reset follows it. `weight` stays unconnected unless `aperture_window` is set — retention here is replay, not eviction. The aperture is never staged through `ApertureManagerOp.sample_geometry`; that port belongs to the final image grid and is not connected in this application.
 
-`AutofocusOp.image_out` is emitted every tick whether or not anyone wants it, so it needs a consumer; Figure 2 wants the pulse-ordered `phase_correction` instead.
+`AutofocusOp.image_out` is emitted every tick whether or not anyone wants it, so `NullSinkOp` consumes it. This application uses the pulse-ordered
+`phase_correction` output to correct the retained pulses before forming the final image.
 
-## The auxiliary lattice
+## Auxiliary image grid
 
-The estimation grid is application geometry (`aux_lattice` in YAML, or derived from CPHD `TxPos` / `SRPPos`), and it comes in two shapes.
+The auxiliary lattice is the image grid used for phase estimation, separate
+from the final ground grid. It is configured by `aux_lattice` in YAML or derived
+from the CPHD transmitter positions (`TxPos`) and scene reference positions
+(`SRPPos`). Two grid types are supported.
 
 `aux_lattice.mode: polar` is the **range-bearing** grid, and it is the one PGA's Fourier relationship actually holds on: rows of constant slant range from the mid-aperture phase centre, columns uniform in bearing within the slant plane. A scatterer's phase history over the aperture is `-(4*pi/lambda) * R * cos(theta_j - theta)`, so over the small angle a spotlight dwell subtends, image bearing is the conjugate of aperture angle — of slow time, on a uniformly sampled pass.
 
@@ -133,10 +240,14 @@ The bearing step is `rho_az / R`, whose `num_u`-column span is exactly the unali
 
 **Why the clamp.** The product's slant-range span is the product's requirement, not the estimator's: PGA keeps `min_scatterers` range bins (16 by default) out of however many pass the peak-to-mean gate, so rows beyond the point where good candidates are plentiful buy only memory — and the aux is the second-largest allocation in this graph. A natively-sized Kourou product (7150 square) asks for 8652 rows and does not fit in 96 GiB; clamped to 4096 it forms and autofocuses, recovering a 1.090x sharpness gain against the 1.096x the unclamped 2048-square run gets.
 
-The clamp is deliberately loose because row count *is* the candidate pool the scatterer selection draws from, and cutting it too far leaves a worse best sixteen: measured on Kourou, 4096 and 2478 rows both recover the full gain, while 512 and 1024 produce an estimate bad enough that iteration 0 regresses sharpness and the loop aborts. That failure is silent — the app still emits an image and exits zero, and only the sharpness report's `1.000x` gives it away — so the clamp warns whenever it fires. An explicit `aux_lattice.num_v` is honoured as given and never clamped.
+The clamp is deliberately loose because row count *is* the candidate pool the scatterer selection draws from, and cutting it too far leaves a worse best sixteen: measured on Kourou, 4096 and 2478 rows both recover the full gain, while 512 and 1024 produce an estimate bad enough that iteration 0 regresses sharpness and the loop aborts. The app still emits an image and exits zero when correction is refused; check
+the `termination` report and accepted-iteration count. The row clamp also logs
+a warning whenever it applies. An explicit `aux_lattice.num_v` is honoured as given and never clamped.
 
 The clamp is a guard against the aux tracking product size, not a memory strategy: it is worth about 5 GiB, and the graph's ceiling is set by the retained aperture, which reserves seventeen copies of the pulse block and accounts for roughly 71% of the footprint. Products past Kourou's native size still exceed 96 GiB.
-Any set of constant-range rows is a valid polar grid, so the anchor is free, and the SRP is the wrong end of it: a product centred away from the IARP would need `num_v` to span the whole IARP-to-scene distance before covering the scene at all — on Kourou that is 638 m at 0.273 m bins, 2335 rows of pure overhead. The derivation uses the product's four corners to pick the row count; it does not report where they land, and the only warning it raises is the row clamp above.
+The polar grid is centred on the final image rather than the CPHD scene
+reference point (SRP). Centring on the reference point instead would require
+`num_v` to span the reference-to-image distance before covering the scene — on Kourou that is 638 m at 0.273 m bins, 2335 rows of pure overhead. The derivation uses the product's four corners to pick the row count; it does not report where they land, and the only warning it raises is the row clamp above.
 
 A polar grid is not a `SampleGeometry` — two unit axes and a uniform metre spacing cannot express it — so the app-owned `AuxPointsSourceOp` supplies it on `BackprojectionOp.sample_points` in points mode, with no contract change. `BackprojectionOp` joins that port on capture time with `Exact{}`, so the source sits in series on the replay edge — profiles in, profiles and lattice out — giving both the same capture time. It emits the lattice first on purpose: the profiles are the consumer's trigger, and because `sample_points` is a `[live]` override under `on_missing SafeDefault{}` the activation fires as soon as the trigger set completes rather than waiting for the lattice. `Exact{}` decides which sample matches, not whether the consumer blocks.
 
@@ -144,17 +255,20 @@ A polar grid is not a `SampleGeometry` — two unit axes and a uniform metre spa
 
 When YAML omits `autofocus.window_fraction`, the application sizes the first PGA window to about 64 azimuth samples: half of a Nyquist-long `u` axis is mostly clutter.
 
-Figure 3, in-place PGA on a radar-geometry product, is a different graph and is not this binary.
-
 ## Validating the estimate
 
-"The image got sharper" is not a measurement. The `position_error` block gives autofocus a known answer to find:
+The `position_error` block injects a known error so recovery can be measured
+against the injected phase, as well as inspected visually:
 
-- `PerturbPositionsOp` shifts the aperture along the look axis by a polynomial in `s` over `[-1, 1]` **and** multiplies the equivalent `4*pi*f*delta/c` onto the range profiles. The profile multiply is the part that matters: an APC shift along look is common-mode in SRP-relative `dR` and would not smear on its own, so the phase is what remains after motion compensation and what PGA actually sees.
-- `OraclePhaseOp` hands `PhaseCorrectionOp` the exact recorded leftover and skips the estimator entirely. If the product comes back focused, the sign convention, the pulse indexing and the `reform` replay are all correct, and any shortfall in a full run belongs to `AutofocusOp`.
-- `AutofocusScoreOp` compares the resampled, pulse-indexed estimate to the recorded truth after removing the affine term PGA cannot observe, and logs the residual in radians and in millimetres of line of sight. It reports which sign fits better rather than assuming one, because which way round the estimate comes out depends on the image's conjugate convention. Exceeding `score_warn_rms_rad` is a warning, not a failure, and with `dump: true` it also writes `af_expected_phase.npy` and `af_estimated_phase.npy` beside the product.
+- `PerturbPositionsOp` shifts the aperture along the look axis by a polynomial in `s` over `[-1, 1]` **and** multiplies the equivalent `4*pi*f*delta/c` onto the range profiles. The profile multiply is the part that matters: an antenna phase-centre shift along the line of sight is common-mode in
+  scene-reference-relative range differences (`dR`) and would not smear on its own, so the phase is what remains after motion compensation and what PGA actually sees.
+- `OraclePhaseOp` hands `PhaseCorrectionOp` the exact injected phase error and skips the estimator entirely. If the product comes back focused, the sign convention, the pulse indexing and the `reform` replay are all correct, and any shortfall in a full run belongs to `AutofocusOp`.
+- `AutofocusScoreOp` compares the resampled, pulse-indexed estimate to the recorded truth after removing the constant offset and linear trend PGA cannot determine, and logs the residual in radians and in millimetres of line of sight. It reports which sign fits better rather than assuming one, because which way round the estimate comes out depends on the image's conjugate convention. Exceeding `score_warn_rms_rad` is a warning, not a failure, and with `dump: true` it also writes `af_expected_phase.npy` and `af_estimated_phase.npy` beside the product.
 
-The recorded lie travels from the liar to the scorer as a shared host buffer rather than a Holoscan edge: the liar runs on ingest ticks and the estimate exists only on the single reform tick, so there is no tick on which the two could be joined.
+The injected-error record travels from `PerturbPositionsOp` to
+`AutofocusScoreOp` through a shared host buffer. Injection runs as pulse blocks
+arrive, while the estimate is produced once after replaying the retained
+aperture, so these records cannot be joined on a single capture timestamp.
 
 ## Build and offline fixture
 
@@ -171,35 +285,42 @@ products in single and double sample precision: clean input, a known injected
 error with identity correction, and oracle recovery. They require finite pixels,
 correct shape/dtype, a material effect from injection, and restoration of the
 clean complex product within 0.1% relative error. The autofocus fixture holds
-its SRP fixed and centres the product on the ground near it, inside the
+its scene reference point fixed and centres the product on the ground near it, inside the
 compressed range support; a platform-centred lattice would pass the old log
 checks while producing only zero pixels. They test the application,
 correction, and dump path; they do not claim PGA recovery on five pulses.
 
-Four fixture smokes: the clean Figure 2 chain, the same chain with the lie injected and scored, the oracle apply path, and the polar auxiliary. They check graph wiring, the injection and the scoring plumbing — not recovery. A five-pulse aperture over a handful of point targets is far too small a scene for PGA to estimate anything from, and the generated fixture is already focused; the estimator passes the image straight through because no range bin clears the strong-scatterer gate. Recovery is measured on real data.
+Four small generated-data smoke tests cover the application with no injected
+error, with injected error and scoring, with exact known-error (oracle)
+correction, and with the polar auxiliary grid. They check graph wiring, the injection and the scoring plumbing — not recovery. A five-pulse aperture over a handful of point targets is far too small a scene for PGA to estimate anything from, and the generated fixture is already focused; the estimator passes the image straight through because no range bin clears the strong-scatterer gate. Recovery is measured on real data.
 
-## Kourou (the PGA vehicle)
+## Kourou dataset and historical measurements
 
-The development collect is an Umbra SNAPSHOT over the Guiana Space Centre (`2023-06-24-13-22-56_UMBRA-05`, 5.23 N 52.77 W, 23375 by 23999, 4.19 GiB), configured in [`config/autofocus.yaml`](config/autofocus.yaml). Download it using the [quick-start above](#download-and-run). It was chosen by screening for PGA's scene preconditions rather than for brightness: `python3 tools/sar_autofocus/pga_screen.py data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd` finds six persistent candidates, the brightest isolated 135 times over its annulus and holding 0.68 of its mean in its worst of eight equal dwell blocks. Two of the scene's brightest returns collapse to 0.07 and 0.09 across the dwell, which is the glint case the screen exists to reject.
+The development dataset is an Umbra SNAPSHOT over the Guiana Space Centre (`2023-06-24-13-22-56_UMBRA-05`, 5.23 N 52.77 W, 23375 by 23999, 4.19 GiB), configured in [`config/autofocus.yaml`](config/autofocus.yaml). Download it using the [download step above](#1-set-up-and-download-kourou). It was chosen by screening for PGA's scene preconditions rather than for brightness: `python3 tools/sar_autofocus/pga_screen.py data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd` finds six persistent candidates, the brightest isolated 135 times over its annulus and holding 0.68 of its mean in its worst of eight equal dwell blocks. Two of the scene's brightest returns collapse to 0.07 and 0.09 across the dwell, which is the glint case the screen exists to reject.
 
-The product is a 2048-square **0.25 m** east-north patch on that scatterer, and the fine spacing is load-bearing rather than cosmetic. The target is diffraction-limited to one or two samples at 0.25 m, so on a 1 m lattice it falls between pixels: the same peak reads 43468 at 1 m and 160525 at 0.25 m (both over the full aperture), and adding a quadratic error *raises* the 1 m number by broadening the PSF onto a pixel. **Do not score focus at 1 m here.** The aux is the polar lattice with rows auto-sized about the product centre, 2460 by 23375 at the full aperture (2478 by 8000 at the `pulse_range` the measurements below use).
+The final image is a 2048-by-2048 east-north patch with **0.25 m** pixel
+spacing, centred on the selected scatterer. This spacing is needed to sample
+the narrow point-target response accurately. The target is diffraction-limited to one or two samples at 0.25 m, so on a 1 m lattice it falls between pixels: the same peak reads 43468 at 1 m and 160525 at 0.25 m (both over the full aperture), and adding a quadratic error *raises* the 1 m number by broadening the point-spread function (PSF) onto a pixel. **Do not score focus at 1 m here.** The aux is the polar lattice with rows auto-sized about the product centre, 2460 by 23375 at the full aperture (2478 by 8000 at the `pulse_range` the measurements below use).
 
 On a persistent target the 2 cm quadratic needs no scaling: it drops the peak to 39.2% of focused.
 
-**Where this stands, re-measured on HSDK 5 over an 8000-pulse `pulse_range`**, scoring the product peak against the clean image and the resampled estimate against the injected truth. (The full 23375-pulse aperture needed 128.4 GiB against 96 GiB of GPU until samples went to single precision on 2026-10-29; it now fits at 66.9 GiB and is measured in the sweep below.)
+The following development measurements used an **8000-pulse** `pulse_range`,
+scoring the image peak against the clean image and the phase estimate against
+the injected truth. They predate the current corrected preset; use step 3 for
+the expected result of the walkthrough. (The full 23375-pulse aperture needed 128.4 GiB against 96 GiB of GPU until samples went to single precision on 2026-10-29; it now fits at 66.9 GiB and is measured in the sweep below.)
 
 | config | product peak | ratio | sharpness | affine-removed phase RMS |
 | --- | --- | --- | --- | --- |
-| clean, no lie | 65493.0 | 1.000 | 6.98e19 | n/a |
-| 2 cm lie, uncorrected | 25686.3 | 0.392 | 1.12e19 | 2.400 rad |
-| 2 cm lie, PGA estimate applied | 66603.6 | 1.017 | 7.18e19 | 0.146 rad |
-| 2 cm lie, oracle phase applied | 65492.6 | 1.000 | 6.98e19 | 0 by construction |
+| clean, no injected error | 65493.0 | 1.000 | 6.98e19 | n/a |
+| 2 cm injected error, uncorrected | 25686.3 | 0.392 | 1.12e19 | 2.400 rad |
+| 2 cm injected error, PGA estimate applied | 66603.6 | 1.017 | 7.18e19 | 0.146 rad |
+| 2 cm injected error, oracle phase applied | 65492.6 | 1.000 | 6.98e19 | 0 by construction |
 
-Measured against the acceptance target in [`docs/planning/SAR/TESTING.md`](../../../docs/planning/SAR/TESTING.md) (residual <= 0.39 rad RMS, hard floor 0.785 rad, product peak >= 0.9 of error-free), the estimator **passes**: 0.146 rad and 1.017. The corrected peak sits slightly above the error-free one because the clean collect is not perfectly focused either — PGA's estimate on it has a 0.96 rad peak-to-peak swing — so correcting the lied collect also removes residual error the clean reference still carries.
+Measured against the acceptance target in [`docs/planning/SAR/TESTING.md`](../../../docs/planning/SAR/TESTING.md) (residual <= 0.39 rad RMS, hard floor 0.785 rad, product peak >= 0.9 of error-free), the estimator **passes**: 0.146 rad and 1.017. The corrected peak sits slightly above the error-free one because the clean collect is not perfectly focused either — PGA's estimate on it has a 0.96 rad peak-to-peak swing — so correcting the error-injected collect also removes residual error the clean reference still carries.
 
 ### Accuracy over aperture length
 
-The table above is one aperture length. Sweeping `pulse_range` and `max_aperture_pulses` together, with everything else at the preset's settings, the estimator degrades with length and **not monotonically**:
+The table above is one aperture length. Sweeping `pulse_range` and `max_aperture_pulses` together, with everything else at the historical settings described here, the estimator degrades with length and **not monotonically**:
 
 | pulses | residual | swing | sharpness | iterations kept |
 | --- | --- | --- | --- | --- |
@@ -209,7 +330,7 @@ The table above is one aperture length. Sweeping `pulse_range` and `max_aperture
 | 20000 | **0.428 rad** | — | 2.73× | 1 of 4 |
 | 23375 (full) | 0.332 rad | 1.25 | 2.84× | 1 of 4 |
 
-**The table above was measured at the old `num_iterations: 4`.** The default became 8 on 2026-10-29 (see the operator [README](../../../operators/sar/autofocus_op/README.md)); on this configuration that moves the 8000-pulse residual from 0.149 to 0.161 rad and sharpness from 8.66× to 8.78×, and it is what makes a 107 rad error recoverable at all.
+**The table above was measured at the old** `num_iterations: 4`**.** The default became 8 on 2026-10-29 (see the operator [README](../../../operators/sar/autofocus_op/README.md)); on this configuration that moves the 8000-pulse residual from 0.149 to 0.161 rad and sharpness from 8.66× to 8.78×, and it is what makes a 107 rad error recoverable at all.
 
 **Most of that spread is not the estimator.** The score is taken against the injected truth alone, while PGA also estimates whatever real error the collect carries — correctly — and is charged for it. Re-running each length with `polynomial: [0, 0, 0.0]` measures the collect's own error by itself, and subtracting it separates the two:
 
@@ -237,7 +358,9 @@ The shape that was previously described as a scale error of about two between th
 
 `PhaseResampleOp` changed with it. Its oversampled branch used to take the low-frequency bins from each end of the vector, which is the correct extraction for a bin-ordered estimate; on a pulse-ordered one it takes the central `num_pulses` samples instead, which is where the real pulses sit in an azimuth extent wider than the aperture. Both branches are now index-consistent and the identity branch is unchanged.
 
-`SarAutofocusGraph.Figure2OversampledDiagnostics` pins the result by applying ten alternative maps of the same estimate by hand and requiring the shipped one to win.
+The regression test `SarAutofocusGraph.Figure2OversampledDiagnostics` checks
+pulse ordering and phase resampling by comparing ten alternative mappings of
+the same estimate and requiring the implemented mapping to recover best.
 
 **The core estimator is exact.** On a synthetic IFFT-formed image at the full azimuth window it recovers a pure quadratic to 7.7e-05 rad RMS at 2.5 rad of error and 0.002 rad at 5 rad — four orders of magnitude inside the target, pinned by `AutofocusOp.PureQuadraticIsRecoveredExactlyAtFullWindow`. The 0.2 rad that the older `RecoversQuadraticUpToAffine` reports is not estimator error at all: that test injects a linear ramp and an offset alongside the quadratic, and the integer `circshift` cannot remove the sub-bin remainder.
 
@@ -252,19 +375,22 @@ The shape that was previously described as a scale error of about two between th
 
 on a 5 rad error, which brings every window ratio inside the 0.39 rad acceptance target. What a narrow window still costs is *swing*: the estimate keeps its shape and under-reports the amplitude, down to 86% at 1:8. That is the honest information cost of estimating from fewer image samples, and it is now the only window effect. `AutofocusOp.NarrowWindowCostsSwingAndStaysInsideTheTarget` pins both columns and doubles as the regression guard on the transform length.
 
-The earlier reading of this fault — that the aperture *edges* were lost while the dwell centre held — was an artifact of the index-order defect above, since the edge and centre labels were read off a vector that was half a dwell out of position. Re-measured in pulse order it is the opposite: the dwell centre degrades first, to a ratio of 0.86 at 1:8, while the edges hold.
+The earlier diagnosis of the transform-length defect — that the aperture *edges* were lost while the dwell centre held — was an artifact of the index-order defect above, since the edge and centre labels were read off a vector that was half a dwell out of position. Re-measured in pulse order it is the opposite: the dwell centre degrades first, to a ratio of 0.86 at 1:8, while the edges hold.
 
-**On Kourou this changes almost nothing** — 0.146 to 0.149 rad, and the product peak 1.017 to 1.011 — and that is the expected result rather than a disappointment. The fault only bites when the per-sample phase step is large, and a 5.4 rad error spread over 8000 pulses has a step of order a milliradian even decimated 23-fold. The prior diagnosis said as much when it ruled fault 1 out as the explanation for Kourou. The table above is where it was ever observable.
+**On Kourou this changes almost nothing** — 0.146 to 0.149 rad, and the product peak 1.017 to 1.011 — and that is the expected result rather than a disappointment. The fault only bites when the per-sample phase step is large, and a 5.4 rad error spread over 8000 pulses has a step of order a milliradian even decimated 23-fold. The small phase step explains why this transform-length defect had little effect on Kourou. The table above is where it was ever observable.
 
 ## Scene preconditions are a real constraint
 
-Two earlier collects failed on the scene rather than on the estimator, and both are worth knowing about before picking a new target.
+Scene selection affects whether PGA can estimate a useful correction. The Dover
+example below illustrates a scatterer that does not persist through the aperture;
+the later screening results compare four other datasets.
 
 PGA assumes each selected range bin is dominated by one strong scatterer that persists across the *full* synthetic aperture (Wahl, Eichel, Ghiglia and Jakowatz, *IEEE T-AES* 30(3), 1994), and that one phase error is common to the whole scene.
 
 A Strait of Dover collect looked ideal on amplitude — isolated bright returns on dark water — but its brightest scatterer is a glint, not a persistent one: the middle quarter of the dwell carries 72% of the coherent peak and the outer half of the aperture adds 5%. Ships also violate space-invariance, since one swinging in wind and waves gives every scattering point its own error; there is a maritime sub-literature (SV-PGA, Mosaic PGA, IPGRA) whose premise is precisely that classical PGA cannot focus swing ships. The Dover result is not an estimator defect, and a 2 cm quadratic centred on the dwell is flattest exactly where a glint is bright, so it costs such a target about 1% of peak and cannot be used as a stimulus at all.
 
-An urban Atlanta collect was recorded here as failing the isolation half instead. **That verdict is superseded** — see the measured screen below, where Atlanta passes both halves more cleanly than Kourou does.
+The Atlanta dataset passes both the scatterer-isolation and persistence checks
+in the measurements below.
 
 ### Three more scenes, and what screening actually buys
 
@@ -286,10 +412,13 @@ Three further collects now have configs beside the Kourou default — [`autofocu
 | Houston | 585× | 0.85 | 7 |
 | Imperial Valley | no cell cleared 30× | — | 0 |
 
-This **corrects the Atlanta claim above**, which predates the tool being restored: Atlanta does not fail the isolation half. It clears it by a wider margin than Kourou on both halves, and the earlier verdict cannot be reproduced at any setting tried here. Read the two measurements together and the screen is broadly predictive — the three scenes with an isolated, persistent scatterer all autofocus to 0.11–0.22 rad, and the one with none is refused outright — but it does not rank them, since Atlanta screens best and Houston focuses best. Compare isolation across scenes with care: the ratio depends on how concentrated a point target is relative to the lattice, and these collects have different native resolutions, so a common 1.0 m lattice oversamples them differently.
+Atlanta clears both isolation and persistence checks by a wider margin than
+Kourou. Read the screening and recovery measurements together: the screen is
+broadly predictive — the three scenes with an isolated, persistent scatterer all autofocus to 0.11–0.22 rad, and the one with none is refused outright — but it does not rank them, since Atlanta screens best and Houston focuses best. Compare isolation across scenes with care: the ratio depends on how concentrated a point target is relative to the lattice, and these collects have different native resolutions, so a common 1.0 m lattice oversamples them differently.
 
 What screening still buys is a scene you can *check*: a single dominant scatterer lets you verify focus afterwards by looking at one impulse response. It does not buy the lowest residual, because the estimator averages a phase gradient over `min_scatterers` range bins and a city supplies hundreds of usable bins where Kourou supplies a handful.
 
 **Agriculture is the floor, and the guard finds it.** All five shapes hit the sharpness guard at iteration 0 on Imperial Valley and the image comes back untouched — distributed clutter has no dominant scatterer in any range bin, which is the precondition stated at the top of this section, and the operator declines rather than applying a wrong correction. It is worth running as the negative control for exactly that reason: without a scene that *should* fail, a per-scene failure elsewhere cannot be attributed.
 
-One caveat on all four: they are spaceborne X-band collects with good ephemeris, which is the regime [`SAR/OPERATOR_API.md`](../../../docs/planning/SAR/OPERATOR_API.md) says should stay on Figure 1, and the error is injected rather than real. None of this tests an uncompensated airborne platform.
+One caveat on all four: they are spaceborne X-band collects with good ephemeris, for which direct image formation without autofocus is normally sufficient
+(see the [SAR operator contracts](../../../docs/planning/SAR/OPERATOR_API.md)), and the error is injected rather than real. None of this tests an uncompensated airborne platform.

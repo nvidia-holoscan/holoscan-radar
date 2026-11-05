@@ -4,6 +4,30 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-05** — Saved SAR image viewer work on `dpc/sar-autofocus`:
+  added `uv run tools/sar_data/view_image.py` with isolated plotting
+  dependencies, PNG output without a display, optional interactive viewing,
+  and comparisons on a shared intensity scale. The autofocus README documents
+  a numbered three-run comparison: injected/uncorrected, injected/PGA-corrected,
+  and original-data/uncorrected, with separate output directories. Shipped
+  `autofocus_blurred`, `autofocus_corrected`, and `autofocus_reference` presets
+  replace the config-generation step and the single recovery preset. Unexplained
+  figure references and injection nicknames were removed, PGA and scoring terms
+  are defined, and historical measurements are labelled. Auxiliary
+  image-dump graph changes were removed to keep the application simple. The
+  documented Kourou comparison produces two zero-correction baselines (with
+  and without injected error) and a seven-iteration recovery at 0.1813 rad residual; its shared-scale PNG renders
+  successfully. All eight focused autofocus/save CTests pass after simplifying.
+  Save logs for images inside a checkout print a shell-quoted host command, and SAR guides document it.
+  Eight offline viewer tests and 28 focused SAR/dump CTests pass. The saved
+  Kourou product renders successfully, and executing an app-emitted command on
+  the host works with spaces and apostrophes in the filename. No operator
+  contract changes. SAR startup now explicitly reports the output directory
+  and filename template, or states that images will not be saved and how to
+  enable saving. Each successful image write reports its repository-relative path (absolute outside the checkout),
+  the host viewer command, PNG placement, and the optional `--show` flag;
+  `output.max_files: 0` is correctly reported as saving disabled.
+
 - **2026-11-05** — Autofocus review follow-up on `dpc/sar-autofocus`:
   sweep correctness, accepted-iteration reporting, runnable recovery presets
   and output guidance, and an application-level complex-pixel comparison are
@@ -1166,6 +1190,7 @@ still declare SDK 4.3.0.
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| SAR autofocus saved-image workflow | Codex | `dpc/sar-autofocus` | **verified locally:** shipped `autofocus_blurred`, `autofocus_corrected`, and `autofocus_reference` presets replace config generation and the single recovery preset. Five-step walkthrough runs all three with distinct output directories. All presets ran on Kourou: both baselines apply zero correction, corrected residual is 0.1813 rad, and the three-panel PNG renders. Pinned lint passes. |
 | SAR autofocus data download | Codex | `dpc/sar-autofocus` | Verified offline: `pull_cphd.py --app autofocus` selects the default Kourou collect and destination; `--app all` includes it and preserves preset subdirectories with shared-collection deduplication. Both guides use the same uv-based quick-start and document alternate-scene preparation. CLI manifests match all eight shipped collection paths with default and custom roots; all eight URLs return HTTP 200. Corrected the Kourou catalog prefix and verified its dimensions with a bounded range read. Four offline regressions cover destinations and HTTP failure reporting; no full collections downloaded. Pinned lint passes. |
 | PR #70 test configuration | Codex | `tbirdsong/5x/package-operator-graph` | **verified locally:** replaced unconditional package test suppression with a package-only default; explicit and cached test settings take precedence. All eight HSDK 5 GA configure checks pass, covering standalone defaults, explicit ON/OFF, package defaults, cached preferences, and package-to-test reconfiguration. Merged `main` at `9cebac3c`, retained both status histories, and passed three merged SDK configuration checks plus full pinned lint. No DSP contracts changed. |
 | FMCW CI application and GUI coverage | Codex | `deustice/gui-updates` | **verified locally:** eight C++ smoke presets, sixteen X11 workflow/language cases, and two native SISO window cases are registered with explicit backends/private caches. The probe handles transient native discovery windows. All 26 cases pass in three final runs; native cases pass 20 extra executions; pinned all-file lint passes. GB10 serial test-stage median rises from 3.78 s (4 cases) to 32.54 s (26 cases), about 28.77 s added. No compiled targets/dependencies added; CI host timing may differ. Details: `tests/gui/README.md`. |

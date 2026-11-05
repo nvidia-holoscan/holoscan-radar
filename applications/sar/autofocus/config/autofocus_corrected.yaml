@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Known-answer recovery on the same Kourou collect as autofocus.yaml.
-# Retain 8000 pulses, inject a 2 cm look-axis quadratic, and score PGA.
+# Inject a 2 cm look-axis quadratic on 8000 Kourou pulses and recover with PGA.
 # The 1000-sample first window is 0.125 of the polar azimuth extent.
-# Save complex product and phase vectors beside the executable when run
-# through the host CLI. See ../README.md for clean/oracle comparisons.
+# Save outputs in a scenario-specific directory beside the executable.
+# See ../README.md for the three-image comparison.
 
 cphd:
   path: sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd
@@ -64,4 +63,4 @@ position_error:
   score_warn_rms_rad: 0.39
 dump: true
 output:
-  path: autofocus_recovery_{index}.npy
+  path: outputs/corrected/autofocus_corrected_{index}.npy
