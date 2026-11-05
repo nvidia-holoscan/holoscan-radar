@@ -21,6 +21,8 @@ target_link_libraries(autofocus PRIVATE
     holoscan::params_io
     yaml-cpp::yaml-cpp)
 configure_file(../config/autofocus.yaml ${CMAKE_CURRENT_BINARY_DIR}/autofocus.yaml COPYONLY)
+configure_file(../config/autofocus_recovery.yaml
+    ${CMAKE_CURRENT_BINARY_DIR}/autofocus_recovery.yaml COPYONLY)
 # The scene-axis presets tools/sar_autofocus/sweep.py sweeps across. Copied so
 # they can be run by hand the same way as the Kourou default.
 foreach(scene atlanta houston imperial)

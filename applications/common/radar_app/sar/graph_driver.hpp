@@ -517,6 +517,16 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
       HOLOSCAN_LOG_INFO("SAR: partition '{}' lane={}",
                         part.authored_name.value_or(std::string("(auto)")), part.execution_lane);
     }
+    HOLOSCAN_LOG_INFO("SAR: display={}; image saving={}",
+                      has_visualization ? (cfg.headless ? "headless" : "window") : "off",
+                      cfg.dump ? "on" : "off");
+    if (cfg.dump) {
+      HOLOSCAN_LOG_INFO("SAR: output template {} (TensorDumpOp reports each saved filename)",
+                        std::filesystem::absolute(cfg.dump_path).string());
+    } else if (!has_visualization) {
+      HOLOSCAN_LOG_INFO(
+          "SAR: no display or saved image requested; set visualize: true or dump: true");
+    }
     auto session = holoscan::run_async(plan, managed_signals);
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
     if (has_visualization && !cfg.headless) {

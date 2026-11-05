@@ -13,7 +13,14 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   offline report regressions pass. The report now labels accepted iterations
   and the configured budget separately, including refusal paths; the app smoke
   requires the new wording. All four autofocus application smokes pass in the
-  SDK container after rebuilding the app. No operator contract changes.
+  SDK container after rebuilding the app. A copied `autofocus_recovery.yaml`
+  preset now makes the 8000-pulse, 2 cm experiment runnable without manual
+  YAML assembly; startup reports experiment and output settings. Quick-start
+  documentation distinguishes clean input, injected recovery, GUI, and complex
+  dumps, and the screen's stale Atlanta claim is removed. The recovery preset
+  runs on Kourou at 0.1813 rad residual with 7/8 accepted iterations and writes
+  the complex product and both phase vectors; all four fixture smokes pass.
+  No operator contract changes.
 
 - **2026-11-05** â€” Download publication review follow-up on
   `dpc/sar-autofocus`: the spotlight quick-start stops on failed transfers

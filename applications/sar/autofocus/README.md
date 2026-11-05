@@ -33,6 +33,60 @@ scenes. `--app autofocus` selects Kourou only; it does not download Atlanta,
 Houston, or Imperial Valley. For recovery measurements after downloading, see
 [Kourou](#kourou-the-pga-vehicle) below.
 
+## What to expect and how to test recovery
+
+The default Kourou input is already well focused. The default run forms one
+image and exits; a visible improvement is not expected. PGA may reject a
+correction that lowers sharpness and leave the product uncorrected. That
+refusal is different from recovering an injected error. Startup logs identify
+whether an error is injected, the aperture length, correction method, effective
+display mode, and whether images are being saved.
+
+After downloading Kourou, run the known-answer preset on the host:
+
+```bash
+./holoscan-radar run autofocus --language cpp --run-args=autofocus_recovery.yaml
+```
+
+This preset retains the first 8000 pulses, injects a 2 cm quadratic line-of-sight
+error, uses a polar auxiliary and a 1000-sample first PGA window, and saves the
+complex product. It disables the GUI so it also runs without a display. Judge
+`AutofocusScoreOp`'s affine-removed RMS against the 0.39 rad target; sharpness
+gain and `converged` alone do not establish recovery. The report distinguishes
+accepted iterations from the configured budget.
+
+The host CLI runs beside the executable. The preset writes:
+
+- `build/autofocus/applications/sar/autofocus/cpp/autofocus_recovery_0.npy`
+- `af_expected_phase.npy` and `af_estimated_phase.npy` in the same directory.
+
+These are NumPy arrays, not PNG screenshots: the product retains complex samples
+for magnitude, phase, and focus measurements. Startup reports the absolute output
+template; `TensorDumpOp: wrote ...` confirms the actual file was saved. For a
+custom config, `dump: true` enables saving, `output.path` chooses the filename
+(template token `{index}`), and `visualize: true` independently enables the GUI.
+Without `output.path`, the image is saved beside the input CPHD. Existing output
+filenames are overwritten on subsequent runs.
+
+For comparisons, copy `autofocus_recovery.yaml`, choose a distinct `output.path`
+for each run, and change only:
+
+| Experiment | Change to the recovery preset | Expected evidence |
+| --- | --- | --- |
+| Clean reference | Set `position_error.polynomial: [0, 0, 0]` | No added error; PGA can still estimate the collect's own residual |
+| Estimated recovery | Use the preset unchanged | Estimate versus injected truth and corrected product |
+| Oracle recovery | Add `position_error.oracle: true` | Exact injected phase bypasses PGA and checks the correction path |
+
+Run copies with `--run-args=/workspace/holoscan-radar/<your-config>.yaml` when
+using the host CLI. Keep the 0.25 m product spacing for peak comparisons; the
+[Kourou measurements](#kourou-the-pga-vehicle) explain the sampling requirement.
+
+`tools/sar_autofocus/pga_screen.py` helps select isolated, persistent targets in
+new data; it is a heuristic, not a recovery test. `sweep.py` repeats injected-error
+experiments across settings and scenes. Neither is used by a normal app run.
+The sweep exits nonzero for failed or incomplete cases; numerical verdicts
+remain characterization results, with explicit operator provenance for refusals.
+
 ## Graph
 
 ```mermaid

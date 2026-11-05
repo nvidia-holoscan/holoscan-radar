@@ -46,12 +46,12 @@ square lattice of a given side and spacing.
     python3 tools/sar_autofocus/pga_screen.py \\
         data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd
 
-Note that a scene can fail this screen and still autofocus well --
-Atlanta does. PGA's precondition is sufficient, not necessary: the
-estimator averages a phase gradient over many range bins, and a city
-supplies hundreds of mediocre ones where a screened scene supplies one
-good one. Read a failure as "this scene cannot be *trusted* to
-autofocus", not as "this scene will not".
+This is a diagnostic scene-selection heuristic, not an autofocus gate:
+it does not measure phase-error recovery, establish stationarity, or
+guarantee success. The estimator averages over many range bins, so a
+scene can fail these thresholds and still autofocus well. Atlanta,
+previously described here as failing, passes the current matched-grid
+screen; see the application README for the re-measured results.
 """
 
 from __future__ import annotations

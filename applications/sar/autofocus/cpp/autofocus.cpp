@@ -81,6 +81,10 @@ int main(int argc, char** argv) {
     // 23k pulses the difference is 17.45 GiB per pool.
     const radar::MaxTensorExtents ingest_extents = make_ingest_extents(extents, cfg);
     const auto& pe = extras->position_error;
+    HOLOSCAN_LOG_INFO(
+        "autofocus: {} over {} pulses; correction={}",
+        pe.enabled ? "injected-error validation" : "input-data run (no injected error)",
+        extras->aperture_pulses, pe.oracle ? "oracle" : "PGA");
 
     // Positions reach the manager in the scene frame, exactly as in every
     // sibling SAR app. This app needs the transform more than they do, not
