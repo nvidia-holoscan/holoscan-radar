@@ -13,7 +13,9 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   `autofocus_blurred`, `autofocus_corrected`, and `autofocus_reference` presets
   replace the config-generation step and the single recovery preset. Unexplained
   figure references and injection nicknames were removed, PGA and scoring terms
-  are defined, and historical measurements are labelled. Auxiliary
+  are defined, and historical measurements are labelled. A preset-defaults
+  table and conversion guide explain how to create blurred, corrected, and
+  reference variants for any of the other shipped scenes. Auxiliary
   image-dump graph changes were removed to keep the application simple. The
   documented Kourou comparison produces two zero-correction baselines (with
   and without injected error) and a seven-iteration recovery at 0.1813 rad residual; its shared-scale PNG renders

@@ -176,9 +176,82 @@ aperture, and final image grid. The other presets serve different purposes:
 | [autofocus_imperial.yaml](config/autofocus_imperial.yaml) | Agricultural scene where correction is expected to be refused | Different CPHD, derived image grid, 0.5 m spacing, and selected pulse range |
 
 These presets use the same processing graph, with settings matched to each
-collection. They do not inject errors or save images by default. The alternate
-scenes support broader algorithm testing, including the sweep tool below;
-use the three comparison presets for the blurred/corrected/reference walkthrough.
+collection. Their shipped behavior is:
+
+| Preset | Added error | PGA correction | Save images |
+| --- | --- | --- | --- |
+| `autofocus.yaml` | None | Enabled | Off |
+| `autofocus_atlanta.yaml` | None | Enabled | Off |
+| `autofocus_houston.yaml` | None | Enabled | Off |
+| `autofocus_imperial.yaml` | None | Enabled; refusal expected | Off |
+| `autofocus_blurred.yaml` | 2 cm quadratic | Zero correction forced | On |
+| `autofocus_corrected.yaml` | 2 cm quadratic | Enabled | On |
+| `autofocus_reference.yaml` | None | Zero correction forced | On |
+
+"Enabled" means PGA attempts to estimate a correction; it may refuse an
+estimate rather than apply one. The alternate scenes support broader algorithm
+testing, including the sweep tool below.
+
+### Make comparison variants for another scene
+
+For any scene preset, use the following edits to create its `_blurred`,
+`_corrected`, and `_reference` variants. Renaming a YAML file alone does not
+change its behavior.
+
+1. Copy the scene preset three times, for example to
+   `autofocus_atlanta_blurred.yaml`, `autofocus_atlanta_corrected.yaml`, and
+   `autofocus_atlanta_reference.yaml` in the same `config/` directory.
+   Keep the CPHD, pulse range, aperture size, image grid, and PGA window the same
+   across all three copies so their final images can be compared directly.
+2. Edit the existing YAML settings according to this table:
+
+   | Variant | `position_error` | `autofocus.min_scatterers` |
+   | --- | --- | --- |
+   | `_blurred` | Use the injection block below | `1000000` to force zero correction |
+   | `_corrected` | Use the same injection block | `16` to enable normal PGA estimation |
+   | `_reference` | Remove the entire block | `1000000` to force zero correction |
+
+   Replace any existing `position_error` block in the blurred and corrected
+   copies with this one; do not append a duplicate YAML key:
+
+   ```yaml
+   position_error:
+     axis: look
+     polynomial: [0, 0, 0.02]
+     oracle: false
+     score_warn_rms_rad: 0.39
+   ```
+
+   The high scatterer requirement must exceed the number of range rows in the
+   auxiliary image. One million exceeds the row count in all shipped presets.
+   Both uncorrected variants should report `refused_scatterers` and zero
+   accepted iterations. The 2 cm error is a starting experiment; recovery also
+   depends on the scene, aperture, and PGA window.
+3. Enable saving in every copy and give each a separate output directory.
+   For example, in `autofocus_atlanta_corrected.yaml`:
+
+   ```yaml
+   dump: true
+   output:
+     path: outputs/atlanta_corrected/autofocus_atlanta_corrected_{index}.npy
+     max_files: 1
+   ```
+
+   Use `atlanta_blurred` and `atlanta_reference` in the other two output paths.
+   Separate directories also preserve each run's phase diagnostics.
+
+Run a custom config by its repository path inside the container. Newly created
+config files are not automatically copied beside the executable:
+
+```bash
+./holoscan-radar run autofocus --language cpp --run-args=/workspace/holoscan-radar/applications/sar/autofocus/config/autofocus_atlanta_corrected.yaml
+```
+
+Run the other two copies the same way, then pass their saved `.npy` files to
+`view_image.py --compare`, as in step 5. Outputs are under
+`build/autofocus/applications/sar/autofocus/cpp/outputs/` on the host.
+Download the selected scene's CPHD first; the Kourou download in step 1 does
+not supply the other scenes.
 
 `tools/sar_autofocus/pga_screen.py` helps select isolated, persistent targets in
 new data; it is a heuristic, not a recovery test. `sweep.py` repeats injected-error
