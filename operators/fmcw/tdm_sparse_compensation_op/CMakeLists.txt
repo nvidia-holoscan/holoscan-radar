@@ -23,11 +23,7 @@ set_property(TARGET tdm_sparse_compensation_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS tdm_sparse_compensation_op
-    EXPORT holoscan_tdm_sparse_compensation_op_targets)
-
-install(EXPORT holoscan_tdm_sparse_compensation_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar)
+    EXPORT holoscan_radar_targets)
 
 include(GNUInstallDirs)
 install(FILES tdm_sparse_compensation_op.hpp

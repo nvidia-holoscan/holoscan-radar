@@ -3,6 +3,10 @@
 
 add_subdirectory(cpp)
 
+if(HOLOSCAN_RADAR_TEST_PACKAGING)
+    add_subdirectory(packaging)
+endif()
+
 # The provider suite checks Python bindings and Graph execution. Numerical
 # Monte Carlo CFAR coverage remains in the C++ statistical CTest tier; the
 # removed Python statistical suite is not part of tests/provider. Registering

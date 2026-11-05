@@ -19,12 +19,7 @@ target_link_libraries(tensor_dump_op
 set_property(TARGET tensor_dump_op PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS tensor_dump_op
-    EXPORT holoscan_tensor_dump_op_targets
-)
-
-install(EXPORT holoscan_tensor_dump_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 include(GNUInstallDirs)

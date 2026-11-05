@@ -10,9 +10,7 @@ target_link_libraries(multi_source_expansion_op PUBLIC
     holoscan::core holoscan::radar_common)
 set_property(TARGET multi_source_expansion_op PROPERTY POSITION_INDEPENDENT_CODE ON)
 install(TARGETS multi_source_expansion_op
-    EXPORT holoscan_multi_source_expansion_op_targets)
-install(EXPORT holoscan_multi_source_expansion_op_targets
-    NAMESPACE holoscan:: DESTINATION lib/cmake/holoscan_radar)
+    EXPORT holoscan_radar_targets)
 include(GNUInstallDirs)
 install(FILES multi_source_expansion_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/detection)

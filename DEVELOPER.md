@@ -314,6 +314,31 @@ What it does, and where to change it:
   for a C++-only run. Narrow to one tier with
   `--ctest-options='-DINCLUDE_LABELS=statistical'`, or widen the exclusion with
   `-DEXCLUDE_LABELS='performance|statistical'`.
+- Enables `HOLOSCAN_RADAR_TEST_PACKAGING` and runs `Packaging_debian` plus
+  `Packaging_wheel` (the latter when Python is enabled). These serial integration
+  checks build fresh artifacts through `holoscan package holoscan-radar`
+  (`DEB,TGZ` and `WHEEL`, using `--local` inside the SDK container), verify selected
+  operator libraries in both native formats, compile/run a C++ consumer against
+  both extracted native packages, and install/import the wheel in a separate
+  Python environment.
+  Configure checks cover the curated package selection, subsets, and
+  explicit/cached test preferences; missing expected libraries fail artifact
+  verification. `HOLOSCAN_RADAR_PKG_OPERATORS` entries are operator subdirectory
+  selection keys, not CMake target names. By the existing library naming convention,
+  each selected key produces an installed `lib<key>.*`; the artifact check relies
+  on this convention and allows additional libraries. If an operator changes its
+  output name or produces multiple libraries, update the artifact check to verify
+  the intended outputs. File presence alone does not prove an operator is usable;
+  the separate C++ consumer checks representative headers, exports, and linking.
+  No packages are published or installed system-wide.
+  Artifacts remain under `build-test/tests/packaging/<mode>/run-*/artifacts/`
+  until the next dashboard run. Build parallelism defaults to two; set
+  `CMAKE_BUILD_PARALLEL_LEVEL` to adjust it. To run just these checks, pass
+  `--ctest-options='-DINCLUDE_LABELS=packaging'`. To omit artifact builds, pass
+  `--cmake-options=-DHOLOSCAN_RADAR_TEST_PACKAGING=OFF`. Ordinary direct CMake
+  builds default this additional suite to off. CI-driver and package-metadata
+  fixtures run alongside the artifact tests as `Packaging_ci_helpers`; the lint
+  workflow keeps its existing checks.
 - The selection is **exclude-based on purpose**: an include list silently drops any label
   nobody remembered to add, which is how the `integration` tier went unrun in CI for the
   life of the suite. A new tier now runs the day it is added.
@@ -406,3 +431,23 @@ python3.12 -m pip wheel . --no-deps -w dist
 - [Holoscan SDK documentation](https://docs.nvidia.com/holoscan/sdk-user-guide/introduction/getting-started)
 - [Holoscan Module ecosystem](https://nvidia-holoscan.github.io/)
 - [Holoscan CLI documentation](https://github.com/nvidia-holoscan/holoscan-cli)
+
+## Consuming the installed C++ package
+
+Point `CMAKE_PREFIX_PATH` at the Radar installation and the matching Holoscan SDK:
+
+```cmake
+find_package(holoscan-radar CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE holoscan::fmcw_range_processor_op)
+```
+
+All built public targets share `holoscan_radar_targets.cmake`; individual target
+names are unchanged. Discovery also works with Debian packaging disabled and
+with intentional operator subsets. The package has no feature components.
+Consumers that manually included the old per-target export files must migrate
+to `find_package`; those files are no longer installed. Use a fresh installation
+prefix when upgrading to avoid retaining stale exports. CUDA, MatX, and the SDK
+remain required; installations containing CPHD also resolve tinyxml2 and Threads.
+Debian packages containing CPHD declare `libtinyxml2-dev` as a dependency.
+For TGZ archives, install it yourself; see the
+[archive prerequisites](pkg/holoscan-radar/README.md#consuming-the-installed-c-package).

@@ -5,15 +5,13 @@
 # named by no public header, so a build that leaves OP_cphd_reader_op off
 # never looks for it.
 #
-# Searched without REQUIRED so the failure can name the fix: REQUIRED aborts
-# with "Could NOT find TINYXML2_INCLUDE_DIR", which says nothing about what to
-# install or that the operator can simply be switched off.
-find_path(TINYXML2_INCLUDE_DIR NAMES tinyxml2.h)
-find_library(TINYXML2_LIBRARY NAMES tinyxml2)
-if(NOT TINYXML2_INCLUDE_DIR OR NOT TINYXML2_LIBRARY)
+# Search quietly so a missing config reports the package to install and the
+# option for disabling this operator. Use the imported target so installed
+# static exports resolve tinyxml2 at the consumer instead of storing a build path.
+find_package(tinyxml2 QUIET CONFIG)
+if(NOT TARGET tinyxml2::tinyxml2)
     message(FATAL_ERROR
-        "cphd_reader_op needs tinyxml2 to parse the CPHD XML metadata block. "
-        "Install it (Debian/Ubuntu: apt-get install libtinyxml2-dev), or "
+        "cphd_reader_op needs tinyxml2. Install libtinyxml2-dev, or "
         "configure with -DOP_cphd_reader_op=OFF to build without the reader.")
 endif()
 
@@ -29,7 +27,6 @@ add_library(holoscan::cphd_reader_op ALIAS cphd_reader_op)
 target_include_directories(cphd_reader_op PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/operators>
     $<INSTALL_INTERFACE:include>)
-target_include_directories(cphd_reader_op PRIVATE ${TINYXML2_INCLUDE_DIR})
 
 target_link_libraries(cphd_reader_op
     PUBLIC
@@ -37,18 +34,13 @@ target_link_libraries(cphd_reader_op
         holoscan::radar_common
         holoscan::radar_schemas
     PRIVATE
-        ${TINYXML2_LIBRARY}
+        tinyxml2::tinyxml2
         Threads::Threads)
 
 set_property(TARGET cphd_reader_op PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS cphd_reader_op
-    EXPORT holoscan_cphd_reader_op_targets
-)
-
-install(EXPORT holoscan_cphd_reader_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 include(GNUInstallDirs)
