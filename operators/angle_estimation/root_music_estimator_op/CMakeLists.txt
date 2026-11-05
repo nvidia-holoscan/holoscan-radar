@@ -24,12 +24,7 @@ set_property(TARGET root_music_estimator_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS root_music_estimator_op
-    EXPORT holoscan_root_music_estimator_op_targets
-)
-
-install(EXPORT holoscan_root_music_estimator_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 include(GNUInstallDirs)

@@ -19,10 +19,7 @@ target_link_libraries(ddm_sparse_demultiplex_op
 set_property(TARGET ddm_sparse_demultiplex_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 install(TARGETS ddm_sparse_demultiplex_op
-    EXPORT holoscan_ddm_sparse_demultiplex_op_targets)
-install(EXPORT holoscan_ddm_sparse_demultiplex_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar)
+    EXPORT holoscan_radar_targets)
 include(GNUInstallDirs)
 install(FILES ddm_sparse_demultiplex_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw)

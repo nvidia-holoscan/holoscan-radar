@@ -68,3 +68,20 @@ CI calls this same file with Python's `-I` isolation flag after installing the w
 
 Looking for Python packaging? Review the project [pyproject.toml](../../pyproject.toml)
 for configuration.
+
+## Consuming the installed C++ package
+
+Point `CMAKE_PREFIX_PATH` at the Radar installation and the matching Holoscan SDK:
+
+```cmake
+find_package(holoscan-radar CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE holoscan::fmcw_range_processor_op)
+```
+
+All built public targets share `holoscan_radar_targets.cmake`; individual target
+names are unchanged. Discovery also works with Debian packaging disabled and
+with intentional operator subsets. The package has no feature components.
+Consumers that manually included the old per-target export files must migrate
+to `find_package`; those files are no longer installed. Use a fresh installation
+prefix when upgrading to avoid retaining stale exports. CUDA, MatX, and the SDK
+remain required; installations containing CPHD also resolve tinyxml2 and Threads.

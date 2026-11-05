@@ -19,11 +19,7 @@ set_property(TARGET doppler_notch_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS doppler_notch_op
-    EXPORT holoscan_doppler_notch_op_targets)
-
-install(EXPORT holoscan_doppler_notch_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar)
+    EXPORT holoscan_radar_targets)
 
 include(GNUInstallDirs)
 install(FILES doppler_notch_op.hpp

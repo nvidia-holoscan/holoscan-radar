@@ -44,12 +44,7 @@ target_compile_features(radar_common PUBLIC cxx_std_20)
 set_property(TARGET radar_common PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS radar_common
-    EXPORT holoscan_radar_common_targets
-)
-
-install(EXPORT holoscan_radar_common_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 install(DIRECTORY radar_common
@@ -83,12 +78,7 @@ set_property(TARGET radar_common_mimo_compensation
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS radar_common_mimo_compensation
-    EXPORT holoscan_radar_common_mimo_compensation_targets
-)
-
-install(EXPORT holoscan_radar_common_mimo_compensation_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 # Generated wire schemas and descriptor bridges depend on radar_common.
@@ -116,12 +106,7 @@ target_link_libraries(radar_common_reduce
 set_property(TARGET radar_common_reduce PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS radar_common_reduce
-    EXPORT holoscan_radar_common_reduce_targets
-)
-
-install(EXPORT holoscan_radar_common_reduce_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 # CUDA device steering-weight builder (shared by the angle operators). Keeps
@@ -145,12 +130,7 @@ target_link_libraries(radar_common_steering
 set_property(TARGET radar_common_steering PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS radar_common_steering
-    EXPORT holoscan_radar_common_steering_targets
-)
-
-install(EXPORT holoscan_radar_common_steering_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 # GPU-accelerated point-target simulator (MatX). The device counterpart of the
@@ -176,12 +156,7 @@ target_link_libraries(radar_common_simulator
 set_property(TARGET radar_common_simulator PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS radar_common_simulator
-    EXPORT holoscan_radar_common_simulator_targets
-)
-
-install(EXPORT holoscan_radar_common_simulator_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 # Python bindings for shared descriptors / enums (holoscan.radar.radar_common).
@@ -210,12 +185,7 @@ set_property(TARGET radar_common_spatial_smoothing
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS radar_common_spatial_smoothing
-    EXPORT holoscan_radar_common_spatial_smoothing_targets
-)
-
-install(EXPORT holoscan_radar_common_spatial_smoothing_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 # CUDA source-count (EFT) kernel (shared by the subspace angle estimators:
@@ -242,10 +212,5 @@ set_property(TARGET radar_common_source_count
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS radar_common_source_count
-    EXPORT holoscan_radar_common_source_count_targets
-)
-
-install(EXPORT holoscan_radar_common_source_count_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )

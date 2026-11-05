@@ -48,6 +48,33 @@ class PackagingMetadata(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "missing operator library: typo_op"):
                 packaging.check_operator_libraries(prefix, {"selected_op", "typo_op"})
 
+    def package_tree(self, prefix):
+        directory = prefix / "lib/cmake/holoscan-radar"
+        directory.mkdir(parents=True)
+        (directory / "holoscan-radar-config.cmake").touch()
+        (directory / "holoscan-radar-config-version.cmake").touch()
+        (directory / "holoscan_radar_targets.cmake").write_text("holoscan::selected_op")
+        return directory
+
+    def test_combined_package_requires_version_and_selected_targets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            prefix = Path(temporary)
+            directory = self.package_tree(prefix)
+            packaging.check_cmake_package(prefix, {"selected_op"})
+            with self.assertRaisesRegex(RuntimeError, "Missing exported target"):
+                packaging.check_cmake_package(prefix, {"missing_op"})
+            (directory / "holoscan-radar-config-version.cmake").unlink()
+            with self.assertRaisesRegex(RuntimeError, "Missing Radar version"):
+                packaging.check_cmake_package(prefix, {"selected_op"})
+
+    def test_combined_package_rejects_legacy_exports(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            prefix = Path(temporary)
+            directory = self.package_tree(prefix)
+            (directory / "holoscan_selected_op_targets.cmake").touch()
+            with self.assertRaisesRegex(RuntimeError, "Unexpected Radar exports"):
+                packaging.check_cmake_package(prefix, {"selected_op"})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,12 +21,7 @@ set_property(TARGET beamscan_estimator_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS beamscan_estimator_op
-    EXPORT holoscan_beamscan_estimator_op_targets
-)
-
-install(EXPORT holoscan_beamscan_estimator_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 include(GNUInstallDirs)

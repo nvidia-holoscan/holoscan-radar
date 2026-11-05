@@ -21,12 +21,7 @@ set_property(TARGET mimo_deinterleave_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS mimo_deinterleave_op
-    EXPORT holoscan_mimo_deinterleave_op_targets
-)
-
-install(EXPORT holoscan_mimo_deinterleave_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 include(GNUInstallDirs)
