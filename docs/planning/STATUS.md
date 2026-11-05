@@ -4,6 +4,14 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-05** — Autofocus review follow-up on `dpc/sar-autofocus`:
+  sweep correctness, accepted-iteration reporting, runnable recovery presets
+  and output guidance, and an application-level complex-pixel comparison are
+  being addressed as four separate commits. Sweep execution failures now
+  invalidate evidence and propagate a nonzero campaign exit; explicit
+  termination provenance determines refusals and accepted iterations. Nine
+  offline report regressions pass. No operator contract changes.
+
 - **2026-11-05** — Download publication review follow-up on
   `dpc/sar-autofocus`: the spotlight quick-start stops on failed transfers
   without publishing the partial file or launching the app. HTTPS downloads

@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import copy
 import dataclasses
+import math
 import pathlib
 import re
 import shutil
@@ -54,7 +55,11 @@ PASS_RAD = 0.3927  # pi/8, the acceptance target
 FLOOR_RAD = 0.7854  # pi/4, the hard floor
 
 SCORE_RE = re.compile(r"affine-removed RMS ([-\d.eE+]+) rad .*?baseline ([-\d.eE+]+) rad RMS")
-SHARP_RE = re.compile(r"\(([\d.eE+]+)x over (\d+) iteration")
+SHARP_RE = re.compile(r"\(([\d.eE+]+)x")
+STATUS_RE = re.compile(r"termination (\w+), (\d+) iteration\(s\) accepted")
+REFUSED_RE = re.compile(r"autofocus REFUSED \((refused_\w+)\)")
+REFUSALS = {"refused_sharpness", "refused_scatterers", "refused_max_correction"}
+TERMINATIONS = REFUSALS | {"converged", "budget_exhausted", "stopped_scatterers"}
 
 CONFIG_DIR = pathlib.Path("applications/sar/autofocus/config")
 
@@ -93,25 +98,12 @@ class Result:
     residual_rad: float
     sharpness: float
     iterations: int
+    termination: str
 
     @property
     def refused(self) -> bool:
-        """The sharpness guard kept the identity, so the image is untouched.
-
-        It shows up as a residual equal to the baseline to several digits: the
-        correction applied was a no-op, so what is left is exactly what was
-        injected. Worth separating from a bad estimate, because refusing is the
-        designed response to a scene PGA cannot work on -- the operator
-        declining to act is not the same failure as it acting wrongly, even
-        though both leave the image unfocused.
-
-        Undetectable on a clean collect: with nothing injected the baseline is
-        zero, and so is the residual of a refusal *and* of a perfect estimate.
-        Those rows need the operator's own log, not the score.
-        """
-        return self.baseline_rad > 0.0 and (
-            abs(self.residual_rad - self.baseline_rad) <= 1e-3 * self.baseline_rad
-        )
+        """Refusal is operator provenance, independent of the measured residual."""
+        return self.termination in REFUSALS
 
     @property
     def verdict(self) -> str:
@@ -293,11 +285,20 @@ def run_one(binary: pathlib.Path, cfg: dict, scene: str, label: str) -> Result |
     finally:
         pathlib.Path(path).unlink(missing_ok=True)
     text = proc.stdout + proc.stderr
+    if proc.returncode != 0:
+        tail = "\n".join(text.strip().splitlines()[-6:])
+        print(
+            f"  !! {scene}/{label}: application failed (exit {proc.returncode})\n{tail}",
+            file=sys.stderr,
+        )
+        return None
     # Last match, not first. A configuration that forms more than one image
     # emits a score per tick, and taking the first silently reported tick 0
     # for the whole run with no indication the others existed.
     scores = list(SCORE_RE.finditer(text))
     sharps = list(SHARP_RE.finditer(text))
+    statuses = list(STATUS_RE.finditer(text))
+    refusals = list(REFUSED_RE.finditer(text))
     if len(scores) > 1:
         print(
             f"  .. {scene}/{label}: {len(scores)} scored images, reporting the last",
@@ -312,13 +313,31 @@ def run_one(binary: pathlib.Path, cfg: dict, scene: str, label: str) -> Result |
             file=sys.stderr,
         )
         return None
+    # Older reports emit only a refusal warning on refused images. Accept
+    # that explicit provenance too; never infer refusal from a residual.
+    if statuses and (not refusals or statuses[-1].start() > refusals[-1].start()):
+        termination = statuses[-1].group(1)
+        iterations = int(statuses[-1].group(2))
+    elif refusals:
+        termination = refusals[-1].group(1)
+        iterations = 0
+    else:
+        print(f"  !! {scene}/{label}: no termination provenance", file=sys.stderr)
+        return None
+    residual, baseline = float(score.group(1)), float(score.group(2))
+    if termination not in TERMINATIONS or not all(
+        math.isfinite(value) and value >= 0 for value in (residual, baseline)
+    ):
+        print(f"  !! {scene}/{label}: invalid score or termination", file=sys.stderr)
+        return None
     return Result(
         scene=scene,
         label=label,
-        residual_rad=float(score.group(1)),
-        baseline_rad=float(score.group(2)),
+        residual_rad=residual,
+        baseline_rad=baseline,
         sharpness=float(sharp.group(1)) if sharp else float("nan"),
-        iterations=int(sharp.group(2)) if sharp else 0,
+        iterations=iterations,
+        termination=termination,
     )
 
 
@@ -390,11 +409,13 @@ def main() -> int:
     )
     print("-" * (scene_w + width + 52))
     results: list[Result] = []
+    failed = 0
     for scene, config in scenes.items():
         base = yaml.safe_load(config.read_text())
         for case in cases:
             result = run_one(args.binary, render(base, case), scene, case.label)
             if result is None:
+                failed += 1
                 continue
             results.append(result)
             removed = result.baseline_rad / result.residual_rad if result.residual_rad else 0.0
@@ -408,7 +429,7 @@ def main() -> int:
     refused = [r for r in results if r.refused]
     print(f"\n{len(inside)} of {len(results)} inside the {FLOOR_RAD:.3f} rad floor")
     if refused:
-        print(f"{len(refused)} of {len(results)} refused by the sharpness guard (image untouched)")
+        print(f"{len(refused)} of {len(results)} refused by autofocus guards (image untouched)")
     if len(scenes) > 1:
         # Per scene as well as overall: the whole point of the scene axis is
         # that a shape failing everywhere and a shape failing on one scene are
@@ -424,7 +445,14 @@ def main() -> int:
                     f"  {scene.ljust(scene_w)}  {ok}/{len(rows)} inside the floor{note}, "
                     f"worst {worst.residual_rad:.3f} rad ({worst.label})"
                 )
-    return 0
+    if failed:
+        print(
+            f"{failed} of {len(cases) * len(scenes)} cases failed to produce valid evidence",
+            file=sys.stderr,
+        )
+    # Numerical verdicts characterize the estimator; execution failures make
+    # the campaign incomplete and must propagate to its caller.
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
