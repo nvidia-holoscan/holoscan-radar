@@ -34,7 +34,7 @@ Holoscan Radar follows [Semantic Versioning](https://semver.org/).
 - Release tags are created only on `release/vX.Y` branches, by release managers.
 - Tags are annotated and immutable; a published tag is never moved or reused.
 - A GA tag points to the same commit as the release candidate it promotes.
-- Package versions are derived from the release tag.
+- Package versions are derived from the checked-in version.
 
 ## Release process
 
