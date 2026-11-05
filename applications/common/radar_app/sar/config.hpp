@@ -866,7 +866,13 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
   }
   for (const auto& cphd : cphd_files) {
     if (cphd.empty() || !std::filesystem::is_regular_file(cphd)) {
-      throw std::runtime_error("cphd.path is empty or not a file: " + cphd.string());
+      throw std::runtime_error("cphd.path is empty or not a file: " + cphd.string() +
+                               "\nDownload instructions (paths relative to repository root):"
+                               "\n  tools/sar_data/README.md"
+                               "\n  applications/sar/autofocus/README.md (autofocus)"
+                               "\nAlso check the selected YAML preset's download comments."
+                               "\nSave under data/ (or configured HOLOHUB_DATA_DIR),"
+                               "\nor set cphd.path to your local CPHD file.");
     }
     cfg.cphd_paths.push_back(std::filesystem::absolute(cphd).string());
   }
