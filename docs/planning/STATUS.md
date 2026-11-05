@@ -4,6 +4,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-05** — Autofocus README usability pass: retained the five-step
+  image comparison and scene-conversion instructions, combined preset defaults
+  into one table, and added log interpretation, settings guidance, and
+  troubleshooting. Removed historical benchmark and defect narratives from
+  the application guide; linked existing operator development notes instead.
+  No application behavior or contracts changed.
+
 - **2026-11-05** — Saved SAR image viewer work on `dpc/sar-autofocus`:
   added `uv run tools/sar_data/view_image.py` with isolated plotting
   dependencies, PNG output without a display, optional interactive viewing,
