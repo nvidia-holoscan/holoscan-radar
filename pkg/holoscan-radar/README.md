@@ -15,7 +15,7 @@ directory, configure with
 `-DBUILD_ALL=OFF -DPKG_holoscan_radar=ON` and set
 `-DHOLOSCAN_RADAR_PKG_OPERATORS='clutter_filter_op;cphd_reader_op'` to the desired
 operator names. The default list in [`pkg/CMakeLists.txt`](../CMakeLists.txt)
-includes all 32 public operators. This curated list defines the expected package
+includes all 33 public operators. This curated list defines the expected package
 contents; intentional subsets are allowed. CI verifies these selected libraries
 in the Debian artifact.
 

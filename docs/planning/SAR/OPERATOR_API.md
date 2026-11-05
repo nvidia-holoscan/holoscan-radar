@@ -2,7 +2,7 @@
 
 ## HSDK 5 C++/CUDA port contract (2026-09-28)
 
-This section is the **current implementation contract** for the six ported
+This section is the **current implementation contract** for the seven ported
 operators. The source branch's detailed design below remains as algorithm and
 future-operator reference. Its HSDK 4 transport statements, proposed/acceptance
 labels, opaque `...` axes, sticky overrides, and metadata stream boundary are
@@ -23,11 +23,12 @@ input and output names within an operator.
 
 | Operator | Inputs | Outputs |
 | --- | --- | --- |
-| `CPHDReaderOp<T>` | source | `phase_history`: complex T `(num_pulses,num_samples)`; `positions`, `reference_position`, optional `velocities`: real T `(num_pulses,3)`; optional `sample_axis`: real T `(num_samples)`; optional `pulse_times`: float64 `(num_pulses)`; optional `coordinate_frame`: descriptor; `stream_boundary`: uint8 scalar every batch |
+| `CPHDReaderOp<T, TGeom>` | source | `phase_history`: complex T `(num_pulses,num_samples)`; `positions`, `reference_position`, optional `velocities`: real TGeom `(num_pulses,3)`; optional `sample_axis`: real T `(num_samples)`; optional `pulse_times`: float64 `(num_pulses)`; optional `coordinate_frame`: descriptor; `stream_boundary`: uint8 scalar every batch |
 | `SARRangeCompressionOp<T>` | `phase_history`: complex T `(num_pulses,num_samples)`; `[live]` `range_window`, `waveform`, `fft_norm`, `nfft`, `propagation_speed` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; optional `range_bins`: real T `(num_range_bins)`; optional `range_window_out`: descriptor |
-| `ApertureManagerOp<T>` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; `positions`, `reference_position`: real T `(num_pulses,3)`; `stream_boundary`: uint8 scalar; optional `[live]` `sample_geometry`, `sample_points`, `control`, `evict` | `range_profiles_out`, `positions_out`, `reference_position_out`: matching pulse tensors; optional `weight`: real T `(num_output_pulses)`; optional `sample_geometry_out`: descriptor; optional `sample_points_out`: real T `(num_v,num_u,3)`; `control_out`: uint8 `(1)` |
-| `BackprojectionOp<T>` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; `positions`, `reference_position`: real T `(num_pulses,3)`; optional `[live]` `control`, `range_bins`, `sample_points`, `weight`, `initial_image`, `sample_geometry`, `range_bin_spacing`, `range_bin_origin`, `reference_frequency`, `interpolation` | `image`: complex T `(num_v,num_u)` on an emit; optional `sample_geometry_out`: descriptor on an emit |
+| `ApertureManagerOp<T, TGeom>` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; `positions`, `reference_position`: real TGeom `(num_pulses,3)`; `stream_boundary`: uint8 scalar; optional `[live]` `sample_geometry`, `sample_points`, `control`, `evict` | `range_profiles_out`, `positions_out`, `reference_position_out`: matching pulse tensors; optional `weight`: real T `(num_output_pulses)`; optional `sample_geometry_out`: descriptor; optional `sample_points_out`: real TGeom `(num_v,num_u,3)`; `control_out`: uint8 `(1)` |
+| `BackprojectionOp<T, TGeom>` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; `positions`, `reference_position`: real TGeom `(num_pulses,3)`; optional `[live]` `control`, `range_bins`, `sample_points`, `weight`, `initial_image`, `sample_geometry`, `range_bin_spacing`, `range_bin_origin`, `reference_frequency`, `interpolation` | `image`: complex T `(num_v,num_u)` on an emit; optional `sample_geometry_out`: descriptor on an emit |
 | `PhaseCorrectionOp<T>` | `range_profiles`: complex T `(num_pulses,num_range_bins)`; `phase_correction`: real T `(num_pulses)` | `range_profiles_out`: complex T `(num_pulses,num_range_bins)` |
+| `AutofocusOp<T>` | `image`: complex T `(num_v,num_u)`; optional `[live]` `num_iterations`, `window_fraction`, `min_scatterers`, `max_correction` | `image_out`: complex T `(num_v,num_u)`; optional `phase_correction`: real T `(num_az)`; optional `sharpness`: real T `(num_iterations+1)`; optional `termination`, `iterations`: int32 `(1)` |
 | `TensorDumpOp` | `tensor`: any dtype/rank; optional `[live]` `every_n`: int64 scalar | sink, no outputs |
 
 `CPHDReaderOp` publishes `stream_boundary` on **every** pulse batch: `0 = none`,
@@ -60,9 +61,10 @@ The SAR descriptors are `CoordinateFrame`,
 | --- | --- |
 | `CPHDReaderOp` | `path` required; `coordinate_frame` required; `pulses_per_tick` required; `channel=0`; `pulse_range=[]`; `loop=false`; `playback_rate=0` (unmetered waits on full); `duty_cycle=1`; static `wait_for_downstream=false` (paced fail-fast unless true) |
 | `SARRangeCompressionOp` | `[live] range_window=rectangular`; `[live] waveform=unset`; `[live] fft_norm=backward`; `[live] nfft=observed num_samples`; `[live] propagation_speed=299792458 m/s` |
-| `ApertureManagerOp` | `max_aperture_pulses=0`; `emit_interval_pulses=0`; `emit_mode=continue`; `aperture_window=rectangular`; all static |
+| `ApertureManagerOp` | `max_aperture_pulses=0`; `emit_interval_pulses=0`; `emit_mode=continue`; `aperture_window=none` (rectangular, all +1); all static |
 | `BackprojectionOp` | `coordinate_frame` required; `sample_geometry` required unless sample points are supplied; `[live] range_bin_spacing=unset`, `range_bin_origin=unset`, `reference_frequency` must be set to first fast-time sample frequency, `interpolation=linear`; static `backend=nvradar_block_anchored_expanded_throughput_phase_lut_vec`, `geometry_change=reset` |
 | `PhaseCorrectionOp` | static `sense` required (`add` or `subtract`) |
+| `AutofocusOp` | static `algorithm=pga` (sole value); static `azimuth_axis` required (`u` or `v`); `[live] num_iterations=8`, `window_fraction=0.5`, `min_scatterers=16`, `max_correction=unset` |
 | `TensorDumpOp` | static `path` required, `format=npy`, `max_files=unlimited`; `[live] every_n=1` |
 
 `initial_image`, `nearest` and `sinc` are declared but currently rejected by
@@ -70,6 +72,13 @@ The SAR descriptors are `CoordinateFrame`,
 MatX exposes it. These are deferred capabilities, not silently supported ones.
 The branch's range-compression normalization default remains implemented as
 `backward`; whether that is the right radiometric default is still open (I5).
+
+`AutofocusOp` was ported after this section was written and its two rows are
+added here on 2026-10-30. Its detailed section below keeps the historical
+`(..., num_v, num_u)` spelling for `image`, which the preamble's disclaimer
+covers: the implementation takes rank 2 only and rejects a leading axis, as the
+tables above specify. `BackprojectionOp.image` reads the same way, and why its
+code still allocates per-batch accumulators is R11.
 
 **`wait_for_downstream` (static, default false).** Optional on `CPHDReaderOp` only (and the future `CRSDReaderOp` that copies that contract). When true, that reader's required Tensor emits retry on `kBackpressured` / `kResourceExhausted` (re-prepare: a failed Tensor emit consumes the loan) instead of failing `compute()`. Not `[live]`. Unmetered `playback_rate` 0 always waits, even when this key is omitted. A positive `playback_rate` fail-fasts unless the key is true.
 Formation operators (`SARRangeCompressionOp`, `ApertureManagerOp`, `BackprojectionOp`, `PhaseCorrectionOp`) and app-owned SAR stages do not take this Param: a full queue fails `compute()`. Continuous strip deepens the 4-slice fan-out edges to 16 instead of waiting. `TensorDumpOp` has no Tensor outputs.
@@ -81,7 +90,8 @@ Formation operators (`SARRangeCompressionOp`, `ApertureManagerOp`, `Backprojecti
 | Typed per-batch `stream_boundary` output and required manager input replace message metadata | HSDK 5 same-tick graph join and explicit collection flush |
 | Named axes replace opaque leading batch; fat outputs capture `MaxTensorExtents` | HSDK 5 tensor-pool sizing and module conventions |
 | `[live]` overrides are per tick, `Exact{}`/`SafeDefault{}`; no sticky value | Matches main-5x temporal contract |
-| Output names `range_window_out`, `sample_geometry_out`, `range_profiles_out` | HSDK 5 unique input/output names |
+| Output names `range_window_out`, `sample_geometry_out`, `range_profiles_out`, and `image_out` on `AutofocusOp` **(2026-10-26)** | HSDK 5 unique input/output names |
+| Optional int32 `termination` and `iterations` outputs on `AutofocusOp` **(2026-10-30)** | Three refusal paths return the image untouched and were indistinguishable from success on every existing port |
 | `CoordinateFrame`, `SampleGeometry`, and `LFMWaveformDescriptor` use HSDK 5 schema-backed wire values | Shared descriptor policy |
 | `wait_for_downstream` optional static Param on `CPHDReaderOp` only (default false; Params schema version 2). Unmetered `playback_rate` 0 waits on a full queue; a positive rate fail-fasts unless the key is true. Formation operators fail-fast (Params schema version 3 after removing the field) | HSDK 5 `kBlocking` emit does not park; unmetered ingest waits. Formation does not |
 
@@ -101,7 +111,28 @@ Design conventions carry over unchanged: plain-tensor data ports (bridge with sm
 
 Two conventions are **extended** and are specified here rather than assumed: precision (below) and cross-tick accumulation (§ *Cross-tick accumulation*).
 
-**Precision (all operators).** Every operator supports both **single** (`complex64` / `float32`) and **double** (`complex128` / `float64`) precision floating-point I/O. Precision is fixed at compile time by the operator's template instantiation — neither a runtime parameter nor inferred from the data — and an instance's inputs and outputs match that precision. The per-operator dtype labels list both forms. SAR adds a second, **orthogonal** axis on `BackprojectionOp` alone: the internal arithmetic strategy for the range computation, which is not a binary and is not the same question as the I/O dtype. See `BackprojectionOp.backend`.
+**Precision (all operators).** Every operator supports both **single** (`complex64` / `float32`) and
+**double** (`complex128` / `float64`) precision floating-point I/O. Precision is fixed at compile
+time by the operator's template instantiation — neither a runtime parameter nor inferred from the
+data — and an instance's inputs and outputs match that precision. **Three operators carry a second
+precision parameter for geometry**: `CPHDReaderOp<T, TGeom>`, `ApertureManagerOp<T, TGeom>`, and
+`BackprojectionOp<T, TGeom>`, where `TGeom` defaults to `T` and governs `positions`,
+`reference_position`, `sample_points`, and `velocities` while `T` governs samples and the image.
+`TGeom` may not be coarser than `T`. The SAR applications default to `<float, double>` and take `sample_precision: double` to opt back in, matching FMCW, which has always instantiated at `float`: very few radar systems deliver more than single-precision samples. This exists because the two cannot be one choice: the sample
+data is where the memory is (on Kourou, 55.7 GiB of 60.9 GiB of declared pools), but ECEF positions
+cannot be carried in float32, where one ulp at a 6.4e6 m radius is 0.76 m — some 25 wavelengths at X
+band, which destroys the phase history before the samples' own precision matters. `<float, double>`
+therefore halves the dominant pools at no measurable cost to the image: on Kourou at 8000 pulses and
+a 7150² product it declares 33.1 GiB against 60.9 GiB and reproduces the double result to five
+significant figures in peak, total energy, and Σ|z|⁴, with an RMS difference of 3.3e-6 relative and
+the identical 1.090× autofocus gain. `pulse_times` was already float64 regardless of `T` for the
+same class of reason; this generalizes that exception rather than introducing a new kind. Ports that
+ride the sample precision keep `T` even when they are metre-valued (`range_bins`, `sample_axis`)
+because their producers are sample-precision, as does `weight`, which is an amplitude taper. The
+per-operator dtype labels list both forms.
+SAR adds a second, **orthogonal** axis on `BackprojectionOp` alone: the internal arithmetic strategy
+for the range computation, which is not a binary and is not the same question as the I/O dtype. See
+`BackprojectionOp.backend`.
 
 **Nothing here is locked yet, so nothing is tagged as proposed.** This document is a proposal in its entirety, and R1 — indexed in [TEAM_BLOCKED.md](TEAM_BLOCKED.md) — *is* the question of accepting it. That inverts the FMCW [OPERATOR_API.md](../OPERATOR_API.md) one level up, where the surrounding text is accepted lockdown and a **[PROPOSED]** tag marks the exceptions to it; tagging individual passages here would imply the untagged remainder is settled, which is the opposite of true. Once R1 accepts this contract, later amendments take the FMCW convention. Which questions are still genuinely open is a separate matter from acceptance: § *Open items* enumerates them by class, and the team-blocked ones are R1 itself and the metadata key namespace (R10).
 
@@ -742,17 +773,19 @@ Such an application wires control from a small operator of its own — fed by th
 Estimates a residual phase correction along the azimuth-conjugate axis, and applies it in-image only when that image is the product. A separate, omittable stage — **absent from the default spine**: the usual product is ground / DEM backprojection without autofocus. Airborne residual phase is the usual reason to opt in (WORKFLOWS Figure 2); spaceborne collections with good ephemeris generally stay on Figure 1.
 
 - **In:** `image` — complex64 / complex128, `(..., num_v, num_u)`. The formed SLC image.
-- **Out:** `image` — complex64 / complex128, same shape. The corrected image.
-- **Out:** `phase_correction` (optional) — float32 / float64, `(..., num_pulses)`. The estimated residual phase, **indexed by pulse**, which is the domain the error physically lives in. Emitted separately so it is composable, testable in isolation, recordable by `SICDWriterOp` in the product's own metadata fields — on the input port of that name, not the message metadata plane — and, the reason the indexing matters, applicable to a *different* formation than the one it was estimated from. See *Notes*.
+- **Out:** `image_out` **[CONTRACT CHANGE 2026-10-26]** — complex64 / complex128, same shape. The corrected image. Renamed from `image` for the same reason as `range_profiles_out` and `sample_geometry_out`: HSDK 5 requires input and output port names to be unique within an operator, and this is the only SAR operator that names both an input and an output `image`. The rename was missed when the others were made because this operator had not been ported.
+- **Out:** `phase_correction` (optional) **[CONTRACT CHANGE 2026-10-31]** — float32 / float64, `(..., num_az)`, the extent of the image's `azimuth_axis`. **Ordered by pulse** — the operator un-shifts the azimuth-FFT bin axis before emitting, so it runs monotonically across the dwell — **but its length is the azimuth extent, not the pulse count.** The old `(..., num_pulses)` was right about the ordering and wrong about the extent: the operator sees an `image` and nothing else, so the pulse count is not available to it. The two agree only on a grid formed at one azimuth sample per pulse. `PhaseCorrectionOp` takes `(num_pulses)`, so an app whose extents differ must resample the length; this one uses an app-owned `PhaseResampleOp`. No library operator for it is specified; see [OPEN_ITEMS.md](OPEN_ITEMS.md).
 - **Out:** `sharpness` (optional) — float32 / float64, `(..., num_iterations + 1)`. The focus metric before each iteration and after the last, so a caller can see whether the estimate converged rather than inferring it from the image.
+- **Out:** `termination` (optional) **[CONTRACT CHANGE 2026-10-30]** — int32, `(1,)`. Why the refinement loop stopped: `0 converged`, `1 budget_exhausted`, `2 refused_sharpness`, `3 refused_scatterers`, `4 refused_max_correction`, `5 stopped_scatterers`. **Provenance, not quality** — it reports what the operator did and never whether the estimate is right; see *Notes*. Codes 2–4 mean the image was returned untouched. int32 rather than the instance precision because it encodes control flow, not samples.
+- **Out:** `iterations` (optional) **[CONTRACT CHANGE 2026-10-30]** — int32, `(1,)`. How many iterations' phase is in `phase_correction`, which is **not** how many were attempted: each iteration is applied, scored, and discarded if sharpness fell, so the last attempt is routinely absent. `0` whenever the estimate was refused.
 
 **Parameters:**
 
 - `algorithm` — enum {pga}. Phase gradient autofocus. Static (selects the kernel). Wave one's only estimator — a constrained opt-in for the algorithm slot, not the module's default product path. See [WORKFLOWS.md](WORKFLOWS.md) → *Autofocus algorithms*. Default: pga (sole value; the *stage* defaults to absent).
 - `azimuth_axis` — enum {u, v}. Which image axis is the azimuth (slow-time-conjugate) axis. **Static** and **required with no default**: PGA is meaningless on the wrong axis, and unlike a frame mismatch this one is not even dimensionally checkable, so it is never inferred. Naming an axis here is also **the assertion that the image is on a conjugate geometry at all** — the D20 precondition — which is why no separate parameter declares it. Default: none (required).
-- `num_iterations` **[live]** — int. Refinement iterations. Default: 4.
+- `num_iterations` **[live]** — int. Refinement iterations, and an **upper bound rather than a count**: the stage stops as soon as an iteration fails to improve sharpness, so a higher value costs nothing on an image that converges early. Default: 8. **Raised from 4 on 2026-10-29**: 4 recovers a 5 rad error but fails a 107 rad one — about 17 wavelengths of line-of-sight error, ordinary for the airborne platforms this stage exists for — at 1.365 rad residual, missing even the 0.785 rad hard floor while `sharpness` reports a 17x gain. 8 brings that to 1.035 rad, and to 0.274 rad (inside the target) with a first window wide enough for the error, which iterating does not substitute for. Costs ~50 mrad of peak accuracy on small errors and ~10.8 ms per iteration on a 2478x8000 auxiliary.
 - `window_fraction` **[live]** — float in `(0, 1]`. Fraction of the azimuth extent retained in the first window; shrinks geometrically across iterations. Default: 0.5.
-- `min_scatterers` **[live]** — int. Minimum strong scatterers required. Below it the estimate is not trustworthy: the operator passes the image through unchanged, emits a zero `phase_correction`, and warns. Default: 16.
+- `min_scatterers` **[live]** — int. **[CONTRACT CLARIFICATION 2026-10-30]** The number of strong range bins the estimate uses — **both a floor and a cap**, which the previous wording ("minimum required") gave only half of. Bins whose azimuth peak stands well above their row mean are candidates; the brightest `min_scatterers` of them are kept and the rest discarded. The cap carries as much weight as the floor: on a dense scene the peak-to-mean gate clears nearly every row (512 of 512 on the Atlanta auxiliary), and averaging all of them dilutes the estimate toward nothing. If fewer than `min_scatterers` clear the gate the estimate is not trustworthy: the operator passes the image through unchanged, emits a zero `phase_correction`, and warns (`termination = refused_scatterers`). Default: 16.
 - `max_correction` **[live]** — float (radians). Ceiling on the peak-to-peak estimated correction; exceeding it indicates a failed estimate rather than a badly defocused image, so the operator passes through and warns. Default: none (uncapped).
 
 **Algorithm (PGA):**
@@ -761,7 +794,7 @@ Estimates a residual phase correction along the azimuth-conjugate axis, and appl
 2. Circularly shift each selected scatterer to the azimuth centre, removing its linear phase.
 3. Apply a window of the current `window_fraction` about the centre.
 4. Transform along `azimuth_axis` to the conjugate domain and estimate the phase gradient across azimuth samples (the linear-unbiased-estimator form).
-5. Integrate the gradient to a phase, apply its conjugate, and shrink the window for the next iteration.
+5. Integrate the gradient to a phase **[CONTRACT CHANGE 2026-10-31]** — outward from DC in both directions, anchored at bin 0, never as a running sum up the bin axis. The step previously said only "integrate the gradient", which reads as the latter. The anchor is not a free choice of constant: the bin axis is the pulse axis rotated by half the aperture, so bins `n/2 - 1` and `n/2` are not adjacent pulses and the gradient between them is meaningless, while bins `n - 1` and `0` are adjacent. Summing up the axis carries the second half's constant of integration across that seam, offsetting the halves by a step at the dwell centre — small for an error even about the centre, the whole error for an odd one. Then apply the conjugate and shrink the window.
 6. Accumulate the per-iteration corrections into `phase_correction`.
 
 **Notes:**
@@ -775,6 +808,10 @@ Estimates a residual phase correction along the azimuth-conjugate axis, and appl
 - *What this asks of the application is a second geometry, and that is the honest cost.* Constructing a lattice whose azimuth axis is conjugate to the aperture's sampling is collection knowledge — angular extent, centre, slant plane. It is derivable from the `positions` the application already supplies under D13, but it is more than handing over a DEM, and an application unwilling to build one should omit autofocus rather than reach for it. That lattice is set on the **auxiliary** `BackprojectionOp` only; product geometry still stages through the manager when one is used.
 - **Autofocus costs absolute geolocation, on every route, and that bites hardest here.** A PGA estimate is ambiguous up to a linear and a constant phase term — an image shift — and the algorithm removes those terms rather than recovering them, which is why [TESTING.md](TESTING.md) asserts recovery only up to them. So autofocusing a product formed directly onto a DEM trades away part of the geolocation accuracy that motivated forming onto the DEM. Not caused by the auxiliary pattern and not fixed by avoiding it; it is a property of the algorithm, and it is the strongest argument for the spaceborne no-autofocus default being a first-class product rather than a hedge.
 - *The in-image path is a footnote for radar-geometry products (WORKFLOWS Figure 3).* PGA applies its correction in the image between iterations regardless, so emitting the corrected `image` is free, and where the product **is** the conjugate grid that image is the finished answer — no `PhaseCorrectionOp`, no second formation. That is not this module's usual DEM path; only a conjugate-grid product uses it.
+- **`termination` and `iterations` report provenance, and the distinction from quality is the whole point of them.** They say what the operator did; they cannot say whether the estimate is right, and a caller must not read a `converged` code as an accuracy claim.
+- *That boundary is measured, not assumed.* Three candidate *quality* signals — phase-gradient coherence, convergence, and the LUE gradient against its unambiguous limit — were implemented and scored against injected truth, and all three are blind to the failure. Coherence reads 0.9993 on a 50 rad catastrophe and 1.0000 on the passes, because the error is a bias common to every scatterer, which is exactly what coherence is built to ignore. PGA converges to a fixed point of its own sharpness-and-gradient objective, that fixed point is not the truth, and the residual therefore lives in the null space of everything the estimator measures. Establishing accuracy needs information this operator does not have. See `autofocus_op/OPEN_ITEMS.md`.
+- *What the two ports do close is that a refusal used to be indistinguishable from success.* Three independent paths return the image untouched — iteration 0 lowering sharpness, too few scatterers, and the `max_correction` ceiling — and on every other port all three look identical to an uneventful run: a zero `phase_correction` and a flat `sharpness` trace, which is also what a correctly-focused image produces. The only statement of what happened was a log line, which no consumer can read. `termination` makes the branch available to the graph; `iterations` separates "refused outright" from "stopped early with most of the correction already applied", which `sharpness` alone cannot. `AutofocusTermination` values are contract: append, never renumber.
+- *Deliberately not emitted: the refused estimate's magnitude.* Its peak-to-peak is already derivable from `phase_correction` on the paths that emit one, and on a `max_correction` refusal the discarded magnitude is diagnostic rather than operational — `SAR_AF_IGNORE_DROP` and the warning cover that case without a port whose value is a thing the operator chose not to use.
 - *An explicit lattice is not rejected on rank, and never was the constraint.* It is `(num_v, num_u, 3)` against an image of `(..., num_v, num_u)`, so `azimuth_axis` has axes to name. What governs is whether the named axis is conjugate to slow-time, which is a property of the geometry rather than of the mode — so the guard applies identically in both geometry modes, and a points-mode lattice that *is* conjugate is a legal thing to estimate from.
 
 ### Product Operators
@@ -885,7 +922,7 @@ What is offered instead is an escape hatch for a caller who wants agreement by c
 One file per emitted image — the image is the product, so there is nothing to accumulate.
 
 - **In:** `image` — complex64 / complex128, `(..., num_v, num_u)`.
-- **In:** `phase_correction` (optional) — float32 / float64, `(..., num_pulses)`. Recorded where autofocus ran. Per pulse, matching `AutofocusOp`'s output (D20), so what is recorded is the correction applied to the collection rather than a resampling of it onto this product's azimuth axis.
+- **In:** `phase_correction` (optional) — float32 / float64, `(..., num_pulses)`. Recorded where autofocus ran. Per pulse (D20), so what is recorded is the correction applied to the collection rather than a resampling of it onto this product's azimuth axis. That is `AutofocusOp`'s output directly when its estimation image has one azimuth sample per pulse, and the application's resample of it otherwise — the same vector `PhaseCorrectionOp` consumed.
 - No outputs — a sink.
 
 **Parameters:**
@@ -1074,6 +1111,7 @@ Every unresolved question in this document, in the two classes [TEAM_BLOCKED.md]
 **Team-blocked** — need a decision before the contract is accepted:
 
 - **R1 — contract acceptance**, including the invariant amendments above.
+- **R11 — retiring the leading batch axis on `BackprojectionOp.image`.** *Batch semantics* specifies `(..., num_v, num_u)` with one accumulator per batch element, but it sits in the historical section, whose opaque `...` axes the preamble disclaims; *Implemented operator ports*, "There is no implicit batch axis", the migration table and [AGENTS.md](../../../AGENTS.md) invariant 4 all give rank 2. The question is why the prose and the code still say otherwise: the emit is half-built (per-batch accumulators filled, all but the first discarded) and the note argues against invariant 4 rather than deferring. Unreachable today. Entangled with D19. Raised 2026-10-30; detail in [backprojection_op/OPEN_ITEMS.md](../../../operators/sar/backprojection_op/OPEN_ITEMS.md) → R11.
 - **R10 — the scope of the metadata key namespace.** `holoscan.radar.stream_boundary` is proposed at the module level rather than under a `sar` tier, because the accumulation convention it serves is module-wide and a finite FMCW source has the same tail-loss problem. That commits a modality whose owners have not weighed in, and a key prefix is a public composition surface once anything reads it. Raised by D22; see *Stream boundary announcement* → *Key namespace*.
 
 **Settled since the first draft**, recorded here because the questions were prominent and readers will look for them: **D21** declines a per-message metadata plane for descriptive facts and offers three optional descriptor override edges instead (was R5 — see *Standard-Format I/O Operators*); **D22** puts the stream-boundary announcement on the metadata plane, written by the source and translated by whoever drives `control` (was R7 — see *Stream boundary announcement*); **D23** fixes the control message at the four values and nothing else (was R2 — see *How the application supplies the emit decision*). Detail and rationale are in [TEAM_BLOCKED.md](TEAM_BLOCKED.md).

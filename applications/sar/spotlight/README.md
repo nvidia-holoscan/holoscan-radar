@@ -2,6 +2,13 @@
 
 One collection produces one reset image. The optional ECEF-to-ENU stage rotates CPHD pulse geometry into the fixed Atlanta lattice frame.
 
+> **Prerequisite: download data before running the application.**
+> Download the Atlanta Umbra CPHD using the
+> [download commands below](#real-collection-preset).
+> Downloads run on the host from the repository root; save files under `data/sar/`
+> as instructed. Data is not bundled, and the application does not download it.
+> Generated-fixture tests in this guide require no external data downloads.
+
 ## Graph
 
 ```mermaid
@@ -55,14 +62,16 @@ From the repository root **on the host**, with the Holoscan CLI installed,
 run:
 
 ```bash
-mkdir -p data/sar
-spotlight_cphd=data/sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd
-if [ ! -f "$spotlight_cphd" ]; then
-  curl --fail --location --continue-at - --output "$spotlight_cphd.part" \
-    'https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com/sar-data/task-data/0f1231be-26d3-4b98-96ab-f675a5375c14/2026-02-20-03-03-38_UMBRA-07/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd'
-  mv "$spotlight_cphd.part" "$spotlight_cphd"
-fi
-./holoscan-radar run spotlight
+(
+  mkdir -p data/sar
+  spotlight_cphd=data/sar/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd
+  if [ ! -f "$spotlight_cphd" ]; then
+    curl --fail --location --continue-at - --output "$spotlight_cphd.part" \
+      'https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com/sar-data/task-data/0f1231be-26d3-4b98-96ab-f675a5375c14/2026-02-20-03-03-38_UMBRA-07/2026-02-20-03-03-38_UMBRA-07_CPHD.cphd' || exit 1
+    mv "$spotlight_cphd.part" "$spotlight_cphd" || exit 1
+  fi
+  ./holoscan-radar run spotlight
+)
 ```
 
 The shipped [`spotlight.yaml`](config/spotlight.yaml) is copied beside the

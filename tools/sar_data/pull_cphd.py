@@ -14,6 +14,7 @@ file's CPHD XML, not the folder name.
 
 Tiled and continuous strip share the Imperial Valley Capella collection.
 
+python3 tools/sar_data/pull_cphd.py --app autofocus
 python3 tools/sar_data/pull_cphd.py --app tiled_strip
 python3 tools/sar_data/pull_cphd.py --app independent_images
 python3 tools/sar_data/pull_cphd.py --app all --dest data/sar
@@ -98,8 +99,19 @@ IMPERIAL_VALLEY: list[tuple[str, str]] = [
     ),
 ]
 
+# The default autofocus preset uses this collect, distinct from MODE5's Kourou.
+AUTOFOCUS_KOUROU: list[tuple[str, str]] = [
+    (
+        "Kourou autofocus",
+        "sar-data/tasks/Kourou, French Guiana/1378d9a4-8eb3-4d5c-96ce-15797a5a8d27/"
+        "2023-06-24-13-22-56_UMBRA-05/"
+        "2023-06-24-13-22-56_UMBRA-05_CPHD.cphd",
+    ),
+]
+
 # app -> (bucket, https prefix, collects, default dest, iarp check)
 APPS: dict[str, tuple[str, str, list[tuple[str, str]], str, bool]] = {
+    "autofocus": (UMBRA_BUCKET, UMBRA_HTTPS, AUTOFOCUS_KOUROU, "data/sar", False),
     "tiled_strip": (CAPELLA_BUCKET, CAPELLA_HTTPS, IMPERIAL_VALLEY, "data/sar/imperial", False),
     "continuous_strip": (
         CAPELLA_BUCKET,
@@ -245,10 +257,10 @@ def jobs_for(app: str, dest: Path | None) -> list[PullJob]:
     """Collections for one app, or every pinned collection when app is ``all``.
 
     Strip apps share Imperial Valley, so ``all`` downloads that object once.
-    ``--dest`` for ``all`` is the parent of each preset directory
-    (``imperial``, ``mode5``), matching the repository ``data/sar`` layout.
+    ``--dest`` for ``all`` replaces ``data/sar``, preserving the relative
+    preset layout (Kourou at the root, plus ``imperial`` and ``mode5``).
     """
-    selected = ["tiled_strip", "independent_images"] if app == "all" else [app]
+    selected = list(APPS) if app == "all" else [app]
     jobs: list[PullJob] = []
     seen: set[tuple[str, str, Path]] = set()
     for name in selected:
@@ -256,7 +268,7 @@ def jobs_for(app: str, dest: Path | None) -> list[PullJob]:
         if dest is None:
             dest_dir = Path(dest_default)
         elif app == "all":
-            dest_dir = dest / Path(dest_default).name
+            dest_dir = dest / Path(dest_default).relative_to("data/sar")
         else:
             dest_dir = dest
         for scene, key in collects:
@@ -344,7 +356,7 @@ def content_length(headers: object) -> int | None:
         size = int(raw)
     except (TypeError, ValueError):
         return None
-    return size if size > 0 else None
+    return size if size >= 0 else None
 
 
 def https_size(url: str) -> int | None:
@@ -397,14 +409,22 @@ def download_https(url: str, dest: Path, progress: DownloadProgress) -> None:
             urllib.request.urlopen(url, timeout=HTTPS_TIMEOUT_S) as response,
             partial.open("wb") as out,
         ):
+            expected_bytes = content_length(response.headers)
+            received_bytes = 0
             if progress.total is None:
-                progress.total = content_length(response.headers)
+                progress.total = expected_bytes or None
             while True:
                 block = response.read(CHUNK_BYTES)
                 if not block:
                     break
                 out.write(block)
+                received_bytes += len(block)
                 progress.add(len(block))
+            if expected_bytes is not None and received_bytes != expected_bytes:
+                raise RuntimeError(
+                    f"HTTPS download size mismatch: received {received_bytes} bytes, "
+                    f"expected {expected_bytes} bytes"
+                )
         partial.replace(dest)
         progress.finish()
     except BaseException:
@@ -513,7 +533,7 @@ def main() -> int:
         default=None,
         help=(
             "directory to write CPHD files into (default: app preset path). "
-            "With --app all, this is the parent of each preset directory."
+            "With --app all, this replaces data/sar while preserving preset subdirectories."
         ),
     )
     parser.add_argument(
@@ -524,6 +544,15 @@ def main() -> int:
     args = parser.parse_args()
     if args.app is None:
         parser.error("--app is required")
+    if args.app == "all" and args.dest is not None:
+        collection_dirs = {
+            Path(spec[3]).resolve() for spec in APPS.values() if spec[3] != "data/sar"
+        }
+        if args.dest.resolve() in collection_dirs:
+            parser.error(
+                "--app all needs the SAR data root, not a collection subdirectory. "
+                "Use --app all --dest data/sar (or omit --dest)."
+            )
     jobs = jobs_for(args.app, args.dest)
     if args.list:
         for job in jobs:
@@ -537,7 +566,17 @@ def main() -> int:
     pulled: list[tuple[PullJob, Path]] = []
     count = len(jobs)
     for index, job in enumerate(jobs, start=1):
-        pulled.append((job, pull_one(job, args.force, index, count)))
+        try:
+            pulled.append((job, pull_one(job, args.force, index, count)))
+        except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+            print(
+                f"error: {job.scene}: download failed: {exc}\n"
+                f"Source: {https_url(job.https_prefix, job.key)}\n"
+                f"Destination: {job.dest_dir / Path(job.key).name}\n"
+                "See tools/sar_data/README.md for download instructions.",
+                file=sys.stderr,
+            )
+            return 1
 
     iarp_files = [(job.scene, path) for job, path in pulled if job.check_iarp]
     if iarp_files:

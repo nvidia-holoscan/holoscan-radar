@@ -4,13 +4,17 @@
 #pragma once
 
 #include <unistd.h>
+#include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <fstream>
 #include <initializer_list>
 #include <memory>
 #include <optional>
@@ -35,6 +39,7 @@
 #include "io/cphd_reader_op/cphd_reader_op.hpp"
 #include "io/cphd_reader_op/params_config.hpp"
 #include "io/tensor_dump_op/tensor_dump_op.hpp"
+#include "io/tensor_dump_op/output_paths.hpp"
 #include "radar_app/app/config_utils.hpp"
 #include "radar_app/app/gpu_placement.hpp"
 #ifdef HOLOSCAN_RADAR_HAS_X11
@@ -79,7 +84,16 @@ inline radar::MaxTensorExtents make_extents(const AppConfig& cfg,
     throw std::invalid_argument("SAR: invalid CPHD pulse/sample extents");
   radar::MaxTensorExtents extents;
   extents.max_samples_per_pulse = max_samples;
-  extents.max_pulses = cfg.reader_pulses_per_tick + manager.max_aperture_pulses;
+  // Reform sends no pulses between boundaries (OPERATOR_API.md step 5a), so
+  // the manager's largest output is the replay alone -- never a tick's
+  // admissions plus the evictions they displace, which is what the sum below
+  // bounds. The reader's batch still has to fit, since ingest arrives on the
+  // same pools. On Kourou that distinction is 6.3 GiB of reservation.
+  if (manager.emit_mode == radar::ApertureEmitMode::kReform) {
+    extents.max_pulses = std::max(cfg.reader_pulses_per_tick, manager.max_aperture_pulses);
+  } else {
+    extents.max_pulses = cfg.reader_pulses_per_tick + manager.max_aperture_pulses;
+  }
   extents.max_range_bins = cfg.nfft > 0 ? cfg.nfft : max_samples;
   int64_t max_v = cfg.sample_geometry.num_v();
   int64_t max_u = cfg.sample_geometry.num_u();
@@ -96,9 +110,36 @@ inline radar::MaxTensorExtents make_extents(const AppConfig& cfg,
   return extents;
 }
 
-template <typename LoadConfig, typename BuildGraph>
-int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_config,
-                      BuildGraph build_graph) {
+// The aperture-wide `max_pulses` above bounds what the manager can replay or
+// evict, and every operator downstream of it has to be sized for that. The
+// ingest side never does: the reader emits one `pulses_per_tick` batch and
+// range compression is 1:1 on it. Sizing those pools for the retained aperture
+// costs nothing under a per-tick allocator but is real memory once HSDK 5
+// materializes pools up front — on a 23k-pulse by 24k-sample collect it is
+// 17.45 GiB per pool against 0.73 GiB needed. Apps with their own ingest-edge
+// operators should size them from this, not from the aperture extents.
+inline radar::MaxTensorExtents make_ingest_extents(const radar::MaxTensorExtents& extents,
+                                                   const AppConfig& cfg) {
+  radar::MaxTensorExtents ingest = extents;
+  ingest.max_pulses = cfg.reader_pulses_per_tick;
+  return ingest;
+}
+
+// Handed to the graph-building callback so an app can name the precisions the
+// driver instantiated. Apps that form at one precision ignore it.
+template <typename TSample, typename TGeometry>
+struct Precision {
+  using Sample = TSample;
+  using Geometry = TGeometry;
+};
+
+// `T` is the sample and image precision, `TGeom` the geometry precision. The
+// default pair is `<float, double>`: samples are single in every application
+// because few radar systems deliver more, which halves the retained aperture,
+// while ECEF positions stay in float64 because float32 cannot carry them.
+template <typename T = float, typename TGeom = double, typename LoadConfig, typename BuildGraph>
+int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig load_config,
+                         BuildGraph build_graph) {
   try {
     // Own SIGINT/SIGTERM before Holoviz or the runtime start threads. Host
     // `holoscan run` maps Ctrl-C to `docker stop` (SIGTERM); without this
@@ -138,6 +179,7 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     bp_seed.reference_frequency = cfg.reference_frequency;
     auto bp_params = app::config::decode_params(document, "/backprojection", bp_seed);
     const radar::MaxTensorExtents extents = make_extents(cfg, *manager_params);
+    const radar::MaxTensorExtents ingest_extents = make_ingest_extents(extents, cfg);
 
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
     bool visualize = cfg.visualize;
@@ -156,24 +198,31 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     holoscan::CompileOptions options;
     const holoscan::ConnectionOptions queue{.queue_depth = 4U};
     auto hud = std::make_shared<radar::FormationHud>();
-    auto reader = graph.op<radar::CPHDReaderOp<double>>("cphd_reader", extents, hud);
+    auto reader = graph.op<radar::CPHDReaderOp<T, TGeom>>("cphd_reader", ingest_extents, hud);
     reader.set_params(std::move(reader_params));
     bind_outputs(options, "cphd_reader",
                  {"phase_history", "positions", "reference_position", "sample_axis", "pulse_times",
                   "velocities"});
-    auto range = graph.op<radar::SARRangeCompressionOp<double>>("range_compression", extents);
+    auto range = graph.op<radar::SARRangeCompressionOp<T>>("range_compression", ingest_extents);
     range.set_params(std::move(range_params));
     bind_outputs(options, "range_compression", {"range_profiles", "range_bins"});
-    auto manager = graph.op<radar::ApertureManagerOp<double>>("aperture_manager", extents);
+    auto manager = graph.op<radar::ApertureManagerOp<T, TGeom>>("aperture_manager", extents);
     manager.set_params(std::move(manager_params));
     bind_outputs(options, "aperture_manager",
                  {"range_profiles_out", "positions_out", "reference_position_out", "weight",
                   "sample_points_out", "control_out"});
-    auto bp = graph.op<radar::BackprojectionOp<double>>("backprojection", extents, hud);
+    auto bp = graph.op<radar::BackprojectionOp<T, TGeom>>("backprojection", extents, hud);
     bp.set_params(std::move(bp_params));
     bind_outputs(options, "backprojection", {"image"});
     auto counter = std::make_shared<app::sar::ImageCount>();
-    auto report = graph.op<app::sar::SarImageReportOp>("image_report", counter, hud);
+    // A scroll mosaic publishes a decimated view of its accumulator, so the
+    // tensor reaching the report is not the formed strip. Report the strip.
+    const std::array<int64_t, 2> product_extent =
+        cfg.scroll && cfg.scroll_parent.is_valid()
+            ? std::array<int64_t, 2>{cfg.scroll_parent.num_v(), cfg.scroll_parent.num_u()}
+            : std::array<int64_t, 2>{0, 0};
+    auto report =
+        graph.op<app::sar::SarImageReportOp>("image_report", counter, hud, product_extent);
     // Authored partitions only get independent workers when each one has a
     // thread-placement binding. Without that, HSDK 5 runs callbacks inline on
     // the controller — the HSDK 4 greedy default that cannot overlap
@@ -192,15 +241,26 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     bool has_visualization = false;
     bool has_timeline = false;
     graph.add_flow(reader->phase_history, range->phase_history, queue);
-    const auto* formed = build_graph(graph, options, queue, cfg, reader, range, manager, bp, source,
-                                     application, formation, extents);
+    const auto* formed = build_graph(Precision<T, TGeom>{}, graph, options, queue, cfg, reader,
+                                     range, manager, bp, source, application, formation, extents);
     graph.add_flow(*formed, report->image, queue);
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
     if (visualize) {
       // Visualization is best-effort: discard stale images when rendering falls behind
       // instead of backpressuring formation, reporting, or an optional tensor dump.
+      // The raster edge carries the formed image, which on tiled_strip is the
+      // whole parent lattice -- 3.62 GiB a slot on the Imperial strip. Every
+      // declared slot is a full copy of it, and a drop-oldest consumer only ever
+      // renders the newest, so depth beyond 1 is reserved and never read. At
+      // depth 4 the continuous_strip pools came to 100.7 GiB against 95.6 GiB of
+      // GPU and the run died at PROFILE_MATERIALIZATION_FAILED before start();
+      // depth 1 was 68.2 GiB. Those two figures predate continuous_strip's
+      // decimated mosaic view, which is now ~16 MiB a slot, so they now bound
+      // tiled_strip rather than both. Depth 1 still holds for the reason above:
+      // the extra slots are never read. Read the slot counts with SAR_DUMP_PLAN
+      // before raising this.
       const holoscan::ConnectionOptions raster_queue{
-          .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 4U};
+          .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 1U};
       const holoscan::ConnectionOptions display_queue{
           .queue_policy = holoscan::QueuePolicy::kDropOldest, .queue_depth = 8U};
       const holoscan::ConnectionOptions overlay_queue{
@@ -303,10 +363,11 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
             static_cast<uint32_t>(std::max<int64_t>(1, lut_side * horizontal_extent / max_side));
         height = static_cast<uint32_t>(std::max<int64_t>(1, lut_side * vertical_extent / max_side));
       }
-      // Keep display hold at session level so rasterization cannot block presentation.
-      auto raster =
-          graph.op<app::sar::SarImageVizOp>("sar_image_viz", raster_max_v, raster_max_u, lut_side,
-                                            transpose_display_axes, std::move(overlay));
+      // Hold is session-level after the image, not a sleep in this operator:
+      // raster and Holoviz share `visualization`, so a hold here never presents.
+      auto raster = graph.op<app::sar::SarImageVizOp>("sar_image_viz", raster_max_v, raster_max_u,
+                                                      lut_side, transpose_display_axes,
+                                                      std::move(overlay), product_extent);
       bind_outputs(options, "sar_image_viz", {"frame"});
       auto make_layers = [&] {
         holoscan::visualization::LayerStack layers;
@@ -424,6 +485,12 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
       options.deployment.bind_thread_placement("timeline", worker_lane)
           .bind_thread_placement("timeline_display", worker_lane);
     const auto plan = holoscan::compile(graph, std::move(options));
+    // Pool sizing is the binding constraint on a retained-aperture run and the
+    // plan is the only place the slot counts are visible: a declared depth of 2
+    // can materialize as 9. SAR_DUMP_PLAN=<file> writes it out.
+    if (const char* plan_dump = std::getenv("SAR_DUMP_PLAN")) {
+      std::ofstream(plan_dump) << plan.json();
+    }
     if (!plan.ok()) {
       const std::string json = std::string(plan.json());
       std::string hint;
@@ -450,6 +517,24 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     for (const auto& part : plan.execution_partitions()) {
       HOLOSCAN_LOG_INFO("SAR: partition '{}' lane={}",
                         part.authored_name.value_or(std::string("(auto)")), part.execution_lane);
+    }
+    const bool saving_images = cfg.dump && cfg.dump_max_files != 0;
+    HOLOSCAN_LOG_INFO("SAR: display={}; image saving={}",
+                      has_visualization ? (cfg.headless ? "headless" : "window") : "off",
+                      saving_images ? "on" : "off");
+    if (saving_images) {
+      const auto output = radar::dump_paths::display_path(cfg.dump_path);
+      HOLOSCAN_LOG_INFO("SAR: image output directory{}: {}",
+                        output.is_relative() ? " (relative to repository root)" : "",
+                        output.parent_path().string());
+      HOLOSCAN_LOG_INFO("SAR: image filename template: {}", output.filename().string());
+      HOLOSCAN_LOG_INFO("SAR: each saved image will log its exact path and viewer command");
+    } else if (cfg.dump) {
+      HOLOSCAN_LOG_INFO(
+          "SAR: images will not be saved because output.max_files is 0; set a positive limit");
+    } else {
+      HOLOSCAN_LOG_INFO("SAR: images will not be saved; set dump: true in {} to save .npy images",
+                        config_hint_path(cli.config, name));
     }
     auto session = holoscan::run_async(plan, managed_signals);
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
@@ -555,4 +640,51 @@ int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_c
     HOLOSCAN_LOG_ERROR("{}: {}", name, error.what());
     return 1;
   }
+}
+
+// Samples default to complex64 with geometry in float64, which is what the
+// sensors produce: very few radar systems deliver more than single-precision
+// samples, and the FMCW applications have always instantiated at `float`. It is
+// also where SAR's memory is -- the sample and image tensors are the dominant
+// pools and geometry is a few per cent of them, so this roughly halves every
+// SAR graph. The two axes are not one choice: ECEF positions cannot go to
+// float32, where one ulp at a 6.4e6 m radius is 0.76 m, some 25 wavelengths at
+// X band, so only the sample side moves. `sample_precision: double` opts back
+// in for a collect that genuinely carries more. See the precision section of
+// SAR/OPERATOR_API.md.
+inline bool single_sample_precision(const std::filesystem::path& config) {
+  const YAML::Node root = YAML::LoadFile(config.string());
+  if (!root["sample_precision"]) {
+    return true;
+  }
+  const auto value = root["sample_precision"].as<std::string>();
+  if (value == "single") {
+    return true;
+  }
+  if (value != "double") {
+    throw std::runtime_error("SAR: sample_precision must be 'single' or 'double'");
+  }
+  return false;
+}
+
+// The precision has to be chosen before the driver is instantiated, so this one
+// key is read here rather than waiting for `load_config` to run inside it.
+template <typename LoadConfig, typename BuildGraph>
+int run_sar_graph_app(int argc, char** argv, const char* name, LoadConfig load_config,
+                      BuildGraph build_graph) {
+  // These two run before the driver, so they are outside its own handler: an
+  // unreadable config path or a bad `sample_precision` would otherwise leave
+  // main() to terminate on the exception instead of reporting it.
+  bool single = true;
+  try {
+    const CliPaths cli = parse_cli(argc, argv, (std::string(name) + ".yaml").c_str());
+    single = single_sample_precision(cli.config);
+  } catch (const std::exception& error) {
+    HOLOSCAN_LOG_ERROR("{}: {}", name, error.what());
+    return 1;
+  }
+  if (single) {
+    return run_sar_graph_app_at<float, double>(argc, argv, name, load_config, build_graph);
+  }
+  return run_sar_graph_app_at<double, double>(argc, argv, name, load_config, build_graph);
 }

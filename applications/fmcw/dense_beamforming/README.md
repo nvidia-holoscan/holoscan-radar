@@ -53,6 +53,12 @@ The normal preset enables relative monostatic free-space range loss with a 100 m
 
 Simulator-backed sources default `app.scene_visibility` to `front_half_space`, with radar-local `+x` as boresight. Select `frustum` with explicit horizontal/vertical FOVs in radians, or `all` to restore isotropic target synthesis. This binary coverage gate is separate from relative range loss and does not model antenna gain.
 
+The C++ and Python GUI smoke tests use
+[`dense_beamforming_viz_smoke.yaml`](config/dense_beamforming_viz_smoke.yaml).
+It keeps the same processing graph and scene, with 16 chirps and a 5-by-5 angle
+grid to reduce worst-case Tensor pool reservations on CI GPUs. The normal demo
+uses 128 chirps and a 13-by-13 angle grid.
+
 ## Python Graph
 
 The HSDK 5 Python provider uses the same C++ YAML loader, operator ports,

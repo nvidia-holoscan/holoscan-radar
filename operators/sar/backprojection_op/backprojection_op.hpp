@@ -31,7 +31,7 @@
 
 namespace holoscan::radar {
 namespace detail {
-template <typename T>
+template <typename T, typename TGeom>
 struct BackprojectionState;
 }
 
@@ -57,9 +57,18 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&BackprojectionParams::backend>("backend"),
     holoscan::field<&BackprojectionParams::geometry_change>("geometry_change"));
 
-template <typename T>
+// `T` is the sample and image precision; `TGeom` is the precision of the
+// geometry ports (`positions`, `reference_position`, `sample_points`). They
+// default to the same type, which is the only combination the contract
+// describes. `<float, double>` exists because ECEF positions do not survive
+// float32: one ulp at a 6.4e6 m radius is 0.76 m, some 25 wavelengths at X
+// band, which destroys the phase history well before the samples' own
+// precision matters. See the operator README.
+template <typename T, typename TGeom = T>
 class BackprojectionOp : public holoscan::Operator<BackprojectionParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
+  static_assert(std::is_same_v<TGeom, float> || std::is_same_v<TGeom, double>);
+  static_assert(sizeof(TGeom) >= sizeof(T), "geometry may not be coarser than samples");
 
  public:
   explicit BackprojectionOp(const MaxTensorExtents& extents,
@@ -115,7 +124,7 @@ class BackprojectionOp : public holoscan::Operator<BackprojectionParams> {
   RangeInterpolation effective_interpolation_{RangeInterpolation::kLinear};
   BackprojectionBackend backend_value_{kDefaultBackprojectionBackend};
   GeometryChange geometry_change_value_{GeometryChange::kReset};
-  bool sample_points_connected_{false}, range_bins_connected_{false}, weight_connected_{false};
+  bool sample_points_connected_{false}, weight_connected_{false};
   int64_t unemitted_pulses_{0};
   bool locality_warned_{false};
   double aperture_compute_s_{0.0};
@@ -125,12 +134,13 @@ class BackprojectionOp : public holoscan::Operator<BackprojectionParams> {
   std::atomic<int64_t> last_image_emit_ns_{0};
   std::atomic<bool> last_image_emit_valid_{false};
   std::shared_ptr<FormationHud> hud_{};
-  std::shared_ptr<detail::BackprojectionState<T>> state_;
+  std::shared_ptr<detail::BackprojectionState<T, TGeom>> state_;
   std::shared_ptr<Tensor> retained_profiles_, retained_positions_, retained_reference_;
   std::shared_ptr<Tensor> retained_sample_points_, retained_weight_;
   LatchedOutput geometry_output_;
 };
 
-extern template class BackprojectionOp<float>;
-extern template class BackprojectionOp<double>;
+extern template class BackprojectionOp<float, float>;
+extern template class BackprojectionOp<double, double>;
+extern template class BackprojectionOp<float, double>;
 }  // namespace holoscan::radar

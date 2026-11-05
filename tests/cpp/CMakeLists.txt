@@ -82,6 +82,7 @@ radar_add_test(sar/test_phase_correction holoscan::phase_correction_op)
 radar_add_test(sar/test_aperture_manager holoscan::aperture_manager_op)
 radar_add_test(sar/test_backprojection holoscan::backprojection_op)
 radar_add_test(sar/test_sar_range_compression holoscan::sar_range_compression_op)
+radar_add_test(sar/test_autofocus holoscan::autofocus_op)
 radar_add_test(io/test_tensor_dump holoscan::tensor_dump_op)
 radar_add_test(io/test_cphd_reader holoscan::cphd_reader_op)
 add_executable(generate_cphd_fixture io/generate_cphd_fixture.cpp)
@@ -183,6 +184,16 @@ radar_add_test(integration/test_selective_aoa_operators
     holoscan::rank_one_residual_screen_op
     holoscan::multi_source_expansion_op
     holoscan::feature_assembly_op)
+radar_add_test(integration/test_sar_autofocus_graph
+    holoscan::aperture_manager_op
+    holoscan::autofocus_op
+    holoscan::backprojection_op
+    holoscan::phase_correction_op)
+# The retain/reform cases drive the autofocus app's own azimuth-to-pulse
+# resampler. Reimplementing it here would assert against a copy, so the app
+# directory is an include root for this one target.
+target_include_directories(test_sar_autofocus_graph PRIVATE
+    ${PROJECT_SOURCE_DIR}/applications/sar)
 radar_add_test(detection/test_cfar_detector
     holoscan::cfar_detector_op
     holoscan::feature_assembly_op)
@@ -344,6 +355,11 @@ function(radar_add_fmcw_workflow_checks application preset smoke_name)
     if(NOT HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ OR NOT HOLOSCAN_RADAR_HAS_X11)
         return()
     endif()
+    # Some GUI demonstrations reserve more Tensor capacity than CI needs.
+    set(window_config "${config_dir}/${preset}.yaml")
+    if(EXISTS "${config_dir}/${preset}_viz_smoke.yaml")
+        set(window_config "${config_dir}/${preset}_viz_smoke.yaml")
+    endif()
     foreach(language IN ITEMS cpp python)
         if(language STREQUAL "python" AND NOT HOLOSCAN_RADAR_BUILD_PYTHON)
             continue()
@@ -368,7 +384,7 @@ function(radar_add_fmcw_workflow_checks application preset smoke_name)
         add_test(NAME ${name}
             COMMAND ${RADAR_XVFB_RUN} ${xvfb_args} ${RADAR_TEST_PYTHON}
                 ${CMAKE_CURRENT_SOURCE_DIR}/check_fmcw_x11.py $<TARGET_FILE:${application}>
-                "${config_dir}/${preset}.yaml" ${probe_args})
+                "${window_config}" ${probe_args})
         set_tests_properties(${name} PROPERTIES
             LABELS "application;smoke;integration;visualization"
             RESOURCE_LOCK fmcw_gui TIMEOUT 60)
@@ -411,14 +427,21 @@ set(SAR_SMOKE_DIR "${PROJECT_BINARY_DIR}/tests/cpp")
 set(SAR_APP_NAMES spotlight video_sar tiled_strip continuous_strip independent_images)
 set(SAR_COUNTS 1 5 5 5 2)
 set(SAR_DIMS "5x5" "5x5" "15x6" "15x6" "5x5")
+# `autofocus` is not in SAR_APP_NAMES -- it drives its own smoke block below
+# rather than the generic count/dims loop -- but it consumes the same fixture,
+# so an autofocus-only build still needs the CPHD generated.
 if(TARGET spotlight OR TARGET video_sar OR TARGET tiled_strip OR
-        TARGET continuous_strip OR TARGET independent_images)
+        TARGET continuous_strip OR TARGET independent_images OR TARGET autofocus)
     add_test(NAME SarFixture
         COMMAND $<TARGET_FILE:generate_cphd_fixture>
             "${SAR_SMOKE_DIR}/generated_sar_smoke.cphd")
     set_tests_properties(SarFixture PROPERTIES FIXTURES_SETUP sar_cphd)
 endif()
-foreach(index RANGE 0 4)
+# Derived, not a literal 0..4: the three lists above must stay the same
+# length, and a hardcoded bound silently drops an app appended to them.
+list(LENGTH SAR_APP_NAMES sar_app_count)
+math(EXPR sar_app_last "${sar_app_count} - 1")
+foreach(index RANGE 0 ${sar_app_last})
     list(GET SAR_APP_NAMES ${index} name)
     list(GET SAR_COUNTS ${index} count)
     list(GET SAR_DIMS ${index} dims)
@@ -455,6 +478,78 @@ foreach(index RANGE 0 4)
         endif()
     endif()
 endforeach()
+
+if(TARGET autofocus)
+    # Figure 2: retained aperture replayed once, auxiliary conjugate estimate,
+    # corrected product. One image, the product lattice.
+    set(af_dir "${PROJECT_BINARY_DIR}/applications/sar/autofocus/cpp")
+    add_test(NAME Sar_autofocus_smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DSAR_EXECUTABLE=$<TARGET_FILE:autofocus>
+            -DSAR_CONFIG=${af_dir}/autofocus_generated_smoke.yaml
+            -DSAR_COUNT=1
+            -DSAR_DIMS=5x5
+            "-DSAR_REQUIRE_REGEX=sharpness .*x; [0-9]+ iteration.s. accepted; budget 8"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_smoke.cmake)
+    set_tests_properties(Sar_autofocus_smoke PROPERTIES
+        FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+
+    # Test the actual saved complex samples through the application in both
+    # supported sample precisions. The oracle must undo a nontrivial injection.
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    foreach(precision single double)
+        add_test(NAME Sar_autofocus_pixels_${precision}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_autofocus_pixels.py
+                --binary $<TARGET_FILE:autofocus>
+                --config ${af_dir}/autofocus_generated_smoke.yaml
+                --precision ${precision})
+        set_tests_properties(Sar_autofocus_pixels_${precision} PROPERTIES
+            FIXTURES_REQUIRED sar_cphd LABELS "application;integration" TIMEOUT 180)
+    endforeach()
+    add_test(NAME AutofocusSweepReports
+        COMMAND ${Python3_EXECUTABLE} -m unittest discover
+            -s ${PROJECT_SOURCE_DIR}/tools/sar_autofocus)
+    set_tests_properties(AutofocusSweepReports PROPERTIES LABELS "python;unit")
+
+    # The same graph with a known look-axis error injected. The 5-pulse fixture
+    # is far too small for PGA to recover anything, so these pin the injection,
+    # the sign convention and the apply path, not the recovery. The scoring is
+    # reported, not enforced: AutofocusScoreOp only warns past its threshold and
+    # does not affect the exit code, so what each variant actually asserts is
+    # the required line below.
+    # Each variant must state a number or a verdict of its own, or it asserts
+    # nothing the plain smoke test above does not. The regexes match digits so
+    # that a "nan" or "inf" fails instead of counting as output.
+    #
+    # Every required line is chosen to be neutral about estimate quality. A
+    # regex that only passes while the operator declines to act -- the polar
+    # variant used to require `autofocus REFUSED` -- is a tripwire pointing
+    # the wrong way: a genuine improvement turns it red. `lie` additionally
+    # pins the sign convention, which is what the comment above claims these
+    # variants are for and what the bare RMS number did not check.
+    set(AF_DIAG_NAMES lie oracle polar)
+    set(AF_DIAG_REQUIRE
+        "AutofocusScoreOp: affine-removed RMS [0-9]+\\.[0-9]+ rad.*sign .4pi f d / c"
+        "OraclePhaseOp: published [0-9]+ pulses  [0-9]+\\.[0-9]+ rad RMS"
+        "AuxPointsSourceOp: staged [0-9]+x[0-9]+ range-bearing points")
+    list(LENGTH AF_DIAG_NAMES af_diag_count)
+    math(EXPR af_diag_last "${af_diag_count} - 1")
+    foreach(af_index RANGE 0 ${af_diag_last})
+        list(GET AF_DIAG_NAMES ${af_index} af_diag)
+        list(GET AF_DIAG_REQUIRE ${af_index} af_require)
+        add_test(NAME Sar_autofocus_${af_diag}
+            COMMAND ${CMAKE_COMMAND}
+                -DSAR_EXECUTABLE=$<TARGET_FILE:autofocus>
+                -DSAR_CONFIG=${af_dir}/autofocus_generated_smoke_${af_diag}.yaml
+                -DSAR_COUNT=1
+                -DSAR_DIMS=5x5
+                "-DSAR_REQUIRE_REGEX=${af_require}"
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_smoke.cmake)
+        set_tests_properties(Sar_autofocus_${af_diag} PROPERTIES
+            FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+    endforeach()
+endif()
 
 if(TARGET video_sar)
     set(video_dir "${PROJECT_BINARY_DIR}/applications/sar/video_sar/cpp")

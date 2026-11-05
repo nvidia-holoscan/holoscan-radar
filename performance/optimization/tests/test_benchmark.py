@@ -329,8 +329,14 @@ Path(arg('--output')).write_text(json.dumps(report))
     def test_campaign_inventory_missing_harness_and_budget(self):
         root = Path(__file__).resolve().parents[3]
         inventory = discover(root)
-        self.assertEqual(len(inventory), 32)
-        self.assertEqual(sum(x["recipe"] is not None for x in inventory), 26)
+        # Derived from the tree rather than hardcoded: the literals had to be
+        # hand-bumped by every new perf operator and failed without saying
+        # which entry had changed.
+        recipes = {p.parent.name for p in root.glob("performance/operators/*/*/recipe.yaml")}
+        self.assertEqual(
+            sorted(x["operator"] for x in inventory if x["recipe"] is not None), sorted(recipes)
+        )
+        self.assertTrue(inventory)
         self.assertTrue(all(x["status"] == "blocked" for x in inventory if not x["recipe"]))
         state = {"operators": [], "config": {}}
         write_json(self.root / "campaign.json", state)

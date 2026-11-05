@@ -2,6 +2,13 @@
 
 The scroll stager splits each reader batch at the emission cadence and forwards its boundary only on the last slice. Backprojection retains overlapping rows as its lattice advances, and a mosaic places emitted windows in the parent strip.
 
+> **Prerequisite: download data before running the application.**
+> Download the Imperial Valley Capella CPHD using the
+> [download script below](#real-collection-preset). The same file serves both strip apps.
+> Downloads run on the host from the repository root; save files under `data/sar/`
+> as instructed. Data is not bundled, and the application does not download it.
+> Generated-fixture tests in this guide require no external data downloads.
+
 ## Graph
 
 ```mermaid
@@ -77,12 +84,19 @@ a CPHD path may replace `cphd.path` directly, or follow a YAML path as the secon
 
 ## Output and display
 
-Each scroll emission reports an image; the mosaic places it into the parent complex strip. The fixture reports five 15 × 6 mosaic images. Optional dump writes the parent mosaic in its original `(v, u)` layout. The Holoviz raster transposes only the display axes, placing along-track `v` horizontally so the long strip fits a landscape window, and composites the source-branch on-image HUD. The proposed u-axis display crop is not wired and remains an open item.
+Each scroll emission reports an image; the mosaic places it into the parent complex strip. The fixture reports five 15 × 6 mosaic images. The Holoviz raster transposes only the display axes, placing along-track `v` horizontally so the long strip fits a landscape window, and composites the source-branch on-image HUD.
+
+The parent strip is resident and full resolution, but it is not what `image_out` publishes. At the preset's 2.58 m spacing the parent is 40247 × 6029 `complex<double>`, 3.62 GiB a copy, and a Tensor pool holds sixteen slots of whatever rides the port — so republishing it would spend most of the card on reserve nobody reads, and at `lattice.pixel_scale: 2.5` it does not fit at all. The operator instead publishes the u-cropped parent decimated to twice `visualize_size` — 2683 × 360, 14.7 MiB — which is what both the display and `dump: true` receive.
+
+Decimating a strip means throwing away roughly 14 of every 15 samples on each axis, so the view is multi-looked rather than subsampled: each sample is the incoherent average of sixteen source samples spread across its box, carried as amplitude with zero phase. Subsampling speckle instead renders as static.
+
+Both the `SAR: image N formed` line and the on-image HUD report the strip's true size rather than the view's. Writing the accumulator out at full resolution is not implemented and remains an open item; at this spacing it would be a 24 GB file per image.
 
 `visualize: true` requests Holoviz when its HSDK 5 component and a usable
 X11 display are available. `headless: true` uses an offscreen CUDA sink.
-`visualize_size` bounds the display raster; it does not change formation
-resolution. `visualize_hold_s` only keeps a finite positive duration after
+`visualize_size` bounds the display raster and, at twice its value, the
+mosaic's published view; it does not change formation resolution, which is
+`lattice.pixel_scale`. `visualize_hold_s` only keeps a finite positive duration after
 an emit; indefinite hold and interactive X11 validation remain open.
 `dump: true` enables the synchronous `TensorDumpOp` branch; use `output.path`
 and `output.max_files` to control its files.

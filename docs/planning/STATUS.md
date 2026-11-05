@@ -4,6 +4,121 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-05** — SAR-branch CI follow-up: added `autofocus_op` to the
+  default native package selection (33 operators), fixing missing autofocus
+  test targets in explicit-test package configurations. Fresh package, subset,
+  explicit-test, and cached-test configuration checks and all 13 packaging
+  helpers pass in the SDK container. Dense C++/Python GUI tests use a smaller
+  16-chirp, 5-by-5 angle preset, reducing worst-case detection capacity about
+  54x. Fixed aliased Python frontend/CFAR extent dictionaries; both new
+  regressions fail before the fix and pass after it. All 10 focused
+  config/application checks, 109 Python application tests, and pinned lint
+  pass. The normal demo and operator contracts are unchanged. Full artifact
+  packaging and the remote CI run still need verification on the CI runner.
+
+- **2026-11-05** — Merged `origin/main` at `0670cc08` into
+  `dpc/sar-autofocus`. The only conflict was adjacent work-table additions;
+  retained both autofocus and packaging entries. Updated the autofocus operator
+  to use main's shared CMake export set. The merged build and all 1,403
+  non-performance CTests pass. All 13 packaging helpers pass in the SDK
+  container, and a fresh autofocus-only package configuration verifies its
+  target is in the shared export. Full pinned lint passes. No public contract
+  changes.
+
+- **2026-11-05** — Autofocus README usability pass: retained the five-step
+  image comparison and scene-conversion instructions, combined preset defaults
+  into one table, and added log interpretation, settings guidance, and
+  troubleshooting. Removed historical benchmark and defect narratives from
+  the application guide; linked existing operator development notes instead.
+  No application behavior or contracts changed.
+
+- **2026-11-05** — Saved SAR image viewer work on `dpc/sar-autofocus`:
+  added `uv run tools/sar_data/view_image.py` with isolated plotting
+  dependencies, PNG output without a display, optional interactive viewing,
+  and comparisons on a shared intensity scale. The autofocus README documents
+  a numbered three-run comparison: injected/uncorrected, injected/PGA-corrected,
+  and original-data/uncorrected, with separate output directories. Shipped
+  `autofocus_blurred`, `autofocus_corrected`, and `autofocus_reference` presets
+  replace the config-generation step and the single recovery preset. Unexplained
+  figure references and injection nicknames were removed, PGA and scoring terms
+  are defined, and historical measurements are labelled. A preset-defaults
+  table and conversion guide explain how to create blurred, corrected, and
+  reference variants for any of the other shipped scenes. Auxiliary
+  image-dump graph changes were removed to keep the application simple. The
+  documented Kourou comparison produces two zero-correction baselines (with
+  and without injected error) and a seven-iteration recovery at 0.1813 rad residual; its shared-scale PNG renders
+  successfully. All eight focused autofocus/save CTests pass after simplifying.
+  Save logs for images inside a checkout print a shell-quoted host command, and SAR guides document it.
+  Eight offline viewer tests and 28 focused SAR/dump CTests pass. The saved
+  Kourou product renders successfully, and executing an app-emitted command on
+  the host works with spaces and apostrophes in the filename. No operator
+  contract changes. SAR startup now explicitly reports the output directory
+  and filename template, or states that images will not be saved and how to
+  enable saving. Each successful image write reports its repository-relative path (absolute outside the checkout),
+  the host viewer command, PNG placement, and the optional `--show` flag;
+  `output.max_files: 0` is correctly reported as saving disabled.
+
+- **2026-11-05** — Autofocus review follow-up on `dpc/sar-autofocus`:
+  sweep correctness, accepted-iteration reporting, runnable recovery presets
+  and output guidance, and an application-level complex-pixel comparison are
+  addressed as four separate commits. Sweep execution failures now
+  invalidate evidence and propagate a nonzero campaign exit; explicit
+  termination provenance determines refusals and accepted iterations. Nine
+  offline report regressions pass. The report now labels accepted iterations
+  and the configured budget separately, including refusal paths; the app smoke
+  requires the new wording. All four autofocus application smokes pass in the
+  SDK container after rebuilding the app. A copied `autofocus_recovery.yaml`
+  preset now makes the 8000-pulse, 2 cm experiment runnable without manual
+  YAML assembly; startup reports experiment and output settings. Quick-start
+  documentation distinguishes clean input, injected recovery, GUI, and complex
+  dumps, and the screen's stale Atlanta claim is removed. The recovery preset
+  runs on Kourou at 0.1813 rad residual with 7/8 accepted iterations and writes
+  the complex product and both phase vectors; all four fixture smokes pass.
+  Pixel-level application checks now compare clean, injected, and oracle
+  complex products at both sample precisions, with a non-vacuous injection
+  threshold, phase-sensitive recovery, finite pixels, and dtype/shape checks.
+  The old autofocus smoke product was centred on the platform, outside the
+  compressed range support, so it silently produced zero pixels. Autofocus
+  fixtures now use a ground-centred product and a fixed-SRP CPHD variant.
+  Pixel comparisons pass in both precisions: injection changes the product by
+  1.073 relative L2, and oracle recovery is within 4.63e-5. They and the offline
+  sweep regressions are registered in CTest. All 71 focused SAR/CPHD/autofocus
+  CTests pass after rebuilding affected apps, and a deliberately reversed
+  correction sign fails the pixel test as expected. Full pinned lint and
+  metadata validation pass. No operator contract changes.
+
+- **2026-11-05** — Download publication review follow-up on
+  `dpc/sar-autofocus`: the spotlight quick-start stops on failed transfers
+  without publishing the partial file or launching the app. HTTPS downloads
+  verify bytes received against the GET response length before replacing a
+  CPHD destination. Six offline downloader tests and three mocked quick-start
+  scenarios pass; length mismatches preserve existing destinations and clean
+  failed partial files. No operator contracts changed.
+
+- **2026-11-05** — **Autofocus has a matching data download command.**
+  `tools/sar_data/pull_cphd.py --app autofocus` downloads the default Kourou
+  collect into `data/sar/`. `--app all` includes it, preserves the `imperial/`
+  and `mode5/` layout under an overridden root, and deduplicates shared
+  Imperial Valley downloads. The autofocus and SAR data guides share a
+  uv-based setup/download/run quick-start and distinguish the separate Atlanta
+  download and Houston subset recipe. Offline CLI manifests match the eight
+  preset collection paths, including custom destinations. A user-reported 404
+  exposed a stale Kourou catalog prefix: corrected it to
+  `sar-data/tasks/Kourou, French Guiana/` and verified all eight objects with
+  HTTP HEAD. A 64 KiB range read confirms Kourou's 23375 by 23999 dimensions.
+  Transfer failures now report the source and destination without a traceback;
+  `--app all` rejects the known per-collection destinations. Four offline
+  downloader regressions pass. No full collections downloaded or operator
+  contracts changed.
+
+- **2026-11-05** — Merged `origin/main` at `9310b259` into
+  `dpc/sar-autofocus`. Preserved the autofocus product-extent sizing alongside
+  main's GPU/display placement, both integration-test dependencies, and both
+  coordination histories. The host `./holoscan-radar test` workflow builds
+  successfully and all 1,400 non-performance CTests pass, including the SAR
+  application smokes and Python provider checks. Repository-wide pinned lint,
+  including metadata validation, passes. No public contract changes.
+
 - **2026-10-28** — **Debian package graph corrected for operator-only delivery.**
   A package-only configuration now enables all 32 public FMCW, SAR, and I/O
   operators without enabling the 12 example applications. The explicit package
@@ -95,6 +210,666 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   pass in the staging image. Delayed-input SISO/SIMO visualization also passes.
   DSP contracts are unchanged; pixel-coordinate resizing limits are documented
   in the shared dashboard guide.
+- **2026-11-02** — **Autofocus handoff note added, and the docs now agree on
+  what `phase_correction` is.**
+  [`SAR/AUTOFOCUS_HANDOFF.md`](SAR/AUTOFOCUS_HANDOFF.md) explains the operator
+  for a developer who knows the module and its SAR side but not this
+  operator, and records three pre-push
+  review warnings left unfixed. The 2026-10-31 contract change made the port
+  pulse-ordered and `num_az` long. The operator README, the autofocus app
+  README, `WORKFLOWS.md` (prose and Figures 2 and 3, which now show the
+  app-owned resample), `TESTING.md`, the D20 record and the `SICDWriterOp`
+  input note still said pulse-indexed or `(num_pulses)`; they are corrected to
+  match the code. The SAR app and operator indexes, `AGENTS.md` and
+  `DEVELOPER.md` now list the autofocus app and `AutofocusOp`, which were
+  missing or described as planned.
+- **2026-11-02** — **The SAR overviews now describe HSDK 5, and
+  `ApertureManagerOp` refuses a taper it cannot compute.** Both overviews,
+  their regeneration prompts and the `WORKFLOWS.md` body still described the
+  source branch's end-of-stream metadata key and a required `control`
+  connection. In HSDK 5 the boundary is a typed `stream_boundary` port and an
+  unwired `control` initializes but never emits. They also said "nothing is
+  built yet" and listed autofocus as planned. Prompts A and B are corrected,
+  and both overviews are brought current. `DEVELOPER_OVERVIEW.md` also gains
+  `<T, TGeom>` precision and the Figure 2 resample. The contract says an
+  `aperture_window` outside `reform` or a stamped block is rejected at
+  initialization, but the manager instead silently dropped the window on a
+  sliding aperture. It now throws in `start()` (new test
+  `RejectsTaperOnSlidingWindow`, checked to fail without the fix), and it warns
+  when a stamped window closes short, as the contract also requires. No
+  contract change. Separately, `SarAutofocusGraph.Figure2RetainAndReform`
+  failed about four runs in five because its wait condition omitted the
+  `sharpness` collector it asserts on; it now waits for it (10 of 10 pass).
+- **2026-10-30** — **The PGA scene screen is ported as
+  [`tools/sar_autofocus/pga_screen.py`](../../tools/sar_autofocus/pga_screen.py),
+  and running it falsified a claim this branch had already committed.** The tool
+  was the last item outstanding from the 2026-10-27 HSDK 5 port note. It no
+  longer builds an ECEF grid in Python or transcribes `reference_frequency`:
+  formation runs through the `spotlight` app on the shared IARP-centred
+  `lattice` block, so a verdict is expressed in the same terms the scene configs
+  use, and the only dependencies are numpy and PyYAML. It scores both halves of
+  PGA's precondition — isolation (peak over an annulus median) and persistence
+  (the candidate across eight disjoint dwell blocks, compared between blocks
+  rather than against the full aperture, so sub-aperture cell-merging is
+  common-mode). **The correction:** the app README recorded Atlanta as failing
+  the isolation half, and this branch repeated it. On a matched 2048² lattice at
+  1.0 m, Atlanta's best candidate is isolated 661× and holds 0.96 of its mean,
+  against Kourou's 135× and 0.68 — Atlanta passes both halves *more cleanly than
+  the collect that screening chose*, and the old verdict did not reproduce at
+  any setting tried. Houston sits at 585× / 0.85, and Imperial Valley has no
+  cell clearing 30×, which independently corroborates the operator refusing it
+  at iteration 0. So the screen is broadly predictive — the three scenes with a
+  persistent isolated scatterer autofocus to 0.11–0.22 rad, the one without is
+  refused — but it does not rank them, since Atlanta screens best and Houston
+  focuses best. Kourou's README and config numbers (previously 221× / 0.85,
+  unreproducible) are re-measured and now cite the command that produces them.
+- **2026-10-30** — **`AutofocusOp` gained two optional provenance outputs,
+  `termination` and `iterations` (CONTRACT CHANGE,
+  [`SAR/OPERATOR_API.md`](SAR/OPERATOR_API.md)).** The Imperial Valley result
+  below made a latent ambiguity concrete: three paths return the image
+  untouched — iteration 0 lowering sharpness, too few scatterers, and the
+  `max_correction` ceiling — and on every existing port all three look
+  identical to an uneventful run, because a zero `phase_correction` and a flat
+  `sharpness` trace are also what a correctly focused image produces. The only
+  statement of what happened was a log line. `termination` carries an
+  `AutofocusTermination` code and `iterations` counts *accepted* iterations,
+  which separates a refusal from an early stop that kept most of its
+  correction. Both are int32 `(1,)` and optional; existing graphs need only the
+  `bind_tensor_output_device` the graph driver requires for every declared GPU
+  tensor output. **These report provenance, not quality** — the quality question
+  recorded below stays closed, and a residual output was rejected for exactly
+  that reason. One SDK note for anyone joining a tensor port: the `[live]`
+  spelling (`Exact{}` + `on_missing SafeDefault{}`) never matches there, since
+  `SafeDefault{}` means "fall back to the Params seed" and a tensor port has
+  none; use `OnAligned` on the shared stamp.
+- **2026-10-30** — **The autofocus fixes below hold on three more collects, and
+  measuring the scene axis corrected three claims that were resting on Kourou
+  alone.** `AutofocusOp` accuracy had only ever been measured on Kourou, which
+  was *screened* for PGA — an isolated reflector lit across the whole dwell — so
+  the operator's precondition was satisfied there by construction. Atlanta
+  (UMBRA-07 airport), Houston (mode02 dense urban) and Imperial Valley (Capella
+  stripmap over agriculture) now have configs beside it and
+  `tools/sar_autofocus/sweep.py --scenes all` sweeps across them. **The fixes
+  generalize:** all five injected symmetries recover to 0.04–0.22 rad on the
+  three scenes with scatterers. **Kourou is the worst of those three**, by a
+  factor of two to four — screening bought a verifiable, dependable scene, not
+  accuracy, because the estimator averages a gradient over many range bins and a
+  city supplies hundreds where Kourou supplies one. The app README recorded
+  Atlanta as a scene *failure*; it fails the isolation screen and still
+  autofocuses better than Kourou, and the README now reconciles the two.
+  **Imperial Valley refuses all five** at iteration 0 and returns the image
+  untouched, which is the designed response to distributed clutter and the first
+  evidence the guard works on real clutter rather than synthetic overreach — so
+  the sweep now reports `refused` separately from `HARMFUL`, since a residual
+  equal to its baseline means the operator declined rather than did damage.
+  Three corrections fell out of re-measuring from the committed tree: (1) the
+  **random walks are not harmful at every magnitude** — `OPEN_ITEMS.md` §7 had
+  published numbers measured *between* the two fixes, and the walk is the shape
+  least protected by symmetry so the reversal hit it hardest; re-measured, only
+  the 20 rad walk is harmful and the shape sweep is 10 of 11 rather than 8.
+  (2) The **window-sizing table's sharp non-monotone optimum was the reversal
+  bug** — 0.274 passing beside 1.181 failing one doubling away is now 0.305
+  beside 0.485, which removes the main argument for *deriving* `window_fraction`
+  rather than configuring it. (3) The **long-aperture ceiling is two failures at
+  two lengths, and the worse one is nearer than recorded**: past ~16000 pulses on
+  a clean collect the guard refuses and autofocus does nothing, which is safe,
+  but past ~12000 with a real error present it *accepts* an estimate that is only
+  half right (0.181 rad at 8000, 0.292 at 12000, 0.442 at 16000, all with
+  sharpness rising 2.9–8.9x), which sharpness cannot distinguish. The entry's
+  own "every shipped workflow forms below that ceiling" excused this app's
+  full-collect preset, which lands at 0.436 rad on the easiest shape there is.
+  **Open:** the band-limited walk (§7), the width grid re-run across scenes, and
+  whether the aperture ceiling becomes a documented limitation or an algorithm
+  change (sub-aperture or coarse-to-fine composition).
+
+- **2026-10-30** — **Sweeping autofocus over error *shape* — the axis every
+  prior measurement held fixed — found two real defects in `AutofocusOp`, both
+  structurally invisible to a quadratic.** Asked to test more broadly, the first
+  shape sweep was damning: every polynomial passed and **every non-polynomial
+  shape failed**, with random walks and a 1-cycle sinusoid actively *harmful*
+  at 2 mm RMS. No window width rescued any of them, so it was not the sizing
+  question from the entry below. The discriminating test was symmetry: the
+  **same sinusoid shifted a quarter cycle**, odd to even about the dwell
+  centre, went from no recovery to 35.6x. **(1) The emitted phase had a
+  constant offset between the two halves of the aperture.** The gradient was
+  integrated straight up the azimuth-FFT bin axis, but that axis is the pulse
+  axis rotated by half the aperture — bins `n/2-1` and `n/2` are *not* adjacent
+  pulses, while bins `n-1` and `0` are and were being skipped — so the second
+  half took its constant of integration across the wrap. Measured on the dumped
+  estimate as a **17.34 rad step at pulse n/2** with the two half-means equal
+  and opposite. This is the "one-sample step at `floor(n/2)`" carried as
+  unexplained since 2026-10-29, which was recorded as too narrow to matter; it
+  was the whole error on any non-even shape. **(2) The emitted phase was
+  time-reversed** — azimuth is the Fourier conjugate of slow time and runs the
+  other way. Pinned by testing four candidate mappings against injected truth
+  over four shapes; plain reversal wins on all four and nothing else wins on
+  any. Only the *exported* vector was wrong, the in-image path never consulting
+  the mapping, so **Figure 3 was always right while Figure 2 handed
+  `PhaseCorrectionOp` a reversed correction.** Both hid behind the same blind
+  spot, and a 2026-10-28 fix in the same code said so at the time: its note
+  records that its two halves "partially cancel on a symmetric quadratic".
+  **Result:** five shapes on Kourou that scored 0.16 to 4.92 rad now all score
+  0.18 to 0.22; the shape sweep goes from **3 of 11 inside the hard floor to 8
+  of 11**. 1190/1190 tests pass. Two tests moved with the fix because they
+  encoded defect 1 — `injected_phi()` built its quadratic against the raw bin
+  index, putting a **7.56 rad jump between adjacent pulses 31 and 32**, and the
+  accuracy assertions ran in bin order, which round-trips through the mapping
+  under test and lets a wrong mapping cancel out of its own comparison. They
+  now assert in pulse order, and `RecoversOddAndEvenErrorsAlike` gates the
+  symmetry directly. New: `tools/sar_autofocus/sweep.py` makes the grid
+  reproducible, `PerturbPositionsOp` injects sinusoids and random walks beside
+  polynomials, and `AutofocusScoreOp` reports the baseline it had to remove so
+  a row is self-describing across shapes. **Still open:** random-walk error
+  remains harmful at every magnitude and width (`OPEN_ITEMS.md` §7) — either
+  the white-driven walk is unphysical for a platform whose INS error is
+  band-limited, or PGA cannot represent broadband error; a band-limited walk
+  separates the two. The window-sizing table below predates these fixes and
+  needs re-measuring.
+- **2026-10-29** — **TENTATIVE: the autofocus first window has to be sized to
+  the error magnitude, oversizing is cheap in the regime that matters, and past
+  ~100 rad no width works well.** Asked whether an application can reasonably
+  know its own error budget — it can, from INS grade, dwell time and wavelength
+  — which turned the question from "can the caller know" into "what does sizing
+  for the worst case cost on a typical collect". Measured, at 8 iterations on
+  Kourou / 8000 pulses: a 1000-sample first window costs **40 mrad** against
+  350 on a 5.4 rad error (0.161 → 0.201) and 9 mrad on a clean collect, while
+  rescuing a 107.3 rad error from 1.035 to 0.274 rad. So below ~27 rad,
+  configuring the window generously from the error budget is sound and the
+  operator needs to do nothing — **an earlier framing of this as circular,
+  "the caller cannot know the magnitude", was wrong.** Two findings qualify it.
+  Above ~100 rad the optimum is **sharp rather than a floor**: at 107.3 rad,
+  1000 samples passes at 0.274 and 2000 fails at 1.181, reproducibly at both 4
+  and 8 iterations, and unexplained — a budget known to an order of magnitude
+  does not land inside that. And at **214.6 rad nothing works**: widening 350 →
+  2000 takes the residual from 50.48 to 2.21 rad, a huge gain that is still 3x
+  the hard floor, with 4000 worse again and `sharpness` reporting 11-18x
+  throughout. **Explicitly tentative:** every cell is one collect, one aperture
+  and one pure quadratic — the smoothest error there is and the one a geometric
+  window suits best. Landed as `autofocus_op/OPEN_ITEMS.md` §6 pending the
+  broader sweep over error profiles and the other collects on disk; nothing goes
+  into contract guidance until that lands. Note the autofocus app hard-codes
+  `window_fraction: 0.0438`, the 350-sample column, with a comment calling it
+  tuned — on this table it is the worst cell in two of five rows.
+- **2026-10-29** — **Three candidate runtime quality signals for `AutofocusOp`
+  were implemented and measured, and all three are blind to the failure they
+  were built to catch.** The open question was whether the operator can tell a
+  caller that its estimate is wrong, since `sharpness` reported a 17.1× gain on
+  an estimate that missed the hard floor. (1) **Phase-gradient coherence**, the
+  normalized vector sum of `g₁ conj(g₀)` over the selected range bins, reads
+  **1.0000 on every passing case and 0.9993 on a 50 rad catastrophe** — the
+  scatterers agree perfectly and are perfectly wrong, because the error is a
+  systematic bias and coherence is constructed to ignore exactly that. (2)
+  **Convergence** (did the loop stop on the guard or run out of budget) is
+  falsified in both directions: 107.3 rad at 8 iterations converges and still
+  fails at 1.035 rad, while 53.6 rad at 4 iterations does not converge and
+  passes at 0.342 rad. (3) **The LUE gradient against its π aliasing limit**
+  peaks at 0.152 rad/bin, so wrapping is not the mechanism. Candidate 2
+  generalizes to any self-consistency test, because the next iteration's
+  estimate *is* a second PGA opinion on the corrected image: on the failing
+  107.3 rad row the last two iterations find essentially nothing left (max
+  |grad| 0.0039 then 0.0010) with 1.035 rad still outstanding. **PGA converges
+  to a fixed point of its own objective that is not the truth, and the gap lies
+  in the null space of everything the estimator measures** — so this reads as a
+  property of the algorithm rather than a missing metric, and establishing
+  accuracy needs information the operator does not have. No port was added and
+  the measurement code was reverted; invariant 2's contract surface is
+  unchanged. **Two findings fell out.** A new and worse failure: at **214.6 rad
+  (about 34 wavelengths) the residual is 50.48 rad**, roughly half of a ~96 rad
+  baseline, with `sharpness` reporting 11.1× and the guard terminating normally
+  — recorded as `autofocus_op/OPEN_ITEMS.md` §6, where the open question is
+  whether `window_fraction` should be *derived* rather than configured, since a
+  caller reaches for autofocus precisely because the magnitude is unknown. And
+  a correction to yesterday's contract text: **8 iterations alone do not
+  recover 107.3 rad** (1.035 rad, still failing); the 0.274 rad figure needs the
+  wider 1000-sample first window as well, and `SAR/OPERATOR_API.md` said
+  otherwise.
+- **2026-10-29** — **`AutofocusOp.num_iterations` now defaults to 8, a contract
+  change.** The prior default of 4 is what fails on the error magnitudes the
+  operator exists for (entry below): 1.365 rad residual at 107 rad of injected
+  error, missing even the 0.785 rad hard floor, while reporting a 17.1×
+  sharpness gain. Eight iterations give 0.274 rad on the same case and are
+  identical at 16 and 32. It costs little because `num_iterations` is an upper
+  bound rather than a count — the sharpness guard stops the loop as soon as an
+  iteration fails to improve — so a converged image never pays for the
+  headroom. Measured on the Kourou-sized aux (2478 × 8000) with the existing
+  perf recipe, an iteration is **~10.8 ms over an 8.7 ms fixed floor** (51.8 ms
+  at 4 iterations against 19.5 ms at 1); the shipped 8000-pulse app run
+  terminates at 6 either way, so ~22 ms against 37 ms of product formation and
+  a ~458 ms video-SAR frame budget. That run's residual moves 0.149 → 0.161 rad
+  and sharpness 8.66 → 8.78× — a little peak accuracy on small errors, bought
+  against a hard failure on large ones. The alternative, leaving the default at
+  4 and documenting that airborne callers should raise it, was rejected: it
+  protects only a caller who reads the guidance, and the failure mode for one
+  who does not is a wrong estimate the operator reports as a success. Callers
+  who want the latency back still set the parameter, including `[live]` per
+  tick. `SAR/OPERATOR_API.md`, the operator README, and the perf recipe move
+  with it; no test asserted the old default, and the one that sized a snapshot
+  bound from it now derives the bound from `AutofocusParams{}`.
+- **2026-10-28** — **`continuous_strip` could not reach `start()` with
+  visualization on, and the cause is the GA SDK's pool slot inflation rather
+  than anything in the app.** Declared pools came to **100.7 GiB against 95.6
+  GiB** on an RTX PRO 6000 and the run died at
+  `PROFILE_MATERIALIZATION_FAILED`; headless the same binary declares 31.8 GiB
+  and runs. Read off `SAR_DUMP_PLAN`, one pool is 90.4 GiB of it:
+  `sar_mosaic.image_out` is the whole Imperial parent lattice (40247 x 6029 x
+  `complex<double>`, 3.62 GiB a slot) and the rasterizer is a second subscriber
+  to it, which takes the pool from 6 slots to 25. The rasterizer's own pools
+  are 0.26 GiB — the cost is entirely the producer's, because every declared
+  slot on a fanned-out edge is a full copy of the published tensor. The viz
+  edge is now depth 1, which is what a `kDropOldest` display consumer actually
+  reads: 68.2 GiB, and the strip runs on time at 40247 x 6029. This is the same
+  slot inflation as the Kourou entry below, now with a second data point —
+  declared depth 4 on two consumers materializes as 25 slots, not 8.
+  **This app ran at full size on 2026-10-21 and the regression is the SDK**:
+  that run reported the failure path as `run_session_worker.cpp:403` against
+  the staging `v5.0.0.7-cuda13` image, today's is `:568` against GA
+  `v5.0.0-cuda13` (adopted in #64), with the `continuous_strip` graph itself
+  byte-identical in behavior (same `graph_generation=56`). Not yet measured:
+  the staging image's slot counts, since `SAR_DUMP_PLAN` postdates the switch.
+  **Followed by the structural fix, which also makes 1.03 m reachable.**
+  `SarMosaicOp` no longer republishes its accumulator. The parent stays
+  resident and full resolution; `image_out` carries it u-cropped and decimated
+  to a display budget, so the pool went from 90.4 GiB to 256 MiB. That is what
+  makes `lattice.pixel_scale: 2.5` affordable at all — a 100618 x 15073 parent
+  at 1.03 m against the 2.58 m native ground-range GSD, declared pools 17.7 GiB
+  (from 100.7), 44.9 GiB resident including the 22.6 GiB accumulator,
+  backprojection 16-18 ms a window and 95 ms ahead of collect time, all
+  verified. **The preset stays at `pixel_scale: 1`** (40247 x 6029, 3.62 GiB
+  accumulator, BP ~7 ms) by request: 2.5 is a documented knob, not the default.
+  All 37 `Sar*` tests pass and `tiled_strip` is unchanged — it takes the
+  new crop and budget arguments at their defaults, which republish the whole
+  parent as before. **Contract note:** the published tensor is now a view, so
+  `dump: true` writes the decimated raster rather than the strip, and
+  `SarImageReportOp` takes the product extent explicitly to keep the
+  `image N formed` line reporting the strip. `SarImageVizOp` takes it for the
+  same reason — the HUD banner was showing the view's 2794 x 375.
+  **The view must multi-look, not subsample.** A strip decimates 15x at the
+  preset and 36x at 2.5, and point sampling leaves one look of speckle per
+  output pixel, which renders as static; `sample_mosaic_rect` now averages
+  intensity over sixteen samples spread across each box and publishes
+  amplitude with zero phase. Measured at 2.5 on image 22 of the Imperial
+  strip, median local amplitude CV over 32 x 32 blocks falls from **0.589 to
+  0.259** and the drainage network becomes legible. Looks are capped per axis
+  because averaging a 36x box whole would read the entire accumulator every
+  image for a fraction of a dB; at 16 looks the cost does not move the
+  backprojection figure at either spacing. A factor-1 view is still a plain
+  copy and keeps its phase, so `tiled_strip` is unaffected — but `dump: true`
+  on a decimated view now writes multi-look amplitude.
+  **Still open:** full-resolution strip output. It cannot ride a Tensor port
+  (3.62 GiB a copy at the preset and 22.6 GiB at 2.5, against a pool floor of
+  6 slots), so it would have to be written off the accumulator directly. Also
+  unresolved: the lattice derivation applies **one square spacing to both
+  axes** (`counts_for_tiled_extent` takes a scalar `native_spacing`) and
+  `lattice.spacing: [v, u]` is rejected under `scroll`, so an anisotropic grid
+  — e.g. along-track at the finer azimuth resolution — is not reachable from
+  config. Asked for and deferred.
+- **2026-10-29** — **Asked how `AutofocusOp` will actually be used, the answer
+  moved the defect: the shipped `num_iterations: 4` fails on airborne-magnitude
+  errors, and the long-aperture ceiling turns out to matter to nothing.** The
+  contract names airborne residual phase as the reason to opt in — "spaceborne
+  collections with good ephemeris generally stay on Figure 1" — while every
+  measurement to date used one 2 cm quadratic, 5.4 rad, on spaceborne collects.
+  Sweeping magnitude at 8000 pulses, the shipped settings give 0.149 rad at 5.4
+  rad, 0.275 at 26.8 and **1.365 at 107.3**, the last missing not just the 0.39
+  rad target but the 0.785 hard floor — **while sharpness reports a 17.1× gain**,
+  so nothing in the operator's output says it failed. 107 rad is roughly 17
+  wavelengths of line-of-sight error, ordinary for an airborne platform on a
+  modest INS. Widening the first window alone does not fix it (1.365 / 0.433 /
+  1.181 / 1.099 / 0.502 rad at 350 / 1000 / 2000 / 4000 / 8000 samples,
+  non-monotonic); **iterating does** — a 1000-sample window with 8 iterations
+  gives 0.274 rad and is identical at 16 and 32, so it converges. One setting
+  then covers 5 to 107 rad inside the target, for 0.149 → 0.201 rad of peak
+  accuracy given up on small errors. Whether `num_iterations` should default
+  above 4 is a contract surface and is left for the team. Separately, the
+  aperture ceiling found earlier is **deprioritised**: every shipped workflow
+  forms below it (`video_sar` 8262 pulses, `spotlight` 11500, `tiled_strip`
+  15905), so only the autofocus app's own full-collect preset exceeds it. Those
+  three are reference regimes, not wiring targets: autofocus is an opt-in stage
+  "absent from the default spine" per `SAR/OPERATOR_API.md`, and all four
+  shipped apps accordingly use `max_aperture_pulses: 0` or `continue` rather
+  than the `reform` it needs. They are what the operator should be
+  characterized against. Recorded in
+  [`operators/sar/autofocus_op/OPEN_ITEMS.md`](../../operators/sar/autofocus_op/OPEN_ITEMS.md)
+  §1.
+- **2026-10-29** — **The autofocus "accuracy degrades with aperture length"
+  finding was itself a measurement artifact; the real defect is narrower and the
+  estimator is much better than reported.** `AutofocusScoreOp` scores the
+  estimate against the *injected* truth alone, but PGA also estimates whatever
+  real error the collect carries, correctly, and is charged for it. Running the
+  same configurations with `polynomial: [0, 0, 0.0]` measures the collect's own
+  error on its own: 0.142 rad at 8000 pulses and 0.507 at 16000, against raw
+  residuals of 0.149 and 0.692. Subtracting that baseline, **the estimator
+  recovers a known 2 cm quadratic to 0.042 rad at 8000 and 0.346 at 16000** —
+  both inside the 0.39 rad target, where the raw 0.692 reads as a clear failure.
+  So most of the apparent degradation is the collect's uncompensated motion
+  growing with aperture, which is physically expected. Three candidate causes
+  were measured and ruled out along the way: scatterer count (`min_scatterers` 16
+  / 64 / 256 / 718 gives 0.69 / 0.56 / 0.64 / 0.75 rad), window width (512 / 1024
+  / 2048 / 4096 absolute samples gives 0.66 / 0.70 / 0.52 / 0.66), and iteration
+  count (1 / 2 / 3 / 4 / 6 gives 0.50 / 0.73 / 0.74 / 0.69 / 0.43 — the *first*
+  estimate is already off, so it is not over-accumulation). **What remains is a
+  genuine aperture ceiling:** beyond roughly 16000 of Kourou's 23375 pulses PGA
+  produces an estimate that lowers sharpness, the guard refuses it, and autofocus
+  contributes nothing. With the guard bypassed those refused estimates are large,
+  1.166 rad at 20000 and 1.335 at 23375, so PGA is confidently finding a wrong
+  error rather than failing to find a small one — the shape of the standard
+  long-aperture PGA problem, wanting a coarse-to-fine or sub-aperture schedule
+  instead of one estimate across the whole dwell. **That is an algorithm decision
+  for the team**, since no setting of the shipped parameters rescues it.
+  Rewritten in
+  [`operators/sar/autofocus_op/OPEN_ITEMS.md`](../../operators/sar/autofocus_op/OPEN_ITEMS.md),
+  which **supersedes both earlier readings of this item**; still needs the Jira
+  entry on board 41309.
+- **2026-10-29** — **The full-aperture autofocus result was measured without
+  ground truth and the conclusion was wrong; re-measured against injected truth,
+  the guard is right and the real defect is an accuracy trend.** Re-running
+  Kourou with a known 2 cm look-axis quadratic (5.365 rad) at the preset's
+  settings, `AutofocusScoreOp`'s affine-removed residual over aperture length is
+  0.149 rad at 8000, 0.283 at 12000, **0.692** at 16000, **0.428** at 20000 and
+  0.332 at 23375, against a 0.39 rad target. **Sharpness gain is anti-correlated
+  with phase accuracy** and must not be read as a quality metric: 16000 pulses
+  keeps all four iterations and is the worst configuration by truth, the full
+  aperture keeps one and is twice as accurate. The residual decomposes into three
+  separate defects — a curvature *over*-estimate that appears at some lengths and
+  not others (at 16000 a best-fit quadratic is 85% of the residual, swing 1.31;
+  the narrow-window tests under-report swing, so this is a different effect),
+  broadband ripple growing with aperture (0.145 / 0.272 / 0.331 rad) which at the
+  full aperture is the whole residual, and **a one-sample step at exactly
+  `floor(n/2)`** of 1.832 / 0.700 / 1.799 rad against a 0.0012–0.0018 rad median
+  step, 473× to 1518×, which smells like a dwell-centre fencepost in the
+  `fftshift(phase_acc)` emit or `PhaseResampleOp`. **The sharpness guard is
+  correct**: forcing the refused iterations through takes the residual 0.332 →
+  1.295 rad. Added `SAR_AF_IGNORE_DROP`, an environment-gated diagnostic that
+  keeps a rejected estimate so it can be scored — the guard otherwise leaves a
+  rejection unobservable, since `phase_acc` is never accumulated and the emitted
+  correction is zero. No contract change and no behaviour change with it unset.
+  Full detail and the reproduction recipe in
+  [`operators/sar/autofocus_op/OPEN_ITEMS.md`](../../operators/sar/autofocus_op/OPEN_ITEMS.md)
+  §1; **still needs the Jira entry on board 41309**, which cannot be filed from
+  this environment.
+- **2026-10-29** — **Float samples with float64 geometry halve the SAR pools and
+  cost nothing measurable, so the precision axis is now two parameters.**
+  `CPHDReaderOp`, `ApertureManagerOp` and `BackprojectionOp` take
+  `<T, TGeom>` with `TGeom` defaulting to `T`; `TGeom` governs `positions`,
+  `reference_position`, `sample_points` and `velocities`, `T` governs samples
+  and the image, and `TGeom` may not be coarser than `T`. **Contract change**,
+  written up in [`SAR/OPERATOR_API.md`](SAR/OPERATOR_API.md) — note it makes
+  `AGENTS.md` invariant 3 ("an instance's inputs and outputs match its
+  templated precision") imprecise as worded, and that wording needs a decision.
+  On Kourou at 8000 pulses and the native 7150² product, `<float, double>`
+  declares **33.1 GiB against 60.9 GiB** and reproduces the double run to five
+  significant figures in peak, total energy and Σ|z|⁴ — RMS difference 3.3e-6
+  relative, the identical 1.090× autofocus gain over 4 iterations, 457 ms
+  against 461 ms. Reached from `applications/sar/autofocus` with
+  `sample_precision: single`; the driver (`run_sar_graph_app<T, TGeom>`) is
+  templated so the other five SAR apps are unchanged at the defaults, and all
+  1188 tests pass.
+  **Why it has to be two parameters and not one.** The memory is entirely in
+  the sample data (55.7 GiB of the 60.9), but ECEF positions cannot be carried
+  in float32: one ulp at a 6.4e6 m radius is 0.76 m, ~25 wavelengths at X band,
+  so a plain `T=float` run destroys the phase history before sample precision
+  matters at all. The split is shallow to implement because the kernels already
+  promote geometry to double on entry (`apc` / `mcp` / `r0` / the x/y/z planes
+  are `double*` whatever `T` is) and the NVRadar family already consumes
+  float32 profiles — so `<float, double>` is close to what the arithmetic was
+  doing anyway. `pulse_times` was already float64 regardless of `T`, so this
+  generalizes a conceded exception rather than inventing a kind.
+  **Single-precision samples are now the default for every SAR application, not
+  an opt-in.** Few radar systems deliver more than single-precision samples, and
+  the FMCW applications have always instantiated at `float` (67 `Op<float>`
+  sites, no `Op<double>`); SAR was the outlier. `run_sar_graph_app` reads
+  `sample_precision` and dispatches to `run_sar_graph_app_at<T, TGeom>`,
+  defaulting to `<float, double>` when the key is absent, so the presets carry no
+  key at all and `sample_precision: double` is the opt-back-in for a collect that
+  genuinely holds more. `AGENTS.md` invariant 3 is reworded for both the
+  two-parameter contract and this default. Measured pools, each app run at both
+  settings on its own collect, with output verified identical (same image
+  indices, geometry, and timing to within noise):
+
+  | app | double | single | saved |
+  | --- | --- | --- | --- |
+  | `spotlight` | 10.4 GiB | 6.7 GiB | 36% |
+  | `video_sar` | 31.7 GiB | 16.6 GiB | 48% |
+  | `tiled_strip` | 33.5 GiB | 17.3 GiB | 48% |
+  | `continuous_strip` | 10.1 GiB | 6.1 GiB | 40% |
+  | `autofocus` (Kourou) | 60.9 GiB | 33.1 GiB | 46% |
+
+  `tiled_strip` first came in at only 16%, because `SarMosaicOp` was declaring
+  its output pool at a hardcoded 16 bytes an element — 3.62 GiB a slot on the
+  Imperial parent, six slots. The operator was already dtype-agnostic at
+  runtime (it latches the incoming dtype), so only the declared span was wrong;
+  it now takes `T` for sizing and keeps the runtime check as a safety net,
+  which is what takes the app to 48%. `independent_images` is untested here
+  because its preset carries no `cphd.path`.
+  **The autofocus preset now runs for the first time, and that exposed an
+  estimator problem.** The preset ships with the full 23375-pulse aperture,
+  which declares **128.4 GiB against 95.6 GiB of GPU** and dies at
+  `PROFILE_MATERIALIZATION_FAILED` before `start()` — it has never been
+  runnable on this hardware. At single it declares 66.9 GiB, fits, and forms
+  2048² in 109 ms at 9.01e11 px·pls/s, 3.5 s ahead of its 4.5 s collect-time
+  target. But the estimator returns **1.000× at the full aperture**: the first
+  estimate lowers sharpness by 34% and the guard refuses it, so nothing is ever
+  applied. Sweeping only the aperture length at the preset's settings gives
+  1.096× at 8000, 1.000× at 12000, **1.491×** at 16000, 1.000× at 20000 and
+  1.000× at 23375 — not monotonic, and not `window_fraction` (256 / 1023 /
+  2047 / 4096 / 8181 samples all give 1.000× at the full aperture). **Not a
+  precision artifact:** at 8000 pulses with the preset's own settings single and
+  double agree to four significant figures at every iteration (1.096× both, 37
+  ms against 40). Recorded as an algorithm follow-up in
+  [`operators/sar/autofocus_op/OPEN_ITEMS.md`](../../operators/sar/autofocus_op/OPEN_ITEMS.md)
+  §1 and the SAR roll-up; **needs a Jira entry on board 41309**, which could not
+  be filed from this environment. With single the default, the preset now runs
+  unmodified — the estimator result is what remains open, not the graph.
+  **The estimator reading here is superseded by the entry above**, which
+  re-measured it against injected truth: the 1.000× clean-collect results are
+  correct behaviour on an already-focused image, not a failure.
+  **Latent:** `downcast_vph_kernel` is only reachable from the fp32 backends
+  and is correctly `if constexpr`-guarded, but the fp32 family has not been
+  exercised at `<float, double>`. A trap worth knowing: the mixed instantiation
+  is easy to get subtly wrong where a buffer is sized by one precision and
+  copied by the other — `copy_sample_points_lattice` allocated with `TGeom` and
+  copied with `T`, which half-filled the auxiliary lattice and looked exactly
+  like "float samples defocus the image" (1.000x instead of 1.090x) rather than
+  like a one-character bug.
+- **2026-10-28** — **The autofocus memory ceiling is down from 78.6 GiB to 60.9
+  GiB with no contract change, and the obvious-looking fix turned out to be
+  worthless.** Measured on Kourou at 8000 pulses and the native 7150² product
+  (`SAR_DUMP_PLAN`), three independent fixes: (1) `make_extents` sized every
+  pool downstream of the manager for `reader_pulses_per_tick +
+  max_aperture_pulses`, but `reform` sends no pulses between boundaries
+  (`OPERATOR_API.md` step 5a), so the replay alone bounds it — `max` not sum,
+  worth **6.3 GiB**; (2) `AuxPointsSourceOp` republished its fixed polar
+  lattice every tick, costing a gigabyte-scale device comparison in
+  `BackprojectionOp` to conclude nothing had changed — it is now published once
+  and the consumer's cached lattice stands; (3) that operator's
+  `range_profiles_out` was a pooled **copy** of the replay for a tensor it
+  never reads, and is now a `kPassThrough` output forwarding the received
+  sample, which deletes the pool outright — **11.4 GiB**, four whole apertures.
+  (3) is the same shape of fix as the mosaic entry above: on a fanned-out edge
+  every declared slot is a full copy, so the cure is to stop owning the tensor.
+  All 1188 tests pass and the run is bit-identical (1.090× sharpness over 4
+  iterations, 461 ms formation).
+  **The negative result is the more useful half.** Slicing the `reform` replay
+  into consecutive tick-sized batches — the fix this started as, and the one
+  the contract already rejects on observability grounds — was implemented end
+  to end (per-batch capture stamps, split `kResetWithoutEmit`/`kEmitAndReset`
+  control, a `DrainAll{}` phase slicer) and produced a bit-identical image. It
+  is also **exactly memory-neutral**: 72.4 GiB sliced against 72.3 GiB
+  unsliced. That is by construction, not by accident — pools reserve in
+  *items*, and the authored depth must equal the batch count, because the
+  manager publishes every batch from one activation and a full required-output
+  queue fails `compute()` rather than waiting. So every reservation is
+  `item_size × batches`, which is one aperture however finely it is cut (depth
+  1 × 2.861 GiB and depth 8 × 0.366 GiB both reserve two apertures per
+  consumer). `phase_correction`'s queue genuinely must hold the whole aperture
+  — it cannot drain until the estimate exists, which needs every batch to have
+  arrived — so a shallower queue there deadlocks. The work is reverted; this
+  **strengthens** the existing contract rejection in
+  [`SAR/OPERATOR_API.md`](SAR/OPERATOR_API.md) rather than reopening it, and
+  the 54.9 GiB previously read as monolithic-item waste was never waste at all
+  but ~19 genuine aperture reservations.
+  **What is left is a floor, not a bug.** `aperture_manager.range_profiles_out`
+  is 9 slots × 2.861 GiB = 25.75 GiB, and both of its consumer edges are
+  already at the minimum depth 1; the 9 is 4 role-reservation slots
+  (`producer` 1, `transport-retention` 2, `retirement` 1) plus 5 for two edges
+  under the 2× `headroom_ratio`. Nothing in the app can reduce it. **Open and
+  needing a team decision:** `float` retained pulses against `double` geometry
+  would halve the remaining 38.7 GiB of pulse pools and is the only app-side
+  lever left, but it cuts across the compile-time precision invariant; and the
+  per-pool role floor and the unconditional 2× queue headroom are SDK-side.
+- **2026-10-26** — **The Figure 2 autofocus application is back, with its
+  validation apparatus.** `applications/sar/autofocus/` builds on main's
+  `run_sar_graph_app`: `reform` aperture replay into an auxiliary conjugate
+  `BackprojectionOp`, `AutofocusOp`, app-owned `PhaseResampleOp`, then
+  `PhaseCorrectionOp` into the product `BackprojectionOp`. The polar
+  (range-bearing) aux lattice rides `sample_points` from the app-owned
+  `AuxPointsSourceOp`, which stays a pass-through on the replay edge: it must
+  emit the lattice **before** the profiles, because the profiles are the
+  consumer's trigger and `sample_points` is a `[live]` override under
+  `on_missing SafeDefault{}`, so the activation does not wait for a lattice
+  that has not been emitted yet. `Exact{}` chooses which sample matches, not
+  whether the consumer blocks — it does not retire the ordering requirement.
+  The three
+  diagnostics (`PerturbPositionsOp`, `OraclePhaseOp`, `AutofocusScoreOp`) are
+  ported too, so the estimate is scored against a known injected error rather
+  than only looked at; the recorded lie crosses from ingest ticks to the single
+  reform tick as a shared host buffer, since no tick joins both.
+  **Shared-code bug found and fixed:** `BackprojectionOp` reported
+  `closes_aperture` only for `kEmitAndReset`, but a `reform` replay resets
+  first and emits second (`kResetThenEmit`), so `sar_eof_drained` could never
+  fire and the app hung for the full 180 s drain. No landed app uses `reform`,
+  which is why this had never been exercised.
+  **Second shared-code bug found and fixed:** `BackprojectionOp.sample_points`
+  was never delivered. Root-caused with a minimal single-operator reproducer
+  (`BackprojectionOp.SamplePointsLatticeOverridesGeometry`) that pushed
+  `control` and `sample_points` in one frame at one timestamp and saw only
+  `control` arrive — a producer (or test frame) must emit every `[live]`
+  override *before* the trigger port, since the activation fires the moment the
+  `OnAligned` set completes and `SafeDefault{}` takes over for anything later.
+  Until the fix the operator silently fell back to the Params geometry, which
+  for a polar aux is unset, so the run died with `sample_geometry is required`.
+  The port had no test coverage at all; the Figure 2 polar aux is its first
+  caller. Four fixture tests
+  (`Sar_autofocus_smoke`/`_lie`/`_oracle`/`_polar`) pin wiring, injection and
+  the apply
+  path; they cannot pin recovery, because a 5-pulse aperture clears no
+  strong-scatterer gate and even the landed `spotlight` dump fixture forms an
+  all-zero 5×5. Recovery stays a real-data measurement.
+  **Kourou does not fit in GPU memory, by a wide margin.** The declared pools
+  come to **169 GiB against 96 GiB** on an RTX PRO 6000, so the run dies at
+  `PROFILE_MATERIALIZATION_FAILED` before `start()`. Read off the compile plan
+  (`SAR_DUMP_PLAN=<file>`, the only place slot counts are visible): the
+  retained aperture is one 8.72 GiB tensor (23375 pulses x 23999 bins x
+  `complex<double>`) and three edges carry it -- `aperture_manager`,
+  `phase_correction`, and `aux_points` -- at 9, 4 and 4 slots for 148 GiB of
+  the total. Two sizing bugs are fixed (the ingest edge was sized for the
+  aperture; the replay edges took the shared depth-4 `queue`, which alone cost
+  42 GiB at 3000 pulses), but a declared depth of 2 still materializes as 9, so
+  the slot inflation and not the edge count is what dominates. The remaining
+  levers -- cutting the inflation, `float` instead of `double`, cropping the
+  range swath to the 512 m scene, or measuring on a shorter `pulse_range` --
+  are **unresolved and need a team decision**; 3000 pulses fits at 31.6 GiB.
+  **Kourou is re-measured on HSDK 5, over an 8000-pulse `pulse_range`.** Four
+  configs on the real collect (clean / 2 cm lie uncorrected / lie with the PGA
+  estimate applied / lie with the oracle phase applied) give product peaks of
+  1.000 / 0.392 / 1.017 / 1.000 and affine-removed phase RMS of n/a / 2.400 /
+  0.146 / 0 against a 5.365 rad injected quadratic. That clears the acceptance
+  target in SAR/TESTING.md (<= 0.39 rad, peak >= 0.9). `AutofocusOp.sharpness`
+  is now wired in the app and reports 8.74x over 4 iterations on this collect.
+- **2026-10-27** — **The autofocus estimator shortfall is root-caused and
+  fixed: `AutofocusOp` was emitting its estimate in the wrong index order and
+  with the wrong sign, and the two errors partially cancelled.** `phase_acc` is
+  accumulated per azimuth-FFT bin with `fftfreq` semantics (bin 0 is DC, the
+  centre of the dwell) while `phase_correction` is contracted as pulse-indexed,
+  which runs monotonically across the dwell; the two differ by an fftshift and
+  the operator emitted the vector unshifted. A `neg_n_kernel` then negated it,
+  so `PhaseCorrectionOp` with `sense: subtract` received the correction rather
+  than the error. A symmetric quadratic circularly shifted by half its length
+  is approximately its own negative plus a constant, so the pair largely undid
+  itself and left an estimator that removed about half the error — enough to
+  clear the 0.7 peak-recovery gate the transfer tests used. The fix is one
+  kernel, `fftshift(phase_acc)` with no negate; **the contract did not change**,
+  the code now matches what `OPERATOR_API.md` already specified. Measured:
+  Kourou residual 1.246 -> 0.146 rad and product peak 0.523 -> 1.017; synthetic
+  1:1 transfer 0.714 -> 0.989 and 2:1 oversampled 0.741 -> 0.974 of the
+  error-free peak. This **supersedes the "fault 2" entry below**: the shape
+  recorded there (twice the truth at dwell centre, half at the edges,
+  sign-inverted at the quarter points, total magnitude nearly right) is exactly
+  a parabola minus its own half-length circular shift. The polar aux's
+  bearing-vs-slow-time conjugacy and `PhaseResampleOp` are both cleared.
+  `PhaseResampleOp` changed with it: its oversampled branch took the
+  low-frequency bins from each end, correct for a bin-ordered estimate, and now
+  takes the central `num_pulses` samples, correct for a pulse-ordered one.
+  Four operator tests and one Graph test compared against the old convention
+  and were corrected to shift rather than negate.
+  **Fault 1, the narrow-window bias, is fixed in the same wave and was the
+  same class of defect.** `window_fraction` narrows the *image* support, to
+  isolate the scatterer from clutter; the gradient FFT behind it must stay at
+  the full azimuth extent. It did not — the window was packed into a
+  `width`-long transform, decimating the phase history by `n_az / width`, so
+  every LUE difference spanned that many phase-history samples instead of one
+  and the small-angle form saturated on steep errors. Transforming the full
+  windowed line instead (zeros included) takes the residual on a 5 rad error
+  from 0.003 / 0.069 / 0.245 / 0.830 to 0.002 / 0.009 / 0.036 / 0.150 rad at
+  window-to-azimuth ratios of 1:1, 1:2, 1:4, 1:8 — every ratio now inside the
+  0.39 rad target. What remains is a *swing* loss (the estimate keeps its shape
+  and under-reports amplitude, 0.86 of truth at 1:8), which is the information
+  cost of fewer image samples. The earlier "loses the aperture edges" reading
+  was an artifact of the index-order defect: re-measured in pulse order the
+  dwell centre degrades first and the edges hold. On Kourou it changes almost
+  nothing (0.146 -> 0.149 rad, peak 1.017 -> 1.011), as the prior diagnosis
+  predicted when it ruled fault 1 out there — a 5.4 rad error over 8000 pulses
+  has a sub-milliradian per-sample step even decimated 23-fold.
+  `NarrowWindowLosesTheApertureEdges` is renamed
+  `NarrowWindowCostsSwingAndStaysInsideTheTarget` and now pins the measured
+  residual *and* swing at each ratio, doubling as the regression guard on the
+  transform length. `pack_window_kernel` and `interpolate_fft_phase_kernel` are
+  deleted with it. **Both autofocus faults are now closed and the estimator
+  meets its acceptance target on the development collect.**
+- **2026-10-27** — **`AutofocusOp` no longer truncates tall images at the
+  launch grid.** `grid_for` clamped the block count to 65535, but no kernel in
+  `autofocus_stage.hpp` uses a grid-stride loop, so an image needing more
+  blocks had its tail left unwritten: on the 2478 x 8000 Kourou auxiliary the
+  last 380 range rows came back out of `image_out` as zeros and the peak finder
+  saw 2098 of 2478 bins. 65535 bounds `gridDim.y` and `.z`; `.x` is capped at
+  2^31-1. `LargeImageIsNotTruncatedByTheLaunchGrid` pins it and was verified to
+  fail against the clamp.
+- **2026-10-27** — **The six deferred autofocus transfer cases are rewritten on
+  HSDK 5 Graph** as `tests/cpp/integration/test_sar_autofocus_graph.cpp`. They
+  could not be restored: they were built on the HSDK 4.x `Application` API and
+  on the wire-capture helpers that the operator-testing landing deleted. They
+  cover transfer onto a differently formed product through two
+  `PhaseCorrectionOp` instances in series, the ground-grid hazard, retain and
+  reform, the oversampled auxiliary, the identity resample, and a comparison of
+  ten alternative maps of the estimate that the shipped one must win.
+  **Still to port:** `tools/sar_image/pga_screen.py` and the Atlanta/Calais
+  configs; the Kourou numbers quoted in the app README are pre-port and must be
+  re-measured before being quoted again.
+  *(Closed 2026-10-30: the screen is ported as
+  `tools/sar_autofocus/pga_screen.py`, the Atlanta/Houston/Imperial configs
+  landed, and the Kourou numbers were re-measured — see the entry at the top.)*
+
+- **2026-10-26** — **`AutofocusOp` ported to HSDK 5 (operator only).** The PGA
+  estimator now builds against the templated `Operator<Params>` API with typed
+  ports, a `contract()` whose four `[live]` scalars use
+  `add_live_override_to_contract`, and `MaxTensorExtents`-sized pools;
+  `autofocus_stage.hpp` (the algorithm) is unchanged. `AutofocusAlgorithm` and
+  `AutofocusAzimuthAxis` were added to `radar_common` with their codecs. All 12
+  operator tests and the full 1,172-test suite pass.
+  **Contract change:** the output port is renamed `image` → `image_out`, because
+  HSDK 5 requires unique input/output names and this operator names both
+  `image`. This is the same rename already applied to `range_profiles_out`,
+  `sample_geometry_out`, and `range_window_out`; `AutofocusOp` was missed only
+  because it had not been ported. Recorded in `SAR/OPERATOR_API.md`.
+  **Implementation bound needing review:** `num_iterations` is `[live]` but
+  `sharpness` is `num_iterations + 1` long and pools are sized at graph build,
+  so it is capped at 255 (`kMaxAutofocusIterations`) rather than being made
+  static. **Deferred to the app port:** the estimate-transfer and Figure 2
+  tests, which need the app-owned aux-lattice and resampling operators.
+  **Still open for the team:** the V-shaped estimate where truth is a parabola,
+  and the packed-row `image` output; the Kourou measurements must also be
+  re-established on main, since `PhaseCorrectionOp` was reworked and the
+  `[live]` parameters become real `contract()` joins here for the first time.
 
 - **2026-10-21** — **HSDK 5 GA image adopted.** The Dockerfile, host CLI wrapper,
   and devcontainer now default to
@@ -390,10 +1165,63 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   bars, per-tick last-pulse latency labels, 1 Hz lag HUD). Strip crop and
   indefinite display hold remain open in the [SAR open-items roll-up](SAR/OPEN_ITEMS.md).
 
+### `dpc/sar-autofocus` push review (2026-10-31)
+
+All 37 commits reviewed against the push protocol. Fixed on the branch:
+
+- **Nine branch-introduced defects.** The perf recipe never bound the two new
+  `termination` / `iterations` outputs; `autofocus` was missing from the
+  `SarFixture` guard, so its four tests required a CPHD that an
+  autofocus-only build does not generate; `TGeom` drift across three operator
+  READMEs and the `OPERATOR_API.md` summary rows; an unguarded config parse in
+  the SAR graph driver that terminated the process on a bad path; and two in
+  `SarMosaicOp` — a crop at decimation factor 1 fell through to the multi-look
+  path, which publishes amplitude with a zeroed imaginary part, so an
+  undecimated crop reached `TensorDumpOp` with its phase discarded; and the
+  decimation factor was not capped to the shorter axis, so a narrow crop read
+  past the end of the canvas. Both are latent — no landed config sets a crop
+  with a parent small enough to leave the factor at 1.
+- **Five test-blindness findings.** Chiefly `image_peak` folding NaN through
+  `std::max`, which returns its first argument against a NaN: an all-NaN image
+  reported a peak of exactly 0.0, which *satisfies* every `EXPECT_LT` against
+  the clean peak instead of failing it. That is how the `OraclePhaseOp` NaN
+  reached a green suite. Also the recovery gates, which used 0.7 where
+  [TESTING.md](SAR/TESTING.md) requires 0.9 and shared one constant with the
+  looser *defocus* threshold; raised and split, and all six integration tests
+  already met the stricter number.
+- **`AutofocusOp` added to both authoritative `SAR/OPERATOR_API.md` tables**,
+  which it had been missing since it was ported. Documentation catching up to
+  reviewed code, not a contract change.
+
+- **The review's nits, worked to zero** and summarised in
+  [`autofocus_op/OPEN_ITEMS.md`](../../operators/sar/autofocus_op/OPEN_ITEMS.md)
+  item 8. One of them stopped being a nit: `perf_autofocus` was missing from
+  the `--scope overrides` registration list (the second list in that file is
+  the recipe-dispatch group and correctly does not carry it), and adding it
+  showed **all three
+  `perf_autofocus` tests already failing**, the two pre-existing ones included.
+  The adapter's locked output manifest still named only `phase_correction` and
+  `sharpness`, so it disagreed with the recipe once `termination` and
+  `iterations` landed. Every perf test carries the `performance` label and the
+  suite is normally run as `ctest -LE performance`, which is why a green
+  1193/1193 hid it. Fixed; all 75 performance tests pass. **Run
+  `ctest -L performance` explicitly when a push touches an operator's ports.**
+  The two autofocus test suites' shared helpers were also extracted to
+  `tests/cpp/sar/autofocus_phase_support.hpp` — `to_bin_order` had already
+  drifted between the copies, which is what hid the azimuth handedness.
+
+Recorded rather than fixed, to keep the branch's scope: eleven pre-existing
+bugs in `ApertureManagerOp`, `CPHDReaderOp` and `BackprojectionOp`, each in
+that operator's `OPEN_ITEMS.md`; R11 (below); and two with no operator home —
+`SarMosaicOp` has no unit test at all, and twelve `metadata.json` manifests
+still declare SDK 4.3.0.
+
 ## In flight / claims
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| SAR autofocus saved-image workflow | Codex | `dpc/sar-autofocus` | **verified locally:** shipped `autofocus_blurred`, `autofocus_corrected`, and `autofocus_reference` presets replace config generation and the single recovery preset. Five-step walkthrough runs all three with distinct output directories. All presets ran on Kourou: both baselines apply zero correction, corrected residual is 0.1813 rad, and the three-panel PNG renders. Pinned lint passes. |
+| SAR autofocus data download | Codex | `dpc/sar-autofocus` | Verified offline: `pull_cphd.py --app autofocus` selects the default Kourou collect and destination; `--app all` includes it and preserves preset subdirectories with shared-collection deduplication. Both guides use the same uv-based quick-start and document alternate-scene preparation. CLI manifests match all eight shipped collection paths with default and custom roots; all eight URLs return HTTP 200. Corrected the Kourou catalog prefix and verified its dimensions with a bounded range read. Four offline regressions cover destinations and HTTP failure reporting; no full collections downloaded. Pinned lint passes. |
 | Packaging review follow-up | Codex | `deustice/packaging-ci` | **verified locally:** the shared external C++ consumer builds and runs against existing CLI-built Debian and TGZ artifacts in the SDK container; nine helper fixtures pass there. The installed-wheel smoke check now uses public `__all__`; isolated import, factory, and float/double Graph checks pass against the existing CLI-built wheel. Removed the obsolete invalid-name probe; remaining subset and explicit/cached-test configuration probes pass in fresh SDK build directories. Documented selection-key/library naming and artifact-check limits beside the curated list, checker, and developer workflow. |
 | Reusable wheel smoke check | Codex | `deustice/packaging-ci` | **verified locally:** extracted installed-wheel import, provider metadata, factory, and float/double Graph checks into `tests/packaging/wheel_smoke.py`; CI calls the same file with isolation. Direct development mode, isolated mode, and wrong-prefix rejection pass against the CLI-built wheel environment. Documented direct use; pinned lint passes. |
 | Packaging CLI entry point coverage | Codex | `deustice/packaging-ci` | **verified locally:** build DEB/TGZ and wheel artifacts through the public `holoscan package` command in local container mode; direct CMake remains only for configuration probes and the external C++ consumer. On HSDK 5 GA arm64, both native artifacts contain all 32 selected libraries, the competing-prefix C++ consumer builds/runs, and the CLI isolated wheel installs and supports both Graph precisions. Nine helper fixtures and full pinned lint pass. |
@@ -416,6 +1244,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 | PR 58 main merge | Codex | `tbirdsong/aivo/cphd-pvp-offset-overflow` | **verified locally:** merged `main` at `d54bfdad` after PR 68 landed; retained both status histories. CPHD code and tests merge cleanly; all 14 focused CPHD file/reader GPU CTests and pinned all-file lint pass. The earlier merge combined CPHD test headers and preserved the overflow regression and reader lifecycle tests. No public contract changes. |
 | CPHD PVP offset-overflow hardening | Codex | `tbirdsong/aivo/cphd-pvp-offset-overflow` | **ready for review:** PVP field placement now uses a word-domain subtraction proof, rejecting negative, overflowing, and past-record layouts before pointer arithmetic while preserving an exact-boundary field. The focused parser regression passes under host ASan/UBSan, and changed-file pinned hooks pass; PR #58 now includes current `main`; the staging HSDK 5 clean build and all 1,088 non-performance CTests pass with zero failures or skips, including the overflow regression and SAR application smokes. Pinned all-file lint passes. |
 | PR 68 review follow-up | Codex | `deustice/operator-opt` | **verified locally:** all five findings remain valid. Both Doppler boundary tests use FixtureCompletion; MUSIC uses one manifold accessor; MVDR and sparse TDM share device calculations; residual direct tests use production weight kernels and the legacy kernel is removed. All 132 GPU CTests across six focused suites and pinned all-file lint pass (Node 22). No public contract changes. |
+| SAR autofocus | dpc | `dpc/sar-autofocus` | **verified locally, ready to push:** `AutofocusOp` and the Figure 2 workflow are on the HSDK 5 Graph API, five estimator faults are fixed (launch-grid truncation, shift-and-negate, window-narrowed LUE transform, half-aperture seam, time reversal), and accuracy is pinned against injected truth on four real collects rather than Kourou alone: all five injected symmetries recover to 0.04-0.22 rad on Kourou/Atlanta/Houston, and Imperial Valley agriculture is refused rather than mis-corrected. Adds the `termination`/`iterations` provenance outputs (**contract change**), `tools/sar_autofocus/sweep.py`, and the first SAR perf suite. Push-reviewed 2026-10-31. 1193/1193 CTests and pinned hooks pass in-container; **`metadata.json` needs a host run**. |
 | Performance delivery scope | Codex | `deustice/optimization-skills` | **verified locally:** distinguish integrated operator changes from external comparison/benchmark candidates; keep experiment tools and evidence local by default while committing requested implementation, integration and focused regression coverage. Both performance skills and reporting references align; skill validation and pinned all-file lint pass. |
 | PR 67 merge conflict resolution | Codex | `deustice/optimization-skills` | **verified locally:** merged `main` at `38ba5ef5`, retained both status histories, and combined the CPHD reader explicit-stop lifecycle with the shared fixture observation deadline. All 13 reader/file and six fixture-completion GPU tests, 127 host optimization-tool tests, and pinned all-file lint pass. |
 | PR 67 CI 207 fixture completion policy | Codex | `deustice/optimization-skills` | **verified:** replaced the Beamscan-only workaround across all 85 native asynchronous fixture runs in 38 existing suites with a configurable shared observation deadline, checked capture completion and native error preservation. Optional outputs and manual frame sequencing remain explicit. All 1,142 registered non-performance checks pass on HSDK 5 GA, including six policy regressions, application smoke tests and tooling/native verification; container Git ownership was handled with process-local configuration. The controlled 12-second BLAS-delay reproducer passes; the actual CI startup delay remains unconfirmed. |
@@ -546,6 +1375,20 @@ Decisions made outside the planning docs, recorded so they aren't re-litigated:
 Contract, SDK, and signal-processing questions that need a team decision are tracked on [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309). Keep issue detail in Jira rather than creating operator-local backlog files.
 New operators should follow [`NEW_OPERATOR_CHECKLIST.md`](NEW_OPERATOR_CHECKLIST.md)
 and [`OPERATOR_DEVELOPMENT.md`](OPERATOR_DEVELOPMENT.md).
+
+**Exception, and it is a known one: SAR does not follow this yet.** Six
+operator-local `OPEN_ITEMS.md` files are tracked in the repository — under
+`io/cphd_reader_op`, `io/tensor_dump_op`, `sar/aperture_manager_op`,
+`sar/autofocus_op`, `sar/backprojection_op` and `sar/sar_range_compression_op`
+— plus the [SAR roll-up](SAR/OPEN_ITEMS.md). They were written during the SAR
+port, when the board was not reachable from the development environment, and
+they carry measured evidence (sweep tables, residuals, rejected alternatives)
+that is the reason the open question is open; a Jira summary of a number is not
+a substitute for the measurement that produced it. Treat them as the current
+source of truth for SAR open items, and the rule above as the direction of
+travel: new non-SAR work files on the board, and the SAR files migrate when
+someone can reconcile them against it. Do not add operator-local backlog files
+outside SAR.
 
 Temporal contracts — how the data plane joins the config plane, what the SDK
 selectors and triggers actually do, and the adopted Exact + unconditional-entry

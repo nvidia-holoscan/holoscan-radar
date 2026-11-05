@@ -34,9 +34,14 @@ constexpr const char* precision_name() {
   return std::is_same_v<T, float> ? "float" : "double";
 }
 
-template <typename T>
+template <typename T, typename TGeom>
 const std::string& op_name() {
-  static const std::string name = std::string("BackprojectionOp<") + precision_name<T>() + ">";
+  // Name the geometry precision only when it differs, so the overwhelmingly
+  // common matched instantiations keep the name their messages already use.
+  static const std::string name = std::is_same_v<T, TGeom>
+                                      ? std::string("BackprojectionOp<") + precision_name<T>() + ">"
+                                      : std::string("BackprojectionOp<") + precision_name<T>() +
+                                            ", " + precision_name<TGeom>() + ">";
   return name;
 }
 
@@ -157,14 +162,14 @@ void maybe_warn_locality(BackprojectionBackend backend, double D, double r0_min,
   *warned = true;
 }
 
-template <typename T>
-void copy_sample_points_lattice(detail::BackprojectionState<T>& state,
+template <typename T, typename TGeom>
+void copy_sample_points_lattice(detail::BackprojectionState<T, TGeom>& state,
                                 const holoscan::Tensor& points, int64_t num_v, int64_t num_u,
                                 cudaStream_t stream, const std::string& who) {
   const int64_t n = num_v * num_u * 3;
-  state.lattice_xyz.ensure(static_cast<size_t>(n) * sizeof(T), stream);
-  if (cudaMemcpyAsync(state.lattice_xyz.template as<T>(), points.data(),
-                      sizeof(T) * static_cast<size_t>(n), cudaMemcpyDeviceToDevice,
+  state.lattice_xyz.ensure(static_cast<size_t>(n) * sizeof(TGeom), stream);
+  if (cudaMemcpyAsync(state.lattice_xyz.template as<TGeom>(), points.data(),
+                      sizeof(TGeom) * static_cast<size_t>(n), cudaMemcpyDeviceToDevice,
                       stream) != cudaSuccess) {
     throw std::runtime_error(who + ": sample_points copy failed");
   }
@@ -176,20 +181,20 @@ void copy_sample_points_lattice(detail::BackprojectionState<T>& state,
 
 }  // namespace
 
-template <typename T>
-BackprojectionOp<T>::BackprojectionOp(const MaxTensorExtents& extents,
-                                      std::shared_ptr<FormationHud> hud)
+template <typename T, typename TGeom>
+BackprojectionOp<T, TGeom>::BackprojectionOp(const MaxTensorExtents& extents,
+                                             std::shared_ptr<FormationHud> hud)
 : extents_(extents), hud_(std::move(hud)) {
   require_extent(extents.max_pulses, "max_pulses", "BackprojectionOp");
   require_extent(extents.max_range_bins, "max_range_bins", "BackprojectionOp");
   require_extent(extents.max_image_v, "max_image_v", "BackprojectionOp");
   require_extent(extents.max_image_u, "max_image_u", "BackprojectionOp");
 }
-template <typename T>
-BackprojectionOp<T>::~BackprojectionOp() = default;
+template <typename T, typename TGeom>
+BackprojectionOp<T, TGeom>::~BackprojectionOp() = default;
 
-template <typename T>
-void BackprojectionOp<T>::setup(OperatorSpec& spec) {
+template <typename T, typename TGeom>
+void BackprojectionOp<T, TGeom>::setup(OperatorSpec& spec) {
   constexpr TensorRepresentation device{
       .memory_kind = MemoryKind::kCudaDevice, .dtype = std::nullopt, .rank = std::nullopt};
   constexpr TensorRepresentation host{
@@ -217,8 +222,8 @@ void BackprojectionOp<T>::setup(OperatorSpec& spec) {
       .produces_tensor(pooled_tensor_output(host, 1U, 11U * sizeof(double)));
 }
 
-template <typename T>
-Contract BackprojectionOp<T>::contract() const {
+template <typename T, typename TGeom>
+Contract BackprojectionOp<T, TGeom>::contract() const {
   Contract result;
   result
       .trigger(OnAligned{.ports = ports(range_profiles, positions, reference_position),
@@ -239,10 +244,10 @@ Contract BackprojectionOp<T>::contract() const {
   return result;
 }
 
-template <typename T>
-void BackprojectionOp<T>::start() {
+template <typename T, typename TGeom>
+void BackprojectionOp<T, TGeom>::start() {
   const auto& p = params();
-  const std::string& who = op_name<T>();
+  const std::string& who = op_name<T, TGeom>();
   effective_frame_ = p.coordinate_frame;
   if (!effective_frame_.is_valid())
     throw std::invalid_argument(who + ": coordinate_frame required");
@@ -257,13 +262,13 @@ void BackprojectionOp<T>::start() {
   backend_value_ = p.backend;
   require_backend(backend_value_, who);
   geometry_change_value_ = p.geometry_change;
-  state_ = std::make_shared<detail::BackprojectionState<T>>();
+  state_ = std::make_shared<detail::BackprojectionState<T, TGeom>>();
 }
 
-template <typename T>
-expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
+template <typename T, typename TGeom>
+expected<void, Error> BackprojectionOp<T, TGeom>::compute(ExecutionContext& context) {
   try {
-    const std::string& who = op_name<T>();
+    const std::string& who = op_name<T, TGeom>();
 
     // Join this pulse block with same-tick controls and geometry overrides.
     HOLOSCAN_TRY(auto profiles_value, receive_tensor(range_profiles, who));
@@ -290,8 +295,6 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       throw std::invalid_argument(who + ": initial_image is not implemented");
     if (sample_points)
       sample_points_connected_ = true;
-    if (range_bins)
-      range_bins_connected_ = true;
     if (weight)
       weight_connected_ = true;
     if (weight_connected_ && geometry_change_value_ == GeometryChange::kScroll)
@@ -309,6 +312,13 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       tick_playback = snap.last_batch_playback;
     }
     const bool stage_after = control_value && *control_value == FormationControl::kEmitAndReset;
+    // Whether this emission completes an aperture, which is not the same as
+    // staging a reset after it. A reform replay resets first and then forms
+    // the whole retained aperture in one pass (kResetThenEmit), so its image
+    // is terminal even though nothing is staged behind it. Reported to the
+    // HUD so the end-of-stream drain can recognise that last image.
+    const bool completes_aperture =
+        stage_after || (control_value && *control_value == FormationControl::kResetThenEmit);
     HOLOSCAN_TRY(auto geometry_override_wire, receive_optional_value(sample_geometry));
     SampleGeometry new_geometry = params().sample_geometry;
     if (geometry_override_wire) {
@@ -354,8 +364,8 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
     // Validate the named pulse and image axes before touching the accumulator.
     classify_input_dtype<T>(*profiles, "range_profiles",
                             /*allow_real=*/false);
-    require_dtype(*positions, real_dtype<T>(), "positions", who);
-    require_dtype(*reference, real_dtype<T>(), "reference_position", who);
+    require_dtype(*positions, real_dtype<TGeom>(), "positions", who);
+    require_dtype(*reference, real_dtype<TGeom>(), "reference_position", who);
     require_contiguous(*profiles, "range_profiles", who);
     require_contiguous(*positions, "positions", who);
     require_contiguous(*reference, "reference_position", who);
@@ -386,7 +396,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
     int64_t incoming_v = 0;
     int64_t incoming_u = 0;
     if (sample_points) {
-      require_dtype(*sample_points, real_dtype<T>(), "sample_points", who);
+      require_dtype(*sample_points, real_dtype<TGeom>(), "sample_points", who);
       require_contiguous(*sample_points, "sample_points", who);
       require_cuda_accessible(*sample_points, "sample_points", who);
       if (sample_points->ndim() != 3 || sample_points->shape()[2] != 3) {
@@ -417,9 +427,9 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
                                     "resetting control message");
       } else if (state_->lattice_num_v == incoming_v && state_->lattice_num_u == incoming_u) {
         const int64_t n = incoming_v * incoming_u * 3;
-        if (detail::device_arrays_differ<T>(state_->lattice_xyz.template as<T>(),
-                                            static_cast<const T*>(sample_points->data()), n,
-                                            state_->cmp_flag, stream)) {
+        if (detail::device_arrays_differ<TGeom>(state_->lattice_xyz.template as<TGeom>(),
+                                                static_cast<const TGeom*>(sample_points->data()), n,
+                                                state_->cmp_flag, stream)) {
           points_changed = true;
         }
       } else {
@@ -544,7 +554,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
 
     int64_t num_v = 0;
     int64_t num_u = 0;
-    const T* lattice_ptr = nullptr;
+    const TGeom* lattice_ptr = nullptr;
     if (sample_points_connected_) {
       if (!state_->lattice_valid) {
         throw std::invalid_argument(who +
@@ -552,7 +562,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       }
       num_v = state_->lattice_num_v;
       num_u = state_->lattice_num_u;
-      lattice_ptr = state_->lattice_xyz.template as<T>();
+      lattice_ptr = state_->lattice_xyz.template as<TGeom>();
     } else {
       if (!effective_geometry_.is_valid()) {
         throw std::invalid_argument(who + ": sample_geometry is required");
@@ -570,7 +580,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
         locality_warned_ = false;
       }
       if (detail::backend_is_matx(backend_value_)) {
-        lattice_ptr = state_->lattice_xyz.template as<T>();
+        lattice_ptr = state_->lattice_xyz.template as<TGeom>();
       }
     }
 
@@ -608,16 +618,21 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
           state_->planes_valid = true;
         }
       } else {
-        detail::copy_entering_xyz(*state_, static_cast<const T*>(sample_points->data()), k, num_u,
-                                  phys0, stream);
-        lattice_ptr = state_->lattice_xyz.template as<T>();
+        detail::copy_entering_xyz(*state_, static_cast<const TGeom*>(sample_points->data()), k,
+                                  num_u, phys0, stream);
+        lattice_ptr = state_->lattice_xyz.template as<TGeom>();
         if (!packed) {
           detail::gather_lattice(*state_, lattice_ptr, num_v * num_u, stream);
           state_->planes_valid = true;
         }
       }
       state_->ring_offset = (phys0 + k) % num_v;
-      locality_warned_ = false;
+      // Deliberately *not* re-arming `locality_warned_` here. A scroll
+      // advances the lattice by whole rows and does not change the locality
+      // property the warning reports, so clearing it every tick turned a
+      // warn-once into a warn-forever -- and, worse, re-ran the check itself,
+      // which costs two blocking device-to-host synchronizations per tick on
+      // the default Taylor backend. `continuous_strip` scrolls every tick.
     }
 
     const T* profile_ptr = static_cast<const T*>(profiles->data());
@@ -674,16 +689,16 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
     const int64_t pulse_stride = num_pulses * 3;
     const int64_t profile_stride = num_pulses * num_bins * 2;
     for (int64_t b = 0; b < cube.batch; ++b) {
-      const T* pos_b = static_cast<const T*>(positions->data()) + b * pulse_stride;
-      const T* ref_b = static_cast<const T*>(reference->data()) + b * pulse_stride;
+      const TGeom* pos_b = static_cast<const TGeom*>(positions->data()) + b * pulse_stride;
+      const TGeom* ref_b = static_cast<const TGeom*>(reference->data()) + b * pulse_stride;
       const T* prof_b = profile_ptr + b * profile_stride;
       detail::prepare_pulses(*state_, pos_b, ref_b, static_cast<int>(num_pulses), stream);
       if (detail::backend_is_matx(backend_value_)) {
 #if __has_include("matx/kernels/sar_bp.cuh")
-        detail::launch_matx_window<T>(backend_value_, *state_, prof_b, pos_b, lattice_ptr,
-                                      static_cast<int>(num_v), static_cast<int>(num_u),
-                                      static_cast<int>(num_pulses), static_cast<int>(num_bins),
-                                      static_cast<int>(b), effective_frequency_, spacing, stream);
+        detail::launch_matx_window<T, TGeom>(
+            backend_value_, *state_, prof_b, pos_b, lattice_ptr, static_cast<int>(num_v),
+            static_cast<int>(num_u), static_cast<int>(num_pulses), static_cast<int>(num_bins),
+            static_cast<int>(b), effective_frequency_, spacing, stream);
 #else
         throw std::invalid_argument(who + ": backend '" + std::string(to_string(backend_value_)) +
                                     "' needs matx/kernels/sar_bp.cuh");
@@ -791,7 +806,7 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
       if (hud_) {
         hud_->publish_bp(FormationHudBp{
             .capture_time_ns = context.activation_time().timestamp_ns,
-            .closes_aperture = stage_after,
+            .closes_aperture = completes_aperture,
             .compute_s = aperture_compute_s_,
             .pulses = emitted_pulses,
             .pixels = emitted_pixels,
@@ -808,7 +823,12 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
           emit_required_tensor(image, context, "BackprojectionOp.image", false, [&] {
             return prepare_device_tensor(
                 image, context, std::vector<int64_t>{num_v, num_u}, complex_dtype<T>(),
-                [&](void* dst, std::size_t) -> expected<void, Error> {
+                [&](void* dst, std::size_t bytes) -> expected<void, Error> {
+                  if (bytes != static_cast<std::size_t>(num_v) * static_cast<std::size_t>(num_u) *
+                                   2U * sizeof(T)) {
+                    return make_unexpected(
+                        Error{ErrorCode::kFailure, who + ": image size mismatch"});
+                  }
                   if (detail::backend_is_matx(backend_value_)) {
 #if __has_include("matx/kernels/sar_bp.cuh")
                     detail::emit_matx_accum(*state_, static_cast<T*>(dst), 1, num_v, num_u, stream);
@@ -865,17 +885,18 @@ expected<void, Error> BackprojectionOp<T>::compute(ExecutionContext& context) {
   }
 }
 
-template <typename T>
-void BackprojectionOp<T>::stop() {
+template <typename T, typename TGeom>
+void BackprojectionOp<T, TGeom>::stop() {
   if (unemitted_pulses_ > 0) {
     HOLOSCAN_LOG_WARN(
         "{}: stopping with {} unemitted pulse(s) still in the "
         "accumulator",
-        op_name<T>(), unemitted_pulses_);
+        op_name<T, TGeom>(), unemitted_pulses_);
   }
 }
 
-template class BackprojectionOp<float>;
-template class BackprojectionOp<double>;
+template class BackprojectionOp<float, float>;
+template class BackprojectionOp<double, double>;
+template class BackprojectionOp<float, double>;
 
 }  // namespace holoscan::radar

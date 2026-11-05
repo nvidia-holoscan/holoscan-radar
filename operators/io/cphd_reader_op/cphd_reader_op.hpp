@@ -78,9 +78,17 @@ HOLOSCAN_PARAM_SCHEMA(CphdReaderParams,
   return params.wait_for_downstream || !(params.playback_rate > 0.0);
 }
 
-template <typename T>
+// `T` is the sample precision; `TGeom` is the precision of the geometry
+// outputs (`positions`, `reference_position`, `velocities`). They default to
+// the same type. `pulse_times` is already float64 regardless of `T`, and
+// `<float, double>` extends that same reasoning to the ECEF positions, which
+// cannot survive float32: one ulp at a 6.4e6 m radius is 0.76 m. `sample_axis`
+// stays on `T` because it belongs to the fast-time sample data.
+template <typename T, typename TGeom = T>
 class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
+  static_assert(std::is_same_v<TGeom, float> || std::is_same_v<TGeom, double>);
+  static_assert(sizeof(TGeom) >= sizeof(T), "geometry may not be coarser than samples");
 
  public:
   explicit CPHDReaderOp(const MaxTensorExtents& extents, std::shared_ptr<FormationHud> hud = {});
@@ -153,6 +161,7 @@ class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
   std::size_t pinned_signal_bytes_{0};
 };
 
-extern template class CPHDReaderOp<float>;
-extern template class CPHDReaderOp<double>;
+extern template class CPHDReaderOp<float, float>;
+extern template class CPHDReaderOp<double, double>;
+extern template class CPHDReaderOp<float, double>;
 }  // namespace holoscan::radar

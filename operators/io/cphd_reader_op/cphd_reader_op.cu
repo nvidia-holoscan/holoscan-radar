@@ -125,7 +125,7 @@ expected<void, Error> cuda_ok(cudaError_t status, const char* what) {
 template <typename T>
 expected<void, Error> fill_history(void* dst, std::size_t bytes, std::size_t nsamp,
                                    int64_t num_samples, bool cf8, const char* pinned,
-                                   void* device_cf8, double* device_amp,
+                                   void* device_cf8, double* device_amp, std::size_t amp_capacity,
                                    const std::vector<double>& amp, cudaStream_t stream) {
   const std::size_t out_bytes = nsamp * sizeof(std::complex<T>);
   if (bytes != out_bytes) {
@@ -134,6 +134,13 @@ expected<void, Error> fill_history(void* dst, std::size_t bytes, std::size_t nsa
   }
   const double* d_amp = nullptr;
   if (!amp.empty()) {
+    // `device_amp` is a fixed `pulses_per_tick` allocation made in `start()`,
+    // so an oversized AmpSF would overrun it rather than be rejected. Every
+    // other host-to-device copy in this file checks its byte count first.
+    if (amp.size() > amp_capacity) {
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument, "CPHDReaderOp: AmpSF longer than the pulse batch"});
+    }
     HOLOSCAN_TRY(cuda_ok(cudaMemcpyAsync(device_amp, amp.data(), amp.size() * sizeof(double),
                                          cudaMemcpyHostToDevice, stream),
                          "AmpSF H2D failed"));
@@ -194,8 +201,8 @@ void check_sample_axis(const std::vector<double>& values, const char* name) {
 }
 }  // namespace
 
-template <typename T>
-struct CPHDReaderOp<T>::Batch {
+template <typename T, typename TGeom>
+struct CPHDReaderOp<T, TGeom>::Batch {
   int64_t first{}, count{}, samples{};
   size_t file_index{};
   bool collection_start{}, nonfinite{};
@@ -204,7 +211,9 @@ struct CPHDReaderOp<T>::Batch {
   const char* signal{};
   bool final{}, follows{}, cf8{};
   double collect_span{};
-  std::vector<T> apc, reference, axis, vel;
+  std::vector<TGeom> apc, reference;
+  std::vector<T> axis;
+  std::vector<TGeom> vel;
   std::vector<double> times, amp;
   TimePoint capture_time{};
   // Optional outputs are attempted once; required outputs retire independently.
@@ -212,21 +221,22 @@ struct CPHDReaderOp<T>::Batch {
   bool retry_warned{};
 };
 
-template <typename T>
-CPHDReaderOp<T>::CPHDReaderOp(const MaxTensorExtents& extents, std::shared_ptr<FormationHud> hud)
+template <typename T, typename TGeom>
+CPHDReaderOp<T, TGeom>::CPHDReaderOp(const MaxTensorExtents& extents,
+                                     std::shared_ptr<FormationHud> hud)
 : extents_(extents), hud_(std::move(hud)) {
   require_extent(extents.max_pulses, "max_pulses", kWho);
   require_extent(extents.max_samples_per_pulse, "max_samples_per_pulse", kWho);
 }
 
-template <typename T>
-CPHDReaderOp<T>::~CPHDReaderOp() {
+template <typename T, typename TGeom>
+CPHDReaderOp<T, TGeom>::~CPHDReaderOp() {
   stop();
   release_resources();
 }
 
-template <typename T>
-LifecycleStatus CPHDReaderOp<T>::on_arm(LifecycleContext& context) noexcept {
+template <typename T, typename TGeom>
+LifecycleStatus CPHDReaderOp<T, TGeom>::on_arm(LifecycleContext& context) noexcept {
   auto sender = context.notification_sender(wake_);
   if (!sender)
     return LifecycleStatus::kFatalFailure;
@@ -234,13 +244,13 @@ LifecycleStatus CPHDReaderOp<T>::on_arm(LifecycleContext& context) noexcept {
   return LifecycleStatus::kOk;
 }
 
-template <typename T>
-void CPHDReaderOp<T>::stop() {
+template <typename T, typename TGeom>
+void CPHDReaderOp<T, TGeom>::stop() {
   scheduler_.stop();
 }
 
-template <typename T>
-LifecycleStatus CPHDReaderOp<T>::on_release(LifecycleContext&) noexcept {
+template <typename T, typename TGeom>
+LifecycleStatus CPHDReaderOp<T, TGeom>::on_release(LifecycleContext&) noexcept {
   scheduler_.release();
   batch_.reset();
   read_ahead_.clear();
@@ -249,8 +259,8 @@ LifecycleStatus CPHDReaderOp<T>::on_release(LifecycleContext&) noexcept {
   return LifecycleStatus::kOk;
 }
 
-template <typename T>
-void CPHDReaderOp<T>::release_resources() noexcept {
+template <typename T, typename TGeom>
+void CPHDReaderOp<T, TGeom>::release_resources() noexcept {
   if (h2d_done_ != 0) {
     cudaEventDestroy(reinterpret_cast<cudaEvent_t>(h2d_done_));
     h2d_done_ = 0;
@@ -277,8 +287,8 @@ void CPHDReaderOp<T>::release_resources() noexcept {
   }
 }
 
-template <typename T>
-void CPHDReaderOp<T>::setup(OperatorSpec& spec) {
+template <typename T, typename TGeom>
+void CPHDReaderOp<T, TGeom>::setup(OperatorSpec& spec) {
   spec.notification_source(wake_, "playback").capacity(2U).sender_reference_capacity(1U);
   spec.lifecycle()
       .stage(LifecycleStage::kArm, &CPHDReaderOp::on_arm)
@@ -290,10 +300,10 @@ void CPHDReaderOp<T>::setup(OperatorSpec& spec) {
           kDevice, 2U,
           tensor_byte_span(std::vector<int64_t>{pulses, samples}, complex_dtype<T>())));
   spec.output(positions).produces_tensor(pooled_tensor_output(
-      kDevice, 2U, tensor_byte_span(std::vector<int64_t>{pulses, 3}, real_dtype<T>())));
+      kDevice, 2U, tensor_byte_span(std::vector<int64_t>{pulses, 3}, real_dtype<TGeom>())));
   spec.output(reference_position)
       .produces_tensor(pooled_tensor_output(
-          kDevice, 2U, tensor_byte_span(std::vector<int64_t>{pulses, 3}, real_dtype<T>())));
+          kDevice, 2U, tensor_byte_span(std::vector<int64_t>{pulses, 3}, real_dtype<TGeom>())));
   spec.output(sample_axis)
       .produces_tensor(pooled_tensor_output(
           kDevice, 1U, tensor_byte_span(std::vector<int64_t>{samples}, real_dtype<T>())));
@@ -302,27 +312,27 @@ void CPHDReaderOp<T>::setup(OperatorSpec& spec) {
           kDevice, 1U, tensor_byte_span(std::vector<int64_t>{pulses}, real_dtype<double>())));
   spec.output(velocities)
       .produces_tensor(pooled_tensor_output(
-          kDevice, 2U, tensor_byte_span(std::vector<int64_t>{pulses, 3}, real_dtype<T>())));
+          kDevice, 2U, tensor_byte_span(std::vector<int64_t>{pulses, 3}, real_dtype<TGeom>())));
   spec.output(coordinate_frame)
       .produces_tensor(pooled_tensor_output(kFrameHost, 1U, 3U * sizeof(double)));
   spec.output(stream_boundary);
 }
 
-template <typename T>
-Contract CPHDReaderOp<T>::contract() const {
+template <typename T, typename TGeom>
+Contract CPHDReaderOp<T, TGeom>::contract() const {
   Contract result;
   result.trigger(OnNotified{.event = wake_});
   return result;
 }
 
-template <typename T>
-void CPHDReaderOp<T>::publish_hud() {
+template <typename T, typename TGeom>
+void CPHDReaderOp<T, TGeom>::publish_hud() {
   if (hud_)
     hud_->publish_reader(spans_, playback_, last_apc_, last_packet_at_, stopped_, capture_time_ns_);
 }
 
-template <typename T>
-void CPHDReaderOp<T>::maybe_warn_behind() {
+template <typename T, typename TGeom>
+void CPHDReaderOp<T, TGeom>::maybe_warn_behind() {
   if (!playback_.paced || !playback_.valid || !std::isfinite(playback_.behind_s))
     return;
   if (playback_.behind_s >= kBehindWarnEnterS) {
@@ -343,8 +353,8 @@ void CPHDReaderOp<T>::maybe_warn_behind() {
       playback_.behind_s, playback_.target_s(), playback_.wall_s, playback_.rate);
 }
 
-template <typename T>
-void CPHDReaderOp<T>::open_file() {
+template <typename T, typename TGeom>
+void CPHDReaderOp<T, TGeom>::open_file() {
   const auto& p = read_params_;
   file_ = std::make_unique<cphd::CphdFile>(files_[file_index_]);
   const auto& info = file_->channel(p.channel);
@@ -365,8 +375,8 @@ void CPHDReaderOp<T>::open_file() {
   next_pulse_ = first_pulse_;
 }
 
-template <typename T>
-void CPHDReaderOp<T>::start() {
+template <typename T, typename TGeom>
+void CPHDReaderOp<T, TGeom>::start() {
   stopped_ = false;
   capture_time_ns_.reset();
   stage_ = Stage::kRead;
@@ -436,15 +446,16 @@ void CPHDReaderOp<T>::start() {
   scheduler_.schedule(std::chrono::steady_clock::now());
 }
 
-template <typename T>
-void CPHDReaderOp<T>::request_read(unsigned slot) {
+template <typename T, typename TGeom>
+void CPHDReaderOp<T, TGeom>::request_read(unsigned slot) {
   read_ahead_.request(scheduler_, [this, slot] {
     return read_batch(slot);
   });
 }
 
-template <typename T>
-std::unique_ptr<typename CPHDReaderOp<T>::Batch> CPHDReaderOp<T>::read_batch(unsigned slot) {
+template <typename T, typename TGeom>
+std::unique_ptr<typename CPHDReaderOp<T, TGeom>::Batch> CPHDReaderOp<T, TGeom>::read_batch(
+    unsigned slot) {
   const auto& p = read_params_;
   if (next_pulse_ == last_pulse_) {
     file_index_ = (file_index_ + 1U) % files_.size();
@@ -461,7 +472,7 @@ std::unique_ptr<typename CPHDReaderOp<T>::Batch> CPHDReaderOp<T>::read_batch(uns
   const auto tx = pvp.field("TxPos", 3);
   const auto rx = pvp.field("RcvPos", 3);
   const auto srp = pvp.field("SRPPos", 3);
-  std::vector<T> apc(tx.size()), reference(srp.size());
+  std::vector<TGeom> apc(tx.size()), reference(srp.size());
   std::array<double, 3> mean{};
   int64_t finite_count = 0;
   bool nonfinite = false;
@@ -471,13 +482,17 @@ std::unique_ptr<typename CPHDReaderOp<T>::Batch> CPHDReaderOp<T>::read_batch(uns
     for (int axis = 0; axis < 3; ++axis) {
       const size_t i = static_cast<size_t>(3 * pulse + axis);
       const double value = 0.5 * (tx[i] + rx[i]);
-      apc[i] = static_cast<T>(value);
-      reference[i] = static_cast<T>(srp[i]);
+      apc[i] = static_cast<TGeom>(value);
+      reference[i] = static_cast<TGeom>(srp[i]);
       finite = finite && std::isfinite(value);
     }
     if (finite) {
+      // Accumulate the full-precision value, not the `TGeom` store above:
+      // `mean` is double, and reading it back through `apc[]` throws away the
+      // precision for a `<float, float>` build.
       for (int axis = 0; axis < 3; ++axis)
-        mean[axis] += apc[3 * pulse + axis];
+        mean[axis] += 0.5 * (tx[static_cast<size_t>(3 * pulse + axis)] +
+                             rx[static_cast<size_t>(3 * pulse + axis)]);
       ++finite_count;
     } else {
       nonfinite = true;
@@ -496,13 +511,13 @@ std::unique_ptr<typename CPHDReaderOp<T>::Batch> CPHDReaderOp<T>::read_batch(uns
   for (int64_t i = 0; i < info.num_samples; ++i) {
     axis[static_cast<size_t>(i)] = static_cast<T>(sc0[0] + i * scss[0]);
   }
-  std::vector<T> vel;
+  std::vector<TGeom> vel;
   if (pvp.has("TxVel") && pvp.has("RcvVel")) {
     const auto tx_vel = pvp.field("TxVel", 3);
     const auto rx_vel = pvp.field("RcvVel", 3);
     vel.resize(tx_vel.size());
     for (size_t i = 0; i < vel.size(); ++i) {
-      vel[i] = static_cast<T>(0.5 * (tx_vel[i] + rx_vel[i]));
+      vel[i] = static_cast<TGeom>(0.5 * (tx_vel[i] + rx_vel[i]));
     }
   }
 
@@ -544,8 +559,8 @@ std::unique_ptr<typename CPHDReaderOp<T>::Batch> CPHDReaderOp<T>::read_batch(uns
   return batch;
 }
 
-template <typename T>
-expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
+template <typename T, typename TGeom>
+expected<void, Error> CPHDReaderOp<T, TGeom>::compute(ExecutionContext& context) {
   const CallbackTimer timing;
   if (context.cancellation().stop_requested()) {
     context.request_stop();
@@ -716,8 +731,8 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
       publishing_port = "velocities";
       if (!(batch.published & 4U)) {
         if (velocities_out_.active() && !batch.vel.empty()) {
-          HOLOSCAN_TRY(auto loan,
-                       upload(velocities, context, batch.vel, {count, 3}, real_dtype<T>(), h2d));
+          HOLOSCAN_TRY(auto loan, upload(velocities, context, batch.vel, {count, 3},
+                                         real_dtype<TGeom>(), h2d));
           HOLOSCAN_RETURN_IF_ERROR(sync_ingest(h2d, h2d_done, compute));
           velocities_out_.emit(velocities, context, std::move(loan), "CPHDReaderOp.velocities",
                                options);
@@ -735,19 +750,20 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
         batch.published |= 8U;
       }
       HOLOSCAN_RETURN_IF_ERROR(required(phase_history, 16U, [&] {
-        return prepare_device_tensor(phase_history, context, std::vector<int64_t>{count, samples},
-                                     complex_dtype<T>(), [&](void* dst, std::size_t bytes) {
-                                       return fill_history<T>(
-                                           dst, bytes, nsamp, samples, batch.cf8, pinned,
-                                           reinterpret_cast<void*>(device_cf8_),
-                                           reinterpret_cast<double*>(device_amp_), batch.amp, h2d);
-                                     });
+        return prepare_device_tensor(
+            phase_history, context, std::vector<int64_t>{count, samples}, complex_dtype<T>(),
+            [&](void* dst, std::size_t bytes) {
+              return fill_history<T>(
+                  dst, bytes, nsamp, samples, batch.cf8, pinned,
+                  reinterpret_cast<void*>(device_cf8_), reinterpret_cast<double*>(device_amp_),
+                  static_cast<std::size_t>(params().pulses_per_tick), batch.amp, h2d);
+            });
       }));
       HOLOSCAN_RETURN_IF_ERROR(required(positions, 32U, [&] {
-        return upload(positions, context, batch.apc, {count, 3}, real_dtype<T>(), h2d);
+        return upload(positions, context, batch.apc, {count, 3}, real_dtype<TGeom>(), h2d);
       }));
       HOLOSCAN_RETURN_IF_ERROR(required(reference_position, 64U, [&] {
-        return upload(reference_position, context, batch.reference, {count, 3}, real_dtype<T>(),
+        return upload(reference_position, context, batch.reference, {count, 3}, real_dtype<TGeom>(),
                       h2d);
       }));
       const auto boundary = final ? (batch.follows ? SarStreamBoundary::kCollectionBoundary
@@ -790,6 +806,7 @@ expected<void, Error> CPHDReaderOp<T>::compute(ExecutionContext& context) {
   }
 }
 
-template class CPHDReaderOp<float>;
-template class CPHDReaderOp<double>;
+template class CPHDReaderOp<float, float>;
+template class CPHDReaderOp<double, double>;
+template class CPHDReaderOp<float, double>;
 }  // namespace holoscan::radar

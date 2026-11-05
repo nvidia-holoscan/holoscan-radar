@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -29,8 +30,12 @@ namespace holoscan::radar::app::sar {
 // Gantt is a separate `TimelineRasterOp` window.
 class SarImageVizOp : public Operator<> {
  public:
+  // `product_extent` is the formed product's size when the tensor on `image`
+  // is a decimated view of it, as a scroll mosaic publishes. The HUD banner
+  // names the product; the view's own size is a transport detail. {0, 0}
+  // reports the tensor.
   SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side, bool transpose_axes,
-                OverlayConfig overlay = {});
+                OverlayConfig overlay = {}, std::array<int64_t, 2> product_extent = {0, 0});
   ~SarImageVizOp() override;
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -45,6 +50,7 @@ class SarImageVizOp : public Operator<> {
   int64_t max_v_{0}, max_u_{0}, display_side_{0};
   bool transpose_axes_{false};
   OverlayConfig overlay_{};
+  std::array<int64_t, 2> product_extent_{0, 0};
   int overlay_index_{0};
   std::chrono::steady_clock::time_point overlay_rate_at_{};
   bool have_overlay_rate_{false};

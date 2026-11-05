@@ -75,12 +75,14 @@ __global__ void render_gray(const float* magnitude, std::uint8_t* output, int64_
 }  // namespace
 
 SarImageVizOp::SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side,
-                             bool transpose_axes, OverlayConfig overlay)
+                             bool transpose_axes, OverlayConfig overlay,
+                             std::array<int64_t, 2> product_extent)
 : max_v_(max_v),
   max_u_(max_u),
   display_side_(display_side),
   transpose_axes_(transpose_axes),
-  overlay_(std::move(overlay)) {
+  overlay_(std::move(overlay)),
+  product_extent_(product_extent) {
   if (max_v_ < 1 || max_u_ < 1 || display_side_ < 1)
     throw std::invalid_argument("SarImageVizOp: invalid image extents");
 }
@@ -173,7 +175,9 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
   if (overlay_.diag)
     diag = overlay_.diag();
   std::vector<std::string> banner;
-  const std::string size = std::to_string(shape[0]) + "x" + std::to_string(shape[1]);
+  const int64_t banner_v = product_extent_[0] > 0 ? product_extent_[0] : shape[0];
+  const int64_t banner_u = product_extent_[1] > 0 ? product_extent_[1] : shape[1];
+  const std::string size = std::to_string(banner_v) + "x" + std::to_string(banner_u);
   if (!overlay_.scene_names.empty()) {
     const size_t idx = static_cast<size_t>(overlay_index_) % overlay_.scene_names.size();
     banner.push_back(overlay_.scene_names[idx] + "  " + size);
@@ -186,7 +190,7 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
   } else {
     const std::string rate_line =
         format_bp_rate_line(diag.bp_compute_s, diag.pulses, diag.pixels, diag.bp_num_v,
-                            diag.bp_num_u, shape[0], shape[1]);
+                            diag.bp_num_u, banner_v, banner_u);
     const auto overlay_now = std::chrono::steady_clock::now();
     if (!rate_line.empty() &&
         (!have_overlay_rate_ ||

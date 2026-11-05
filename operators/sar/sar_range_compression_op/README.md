@@ -43,7 +43,7 @@ Set `max_pulses`, `max_samples_per_pulse`, and `max_range_bins` for the largest 
 ## Parameters
 
 | Parameter | Type | Default | Mutability | Responsibility |
-| --- | --- | --- | --- |
+| --- | --- | --- | --- | --- |
 | `range_window` | `WindowSpec` | rectangular | [live] | Fast-time taper |
 | `waveform` | `LFMWaveformDescriptor` | unset | [live] | Physical range axis |
 | `fft_norm` | `FftNorm` | backward | [live] | Inverse FFT scaling |

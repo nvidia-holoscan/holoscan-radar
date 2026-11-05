@@ -99,9 +99,9 @@ inline bool backend_is_implemented(BackprojectionBackend backend) {
   return true;
 }
 
-template <typename T>
+template <typename T, typename TGeom = T>
 struct BackprojectionState {
-  DeviceBuffer lattice_xyz;  // (num_v * num_u * 3) T, cached
+  DeviceBuffer lattice_xyz;  // (num_v * num_u * 3) TGeom, cached
   DeviceBuffer x_plane;      // double, num_pixels
   DeviceBuffer y_plane;
   DeviceBuffer z_plane;
@@ -328,8 +328,8 @@ bool device_arrays_differ(const T* a, const T* b, int64_t n, DeviceBuffer& flag,
 }
 
 // Worst-case 16x16-tile diameter over x/y/z planes.
-template <typename T>
-double max_tile_diameter(BackprojectionState<T>& state, int64_t num_v, int64_t num_u,
+template <typename T, typename TGeom>
+double max_tile_diameter(BackprojectionState<T, TGeom>& state, int64_t num_v, int64_t num_u,
                          cudaStream_t stream) {
   const int tiles_v = static_cast<int>((num_v + 15) / 16);
   const int tiles_u = static_cast<int>((num_u + 15) / 16);
@@ -507,24 +507,24 @@ __global__ void downcast_real_kernel(const double* src, float* dst, int n) {
   dst[i] = static_cast<float>(src[i]);
 }
 
-__global__ void zero_float_kernel(float* dst, int n) {
-  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+__global__ void zero_float_kernel(float* dst, int64_t n) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
   }
   dst[i] = 0.0f;
 }
 
-__global__ void promote_image_kernel(const float* src, float* dst, int n) {
-  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+__global__ void promote_image_kernel(const float* src, float* dst, int64_t n) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
   }
   dst[i] = src[i];
 }
 
-__global__ void promote_image_kernel(const float* src, double* dst, int n) {
-  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+__global__ void promote_image_kernel(const float* src, double* dst, int64_t n) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
   }
@@ -545,8 +545,8 @@ inline dim3 bp_block() {
   return dim3(16, 16, 1);
 }
 
-template <typename T>
-void ensure_accum(BackprojectionState<T>& state, int64_t batch, int64_t num_v, int64_t num_u,
+template <typename T, typename TGeom>
+void ensure_accum(BackprojectionState<T, TGeom>& state, int64_t batch, int64_t num_v, int64_t num_u,
                   cudaStream_t stream) {
   const int64_t n = batch * num_v * num_u * 2;
   const bool resize =
@@ -555,8 +555,7 @@ void ensure_accum(BackprojectionState<T>& state, int64_t batch, int64_t num_v, i
   if (resize) {
     const int threads = 256;
     const int blocks = static_cast<int>((n + threads - 1) / threads);
-    zero_float_kernel<<<blocks, threads, 0, stream>>>(state.accum.template as<float>(),
-                                                      static_cast<int>(n));
+    zero_float_kernel<<<blocks, threads, 0, stream>>>(state.accum.template as<float>(), n);
     state.cached_batch = batch;
     state.cached_num_v = num_v;
     state.cached_num_u = num_u;
@@ -565,16 +564,15 @@ void ensure_accum(BackprojectionState<T>& state, int64_t batch, int64_t num_v, i
   }
 }
 
-template <typename T>
-void reset_accum(BackprojectionState<T>& state, cudaStream_t stream) {
+template <typename T, typename TGeom>
+void reset_accum(BackprojectionState<T, TGeom>& state, cudaStream_t stream) {
   if (state.accum.ptr == nullptr || state.cached_batch == 0) {
     return;
   }
   const int64_t n = state.cached_batch * state.cached_num_v * state.cached_num_u * 2;
   const int threads = 256;
   const int blocks = static_cast<int>((n + threads - 1) / threads);
-  zero_float_kernel<<<blocks, threads, 0, stream>>>(state.accum.template as<float>(),
-                                                    static_cast<int>(n));
+  zero_float_kernel<<<blocks, threads, 0, stream>>>(state.accum.template as<float>(), n);
   state.ring_offset = 0;
   state.launch_row0 = 0;
 }
@@ -602,8 +600,8 @@ inline void geometry_to_double3(const SampleGeometry& geometry, double3* origin,
 // `packed == false` writes those directly and never materializes the
 // (N, 3) buffer (1.61 GiB at Atlanta 8192x8192 double). MatX consumes packed
 // xyz, so `packed == true` writes that instead.
-template <typename T>
-void expand_geometry_on_device(BackprojectionState<T>& state, const SampleGeometry& geometry,
+template <typename T, typename TGeom>
+void expand_geometry_on_device(BackprojectionState<T, TGeom>& state, const SampleGeometry& geometry,
                                bool packed, cudaStream_t stream) {
   const int64_t num_v = geometry.num_v();
   const int64_t num_u = geometry.num_u();
@@ -619,10 +617,10 @@ void expand_geometry_on_device(BackprojectionState<T>& state, const SampleGeomet
   const dim3 grid = lattice_launch(pixels);
   constexpr int kThreads = 256;
   if (packed) {
-    state.lattice_xyz.ensure(static_cast<size_t>(pixels) * 3 * sizeof(T), stream);
-    expand_lattice_packed_kernel<T>
+    state.lattice_xyz.ensure(static_cast<size_t>(pixels) * 3 * sizeof(TGeom), stream);
+    expand_lattice_packed_kernel<TGeom>
         <<<grid, kThreads, 0, stream>>>(origin, axis_v, axis_u, spacing_v, spacing_u, num_v, num_u,
-                                        state.lattice_xyz.template as<T>());
+                                        state.lattice_xyz.template as<TGeom>());
     return;
   }
   state.x_plane.ensure(static_cast<size_t>(pixels) * sizeof(double), stream);
@@ -633,8 +631,8 @@ void expand_geometry_on_device(BackprojectionState<T>& state, const SampleGeomet
                                                               state.y_d(), state.z_d());
 }
 
-template <typename T>
-void expand_geometry_rows(BackprojectionState<T>& state, const SampleGeometry& geometry,
+template <typename T, typename TGeom>
+void expand_geometry_rows(BackprojectionState<T, TGeom>& state, const SampleGeometry& geometry,
                           bool packed, int64_t logical_v0, int64_t n_rows, int64_t phys_v0,
                           cudaStream_t stream) {
   const int64_t num_v = geometry.num_v();
@@ -649,9 +647,9 @@ void expand_geometry_rows(BackprojectionState<T>& state, const SampleGeometry& g
   const dim3 grid = lattice_launch(pixels);
   constexpr int kThreads = 256;
   if (packed) {
-    expand_lattice_packed_rows_kernel<T><<<grid, kThreads, 0, stream>>>(
+    expand_lattice_packed_rows_kernel<TGeom><<<grid, kThreads, 0, stream>>>(
         origin, axis_v, axis_u, spacing_v, spacing_u, num_v, num_u, logical_v0, n_rows, phys_v0,
-        state.lattice_xyz.template as<T>());
+        state.lattice_xyz.template as<TGeom>());
     return;
   }
   expand_lattice_plane_rows_kernel<<<grid, kThreads, 0, stream>>>(
@@ -682,8 +680,8 @@ inline void memset_row_span(void* base, int64_t phys0, int64_t n_rows, int64_t n
   one(0, n_rows - first);
 }
 
-template <typename T>
-void zero_nvradar_rows(BackprojectionState<T>& state, int64_t phys0, int64_t n_rows,
+template <typename T, typename TGeom>
+void zero_nvradar_rows(BackprojectionState<T, TGeom>& state, int64_t phys0, int64_t n_rows,
                        cudaStream_t stream) {
   const int64_t nv = state.cached_num_v;
   const int64_t nu = state.cached_num_u;
@@ -695,15 +693,15 @@ void zero_nvradar_rows(BackprojectionState<T>& state, int64_t phys0, int64_t n_r
   }
 }
 
-template <typename T>
-void copy_entering_xyz(BackprojectionState<T>& state, const T* src, int64_t k, int64_t num_u,
-                       int64_t phys0, cudaStream_t stream) {
+template <typename T, typename TGeom>
+void copy_entering_xyz(BackprojectionState<T, TGeom>& state, const TGeom* src, int64_t k,
+                       int64_t num_u, int64_t phys0, cudaStream_t stream) {
   const int64_t nv = state.lattice_num_v;
   const int64_t nu = num_u;
-  T* dst = state.lattice_xyz.template as<T>();
+  TGeom* dst = state.lattice_xyz.template as<TGeom>();
   auto copy_rows = [&](int64_t drow, int64_t srow, int64_t n) {
     if (cudaMemcpyAsync(dst + (drow * nu * 3), src + (srow * nu * 3),
-                        sizeof(T) * static_cast<size_t>(n * nu * 3), cudaMemcpyDeviceToDevice,
+                        sizeof(TGeom) * static_cast<size_t>(n * nu * 3), cudaMemcpyDeviceToDevice,
                         stream) != cudaSuccess) {
       throw std::runtime_error("BackprojectionOp: entering sample_points copy");
     }
@@ -717,8 +715,8 @@ void copy_entering_xyz(BackprojectionState<T>& state, const T* src, int64_t k, i
   copy_rows(0, first, k - first);
 }
 
-template <typename T>
-void gather_lattice(BackprojectionState<T>& state, const T* lattice, int64_t num_pixels,
+template <typename T, typename TGeom>
+void gather_lattice(BackprojectionState<T, TGeom>& state, const TGeom* lattice, int64_t num_pixels,
                     cudaStream_t stream) {
   state.x_plane.ensure(static_cast<size_t>(num_pixels) * sizeof(double), stream);
   state.y_plane.ensure(static_cast<size_t>(num_pixels) * sizeof(double), stream);
@@ -729,21 +727,21 @@ void gather_lattice(BackprojectionState<T>& state, const T* lattice, int64_t num
                                                     state.z_d());
 }
 
-template <typename T>
-void prepare_pulses(BackprojectionState<T>& state, const T* positions, const T* reference, int Np,
-                    cudaStream_t stream) {
+template <typename T, typename TGeom>
+void prepare_pulses(BackprojectionState<T, TGeom>& state, const TGeom* positions,
+                    const TGeom* reference, int Np, cudaStream_t stream) {
   state.apc.ensure(static_cast<size_t>(Np) * 3 * sizeof(double), stream);
   state.mcp.ensure(static_cast<size_t>(Np) * 3 * sizeof(double), stream);
   state.r0.ensure(static_cast<size_t>(Np) * sizeof(double), stream);
   const int threads = 256;
   const int blocks = (Np + threads - 1) / threads;
-  compute_r0_apc_kernel<T><<<blocks, threads, 0, stream>>>(
+  compute_r0_apc_kernel<TGeom><<<blocks, threads, 0, stream>>>(
       positions, reference, Np, state.apc.template as<double>(), state.mcp.template as<double>(),
       state.r0.template as<double>());
 }
 
-template <typename T>
-void prepare_float_scene(BackprojectionState<T>& state, int64_t num_pixels, int Np,
+template <typename T, typename TGeom>
+void prepare_float_scene(BackprojectionState<T, TGeom>& state, int64_t num_pixels, int Np,
                          cudaStream_t stream) {
   const int64_t full = state.lattice_num_v * state.lattice_num_u;
   const int64_t off = state.launch_row0 * state.lattice_num_u;
@@ -763,9 +761,9 @@ void prepare_float_scene(BackprojectionState<T>& state, int64_t num_pixels, int 
   downcast(state.r0, state.r0_f, Np, static_cast<size_t>(Np) * sizeof(float), 0);
 }
 
-template <typename T>
-void ensure_nvradar_lut(BackprojectionState<T>& state, double pc_partial, double rmin, double dr,
-                        int Nfft, cudaStream_t stream) {
+template <typename T, typename TGeom>
+void ensure_nvradar_lut(BackprojectionState<T, TGeom>& state, double pc_partial, double rmin,
+                        double dr, int Nfft, cudaStream_t stream) {
   const bool same = state.lut_nfft == Nfft && state.lut_pc == pc_partial &&
                     state.lut_rmin == rmin && state.lut_dr == dr;
   state.phase_lut.ensure(static_cast<size_t>(Nfft) * 2 * sizeof(float), stream);
@@ -782,8 +780,8 @@ void ensure_nvradar_lut(BackprojectionState<T>& state, double pc_partial, double
   state.lut_nfft = Nfft;
 }
 
-template <typename T>
-void launch_nvradar(BackprojectionBackend backend, BackprojectionState<T>& state,
+template <typename T, typename TGeom>
+void launch_nvradar(BackprojectionBackend backend, BackprojectionState<T, TGeom>& state,
                     const void* profiles, int num_v, int num_u, int Np, int Nfft, int batch_index,
                     double rmin, double dr, double pc_partial, cudaStream_t stream, int row0 = 0,
                     int full_v = -1) {
@@ -791,8 +789,8 @@ void launch_nvradar(BackprojectionBackend backend, BackprojectionState<T>& state
     full_v = num_v;
   }
   struct LaunchRowGuard {
-    BackprojectionState<T>& state;
-    explicit LaunchRowGuard(BackprojectionState<T>& s, int64_t row) : state(s) {
+    BackprojectionState<T, TGeom>& state;
+    explicit LaunchRowGuard(BackprojectionState<T, TGeom>& s, int64_t row) : state(s) {
       state.launch_row0 = row;
     }
     ~LaunchRowGuard() { state.launch_row0 = 0; }
@@ -1078,8 +1076,8 @@ void launch_nvradar(BackprojectionBackend backend, BackprojectionState<T>& state
                               std::string(to_string(backend)) + "' is not implemented");
 }
 
-template <typename T>
-void launch_nvradar_window(BackprojectionBackend backend, BackprojectionState<T>& state,
+template <typename T, typename TGeom>
+void launch_nvradar_window(BackprojectionBackend backend, BackprojectionState<T, TGeom>& state,
                            const void* profiles, int num_v, int num_u, int Np, int Nfft,
                            int batch_index, double rmin, double dr, double pc_partial,
                            cudaStream_t stream) {
@@ -1095,13 +1093,13 @@ void launch_nvradar_window(BackprojectionBackend backend, BackprojectionState<T>
                  pc_partial, stream, 0, num_v);
 }
 
-template <typename T>
-void emit_accum(BackprojectionState<T>& state, T* dst, int64_t batch, int64_t num_v, int64_t num_u,
-                cudaStream_t stream) {
+template <typename T, typename TGeom>
+void emit_accum(BackprojectionState<T, TGeom>& state, T* dst, int64_t batch, int64_t num_v,
+                int64_t num_u, cudaStream_t stream) {
   const int threads = 256;
   auto promote = [&](const float* src, T* out, int64_t n) {
     const int blocks = static_cast<int>((n + threads - 1) / threads);
-    promote_image_kernel<<<blocks, threads, 0, stream>>>(src, out, static_cast<int>(n));
+    promote_image_kernel<<<blocks, threads, 0, stream>>>(src, out, n);
   };
   const int64_t off = state.ring_offset;
   if (off <= 0 || off >= num_v) {
@@ -1169,9 +1167,9 @@ inline matx::SarBpParams matx_params(BackprojectionBackend backend, double frequ
   return params;
 }
 
-template <typename T>
-void ensure_matx_accum(BackprojectionState<T>& state, int64_t batch, int64_t num_v, int64_t num_u,
-                       cudaStream_t stream) {
+template <typename T, typename TGeom>
+void ensure_matx_accum(BackprojectionState<T, TGeom>& state, int64_t batch, int64_t num_v,
+                       int64_t num_u, cudaStream_t stream) {
   const int64_t n = batch * num_v * num_u;
   const bool resize =
       state.cached_batch != batch || state.cached_num_v != num_v || state.cached_num_u != num_u;
@@ -1188,8 +1186,8 @@ void ensure_matx_accum(BackprojectionState<T>& state, int64_t batch, int64_t num
   }
 }
 
-template <typename T>
-void reset_matx_accum(BackprojectionState<T>& state, cudaStream_t stream) {
+template <typename T, typename TGeom>
+void reset_matx_accum(BackprojectionState<T, TGeom>& state, cudaStream_t stream) {
   if (state.matx_accum.ptr == nullptr) {
     return;
   }
@@ -1200,25 +1198,26 @@ void reset_matx_accum(BackprojectionState<T>& state, cudaStream_t stream) {
   state.launch_row0 = 0;
 }
 
-template <typename T>
-void launch_matx(BackprojectionBackend backend, BackprojectionState<T>& state, const void* profiles,
-                 const T* positions, const T* lattice, int num_v, int num_u, int Np, int Nfft,
-                 int batch_index, double frequency, double dr, cudaStream_t stream, int row0 = 0,
-                 int full_v = -1) {
+template <typename T, typename TGeom>
+void launch_matx(BackprojectionBackend backend, BackprojectionState<T, TGeom>& state,
+                 const void* profiles, const TGeom* positions, const TGeom* lattice, int num_v,
+                 int num_u, int Np, int Nfft, int batch_index, double frequency, double dr,
+                 cudaStream_t stream, int row0 = 0, int full_v = -1) {
   using C = cuda::std::complex<T>;
-  using Vec = std::conditional_t<std::is_same_v<T, float>, float3, double3>;
+  using Vec = std::conditional_t<std::is_same_v<TGeom, float>, float3, double3>;
   if (full_v < 1) {
     full_v = num_v;
   }
   const int pixels_full = full_v * num_u;
   C* img_ptr = state.matx_accum.template as<C>() + static_cast<size_t>(batch_index) * pixels_full +
                static_cast<size_t>(row0) * num_u;
-  const T* lat = lattice + static_cast<size_t>(row0) * num_u * 3;
+  const TGeom* lat = lattice + static_cast<size_t>(row0) * num_u * 3;
   auto img = matx::make_tensor<C, 2>(img_ptr, {num_v, num_u});
-  auto vox = matx::make_tensor<Vec, 2>(reinterpret_cast<Vec*>(const_cast<T*>(lat)), {num_v, num_u});
+  auto vox =
+      matx::make_tensor<Vec, 2>(reinterpret_cast<Vec*>(const_cast<TGeom*>(lat)), {num_v, num_u});
   const auto params = matx_params(backend, frequency, dr);
   auto* prof_base = static_cast<C*>(const_cast<void*>(profiles));
-  auto* pos_base = reinterpret_cast<Vec*>(const_cast<T*>(positions));
+  auto* pos_base = reinterpret_cast<Vec*>(const_cast<TGeom*>(positions));
   double* r0_base = state.r0.template as<double>();
   for (int p0 = 0; p0 < Np; p0 += kKernelPulseTile) {
     const int n = std::min(kKernelPulseTile, Np - p0);
@@ -1229,11 +1228,11 @@ void launch_matx(BackprojectionBackend backend, BackprojectionState<T>& state, c
   }
 }
 
-template <typename T>
-void launch_matx_window(BackprojectionBackend backend, BackprojectionState<T>& state,
-                        const void* profiles, const T* positions, const T* lattice, int num_v,
-                        int num_u, int Np, int Nfft, int batch_index, double frequency, double dr,
-                        cudaStream_t stream) {
+template <typename T, typename TGeom>
+void launch_matx_window(BackprojectionBackend backend, BackprojectionState<T, TGeom>& state,
+                        const void* profiles, const TGeom* positions, const TGeom* lattice,
+                        int num_v, int num_u, int Np, int Nfft, int batch_index, double frequency,
+                        double dr, cudaStream_t stream) {
   const int offset = static_cast<int>(state.ring_offset);
   if (offset <= 0 || offset >= num_v) {
     launch_matx(backend, state, profiles, positions, lattice, num_v, num_u, Np, Nfft, batch_index,
@@ -1246,8 +1245,8 @@ void launch_matx_window(BackprojectionBackend backend, BackprojectionState<T>& s
               frequency, dr, stream, 0, num_v);
 }
 
-template <typename T>
-void zero_matx_rows(BackprojectionState<T>& state, int64_t phys0, int64_t n_rows,
+template <typename T, typename TGeom>
+void zero_matx_rows(BackprojectionState<T, TGeom>& state, int64_t phys0, int64_t n_rows,
                     cudaStream_t stream) {
   using C = cuda::std::complex<T>;
   const int64_t nv = state.cached_num_v;
@@ -1260,8 +1259,8 @@ void zero_matx_rows(BackprojectionState<T>& state, int64_t phys0, int64_t n_rows
   }
 }
 
-template <typename T>
-void emit_matx_accum(BackprojectionState<T>& state, T* dst, int64_t batch, int64_t num_v,
+template <typename T, typename TGeom>
+void emit_matx_accum(BackprojectionState<T, TGeom>& state, T* dst, int64_t batch, int64_t num_v,
                      int64_t num_u, cudaStream_t stream) {
   using C = cuda::std::complex<T>;
   const int64_t off = state.ring_offset;

@@ -12,9 +12,9 @@ namespace app = holoscan::radar::app;
 int main(int argc, char** argv) {
   return run_sar_graph_app(
       argc, argv, "spotlight", load_config,
-      [](auto& graph, auto& options, const auto& queue, const auto& cfg, auto& reader, auto& range,
-         auto& manager, auto& bp, auto& source, auto& /*application*/, auto& /*formation*/,
-         const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {
+      [](auto precision, auto& graph, auto& options, const auto& queue, const auto& cfg,
+         auto& reader, auto& range, auto& manager, auto& bp, auto& source, auto& /*application*/,
+         auto& /*formation*/, const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {
         graph.add_flow(range->range_profiles, manager->range_profiles, queue);
         graph.add_flow(reader->stream_boundary, manager->stream_boundary, queue);
         if (cfg.transform_to_scene_enu) {

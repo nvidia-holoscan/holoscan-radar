@@ -21,3 +21,13 @@ if(actual LESS 1 OR NOT expected_dims EQUAL actual)
     message(FATAL_ERROR "Expected at least one ${SAR_DIMS} formed line and no other sizes, "
         "got ${actual} formed lines, ${expected_dims} matching: ${log}")
 endif()
+# Optional: require a numeric line from the run. Everything above checks the
+# exit code, the image count and the image dimensions -- no pixel and no value.
+# A diagnostic variant that produces a number should be made to state it, and
+# the regex should match digits so that an "inf" or "nan" fails rather than
+# passing as "some output was produced".
+if(DEFINED SAR_REQUIRE_REGEX AND NOT SAR_REQUIRE_REGEX STREQUAL "")
+    if(NOT log MATCHES "${SAR_REQUIRE_REGEX}")
+        message(FATAL_ERROR "Expected a line matching '${SAR_REQUIRE_REGEX}': ${log}")
+    endif()
+endif()

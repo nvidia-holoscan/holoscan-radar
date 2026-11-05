@@ -133,9 +133,10 @@ inline YamlRecipe parse_yaml_recipe(const ProfileSuite& suite) {
         input.generator != "cluster_labels" && input.generator != "reduction_indices" &&
         input.generator != "reduction_points" && input.generator != "axis_ramp" &&
         input.generator != "centered_axis_ramp" && input.generator != "valid_mask" &&
-        input.generator != "typed")
+        input.generator != "scatterer_image" && input.generator != "typed")
       throw std::invalid_argument("unknown recipe generator: " + input.generator);
     if ((input.generator == "iq_cube" && input.dtype != "complex64") ||
+        (input.generator == "scatterer_image" && input.dtype != "complex64") ||
         (input.generator == "power_map" && input.dtype != "float32") ||
         (input.generator == "cluster_blobs" && input.dtype != "float32") ||
         (input.generator == "rank_one_mix" && input.dtype != "complex64") ||
@@ -436,6 +437,8 @@ std::shared_ptr<holoscan::Tensor> generate_precision_input(
   const auto shape = recipe_shape(input, values);
   if (input.generator == "iq_cube" && input.dtype == "complex64")
     return make_iq_cube_device<T>(shape);
+  if (input.generator == "scatterer_image" && input.dtype == "complex64")
+    return make_scatterer_image_device<T>(shape);
   if (input.generator == "power_map" && input.dtype == "float32")
     return make_power_map_device<T>(shape);
   if ((input.generator == "axis_ramp" || input.generator == "centered_axis_ramp") &&
@@ -608,15 +611,33 @@ inline MaxTensorExtents direct_recipe_extents(const YamlRecipe& recipe,
   const auto declared = recipe.constructor["extents"];
   if (!declared)
     throw std::invalid_argument("recipe uses a typed bounds policy");
-  require_keys(
-      declared,
-      {"max_samples_per_chirp", "max_chirps", "max_range_bins", "max_doppler_bins", "max_rx",
-       "max_tx", "max_interleaved_chirps", "max_virtual_channels", "max_channels", "max_az",
-       "max_el", "max_detections", "max_points", "max_items", "max_snapshots", "max_features",
-       "max_sources", "max_clusters", "max_subarray_channels"},
-      "recipe extents");
+  require_keys(declared,
+               {"max_samples_per_chirp",
+                "max_chirps",
+                "max_range_bins",
+                "max_doppler_bins",
+                "max_rx",
+                "max_tx",
+                "max_interleaved_chirps",
+                "max_virtual_channels",
+                "max_channels",
+                "max_az",
+                "max_el",
+                "max_detections",
+                "max_points",
+                "max_items",
+                "max_snapshots",
+                "max_features",
+                "max_sources",
+                "max_clusters",
+                "max_subarray_channels",
+                "max_pulses",
+                "max_samples_per_pulse",
+                "max_image_u",
+                "max_image_v"},
+               "recipe extents");
   using Member = std::optional<int64_t> MaxTensorExtents::*;
-  static constexpr std::array<std::pair<std::string_view, Member>, 19> fields{{
+  static constexpr std::array<std::pair<std::string_view, Member>, 23> fields{{
       {"max_samples_per_chirp", &MaxTensorExtents::max_samples_per_chirp},
       {"max_chirps", &MaxTensorExtents::max_chirps},
       {"max_range_bins", &MaxTensorExtents::max_range_bins},
@@ -636,6 +657,10 @@ inline MaxTensorExtents direct_recipe_extents(const YamlRecipe& recipe,
       {"max_sources", &MaxTensorExtents::max_sources},
       {"max_clusters", &MaxTensorExtents::max_clusters},
       {"max_subarray_channels", &MaxTensorExtents::max_subarray_channels},
+      {"max_pulses", &MaxTensorExtents::max_pulses},
+      {"max_samples_per_pulse", &MaxTensorExtents::max_samples_per_pulse},
+      {"max_image_u", &MaxTensorExtents::max_image_u},
+      {"max_image_v", &MaxTensorExtents::max_image_v},
   }};
   MaxTensorExtents result;
   for (const auto& item : declared) {

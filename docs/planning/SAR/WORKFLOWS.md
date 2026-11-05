@@ -1,11 +1,11 @@
 # Holoscan Radar Module — SAR Collection & Image-Formation Workflows
 
-## HSDK 5 implementation scope (2026-09-28)
+## HSDK 5 implementation scope (2026-11-02)
 
-Five C++ applications under `applications/sar/` implement modes 1–5 in this document. Their
+Six C++ applications under `applications/sar/` are implemented: five implement modes 1–5 in this document, and the sixth runs the Figure 2 autofocus chain. Their
 [README](../../../applications/sar/README.md) contains the current
-HSDK 5 Graph diagrams for each mode. Modes 6–9 and the operators in the
-deramped, direct-sampled, autofocus, and product branches remain planned.
+HSDK 5 Graph diagrams for each one. Modes 6–9, Figure 3 in-place autofocus, and the operators in the
+deramped, direct-sampled, and product branches remain planned.
 Historical diagrams below may use the source branch's metadata boundary and
 old port names; the current [operator contract](OPERATOR_API.md) governs
 HSDK 5 wiring. Every CPHD batch carries a typed `stream_boundary` scalar.
@@ -202,11 +202,12 @@ The chains below are built from seventeen operators, introduced here so the rest
 
 These hold across every workflow, and are consistent with [OPERATOR_API.md](OPERATOR_API.md).
 
-- **Tensor layout.** Phase history is `(..., num_pulses, num_samples)`; range profiles `(..., num_pulses, num_range_bins)`; per-pulse phase-center positions `(..., num_pulses, 3)`. Images are `(..., num_v, num_u)` in **both** sample-geometry modes; an explicit sample geometry is a `(num_v, num_u, 3)` lattice of positions, one per pixel, so the modes differ in how positions are specified rather than in rank. Leading `...` axes are opaque batch dimensions, preserved as independent images through formation.
+- **Tensor layout.** Phase history is `(num_pulses, num_samples)`; range profiles `(num_pulses, num_range_bins)`; per-pulse phase-center positions `(num_pulses, 3)`. Images are `(num_v, num_u)` in **both** sample-geometry modes; an explicit sample geometry is a `(num_v, num_u, 3)` lattice of positions, one per pixel, so the modes differ in how positions are specified rather than in rank. The HSDK 5 operators take exactly these named axes and reject a leading `...` axis; there is no implicit batch, and multiple images are an application concern.
 - **The pulse axis is the aperture axis**, and it is the axis that accumulates across ticks. Everything ahead of formation is stateless and per-batch except retention: `ApertureManagerOp`, where one is present, is where the tick boundary stops being invisible, and formation holds an accumulator but no aperture.
 - **One Cartesian frame, declared.** Phase-center positions and image sample points must be in the *same* right-handed metres frame. The backprojection kernel only takes norms of position differences, so it is inherently frame-free — which is exactly why a mismatch is silent. The `CoordinateFrame` descriptor is a required, no-default parameter making the frame explicit at the boundary, in the same spirit and for the same reason as FMCW's `AngleConvention`.
-- **The final pulse batch may be short.** A file-backed source runs out mid-batch, so every stage infers the pulse count from the tensor rather than from a configured batch size. The trailing partial aperture is not flushed by the accumulator on its own — `Operator::stop()` has no `OutputContext` — so end of stream is *announced* by the operator that knows: the reader stamps `holoscan.radar.stream_boundary` as message metadata (**D22**), and whoever drives `control` turns it into a flush. `ApertureManagerOp` reads it directly. An application-owned control operator must be fed by the source to hear it, and `BackprojectionOp` warns at `stop()` if it is still holding an unemitted image, so a tail lost this way is visible rather than silent.
-- **Two things the application supplies, not the library**, and a third where there is no `ApertureManagerOp`. Per-pulse phase-center positions and the image sample geometry always; the `control` source that tells formation when an image comes out whenever no manager is in the graph, that connection being required rather than optional. See *Application responsibilities*.
+- **The final pulse batch may be short.** A file-backed source runs out mid-batch, so every stage infers the pulse count from the tensor rather than from a configured batch size. The trailing partial aperture is not flushed by the accumulator on its own — `Operator::stop()` has no `OutputContext` — so end of stream is *announced* by the operator that knows (**D22**).
+  The reader publishes a typed `uint8` `stream_boundary` on every batch — `0` none, `1` collection boundary, `2` end of stream — and whoever drives `control` turns a nonzero value into a flush. `ApertureManagerOp` joins it as a required input on the same tick as the pulses. An application-owned control operator must consume it to hear end of stream, and `BackprojectionOp` warns at `stop()` if it is still holding unemitted pulses, so a tail lost this way is visible rather than silent.
+- **Two things the application supplies, not the library**, and a third where there is no `ApertureManagerOp`. Per-pulse phase-center positions and the image sample geometry always; the `control` source that tells formation when an image comes out whenever no manager is in the graph — optional to wire, but without it formation never emits. See *Application responsibilities*.
 
 ## Ingress: three data forms, one convergence point
 
@@ -220,7 +221,7 @@ The third case looks circular: direct-sampled pulses are time-domain, get matche
 
 ## Application responsibilities
 
-Two inputs to the chain are deliberately **not** library operators, a third becomes the application's wherever there is no `ApertureManagerOp`, and one piece of fragment configuration is the application's to set in every graph.
+Two inputs to the chain are deliberately **not** library operators, a third becomes the application's wherever there is no `ApertureManagerOp`, and an application that builds its own pulse source also owns that source's `stream_boundary`.
 
 **Per-pulse phase-center positions.** On the CPHD path these come out of the reader — CPHD stores position and velocity for the Aperture Reference Point, which is effectively the antenna phase centre. On a live platform the application derives them from IMU and GPS through lever-arm correction, attitude application, and time alignment to pulse instants. That derivation is specific to the airframe and the navigation hardware, so it belongs in the app's `custom_ops.hpp` alongside the live-radar source. `BackprojectionOp` sees one port either way and does not know which source filled it.
 
@@ -232,22 +233,19 @@ Either form goes to `ApertureManagerOp` where one is in the graph, rather than t
 
 The lattice's positions are arbitrary, but they must be **locally coherent** — a compact tile of pixels should correspond to a compact region of space — because the Taylor formation variants expand about a per-block reference. A DEM raster satisfies this naturally; a deliberately scattered lattice does not, and the operator warns.
 
-**A control source, wherever there is no `ApertureManagerOp`.** Telling formation when an image comes out is the manager's one mandatory job — mandatory because nothing else does it, `BackprojectionOp` never deciding for itself. The manager is optional; that job is not. `BackprojectionOp.control` is a **required connection**, and a graph leaving it unconnected is rejected at initialization rather than running quietly and never emitting an image. An application omitting the manager therefore owns a small control operator of its own, in `custom_ops.hpp` or in its live-sensor source where it has one. Not `CPHDReaderOp`, which declares no `control` output by design (**D22**): it announces boundaries on the metadata plane and leaves the emit vocabulary to whoever owns the aperture.
+**A control source, wherever there is no `ApertureManagerOp`.** Telling formation when an image comes out is the manager's one mandatory job — mandatory because nothing else does it, `BackprojectionOp` never deciding for itself. The manager is optional; that job is not. In HSDK 5, `BackprojectionOp.control` is an optional `[live]` input, so a graph leaving it unwired initializes, accumulates, and never emits an image; the only sign is a `stop()` warning about unemitted pulses.
+An application omitting the manager therefore owns a small control operator of its own, in `custom_ops.hpp` or in its live-sensor source where it has one. Not `CPHDReaderOp`, which declares no `control` output by design (**D22**): it announces boundaries on `stream_boundary` and leaves the emit vocabulary to whoever owns the aperture.
 
-Four things transfer along with that edge. Three of them fail loudly, at initialization or on the tick; the second does not, which is why it is the one to check first.
+Four things transfer along with that edge. Only the third fails loudly; the first two surface only as the `stop()` warning, which is why they are the ones to check first.
 
-1. **The connection itself**, checked at initialization — see [OPERATOR_API.md](OPERATOR_API.md) → *Build-time wiring validation*.
-2. **Reachability.** At least one of that operator's inputs must be fed, directly or transitively, by the sensor source, because metadata arrives only through `receive()`. An operator wired as a pure source never hears `holoscan.radar.stream_boundary`, so the collection's final aperture is never flushed — and nothing says so except `BackprojectionOp`'s `stop()` warning. `ApertureManagerOp` satisfies this by construction, its own inputs being the pulses.
+1. **The connection itself.** Leave `control` unwired and no image is ever emitted.
+2. **Hearing end of stream.** The control operator must consume the source's `stream_boundary`, and a stage that splits a batch must forward the boundary on its final slice only. Without it the collection's final aperture is never flushed. `ApertureManagerOp` satisfies this by construction, `stream_boundary` being one of its required inputs.
 3. **Timing a geometry change.** With no manager holding a new lattice until the aperture ends, the application emits the geometry and the resetting control message that admits it **on the same tick**; a geometry arriving without one is an error rather than a buffered request. Scroll is the exception — a pure translation along `v` invalidates nothing and needs no reset. See *How a moving scene coexists with an accumulator*.
 4. **Weights, if a taper is wanted.** `weight` is genuinely optional and defaults to `+1` for every pulse, so an untapered aperture costs nothing to give up. A cross-range taper means computing the window across the aperture's final membership and driving `weight` directly, which an application handing over whole apertures can do because it knows every pulse's slot. Under `geometry_change = scroll` the port is rejected outright and a strip cannot taper at all.
 
 Nothing is given up by owning these — tapering included — and the manager reaches nothing an application cannot. What is taken on is the bookkeeping, and in one configuration that bookkeeping is a stateful retention operator rather than a counter: see *How the modes reach the operator chain*.
 
-**The metadata plane costs the application nothing to set up.** Metadata is enabled by default in the SDK (`kDefaultMetadataEnabled = true`), and `kUpdate` is an **operator-level** setting: `Operator::metadata_policy` takes precedence over the fragment default, so the operator that needs it sets it on itself. There is no fragment-wide line to remember and no application-level precondition.
-
-`kUpdate` rather than the SDK's default `kRaise` because the default cannot work for a consumer that merges: a producer holds one dictionary for all its output ports, so a consumer taking several ports from the same producer merges identical content several times, and `kRaise` fires on a key being present rather than on two values disagreeing. In wave one that consumer is `BackprojectionOp`, which takes five or six ports from the manager.
-
-What can still go wrong is a foreign operator between the source and the control owner that has metadata **explicitly disabled** — it drops the announcement, and a file-backed collection then silently loses its final aperture. `BackprojectionOp`'s `stop()` warning is what surfaces that. This is a hazard to know about rather than a setting to remember.
+**The boundary is a port, not metadata.** The source branch carried D22's announcement as a message-metadata key, which needed a merge policy and could be dropped by an operator with metadata disabled. The HSDK 5 port replaced it with the typed `stream_boundary` scalar, stamped with the batch's capture time and joined by the manager on that tick, so there is no metadata setup and no metadata hazard. What remains is the wiring: an application that builds its own pulse source must publish the scalar on every batch, and a stage between source and manager that splits or coalesces batches must carry it through.
 
 ---
 
@@ -269,11 +267,11 @@ Cross-cutting wiring facts, which apply across the diagrams:
 - `reference_position` **travels with** `positions`, for the same reason and to the same consumer. It carries the reference *point*, not a distance; the per-pulse reference range is derived from it inside `BackprojectionOp`.
 - `range_bins` is the optional third edge: wiring `SARRangeCompressionOp.range_bins → BackprojectionOp.range_bins` makes the two stages' range axes consistent by construction, and supersedes `range_bin_spacing` / `range_bin_origin`. Leaving it unconnected means the caller mirrors `nfft` by hand. `CPHDReaderOp.sample_axis` is **not** a substitute: it is the stored-sample axis (frequency or time of arrival), not a range axis, and it has the same length as `range_bins` whenever `nfft` is unset — so the mis-wiring is shape-legal and shows up only as a displaced image.
 - `BackprojectionOp.reference_frequency` is a **parameter**, not an edge from range compression. After compression's leading `ifftshift` it is the frequency of stored sample `N/2` (`SC0 + (N/2)·SCSS` on a CPHD collection), not `SC0`. The app (YAML or sidecar) supplies it. Wiring `sample_axis` into formation is the same silent-failure class as the bullet above.
-- `sample_points` carries an explicit lattice, and connecting it is what selects that mode; a uniform lattice rides the `sample_geometry` descriptor instead and has no tensor edge. Either way the image comes out `(..., num_v, num_u)`, and either way the geometry reaches formation through the manager so that a change and the reset it needs arrive together — except under `geometry_change = scroll`, where geometry goes directly to formation and `sample_points` carries only the entering rows after the first message.
+- `sample_points` carries an explicit lattice, and connecting it is what selects that mode; a uniform lattice rides the `sample_geometry` descriptor instead and has no tensor edge. Either way the image comes out `(num_v, num_u)`, and either way the geometry reaches formation through the manager so that a change and the reset it needs arrive together — except under `geometry_change = scroll`, where geometry goes directly to formation and `sample_points` carries only the entering rows after the first message.
 - `weight` **and** `control` are the manager's two edges into formation, and they are **not** equally optional — which is worth knowing before deciding to do without a manager. Both were once `BackprojectionOp` parameters.
 - `weight` is the optional one. It carries `+1` for pulses entering the aperture and `−1` for those leaving, which is the whole eviction mechanism, and it defaults to `+1` per pulse when nothing drives it — so an application content with an untapered aperture need not drive it at all. Under `geometry_change = scroll` formation rejects a connected `weight` outright. The matching *input* running the other way is `evict`, for an application owning the window length rather than configuring it.
-- `control` is **required to be connected**. It says when an image comes out, and some producer must own it whether or not a manager exists; an unconnected `control` is rejected at initialization. A manager under scroll — if one is present at all — emits `control` and nothing else, which a small app-owned operator does equally well provided it is fed by the source. The matching `control` *input* runs the other way, for an application driving the cadence itself.
-- **Autofocus is not on the default spine.** Figure 1 ends at the SLC. PGA attaches only when an application opts in: Figure 2 for the usual ground / DEM product, Figure 3 when the product itself is already on a radar-geometry (conjugate) lattice. Both paths emit `phase_correction` indexed by **pulse**. It goes to `SICDWriterOp`, which records it among the product's own metadata fields, and, in Figure 2, into `PhaseCorrectionOp` on the pulse path — never along the image path into multilook or other product stages.
+- `control` is optional to wire but not optional to drive. It says when an image comes out, and some producer must own it whether or not a manager exists; an unwired `control` means formation never emits, and only warns at `stop()`. A manager under scroll — if one is present at all — emits `control` and nothing else, which a small app-owned operator does equally well provided it consumes `stream_boundary`. The matching `control` *input* runs the other way, for an application driving the cadence itself.
+- **Autofocus is not on the default spine.** Figure 1 ends at the SLC. PGA attaches only when an application opts in: Figure 2 for the usual ground / DEM product, Figure 3 when the product itself is already on a radar-geometry (conjugate) lattice. Both paths emit `phase_correction` ordered by **pulse**, one value per azimuth sample of the estimation image (`num_az`); where that is not `num_pulses`, the application resamples it first. It goes to `SICDWriterOp`, which records it among the product's own metadata fields, and, in Figure 2, into `PhaseCorrectionOp` on the pulse path — never along the image path into multilook or other product stages.
 - **Figure 2 requires a retained aperture replay.** Configure `ApertureManagerOp` with `max_aperture_pulses > 0` and `emit_mode = reform` (or an app-owned equivalent). On that reform tick: conjugate-grid auxiliary `BackprojectionOp` → `AutofocusOp`; `PhaseCorrectionOp` corrects the **same replayed pulses**; product `BackprojectionOp` forms the DEM image — in graph dependency order within the tick. Product geometry stages through the manager; the auxiliary conjugate lattice is on the aux instance alone. Not for `emit_mode = continue` or scroll. See [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp` → *Autofocus on a ground / DEM product*.
 - `PhaseCorrectionOp` **is in-place on the data plane** — `range_profiles` in, same out — and appears only in Figure 2, **after** the aperture source and **before** the product formation. Its `phase_correction` is required/blocking and comes from `AutofocusOp` on the replay tick: two formations, not a loop.
 - **Writers and dumps are taps.** They attach to an existing edge without consuming it, so they never appear between two processing stages.
@@ -286,7 +284,7 @@ Cross-cutting wiring facts, which apply across the diagrams:
 
 `ApertureManagerOp` is the operator whose presence varies most visibly, since it is optional everywhere (see *How the modes reach the operator chain*) and mode 4 leaves nothing for it to do but the emit cadence, so that mode usually does without one.
 
-Leaving it out is not a different chain — the same operators in the same order, geometry going straight to formation — but it is not free either: the emit decision has to come from somewhere, and `BackprojectionOp.control` is a required connection, so a small app-owned operator takes its place rather than the edge disappearing. Not `CPHDReaderOp`, which has no `control` output — it announces boundaries as metadata (**D22**) and leaves the vocabulary to whoever owns the aperture, so that operator must take an input from the source to hear one. *Application responsibilities* enumerates the four things that transfer.
+Leaving it out is not a different chain — the same operators in the same order, geometry going straight to formation — but it is not free either: the emit decision has to come from somewhere, and an unwired `BackprojectionOp.control` never emits, so a small app-owned operator takes its place rather than the edge disappearing. Not `CPHDReaderOp`, which has no `control` output — it announces boundaries on `stream_boundary` (**D22**) and leaves the vocabulary to whoever owns the aperture, so that operator must consume `stream_boundary` to hear one. *Application responsibilities* enumerates the four things that transfer.
 
 The listings below are the **shape view**: operators in order, with the tensor each hands on and how its shape evolves. They are deliberately not diagrams — the port-level wire diagrams are Figures 1 through 5 under *Port-level wiring*, and carry the Holoscan port name on every edge. Read a listing to see what the data becomes, a figure to see what connects to what.
 
@@ -341,11 +339,11 @@ live radar (app source)   → pulses (num_pulses, num_samples)
 
 ## Port-level wiring
 
-**Figure 1 — The wave-one chain (autofocus off)**, the default path, serving every mode. The usual product is a ground / DEM lattice (`sample_points` or `sample_geometry`); nothing here requires a radar-geometry grid. Dashed nodes/edges are optional. `ApertureManagerOp` is drawn where used (solid because its edges exist when present, not because it is mandatory). An app owning apertures drives `control` itself — that connection is required whether or not a manager exists — and drives `weight` only if it wants a taper, `+1` being the default. Mode 4 drives `control` alone, scroll rejecting `weight`. Autofocus is omitted unless the app opts into Figure 2 or 3.
+**Figure 1 — The wave-one chain (autofocus off)**, the default path, serving every mode. The usual product is a ground / DEM lattice (`sample_points` or `sample_geometry`); nothing here requires a radar-geometry grid. Dashed nodes/edges are optional. `ApertureManagerOp` is drawn where used (solid because its edges exist when present, not because it is mandatory). An app owning apertures drives `control` itself — without it formation never emits, manager or not — and drives `weight` only if it wants a taper, `+1` being the default. Mode 4 drives `control` alone, scroll rejecting `weight`. Autofocus is omitted unless the app opts into Figure 2 or 3.
 
 Two groups of dashed edges are worth reading deliberately, because both were added by decisions rather than by the signal path.
 
-**The app-owned policy node takes an input**, which earlier drafts omitted and which is not cosmetic: an operator deciding when to emit or how many pulses to evict decides from the data (a count, an angle subtended), and under D22 that same edge is how it hears the boundary announcement — metadata arrives only through `receive()`, so a policy operator wired as a pure source would never learn that the collection ended.
+**The app-owned policy node takes an input**, which earlier drafts omitted and which is not cosmetic: an operator deciding when to emit or how many pulses to evict decides from the data (a count, an angle subtended), and under D22 it must also take the source's `stream_boundary`, or it never learns that the collection ended.
 
 **The three edges into `SICDWriterOp` are D21's optional overrides**, not part of the signal path: they let a writer take the frame, the applied window and the formation lattice from the stages that own them instead of from mirrored parameters. Omitting them is the ordinary case and mirroring by hand is legal; they are drawn here because Figure 1 is where the wiring vocabulary is introduced, and left out of Figures 2 and 3 for legibility.
 
@@ -372,7 +370,7 @@ flowchart TD
   class GEOM,POL,SICD opt
 ```
 
-**Figure 2 — PGA on a ground / DEM product** (D20), Figure 1 with the autofocus splice. **Required:** `max_aperture_pulses > 0` and `emit_mode = reform` (AF-off `max_aperture_pulses = 0` cannot replay after AF). On the reform tick the manager replays the aperture once → aux conjugate `BackprojectionOp` → `AutofocusOp` → `PhaseCorrectionOp` → product `BackprojectionOp`, in dependency order within the tick. Product geometry stages through the manager; conjugate lattice is on the aux instance only. Not sliding or scroll. PGA is opt-in; conjugacy is declared, not checked; estimate costs some absolute geolocation. Prefer Figure 1 when nav is good enough. Detail: [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp` → *Autofocus on a ground / DEM product*.
+**Figure 2 — PGA on a ground / DEM product** (D20), Figure 1 with the autofocus splice. **Required:** `max_aperture_pulses > 0` and `emit_mode = reform` (AF-off `max_aperture_pulses = 0` cannot replay after AF). On the reform tick the manager replays the aperture once → aux conjugate `BackprojectionOp` → `AutofocusOp` → app-owned resample → `PhaseCorrectionOp` → product `BackprojectionOp`, in dependency order within the tick. Product geometry stages through the manager; conjugate lattice is on the aux instance only. Not sliding or scroll. PGA is opt-in; conjugacy is declared, not checked; estimate costs some absolute geolocation. Prefer Figure 1 when nav is good enough. Detail: [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp` → *Autofocus on a ground / DEM product*.
 
 ```mermaid
 flowchart TD
@@ -386,7 +384,8 @@ flowchart TD
   AC -.->|"control (reset-then-emit)"| BPA
   CONJ(("app-owned conjugate<br>estimation geometry")) -->|"sample_geometry<br>(aux instance only)"| BPA
   BPA -->|"image (small, conjugate)"| AF["AutofocusOp"]
-  AF -->|"phase_correction (num_pulses)"| PC["PhaseCorrectionOp"]
+  AF -->|"phase_correction (num_az)"| RS(("app-owned resample<br>(identity when num_az = num_pulses)"))
+  RS -->|"phase_correction (num_pulses)"| PC["PhaseCorrectionOp"]
   AC -->|"range_profiles (same replay)"| PC
   PC -->|"range_profiles (corrected)"| BPP["BackprojectionOp<br>(product, ground / DEM)"]
   AC -->|"positions + reference_position"| BPP
@@ -424,7 +423,7 @@ flowchart TD
   POL -.->|"evict"| AC
   BP -->|"image (num_v, num_u)"| AF["AutofocusOp"]
   AF -->|"image"| SLC(["SLC image"])
-  AF -.->|"phase_correction (num_pulses)"| SICD["SICDWriterOp"]
+  AF -.->|"phase_correction (num_az;<br>resample if not num_pulses)"| SICD["SICDWriterOp"]
   SLC -->|"image"| SICD
   class AF,GEOM,POL,SICD opt
 ```
@@ -523,10 +522,10 @@ Consequences for the operator interface:
 
 - **PGA is wave one's estimator, not the default product path.** The module's usual product is ground / DEM backprojection (Figure 1, autofocus off). PGA cannot estimate on that product; Figure 2 is the opt-in when airborne residual phase requires it, and it **requires** aperture retention plus `emit_mode = reform` (or an app-owned equivalent) so the corrected product pass has pulses to replay — see [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp`. Geometry-agnostic algorithms (map drift, minimum entropy) would attach more naturally to DEM products when they land — they are the better long-term "AF on any lattice" story, and PGA should not be read as standing in for them.
 - **PGA's geometry constraint binds the estimate, never the product (D20).** PGA presumes the image's azimuth axis *is* the Fourier conjugate of slow-time, which holds for a polar or range-Doppler grid and not for an image backprojected onto an arbitrary ground grid or point set. Form a small conjugate-grid image to estimate on, and carry the resulting per-pulse phase into the real formation through `PhaseCorrectionOp`. The constraint is real and unchanged; it binds a cheap auxiliary formation instead of the product.
-- **The correction is indexed by pulse, and that is what makes the split work.** A residual phase error is a property of the platform and the atmosphere — one number per pulse — while azimuth is merely where the estimator can see it. Publishing in pulse index makes the estimate portable between geometries; publishing it in azimuth bins would tie it to the image it came from.
+- **The correction is ordered by pulse, and that is what makes the split work.** A residual phase error is a property of the platform and the atmosphere — one number per pulse — while azimuth is merely where the estimator can see it. Publishing in pulse order makes the estimate portable between geometries; publishing it in azimuth-FFT bin order would tie it to the image it came from. The estimator sees only the image, so the vector's length is that image's azimuth extent; an auxiliary formed at one azimuth sample per pulse makes the two lengths agree, and any other needs a resample onto `num_pulses` (see [OPEN_ITEMS.md](OPEN_ITEMS.md)).
 - **Minimum entropy is the geometry-agnostic alternative.** It optimizes a scalar image metric instead of exploiting a transform relationship, so it estimates on whatever geometry formation produced and skips the auxiliary image entirely. Worth having later, at the cost of being iterative and needing re-formation inside the loop.
 - **Estimation order sets what a failure looks like.** Map drift recovers only low-order phase, so a high-order error passes through as residual defocus rather than an error. PGA and minimum entropy can chase arbitrary order and so can also chase noise — which is what `min_scatterers` and `max_correction` guard against.
-- **All of them emit a per-pulse phase vector plus a corrected image**, which is why the slot's output contract (`image` + `phase_correction`) is shared rather than per-algorithm. The corrected image is meaningful only where the estimation image is the product (Figure 3); otherwise the phase vector is the output that matters (Figure 2).
+- **All of them emit a pulse-ordered phase vector plus a corrected image**, which is why the slot's output contract (`image` + `phase_correction`) is shared rather than per-algorithm. The corrected image is meaningful only where the estimation image is the product (Figure 3); otherwise the phase vector is the output that matters (Figure 2).
 - **Every algorithm here trades absolute geolocation for focus.** The estimate is ambiguous up to a linear and constant phase — an image shift — which these algorithms discard rather than recover. That cost is sharpest on exactly the product this module is built to make, since forming straight onto a DEM is a geolocation claim, and it is why omitting autofocus is the default answer rather than a gap.
 
 ---
@@ -552,7 +551,7 @@ Two things vary independently, so this is two tables rather than one. **Ingress 
 | Positions from       | the file                 | the application                       | the application            |
 | Announces a boundary | file end + end of stream | only where the source knows one       | same                       |
 
-The boundary announcement is the reader's job on the CPHD path and is stamped as message metadata (**D22**); a live source announces only if it has a boundary to announce, which an unbounded radar does not.
+The boundary announcement is the reader's job on the CPHD path, published as the typed `stream_boundary` scalar on every batch (**D22**); a live source publishes `0` until it has a boundary to announce, which an unbounded radar never does.
 
 | Mode                   | 1, spotlight image       | 2, video SAR                                          | 3, tiled strip                                         | 4, continuous strip                                  |
 | ---------------------- | ------------------------ | ----------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------- |
@@ -564,7 +563,7 @@ The boundary announcement is the reader's job on the CPHD path and is stamped as
 | `emit_mode`            | reset                    | continue                                              | reset                                                  | —                                                    |
 | App ports              | `control`                | `control`, plus `evict` where the app owns the length | `sample_geometry` per tile; `control` at end of stream | `sample_geometry` and `control`, both into formation |
 
-Modes 5 through 9 are not columns because they are not distinct configurations — each replicates one of the above across geometries, so a column would repeat its neighbour. *How the modes reach the operator chain* gives the mapping. The manager rows are how a column is spelled **if** a manager is used, which outside mode 2 it need not be. The `control` entry in the last row is **not** conditional in the same way: that connection is required in every column, and only who drives it changes.
+Modes 5 through 9 are not columns because they are not distinct configurations — each replicates one of the above across geometries, so a column would repeat its neighbour. *How the modes reach the operator chain* gives the mapping. The manager rows are how a column is spelled **if** a manager is used, which outside mode 2 it need not be. The `control` entry in the last row is **not** conditional in the same way: something drives it in every column, and only who drives it changes.
 
 **How a moving scene coexists with an accumulator.** The scene row and the aperture rows interact, and the interaction is easy to misread as a contradiction. Partial sums computed against one set of sample points mean nothing against another, so the scene cannot drift arbitrarily underneath a running sum. The two moving-scene columns resolve that differently, and the difference is the whole distinction between modes 3 and 4.
 
@@ -586,7 +585,7 @@ Autofocus is not a column in the sense the FMCW comparison uses columns: like cl
 - **A tapered aperture re-forms; an incrementally-slid one is unweighted.** The cross-range taper reaches formation as per-pulse values on `weight`, from whoever owns aperture membership — `ApertureManagerOp.aperture_window` where a manager does, the application directly where it hands over whole apertures itself. It can be stamped at admission only for a block aperture whose length is known in advance, which is the ordinary case for a single image over a planned collection.
 - Every other configuration defers the weights to the aperture boundary and replays the retained pulses (`emit_mode = reform`). Applying a taper to an incrementally-slid window is refused rather than approximated, because it would cost as much as re-forming; a scrolling strip is refused for the same reason with no re-forming available to it.
 - Where no taper is applied, cross-range sidelobes are the unweighted ~−13 dB. See [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp` → *Notes*.
-- **Open items** — two remain team-blocked: contract acceptance itself (**R1**) and the scope of the metadata key namespace (**R10** — whether D22's key sits module-wide or under a `sar` tier, which is a decision about FMCW). The full list is in [OPERATOR_API.md](OPERATOR_API.md) → *Open items*. Closed since the last revision: PGA's grid conjugacy (R4 → **D20**), the metadata plane (R5 → **D21**, declined, with three optional descriptor edges offered instead), who announces a boundary (R7 → **D22**, a source, as message metadata), and the control message's payload (R2 → **D23**, the four values and nothing else).
+- **Open items** — contract acceptance (**R1**) closed as accepted on 2026-08-07. The metadata key namespace (**R10**) is still listed for team review, but the HSDK 5 port retired the metadata boundary it was about, so it gates nothing here. The full list is in [OPERATOR_API.md](OPERATOR_API.md) → *Open items*. Closed since the last revision: PGA's grid conjugacy (R4 → **D20**), the metadata plane (R5 → **D21**, declined, with three optional descriptor edges offered instead), who announces a boundary (R7 → **D22**, a source; message metadata on the source branch, a typed `stream_boundary` port in HSDK 5), and the control message's payload (R2 → **D23**, the four values and nothing else).
 
 ---
 
@@ -594,7 +593,9 @@ Autofocus is not a column in the sense the FMCW comparison uses columns: like cl
 
 [PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) and [DEVELOPER_OVERVIEW.md](DEVELOPER_OVERVIEW.md) are derived from this document (and, for the developer overview, from [OPERATOR_API.md](OPERATOR_API.md) for contracts and mechanisms). When the mode inventory, the deferred list, a quality claim, the mode→configuration mapping, or *Application responsibilities* changes here, **regenerate the affected derivative(s) from the prompt(s) below rather than hand-patching** — patching is how a derivative drifts from its source while continuing to look maintained. Diff each regenerated file against the previous version and confirm every change traces to a change in the sources.
 
-**Both derivatives are current as of 2026-08-05**, regenerated after the manager's two-tier framing landed here — one **mandatory** job, telling formation when to emit, with everything else convenience. Both prompts gained a matching instruction in the same pass so a later regeneration cannot quietly drop it: Prompt B's KEEP list carries the two tiers and the four no-manager obligations, and Prompt A's *What you supply* item carries the boundary as a practitioner-facing declaration, named without the operator or the port.
+**The developer overview was regenerated on 2026-11-02** against the HSDK 5 port contract, after Prompt B was corrected for the typed `stream_boundary`, optional `control`, `<T, TGeom>` precision and `AutofocusOp`. The practitioner overview was brought current in the same pass, after Prompt A was corrected to state implementation status rather than "nothing is built".
+
+The previous joint regeneration, on 2026-08-05, came after the manager's two-tier framing landed here — one **mandatory** job, telling formation when to emit, with everything else convenience. Both prompts gained a matching instruction in the same pass so a later regeneration cannot quietly drop it: Prompt B's KEEP list carries the two tiers and the four no-manager obligations, and Prompt A's *What you supply* item carries the boundary as a practitioner-facing declaration, named without the operator or the port.
 
 **Upstream came into line in the same pass.** [OPERATOR_API.md](OPERATOR_API.md) was already correct on the facts, but its `ApertureManagerOp` opening enumerated the three jobs co-equally; the emit decision now leads there, with membership and configuration timing following as convenience, and *Optional by design* opens by saying that it is the operator which is optional and never the emit decision. An editing pass for consistency — no port, parameter, shape or default moved.
 
@@ -613,6 +614,8 @@ SOURCES, in precedence order. Invent nothing absent from both.
 2. SAR/OPERATOR_API.md — secondary, and only for two things: the obligations
    the reader must meet, and the image-quality consequences they inherit. Never
    for interface detail.
+3. applications/sar/README.md — only for which modes and stages are
+   implemented today.
 
 AUDIENCE. **Expert** SAR practitioners — very possibly more expert in SAR than
 the authors of this contract. Write to them as peers reviewing our work, never
@@ -671,7 +674,9 @@ SYNTHESIZE. These are not sections in either source and must be assembled:
 - Where this is most likely to fall short for you — the honest weakness list.
 
 RULES.
-- Say plainly, near the top, that nothing described is built yet.
+- Say plainly, near the top, which modes and stages are implemented and which
+  are design scope only. Never describe an unbuilt stage (writers, multilook,
+  geocode) as provided.
 - Name WORKFLOWS.md as the source of truth and link it. Mention
   DEVELOPER_OVERVIEW.md only as the sibling aimed at implementers, if at all.
 - Follow the source's mode numbering and inventory exactly. If the source has
@@ -717,10 +722,18 @@ SOURCES, in precedence order. Invent nothing absent from them.
 2. SAR/OPERATOR_API.md — primary for contracts that implementers must obey:
    cross-tick accumulation, ApertureManagerOp / BackprojectionOp split,
    PhaseCorrectionOp / AutofocusOp constraints (especially Figure 2 = reform +
-   retention), [live] rules, backend. Do not paste full port tables;
-   summarize and link.
-3. SAR/SIGPROC_PLAN.md — wave-one operator list and build-order pointer only.
-4. SAR/TEAM_BLOCKED.md / docs/planning/SDK_QUESTIONS.md — name open R-items that
+   retention), [live] rules, backend. Its opening "HSDK 5 C++/CUDA port
+   contract" section is the current contract and overrides the historical
+   design below it — transport, the typed stream_boundary port, per-tick
+   [live] joins, optional control, <T, TGeom> precision. Use the historical
+   sections for rationale and D-numbers only where the HSDK 5 section is
+   silent. Do not paste full port tables; summarize and link.
+3. applications/sar/README.md and operators/sar/*/README.md — what is
+   implemented: operator and app counts, app entry points, behaviour the code
+   has today. Where code and contract disagree, follow the contract and name
+   the disagreement as open; do not resolve it.
+4. SAR/SIGPROC_PLAN.md — wave-one operator list and build-order pointer only.
+5. SAR/TEAM_BLOCKED.md / docs/planning/SDK_QUESTIONS.md — name open R-items that
    block implementation choices; do not resolve them.
 
 AUDIENCE. An expert software developer who will implement or extend this module.
@@ -741,8 +754,9 @@ is the map, not the contract.
 
 SECTION ORDER (headings may be tightened but keep this arc).
 1. About this document (derivative disclaimer; link WORKFLOWS + OPERATOR_API;
-   link PRACTITIONER_OVERVIEW as the non-implementer sibling; say nothing is
-   built yet; "read next" list).
+   link PRACTITIONER_OVERVIEW as the non-implementer sibling; a dated status
+   line saying which operators and apps are implemented and what is deferred;
+   "read next" list).
 2. What we are building (scope table: in / out).
 3. Mental model: one graph, modes are configuration (one simple Mermaid of the
    default AF-off spine WITH operator names).
@@ -771,44 +785,52 @@ KEEP (translated or summarized, not stripped):
 - Quantitative limits that affect implementation (e.g. unweighted ~−13 dB,
   scroll axis = v, Figure 2 memory = aperture retention).
 - Autofocus off by default; Figure 2 requires max_aperture_pulses > 0 and
-  emit_mode = reform.
-- The boundary announcement (D22): the source stamps
-  holoscan.radar.stream_boundary, whoever drives control translates it, an
-  app-owned control operator must be fed by the source to hear it. The app
-  needs no metadata setup: metadata is on by default and kUpdate is set
-  per-operator by the merging consumer. The residual hazard is a foreign
-  operator with metadata explicitly disabled. Wiring an implementer can get
-  wrong silently, so it belongs in the pitfalls section too.
+  emit_mode = reform. AutofocusOp.phase_correction is pulse-ordered but num_az
+  long, so Figure 2 resamples it to num_pulses (app-owned) before
+  PhaseCorrectionOp.
+- Precision: samples on T, geometry on TGeom for CPHDReaderOp,
+  ApertureManagerOp and BackprojectionOp; TGeom may not be coarser than T;
+  apps default samples to single.
+- The boundary announcement (D22, as ported to HSDK 5): CPHDReaderOp publishes
+  a typed uint8 stream_boundary on every batch, ApertureManagerOp joins it as
+  a required aligned input, a stage that splits a batch forwards the boundary
+  on its last slice only, and an app that builds its own pulse source must
+  publish it. An app-owned control operator must consume it to hear end of
+  stream. Wiring an implementer can get wrong silently, so it belongs in the
+  pitfalls section too. Do not describe the retired message-metadata
+  mechanism as current.
 - ApertureManagerOp's two tiers, and lead with the first. Its one MANDATORY job
   is telling BackprojectionOp when to emit an image; everything else it does is
   convenience (staging geometry to the aperture boundary, buffering pulses,
   deciding membership and taper), of which retention is the only one an app
   cannot assemble from operators it already has. The operator is optional in
-  every mode; that job is not, BackprojectionOp.control being a REQUIRED
-  connection. So state what an app leaving the manager out takes on: the
-  connection itself, source reachability so it hears the boundary, emitting a
-  geometry change with its reset on one tick, and its own weights for a taper.
-  Do not describe the manager by listing its jobs co-equally — that is the
-  framing this bullet exists to prevent.
+  every mode; that job is not. BackprojectionOp.control is optional to wire,
+  but an unwired control never emits: formation accumulates silently and only
+  warns at stop(). So state what an app leaving the manager out takes on: a
+  control producer, feeding it stream_boundary so it hears end of stream,
+  emitting a geometry change with its reset on one tick, and its own weights
+  for a taper. Do not describe the manager by listing its jobs co-equally —
+  that is the framing this bullet exists to prevent.
 
 STRIP / AVOID:
 - Full port-by-port contract dumps (link OPERATOR_API instead).
 - Long practitioner-only product advocacy.
 - Re-arguing settled decisions in prose — cite the D-number and link only.
-- Restating R1/R10 as though still under design — name and link only.
+- Restating R1/R10 as though still under design — R1 was accepted 2026-08-07
+  and R10 concerns the retired metadata namespace; name and link only.
 - Regeneration prompts or appendix text inside the overview.
 - Assuming SAR jargon without a vocabulary-table entry on first use.
 
 RULES.
 - Complete sentences and prose; tables where they beat paragraphs.
-- Never call the SAR OPERATOR_API locked or accepted text. R1 *is* its
-  acceptance and nothing in it is locked yet, which inverts the FMCW contract
-  one level up — that one is locked, and its [PROPOSED] tag marks the
-  exceptions. Cite the SAR contract as the contract, and as a proposal.
+- Cite OPERATOR_API's HSDK 5 section as the current contract and its later
+  sections as historical design; never present historical behaviour as what
+  the code does.
 - One primary Mermaid (default AF-off chain with operator names). Optional
   second small diagram only if it clarifies aperture vs accumulator — do not
   reproduce all five WORKFLOWS figures.
-- Say plainly that nothing is built yet.
+- Say plainly what is implemented and what is deferred; do not describe
+  deferred operators (writers, GeocodeOp, multilook) as present.
 - Lint: markdownlint MD013 at 800; no SPDX on markdown. Run pre-commit on the
   file before finishing.
 - Update WORKFLOWS.md's derivative pointer if the overview's role changed.

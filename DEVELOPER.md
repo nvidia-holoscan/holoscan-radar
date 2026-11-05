@@ -33,12 +33,13 @@ holoscan-radar/
 │           └── metadata.json       # Operator-level metadata
 ├── applications/
 │   ├── common/radar_app/            # Shared Graph/config/report/dashboard support
-│   ├── sar/                        # Five standalone C++ formation apps
+│   ├── sar/                        # Six standalone C++ SAR apps
 │   │   ├── spotlight/
 │   │   ├── video_sar/
 │   │   ├── tiled_strip/
 │   │   ├── continuous_strip/
-│   │   └── independent_images/
+│   │   ├── independent_images/
+│   │   └── autofocus/
 │   └── fmcw/
 │       ├── siso/
 │       ├── simo/

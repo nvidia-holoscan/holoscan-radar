@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -57,9 +58,14 @@ struct ImageCount {
 
 class SarImageReportOp : public holoscan::Operator<> {
  public:
+  // `product_extent` is the formed product's size when that is not the size of
+  // the tensor on `image`. A mosaic publishes a decimated view of a resident
+  // accumulator, and the strip is what was formed; the view is a transport
+  // detail nobody reading the log cares about. {0, 0} reports the tensor.
   explicit SarImageReportOp(std::shared_ptr<ImageCount> count,
-                            std::shared_ptr<FormationHud> hud = {})
-  : count_(std::move(count)), hud_(std::move(hud)) {}
+                            std::shared_ptr<FormationHud> hud = {},
+                            std::array<int64_t, 2> product_extent = {0, 0})
+  : count_(std::move(count)), hud_(std::move(hud)), product_extent_(product_extent) {}
   void setup(OperatorSpec& spec) override { spec.input(image).queue_depth(4U); }
   [[nodiscard]] Contract contract() const override {
     Contract result;
@@ -76,10 +82,12 @@ class SarImageReportOp : public holoscan::Operator<> {
     const auto index = count_->count.fetch_add(1) + 1;
     const bool shape_changed = !last_num_v_.has_value() || *last_num_v_ != shape[0] ||
                                !last_num_u_.has_value() || *last_num_u_ != shape[1];
-    log_formed(index, shape[0], shape[1], /*info=*/false);
+    const int64_t report_v = product_extent_[0] > 0 ? product_extent_[0] : shape[0];
+    const int64_t report_u = product_extent_[1] > 0 ? product_extent_[1] : shape[1];
+    log_formed(index, report_v, report_u, /*info=*/false);
     const auto now = std::chrono::steady_clock::now();
     if (shape_changed || !last_info_at_.has_value() || now - *last_info_at_ >= kHeartbeatPeriod) {
-      log_formed(index, shape[0], shape[1], /*info=*/true);
+      log_formed(index, report_v, report_u, /*info=*/true);
       last_info_at_ = now;
     }
     last_num_v_ = shape[0];
@@ -118,6 +126,7 @@ class SarImageReportOp : public holoscan::Operator<> {
 
   std::shared_ptr<ImageCount> count_;
   std::shared_ptr<FormationHud> hud_{};
+  std::array<int64_t, 2> product_extent_{0, 0};
   std::optional<std::chrono::steady_clock::time_point> last_info_at_{};
   std::optional<int64_t> last_num_v_{};
   std::optional<int64_t> last_num_u_{};

@@ -36,7 +36,7 @@ Set `max_pulses` and `max_range_bins` to cover the largest aligned tick. The out
 ## Parameters
 
 | Parameter | Type | Default | Mutability | Responsibility |
-| --- | --- | --- | --- |
+| --- | --- | --- | --- | --- |
 | `sense` | `PhaseCorrectionSense` | required | Static | Add or subtract per-pulse phase |
 
 ## Operation and synchronization

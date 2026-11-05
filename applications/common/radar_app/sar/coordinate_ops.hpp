@@ -25,6 +25,7 @@
 #include <holoscan/core/port.hpp>
 #include <holoscan/core/temporal_contract.hpp>
 
+#include "radar_common/sar/geodesy.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 
 namespace holoscan::radar::app::sar {
@@ -36,20 +37,7 @@ class EcefToSceneEnuOp : public Operator<> {
   : origin_(origin), quantize_(quantize), max_pulses_(max_pulses) {
     if (max_pulses_ < 1)
       throw std::invalid_argument("EcefToSceneEnuOp: invalid pulse extent");
-    constexpr double kA = 6378137.0;
-    constexpr double kF = 1.0 / 298.257223563;
-    const double b = kA * (1.0 - kF);
-    const double e2 = 1.0 - b * b / (kA * kA);
-    const auto [x, y, z] = origin_;
-    const double lon = std::atan2(y, x);
-    const double p = std::hypot(x, y);
-    const double theta = std::atan2(z * kA, p * b);
-    const double slt = std::sin(theta), clt = std::cos(theta);
-    const double lat =
-        std::atan2(z + e2 * (kA * kA / b) * slt * slt * slt, p - e2 * kA * clt * clt * clt);
-    const double sl = std::sin(lat), cl = std::cos(lat);
-    const double so = std::sin(lon), co = std::cos(lon);
-    rotation_ = {-so, co, 0.0, -sl * co, -sl * so, cl, cl * co, cl * so, sl};
+    rotation_ = geodesy::ecef_to_enu_rotation(origin_);
   }
   void setup(OperatorSpec& spec) override {
     constexpr TensorRepresentation device{
@@ -107,10 +95,9 @@ class EcefToSceneEnuOp : public Operator<> {
       const double dx = host[static_cast<std::size_t>(3 * i)] - origin_[0];
       const double dy = host[static_cast<std::size_t>(3 * i + 1)] - origin_[1];
       const double dz = host[static_cast<std::size_t>(3 * i + 2)] - origin_[2];
-      const std::array<double, 3> d{dx, dy, dz};
+      const auto enu = geodesy::apply_enu_rotation(rotation_, {dx, dy, dz});
       for (int j = 0; j < 3; ++j) {
-        double value =
-            rotation_[3 * j] * d[0] + rotation_[3 * j + 1] * d[1] + rotation_[3 * j + 2] * d[2];
+        double value = enu[static_cast<std::size_t>(j)];
         if (quantize)
           value = static_cast<double>(static_cast<float>(value));
         host[static_cast<std::size_t>(3 * i + j)] = value;

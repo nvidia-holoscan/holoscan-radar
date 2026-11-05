@@ -110,6 +110,56 @@ constant so either answer stays a one-line change.
 **Detail:** [OPERATOR_API.md](OPERATOR_API.md) → Stream boundary announcement →
 Key namespace
 
+### R11 — Does `BackprojectionOp.image` keep its leading batch axis?
+
+Raised 2026-10-30 during a pre-push review of `dpc/sar-autofocus`. Not caused by
+that branch; surfaced because the review had to work out what the batch axis was
+for and could not settle it from the documents.
+
+The axis is specified deliberately and at length:
+[OPERATOR_API.md](OPERATOR_API.md) → BackprojectionOp → **Out:** `image` is
+`(..., num_v, num_u)` with "one independent accumulator per batch element", and
+the *Batch semantics* note explains that a batch is a batch of **collections**
+against one shared lattice — several independent sub-collections formed by one
+instance rather than `N`.
+
+All of that is in `## Historical SAR design reference`, and the HSDK 5 section
+that overrides it has already decided the other way: its preamble names "opaque
+`...` axes" among the historical statements that "do not override this section",
+says "There is no implicit batch axis", records "Named axes replace opaque
+leading batch" in the migration table, and gives `BackprojectionOp.image` as
+`(num_v,num_u)` in *Implemented operator ports*. [AGENTS.md](../../../AGENTS.md)
+invariant 4 agrees. So the question is narrower than it first looks — **not what
+the contract should say, but why three paragraphs and some live code still say
+the other thing.**
+
+Two reasons it is worth a look rather than a quiet edit. The *Batch semantics*
+note is substantive prose, not `(...)` notation, and it argues against invariant
+4 directly ("the rank-agnostic reading of invariant 4") instead of deferring to
+it, so it does not read as superseded boilerplate. And the implementation is
+half-built in a way that half-asserts the feature: accumulation allocates and
+fills one accumulator per batch element, then the emit hardcodes a batch of `1`
+and declares a rank-2 output, so every image but the first is computed and
+discarded. No graph here produces a leading axis, so that is latent — but it
+means a caller who sent a rank-3 cube on purpose would lose all but the first
+image silently.
+
+This is not separable from **D19**, which defers letting `sample_points` carry a
+leading axis the data does not; D19's formulation is written in terms of this
+axis, so a decision to remove it is also a decision about D19.
+
+The standing preference is to let invariant 4 win — reject the leading axis,
+drop the dead per-batch path, and withdraw the contract's batch language — on
+the grounds that it is unreachable, untested, inconsistent with `:15` and the
+migration table, and duplicated by instantiating `N` operators. That is a
+recommendation, not a resolution: it discards a design the notes argue for and
+forecloses D19 as written, and the owner of invariant 4 has not weighed in.
+Until then the code and the documents should both be left alone. Whichever way
+it goes, the four conflicting statements need to be made to agree.
+
+**Detail:** [backprojection_op/OPEN_ITEMS.md](../../../operators/sar/backprojection_op/OPEN_ITEMS.md)
+→ Team-blocked → R11
+
 ---
 
 Agents: [AGENTS.md](../../../AGENTS.md) ("Do not silently resolve documented
@@ -356,6 +406,9 @@ restrict formation to conjugate grids (a); geometry-agnostic AF as only
 wave-one answer (c). Costs: app builds conjugate estimation geometry;
 conjugacy declared via `azimuth_axis`, not checked; AF discards
 linear/constant phase. Figure 2 needs `emit_mode = reform` + retention.
+Amended 2026-10-31: the emitted vector is pulse-ordered but `num_az` long,
+since the operator sees only the image; a grid with one azimuth sample per
+pulse makes it per-pulse, and any other grid needs an app-owned resample.
 
 **Detail:** [OPERATOR_API.md](OPERATOR_API.md) → AutofocusOp → Notes
 

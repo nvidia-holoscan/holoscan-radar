@@ -1,0 +1,49 @@
+{
+    "$schema": "urn:holohub:application:v1",
+    "application": {
+        "name": "autofocus",
+        "authors": [
+            {
+                "name": "Holoscan Team",
+                "affiliation": "NVIDIA"
+            }
+        ],
+        "language": [
+            "C++"
+        ],
+        "version": "0.1.0",
+        "changelog": {
+            "0.1.0": "Standalone SAR Figure 2 phase gradient autofocus application"
+        },
+        "holoscan_sdk": {
+            "minimum_required_version": "5.0.0",
+            "tested_versions": [
+                "5.0.0"
+            ]
+        },
+        "platforms": [
+            "x86_64",
+            "aarch64"
+        ],
+        "tags": [
+            "Radar",
+            "Signal Processing",
+            "GPU",
+            "Accelerated Computing",
+            "Synthetic Aperture Radar",
+            "Autofocus"
+        ],
+        "ranking": 3,
+        "requirements": {},
+        "default_mode": "default",
+        "modes": {
+            "default": {
+                "description": "Run the SAR Figure 2 autofocus pipeline",
+                "run": {
+                    "command": "<holohub_app_bin>/autofocus",
+                    "workdir": "holohub_app_bin"
+                }
+            }
+        }
+    }
+}

@@ -14,9 +14,11 @@ namespace app = holoscan::radar::app;
 int main(int argc, char** argv) {
   return run_sar_graph_app(
       argc, argv, "continuous_strip", load_config,
-      [](auto& graph, auto& options, const auto& queue, const auto& cfg, auto& reader, auto& range,
-         auto& manager, auto& bp, auto& /*source*/, auto& application, auto& formation,
-         const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {
+      [](auto precision, auto& graph, auto& options, const auto& queue, const auto& cfg,
+         auto& reader, auto& range, auto& manager, auto& bp, auto& /*source*/, auto& application,
+         auto& formation, const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {
+        // The mosaic's declared pool follows the formed image's precision.
+        using T = typename decltype(precision)::Sample;
         const int64_t slice =
             cfg.emit_interval_pulses > 0 && cfg.reader_pulses_per_tick > cfg.emit_interval_pulses
                 ? cfg.emit_interval_pulses
@@ -44,8 +46,14 @@ int main(int argc, char** argv) {
         graph.add_flow(manager->positions_out, bp->positions, staged);
         graph.add_flow(manager->reference_position_out, bp->reference_position, staged);
         graph.add_flow(manager->control_out, bp->control, staged);
-        auto mosaic = graph.template op<app::sar::SarMosaicOp>("sar_mosaic", cfg.scroll_parent,
-                                                               cfg.reader_loop);
+        // The accumulator stays full resolution; what it publishes is a
+        // display view of it. The budget is twice `visualize_size` because the
+        // Holoviz window is fitted to the desktop work area and can be wider
+        // than that key, and a view narrower than the window would be upscaled
+        // at the raster. Twice is a few MiB a slot either way.
+        auto mosaic = graph.template op<app::sar::SarMosaicOp<T>>(
+            "sar_mosaic", cfg.scroll_parent, cfg.reader_loop, cfg.viz_crop_u0, cfg.viz_crop_nu,
+            2 * cfg.visualize_size);
         formation.add(mosaic);
         bind_outputs(options, "sar_mosaic", {"image_out"});
         graph.add_flow(bp->image, mosaic->image, queue);

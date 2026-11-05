@@ -19,6 +19,7 @@
 #include <holoscan/logger/logger.hpp>
 
 #include "io/tensor_dump_op/npy_writer.hpp"
+#include "io/tensor_dump_op/output_paths.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
@@ -149,14 +150,28 @@ expected<void, Error> TensorDumpOp::compute(ExecutionContext& context) {
   ++files_written_;
   const double elapsed =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-  HOLOSCAN_LOG_INFO("{}: wrote {} ({:.2f} GiB) in {:.3f} s", kOpName, out_path,
+  const bool image = p.format == TensorDumpFormat::kNpy && input.shape().size() == 2U &&
+                     (input.dtype().code == kDLComplex || input.dtype().code == kDLFloat);
+  HOLOSCAN_LOG_INFO("{}: saved {} {} ({:.2f} GiB) in {:.3f} s", kOpName, image ? "image" : "tensor",
+                    dump_paths::display_path(out_path).string(),
                     static_cast<double>(nbytes) / (1024.0 * 1024.0 * 1024.0), elapsed);
+  if (image) {
+    const auto command = dump_paths::image_view_command(out_path);
+    if (!command.empty()) {
+      HOLOSCAN_LOG_INFO("{}: saved image path is relative to the repository root", kOpName);
+      HOLOSCAN_LOG_INFO("{}: view from repository root: {}", kOpName, command);
+      HOLOSCAN_LOG_INFO(
+          "{}: run the command on the host to write a PNG beside the .npy; "
+          "add --show for interactive viewing",
+          kOpName);
+    }
+  }
   return {};
 }
 
 void TensorDumpOp::stop() {
   HOLOSCAN_LOG_INFO("{}: wrote {} file(s) over {} message(s) to '{}'", kOpName, files_written_,
-                    tick_, params().path);
+                    tick_, dump_paths::display_path(params().path).string());
 }
 
 }  // namespace holoscan::radar
