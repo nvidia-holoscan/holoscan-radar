@@ -19,12 +19,7 @@ set_property(TARGET detection_reduction_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS detection_reduction_op
-    EXPORT holoscan_detection_reduction_op_targets
-)
-
-install(EXPORT holoscan_detection_reduction_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 include(GNUInstallDirs)

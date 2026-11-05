@@ -29,6 +29,7 @@ class ContainerCTestContract(unittest.TestCase):
                 "cmake_minimum_required(VERSION 3.24)",
                 "project(RadarCIFixture LANGUAGES NONE)",
                 "enable_testing()",
+                'option(HOLOSCAN_RADAR_TEST_PACKAGING "Artifact coverage fixture" OFF)',
             ]
             if fail_configure:
                 cmake.append('message(FATAL_ERROR "fixture configure failure")')
@@ -43,6 +44,14 @@ class ContainerCTestContract(unittest.TestCase):
                             f"set_tests_properties({name} PROPERTIES LABELS {name})",
                         ]
                     )
+                cmake.extend(
+                    [
+                        "if(HOLOSCAN_RADAR_TEST_PACKAGING)",
+                        'add_test(NAME packaging COMMAND "${CMAKE_COMMAND}" -E true)',
+                        "set_tests_properties(packaging PROPERTIES LABELS packaging)",
+                        "endif()",
+                    ]
+                )
             (root / "CMakeLists.txt").write_text("\n".join(cmake) + "\n")
             result = subprocess.run(
                 [CTEST, "-S", "ci/container.ctest", "-VV", "-DCTEST_SITE=CI-Fixture", *extra_args],
@@ -67,11 +76,18 @@ class ContainerCTestContract(unittest.TestCase):
             ("-DRADAR_CDASH_BUILD_NAME:STRING=radar-linux-main-5x", "-DCTEST_BUILD_FLAGS=-j2")
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(set(names), {"unit", "statistical", "integration"})
+        self.assertEqual(set(names), {"unit", "statistical", "integration", "packaging"})
         for report in reports.values():
             self.assertEqual(ET.fromstring(report).attrib["BuildName"], "radar-linux-main-5x")
-        self.assertIn("CTest coverage: 3 tests", result.stdout)
+        self.assertIn("CTest coverage: 4 tests", result.stdout)
         self.assertIn("-j2", result.stdout)
+
+    def test_packaging_coverage_can_be_disabled_explicitly(self):
+        result, _, names = self.run_dashboard(
+            ("-DCONFIGURE_OPTIONS=-DHOLOSCAN_RADAR_TEST_PACKAGING:BOOL=OFF",)
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(set(names), {"unit", "statistical", "integration"})
 
     def test_local_default_name(self):
         result, reports, _ = self.run_dashboard()
@@ -98,7 +114,7 @@ class ContainerCTestContract(unittest.TestCase):
     def test_test_failure_fails_dashboard(self):
         result, _, names = self.run_dashboard(fail_test=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(set(names), {"unit", "statistical", "integration"})
+        self.assertEqual(set(names), {"unit", "statistical", "integration", "packaging"})
         self.assertIn("Tests failed with return value", result.stdout + result.stderr)
 
 

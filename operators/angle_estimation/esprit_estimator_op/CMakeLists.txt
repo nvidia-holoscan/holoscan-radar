@@ -24,12 +24,7 @@ set_property(TARGET esprit_estimator_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS esprit_estimator_op
-    EXPORT holoscan_esprit_estimator_op_targets
-)
-
-install(EXPORT holoscan_esprit_estimator_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 include(GNUInstallDirs)

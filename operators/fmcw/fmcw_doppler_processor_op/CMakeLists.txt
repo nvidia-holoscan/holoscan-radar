@@ -21,12 +21,7 @@ set_property(TARGET fmcw_doppler_processor_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS fmcw_doppler_processor_op
-    EXPORT holoscan_fmcw_doppler_processor_op_targets
-)
-
-install(EXPORT holoscan_fmcw_doppler_processor_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 include(GNUInstallDirs)

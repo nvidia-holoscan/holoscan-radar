@@ -22,12 +22,7 @@ set_property(TARGET phase_shift_beamformer_op
     PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS phase_shift_beamformer_op
-    EXPORT holoscan_phase_shift_beamformer_op_targets
-)
-
-install(EXPORT holoscan_phase_shift_beamformer_op_targets
-    NAMESPACE holoscan::
-    DESTINATION lib/cmake/holoscan_radar
+    EXPORT holoscan_radar_targets
 )
 
 include(GNUInstallDirs)
