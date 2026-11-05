@@ -187,6 +187,7 @@ def check_debian(args):
     check_operator_libraries(exports[0].parents[3], expected)
     check_cmake_package(prefix, expected)
     check_native_consumer(args, prefix, "debian", expected=expected)
+    check_installed_headers(args, prefix)
     check_cmake_package(exports[0].parents[3], expected)
     check_native_consumer(args, exports[0].parents[3], "tgz", expected=expected)
     # Ordinary installs must support discovery with the Debian option disabled.
@@ -226,6 +227,24 @@ def check_cmake_package(prefix, expected):
     for target in expected:
         if f"holoscan::{target}" not in content:
             raise RuntimeError(f"Missing exported target: {target}")
+
+
+def check_installed_headers(args, prefix):
+    # Compile each installed header alone so includes of uninstalled files fail here.
+    build = args.work / "installed-headers"
+    run(
+        "cmake",
+        "-S",
+        args.source / "tests/packaging/headers",
+        "-B",
+        build,
+        f"-DCMAKE_PREFIX_PATH={prefix};{args.sdk_dir.parents[2]}",
+        f"-Dholoscan_DIR={args.sdk_dir}",
+        f"-DRADAR_INCLUDE_ROOT={prefix / 'include/holoscan/radar'}",
+        f"-DCMAKE_CUDA_ARCHITECTURES={args.architectures}",
+        cwd=args.work,
+    )
+    run("cmake", "--build", build, "--parallel", args.parallel, cwd=args.work)
 
 
 def check_native_consumer(args, prefix, name, expected=(), absent=()):

@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "detection/detection_reduction_op/detection_reduction_op.hpp"
+#include "detection_reduction_op.hpp"  // NOLINT(build/include_subdir)
 
 #include <cuda_runtime_api.h>
 
@@ -23,7 +23,7 @@
 #include <holoscan/core/expected_macros.hpp>
 #include <holoscan/core/payload_options.hpp>
 
-#include "detection/detection_reduction_op/detection_reduction_stage.hpp"
+#include "detection_reduction_stage.hpp"  // NOLINT(build/include_subdir)
 #include "radar_common/sdk/config_tensor.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"

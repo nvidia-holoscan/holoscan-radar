@@ -22,9 +22,9 @@
 #include "radar_common/reduce/reduction_enums.hpp"
 
 // YAML::convert<> specializations for the shared config-plane descriptor
-// types, enabling Holoscan's from_config() path for operator parameters
-// (see arg_setters.hpp for the registration side). Lives in its own header
-// so the descriptor and sim layers stay yaml-cpp-free.
+// types, enabling Holoscan's from_config() path for operator parameters.
+// Lives in its own header so the descriptor and sim layers stay
+// yaml-cpp-free.
 //
 // Spellings match the canonical to_string() forms in descriptors/enums.hpp.
 // Decode failures throw with the offending key and the accepted values;

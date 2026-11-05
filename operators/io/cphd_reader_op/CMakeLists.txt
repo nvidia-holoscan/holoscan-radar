@@ -44,9 +44,11 @@ install(TARGETS cphd_reader_op
 )
 
 include(GNUInstallDirs)
-# collection_paths.hpp travels with the operator header, which includes it --
-# installing one without the other leaves an installed header that cannot
-# compile.
-install(FILES cphd_reader_op.hpp collection_paths.hpp
+install(FILES cphd_reader_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/io
+)
+# The operator header includes these as "io/cphd_reader_op/<file>"; installing
+# them elsewhere leaves an installed header that cannot compile.
+install(FILES collection_paths.hpp host_read_ahead.hpp playback_scheduler.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/io/cphd_reader_op
 )
