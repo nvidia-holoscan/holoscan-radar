@@ -36,7 +36,7 @@ if(TARGET holoscan::visualization::op_holoviz)
 endif()
 
 if(HOLOSCAN_RADAR_BUILD_TESTING)
-    set(SAR_FIXTURE "${PROJECT_BINARY_DIR}/tests/cpp/generated_sar_smoke.cphd")
+    set(SAR_FIXTURE "${PROJECT_BINARY_DIR}/tests/cpp/generated_sar_smoke_autofocus.cphd")
     configure_file(autofocus_smoke.yaml.in
         ${CMAKE_CURRENT_BINARY_DIR}/autofocus_generated_smoke.yaml @ONLY)
     configure_file(autofocus_smoke_lie.yaml.in

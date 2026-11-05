@@ -166,7 +166,17 @@ cmake --build build --target autofocus generate_cphd_fixture
 ctest --test-dir build -R '^Sar_autofocus_' --output-on-failure
 ```
 
-Four fixture runs: the clean Figure 2 chain, the same chain with the lie injected and scored, the oracle apply path, and the polar auxiliary. They check graph wiring, the injection and the scoring plumbing — not recovery. A five-pulse aperture over a handful of point targets is far too small a scene for PGA to estimate anything from, and the generated fixture is already focused; the estimator passes the image straight through because no range bin clears the strong-scatterer gate. Recovery is measured on real data.
+Two additional `Sar_autofocus_pixels_*` tests compare the saved complex
+products in single and double sample precision: clean input, a known injected
+error with identity correction, and oracle recovery. They require finite pixels,
+correct shape/dtype, a material effect from injection, and restoration of the
+clean complex product within 0.1% relative error. The autofocus fixture holds
+its SRP fixed and centres the product on the ground near it, inside the
+compressed range support; a platform-centred lattice would pass the old log
+checks while producing only zero pixels. They test the application,
+correction, and dump path; they do not claim PGA recovery on five pulses.
+
+Four fixture smokes: the clean Figure 2 chain, the same chain with the lie injected and scored, the oracle apply path, and the polar auxiliary. They check graph wiring, the injection and the scoring plumbing — not recovery. A five-pulse aperture over a handful of point targets is far too small a scene for PGA to estimate anything from, and the generated fixture is already focused; the estimator passes the image straight through because no range bin clears the strong-scatterer gate. Recovery is measured on real data.
 
 ## Kourou (the PGA vehicle)
 

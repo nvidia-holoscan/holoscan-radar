@@ -40,7 +40,8 @@ inline void write_be32(std::ofstream& out, float value) {
 inline fs::path make_fixture(const fs::path& path, double sc0_per_pulse = 0.0,
                              double scss_per_pulse = 0.0, double iarp_x = 6378000.0,
                              bool wide_swath = false, int64_t pulses = 5,
-                             const std::optional<PvpFieldOverride>& pvp_override = std::nullopt) {
+                             const std::optional<PvpFieldOverride>& pvp_override = std::nullopt,
+                             bool fixed_srp = false) {
   if (pulses <= 0 || pulses * 104 > 8192 - 4096)
     throw std::invalid_argument("CPHD fixture: pulse count exceeds the fixed PVP block");
   const int64_t kPulses = pulses;
@@ -104,10 +105,10 @@ inline fs::path make_fixture(const fs::path& path, double sc0_per_pulse = 0.0,
   out.write(xml.data(), static_cast<std::streamsize>(xml.size()));
   out.seekp(kPvpOffset);
   for (int64_t pulse = 0; pulse < kPulses; ++pulse) {
-    for (double value :
-         {pulse * 0.01, 6378000.0, static_cast<double>(pulse), 1000.0, 6378000.0,
-          static_cast<double>(pulse), 1000.0, 6378000.0, static_cast<double>(pulse * 100), 0.0,
-          9.0e9 + pulse * sc0_per_pulse, 1.0e6 + pulse * scss_per_pulse, 1.0}) {
+    for (double value : {pulse * 0.01, 6378000.0, static_cast<double>(pulse), 1000.0, 6378000.0,
+                         static_cast<double>(pulse), 1000.0, 6378000.0,
+                         static_cast<double>(fixed_srp ? 0 : pulse * 100), 0.0,
+                         9.0e9 + pulse * sc0_per_pulse, 1.0e6 + pulse * scss_per_pulse, 1.0}) {
       write_be64(out, value);
     }
   }

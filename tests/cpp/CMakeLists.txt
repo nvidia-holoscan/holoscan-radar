@@ -489,6 +489,24 @@ if(TARGET autofocus)
     set_tests_properties(Sar_autofocus_smoke PROPERTIES
         FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
 
+    # Test the actual saved complex samples through the application in both
+    # supported sample precisions. The oracle must undo a nontrivial injection.
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    foreach(precision single double)
+        add_test(NAME Sar_autofocus_pixels_${precision}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_autofocus_pixels.py
+                --binary $<TARGET_FILE:autofocus>
+                --config ${af_dir}/autofocus_generated_smoke.yaml
+                --precision ${precision})
+        set_tests_properties(Sar_autofocus_pixels_${precision} PROPERTIES
+            FIXTURES_REQUIRED sar_cphd LABELS "application;integration" TIMEOUT 180)
+    endforeach()
+    add_test(NAME AutofocusSweepReports
+        COMMAND ${Python3_EXECUTABLE} -m unittest discover
+            -s ${PROJECT_SOURCE_DIR}/tools/sar_autofocus)
+    set_tests_properties(AutofocusSweepReports PROPERTIES LABELS "python;unit")
+
     # The same graph with a known look-axis error injected. The 5-pulse fixture
     # is far too small for PGA to recover anything, so these pin the injection,
     # the sign convention and the apply path, not the recovery. The scoring is

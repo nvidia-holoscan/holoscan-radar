@@ -9,7 +9,7 @@ cphd:
   sidecar: ""
 enu_origin_ecef: [6378000.0, 0.0, 0.0]
 sample_geometry:
-  origin: [-2.0, 1002.0, 0.0]
+  origin: [-2.0, 2.0, 0.0]
   axis_v: [0.0, -1.0, 0.0]
   axis_u: [1.0, 0.0, 0.0]
   spacing: [1.0, 1.0]

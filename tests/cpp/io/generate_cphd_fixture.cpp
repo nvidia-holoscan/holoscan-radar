@@ -4,6 +4,7 @@
 #include <exception>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <iostream>
+#include <optional>
 #include <string>
 
 #include "io/cphd_fixture.hpp"  // NOLINT(build/include_subdir)
@@ -23,6 +24,12 @@ int main(int argc, char** argv) {
                                                          20);
     const auto wide = path.parent_path() / (path.stem().string() + "_wide.cphd");
     holoscan::radar::testing::cphd_fixture::make_fixture(wide, 0.0, 0.0, 6378200.0, true);
+    // A fixed scene reference keeps the autofocus product close to every
+    // pulse's SRP, so the look-axis oracle restores complex samples rather
+    // than mixing injected phase with a large scene/reference separation.
+    const auto autofocus = path.parent_path() / (path.stem().string() + "_autofocus.cphd");
+    holoscan::radar::testing::cphd_fixture::make_fixture(autofocus, 0.0, 0.0, 6378000.0, false, 5,
+                                                         std::nullopt, true);
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

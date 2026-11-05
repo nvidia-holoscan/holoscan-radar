@@ -7,7 +7,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 - **2026-11-05** â€” Autofocus review follow-up on `dpc/sar-autofocus`:
   sweep correctness, accepted-iteration reporting, runnable recovery presets
   and output guidance, and an application-level complex-pixel comparison are
-  being addressed as four separate commits. Sweep execution failures now
+  addressed as four separate commits. Sweep execution failures now
   invalidate evidence and propagate a nonzero campaign exit; explicit
   termination provenance determines refusals and accepted iterations. Nine
   offline report regressions pass. The report now labels accepted iterations
@@ -20,7 +20,18 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   dumps, and the screen's stale Atlanta claim is removed. The recovery preset
   runs on Kourou at 0.1813 rad residual with 7/8 accepted iterations and writes
   the complex product and both phase vectors; all four fixture smokes pass.
-  No operator contract changes.
+  Pixel-level application checks now compare clean, injected, and oracle
+  complex products at both sample precisions, with a non-vacuous injection
+  threshold, phase-sensitive recovery, finite pixels, and dtype/shape checks.
+  The old autofocus smoke product was centred on the platform, outside the
+  compressed range support, so it silently produced zero pixels. Autofocus
+  fixtures now use a ground-centred product and a fixed-SRP CPHD variant.
+  Pixel comparisons pass in both precisions: injection changes the product by
+  1.073 relative L2, and oracle recovery is within 4.63e-5. They and the offline
+  sweep regressions are registered in CTest. All 71 focused SAR/CPHD/autofocus
+  CTests pass after rebuilding affected apps, and a deliberately reversed
+  correction sign fails the pixel test as expected. Full pinned lint and
+  metadata validation pass. No operator contract changes.
 
 - **2026-11-05** â€” Download publication review follow-up on
   `dpc/sar-autofocus`: the spotlight quick-start stops on failed transfers
