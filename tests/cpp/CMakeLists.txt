@@ -355,6 +355,11 @@ function(radar_add_fmcw_workflow_checks application preset smoke_name)
     if(NOT HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ OR NOT HOLOSCAN_RADAR_HAS_X11)
         return()
     endif()
+    # Some GUI demonstrations reserve more Tensor capacity than CI needs.
+    set(window_config "${config_dir}/${preset}.yaml")
+    if(EXISTS "${config_dir}/${preset}_viz_smoke.yaml")
+        set(window_config "${config_dir}/${preset}_viz_smoke.yaml")
+    endif()
     foreach(language IN ITEMS cpp python)
         if(language STREQUAL "python" AND NOT HOLOSCAN_RADAR_BUILD_PYTHON)
             continue()
@@ -379,7 +384,7 @@ function(radar_add_fmcw_workflow_checks application preset smoke_name)
         add_test(NAME ${name}
             COMMAND ${RADAR_XVFB_RUN} ${xvfb_args} ${RADAR_TEST_PYTHON}
                 ${CMAKE_CURRENT_SOURCE_DIR}/check_fmcw_x11.py $<TARGET_FILE:${application}>
-                "${config_dir}/${preset}.yaml" ${probe_args})
+                "${window_config}" ${probe_args})
         set_tests_properties(${name} PROPERTIES
             LABELS "application;smoke;integration;visualization"
             RESOURCE_LOCK fmcw_gui TIMEOUT 60)

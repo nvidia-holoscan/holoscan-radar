@@ -4,6 +4,18 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-05** — SAR-branch CI follow-up: added `autofocus_op` to the
+  default native package selection (33 operators), fixing missing autofocus
+  test targets in explicit-test package configurations. Fresh package, subset,
+  explicit-test, and cached-test configuration checks and all 13 packaging
+  helpers pass in the SDK container. Dense C++/Python GUI tests use a smaller
+  16-chirp, 5-by-5 angle preset, reducing worst-case detection capacity about
+  54x. Fixed aliased Python frontend/CFAR extent dictionaries; both new
+  regressions fail before the fix and pass after it. All 10 focused
+  config/application checks, 109 Python application tests, and pinned lint
+  pass. The normal demo and operator contracts are unchanged. Full artifact
+  packaging and the remote CI run still need verification on the CI runner.
+
 - **2026-11-05** — Merged `origin/main` at `0670cc08` into
   `dpc/sar-autofocus`. The only conflict was adjacent work-table additions;
   retained both autofocus and packaging entries. Updated the autofocus operator

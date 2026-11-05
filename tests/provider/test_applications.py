@@ -45,6 +45,27 @@ def isolate_presenter_choice(monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    "preset,num_angles",
+    [("dense_beamforming", 13), ("dense_beamforming_viz_smoke", 5)],
+)
+def test_dense_frontend_and_cfar_extents_are_independent(preset, num_angles):
+    path = _ROOT / "dense_beamforming" / "config" / f"{preset}.yaml"
+    cfg = _radar._load_dense(str(path))
+    frontend = cfg["extents"]
+    cfar = cfg["cfar_extents"]
+    assert frontend is not cfar
+    # The ADC has 8x8 receivers, independent of the az/el scan dimensions.
+    assert frontend["max_rx"] == 64
+    assert frontend["max_channels"] == num_angles * num_angles
+    assert "max_tx" not in frontend
+    assert cfar["max_tx"] == num_angles
+    assert cfar["max_rx"] == num_angles
+    assert "max_channels" not in cfar
+    cfar["max_rx"] = 1
+    assert frontend["max_rx"] == 64
+
+
 @pytest.mark.parametrize("module,directory,preset", _CASES, ids=[item[2] for item in _CASES])
 def test_smoke_preset_reaches_all_report_frames(module, directory, preset, capfd):
     path = _ROOT / directory / "config" / f"{preset}_smoke.yaml"

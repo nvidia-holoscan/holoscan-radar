@@ -352,7 +352,8 @@ nb::dict load_dense(std::string path) {
   extents["max_features"] = *cfg.extents.max_features;
   extents["max_az"] = *cfg.extents.max_az;
   extents["max_el"] = *cfg.extents.max_el;
-  nb::dict cfar_extents = nb::dict(extents);
+  // CFAR uses angle axes; keep its sizing separate from the ADC receive array.
+  nb::dict cfar_extents = nb::borrow<nb::dict>(extents.attr("copy")());
   cfar_extents["max_tx"] = *cfg.cfar_extents.max_tx;
   cfar_extents["max_rx"] = *cfg.cfar_extents.max_rx;
   cfar_extents.attr("pop")("max_channels");
