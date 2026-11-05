@@ -22,6 +22,36 @@ def run(*command, cwd, env=None):
     subprocess.run(list(map(str, command)), cwd=cwd, env=env, check=True)
 
 
+MULTIARCH = re.compile(r"[a-z0-9_]+-[a-z0-9_]+-[a-z0-9_]+")
+
+
+def sdk_prefix(sdk_dir):
+    """Map an SDK CMake package directory to its install prefix.
+
+    Handles ``<prefix>/lib[64]/cmake/holoscan`` and the Debian multiarch layout
+    ``<prefix>/lib/<triplet>/cmake/holoscan``.
+    """
+    if sdk_dir.parts[-2:] != ("cmake", "holoscan"):
+        raise RuntimeError(f"Expected an SDK <libdir>/cmake/holoscan directory: {sdk_dir}")
+    libdir = sdk_dir.parents[1]
+    if MULTIARCH.fullmatch(libdir.name) and libdir.parent.name == "lib":
+        libdir = libdir.parent
+    if libdir.name not in ("lib", "lib64"):
+        raise RuntimeError(f"Cannot derive the SDK prefix from {sdk_dir}; pass --sdk-prefix")
+    return libdir.parent
+
+
+def sdk_python_site(prefix):
+    """Return the SDK's Python package directory, or None when it is on sys.path."""
+    for candidate in (
+        prefix / "lib/python3.12/site-packages",
+        prefix / "lib/python3/dist-packages",
+    ):
+        if (candidate / "holoscan").is_dir():
+            return candidate
+    return None
+
+
 def cache_values(build):
     return dict(
         re.findall(
@@ -144,7 +174,7 @@ def package_with_cli(args, generators):
         # Already inside the SDK/GPU container; do not start nested containers.
         "--local",
         "--local-sdk-root",
-        args.sdk_dir.parents[2],
+        args.sdk_prefix,
         cwd=artifacts,
         env=env,
     )
@@ -231,24 +261,33 @@ def check_cmake_package(prefix, expected):
 def check_native_consumer(args, prefix, name, expected=(), absent=()):
     # Build against the extracted artifact, with no source/build include paths.
     consumer = args.work / f"consumer-{name}"
-    # Keep a competing MatX ahead of an already-listed SDK to catch mixed installs.
-    competing = args.work / f"competing-sdk-{name}"
-    matx_config = competing / "lib/cmake/matx/matx-config.cmake"
-    matx_config.parent.mkdir(parents=True)
-    matx_config.write_text('message(FATAL_ERROR "MatX selected from a different SDK")\n')
+    prefix_path = [prefix]
+    # When the SDK ships MatX beside its package directory, keep a competing MatX
+    # ahead of the SDK prefix to catch mixed installs.
+    sdk_matx = args.sdk_dir.parent / "matx"
+    if (sdk_matx / "matx-config.cmake").is_file():
+        competing = args.work / f"competing-sdk-{name}"
+        matx_config = competing / "lib/cmake/matx/matx-config.cmake"
+        matx_config.parent.mkdir(parents=True)
+        matx_config.write_text('message(FATAL_ERROR "MatX selected from a different SDK")\n')
+        prefix_path.append(competing)
+    else:
+        sdk_matx = None
+    prefix_path.append(args.sdk_prefix)
     command = [
         "cmake",
         "-S",
         args.source / "tests/packaging/consumer",
         "-B",
         consumer,
-        f"-DCMAKE_PREFIX_PATH={prefix};{competing};{args.sdk_dir.parents[2]}",
+        f"-DCMAKE_PREFIX_PATH={';'.join(map(str, prefix_path))}",
         f"-Dholoscan_DIR={args.sdk_dir}",
         f"-DRADAR_EXPECT_TARGETS={';'.join(sorted(expected))}",
         f"-DRADAR_ABSENT_TARGETS={';'.join(sorted(absent))}",
         f"-DCMAKE_CUDA_ARCHITECTURES={args.architectures}",
     ]
     run(*command, cwd=args.work)
+    check_consumer_matx(consumer, sdk_matx)
     run("cmake", "--build", consumer, "--parallel", args.parallel, cwd=args.work)
     run(consumer / "radar_package_consumer", cwd=args.work)
 
@@ -272,6 +311,15 @@ def check_native_consumer(args, prefix, name, expected=(), absent=()):
             )
 
 
+def check_consumer_matx(consumer, sdk_matx):
+    """Require the SDK's MatX when it ships one, else the single MatX available."""
+    selected = cache_values(consumer).get("matx_DIR", "")
+    if not selected or selected.endswith("-NOTFOUND"):
+        raise RuntimeError("Consumer did not resolve MatX")
+    if sdk_matx is not None and Path(selected).resolve() != sdk_matx.resolve():
+        raise RuntimeError(f"Consumer selected MatX {selected}, not the SDK's {sdk_matx}")
+
+
 def check_wheel(args):
     _, artifacts = package_with_cli(args, "WHEEL")
     wheels = list(artifacts.glob("*.whl"))
@@ -292,15 +340,11 @@ def check_wheel(args):
         wheels[0],
         cwd=args.work,
     )
-    sdk_site = args.sdk_dir.parents[2] / "lib/python3.12/site-packages"
-    run(
-        python,
-        "-I",
-        Path(__file__).resolve().with_name("wheel_smoke.py"),
-        "--sdk-site",
-        sdk_site,
-        cwd=args.work,
-    )
+    smoke = [python, "-I", Path(__file__).resolve().with_name("wheel_smoke.py")]
+    sdk_site = sdk_python_site(args.sdk_prefix)
+    if sdk_site:
+        smoke += ["--sdk-site", sdk_site]
+    run(*smoke, cwd=args.work)
 
 
 def main():
@@ -309,11 +353,15 @@ def main():
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--work", required=True, type=Path)
     parser.add_argument("--sdk-dir", required=True, type=Path)
+    parser.add_argument(
+        "--sdk-prefix", type=Path, help="SDK install prefix (default: derived from --sdk-dir)"
+    )
     parser.add_argument("--architectures", default="native")
     parser.add_argument("--parallel", default=os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "2"))
     args = parser.parse_args()
     args.source = args.source.resolve()
     args.sdk_dir = args.sdk_dir.resolve()
+    args.sdk_prefix = (args.sdk_prefix or sdk_prefix(args.sdk_dir)).resolve()
     args.work = args.work.resolve()
     # A fresh tree is essential: cached OP_* selections would hide omissions.
     args.work.mkdir(parents=True, exist_ok=True)
