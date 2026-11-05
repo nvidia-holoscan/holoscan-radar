@@ -75,45 +75,25 @@ class PackagingMetadata(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Unexpected Radar exports"):
                 packaging.check_cmake_package(prefix, {"selected_op"})
 
-    def test_sdk_prefix_supports_hsdk_ga_and_apt_layouts(self):
-        for sdk_dir, prefix in (
-            ("/opt/nvidia/holoscan/lib/cmake/holoscan", "/opt/nvidia/holoscan"),
-            ("/usr/lib/cmake/holoscan", "/usr"),
-            ("/usr/lib64/cmake/holoscan", "/usr"),
-            ("/usr/lib/x86_64-linux-gnu/cmake/holoscan", "/usr"),
-            ("/usr/lib/aarch64-linux-gnu/cmake/holoscan", "/usr"),
-        ):
-            with self.subTest(sdk_dir=sdk_dir):
-                self.assertEqual(packaging.sdk_prefix(Path(sdk_dir)), Path(prefix))
-
-    def test_sdk_prefix_rejects_unknown_layouts(self):
-        for sdk_dir in ("/usr/share/holoscan", "/opt/holoscan/cmake/holoscan"):
-            with self.subTest(sdk_dir=sdk_dir), self.assertRaises(RuntimeError):
-                packaging.sdk_prefix(Path(sdk_dir))
-
-    def test_sdk_python_site_finds_layout_or_none(self):
+    def test_consumer_must_resolve_radar_build_dependencies(self):
         with tempfile.TemporaryDirectory() as temporary:
-            prefix = Path(temporary)
-            self.assertIsNone(packaging.sdk_python_site(prefix))
-            site = prefix / "lib/python3/dist-packages"
-            (site / "holoscan").mkdir(parents=True)
-            self.assertEqual(packaging.sdk_python_site(prefix), site)
-
-    def test_consumer_matx_requires_sdk_copy_when_present(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            build = Path(temporary)
-            sdk_matx = build / "sdk/lib/cmake/matx"
-            sdk_matx.mkdir(parents=True)
-            cache = build / "CMakeCache.txt"
-            cache.write_text(f"matx_DIR:PATH={sdk_matx}\n")
-            packaging.check_consumer_matx(build, sdk_matx)
-            packaging.check_consumer_matx(build, None)
-            cache.write_text("matx_DIR:PATH=/other/lib/cmake/matx\n")
-            with self.assertRaisesRegex(RuntimeError, "not the SDK"):
-                packaging.check_consumer_matx(build, sdk_matx)
-            cache.write_text("matx_DIR:PATH=matx_DIR-NOTFOUND\n")
-            with self.assertRaisesRegex(RuntimeError, "did not resolve MatX"):
-                packaging.check_consumer_matx(build, None)
+            radar, consumer = Path(temporary) / "radar", Path(temporary) / "consumer"
+            radar.mkdir()
+            consumer.mkdir()
+            built = (
+                "holoscan_DIR:PATH=/sdk/lib/cmake/holoscan\nmatx_DIR:PATH=/deps/lib/cmake/matx\n"
+            )
+            (radar / "CMakeCache.txt").write_text(built)
+            (consumer / "CMakeCache.txt").write_text(built.replace(":PATH", ":UNINITIALIZED", 1))
+            packaging.check_consumer_dependencies(consumer, radar)
+            (consumer / "CMakeCache.txt").write_text(
+                "holoscan_DIR:PATH=/sdk/lib/cmake/holoscan\nmatx_DIR:PATH=/other/lib/cmake/matx\n"
+            )
+            with self.assertRaisesRegex(RuntimeError, "Consumer matx_DIR"):
+                packaging.check_consumer_dependencies(consumer, radar)
+            (consumer / "CMakeCache.txt").write_text("holoscan_DIR:PATH=/sdk/lib/cmake/holoscan\n")
+            with self.assertRaisesRegex(RuntimeError, "Consumer matx_DIR None"):
+                packaging.check_consumer_dependencies(consumer, radar)
 
 
 if __name__ == "__main__":
