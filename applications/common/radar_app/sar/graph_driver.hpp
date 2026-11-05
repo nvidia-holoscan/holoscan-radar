@@ -39,6 +39,7 @@
 #include "io/cphd_reader_op/cphd_reader_op.hpp"
 #include "io/cphd_reader_op/params_config.hpp"
 #include "io/tensor_dump_op/tensor_dump_op.hpp"
+#include "io/tensor_dump_op/output_paths.hpp"
 #include "radar_app/app/config_utils.hpp"
 #include "radar_app/app/gpu_placement.hpp"
 #ifdef HOLOSCAN_RADAR_HAS_X11
@@ -517,15 +518,23 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
       HOLOSCAN_LOG_INFO("SAR: partition '{}' lane={}",
                         part.authored_name.value_or(std::string("(auto)")), part.execution_lane);
     }
+    const bool saving_images = cfg.dump && cfg.dump_max_files != 0;
     HOLOSCAN_LOG_INFO("SAR: display={}; image saving={}",
                       has_visualization ? (cfg.headless ? "headless" : "window") : "off",
-                      cfg.dump ? "on" : "off");
-    if (cfg.dump) {
-      HOLOSCAN_LOG_INFO("SAR: output template {} (TensorDumpOp reports each saved filename)",
-                        std::filesystem::absolute(cfg.dump_path).string());
-    } else if (!has_visualization) {
+                      saving_images ? "on" : "off");
+    if (saving_images) {
+      const auto output = radar::dump_paths::display_path(cfg.dump_path);
+      HOLOSCAN_LOG_INFO("SAR: image output directory{}: {}",
+                        output.is_relative() ? " (relative to repository root)" : "",
+                        output.parent_path().string());
+      HOLOSCAN_LOG_INFO("SAR: image filename template: {}", output.filename().string());
+      HOLOSCAN_LOG_INFO("SAR: each saved image will log its exact path and viewer command");
+    } else if (cfg.dump) {
       HOLOSCAN_LOG_INFO(
-          "SAR: no display or saved image requested; set visualize: true or dump: true");
+          "SAR: images will not be saved because output.max_files is 0; set a positive limit");
+    } else {
+      HOLOSCAN_LOG_INFO("SAR: images will not be saved; set dump: true in {} to save .npy images",
+                        config_hint_path(cli.config, name));
     }
     auto session = holoscan::run_async(plan, managed_signals);
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ

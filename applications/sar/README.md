@@ -76,7 +76,8 @@ The PNG is written beside the input; no display is needed. `uv` supplies the
 optional plotting dependencies. Add `--show` for interactive viewing or use
 `clean.npy corrected.npy --compare` for panels sharing one intensity scale.
 The [viewer guide](../../tools/sar_data/README.md#view-saved-images) describes
-range settings and array orientation.
+range settings and array orientation. Save logs within the checkout print the
+viewer command for the actual image filename.
 
 ## Troubleshooting
 

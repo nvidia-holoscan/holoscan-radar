@@ -53,6 +53,14 @@ accessible. The operator copies it to host memory, synchronizes the CUDA
 stream, creates parent directories, and writes synchronously. Expect disk
 latency in the Graph's critical path; throttle or cap diagnostic dumps.
 
+For 2-D floating-point or complex NumPy images saved within a development
+checkout, saved paths are relative to the repository root and the save log
+also prints a shell-quoted host viewer command. Files outside the checkout
+retain absolute paths.
+`uv run tools/sar_data/view_image.py <image.npy>` saves a log-magnitude PNG
+beside the array; see the [viewer guide](../../../tools/sar_data/README.md#view-saved-images).
+The viewer is an optional host tool and is not a runtime dependency of the sink.
+
 ## Failure cases and use
 
 An empty `path`, `every_n < 1`, or negative `max_files` is invalid. Unsupported

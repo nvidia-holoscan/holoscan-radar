@@ -63,6 +63,8 @@ def run_product(binary: Path, base: str, work: Path, precision: str, mode: str) 
         raise AssertionError(
             f"{mode}: exit {result.returncode}, image exists={output.is_file()}\n{log}"
         )
+    if f"TensorDumpOp: saved image {output}" not in log:
+        raise AssertionError(f"{mode}: saved image path was not reported\n{log}")
     if mode == "oracle":
         if "OraclePhaseOp: published 5 pulses" not in log:
             raise AssertionError(f"oracle correction was not exercised\n{log}")

@@ -42,6 +42,11 @@ but interactive display is unavailable. Missing, nonnumeric, non-finite,
 empty, and all-zero images produce a clear error rather than a misleading plot.
 Phase-vector diagnostics are 1-D arrays and are not accepted as images.
 
+Saved 2-D floating-point or complex images within a repository checkout also
+log a shell-quoted viewer command after `TensorDumpOp` confirms the file was
+written. Run that command on the host from the repository root; its relative
+path works across the CLI's host/container repository mount.
+
 Offline viewer checks (no GPU or external collections needed):
 
 ```bash
