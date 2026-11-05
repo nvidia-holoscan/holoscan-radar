@@ -1,9 +1,54 @@
-# Optional SAR data preparation
+# SAR data preparation and saved-image viewing
 
-These Python command-line tools prepare **local CPHD files** for the six C++
-SAR applications. They are not imported by an operator or application at run
+These Python command-line tools prepare **local CPHD files** and view saved
+NumPy images for the six C++ SAR applications. They are not imported by an operator or application at run
 time. CTest uses a C++ CPHD generator and does not install these dependencies
 or download public collections.
+
+## View saved images
+
+Run from the repository root **on the host**:
+
+```bash
+uv run tools/sar_data/view_image.py path/to/image.npy
+```
+
+This writes `image.png` beside the saved array and prints its
+absolute path. It needs no display and works over SSH. `uv` automatically
+provides NumPy and Matplotlib in an isolated environment; you do not need the
+CPHD preparation dependencies below. The application and original `.npy` file
+are unchanged. Existing PNG output files are overwritten.
+
+For other files and options:
+
+```bash
+uv run tools/sar_data/view_image.py image.npy --range-db 80 -o figures/image.png
+uv run tools/sar_data/view_image.py clean.npy corrected.npy --compare
+uv run tools/sar_data/view_image.py image.npy --show
+```
+
+The default is grayscale log magnitude over 60 dB, with the brightest sample
+at 0 dB. Complex input is shown by magnitude; real input is treated as
+amplitude, not power. Comparisons write `<first-stem>_comparison.png` and use
+one peak reference and one color scale across all panels, so a dim image
+stays dim. Arrays must have matching shapes; compare the same scene and grid,
+since the viewer does no registration or georeferencing. Axes are array rows
+and columns, with row zero at the top and no smoothing between samples.
+
+`--show` additionally opens an interactive plot when your Python environment
+has an interactive Matplotlib backend and a working display. The PNG is still
+saved. With a noninteractive backend, the tool reports that the PNG is saved
+but interactive display is unavailable. Missing, nonnumeric, non-finite,
+empty, and all-zero images produce a clear error rather than a misleading plot.
+Phase-vector diagnostics are 1-D arrays and are not accepted as images.
+
+Offline viewer checks (no GPU or external collections needed):
+
+```bash
+uv run tools/sar_data/viewer_tests/test_view_image.py
+```
+
+## Data preparation setup
 
 On the **host**, run the following from the repository root using `uv`,
 matching the [repository setup](../../DEVELOPER.md#holoscan-cli):

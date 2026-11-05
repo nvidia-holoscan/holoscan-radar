@@ -63,6 +63,21 @@ See the [SAR open-items roll-up](../../docs/planning/SAR/OPEN_ITEMS.md) for
 tracked follow-ups and [SAR input data](../../docs/planning/SAR/INPUT_DATA.md) for optional real
 collections and [SDK development](../../SDK_DEVELOPMENT.md) for the pinned image.
 
+## View saved images
+
+With `dump: true`, the app writes complex `.npy` products independently of the
+GUI. Convert a saved image to a PNG on the host from the repository root:
+
+```bash
+uv run tools/sar_data/view_image.py path/to/image.npy
+```
+
+The PNG is written beside the input; no display is needed. `uv` supplies the
+optional plotting dependencies. Add `--show` for interactive viewing or use
+`clean.npy corrected.npy --compare` for panels sharing one intensity scale.
+The [viewer guide](../../tools/sar_data/README.md#view-saved-images) describes
+range settings and array orientation.
+
 ## Troubleshooting
 
 ### Vulkan or display initialization fails on any platform
