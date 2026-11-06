@@ -41,7 +41,7 @@ CPHDReaderOp links the system shared library (libtinyxml2). It is not copied int
 CUDA Toolkit (https://developer.nvidia.com/cuda-toolkit)
 Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 Distributed under the NVIDIA CUDA Toolkit End User License Agreement (https://docs.nvidia.com/cuda/eula/index.html)
-The CUDA runtime is linked statically per CMake's default; cuFFT and cuSOLVER are linked dynamically and are not copied into this package.
+The Debian package and TGZ contain static operator archives compiled with nvcc; they do not embed the CUDA runtime, cuFFT, or cuSOLVER. The Python extension module links the CUDA runtime, cuFFT, and cuSOLVER dynamically. None of these libraries is copied into this package.
 
 GoogleTest (https://github.com/google/googletest)
 Copyright 2008, Google Inc. All rights reserved.

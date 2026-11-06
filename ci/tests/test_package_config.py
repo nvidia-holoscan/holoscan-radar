@@ -171,6 +171,7 @@ class InstalledConfig(unittest.TestCase):
             for path, origin in debian.items():
                 with self.subTest(deb=path):
                     self.assertEqual((unpacked / path).read_bytes(), (ROOT / origin).read_bytes())
+                    self.assertEqual((unpacked / path).stat().st_mode & 0o777, 0o644)
             with tarfile.open(next(artifacts.glob("*.tar.gz"))) as archive:
                 names = {name.removeprefix("./") for name in archive.getnames()}
             for path in legal:

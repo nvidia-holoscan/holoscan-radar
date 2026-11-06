@@ -246,8 +246,8 @@ def check_debian(args):
     check_headers_without_yaml_cpp(prefix)
     check_legal_files(args, prefix)
     copyright_file = unpacked / "usr/share/doc/holoscan-radar/copyright"
-    if not copyright_file.is_file():
-        raise RuntimeError("Debian artifact missing /usr/share/doc/holoscan-radar/copyright")
+    if not copyright_file.is_file() or copyright_file.stat().st_mode & 0o777 != 0o644:
+        raise RuntimeError("Debian artifact missing /usr/share/doc/holoscan-radar/copyright (0644)")
     if (prefix / "bin").exists() and any((prefix / "bin").iterdir()):
         raise RuntimeError("Operator-only Debian artifact contains executables")
     if (prefix / "holoscan_radar").exists():
