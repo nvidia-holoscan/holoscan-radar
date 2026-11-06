@@ -13,9 +13,13 @@ function(holoscan_radar_configure_deb)
         # Installed CMake discovery needs tinyxml2's config, not just its runtime.
         string(APPEND _radar_deb_depends ", libtinyxml2-dev")
     endif()
-    set(_radar_archive_arch "${CMAKE_SYSTEM_PROCESSOR}")
-    if(_radar_archive_arch MATCHES "^(aarch64|arm64)$")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)$")
+        set(_radar_archive_arch "x86_64")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
         set(_radar_archive_arch "sbsa")
+    else()
+        message(FATAL_ERROR
+            "holoscan-radar packaging supports only x86_64 and SBSA; got ${CMAKE_SYSTEM_PROCESSOR}")
     endif()
     # CPack passes only CPACK_* variables to the per-generator project config.
     set(CPACK_HOLOSCAN_RADAR_ARCHIVE_FILE_NAME

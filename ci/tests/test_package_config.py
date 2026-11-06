@@ -70,19 +70,43 @@ class InstalledConfig(unittest.TestCase):
                         expected += ", libtinyxml2-dev"
                     self.assertEqual(depends, expected)
 
+    def write_package_fixture(self, root):
+        source = root / "source"
+        source.mkdir()
+        (source / "CMakeLists.txt").write_text(
+            "cmake_minimum_required(VERSION 4.0)\n"
+            "project(holoscan_radar VERSION 0.2.0 LANGUAGES NONE)\n"
+            'set(PROJECT_DESCRIPTION "Package layout fixture")\n'
+            f'list(PREPEND CMAKE_MODULE_PATH "{ROOT}/cmake")\n'
+            f'add_subdirectory("{ROOT}/pkg/holoscan-radar" pkg)\n'
+            f'install(FILES "{ROOT}/pkg/holoscan-radar/README.md" DESTINATION share)\n'
+        )
+        return source
+
+    def test_packaging_rejects_unsupported_processor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = self.write_package_fixture(root)
+            result = subprocess.run(
+                [
+                    "cmake",
+                    "-S",
+                    str(source),
+                    "-B",
+                    str(root / "build"),
+                    "-DCMAKE_SYSTEM_NAME=Linux",
+                    "-DCMAKE_SYSTEM_PROCESSOR=ppc64le",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("supports only x86_64 and SBSA; got ppc64le", result.stderr)
+
     def test_archive_is_raw_install_tree_and_debian_is_unchanged(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            source = root / "source"
-            source.mkdir()
-            (source / "CMakeLists.txt").write_text(
-                "cmake_minimum_required(VERSION 4.0)\n"
-                "project(holoscan_radar VERSION 0.2.0 LANGUAGES NONE)\n"
-                'set(PROJECT_DESCRIPTION "Package layout fixture")\n'
-                f'list(PREPEND CMAKE_MODULE_PATH "{ROOT}/cmake")\n'
-                f'add_subdirectory("{ROOT}/pkg/holoscan-radar" pkg)\n'
-                f'install(FILES "{ROOT}/pkg/holoscan-radar/README.md" DESTINATION share)\n'
-            )
+            source = self.write_package_fixture(root)
             build = root / "build"
             artifacts = root / "artifacts"
             for command in (
