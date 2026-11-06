@@ -853,8 +853,8 @@ change.
 - **Single-entry `TensorMap`** — port name is the contract; reject multi-entry
   maps with a clear error.
 - **All outputs connected** in applications and tests.
-- **`ConfigCodec`** for every custom parameter type
-  (`radar_common/sdk/config_codecs.hpp` covers the shared descriptors).
+- **Custom parameter types** decode through a `holoscan::config::ConfigCodec<T>`
+  specialization (see `radar_common/sdk/config_codecs.hpp`), not Arg setters.
 - **Compact row-major** inputs this wave; reject non-contiguous if unsupported.
 - **Geometry-aware element operations** — do not apply an axis-dependent
   window, neighborhood, or stencil to a flattened multidimensional aperture.

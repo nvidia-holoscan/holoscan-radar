@@ -29,3 +29,6 @@ include(GNUInstallDirs)
 install(FILES virtual_array_assembly_op.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw
 )
+install(FILES virtual_array_assembly_stage.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/fmcw/virtual_array_assembly_op
+)
