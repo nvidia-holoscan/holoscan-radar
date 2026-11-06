@@ -11,3 +11,9 @@ holoscan_radar_add_operator(music_estimator_op)
 holoscan_radar_add_operator(root_music_estimator_op)
 holoscan_radar_add_operator(esprit_estimator_op)
 holoscan_radar_add_operator(phase_shift_beamformer_op)
+
+# ESPRIT and Root-MUSIC public headers include this shared device helper.
+include(GNUInstallDirs)
+install(FILES angle_boundary_device.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/angle_estimation
+)
