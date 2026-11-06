@@ -16,7 +16,7 @@
 // or, in auto mode, a small multiple of the per-item noise-floor proxy
 // trace(R̂_i)/num_channels.
 //
-// Includes <matx.h> (via matx_utils.hpp): include only from .cu files.
+// Includes <matx.h> (via detail/matx_views.hpp): include only from .cu files.
 
 #pragma once
 
@@ -26,7 +26,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#include "radar_common/tensor/matx_utils.hpp"
+#include "radar_common/tensor/detail/matx_views.hpp"
 
 namespace holoscan::radar::detail {
 

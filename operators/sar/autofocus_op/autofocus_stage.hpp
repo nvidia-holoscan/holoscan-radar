@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Phase-gradient autofocus stage behind AutofocusOp. CUDA-TU only
-// (includes <matx.h> via matx_utils.hpp).
+// (includes <matx.h> via detail/matx_views.hpp).
 //
 // Algorithm (OPERATOR_API.md → AutofocusOp), on a (batch, n_range,
 // n_az) working cube whose last axis is the declared azimuth:
@@ -57,7 +57,7 @@
 
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/tensor/cuda_check.hpp"
-#include "radar_common/tensor/matx_utils.hpp"
+#include "radar_common/tensor/detail/matx_views.hpp"
 
 namespace holoscan::radar::detail {
 

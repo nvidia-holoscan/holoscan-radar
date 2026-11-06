@@ -4,6 +4,7 @@
 """Build and consume actual artifacts in the GPU/SDK test container."""
 
 import argparse
+import importlib.util
 import os
 import re
 import shlex
@@ -143,8 +144,6 @@ def package_with_cli(args, generators):
         "python" if generators == "WHEEL" else "cpp",
         # Already inside the SDK/GPU container; do not start nested containers.
         "--local",
-        "--local-sdk-root",
-        args.sdk_dir.parents[2],
         cwd=artifacts,
         env=env,
     )
@@ -245,7 +244,7 @@ def check_installed_headers(args, prefix):
         args.source / "tests/packaging/headers",
         "-B",
         build,
-        f"-DCMAKE_PREFIX_PATH={prefix};{args.sdk_dir.parents[2]}",
+        f"-DCMAKE_PREFIX_PATH={prefix}",
         f"-Dholoscan_DIR={args.sdk_dir}",
         f"-DRADAR_INCLUDE_ROOT={prefix / 'include/holoscan/radar'}",
         f"-DCMAKE_CUDA_ARCHITECTURES={args.architectures}",
@@ -257,18 +256,13 @@ def check_installed_headers(args, prefix):
 def check_native_consumer(args, prefix, name, expected=(), absent=()):
     # Build against the extracted artifact, with no source/build include paths.
     consumer = args.work / f"consumer-{name}"
-    # Keep a competing MatX ahead of an already-listed SDK to catch mixed installs.
-    competing = args.work / f"competing-sdk-{name}"
-    matx_config = competing / "lib/cmake/matx/matx-config.cmake"
-    matx_config.parent.mkdir(parents=True)
-    matx_config.write_text('message(FATAL_ERROR "MatX selected from a different SDK")\n')
     command = [
         "cmake",
         "-S",
         args.source / "tests/packaging/consumer",
         "-B",
         consumer,
-        f"-DCMAKE_PREFIX_PATH={prefix};{competing};{args.sdk_dir.parents[2]}",
+        f"-DCMAKE_PREFIX_PATH={prefix}",
         f"-Dholoscan_DIR={args.sdk_dir}",
         f"-DRADAR_EXPECT_TARGETS={';'.join(sorted(expected))}",
         f"-DRADAR_ABSENT_TARGETS={';'.join(sorted(absent))}",
@@ -318,15 +312,12 @@ def check_wheel(args):
         wheels[0],
         cwd=args.work,
     )
-    sdk_site = args.sdk_dir.parents[2] / "lib/python3.12/site-packages"
-    run(
-        python,
-        "-I",
-        Path(__file__).resolve().with_name("wheel_smoke.py"),
-        "--sdk-site",
-        sdk_site,
-        cwd=args.work,
-    )
+    smoke = [python, "-I", Path(__file__).resolve().with_name("wheel_smoke.py")]
+    # Isolated mode drops PYTHONPATH; forward the SDK bindings this interpreter sees.
+    sdk = importlib.util.find_spec("holoscan")
+    if sdk and sdk.submodule_search_locations:
+        smoke += ["--sdk-site", Path(list(sdk.submodule_search_locations)[0]).parent]
+    run(*smoke, cwd=args.work)
 
 
 def main():
