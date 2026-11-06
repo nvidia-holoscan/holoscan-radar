@@ -44,10 +44,10 @@ size Tensor pools before `arm()`. The field list in
 `radar_common/descriptors/max_tensor_extents.hpp` is the public sizing surface;
 each operator README Construction table identifies the fields that operator
 requires. Applications may construct the value directly or decode the same
-`max_*` keys with `MaxTensorExtentsFromYaml` from
-`radar_common/sdk/max_tensor_extents_yaml.hpp`. That header and the other
-yaml-cpp helpers in `radar_common/sdk/` are in-tree only; the installed package
-does not ship them, so it needs no yaml-cpp.
+`max_*` keys from a YAML or JSON `holoscan::config::Document` with
+`document.get<MaxTensorExtents>(path)`, through the codec in
+`radar_common/sdk/config_codecs.hpp`. An absent or null key leaves that field
+unset; unknown keys and non-positive values are rejected.
 
 The values are maxima for the graph lifetime, not fixed per-tick shapes.
 Operators continue to infer named extents from each input and accept shape

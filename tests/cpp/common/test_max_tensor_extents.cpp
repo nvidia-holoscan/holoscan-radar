@@ -3,28 +3,33 @@
 
 #include <gtest/gtest.h>
 
-#include <yaml-cpp/yaml.h>
-
 #include <stdexcept>
 #include <string>
 
+#include <holoscan/config/io.hpp>
+
 #include "radar_common/descriptors/max_tensor_extents.hpp"
-#include "radar_common/sdk/max_tensor_extents_yaml.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
 #include "radar_common/tensor/max_byte_span.hpp"
 
 namespace {
 
 using holoscan::radar::MaxTensorExtents;
-using holoscan::radar::MaxTensorExtentsFromYaml;
 using holoscan::radar::byte_span_complex_cube;
 using holoscan::radar::require_extent;
 
-TEST(MaxTensorExtents, FromYamlParsesOptionalFields) {
-  const auto extents = MaxTensorExtentsFromYaml(YAML::Load(R"(
+holoscan::config::Document parse(const char* text) {
+  return holoscan::config_io::parse(text, holoscan::config_io::Format::kYaml);
+}
+
+TEST(MaxTensorExtents, DecodesOptionalFields) {
+  const auto extents = parse(R"(
 max_chirps: 128
 max_range_bins: 512
 max_rx: 8
-)"));
+max_az: null
+)")
+                           .get<MaxTensorExtents>("");
   ASSERT_TRUE(extents.max_chirps.has_value());
   EXPECT_EQ(*extents.max_chirps, 128);
   ASSERT_TRUE(extents.max_range_bins.has_value());
@@ -32,24 +37,25 @@ max_rx: 8
   ASSERT_TRUE(extents.max_rx.has_value());
   EXPECT_EQ(*extents.max_rx, 8);
   EXPECT_FALSE(extents.max_az.has_value());
+  EXPECT_FALSE(extents.max_tx.has_value());
 }
 
-TEST(MaxTensorExtents, FromYamlRejectsNonPositive) {
-  EXPECT_THROW(MaxTensorExtentsFromYaml(YAML::Load("max_chirps: 0")), std::invalid_argument);
-  EXPECT_THROW(MaxTensorExtentsFromYaml(YAML::Load("max_chirps: -1")), std::invalid_argument);
+TEST(MaxTensorExtents, RejectsNonPositive) {
+  EXPECT_FALSE(parse("max_chirps: 0").try_get<MaxTensorExtents>(""));
+  EXPECT_FALSE(parse("max_chirps: -1").try_get<MaxTensorExtents>(""));
 }
 
-TEST(MaxTensorExtents, FromYamlRejectsNonMap) {
-  EXPECT_THROW(MaxTensorExtentsFromYaml(YAML::Load("[1, 2]")), std::invalid_argument);
+TEST(MaxTensorExtents, RejectsNonMapAndUnknownKeys) {
+  EXPECT_FALSE(parse("[1, 2]").try_get<MaxTensorExtents>(""));
+  EXPECT_FALSE(parse("max_chirp: 4").try_get<MaxTensorExtents>(""));
 }
 
-TEST(MaxTensorExtents, YamlConvertRoundTrip) {
+TEST(MaxTensorExtents, EncodeDecodeRoundTrip) {
   MaxTensorExtents src;
   src.max_chirps = 64;
   src.max_az = 101;
-  const YAML::Node node = YAML::convert<MaxTensorExtents>::encode(src);
-  const auto dst = node.as<MaxTensorExtents>();
-  EXPECT_EQ(dst, src);
+  const auto encoded = holoscan::config::Document::from_value(holoscan::config::encode_config(src));
+  EXPECT_EQ(encoded.get<MaxTensorExtents>(""), src);
 }
 
 TEST(MaxTensorExtents, RequireExtent) {

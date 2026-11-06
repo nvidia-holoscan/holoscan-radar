@@ -5,9 +5,12 @@
 
 #include <array>
 #include <complex>
+#include <cstdint>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -25,6 +28,8 @@
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/descriptors/shift_invariant_subarray_pair.hpp"
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
+#include "radar_common/descriptors/enums.hpp"
+#include "radar_common/descriptors/max_tensor_extents.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/reduce/reduction_enums.hpp"
 
@@ -145,6 +150,46 @@ inline constexpr PeakInterpolation kPeakInterpolations[] = {
     PeakInterpolation::kNone,
     PeakInterpolation::kParabolic,
 };
+inline constexpr MultiplexingScheme kMultiplexingSchemes[] = {
+    MultiplexingScheme::kTdm,
+    MultiplexingScheme::kDdm,
+};
+
+// Every MaxTensorExtents field, so the codec's field list and its
+// positivity check cannot drift apart.
+using OptionalExtent = std::optional<std::int64_t>;
+using MaxTensorExtentField = std::pair<std::string_view, OptionalExtent MaxTensorExtents::*>;
+inline constexpr MaxTensorExtentField kMaxTensorExtentFields[] = {
+    {"max_samples_per_chirp", &MaxTensorExtents::max_samples_per_chirp},
+    {"max_samples_per_pulse", &MaxTensorExtents::max_samples_per_pulse},
+    {"max_pulses", &MaxTensorExtents::max_pulses},
+    {"max_image_u", &MaxTensorExtents::max_image_u},
+    {"max_image_v", &MaxTensorExtents::max_image_v},
+    {"max_chirps", &MaxTensorExtents::max_chirps},
+    {"max_range_bins", &MaxTensorExtents::max_range_bins},
+    {"max_doppler_bins", &MaxTensorExtents::max_doppler_bins},
+    {"max_rx", &MaxTensorExtents::max_rx},
+    {"max_tx", &MaxTensorExtents::max_tx},
+    {"max_interleaved_chirps", &MaxTensorExtents::max_interleaved_chirps},
+    {"max_virtual_channels", &MaxTensorExtents::max_virtual_channels},
+    {"max_channels", &MaxTensorExtents::max_channels},
+    {"max_az", &MaxTensorExtents::max_az},
+    {"max_el", &MaxTensorExtents::max_el},
+    {"max_detections", &MaxTensorExtents::max_detections},
+    {"max_points", &MaxTensorExtents::max_points},
+    {"max_items", &MaxTensorExtents::max_items},
+    {"max_snapshots", &MaxTensorExtents::max_snapshots},
+    {"max_features", &MaxTensorExtents::max_features},
+    {"max_sources", &MaxTensorExtents::max_sources},
+    {"max_clusters", &MaxTensorExtents::max_clusters},
+    {"max_subarray_channels", &MaxTensorExtents::max_subarray_channels},
+};
+
+template <std::size_t... I>
+constexpr auto max_tensor_extent_fields(std::index_sequence<I...>) {
+  return std::make_tuple(config::defaulted_object_field(kMaxTensorExtentFields[I].first,
+                                                        kMaxTensorExtentFields[I].second)...);
+}
 
 template <typename Enum, const auto& Candidates>
 struct CanonicalEnumCodec {
@@ -200,6 +245,7 @@ using ConventionPresetCodec =  // NOLINT(whitespace/indent_namespace)
 using SignedAxisCodec = CanonicalEnumCodec<SignedAxis, kSignedAxes>;
 using ElevationCodec = CanonicalEnumCodec<ElevationReference, kElevationReferences>;
 using PeakCodec = CanonicalEnumCodec<PeakInterpolation, kPeakInterpolations>;
+using MultiplexingCodec = CanonicalEnumCodec<MultiplexingScheme, kMultiplexingSchemes>;
 using PhaseSenseCodec = CanonicalEnumCodec<PhaseCorrectionSense, kPhaseCorrectionSenses>;
 using AutofocusAlgorithmCodec = CanonicalEnumCodec<AutofocusAlgorithm, kAutofocusAlgorithms>;
 using AutofocusAxisCodec = CanonicalEnumCodec<AutofocusAzimuthAxis, kAutofocusAzimuthAxes>;
@@ -707,6 +753,42 @@ struct ConfigCodec<radar::AngleConvention> : ObjectCodec<radar::AngleConvention>
       defaulted_object_field("elevation_positive_axis",
                              &radar::AngleConvention::elevation_positive_axis),
       defaulted_object_field("elevation_reference", &radar::AngleConvention::elevation_reference));
+};
+
+template <>
+struct ConfigCodec<radar::MultiplexingScheme> : radar::config_detail::MultiplexingCodec {};
+
+// Applications decode the max_* keys with document.get<MaxTensorExtents>(path).
+// An absent or null key leaves that extent unset; a present one must be
+// positive, since operators size their Tensor pools from it.
+template <>
+struct ConfigCodec<radar::MaxTensorExtents> {
+  static constexpr auto fields = radar::config_detail::max_tensor_extent_fields(
+      std::make_index_sequence<std::size(radar::config_detail::kMaxTensorExtentFields)>{});
+
+  static ConfigResult<radar::MaxTensorExtents> decode(ConfigView view, const DecodeOptions& options,
+                                                      DecodeContext& context) {
+    auto extents = ObjectCodec<radar::MaxTensorExtents>::decode(std::move(view), options, context);
+    if (!extents) {
+      return tl::make_unexpected(extents.error());
+    }
+    for (const auto& [name, member] : radar::config_detail::kMaxTensorExtentFields) {
+      const auto& value = (*extents).*member;
+      if (value && *value <= 0) {
+        return tl::make_unexpected(ConfigError::make(ConfigErrorCode::kOutOfRange,
+                                                     "MaxTensorExtents." + std::string(name) +
+                                                         " must be positive, got " +
+                                                         std::to_string(*value),
+                                                     context.path()));
+      }
+    }
+    return extents;
+  }
+
+  static ConfigResult<ConfigValue> encode(const radar::MaxTensorExtents& value,
+                                          const EncodeOptions& options, EncodeContext& context) {
+    return ObjectCodec<radar::MaxTensorExtents>::encode(value, options, context);
+  }
 };
 
 }  // namespace holoscan::config

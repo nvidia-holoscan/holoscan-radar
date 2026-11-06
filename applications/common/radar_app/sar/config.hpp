@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Shared SAR config type and YAML loader. Each standalone app validates
-// its topology in a colocated config.hpp. Operator blocks are NOT parsed here — they flow
-// through Holoscan's from_config(). Exception: nfft and
+// its topology in a colocated config.hpp. Operator blocks are NOT parsed here — they reach
+// their operators through decode_params in the Graph driver. Exception: nfft and
 // propagation_speed under range_compression are a read-only mirror
 // so range_bin_spacing matches the operator if those keys are set.
 // App-owned `nfft_pad: next_fast` computes nfft as
@@ -27,8 +27,6 @@
 
 #pragma once
 
-#include <yaml-cpp/yaml.h>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -37,9 +35,12 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#include <holoscan/config/io.hpp>
 
 #include "io/cphd_reader_op/cphd_file.hpp"
 #include "radar_common/descriptors/enums.hpp"
@@ -47,10 +48,42 @@
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/dsp/fft_size.hpp"
 #include "radar_common/math/constants.hpp"
-#include "radar_common/sdk/sar_yaml_converters.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
+#include "radar_app/app/config_utils.hpp"
 #include "radar_app/app/run_config.hpp"
 
 namespace radar = holoscan::radar;
+
+namespace sar_config {
+
+using holoscan::config::ConfigValueKind;
+using holoscan::config::Document;
+
+// The value at `path`, or nullopt when the key is absent.
+template <typename T>
+std::optional<T> get_if(const Document& doc, std::string_view path) {
+  if (!doc.find(path)) {
+    return std::nullopt;
+  }
+  return doc.get<T>(path);
+}
+
+// As get_if, but an explicit null (`key:` or `key: null`) also keeps the default.
+template <typename T>
+std::optional<T> get_if_set(const Document& doc, std::string_view path) {
+  const auto view = doc.find(path);
+  if (!view || view->kind() == ConfigValueKind::kNull) {
+    return std::nullopt;
+  }
+  return doc.get<T>(path);
+}
+
+inline bool is_number(ConfigValueKind kind) {
+  return kind == ConfigValueKind::kSignedInteger || kind == ConfigValueKind::kUnsignedInteger ||
+         kind == ConfigValueKind::kFloating;
+}
+
+}  // namespace sar_config
 
 struct AppConfig : radar::app::CommonRunConfig {
   std::string cphd_path;
@@ -376,18 +409,20 @@ inline radar::SampleGeometry lattice_from_image_area(const std::array<double, 3>
 }
 
 // Square N, or [num_v, num_u].
-inline std::array<int64_t, 2> parse_lattice_counts(const YAML::Node& node) {
-  if (node.IsScalar()) {
-    const int64_t n = node.as<int64_t>();
+inline std::array<int64_t, 2> parse_lattice_counts(const holoscan::config::Document& doc,
+                                                   std::string_view path) {
+  const auto kind = doc.at(path).kind();
+  if (sar_config::is_number(kind)) {
+    const int64_t n = doc.get<int64_t>(path);
     if (n <= 0) {
       throw std::runtime_error("lattice.counts must be > 0");
     }
     return {n, n};
   }
-  if (!node.IsSequence()) {
+  if (kind != sar_config::ConfigValueKind::kArray) {
     throw std::runtime_error("lattice.counts must be N or [num_v, num_u]");
   }
-  const auto counts = node.as<std::vector<int64_t>>();
+  const auto counts = doc.get<std::vector<int64_t>>(path);
   if (counts.size() != 2 || counts[0] <= 0 || counts[1] <= 0) {
     throw std::runtime_error("lattice.counts must be N or [num_v, num_u], all > 0");
   }
@@ -846,22 +881,23 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
   if (!std::filesystem::exists(path)) {
     throw std::runtime_error("config file not found: " + path.string());
   }
-  const YAML::Node root = YAML::LoadFile(path.string());
+  using sar_config::ConfigValueKind;
+  using sar_config::get_if;
+  using sar_config::get_if_set;
+  const auto doc = radar::app::config::load_document(path);
   const auto yaml_dir = path.parent_path();
 
   AppConfig cfg;
   std::vector<std::filesystem::path> cphd_files;
   if (!cphd_override.empty()) {
     cphd_files.push_back(resolve_existing(cphd_override, yaml_dir));
-  } else if (const YAML::Node node = root["cphd"]) {
-    if (const YAML::Node p = node["path"]) {
-      if (p.IsSequence()) {
-        for (const YAML::Node& item : p) {
-          cphd_files.push_back(resolve_existing(item.as<std::string>(), yaml_dir));
-        }
-      } else {
-        cphd_files.push_back(resolve_existing(p.as<std::string>(), yaml_dir));
+  } else if (const auto p = doc.find("/cphd/path")) {
+    if (p->kind() == ConfigValueKind::kArray) {
+      for (const auto& item : doc.get<std::vector<std::string>>("/cphd/path")) {
+        cphd_files.push_back(resolve_existing(item, yaml_dir));
       }
+    } else {
+      cphd_files.push_back(resolve_existing(doc.get<std::string>("/cphd/path"), yaml_dir));
     }
   }
   for (const auto& cphd : cphd_files) {
@@ -881,34 +917,27 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
   }
   cfg.cphd_path = cfg.cphd_paths.front();
   const std::filesystem::path cphd(cfg.cphd_path);
-  if (const YAML::Node node = root["cphd"]) {
-    if (const YAML::Node n = node["names"]) {
-      if (!n.IsSequence()) {
-        throw std::runtime_error("cphd.names must be a list");
-      }
-      for (const YAML::Node& item : n) {
-        cfg.scene_names.push_back(item.as<std::string>());
-      }
+  if (const auto n = doc.find("/cphd/names")) {
+    if (n->kind() != ConfigValueKind::kArray) {
+      throw std::runtime_error("cphd.names must be a list");
     }
+    cfg.scene_names = doc.get<std::vector<std::string>>("/cphd/names");
   }
 
   // Read-only mirror of operator keys that change dr. The CPHD
   // supplies df (SCSS) and num_samples; nfft / c come from the
-  // same YAML block from_config() feeds the operator, when set.
+  // same YAML block decode_params feeds the operator, when set.
   // nfft_pad: next_fast is app-owned (not an operator parameter).
   int64_t nfft = 0;
   double speed = radar::kSpeedOfLight;
-  if (const YAML::Node rc = root["range_compression"]) {
-    if (const YAML::Node n = rc["nfft"]) {
-      nfft = n.as<int64_t>();
-    }
-    if (const YAML::Node p = rc["propagation_speed"]) {
-      speed = p.as<double>();
-    }
+  if (const auto n = get_if<int64_t>(doc, "/range_compression/nfft")) {
+    nfft = *n;
   }
-  if (const YAML::Node pad = root["nfft_pad"]) {
-    const auto policy = pad.as<std::string>();
-    if (policy != "next_fast") {
+  if (const auto p = get_if<double>(doc, "/range_compression/propagation_speed")) {
+    speed = *p;
+  }
+  if (const auto policy = get_if<std::string>(doc, "/nfft_pad")) {
+    if (*policy != "next_fast") {
       throw std::runtime_error(
           "nfft_pad must be 'next_fast' (omit the key for native "
           "N, or set range_compression.nfft to pin a length)");
@@ -935,16 +964,15 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
 
   std::array<int64_t, 2> lattice_counts{};
   std::array<double, 2> lattice_spacing{};
-  const bool has_lattice = static_cast<bool>(root["lattice"]);
+  const bool has_lattice = doc.find("/lattice").has_value();
   if (has_lattice) {
-    if (root["sample_geometry"]) {
+    if (doc.find("/sample_geometry")) {
       throw std::runtime_error(
           "lattice and sample_geometry are mutually exclusive: "
           "lattice derives an ECEF grid at each file's IARP");
     }
-    const YAML::Node lat = root["lattice"];
-    const bool has_counts = static_cast<bool>(lat["counts"]);
-    const bool has_spacing = static_cast<bool>(lat["spacing"]);
+    const bool has_counts = doc.find("/lattice/counts").has_value();
+    const bool has_spacing = doc.find("/lattice/spacing").has_value();
     if (has_counts != has_spacing) {
       throw std::runtime_error(
           "lattice.counts and lattice.spacing must be set "
@@ -952,8 +980,8 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
           "physics)");
     }
     int64_t n_tiles = 1;
-    if (const YAML::Node t = lat["tiles"]) {
-      n_tiles = t.as<int64_t>();
+    if (const auto t = get_if<int64_t>(doc, "/lattice/tiles")) {
+      n_tiles = *t;
       if (n_tiles < 1) {
         throw std::runtime_error("lattice.tiles must be >= 1");
       }
@@ -970,8 +998,8 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
             "omit counts/spacing");
       }
     }
-    if (const YAML::Node sc = lat["scroll"]) {
-      cfg.scroll = sc.as<bool>();
+    if (const auto sc = get_if<bool>(doc, "/lattice/scroll")) {
+      cfg.scroll = *sc;
     }
     if (cfg.scroll) {
       if (n_tiles > 1) {
@@ -988,27 +1016,27 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
             "omit counts/spacing");
       }
     }
-    if (const YAML::Node side = lat["max_side"]) {
-      cfg.lattice_max_side = side.as<int64_t>();
+    if (const auto side = get_if<int64_t>(doc, "/lattice/max_side")) {
+      cfg.lattice_max_side = *side;
       if (cfg.lattice_max_side < 0) {
         throw std::runtime_error("lattice.max_side must be >= 0 (0 = no cap)");
       }
     }
     std::vector<double> pixel_scale(cfg.cphd_paths.size(), 1.0);
-    if (const YAML::Node sc = lat["pixel_scale"]) {
+    if (const auto sc = doc.find("/lattice/pixel_scale")) {
       if (has_counts) {
         throw std::runtime_error(
             "lattice.pixel_scale applies to collection-physics "
             "derivation; omit it when counts/spacing are set");
       }
-      if (sc.IsScalar()) {
-        const double s = sc.as<double>();
+      if (sar_config::is_number(sc->kind())) {
+        const double s = doc.get<double>("/lattice/pixel_scale");
         if (!(s > 0.0) || !std::isfinite(s)) {
           throw std::runtime_error("lattice.pixel_scale must be finite and > 0");
         }
         std::fill(pixel_scale.begin(), pixel_scale.end(), s);
-      } else if (sc.IsSequence()) {
-        const auto values = sc.as<std::vector<double>>();
+      } else if (sc->kind() == ConfigValueKind::kArray) {
+        const auto values = doc.get<std::vector<double>>("/lattice/pixel_scale");
         if (values.size() != cfg.cphd_paths.size()) {
           throw std::runtime_error("lattice.pixel_scale length must match cphd.path (" +
                                    std::to_string(cfg.cphd_paths.size()) + " files, got " +
@@ -1028,16 +1056,15 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
     }
     cfg.lattice_pixel_scale = pixel_scale;
     if (has_counts) {
-      lattice_counts = parse_lattice_counts(lat["counts"]);
-      const YAML::Node sp = lat["spacing"];
-      if (sp.IsScalar()) {
-        const double metres = sp.as<double>();
+      lattice_counts = parse_lattice_counts(doc, "/lattice/counts");
+      if (doc.at("/lattice/spacing").kind() != ConfigValueKind::kArray) {
+        const double metres = doc.get<double>("/lattice/spacing");
         if (!(metres > 0.0) || !std::isfinite(metres)) {
           throw std::runtime_error("lattice.spacing must be finite and > 0");
         }
         lattice_spacing = {metres, metres};
       } else {
-        const auto values = sp.as<std::vector<double>>();
+        const auto values = doc.get<std::vector<double>>("/lattice/spacing");
         if (values.size() != 2 || !(values[0] > 0.0) || !(values[1] > 0.0) ||
             !std::isfinite(values[0]) || !std::isfinite(values[1])) {
           throw std::runtime_error("lattice.spacing must be metres or [v, u], all > 0");
@@ -1045,7 +1072,7 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
         lattice_spacing = {values[0], values[1]};
       }
     }
-    if (cfg.cphd_paths.size() > 1 && root["enu_origin_ecef"]) {
+    if (cfg.cphd_paths.size() > 1 && doc.find("/enu_origin_ecef")) {
       throw std::runtime_error(
           "enu_origin_ecef is a single-scene rotate; mode 5 "
           "forms in ECEF at each IARP instead");
@@ -1068,15 +1095,12 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
         const auto phys = file.collection_physics();
         int64_t first_pulse = 0;
         int64_t last_pulse = file.channel(0).num_vectors;
-        if (const YAML::Node rd = root["cphd_reader"]) {
-          if (const YAML::Node pr = rd["pulse_range"]) {
-            const auto range = pr.as<std::vector<int64_t>>();
-            if (range.size() != 2) {
-              throw std::runtime_error("cphd_reader.pulse_range needs 2 entries");
-            }
-            first_pulse = range[0];
-            last_pulse = range[1];
+        if (const auto range = get_if<std::vector<int64_t>>(doc, "/cphd_reader/pulse_range")) {
+          if (range->size() != 2) {
+            throw std::runtime_error("cphd_reader.pulse_range needs 2 entries");
           }
+          first_pulse = (*range)[0];
+          last_pulse = (*range)[1];
         }
         const int64_t num_bins = nfft > 0 ? nfft : file.channel(0).num_samples;
         if (num_bins < 1) {
@@ -1114,15 +1138,12 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
         const auto phys = file.collection_physics();
         int64_t first_pulse = 0;
         int64_t last_pulse = file.channel(0).num_vectors;
-        if (const YAML::Node rd = root["cphd_reader"]) {
-          if (const YAML::Node pr = rd["pulse_range"]) {
-            const auto range = pr.as<std::vector<int64_t>>();
-            if (range.size() != 2) {
-              throw std::runtime_error("cphd_reader.pulse_range needs 2 entries");
-            }
-            first_pulse = range[0];
-            last_pulse = range[1];
+        if (const auto range = get_if<std::vector<int64_t>>(doc, "/cphd_reader/pulse_range")) {
+          if (range->size() != 2) {
+            throw std::runtime_error("cphd_reader.pulse_range needs 2 entries");
           }
+          first_pulse = (*range)[0];
+          last_pulse = (*range)[1];
         }
         const int64_t num_bins = nfft > 0 ? nfft : file.channel(0).num_samples;
         if (num_bins < 1) {
@@ -1188,12 +1209,9 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
 
   if (!has_lattice) {
     std::filesystem::path sidecar;
-    if (const YAML::Node node = root["cphd"]) {
-      if (const YAML::Node s = node["sidecar"]) {
-        const std::string given = s.as<std::string>();
-        if (!given.empty()) {
-          sidecar = resolve_existing(given, yaml_dir);
-        }
+    if (const auto given = get_if<std::string>(doc, "/cphd/sidecar")) {
+      if (!given->empty()) {
+        sidecar = resolve_existing(*given, yaml_dir);
       }
     }
     if (sidecar.empty()) {
@@ -1207,115 +1225,104 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
     // not silently replace the Atlanta ENU lattice with a leftover
     // fixture file. Sidecar is the source only when the YAML omits
     // the lattice (generated smoke / spotlight fixtures).
-    const bool yaml_has_lattice = static_cast<bool>(root["sample_geometry"]);
+    const bool yaml_has_lattice = doc.find("/sample_geometry").has_value();
     if (!yaml_has_lattice && !sidecar.empty() && std::filesystem::is_regular_file(sidecar)) {
       cfg.sidecar_path = sidecar.string();
-      // JSON is valid YAML. The converter runs SampleGeometry's
-      // constructor, so a broken lattice fails here rather than
-      // inside the operator.
-      const YAML::Node truth = YAML::LoadFile(sidecar.string());
-      const YAML::Node schema = truth["schema"];
-      if (!schema || schema.as<std::string>() != "holoscan-radar/sar-sim-truth/1") {
+      // The SampleGeometry codec runs its constructor, so a broken
+      // lattice fails here rather than inside the operator.
+      const auto truth = holoscan::config_io::load(sidecar, holoscan::config_io::Format::kJson);
+      const auto schema = get_if<std::string>(truth, "/schema");
+      if (!schema || *schema != "holoscan-radar/sar-sim-truth/1") {
         throw std::runtime_error("sidecar schema is not holoscan-radar/sar-sim-truth/1: " +
                                  sidecar.string());
       }
-      if (!truth["sample_geometry"]) {
+      if (!truth.find("/sample_geometry")) {
         throw std::runtime_error("sidecar is missing sample_geometry: " + sidecar.string());
       }
-      cfg.sample_geometry = truth["sample_geometry"].as<radar::SampleGeometry>();
-      if (!truth["collection"] || !truth["collection"]["fx_min_hz"] ||
-          !truth["collection"]["fx_spacing_hz"] || !truth["collection"]["num_samples"]) {
+      cfg.sample_geometry = truth.get<radar::SampleGeometry>("/sample_geometry");
+      if (!truth.find("/collection/fx_min_hz") || !truth.find("/collection/fx_spacing_hz") ||
+          !truth.find("/collection/num_samples")) {
         throw std::runtime_error(
             "sidecar is missing collection.fx_min_hz / "
             "fx_spacing_hz / num_samples: " +
             sidecar.string());
       }
       // Stored sample N/2, matching SARRangeCompressionOp's IFFT DC.
-      const double fx_min = truth["collection"]["fx_min_hz"].as<double>();
-      const double fx_step = truth["collection"]["fx_spacing_hz"].as<double>();
-      const int64_t n_samp = truth["collection"]["num_samples"].as<int64_t>();
+      const double fx_min = truth.get<double>("/collection/fx_min_hz");
+      const double fx_step = truth.get<double>("/collection/fx_spacing_hz");
+      const int64_t n_samp = truth.get<int64_t>("/collection/num_samples");
       cfg.reference_frequency = fx_min + static_cast<double>(n_samp / 2) * fx_step;
     } else {
-      if (!root["sample_geometry"]) {
+      if (!doc.find("/sample_geometry")) {
         throw std::runtime_error("no sidecar at " +
                                  (sidecar.empty() ? std::string("<none>") : sidecar.string()) +
                                  " and YAML is missing sample_geometry / "
                                  "reference_frequency");
       }
-      cfg.sample_geometry = root["sample_geometry"].as<radar::SampleGeometry>();
-      cfg.reference_frequency = root["reference_frequency"]
-                                    ? root["reference_frequency"].as<double>()
-                                    : reference_frequency_from_cphd(cfg.cphd_path);
+      cfg.sample_geometry = doc.get<radar::SampleGeometry>("/sample_geometry");
+      const auto reference_frequency = get_if<double>(doc, "/reference_frequency");
+      cfg.reference_frequency =
+          reference_frequency ? *reference_frequency : reference_frequency_from_cphd(cfg.cphd_path);
     }
     cfg.collection_geometries = {cfg.sample_geometry};
     cfg.collection_spacings = {cfg.range_bin_spacing};
     cfg.collection_frequencies = {cfg.reference_frequency};
   }
 
-  if (const YAML::Node origin = root["enu_origin_ecef"]) {
-    const auto values = origin.as<std::vector<double>>();
-    if (values.size() != 3) {
+  if (const auto values = get_if<std::vector<double>>(doc, "/enu_origin_ecef")) {
+    if (values->size() != 3) {
       throw std::runtime_error("enu_origin_ecef must have 3 ECEF metres");
     }
-    cfg.enu_origin_ecef = {values[0], values[1], values[2]};
+    cfg.enu_origin_ecef = {(*values)[0], (*values)[1], (*values)[2]};
     cfg.transform_to_scene_enu = true;
   }
-  if (const YAML::Node flag = root["quantize_phase_center_f32"]) {
-    cfg.quantize_phase_center_f32 = flag.as<bool>();
+  if (const auto flag = get_if<bool>(doc, "/quantize_phase_center_f32")) {
+    cfg.quantize_phase_center_f32 = *flag;
   }
-  if (const YAML::Node vph = root["nvradar_vph_path"]) {
-    cfg.nvradar_vph_path = vph.as<std::string>();
+  if (const auto vph = get_if<std::string>(doc, "/nvradar_vph_path")) {
+    cfg.nvradar_vph_path = *vph;
   }
 
-  if (const YAML::Node v = root["dump"]; v && !v.IsNull()) {
-    cfg.dump = v.as<bool>();
+  if (const auto v = get_if_set<bool>(doc, "/dump")) {
+    cfg.dump = *v;
   }
-  if (const YAML::Node output = root["output"]) {
-    if (const YAML::Node p = output["path"]) {
-      const std::string given = p.as<std::string>();
-      if (!given.empty()) {
-        cfg.dump_path = given;
-      }
+  if (const auto given = get_if<std::string>(doc, "/output/path")) {
+    if (!given->empty()) {
+      cfg.dump_path = *given;
     }
-    if (const YAML::Node m = output["max_files"]) {
-      cfg.dump_max_files = m.as<int64_t>();
-    }
+  }
+  if (const auto m = get_if<int64_t>(doc, "/output/max_files")) {
+    cfg.dump_max_files = *m;
   }
   if (cfg.dump && cfg.dump_path.empty()) {
     cfg.dump_path = (cphd.parent_path() / (cphd.stem().string() + "_image_{index}.npy")).string();
   }
 
-  if (const YAML::Node am = root["aperture_manager"]) {
-    if (const YAML::Node m = am["max_aperture_pulses"]) {
-      const auto max_ap = m.as<int64_t>();
-      cfg.show_playback_lag = max_ap > 0;
-      if (max_ap > 0) {
-        cfg.wire_weight = true;
-      }
+  if (const auto max_ap = get_if<int64_t>(doc, "/aperture_manager/max_aperture_pulses")) {
+    cfg.show_playback_lag = *max_ap > 0;
+    if (*max_ap > 0) {
+      cfg.wire_weight = true;
     }
-    if (const YAML::Node w = am["aperture_window"]) {
-      const auto spec = w.as<radar::WindowSpec>();
-      if (spec.type != radar::WindowType::kNone) {
-        cfg.wire_weight = true;
-      }
+  }
+  if (const auto spec = get_if<radar::WindowSpec>(doc, "/aperture_manager/aperture_window")) {
+    if (spec->type != radar::WindowType::kNone) {
+      cfg.wire_weight = true;
     }
-    if (const YAML::Node e = am["emit_interval_pulses"]) {
-      cfg.emit_interval_pulses = e.as<int64_t>();
-    }
+  }
+  if (const auto e = get_if<int64_t>(doc, "/aperture_manager/emit_interval_pulses")) {
+    cfg.emit_interval_pulses = *e;
   }
   if (cfg.scroll || cfg.parent_geometry.is_valid()) {
     cfg.show_playback_lag = true;
   }
   // Read-only mirrors of operator YAML so the tile stager can
   // wrap and so cadence tiles stay even (one tile = N reader
-  // ticks). from_config() still owns the operator parameters.
-  if (const YAML::Node rd = root["cphd_reader"]) {
-    if (const YAML::Node lp = rd["loop"]; lp && !lp.IsNull()) {
-      cfg.reader_loop = lp.as<bool>();
-    }
-    if (const YAML::Node p = rd["pulses_per_tick"]) {
-      cfg.reader_pulses_per_tick = p.as<int64_t>();
-    }
+  // ticks). decode_params still owns the operator parameters.
+  if (const auto lp = get_if_set<bool>(doc, "/cphd_reader/loop")) {
+    cfg.reader_loop = *lp;
+  }
+  if (const auto p = get_if<int64_t>(doc, "/cphd_reader/pulses_per_tick")) {
+    cfg.reader_pulses_per_tick = *p;
   }
   if (cfg.tile_pulses > 0) {
     if (cfg.emit_interval_pulses != 0 && cfg.emit_interval_pulses != cfg.tile_pulses) {
@@ -1355,23 +1362,23 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
       }
     }
   }
-  if (const YAML::Node v = root["visualize"]; v && !v.IsNull()) {
-    cfg.visualize = v.as<bool>();
+  if (const auto v = get_if_set<bool>(doc, "/visualize")) {
+    cfg.visualize = *v;
   }
-  if (const YAML::Node v = root["visualize_size"]; v && !v.IsNull()) {
-    cfg.visualize_size = v.as<int64_t>();
+  if (const auto v = get_if_set<int64_t>(doc, "/visualize_size")) {
+    cfg.visualize_size = *v;
   }
   if (cfg.visualize_size <= 0) {
     throw std::runtime_error("visualize_size must be > 0");
   }
-  if (const YAML::Node v = root["skip_display_check"]; v && !v.IsNull()) {
-    cfg.skip_display_check = v.as<bool>();
+  if (const auto v = get_if_set<bool>(doc, "/skip_display_check")) {
+    cfg.skip_display_check = *v;
   }
-  if (const YAML::Node v = root["headless"]; v && !v.IsNull()) {
-    cfg.headless = v.as<bool>();
+  if (const auto v = get_if_set<bool>(doc, "/headless")) {
+    cfg.headless = *v;
   }
-  if (const YAML::Node v = root["visualize_hold_s"]; v && !v.IsNull()) {
-    cfg.visualize_hold_s = v.as<double>();
+  if (const auto v = get_if_set<double>(doc, "/visualize_hold_s")) {
+    cfg.visualize_hold_s = *v;
   }
   if (!std::isfinite(cfg.visualize_hold_s)) {
     throw std::runtime_error("visualize_hold_s must be finite");

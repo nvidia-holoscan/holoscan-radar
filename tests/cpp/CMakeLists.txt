@@ -56,12 +56,12 @@ radar_add_test(common/test_ddm_code_generators
     holoscan::radar_common_mimo_compensation)
 radar_add_test(common/test_live_override_payloads)
 radar_add_test(common/test_wire_descriptors holoscan::radar_schemas)
-# yaml_converters.hpp / max_tensor_extents_yaml.hpp are header-only; HSDK 5
-# no longer re-exports yaml-cpp.
+# The performance harness parses its YAML recipes with yaml-cpp, which HSDK 5
+# no longer re-exports.
 find_package(yaml-cpp REQUIRED)
-radar_add_test(common/test_sdk yaml-cpp holoscan::config_io)
+radar_add_test(common/test_sdk holoscan::config_io)
 radar_add_test(common/test_emit_required)
-radar_add_test(common/test_max_tensor_extents yaml-cpp)
+radar_add_test(common/test_max_tensor_extents holoscan::config_io)
 radar_add_test(utils/test_perf_profiles yaml-cpp)
 radar_add_test(utils/test_perf_runner)
 radar_add_test(utils/test_perf_yaml_standard yaml-cpp holoscan::doppler_notch_op
@@ -210,10 +210,9 @@ radar_add_test(detection/test_cfar_detector_statistical
     holoscan::cfar_detector_op)
 
 radar_add_test(app/test_gpu_placement holoscan::radar_app)
-radar_add_test(app/test_fmcw_config_loader yaml-cpp holoscan::params_io holoscan::radar_app)
+radar_add_test(app/test_fmcw_config_loader holoscan::params_io holoscan::radar_app)
 
 radar_add_test(app/test_fmcw_simo_config
-    yaml-cpp
     holoscan::params_io
     holoscan::radar_app
     holoscan::fmcw_range_processor_op
@@ -233,7 +232,6 @@ target_compile_definitions(test_fmcw_simo_config PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 radar_add_test(app/test_fmcw_siso_config
-    yaml-cpp
     holoscan::params_io
     holoscan::radar_app
     holoscan::fmcw_range_processor_op
@@ -251,7 +249,6 @@ target_compile_definitions(test_fmcw_siso_config PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 radar_add_test(app/test_fmcw_mimo_config
-    yaml-cpp
     holoscan::params_io
     holoscan::radar_app
     holoscan::fmcw_range_processor_op
@@ -275,7 +272,6 @@ target_compile_definitions(test_fmcw_mimo_config PRIVATE
     HOLOSCAN_RADAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 radar_add_test(app/test_adaptive_aoa_config
-    yaml-cpp
     holoscan::params_io
     holoscan::radar_app
     holoscan::fmcw_range_processor_op
@@ -301,7 +297,6 @@ target_compile_definitions(test_adaptive_aoa_config PRIVATE
 
 
 radar_add_test(app/test_multi_profile_source
-    yaml-cpp
     holoscan::params_io
     holoscan::radar_app
     holoscan::radar_common_simulator

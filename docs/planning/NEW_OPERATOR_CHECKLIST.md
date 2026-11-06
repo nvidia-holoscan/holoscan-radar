@@ -111,8 +111,8 @@ throws or remains deferred in the Jira backlog.
       statement.
 - [ ] **Static parameters** (kernel-selecting enums, structural modes): no
       override port; document that callers instantiate separate operators.
-- [ ] **`initialize()`:** call `ensure_radar_arg_setters()` and register any
-      operator-local enum argument setters before `Operator::initialize()`.
+- [ ] **Custom parameter types:** give each one a `ConfigCodec`; the shared
+      descriptors already have theirs in `radar_common/sdk/config_codecs.hpp`.
 
 ---
 
@@ -261,7 +261,7 @@ contract-specific fixture, descriptor, enum, sizing policy, or metric is needed.
 | --- | --- |
 | Override ports / Exact resolve | `radar_common/sdk/override_param.hpp` |
 | Warn-once artifact cache | `radar_common/sdk/config_cache.hpp` |
-| Custom parameter Arg setters | `radar_common/sdk/arg_setters.hpp` |
+| Config codecs for custom parameter types | `radar_common/sdk/config_codecs.hpp` |
 | Batching / dtype / device checks | `radar_common/tensor/tensor_utils.hpp` |
 | Device tensor allocation | `radar_common/tensor/dlpack_buffer.hpp` |
 | MatX views (`.cu` / stage only) | `radar_common/tensor/matx_utils.hpp` |

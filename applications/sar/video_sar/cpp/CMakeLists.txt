@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-find_package(yaml-cpp REQUIRED)
 find_package(holoscan 5 CONFIG REQUIRED COMPONENTS core visualization)
 
 add_executable(video_sar video_sar.cpp)
@@ -16,8 +15,7 @@ target_link_libraries(video_sar PRIVATE
     holoscan::backprojection_op
     holoscan::tensor_dump_op
     holoscan::radar_app
-    holoscan::params_io
-    yaml-cpp::yaml-cpp)
+    holoscan::params_io)
 configure_file(../config/video_sar.yaml ${CMAKE_CURRENT_BINARY_DIR}/video_sar.yaml COPYONLY)
 if(TARGET holoscan::visualization::op_holoviz)
     target_compile_definitions(video_sar PRIVATE HOLOSCAN_RADAR_SAR_HOLOVIZ=1)

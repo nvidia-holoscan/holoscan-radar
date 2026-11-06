@@ -33,7 +33,6 @@ target_include_directories(holoscan_radar_python PRIVATE
 target_link_libraries(holoscan_radar_python PRIVATE holoscan::core holoscan::params_io
     holoscan::radar_common holoscan::radar_common_simulator holoscan::radar_schemas
     radar_app
-    yaml-cpp
     fmcw_dashboard
     clutter_filter_op
     snapshot_gather_op
