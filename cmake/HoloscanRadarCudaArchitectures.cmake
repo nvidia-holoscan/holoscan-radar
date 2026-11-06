@@ -9,6 +9,10 @@
 # PTX for the newest. An explicit CMAKE_CUDA_ARCHITECTURES or the CUDAARCHS
 # environment variable overrides both defaults. Numeric values below 70 are
 # floored (MatX requires compute capability >= 7.0).
+#
+# Package builds also compress every fatbinary image for size: by default nvcc
+# compresses only PTX, and SASS for six architectures dominates the package
+# size. An explicit CMAKE_CUDA_FLAGS replaces this default.
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES AND "$ENV{CUDAARCHS}" STREQUAL "")
     if(PKG_holoscan_radar OR SKBUILD)
         set(CMAKE_CUDA_ARCHITECTURES "all-major")
@@ -19,4 +23,8 @@ elseif(CMAKE_CUDA_ARCHITECTURES MATCHES "^[0-9]+$"
        AND CMAKE_CUDA_ARCHITECTURES LESS 70)
     message(STATUS "MatX requires CUDA compute capability >= 7.0; using 70")
     set(CMAKE_CUDA_ARCHITECTURES "70")
+endif()
+
+if(PKG_holoscan_radar OR SKBUILD)
+    string(APPEND CMAKE_CUDA_FLAGS_INIT " --compress-mode=size")
 endif()

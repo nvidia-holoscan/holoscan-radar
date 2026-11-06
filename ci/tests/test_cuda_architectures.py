@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check the default CUDA architectures in CMake script mode, without a GPU or toolkit."""
+"""Check the default CUDA architectures and flags in CMake script mode, without a GPU or toolkit."""
 
 import os
 import subprocess
@@ -12,15 +12,14 @@ from pathlib import Path
 MODULE = Path(__file__).resolve().parents[2] / "cmake/HoloscanRadarCudaArchitectures.cmake"
 
 
-def architectures(*definitions, cudaarchs=None):
+def probe(variable, *definitions, cudaarchs=None):
     env = {key: value for key, value in os.environ.items() if key != "CUDAARCHS"}
     if cudaarchs is not None:
         env["CUDAARCHS"] = cudaarchs
     with tempfile.TemporaryDirectory() as directory:
         script = Path(directory) / "probe.cmake"
         script.write_text(
-            f'include("{MODULE.as_posix()}")\n'
-            'message(NOTICE "archs=[${CMAKE_CUDA_ARCHITECTURES}]")\n'
+            f'include("{MODULE.as_posix()}")\nmessage(NOTICE "value=[${{{variable}}}]")\n'
         )
         result = subprocess.run(
             ["cmake", *(f"-D{d}" for d in definitions), "-P", str(script)],
@@ -29,7 +28,11 @@ def architectures(*definitions, cudaarchs=None):
             text=True,
             check=True,
         )
-    return result.stderr.rsplit("archs=[", 1)[1].split("]", 1)[0]
+    return result.stderr.rsplit("value=[", 1)[1].split("]", 1)[0]
+
+
+def architectures(*definitions, cudaarchs=None):
+    return probe("CMAKE_CUDA_ARCHITECTURES", *definitions, cudaarchs=cudaarchs)
 
 
 class CudaArchitectureDefaults(unittest.TestCase):
@@ -50,6 +53,15 @@ class CudaArchitectureDefaults(unittest.TestCase):
 
     def test_old_architectures_are_floored(self):
         self.assertEqual(architectures("CMAKE_CUDA_ARCHITECTURES=60"), "70")
+
+    def test_package_builds_compress_device_code(self):
+        self.assertEqual(probe("CMAKE_CUDA_FLAGS_INIT").strip(), "")
+        self.assertEqual(
+            probe("CMAKE_CUDA_FLAGS_INIT", "PKG_holoscan_radar=ON").strip(), "--compress-mode=size"
+        )
+        self.assertEqual(
+            probe("CMAKE_CUDA_FLAGS_INIT", "SKBUILD=2").strip(), "--compress-mode=size"
+        )
 
 
 if __name__ == "__main__":
