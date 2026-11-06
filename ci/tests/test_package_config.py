@@ -63,7 +63,7 @@ class InstalledConfig(unittest.TestCase):
                         ["dpkg-deb", "--field", str(package), "Depends"],
                         text=True,
                     ).strip()
-                    expected = "holoscan (>= 5.0.0)"
+                    expected = "holoscan (>= 5.0.0), libyaml-cpp-dev (>= 0.8.0)"
                     if enabled:
                         expected += ", libtinyxml2-dev"
                     self.assertEqual(depends, expected)
@@ -72,7 +72,7 @@ class InstalledConfig(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             sdk = root / "sdk"
-            for name in ("holoscan", "matx", "tinyxml2"):
+            for name in ("holoscan", "matx", "tinyxml2", "yaml-cpp"):
                 directory = sdk / "lib/cmake" / name
                 directory.mkdir(parents=True)
                 (directory / f"{name}-config.cmake").write_text(f"set({name}_FOUND TRUE)\n")
