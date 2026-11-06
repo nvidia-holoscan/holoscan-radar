@@ -16,7 +16,9 @@ namespace.
 | `sdk/` | Typed Holoscan Tensor I/O, live-override, output, and configuration-cache helpers |
 | `reduce/` | Reusable GPU group-by-label reductions |
 
-`tensor/matx_utils.hpp` is CUDA-translation-unit-only. Consumers of the compiled
+Headers under any `detail/` directory, such as `tensor/detail/matx_views.hpp`,
+are private: they are not installed and may include only from CUDA translation
+units (`.cu`) and `*_stage.hpp` headers. Consumers of the compiled
 reduction kernels should link `holoscan::radar_common_reduce` rather than
 compiling `group_by_label.cu` again.
 

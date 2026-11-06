@@ -156,7 +156,7 @@ the plan builder and validate there.
 | Batching / dtype / device / contiguity checks | `radar_common/tensor/tensor_utils.hpp` (`collapse_named_tx_rx_batch` for FMCW cubes) |
 | CUDA last-error guard | `radar_common/tensor/cuda_check.hpp` |
 | Device tensor alloc | `radar_common/tensor/dlpack_buffer.hpp` |
-| MatX views | `radar_common/tensor/matx_utils.hpp` (`.cu` / stage only) |
+| MatX views | `radar_common/tensor/detail/matx_views.hpp` (`.cu` / stage only; `detail/` is private, not installed) |
 | Single-operator tests | `<holoscan/testing/operator_test_harness.hpp>`, `tests/cpp/utils/tensor_fixtures.hpp`, `test_extents.hpp` |
 
 **Do not re-derive per-operator I/O or validation boilerplate.** The single-entry

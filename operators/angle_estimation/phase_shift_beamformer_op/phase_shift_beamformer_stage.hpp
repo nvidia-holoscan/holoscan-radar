@@ -20,7 +20,7 @@
 // the (..., num_az, num_el, num_doppler, num_range_bins) output cube directly —
 // no post-permute.
 //
-// Includes <matx.h> (via matx_utils.hpp): include only from .cu files.
+// Includes <matx.h> (via detail/matx_views.hpp): include only from .cu files.
 
 #pragma once
 
@@ -28,7 +28,7 @@
 
 #include <cstdint>
 
-#include "radar_common/tensor/matx_utils.hpp"
+#include "radar_common/tensor/detail/matx_views.hpp"
 
 namespace holoscan::radar::detail {
 

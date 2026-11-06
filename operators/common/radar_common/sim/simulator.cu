@@ -33,8 +33,8 @@
 #include <vector>
 
 #include "radar_common/math/constants.hpp"
+#include "radar_common/tensor/detail/matx_views.hpp"
 #include "radar_common/tensor/dlpack_buffer.hpp"
-#include "radar_common/tensor/matx_utils.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
 namespace holoscan::radar::sim {

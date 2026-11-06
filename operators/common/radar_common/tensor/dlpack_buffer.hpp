@@ -43,7 +43,7 @@ struct CudaDeviceMemory final : holoscan::TensorMemoryReference {
 // (cudaFree on release, which orders after outstanding work on the device).
 //
 // Compute kernels view the same memory through rank-collapsed MatX views
-// (radar_common/tensor/matx_utils.hpp) while the emitted Tensor keeps the
+// (radar_common/tensor/detail/matx_views.hpp) while the emitted Tensor keeps the
 // caller's full-rank shape — this is how rank-agnostic batching round-trips
 // leading axes through the operators.
 inline std::shared_ptr<holoscan::Tensor> make_device_tensor(const std::vector<int64_t>& shape,
