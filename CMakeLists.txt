@@ -171,3 +171,13 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/holoscan-radar-config.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/holoscan-radar-config-version.cmake"
     DESTINATION "${_radar_config_dir}")
+
+# Apache-2.0 section 4: redistributions carry the license and notice. Wheels get
+# them as .dist-info/licenses from scikit-build-core, so keep them out of site-packages.
+if(NOT SKBUILD)
+    install(FILES "${PROJECT_SOURCE_DIR}/LICENSE"
+        DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/holoscan-radar"
+        RENAME LICENSE.txt)
+    install(FILES "${PROJECT_SOURCE_DIR}/NOTICE"
+        DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/holoscan-radar")
+endif()

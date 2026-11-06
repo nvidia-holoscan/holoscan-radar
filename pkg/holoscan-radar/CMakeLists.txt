@@ -3,17 +3,7 @@
 
 # This file is entered via add_holohub_package(holoscan-radar ...) in
 # pkg/CMakeLists.txt, which only fires when PKG_holoscan_radar is ON.
-include(GNUInstallDirs)
 include(holohub_configure_deb)
-
-# Apache-2.0 section 4: package redistributions carry the license and notice.
-cmake_path(SET _radar_source_root NORMALIZE "${CMAKE_CURRENT_LIST_DIR}/../..")
-install(FILES "${_radar_source_root}/LICENSE"
-    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/holoscan-radar"
-    RENAME LICENSE.txt)
-install(FILES "${_radar_source_root}/NOTICE"
-    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/holoscan-radar")
-unset(_radar_source_root)
 
 # Package selection runs before operators/; wait for the final target graph so
 # dependencies also reflect CPHD enabled by apps or explicit cached preferences.

@@ -4,6 +4,8 @@
 """Exercise installed CMake discovery metadata; no operator compute is mocked."""
 
 import platform
+import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -11,6 +13,16 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def legal_file_fixture(source):
+    """Copy the root legal-file install block and its inputs into a fixture project."""
+    block = re.search(
+        r"^if\(NOT SKBUILD\)\n.*?^endif\(\)\n", (ROOT / "CMakeLists.txt").read_text(), re.M | re.S
+    )
+    for name in ("LICENSE", "NOTICE"):
+        shutil.copy2(ROOT / name, source / name)
+    return "include(GNUInstallDirs)\n" + block.group(0)
 
 
 class InstalledConfig(unittest.TestCase):
@@ -143,7 +155,7 @@ class InstalledConfig(unittest.TestCase):
                 "project(holoscan_radar VERSION 0.2.0 LANGUAGES NONE)\n"
                 'set(PROJECT_DESCRIPTION "Package legal-file fixture")\n'
                 f'list(PREPEND CMAKE_MODULE_PATH "{ROOT}/cmake")\n'
-                f'add_subdirectory("{ROOT}/pkg/holoscan-radar" pkg)\n'
+                f'add_subdirectory("{ROOT}/pkg/holoscan-radar" pkg)\n' + legal_file_fixture(source)
             )
             build = root / "build"
             artifacts = root / "artifacts"
@@ -178,6 +190,33 @@ class InstalledConfig(unittest.TestCase):
                 with self.subTest(tgz=path):
                     self.assertIn(path, names)
             self.assertFalse(any(name.startswith("usr/") for name in names), names)
+
+    def test_plain_install_carries_license_and_notice_except_for_wheels(self):
+        for skbuild in (False, True):
+            with self.subTest(skbuild=skbuild), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / "source"
+                source.mkdir()
+                (source / "CMakeLists.txt").write_text(
+                    "cmake_minimum_required(VERSION 4.0)\n"
+                    "project(holoscan_radar LANGUAGES NONE)\n" + legal_file_fixture(source)
+                )
+                build = root / "build"
+                prefix = root / "prefix"
+                configure = ["cmake", "-S", str(source), "-B", str(build)]
+                if skbuild:
+                    configure.append("-DSKBUILD=2")
+                for command in (
+                    configure,
+                    ["cmake", "--install", str(build), "--prefix", str(prefix)],
+                ):
+                    subprocess.run(command, check=True, capture_output=True, text=True)
+                doc = prefix / "share/doc/holoscan-radar"
+                if skbuild:
+                    self.assertFalse(prefix.exists() and any(prefix.rglob("*")))
+                    continue
+                for name, origin in (("LICENSE.txt", "LICENSE"), ("NOTICE", "NOTICE")):
+                    self.assertEqual((doc / name).read_bytes(), (ROOT / origin).read_bytes())
 
     def test_relocated_config_dependencies_versions_and_components(self):
         with tempfile.TemporaryDirectory() as temporary:

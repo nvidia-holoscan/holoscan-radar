@@ -284,6 +284,7 @@ def check_debian(args):
     run("cmake", "--install", subset, "--prefix", installed, cwd=args.work)
     relocated = args.work / "relocated-subset"
     installed.rename(relocated)
+    check_legal_files(args, relocated)
     check_cmake_package(relocated, {"fmcw_range_processor_op"})
     check_native_consumer(
         args,
