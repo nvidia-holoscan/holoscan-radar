@@ -2,6 +2,29 @@
 
 This directory defines the Debian package and TGZ archive for `holoscan-radar`.
 
+## Installed layout
+
+Native installs and packages use the `/usr` prefix with the GNU multiarch
+library directory, matching the Holoscan SDK 5 Debian packages:
+
+```text
+/usr/include/holoscan/radar/...
+/usr/lib/<triplet>/lib<operator>.*
+/usr/lib/<triplet>/cmake/holoscan-radar/...
+```
+
+`<triplet>` is the target's multiarch name, such as `x86_64-linux-gnu` or
+`aarch64-linux-gnu`. This applies to a plain `cmake --install`, the DEB, and
+the TGZ, whose entries keep the `usr/...` install paths. CMake selects the
+library directory with `GNUInstallDirs`; pass `-DCMAKE_INSTALL_PREFIX` or
+`-DCMAKE_INSTALL_LIBDIR` at configure time to choose a different layout, and
+packages follow the configured prefix. Wheels keep their own layout.
+
+The libraries use relative (`$ORIGIN`) RPATHs, and `/usr/lib/<triplet>` is on
+the default dynamic loader path, so applications using the installed package
+do not need `LD_LIBRARY_PATH`. Installs under a custom prefix need that
+prefix's library directory on the loader path instead.
+
 ## Usage
 
 From the repository root **on the host**; the CLI builds the package in a container:
@@ -71,7 +94,10 @@ for configuration.
 
 ## Consuming the installed C++ package
 
-Point `CMAKE_PREFIX_PATH` at the Radar installation and the matching Holoscan SDK:
+CMake finds a `/usr` installation without extra hints. For a custom prefix or
+an extracted TGZ, point `CMAKE_PREFIX_PATH` at the Radar installation and the
+matching Holoscan SDK. The installed config locates headers and libraries
+relative to its own directory:
 
 ```cmake
 find_package(holoscan-radar CONFIG REQUIRED)
@@ -109,12 +135,12 @@ sudo apt-get install libtinyxml2-10   # libtinyxml2-dev for static builds
 
 The TGZ archive, for example `holoscan-radar-linux-x86_64-0.2.0.tar.gz` (`sbsa`
 on Arm), is a raw install tree of the packaged files. It has no top-level
-directory and keeps the DEB's `opt/nvidia/holoscan` prefix. To build against it
-without installing the DEB, extract it and point `CMAKE_PREFIX_PATH` at that
-prefix; add the prefix's `lib` directory to `LD_LIBRARY_PATH` only if the archive
-ships shared libraries:
+directory and keeps the DEB's `usr` prefix and multiarch `lib/<triplet>`
+directory. To build against it without installing the DEB, extract it and point
+`CMAKE_PREFIX_PATH` at that prefix; add the prefix's `lib/<triplet>` directory to
+`LD_LIBRARY_PATH` only if the archive ships shared libraries:
 
 ```bash
 mkdir -p "$HOME/radar" && tar -xzf holoscan-radar-linux-x86_64-0.2.0.tar.gz -C "$HOME/radar"
-cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/radar/opt/nvidia/holoscan"
+cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/radar/usr"
 ```

@@ -434,7 +434,11 @@ python3.12 -m pip wheel . --no-deps -w dist
 
 ## Consuming the installed C++ package
 
-Point `CMAKE_PREFIX_PATH` at the Radar installation and the matching Holoscan SDK:
+Native installs default to `/usr` with the multiarch library directory
+(`lib/<triplet>`), where CMake finds them without extra hints; see the
+[installed layout](pkg/holoscan-radar/README.md#installed-layout). For a custom
+prefix, point `CMAKE_PREFIX_PATH` at the Radar installation and the matching
+Holoscan SDK:
 
 ```cmake
 find_package(holoscan-radar CONFIG REQUIRED)
