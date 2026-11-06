@@ -4,9 +4,11 @@
 """Host-only metadata tests for the artifact checker; artifact tests require the GPU SDK."""
 
 import importlib.util
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 CHECKER = Path(__file__).resolve().parents[2] / "tests/packaging/check_packages.py"
 SPEC = importlib.util.spec_from_file_location("check_packages", CHECKER)
@@ -74,6 +76,68 @@ class PackagingMetadata(unittest.TestCase):
             (directory / "holoscan_selected_op_targets.cmake").touch()
             with self.assertRaisesRegex(RuntimeError, "Unexpected Radar exports"):
                 packaging.check_cmake_package(prefix, {"selected_op"})
+
+    def archive_members(self, *entries):
+        members = []
+        for name, kind, link in entries:
+            member = tarfile.TarInfo(name)
+            member.type, member.linkname = kind, link
+            members.append(member)
+        return members
+
+    def test_archive_allows_packaged_payload_under_debian_prefix(self):
+        prefix = "opt/nvidia/holoscan"
+        packaging.check_archive_members(
+            self.archive_members(
+                ("opt", tarfile.DIRTYPE, ""),
+                (f"{prefix}/include/holoscan/radar/op.hpp", tarfile.REGTYPE, ""),
+                (f"{prefix}/lib/libselected_op.a", tarfile.REGTYPE, ""),
+                (f"{prefix}/lib/libshared_op.so.1", tarfile.REGTYPE, ""),
+                (f"{prefix}/lib/libshared_op.so", tarfile.SYMTYPE, "libshared_op.so.1"),
+                (
+                    f"{prefix}/lib/cmake/holoscan-radar/holoscan-radar-config.cmake",
+                    tarfile.REGTYPE,
+                    "",
+                ),
+                (f"{prefix}/share/doc/holoscan-radar/LICENSE.txt", tarfile.REGTYPE, ""),
+                (f"{prefix}/share/doc/holoscan-radar/NOTICE", tarfile.REGTYPE, ""),
+            )
+        )
+
+    def test_archive_rejects_unpackaged_or_escaping_members(self):
+        prefix = "opt/nvidia/holoscan"
+        for name, kind, link, message in (
+            (f"{prefix}/bin/siso", tarfile.REGTYPE, "", "Unexpected"),
+            (f"{prefix}/bin", tarfile.DIRTYPE, "", "Unexpected"),
+            (f"{prefix}/examples/siso.yaml", tarfile.REGTYPE, "", "Unexpected"),
+            (f"{prefix}/holoscan_radar/__init__.py", tarfile.REGTYPE, "", "Unexpected"),
+            ("holoscan-radar_0.2.0/include/op.hpp", tarfile.REGTYPE, "", "Unexpected"),
+            (f"/{prefix}/include/op.hpp", tarfile.REGTYPE, "", "Unsafe"),
+            (f"{prefix}/../include/op.hpp", tarfile.REGTYPE, "", "Unsafe"),
+            (f"{prefix}/lib/libop.so", tarfile.SYMTYPE, "/usr/lib/libop.so", "Unsafe"),
+            (f"{prefix}/lib/libop.so", tarfile.SYMTYPE, "../../libop.so", "Unsafe"),
+        ):
+            with self.subTest(name=name, link=link):
+                with self.assertRaisesRegex(RuntimeError, message):
+                    packaging.check_archive_members(self.archive_members((name, kind, link)))
+
+    def test_library_rpaths_must_be_origin_relative(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            prefix = Path(temporary)
+            (prefix / "lib").mkdir()
+            (prefix / "lib/libop.so.1").touch()
+            dynamic = " 0x1d (RUNPATH)  Library runpath: [{}]\n"
+            with mock.patch.object(
+                packaging.subprocess, "check_output", return_value=dynamic.format("$ORIGIN")
+            ):
+                packaging.check_library_rpaths(prefix)
+            with mock.patch.object(
+                packaging.subprocess,
+                "check_output",
+                return_value=dynamic.format("$ORIGIN:/opt/nvidia/holoscan/lib"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "non-relative RPATH"):
+                    packaging.check_library_rpaths(prefix)
 
 
 if __name__ == "__main__":

@@ -70,7 +70,7 @@ class InstalledConfig(unittest.TestCase):
                         expected += ", libtinyxml2-dev"
                     self.assertEqual(depends, expected)
 
-    def test_archive_is_relocatable_prefix_and_debian_keeps_opt(self):
+    def test_archive_is_raw_install_tree_and_debian_is_unchanged(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "source"
@@ -98,15 +98,15 @@ class InstalledConfig(unittest.TestCase):
                 ],
             ):
                 subprocess.run(command, check=True, capture_output=True, text=True)
-            archive = artifacts / f"holoscan-radar_0.2.0_{platform.machine()}.tar.gz"
+            arch = {"aarch64": "sbsa"}.get(platform.machine(), platform.machine())
+            archive = artifacts / f"holoscan-radar-linux-{arch}-0.2.0.tar.gz"
             with tarfile.open(archive) as contents:
-                names = contents.getnames()
-            prefix = archive.name.removesuffix(".tar.gz")
-            self.assertIn(f"{prefix}/share/README.md", names)
-            self.assertTrue(all(name.split("/")[0] == prefix for name in names), names)
-            debian = subprocess.check_output(
-                ["dpkg-deb", "--contents", str(next(artifacts.glob("*.deb")))], text=True
-            )
+                names = [name.removeprefix("./") for name in contents.getnames()]
+            self.assertIn("opt/nvidia/holoscan/share/README.md", names)
+            self.assertTrue(all(name.split("/")[0] == "opt" for name in names), names)
+            deb_arch = subprocess.check_output(["dpkg", "--print-architecture"], text=True)
+            package = artifacts / f"holoscan-radar_0.2.0_{deb_arch.strip()}.deb"
+            debian = subprocess.check_output(["dpkg-deb", "--contents", str(package)], text=True)
             self.assertIn("./opt/nvidia/holoscan/share/README.md", debian)
 
     def test_relocated_config_dependencies_versions_and_components(self):

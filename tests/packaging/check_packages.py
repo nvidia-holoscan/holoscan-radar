@@ -6,6 +6,7 @@
 import argparse
 import importlib.util
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -15,7 +16,7 @@ import tarfile
 import tempfile
 import tomllib
 import venv
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 def run(*command, cwd, env=None):
@@ -112,6 +113,51 @@ def check_operator_libraries(prefix, expected):
             raise RuntimeError(f"Package artifact missing operator library: {name}")
 
 
+# The TGZ is a raw install tree of the packaged files under the DEB prefix.
+ARCHIVE_PREFIX = PurePosixPath("opt/nvidia/holoscan")
+ARCHIVE_PAYLOAD = re.compile(
+    r"include/.+|lib/lib[^/]+\.(a|so(\.[0-9]+)*)|lib/cmake/holoscan-radar/[^/]+\.cmake"
+    r"|share/doc/holoscan-radar/(LICENSE\.txt|NOTICE)"
+)
+
+
+def archive_name(version):
+    arch = {"aarch64": "sbsa", "arm64": "sbsa"}.get(platform.machine(), platform.machine())
+    return f"holoscan-radar-linux-{arch}-{version}.tar.gz"
+
+
+def check_archive_members(members):
+    """Allow only packaged payload, and no member or link that escapes the extraction root."""
+    files, directories = set(), set()
+    for member in members:
+        path = PurePosixPath(member.name)
+        links = [PurePosixPath(member.linkname)] if member.issym() or member.islnk() else []
+        if any(item.is_absolute() or ".." in item.parts for item in [path, *links]):
+            raise RuntimeError(f"Unsafe TGZ member: {member.name} -> {member.linkname}")
+        (directories if member.isdir() else files).add(path)
+    unexpected = [
+        path
+        for path in files
+        if not path.is_relative_to(ARCHIVE_PREFIX)
+        or not ARCHIVE_PAYLOAD.fullmatch(str(path.relative_to(ARCHIVE_PREFIX)))
+    ]
+    unexpected += [path for path in directories if not any(path in f.parents for f in files)]
+    if unexpected:
+        raise RuntimeError(f"Unexpected TGZ members: {sorted(map(str, unexpected))}")
+
+
+def check_library_rpaths(prefix):
+    """Shared libraries may search only $ORIGIN-relative paths."""
+    for library in (prefix / "lib").glob("*.so*"):
+        if library.is_symlink():
+            continue
+        dynamic = subprocess.check_output(["readelf", "-d", str(library)], text=True)
+        for paths in re.findall(r"\((?:RPATH|RUNPATH)\).*\[([^\]]*)\]", dynamic):
+            absolute = [path for path in paths.split(":") if not path.startswith("$ORIGIN")]
+            if absolute:
+                raise RuntimeError(f"{library.name} has non-relative RPATH entries: {absolute}")
+
+
 def package_with_cli(args, generators):
     artifacts = args.work / "artifacts"
     artifacts.mkdir()
@@ -177,19 +223,15 @@ def check_debian(args):
     archives = list(artifacts.glob("*.tar.gz"))
     if len(archives) != 1:
         raise RuntimeError(f"Expected one TGZ artifact, found {archives}")
+    version = tomllib.loads((args.source / "pyproject.toml").read_text())["project"]["version"]
+    if archives[0].name != archive_name(version):
+        raise RuntimeError(f"Expected TGZ {archive_name(version)}, found {archives[0].name}")
     archive_root = args.work / "archive"
     with tarfile.open(archives[0]) as archive:
-        top_level = {Path(name).parts[0] for name in archive.getnames()}
+        check_archive_members(archive.getmembers())
         archive.extractall(archive_root, filter="data")
-    # The TGZ is a relocatable prefix named after the archive, without the DEB's /opt path.
-    archive_prefix = archive_root / archives[0].name.removesuffix(".tar.gz")
-    if top_level != {archive_prefix.name}:
-        raise RuntimeError(
-            f"Expected TGZ top-level directory {archive_prefix.name}, found {top_level}"
-        )
-    exports = list(archive_root.rglob("holoscan_radar_targets.cmake"))
-    if exports != [archive_prefix / "lib/cmake/holoscan-radar/holoscan_radar_targets.cmake"]:
-        raise RuntimeError(f"Expected one Radar export tree in the TGZ prefix, found {exports}")
+    archive_prefix = archive_root / ARCHIVE_PREFIX
+    check_library_rpaths(archive_prefix)
     check_operator_libraries(archive_prefix, expected)
     check_cmake_package(prefix, expected)
     check_native_consumer(args, prefix, "debian", expected=expected)

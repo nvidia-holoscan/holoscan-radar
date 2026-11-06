@@ -99,15 +99,14 @@ the matching Holoscan SDK and CUDA toolkit. On Debian/Ubuntu:
 sudo apt-get install libtinyxml2-dev
 ```
 
-The TGZ unpacks to a relocatable prefix named after the archive, for example
-`holoscan-radar_0.2.0_x86_64/{include,lib}`; the DEB installs the same tree under
-`/opt/nvidia/holoscan`. Extract the archive anywhere and add that directory to
-`CMAKE_PREFIX_PATH`. Add its `lib` directory to `LD_LIBRARY_PATH` at run time
-if the archive ships shared libraries; static operator libraries need only the
-SDK and CUDA runtimes:
+The TGZ archive, for example `holoscan-radar-linux-x86_64-0.2.0.tar.gz` (`sbsa`
+on Arm), is a raw install tree of the packaged files. It has no top-level
+directory and keeps the DEB's `opt/nvidia/holoscan` prefix. To build against it
+without installing the DEB, extract it and point `CMAKE_PREFIX_PATH` at that
+prefix; add the prefix's `lib` directory to `LD_LIBRARY_PATH` only if the archive
+ships shared libraries:
 
 ```bash
-tar -xzf holoscan-radar_0.2.0_x86_64.tar.gz -C "$HOME/opt"
-cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/opt/holoscan-radar_0.2.0_x86_64"
-export LD_LIBRARY_PATH="$HOME/opt/holoscan-radar_0.2.0_x86_64/lib:$LD_LIBRARY_PATH"
+mkdir -p "$HOME/radar" && tar -xzf holoscan-radar-linux-x86_64-0.2.0.tar.gz -C "$HOME/radar"
+cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/radar/opt/nvidia/holoscan"
 ```
