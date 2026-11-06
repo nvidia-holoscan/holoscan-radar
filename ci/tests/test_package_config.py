@@ -133,6 +133,51 @@ class InstalledConfig(unittest.TestCase):
             debian = subprocess.check_output(["dpkg-deb", "--contents", str(package)], text=True)
             self.assertIn("./opt/nvidia/holoscan/share/README.md", debian)
 
+    def test_package_artifacts_carry_license_and_notice(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            (source / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 4.0)\n"
+                "project(holoscan_radar VERSION 0.2.0 LANGUAGES NONE)\n"
+                'set(PROJECT_DESCRIPTION "Package legal-file fixture")\n'
+                f'list(PREPEND CMAKE_MODULE_PATH "{ROOT}/cmake")\n'
+                f'add_subdirectory("{ROOT}/pkg/holoscan-radar" pkg)\n'
+            )
+            build = root / "build"
+            artifacts = root / "artifacts"
+            for command in (
+                ["cmake", "-S", str(source), "-B", str(build)],
+                [
+                    "cpack",
+                    "--config",
+                    str(build / "pkg/CPackConfig-holoscan-radar.cmake"),
+                    "-G",
+                    "DEB;TGZ",
+                    "-B",
+                    str(artifacts),
+                ],
+            ):
+                subprocess.run(command, check=True, capture_output=True, text=True)
+            doc = "opt/nvidia/holoscan/share/doc/holoscan-radar"
+            legal = {f"{doc}/LICENSE.txt": "LICENSE", f"{doc}/NOTICE": "NOTICE"}
+            debian = {**legal, "usr/share/doc/holoscan-radar/copyright": "LICENSE"}
+            unpacked = root / "deb"
+            subprocess.run(
+                ["dpkg-deb", "--extract", str(next(artifacts.glob("*.deb"))), str(unpacked)],
+                check=True,
+            )
+            for path, origin in debian.items():
+                with self.subTest(deb=path):
+                    self.assertEqual((unpacked / path).read_bytes(), (ROOT / origin).read_bytes())
+            with tarfile.open(next(artifacts.glob("*.tar.gz"))) as archive:
+                names = {name.removeprefix("./") for name in archive.getnames()}
+            for path in legal:
+                with self.subTest(tgz=path):
+                    self.assertIn(path, names)
+            self.assertFalse(any(name.startswith("usr/") for name in names), names)
+
     def test_relocated_config_dependencies_versions_and_components(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

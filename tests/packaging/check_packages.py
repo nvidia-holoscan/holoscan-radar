@@ -16,6 +16,7 @@ import tarfile
 import tempfile
 import tomllib
 import venv
+import zipfile
 from pathlib import Path, PurePosixPath
 
 
@@ -173,6 +174,15 @@ def check_headers_without_yaml_cpp(prefix):
         raise RuntimeError(f"Installed headers include yaml-cpp: {offenders}")
 
 
+def check_legal_files(args, prefix):
+    """Require the Apache-2.0 LICENSE and NOTICE in the package documentation directory."""
+    doc = prefix / "share/doc/holoscan-radar"
+    for name, origin in (("LICENSE.txt", "LICENSE"), ("NOTICE", "NOTICE")):
+        path = doc / name
+        if not path.is_file() or path.read_bytes() != (args.source / origin).read_bytes():
+            raise RuntimeError(f"Package artifact missing or stale legal file: {path}")
+
+
 def package_with_cli(args, generators):
     artifacts = args.work / "artifacts"
     artifacts.mkdir()
@@ -234,6 +244,10 @@ def check_debian(args):
     prefix = unpacked / "opt/nvidia/holoscan"
     check_operator_libraries(prefix, expected)
     check_headers_without_yaml_cpp(prefix)
+    check_legal_files(args, prefix)
+    copyright_file = unpacked / "usr/share/doc/holoscan-radar/copyright"
+    if not copyright_file.is_file():
+        raise RuntimeError("Debian artifact missing /usr/share/doc/holoscan-radar/copyright")
     if (prefix / "bin").exists() and any((prefix / "bin").iterdir()):
         raise RuntimeError("Operator-only Debian artifact contains executables")
     if (prefix / "holoscan_radar").exists():
@@ -251,6 +265,7 @@ def check_debian(args):
     archive_prefix = archive_root / ARCHIVE_PREFIX
     check_library_rpaths(archive_prefix)
     check_operator_libraries(archive_prefix, expected)
+    check_legal_files(args, archive_prefix)
     check_cmake_package(prefix, expected)
     check_native_consumer(args, prefix, "debian", expected=expected)
     check_installed_headers(args, prefix)
@@ -357,6 +372,13 @@ def check_wheel(args):
     wheels = list(artifacts.glob("*.whl"))
     if len(wheels) != 1:
         raise RuntimeError(f"Expected one wheel artifact, found {wheels}")
+    with zipfile.ZipFile(wheels[0]) as wheel:
+        names = wheel.namelist()
+    for name in ("LICENSE", "NOTICE"):
+        if not any(entry.endswith(f".dist-info/licenses/{name}") for entry in names):
+            raise RuntimeError(f"Wheel metadata missing {name}")
+    if any("share/doc/" in entry for entry in names):
+        raise RuntimeError("Wheel payload unexpectedly contains package documentation")
     # Inherit SDK dependencies, but require Radar itself to come from this venv.
     environment = args.work / "venv"
     venv.EnvBuilder(with_pip=True, system_site_packages=True).create(environment)
