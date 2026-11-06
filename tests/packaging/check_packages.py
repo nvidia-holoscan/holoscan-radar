@@ -229,7 +229,24 @@ def check_cmake_package(prefix, expected):
             raise RuntimeError(f"Missing exported target: {target}")
 
 
+def check_headers_without_matx(prefix):
+    """Installed headers must not need MatX, and private detail/ headers stay uninstalled."""
+    include = prefix / "include"
+    private = [str(path.relative_to(prefix)) for path in include.rglob("detail") if path.is_dir()]
+    if private:
+        raise RuntimeError(f"Installed private detail/ directories: {private}")
+    offenders = [
+        str(path.relative_to(prefix))
+        for path in include.rglob("*")
+        if path.suffix in (".hpp", ".cuh")
+        and re.search(r"^\s*#\s*include\s*[<\"]matx\.h[>\"]", path.read_text(), re.M)
+    ]
+    if offenders:
+        raise RuntimeError(f"Installed headers include MatX: {offenders}")
+
+
 def check_installed_headers(args, prefix):
+    check_headers_without_matx(prefix)
     # Compile each installed header alone so includes of uninstalled files fail here.
     build = args.work / "installed-headers"
     run(
