@@ -10,6 +10,9 @@ project(RadarInstalledHeaders LANGUAGES CXX CUDA)
 find_package(holoscan-radar CONFIG REQUIRED)
 get_property(_radar_imported DIRECTORY PROPERTY IMPORTED_TARGETS)
 list(FILTER _radar_imported INCLUDE REGEX "^holoscan::")
+# Radar targets do not export MatX usage requirements, but headers such as
+# radar_common/tensor/matx_utils.hpp include <matx.h>.
+list(APPEND _radar_imported matx::matx)
 
 file(GLOB_RECURSE _radar_headers RELATIVE "${RADAR_INCLUDE_ROOT}"
     "${RADAR_INCLUDE_ROOT}/*.hpp" "${RADAR_INCLUDE_ROOT}/*.cuh")

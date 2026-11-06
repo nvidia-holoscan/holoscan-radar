@@ -152,7 +152,7 @@ the plan builder and validate there.
 | Required emit wait-or-fail | `emit_required_tensor` / `retry_transient` in `tensor_io.hpp` |
 | Exact `[live]` resolve | `radar_common/sdk/override_param.hpp` |
 | Warn-once artifact cache | `radar_common/sdk/config_cache.hpp` |
-| Arg setters for custom types | `radar_common/sdk/arg_setters.hpp` |
+| Config codecs for custom types | `radar_common/sdk/config_codecs.hpp` |
 | Batching / dtype / device / contiguity checks | `radar_common/tensor/tensor_utils.hpp` (`collapse_named_tx_rx_batch` for FMCW cubes) |
 | CUDA last-error guard | `radar_common/tensor/cuda_check.hpp` |
 | Device tensor alloc | `radar_common/tensor/dlpack_buffer.hpp` |
@@ -853,8 +853,8 @@ change.
 - **Single-entry `TensorMap`** — port name is the contract; reject multi-entry
   maps with a clear error.
 - **All outputs connected** in applications and tests.
-- **`ensure_radar_arg_setters()`** in `initialize()` before
-  `Operator::initialize()`.
+- **Custom parameter types** decode through a `holoscan::config::ConfigCodec<T>`
+  specialization (see `radar_common/sdk/config_codecs.hpp`), not Arg setters.
 - **Compact row-major** inputs this wave; reject non-contiguous if unsupported.
 - **Geometry-aware element operations** — do not apply an axis-dependent
   window, neighborhood, or stencil to a flattened multidimensional aperture.
