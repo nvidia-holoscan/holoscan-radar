@@ -3,7 +3,7 @@
 
 // Private: not installed; include only from CUDA translation units (.cu) and
 // *_stage.hpp headers. MatX-side views and helpers shared by the operator
-// kernels; this header includes <matx.h>, which installed headers must not.
+// kernels; this header includes <matx.h>.
 
 #pragma once
 

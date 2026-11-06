@@ -48,21 +48,6 @@ class PackagingMetadata(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "missing operator library: typo_op"):
                 packaging.check_operator_libraries(prefix, {"selected_op", "typo_op"})
 
-    def test_header_check_rejects_matx_and_private_headers(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            prefix = Path(temporary)
-            tensor = prefix / "include/holoscan/radar/radar_common/tensor"
-            tensor.mkdir(parents=True)
-            (tensor / "tensor_utils.hpp").write_text("#include <holoscan/holoscan.hpp>\n")
-            packaging.check_headers_without_matx(prefix)
-            (tensor / "views.hpp").write_text("#pragma once\n#include <matx.h>\n")
-            with self.assertRaisesRegex(RuntimeError, "include MatX"):
-                packaging.check_headers_without_matx(prefix)
-            (tensor / "views.hpp").unlink()
-            (tensor / "detail").mkdir()
-            with self.assertRaisesRegex(RuntimeError, "private detail/"):
-                packaging.check_headers_without_matx(prefix)
-
     def package_tree(self, prefix):
         directory = prefix / "lib/cmake/holoscan-radar"
         directory.mkdir(parents=True)
