@@ -13,6 +13,7 @@ function(holoscan_radar_configure_deb)
         # Installed CMake discovery needs tinyxml2's config, not just its runtime.
         string(APPEND _radar_deb_depends ", libtinyxml2-dev")
     endif()
+    set(CPACK_PROJECT_CONFIG_FILE "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/cpack_project_config.cmake")
     holohub_configure_deb(
         NAME        "holoscan-radar"
         DESCRIPTION "${PROJECT_DESCRIPTION}"

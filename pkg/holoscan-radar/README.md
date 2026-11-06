@@ -1,6 +1,6 @@
 # holoscan-radar package
 
-This directory defines the Debian package for `holoscan-radar`.
+This directory defines the Debian package and TGZ archive for `holoscan-radar`.
 
 ## Usage
 
@@ -97,4 +97,17 @@ the matching Holoscan SDK and CUDA toolkit. On Debian/Ubuntu:
 
 ```bash
 sudo apt-get install libtinyxml2-dev
+```
+
+The TGZ unpacks to a relocatable prefix named after the archive, for example
+`holoscan-radar_0.2.0_x86_64/{include,lib}`; the DEB installs the same tree under
+`/opt/nvidia/holoscan`. Extract the archive anywhere and add that directory to
+`CMAKE_PREFIX_PATH`. Add its `lib` directory to `LD_LIBRARY_PATH` at run time
+if the archive ships shared libraries; static operator libraries need only the
+SDK and CUDA runtimes:
+
+```bash
+tar -xzf holoscan-radar_0.2.0_x86_64.tar.gz -C "$HOME/opt"
+cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/opt/holoscan-radar_0.2.0_x86_64"
+export LD_LIBRARY_PATH="$HOME/opt/holoscan-radar_0.2.0_x86_64/lib:$LD_LIBRARY_PATH"
 ```

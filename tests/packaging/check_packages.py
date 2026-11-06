@@ -180,16 +180,23 @@ def check_debian(args):
         raise RuntimeError(f"Expected one TGZ artifact, found {archives}")
     archive_root = args.work / "archive"
     with tarfile.open(archives[0]) as archive:
+        top_level = {Path(name).parts[0] for name in archive.getnames()}
         archive.extractall(archive_root, filter="data")
+    # The TGZ is a relocatable prefix named after the archive, without the DEB's /opt path.
+    archive_prefix = archive_root / archives[0].name.removesuffix(".tar.gz")
+    if top_level != {archive_prefix.name}:
+        raise RuntimeError(
+            f"Expected TGZ top-level directory {archive_prefix.name}, found {top_level}"
+        )
     exports = list(archive_root.rglob("holoscan_radar_targets.cmake"))
-    if len(exports) != 1:
-        raise RuntimeError(f"Expected one Radar export tree in TGZ, found {exports}")
-    check_operator_libraries(exports[0].parents[3], expected)
+    if exports != [archive_prefix / "lib/cmake/holoscan-radar/holoscan_radar_targets.cmake"]:
+        raise RuntimeError(f"Expected one Radar export tree in the TGZ prefix, found {exports}")
+    check_operator_libraries(archive_prefix, expected)
     check_cmake_package(prefix, expected)
     check_native_consumer(args, prefix, "debian", expected=expected)
     check_installed_headers(args, prefix)
-    check_cmake_package(exports[0].parents[3], expected)
-    check_native_consumer(args, exports[0].parents[3], "tgz", expected=expected)
+    check_cmake_package(archive_prefix, expected)
+    check_native_consumer(args, archive_prefix, "tgz", expected=expected)
     # Ordinary installs must support discovery with the Debian option disabled.
     subset = configure(
         args,

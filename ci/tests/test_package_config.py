@@ -3,7 +3,9 @@
 
 """Exercise installed CMake discovery metadata; no operator compute is mocked."""
 
+import platform
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -67,6 +69,45 @@ class InstalledConfig(unittest.TestCase):
                     if enabled:
                         expected += ", libtinyxml2-dev"
                     self.assertEqual(depends, expected)
+
+    def test_archive_is_relocatable_prefix_and_debian_keeps_opt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            (source / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 4.0)\n"
+                "project(holoscan_radar VERSION 0.2.0 LANGUAGES NONE)\n"
+                'set(PROJECT_DESCRIPTION "Package layout fixture")\n'
+                f'list(PREPEND CMAKE_MODULE_PATH "{ROOT}/cmake")\n'
+                f'add_subdirectory("{ROOT}/pkg/holoscan-radar" pkg)\n'
+                f'install(FILES "{ROOT}/pkg/holoscan-radar/README.md" DESTINATION share)\n'
+            )
+            build = root / "build"
+            artifacts = root / "artifacts"
+            for command in (
+                ["cmake", "-S", str(source), "-B", str(build)],
+                [
+                    "cpack",
+                    "--config",
+                    str(build / "pkg/CPackConfig-holoscan-radar.cmake"),
+                    "-G",
+                    "DEB;TGZ",
+                    "-B",
+                    str(artifacts),
+                ],
+            ):
+                subprocess.run(command, check=True, capture_output=True, text=True)
+            archive = artifacts / f"holoscan-radar_0.2.0_{platform.machine()}.tar.gz"
+            with tarfile.open(archive) as contents:
+                names = contents.getnames()
+            prefix = archive.name.removesuffix(".tar.gz")
+            self.assertIn(f"{prefix}/share/README.md", names)
+            self.assertTrue(all(name.split("/")[0] == prefix for name in names), names)
+            debian = subprocess.check_output(
+                ["dpkg-deb", "--contents", str(next(artifacts.glob("*.deb")))], text=True
+            )
+            self.assertIn("./opt/nvidia/holoscan/share/README.md", debian)
 
     def test_relocated_config_dependencies_versions_and_components(self):
         with tempfile.TemporaryDirectory() as temporary:
