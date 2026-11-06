@@ -10,7 +10,7 @@
 // granularity, and it is enforced by the UlpParity tests. The
 // signatures below are the stable stage API: extend via additive overloads.
 //
-// Includes <matx.h> (via matx_utils.hpp): include only from .cu files.
+// Includes <matx.h> (via detail/matx_views.hpp): include only from .cu files.
 
 #pragma once
 
@@ -24,7 +24,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
-#include "radar_common/tensor/matx_utils.hpp"
+#include "radar_common/tensor/detail/matx_views.hpp"
 
 namespace holoscan::radar::detail {
 

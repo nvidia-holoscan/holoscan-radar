@@ -1122,7 +1122,7 @@ void emit_accum(BackprojectionState<T, TGeom>& state, T* dst, int64_t batch, int
 #if __has_include("matx/kernels/sar_bp.cuh")
 #include <vector_types.h>
 
-#include "radar_common/tensor/matx_utils.hpp"
+#include "radar_common/tensor/detail/matx_views.hpp"
 #include "matx/operators/sar_bp.h"
 #endif
 

@@ -13,7 +13,7 @@
 // (per-cell selection) cannot be expressed in MatX at all — so the stencil
 // is the uniform home for all four variants.
 //
-// Includes <matx.h> (via matx_utils.hpp): include only from .cu files.
+// Includes <matx.h> (via detail/matx_views.hpp): include only from .cu files.
 
 #pragma once
 
@@ -27,7 +27,7 @@
 
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
-#include "radar_common/tensor/matx_utils.hpp"
+#include "radar_common/tensor/detail/matx_views.hpp"
 
 namespace holoscan::radar::detail {
 

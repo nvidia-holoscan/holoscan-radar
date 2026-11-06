@@ -14,7 +14,7 @@
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/dsp/window.hpp"
 #include "radar_common/sdk/config_cache.hpp"
-#include "radar_common/tensor/matx_utils.hpp"
+#include "radar_common/tensor/detail/matx_views.hpp"
 
 namespace holoscan::radar::detail {
 
