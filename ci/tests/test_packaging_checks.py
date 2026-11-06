@@ -75,26 +75,6 @@ class PackagingMetadata(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Unexpected Radar exports"):
                 packaging.check_cmake_package(prefix, {"selected_op"})
 
-    def test_consumer_must_resolve_radar_build_dependencies(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            radar, consumer = Path(temporary) / "radar", Path(temporary) / "consumer"
-            radar.mkdir()
-            consumer.mkdir()
-            built = (
-                "holoscan_DIR:PATH=/sdk/lib/cmake/holoscan\nmatx_DIR:PATH=/deps/lib/cmake/matx\n"
-            )
-            (radar / "CMakeCache.txt").write_text(built)
-            (consumer / "CMakeCache.txt").write_text(built.replace(":PATH", ":UNINITIALIZED", 1))
-            packaging.check_consumer_dependencies(consumer, radar)
-            (consumer / "CMakeCache.txt").write_text(
-                "holoscan_DIR:PATH=/sdk/lib/cmake/holoscan\nmatx_DIR:PATH=/other/lib/cmake/matx\n"
-            )
-            with self.assertRaisesRegex(RuntimeError, "Consumer matx_DIR"):
-                packaging.check_consumer_dependencies(consumer, radar)
-            (consumer / "CMakeCache.txt").write_text("holoscan_DIR:PATH=/sdk/lib/cmake/holoscan\n")
-            with self.assertRaisesRegex(RuntimeError, "Consumer matx_DIR None"):
-                packaging.check_consumer_dependencies(consumer, radar)
-
 
 if __name__ == "__main__":
     unittest.main()

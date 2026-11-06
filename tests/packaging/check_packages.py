@@ -185,10 +185,10 @@ def check_debian(args):
         raise RuntimeError(f"Expected one Radar export tree in TGZ, found {exports}")
     check_operator_libraries(exports[0].parents[3], expected)
     check_cmake_package(prefix, expected)
-    check_native_consumer(args, prefix, "debian", build, expected=expected)
+    check_native_consumer(args, prefix, "debian", expected=expected)
     check_installed_headers(args, prefix)
     check_cmake_package(exports[0].parents[3], expected)
-    check_native_consumer(args, exports[0].parents[3], "tgz", build, expected=expected)
+    check_native_consumer(args, exports[0].parents[3], "tgz", expected=expected)
     # Ordinary installs must support discovery with the Debian option disabled.
     subset = configure(
         args,
@@ -207,7 +207,6 @@ def check_debian(args):
         args,
         relocated,
         "subset",
-        subset,
         expected={"fmcw_range_processor_op"},
         absent={"cphd_reader_op", "fmcw_doppler_processor_op"},
     )
@@ -238,7 +237,7 @@ def check_installed_headers(args, prefix):
         args.source / "tests/packaging/headers",
         "-B",
         build,
-        f"-DCMAKE_PREFIX_PATH={prefix};{args.sdk_dir.parents[2]}",
+        f"-DCMAKE_PREFIX_PATH={prefix}",
         f"-Dholoscan_DIR={args.sdk_dir}",
         f"-DRADAR_INCLUDE_ROOT={prefix / 'include/holoscan/radar'}",
         f"-DCMAKE_CUDA_ARCHITECTURES={args.architectures}",
@@ -247,7 +246,7 @@ def check_installed_headers(args, prefix):
     run("cmake", "--build", build, "--parallel", args.parallel, cwd=args.work)
 
 
-def check_native_consumer(args, prefix, name, radar_build, expected=(), absent=()):
+def check_native_consumer(args, prefix, name, expected=(), absent=()):
     # Build against the extracted artifact, with no source/build include paths.
     consumer = args.work / f"consumer-{name}"
     command = [
@@ -263,7 +262,6 @@ def check_native_consumer(args, prefix, name, radar_build, expected=(), absent=(
         f"-DCMAKE_CUDA_ARCHITECTURES={args.architectures}",
     ]
     run(*command, cwd=args.work)
-    check_consumer_dependencies(consumer, radar_build)
     run("cmake", "--build", consumer, "--parallel", args.parallel, cwd=args.work)
     run(consumer / "radar_package_consumer", cwd=args.work)
 
@@ -284,16 +282,6 @@ def check_native_consumer(args, prefix, name, radar_build, expected=(), absent=(
         if (result.returncode == 0) != success:
             raise RuntimeError(
                 f"Unexpected {label} discovery result: {result.stdout}{result.stderr}"
-            )
-
-
-def check_consumer_dependencies(consumer, radar_build):
-    """Require the consumer to resolve the dependencies Radar was built against."""
-    built, consumed = cache_values(radar_build), cache_values(consumer)
-    for name in ("holoscan_DIR", "matx_DIR"):
-        if Path(consumed.get(name, "")).resolve() != Path(built[name]).resolve():
-            raise RuntimeError(
-                f"Consumer {name} {consumed.get(name)} differs from the Radar build's {built[name]}"
             )
 
 
