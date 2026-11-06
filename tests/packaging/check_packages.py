@@ -154,6 +154,17 @@ def package_with_cli(args, generators):
     return build_parent, artifacts
 
 
+def check_yaml_cpp_declared(prefix, depends_names):
+    """Installed headers that include yaml-cpp need libyaml-cpp-dev in Depends."""
+    users = [
+        str(path.relative_to(prefix))
+        for path in (prefix / "include").rglob("*.hpp")
+        if re.search(r"^\s*#\s*include\s*[<\"]yaml-cpp/", path.read_text(), re.M)
+    ]
+    if users and "libyaml-cpp-dev" not in depends_names:
+        raise RuntimeError(f"Installed headers include yaml-cpp without libyaml-cpp-dev: {users}")
+
+
 def check_debian(args):
     build_parent, artifacts = package_with_cli(args, "DEB,TGZ")
     build = build_parent / "holoscan_radar/package"
@@ -164,12 +175,14 @@ def check_debian(args):
     depends = subprocess.check_output(
         ["dpkg-deb", "--field", str(packages[0]), "Depends"], text=True
     )
-    has_tinyxml2 = any(dep.strip().split()[0] == "libtinyxml2-dev" for dep in depends.split(","))
+    depends_names = {dep.strip().split()[0] for dep in depends.split(",")}
+    has_tinyxml2 = "libtinyxml2-dev" in depends_names
     if has_tinyxml2 != ("cphd_reader_op" in expected):
         raise RuntimeError(f"Debian tinyxml2 dependency does not match CPHD selection: {depends}")
     unpacked = args.work / "unpacked"
     run("dpkg-deb", "--extract", packages[0], unpacked, cwd=args.work)
     prefix = unpacked / "opt/nvidia/holoscan"
+    check_yaml_cpp_declared(prefix, depends_names)
     check_operator_libraries(prefix, expected)
     if (prefix / "bin").exists() and any((prefix / "bin").iterdir()):
         raise RuntimeError("Operator-only Debian artifact contains executables")

@@ -35,9 +35,13 @@ target_include_directories(radar_common
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar>
 )
 
+# Installed radar_common/sdk YAML helpers and io/cphd_reader_op/collection_paths.hpp
+# include yaml-cpp headers; HSDK 5 no longer re-exports yaml-cpp.
+find_package(yaml-cpp CONFIG REQUIRED)
 target_link_libraries(radar_common
     PUBLIC
         holoscan::core
+        yaml-cpp::yaml-cpp
 )
 
 target_compile_features(radar_common PUBLIC cxx_std_20)

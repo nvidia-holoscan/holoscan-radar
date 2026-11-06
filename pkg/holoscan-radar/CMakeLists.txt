@@ -8,7 +8,8 @@ include(holohub_configure_deb)
 # Package selection runs before operators/; wait for the final target graph so
 # dependencies also reflect CPHD enabled by apps or explicit cached preferences.
 function(holoscan_radar_configure_deb)
-    set(_radar_deb_depends "holoscan (>= 5.0.0)")
+    # Installed headers include yaml-cpp, and radar_common exports yaml-cpp::yaml-cpp.
+    set(_radar_deb_depends "holoscan (>= 5.0.0), libyaml-cpp-dev")
     if(TARGET cphd_reader_op)
         # Installed CMake discovery needs tinyxml2's config, not just its runtime.
         string(APPEND _radar_deb_depends ", libtinyxml2-dev")

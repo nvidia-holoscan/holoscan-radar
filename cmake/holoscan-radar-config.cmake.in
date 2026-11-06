@@ -6,6 +6,7 @@
 include(CMakeFindDependencyMacro)
 find_dependency(holoscan 5.0 CONFIG COMPONENTS core params_io)
 find_dependency(CUDAToolkit)
+find_dependency(yaml-cpp CONFIG)
 # Keep MatX aligned with the selected SDK without changing caller search paths.
 set(_radar_saved_prefix_path "${CMAKE_PREFIX_PATH}")
 get_filename_component(_radar_sdk_prefix "${holoscan_DIR}/../../.." ABSOLUTE)
