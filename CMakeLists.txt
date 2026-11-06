@@ -3,18 +3,7 @@
 
 cmake_minimum_required(VERSION 4.0)
 
-# Default the CUDA architectures before project() enables the CUDA language,
-# following the SDK's MatX examples: `native` targets the GPU present at
-# build time; numeric values below 70 are floored (MatX requires compute
-# capability >= 7.0). Override with -DCMAKE_CUDA_ARCHITECTURES for CI or
-# cross-target builds.
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES "native")
-elseif(CMAKE_CUDA_ARCHITECTURES MATCHES "^[0-9]+$"
-       AND CMAKE_CUDA_ARCHITECTURES LESS 70)
-    message(STATUS "MatX requires CUDA compute capability >= 7.0; using 70")
-    set(CMAKE_CUDA_ARCHITECTURES "70")
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/HoloscanRadarCudaArchitectures.cmake")
 
 project(holoscan_radar
     VERSION 0.2.0
