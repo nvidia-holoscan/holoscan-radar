@@ -127,17 +127,23 @@ class PackagingMetadata(unittest.TestCase):
             (prefix / "lib").mkdir()
             (prefix / "lib/libop.so.1").touch()
             dynamic = " 0x1d (RUNPATH)  Library runpath: [{}]\n"
-            with mock.patch.object(
-                packaging.subprocess, "check_output", return_value=dynamic.format("$ORIGIN")
-            ):
-                packaging.check_library_rpaths(prefix)
-            with mock.patch.object(
-                packaging.subprocess,
-                "check_output",
-                return_value=dynamic.format("$ORIGIN:/opt/nvidia/holoscan/lib"),
-            ):
-                with self.assertRaisesRegex(RuntimeError, "non-relative RPATH"):
+            for runpath in ("$ORIGIN", "$ORIGIN/../lib", "${ORIGIN}/lib:$ORIGIN"):
+                with (
+                    self.subTest(runpath=runpath),
+                    mock.patch.object(
+                        packaging.subprocess, "check_output", return_value=dynamic.format(runpath)
+                    ),
+                ):
                     packaging.check_library_rpaths(prefix)
+            for runpath in ("$ORIGIN:/opt/nvidia/holoscan/lib", "$ORIGIN_SUFFIX", "lib"):
+                with (
+                    self.subTest(runpath=runpath),
+                    mock.patch.object(
+                        packaging.subprocess, "check_output", return_value=dynamic.format(runpath)
+                    ),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "non-relative RPATH"):
+                        packaging.check_library_rpaths(prefix)
 
 
 if __name__ == "__main__":

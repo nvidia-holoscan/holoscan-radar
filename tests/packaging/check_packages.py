@@ -153,7 +153,11 @@ def check_library_rpaths(prefix):
             continue
         dynamic = subprocess.check_output(["readelf", "-d", str(library)], text=True)
         for paths in re.findall(r"\((?:RPATH|RUNPATH)\).*\[([^\]]*)\]", dynamic):
-            absolute = [path for path in paths.split(":") if not path.startswith("$ORIGIN")]
+            absolute = [
+                path
+                for path in paths.split(":")
+                if not re.fullmatch(r"\$(ORIGIN|\{ORIGIN\})(/.*)?", path)
+            ]
             if absolute:
                 raise RuntimeError(f"{library.name} has non-relative RPATH entries: {absolute}")
 
