@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Shared library for the supporting data structures and helpers used across
+# Library for the supporting data structures and helpers used across
 # operator groups (see README.md in this directory). Host-side C++ only in
 # `radar_common`: MatX-facing helpers are header-only
 # (radar_common/tensor/detail/matx_views.hpp) and are compiled into each
@@ -9,7 +9,7 @@
 # Headers under any `detail/` directory are private and never installed.
 # CUDA shared kernels (group-by-label reduce) live in `radar_common_reduce`.
 
-add_library(radar_common STATIC
+add_library(radar_common
     radar_common/tensor/tensor_utils.cpp
     radar_common/dsp/window.cpp
     radar_common/dsp/ddm_code_generators.cpp
@@ -58,7 +58,7 @@ install(DIRECTORY radar_common
 # sparse TDM operator, tests, and application planning helpers. The host-only
 # radar_common target remains CUDA-free; this target owns the kernels and
 # per-instance cuFFT scratch.
-add_library(radar_common_mimo_compensation STATIC
+add_library(radar_common_mimo_compensation
     radar_common/dsp/mimo_coherent_compensation_stage.cu)
 add_library(holoscan::radar_common_mimo_compensation ALIAS
     radar_common_mimo_compensation)
@@ -89,7 +89,7 @@ add_subdirectory(radar_schemas)
 # DetectionReductionOp contract and any future consumer). Host-only
 # radar_common stays CUDA-free; this target owns the .cu objects so operators
 # link once instead of recompiling kernels (ODR).
-add_library(radar_common_reduce STATIC
+add_library(radar_common_reduce
     radar_common/reduce/group_by_label.cu)
 add_library(holoscan::radar_common_reduce ALIAS radar_common_reduce)
 
@@ -113,7 +113,7 @@ install(TARGETS radar_common_reduce
 # CUDA device steering-weight builder (shared by the angle operators). Keeps
 # the O(num_beams*num_channels) phase evaluation off the serial host path;
 # radar_common stays CUDA-free, so the kernel owns its own .cu target (ODR).
-add_library(radar_common_steering STATIC
+add_library(radar_common_steering
     radar_common/dsp/steering_weights_device.cu)
 add_library(holoscan::radar_common_steering ALIAS radar_common_steering)
 
@@ -136,7 +136,7 @@ install(TARGETS radar_common_steering
 
 # GPU-accelerated point-target simulator (MatX). The device counterpart of the
 # STL simulate() in radar_common/sim/scene.hpp; links MatX privately.
-add_library(radar_common_simulator STATIC
+add_library(radar_common_simulator
     radar_common/sim/simulator.cu)
 add_library(holoscan::radar_common_simulator ALIAS radar_common_simulator)
 
@@ -166,7 +166,7 @@ install(TARGETS radar_common_simulator
 # Materializes sub-array "looks" from the host-planned index tables; the host
 # planning (lattice detection, sub-array enumeration) stays in CUDA-free
 # radar_common, so this target owns only the .cu (ODR).
-add_library(radar_common_spatial_smoothing STATIC
+add_library(radar_common_spatial_smoothing
     radar_common/dsp/spatial_smoothing_device.cu)
 add_library(holoscan::radar_common_spatial_smoothing ALIAS
     radar_common_spatial_smoothing)
@@ -192,7 +192,7 @@ install(TARGETS radar_common_spatial_smoothing
 # MUSIC / Root-MUSIC / ESPRIT). Batched per-item model-order decision from the
 # eigenvalues matx::eig already produced on the GPU, with no host round trip;
 # radar_common stays CUDA-free, so this target owns the .cu (ODR).
-add_library(radar_common_source_count STATIC
+add_library(radar_common_source_count
     radar_common/dsp/source_count_device.cu)
 add_library(holoscan::radar_common_source_count ALIAS
     radar_common_source_count)

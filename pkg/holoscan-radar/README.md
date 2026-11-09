@@ -80,25 +80,31 @@ target_link_libraries(my_app PRIVATE holoscan::fmcw_range_processor_op)
 
 All built public targets share `holoscan_radar_targets.cmake`; individual target
 names are unchanged. Installed library files carry a `holoscan_radar_` prefix,
-for example `libholoscan_radar_cfar_detector_op.a`; link the `holoscan::`
+for example `libholoscan_radar_cfar_detector_op.so`; link the `holoscan::`
 targets rather than file names. Discovery also works with Debian packaging
 disabled and with intentional operator subsets. The package has no feature components.
 Consumers that manually included the old per-target export files must migrate
 to `find_package`; those files are no longer installed. Use a fresh installation
-prefix when upgrading to avoid retaining stale exports. CUDA, MatX, and the SDK
-remain required; installations containing CPHD also resolve tinyxml2 and Threads.
+prefix when upgrading to avoid retaining stale exports.
 
-For Debian packages containing CPHD, the package dependency on `libtinyxml2-dev`
-installs tinyxml2's CMake configuration and runtime library. A CPHD-free build
-omits this dependency. The full package resolves tinyxml2 during `find_package`,
-even when the application uses only FMCW operators.
+Libraries are shared by default and installed as `libholoscan_radar_<target>.so`;
+configure with `-DBUILD_SHARED_LIBS=OFF` to build and install static archives
+instead. CUDA and the SDK are required. Static installations also resolve MatX,
+and those containing CPHD also resolve tinyxml2 and Threads. Shared libraries
+keep these dependencies private.
+
+Debian packages containing CPHD depend on tinyxml2: `libtinyxml2-10` (the
+runtime library) for shared builds, or `libtinyxml2-dev` (its CMake
+configuration) for static builds, which resolve tinyxml2 during `find_package`
+even when the application uses only FMCW operators. A CPHD-free build omits
+this dependency.
 
 TGZ archives do not install system dependencies. Before using an archive that
-contains CPHD, install tinyxml2's development package yourself, in addition to
-the matching Holoscan SDK and CUDA toolkit. On Debian/Ubuntu:
+contains CPHD, install tinyxml2 yourself, in addition to the matching Holoscan
+SDK and CUDA toolkit. On Debian/Ubuntu:
 
 ```bash
-sudo apt-get install libtinyxml2-dev
+sudo apt-get install libtinyxml2-10   # libtinyxml2-dev for static builds
 ```
 
 The TGZ archive, for example `holoscan-radar-linux-x86_64-0.2.0.tar.gz` (`sbsa`

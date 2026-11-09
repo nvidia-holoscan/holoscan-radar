@@ -6,10 +6,14 @@
 include(CMakeFindDependencyMacro)
 find_dependency(holoscan 5.0 CONFIG COMPONENTS core params_io)
 find_dependency(CUDAToolkit)
-find_dependency(matx)
-if(@HOLOSCAN_RADAR_CONFIG_HAS_CPHD@)
-    find_dependency(Threads)
-    find_dependency(tinyxml2 CONFIG)
+# Shared libraries keep MatX, tinyxml2, and Threads private; static exports
+# name them as link dependencies.
+if(NOT @BUILD_SHARED_LIBS@)
+    find_dependency(matx)
+    if(@HOLOSCAN_RADAR_CONFIG_HAS_CPHD@)
+        find_dependency(Threads)
+        find_dependency(tinyxml2 CONFIG)
+    endif()
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/holoscan_radar_targets.cmake")

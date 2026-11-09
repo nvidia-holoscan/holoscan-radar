@@ -34,6 +34,25 @@ class PackagingMetadata(unittest.TestCase):
                 },
             )
 
+    def test_shared_build_detection_follows_cmake_booleans(self):
+        cases = {
+            None: True,
+            "ON": True,
+            "TRUE": True,
+            "yes": True,
+            "1": True,
+            "OFF": False,
+            "FALSE": False,
+            "0": False,
+            "": False,
+        }
+        for value, expected in cases.items():
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
+                build = Path(directory)
+                entry = "" if value is None else f"BUILD_SHARED_LIBS:BOOL={value}\n"
+                (build / "CMakeCache.txt").write_text(f"OP_sample_op:BOOL=ON\n{entry}")
+                self.assertEqual(packaging.is_shared(build), expected)
+
     def test_artifact_check_allows_contents_outside_curated_selection(self):
         with tempfile.TemporaryDirectory() as directory:
             prefix = Path(directory)
