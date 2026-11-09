@@ -25,6 +25,11 @@ function(holoscan_radar_configure_deb)
     set(CPACK_HOLOSCAN_RADAR_ARCHIVE_FILE_NAME
         "holoscan-radar-linux-${_radar_archive_arch}-${PROJECT_VERSION}")
     set(CPACK_PROJECT_CONFIG_FILE "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/cpack_project_config.cmake")
+    # Debian policy 12.5 requires /usr/share/doc/<package>/copyright even with an /opt prefix.
+    # An absolute install() destination would break TGZ, so stage it for DEB only.
+    cmake_path(SET CPACK_HOLOSCAN_RADAR_COPYRIGHT_FILE NORMALIZE
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../../LICENSE")
+    set(CPACK_PRE_BUILD_SCRIPTS "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/debian_copyright.cmake")
     holohub_configure_deb(
         NAME        "holoscan-radar"
         DESCRIPTION "${PROJECT_DESCRIPTION}"
