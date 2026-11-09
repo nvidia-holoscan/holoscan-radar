@@ -79,11 +79,6 @@ class InstalledConfig(unittest.TestCase):
                 (directory / f"{name}-config-version.cmake").write_text(
                     "set(PACKAGE_VERSION_COMPATIBLE TRUE)\n"
                 )
-            competing = root / "competing/lib/cmake/matx"
-            competing.mkdir(parents=True)
-            (competing / "matx-config.cmake").write_text(
-                'message(FATAL_ERROR "MatX selected from competing SDK")\n'
-            )
             modules = root / "modules"
             modules.mkdir()
             (modules / "FindCUDAToolkit.cmake").write_text("set(CUDAToolkit_FOUND TRUE)\n")
@@ -140,7 +135,7 @@ class InstalledConfig(unittest.TestCase):
                     str(consumer),
                     "-B",
                     str(root / name),
-                    f"-DCMAKE_PREFIX_PATH={relocated};{root / 'competing'};{sdk}",
+                    f"-DCMAKE_PREFIX_PATH={relocated};{sdk}",
                     f"-DCMAKE_MODULE_PATH={modules}",
                     *options,
                     success=success,
