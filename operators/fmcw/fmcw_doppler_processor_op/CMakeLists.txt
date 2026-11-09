@@ -17,8 +17,7 @@ target_link_libraries(fmcw_doppler_processor_op
     PRIVATE
         matx::matx)
 
-set_property(TARGET fmcw_doppler_processor_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(fmcw_doppler_processor_op)
 
 install(TARGETS fmcw_doppler_processor_op
     EXPORT holoscan_radar_targets

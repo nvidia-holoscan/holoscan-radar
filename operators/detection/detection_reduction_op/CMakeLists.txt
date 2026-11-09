@@ -15,8 +15,7 @@ target_link_libraries(detection_reduction_op
         holoscan::radar_common
         holoscan::radar_common_reduce)
 
-set_property(TARGET detection_reduction_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(detection_reduction_op)
 
 install(TARGETS detection_reduction_op
     EXPORT holoscan_radar_targets

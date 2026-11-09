@@ -16,8 +16,7 @@ target_link_libraries(ddm_sparse_demultiplex_op
         holoscan::radar_common_mimo_compensation
         holoscan::radar_schemas
 )
-set_property(TARGET ddm_sparse_demultiplex_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(ddm_sparse_demultiplex_op)
 install(TARGETS ddm_sparse_demultiplex_op
     EXPORT holoscan_radar_targets)
 include(GNUInstallDirs)

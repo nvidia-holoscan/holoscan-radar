@@ -325,7 +325,7 @@ What it does, and where to change it:
   explicit/cached test preferences; missing expected libraries fail artifact
   verification. `HOLOSCAN_RADAR_PKG_OPERATORS` entries are operator subdirectory
   selection keys, not CMake target names. By the existing library naming convention,
-  each selected key produces an installed `lib<key>.*`; the artifact check relies
+  each selected key produces an installed `libholoscan_radar_<key>.*`; the artifact check relies
   on this convention and allows additional libraries. If an operator changes its
   output name or produces multiple libraries, update the artifact check to verify
   the intended outputs. File presence alone does not prove an operator is usable;

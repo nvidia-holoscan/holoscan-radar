@@ -15,8 +15,7 @@ target_link_libraries(aperture_manager_op
         holoscan::radar_schemas
         CUDA::cudart)
 
-set_property(TARGET aperture_manager_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(aperture_manager_op)
 
 install(TARGETS aperture_manager_op
     EXPORT holoscan_radar_targets

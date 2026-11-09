@@ -20,8 +20,7 @@ target_link_libraries(root_music_estimator_op
         matx::matx
         CUDA::cusolver)
 
-set_property(TARGET root_music_estimator_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(root_music_estimator_op)
 
 install(TARGETS root_music_estimator_op
     EXPORT holoscan_radar_targets

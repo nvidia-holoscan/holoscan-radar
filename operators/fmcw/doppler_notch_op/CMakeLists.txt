@@ -15,8 +15,7 @@ target_link_libraries(doppler_notch_op
     PRIVATE
         matx::matx)
 
-set_property(TARGET doppler_notch_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(doppler_notch_op)
 
 install(TARGETS doppler_notch_op
     EXPORT holoscan_radar_targets)

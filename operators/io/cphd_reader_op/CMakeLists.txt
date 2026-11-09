@@ -37,7 +37,7 @@ target_link_libraries(cphd_reader_op
         tinyxml2::tinyxml2
         Threads::Threads)
 
-set_property(TARGET cphd_reader_op PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(cphd_reader_op)
 
 install(TARGETS cphd_reader_op
     EXPORT holoscan_radar_targets

@@ -18,8 +18,7 @@ target_link_libraries(virtual_array_assembly_op
     PRIVATE
         matx::matx)
 
-set_property(TARGET virtual_array_assembly_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(virtual_array_assembly_op)
 
 install(TARGETS virtual_array_assembly_op
     EXPORT holoscan_radar_targets

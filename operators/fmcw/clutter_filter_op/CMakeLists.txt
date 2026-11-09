@@ -16,8 +16,7 @@ target_link_libraries(clutter_filter_op
     PRIVATE
         matx::matx)
 
-set_property(TARGET clutter_filter_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(clutter_filter_op)
 
 install(TARGETS clutter_filter_op
     EXPORT holoscan_radar_targets

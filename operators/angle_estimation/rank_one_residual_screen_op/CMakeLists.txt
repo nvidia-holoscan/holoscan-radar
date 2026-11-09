@@ -8,7 +8,7 @@ target_include_directories(rank_one_residual_screen_op PUBLIC
     $<INSTALL_INTERFACE:include>)
 target_link_libraries(rank_one_residual_screen_op PUBLIC
     holoscan::core holoscan::radar_common holoscan::radar_schemas)
-set_property(TARGET rank_one_residual_screen_op PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(rank_one_residual_screen_op)
 install(TARGETS rank_one_residual_screen_op
     EXPORT holoscan_radar_targets)
 include(GNUInstallDirs)

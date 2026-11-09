@@ -42,7 +42,7 @@ target_link_libraries(radar_common
 )
 
 target_compile_features(radar_common PUBLIC cxx_std_20)
-set_property(TARGET radar_common PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(radar_common)
 
 install(TARGETS radar_common
     EXPORT holoscan_radar_targets
@@ -76,8 +76,7 @@ target_link_libraries(radar_common_mimo_compensation
         CUDA::cufft
 )
 
-set_property(TARGET radar_common_mimo_compensation
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(radar_common_mimo_compensation)
 
 install(TARGETS radar_common_mimo_compensation
     EXPORT holoscan_radar_targets
@@ -105,7 +104,7 @@ target_link_libraries(radar_common_reduce
         holoscan::radar_common
 )
 
-set_property(TARGET radar_common_reduce PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(radar_common_reduce)
 
 install(TARGETS radar_common_reduce
     EXPORT holoscan_radar_targets
@@ -129,7 +128,7 @@ target_link_libraries(radar_common_steering
         holoscan::radar_common
 )
 
-set_property(TARGET radar_common_steering PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(radar_common_steering)
 
 install(TARGETS radar_common_steering
     EXPORT holoscan_radar_targets
@@ -155,7 +154,7 @@ target_link_libraries(radar_common_simulator
         matx::matx
 )
 
-set_property(TARGET radar_common_simulator PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(radar_common_simulator)
 
 install(TARGETS radar_common_simulator
     EXPORT holoscan_radar_targets
@@ -183,8 +182,7 @@ target_link_libraries(radar_common_spatial_smoothing
         holoscan::radar_common
 )
 
-set_property(TARGET radar_common_spatial_smoothing
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(radar_common_spatial_smoothing)
 
 install(TARGETS radar_common_spatial_smoothing
     EXPORT holoscan_radar_targets
@@ -210,8 +208,7 @@ target_link_libraries(radar_common_source_count
         holoscan::radar_common
 )
 
-set_property(TARGET radar_common_source_count
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(radar_common_source_count)
 
 install(TARGETS radar_common_source_count
     EXPORT holoscan_radar_targets

@@ -36,15 +36,15 @@ class PackagingMetadata(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             prefix = Path(directory)
             (prefix / "lib").mkdir()
-            (prefix / "lib/libselected_op.a").touch()
-            (prefix / "lib/libother_op.a").touch()
+            (prefix / "lib/libholoscan_radar_selected_op.a").touch()
+            (prefix / "lib/libholoscan_radar_other_op.a").touch()
             packaging.check_operator_libraries(prefix, {"selected_op"})
 
     def test_artifact_check_rejects_missing_curated_library(self):
         with tempfile.TemporaryDirectory() as directory:
             prefix = Path(directory)
             (prefix / "lib").mkdir()
-            (prefix / "lib/libselected_op.a").touch()
+            (prefix / "lib/libholoscan_radar_selected_op.a").touch()
             with self.assertRaisesRegex(RuntimeError, "missing operator library: typo_op"):
                 packaging.check_operator_libraries(prefix, {"selected_op", "typo_op"})
 

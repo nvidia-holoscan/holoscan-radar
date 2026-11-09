@@ -11,7 +11,7 @@ target_link_libraries(ddm_power_fold_op PUBLIC
     holoscan::core
     holoscan::radar_common
     holoscan::radar_common_mimo_compensation)
-set_property(TARGET ddm_power_fold_op PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(ddm_power_fold_op)
 
 install(TARGETS ddm_power_fold_op
     EXPORT holoscan_radar_targets)

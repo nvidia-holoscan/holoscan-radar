@@ -17,8 +17,7 @@ target_link_libraries(beamscan_estimator_op
     PRIVATE
         matx::matx)
 
-set_property(TARGET beamscan_estimator_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(beamscan_estimator_op)
 
 install(TARGETS beamscan_estimator_op
     EXPORT holoscan_radar_targets
