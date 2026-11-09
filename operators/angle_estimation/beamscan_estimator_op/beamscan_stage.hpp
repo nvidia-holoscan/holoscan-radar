@@ -16,7 +16,7 @@
 // (num_az, num_el) layout), and picks the per-item peak (argmax + optional
 // parabolic sub-grid refinement).
 //
-// Includes <matx.h> (via matx_utils.hpp): include only from .cu files.
+// Includes <matx.h> (via detail/matx_views.hpp): include only from .cu files.
 
 #pragma once
 
@@ -26,7 +26,7 @@
 #include <type_traits>
 
 #include "radar_common/descriptors/enums.hpp"
-#include "radar_common/tensor/matx_utils.hpp"
+#include "radar_common/tensor/detail/matx_views.hpp"
 
 namespace holoscan::radar::detail {
 

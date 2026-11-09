@@ -18,7 +18,7 @@
 #include "angle_estimation/angle_boundary_device.hpp"
 #include "angle_estimation/music_estimator_op/music_stage.hpp"
 #include "radar_common/dsp/source_count_device.hpp"
-#include "radar_common/tensor/matx_utils.hpp"
+#include "radar_common/tensor/detail/matx_views.hpp"
 
 namespace holoscan::radar::detail {
 

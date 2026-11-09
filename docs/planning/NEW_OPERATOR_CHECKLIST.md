@@ -82,7 +82,7 @@ throws or remains deferred in the Jira backlog.
 - [ ] **Three-file split** (GPU operators):
   - `<op>.hpp` — contract reference: ports, parameters, class shell
   - `<op>_stage.hpp` — kernels / MatX stage (CUDA-TU only; includes
-    `matx_utils.hpp`)
+    the private, uninstalled `tensor/detail/matx_views.hpp`)
   - `<op>.cu` — `setup()`, `compute()`, explicit template instantiations
 - [ ] **Header** documents every port/shape/dtype and flags implementation
       gaps honestly (what throws vs what works).
@@ -265,6 +265,6 @@ contract-specific fixture, descriptor, enum, sizing policy, or metric is needed.
 | Custom parameter codecs | `radar_common/sdk/config_codecs.hpp` |
 | Batching / dtype / device checks | `radar_common/tensor/tensor_utils.hpp` |
 | Device tensor allocation | `radar_common/tensor/dlpack_buffer.hpp` |
-| MatX views (`.cu` / stage only) | `radar_common/tensor/matx_utils.hpp` |
+| MatX views (`.cu` / stage only; `detail/` is private, not installed) | `radar_common/tensor/detail/matx_views.hpp` |
 | Test TensorMap / overrides | `holoscan::testing` plus `tests/cpp/utils/tensor_fixtures.hpp` |
 | Host ↔ device test tensors | `tests/cpp/utils/tensor_fixtures.hpp` |

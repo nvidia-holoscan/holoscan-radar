@@ -4,8 +4,9 @@
 # Shared library for the supporting data structures and helpers used across
 # operator groups (see README.md in this directory). Host-side C++ only in
 # `radar_common`: MatX-facing helpers are header-only
-# (radar_common/tensor/matx_utils.hpp) and are compiled into each operator's .cu
-# translation units, so that target does not link MatX or CUDA.
+# (radar_common/tensor/detail/matx_views.hpp) and are compiled into each
+# operator's .cu translation units, so that target does not link MatX or CUDA.
+# Headers under any `detail/` directory are private and never installed.
 # CUDA shared kernels (group-by-label reduce) live in `radar_common_reduce`.
 
 add_library(radar_common STATIC
@@ -50,6 +51,7 @@ install(TARGETS radar_common
 install(DIRECTORY radar_common
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar
     FILES_MATCHING PATTERN "*.hpp"
+    PATTERN "detail" EXCLUDE
 )
 
 # CUDA TDM/DDM coherent-compensation stages shared by the dense MIMO operator,

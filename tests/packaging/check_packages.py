@@ -119,6 +119,8 @@ def package_with_cli(args, generators):
     env = os.environ.copy()
     env["HOLOSCAN_CLI_BUILD_PARENT_DIR"] = str(build_parent)
     env["CMAKE_BUILD_PARALLEL_LEVEL"] = args.parallel
+    # DEB/TGZ builds take no CMAKE_ARGS; keep their architectures matched to the wheel.
+    env["CUDAARCHS"] = args.architectures
     # The CLI delegates wheel builds to the production backend, with isolation.
     env["SKBUILD_BUILD_DIR"] = str(build_parent / "wheel")
     env["CMAKE_ARGS"] = shlex.join(

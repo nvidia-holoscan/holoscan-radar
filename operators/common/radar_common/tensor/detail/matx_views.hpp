@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// MatX-side helpers shared by the operator kernels. This header includes
-// <matx.h>, so it must only be included from CUDA translation units (.cu
-// files and the *_stage.hpp headers they include) — never from an
-// operator's public .hpp.
+// Private: not installed; include only from CUDA translation units (.cu) and
+// *_stage.hpp headers. MatX-side views and helpers shared by the operator
+// kernels; this header includes <matx.h>.
 
 #pragma once
 
