@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-find_package(yaml-cpp REQUIRED)
 find_package(holoscan 5 CONFIG REQUIRED COMPONENTS core visualization)
 
 add_executable(tiled_strip tiled_strip.cpp)
@@ -17,8 +16,7 @@ target_link_libraries(tiled_strip PRIVATE
     holoscan::tensor_dump_op
     holoscan::radar_app
     sar_mosaic
-    holoscan::params_io
-    yaml-cpp::yaml-cpp)
+    holoscan::params_io)
 configure_file(../config/tiled_strip.yaml ${CMAKE_CURRENT_BINARY_DIR}/tiled_strip.yaml COPYONLY)
 if(TARGET holoscan::visualization::op_holoviz)
     target_compile_definitions(tiled_strip PRIVATE HOLOSCAN_RADAR_SAR_HOLOVIZ=1)

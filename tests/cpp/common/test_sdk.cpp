@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// SDK glue (radar_common/sdk): the build-once config cache and the YAML
+// SDK glue (radar_common/sdk): the build-once config cache and the config
 // converters for enums, window specs, and waveform descriptors.
 
 #include <gtest/gtest.h>
@@ -24,7 +24,6 @@
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/sdk/config_codecs.hpp"
-#include "radar_common/sdk/yaml_converters.hpp"
 
 namespace {
 
@@ -144,61 +143,57 @@ TEST(ConfigCacheTest, FirstBuildIsSilentThenReconfigurationWarnsOnce) {
   EXPECT_FALSE(warned_building("a"));  // prior config still cached
 }
 
-// ---- YAML converters -------------------------------------------------------
+// ---- Config codecs ---------------------------------------------------------
 
-TEST(YamlConverters, EnumsRoundTripAndRejectUnknownSpellings) {
+template <typename T>
+T round_trip(const T& value) {
+  return holoscan::config::Document::from_value(holoscan::config::encode_config(value))
+      .template get<T>("");
+}
+
+holoscan::config::Document parse_yaml(const std::string& text) {
+  return holoscan::config_io::parse(text, holoscan::config_io::Format::kYaml);
+}
+
+TEST(ConfigCodecs, EnumsRoundTripAndRejectUnknownSpellings) {
   using holoscan::radar::ClutterFilterMethod;
   using holoscan::radar::FftNorm;
+  using holoscan::radar::MultiplexingScheme;
 
   for (auto norm : {FftNorm::kBackward, FftNorm::kOrtho, FftNorm::kForward}) {
-    const YAML::Node node = YAML::convert<FftNorm>::encode(norm);
-    EXPECT_EQ(node.as<FftNorm>(), norm);
+    EXPECT_EQ(round_trip(norm), norm);
   }
   for (auto method : {ClutterFilterMethod::kNone, ClutterFilterMethod::kMeanSubtraction,
                       ClutterFilterMethod::kSingleDelay, ClutterFilterMethod::kDoubleDelay}) {
-    const YAML::Node node = YAML::convert<ClutterFilterMethod>::encode(method);
-    EXPECT_EQ(node.as<ClutterFilterMethod>(), method);
+    EXPECT_EQ(round_trip(method), method);
   }
-  for (auto type : holoscan::radar::detail::kAllWindowTypes) {
-    const YAML::Node node = YAML::convert<WindowType>::encode(type);
-    EXPECT_EQ(node.as<WindowType>(), type);
+  for (auto type : holoscan::radar::config_detail::kWindowTypes) {
+    EXPECT_EQ(round_trip(type), type);
+  }
+  for (auto scheme : {MultiplexingScheme::kTdm, MultiplexingScheme::kDdm}) {
+    EXPECT_EQ(round_trip(scheme), scheme);
   }
 
-  EXPECT_THROW(YAML::Load("hanning").as<WindowType>(), std::invalid_argument);
-  EXPECT_THROW(YAML::Load("mean-subtraction").as<ClutterFilterMethod>(), std::invalid_argument);
+  EXPECT_FALSE(parse_yaml("mean-subtraction").try_get<ClutterFilterMethod>(""));
+  EXPECT_FALSE(parse_yaml("fdm").try_get<MultiplexingScheme>(""));
 }
 
-TEST(YamlConverters, WindowSpecMapScalarAndRoundTrip) {
-  const YAML::Node map =
-      YAML::Load("{type: kaiser, kaiser_beta: 8.5, coherent_gain_normalization: false}");
-  const auto spec = map.as<WindowSpec>();
-  EXPECT_EQ(spec.type, WindowType::kKaiser);
-  ASSERT_TRUE(spec.kaiser_beta.has_value());
-  EXPECT_DOUBLE_EQ(*spec.kaiser_beta, 8.5);
-  EXPECT_FALSE(spec.coherent_gain_normalization);
+TEST(ConfigCodecs, WindowSpecRoundTrips) {
+  const auto spec =
+      parse_yaml("{type: kaiser, kaiser_beta: 8.5, coherent_gain_normalization: false}")
+          .get<WindowSpec>("");
   // Omitted keys keep the struct defaults.
   EXPECT_DOUBLE_EQ(spec.tukey_alpha, WindowSpec{}.tukey_alpha);
-
-  // Bare scalar is shorthand for a default spec of that type.
-  const auto shorthand = YAML::Load("hann").as<WindowSpec>();
-  EXPECT_EQ(shorthand.type, WindowType::kHann);
-  EXPECT_EQ(shorthand.kaiser_beta, WindowSpec{}.kaiser_beta);
-
-  // encode -> decode is identity (operator== covers every field).
-  EXPECT_EQ(YAML::convert<WindowSpec>::encode(spec).as<WindowSpec>(), spec);
+  EXPECT_EQ(round_trip(spec), spec);
 }
 
-TEST(YamlConverters, WaveformDecodesBothSpellingsAndValidates) {
-  const char* common =
-      "carrier_frequency: 77.0e9\n"
-      "chirp_duration: 20.0e-6\n"
-      "sample_rate: 12.8e6\n"
-      "chirp_repetition_interval: 25.0e-6\n";
+TEST(ConfigCodecs, WaveformDecodesBothSpellingsAndRoundTrips) {
+  const std::string common =
+      "{carrier_frequency: 77.0e9, chirp_duration: 20.0e-6, sample_rate: 12.8e6, "
+      "chirp_repetition_interval: 25.0e-6, ";
   const auto by_bandwidth =
-      YAML::Load(std::string(common) + "bandwidth: 150.0e6").as<FMCWWaveformDescriptor>();
-  const auto by_slope =
-      YAML::Load(std::string(common) + "chirp_slope: 7.5e12").as<FMCWWaveformDescriptor>();
-  EXPECT_TRUE(by_bandwidth.is_valid());
+      parse_yaml(common + "bandwidth: 150.0e6}").get<FMCWWaveformDescriptor>("");
+  const auto by_slope = parse_yaml(common + "chirp_slope: 7.5e12}").get<FMCWWaveformDescriptor>("");
   // Same waveform through either spelling (field-level: the derived slope
   // 150e6/20e-6 rounds one ulp away from the literal 7.5e12), and the
   // bandwidth spelling matches native construction exactly.
@@ -207,17 +202,9 @@ TEST(YamlConverters, WaveformDecodesBothSpellingsAndValidates) {
   EXPECT_DOUBLE_EQ(by_bandwidth.bandwidth(), by_slope.bandwidth());
   EXPECT_EQ(by_bandwidth, FMCWWaveformDescriptor(test_waveform_spec()));
 
-  // Construction validation applies to YAML decode: neither spelling, and
-  // inconsistent double spelling, both throw.
-  EXPECT_THROW(YAML::Load(common).as<FMCWWaveformDescriptor>(), std::invalid_argument);
-  EXPECT_THROW(YAML::Load(std::string(common) + "bandwidth: 150.0e6\nchirp_slope: 1.0e12")
-                   .as<FMCWWaveformDescriptor>(),
-               std::invalid_argument);
-
-  // encode -> decode is identity for analytic (non-reference) waveforms.
-  EXPECT_EQ(
-      YAML::convert<FMCWWaveformDescriptor>::encode(by_bandwidth).as<FMCWWaveformDescriptor>(),
-      by_bandwidth);
+  EXPECT_FALSE(parse_yaml(common + "bandwidth: 150.0e6, chirp_slope: 1.0e12}")
+                   .try_get<FMCWWaveformDescriptor>(""));
+  EXPECT_EQ(round_trip(by_bandwidth), by_bandwidth);
 }
 
 TEST(ConfigCodecs, EnumsAndWindowShorthandMatchYaml) {
@@ -274,17 +261,14 @@ TEST(ConfigCodecs, WindowMapAndWaveformValidate) {
   EXPECT_FALSE(unknown_field_doc->try_get<WindowSpec>(""));
 }
 
-TEST(YamlConverters, ShiftInvariantSubarrayPairRoundTrips) {
-  const auto pair = YAML::Load("{reference_indices: [0, 1, 2], shifted_indices: [1, 2, 3]}")
-                        .as<ShiftInvariantSubarrayPair>();
+TEST(ConfigCodecs, ShiftInvariantSubarrayPairRoundTrips) {
+  const auto pair = parse_yaml("{reference_indices: [0, 1, 2], shifted_indices: [1, 2, 3]}")
+                        .get<ShiftInvariantSubarrayPair>("");
   EXPECT_EQ(pair.reference_indices, (std::vector<int64_t>{0, 1, 2}));
   EXPECT_EQ(pair.shifted_indices, (std::vector<int64_t>{1, 2, 3}));
-  EXPECT_EQ(
-      YAML::convert<ShiftInvariantSubarrayPair>::encode(pair).as<ShiftInvariantSubarrayPair>(),
-      pair);
+  EXPECT_EQ(round_trip(pair), pair);
 
-  EXPECT_THROW(YAML::Load("{reference_indices: [0, 1]}").as<ShiftInvariantSubarrayPair>(),
-               std::invalid_argument);
+  EXPECT_FALSE(parse_yaml("{reference_indices: [0, 1]}").try_get<ShiftInvariantSubarrayPair>(""));
 }
 
 }  // namespace

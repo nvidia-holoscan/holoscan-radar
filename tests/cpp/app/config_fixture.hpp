@@ -3,15 +3,16 @@
 
 #pragma once
 
-#include <yaml-cpp/yaml.h>
-
 #include <chrono>
 #include <cstddef>
 #include <filesystem>  // NOLINT(build/c++17)
+#include <format>
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <utility>
 
 #include <holoscan/config/io.hpp>
 
@@ -60,39 +61,66 @@ class PresetOverride {
   std::filesystem::path path_;
 };
 
-inline YAML::Node yaml_value(holoscan::config::ConfigView value) {
+// The document with every `extends:` applied.
+inline holoscan::config::Document resolved_document(const std::filesystem::path& path) {
+  return app::config::load_inherited_document(path);
+}
+
+// `document` with `value` at `path`, adding the key when it is absent.
+inline holoscan::config::Document with_value(const holoscan::config::Document& document,
+                                             std::string_view path,
+                                             holoscan::config::ConfigValue value) {
+  using holoscan::config::Edit;
+  return document.patched(document.find(path) ? Edit::replace(path, std::move(value))
+                                              : Edit::add(path, std::move(value)));
+}
+
+// Order-independent text for comparing two documents.
+inline std::string canonical(const holoscan::config::Document& document) {
+  return holoscan::config_io::serialize(document, holoscan::config_io::Format::kJson);
+}
+
+// Flow-style YAML for one value, for building preset override patches.
+inline std::string flow_yaml(holoscan::config::ConfigView value) {
   using Kind = holoscan::config::ConfigValueKind;
   switch (value.kind()) {
     case Kind::kNull:
-      return YAML::Node(YAML::NodeType::Null);
+      return "null";
     case Kind::kBool:
-      return YAML::Node(value.as_bool());
+      return value.as_bool() ? "true" : "false";
     case Kind::kSignedInteger:
-      return YAML::Node(value.as_signed_integer());
+      return std::to_string(value.as_signed_integer());
     case Kind::kUnsignedInteger:
-      return YAML::Node(value.as_unsigned_integer());
-    case Kind::kFloating:
-      return YAML::Node(value.as_floating());
-    case Kind::kString:
-      return YAML::Node(std::string(value.as_string()));
+      return std::to_string(value.as_unsigned_integer());
+    case Kind::kFloating: {
+      std::string text = std::format("{}", value.as_floating());
+      if (text.find_first_of(".en") == std::string::npos)
+        text += ".0";
+      return text;
+    }
+    case Kind::kString: {
+      std::string text = "\"";
+      for (const char c : value.as_string()) {
+        if (c == '"' || c == '\\')
+          text += '\\';
+        text += c;
+      }
+      return text + "\"";
+    }
     case Kind::kArray: {
-      YAML::Node node(YAML::NodeType::Sequence);
+      std::string text = "[";
       for (std::size_t i = 0; i < value.size(); ++i)
-        node.push_back(yaml_value(value.element(i)));
-      return node;
+        text += (i ? ", " : "") + flow_yaml(value.element(i));
+      return text + "]";
     }
     case Kind::kObject: {
-      YAML::Node node(YAML::NodeType::Map);
+      std::string text = "{";
       for (std::size_t i = 0; i < value.size(); ++i)
-        node[std::string(value.key(i))] = yaml_value(value.element(i));
-      return node;
+        text += (i ? ", " : "") + std::string(value.key(i)) + ": " + flow_yaml(value.element(i));
+      return text + "}";
     }
   }
   throw std::runtime_error("invalid config value");
-}
-
-inline YAML::Node resolved_yaml(const std::filesystem::path& path) {
-  return yaml_value(app::config::load_inherited_document(path).root());
 }
 
 }  // namespace holoscan::radar::testing

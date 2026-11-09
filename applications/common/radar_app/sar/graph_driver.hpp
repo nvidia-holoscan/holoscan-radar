@@ -4,7 +4,6 @@
 #pragma once
 
 #include <unistd.h>
-#include <yaml-cpp/yaml.h>
 
 #include <algorithm>
 #include <array>
@@ -653,11 +652,11 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
 // in for a collect that genuinely carries more. See the precision section of
 // SAR/OPERATOR_API.md.
 inline bool single_sample_precision(const std::filesystem::path& config) {
-  const YAML::Node root = YAML::LoadFile(config.string());
-  if (!root["sample_precision"]) {
+  const auto document = app::config::load_document(config);
+  if (!document.find("/sample_precision")) {
     return true;
   }
-  const auto value = root["sample_precision"].as<std::string>();
+  const auto value = document.get<std::string>("/sample_precision");
   if (value == "single") {
     return true;
   }

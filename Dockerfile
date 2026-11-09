@@ -54,9 +54,10 @@ RUN python3 -m pip install --no-cache-dir --upgrade 'pip>=25.1' \
 #                 CMAKE_<LANG>_COMPILER_LAUNCHER and the CTest driver points
 #                 CCACHE_DIR at the gitignored .cache/, so it survives the
 #                 build-test/ wipe.
-#   libyaml-cpp-dev — demo apps parse YAML configs with yaml-cpp. HSDK 4.x
-#                 exported it from the SDK install; HSDK 5 keeps yaml-cpp
-#                 private to config_io, so the apps need the system package.
+#   libyaml-cpp-dev — the performance harness parses its YAML recipes with
+#                 yaml-cpp. HSDK 4.x exported it from the SDK install; HSDK 5
+#                 keeps yaml-cpp private to config_io, so the harness needs
+#                 the system package. Applications use holoscan::config_io.
 #   libtinyxml2-dev — CPHDReaderOp parses CPHD XML metadata; the HSDK 5
 #                 development image no longer supplies this dependency.
 #   openssh-client — git-over-SSH and host tooling (dotfiles clone, remotes);

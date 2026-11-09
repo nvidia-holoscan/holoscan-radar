@@ -25,7 +25,6 @@ target_link_libraries(adaptive_aoa PRIVATE
     holoscan::radar_common
     holoscan::params_io
     holoscan::core
-    yaml-cpp
     CUDA::cudart)
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     target_link_libraries(adaptive_aoa PRIVATE holoscan::fmcw_dashboard)
