@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-find_package(yaml-cpp REQUIRED)
 find_package(holoscan 5 CONFIG REQUIRED COMPONENTS core visualization)
 
 add_executable(autofocus autofocus.cpp)
@@ -18,8 +17,7 @@ target_link_libraries(autofocus PRIVATE
     holoscan::phase_correction_op
     holoscan::tensor_dump_op
     holoscan::radar_app
-    holoscan::params_io
-    yaml-cpp::yaml-cpp)
+    holoscan::params_io)
 configure_file(../config/autofocus.yaml ${CMAKE_CURRENT_BINARY_DIR}/autofocus.yaml COPYONLY)
 foreach(scenario blurred corrected reference)
     configure_file(../config/autofocus_${scenario}.yaml

@@ -5,15 +5,13 @@
 // Holoviz flags come from the shared load_sar_config. This file adds the
 // auxiliary conjugate lattice and the position-error diagnostic, and refuses
 // formation shapes that are not Figure 2 (tiles, scroll, multi-collection,
-// pass-through manager). Operator blocks still flow through from_config().
+// pass-through manager). Operator blocks reach their operators through decode_params.
 //
 // load_sar_config returns a plain AppConfig, which is what the shared graph
 // driver expects, so these extras travel beside it in AutofocusExtras: main
 // owns one and hands it to both the load and the graph-building lambda.
 
 #pragma once
-
-#include <yaml-cpp/yaml.h>
 
 #include <algorithm>
 #include <array>
@@ -35,7 +33,7 @@
 #include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/math/constants.hpp"
-#include "radar_common/sdk/yaml_converters.hpp"
+#include "radar_common/sdk/config_codecs.hpp"
 
 namespace radar = holoscan::radar;
 
@@ -140,20 +138,18 @@ inline AuxFrame read_aux_frame(const AppConfig& cfg, int64_t first_pulse, int64_
   return f;
 }
 
-inline std::pair<int64_t, int64_t> pulse_range_from_yaml(const YAML::Node& root,
-                                                         const std::string& cphd_path) {
+inline std::pair<int64_t, int64_t> pulse_range_from_config(const holoscan::config::Document& doc,
+                                                           const std::string& cphd_path) {
   radar::cphd::CphdFile file(cphd_path);
   int64_t first = 0;
   int64_t last = file.channel(0).num_vectors;
-  if (const YAML::Node rd = root["cphd_reader"]) {
-    if (const YAML::Node pr = rd["pulse_range"]) {
-      const auto range = pr.as<std::vector<int64_t>>();
-      if (range.size() != 2) {
-        throw std::runtime_error("cphd_reader.pulse_range needs 2 entries");
-      }
-      first = range[0];
-      last = range[1];
+  if (const auto range =
+          sar_config::get_if<std::vector<int64_t>>(doc, "/cphd_reader/pulse_range")) {
+    if (range->size() != 2) {
+      throw std::runtime_error("cphd_reader.pulse_range needs 2 entries");
     }
+    first = (*range)[0];
+    last = (*range)[1];
   }
   if (last <= first) {
     throw std::runtime_error("pulse_range must be a non-empty half-open interval");
@@ -406,37 +402,39 @@ inline AuxPolarLattice derive_aux_polar_lattice(const AppConfig& cfg, int64_t fi
   return out;
 }
 
-inline void load_position_error(const YAML::Node& root, const AppConfig& cfg,
+inline void load_position_error(const holoscan::config::Document& doc, const AppConfig& cfg,
                                 PositionErrorConfig* out) {
-  const YAML::Node pe = root["position_error"];
-  if (!pe || pe.IsNull()) {
+  using sar_config::get_if;
+  const auto pe = doc.find("/position_error");
+  if (!pe || pe->kind() == holoscan::config::ConfigValueKind::kNull) {
     return;
   }
   out->enabled = true;
-  const std::string axis = pe["axis"] ? pe["axis"].as<std::string>() : std::string("look");
+  const std::string axis = get_if<std::string>(doc, "/position_error/axis").value_or("look");
   if (axis != "look") {
     throw std::runtime_error("position_error.axis must be look (mid-aperture APC to SRP)");
   }
   // The three shapes are additive, so any one of them on its own is a
   // complete profile and a block with none of them is an error rather than a
   // silent no-op.
-  if (const YAML::Node poly = pe["polynomial"]) {
-    out->profile.polynomial = poly.as<std::vector<double>>();
+  if (const auto poly = get_if<std::vector<double>>(doc, "/position_error/polynomial")) {
+    out->profile.polynomial = *poly;
     for (const double c : out->profile.polynomial) {
       if (!std::isfinite(c)) {
         throw std::runtime_error("position_error.polynomial must be finite");
       }
     }
   }
-  if (const YAML::Node sines = pe["sinusoids"]) {
-    if (!sines.IsSequence()) {
+  if (const auto sines = doc.find("/position_error/sinusoids")) {
+    if (sines->kind() != holoscan::config::ConfigValueKind::kArray) {
       throw std::runtime_error("position_error.sinusoids must be a sequence");
     }
-    for (const auto& node : sines) {
+    for (std::size_t i = 0; i < sines->size(); ++i) {
+      const std::string entry = "/position_error/sinusoids/" + std::to_string(i);
       app::sar::ErrorSinusoid sine;
-      sine.amplitude = node["amplitude"] ? node["amplitude"].as<double>() : 0.0;
-      sine.cycles = node["cycles"] ? node["cycles"].as<double>() : 0.0;
-      sine.phase_deg = node["phase_deg"] ? node["phase_deg"].as<double>() : 0.0;
+      sine.amplitude = get_if<double>(doc, entry + "/amplitude").value_or(0.0);
+      sine.cycles = get_if<double>(doc, entry + "/cycles").value_or(0.0);
+      sine.phase_deg = get_if<double>(doc, entry + "/phase_deg").value_or(0.0);
       if (!std::isfinite(sine.amplitude) || !std::isfinite(sine.cycles) ||
           !std::isfinite(sine.phase_deg)) {
         throw std::runtime_error("position_error.sinusoids entries must be finite");
@@ -447,29 +445,30 @@ inline void load_position_error(const YAML::Node& root, const AppConfig& cfg,
       out->profile.sinusoids.push_back(sine);
     }
   }
-  if (const YAML::Node rw = pe["random_walk"]) {
-    out->profile.random_walk_rms = rw["rms"] ? rw["rms"].as<double>() : 0.0;
+  if (doc.find("/position_error/random_walk")) {
+    out->profile.random_walk_rms =
+        get_if<double>(doc, "/position_error/random_walk/rms").value_or(0.0);
     if (!std::isfinite(out->profile.random_walk_rms)) {
       throw std::runtime_error("position_error.random_walk.rms must be finite");
     }
-    if (const YAML::Node seed = rw["seed"]) {
-      out->profile.random_walk_seed = seed.as<std::uint64_t>();
+    if (const auto seed = get_if<std::uint64_t>(doc, "/position_error/random_walk/seed")) {
+      out->profile.random_walk_seed = *seed;
     }
   }
   if (out->profile.empty()) {
     throw std::runtime_error(
         "position_error needs one of polynomial, sinusoids or random_walk (metres)");
   }
-  if (const YAML::Node w = pe["score_warn_rms_rad"]) {
-    out->warn_rms_rad = w.as<double>();
+  if (const auto w = get_if<double>(doc, "/position_error/score_warn_rms_rad")) {
+    out->warn_rms_rad = *w;
     if (!(out->warn_rms_rad > 0.0) || !std::isfinite(out->warn_rms_rad)) {
       throw std::runtime_error("position_error.score_warn_rms_rad must be finite and > 0");
     }
   }
-  if (const YAML::Node o = pe["oracle"]) {
-    out->oracle = o.as<bool>();
+  if (const auto o = get_if<bool>(doc, "/position_error/oracle")) {
+    out->oracle = *o;
   }
-  const auto window = af_detail::pulse_range_from_yaml(root, cfg.cphd_path);
+  const auto window = af_detail::pulse_range_from_config(doc, cfg.cphd_path);
   out->num_pulses = window.second - window.first;
 
   radar::cphd::CphdFile file(cfg.cphd_path);
@@ -509,31 +508,19 @@ inline AppConfig load_autofocus_config(const std::filesystem::path& path,
     throw std::runtime_error("autofocus does not take nvradar_vph_path");
   }
 
-  // Read these as their canonical spellings rather than through a YAML
-  // converter: the operator blocks reach their operators through
-  // decode_params, and this app only needs to know which topology was asked
-  // for before the graph exists.
-  const YAML::Node root = YAML::LoadFile(path.string());
-  int64_t max_ap = 0;
-  int64_t emit_interval = 0;
-  bool has_window = false;
-  std::string emit(radar::to_string(radar::ApertureEmitMode::kContinue));
-  if (const YAML::Node am = root["aperture_manager"]) {
-    if (const YAML::Node m = am["max_aperture_pulses"]) {
-      max_ap = m.as<int64_t>();
-    }
-    if (const YAML::Node e = am["emit_mode"]) {
-      emit = e.as<std::string>();
-    }
-    if (const YAML::Node i = am["emit_interval_pulses"]) {
-      emit_interval = i.as<int64_t>();
-    }
-    if (const YAML::Node w = am["aperture_window"]) {
-      if (const YAML::Node t = w["type"]) {
-        has_window = t.as<std::string>() != radar::to_string(radar::WindowType::kNone);
-      }
-    }
-  }
+  // The operator blocks reach their operators through decode_params; this
+  // app only needs to know which topology was asked for before the graph
+  // exists.
+  using sar_config::get_if;
+  const auto doc = radar::app::config::load_document(path);
+  const int64_t max_ap = get_if<int64_t>(doc, "/aperture_manager/max_aperture_pulses").value_or(0);
+  const std::string emit =
+      get_if<std::string>(doc, "/aperture_manager/emit_mode")
+          .value_or(std::string(radar::to_string(radar::ApertureEmitMode::kContinue)));
+  const int64_t emit_interval =
+      get_if<int64_t>(doc, "/aperture_manager/emit_interval_pulses").value_or(0);
+  const auto window_spec = get_if<radar::WindowSpec>(doc, "/aperture_manager/aperture_window");
+  const bool has_window = window_spec && window_spec->type != radar::WindowType::kNone;
   if (max_ap <= 0) {
     throw std::runtime_error(
         "Figure 2 needs aperture_manager.max_aperture_pulses > 0 "
@@ -547,12 +534,12 @@ inline AppConfig load_autofocus_config(const std::filesystem::path& path,
   cfg.wire_weight = has_window;
   cfg.show_playback_lag = false;
 
-  load_position_error(root, cfg, &extras->position_error);
+  load_position_error(doc, cfg, &extras->position_error);
   if (extras->position_error.oracle && !extras->position_error.enabled) {
     throw std::runtime_error("position_error.oracle needs a position_error block");
   }
 
-  const auto window = af_detail::pulse_range_from_yaml(root, cfg.cphd_path);
+  const auto window = af_detail::pulse_range_from_config(doc, cfg.cphd_path);
   const int64_t first_pulse = window.first;
   const int64_t last_pulse = window.second;
   extras->aperture_pulses = last_pulse - first_pulse;
@@ -572,51 +559,48 @@ inline AppConfig load_autofocus_config(const std::filesystem::path& path,
     return cfg;
   }
 
-  if (const YAML::Node af = root["autofocus"]) {
-    extras->window_fraction_in_yaml = static_cast<bool>(af["window_fraction"]);
-  }
+  extras->window_fraction_in_yaml = doc.find("/autofocus/window_fraction").has_value();
 
   int64_t num_v = 32;
   int64_t num_u = 0;
   double samples_per_psf = 2.0;
   bool polar = false;
-  if (const YAML::Node aux = root["aux_lattice"]) {
-    if (const YAML::Node m = aux["mode"]) {
-      const auto mode = m.as<std::string>();
-      if (mode == "polar") {
+  if (doc.find("/aux_lattice")) {
+    if (const auto mode = get_if<std::string>(doc, "/aux_lattice/mode")) {
+      if (*mode == "polar") {
         polar = true;
         num_v = 0;  // 0 = auto-size from the product's range span
-      } else if (mode != "cartesian") {
+      } else if (*mode != "cartesian") {
         throw std::runtime_error("aux_lattice.mode must be 'polar' or 'cartesian'");
       }
     }
-    if (const YAML::Node geom = aux["sample_geometry"]) {
+    if (doc.find("/aux_lattice/sample_geometry")) {
       if (polar) {
         throw std::runtime_error(
             "aux_lattice.sample_geometry cannot describe a polar lattice; "
             "drop one of mode: polar / sample_geometry");
       }
-      extras->aux_sample_geometry = geom.as<radar::SampleGeometry>();
+      extras->aux_sample_geometry = doc.get<radar::SampleGeometry>("/aux_lattice/sample_geometry");
       return cfg;
     }
-    if (const YAML::Node nv = aux["num_v"]) {
-      num_v = nv.as<int64_t>();
+    if (const auto nv = get_if<int64_t>(doc, "/aux_lattice/num_v")) {
+      num_v = *nv;
     }
-    if (const YAML::Node nu = aux["num_u"]) {
+    if (doc.find("/aux_lattice/num_u")) {
       if (!polar) {
         throw std::runtime_error(
             "aux_lattice.num_u applies to mode: polar only "
             "(the Cartesian grid takes samples_per_psf)");
       }
-      num_u = nu.as<int64_t>();
+      num_u = doc.get<int64_t>("/aux_lattice/num_u");
     }
-    if (const YAML::Node spp = aux["samples_per_psf"]) {
+    if (doc.find("/aux_lattice/samples_per_psf")) {
       if (polar) {
         throw std::runtime_error(
             "aux_lattice.samples_per_psf applies to the Cartesian grid; "
             "a polar lattice takes num_u");
       }
-      samples_per_psf = spp.as<double>();
+      samples_per_psf = doc.get<double>("/aux_lattice/samples_per_psf");
     }
   }
   if (polar) {

@@ -3,9 +3,9 @@
 
 #include <gtest/gtest.h>
 
-#include <yaml-cpp/yaml.h>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
+#include <span>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -25,7 +25,10 @@
 namespace {
 
 using holoscan::radar::testing::PresetOverride;
-using holoscan::radar::testing::resolved_yaml;
+using holoscan::config::ConfigValue;
+using holoscan::radar::testing::canonical;
+using holoscan::radar::testing::resolved_document;
+using holoscan::radar::testing::with_value;
 
 namespace mimo = holoscan::radar::app::mimo;
 namespace radar = holoscan::radar;
@@ -35,15 +38,15 @@ std::filesystem::path config_path(const char* name) {
 }
 
 void expect_smoke_matches_production(const char* production_name, const char* smoke_name) {
-  YAML::Node expected = resolved_yaml(config_path(production_name));
-  const YAML::Node smoke = resolved_yaml(config_path(smoke_name));
-  expected["app"]["run"]["num_frames"] = 2;
-  expected["app"]["visualization"]["enabled"] = false;
-  expected["app"]["range_loss"] = YAML::Node(YAML::NodeType::Null);
-  YAML::Node targets(YAML::NodeType::Sequence);
-  targets.push_back(expected["app"]["targets"][0]);
-  expected["app"]["targets"] = targets;
-  EXPECT_EQ(YAML::Dump(expected), YAML::Dump(smoke));
+  auto expected = resolved_document(config_path(production_name));
+  const auto smoke = resolved_document(config_path(smoke_name));
+  expected = with_value(expected, "/app/run/num_frames", ConfigValue::signed_integer(2));
+  expected = with_value(expected, "/app/visualization/enabled", ConfigValue::boolean(false));
+  expected = with_value(expected, "/app/range_loss", ConfigValue::null());
+  const ConfigValue first_target = expected.at("/app/targets/0").to_value();
+  expected = with_value(expected, "/app/targets",
+                        ConfigValue::array(std::span<const ConfigValue>(&first_target, 1)));
+  EXPECT_EQ(canonical(expected), canonical(smoke));
 }
 
 class MutatedConfig {

@@ -162,6 +162,17 @@ def check_library_rpaths(prefix):
                 raise RuntimeError(f"{library.name} has non-relative RPATH entries: {absolute}")
 
 
+def check_headers_without_yaml_cpp(prefix):
+    """Installed headers must compile without yaml-cpp, which the package does not declare."""
+    offenders = [
+        str(path.relative_to(prefix))
+        for path in (prefix / "include").rglob("*.hpp")
+        if re.search(r"^\s*#\s*include\s*[<\"]yaml-cpp/", path.read_text(), re.M)
+    ]
+    if offenders:
+        raise RuntimeError(f"Installed headers include yaml-cpp: {offenders}")
+
+
 def package_with_cli(args, generators):
     artifacts = args.work / "artifacts"
     artifacts.mkdir()
@@ -169,6 +180,8 @@ def package_with_cli(args, generators):
     env = os.environ.copy()
     env["HOLOSCAN_CLI_BUILD_PARENT_DIR"] = str(build_parent)
     env["CMAKE_BUILD_PARALLEL_LEVEL"] = args.parallel
+    # DEB/TGZ builds take no CMAKE_ARGS; keep their architectures matched to the wheel.
+    env["CUDAARCHS"] = args.architectures
     # The CLI delegates wheel builds to the production backend, with isolation.
     env["SKBUILD_BUILD_DIR"] = str(build_parent / "wheel")
     env["CMAKE_ARGS"] = shlex.join(
@@ -220,6 +233,7 @@ def check_debian(args):
     run("dpkg-deb", "--extract", packages[0], unpacked, cwd=args.work)
     prefix = unpacked / "opt/nvidia/holoscan"
     check_operator_libraries(prefix, expected)
+    check_headers_without_yaml_cpp(prefix)
     if (prefix / "bin").exists() and any((prefix / "bin").iterdir()):
         raise RuntimeError("Operator-only Debian artifact contains executables")
     if (prefix / "holoscan_radar").exists():

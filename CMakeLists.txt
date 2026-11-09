@@ -3,18 +3,7 @@
 
 cmake_minimum_required(VERSION 4.0)
 
-# Default the CUDA architectures before project() enables the CUDA language,
-# following the SDK's MatX examples: `native` targets the GPU present at
-# build time; numeric values below 70 are floored (MatX requires compute
-# capability >= 7.0). Override with -DCMAKE_CUDA_ARCHITECTURES for CI or
-# cross-target builds.
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES "native")
-elseif(CMAKE_CUDA_ARCHITECTURES MATCHES "^[0-9]+$"
-       AND CMAKE_CUDA_ARCHITECTURES LESS 70)
-    message(STATUS "MatX requires CUDA compute capability >= 7.0; using 70")
-    set(CMAKE_CUDA_ARCHITECTURES "70")
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/HoloscanRadarCudaArchitectures.cmake")
 
 project(holoscan_radar
     VERSION 0.2.0
@@ -33,34 +22,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ---------------------------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------------------------
-# HSDK 4.x re-exported MatX from find_package(holoscan) via find_dependency.
-# HSDK 5 keeps MatX in the SDK install tree but does not pull it in
-# transitively — find it explicitly.
-# The CLI may mount a sibling SDK and prepend it to CMAKE_PREFIX_PATH.
-# Keep all SDK dependency packages aligned with an explicit holoscan_DIR.
-if(holoscan_DIR)
-    get_filename_component(_radar_sdk_prefix "${holoscan_DIR}/../../.." ABSOLUTE)
-    list(PREPEND CMAKE_PREFIX_PATH "${_radar_sdk_prefix}")
-    # Reused CLI build directories can retain dependency cache entries
-    # from another SDK, even after the prefix path changes.
-    foreach(_radar_sdk_package IN ITEMS Flatbuffers CCCL CUB Thrust dlpack fmt
-            libcudacxx magic_enum nvtx3)
-        string(TOLOWER "${_radar_sdk_package}" _radar_sdk_package_lower)
-        set(_radar_sdk_package_dir
-            "${_radar_sdk_prefix}/lib/cmake/${_radar_sdk_package_lower}")
-        if(EXISTS "${_radar_sdk_package_dir}")
-            set(${_radar_sdk_package}_DIR "${_radar_sdk_package_dir}" CACHE PATH
-                "Dependency from the selected Holoscan SDK" FORCE)
-        endif()
-    endforeach()
-    unset(_radar_sdk_package_lower)
-    unset(_radar_sdk_package_dir)
-    unset(_radar_sdk_package)
-    unset(_radar_sdk_prefix)
-endif()
-
+# find_package(holoscan) resolves its own dependencies (CCCL, fmt, ...) from the SDK.
 find_package(CUDAToolkit REQUIRED)
 find_package(holoscan REQUIRED COMPONENTS core params_io testing)
+# HSDK 4.x re-exported MatX from find_package(holoscan) via find_dependency.
+# HSDK 5 does not pull it in transitively, so find it explicitly.
 find_package(matx REQUIRED)
 
 

@@ -42,7 +42,7 @@ Basis: externally distributed Apache-2.0 Holoscan module with customer/partner-f
 **Key boundaries and interfaces:**
 
 - **Operator APIs:** C++ (`holoscan::radar`) and Python (`holoscan.radar`) operators consume application-supplied tensors and parameters in the same process as the Holoscan runtime.
-- **Application configuration:** Demo apps load YAML via `YAML::LoadFile` / `yaml.safe_load` and Holoscan `from_config()` (e.g., under `applications/fmcw_*/`); operator parameter blocks and graph shape can change based on those files.
+- **Application configuration:** Demo apps load YAML via Holoscan `config_io` / `yaml.safe_load` and decode operator parameters with Holoscan `params::decode` (e.g., under `applications/fmcw_*/`); operator parameter blocks and graph shape can change based on those files.
 - **Visualization and reporting:** Optional Holoviz paths (`HolovizOp`, `radar_app` viz helpers) and report operators (e.g., `DetectionReportOp`, `ClusterReportOp`) render or log detection/cluster metadata locally.
 - **Build and packaging:** CMake against Holoscan SDK / CUDA / MatX; optional container based on a published Holoscan NGC image; wheel builds via scikit-build-core.
 - **Auxiliary tooling:** Performance harnesses under `performance/` and CI helper scripts under `.github/workflows/scripts/`.
@@ -53,7 +53,7 @@ This repository does **not** implement network listeners, authentication, or rem
 
 The following scenarios reflect the main security concerns for this codebase, including auxiliary paths:
 
-1. **Malicious or untrusted application configuration (YAML):** Attacker-controlled config files consumed by demo loaders (`YAML::LoadFile` / `yaml.safe_load`) or Holoscan `from_config()` can change operator parameters, graph wiring (e.g., `peak_only` gating clustering), and visualization settings, leading to denial of service, unexpected processing behavior, or unsafe resource use if writers of those files are not controlled.
+1. **Malicious or untrusted application configuration (YAML):** Attacker-controlled config files consumed by demo loaders (Holoscan `config_io` / `yaml.safe_load`) or Holoscan `params::decode` can change operator parameters, graph wiring (e.g., `peak_only` gating clustering), and visualization settings, leading to denial of service, unexpected processing behavior, or unsafe resource use if writers of those files are not controlled.
 
 2. **Untrusted tensor / parameter inputs to GPU operators:** Malformed shapes, sizes, or values on ports into FMCW, CFAR, clustering, or angle-estimation operators (MatX/CUDA paths under `operators/`) can cause process crashes, GPU faults, or resource exhaustion; impact is generally bounded by the host process unless the platform provides stronger isolation.
 
@@ -61,7 +61,7 @@ The following scenarios reflect the main security concerns for this codebase, in
 
 4. **Disclosure of operational radar outputs via reports and visualization:** When connected to real sensors, report operators and Holoviz overlays can expose detections, ranges, velocities, and angles on local displays or in logs. Misconfigured logging or shared displays in multi-user environments can leak operationally sensitive situational data.
 
-5. **Supply chain and build-time trust:** Builds depend on Holoscan SDK, CUDA Toolkit, MatX (via the SDK), yaml-cpp (apps), container base images, and optional pip installs (e.g., developer CLI tools in the Dockerfile). Compromised mirrors, tampered packages, or unpinned tooling increase exposure if builds are not verified and run in trusted environments.
+5. **Supply chain and build-time trust:** Builds depend on Holoscan SDK, CUDA Toolkit, MatX (via the SDK), yaml-cpp (performance harness), container base images, and optional pip installs (e.g., developer CLI tools in the Dockerfile). Compromised mirrors, tampered packages, or unpinned tooling increase exposure if builds are not verified and run in trusted environments.
 
 6. **Auxiliary scripts invoking shells:** CI helpers (e.g., subprocess usage under `.github/workflows/scripts/`) can amplify risk if run on untrusted inputs or in shared CI contexts without the intended trusted-operator assumptions.
 

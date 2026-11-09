@@ -3,14 +3,14 @@
 
 #include <gtest/gtest.h>
 
-#include <yaml-cpp/yaml.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <holoscan/config/io.hpp>
 
 #include "config.hpp"  // NOLINT(build/include_subdir)
 #include "radar_app/app/multi_profile_source.hpp"
@@ -33,12 +33,12 @@ std::filesystem::path smoke_config() {
 }
 
 std::string profile_patch(const char* field, const char* value) {
-  auto resolved = holoscan::radar::testing::resolved_yaml(smoke_config());
-  auto profiles = resolved["app"]["profiles"];
-  profiles[1][field] = YAML::Load(value);
-  YAML::Node patch;
-  patch["app"]["profiles"] = profiles;
-  return YAML::Dump(patch);
+  namespace testing = holoscan::radar::testing;
+  const auto resolved = testing::resolved_document(smoke_config());
+  const auto parsed = holoscan::config_io::parse(value, holoscan::config_io::Format::kYaml);
+  const auto patched = testing::with_value(resolved, std::string("/app/profiles/1/") + field,
+                                           parsed.root().to_value());
+  return "app:\n  profiles: " + testing::flow_yaml(patched.at("/app/profiles")) + "\n";
 }
 
 TEST(TransmitFrameCoordinator, PreservesTransmitStampAcrossDifferentSourceActivations) {
