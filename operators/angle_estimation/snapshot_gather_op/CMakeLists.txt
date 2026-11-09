@@ -13,8 +13,7 @@ target_link_libraries(snapshot_gather_op
         holoscan::core
         holoscan::radar_common)
 
-set_property(TARGET snapshot_gather_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(snapshot_gather_op)
 
 install(TARGETS snapshot_gather_op
     EXPORT holoscan_radar_targets

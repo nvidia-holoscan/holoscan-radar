@@ -16,8 +16,7 @@ target_link_libraries(autofocus_op
         matx::matx
         CUDA::cudart)
 
-set_property(TARGET autofocus_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(autofocus_op)
 
 install(TARGETS autofocus_op
     EXPORT holoscan_radar_targets

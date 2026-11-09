@@ -8,6 +8,8 @@
 #   clustering/       — clustering operators (DBSCAN)
 #   angle_estimation/ — angle estimation operators (beamformers, subspace DOA)
 
+include(HoloscanRadarLibraries)
+
 # The shared library is not gated: every operator group links against it.
 add_subdirectory(common)
 

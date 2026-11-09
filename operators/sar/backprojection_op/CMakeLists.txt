@@ -16,8 +16,7 @@ target_link_libraries(backprojection_op
     PRIVATE
         matx::matx)
 
-set_property(TARGET backprojection_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(backprojection_op)
 
 # I1: bundled matx::experimental::sar_bp needs C++20 (concepts). Local
 # to this translation unit; not a MatX pin bump.

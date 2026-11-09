@@ -8,7 +8,7 @@ target_include_directories(multi_source_expansion_op PUBLIC
     $<INSTALL_INTERFACE:include>)
 target_link_libraries(multi_source_expansion_op PUBLIC
     holoscan::core holoscan::radar_common)
-set_property(TARGET multi_source_expansion_op PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(multi_source_expansion_op)
 install(TARGETS multi_source_expansion_op
     EXPORT holoscan_radar_targets)
 include(GNUInstallDirs)

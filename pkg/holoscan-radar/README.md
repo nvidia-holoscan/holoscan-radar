@@ -79,8 +79,10 @@ target_link_libraries(my_app PRIVATE holoscan::fmcw_range_processor_op)
 ```
 
 All built public targets share `holoscan_radar_targets.cmake`; individual target
-names are unchanged. Discovery also works with Debian packaging disabled and
-with intentional operator subsets. The package has no feature components.
+names are unchanged. Installed library files carry a `holoscan_radar_` prefix,
+for example `libholoscan_radar_cfar_detector_op.a`; link the `holoscan::`
+targets rather than file names. Discovery also works with Debian packaging
+disabled and with intentional operator subsets. The package has no feature components.
 Consumers that manually included the old per-target export files must migrate
 to `find_package`; those files are no longer installed. Use a fresh installation
 prefix when upgrading to avoid retaining stale exports. CUDA, MatX, and the SDK

@@ -17,8 +17,7 @@ target_link_libraries(mimo_deinterleave_op
     PRIVATE
         matx::matx)
 
-set_property(TARGET mimo_deinterleave_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(mimo_deinterleave_op)
 
 install(TARGETS mimo_deinterleave_op
     EXPORT holoscan_radar_targets

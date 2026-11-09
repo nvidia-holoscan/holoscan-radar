@@ -16,8 +16,7 @@ target_link_libraries(sar_range_compression_op
     PRIVATE
         matx::matx)
 
-set_property(TARGET sar_range_compression_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(sar_range_compression_op)
 
 install(TARGETS sar_range_compression_op
     EXPORT holoscan_radar_targets

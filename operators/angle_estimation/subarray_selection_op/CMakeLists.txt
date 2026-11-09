@@ -16,8 +16,7 @@ target_link_libraries(subarray_selection_op
         holoscan::radar_schemas
         holoscan::radar_common_spatial_smoothing)
 
-set_property(TARGET subarray_selection_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(subarray_selection_op)
 
 install(TARGETS subarray_selection_op
     EXPORT holoscan_radar_targets

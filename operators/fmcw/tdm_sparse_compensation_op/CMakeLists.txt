@@ -19,8 +19,7 @@ target_link_libraries(tdm_sparse_compensation_op
         holoscan::radar_schemas
 )
 
-set_property(TARGET tdm_sparse_compensation_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(tdm_sparse_compensation_op)
 
 install(TARGETS tdm_sparse_compensation_op
     EXPORT holoscan_radar_targets)

@@ -16,7 +16,7 @@ target_link_libraries(tensor_dump_op
         holoscan::core
         holoscan::radar_common)
 
-set_property(TARGET tensor_dump_op PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(tensor_dump_op)
 
 install(TARGETS tensor_dump_op
     EXPORT holoscan_radar_targets

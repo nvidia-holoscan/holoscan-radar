@@ -16,8 +16,7 @@ target_link_libraries(cfar_detector_op
     PRIVATE
         matx::matx)
 
-set_property(TARGET cfar_detector_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(cfar_detector_op)
 
 install(TARGETS cfar_detector_op
     EXPORT holoscan_radar_targets

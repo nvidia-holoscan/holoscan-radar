@@ -13,8 +13,7 @@ target_link_libraries(feature_assembly_op
         holoscan::core
         holoscan::radar_common)
 
-set_property(TARGET feature_assembly_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(feature_assembly_op)
 
 install(TARGETS feature_assembly_op
     EXPORT holoscan_radar_targets

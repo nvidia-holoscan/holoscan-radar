@@ -15,8 +15,7 @@ target_link_libraries(phase_correction_op
     PRIVATE
         CUDA::cudart)
 
-set_property(TARGET phase_correction_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(phase_correction_op)
 
 install(TARGETS phase_correction_op
     EXPORT holoscan_radar_targets

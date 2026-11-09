@@ -18,8 +18,7 @@ target_link_libraries(phase_shift_beamformer_op
     PRIVATE
         matx::matx)
 
-set_property(TARGET phase_shift_beamformer_op
-    PROPERTY POSITION_INDEPENDENT_CODE ON)
+holoscan_radar_set_library_properties(phase_shift_beamformer_op)
 
 install(TARGETS phase_shift_beamformer_op
     EXPORT holoscan_radar_targets
