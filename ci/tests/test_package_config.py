@@ -43,8 +43,8 @@ class InstalledConfig(unittest.TestCase):
             )
             build = root / "build"
             # Reuse the tree to verify both adding and removing the dependency.
-            for enabled in (False, True, False):
-                with self.subTest(cphd=enabled):
+            for enabled, shared in ((False, True), (True, True), (True, False), (False, False)):
+                with self.subTest(cphd=enabled, shared=shared):
                     subprocess.run(
                         [
                             "cmake",
@@ -53,6 +53,7 @@ class InstalledConfig(unittest.TestCase):
                             "-B",
                             str(build),
                             f"-DBUILD_CPHD={'ON' if enabled else 'OFF'}",
+                            f"-DBUILD_SHARED_LIBS={'ON' if shared else 'OFF'}",
                         ],
                         check=True,
                         capture_output=True,
@@ -79,7 +80,7 @@ class InstalledConfig(unittest.TestCase):
                     ).strip()
                     expected = "holoscan (>= 5.0.0)"
                     if enabled:
-                        expected += ", libtinyxml2-dev"
+                        expected += ", libtinyxml2-10" if shared else ", libtinyxml2-dev"
                     self.assertEqual(depends, expected)
 
     def write_package_fixture(self, root):
@@ -239,6 +240,7 @@ class InstalledConfig(unittest.TestCase):
                 "cmake_minimum_required(VERSION 4.0)\nproject(Fixture VERSION 0.2.0 LANGUAGES NONE)\n"
                 "include(CMakePackageConfigHelpers)\n"
                 "set(HOLOSCAN_RADAR_CONFIG_HAS_CPHD ON)\n"
+                "set(BUILD_SHARED_LIBS OFF)\n"
                 f'configure_package_config_file("{ROOT}/cmake/holoscan-radar-config.cmake.in" '
                 '"${CMAKE_CURRENT_BINARY_DIR}/holoscan-radar-config.cmake" '
                 "INSTALL_DESTINATION lib/cmake/holoscan-radar)\n"

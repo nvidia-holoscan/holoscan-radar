@@ -236,7 +236,9 @@ def check_debian(args):
     depends = subprocess.check_output(
         ["dpkg-deb", "--field", str(packages[0]), "Depends"], text=True
     )
-    has_tinyxml2 = any(dep.strip().split()[0] == "libtinyxml2-dev" for dep in depends.split(","))
+    # Shared libraries need only tinyxml2's runtime; static exports need its config.
+    tinyxml2 = "libtinyxml2-10" if is_shared(build) else "libtinyxml2-dev"
+    has_tinyxml2 = any(dep.strip().split()[0] == tinyxml2 for dep in depends.split(","))
     if has_tinyxml2 != ("cphd_reader_op" in expected):
         raise RuntimeError(f"Debian tinyxml2 dependency does not match CPHD selection: {depends}")
     unpacked = args.work / "unpacked"
@@ -295,6 +297,20 @@ def check_debian(args):
     )
 
 
+def cmake_true(value):
+    value = value.strip().upper()
+    if value in {"1", "ON", "YES", "TRUE", "Y"}:
+        return True
+    try:
+        return float(value) != 0
+    except ValueError:
+        return False
+
+
+def is_shared(build):
+    return cmake_true(cache_values(build).get("BUILD_SHARED_LIBS", "ON"))
+
+
 def check_cmake_package(prefix, expected):
     configs = list(prefix.rglob("holoscan-radar-config.cmake"))
     if len(configs) != 1:
@@ -350,10 +366,17 @@ def check_native_consumer(args, prefix, name, expected=(), absent=()):
 
     version = tomllib.loads((args.source / "pyproject.toml").read_text())["project"]["version"]
     # Probe discovery failures in separate build trees, never stale caches.
+    # Shared libraries keep MatX and tinyxml2 private; static exports require both.
+    shared = any(prefix.rglob("libholoscan_radar_*.so"))
+    private_deps = [
+        "-DCMAKE_DISABLE_FIND_PACKAGE_matx=TRUE",
+        "-DCMAKE_DISABLE_FIND_PACKAGE_tinyxml2=TRUE",
+    ]
     for label, options, success in (
         ("exact", [f"-DRADAR_VERSION={version};EXACT"], True),
         ("future", ["-DRADAR_VERSION=999.0"], False),
         ("component", ["-DRADAR_COMPONENT_ARGS=COMPONENTS;unsupported"], False),
+        ("private-deps", private_deps, shared),
     ):
         probe = command.copy()
         probe[probe.index("-B") + 1] = args.work / f"consumer-{name}-{label}"

@@ -446,8 +446,13 @@ names are unchanged. Discovery also works with Debian packaging disabled and
 with intentional operator subsets. The package has no feature components.
 Consumers that manually included the old per-target export files must migrate
 to `find_package`; those files are no longer installed. Use a fresh installation
-prefix when upgrading to avoid retaining stale exports. CUDA, MatX, and the SDK
-remain required; installations containing CPHD also resolve tinyxml2 and Threads.
-Debian packages containing CPHD declare `libtinyxml2-dev` as a dependency.
+prefix when upgrading to avoid retaining stale exports.
+
+Libraries are shared by default and installed as `libholoscan_radar_<target>.so`;
+configure with `-DBUILD_SHARED_LIBS=OFF` to build and install static archives
+instead. CUDA and the SDK are required. Static installations also resolve MatX,
+and those containing CPHD also resolve tinyxml2 and Threads. Shared libraries
+keep these dependencies private.
+Debian packages containing CPHD declare a tinyxml2 dependency.
 For TGZ archives, install it yourself; see the
 [archive prerequisites](pkg/holoscan-radar/README.md#consuming-the-installed-c-package).

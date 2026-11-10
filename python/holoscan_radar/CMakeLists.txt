@@ -25,6 +25,11 @@ set_target_properties(holoscan_radar_python PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar"
     BUILD_RPATH "$ORIGIN/../../lib"
     INSTALL_RPATH "$ORIGIN/../lib")
+if(BUILD_SHARED_LIBS)
+    # HSDK compares payload and parameter type tokens by address. Export the
+    # module's copies so they unify with those in the shared operator libraries.
+    set_target_properties(holoscan_radar_python PROPERTIES CXX_VISIBILITY_PRESET default)
+endif()
 target_include_directories(holoscan_radar_python PRIVATE
     "${PROJECT_SOURCE_DIR}/operators"
     "${PROJECT_SOURCE_DIR}/operators/common"

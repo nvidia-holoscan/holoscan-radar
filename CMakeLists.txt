@@ -69,6 +69,10 @@ if(NOT DEFINED HOLOSCAN_RADAR_BUILD_TESTING)
     endif()
 endif()
 
+# Installed libraries are shared by default, matching the Holoscan SDK.
+# Configure with -DBUILD_SHARED_LIBS=OFF for static libraries.
+option(BUILD_SHARED_LIBS "Build Holoscan Radar libraries as shared libraries" ON)
+
 # Artifact checks build fresh packages and are enabled by the CI test driver.
 option(HOLOSCAN_RADAR_TEST_PACKAGING "Test Debian and Python wheel artifacts" OFF)
 
