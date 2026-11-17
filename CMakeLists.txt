@@ -11,6 +11,15 @@ project(holoscan_radar
     LANGUAGES CXX CUDA
 )
 
+# Install under /usr like Holoscan SDK 5 packages; GNUInstallDirs then selects
+# the multiarch library directory (lib/<triplet>) on Debian-based systems.
+# Explicit CMAKE_INSTALL_PREFIX/CMAKE_INSTALL_LIBDIR values and parent projects
+# keep control, and wheels keep the scikit-build-core layout.
+if(PROJECT_IS_TOP_LEVEL AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT AND NOT SKBUILD)
+    set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH
+        "Install path prefix, prepended onto install directories." FORCE)
+endif()
+include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

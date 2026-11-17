@@ -35,6 +35,27 @@ def cache_values(build):
     )
 
 
+def install_layout(build):
+    """Return the configured install prefix and library directory of a build tree."""
+    values = cache_values(build)
+    return Path(values["CMAKE_INSTALL_PREFIX"]), values["CMAKE_INSTALL_LIBDIR"]
+
+
+def library_architecture(build):
+    compilers = list(build.glob("CMakeFiles/*/CMakeCXXCompiler.cmake"))
+    match = re.search(
+        r'^set\(CMAKE_CXX_LIBRARY_ARCHITECTURE "([^"]+)"\)$', compilers[0].read_text(), re.M
+    )
+    if not match:
+        raise RuntimeError("CMake reported no multiarch library architecture")
+    return match.group(1)
+
+
+def export_prefix(export, libdir):
+    """Return the install prefix holding <libdir>/cmake/holoscan-radar/<export>."""
+    return export.parents[len(Path(libdir, "cmake", "holoscan-radar").parts)]
+
+
 def configure(args, name, *options):
     """Probe CMake configuration semantics; artifacts use the public package CLI."""
     build = args.work / name
@@ -93,6 +114,21 @@ def check_configuration(args, full):
     }
     if selected != {"clutter_filter_op", "cphd_reader_op"}:
         raise RuntimeError(f"Unexpected subset selection: {selected}")
+    # Default installs and packages use /usr with the multiarch library directory.
+    expected_layout = (Path("/usr"), f"lib/{library_architecture(full)}")
+    if install_layout(full) != expected_layout:
+        raise RuntimeError(f"Unexpected install layout: {install_layout(full)}")
+    layout = configure(
+        args,
+        "explicit-layout",
+        "-DCMAKE_INSTALL_PREFIX=/opt/example",
+        "-DCMAKE_INSTALL_LIBDIR=lib64",
+    )
+    if install_layout(layout) != (Path("/opt/example"), "lib64"):
+        raise RuntimeError(f"Explicit install layout was overridden: {install_layout(layout)}")
+    cpack = (layout / "pkg/CPackConfig-holoscan-radar.cmake").read_text()
+    if 'set(CPACK_HOLOSCAN_RADAR_INSTALL_PREFIX "/opt/example")' not in cpack:
+        raise RuntimeError("Packages do not follow the explicit install prefix")
     explicit = configure(args, "explicit-tests", "-DHOLOSCAN_RADAR_BUILD_TESTING=ON")
     if not (explicit / "tests/CTestTestfile.cmake").exists():
         raise RuntimeError("Explicit tests ON was overridden by packaging")
@@ -115,11 +151,12 @@ def check_operator_libraries(prefix, expected):
 
 
 # The TGZ is a raw install tree of the packaged files under the DEB prefix.
-ARCHIVE_PREFIX = PurePosixPath("opt/nvidia/holoscan")
-ARCHIVE_PAYLOAD = re.compile(
-    r"include/.+|lib/lib[^/]+\.(a|so(\.[0-9]+)*)|lib/cmake/holoscan-radar/[^/]+\.cmake"
-    r"|share/doc/holoscan-radar/(LICENSE\.txt|NOTICE)"
-)
+def archive_payload(libdir):
+    lib = re.escape(str(libdir))
+    return re.compile(
+        rf"include/.+|{lib}/lib[^/]+\.(a|so(\.[0-9]+)*)|{lib}/cmake/holoscan-radar/[^/]+\.cmake"
+        r"|share/doc/holoscan-radar/(LICENSE\.txt|NOTICE)"
+    )
 
 
 def archive_name(version):
@@ -127,7 +164,7 @@ def archive_name(version):
     return f"holoscan-radar-linux-{arch}-{version}.tar.gz"
 
 
-def check_archive_members(members):
+def check_archive_members(members, prefix, libdir):
     """Allow only packaged payload, and no member or link that escapes the extraction root."""
     files, directories = set(), set()
     for member in members:
@@ -136,20 +173,20 @@ def check_archive_members(members):
         if any(item.is_absolute() or ".." in item.parts for item in [path, *links]):
             raise RuntimeError(f"Unsafe TGZ member: {member.name} -> {member.linkname}")
         (directories if member.isdir() else files).add(path)
+    prefix, payload = PurePosixPath(prefix), archive_payload(libdir)
     unexpected = [
         path
         for path in files
-        if not path.is_relative_to(ARCHIVE_PREFIX)
-        or not ARCHIVE_PAYLOAD.fullmatch(str(path.relative_to(ARCHIVE_PREFIX)))
+        if not path.is_relative_to(prefix) or not payload.fullmatch(str(path.relative_to(prefix)))
     ]
     unexpected += [path for path in directories if not any(path in f.parents for f in files)]
     if unexpected:
         raise RuntimeError(f"Unexpected TGZ members: {sorted(map(str, unexpected))}")
 
 
-def check_library_rpaths(prefix):
+def check_library_rpaths(prefix, libdir="lib"):
     """Shared libraries may search only $ORIGIN-relative paths."""
-    for library in (prefix / "lib").glob("*.so*"):
+    for library in (prefix / libdir).glob("*.so*"):
         if library.is_symlink():
             continue
         dynamic = subprocess.check_output(["readelf", "-d", str(library)], text=True)
@@ -243,8 +280,9 @@ def check_debian(args):
         raise RuntimeError(f"Debian tinyxml2 dependency does not match CPHD selection: {depends}")
     unpacked = args.work / "unpacked"
     run("dpkg-deb", "--extract", packages[0], unpacked, cwd=args.work)
-    prefix = unpacked / "opt/nvidia/holoscan"
-    check_operator_libraries(prefix, expected)
+    install_prefix, libdir = install_layout(build)
+    prefix = unpacked / install_prefix.relative_to("/")
+    check_operator_libraries(prefix / libdir, expected)
     check_headers_without_yaml_cpp(prefix)
     check_legal_files(args, prefix)
     copyright_file = unpacked / "usr/share/doc/holoscan-radar/copyright"
@@ -262,12 +300,14 @@ def check_debian(args):
         raise RuntimeError(f"Expected TGZ {archive_name(version)}, found {archives[0].name}")
     archive_root = args.work / "archive"
     with tarfile.open(archives[0]) as archive:
-        check_archive_members(archive.getmembers())
+        check_archive_members(archive.getmembers(), install_prefix.relative_to("/"), libdir)
         archive.extractall(archive_root, filter="data")
-    archive_prefix = archive_root / ARCHIVE_PREFIX
-    check_library_rpaths(archive_prefix)
-    check_operator_libraries(archive_prefix, expected)
+    archive_prefix = archive_root / install_prefix.relative_to("/")
+    check_library_rpaths(archive_prefix, libdir)
+    check_operator_libraries(archive_prefix / libdir, expected)
     check_legal_files(args, archive_prefix)
+    if (archive_root / "usr/share/doc/holoscan-radar/copyright").exists():
+        raise RuntimeError("TGZ artifact unexpectedly contains the Debian-only copyright file")
     check_cmake_package(prefix, expected)
     check_native_consumer(args, prefix, "debian", expected=expected)
     check_installed_headers(args, prefix)

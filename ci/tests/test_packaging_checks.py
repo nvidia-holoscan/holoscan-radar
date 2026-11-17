@@ -69,6 +69,12 @@ class PackagingMetadata(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "missing operator library: typo_op"):
                 packaging.check_operator_libraries(prefix, {"selected_op", "typo_op"})
 
+    def test_export_prefix_follows_multiarch_library_directory(self):
+        root = Path("/archive/holoscan-radar/usr")
+        for libdir in ("lib", "lib/x86_64-linux-gnu"):
+            export = root / libdir / "cmake/holoscan-radar/holoscan_radar_targets.cmake"
+            self.assertEqual(packaging.export_prefix(export, libdir), root)
+
     def package_tree(self, prefix):
         directory = prefix / "lib/cmake/holoscan-radar"
         directory.mkdir(parents=True)
@@ -105,26 +111,28 @@ class PackagingMetadata(unittest.TestCase):
         return members
 
     def test_archive_allows_packaged_payload_under_debian_prefix(self):
-        prefix = "opt/nvidia/holoscan"
+        prefix, lib = "usr", "lib/x86_64-linux-gnu"
         packaging.check_archive_members(
             self.archive_members(
-                ("opt", tarfile.DIRTYPE, ""),
+                ("usr", tarfile.DIRTYPE, ""),
                 (f"{prefix}/include/holoscan/radar/op.hpp", tarfile.REGTYPE, ""),
-                (f"{prefix}/lib/libselected_op.a", tarfile.REGTYPE, ""),
-                (f"{prefix}/lib/libshared_op.so.1", tarfile.REGTYPE, ""),
-                (f"{prefix}/lib/libshared_op.so", tarfile.SYMTYPE, "libshared_op.so.1"),
+                (f"{prefix}/{lib}/libselected_op.a", tarfile.REGTYPE, ""),
+                (f"{prefix}/{lib}/libshared_op.so.1", tarfile.REGTYPE, ""),
+                (f"{prefix}/{lib}/libshared_op.so", tarfile.SYMTYPE, "libshared_op.so.1"),
                 (
-                    f"{prefix}/lib/cmake/holoscan-radar/holoscan-radar-config.cmake",
+                    f"{prefix}/{lib}/cmake/holoscan-radar/holoscan-radar-config.cmake",
                     tarfile.REGTYPE,
                     "",
                 ),
                 (f"{prefix}/share/doc/holoscan-radar/LICENSE.txt", tarfile.REGTYPE, ""),
                 (f"{prefix}/share/doc/holoscan-radar/NOTICE", tarfile.REGTYPE, ""),
-            )
+            ),
+            prefix,
+            lib,
         )
 
     def test_archive_rejects_unpackaged_or_escaping_members(self):
-        prefix = "opt/nvidia/holoscan"
+        prefix, lib = "usr", "lib/x86_64-linux-gnu"
         for name, kind, link, message in (
             (f"{prefix}/bin/siso", tarfile.REGTYPE, "", "Unexpected"),
             (f"{prefix}/bin", tarfile.DIRTYPE, "", "Unexpected"),
@@ -133,12 +141,14 @@ class PackagingMetadata(unittest.TestCase):
             ("holoscan-radar_0.2.0/include/op.hpp", tarfile.REGTYPE, "", "Unexpected"),
             (f"/{prefix}/include/op.hpp", tarfile.REGTYPE, "", "Unsafe"),
             (f"{prefix}/../include/op.hpp", tarfile.REGTYPE, "", "Unsafe"),
-            (f"{prefix}/lib/libop.so", tarfile.SYMTYPE, "/usr/lib/libop.so", "Unsafe"),
-            (f"{prefix}/lib/libop.so", tarfile.SYMTYPE, "../../libop.so", "Unsafe"),
+            (f"{prefix}/{lib}/libop.so", tarfile.SYMTYPE, "/usr/lib/libop.so", "Unsafe"),
+            (f"{prefix}/{lib}/libop.so", tarfile.SYMTYPE, "../../libop.so", "Unsafe"),
         ):
             with self.subTest(name=name, link=link):
                 with self.assertRaisesRegex(RuntimeError, message):
-                    packaging.check_archive_members(self.archive_members((name, kind, link)))
+                    packaging.check_archive_members(
+                        self.archive_members((name, kind, link)), prefix, lib
+                    )
 
     def test_library_rpaths_must_be_origin_relative(self):
         with tempfile.TemporaryDirectory() as temporary:
