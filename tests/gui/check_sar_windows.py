@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise both SAR windows and idle final-image shutdown on a real X11 server."""
+"""Exercise SAR panels, independent updates, resizing, and idle shutdown on real X11."""
 
 import argparse
 import ctypes as c
@@ -33,9 +33,10 @@ def check(args):
             f"extends: {json.dumps(str(Path(args.config).resolve()))}\n"
             "app:\n  visualization:\n    enabled: true\n    headless: false\n"
             "    final_image_hold_s: -1\n    max_side: 256\n"
-            "    window_width: 256\n    window_height: 256\n"
+            f"    window_width: {args.canvas_width}\n    window_height: {args.canvas_height}\n"
             "    window_title: Radar CI SAR formation\n"
             f"    resize_mode: {args.resize_mode}\n"
+            f"    timeline: {{placement: {args.timeline_placement}}}\n"
         )
         if args.soak_seconds:
             with preset.open("a") as config:
@@ -93,18 +94,101 @@ def check(args):
                             )
 
                 formation = wait(lambda: find_window(lib, display, root, b"Radar CI SAR formation"))
-                timeline = wait(lambda: find_window(lib, display, root, b"SAR timeline"))
-                # Xvfb has no window manager; keep the diagnostic window from
-                # obscuring the formation canvas during pixel observations.
-                lib.XMoveWindow(display, timeline, 0, 600)
-                lib.XFlush(display)
-                wait(lambda: colors(lib, display, formation, geometry(lib, display, formation)) > 8)
-                wait(lambda: colors(lib, display, timeline, geometry(lib, display, timeline)) > 8)
+                docked = args.timeline_placement == "bottom"
+                x11_dock = docked and args.presenter == "x11"
+                timeline = (
+                    formation
+                    if docked and not x11_dock
+                    else wait(lambda: find_window(lib, display, root, b"SAR timeline"))
+                )
+                image_panel = (
+                    wait(lambda: find_window(lib, display, root, b"SAR image"))
+                    if x11_dock
+                    else formation
+                )
+                if not docked:
+                    lib.XMoveWindow(display, timeline, 0, 600)
+                    lib.XFlush(display)
+                wait(
+                    lambda: colors(lib, display, image_panel, geometry(lib, display, image_panel))
+                    > 8
+                )
+                if not docked or x11_dock:
+                    wait(
+                        lambda: colors(lib, display, timeline, geometry(lib, display, timeline)) > 8
+                    )
                 for width, height in ((640, 360), (320, 480), (256, 256)):
                     lib.XResizeWindow(display, formation, width, height)
                     lib.XFlush(display)
                     wait(lambda: geometry(lib, display, formation) == (width, height))
+                    if x11_dock:
+                        wait(lambda: geometry(lib, display, timeline) == (width, 112))
+                        wait(lambda: geometry(lib, display, image_panel) == (width, height - 112))
+                        wait(lambda: colors(lib, display, image_panel, (width, height - 112)) > 8)
+                        wait(lambda: colors(lib, display, timeline, (width, 112)) > 8)
                     wait(lambda: colors(lib, display, formation, (width, height)) > 8)
+                    if docked and not x11_dock:
+                        wait(
+                            lambda: colors(lib, display, formation, (width, 112), (0, height - 112))
+                            > 8
+                        )
+                if x11_dock and not args.soak_seconds:
+                    # With the source at EOF, timeline ticks must neither upload
+                    # nor repaint the cached image panel, even though time advances.
+                    lib.XGetWindowProperty.argtypes = [
+                        c.c_void_p,
+                        c.c_ulong,
+                        c.c_ulong,
+                        c.c_long,
+                        c.c_long,
+                        c.c_int,
+                        c.c_ulong,
+                        c.POINTER(c.c_ulong),
+                        c.POINTER(c.c_int),
+                        c.POINTER(c.c_ulong),
+                        c.POINTER(c.c_ulong),
+                        c.POINTER(c.c_void_p),
+                    ]
+                    atom = lib.XInternAtom(display, b"RADAR_PRESENTATION_COUNTERS", 0)
+
+                    def counters(window):
+                        actual, count, remaining = c.c_ulong(), c.c_ulong(), c.c_ulong()
+                        form, data = c.c_int(), c.c_void_p()
+                        lib.XGetWindowProperty(
+                            display,
+                            window,
+                            atom,
+                            0,
+                            2,
+                            0,
+                            6,
+                            c.byref(actual),
+                            c.byref(form),
+                            c.byref(count),
+                            c.byref(remaining),
+                            c.byref(data),
+                        )
+                        try:
+                            if form.value == 32 and count.value == 2:
+                                return tuple(
+                                    c.cast(data, c.POINTER(c.c_ulong))[i] for i in range(2)
+                                )
+                            return None
+                        finally:
+                            if data:
+                                lib.XFree(data)
+
+                    wait(lambda: counters(image_panel))
+                    wait(lambda: counters(timeline))
+                    time.sleep(0.3)
+                    before_image, before_timeline = counters(image_panel), counters(timeline)
+                    time.sleep(0.5)
+                    assert (
+                        counters(image_panel) == before_image
+                    ), "Timeline repainted/uploaded SAR image"
+                    assert (
+                        counters(timeline)[0] > before_timeline[0]
+                    ), "Timeline stopped at image EOF"
                 log.seek(0)
                 initial_counts = [
                     int(x) for x in re.findall(r"SAR: image (\d+) formed", log.read())
@@ -142,6 +226,27 @@ def check(args):
                         + "\n"
                     )
                 if args.capture:
+                    capture_height = args.canvas_height + (112 if docked else 0)
+                    lib.XResizeWindow(display, formation, args.canvas_width, capture_height)
+                    lib.XFlush(display)
+                    wait(
+                        lambda: geometry(lib, display, formation)
+                        == (args.canvas_width, capture_height)
+                    )
+                    if x11_dock:
+                        wait(lambda: geometry(lib, display, timeline) == (args.canvas_width, 112))
+                        wait(
+                            lambda: geometry(lib, display, image_panel)
+                            == (args.canvas_width, args.canvas_height)
+                        )
+                        wait(
+                            lambda: colors(
+                                lib, display, image_panel, (args.canvas_width, args.canvas_height)
+                            )
+                            > 8
+                        )
+                        wait(lambda: colors(lib, display, timeline, (args.canvas_width, 112)) > 8)
+                    time.sleep(0.2)
                     save_windows()
                 # The fixture reaches EOF quickly. Exercise closure while the
                 # formation producer is idle and the last image is retained.
@@ -185,7 +290,8 @@ def check(args):
                 assert "VK_ERROR" not in output
                 assert "no CUDA-backed Vulkan adapter can present" not in output
                 print(
-                    f"PASS: {args.application} {args.presenter} both windows, resize, idle {args.close} close"
+                    f"PASS: {args.application} {args.presenter} {args.timeline_placement} timeline, "
+                    f"resize, idle {args.close} close"
                 )
             except BaseException:
                 log.seek(0)
@@ -212,5 +318,8 @@ if __name__ == "__main__":
     parser.add_argument("--latency-ms", type=float, default=0.0)
     parser.add_argument("--soak-seconds", type=float, default=0.0)
     parser.add_argument("--escape", action="store_true")
+    parser.add_argument("--timeline-placement", choices=("bottom", "window"), default="bottom")
     parser.add_argument("--capture", action="store_true")
+    parser.add_argument("--canvas-width", type=int, default=256)
+    parser.add_argument("--canvas-height", type=int, default=256)
     check(parser.parse_args())

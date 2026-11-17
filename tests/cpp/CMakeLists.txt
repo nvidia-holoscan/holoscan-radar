@@ -653,3 +653,25 @@ foreach(application IN ITEMS spotlight video_sar tiled_strip continuous_strip in
         endforeach()
     endforeach()
 endforeach()
+
+# Keep the explicit legacy layout covered alongside the new docked default.
+if(TARGET spotlight AND HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ AND HOLOSCAN_RADAR_HAS_X11)
+    foreach(language IN ITEMS cpp python)
+        if(language STREQUAL "python" AND NOT HOLOSCAN_RADAR_BUILD_PYTHON)
+            continue()
+        endif()
+        set(separate_args --application spotlight --presenter x11 --timeline-placement window)
+        if(language STREQUAL "python")
+            list(APPEND separate_args --python --close timeline --escape)
+        endif()
+        add_test(NAME SarWindow_spotlight_${language}_x11_separate
+            COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
+                ${PROJECT_SOURCE_DIR}/tests/gui/check_sar_windows.py $<TARGET_FILE:spotlight>
+                ${PROJECT_BINARY_DIR}/applications/sar/spotlight/cpp/spotlight_generated_smoke.yaml
+                ${separate_args})
+        set_tests_properties(SarWindow_spotlight_${language}_x11_separate PROPERTIES
+            LABELS "application;smoke;integration;visualization"
+            RESOURCE_LOCK fmcw_gui TIMEOUT 60 FIXTURES_REQUIRED sar_cphd
+            ENVIRONMENT "PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT}:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
+    endforeach()
+endif()

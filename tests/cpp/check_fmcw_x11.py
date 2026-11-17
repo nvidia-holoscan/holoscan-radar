@@ -205,7 +205,7 @@ def geometry(lib, display, window):
     return width.value, height.value
 
 
-def colors(lib, display, root, size):
+def colors(lib, display, root, size, origin=(0, 0)):
     # Wait for mapping before reading client pixels; desktop wallpaper must
     # never satisfy the image assertion on a real forwarded display.
     attributes = WindowAttributes()
@@ -215,7 +215,7 @@ def colors(lib, display, root, size):
     ):
         return 0
     width, height = size
-    image = lib.XGetImage(display, root, 0, 0, width, height, c.c_ulong(-1).value, 2)
+    image = lib.XGetImage(display, root, *origin, width, height, c.c_ulong(-1).value, 2)
     if not image:
         return 0
     try:

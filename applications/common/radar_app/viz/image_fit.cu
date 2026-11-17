@@ -38,3 +38,45 @@ cudaError_t fit_image(const void* source, void* target, int width, int height, i
   return cudaPeekAtLastError();
 }
 }  // namespace holoscan::radar::app::viz
+
+namespace holoscan::radar::app::viz {
+namespace {
+__device__ uchar4 sample_panel(const uchar4* source, int width, int height, float x, float y) {
+  if (!source || x < 0 || y < 0 || x >= width || y >= height)
+    return make_uchar4(0, 0, 0, 255);
+  return source[min(height - 1, static_cast<int>(y)) * width + min(width - 1, static_cast<int>(x))];
+}
+__global__ void dock_kernel(const uchar4* image, const uchar4* footer, uchar4* target, int width,
+                            int image_height, int footer_height, int window_width,
+                            int window_height, bool fit) {
+  const int height = image_height + footer_height;
+  const int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= width * height)
+    return;
+  const float x = (index % width + 0.5F) * window_width / width;
+  const float y = (index / width + 0.5F) * window_height / height;
+  const int fh = min(footer_height, max(1, window_height / 2));
+  const int ih = max(1, window_height - fh);
+  if (y >= ih) {
+    target[index] = sample_panel(footer, width, footer_height, x * width / window_width,
+                                 (y - ih) * footer_height / fh);
+  } else {
+    const float scale =
+        fminf(static_cast<float>(window_width) / width, static_cast<float>(ih) / image_height);
+    const float sx =
+        fit ? (x - (window_width - width * scale) * 0.5F) / scale : x * width / window_width;
+    const float sy = fit ? (y - (ih - image_height * scale) * 0.5F) / scale : y * image_height / ih;
+    target[index] = sample_panel(image, width, image_height, sx, sy);
+  }
+}
+}  // namespace
+cudaError_t compose_docked_panels(const void* image, const void* footer, void* target, int width,
+                                  int image_height, int footer_height, int window_width,
+                                  int window_height, bool fit, cudaStream_t stream) {
+  dock_kernel<<<(width * (image_height + footer_height) + 255) / 256, 256, 0, stream>>>(
+      static_cast<const uchar4*>(image), static_cast<const uchar4*>(footer),
+      static_cast<uchar4*>(target), width, image_height, footer_height, window_width, window_height,
+      fit);
+  return cudaGetLastError();
+}
+}  // namespace holoscan::radar::app::viz

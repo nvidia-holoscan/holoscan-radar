@@ -4,6 +4,7 @@
 #pragma once
 
 #include <X11/Xlib.h>
+#include <X11/Xatom.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/Xrender.h>
 #include <X11/keysym.h>
@@ -21,6 +22,7 @@
 #include <utility>
 
 #include "radar_app/app/gui_lifecycle.hpp"
+#include "radar_app/viz/x11_docked_window.hpp"
 
 #include <holoscan/core/errors.hpp>
 #include <holoscan/core/execution_context.hpp>
@@ -35,6 +37,8 @@
 
 namespace holoscan::radar::app::viz {
 
+using X11PropertyWord = unsigned long;  // NOLINT(runtime/int): Xlib format-32 property ABI
+
 // X11 transports an already-composed GPU frame. It does not draw radar plots or
 // text, and has no Vulkan surface or presentation-GPU requirement. XRender scales
 // the complete canvas on the display server, including over an SSH connection.
@@ -42,13 +46,16 @@ class X11ImagePresenterOp final : public Operator<> {
  public:
   X11ImagePresenterOp(std::int32_t width, std::int32_t height, std::string title, bool fit = false,
                       std::shared_ptr<FrameProgress> progress = authoring_frame_progress(),
-                      std::string position = {})
+                      std::string position = {}, std::shared_ptr<X11DockedWindow> dock = {},
+                      bool footer = false)
   : width_(width),
     height_(height),
     title_(std::move(title)),
     fit_(fit),
     progress_(std::move(progress)),
-    position_(std::move(position)) {
+    position_(std::move(position)),
+    dock_(std::move(dock)),
+    footer_(footer) {
     if (width_ <= 0 || height_ <= 0)
       throw std::invalid_argument("X11 image dimensions must be positive");
   }
@@ -91,9 +98,12 @@ class X11ImagePresenterOp final : public Operator<> {
     const int y = position_ == "bottom_left"
                       ? std::max(0, DisplayHeight(state.display, screen) - height_ - 48)
                       : 0;
-    state.window = XCreateSimpleWindow(state.display, RootWindow(state.display, screen), 0, y,
-                                       width_, height_, 0, 0, 0);
+    state.window = XCreateSimpleWindow(state.display,
+                                       dock_ ? dock_->parent() : RootWindow(state.display, screen),
+                                       0, y, width_, height_, 0, 0, 0);
     XStoreName(state.display, state.window, title_.c_str());
+    if (dock_)
+      state.counters = XInternAtom(state.display, "RADAR_PRESENTATION_COUNTERS", False);
     state.close = XInternAtom(state.display, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(state.display, state.window, &state.close, 1);
     XSelectInput(state.display, state.window, ExposureMask | StructureNotifyMask | KeyPressMask);
@@ -113,7 +123,12 @@ class X11ImagePresenterOp final : public Operator<> {
     state.width = width_;
     state.height = height_;
     XMapWindow(state.display, state.window);
-    XFlush(state.display);
+    XSync(state.display, False);
+    if (dock_) {
+      state.dock = dock_;
+      state.footer = footer_;
+      dock_->attach(footer_, state.window);
+    }
   }
 
   void stop() override {
@@ -123,6 +138,10 @@ class X11ImagePresenterOp final : public Operator<> {
 
   [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override {
     auto& state = *state_;
+    if (dock_ && dock_->poll()) {
+      context.request_stop();
+      return {};
+    }
     bool redraw = false;
     while (XPending(state.display)) {
       XEvent event;
@@ -183,6 +202,9 @@ class X11ImagePresenterOp final : public Operator<> {
         }
       }
       XPutImage(state.display, state.pixmap, state.gc, state.pixels, 0, 0, 0, 0, width_, height_);
+      ++state.uploads;
+      if (dock_)
+        dock_->uploaded(footer_, static_cast<std::uint64_t>(width_) * height_ * 4U);
       redraw = true;
       have_frame_ = true;
       if (progress_)
@@ -206,6 +228,14 @@ class X11ImagePresenterOp final : public Operator<> {
       XRenderComposite(state.display, PictOpSrc, state.source, 0, state.target, 0, 0, 0, 0,
                        (state.width - target_width) / 2, (state.height - target_height) / 2,
                        target_width, target_height);
+      ++state.repaints;
+      if (dock_) {
+        // Xlib format-32 properties use native unsigned long array elements.
+        const std::array<X11PropertyWord, 2> counters{state.uploads, state.repaints};
+        XChangeProperty(state.display, state.window, state.counters, XA_CARDINAL, 32,
+                        PropModeReplace, reinterpret_cast<const unsigned char*>(counters.data()),
+                        counters.size());
+      }
       XFlush(state.display);
     }
     return {};
@@ -222,7 +252,10 @@ class X11ImagePresenterOp final : public Operator<> {
     Picture source{};
     Picture target{};
     XImage* pixels{};
-    Atom close{};
+    Atom close{}, counters{};
+    X11PropertyWord uploads{0}, repaints{0};
+    std::shared_ptr<X11DockedWindow> dock;
+    bool footer{false};
     int width{};
     int height{};
 
@@ -239,8 +272,12 @@ class X11ImagePresenterOp final : public Operator<> {
         XFreeGC(display, gc);
       if (pixmap)
         XFreePixmap(display, pixmap);
-      if (window)
-        XDestroyWindow(display, window);
+      if (window) {
+        if (dock)
+          dock->release(footer, display, window);
+        else
+          XDestroyWindow(display, window);
+      }
       XCloseDisplay(display);
     }
   };
@@ -252,6 +289,8 @@ class X11ImagePresenterOp final : public Operator<> {
   std::shared_ptr<FrameProgress> progress_;
   bool have_frame_{false};
   std::string position_;
+  std::shared_ptr<X11DockedWindow> dock_;
+  bool footer_;
   std::shared_ptr<State> state_;
 };
 

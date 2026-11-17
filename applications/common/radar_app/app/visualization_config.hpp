@@ -26,6 +26,7 @@ struct VisualizationConfig {
   int64_t max_side{1024};
   struct Timeline {
     bool enabled{true};
+    std::string placement{"bottom"};
     double display_rate_hz{10.0};
     int64_t window_width{1280};
     int64_t window_height{112};
@@ -53,6 +54,7 @@ struct VisualizationConfig {
         display_rate_hz <= 0.0 || display_rate_hz > 1000.0 ||
         (resize_mode != "stretch" && resize_mode != "fit") || max_side < 1 || max_side > 16384 ||
         window_width < 1 || window_width > 16384 || window_height < 1 || window_height > 16384 ||
+        (timeline.placement != "bottom" && timeline.placement != "window") ||
         !std::isfinite(timeline.display_rate_hz) || timeline.display_rate_hz <= 0.0 ||
         timeline.display_rate_hz > 1000.0 || timeline.window_width < 1 ||
         timeline.window_width > 16384 || timeline.window_height < 1 ||
@@ -94,6 +96,7 @@ struct ConfigCodec<radar::app::VisualizationConfig::Timeline>
   using Config = radar::app::VisualizationConfig::Timeline;
   static constexpr auto fields =
       std::make_tuple(defaulted_object_field("enabled", &Config::enabled),
+                      defaulted_object_field("placement", &Config::placement),
                       defaulted_object_field("display_rate_hz", &Config::display_rate_hz),
                       defaulted_object_field("window_width", &Config::window_width),
                       defaulted_object_field("window_height", &Config::window_height));

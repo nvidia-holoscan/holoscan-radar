@@ -370,9 +370,21 @@ flowchart LR
     B --> Report[Image report]
     B -. dump .-> Dump[TensorDumpOp]
     B -. image / look / HUD .-> Compose[GPU frame composer]
-    Compose --> Present[X11 / native / headless]
-    Timeline[Timeline GPU composer] --> TimelinePresent[X11 / native / headless]
+    Compose -->|X11| ImageView[Image download and X11 image panel]
+    Timeline[Timeline GPU composer] -->|X11| TimelineView[Timeline download and X11 footer panel]
+    Compose -->|Native| Dock[DockedFrameOp] --> Native[NativeImagePresenterOp]
+    Timeline -->|Native| Dock
+    ImageView -. child of .-> Window[One viewing window]
+    TimelineView -. child of .-> Window
+    Compose -->|Headless| ImageSink[CompletedFrameSinkOp]
+    Timeline -->|Headless| TimelineSink[CompletedFrameSinkOp]
 ```
+
+The default viewer docks the timeline below the image at 112 pixels high,
+updating independently at 10 Hz. `app.visualization.timeline.placement: window`
+restores a separate timeline window. See the
+[shared presentation controls](../../common/radar_app/viz/README.md#docked-sar-timeline)
+for resize and transport behavior.
 
 `PerturbPositionsOp` adds the configured error. `AutofocusScoreOp` compares the
 estimate with that injected error. Both are absent when `position_error` is

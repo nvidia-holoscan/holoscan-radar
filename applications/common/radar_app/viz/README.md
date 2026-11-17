@@ -296,7 +296,7 @@ X11 events are polled independently of scientific frame arrivals. Native
 windows receive bounded periodic replay of the last completed frame, including
 an initial blank frame, so the SDK can service close and resize during producer
 gaps and final-image hold. Closing a window or pressing Escape stops the whole
-application cooperatively; either SAR window has this behavior.
+application cooperatively; SAR's docked view and either separate window have this behavior.
 
 Resize recovery can be checked with the delayed-X11 regression probe in
 [`tests/gui/README.md`](../../../../tests/gui/README.md). It verifies update
@@ -382,3 +382,55 @@ capture-age cutoff: a SAR image may finish long after acquisition. Image,
 geometry, and text join exactly before this boundary; retained/replayed frames
 keep their original content timestamp. Native replay polls at least 20 Hz for
 window events even when the scientific display-rate cap is lower.
+
+## Docked SAR timeline
+
+SAR now defaults to one viewing window with the timeline docked below the
+formation/HUD image. The image canvas keeps its configured resolution; initial
+window height adds the timeline height. On resize, the footer stays 112 physical
+pixels high by default and the image uses the remaining height. Very short
+windows clamp the footer to half the available height. The image honors
+`resize_mode`; the timeline fills the footer independently. Text and diagnostic
+lanes retain their own update rate, which defaults to 10 Hz.
+
+```yaml
+app:
+  visualization:
+    timeline:
+      enabled: true
+      placement: bottom  # window restores the previous separate timeline
+      display_rate_hz: 10
+      window_height: 112
+```
+
+The docked timeline raster takes the image canvas width. `timeline.window_width`
+applies to separate-window mode; `window_height` is the dock height in either
+layout. Disabling the timeline removes the footer. C++ and Python share this
+layout through the same native runtime. Saved image extents and values remain
+independent of the viewing window.
+
+For X11, one managed parent owns two child drawing surfaces. Each panel retains
+its own server pixmap, bounded finished-frame download, presentation worker,
+and event clock. A timeline tick uploads and paints only the footer; it cannot
+activate formation, grayscale conversion, image HUD composition, or image
+transport. Resizes and expose events repaint affected cached panels. Closing
+the parent or pressing Escape in either panel stops the complete application.
+The child windows are implementation details, with no separate taskbar entries
+or decorations. Host and GPU work remain bounded by the configured canvases.
+
+Native HoloViz presents a complete window on each refresh. `DockedFrameOp`
+retains at most one completed GPU image and one completed GPU timeline and
+composites them into a bounded GPU output pool. It does not rerun SAR rendering
+or download the image when the timeline changes. Native composition/window
+presentation still reads the cached image each refresh; this differs from X11's
+partial repaint. Native refresh retains the existing display-rate setting and
+minimum 20 Hz event pump; new timeline content still defaults to 10 Hz. The native footer uses the existing X11 window-extent integration to compensate
+for window size so its physical height stays fixed. Without accessible window
+extents, native sizing falls back to the configured canvas. This path requires positive visual qualification on a
+presentation-capable GPU/display; GPU tests cover pixel placement and timestamps.
+
+The image and its HUD still join exactly before caching. The live timeline
+retains its independent clock; it is not forced to match an acquisition time.
+Native combined display frames preserve the main image's capture time and
+provenance. Headless execution renders and consumes both completed panels
+independently, without creating a window or adding an interactive hold.

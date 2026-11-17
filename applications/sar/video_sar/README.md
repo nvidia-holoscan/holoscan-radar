@@ -27,11 +27,21 @@ flowchart LR
     Raster -->|Image, look, labels| Frame[GPU FrameComposerOp]
     Raster -. Different GPUs .-> Bridge[Bounded RGBA device bridge] -.-> Frame
     Frame -->|X11| Download[ImageDownloadOp] --> X11[X11ImagePresenterOp]
-    Frame -->|Native| Replay[CompletedFrameReplayOp] --> Viz[NativeImagePresenterOp]
+    Frame -->|Native| Dock[DockedFrameOp] --> Viz[NativeImagePresenterOp]
     Frame -->|Headless| Sink[CompletedFrameSinkOp]
     Timeline[GPU TimelineRasterOp] -->|Image and SDK text| TimelineFrame[GPU timeline composer]
-    TimelineFrame --> TimelineTransport[Separate X11, native, or headless presenter]
+    TimelineFrame -->|Native| Dock
+    TimelineFrame -->|X11| TimelineDownload[ImageDownloadOp] --> TimelineView[X11 timeline panel]
+    X11 -. child of .-> Window[One viewing window]
+    TimelineView -. child of .-> Window
+    TimelineFrame -->|Headless| TimelineSink[CompletedFrameSinkOp]
 ```
+
+The default viewer docks the timeline below the image at 112 pixels high,
+updating independently at 10 Hz. `app.visualization.timeline.placement: window`
+restores a separate timeline window. See the
+[shared presentation controls](../../common/radar_app/viz/README.md#docked-sar-timeline)
+for resize and transport behavior.
 
 The solid paths are required data and control flows. Dashed dump and
 visualization branches are enabled by application configuration. The reader's
@@ -89,7 +99,7 @@ a CPHD path may replace `cphd.path` directly, or follow a YAML path as the secon
 
 ## Output and display
 
-Each emission reports a complex image; the fixture produces five frames. A dump writes each formed image, whereas optional Holoviz shows a log-magnitude raster with the source-branch on-image HUD (scene name, formed size, BP rate, last-pulse latency, paced collect-vs-wall lag, APC look chevron) and a second `SAR timeline` Gantt window (20 s dwell bars, image-emit ticks with last-pulse latency labels, 1 Hz lag HUD). `playback_rate: 1` paces the reader by CPHD transmit time (sleep when ahead of collect; no sleep when behind). The lag HUD is that slack polled live (`now` versus collect), as on the HSDK 4 demo. Real-time images are still not guaranteed. The reader must deliver the boundary on the final batch for the reset.
+Each emission reports a complex image; the fixture produces five frames. A dump writes each formed image, whereas optional Holoviz shows a log-magnitude raster with the source-branch on-image HUD (scene name, formed size, BP rate, last-pulse latency, paced collect-vs-wall lag, APC look chevron) and a docked timeline strip (20 s dwell bars, image-emit ticks with last-pulse latency labels, 1 Hz lag HUD). `playback_rate: 1` paces the reader by CPHD transmit time (sleep when ahead of collect; no sleep when behind). The lag HUD is that slack polled live (`now` versus collect), as on the HSDK 4 demo. Real-time images are still not guaranteed. The reader must deliver the boundary on the final batch for the reset.
 
 A required emit onto a full output queue aborts the run. After the operator Error, the Graph driver prints a prominent backpressure banner: lower `cphd_reader.playback_rate` or reduce the image size so the pipeline can keep up.
 

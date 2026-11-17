@@ -31,6 +31,7 @@
 #include "radar_app/app/visualization_config.hpp"
 #include "radar_app/viz/image_device_bridge_op.hpp"
 #include "radar_app/viz/image_fit.hpp"
+#include "radar_app/viz/docked_frame_op.hpp"
 #include "radar_app/viz/window_extent.hpp"
 #include "radar_app/viz/native_image_presenter_op.hpp"
 #if HOLOSCAN_RADAR_HAS_X11
@@ -202,6 +203,70 @@ inline void add_image_presentation(
   connect_image_devices(graph, options, repaint, presentation, replay->output,
                         viewer->image_layer_input(0), prefix + "_display", width, height,
                         DeviceId{application_composer_device()},
+                        DeviceId{application_display_device()}, queue);
+}
+
+// Both panels are already GPU-composed, with independent content timestamps.
+inline void add_docked_presentation(
+    Graph& graph, CompileOptions& options, PartitionHandle& image_partition,
+    const Output<schema::ImageT>& image, PartitionHandle& footer_partition,
+    const Output<schema::ImageT>& footer, int width, int image_height, int footer_height,
+    const VisualizationConfig& config, std::shared_ptr<FrameProgress> progress) {
+  const ConnectionOptions queue{.queue_policy = QueuePolicy::kDropOldest, .queue_depth = 1U};
+  if (config.headless) {
+    add_image_presentation(graph, options, image_partition, image, "sar", width, image_height,
+                           config.window_title, config, progress);
+    add_image_presentation(graph, options, footer_partition, footer, "timeline", width,
+                           footer_height, "SAR timeline", config, {});
+    return;
+  }
+#if HOLOSCAN_RADAR_HAS_X11
+  if (config.x11_presentation.value_or(true)) {
+    auto dock =
+        std::make_shared<X11DockedWindow>(width, image_height, footer_height, config.window_title);
+    auto image_download = graph.op<ImageDownloadOp>("sar_download", width, image_height);
+    auto footer_download = graph.op<ImageDownloadOp>("timeline_download", width, footer_height);
+    auto image_viewer = graph.op<X11ImagePresenterOp>("sar_viewer", width, image_height,
+                                                      "SAR image", config.resize_mode == "fit",
+                                                      progress, std::string{}, dock, false);
+    auto footer_viewer = graph.op<X11ImagePresenterOp>(
+        "timeline_viewer", width, footer_height, "SAR timeline", false,
+        std::shared_ptr<FrameProgress>{}, std::string{}, dock, true);
+    image_partition.add(image_download);
+    footer_partition.add(footer_download);
+    auto image_present = graph.partition("sar_presentation");
+    auto footer_present = graph.partition("timeline_presentation");
+    image_present.add(image_viewer);
+    footer_present.add(footer_viewer);
+    options.deployment.bind_thread_placement("sar_presentation", ThreadPlacement{});
+    options.deployment.bind_thread_placement("timeline_presentation", ThreadPlacement{});
+    graph.add_flow(image, image_download->image_in, queue);
+    graph.add_flow(image_download->image_out, image_viewer->image, queue);
+    graph.add_flow(footer, footer_download->image_in, queue);
+    graph.add_flow(footer_download->image_out, footer_viewer->image, queue);
+    return;
+  }
+#endif
+  auto dock = graph.op<DockedFrameOp>("sar_dock", width, image_height, footer_height,
+                                      config.display_rate_hz, config.resize_mode == "fit",
+                                      config.window_title, progress);
+  auto repaint = graph.partition("sar_repaint");
+  repaint.add(dock);
+  options.deployment.bind_thread_placement("sar_repaint", ThreadPlacement{});
+  options.deployment.bind_tensor_output_device(
+      TensorOutputDevicePlacement{.operator_path = "sar_dock",
+                                  .output_port = "output",
+                                  .device = DeviceId{application_composer_device()}});
+  graph.add_flow(image, dock->image, queue);
+  graph.add_flow(footer, dock->footer, queue);
+  auto viewer = graph.op<NativeImagePresenterOp>("sar_viewer", width, image_height + footer_height,
+                                                 config.window_title);
+  auto presentation = graph.partition("sar_presentation");
+  presentation.add(viewer);
+  options.deployment.bind_thread_placement("sar_presentation", ThreadPlacement{});
+  connect_image_devices(graph, options, repaint, presentation, dock->output,
+                        viewer->image_layer_input(0), "sar_display", width,
+                        image_height + footer_height, DeviceId{application_composer_device()},
                         DeviceId{application_display_device()}, queue);
 }
 

@@ -28,8 +28,8 @@ A separate remote desktop is unnecessary for that mode.
 | Resize / aspect | Stretch | Stretch | Shared stretch default, optional fit; configured bounded canvas remains fixed |
 | Resolution / display cap | Dashboard dimensions and cap | Decimation, no common cap | Shared dimensions and cap; SAR max-side decimation remains specialized |
 | Color scaling | Noise-anchored viridis and peak fallback | Percentile grayscale | Intentionally different; original scientific scaling retained |
-| Windows / placement | Dashboard | Formation plus bottom-left timeline | Modality-specific layouts retained; both SAR windows get the selected transport |
-| Close / Escape / signals | Window/session controls | Multiple windows with producer-coupled servicing | Shared cooperative stop; either SAR window stops session; event servicing continues during idle hold |
+| Windows / placement | Dashboard | Formation plus bottom-left timeline | SAR defaults to one window with a docked timeline; explicit separate-window mode remains; both panels use the selected transport |
+| Close / Escape / signals | Window/session controls | Multiple windows with producer-coupled servicing | Shared cooperative stop from the docked view or either separate SAR window; events continue during idle hold |
 | Loop / EOF / products | Finite simulated frame count | CPHD loop, dwell flush, report/dump drain | Specialized completion rules retained, followed by shared bounded display drain |
 | Final hold | Zero | 30 seconds or preset override | Intentionally different defaults; negative holds until closed; headless ignores GUI hold |
 | Inheritance / config | Recursive SDK merge | Direct file loads in several paths | Shared inherited loader, including autofocus and Python sizing reads |
@@ -135,3 +135,71 @@ bounded depth, and 0.5-second traversal deadline. Pixel checks wait for
 mapping and inspect application pixels, so laptop wallpaper cannot satisfy them.
 All 28 Xvfb window cases plus the fixture (29 CTests) passed again after these
 test-only changes. No production GUI code changed during this follow-up.
+
+## Docked timeline follow-up
+
+SAR now defaults to a single window with a dedicated bottom timeline strip.
+The agreed strip height is 112 physical pixels, independently updating at the
+existing 10 Hz default. The image takes the remaining window height and retains
+its own fit/stretch policy. Very short windows clamp the strip to half the
+available height. `app.visualization.timeline.placement: window` preserves the
+previous separate-window layout; disabling the timeline removes the strip.
+The docked raster uses the image canvas width; the old timeline width setting
+continues to control the separate-window layout. Image saving is unchanged.
+
+`viz/x11_docked_window.hpp` manages one X11 parent and two child surfaces. Each
+child reuses the existing finished-image presenter and independent download
+queue/worker. A timeline-only update uploads and repaints only that child.
+The shell only handles layout and events; it never composites a whole display
+frame. Parent resize/expose can repaint cached panels, without reallocating
+render pools or rerunning scientific rendering. The entire view stops on close
+or Escape in either panel.
+
+`viz/docked_frame_op.hpp` handles native presentation. It retains one finished
+GPU image/HUD and one finished GPU timeline, admits them by independent arrival,
+and composites a bounded combined GPU display frame for the native SDK window.
+The user explicitly accepted that native HoloViz must redraw its whole window
+on refresh. This does not rerun SAR image formation, grayscale conversion, HUD
+creation, or a main-image host download. The kernel compensates for actual window
+size to keep the footer height fixed. Native window refresh retains the existing
+display-rate/minimum-event-pump cadence, independently of 10 Hz timeline content.
+Size compensation uses the existing X11 extent helper; without accessible
+window extents it falls back to configured dimensions. Native display frames preserve the image's
+capture time and provenance; the diagnostic timeline remains independently live.
+Headless rendering still consumes both completed panels independently.
+
+GPU tests cover footer placement, fit, blank image startup, and different old
+panel timestamps. X11 window tests assert shared parentage, fixed footer height,
+image and timeline pixel recovery after resize, and Escape/close. They also read
+per-panel upload/repaint counters: after EOF, the timeline must advance while
+both image counters stay unchanged. Explicit separate-window tests cover C++
+and Python compatibility. The 28 real SSH/X11 workflow/language cases passed
+again with the docked layout. A larger delayed-display soak retained stable RSS
+and file descriptors while processing continued. Native positive window review
+still requires a compatible display; no native visual success is claimed here.
+
+The final affected suite passed all 154 CTests serially in 166.17 seconds,
+including provider tests, numerical/dump parity, both precision paths, all SAR
+X11 panels, and explicit separate-window compatibility. The first parallel run
+hit a cold-start unpaced tiled-strip source backpressure stop; the isolated
+rerun and complete serial run passed without changing processing queues,
+playback behavior, or tolerances. The refreshed SSH/X11 matrix passed all 28
+workflow/language cases on the laptop connection. New GPU docking tests also
+passed without any native presentation surface. A 1024-by-768 image plus footer
+delayed-display soak (10 ms/chunk, ten seconds) advanced from image 1,459 to
+13,862 while RSS stayed about 339.6 MiB and file descriptors stayed at 149.
+A preview capture must wait for both panels to recover after resize: a visible
+footer alone cannot establish that the image finished repainting.
+
+The corresponding Python fit/Escape soak passed with RSS fixed at 576.9 MiB,
+146–148 file descriptors, and processing advancing from image 2,529 to 14,131.
+The 1024-by-768-plus-footer laptop capture was inspected after explicit recovery
+of both panels. Pinned repository-wide lint passes. These short fixture soaks
+establish recovery and bounded growth for the exercised path, not long-duration
+production latency or real-collection image-quality bounds.
+
+The actual native presentation helper also compiles successfully through HSDK's
+Graph compiler without starting a window: this checks its partitions, typed
+viewer ports, and device placement. All seven render/configuration rechecks
+passed, including that additional native wiring test. This is distinct from
+positive native visual validation, which remains unavailable on this display.

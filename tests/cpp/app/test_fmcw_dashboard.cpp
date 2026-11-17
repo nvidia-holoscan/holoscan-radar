@@ -852,8 +852,9 @@ TEST(CompletedFrameFit, AddsBordersWithoutChangingTheScientificCanvas) {
 namespace {
 class AgedCompletedFrameSourceOp final : public holoscan::Operator<> {
  public:
-  explicit AgedCompletedFrameSourceOp(std::shared_ptr<radar::app::FrameProgress> progress)
-  : progress_(std::move(progress)) {}
+  explicit AgedCompletedFrameSourceOp(std::shared_ptr<radar::app::FrameProgress> progress,
+                                      std::chrono::seconds age = std::chrono::seconds{30})
+  : progress_(std::move(progress)), age_(age) {}
   void setup(holoscan::OperatorSpec& spec) override {
     spec.output(image)
         .tensor_field(holoscan::schema::ImageTensorFields::data)
@@ -886,8 +887,7 @@ class AgedCompletedFrameSourceOp final : public holoscan::Operator<> {
     descriptor.height = 2;
     descriptor.encoding = holoscan::schema::ImageEncoding_RGBA8;
     auto stamp = context.activation_time();
-    stamp.timestamp_ns -=
-        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::seconds{30}).count();
+    stamp.timestamp_ns -= std::chrono::duration_cast<std::chrono::nanoseconds>(age_).count();
     progress_->expected_ns.store(stamp.timestamp_ns);
     HOLOSCAN_RETURN_IF_ERROR(image.emit_tensor(std::move(loan), descriptor,
                                                holoscan::EmitOptions{.capture_time = stamp}));
@@ -899,6 +899,7 @@ class AgedCompletedFrameSourceOp final : public holoscan::Operator<> {
  private:
   std::shared_ptr<radar::app::FrameProgress> progress_;
   bool sent_{false};
+  std::chrono::seconds age_;
 };
 }  // namespace
 
@@ -937,4 +938,101 @@ TEST(CompletedFrameReplay, AcceptsOldAcquisitionTimesAndRetainsTheOriginalStamp)
   EXPECT_TRUE(session.diagnostics().empty());
   ASSERT_GE(progress->expected_ns.load(), 0);
   EXPECT_EQ(progress->capture_ns.load(), progress->expected_ns.load());
+}
+
+TEST(CompletedFrameDock, KeepsFooterHeightAndImageFitIndependentOnResize) {
+  constexpr int width = 8, ih = 4, fh = 2;
+  std::vector<std::uint8_t> image(width * ih * 4, 127), footer(width * fh * 4, 200);
+  std::vector<std::uint8_t> output(width * (ih + fh) * 4);
+  void *main = nullptr, *strip = nullptr, *target = nullptr;
+  ASSERT_EQ(cudaMalloc(&main, image.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&strip, footer.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&target, output.size()), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(main, image.data(), image.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(strip, footer.data(), footer.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  // A doubled window height leaves the footer two physical pixels high: one
+  // row in the bounded six-row presentation canvas. The SAR region can fit.
+  ASSERT_EQ(viz::compose_docked_panels(main, strip, target, width, ih, fh, 8, 12, true, nullptr),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  EXPECT_EQ(output[0], 0);  // letterbox above the cached SAR canvas
+  EXPECT_EQ(output[width * 2 * 4], 127);
+  EXPECT_EQ(output[width * 4 * 4], 0);
+  EXPECT_EQ(output[width * 5 * 4], 200);  // independently positioned footer
+  ASSERT_EQ(viz::compose_docked_panels(nullptr, strip, target, width, ih, fh, 8, 3, false, nullptr),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  EXPECT_EQ(output[0], 0);  // timeline is valid before the first SAR image
+  EXPECT_EQ(output[width * 5 * 4], 200);
+  EXPECT_EQ(cudaFree(target), cudaSuccess);
+  EXPECT_EQ(cudaFree(strip), cudaSuccess);
+  EXPECT_EQ(cudaFree(main), cudaSuccess);
+}
+
+TEST(CompletedFrameDock, RetainsOldContentStampsWithoutWaitingForMatchingTimelineTimes) {
+  auto progress = std::make_shared<radar::app::FrameProgress>();
+  holoscan::Graph graph{"aged-docked-frame"};
+  auto source = graph.op<AgedCompletedFrameSourceOp>("source", progress);
+  auto dock = graph.op<viz::DockedFrameOp>("dock", 2, 2, 2, 20.0, true, std::string{},
+                                           std::shared_ptr<radar::app::FrameProgress>{});
+  auto footer = graph.op<AgedCompletedFrameSourceOp>(
+      "footer", std::make_shared<radar::app::FrameProgress>(), std::chrono::seconds{40});
+  auto sink = graph.op<viz::CompletedFrameSinkOp>("sink", progress);
+  graph.partition("source").add(source);
+  graph.partition("footer").add(footer);
+  graph.partition("dock").add(dock);
+  graph.partition("sink").add(sink);
+  graph.add_flow(source->image, dock->image);
+  graph.add_flow(footer->image, dock->footer);
+  // Independent panel acquisition times must never form an exact timestamp join.
+  graph.add_flow(dock->output, sink->image);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>(
+      "clock", holoscan::RealtimeClock::Config{.initial_time_offset = 60.0}));
+  holoscan::CompileOptions options;
+  for (const auto* name : {"source", "footer", "dock"})
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = name,
+        .output_port = std::string(name) == "dock" ? "output" : "image",
+        .device = radar::app::application_device()});
+  const auto plan = holoscan::compile(graph, options);
+  ASSERT_TRUE(plan.ok()) << plan.json();
+  auto session = holoscan::run_async(plan);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+  while ((progress->expected_ns.load() < 0 ||
+          progress->capture_ns.load() != progress->expected_ns.load()) &&
+         std::chrono::steady_clock::now() < deadline &&
+         !session.wait_for(std::chrono::milliseconds{10})) {
+  }
+  session.request_stop();
+  session.wait();
+  EXPECT_TRUE(session.diagnostics().empty());
+  ASSERT_GE(progress->expected_ns.load(), 0);
+  EXPECT_EQ(progress->capture_ns.load(), progress->expected_ns.load());
+}
+
+TEST(CompletedFrameDock, CompilesTheActualNativePresentationBranchWithoutOpeningAWindow) {
+  holoscan::Graph graph{"native-docked-wiring"};
+  auto progress = std::make_shared<radar::app::FrameProgress>();
+  auto image = graph.op<AgedCompletedFrameSourceOp>("image", progress);
+  auto footer = graph.op<AgedCompletedFrameSourceOp>("footer", progress);
+  auto image_partition = graph.partition("image");
+  auto footer_partition = graph.partition("footer");
+  image_partition.add(image);
+  footer_partition.add(footer);
+  radar::app::VisualizationConfig config;
+  config.x11_presentation = false;
+  config.window_title = "native dock compile check";
+  holoscan::CompileOptions options;
+  for (const auto* name : {"image", "footer"})
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = name,
+        .output_port = "image",
+        .device = holoscan::DeviceId{radar::app::application_composer_device()}});
+  viz::add_docked_presentation(graph, options, image_partition, image->image, footer_partition,
+                               footer->image, 2, 2, 2, config, progress);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+  // Compilation exercises the real helper's partitions, device placement and
+  // native viewer ports. Window/Vulkan surface creation belongs to start().
+  const auto plan = holoscan::compile(graph, options);
+  EXPECT_TRUE(plan.ok()) << plan.json();
 }

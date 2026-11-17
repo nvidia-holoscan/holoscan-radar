@@ -4,6 +4,19 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-17** — **Docked SAR timeline** on `deustice/sar-gui`. The default
+  viewer uses one window with a 112-pixel bottom strip and independent 10 Hz
+  timeline updates. X11 retains separate panel caches and transport; timeline
+  ticks neither upload nor repaint the held image. Native HoloViz composites
+  the finished GPU panels for full-window refresh, without rerunning SAR
+  rendering or downloading the main image. `timeline.placement: window`
+  preserves the separate-window layout. All 154 affected CTests pass serially,
+  including numerical/dump parity and explicit panel-counter checks. All 28
+  real SSH/X11 workflow/language cases pass again; native positive visual
+  review still needs capable hardware. Delayed-display resize/resource checks
+  and pinned lint are recorded in [the GUI record](GUI_UNIFICATION.md).
+  The user's local autofocus visualization preset edit is preserved.
+
 - **2026-11-17** — **Shared radar GUI presentation** on `deustice/sar-gui`,
   based on `deustice/sar-python`. All seven FMCW and six SAR C++/Python apps
   share presenter policy, canonical configuration with legacy aliases,

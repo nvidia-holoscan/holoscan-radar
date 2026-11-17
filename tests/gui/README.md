@@ -34,9 +34,9 @@ and Python provider:
 ctest --test-dir build --output-on-failure -L visualization
 ```
 
-The full Python-enabled window matrix has 56 cases: 32 FMCW (eight presets,
+The full Python-enabled window matrix has 58 cases: 32 FMCW (eight presets,
 two languages, two presenters) and 24 SAR (six workflows, two languages, two
-presenters). Fourteen C++ headless cases additionally exercise the real launch
+presenters), plus two explicit separate-window compatibility cases. Fourteen C++ headless cases additionally exercise the real launch
 override without a display. Native cases require a presentation-capable display.
 
 ## Historical PR #69 test-stage cost
@@ -104,12 +104,15 @@ The status-header capture follows the scaled canvas as the window changes size.
 Text and plots are composed into one GPU frame, so their alignment is preserved.
 This checks update recovery; it does not require the panel layout to reflow.
 
-## SAR two-window checks
+## SAR panel and window checks
 
 `SarWindow_<application>_<language>_<presenter>` covers all six SAR apps in
 C++ and Python with explicit X11/native modes and isolated preferences. The
 fixture uses inherited configuration, verifies formation and timeline pixels,
-resizes the formation canvas, and closes during final-image hold. C++ closes
+resizes the viewing window, and closes during final-image hold. The default
+timeline is a child panel in the same window; its height stays 112 pixels as
+the window resizes. While the source is at EOF, the timeline must advance
+without either uploading or repainting the held image. C++ closes
 formation; Python exercises aspect fit and closes timeline. Native tests
 require a presentation-capable CUDA/Vulkan display and do not skip renderer
 failures. The fixtures share the existing GUI resource lock.
@@ -149,3 +152,15 @@ waits for mapping, and reads application pixels instead of desktop pixels.
 The 2026-11-17 Thor-to-laptop run passed all 28 X11 cases (13 applications in
 both languages plus the second DDM variant). This establishes transport and
 basic interaction behavior; scientific image-quality review remains separate.
+
+For the docked SAR default, the X11 probe checks the panel's parent window and
+reads `RADAR_PRESENTATION_COUNTERS` on each child: upload count and repaint
+count (two format-32 CARDINAL values). After EOF and resize settling, the image
+counts must stay unchanged while the footer upload count increases. This
+assertion detects full-image redraw or transport triggered by timeline ticks.
+`--timeline-placement window` covers the compatibility layout instead.
+`--capture --canvas-width 1024 --canvas-height 768` saves a larger preview of the
+final layout after the normal resize checks; these are synthetic fixture images,
+not scientific image-quality qualification. Native probes verify footer pixels;
+GPU tests check physical-height compensation, fit, blank startup, and independent
+old panel timestamps. Positive native-window review requires capable hardware.

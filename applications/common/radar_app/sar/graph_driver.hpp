@@ -428,20 +428,24 @@ struct SarGraphRuntime {
                                       raster->frame, composed->image_layer_input(0), "sar_composer",
                                       lut_side, lut_side, app::application_device(),
                                       renderer_device, overlay_queue);
-      app::viz::add_image_presentation(graph, options, visualization, composed->output(), "sar",
-                                       width, height, cfg.visualization.window_title,
-                                       cfg.visualization, display_progress);
+      const bool docked =
+          cfg.visualization.timeline.enabled && cfg.visualization.timeline.placement == "bottom";
+      if (!docked)
+        app::viz::add_image_presentation(graph, options, visualization, composed->output(), "sar",
+                                         width, height, cfg.visualization.window_title,
+                                         cfg.visualization, display_progress);
       has_visualization = true;
       if (cfg.visualization.timeline.enabled) {
         auto timeline = graph.op<app::sar::TimelineRasterOp>(
             "timeline_raster", hud, cfg.scene_names, cfg.show_playback_lag,
-            cfg.visualization.timeline.display_rate_hz, cfg.visualization.timeline.window_width,
+            cfg.visualization.timeline.display_rate_hz,
+            docked ? width : cfg.visualization.timeline.window_width,
             cfg.visualization.timeline.window_height);
         bind_outputs(options, "timeline_raster", {"frame"});
         auto timeline_part = graph.partition("timeline");
         timeline_part.add(timeline);
         auto timeline_display = graph.partition("timeline_display");
-        const auto tw = cfg.visualization.timeline.window_width;
+        const auto tw = docked ? width : cfg.visualization.timeline.window_width;
         const auto th = cfg.visualization.timeline.window_height;
         auto timeline_frame = graph.op<app::viz::FrameComposerOp>("timeline_frame", tw, th, 16384U);
         timeline_display.add(timeline_frame);
@@ -452,11 +456,17 @@ struct SarGraphRuntime {
                                         timeline->frame, timeline_frame->image_layer_input(0),
                                         "timeline_composer", tw, th, app::application_device(),
                                         renderer_device, overlay_queue);
-        auto timeline_config = cfg.visualization;
-        timeline_config.display_rate_hz = cfg.visualization.timeline.display_rate_hz;
-        app::viz::add_image_presentation(graph, options, timeline_display, timeline_frame->output(),
-                                         "timeline", tw, th, "SAR timeline", timeline_config, {},
-                                         "bottom_left");
+        if (docked) {
+          app::viz::add_docked_presentation(graph, options, visualization, composed->output(),
+                                            timeline_display, timeline_frame->output(), width,
+                                            height, th, cfg.visualization, display_progress);
+        } else {
+          auto timeline_config = cfg.visualization;
+          timeline_config.display_rate_hz = cfg.visualization.timeline.display_rate_hz;
+          app::viz::add_image_presentation(graph, options, timeline_display,
+                                           timeline_frame->output(), "timeline", tw, th,
+                                           "SAR timeline", timeline_config, {}, "bottom_left");
+        }
         has_timeline = true;
       }
     }
@@ -542,7 +552,7 @@ struct SarGraphRuntime {
           !cfg.visualization.x11_presentation.value_or(true)) {
         if (cfg.scroll || !cfg.tile_geometries.empty())
           spawn_place_window_top_left("SAR formation");
-        if (has_timeline)
+        if (has_timeline && cfg.visualization.timeline.placement == "window")
           spawn_place_window_bottom_left("SAR timeline");
       }
 #endif
