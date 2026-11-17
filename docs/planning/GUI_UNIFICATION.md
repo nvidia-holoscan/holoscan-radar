@@ -98,9 +98,9 @@ establish laptop forwarding quality or scientific visual correctness.
 | Final affected coverage | All 149 focused CTests passed, including provider pytest, all six SAR X11 windows in both languages, all eight FMCW X11 presets in both languages, all 14 C++ headless cases, configuration, scientific/dump and shutdown cases |
 | Timestamp / GPU fit | GPU tests cover a frame carrying a 30-second-old acquisition stamp, provenance retention, and fit borders |
 | Delayed display / resources | C++ and Python SAR video soaks passed with 10 ms per-chunk delay for ten seconds. RSS: C++ 327.2→327.0 MiB, Python 564.4→564.2 MiB; FDs: 148–150 and 145. Processing advanced from image 1 to 10,646 / 9,803. C++ and Python SIMO delayed resize passed at five sizes |
-| Native presentation | Explicit SISO and SAR spotlight native probes fail on this Thor/Xvfb setup because no CUDA-backed adapter can present; positive native window/fit checks remain required on a compatible display |
-| Actual SSH/X11 | Pending a reachable laptop forwarding session; discovered forwarding addresses did not complete a connection probe |
-| Manual visual review | Pending: all scientific layouts, HUD/text alignment, mosaic orientation/crops, autofocus views, timeline labels, both resize policies, placement, and shutdown on actual laptop and native-capable display |
+| Native presentation | Explicit native probes fail on both Thor/Xvfb and the working laptop forwarding connection because no CUDA-backed adapter can present; positive native window/fit checks remain required on a compatible display |
+| Actual SSH/X11 | All 28 real SSH/X11 cases passed on `localhost:10.0`: all 13 applications in both languages, including both DDM variants; application pixels, resize, cooperative closure, SAR two-window/fit/Escape coverage |
+| Manual visual review | Captured synthetic formation/HUD and timeline images inspected; real-collection scientific layouts, mosaic orientation/crops, autofocus quality, and native presentation still require human visual review |
 
 Positive multi-GPU native transport and long-duration memory/performance
 qualification remain hardware-specific checks. Short diagnostic soaks do not
@@ -118,3 +118,20 @@ The implementation is split into configuration/policy, shared GPU presentation
 and SAR lifecycle, Python facade parity, and regression/documentation commits.
 The existing native presenter and composer class names remain compatibility
 aliases for app-private callers; no public operator or shared descriptor was added.
+
+### Forwarded display follow-up
+
+On 2026-11-17 the user identified `localhost:10.0`. Host and project-container
+connections succeeded. The 28 window probes ran directly on that laptop display,
+without Xvfb or a separate remote desktop, and passed in 137.87 seconds of summed
+case time. The SAR probe exercised formation closure in C++ and timeline Escape
+with aspect fit in Python. The same display rejected explicit native SAR startup
+with the expected Vulkan capability error and X11 guidance.
+
+The first forwarded probe exposed a test limitation: a real window manager can
+reparent the timeline beneath decoration windows. The shared probe now searches
+bounded child trees under an atomic X11 snapshot, with a 512-window budget,
+bounded depth, and 0.5-second traversal deadline. Pixel checks wait for
+mapping and inspect application pixels, so laptop wallpaper cannot satisfy them.
+All 28 Xvfb window cases plus the fixture (29 CTests) passed again after these
+test-only changes. No production GUI code changed during this follow-up.

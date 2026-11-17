@@ -14,9 +14,12 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   All 1,455 selected non-performance CTests pass, including provider tests,
   numerical/dump parity, all-app X11 windows, headless execution, signals, and
   GPU timestamp/fit regressions. Delayed-display resize and short resource soaks
-  pass; repository-wide pinned lint passes. Native positive validation remains
-  pending because this Thor virtual display cannot present CUDA/Vulkan windows;
-  actual laptop SSH/X11 and scientific visual review also remain pending.
+  pass; repository-wide pinned lint passes. All 28 actual laptop SSH/X11 cases
+  pass across both languages, including both SAR windows, resize, fit, and
+  Escape. The improved window probes also pass all 29 selected Xvfb CTests
+  (including fixture setup). Scientific visual review and positive native
+  presentation validation remain pending; this Thor cannot present Vulkan
+  windows to either the virtual display or the laptop forwarding connection.
   See [GUI decisions and validation](GUI_UNIFICATION.md).
 
 - **2026-11-17** â€” **Complete Python operator coverage and SAR applications** on

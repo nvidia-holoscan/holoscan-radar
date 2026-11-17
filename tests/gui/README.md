@@ -129,3 +129,23 @@ images for visual review. Processing must continue during the soak. RSS must
 plateau within 64 MiB or 10%, and file descriptors within four. These short
 checks detect regressions; long-duration deployment qualification remains a
 separate measurement.
+
+## Real forwarded-display probes
+
+The same scripts run directly on the `DISPLAY` forwarded into the project
+container; omit `xvfb-run`. For example, inside that container:
+
+```bash
+python3 tests/gui/check_sar_windows.py build-test/applications/sar/spotlight/cpp/spotlight build-test/applications/sar/spotlight/cpp/spotlight_generated_smoke.yaml --application spotlight --presenter x11
+python3 tests/cpp/check_fmcw_x11.py build-test/applications/fmcw/simo/cpp/simo "$PWD/applications/fmcw/simo/config/simo.yaml" --application simo --presenter x11
+```
+
+Add `--python` for Python. For SAR, `--close timeline --escape --resize-mode fit`
+checks the alternate window and resize policy. The provider must be on
+`PYTHONPATH`, as with registered tests. These commands open, resize, and close
+actual laptop windows. The probe traverses reparented windows with bounded work,
+waits for mapping, and reads application pixels instead of desktop pixels.
+
+The 2026-11-17 Thor-to-laptop run passed all 28 X11 cases (13 applications in
+both languages plus the second DDM variant). This establishes transport and
+basic interaction behavior; scientific image-quality review remains separate.

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check FMCW window pixels and shutdown with X11 or native HoloViz under Xvfb."""
+"""Check FMCW window pixels and shutdown with forwarded X11, Xvfb, or native HoloViz."""
 
 from __future__ import annotations
 
@@ -57,9 +57,38 @@ class Event(c.Union):
     _fields_ = [("client", ClientMessage), ("key", KeyEvent), ("padding", c.c_long * 24)]
 
 
+class WindowAttributes(c.Structure):
+    _fields_ = [
+        ("x", c.c_int),
+        ("y", c.c_int),
+        ("width", c.c_int),
+        ("height", c.c_int),
+        ("border_width", c.c_int),
+        ("depth", c.c_int),
+        ("visual", c.c_void_p),
+        ("root", c.c_ulong),
+        ("window_class", c.c_int),
+        ("bit_gravity", c.c_int),
+        ("win_gravity", c.c_int),
+        ("backing_store", c.c_int),
+        ("backing_planes", c.c_ulong),
+        ("backing_pixel", c.c_ulong),
+        ("save_under", c.c_int),
+        ("colormap", c.c_ulong),
+        ("map_installed", c.c_int),
+        ("map_state", c.c_int),
+        ("all_event_masks", c.c_long),
+        ("your_event_mask", c.c_long),
+        ("do_not_propagate_mask", c.c_long),
+        ("override_redirect", c.c_int),
+        ("screen", c.c_void_p),
+    ]
+
+
 def xlib():
     lib = c.CDLL("libX11.so.6")
     signatures = {
+        "XGetWindowAttributes": (c.c_int, [c.c_void_p, c.c_ulong, c.POINTER(WindowAttributes)]),
         "XOpenDisplay": (c.c_void_p, [c.c_char_p]),
         "XDefaultRootWindow": (c.c_ulong, [c.c_void_p]),
         "XGrabServer": (c.c_int, [c.c_void_p]),
@@ -117,29 +146,42 @@ def find_window(lib, display, root, prefix=b"Radar CI dashboard"):
     # tree/name snapshot atomic so it cannot disappear during XFetchName.
     lib.XGrabServer(display)
     try:
-        parent, returned_root, count = c.c_ulong(), c.c_ulong(), c.c_uint()
-        children = c.POINTER(c.c_ulong)()
-        lib.XQueryTree(
-            display,
-            root,
-            c.byref(returned_root),
-            c.byref(parent),
-            c.byref(children),
-            c.byref(count),
-        )
-        try:
-            for index in range(count.value):
-                name = c.c_void_p()
-                lib.XFetchName(display, children[index], c.byref(name))
-                if name.value:
-                    try:
-                        if c.string_at(name).startswith(prefix):
-                            return children[index]
-                    finally:
-                        lib.XFree(name)
-        finally:
-            if children:
-                lib.XFree(children)
+        # A real window manager can reparent clients below decoration windows.
+        # Bound both the traversal and the server-lock interval on forwarded X11.
+        pending = [(root, 0)]
+        budget = 512
+        deadline = time.monotonic() + 0.5
+        while pending and budget and time.monotonic() < deadline:
+            node, depth = pending.pop()
+            parent, returned_root, count = c.c_ulong(), c.c_ulong(), c.c_uint()
+            children = c.POINTER(c.c_ulong)()
+            lib.XQueryTree(
+                display,
+                node,
+                c.byref(returned_root),
+                c.byref(parent),
+                c.byref(children),
+                c.byref(count),
+            )
+            try:
+                for index in reversed(range(count.value)):
+                    if not budget or time.monotonic() >= deadline:
+                        break
+                    budget -= 1
+                    child = children[index]
+                    name = c.c_void_p()
+                    lib.XFetchName(display, child, c.byref(name))
+                    if name.value:
+                        try:
+                            if c.string_at(name).startswith(prefix):
+                                return child
+                        finally:
+                            lib.XFree(name)
+                    if depth < 4:
+                        pending.append((child, depth + 1))
+            finally:
+                if children:
+                    lib.XFree(children)
         return None
     finally:
         lib.XUngrabServer(display)
@@ -164,7 +206,14 @@ def geometry(lib, display, window):
 
 
 def colors(lib, display, root, size):
-    # Read the root so an app that has created but not mapped its window is safe.
+    # Wait for mapping before reading client pixels; desktop wallpaper must
+    # never satisfy the image assertion on a real forwarded display.
+    attributes = WindowAttributes()
+    if (
+        not lib.XGetWindowAttributes(display, root, c.byref(attributes))
+        or attributes.map_state != 2
+    ):
+        return 0
     width, height = size
     image = lib.XGetImage(display, root, 0, 0, width, height, c.c_ulong(-1).value, 2)
     if not image:
@@ -195,7 +244,7 @@ def check(
     lib = xlib()
     display = lib.XOpenDisplay(None)
     if not display:
-        raise RuntimeError("the Xvfb test display could not be opened")
+        raise RuntimeError("the test display could not be opened")
     root = lib.XDefaultRootWindow(display)
     deadline = time.monotonic() + int(os.environ.get("HOLOSCAN_RADAR_TEST_TIMEOUT_SECONDS", "30"))
     with tempfile.TemporaryDirectory(prefix="radar-x11-test-") as directory:
@@ -236,12 +285,12 @@ def check(
                 size = geometry(lib, display, window)
                 root_size = geometry(lib, display, root)
                 size = tuple(min(a, b) for a, b in zip(size, root_size, strict=True))
-                wait(lambda: colors(lib, display, root, size) > 32)
+                wait(lambda: colors(lib, display, window, size) > 32)
                 if not smoke:
                     lib.XResizeWindow(display, window, 640, 360)
                     lib.XFlush(display)
                     wait(lambda: geometry(lib, display, window) == (640, 360))
-                    wait(lambda: colors(lib, display, root, (640, 360)) > 32)
+                    wait(lambda: colors(lib, display, window, (640, 360)) > 32)
 
                 event = Event()
                 event.client.type = 33  # ClientMessage
