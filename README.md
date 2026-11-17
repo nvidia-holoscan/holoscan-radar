@@ -84,7 +84,7 @@ Run these commands from the **host**; the CLI builds and runs in containers:
 
 The development image supplies the HSDK 5 SDK, CUDA toolkit, and C++ build tools.
 A CUDA-capable NVIDIA GPU is required for operators, apps, and tests. The test
-command includes the FMCW Python provider and its pytest suite by default. To
+command includes the Python provider and its pytest suite by default. To
 run only the C++ tests, pass `--cmake-options=-DHOLOSCAN_RADAR_BUILD_PYTHON=OFF`.
 To run a Python application:
 
@@ -94,8 +94,11 @@ To run a Python application:
 
 The Python provider is optional in ordinary C++ builds; see
 [`SDK_DEVELOPMENT.md`](SDK_DEVELOPMENT.md) for SDK components and packaging.
-It registers the 26 FMCW operators in both precisions under `holoscan.radar`
-and exposes seven Python Graph workflows through `holoscan_radar.applications`.
+It exposes all 33 public operators through 68 native registrations under
+`holoscan.radar` and thirteen Python Graph workflows through
+`holoscan_radar.applications`: seven FMCW and six SAR. See the
+[SAR Python guide](applications/sar/README.md#python-applications) for precision
+pairs, input data, visualization, and CLI examples.
 
 For manual CMake and targeted CTest work **inside** a development container,
 see [`DEVELOPER.md`](DEVELOPER.md#inside-a-development-container). The same

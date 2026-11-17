@@ -1,6 +1,6 @@
 # Standalone SAR applications
 
-The six HSDK 5 C++ SAR workflows share the CPHD reader, range compression,
+The six HSDK 5 C++ and Python SAR workflows share the CPHD reader, range compression,
 aperture manager, and backprojection operators. Five are formation modes; the
 sixth, autofocus, adds the opt-in phase gradient autofocus chain (WORKFLOWS
 Figure 2) over a retained, replayed aperture. Each executable
@@ -16,6 +16,58 @@ and CUDA visualization live in `applications/common/radar_app/sar/`.
 | [continuous_strip](continuous_strip/README.md) | 4 | Batch slicing, scroll geometry, and mosaic |
 | [independent_images](independent_images/README.md) | 5 | Per-collection geometry, spacing, and frequency |
 | [autofocus](autofocus/README.md) | — | Retained aperture, conjugate-grid PGA estimate, corrected product formation |
+
+## Python applications
+
+Every SAR workflow has a colocated Python graph and CLI manifest. Python wires
+the processing operators and application stages; both languages share native
+configuration validation, pools, mosaics, reporting, HUD/timeline, and run
+driving. Existing Mermaid diagrams describe both implementations. The CLI
+selects Python when `--language` is omitted; pass `--language cpp` explicitly
+to run the C++ reference.
+
+```bash
+./holoscan-radar run spotlight --language python
+./holoscan-radar run video_sar --language python
+./holoscan-radar run tiled_strip --language python
+./holoscan-radar run continuous_strip --language python
+./holoscan-radar run independent_images --language python
+./holoscan-radar run autofocus --language python
+```
+
+Pass a preset through `--run-args=config.yaml`; a SAR input override is
+`--run-args="config.yaml --cphd /path/to/input.cphd"`. Real-data presets still
+need their documented CPHD files. Python does not download collections.
+
+For programmatic use inside the SDK environment:
+
+```python
+from holoscan_radar.applications.spotlight import build_graph
+
+workflow = build_graph("spotlight.yaml", cphd_override="/data/input.cphd")
+# workflow.graph is the SDK Graph. workflow.options exports equivalent compile
+# options for inspection; run() uses the shared native driver's placements.
+images = workflow.run()
+```
+
+`run()` runs once, returns the reported image count, and raises on runtime
+failure. Each workflow owns independent HUD, counters, and replay support.
+SIGINT/SIGTERM cooperatively stop and join native execution before propagating
+`KeyboardInterrupt`. SDK calls release the GIL while running.
+
+Public SAR operators use mapping parameters, matching their YAML spelling.
+`CPHDReaderOp`, `ApertureManagerOp`, and `BackprojectionOp` expose explicit
+`F32GeomF32`, `F32GeomF64`, and `F64GeomF64` factories. The apps choose
+`F32GeomF64` by default, preserving ECEF precision; `sample_precision: double`
+selects `F64GeomF64`. Other SAR operators expose F32/F64 factories.
+`TensorDumpOp(graph, name, path=...)` accepts any tensor dtype and takes no
+pool extents. Python live enum ports retain the
+[documented SDK limitation](../../SDK_DEVELOPMENT.md#python-provider).
+
+The provider suite compares complex C++/Python fixture products in both sample
+precisions, covers retention and geometry changes, exercises the autofocus
+branches, and runs headless rendering. These checks establish application and
+binding parity; they do not qualify real-collection image quality.
 
 ## Choose a run path
 

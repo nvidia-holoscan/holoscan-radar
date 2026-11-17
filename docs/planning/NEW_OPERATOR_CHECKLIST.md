@@ -250,9 +250,10 @@ contract-specific fixture, descriptor, enum, sizing policy, or metric is needed.
       [Jira board 41309](https://jirasw.nvidia.com/secure/RapidBoard.jspa?rapidView=41309), naming the source directory.
 - [ ] PR description notes **contract changes** explicitly if `OPERATOR_API.md`
       changed.
-- [ ] FMCW Python provider — register both precision types under stable
+- [ ] Python provider — register every supported precision instantiation under stable
       `holoscan.radar.*` names, update the `holoscan_radar` facade and Graph tests,
-      and verify the clean wheel import. SAR/IO Python bindings are outside this wave.
+      and verify the clean wheel import. Geometry operators expose explicit sample/geometry
+      pairs; dtype-independent sinks have one factory without pool extents.
 
 ---
 

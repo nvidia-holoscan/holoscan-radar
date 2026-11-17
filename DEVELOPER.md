@@ -55,7 +55,7 @@ holoscan-radar/
 ├── performance/                   # C++ YAML recipes, adapters, and shared runner
 └── tests/
     ├── cpp/                        # GTest suite (+ utils/: fixtures and Graph helpers)
-    └── provider/                   # FMCW provider and Graph pytest suite
+    └── provider/                   # Operator provider and Graph pytest suite
 ```
 
 ---
@@ -244,25 +244,28 @@ For individual SAR build gates use `-DBUILD_ALL=OFF -DAPP_spotlight=ON`
 `APP_independent_images`). See the [SAR app index](applications/sar/README.md)
 for mode-specific graphs, [data preparation](tools/sar_data/README.md) for
 optional public collections, and the [HSDK 5 SAR contract](docs/planning/SAR/OPERATOR_API.md).
-The fixture is generated in C++; Python is required only for optional data
-preparation. All five SAR GUI apps have been visually checked with their
+The fixture is generated in C++; C++ applications do not require the Python
+provider. The five formation GUI apps have been visually checked with their
 current presets. That check does not establish full-resolution image quality
 or validate every public collection and backprojection backend.
 
 The HSDK 5 GA image supplies Python Core and Visualization. Configure the
-FMCW provider with nanobind and run its Graph suite inside the container:
+FMCW/SAR provider with nanobind and run its Graph suite inside the container:
 
 ```bash
 cmake -S . -B build-python -DHOLOSCAN_RADAR_BUILD_PYTHON=ON
 cmake --build build-python -j"$(nproc)"
-PYTHONPATH=/usr/lib/python3.12/site-packages:build-python/python/lib \
-  python3.12 -m pytest tests/provider -q
+ctest --test-dir build-python -R pytest_provider --output-on-failure
 ```
 
-The seven Python Graph sources are colocated at
-`applications/fmcw/<app>/python/<app>.py`; CMake stages them under
+The thirteen Python Graph sources are colocated at
+`applications/{fmcw,sar}/<app>/python/<app>.py`; CMake stages them under
 `holoscan_radar.applications` for source builds and wheels. The provider
-registers all 26 FMCW operators in both precisions under `holoscan.radar`.
+registers all 33 public operators, including SAR precision pairs and the
+dtype-independent dump sink, under `holoscan.radar`. Python-enabled test builds
+also build the six C++ SAR references and generate their CPHD fixtures. CTest
+sets `HOLOSCAN_RADAR_TEST_BUILD_DIR` for provider tests; set it to the absolute
+build directory when invoking pytest directly.
 Python `[live]` enum ports remain unavailable until the SDK can register those
 port payloads.
 

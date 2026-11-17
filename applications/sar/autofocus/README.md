@@ -406,3 +406,15 @@ The small five-pulse test dataset cannot demonstrate PGA recovery. Use the
 real-data walkthrough for that comparison. The
 [SAR testing requirements](../../../docs/planning/SAR/TESTING.md) describe the
 accuracy criteria in more detail.
+
+## Python graph
+
+This workflow also has a Python implementation with the same presets and
+processing graph shown above. Run it from the host:
+
+```bash
+./holoscan-radar run autofocus --language python
+```
+
+See the [shared Python guide](../README.md#python-applications) for CPHD
+inputs, precision, programmatic composition, dumping, and shutdown behavior.

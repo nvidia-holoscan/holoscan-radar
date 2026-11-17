@@ -4,6 +4,25 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-17** — **Complete Python operator coverage and SAR applications** on
+  `deustice/sar-python`, based on `deustice/cfar-calibration` at `57061f50`. The provider now
+  covers all 33 operators (68 precision-aware factories), including explicit
+  sample/geometry precision pairs and dtype-independent tensor dumping. Six
+  Python SAR graphs share the native configuration, visualization, playback,
+  reporting, and shutdown support with their C++ references. Validation includes
+  a full 1,393-test non-performance CTest pass and focused CFAR retests after
+  base updates. On the final base, all 75 affected native tests and 281 provider
+  pytest cases pass, including complex fixture parity in both sample precisions,
+  direct SAR operator checks, headless rendering, context isolation, and
+  SIGINT/SIGTERM shutdown. The release wheel builds for all major CUDA
+  architectures without app executables; isolated installation, provider
+  discovery, all new factory constructors, and SAR image formation pass.
+  Repository-wide pinned lint passes.
+  The user will perform the interactive six-app visual walkthrough manually;
+  the local virtual display cannot present CUDA/Vulkan windows. Real-collection
+  image-quality qualification remains deferred; public contracts and the GA
+  SDK's documented Python live-enum limitation are unchanged.
+
 - **2026-11-17** — **CFAR calibration log levels** on
   `deustice/cfar-calibration`: routine start/ETA/progress/completion at INFO;
   warn once per build when estimated total duration exceeds 60 seconds, with
@@ -1313,6 +1332,7 @@ still declare SDK 4.3.0.
 | GA migration review corrections | Codex | `deustice/hsdk-ga-image` | **complete:** aligned tutorial SDK minimum, unconditional aligned-input guidance, and L18 implementation status; restored the helper diagnostic's documented EA attribution from Git history. Exact original SDK/reproducer unavailable, so no new reproduction claimed. Documentation/comment-only; pinned focused and all-file lint pass. |
 | EA-only source and documentation qualifiers | Codex | `deustice/hsdk-ga-image` | **complete:** audited identifiers, feature gates, type/schema comments, test labels, and planning guidance across tracked files. Removed stale qualifiers from schema/test comments and current guidance; no active HSDK5-EA identifiers or EA-only gates remain. Schema fields and executable code are unchanged; historical measurements retain their SDK versions. All-file pinned lint passes. |
 | Repository-wide EA reference sweep | Codex | `deustice/hsdk-ga-image` | **complete:** audited all 743 tracked paths, hidden configuration, and ignored local `uv.lock`; no active EA/RC image or dependency pins remain. Refreshed local CLI/lock from rc1 to GA 5.0.0, corrected the tutorial image tag, and clarified temporal measurement provenance. Historical records and workaround rationale retained. GA CLI Python SISO smoke, lock consistency, and all-file pinned lint pass. |
+| Complete SAR/IO Python bindings and six SAR applications | Codex | `deustice/sar-python` | **implemented:** all 33 operators and six Python SAR graphs; automated GPU, fixture parity, and headless rendering checks pass. Interactive visual walkthrough assigned to the user. |
 | HSDK 5 GA image migration | Codex | `deustice/hsdk-ga-image` | **verified locally:** Dockerfile, CLI wrapper, and devcontainer use the public CUDA 13 GA image; active setup guides updated. GB10 arm64 SDK layout/import checks, development-image build, all 1,094 CTests (zero failures/skips), Python SISO CLI smoke, and all-file pinned lint pass. |
 | Rebase Python provider onto staging SDK and wrapper | Codex | `deustice/python` | **verified locally:** branch rebased onto `origin/main` at `22df786f`; seven Python manifests and guides use the `/usr` SDK and `./holoscan-radar`; wrapper Python SISO smoke, 1,089 Python-enabled CTests, and 80 direct provider cases pass on staging SDK 5.0.0.7. |
 | Python binding runtime coverage and Doppler FFT pool sizing | Codex | `deustice/python` | **complete:** three provider runtime checks cover both precisions, GPU Tensor transport, Params decoding, and one-tick `nfft`; split/fused pools honor `max_doppler_bins`. All 80 provider tests, the CTest entry, and focused C++ nfft regressions pass in the pinned GPU image. |
