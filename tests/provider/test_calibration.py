@@ -109,8 +109,10 @@ def test_graph_stop_cancels_runtime_calibration(tmp_path, capfd):
         Path(__file__).resolve().parents[2]
         / "applications/fmcw/dense_beamforming/config/dense_beamforming_smoke.yaml"
     )
-    config_data = yaml.safe_load(path.read_text())
-    config_data["beamform_then_detect"]["cfar_detector"].update(cfar_variant="GO", pfa=1e-9)
+    config_data = {
+        "extends": str(path),
+        "cfar_detector": {"cfar_variant": "GO", "pfa": 1e-9},
+    }
     preset = tmp_path / "cancel.yaml"
     preset.write_text(yaml.safe_dump(config_data))
     workflow = dense_beamforming.build_graph(preset)
@@ -167,10 +169,10 @@ def test_graph_runtime_trial_override(tmp_path, capfd):
         Path(__file__).resolve().parents[2]
         / "applications/fmcw/dense_beamforming/config/dense_beamforming_smoke.yaml"
     )
-    config_data = yaml.safe_load(path.read_text())
-    config_data["beamform_then_detect"]["cfar_detector"].update(
-        cfar_variant="GO", pfa=1e-9, calibration_trials=1024
-    )
+    config_data = {
+        "extends": str(path),
+        "cfar_detector": {"cfar_variant": "GO", "pfa": 1e-9, "calibration_trials": 1024},
+    }
     preset = tmp_path / "override.yaml"
     preset.write_text(yaml.safe_dump(config_data))
     workflow = dense_beamforming.build_graph(preset)
