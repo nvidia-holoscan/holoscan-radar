@@ -75,12 +75,21 @@ class _SarBuilder:
         return options
 
 
-def prepare(application: str, config: str | Path, cphd_override: str | Path | None) -> Any:
+def prepare(
+    application: str,
+    config: str | Path,
+    cphd_override: str | Path | None,
+    *,
+    presenter: str | None = None,
+    choose_presenter: bool = False,
+) -> Any:
     """Reuse C++ config validation, pool sizing and per-graph support owners."""
     native = _radar._prepare_sar(
         application,
         str(Path(config).expanduser().resolve()),
         "" if cphd_override is None else str(Path(cphd_override).expanduser().resolve()),
+        presenter or "",
+        choose_presenter,
     )
     graph = hs.Graph(application)
     graph.op(native.registry_name, "cphd_reader", context=native)

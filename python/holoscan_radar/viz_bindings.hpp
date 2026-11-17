@@ -40,8 +40,8 @@ struct DashboardThunks : authoring::ManualOperatorRegistrationThunks<viz::FmcwDa
     const auto* input = static_cast<const VizPath*>(params->data());
     auto cfg = Loader::load(std::filesystem::path(input->path));
     auto dashboard = Loader::dashboard(cfg);
-    return DashboardThunks::make_operator_ref(
-        graph.op<viz::FmcwDashboardOp>(name, std::move(dashboard)));
+    return DashboardThunks::make_operator_ref(graph.op<viz::FmcwDashboardOp>(
+        name, std::move(dashboard), app::authoring_frame_progress()));
   }
   static holoscan::expected<authoring::OpaqueOperatorRef, holoscan::Error> from_assignments(
       holoscan::Graph& graph, std::string_view name,
@@ -98,6 +98,7 @@ viz::FmcwDashboardConfig dashboard_config(const Config& cfg, std::string title, 
                           ? app::physical_scan_grid_bounds(angle_convention, az_grid, el_grid)
                           : app::PhysicalAngleBounds{{-1.0, 1.0}, {-1.0, 1.0}};
   viz::FmcwDashboardConfig result;
+  result.total_frames = cfg.num_frames;
   result.mode = clustered ? viz::DashboardMode::kClusters : viz::DashboardMode::kRawDetections;
   result.show_angles = show_angles;
   result.dynamic_range_db = static_cast<float>(cfg.visualization.dynamic_range_db);
@@ -130,6 +131,10 @@ inline nb::dict visualization_settings(const app::VisualizationConfig& config,
   nb::dict result;
   result["x11_presentation"] =
       config.x11_presentation ? nb::cast(*config.x11_presentation) : nb::none();
+  result["headless"] = config.headless;
+  result["skip_display_check"] = config.skip_display_check;
+  result["final_image_hold_s"] = config.final_image_hold_s;
+  result["resize_mode"] = config.resize_mode;
   result["window_width"] = config.window_width;
   result["window_height"] = config.window_height;
   result["window_title"] = config.window_title;

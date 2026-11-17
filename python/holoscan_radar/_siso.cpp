@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/optional.h>
 
@@ -24,6 +25,7 @@
 #include "applications/fmcw/dense_beamforming/cpp/config.hpp"
 #include "radar_app/app/source.hpp"
 #include "radar_app/app/gpu_placement.hpp"
+#include "radar_app/app/presentation_config.hpp"
 #include "radar_app/app/logging.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "python/holoscan_radar/viz_bindings.hpp"
@@ -410,6 +412,44 @@ void register_siso_bindings(nb::module_& module) {
   register_app_node<SisoSourceThunks>("holoscan.radar._app.SisoSource");
   register_app_node<SisoReportThunks>("holoscan.radar._app.SisoReport");
   module.def("_load_siso", &load_siso);
+  nb::class_<app::FrameProgress>(module, "_FrameProgress")
+      .def_prop_ro("capture_ns",
+                   [](const app::FrameProgress& progress) {
+                     return progress.capture_ns.load();
+                   })
+      .def_prop_ro("expected_ns",
+                   [](const app::FrameProgress& progress) {
+                     return progress.expected_ns.load();
+                   })
+      .def_prop_ro("input_ns", [](const app::FrameProgress& progress) {
+        return progress.input_ns.load();
+      });
+  module.def("_last_report_capture_ns", [] {
+    return app::AppFrameBank::last_capture_ns.load();
+  });
+  module.def("_frame_progress", [] {
+    return app::authoring_frame_progress();
+  });
+  module.def("_prepare_presentation",
+             [](bool enabled, bool headless, bool skip, std::optional<bool> configured,
+                const std::string& path, const std::string& mode, bool choose_again) {
+               struct Config {
+                 app::VisualizationConfig visualization;
+                 bool visualize, headless, skip_display_check;
+               } cfg{};
+               cfg.visualization.enabled = enabled;
+               cfg.visualization.headless = headless;
+               cfg.visualization.skip_display_check = skip;
+               cfg.visualization.x11_presentation = configured;
+               app::prepare_presentation(cfg, path, mode, choose_again);
+               nb::dict result;
+               result["enabled"] = cfg.visualize;
+               result["headless"] = cfg.headless;
+               result["x11_presentation"] = cfg.visualization.x11_presentation.value_or(true);
+               result["device"] = app::application_device().value;
+               return result;
+             });
+
   module.def("_configure_fmcw_logging", &app::configure_fmcw_logging);
   module.def("_resolve_x11_presentation", &app::resolve_fmcw_x11_presentation, nb::arg("window"),
              nb::arg("configured"), nb::arg("choose_again") = false, nb::arg("config_path") = "");

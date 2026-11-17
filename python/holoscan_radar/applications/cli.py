@@ -88,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Forget the saved presenter for this display setup and ask again (explicit YAML wins)",
     )
+    parser.add_argument("--presenter", choices=("x11", "native", "headless", "off"))
     args = parser.parse_args(argv)
     cphd_override = args.cphd or args.cphd_override
     if (
@@ -103,12 +104,15 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"configuration file not found: {config}")
     builder = import_module(f"holoscan_radar.applications.{args.application}").build_graph
     if args.application in _SAR_APPLICATIONS:
-        if args.choose_presenter:
-            parser.error("--choose-presenter is available for FMCW applications only")
         if args.cphd and args.cphd_override:
             parser.error("supply only one CPHD override")
         try:
-            workflow = builder(config, cphd_override=cphd_override)
+            workflow = builder(
+                config,
+                cphd_override=cphd_override,
+                presenter=args.presenter,
+                choose_presenter=args.choose_presenter,
+            )
         except RuntimeError as error:
             # Other build and execution failures retain their traceback for diagnosis.
             if not str(error).startswith("CPHD input file not found:\n"):
@@ -118,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         if args.cphd or args.cphd_override:
             parser.error("--cphd is available for SAR applications only")
-        workflow = builder(config, choose_presenter=args.choose_presenter)
+        workflow = builder(config, choose_presenter=args.choose_presenter, presenter=args.presenter)
     try:
         workflow.run()
     except KeyboardInterrupt:

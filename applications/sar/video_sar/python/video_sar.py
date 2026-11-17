@@ -8,9 +8,17 @@ from pathlib import Path
 from holoscan_radar.applications.sar_graph import BuiltSarGraph, prepare
 
 
-def build_graph(config: str | Path, *, cphd_override: str | Path | None = None) -> BuiltSarGraph:
+def build_graph(
+    config: str | Path,
+    *,
+    cphd_override: str | Path | None = None,
+    presenter: str | None = None,
+    choose_presenter: bool = False,
+) -> BuiltSarGraph:
     """Compose the C++-equivalent processing graph using native SAR helpers."""
-    ctx = prepare("video_sar", config, cphd_override)
+    ctx = prepare(
+        "video_sar", config, cphd_override, presenter=presenter, choose_presenter=choose_presenter
+    )
     reader = ctx.op("cphd_reader")
     range_op = ctx.op("range_compression")
     manager = ctx.op("aperture_manager")

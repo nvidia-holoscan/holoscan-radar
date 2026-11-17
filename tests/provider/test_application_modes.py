@@ -78,11 +78,11 @@ def test_cli_forwards_choose_presenter(choose, monkeypatch, tmp_path):
     path.write_text("app: {}\n")
     calls = []
 
-    def build(config, *, choose_presenter):
-        calls.append((config, choose_presenter))
+    def build(config, *, choose_presenter, presenter):
+        calls.append((config, choose_presenter, presenter))
         return SimpleNamespace(run=lambda: calls.append("run"))
 
     monkeypatch.setattr(cli, "import_module", lambda _: SimpleNamespace(build_graph=build))
     args = ["siso", str(path)] + (["--choose-presenter"] if choose else [])
     assert cli.main(args) == 0
-    assert calls == [(path, choose), "run"]
+    assert calls == [(path, choose, None), "run"]

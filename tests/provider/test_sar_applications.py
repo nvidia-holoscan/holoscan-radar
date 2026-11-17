@@ -113,7 +113,8 @@ def test_sar_headless_visualization_executes(app, tmp_path):
     source = _preset(app, f"{app}_generated_smoke.yaml")
     path = _write_config(source, tmp_path / "viz.yaml", visualize=True)
     workflow = _builder(app)(path)
-    assert hs.compile(workflow.graph, workflow.options).ok
+    plan = hs.compile(workflow.graph, workflow.options)
+    assert plan.ok, plan.json()
     assert workflow.run() > 0
 
 
@@ -149,13 +150,13 @@ def test_sar_cli_passes_cphd_override(monkeypatch, tmp_path):
     path.write_text("{}")
     calls = []
 
-    def build(config, *, cphd_override):
-        calls.append((config, cphd_override))
+    def build(config, *, cphd_override, presenter, choose_presenter):
+        calls.append((config, cphd_override, presenter, choose_presenter))
         return SimpleNamespace(run=lambda: calls.append("run"))
 
     monkeypatch.setattr(cli, "import_module", lambda _: SimpleNamespace(build_graph=build))
     assert cli.main(["spotlight", str(path), "--cphd", "override.cphd"]) == 0
-    assert calls == [(path, "override.cphd"), "run"]
+    assert calls == [(path, "override.cphd", None, False), "run"]
 
 
 @pytest.mark.parametrize("signum", (signal.SIGINT, signal.SIGTERM), ids=("sigint", "sigterm"))

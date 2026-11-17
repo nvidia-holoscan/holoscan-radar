@@ -37,14 +37,6 @@ def add_dashboard(
     frame = graph.op(
         "holoscan.radar._app.FrameComposer", "dashboard_frame", width=width, height=height
     )
-    x11 = _radar._fmcw_uses_x11_presentation(viz["x11_presentation"])
-    holoviz = graph.op(
-        "holoscan.radar._app.X11DashboardViewer" if x11 else "holoscan.radar._app.DashboardViewer",
-        "holoviz",
-        width=width,
-        height=height,
-        title=f"{viz['window_title']} - {title}",
-    )
     partition.add(display, bridge)
     visualization = graph.partition("visualization")
     visualization.add(frame)
@@ -134,6 +126,24 @@ def add_dashboard(
     graph.add_flow(display.text, frame.text, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1)
 
     presentation = graph.partition("presentation")
+    if viz["headless"]:
+        sink = graph.op(
+            "holoscan.radar._app.CompletedFrameSink", "viz_sink", width=width, height=height
+        )
+        presentation.add(sink)
+        graph.add_flow(
+            frame.output, sink.image, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+        )
+        return
+    x11 = viz["x11_presentation"]
+    holoviz = graph.op(
+        "holoscan.radar._app.X11DashboardViewer" if x11 else "holoscan.radar._app.DashboardViewer",
+        "holoviz",
+        width=width,
+        height=height,
+        title=f"{viz['window_title']} - {title}",
+        fit=viz["resize_mode"] == "fit",
+    )
     presentation.add(holoviz)
     if x11:
         download = graph.op(
@@ -150,12 +160,31 @@ def add_dashboard(
             queue_depth=1,
         )
         return
+    replay = graph.op(
+        "holoscan.radar._app.CompletedFrameReplay",
+        "dashboard_replay",
+        width=width,
+        height=height,
+        rate=viz["display_rate_hz"],
+        fit=viz["resize_mode"] == "fit",
+        title=f"{viz['window_title']} - {title}",
+    )
+    repaint = graph.partition("repaint")
+    repaint.add(replay)
+    options.deployment.bind_tensor_output_device(
+        operator_path="dashboard_replay",
+        output_port="output",
+        device=hs.execution.DeviceId(composer_device),
+    )
+    graph.add_flow(
+        frame.output, replay.image, queue_policy=hs.QueuePolicy.DROP_OLDEST, queue_depth=1
+    )
     _connect_image_devices(
         graph,
-        visualization,
+        repaint,
         presentation,
         options,
-        frame.output,
+        replay.output,
         holoviz.image,
         "dashboard",
         width,

@@ -187,7 +187,7 @@ struct PythonSarContext : std::enable_shared_from_this<PythonSarContext<T>> {
   }
 
   holoscan::config::Document autofocus_document() const {
-    auto document = app::config::load_document(extras.config_path);
+    auto document = app::config::load_inherited_document(extras.config_path);
     document = app::config::normalize_enum_field<radar::BackprojectionBackend>(
         std::move(document), "/backprojection/backend");
     document = app::config::normalize_enum_field<radar::GeometryChange>(
@@ -473,13 +473,18 @@ void register_sar_bindings(nb::module_& module) {
   register_anchor<double>();
   bind_context<float>(module, "_SarF32Context");
   bind_context<double>(module, "_SarF64Context");
-  module.def("_prepare_sar",
-             [](const std::string& name, const std::string& path,
-                const std::string& cphd_override) -> nb::object {
-               auto setup = prepare(name, path, cphd_override);
-               if (single_sample_precision(path)) {
-                 return nb::cast(std::make_shared<PythonSarContext<float>>(std::move(setup)));
-               }
-               return nb::cast(std::make_shared<PythonSarContext<double>>(std::move(setup)));
-             });
+  module.def(
+      "_prepare_sar",
+      [](const std::string& name, const std::string& path, const std::string& cphd_override,
+         const std::string& presenter, bool choose_presenter) -> nb::object {
+        auto setup = prepare(name, path, cphd_override);
+        setup.config.presenter = presenter;
+        setup.config.choose_presenter = choose_presenter;
+        if (single_sample_precision(path)) {
+          return nb::cast(std::make_shared<PythonSarContext<float>>(std::move(setup)));
+        }
+        return nb::cast(std::make_shared<PythonSarContext<double>>(std::move(setup)));
+      },
+      nb::arg("application"), nb::arg("path"), nb::arg("cphd_override"), nb::arg("presenter") = "",
+      nb::arg("choose_presenter") = false);
 }
