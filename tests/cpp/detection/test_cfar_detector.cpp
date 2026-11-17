@@ -28,6 +28,9 @@
 #include <holoscan/core/compile.hpp>
 #include <holoscan/core/diagnostic.hpp>
 #include <holoscan/core/errors.hpp>
+#include <holoscan/core/execution_context.hpp>
+#include <holoscan/core/operator_spec.hpp>
+#include <holoscan/core/port.hpp>
 #include <holoscan/core/connection_options.hpp>
 #include <holoscan/core/expected_macros.hpp>
 #include <holoscan/core/graph.hpp>
@@ -831,6 +834,66 @@ TEST(CFARDetectorOpTest, FailedNonblockingRebuildReturnsRuntimeErrorInsteadOfSer
            diagnostic.detail->error.message ==
                "CFAR calibration trial budget exceeds uint64 capacity";
   })) << result.describe_failure();
+}
+
+// Observe a compute failure without ending this test's session, so the same
+// operator instance can demonstrate recovery on a subsequent input tick.
+class RecoveringCfar final : public CFARDetectorOp<double> {
+ public:
+  using CFARDetectorOp<double>::CFARDetectorOp;
+
+  void setup(holoscan::OperatorSpec& spec) override {
+    CFARDetectorOp<double>::setup(spec);
+    spec.output(status, "status");
+  }
+
+  holoscan::expected<void, holoscan::Error> compute(holoscan::ExecutionContext& context) override {
+    const auto result = CFARDetectorOp<double>::compute(context);
+    return status.emit(result ? int64_t{1} : int64_t{0});
+  }
+
+  holoscan::Output<int64_t> status;
+};
+
+TEST(CFARDetectorOpTest, FailedNonblockingRebuildCanRetryOnTheNextTick) {
+  auto fixture = holoscan::testing::create_operator_test<RecoveringCfar>(
+      holoscan::radar::testing::default_test_extents());
+  auto params = ca_params(0.1);
+  params.cfar_variant = CfarVariant::kGO;
+  fixture.set_params(params);
+  auto input = to_device_tensor<double>(power_map(1.0, {{8, 16}}, 26.0), {kDoppler, kRange},
+                                        real_dtype<double>());
+  for (int tick = 0; tick < 5; ++tick) {
+    fixture.push_frame(
+        holoscan::testing::frame_at(std::chrono::milliseconds{100 * (tick + 1)},
+                                    holoscan::testing::input("pfa", tick == 0 ? 0.1 : 1e-30),
+                                    holoscan::testing::input("rd_maps", *input)));
+  }
+  fixture.capture<int64_t>("status", 5U);
+  for (const char* output :
+       {"detection_mask", "detection_score", "noise_estimate", "detection_idx", "cfar_power"})
+    fixture.output_device(output, holoscan::DeviceId{0});
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running =
+      fixture.run_async(completion.run_options(holoscan::testing::FrameRelease::kManual));
+  for (std::size_t tick = 1; tick <= 5; ++tick) {
+    ASSERT_TRUE(running.release_frame(completion.remaining()));
+    ASSERT_TRUE(completion.wait_for_output(running, "status", tick));
+    if (tick == 2 || tick == 4)
+      holoscan::radar::detail::join_inflight_alpha_lut_builds();
+  }
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto statuses = result.samples<int64_t>("status");
+  ASSERT_EQ(statuses.size(), 5U);
+  EXPECT_EQ(statuses[0].data, 1);
+  EXPECT_EQ(statuses[1].data, 1);  // First build is pending: serve the old table.
+  EXPECT_EQ(statuses[2].data, 0);  // Report and clear the failed build.
+  EXPECT_EQ(statuses[3].data, 1);  // A fresh build is pending: serve the old table.
+  EXPECT_EQ(statuses[4].data, 0);  // Observe the fresh build's failure as well.
 }
 
 TEST(CFARDetectorOpTest, SupersededCalibrationSubscriptionsAreReleasedBeforeStop) {
