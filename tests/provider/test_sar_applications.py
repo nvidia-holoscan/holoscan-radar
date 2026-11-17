@@ -7,6 +7,7 @@ import importlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 from pathlib import Path
@@ -115,6 +116,21 @@ def test_sar_headless_visualization_executes(app, tmp_path):
     workflow = _builder(app)(path)
     assert hs.compile(workflow.graph, workflow.options).ok
     assert workflow.run() > 0
+
+
+def test_sar_runtime_data_root_resolves_relocated_collection(tmp_path, monkeypatch):
+    data_root = tmp_path / "runtime_data"
+    cphd = data_root / "sar" / "relocated.cphd"
+    cphd.parent.mkdir(parents=True)
+    shutil.copyfile(_build_root() / "tests/cpp/generated_sar_smoke.cphd", cphd)
+    path = _write_config(
+        _preset("spotlight", "spotlight_generated_smoke.yaml"), tmp_path / "config.yaml"
+    )
+    config = yaml.safe_load(path.read_text())
+    config["cphd"]["path"] = "sar/relocated.cphd"
+    path.write_text(yaml.safe_dump(config))
+    monkeypatch.setenv("HOLOHUB_DATA_DIR", str(data_root))
+    assert _builder("spotlight")(path).run() == 1
 
 
 def test_sar_contexts_have_independent_lifetimes_and_reject_second_run(tmp_path):

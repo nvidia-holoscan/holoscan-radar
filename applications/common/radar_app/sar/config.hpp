@@ -31,6 +31,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <optional>
 #include <stdexcept>
@@ -865,9 +866,16 @@ inline std::filesystem::path resolve_existing(const std::filesystem::path& given
   if (std::filesystem::is_regular_file(beside_yaml)) {
     return std::filesystem::absolute(beside_yaml);
   }
-  // Preset paths such as sar/imperial/... also resolve under the build's data root.
-  // Keep absolute paths and existing caller/YAML-relative files authoritative.
+  // Wheels may run away from the build machine's data tree. Keep existing
+  // caller/YAML-relative files authoritative, then try the runtime data root
+  // before falling back to the data root selected at build time.
   if (given.is_relative()) {
+    if (const char* root = std::getenv("HOLOHUB_DATA_DIR"); root != nullptr && root[0] != '\0') {
+      const auto in_runtime_data = std::filesystem::path(root) / given;
+      if (std::filesystem::is_regular_file(in_runtime_data)) {
+        return std::filesystem::absolute(in_runtime_data);
+      }
+    }
     const auto in_data = std::filesystem::path(HOLOSCAN_RADAR_DATA_DIR) / given;
     if (std::filesystem::is_regular_file(in_data)) {
       return in_data;

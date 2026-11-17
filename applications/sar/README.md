@@ -55,6 +55,14 @@ failure. Each workflow owns independent HUD, counters, and replay support.
 SIGINT/SIGTERM cooperatively stop and join native execution before propagating
 `KeyboardInterrupt`. SDK calls release the GIL while running.
 
+For an installed wheel, set `HOLOHUB_DATA_DIR` at runtime when preset data lives
+outside the build machine's data directory. For example, a preset input
+`sar/collection.cphd` resolves to `/datasets/radar/sar/collection.cphd` with
+`HOLOHUB_DATA_DIR=/datasets/radar`. The wheel does not include CPHD collections.
+An explicit absolute input or `cphd_override` remains supported. Existing input
+files relative to the caller or beside the YAML take precedence over the runtime
+data root; an unset or empty variable retains the compiled fallback.
+
 Public SAR operators use mapping parameters, matching their YAML spelling.
 `CPHDReaderOp`, `ApertureManagerOp`, and `BackprojectionOp` expose explicit
 `F32GeomF32`, `F32GeomF64`, and `F64GeomF64` factories. The apps choose
@@ -82,8 +90,10 @@ a development container, see the individual app guides.
 The shipped YAML files are **real-data presets**. Download or subset the CPHD
 files in the host `data/sar/` directory using [optional data preparation tools](../../tools/sar_data/README.md),
 then run through the Holoscan CLI or directly inside the DevContainer. Relative
-CPHD paths resolve under `HOLOHUB_DATA_DIR` (default: the repository `data/`
-directory); the repository mount already exposes these files in both environments. Each app guide gives a complete
+CPHD paths first use an existing caller-relative or YAML-relative file, then
+runtime `HOLOHUB_DATA_DIR`, then the data directory compiled into the application
+(default: the repository `data/` directory). The repository mount exposes the
+files in both environments. Each app guide gives a complete
 download-and-run command block. Read each app guide for
 the exact collection, geometry, output, and display prerequisites. The
 [CPHD reader](../../operators/io/cphd_reader_op/README.md) and

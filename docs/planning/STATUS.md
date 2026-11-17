@@ -4,6 +4,18 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-17** — **SAR Python packaging review follow-up** on
+  `deustice/sar-python`: the provider links/enables SAR visualization only when
+  `sar_image_viz` exists. CPHD lookup checks runtime `HOLOHUB_DATA_DIR` before
+  the compiled data root, preserving explicit caller/YAML-relative paths and
+  the compiled fallback. Installed-wheel usage and precedence are documented.
+  All 31 selected GA SDK CTests pass, including the full provider suite, three
+  native path-resolution cases, the placement regression, 25 SAR application
+  checks, and fixture setup. The final path cases also pass after adding the
+  explicit runtime-versus-compiled-root precedence assertion. CMake probes pass
+  with the SAR visualization target present and absent, and `_sar.cpp` compiles
+  with SAR visualization disabled. Repository-wide pinned lint passes.
+
 - **2026-11-17** — **SAR Python review follow-up** on `deustice/sar-python`:
   prepared contexts retain compute/display/composer choices through attachment
   and finalization; failed CFAR futures are cleared before reporting errors so
