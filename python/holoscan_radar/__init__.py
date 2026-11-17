@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""FMCW radar operators for HSDK 5 Graph authoring.
+"""Radar operators for HSDK 5 Graph authoring.
 
-Every public operator has the call shape ``OpF32(graph, name, *, extents, **params)``
-(or ``OpF64``). ``extents`` is a mapping of ``max_*`` pool limits. Descriptor
+Pooled operators have the call shape ``OpF32(graph, name, *, extents, **params)``
+(or ``OpF64``; geometry operators name both precisions explicitly).
+``TensorDumpOp(graph, name, **params)`` is a dtype-independent sink. ``extents`` is a mapping of ``max_*`` pool limits. Descriptor
 parameters use their Radar YAML spelling as mappings. Complex reference samples
 cross the native boundary as ``[real, imaginary]`` pairs. DDM phase-code
 matrices accept real or complex samples and become flat interleaved pairs. The C++ Radar codecs
@@ -94,6 +95,22 @@ def _make_operator(type_name: str) -> Any:
 
 
 _REGISTRY_NAMES = (
+    "CPHDReaderOpF32GeomF32",
+    "CPHDReaderOpF32GeomF64",
+    "CPHDReaderOpF64GeomF64",
+    "ApertureManagerOpF32GeomF32",
+    "ApertureManagerOpF32GeomF64",
+    "ApertureManagerOpF64GeomF64",
+    "BackprojectionOpF32GeomF32",
+    "BackprojectionOpF32GeomF64",
+    "BackprojectionOpF64GeomF64",
+    "SARRangeCompressionOpF32",
+    "SARRangeCompressionOpF64",
+    "PhaseCorrectionOpF32",
+    "PhaseCorrectionOpF64",
+    "AutofocusOpF32",
+    "AutofocusOpF64",
+    "TensorDumpOp",
     "BeamscanEstimatorOpF32",
     "BeamscanEstimatorOpF64",
     "CFARDetectorOpF32",
@@ -148,6 +165,14 @@ _REGISTRY_NAMES = (
     "VirtualArrayAssemblyOpF64",
 )
 globals().update({name: _make_operator(f"holoscan.radar.{name}") for name in _REGISTRY_NAMES})
+
+
+def TensorDumpOp(graph: Any, name: str, **params: object) -> Any:
+    """Create the dtype-independent tensor dump sink (no pool extents)."""
+    return _operator_call("holoscan.radar.TensorDumpOp", graph, name, extents={}, **params)
+
+
+TensorDumpOp.registry_name = "holoscan.radar.TensorDumpOp"
 __all__ = list(_REGISTRY_NAMES)
 
 

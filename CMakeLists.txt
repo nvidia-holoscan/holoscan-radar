@@ -128,6 +128,14 @@ if(HOLOSCAN_RADAR_BUILD_PYTHON)
     unset(_radar_op)
 endif()
 
+# Python application parity tests execute the C++ reference applications.
+if(HOLOSCAN_RADAR_BUILD_PYTHON AND HOLOSCAN_RADAR_BUILD_TESTING)
+    foreach(_sar_app IN ITEMS spotlight video_sar tiled_strip continuous_strip independent_images autofocus)
+        set(APP_${_sar_app} ON CACHE BOOL "Required by SAR Python parity tests" FORCE)
+    endforeach()
+    unset(_sar_app)
+endif()
+
 # ---------------------------------------------------------------------------
 # Subprojects
 # ---------------------------------------------------------------------------

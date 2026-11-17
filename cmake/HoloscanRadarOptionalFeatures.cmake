@@ -78,8 +78,15 @@ else()
     message(STATUS "Python bindings disabled (HOLOSCAN_RADAR_BUILD_PYTHON=OFF)")
 endif()
 
-# FMCW operators registered by the Python provider.
+# Public operators registered by the Python provider.
 set(HOLOSCAN_RADAR_OPERATORS
+    cphd_reader_op
+    aperture_manager_op
+    backprojection_op
+    sar_range_compression_op
+    phase_correction_op
+    autofocus_op
+    tensor_dump_op
     clutter_filter_op
     snapshot_gather_op
     phase_shift_beamformer_op

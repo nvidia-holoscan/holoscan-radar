@@ -39,6 +39,13 @@ target_link_libraries(holoscan_radar_python PRIVATE holoscan::core holoscan::par
     holoscan::radar_common holoscan::radar_common_simulator holoscan::radar_schemas
     radar_app
     fmcw_dashboard
+    cphd_reader_op
+    aperture_manager_op
+    backprojection_op
+    sar_range_compression_op
+    phase_correction_op
+    autofocus_op
+    tensor_dump_op
     clutter_filter_op
     snapshot_gather_op
     phase_shift_beamformer_op
