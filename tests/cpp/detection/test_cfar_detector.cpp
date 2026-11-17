@@ -26,6 +26,8 @@
 #include <vector>
 
 #include <holoscan/core/compile.hpp>
+#include <holoscan/core/diagnostic.hpp>
+#include <holoscan/core/errors.hpp>
 #include <holoscan/core/connection_options.hpp>
 #include <holoscan/core/expected_macros.hpp>
 #include <holoscan/core/graph.hpp>
@@ -778,6 +780,57 @@ TEST(CFARDetectorOpTest, NonBlockingPfaOverrideServesStaleLut) {
   const double initial_score = cfar_frames(result, "detection_score")[0].as<double>()[kPeak];
   EXPECT_DOUBLE_EQ(cfar_frames(result, "detection_score")[1].as<double>()[kPeak], initial_score);
   EXPECT_DOUBLE_EQ(cfar_frames(result, "detection_score")[2].as<double>()[kPeak], initial_score);
+}
+
+TEST(CFARDetectorOpTest, FailedNonblockingRebuildReturnsRuntimeErrorInsteadOfServingStaleForever) {
+  using Op = CFARDetectorOp<double>;
+  auto fixture =
+      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  auto params = ca_params(0.1);
+  params.cfar_variant = CfarVariant::kGO;
+  fixture.set_params(params);
+  auto input = to_device_tensor<double>(power_map(1.0, {{8, 16}}, 26.0), {kDoppler, kRange},
+                                        real_dtype<double>());
+  for (int tick = 0; tick < 3; ++tick) {
+    const auto stamp = std::chrono::milliseconds{100 * (tick + 1)};
+    fixture.push_frame(
+        holoscan::testing::frame_at(stamp, holoscan::testing::input("pfa", tick == 0 ? 0.1 : 1e-30),
+                                    holoscan::testing::input("rd_maps", *input)));
+  }
+  fixture.capture_snapshot<holoscan::Tensor>("detection_mask", 3U, 1024U * 1024U);
+  for (const char* output :
+       {"detection_mask", "detection_score", "noise_estimate", "detection_idx", "cfar_power"})
+    fixture.output_device(output, holoscan::DeviceId{0});
+  fixture.input_source_device("rd_maps", holoscan::DeviceId{0});
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running =
+      fixture.run_async(completion.run_options(holoscan::testing::FrameRelease::kManual));
+  for (std::size_t tick = 1; tick <= 2; ++tick) {
+    const auto released = running.release_frame(completion.remaining());
+    if (!released) {
+      running.request_stop();
+      FAIL() << released.error().message << "\n" << running.finish().describe_failure();
+    }
+    ASSERT_TRUE(completion.wait_for_output(running, "detection_mask", tick));
+  }
+  // Tick two served the old table. Wait for its impossible budget to fail
+  // before the next tick; no scheduling sleeps or retry-count assumptions.
+  holoscan::radar::detail::join_inflight_alpha_lut_builds();
+  ASSERT_TRUE(running.release_frame(completion.remaining()));
+  EXPECT_FALSE(completion.wait_for_output(running, "detection_mask", 3U));
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  EXPECT_FALSE(result.ok());
+  EXPECT_EQ(result.snapshots<holoscan::Tensor>("detection_mask").size(), 2U);
+  const auto diagnostics = result.diagnostics();
+  EXPECT_TRUE(std::any_of(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
+    return diagnostic.detail &&
+           diagnostic.detail->operation == holoscan::DiagnosticOperation::kCompute &&
+           diagnostic.detail->error.code == holoscan::ErrorCode::kFailure &&
+           diagnostic.detail->error.message ==
+               "CFAR calibration trial budget exceeds uint64 capacity";
+  })) << result.describe_failure();
 }
 
 TEST(CFARDetectorOpTest, SupersededCalibrationSubscriptionsAreReleasedBeforeStop) {

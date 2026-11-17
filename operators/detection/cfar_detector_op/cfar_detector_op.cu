@@ -58,6 +58,7 @@ struct CfarDetectorState {
   CfarAlphaLutKey alpha_lut_key{};
   CfarAlphaLutKey pending_lut_key{};
   bool pending_lut_active{false};
+  detail::AlphaLutFuture pending_lut_future;
   bool stale_lut_warned{false};
   bool pfa_lut_slow_warned{false};
   bool runtime_build_warned{false};
@@ -655,6 +656,7 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
     detail::release_alpha_lut_builds(&state);
     state.pending_lut_key = {};
     state.pending_lut_active = false;
+    state.pending_lut_future = {};
     state.stale_lut_warned = false;
   }
 
@@ -672,6 +674,7 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
     state.alpha_lut_key = {};
     state.pending_lut_key = {};
     state.pending_lut_active = false;
+    state.pending_lut_future = {};
     state.stale_lut_warned = false;
     state.external_alpha_lut_validated = false;
   }
@@ -732,6 +735,7 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
         state.alpha_lut_key = lut_key;
         state.pending_lut_key = {};
         state.pending_lut_active = false;
+        state.pending_lut_future = {};
         state.stale_lut_warned = false;
         return {};
       };
@@ -764,7 +768,9 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
                 : "serving the previous LUT while building");
         state.runtime_build_warned = true;
       };
-      detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
+      detail::AlphaLutSnapshot snap = state.pending_lut_active
+                                          ? detail::poll_alpha_lut_build(state.pending_lut_future)
+                                          : detail::poll_cached_alpha_lut(lut_key);
       if (snap.ready) {
         HOLOSCAN_TRY(adopt_ready_lut(std::move(snap.lut)));
       } else if (stage.blocking_alpha_lut_rebuild || state.alpha_lut_host_cache.empty()) {
@@ -776,14 +782,15 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
               [&] {
                 return cancellation.stop_requested();
               },
-              &state)));
+              &state, state.pending_lut_future)));
         } catch (const std::exception& e) {
           return fail_runtime(e.what());
         }
       } else {
         warn_runtime_rebuild();
         warn_slow_pfa_lut();
-        detail::ensure_alpha_lut_build(lut_key, &state);
+        if (!state.pending_lut_active)
+          state.pending_lut_future = detail::ensure_alpha_lut_build(lut_key, &state);
         state.pending_lut_key = lut_key;
         state.pending_lut_active = true;
         if (!state.stale_lut_warned) {
@@ -794,12 +801,13 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
         }
       }
     } else if (state.pending_lut_active && state.pending_lut_key == lut_key) {
-      detail::AlphaLutSnapshot snap = detail::poll_cached_alpha_lut(lut_key);
+      detail::AlphaLutSnapshot snap = detail::poll_alpha_lut_build(state.pending_lut_future);
       if (snap.ready) {
         state.alpha_lut_host_cache = std::move(snap.lut);
         state.alpha_lut_key = lut_key;
         state.pending_lut_key = {};
         state.pending_lut_active = false;
+        state.pending_lut_future = {};
         state.stale_lut_warned = false;
         HOLOSCAN_TRY(upload_alpha_lut<T>(state, state.alpha_lut_host_cache, stream));
       }
@@ -957,7 +965,7 @@ void CFARDetectorOp<T>::start() {
                                  pinned.calibration_trials};
   try {
     if (uses_slow_pfa_lut_calibration(variant, fold)) {
-      detail::ensure_alpha_lut_build(warm_key, state_.get());
+      state_->pending_lut_future = detail::ensure_alpha_lut_build(warm_key, state_.get());
       state_->pending_lut_key = warm_key;
       state_->pending_lut_active = true;
       HOLOSCAN_LOG_WARN(
@@ -981,6 +989,8 @@ void CFARDetectorOp<T>::start() {
 template <typename T>
 void CFARDetectorOp<T>::stop() {
   detail::release_alpha_lut_builds(state_.get());
+  state_->pending_lut_future = {};
+  state_->pending_lut_active = false;
 }
 
 template <typename T>
@@ -1079,7 +1089,13 @@ expected<void, Error> CFARDetectorOp<T>::compute(ExecutionContext& context) {
   detail::CfarDetectorState& state = *state_;
   HOLOSCAN_TRY(auto workspace, prepare_dense_workspace<T>(state, plan));
 
-  auto updated = update_alpha_lut<T>(state, plan, stream, context.cancellation());
+  auto updated = [&]() -> expected<void, Error> {
+    try {
+      return update_alpha_lut<T>(state, plan, stream, context.cancellation());
+    } catch (const std::exception& e) {
+      return fail_runtime(e.what());
+    }
+  }();
   if (!updated) {
     if (context.cancellation().stop_requested())
       return {};

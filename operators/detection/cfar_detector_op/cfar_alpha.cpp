@@ -920,7 +920,6 @@ struct CfarAlphaLutKeyHash {
 };
 
 using AlphaLut = std::vector<double>;
-using AlphaLutFuture = std::shared_future<AlphaLut>;
 
 // Bound on the process-wide LUT cache. Each entry is tiny (a few hundred
 // doubles) and distinct keys are rare in practice (one per (variant, pfa,
@@ -988,15 +987,18 @@ void run_lut_build(CfarAlphaLutKey key, std::shared_ptr<AlphaLutJob> job, int de
   }
 }
 
+AlphaLutSnapshot poll_alpha_lut_build(const AlphaLutFuture& build) {
+  if (build.wait_for(std::chrono::seconds{0}) == std::future_status::ready)
+    return {true, build.get()};
+  return {false, {}, true};
+}
+
 AlphaLutSnapshot poll_cached_alpha_lut(const CfarAlphaLutKey& key) {
   std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
   if (auto it = g_alpha_lut_cache.find(key); it != g_alpha_lut_cache.end())
     return {true, it->second};
-  if (auto it = g_jobs.find(key); it != g_jobs.end()) {
-    if (it->second->future.wait_for(std::chrono::seconds{0}) == std::future_status::ready)
-      return {true, it->second->future.get()};
-    return {false, {}, true};
-  }
+  if (auto it = g_jobs.find(key); it != g_jobs.end())
+    return poll_alpha_lut_build(it->second->future);
   return {};
 }
 
@@ -1030,8 +1032,13 @@ AlphaLutAcquisition acquire_job(const CfarAlphaLutKey& key, const void* owner) {
   return {job, {}};
 }
 
-void ensure_alpha_lut_build(const CfarAlphaLutKey& key, const void* owner) {
-  (void)acquire_job(key, owner);
+AlphaLutFuture ensure_alpha_lut_build(const CfarAlphaLutKey& key, const void* owner) {
+  auto acquired = acquire_job(key, owner);
+  if (acquired.job)
+    return acquired.job->future;
+  std::promise<AlphaLut> ready;
+  ready.set_value(std::move(acquired.cached.lut));
+  return ready.get_future().share();
 }
 
 void release_alpha_lut_builds(const void* owner) {
@@ -1058,19 +1065,22 @@ void release_alpha_lut_builds(const void* owner) {
 }
 
 std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key,
-                                         std::function<bool()> cancelled, const void* owner) {
+                                         std::function<bool()> cancelled, const void* owner,
+                                         AlphaLutFuture build) {
   int local_owner = 0;
   const void* subscriber = owner ? owner : &local_owner;
-  auto acquired = acquire_job(key, subscriber);
-  if (acquired.cached.ready)
-    return std::move(acquired.cached.lut);
-  auto job = std::move(acquired.job);
+  if (!build.valid()) {
+    auto acquired = acquire_job(key, subscriber);
+    if (acquired.cached.ready)
+      return std::move(acquired.cached.lut);
+    build = acquired.job->future;
+  }
   try {
-    while (job->future.wait_for(std::chrono::milliseconds{10}) != std::future_status::ready) {
+    while (build.wait_for(std::chrono::milliseconds{10}) != std::future_status::ready) {
       if (cancelled && cancelled())
         throw CfarCalibrationCancelled{};
     }
-    auto lut = job->future.get();
+    auto lut = build.get();
     if (!owner)
       release_alpha_lut_builds(subscriber);
     return lut;

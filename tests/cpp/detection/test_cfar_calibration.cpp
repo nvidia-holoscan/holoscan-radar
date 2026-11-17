@@ -74,17 +74,33 @@ TEST(CfarCalibration, ConcurrentCacheEvictionNeverReturnsAnEmptyOrWrongLut) {
     EXPECT_TRUE(reader.get());
 }
 
-TEST(CfarCalibration, FailedBackgroundJobIsRetiredWhileOwnersRemain) {
-  radar::CfarAlphaLutKey key{radar::CfarVariant::kGO, 1e-40, 1, 0, 1, 1, 1, 1, 16, 16};
+TEST(CfarCalibration, FailedBackgroundJobRetainsSubscriberErrorAndAllowsFreshRetries) {
+  radar::CfarAlphaLutKey key{radar::CfarVariant::kGO, 1e-30, 1, 0, 1, 1, 1, 1, 16, 16};
+  int owner = 0, fresh_owner = 0;
+  auto subscribed = detail::ensure_alpha_lut_build(key, &owner);
+  subscribed.wait();
+  // The failed job leaves the registry, but its subscriber still observes the error.
+  EXPECT_FALSE(detail::poll_cached_alpha_lut(key).ready);
+  EXPECT_THROW(detail::poll_alpha_lut_build(subscribed), std::invalid_argument);
+  auto retry = detail::ensure_alpha_lut_build(key, &fresh_owner);
+  retry.wait();
+  EXPECT_FALSE(detail::poll_cached_alpha_lut(key).ready);
+  EXPECT_THROW(detail::poll_alpha_lut_build(retry), std::invalid_argument);
+  EXPECT_THROW(detail::poll_alpha_lut_build(subscribed), std::invalid_argument);
+  // A blocking first tick must consume its retained build, not silently reacquire a job.
+  EXPECT_THROW(detail::get_cached_alpha_lut(key, {}, &owner, subscribed), std::invalid_argument);
+  detail::release_alpha_lut_builds(&owner);
+  detail::release_alpha_lut_builds(&fresh_owner);
+}
+
+TEST(CfarCalibration, CachedBuildReturnsARetainedReadyResult) {
+  radar::CfarAlphaLutKey key{radar::CfarVariant::kCA, 0.0137, 1, -1, 1, 1, 1, 1, 5, 5};
+  const auto expected = detail::get_cached_alpha_lut(key);
   int owner = 0;
-  detail::ensure_alpha_lut_build(key, &owner);
-  detail::join_inflight_alpha_lut_builds();
-  // Failure must not poison the registry until this owner's eventual stop().
-  EXPECT_NO_THROW(EXPECT_FALSE(detail::poll_cached_alpha_lut(key).ready));
-  // A new caller can attempt a replacement; its failure is independently retired too.
-  detail::ensure_alpha_lut_build(key, &owner);
-  detail::join_inflight_alpha_lut_builds();
-  EXPECT_NO_THROW(EXPECT_FALSE(detail::poll_cached_alpha_lut(key).ready));
+  const auto cached = detail::ensure_alpha_lut_build(key, &owner);
+  const auto snap = detail::poll_alpha_lut_build(cached);
+  EXPECT_TRUE(snap.ready);
+  EXPECT_EQ(snap.lut, expected);
   detail::release_alpha_lut_builds(&owner);
 }
 
