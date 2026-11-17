@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from importlib import import_module
 from pathlib import Path
 
@@ -56,6 +58,25 @@ def _config_path(application: str, value: str) -> Path:
     return path
 
 
+def _print_sar_input_error(error: RuntimeError) -> None:
+    """Style actionable native input diagnostics only at the terminal boundary."""
+    color = (
+        sys.stderr.isatty() and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
+    )
+    for index, line in enumerate(str(error).splitlines()):
+        style = ""
+        if index == 0:
+            line = f"Error: {line}"
+            style = "\033[1;31m"
+        elif line.startswith("Next step:"):
+            style = "\033[1;36m"
+        elif line == "More information":
+            style = "\033[1m"
+        if color and style:
+            line = f"{style}{line}\033[0m"
+        print(line, file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run a Holoscan Radar Graph application")
     parser.add_argument("application", choices=tuple(_DEFAULT_CONFIG))
@@ -86,7 +107,14 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--choose-presenter is available for FMCW applications only")
         if args.cphd and args.cphd_override:
             parser.error("supply only one CPHD override")
-        workflow = builder(config, cphd_override=cphd_override)
+        try:
+            workflow = builder(config, cphd_override=cphd_override)
+        except RuntimeError as error:
+            # Other build and execution failures retain their traceback for diagnosis.
+            if not str(error).startswith("CPHD input file not found:\n"):
+                raise
+            _print_sar_input_error(error)
+            return 1
     else:
         if args.cphd or args.cphd_override:
             parser.error("--cphd is available for SAR applications only")

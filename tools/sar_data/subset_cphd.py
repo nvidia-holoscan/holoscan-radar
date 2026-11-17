@@ -12,6 +12,11 @@ python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml -o 
 python3 subset_cphd.py --source in.cphd --sample-count 128 --pulse-count 40 -o out.cphd
 """
 
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["lxml>=6.1", "numpy>=1.24", "pyyaml>=6.0", "sarkit>=1.10"]
+# ///
+
 from __future__ import annotations
 
 import argparse

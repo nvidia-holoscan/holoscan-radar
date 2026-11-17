@@ -55,20 +55,16 @@ uv run tools/sar_data/viewer_tests/test_view_image.py
 
 ## Data preparation setup
 
-On the **host**, run the following from the repository root using `uv`,
-matching the [repository setup](../../DEVELOPER.md#holoscan-cli):
+Use `uv run` for either preparation script; it installs the declared dependencies
+in an isolated tool environment without changing the repository's `.venv`:
 
 ```bash
-uv sync
-uv pip install --python .venv/bin/python -r tools/sar_data/requirements.txt
-source .venv/bin/activate
+uv run tools/sar_data/pull_cphd.py --app autofocus --list
+uv run tools/sar_data/subset_cphd.py --help
 ```
 
-`uv sync` prepares the repository's `.venv` and Holoscan CLI. The `uv pip`
-command adds the optional data-preparation dependencies to that environment;
-they are not included by `uv sync` alone. Keep the environment activated for
-the `python3` commands below. If you run `uv sync` again, repeat the `uv pip`
-command before using these tools.
+For direct `python3` invocation instead, install `tools/sar_data/requirements.txt`
+in your chosen Python environment. The commands below use `uv run`.
 
 Prepare data on the host; both the host CLI and development container can
 then use the downloaded files. No Python dependency installation inside the
@@ -86,7 +82,7 @@ work even when the CLI runs the executable from its build directory.
 For example, download the Imperial Valley collect and run continuous strip:
 
 ```bash
-python3 tools/sar_data/pull_cphd.py --app continuous_strip \
+uv run tools/sar_data/pull_cphd.py --app continuous_strip \
   --dest data/sar/imperial
 ./holoscan-radar run continuous_strip
 ```
@@ -102,30 +98,58 @@ directory or YAML directory take precedence over the data-directory fallback.
 
 ## Public collection downloads
 
+The selected YAML determines the required inputs. From the host repository root:
+
+```bash
+uv run tools/sar_data/pull_cphd.py --config applications/sar/autofocus/config/autofocus_imperial.yaml --list
+uv run tools/sar_data/pull_cphd.py --config applications/sar/autofocus/config/autofocus_imperial.yaml
+```
+
+Use the same config you pass to the application. This handles every shipped SAR
+preset, including the autofocus Atlanta, Imperial, and Houston variants. The
+manifest must match every `cphd.path` entry, including its directory; unknown
+paths fail before any download or output-directory creation. To use another data
+root, pass `--data-root /path/to/data` or set `HOLOHUB_DATA_DIR`, preserving the
+`sar/` layout and the application's matching data-root setting. Existing files
+relative to the working directory or YAML directory retain application precedence;
+if they point outside the registered layout, selection fails rather than downloading
+another file. Custom datasets need a catalog entry in `pull_cphd.py`.
+
+`--list` validates and prints the complete plan offline. Houston runs the existing
+`houston_1m.yaml` subset recipe with HTTP range reads, avoiding the full raw
+collection download. `uv run` supplies the downloader's YAML dependency and,
+only when preparing Houston, the subset tool's separate dependencies.
+
+`--app` selects an application's default YAML. Existing `--dest` overrides remain
+available for these shortcuts; the application must then be configured to use that
+location. With `--config`, use `--data-root` so configured paths stay authoritative.
+`--app all` retains its historical eight-object selection (Kourou, Imperial, and
+six independent images); Atlanta and Houston require explicit selection.
+
 On the **host**, list a manifest without touching the network:
 
 ```bash
-python3 tools/sar_data/pull_cphd.py --app tiled_strip --list
+uv run tools/sar_data/pull_cphd.py --app tiled_strip --list
 ```
 
 Choose the command for the preset you want to run. Destinations below are
 relative to the repository root; omit `--dest` to use each downloader default.
-The commands assume the activated environment from the setup above.
+The commands use isolated dependencies as described above.
 
 | Application / preset | Collection | Download / preparation command | Destination |
 | --- | --- | --- | --- |
-| Autofocus default | Kourou Umbra, 2023-06-24 | `python3 tools/sar_data/pull_cphd.py --app autofocus` | `data/sar/` |
-| Tiled strip | Imperial Valley Capella | `python3 tools/sar_data/pull_cphd.py --app tiled_strip` | `data/sar/imperial/` |
-| Continuous strip / autofocus Imperial | Same Imperial Valley Capella | `python3 tools/sar_data/pull_cphd.py --app continuous_strip` | `data/sar/imperial/` |
-| Independent images | Six Umbra collections | `python3 tools/sar_data/pull_cphd.py --app independent_images` | `data/sar/mode5/` |
-| Spotlight / autofocus Atlanta | Atlanta Umbra | [Spotlight download commands](../../applications/sar/spotlight/README.md#real-collection-preset) | `data/sar/` |
-| Video SAR / autofocus Houston | Houston FX subset | [Houston subset recipe](#houston-video-subset) | `data/sar/` |
+| Autofocus default | Kourou Umbra, 2023-06-24 | `uv run tools/sar_data/pull_cphd.py --app autofocus` | `data/sar/` |
+| Tiled strip | Imperial Valley Capella | `uv run tools/sar_data/pull_cphd.py --app tiled_strip` | `data/sar/imperial/` |
+| Continuous strip / autofocus Imperial | Same Imperial Valley Capella | `uv run tools/sar_data/pull_cphd.py --app continuous_strip` | `data/sar/imperial/` |
+| Independent images | Six Umbra collections | `uv run tools/sar_data/pull_cphd.py --app independent_images` | `data/sar/mode5/` |
+| Spotlight / autofocus Atlanta | Atlanta Umbra | `uv run tools/sar_data/pull_cphd.py --app spotlight` | `data/sar/` |
+| Video SAR / autofocus Houston | Houston FX subset | `uv run tools/sar_data/pull_cphd.py --app video_sar` | `data/sar/` |
 
 For the default autofocus workflow, download Kourou and launch:
 
 ```bash
-python3 tools/sar_data/pull_cphd.py --app autofocus --list
-python3 tools/sar_data/pull_cphd.py --app autofocus
+uv run tools/sar_data/pull_cphd.py --app autofocus --list
+uv run tools/sar_data/pull_cphd.py --app autofocus
 ./holoscan-radar run autofocus --language cpp
 ```
 
@@ -144,8 +168,8 @@ It does not download Atlanta or prepare the Houston subset; use the separate
 instructions in the table for those.
 
 ```bash
-python3 tools/sar_data/pull_cphd.py --app all --list
-python3 tools/sar_data/pull_cphd.py --app all --dest data/sar
+uv run tools/sar_data/pull_cphd.py --app all --list
+uv run tools/sar_data/pull_cphd.py --app all --dest data/sar
 ```
 
 With `--app all`, `--dest` replaces the `data/sar/` root: Kourou goes directly
@@ -166,9 +190,9 @@ the full 110 GiB signal block:
 
 ```bash
 mkdir -p data/sar
-python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
+uv run tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
   --dry-run -o data/sar
-python3 tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
+uv run tools/sar_data/subset_cphd.py tools/sar_data/recipes/houston_1m.yaml \
   -o data/sar
 ```
 
@@ -200,7 +224,7 @@ available **on the host**. With the optional Python dependencies installed,
 run:
 
 ```bash
-python3 tools/sar_data/subset_cphd.py \
+uv run tools/sar_data/subset_cphd.py \
   --source build/tests/cpp/generated_sar_smoke.cphd \
   --pulse-count 3 --sample-count 4 -o build/tests/cpp/subset_local.cphd
 ```
