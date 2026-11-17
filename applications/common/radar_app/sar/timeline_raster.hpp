@@ -30,11 +30,15 @@ namespace holoscan::radar::app::sar {
 class TimelineRasterOp : public Operator<> {
  public:
   TimelineRasterOp(std::shared_ptr<radar::FormationHud> hud, std::vector<std::string> scene_names,
-                   bool show_playback_lag);
+                   bool show_playback_lag, double rate = 10.0, int64_t width = kWidth,
+                   int64_t height = kHeight);
+  void start() override;
+  void stop() override;
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
   [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override;
   Output<schema::ImageT> frame{"frame"};
+  Output<Tensor> labels{"labels"};
 
   static constexpr int64_t kWidth = 1280;
   static constexpr int64_t kHeight = 112;
@@ -49,6 +53,9 @@ class TimelineRasterOp : public Operator<> {
   std::shared_ptr<radar::FormationHud> hud_;
   std::vector<std::string> scene_names_;
   bool show_playback_lag_{false};
+  std::chrono::nanoseconds period_;
+  int64_t width_, height_;
+  void* commands_{nullptr};
   std::vector<ImageMark> image_emits_;
   std::optional<std::chrono::steady_clock::time_point> last_seen_emit_;
   std::chrono::steady_clock::time_point hud_at_{};

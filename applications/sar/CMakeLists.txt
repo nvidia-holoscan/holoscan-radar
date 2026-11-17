@@ -31,7 +31,7 @@ if(HOLOSCAN_RADAR_BUILD_PYTHON OR BUILD_ALL OR APP_spotlight OR APP_video_sar OR
         add_library(sar_image_viz STATIC
         ${PROJECT_SOURCE_DIR}/applications/common/radar_app/sar/sar_image_viz.cu
         ${PROJECT_SOURCE_DIR}/applications/common/radar_app/sar/sar_image_lut.cu
-        ${PROJECT_SOURCE_DIR}/applications/common/radar_app/sar/timeline_raster.cpp)
+        ${PROJECT_SOURCE_DIR}/applications/common/radar_app/sar/timeline_raster.cu)
         target_include_directories(sar_image_viz PRIVATE
         ${PROJECT_SOURCE_DIR}/operators ${PROJECT_SOURCE_DIR}/operators/common
         ${PROJECT_SOURCE_DIR}/applications/common)

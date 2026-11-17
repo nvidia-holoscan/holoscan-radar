@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <functional>
@@ -18,6 +19,7 @@
 #include <holoscan/core/compile.hpp>
 #include <holoscan/core/graph.hpp>
 #include <holoscan/core/run.hpp>
+#include <holoscan/core/managed_shutdown_signals.hpp>
 #include <holoscan/logger/logger.hpp>
 #include <holoscan/time/realtime_clock.hpp>
 
@@ -60,22 +62,15 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
                        BuildFn&& build) {
   configure_fmcw_logging();
   try {
+    auto created_signals = holoscan::ManagedShutdownSignals::create();
+    if (!created_signals)
+      throw std::runtime_error("Radar: cannot establish managed shutdown signals");
+    auto managed_signals = std::move(created_signals).value();
     const auto launch = parse_fmcw_launch_options(argc, argv, default_yaml);
     Config cfg = load_config(launch.config_path);
-    if (cfg.visualize && !cfg.headless && !cfg.skip_display_check && !gui_available()) {
-      HOLOSCAN_LOG_WARN(
-          "{}: visualize is enabled but no usable display was detected; "
-          "running without the visualization window",
-          log_prefix);
-      cfg.visualize = false;
-    }
-
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
-    cfg.visualization.x11_presentation =
-        resolve_fmcw_x11_presentation(cfg.visualize, cfg.visualization.x11_presentation,
-                                      launch.choose_presenter, launch.config_path.string());
-    select_fmcw_application_device(cfg.visualize, cfg.visualize,
-                                   cfg.visualization.x11_presentation.value());
+    prepare_presentation(cfg, launch.config_path.string(), launch.presenter,
+                         launch.choose_presenter);
 #else
     select_application_device(false, false);
 #endif
@@ -93,8 +88,32 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
                                " compile failed: " + std::string(plan.json()));
     }
 
-    holoscan::RunSession session = holoscan::run_async(plan);
+    holoscan::RunSession session = holoscan::run_async(plan, managed_signals);
     wait_for_app_frames(session, static_cast<int>(cfg.num_frames));
+    if (cfg.visualize) {
+      // Display is best effort, but do not stop the graph before the final
+      // source frame has had a bounded opportunity to complete composition.
+      const auto deadline = std::chrono::steady_clock::now() + kDisplayDrainTimeout;
+      const auto progress = authoring_frame_progress();
+      while ((progress->input_ns.load() < AppFrameBank::last_capture_ns.load() ||
+              progress->expected_ns.load() < 0 ||
+              progress->capture_ns.load() < progress->expected_ns.load()) &&
+             std::chrono::steady_clock::now() < deadline &&
+             session.termination() == holoscan::RunTermination::kRunning) {
+        if (session.wait_for(kAppPoll) || !session.diagnostics().empty())
+          break;
+      }
+    }
+    if (cfg.visualize && !cfg.headless) {
+      const auto end =
+          std::chrono::steady_clock::now() +
+          std::chrono::duration<double>(std::max(0.0, cfg.visualization.final_image_hold_s));
+      while (session.termination() == holoscan::RunTermination::kRunning &&
+             (cfg.visualization.final_image_hold_s < 0 || std::chrono::steady_clock::now() < end)) {
+        if (session.wait_for(kAppPoll) || !session.diagnostics().empty())
+          break;
+      }
+    }
     const bool already_stopped = session.termination() == holoscan::RunTermination::kStopped;
     session.request_stop();
     session.wait();
@@ -112,6 +131,7 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
                                std::to_string(AppFrameBank::captured) + " / " +
                                std::to_string(cfg.num_frames) + " frames");
     }
+    (void)managed_signals.close();
     if (cadence) {
       cadence->log_summary();
     }

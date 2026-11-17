@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     // these are this app's own blocks, plus the /backprojection fields
     // again because the auxiliary formation decodes that block a second
     // time from a separate document.
-    auto document = app::config::load_document(extras->config_path);
+    auto document = app::config::load_inherited_document(extras->config_path);
     document = app::config::normalize_enum_field<radar::BackprojectionBackend>(
         std::move(document), "/backprojection/backend");
     document = app::config::normalize_enum_field<radar::GeometryChange>(

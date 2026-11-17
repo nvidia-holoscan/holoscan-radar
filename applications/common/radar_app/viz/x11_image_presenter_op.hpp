@@ -9,6 +9,8 @@
 #include <X11/keysym.h>
 #include <dlpack/dlpack.h>
 
+#include <algorithm>
+#include <chrono>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +19,8 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+
+#include "radar_app/app/gui_lifecycle.hpp"
 
 #include <holoscan/core/errors.hpp>
 #include <holoscan/core/execution_context.hpp>
@@ -36,8 +40,15 @@ namespace holoscan::radar::app::viz {
 // the complete canvas on the display server, including over an SSH connection.
 class X11ImagePresenterOp final : public Operator<> {
  public:
-  X11ImagePresenterOp(std::int32_t width, std::int32_t height, std::string title)
-  : width_(width), height_(height), title_(std::move(title)) {
+  X11ImagePresenterOp(std::int32_t width, std::int32_t height, std::string title, bool fit = false,
+                      std::shared_ptr<FrameProgress> progress = authoring_frame_progress(),
+                      std::string position = {})
+  : width_(width),
+    height_(height),
+    title_(std::move(title)),
+    fit_(fit),
+    progress_(std::move(progress)),
+    position_(std::move(position)) {
     if (width_ <= 0 || height_ <= 0)
       throw std::invalid_argument("X11 image dimensions must be positive");
   }
@@ -57,7 +68,7 @@ class X11ImagePresenterOp final : public Operator<> {
 
   [[nodiscard]] Contract contract() const override {
     Contract result;
-    result.trigger(OnEach{image});
+    result.trigger(OnClock{.period = std::chrono::milliseconds{16}}).input(image, DrainAll{});
     return result;
   }
 
@@ -77,7 +88,10 @@ class X11ImagePresenterOp final : public Operator<> {
         visual->c_class != TrueColor)
       throw std::runtime_error("X11 image presentation requires TrueColor and XRender");
 
-    state.window = XCreateSimpleWindow(state.display, RootWindow(state.display, screen), 0, 0,
+    const int y = position_ == "bottom_left"
+                      ? std::max(0, DisplayHeight(state.display, screen) - height_ - 48)
+                      : 0;
+    state.window = XCreateSimpleWindow(state.display, RootWindow(state.display, screen), 0, y,
                                        width_, height_, 0, 0, 0);
     XStoreName(state.display, state.window, title_.c_str());
     state.close = XInternAtom(state.display, "WM_DELETE_WINDOW", False);
@@ -102,18 +116,14 @@ class X11ImagePresenterOp final : public Operator<> {
     XFlush(state.display);
   }
 
-  void stop() override { state_.reset(); }
+  void stop() override {
+    state_.reset();
+    have_frame_ = false;
+  }
 
   [[nodiscard]] expected<void, Error> compute(ExecutionContext& context) override {
-    HOLOSCAN_TRY(auto sample, image.receive());
-    const auto& frame = sample.data;
-    if (frame.width != width_ || frame.height != height_ || !frame.data || !frame.data->data() ||
-        frame.encoding != schema::ImageEncoding_RGBA8 || frame.data->ndim() != 3 ||
-        frame.data->shape()[0] != height_ || frame.data->shape()[1] != width_ ||
-        frame.data->shape()[2] != 4)
-      return make_unexpected(Error{ErrorCode::kInvalidArgument, "X11 RGBA frame shape mismatch"});
-
     auto& state = *state_;
+    bool redraw = false;
     while (XPending(state.display)) {
       XEvent event;
       XNextEvent(state.display, &event);
@@ -123,50 +133,79 @@ class X11ImagePresenterOp final : public Operator<> {
         context.request_stop();
         return {};
       }
+      if (event.type == Expose)
+        redraw = true;
       if (event.type == ConfigureNotify) {
+        redraw = true;
         state.width = event.xconfigure.width;
         state.height = event.xconfigure.height;
       }
     }
 
-    // Pack for the server's visual, including its channel masks and byte order.
-    // XPutPixel is presentation format conversion, not a signal-processing path.
-    const auto* rgba = static_cast<const std::uint8_t*>(frame.data->data());
-    const auto channel = [](std::uint8_t value, std::uint64_t mask) {
-      if (mask == 0)
-        return std::uint64_t{0};
-      unsigned int shift = 0;
-      while ((mask & 1UL) == 0) {
-        mask >>= 1U;
-        ++shift;
+    HOLOSCAN_TRY(auto frames, image.selected_batch());
+    if (!frames.empty()) {
+      const auto& sample = frames.back();
+      const auto& frame = sample.data;
+      if (frame.width != width_ || frame.height != height_ || !frame.data || !frame.data->data() ||
+          frame.encoding != schema::ImageEncoding_RGBA8 || frame.data->ndim() != 3 ||
+          frame.data->shape()[0] != height_ || frame.data->shape()[1] != width_ ||
+          frame.data->shape()[2] != 4)
+        return make_unexpected(Error{ErrorCode::kInvalidArgument, "X11 RGBA frame shape mismatch"});
+
+      // Pack for the server's visual, including its channel masks and byte order.
+      // XPutPixel is presentation format conversion, not a signal-processing path.
+      const auto* rgba = static_cast<const std::uint8_t*>(frame.data->data());
+      const auto channel = [](std::uint8_t value, std::uint64_t mask) {
+        if (mask == 0)
+          return std::uint64_t{0};
+        unsigned int shift = 0;
+        while ((mask & 1UL) == 0) {
+          mask >>= 1U;
+          ++shift;
+        }
+        return ((static_cast<std::uint64_t>(value) * mask + 127UL) / 255UL) << shift;
+      };
+      std::array<std::uint64_t, 256> red{};
+      std::array<std::uint64_t, 256> green{};
+      std::array<std::uint64_t, 256> blue{};
+      for (std::size_t i = 0; i < red.size(); ++i) {
+        red[i] = channel(static_cast<std::uint8_t>(i), state.pixels->red_mask);
+        green[i] = channel(static_cast<std::uint8_t>(i), state.pixels->green_mask);
+        blue[i] = channel(static_cast<std::uint8_t>(i), state.pixels->blue_mask);
       }
-      return ((static_cast<std::uint64_t>(value) * mask + 127UL) / 255UL) << shift;
-    };
-    std::array<std::uint64_t, 256> red{};
-    std::array<std::uint64_t, 256> green{};
-    std::array<std::uint64_t, 256> blue{};
-    for (std::size_t i = 0; i < red.size(); ++i) {
-      red[i] = channel(static_cast<std::uint8_t>(i), state.pixels->red_mask);
-      green[i] = channel(static_cast<std::uint8_t>(i), state.pixels->green_mask);
-      blue[i] = channel(static_cast<std::uint8_t>(i), state.pixels->blue_mask);
-    }
-    const auto opaque =
-        ~(state.pixels->red_mask | state.pixels->green_mask | state.pixels->blue_mask);
-    for (std::int32_t y = 0; y < height_; ++y) {
-      for (std::int32_t x = 0; x < width_; ++x) {
-        const auto* pixel = rgba + (static_cast<std::size_t>(y) * width_ + x) * 4U;
-        const std::uint64_t packed = red[pixel[0]] | green[pixel[1]] | blue[pixel[2]] | opaque;
-        XPutPixel(state.pixels, x, y, packed);
+      const auto opaque =
+          ~(state.pixels->red_mask | state.pixels->green_mask | state.pixels->blue_mask);
+      for (std::int32_t y = 0; y < height_; ++y) {
+        for (std::int32_t x = 0; x < width_; ++x) {
+          const auto* pixel = rgba + (static_cast<std::size_t>(y) * width_ + x) * 4U;
+          const std::uint64_t packed = red[pixel[0]] | green[pixel[1]] | blue[pixel[2]] | opaque;
+          XPutPixel(state.pixels, x, y, packed);
+        }
       }
+      XPutImage(state.display, state.pixmap, state.gc, state.pixels, 0, 0, 0, 0, width_, height_);
+      redraw = true;
+      have_frame_ = true;
+      if (progress_)
+        progress_->capture_ns.store(sample.metadata.capture_time().timestamp_ns);
     }
-    XPutImage(state.display, state.pixmap, state.gc, state.pixels, 0, 0, 0, 0, width_, height_);
-    if (state.width > 0 && state.height > 0) {
-      XTransform transform{{{XDoubleToFixed(static_cast<double>(width_) / state.width), 0, 0},
-                            {0, XDoubleToFixed(static_cast<double>(height_) / state.height), 0},
+    if (redraw && have_frame_ && state.width > 0 && state.height > 0) {
+      int target_width = state.width;
+      int target_height = state.height;
+      if (fit_) {
+        const double scale = std::min(static_cast<double>(state.width) / width_,
+                                      static_cast<double>(state.height) / height_);
+        target_width = std::max(1, static_cast<int>(width_ * scale));
+        target_height = std::max(1, static_cast<int>(height_ * scale));
+        XSetForeground(state.display, state.gc, 0);
+        XFillRectangle(state.display, state.window, state.gc, 0, 0, state.width, state.height);
+      }
+      XTransform transform{{{XDoubleToFixed(static_cast<double>(width_) / target_width), 0, 0},
+                            {0, XDoubleToFixed(static_cast<double>(height_) / target_height), 0},
                             {0, 0, XDoubleToFixed(1.0)}}};
       XRenderSetPictureTransform(state.display, state.source, &transform);
-      XRenderComposite(state.display, PictOpSrc, state.source, 0, state.target, 0, 0, 0, 0, 0, 0,
-                       state.width, state.height);
+      XRenderComposite(state.display, PictOpSrc, state.source, 0, state.target, 0, 0, 0, 0,
+                       (state.width - target_width) / 2, (state.height - target_height) / 2,
+                       target_width, target_height);
       XFlush(state.display);
     }
     return {};
@@ -209,6 +248,10 @@ class X11ImagePresenterOp final : public Operator<> {
   std::int32_t width_;
   std::int32_t height_;
   std::string title_;
+  bool fit_;
+  std::shared_ptr<FrameProgress> progress_;
+  bool have_frame_{false};
+  std::string position_;
   std::shared_ptr<State> state_;
 };
 

@@ -16,6 +16,7 @@
 #include <cstring>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -936,7 +937,10 @@ AnnotationCanvas make_annotation(std::int64_t rows, std::int64_t cols,
 
 }  // namespace
 
-FmcwDashboardOp::FmcwDashboardOp(FmcwDashboardConfig config) : config_(std::move(config)) {
+FmcwDashboardOp::FmcwDashboardOp(FmcwDashboardConfig config,
+                                 std::shared_ptr<FrameProgress> progress)
+: config_(std::move(config)),
+  progress_(progress ? std::move(progress) : std::make_shared<FrameProgress>()) {
   sim::validate_scene_visibility(config_.scene_visibility);
   if (!std::isfinite(config_.range_doppler_width_percent) ||
       config_.range_doppler_width_percent < 25.0 || config_.range_doppler_width_percent > 70.0 ||
@@ -1045,6 +1049,11 @@ holoscan::Contract FmcwDashboardOp::contract() const {
 }
 
 expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& context) {
+  struct Receipt {
+    std::shared_ptr<FrameProgress> progress;
+    int64_t input_ns;
+    ~Receipt() { progress->input_ns.store(input_ns); }
+  } receipt{progress_, context.activation_time().timestamp_ns};
   constexpr const char* kWho = "FmcwDashboardOp";
   HOLOSCAN_TRY(auto power, receive_tensor(cfar_power, kWho));
   HOLOSCAN_TRY(auto idx, receive_tensor(detection_idx, kWho));
@@ -1093,8 +1102,9 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
   }
 
   HOLOSCAN_TRY(auto render_time, context.clock().now());
-  const bool should_render = !last_render_ns_ || render_time.timestamp_ns - *last_render_ns_ >=
-                                                     1.0e9 / config_.display_rate_hz;
+  const bool should_render =
+      (config_.total_frames > 0 && current_frame + 1 >= config_.total_frames) || !last_render_ns_ ||
+      render_time.timestamp_ns - *last_render_ns_ >= 1.0e9 / config_.display_rate_hz;
   constexpr int kBlock = 256;
   float host_peak = 0.0F;
   std::vector<float> background_samples;
@@ -1248,7 +1258,9 @@ expected<void, Error> FmcwDashboardOp::compute(holoscan::ExecutionContext& conte
   last_render_ns_ = render_time.timestamp_ns;
   const EmitOptions presentation{.capture_time = presentation_time};
   HOLOSCAN_TRY(text.emit(std::move(text_loan), presentation));
-  return rgba.emit(std::move(loan), presentation);
+  HOLOSCAN_TRY(rgba.emit(std::move(loan), presentation));
+  progress_->expected_ns.store(presentation_time.timestamp_ns);
+  return {};
 }
 
 namespace detail {

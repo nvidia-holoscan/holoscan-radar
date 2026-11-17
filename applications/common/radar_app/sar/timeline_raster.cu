@@ -10,6 +10,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
+
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -19,6 +21,7 @@
 #include <vector>
 
 #include <holoscan/core/domain/tensor.hpp>
+#include <holoscan/visualization/holoviz_op.hpp>
 #include <holoscan/core/errors.hpp>
 #include <holoscan/core/execution_context.hpp>
 #include <holoscan/core/expected.hpp>
@@ -42,20 +45,63 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-void fill_rect(std::vector<uint8_t>* img, int64_t w, int64_t h, int64_t x0, int64_t y0, int64_t x1,
+constexpr size_t kMaxRects = 2048;
+constexpr size_t kTextRows = 256;
+constexpr size_t kTextBytes = 128;
+struct Rect {
+  int64_t x0, y0, x1, y1;
+  uint8_t r, g, b;
+};
+struct TimelineCommands {
+  std::vector<Rect> rectangles;
+  std::array<uint8_t, kTextRows * kTextBytes> text{};
+  size_t rows{0};
+};
+
+// The host creates only bounded drawing commands and text records. Pixels and
+// glyphs are rendered on the GPU, never through a full-frame host raster.
+void fill_rect(TimelineCommands* img, int64_t, int64_t, int64_t x0, int64_t y0, int64_t x1,
                int64_t y1, const std::array<uint8_t, 3>& c) {
-  if (x0 > x1)
-    std::swap(x0, x1);
-  if (y0 > y1)
-    std::swap(y0, y1);
-  x0 = std::max(int64_t{0}, x0);
-  y0 = std::max(int64_t{0}, y0);
-  x1 = std::min(w, x1);
-  y1 = std::min(h, y1);
-  for (int64_t y = y0; y < y1; ++y) {
-    for (int64_t x = x0; x < x1; ++x)
-      plot_put_px(img, w, h, x, y, c);
+  if (img->rectangles.size() < kMaxRects)
+    img->rectangles.push_back(
+        {std::min(x0, x1), std::min(y0, y1), std::max(x0, x1), std::max(y0, y1), c[0], c[1], c[2]});
+}
+
+void draw_text(TimelineCommands* img, int64_t, int64_t, int64_t x, int64_t y,
+               const std::string& text, const std::array<uint8_t, 3>& color, int scale) {
+  if (img->rows >= kTextRows)
+    return;
+  auto* row = img->text.data() + img->rows++ * kTextBytes;
+  const visualization::TextRunHeader header{
+      .x = static_cast<float>(x),
+      .y = static_cast<float>(y),
+      .size_px = static_cast<float>(7 * scale),
+      .color = 0xff000000U | (static_cast<uint32_t>(color[2]) << 16U) |
+               (static_cast<uint32_t>(color[1]) << 8U) | color[0]};
+  std::memcpy(row, &header, sizeof(header));
+  std::memcpy(row + sizeof(header), text.data(),
+              std::min(text.size(), kTextBytes - sizeof(header) - 1));
+}
+
+__global__ void render_timeline(uint8_t* output, int64_t width, int64_t height,
+                                const Rect* rectangles, size_t count) {
+  const int64_t pixel = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (pixel >= width * height)
+    return;
+  const int64_t x = pixel % width, y = pixel / width;
+  uint8_t r = 16, g = 16, b = 16;
+  for (size_t i = 0; i < count; ++i) {
+    const auto rect = rectangles[i];
+    if (x >= rect.x0 && x < rect.x1 && y >= rect.y0 && y < rect.y1) {
+      r = rect.r;
+      g = rect.g;
+      b = rect.b;
+    }
   }
+  output[pixel * 4] = r;
+  output[pixel * 4 + 1] = g;
+  output[pixel * 4 + 2] = b;
+  output[pixel * 4 + 3] = 255;
 }
 
 int64_t time_to_x(Clock::time_point t, Clock::time_point origin, double window_s, int64_t w) {
@@ -64,7 +110,7 @@ int64_t time_to_x(Clock::time_point t, Clock::time_point origin, double window_s
   return static_cast<int64_t>(std::llround(frac * static_cast<double>(w)));
 }
 
-void draw_bar(std::vector<uint8_t>* img, int64_t w, int64_t h, Clock::time_point t0,
+void draw_bar(TimelineCommands* img, int64_t w, int64_t h, Clock::time_point t0,
               Clock::time_point t1, Clock::time_point origin, double window_s, int64_t y0,
               int64_t y1, const std::array<uint8_t, 3>& c) {
   const int64_t x0 = time_to_x(t0, origin, window_s, w);
@@ -74,7 +120,7 @@ void draw_bar(std::vector<uint8_t>* img, int64_t w, int64_t h, Clock::time_point
   fill_rect(img, w, h, x0, y0, x1, y1, c);
 }
 
-void draw_tick(std::vector<uint8_t>* img, int64_t w, int64_t h, Clock::time_point t,
+void draw_tick(TimelineCommands* img, int64_t w, int64_t h, Clock::time_point t,
                Clock::time_point origin, double window_s, int64_t y0, int64_t y1,
                const std::array<uint8_t, 3>& c) {
   const int64_t x = time_to_x(t, origin, window_s, w);
@@ -190,10 +236,17 @@ std::string fit_label(const std::string& name, int64_t max_w, int scale) {
 }  // namespace
 
 TimelineRasterOp::TimelineRasterOp(std::shared_ptr<radar::FormationHud> hud,
-                                   std::vector<std::string> scene_names, bool show_playback_lag)
+                                   std::vector<std::string> scene_names, bool show_playback_lag,
+                                   double rate, int64_t width, int64_t height)
 : hud_(std::move(hud)),
   scene_names_(std::move(scene_names)),
-  show_playback_lag_(show_playback_lag) {
+  show_playback_lag_(show_playback_lag),
+  period_(std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::duration<double>(1.0 / rate))),
+  width_(width),
+  height_(height) {
+  if (!std::isfinite(rate) || rate <= 0.0 || rate > 1000.0 || width < 1 || height < 1)
+    throw std::invalid_argument("Invalid timeline dimensions/rate");
   if (!hud_)
     throw std::invalid_argument("TimelineRasterOp: FormationHud mailbox is required");
 }
@@ -204,13 +257,28 @@ void TimelineRasterOp::setup(OperatorSpec& spec) {
   spec.output(frame)
       .tensor_field(schema::ImageTensorFields::data)
       .produces_tensor(pooled_tensor_output(
-          rgba, 3U, static_cast<uint64_t>(kWidth) * static_cast<uint64_t>(kHeight) * 4U));
+          rgba, 3U, static_cast<uint64_t>(width_) * static_cast<uint64_t>(height_) * 4U));
+  constexpr TensorRepresentation text{.memory_kind = MemoryKind::kHost,
+                                      .dtype = DLDataType{kDLUInt, 8U, 1U},
+                                      .rank = 2U,
+                                      .strides = TensorStridePolicy::kContiguousOnly};
+  spec.output(labels).produces_tensor(pooled_tensor_output(text, 2U, kTextRows * kTextBytes));
 }
 
 Contract TimelineRasterOp::contract() const {
   Contract result;
-  result.trigger(OnClock{.period = std::chrono::milliseconds(100)});
+  result.trigger(OnClock{.period = period_});
   return result;
+}
+
+void TimelineRasterOp::start() {
+  if (cudaMalloc(&commands_, kMaxRects * sizeof(Rect)) != cudaSuccess)
+    throw std::runtime_error("Timeline command allocation failed");
+}
+void TimelineRasterOp::stop() {
+  if (commands_)
+    (void)cudaFree(commands_);
+  commands_ = nullptr;
 }
 
 expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
@@ -231,6 +299,8 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
       mark.latency_s = std::chrono::duration<double>(*snap.bp.emit_at - *packet_at).count();
     }
     mark.file_index = span_file_at(snap.spans, color_at);
+    if (image_emits_.size() >= 256)
+      image_emits_.erase(image_emits_.begin());
     image_emits_.push_back(mark);
   }
   const auto keep = std::find_if(image_emits_.begin(), image_emits_.end(), [&](const ImageMark& m) {
@@ -238,9 +308,9 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   });
   image_emits_.erase(image_emits_.begin(), keep);
 
-  const int64_t w = kWidth;
-  const int64_t h = kHeight;
-  std::vector<uint8_t> img(static_cast<size_t>(w * h * 4), 0);
+  const int64_t w = width_;
+  const int64_t h = height_;
+  TimelineCommands img;
   const std::array<uint8_t, 3> bg{16, 16, 16};
   fill_rect(&img, w, h, 0, 0, w, h, bg);
 
@@ -276,7 +346,7 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
     const int64_t tx = w - 8 - hud_slot;
     const int64_t ty = y0 + (y1 - y0 - label_h) / 2;
     fill_rect(&img, w, h, tx - pad, y0, w - 2, y1, bg);
-    plot_draw_text_5x7(&img, w, h, tx, ty, lab, color, kScale);
+    draw_text(&img, w, h, tx, ty, lab, color, kScale);
   };
 
   for (const auto& span : snap.spans) {
@@ -301,7 +371,7 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
       name = fit_label(name, vis1 - vis0 - 8, kScale);
       if (!name.empty()) {
         const int64_t ty = plat_y0 + (plat_y1 - plat_y0 - label_h) / 2;
-        plot_draw_text_5x7(&img, w, h, vis0 + 4, ty, name, fg, kScale);
+        draw_text(&img, w, h, vis0 + 4, ty, name, fg, kScale);
       }
     }
   }
@@ -327,7 +397,7 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
     // tick scrolled away (mode 4 parked this HUD for the same overlap).
     if (tx < 2 || tx + tw > w - 2 || tx < last_label_right + 4)
       continue;
-    plot_draw_text_5x7(&img, w, h, tx, lat_y, lab, tick_c, kScale);
+    draw_text(&img, w, h, tx, lat_y, lab, tick_c, kScale);
     last_label_right = tx + tw;
   }
 
@@ -350,7 +420,7 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
       tx = 2;
     if (tx + tw > w - 2)
       tx = w - 2 - tw;
-    plot_draw_text_5x7(&img, w, h, tx, axis_y + lab_gap, lab, fg, kScale);
+    draw_text(&img, w, h, tx, axis_y + lab_gap, lab, fg, kScale);
   }
   fill_rect(&img, w, h, w - 2, 0, w, h, head_c);
 
@@ -376,11 +446,31 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   auto writer = loan->write(context.cuda_stream());
   if (!writer)
     return make_unexpected(std::move(writer).error());
-  if (cudaMemcpyAsync(writer->data(), img.data(), img.size(), cudaMemcpyHostToDevice,
-                      context.cuda_stream().get()) != cudaSuccess) {
-    return make_unexpected(Error{ErrorCode::kFailure, "TimelineRasterOp: timeline H2D failed"});
-  }
+  if (cudaMemcpyAsync(commands_, img.rectangles.data(), img.rectangles.size() * sizeof(Rect),
+                      cudaMemcpyHostToDevice, context.cuda_stream().get()) != cudaSuccess)
+    return make_unexpected(Error{ErrorCode::kFailure, "Timeline commands H2D failed"});
+  // The bounded host command vector may be destroyed after this callback.
+  // Finish its H2D read before releasing it; pixels remain GPU-rendered.
+  if (cudaStreamSynchronize(context.cuda_stream().get()) != cudaSuccess)
+    return make_unexpected(Error{ErrorCode::kFailure, "Timeline command transfer failed"});
+  render_timeline<<<(w * h + 255) / 256, 256, 0, context.cuda_stream().get()>>>(
+      static_cast<uint8_t*>(writer->data()), w, h, static_cast<const Rect*>(commands_),
+      img.rectangles.size());
+  if (cudaPeekAtLastError() != cudaSuccess)
+    return make_unexpected(Error{ErrorCode::kFailure, "Timeline GPU raster failed"});
   HOLOSCAN_RETURN_IF_ERROR(std::move(*writer).commit());
+  auto text = labels.allocate_tensor(
+      TensorLoanRequest{.shape = std::array<int64_t, 2>{kTextRows, kTextBytes},
+                        .dtype = DLDataType{kDLUInt, 8U, 1U}});
+  if (!text)
+    return make_unexpected(std::move(text).error());
+  HOLOSCAN_RETURN_IF_ERROR(text->write_host_and_commit(
+      [&](const TensorOutputWriteGuard& guard) -> expected<void, Error> {
+        std::memcpy(guard.data(), img.text.data(), img.text.size());
+        return {};
+      }));
+  HOLOSCAN_RETURN_IF_ERROR(
+      labels.emit(std::move(*text), EmitOptions{.capture_time = context.activation_time()}));
   schema::ImageT descriptor{};
   descriptor.height = static_cast<std::int32_t>(h);
   descriptor.width = static_cast<std::int32_t>(w);

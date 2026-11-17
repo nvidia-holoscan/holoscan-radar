@@ -23,6 +23,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/logger/logger.hpp>
 
+#include "io/tensor_dump_op/tensor_dump_op.hpp"
 #include "radar_app/sar/hud_format.hpp"
 #include "radar_common/sar/formation_hud.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
@@ -54,6 +55,22 @@ class SarImageSchemaSinkOp : public holoscan::Operator<> {
 struct ImageCount {
   std::atomic<int64_t> count{0};
   std::atomic<int64_t> reported_capture_ns{0};
+  std::atomic<int64_t> dumped_capture_ns{-1};
+};
+
+// Application-only completion observer: the public dump ports and Params stay
+// unchanged. A successful callback means the write (or configured skip) ended.
+class TrackedTensorDumpOp : public radar::TensorDumpOp {
+ public:
+  explicit TrackedTensorDumpOp(std::shared_ptr<ImageCount> count) : count_(std::move(count)) {}
+  expected<void, Error> compute(ExecutionContext& context) override {
+    HOLOSCAN_RETURN_IF_ERROR(radar::TensorDumpOp::compute(context));
+    count_->dumped_capture_ns.store(context.activation_time().timestamp_ns);
+    return {};
+  }
+
+ private:
+  std::shared_ptr<ImageCount> count_;
 };
 
 class SarImageReportOp : public holoscan::Operator<> {

@@ -31,6 +31,7 @@ target_include_directories(radar_app_gpu PUBLIC
 target_link_libraries(radar_app_gpu PUBLIC holoscan::core holoscan::params_io CUDA::cudart)
 set_target_properties(radar_app_gpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
+    target_sources(radar_app_gpu PRIVATE viz/image_fit.cu)
     target_compile_definitions(radar_app_gpu PRIVATE HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ=1)
     target_link_libraries(radar_app_gpu PRIVATE holoscan::visualization::holoviz)
 endif()

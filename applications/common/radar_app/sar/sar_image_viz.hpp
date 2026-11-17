@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -35,7 +36,8 @@ class SarImageVizOp : public Operator<> {
   // names the product; the view's own size is a transport detail. {0, 0}
   // reports the tensor.
   SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side, bool transpose_axes,
-                OverlayConfig overlay = {}, std::array<int64_t, 2> product_extent = {0, 0});
+                OverlayConfig overlay = {}, std::array<int64_t, 2> product_extent = {0, 0},
+                double display_rate_hz = 60.0, std::function<bool()> terminal = {});
   ~SarImageVizOp() override;
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -52,6 +54,9 @@ class SarImageVizOp : public Operator<> {
   OverlayConfig overlay_{};
   std::array<int64_t, 2> product_extent_{0, 0};
   int overlay_index_{0};
+  double display_rate_hz_;
+  std::function<bool()> terminal_;
+  std::optional<std::chrono::steady_clock::time_point> last_display_at_;
   std::chrono::steady_clock::time_point overlay_rate_at_{};
   bool have_overlay_rate_{false};
   std::string held_rate_line_{};

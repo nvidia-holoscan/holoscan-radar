@@ -76,13 +76,16 @@ __global__ void render_gray(const float* magnitude, std::uint8_t* output, int64_
 
 SarImageVizOp::SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side,
                              bool transpose_axes, OverlayConfig overlay,
-                             std::array<int64_t, 2> product_extent)
+                             std::array<int64_t, 2> product_extent, double display_rate_hz,
+                             std::function<bool()> terminal)
 : max_v_(max_v),
   max_u_(max_u),
   display_side_(display_side),
   transpose_axes_(transpose_axes),
   overlay_(std::move(overlay)),
-  product_extent_(product_extent) {
+  product_extent_(product_extent),
+  display_rate_hz_(display_rate_hz),
+  terminal_(std::move(terminal)) {
   if (max_v_ < 1 || max_u_ < 1 || display_side_ < 1)
     throw std::invalid_argument("SarImageVizOp: invalid image extents");
 }
@@ -95,8 +98,10 @@ void SarImageVizOp::setup(OperatorSpec& spec) {
       .memory_kind = MemoryKind::kCudaDevice, .dtype = std::nullopt, .rank = std::nullopt};
   constexpr TensorRepresentation rgba{
       .memory_kind = MemoryKind::kCudaDevice, .dtype = DLDataType{kDLUInt, 8U, 1U}, .rank = 3U};
-  constexpr TensorRepresentation hud_text{
-      .memory_kind = MemoryKind::kHost, .dtype = DLDataType{kDLUInt, 8U, 1U}, .rank = 2U};
+  constexpr TensorRepresentation hud_text{.memory_kind = MemoryKind::kHost,
+                                          .dtype = DLDataType{kDLUInt, 8U, 1U},
+                                          .rank = 2U,
+                                          .strides = TensorStridePolicy::kContiguousOnly};
   constexpr TensorRepresentation hud_geom{
       .memory_kind = MemoryKind::kHost, .dtype = DLDataType{kDLFloat, 32U, 1U}, .rank = 1U};
   spec.input(image).queue_depth(4U).expects_tensor(tensor_input(device));
@@ -124,6 +129,14 @@ void SarImageVizOp::start() {
 expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
   // Receive and validate inputs
   HOLOSCAN_TRY(auto input, receive_tensor(image, "SarImageVizOp"));
+  const auto now = std::chrono::steady_clock::now();
+  if (last_display_at_ &&
+      std::chrono::duration<double>(now - *last_display_at_).count() < 1.0 / display_rate_hz_ &&
+      !(terminal_ && terminal_())) {
+    ++overlay_index_;
+    return {};
+  }
+  last_display_at_ = now;
   const auto shape = input.shape();
   const auto dtype = input.dtype();
   if (shape.size() != 2U || shape[0] < 1 || shape[1] < 1 || shape[0] > max_v_ ||
