@@ -61,8 +61,10 @@ range_compression:
 backprojection:
   coordinate_frame: ecef
 
-visualize: true
-visualize_size: 1400
-skip_display_check: false
-headless: false
-visualize_hold_s: -1
+app:
+  visualization:
+    enabled: true
+    max_side: 1400
+    skip_display_check: false
+    headless: false
+    final_image_hold_s: -1

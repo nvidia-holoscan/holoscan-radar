@@ -100,3 +100,16 @@ TEST(FmcwConfigLoader, Accepts32FilesAndRejects33) {
   EXPECT_THROW(config::load_inherited_document(first), std::runtime_error);
 }
 }  // namespace
+
+TEST(SharedGuiConfig, NormalizesAliasesBeforeInheritanceAndHonorsSameFileCommonFields) {
+  ConfigDirectory files;
+  files.write("base.yaml", "app: {visualization: {enabled: true, final_image_hold_s: 30}}\n");
+  const auto child =
+      files.write("child.yaml",
+                  "extends: base.yaml\nvisualize: false\n"
+                  "visualize_hold_s: 2\napp: {visualization: {headless: true}}\nheadless: false\n");
+  const auto doc = config::load_inherited_document(child);
+  EXPECT_FALSE(doc.get<bool>("/app/visualization/enabled"));
+  EXPECT_TRUE(doc.get<bool>("/app/visualization/headless"));
+  EXPECT_DOUBLE_EQ(doc.get<double>("/app/visualization/final_image_hold_s"), 2.0);
+}

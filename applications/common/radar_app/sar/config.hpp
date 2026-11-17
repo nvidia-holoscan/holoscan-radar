@@ -50,6 +50,11 @@
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/config_codecs.hpp"
 #include "radar_app/app/config_utils.hpp"
+#include "radar_app/app/visualization_config.hpp"
+
+#include "radar_app/app/presentation_config.hpp"
+
+#include "radar_app/app/config_loader.hpp"
 #include "radar_app/app/run_config.hpp"
 
 namespace radar = holoscan::radar;
@@ -86,6 +91,10 @@ inline bool is_number(ConfigValueKind kind) {
 }  // namespace sar_config
 
 struct AppConfig : radar::app::CommonRunConfig {
+  radar::app::VisualizationConfig visualization;
+  bool choose_presenter{false};
+  std::string presenter;
+  bool explicit_window_size{false};
   std::string cphd_path;
   std::vector<std::string> cphd_paths;
   std::vector<std::string> scene_names;
@@ -186,6 +195,8 @@ struct AppConfig : radar::app::CommonRunConfig {
 struct CliPaths {
   std::filesystem::path config;
   std::filesystem::path cphd_override;
+  bool choose_presenter{false};
+  std::string presenter;
 };
 
 // First CLI argument is the YAML, unless it is a .cphd — then the
@@ -194,25 +205,50 @@ struct CliPaths {
 inline CliPaths parse_cli(int argc, char** argv, const char* default_yaml) {
   const auto bin_dir = std::filesystem::path(argv[0]).parent_path();
   CliPaths out;
-  if (argc <= 1) {
-    out.config = bin_dir / default_yaml;
-    return out;
+  out.config = bin_dir / default_yaml;
+  std::vector<std::string> positional;
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg(argv[i]);
+    if (arg == "--choose-presenter") {
+      out.choose_presenter = true;
+    } else if (arg == "--presenter" || arg == "--cphd") {
+      if (++i >= argc)
+        throw std::invalid_argument(arg + " requires a value");
+      if (arg == "--presenter")
+        out.presenter = argv[i];
+      else
+        out.cphd_override = argv[i];
+    } else if (arg.starts_with("--presenter=")) {
+      out.presenter = arg.substr(12);
+      if (out.presenter.empty())
+        throw std::invalid_argument("--presenter requires a mode");
+    } else if (arg.starts_with("-")) {
+      throw std::invalid_argument("Unknown SAR argument: " + arg);
+    } else {
+      positional.push_back(arg);
+    }
   }
-  const std::filesystem::path first(argv[1]);
-  const std::string ext = first.extension().string();
-  if (ext == ".cphd" || ext == ".CPHD") {
-    out.config = bin_dir / default_yaml;
-    out.cphd_override = first;
-    return out;
-  }
-  if (std::filesystem::is_regular_file(first)) {
-    out.config = first;
-  } else {
-    const auto beside = bin_dir / first.filename();
-    out.config = std::filesystem::is_regular_file(beside) ? beside : first;
-  }
-  if (argc > 2) {
-    out.cphd_override = argv[2];
+  radar::app::validate_presenter(out.presenter);
+  if (positional.size() > 2)
+    throw std::invalid_argument(
+        "Usage: <application> [config.yaml] [input.cphd] [--presenter MODE]");
+  if (!positional.empty()) {
+    const std::filesystem::path first(positional.front());
+    if (first.extension() == ".cphd" || first.extension() == ".CPHD") {
+      if (!out.cphd_override.empty() || positional.size() > 1)
+        throw std::invalid_argument("Supply only one CPHD override");
+      out.cphd_override = first;
+    } else {
+      const auto beside = bin_dir / first.filename();
+      out.config = std::filesystem::is_regular_file(first)    ? first
+                   : std::filesystem::is_regular_file(beside) ? beside
+                                                              : first;
+      if (positional.size() == 2) {
+        if (!out.cphd_override.empty())
+          throw std::invalid_argument("Supply only one CPHD override");
+        out.cphd_override = positional[1];
+      }
+    }
   }
   return out;
 }
@@ -884,7 +920,7 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
   using sar_config::ConfigValueKind;
   using sar_config::get_if;
   using sar_config::get_if_set;
-  const auto doc = radar::app::config::load_document(path);
+  const auto doc = radar::app::config::load_inherited_document(path);
   const auto yaml_dir = path.parent_path();
 
   AppConfig cfg;
@@ -1386,26 +1422,24 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
       }
     }
   }
-  if (const auto v = get_if_set<bool>(doc, "/visualize")) {
-    cfg.visualize = *v;
-  }
-  if (const auto v = get_if_set<int64_t>(doc, "/visualize_size")) {
-    cfg.visualize_size = *v;
-  }
-  if (cfg.visualize_size <= 0) {
-    throw std::runtime_error("visualize_size must be > 0");
-  }
-  if (const auto v = get_if_set<bool>(doc, "/skip_display_check")) {
-    cfg.skip_display_check = *v;
-  }
-  if (const auto v = get_if_set<bool>(doc, "/headless")) {
-    cfg.headless = *v;
-  }
-  if (const auto v = get_if_set<double>(doc, "/visualize_hold_s")) {
-    cfg.visualize_hold_s = *v;
-  }
-  if (!std::isfinite(cfg.visualize_hold_s)) {
-    throw std::runtime_error("visualize_hold_s must be finite");
-  }
+  cfg.visualization.enabled = false;
+  cfg.visualization.final_image_hold_s = 30.0;
+  cfg.visualization.window_title = "SAR formation";
+  if (doc.find("/app/visualization"))
+    cfg.visualization = doc.get<radar::app::VisualizationConfig>("/app/visualization");
+  if (!doc.find("/app/visualization/enabled"))
+    cfg.visualization.enabled = false;
+  if (!doc.find("/app/visualization/final_image_hold_s"))
+    cfg.visualization.final_image_hold_s = 30.0;
+  if (!doc.find("/app/visualization/window_title"))
+    cfg.visualization.window_title = "SAR formation";
+  cfg.visualization.validate_layout();
+  cfg.visualize = cfg.visualization.enabled;
+  cfg.headless = cfg.visualization.headless;
+  cfg.skip_display_check = cfg.visualization.skip_display_check;
+  cfg.visualize_size = cfg.visualization.max_side;
+  cfg.visualize_hold_s = cfg.visualization.final_image_hold_s;
+  cfg.explicit_window_size = doc.find("/app/visualization/window_width").has_value() ||
+                             doc.find("/app/visualization/window_height").has_value();
   return cfg;
 }

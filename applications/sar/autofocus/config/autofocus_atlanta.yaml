@@ -88,4 +88,6 @@ aux_lattice:
 # Add a position_error block to inject a known error and score the
 # estimate against it; sweep.py writes that block per grid point.
 
-visualize: false
+app:
+  visualization:
+    enabled: false

@@ -158,7 +158,7 @@ inline bool choose_x11_presentation(const PresentationChoice& choice, std::istre
     return true;
   }
 
-  output << "\nChoose how to display the radar dashboard:\n"
+  output << "\nChoose how to display the radar application:\n"
             "  x: X11 image transport (recommended for SSH/X11 forwarding)\n"
             "  n: Native HoloViz window (for a local desktop with Vulkan presentation)\n"
             "To bypass this question and any remembered choice, set\n"

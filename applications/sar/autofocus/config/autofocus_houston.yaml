@@ -66,4 +66,6 @@ phase_correction:
 aux_lattice:
   mode: polar
 
-visualize: false
+app:
+  visualization:
+    enabled: false

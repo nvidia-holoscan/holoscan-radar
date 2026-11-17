@@ -53,7 +53,10 @@ phase_correction:
   sense: subtract
 aux_lattice:
   mode: polar
-visualize: false
 dump: true
 output:
   path: outputs/reference/autofocus_reference_{index}.npy
+
+app:
+  visualization:
+    enabled: false

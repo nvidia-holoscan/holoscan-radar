@@ -87,11 +87,14 @@ range_compression:
 backprojection:
   coordinate_frame: ecef
 
-visualize: true
 # Holoviz window (px, square). LUT box-averages the formed image
 # to this so R8_UINT is 1:1. A dump (dump: true) is the physics
 # lattice.
-visualize_size: 1024
-skip_display_check: false
-headless: false
-visualize_hold_s: -1
+
+app:
+  visualization:
+    enabled: true
+    max_side: 1024
+    skip_display_check: false
+    headless: false
+    final_image_hold_s: -1

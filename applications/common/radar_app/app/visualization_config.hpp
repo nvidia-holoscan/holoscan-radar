@@ -17,7 +17,19 @@
 namespace holoscan::radar::app {
 
 struct VisualizationConfig {
+  int64_t total_frames{0};  // Application-derived, never a YAML field.
   bool enabled{true};
+  bool headless{false};
+  bool skip_display_check{false};
+  double final_image_hold_s{0.0};
+  std::string resize_mode{"stretch"};
+  int64_t max_side{1024};
+  struct Timeline {
+    bool enabled{true};
+    double display_rate_hz{10.0};
+    int64_t window_width{1280};
+    int64_t window_height{112};
+  } timeline;
   std::optional<bool> x11_presentation;
   int64_t window_width{1280};
   int64_t window_height{720};
@@ -37,6 +49,16 @@ struct VisualizationConfig {
   std::string profile;
 
   void validate_layout() const {
+    if (!std::isfinite(final_image_hold_s) || !std::isfinite(display_rate_hz) ||
+        display_rate_hz <= 0.0 || display_rate_hz > 1000.0 ||
+        (resize_mode != "stretch" && resize_mode != "fit") || max_side < 1 || max_side > 16384 ||
+        window_width < 1 || window_width > 16384 || window_height < 1 || window_height > 16384 ||
+        !std::isfinite(timeline.display_rate_hz) || timeline.display_rate_hz <= 0.0 ||
+        timeline.display_rate_hz > 1000.0 || timeline.window_width < 1 ||
+        timeline.window_width > 16384 || timeline.window_height < 1 ||
+        timeline.window_height > 16384) {
+      throw std::runtime_error("app.visualization: invalid rate, dimensions, hold, or resize_mode");
+    }
     if (noise_sample_limit < 64 || noise_sample_limit > 65536 || noise_range_half_width < 0 ||
         noise_range_half_width > 64 || noise_doppler_half_width < 0 ||
         noise_doppler_half_width > 64 || !std::isfinite(noise_sigma) || noise_sigma < 0.0 ||
@@ -67,11 +89,28 @@ struct ParamStorageTraits<radar::app::VisualizationConfig>
 namespace holoscan::config {
 
 template <>
+struct ConfigCodec<radar::app::VisualizationConfig::Timeline>
+: ObjectCodec<radar::app::VisualizationConfig::Timeline> {
+  using Config = radar::app::VisualizationConfig::Timeline;
+  static constexpr auto fields =
+      std::make_tuple(defaulted_object_field("enabled", &Config::enabled),
+                      defaulted_object_field("display_rate_hz", &Config::display_rate_hz),
+                      defaulted_object_field("window_width", &Config::window_width),
+                      defaulted_object_field("window_height", &Config::window_height));
+};
+
+template <>
 struct ConfigCodec<radar::app::VisualizationConfig>
 : ObjectCodec<radar::app::VisualizationConfig> {  // NOLINT
   using Config = radar::app::VisualizationConfig;
   static constexpr auto fields = std::make_tuple(
       defaulted_object_field("enabled", &Config::enabled),
+      defaulted_object_field("headless", &Config::headless),
+      defaulted_object_field("skip_display_check", &Config::skip_display_check),
+      defaulted_object_field("final_image_hold_s", &Config::final_image_hold_s),
+      defaulted_object_field("resize_mode", &Config::resize_mode),
+      defaulted_object_field("max_side", &Config::max_side),
+      defaulted_object_field("timeline", &Config::timeline),
       defaulted_object_field("x11_presentation", &Config::x11_presentation),
       defaulted_object_field("window_width", &Config::window_width),
       defaulted_object_field("window_height", &Config::window_height),

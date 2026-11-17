@@ -65,12 +65,15 @@ range_compression:
 backprojection:
   coordinate_frame: ecef
 
-visualize: true
 # Holoviz window (px), not formation cost. LUT box-averages
 # the formed lattice to this. Lag HUD is live collect vs wall
 # (same as the HSDK 4 demo). If it stays behind, lower
 # lattice.max_side.
-visualize_size: 1024
-skip_display_check: false
-headless: false
-visualize_hold_s: -1
+
+app:
+  visualization:
+    enabled: true
+    max_side: 1024
+    skip_display_check: false
+    headless: false
+    final_image_hold_s: -1
