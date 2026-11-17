@@ -328,6 +328,24 @@ target_include_directories(test_fmcw_simo_report PRIVATE
 radar_add_test(app/test_report_shapes holoscan::radar_app)
 radar_add_test(app/test_sar_diagnostics holoscan::radar_app)
 
+if(TARGET spotlight AND TARGET holoscan::visualization::op_holoviz)
+    add_executable(test_sar_runtime app/test_sar_runtime.cpp)
+    target_link_libraries(test_sar_runtime PRIVATE radar_test_utils GTest::gtest_main
+        holoscan::radar_app holoscan::params_io sar_image_viz
+        holoscan::visualization::op_holoviz
+        holoscan::cphd_reader_op holoscan::sar_range_compression_op
+        holoscan::aperture_manager_op holoscan::backprojection_op holoscan::tensor_dump_op)
+    target_include_directories(test_sar_runtime PRIVATE ${PROJECT_SOURCE_DIR})
+    target_compile_definitions(test_sar_runtime PRIVATE
+        HOLOSCAN_RADAR_DATA_DIR="${HOLOHUB_DATA_DIR}"
+        HOLOSCAN_RADAR_SAR_HOLOVIZ=1
+        HOLOSCAN_RADAR_SPOTLIGHT_FIXTURE="${PROJECT_BINARY_DIR}/applications/sar/spotlight/cpp/spotlight_generated_smoke.yaml")
+    add_test(NAME SarRuntime.PreparedPlacementSurvivesInterleavedDeviceSelection
+        COMMAND test_sar_runtime)
+    set_tests_properties(SarRuntime.PreparedPlacementSurvivesInterleavedDeviceSelection PROPERTIES
+        FIXTURES_REQUIRED sar_cphd LABELS "unit")
+endif()
+
 if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     radar_add_test(app/test_fmcw_dashboard holoscan::fmcw_dashboard)
 endif()
