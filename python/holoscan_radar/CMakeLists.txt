@@ -38,7 +38,7 @@ target_include_directories(holoscan_radar_python PRIVATE
 target_link_libraries(holoscan_radar_python PRIVATE holoscan::core holoscan::params_io
     holoscan::radar_common holoscan::radar_common_simulator holoscan::radar_schemas
     radar_app
-    fmcw_dashboard sar_image_viz sar_mosaic
+    fmcw_dashboard sar_mosaic
     cphd_reader_op
     aperture_manager_op
     backprojection_op
@@ -98,7 +98,10 @@ foreach(_radar_helper IN ITEMS __init__.py fmcw_dashboard.py cli.py)
         "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/${_radar_helper}" COPYONLY)
 endforeach()
 
-target_compile_definitions(holoscan_radar_python PRIVATE HOLOSCAN_RADAR_SAR_HOLOVIZ=1)
+if(TARGET sar_image_viz)
+    target_link_libraries(holoscan_radar_python PRIVATE sar_image_viz)
+    target_compile_definitions(holoscan_radar_python PRIVATE HOLOSCAN_RADAR_SAR_HOLOVIZ=1)
+endif()
 
 foreach(_radar_app IN ITEMS spotlight video_sar tiled_strip continuous_strip independent_images autofocus)
     set(_radar_app_source
