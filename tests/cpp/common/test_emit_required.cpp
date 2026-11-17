@@ -281,8 +281,10 @@ TEST(EmitRequired, FailFastCancelsRetryingPeerAndPreservesFailure) {
     const auto expected =
         holoscan::runtime_error_message(explain_fail_fast_emit("FailingEmitOp.out", code));
     for (const auto& diagnostic : session.diagnostics()) {
-      const auto formatted = holoscan::format_diagnostic(diagnostic, plan.graph());
-      preserved = preserved || formatted.find(expected) != std::string::npos;
+      // Human-readable diagnostics may wrap the message across lines.
+      preserved =
+          preserved || (diagnostic.detail && diagnostic.detail->error.code == code &&
+                        holoscan::runtime_error_message(diagnostic.detail->error) == expected);
     }
     EXPECT_TRUE(preserved) << "Original fatal emit diagnostic was lost";
   }
