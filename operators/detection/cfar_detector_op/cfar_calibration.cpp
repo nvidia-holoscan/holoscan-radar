@@ -256,6 +256,7 @@ CfarCalibrationResult execute_cfar_calibration(CfarCalibrationPlan plan,
   state.started_at = result.started_at;
   state.total_trials = plan.total_trials;
   state.total_geometries = plan.geometries.size();
+  bool warned_duration = false;
   auto notify = [&](const char* status) {
     state.status = status;
     state.elapsed_seconds = std::chrono::duration<double>(Clock::now() - start).count();
@@ -265,22 +266,56 @@ CfarCalibrationResult execute_cfar_calibration(CfarCalibrationPlan plan,
                                   : plan.estimated_seconds;
     if (stop.stop_requested())
       throw CfarCalibrationCancelled{};
+    const bool initial_estimate = state.status == "estimated";
+    const double estimated_duration =
+        initial_estimate ? plan.estimated_seconds : state.elapsed_seconds + state.remaining_seconds;
+    if (!warned_duration && (initial_estimate || state.status == "running") &&
+        estimated_duration > 60.0 && state.remaining_seconds > 0) {
+      warned_duration = true;
+      HOLOSCAN_LOG_WARN(
+          "CFAR Monte Carlo calibration is expected to take more than 60 seconds.\n"
+          "- Estimated total duration: {:.1f} s\n"
+          "- Estimated completion: {}\n"
+          "Hint: For manual tuning, increase CFARDetectorOp's \"threshold_scale\" parameter to "
+          "reduce false alarms without recalibration. Manual scaling does not guarantee a "
+          "specific Pfa.",
+          estimated_duration, timestamp(state.remaining_seconds));
+    }
     if (progress)
       progress(state);
   };
   if (plan.method == "direct_monte_carlo" && plan.params->calibration_trials > 0 &&
-      plan.budget.coverage < plan.params->calibration_confidence)
+      plan.budget.coverage < plan.params->calibration_confidence) {
+    std::string required_trials;
+    try {
+      required_trials = std::to_string(
+          cfar_calibration_budget(plan.params->pfa, plan.params->calibration_relative_error,
+                                  plan.params->calibration_confidence)
+              .trials);
+    } catch (const std::invalid_argument&) {
+      // An explicit count remains valid even when the automatic budget is unrepresentable.
+      required_trials = "exceeds the supported trial-count range";
+    }
     HOLOSCAN_LOG_WARN(
-        "CFAR calibration_trials override={} per geometry: achieved coverage={} is below requested "
-        "confidence={}; requested Pfa accuracy is not assured. Set calibration_trials=0 for the "
-        "automatic budget",
-        plan.budget.trials, plan.budget.coverage, plan.params->calibration_confidence);
+        "Not enough Monte Carlo trials to achieve the requested CFAR confidence for Pfa {}.\n"
+        "- Achieved coverage: {:.6g}%\n"
+        "- Requested coverage: {:.6g}%\n"
+        "- Target relative Pfa error: +/-{:.6g}%\n"
+        "- Trials requested per geometry: {}\n"
+        "- Trials for requested coverage per geometry (automatic budget): {}\n"
+        "Continuing with the requested trial count; requested Pfa accuracy is not assured. "
+        "Set calibration_trials=0 to use the automatic budget.\n"
+        "Hint: For manual tuning, increase CFARDetectorOp's \"threshold_scale\" parameter to "
+        "reduce "
+        "false alarms without recalibration. Manual scaling does not guarantee a specific Pfa.",
+        plan.params->pfa, 100 * plan.budget.coverage, 100 * plan.params->calibration_confidence,
+        100 * plan.params->calibration_relative_error, plan.budget.trials, required_trials);
+  }
   if (plan.method == "direct_monte_carlo")
-    HOLOSCAN_LOG_WARN(
+    HOLOSCAN_LOG_INFO(
         "CFAR calibration {} start={} pfa={} relative_error={} confidence={} geometries={} "
-        "trials_per_geometry={} total_trials={} budget_mode={} coverage={}; supply alpha_lut from "
-        "calibrate_cfar to bypass "
-        "runtime Monte Carlo",
+        "trials_per_geometry={} total_trials={} budget_mode={} coverage={}.\n"
+        "To bypass runtime Monte Carlo, supply a precomputed alpha_lut from calibrate_cfar.",
         to_string(plan.params->cfar_variant), result.started_at, plan.params->pfa,
         plan.params->calibration_relative_error, plan.params->calibration_confidence,
         plan.geometries.size(), plan.budget.trials, plan.total_trials,
@@ -305,7 +340,7 @@ CfarCalibrationResult execute_cfar_calibration(CfarCalibrationPlan plan,
       if (!plan.estimated_seconds) {
         plan.estimated_seconds = estimate_seconds(plan, stop);
       }
-      HOLOSCAN_LOG_WARN(
+      HOLOSCAN_LOG_INFO(
           "CFAR calibration estimated duration={} s start={} estimated_completion={} (conservative "
           "measured GPU "
           "probe at the largest LUT index; includes generation and tail selection)",

@@ -107,6 +107,13 @@ group: [`operators/detection/README.md`](../README.md)
 
 ## Offline calibration and accuracy
 
+For manual tuning without another Monte Carlo build, keep an already calibrated
+`pfa` unchanged and increase `threshold_scale` above `1.0`. This linear multiplier
+raises the power threshold: `threshold_scale: 2.0` doubles it, reducing false
+alarms at the cost of detection sensitivity. It does not establish a calibrated
+new Pfa; changing `pfa` itself can still trigger a new LUT build. An existing
+external `alpha_lut` can also be scaled this way.
+
 Automatic Monte Carlo calibration defaults to `calibration_relative_error: 0.10`
 and `calibration_confidence: 0.95`. The initial budget is approximately
 `z^2 * (1-pfa) / (error^2 * pfa)`, with at least 4096 trials. The final budget
@@ -147,11 +154,15 @@ silently reducing accuracy. Trials use deterministic Philox streams and bounded
 65536-trial GPU batches. Only the required upper tail survives between batches;
 there is no full-run sample buffer or CPU sampling fallback.
 
-On a cache miss, warnings report the start timestamp, settings, geometries,
-trial counts, and whether the caller blocks or serves a previous table. A
-bounded GPU probe estimates duration and completion time; progress logs refresh
-at most every five seconds. Estimates include generation and tail selection
-and can change with GPU load and geometry. Builds continue until completion or
+Calibration start, estimated duration/completion, progress, and successful
+completion are logged at INFO. A bounded GPU probe provides the initial estimate;
+progress logs refresh at most every five seconds. A WARNING with the manual
+`threshold_scale` tuning hint is emitted once per build if the estimated total
+duration exceeds 60 seconds, including when a progress-based estimate first
+crosses that threshold. Insufficient-trial coverage remains a WARNING, as do
+runtime cache misses that block or serve a previous table. Estimates include
+generation and tail selection and can change with GPU load and geometry.
+Builds continue until completion or
 cancellation. Explicit `alpha_lut` bypasses this work. Cancelled/failed jobs do
 not enter the cache; a shared build is cancelled only after its last consumer
 releases it. Calibration settings and algorithm version are part of cache identity.

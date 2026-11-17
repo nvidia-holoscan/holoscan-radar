@@ -87,6 +87,97 @@ TEST(CfarCalibration, TrialOverridePropagatesThroughRuntimeCache) {
   EXPECT_THROW(detail::prepare_cfar_calibration(p, {8, 8}), std::invalid_argument);
 }
 
+TEST(CfarCalibration, RoutineLogsAreInfoAndInitialDurationWarnsOnlyAboveSixtySeconds) {
+  auto p = params();
+  p.pfa = 0.1;
+  const std::string duration_warning =
+      "CFAR Monte Carlo calibration is expected to take more than 60 seconds.";
+  for (double estimate : {60.0, 61.0}) {
+    auto plan = detail::prepare_cfar_calibration(p, {8, 8});
+    // Inject the timing probe result; exercise real GPU calibration without a long wait.
+    plan.estimated_seconds = estimate;
+    testing::internal::CaptureStderr();
+    EXPECT_NO_THROW(detail::execute_cfar_calibration(plan));
+    const auto logs = testing::internal::GetCapturedStderr();
+    EXPECT_NE(logs.find("[info]"), std::string::npos);
+    EXPECT_NE(logs.find("CFAR calibration GO start="), std::string::npos);
+    EXPECT_NE(logs.find("CFAR calibration estimated duration="), std::string::npos);
+    EXPECT_NE(logs.find("CFAR calibration completed"), std::string::npos);
+    const auto warning = logs.find(duration_warning);
+    if (estimate == 60.0) {
+      EXPECT_EQ(warning, std::string::npos);
+      EXPECT_EQ(logs.find("[warning]"), std::string::npos);
+    } else {
+      ASSERT_NE(warning, std::string::npos);
+      EXPECT_EQ(logs.find(duration_warning, warning + duration_warning.size()), std::string::npos);
+      EXPECT_NE(logs.find("Estimated total duration: 61.0 s"), std::string::npos);
+      EXPECT_NE(logs.find("Estimated completion:"), std::string::npos);
+      EXPECT_NE(logs.find("Hint: For manual tuning, increase CFARDetectorOp's"), std::string::npos);
+    }
+  }
+}
+
+TEST(CfarCalibration, RevisedDurationEstimateWarnsOnceWithoutWaitingForCompletion) {
+  auto p = params();
+  p.pfa = 1e-12;
+  auto plan = detail::prepare_cfar_calibration(p, {8, 8});
+  // An optimistic initial probe is superseded by measured throughput after the first batch.
+  plan.estimated_seconds = 1;
+  int batches = 0;
+  testing::internal::CaptureStderr();
+  EXPECT_THROW(detail::execute_cfar_calibration(plan,
+                                                [&](const auto& event) {
+                                                  if (event.status == "running" && ++batches == 2)
+                                                    throw radar::CfarCalibrationCancelled{};
+                                                }),
+               radar::CfarCalibrationCancelled);
+  const auto logs = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(batches, 2);
+  const auto initial_estimate = logs.find("CFAR calibration estimated duration=1 s");
+  ASSERT_NE(initial_estimate, std::string::npos);
+  const std::string duration_warning =
+      "CFAR Monte Carlo calibration is expected to take more than 60 seconds.";
+  const auto warning = logs.find(duration_warning);
+  ASSERT_NE(warning, std::string::npos);
+  EXPECT_GT(warning, initial_estimate);
+  EXPECT_EQ(logs.find(duration_warning, warning + duration_warning.size()), std::string::npos);
+}
+
+TEST(CfarCalibration, UnderfundedWarningExplainsBudgetWithoutRejectingOverride) {
+  for (double pfa : {1e-9, 1e-30}) {
+    auto p = params();
+    p.pfa = pfa;
+    p.calibration_trials = 17;
+    testing::internal::CaptureStderr();
+    EXPECT_NO_THROW({
+      const auto result = radar::calibrate_cfar(p, {8, 8});
+      EXPECT_EQ(result.plan.budget.trials, 17U);
+      EXPECT_FALSE(result.alpha_lut.empty());
+    });
+    const auto logs = testing::internal::GetCapturedStderr();
+    EXPECT_NE(logs.find("Not enough Monte Carlo trials to achieve the requested CFAR confidence"),
+              std::string::npos);
+    EXPECT_NE(logs.find("Achieved coverage:"), std::string::npos);
+    EXPECT_NE(logs.find("Requested coverage: 95%"), std::string::npos);
+    EXPECT_NE(logs.find("Target relative Pfa error: +/-10%"), std::string::npos);
+    EXPECT_NE(logs.find("Trials requested per geometry: 17"), std::string::npos);
+    EXPECT_NE(logs.find("Continuing with the requested trial count"), std::string::npos);
+    const auto startup = logs.find("CFAR calibration GO start=");
+    ASSERT_NE(startup, std::string::npos);
+    const auto warning = logs.substr(0, startup);
+    EXPECT_NE(warning.find("Hint: For manual tuning, increase CFARDetectorOp's \"threshold_scale\" "
+                           "parameter to reduce false alarms without recalibration. Manual scaling "
+                           "does not guarantee a specific Pfa."),
+              std::string::npos);
+    if (pfa == 1e-9) {
+      EXPECT_NE(logs.find("(automatic budget): 384145881686"), std::string::npos);
+    } else {
+      EXPECT_NE(logs.find("(automatic budget): exceeds the supported trial-count range"),
+                std::string::npos);
+    }
+  }
+}
+
 TEST(CfarCalibration, RareBudgetCoverageAgreesWithIndependentBinomialSum) {
   const auto b = radar::cfar_calibration_budget(1e-9);
   auto cdf = [&](long double q) {

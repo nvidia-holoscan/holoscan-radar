@@ -179,4 +179,7 @@ def test_graph_runtime_trial_override(tmp_path, capfd):
     logs = capfd.readouterr().err
     assert "trials_per_geometry=1024" in logs
     assert "budget_mode=override" in logs
-    assert "requested Pfa accuracy is not assured" in logs
+    assert "Not enough Monte Carlo trials to achieve the requested CFAR confidence" in logs
+    assert "Requested coverage: 95%" in logs
+    assert "Trials requested per geometry: 1024" in logs
+    assert "Continuing with the requested trial count" in logs

@@ -4,6 +4,23 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-17** — **CFAR calibration log levels** on
+  `deustice/cfar-calibration`: routine start/ETA/progress/completion at INFO;
+  warn once per build when estimated total duration exceeds 60 seconds, with
+  completion time and manual-tuning hint. Recheck updated throughput estimates;
+  insufficient-trial coverage and runtime cache-miss warnings remain warnings.
+  All 15 calibration GPU CTests pass, including the 60-second boundary and a
+  revised estimate crossing the threshold; full pinned lint passes.
+
+- **2026-11-17** — **CFAR low-trial warning readability** on
+  `deustice/cfar-calibration`: report requested Pfa, coverage percentages,
+  relative-error target and per-geometry requested/automatic trial budgets.
+  The low-trial warning includes a manual `CFARDetectorOp.threshold_scale`
+  tuning hint without claiming a new calibrated Pfa.
+  Explicit overrides remain usable when the automatic budget is unrepresentable.
+  All 13 calibration GPU CTests and full pinned lint pass; the Python warning
+  assertion is updated, but provider runtime checks were not rerun.
+
 - **2026-11-17** — **CFAR calibration rebased onto current main** at `ea8660ae`.
   Replayed only the Pfa-aware/offline calibration and trial-override commits;
   retained main's SAR autofocus test registration alongside the calibration
