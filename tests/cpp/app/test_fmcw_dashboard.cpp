@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cuda_runtime_api.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -12,6 +14,7 @@
 #include <cstring>
 #include <deque>
 #include <optional>
+#include <memory>
 #include <limits>
 #include <ostream>
 #include <stdexcept>
@@ -21,6 +24,7 @@
 
 #include <holoscan/core/compile.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/core/run.hpp>
 #include <holoscan/sensor_io/schemas/image_schema_traits.hpp>
 #include <holoscan/time/realtime_clock.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
@@ -33,6 +37,8 @@
 #include "radar_app/viz/dashboard_text.hpp"
 #include "radar_app/viz/fmcw_holoviz_op.hpp"
 #include "radar_app/viz/image_device_bridge_op.hpp"
+#include "radar_app/viz/image_fit.hpp"
+#include "radar_app/viz/presentation_graph.hpp"
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
 #include "utils/tensor_fixtures.hpp"
 #include "utils/fixture_completion.hpp"
@@ -823,3 +829,112 @@ TEST(FmcwDashboardTest, TruthVisibilityTracksTargetMotion) {
 }
 
 }  // namespace
+
+TEST(CompletedFrameFit, AddsBordersWithoutChangingTheScientificCanvas) {
+  constexpr int width = 8, height = 4;
+  std::vector<std::uint8_t> input(width * height * 4, 127);
+  std::vector<std::uint8_t> output(input.size());
+  void* source = nullptr;
+  void* target = nullptr;
+  ASSERT_EQ(cudaMalloc(&source, input.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&target, output.size()), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(source, input.data(), input.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  EXPECT_EQ(viz::fit_image(source, target, width, height, 400, 400, nullptr), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  EXPECT_EQ(output[0], 0);
+  EXPECT_EQ(output[3], 255);
+  EXPECT_EQ(output[width * 4], 127);
+  EXPECT_EQ(output[(height - 1) * width * 4], 0);
+  EXPECT_EQ(cudaFree(target), cudaSuccess);
+  EXPECT_EQ(cudaFree(source), cudaSuccess);
+}
+
+namespace {
+class AgedCompletedFrameSourceOp final : public holoscan::Operator<> {
+ public:
+  explicit AgedCompletedFrameSourceOp(std::shared_ptr<radar::app::FrameProgress> progress)
+  : progress_(std::move(progress)) {}
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.output(image)
+        .tensor_field(holoscan::schema::ImageTensorFields::data)
+        .produces_tensor(holoscan::TensorOutputSpec{
+            .representation = {.memory_kind = holoscan::MemoryKind::kCudaDevice,
+                               .dtype = DLDataType{kDLUInt, 8U, 1U},
+                               .rank = 3U,
+                               .strides = holoscan::TensorStridePolicy::kContiguousOnly},
+            .bounds = holoscan::TensorBounds{.max_rank = 3U, .max_byte_span = 16U},
+            .storage = holoscan::TensorOutputStorage::kRuntimePool});
+  }
+  holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = std::chrono::milliseconds{10}});
+    return result;
+  }
+  holoscan::expected<void, holoscan::Error> compute(holoscan::ExecutionContext& context) override {
+    if (sent_)
+      return {};
+    const std::array<int64_t, 3> shape{2, 2, 4};
+    HOLOSCAN_TRY(auto loan, image.allocate_tensor(holoscan::TensorLoanRequest{
+                                .shape = shape, .dtype = DLDataType{kDLUInt, 8U, 1U}}));
+    HOLOSCAN_TRY(auto writer, loan.write(context.cuda_stream()));
+    if (cudaMemsetAsync(writer.data(), 127, writer.byte_size(), context.cuda_stream().get()) !=
+        cudaSuccess)
+      return holoscan::make_unexpected(holoscan::Error{holoscan::ErrorCode::kFailure});
+    HOLOSCAN_RETURN_IF_ERROR(std::move(writer).commit());
+    holoscan::schema::ImageT descriptor{};
+    descriptor.width = 2;
+    descriptor.height = 2;
+    descriptor.encoding = holoscan::schema::ImageEncoding_RGBA8;
+    auto stamp = context.activation_time();
+    stamp.timestamp_ns -=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::seconds{30}).count();
+    progress_->expected_ns.store(stamp.timestamp_ns);
+    HOLOSCAN_RETURN_IF_ERROR(image.emit_tensor(std::move(loan), descriptor,
+                                               holoscan::EmitOptions{.capture_time = stamp}));
+    sent_ = true;
+    return {};
+  }
+  holoscan::Output<holoscan::schema::ImageT> image{"image"};
+
+ private:
+  std::shared_ptr<radar::app::FrameProgress> progress_;
+  bool sent_{false};
+};
+}  // namespace
+
+TEST(CompletedFrameReplay, AcceptsOldAcquisitionTimesAndRetainsTheOriginalStamp) {
+  auto progress = std::make_shared<radar::app::FrameProgress>();
+  holoscan::Graph graph{"aged-completed-frame"};
+  auto source = graph.op<AgedCompletedFrameSourceOp>("source", progress);
+  auto replay = graph.op<viz::CompletedFrameReplayOp>("replay", 2, 2, 0.1,
+                                                      std::shared_ptr<radar::app::FrameProgress>{});
+  auto sink = graph.op<viz::CompletedFrameSinkOp>("sink", progress);
+  graph.partition("source").add(source);
+  graph.partition("replay").add(replay);
+  graph.partition("sink").add(sink);
+  graph.add_flow(source->image, replay->image);
+  graph.add_flow(replay->output, sink->image);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>(
+      "clock", holoscan::RealtimeClock::Config{.initial_time_offset = 60.0}));
+  holoscan::CompileOptions options;
+  const auto device = radar::app::application_device();
+  for (const auto* name : {"source", "replay"})
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = name,
+        .output_port = std::string(name) == "source" ? "image" : "output",
+        .device = device});
+  const auto plan = holoscan::compile(graph, options);
+  ASSERT_TRUE(plan.ok()) << plan.json();
+  auto session = holoscan::run_async(plan);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+  while ((progress->expected_ns.load() < 0 ||
+          progress->capture_ns.load() != progress->expected_ns.load()) &&
+         std::chrono::steady_clock::now() < deadline &&
+         !session.wait_for(std::chrono::milliseconds{10})) {
+  }
+  session.request_stop();
+  session.wait();
+  EXPECT_TRUE(session.diagnostics().empty());
+  ASSERT_GE(progress->expected_ns.load(), 0);
+  EXPECT_EQ(progress->capture_ns.load(), progress->expected_ns.load());
+}

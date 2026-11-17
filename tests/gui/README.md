@@ -1,4 +1,4 @@
-# FMCW GUI checks
+# Radar GUI checks
 
 ## Registered CI smoke coverage
 
@@ -9,7 +9,9 @@ The default GPU CTest dashboard includes these checks for enabled applications:
 | C++ without visualization | All eight smoke presets complete two frames, including linear and nonlinear DDM. |
 | Python without visualization | The same eight workflows run through `pytest_provider`. |
 | X11 presentation | All eight presets in C++ and Python produce visible pixels and close successfully. |
-| Native HoloViz window | SISO in C++ and Python produces visible pixels, resizes, and closes successfully. |
+| Native HoloViz window | All eight FMCW presets in C++ and Python produce visible pixels and close successfully. |
+| Headless GPU rendering | Eight FMCW presets and six SAR workflows in C++; eight FMCW presets and SAR execution in provider tests. No display environment or interactive hold. |
+| SAR windows | Six workflows in both languages and both window transports; formation and timeline pixels, resize, idle closure, and Escape. |
 
 SISO retains detailed X11 resize/close checks, including Python over TCP X11.
 Other X11 cases perform shorter pixel/close checks. GUI probes explicitly enable
@@ -32,13 +34,12 @@ and Python provider:
 ctest --test-dir build --output-on-failure -L visualization
 ```
 
-This adds 22 CTest entries to the default all-application Python-enabled build:
-six missing C++ smokes, fourteen X11 workflow/language cases, and two native
-window cases. Existing SISO X11 and adaptive/multi-waveform smoke names remain
-unchanged. No compiled source, executable target, or dependency is added; the
-default CI build already builds these applications.
+The full Python-enabled window matrix has 56 cases: 32 FMCW (eight presets,
+two languages, two presenters) and 24 SAR (six workflows, two languages, two
+presenters). Fourteen C++ headless cases additionally exercise the real launch
+override without a display. Native cases require a presentation-capable display.
 
-## Measured test-stage cost
+## Historical PR #69 test-stage cost
 
 A local check on 2026-11-03 used an NVIDIA GB10 (Linux ARM64, driver
 580.173.02), the HSDK 5.0.0 development image, and serial CTest (`-j1`). Three
@@ -70,7 +71,8 @@ CI build cost.
 
 Raw CTest JUnit reports, timing samples, the original probe snapshot, and the
 summary are under ignored `build/mimo_tdm/ci-gui-timing/` in the measurement
-checkout. The broader delayed-display diagnostic below remains manual.
+checkout. These historical measurements predate SAR GUI unification; they do not estimate
+the current matrix cost.
 
 ## Delayed-display resize diagnostic
 
@@ -101,3 +103,29 @@ Python case, as with direct provider tests. `--app` selects another FMCW workflo
 The status-header capture follows the scaled canvas as the window changes size.
 Text and plots are composed into one GPU frame, so their alignment is preserved.
 This checks update recovery; it does not require the panel layout to reflow.
+
+## SAR two-window checks
+
+`SarWindow_<application>_<language>_<presenter>` covers all six SAR apps in
+C++ and Python with explicit X11/native modes and isolated preferences. The
+fixture uses inherited configuration, verifies formation and timeline pixels,
+resizes the formation canvas, and closes during final-image hold. C++ closes
+formation; Python exercises aspect fit and closes timeline. Native tests
+require a presentation-capable CUDA/Vulkan display and do not skip renderer
+failures. The fixtures share the existing GUI resource lock.
+
+Actual laptop-to-Thor SSH/X11 windows require a separate visual walkthrough of
+all 13 applications in both languages. Inspect text/overlay alignment, SAR
+mosaic orientation and crops, autofocus products, timeline annotations, both
+resize policies, placement, and close/Escape behavior. Also review native
+presentation on capable hardware. Automated pixel checks and headless success
+alone cannot establish interactive visual correctness.
+
+For bounded delay and resource diagnostics, the SAR probe accepts
+`--latency-ms 10 --soak-seconds 10`. It forwards X11 through a local proxy,
+checks image recovery at each size, and records RSS and file-descriptor samples
+under `<build-dir>/gui-sar/`. Add `--capture` to save both completed window
+images for visual review. Processing must continue during the soak. RSS must
+plateau within 64 MiB or 10%, and file descriptors within four. These short
+checks detect regressions; long-duration deployment qualification remains a
+separate measurement.

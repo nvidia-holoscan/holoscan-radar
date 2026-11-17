@@ -1,5 +1,7 @@
 # Independent SAR images
 
+See [shared GUI configuration and presentation](../../common/radar_app/viz/README.md#shared-presentation-controls).
+
 The collection stager supplies a new lattice, range spacing, and first fast-time sample frequency for each CPHD. Each collection boundary emits and resets its image.
 
 > **Prerequisite: download data before running the application.**
@@ -25,13 +27,13 @@ flowchart LR
     B --> Report[Image report]
     B -. dump .-> Dump[TensorDumpOp]
     B -. visualize .-> Raster[CUDA SAR raster]
-    Raster -->|Same GPU| Viz[HolovizOp]
-    Raster -.->|Different GPUs| Download[ImageDownloadOp]
-    Download -.-> Upload[ImageUploadOp] -.-> Viz
-    Raster -->|Host overlay and labels| Viz
-    Timeline[TimelineRasterOp - window mode] -->|Same GPU| TimelineViz[Timeline HolovizOp]
-    Timeline -.->|Different GPUs| TimelineDownload[ImageDownloadOp]
-    TimelineDownload -.-> TimelineUpload[ImageUploadOp] -.-> TimelineViz
+    Raster -->|Image, look, labels| Frame[GPU FrameComposerOp]
+    Raster -. Different GPUs .-> Bridge[Bounded RGBA device bridge] -.-> Frame
+    Frame -->|X11| Download[ImageDownloadOp] --> X11[X11ImagePresenterOp]
+    Frame -->|Native| Replay[CompletedFrameReplayOp] --> Viz[NativeImagePresenterOp]
+    Frame -->|Headless| Sink[CompletedFrameSinkOp]
+    Timeline[GPU TimelineRasterOp] -->|Image and SDK text| TimelineFrame[GPU timeline composer]
+    TimelineFrame --> TimelineTransport[Separate X11, native, or headless presenter]
 ```
 
 The solid paths are required data and control flows. Dashed dump and

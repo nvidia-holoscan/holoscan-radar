@@ -4,6 +4,21 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-17** — **Shared radar GUI presentation** on `deustice/sar-gui`,
+  based on `deustice/sar-python`. All seven FMCW and six SAR C++/Python apps
+  share presenter policy, canonical configuration with legacy aliases,
+  GPU composition, finished-image X11 transport, native/headless/off options,
+  aspect fit, and cooperative window/EOF lifecycle. SAR formation/HUD and
+  timeline both work through X11 without a native Vulkan presentation surface.
+  Scientific displays, processing, and public operator contracts are preserved.
+  All 1,455 selected non-performance CTests pass, including provider tests,
+  numerical/dump parity, all-app X11 windows, headless execution, signals, and
+  GPU timestamp/fit regressions. Delayed-display resize and short resource soaks
+  pass; repository-wide pinned lint passes. Native positive validation remains
+  pending because this Thor virtual display cannot present CUDA/Vulkan windows;
+  actual laptop SSH/X11 and scientific visual review also remain pending.
+  See [GUI decisions and validation](GUI_UNIFICATION.md).
+
 - **2026-11-17** — **Complete Python operator coverage and SAR applications** on
   `deustice/sar-python`, based on `deustice/cfar-calibration` at `57061f50`. The provider now
   covers all 33 operators (68 precision-aware factories), including explicit

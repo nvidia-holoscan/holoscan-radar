@@ -33,8 +33,28 @@ class ClientMessage(c.Structure):
     ]
 
 
+class KeyEvent(c.Structure):
+    _fields_ = [
+        ("type", c.c_int),
+        ("serial", c.c_ulong),
+        ("send_event", c.c_int),
+        ("display", c.c_void_p),
+        ("window", c.c_ulong),
+        ("root", c.c_ulong),
+        ("subwindow", c.c_ulong),
+        ("time", c.c_ulong),
+        ("x", c.c_int),
+        ("y", c.c_int),
+        ("x_root", c.c_int),
+        ("y_root", c.c_int),
+        ("state", c.c_uint),
+        ("keycode", c.c_uint),
+        ("same_screen", c.c_int),
+    ]
+
+
 class Event(c.Union):
-    _fields_ = [("client", ClientMessage), ("padding", c.c_long * 24)]
+    _fields_ = [("client", ClientMessage), ("key", KeyEvent), ("padding", c.c_long * 24)]
 
 
 def xlib():
@@ -76,7 +96,9 @@ def xlib():
         ),
         "XGetPixel": (c.c_ulong, [c.c_void_p, c.c_int, c.c_int]),
         "XDestroyImage": (c.c_int, [c.c_void_p]),
+        "XMoveWindow": (c.c_int, [c.c_void_p, c.c_ulong, c.c_int, c.c_int]),
         "XResizeWindow": (c.c_int, [c.c_void_p, c.c_ulong, c.c_uint, c.c_uint]),
+        "XKeysymToKeycode": (c.c_ubyte, [c.c_void_p, c.c_ulong]),
         "XInternAtom": (c.c_ulong, [c.c_void_p, c.c_char_p, c.c_int]),
         "XSendEvent": (c.c_int, [c.c_void_p, c.c_ulong, c.c_int, c.c_long, c.POINTER(Event)]),
         "XFlush": (c.c_int, [c.c_void_p]),
@@ -90,7 +112,7 @@ def xlib():
     return lib
 
 
-def find_window(lib, display, root):
+def find_window(lib, display, root, prefix=b"Radar CI dashboard"):
     # Native renderer discovery creates a short-lived probe window. Keep the
     # tree/name snapshot atomic so it cannot disappear during XFetchName.
     lib.XGrabServer(display)
@@ -111,7 +133,7 @@ def find_window(lib, display, root):
                 lib.XFetchName(display, children[index], c.byref(name))
                 if name.value:
                     try:
-                        if c.string_at(name).startswith(b"Radar CI dashboard"):
+                        if c.string_at(name).startswith(prefix):
                             return children[index]
                     finally:
                         lib.XFree(name)
@@ -178,9 +200,13 @@ def check(
     deadline = time.monotonic() + int(os.environ.get("HOLOSCAN_RADAR_TEST_TIMEOUT_SECONDS", "30"))
     with tempfile.TemporaryDirectory(prefix="radar-x11-test-") as directory:
         preset = Path(directory) / "window.yaml"
+        # The bounded multi-profile simulated link is deliberately fail-stop
+        # under overload. Give this window test cold-start margin while other
+        # GPU unit tests run; numerical smoke presets keep their normal cadence.
+        cadence = "    frame_period: 0.5\n" if application == "multi_waveform" else ""
         preset.write_text(
             f"extends: {json.dumps(config)}\napp:\n  run:\n    num_frames: 1000\n"
-            "  visualization:\n    enabled: true\n"
+            f"{cadence}  visualization:\n    enabled: true\n"
             f"    x11_presentation: {str(presenter == 'x11').lower()}\n"
             "    window_title: Radar CI dashboard\n"
         )

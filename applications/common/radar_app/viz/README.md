@@ -1,4 +1,4 @@
-# Shared FMCW dashboard
+# Shared radar visualization
 
 All seven FMCW applications use `FmcwDashboardOp` and the same C++/Python
 visualization wiring. The dashboard presents the CFAR power surface, current
@@ -257,7 +257,8 @@ window systems retain the image-only SDK `FmcwHolovizOp` presentation path.
 Joining both inputs lets the viewer recover after resize or remote-display stalls
 have dropped queued frames. An image-driven `OnEach` with an `Exact` text side
 selector can strand a stale image after its matching text is evicted. An independent
-render clock can also redraw the image without its labels. The compositor caps
+composition clock can also redraw the image without its labels. The terminal
+event clock therefore replays only already-composed complete frames. The compositor caps
 rasterization at `visualization.display_rate_hz`, while updating histories for
 every admitted radar frame. Display products share a completion timestamp so
 presentation alignment excludes upstream processing latency. Radar data and
@@ -291,12 +292,93 @@ existing target-color distinction. Dear ImGui and configurable TTF rendering
 are available through the lower-level renderer, rather than callbacks on
 `HolovizOp`; they would require a custom presentation operator.
 
-Window events are serviced on rendered frames. A stalled or stopped producer
-leaves the last image visible but does not provide an independent UI event
-pump; this is an SDK operator limitation.
+X11 events are polled independently of scientific frame arrivals. Native
+windows receive bounded periodic replay of the last completed frame, including
+an initial blank frame, so the SDK can service close and resize during producer
+gaps and final-image hold. Closing a window or pressing Escape stops the whole
+application cooperatively; either SAR window has this behavior.
 
 Resize recovery can be checked with the delayed-X11 regression probe in
 [`tests/gui/README.md`](../../../../tests/gui/README.md). It verifies update
 recovery across resize bursts and delayed X11 traffic. The GPU dashboard test
 also checks that native text is embedded in the emitted frame and unmatched
 image/text inputs do not render.
+
+## Shared presentation controls
+
+All seven FMCW and six SAR applications expose the same C++ and Python options:
+
+```bash
+./holoscan-radar run spotlight --language cpp --run-args='--presenter x11'
+./holoscan-radar run spotlight --language python --run-args='--presenter x11'
+./holoscan-radar run simo --language python --run-args='--presenter headless'
+```
+
+Executables accept `--presenter x11|native|headless|off` before or after the
+YAML path, plus `--choose-presenter`. SAR retains positional CPHD paths and
+`--cphd`. Python builders accept `presenter=None` and
+`choose_presenter=False`; SAR also retains `cphd_override`.
+
+An explicit launch mode overrides YAML. Explicit YAML overrides preferences
+and prompts. With no explicit selection, both modalities reuse the existing
+FMCW version-2 cache, keyed by display and local/SSH setup. Its expiration,
+reset, interactive, and unattended behavior is described above. Headless and
+off modes never prompt. An explicit X11 selection cannot silently fall back to
+native Vulkan presentation. A remote desktop is unnecessary for X11.
+
+```yaml
+app:
+  visualization:
+    enabled: true
+    x11_presentation: true
+    headless: false
+    display_rate_hz: 60
+    resize_mode: stretch  # fit preserves the whole canvas aspect ratio
+    final_image_hold_s: 30  # 0: finish; positive: seconds; negative: until closed
+    max_side: 1024  # SAR display downsampling, independent of product resolution
+    timeline:  # SAR diagnostics; ignored by FMCW scientific rendering
+      enabled: true
+      display_rate_hz: 10
+      window_width: 1280
+      window_height: 112
+```
+
+FMCW retains its zero-second hold default. SAR retains its 30-second default
+and preset overrides. Headless/off runs do not wait for an interactive hold.
+SAR's omitted width/height use existing product-aware sizing and desktop-fitted
+strip sizing; explicit `window_width`/`window_height` override the window canvas.
+Resizing scales a bounded complete canvas rather than changing formation
+resolution, reallocating pools, or reflowing scientific plots.
+
+SAR's old `visualize`, `headless`, `skip_display_check`, `visualize_size`, and
+`visualize_hold_s` remain aliases for `enabled`, `headless`,
+`skip_display_check`, `max_side`, and `final_image_hold_s` in this block.
+Aliases normalize within each file before inheritance. A child alias overrides
+a parent setting; common spelling wins over a conflicting alias in the same
+file, with a warning. Relative `extends` paths resolve against their containing
+file; existing data paths retain leaf-config-relative resolution. Arrays and
+scalars replace; mappings merge recursively; explicit nulls remain explicit.
+
+SAR keeps grayscale percentile scaling, product orientation, crops, mosaics,
+HUD, playback diagnostics, and autofocus displays. FMCW keeps its dashboard
+plots, physical axes, truth/detection annotations, and noise scaling. Timeline
+pixels render on the GPU from bounded host commands; its labels use the same
+SDK GPU text renderer as formation and dashboards.
+
+X11 transfers only finished display frames through bounded host pools. Native
+presentation requires a CUDA-backed Vulkan adapter that can present to the
+selected display. X11 and headless require an offscreen CUDA/Vulkan renderer,
+but never create a native presentation surface during startup. GPU indices and
+visibility are not changed. Cross-device bridges transfer bounded display RGBA
+images, never raw apertures or complex mosaics.
+
+Normal completion drains reporting and enabled dump sinks and gives the final
+display frame a bounded completion opportunity. SIGINT/SIGTERM and window close
+stop cooperatively and join execution. Display queues discard stale frames;
+window resize and display delay must not corrupt saved scientific products.
+
+Completed frames are consumed from bounded arrival queues without a short
+capture-age cutoff: a SAR image may finish long after acquisition. Image,
+geometry, and text join exactly before this boundary; retained/replayed frames
+keep their original content timestamp. Native replay polls at least 20 Hz for
+window events even when the scientific display-rate cap is lower.

@@ -1,5 +1,7 @@
 # SAR autofocus
 
+See [shared GUI configuration and presentation](../../common/radar_app/viz/README.md#shared-presentation-controls).
+
 Phase gradient autofocus (PGA) estimates phase errors that blur a synthetic
 aperture radar (SAR) image. This application retains the received pulses,
 forms an auxiliary image for estimating the error, applies the estimated phase
@@ -367,7 +369,9 @@ flowchart LR
     A -- positions / reference / control --> B
     B --> Report[Image report]
     B -. dump .-> Dump[TensorDumpOp]
-    B -. visualize .-> Viz[HolovizOp]
+    B -. image / look / HUD .-> Compose[GPU frame composer]
+    Compose --> Present[X11 / native / headless]
+    Timeline[Timeline GPU composer] --> TimelinePresent[X11 / native / headless]
 ```
 
 `PerturbPositionsOp` adds the configured error. `AutofocusScoreOp` compares the
