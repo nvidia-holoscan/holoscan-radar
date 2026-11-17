@@ -118,6 +118,8 @@ class DownloadCliTest(unittest.TestCase):
         for text in (
             f"cphd:\n  path: {known}\n  path: {known}\n",
             f"cphd: {{path: {known}}}\ncphd: {{path: {known}}}\n",
+            f"cphd: {{<<: {{path: {known}, path: {known}}}}}\n",
+            f"cphd: {{<<: [{{path: {known}, path: {known}}}]}}\n",
         ):
             with self.subTest(text=text), tempfile.TemporaryDirectory() as temp:
                 config = Path(temp) / "config.yaml"
@@ -143,6 +145,20 @@ class DownloadCliTest(unittest.TestCase):
                 prepare.assert_not_called()
                 mkdir.assert_not_called()
                 self.assertFalse(root.exists())
+
+    def test_yaml_merge_overrides_and_reused_anchors_remain_supported(self):
+        known = "sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd"
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / "config.yaml"
+            config.write_text(
+                "defaults: &defaults {path: unused.cphd}\n"
+                f"cphd: &cphd {{<<: *defaults, path: {known}}}\n"
+                "copy: {<<: *cphd}\n"
+            )
+            root = Path(temp) / "data"
+            jobs = pull_cphd.jobs_for_config(config, root)
+            self.assertEqual([job.destination for job in jobs], [root / known])
+            self.assertFalse(root.exists())
 
     def test_multiple_inputs_deduplicate_and_honor_data_root(self):
         known = "sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd"

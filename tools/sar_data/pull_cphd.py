@@ -323,34 +323,41 @@ def format_duration(seconds: float) -> str:
 class UniqueKeySafeLoader(yaml.SafeLoader):
     """Reject ambiguous mappings while retaining safe YAML construction."""
 
-    def construct_mapping(self, node, deep=False):
-        keys = set()
-        for key_node, _ in node.value:
-            # Merge keys are expanded by SafeLoader below. Check authored keys
-            # first so normal YAML merge overrides remain supported.
-            key = (
-                key_node.tag
-                if key_node.tag == "tag:yaml.org,2002:merge"
-                else self.construct_object(key_node, deep=deep)
-            )
-            try:
-                duplicate = key in keys
-                keys.add(key)
-            except TypeError as exc:
-                raise yaml.constructor.ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    "found an unhashable key",
-                    key_node.start_mark,
-                ) from exc
-            if duplicate:
-                raise yaml.constructor.ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    f"found duplicate key {key!r}",
-                    key_node.start_mark,
+    def __init__(self, stream):
+        super().__init__(stream)
+        self._checked_mappings = set()
+
+    def flatten_mapping(self, node):
+        # SafeLoader recursively flattens merge sources without constructing
+        # them as mappings. Validate here so inline merge sources are checked
+        # too, before expansion introduces legitimate override duplicates.
+        if node not in self._checked_mappings:
+            self._checked_mappings.add(node)
+            keys = set()
+            for key_node, _ in node.value:
+                key = (
+                    key_node.tag
+                    if key_node.tag == "tag:yaml.org,2002:merge"
+                    else self.construct_object(key_node)
                 )
-        return super().construct_mapping(node, deep=deep)
+                try:
+                    duplicate = key in keys
+                    keys.add(key)
+                except TypeError as exc:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        "found an unhashable key",
+                        key_node.start_mark,
+                    ) from exc
+                if duplicate:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        f"found duplicate key {key!r}",
+                        key_node.start_mark,
+                    )
+        super().flatten_mapping(node)
 
 
 def jobs_for_config(config: Path, data_root: Path | None = None) -> list[PullJob]:
