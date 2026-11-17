@@ -4,6 +4,8 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <future>
 #include <vector>
 
 namespace holoscan::radar {
@@ -21,14 +23,21 @@ constexpr int kMaxOsTrainingCells = 512;
 struct AlphaLutSnapshot {
   bool ready{false};
   std::vector<double> lut{};
+  bool building{false};  // An unfinished job exists; distinguishes cancellation from pending work.
 };
 
-// Returns a ready LUT when cached; otherwise queues a build (if needed) and
-// returns ready=false.
+// Return a cached LUT or the current background-job state without queuing work.
 AlphaLutSnapshot poll_cached_alpha_lut(const CfarAlphaLutKey& key);
 
-// Idempotently queue a background LUT build for key when not cached.
-void ensure_alpha_lut_build(const CfarAlphaLutKey& key);
+// Retain the outcome for a subscriber even after a failed job leaves the registry.
+using AlphaLutFuture = std::shared_future<std::vector<double>>;
+AlphaLutSnapshot poll_alpha_lut_build(const AlphaLutFuture& build);
+
+// Idempotently queue a build and retain its result, including any failure.
+AlphaLutFuture ensure_alpha_lut_build(const CfarAlphaLutKey& key, const void* owner = nullptr);
+
+// Drop only this detector's subscriptions; cancel and drain jobs with no remaining users.
+void release_alpha_lut_builds(const void* owner);
 
 // Block until every in-flight background alpha-LUT build has finished. Called
 // from CFARDetectorOp::stop() so a detached GPU Monte-Carlo build cannot launch
@@ -36,7 +45,10 @@ void ensure_alpha_lut_build(const CfarAlphaLutKey& key);
 void join_inflight_alpha_lut_builds();
 
 // Blocking LUT lookup (first tick or when async rebuild is disabled).
-std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key);
+// A supplied build preserves that subscriber's result even after registry replacement.
+std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key,
+                                         std::function<bool()> cancelled = {},
+                                         const void* owner = nullptr, AlphaLutFuture build = {});
 
 // Training-cell count for one (doppler, range) cell under the CA window
 // footprint (matches cfar_ca_kernel).

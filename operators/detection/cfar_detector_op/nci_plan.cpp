@@ -51,7 +51,7 @@ std::vector<int64_t> NciPlan::output_shape(int64_t num_doppler, int64_t num_rang
 }
 
 NciPlan NciPlan::from_shape(const std::vector<int64_t>& shape, const std::vector<int64_t>& nci_axes,
-                            const char* port_name) {
+                            const char* port_name, bool materialize_lookup) {
   if (shape.size() < 2) {
     std::ostringstream msg;
     msg << port_name << ": expected rank >= 2 (..., doppler, range), got rank " << shape.size();
@@ -103,7 +103,7 @@ NciPlan NciPlan::from_shape(const std::vector<int64_t>& shape, const std::vector
     plan.fold = 1;
   }
 
-  if (plan.fold > 1) {
+  if (plan.fold > 1 && materialize_lookup) {
     plan.batch_in_table.resize(static_cast<size_t>(plan.out_batch * plan.fold));
     std::vector<int64_t> leading_coords(plan.leading_dims.size());
     std::vector<int64_t> preserved_coords(plan.preserved_dims.size());

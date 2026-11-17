@@ -10,6 +10,7 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -19,6 +20,7 @@
 
 #include "utils/fixture_completion.hpp"
 #include "detection/cfar_detector_op/cfar_alpha.hpp"
+#include "detection/cfar_detector_op/cfar_calibration.hpp"
 #include "detection/cfar_detector_op/cfar_detector_op.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "utils/test_extents.hpp"
@@ -61,6 +63,8 @@ std::vector<double> power_map(double floor, const std::vector<std::pair<int64_t,
   return power_map(kDoppler, kRange, floor, targets, peak);
 }
 
+// Numerical calibration cost scales with 1/Pfa. Shape/noise/score tests use
+// affordable probabilities; rare-event budgeting and cancellation have dedicated tests.
 CFARParams so_params(double pfa) {
   CFARParams p{};
   p.cfar_variant = CfarVariant::kSO;
@@ -197,6 +201,89 @@ double score_at(const HostTensor& score, int64_t d, int64_t r) {
 
 }  // namespace
 
+template <typename T>
+void check_single_populated_axis() {
+  for (const auto variant : {CfarVariant::kSO, CfarVariant::kGO}) {
+    for (const auto& shape :
+         std::vector<std::vector<int64_t>>{{1, 16}, {16, 1}, {3, 16}, {16, 3}, {1, 1}}) {
+      auto params = so_params(0.1);
+      params.cfar_variant = variant;
+      params.training_cells = {1, 1};
+      params.threshold_scale = 1.5;
+      const auto max_index =
+          holoscan::radar::detail::max_go_lut_index(shape[0], shape[1], 1, 1, 1, 1);
+      params.alpha_lut.assign(max_index + 1, 2.0);
+      std::vector<T> flat(shape[0] * shape[1], T{2});
+      const auto out = run_cfar<T>(to_device_tensor<T>(flat, shape, real_dtype<T>()), params);
+      for (std::size_t i = 0; i < flat.size(); ++i) {
+        EXPECT_NEAR(out.noise.template as<T>()[i], max_index ? 2.0 : 0.0, 1e-5);
+        EXPECT_NEAR(out.score.template as<T>()[i], max_index ? 1.0 / 3 : 0.0, 1e-5);
+        EXPECT_EQ(out.mask.template as<uint8_t>()[i], 0);
+      }
+      EXPECT_EQ(num_detections(out.idx), 0);
+      if (!max_index)
+        continue;
+      const auto target = (shape[0] / 2) * shape[1] + shape[1] / 2;
+      flat[target] = T{100};
+      const auto peak = run_cfar<T>(to_device_tensor<T>(flat, shape, real_dtype<T>()), params);
+      EXPECT_NEAR(peak.noise.template as<T>()[target], 2.0, 1e-5);
+      EXPECT_NEAR(peak.score.template as<T>()[target], 100.0 / 6, 1e-5);
+      EXPECT_EQ(peak.mask.template as<uint8_t>()[target], 1);
+      EXPECT_TRUE(idx_contains(peak.idx, shape[0] / 2, shape[1] / 2));
+    }
+  }
+}
+
+TEST(CFARDetectorOpSoTest, SinglePopulatedAxisFloat) {
+  check_single_populated_axis<float>();
+}
+
+TEST(CFARDetectorOpSoTest, SinglePopulatedAxisDouble) {
+  check_single_populated_axis<double>();
+}
+
+template <typename T>
+void check_thin_map_calibration() {
+  for (const auto& shape : std::vector<std::vector<int64_t>>{{8, 1, 512}, {8, 256, 1}}) {
+    auto params = so_params(0.1);
+    params.training_cells = {1, 1};
+    const auto calibrated = holoscan::radar::calibrate_cfar(params, shape);
+    ASSERT_EQ(calibrated.plan.method, "direct_monte_carlo");
+    EXPECT_GE(calibrated.plan.budget.coverage, params.calibration_confidence);
+    params.alpha_lut = calibrated.alpha_lut;
+    std::mt19937_64 rng(91735);
+    std::exponential_distribution<double> exponential(1.0);
+    const int64_t length = std::max(shape[1], shape[2]);
+    std::vector<T> data(shape[0] * length);
+    for (auto& value : data)
+      value = static_cast<T>(exponential(rng));
+    const auto out = run_cfar<T>(to_device_tensor<T>(data, shape, real_dtype<T>()), params);
+    int alarms = 0;
+    for (int64_t channel = 0; channel < shape[0]; ++channel) {
+      // In the interior, each populated half-side has exactly one independent
+      // exponential reference cell. This 1-D oracle does not use the GO/SO helpers.
+      for (int64_t position = 2; position + 2 < length; ++position) {
+        const auto i = channel * length + position;
+        const double noise = std::min(data[i - 2], data[i + 2]);
+        const double score = data[i] / (params.alpha_lut[1] * noise);
+        EXPECT_NEAR(out.noise.template as<T>()[i], noise, 1e-5);
+        EXPECT_NEAR(out.score.template as<T>()[i], score, std::max(1e-5, score * 1e-5));
+        EXPECT_EQ(out.mask.template as<uint8_t>()[i] != 0, score > 1);
+        alarms += out.mask.template as<uint8_t>()[i] != 0;
+      }
+    }
+    EXPECT_NEAR(static_cast<double>(alarms) / (shape[0] * (length - 4)), params.pfa, 0.035);
+  }
+}
+
+TEST(CFARDetectorOpSoTest, ThinMapOfflineCalibrationMatchesDetectorFloat) {
+  check_thin_map_calibration<float>();
+}
+
+TEST(CFARDetectorOpSoTest, ThinMapOfflineCalibrationMatchesDetectorDouble) {
+  check_thin_map_calibration<double>();
+}
+
 TEST(CFARDetectorOpSoTest, DetectsSingleTargetRealPath) {
   const int64_t dt = 8;
   const int64_t rt = 16;
@@ -231,7 +318,7 @@ TEST(CFARDetectorOpSoTest, NoFalseAlarmsOnFlatMap) {
   const auto map = power_map(1.0, {}, 1.0);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = run_cfar<double>(input, so_params(1e-6));
+  const auto out = run_cfar<double>(input, so_params(1e-3));
 
   EXPECT_EQ(num_detections(out.idx), 0);
 }
@@ -390,7 +477,7 @@ TEST(CFARDetectorOpSoTest, BorderCellsUseInBoundsTrainingOnly) {
   const auto map = power_map(floor, {}, floor);
   auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
 
-  const auto out = run_cfar<double>(input, so_params(1e-6));
+  const auto out = run_cfar<double>(input, so_params(1e-3));
 
   const auto* noise = out.noise.as<double>();
   const auto* scores = out.score.as<double>();
@@ -497,7 +584,7 @@ TEST(CFARDetectorOpSoTest, NciIntegratesChannelsForDetection) {
   auto flat_input =
       to_device_tensor<double>(flat_cube, {kChannels, kDoppler, kRange}, real_dtype<double>());
 
-  CFARParams flat_params = so_params(1e-6);
+  CFARParams flat_params = so_params(1e-3);
   const auto per_channel = run_cfar<double>(flat_input, flat_params);
   EXPECT_EQ(num_detections(per_channel.idx), 0);
 
@@ -740,7 +827,7 @@ TEST(CFARDetectorOpSoTest, PfaConfigurableFromParams) {
   auto input = to_device_tensor<double>(map, {kDoppler, kRange}, real_dtype<double>());
   CFARParams loose = so_params(1e-2);
   loose.blocking_alpha_lut_rebuild = true;
-  CFARParams tight = so_params(1e-8);
+  CFARParams tight = so_params(1e-3);
   tight.blocking_alpha_lut_rebuild = true;
   EXPECT_GT(score_at(run_cfar<double>(input, loose).score, dt, rt),
             score_at(run_cfar<double>(input, tight).score, dt, rt));

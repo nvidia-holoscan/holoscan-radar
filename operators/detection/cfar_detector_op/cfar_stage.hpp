@@ -39,6 +39,9 @@ struct CfarStageConfig {
   std::vector<int64_t> guard_cells;
   std::vector<int64_t> training_cells;
   double pfa;
+  double calibration_relative_error{0.10};
+  double calibration_confidence{0.95};
+  int64_t calibration_trials{0};
   std::vector<double> alpha_lut;
   double threshold_scale;
   std::vector<int64_t> nci_axes;
@@ -252,8 +255,11 @@ __global__ void cfar_goso_kernel(const T* power, int64_t batch, int64_t num_dopp
                                                            range_pos_sum, range_pos_cnt);
   const T doppler_stat = goso_side_statistic<T, kGreatestOf>(doppler_neg_sum, doppler_neg_cnt,
                                                              doppler_pos_sum, doppler_pos_cnt);
-  const T noise_est = kGreatestOf ? (range_stat > doppler_stat ? range_stat : doppler_stat)
-                                  : (range_stat < doppler_stat ? range_stat : doppler_stat);
+  // Empty axes contribute no statistic, matching calibration and LUT indexing.
+  const T noise_est = !(range_neg_cnt + range_pos_cnt)       ? doppler_stat
+                      : !(doppler_neg_cnt + doppler_pos_cnt) ? range_stat
+                      : kGreatestOf ? (range_stat > doppler_stat ? range_stat : doppler_stat)
+                                    : (range_stat < doppler_stat ? range_stat : doppler_stat);
   const T alpha = lut_idx < alpha_lut_size ? alpha_lut[lut_idx] : T{0};
   const T threshold = threshold_scale * alpha * noise_est;
   noise[idx] = noise_est;

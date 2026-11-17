@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 add_library(cfar_detector_op cfar_detector_op.cu cfar_alpha.cpp cfar_alpha_mc.cu
-    nci_plan.cpp)
+    nci_plan.cpp cfar_calibration.cpp cfar_calibration.cu)
 add_library(holoscan::cfar_detector_op ALIAS cfar_detector_op)
 
 target_include_directories(cfar_detector_op PUBLIC
@@ -23,6 +23,6 @@ install(TARGETS cfar_detector_op
 )
 
 include(GNUInstallDirs)
-install(FILES cfar_detector_op.hpp
+install(FILES cfar_detector_op.hpp cfar_calibration.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/holoscan/radar/detection
 )

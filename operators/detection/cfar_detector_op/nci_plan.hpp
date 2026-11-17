@@ -38,8 +38,9 @@ struct NciPlan {
   std::vector<int64_t> output_shape(int64_t num_doppler, int64_t num_range) const;
 
   // Build a plan from the input tensor shape and nci_axes parameter.
+  // Offline calibration disables lookup materialization; validation/fold resolution is shared.
   static NciPlan from_shape(const std::vector<int64_t>& shape, const std::vector<int64_t>& nci_axes,
-                            const char* port_name);
+                            const char* port_name, bool materialize_lookup = true);
 };
 
 }  // namespace holoscan::radar::detail
