@@ -649,6 +649,15 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
   const bool had_external_alpha_lut = state.using_external_alpha_lut;
   const bool has_external_alpha_lut = !stage.alpha_lut.empty();
 
+  // Only the current configuration needs a subscription. This also covers a
+  // queued startup warm-up and reverting to the already active table.
+  if (state.pending_lut_active && (has_external_alpha_lut || state.pending_lut_key != lut_key)) {
+    detail::release_alpha_lut_builds(&state);
+    state.pending_lut_key = {};
+    state.pending_lut_active = false;
+    state.stale_lut_warned = false;
+  }
+
   if (had_external_alpha_lut && !has_external_alpha_lut) {
     if (!state.alpha_lut_cleared_pfa_active_warned) {
       HOLOSCAN_LOG_WARN(
@@ -946,6 +955,8 @@ void CFARDetectorOp<T>::start() {
   try {
     if (uses_slow_pfa_lut_calibration(variant, fold)) {
       detail::ensure_alpha_lut_build(warm_key, state_.get());
+      state_->pending_lut_key = warm_key;
+      state_->pending_lut_active = true;
       HOLOSCAN_LOG_WARN(
           "CFARDetectorOp: queued cancellable start-time Monte Carlo calibration; first tick waits "
           "for alpha_lut");

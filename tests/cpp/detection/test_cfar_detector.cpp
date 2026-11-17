@@ -14,6 +14,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -180,7 +181,8 @@ struct CfarLiveWiring {
 };
 
 holoscan::testing::TestResult run_cfar_live(std::vector<CfarLiveTick> ticks, CFARParams params,
-                                            CfarLiveWiring wiring) {
+                                            CfarLiveWiring wiring,
+                                            std::function<void()> before_stop = {}) {
   using Op = CFARDetectorOp<double>;
   auto fixture =
       holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
@@ -250,6 +252,8 @@ holoscan::testing::TestResult run_cfar_live(std::vector<CfarLiveTick> ticks, CFA
   for (const char* output : kOutputs) {
     (void)completion.wait_for_output(running, output, ticks.size());
   }
+  if (before_stop)
+    before_stop();
   running.request_stop();
   auto fixture_result = running.finish();
   completion.check(fixture_result);
@@ -774,6 +778,74 @@ TEST(CFARDetectorOpTest, NonBlockingPfaOverrideServesStaleLut) {
   const double initial_score = cfar_frames(result, "detection_score")[0].as<double>()[kPeak];
   EXPECT_DOUBLE_EQ(cfar_frames(result, "detection_score")[1].as<double>()[kPeak], initial_score);
   EXPECT_DOUBLE_EQ(cfar_frames(result, "detection_score")[2].as<double>()[kPeak], initial_score);
+}
+
+TEST(CFARDetectorOpTest, SupersededCalibrationSubscriptionsAreReleasedBeforeStop) {
+  namespace detail = holoscan::radar::detail;
+  using holoscan::radar::CfarAlphaLutKey;
+  auto input = to_device_tensor<double>(power_map(1.0, {{8, 16}}, 26.0), {kDoppler, kRange},
+                                        real_dtype<double>());
+  auto params = ca_params(0.1);
+  params.cfar_variant = CfarVariant::kGO;
+  CfarAlphaLutKey base{CfarVariant::kGO, params.pfa, 1, params.os_rank, 1, 1, 2, 2,
+                       kDoppler,         kRange};
+  const auto lut = detail::get_cached_alpha_lut(base);
+  for (bool shared : {false, true}) {
+    auto first_key = base;
+    first_key.pfa = shared ? 1.23e-9 : 1.24e-9;
+    auto second_key = base;
+    second_key.pfa = shared ? 2.23e-9 : 2.24e-9;
+    int other_detector = 0;
+    if (shared)
+      detail::ensure_alpha_lut_build(first_key, &other_detector);
+    CfarLiveTick initial{};
+    initial.rd_maps = input;
+    auto first = initial;
+    first.pfa = first_key.pfa;
+    auto second = initial;
+    second.pfa = second_key.pfa;
+    // Check while the detector is still running: stop() would mask leaked subscriptions.
+    const auto result =
+        run_cfar_live({initial, first, second, initial}, params, {.pfa = true}, [&] {
+          EXPECT_EQ(detail::poll_cached_alpha_lut(first_key).building, shared);
+          EXPECT_FALSE(detail::poll_cached_alpha_lut(second_key).building);
+          detail::release_alpha_lut_builds(&other_detector);
+          EXPECT_FALSE(detail::poll_cached_alpha_lut(first_key).building);
+        });
+    ASSERT_TRUE(result.ok()) << result.describe_failure();
+  }
+
+  auto pending_key = base;
+  pending_key.pfa = 3.24e-9;
+  CfarLiveTick initial{};
+  initial.rd_maps = input;
+  auto pending = initial;
+  pending.pfa = pending_key.pfa;
+  auto external = initial;
+  external.alpha_lut = lut;
+  const auto result =
+      run_cfar_live({initial, pending, external}, params, {.pfa = true, .alpha_lut = true}, [&] {
+        EXPECT_FALSE(detail::poll_cached_alpha_lut(pending_key).building);
+      });
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+}
+
+TEST(CFARDetectorOpTest, ExternalLutReleasesSupersededStartupCalibration) {
+  namespace detail = holoscan::radar::detail;
+  auto input =
+      to_device_tensor<double>(power_map(1.0, {}, 1.0), {kDoppler, kRange}, real_dtype<double>());
+  auto params = ca_params(4.24e-9);
+  params.cfar_variant = CfarVariant::kOS;
+  params.os_rank = 2;
+  params.preintegrated_looks = 2;
+  holoscan::radar::CfarAlphaLutKey warm{CfarVariant::kOS, params.pfa, 2, 2, 1, 1, 2, 2, 7, 7};
+  CfarLiveTick external{};
+  external.rd_maps = input;
+  external.alpha_lut = std::vector<double>(49, 1.0);
+  const auto result = run_cfar_live({external}, params, {.alpha_lut = true}, [&] {
+    EXPECT_FALSE(detail::poll_cached_alpha_lut(warm).building);
+  });
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
 }
 
 TEST(CFARDetectorOpTest, LiveMaxDetectionsOverrideMidStream) {

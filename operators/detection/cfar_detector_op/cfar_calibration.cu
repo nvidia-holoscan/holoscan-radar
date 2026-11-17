@@ -172,18 +172,21 @@ double calibrate_cfar_geometry_gpu(const CfarCalibrationPlan& plan,
     throw CfarCalibrationCancelled{};
   if (!batch_size || batch_size > kBatch)
     throw std::invalid_argument("CFAR calibration invalid batch size");
-  const auto trials =
-      benchmark ? std::min<std::uint64_t>(kBatch, plan.budget.trials) : plan.budget.trials;
-  const auto rank = std::min(plan.budget.tail_rank, trials);
-  if (!trials || !rank ||
-      rank > static_cast<std::uint64_t>(std::numeric_limits<int>::max() - kBatch))
+  // A bounded timing probe must still reject an unsupported full calibration.
+  const auto requested_rank = plan.budget.tail_rank;
+  if (!plan.budget.trials || !requested_rank ||
+      requested_rank > static_cast<std::uint64_t>(std::numeric_limits<int>::max() - kBatch))
     throw std::invalid_argument("CFAR calibration tail capacity exceeds supported GPU sort extent");
-  const auto capacity = rank + kBatch;
+  const auto requested_capacity = requested_rank + kBatch;
   std::size_t free_bytes = 0, total_bytes = 0;
   checked(cudaMemGetInfo(&free_bytes, &total_bytes));
   // Reserve room for both key buffers and CUB scratch before starting a long build.
-  if (capacity > free_bytes / (sizeof(double) * 6))
+  if (requested_capacity > free_bytes / (sizeof(double) * 6))
     throw std::invalid_argument("CFAR calibration tail workspace exceeds available GPU memory");
+  const auto trials =
+      benchmark ? std::min<std::uint64_t>(kBatch, plan.budget.trials) : plan.budget.trials;
+  const auto rank = std::min(requested_rank, trials);
+  const auto capacity = rank + kBatch;
   Stream stream;
   Allocation in(capacity * sizeof(double)), out(capacity * sizeof(double)), invalid(sizeof(int));
   auto* input = static_cast<double*>(in.data);

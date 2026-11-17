@@ -236,6 +236,42 @@ TEST(CfarCalibration, AnalyticAndExternalTablesBypassMonteCarlo) {
   EXPECT_THROW(radar::calibrate_cfar(p, {16, 16}), std::invalid_argument);
 }
 
+TEST(CfarCalibration, ExternalTablesIgnoreSlotZeroAndEntriesPastRequiredSize) {
+  for (auto variant : {radar::CfarVariant::kCA, radar::CfarVariant::kOS, radar::CfarVariant::kGO,
+                       radar::CfarVariant::kSO}) {
+    for (int looks : {1, 2}) {
+      auto p = params(variant);
+      p.preintegrated_looks = looks;
+      p.os_rank = 1;
+      const auto size = detail::prepare_cfar_calibration(p, {16, 16}).lut_size;
+      for (double sentinel : {-1.0, std::numeric_limits<double>::infinity(),
+                              std::numeric_limits<double>::quiet_NaN()}) {
+        p.alpha_lut.assign(size + 2, 1.0);
+        p.alpha_lut[0] = sentinel;
+        p.alpha_lut[size] = sentinel;
+        p.alpha_lut[size + 1] = sentinel;
+        EXPECT_EQ(radar::plan_cfar_calibration(p, {16, 16}).method, "external");
+        const auto result = radar::calibrate_cfar(p, {16, 16});
+        EXPECT_EQ(result.plan.method, "external");
+        EXPECT_EQ(result.alpha_lut.size(), p.alpha_lut.size());
+        p.alpha_lut[1] = sentinel;
+        EXPECT_THROW(radar::plan_cfar_calibration(p, {16, 16}), std::invalid_argument);
+        EXPECT_THROW(radar::calibrate_cfar(p, {16, 16}), std::invalid_argument);
+      }
+    }
+  }
+}
+
+TEST(CfarCalibration, PlanningProbeRejectsUnsupportedFullTail) {
+  auto p = params();
+  p.calibration_relative_error = 1e-5;
+  const auto budget = radar::cfar_calibration_budget(p.pfa, p.calibration_relative_error);
+  ASSERT_GT(budget.tail_rank, static_cast<std::uint64_t>(std::numeric_limits<int>::max()));
+  // Both public entry points must reject before allocating the requested tail or sampling.
+  EXPECT_THROW(radar::plan_cfar_calibration(p, {8, 8}), std::invalid_argument);
+  EXPECT_THROW(radar::calibrate_cfar(p, {8, 8}), std::invalid_argument);
+}
+
 TEST(CfarCalibration, NoTrainingCellsNeedNoCalibration) {
   for (auto variant : {radar::CfarVariant::kCA, radar::CfarVariant::kGO, radar::CfarVariant::kSO}) {
     auto p = params(variant);

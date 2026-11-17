@@ -22,10 +22,10 @@ constexpr int kMaxOsTrainingCells = 512;
 struct AlphaLutSnapshot {
   bool ready{false};
   std::vector<double> lut{};
+  bool building{false};  // An unfinished job exists; distinguishes cancellation from pending work.
 };
 
-// Returns a ready LUT when cached; otherwise queues a build (if needed) and
-// returns ready=false.
+// Return a cached LUT or the current background-job state without queuing work.
 AlphaLutSnapshot poll_cached_alpha_lut(const CfarAlphaLutKey& key);
 
 // Idempotently queue a background LUT build for key when not cached.

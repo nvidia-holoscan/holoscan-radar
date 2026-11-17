@@ -1002,10 +1002,11 @@ AlphaLutSnapshot poll_cached_alpha_lut(const CfarAlphaLutKey& key) {
   std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
   if (auto it = g_alpha_lut_cache.find(key); it != g_alpha_lut_cache.end())
     return {true, it->second};
-  if (auto it = g_jobs.find(key);
-      it != g_jobs.end() &&
-      it->second->future.wait_for(std::chrono::seconds{0}) == std::future_status::ready)
-    return {true, it->second->future.get()};
+  if (auto it = g_jobs.find(key); it != g_jobs.end()) {
+    if (it->second->future.wait_for(std::chrono::seconds{0}) == std::future_status::ready)
+      return {true, it->second->future.get()};
+    return {false, {}, true};
+  }
   return {};
 }
 

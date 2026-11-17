@@ -218,8 +218,8 @@ CfarCalibrationPlan prepare_cfar_calibration(const CFARParams& params,
   if (!params.alpha_lut.empty()) {
     if (params.alpha_lut.size() < plan.lut_size)
       throw std::invalid_argument("CFAR alpha_lut too short");
-    for (double a : params.alpha_lut)
-      if (!std::isfinite(a) || a < 0)
+    for (std::size_t i = 1; i < plan.lut_size; ++i)
+      if (!std::isfinite(params.alpha_lut[i]) || params.alpha_lut[i] < 0)
         throw std::invalid_argument("CFAR alpha_lut must be finite and nonnegative");
     for (auto g : plan.geometries)
       if (params.alpha_lut[g.lut_index] <= 0)
