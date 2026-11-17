@@ -14,6 +14,7 @@
 #include <exception>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <fstream>
+#include <functional>
 #include <initializer_list>
 #include <memory>
 #include <optional>
@@ -132,26 +133,94 @@ struct Precision {
   using Geometry = TGeometry;
 };
 
-// `T` is the sample and image precision, `TGeom` the geometry precision. The
-// default pair is `<float, double>`: samples are single in every application
-// because few radar systems deliver more, which halves the retained aperture,
-// while ECEF positions stay in float64 because float32 cannot carry them.
-template <typename T = float, typename TGeom = double, typename LoadConfig, typename BuildGraph>
-int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig load_config,
-                         BuildGraph build_graph) {
-  try {
-    // Own SIGINT/SIGTERM before Holoviz or the runtime start threads. Host
-    // `holoscan run` maps Ctrl-C to `docker stop` (SIGTERM); without this
-    // domain the looping presets ignore both signals until the CLI SIGKILLs.
-    auto created_signals = holoscan::ManagedShutdownSignals::create();
-    if (!created_signals) {
-      throw std::runtime_error(std::string("SAR: managed SIGINT/SIGTERM domain failed: ") +
-                               holoscan::runtime_error_message(created_signals.error()));
-    }
-    auto managed_signals = std::move(created_signals).value();
-    const CliPaths cli = parse_cli(argc, argv, (std::string(name) + ".yaml").c_str());
-    AppConfig cfg = load_config(cli.config, cli.cphd_override);
-    auto document = app::config::load_document(cli.config);
+inline bool select_sar_device(const AppConfig& cfg) {
+#ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
+  bool visualize = cfg.visualize;
+#ifdef HOLOSCAN_RADAR_HAS_X11
+  if (visualize && !cfg.headless && !cfg.skip_display_check && !app::gui_available()) {
+    HOLOSCAN_LOG_WARN("SAR: no X11 display; skipping visualization");
+    visualize = false;
+  }
+#endif
+  app::select_application_device(visualize && !cfg.headless, visualize && cfg.headless);
+  return visualize;
+#else
+  app::select_application_device(false, false);
+  return false;
+#endif
+}
+
+inline radar::MaxTensorExtents prepare_sar_extents(const AppConfig& cfg,
+                                                   const std::filesystem::path& path) {
+  auto document = app::config::normalize_enum_field<radar::ApertureEmitMode>(
+      app::config::load_document(path), "/aperture_manager/emit_mode");
+  radar::ApertureManagerParams seed;
+  seed.emit_interval_pulses = cfg.tile_pulses;
+  return make_extents(cfg, *app::config::decode_params(document, "/aperture_manager", seed));
+}
+
+// Prepare external configuration and device discovery before entering a registry
+// constructor transaction. Attaching a Python context then only authors nodes.
+struct SarRuntimeInputs {
+  holoscan::config::Document document;
+  radar::MaxTensorExtents extents;
+  bool visualize;
+};
+
+inline SarRuntimeInputs prepare_sar_runtime(const AppConfig& cfg,
+                                            const std::filesystem::path& path) {
+  return {app::config::load_document(path), prepare_sar_extents(cfg, path), select_sar_device(cfg)};
+}
+
+// Shared native scaffolding for C++ and Python-authored SAR graphs. Each context
+// owns its HUD and completion counters independently; operators capture shared
+// owners so their lifetime extends through execution-plan teardown.
+template <typename T = float, typename TGeom = double>
+struct SarGraphRuntime {
+  std::string name;
+  CliPaths cli;
+  AppConfig cfg;
+  bool visualize;
+  std::shared_ptr<holoscan::Graph> owned_graph;
+  holoscan::Graph& graph;
+  holoscan::CompileOptions options;
+  holoscan::ConnectionOptions queue{.queue_depth = 4U};
+  radar::MaxTensorExtents extents, ingest_extents;
+  std::shared_ptr<radar::FormationHud> hud{std::make_shared<radar::FormationHud>()};
+  std::shared_ptr<app::sar::ImageCount> counter{std::make_shared<app::sar::ImageCount>()};
+  holoscan::OperatorHandle<radar::CPHDReaderOp<T, TGeom>> reader{
+      graph.op<radar::CPHDReaderOp<T, TGeom>>("cphd_reader", ingest_extents, hud)};
+  holoscan::OperatorHandle<radar::SARRangeCompressionOp<T>> range{
+      graph.op<radar::SARRangeCompressionOp<T>>("range_compression", ingest_extents)};
+  holoscan::OperatorHandle<radar::ApertureManagerOp<T, TGeom>> manager{
+      graph.op<radar::ApertureManagerOp<T, TGeom>>("aperture_manager", extents)};
+  holoscan::OperatorHandle<radar::BackprojectionOp<T, TGeom>> bp{
+      graph.op<radar::BackprojectionOp<T, TGeom>>("backprojection", extents, hud)};
+  std::array<int64_t, 2> product_extent{
+      cfg.scroll && cfg.scroll_parent.is_valid()
+          ? std::array<int64_t, 2>{cfg.scroll_parent.num_v(), cfg.scroll_parent.num_u()}
+          : std::array<int64_t, 2>{0, 0}};
+  holoscan::OperatorHandle<app::sar::SarImageReportOp> report{
+      graph.op<app::sar::SarImageReportOp>("image_report", counter, hud, product_extent)};
+  holoscan::PartitionHandle source{graph.partition("source")};
+  holoscan::PartitionHandle application{graph.partition("application")};
+  holoscan::PartitionHandle formation{graph.partition("formation")};
+  bool has_visualization{false}, has_timeline{false};
+  bool finished{false}, started{false};
+
+  SarGraphRuntime(std::string app_name, CliPaths paths, AppConfig config,
+                  holoscan::Graph* external_graph = nullptr,
+                  const SarRuntimeInputs* prepared = nullptr)
+  : name(std::move(app_name)),
+    cli(std::move(paths)),
+    cfg(std::move(config)),
+    visualize(prepared == nullptr ? select_sar_device(cfg) : prepared->visualize),
+    owned_graph(external_graph == nullptr ? std::make_shared<holoscan::Graph>(name) : nullptr),
+    graph(external_graph == nullptr ? *owned_graph : *external_graph),
+    extents(prepared == nullptr ? prepare_sar_extents(cfg, cli.config) : prepared->extents),
+    ingest_extents(make_ingest_extents(extents, cfg)) {
+    auto document =
+        prepared == nullptr ? app::config::load_document(cli.config) : prepared->document;
     document = app::config::normalize_enum_field<radar::FftNorm>(std::move(document),
                                                                  "/range_compression/fft_norm");
     document = app::config::normalize_enum_field<radar::ApertureEmitMode>(
@@ -177,51 +246,21 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
     bp_seed.range_bin_spacing = cfg.range_bin_spacing;
     bp_seed.reference_frequency = cfg.reference_frequency;
     auto bp_params = app::config::decode_params(document, "/backprojection", bp_seed);
-    const radar::MaxTensorExtents extents = make_extents(cfg, *manager_params);
-    const radar::MaxTensorExtents ingest_extents = make_ingest_extents(extents, cfg);
 
-#ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
-    bool visualize = cfg.visualize;
-#ifdef HOLOSCAN_RADAR_HAS_X11
-    if (visualize && !cfg.headless && !cfg.skip_display_check && !app::gui_available()) {
-      HOLOSCAN_LOG_WARN("SAR: no X11 display; skipping visualization");
-      visualize = false;
-    }
-#endif
-    app::select_application_device(visualize && !cfg.headless, visualize && cfg.headless);
-#else
-    app::select_application_device(false, false);
-#endif
-
-    holoscan::Graph graph{name};
-    holoscan::CompileOptions options;
-    const holoscan::ConnectionOptions queue{.queue_depth = 4U};
-    auto hud = std::make_shared<radar::FormationHud>();
-    auto reader = graph.op<radar::CPHDReaderOp<T, TGeom>>("cphd_reader", ingest_extents, hud);
     reader.set_params(std::move(reader_params));
     bind_outputs(options, "cphd_reader",
                  {"phase_history", "positions", "reference_position", "sample_axis", "pulse_times",
                   "velocities"});
-    auto range = graph.op<radar::SARRangeCompressionOp<T>>("range_compression", ingest_extents);
     range.set_params(std::move(range_params));
     bind_outputs(options, "range_compression", {"range_profiles", "range_bins"});
-    auto manager = graph.op<radar::ApertureManagerOp<T, TGeom>>("aperture_manager", extents);
     manager.set_params(std::move(manager_params));
     bind_outputs(options, "aperture_manager",
                  {"range_profiles_out", "positions_out", "reference_position_out", "weight",
                   "sample_points_out", "control_out"});
-    auto bp = graph.op<radar::BackprojectionOp<T, TGeom>>("backprojection", extents, hud);
     bp.set_params(std::move(bp_params));
     bind_outputs(options, "backprojection", {"image"});
-    auto counter = std::make_shared<app::sar::ImageCount>();
     // A scroll mosaic publishes a decimated view of its accumulator, so the
     // tensor reaching the report is not the formed strip. Report the strip.
-    const std::array<int64_t, 2> product_extent =
-        cfg.scroll && cfg.scroll_parent.is_valid()
-            ? std::array<int64_t, 2>{cfg.scroll_parent.num_v(), cfg.scroll_parent.num_u()}
-            : std::array<int64_t, 2>{0, 0};
-    auto report =
-        graph.op<app::sar::SarImageReportOp>("image_report", counter, hud, product_extent);
     // Authored partitions only get independent workers when each one has a
     // thread-placement binding. Without that, HSDK 5 runs callbacks inline on
     // the controller — the HSDK 4 greedy default that cannot overlap
@@ -231,17 +270,14 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
     // chain. A join of two producers (range and ecef_to_enu both into the
     // manager) in `application` fails compile; put the ECEF transform on
     // `source` with the reader.
-    auto source = graph.partition("source");
     source.add(reader);
-    auto application = graph.partition("application");
     application.add(range).add(manager);
-    auto formation = graph.partition("formation");
     formation.add(bp).add(report);
-    bool has_visualization = false;
-    bool has_timeline = false;
-    graph.add_flow(reader->phase_history, range->phase_history, queue);
-    const auto* formed = build_graph(Precision<T, TGeom>{}, graph, options, queue, cfg, reader,
-                                     range, manager, bp, source, application, formation, extents);
+  }
+
+  void finish(const holoscan::Output<holoscan::Tensor>* formed) {
+    if (finished)
+      throw std::logic_error("SAR graph was already finalized");
     graph.add_flow(*formed, report->image, queue);
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
     if (visualize) {
@@ -275,7 +311,7 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
       app::sar::OverlayConfig overlay;
       overlay.scene_names = cfg.scene_names;
       overlay.show_playback_lag = cfg.show_playback_lag;
-      overlay.diag = [hud, show_lag = cfg.show_playback_lag, mosaic, scroll = cfg.scroll,
+      overlay.diag = [hud = hud, show_lag = cfg.show_playback_lag, mosaic, scroll = cfg.scroll,
                       parent = cfg.parent_geometry, scroll_parent = cfg.scroll_parent,
                       geoms = cfg.collection_geometries, to_enu = cfg.transform_to_scene_enu,
                       origin = cfg.enu_origin_ecef]() {
@@ -483,6 +519,14 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
     if (has_timeline)
       options.deployment.bind_thread_placement("timeline", worker_lane)
           .bind_thread_placement("timeline_display", worker_lane);
+    finished = true;
+  }
+
+  int64_t run(holoscan::ManagedShutdownSignals* managed_signals = nullptr,
+              const std::function<void()>& poll = {}) {
+    if (!finished || started)
+      throw std::logic_error("SAR graph must be finalized and run once");
+    started = true;
     const auto plan = holoscan::compile(graph, std::move(options));
     // Pool sizing is the binding constraint on a retained-aperture run and the
     // plan is the only place the slot counts are visible: a declared depth of 2
@@ -533,59 +577,74 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
           "SAR: images will not be saved because output.max_files is 0; set a positive limit");
     } else {
       HOLOSCAN_LOG_INFO("SAR: images will not be saved; set dump: true in {} to save .npy images",
-                        config_hint_path(cli.config, name));
+                        config_hint_path(cli.config, name.c_str()));
     }
-    auto session = holoscan::run_async(plan, managed_signals);
+    auto session = managed_signals == nullptr ? holoscan::run_async(plan)
+                                              : holoscan::run_async(plan, *managed_signals);
+    try {
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
-    if (has_visualization && !cfg.headless) {
-      if (cfg.scroll || !cfg.tile_geometries.empty())
-        spawn_place_window_top_left("SAR formation");
-      if (has_timeline)
-        spawn_place_window_bottom_left("SAR timeline");
-    }
+      if (has_visualization && !cfg.headless) {
+        if (cfg.scroll || !cfg.tile_geometries.empty())
+          spawn_place_window_top_left("SAR formation");
+        if (has_timeline)
+          spawn_place_window_bottom_left("SAR timeline");
+      }
 #endif
-    if (!cfg.reader_loop) {
-      // request_stop does not drain queued samples. After reader EOF, wait
-      // for the terminal closing image to reach reporting, including fan-out
-      // slices. A BP wall timestamp alone can refer to an earlier image.
-      constexpr auto kDrainWait = std::chrono::seconds{180};
-      constexpr auto kPoll = std::chrono::milliseconds{50};
-      std::optional<std::chrono::steady_clock::time_point> drain_deadline;
-      auto eos_flushed = [&] {
-        const auto snap = hud->snapshot();
-        return sar_eof_drained(snap, counter->reported_capture_ns.load(std::memory_order_acquire));
-      };
-      while (!eos_flushed()) {
-        const auto now = std::chrono::steady_clock::now();
-        if (!drain_deadline.has_value()) {
+      if (!cfg.reader_loop) {
+        // request_stop does not drain queued samples. After reader EOF, wait
+        // for the terminal closing image to reach reporting, including fan-out
+        // slices. A BP wall timestamp alone can refer to an earlier image.
+        constexpr auto kDrainWait = std::chrono::seconds{180};
+        constexpr auto kPoll = std::chrono::milliseconds{50};
+        std::optional<std::chrono::steady_clock::time_point> drain_deadline;
+        auto eos_flushed = [&] {
           const auto snap = hud->snapshot();
-          if (snap.reader_stopped)
-            drain_deadline = now + kDrainWait;
+          return sar_eof_drained(snap,
+                                 counter->reported_capture_ns.load(std::memory_order_acquire));
+        };
+        while (!eos_flushed()) {
+          if (poll)
+            poll();
+          const auto now = std::chrono::steady_clock::now();
+          if (!drain_deadline.has_value()) {
+            const auto snap = hud->snapshot();
+            if (snap.reader_stopped)
+              drain_deadline = now + kDrainWait;
+          }
+          if (drain_deadline.has_value() && now >= *drain_deadline)
+            break;
+          auto slice_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(kPoll);
+          if (drain_deadline.has_value()) {
+            const auto remaining =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(*drain_deadline - now);
+            if (remaining < slice_ns)
+              slice_ns = remaining;
+          }
+          if (session.wait_for(slice_ns))
+            break;
         }
-        if (drain_deadline.has_value() && now >= *drain_deadline)
-          break;
-        auto slice_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(kPoll);
-        if (drain_deadline.has_value()) {
-          const auto remaining =
-              std::chrono::duration_cast<std::chrono::nanoseconds>(*drain_deadline - now);
-          if (remaining < slice_ns)
-            slice_ns = remaining;
+        if (eos_flushed() && has_visualization && !cfg.headless && cfg.visualize_hold_s > 0.0) {
+          const auto hold = std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::duration<double>(cfg.visualize_hold_s));
+          const auto hold_end = std::chrono::steady_clock::now() + hold;
+          while (std::chrono::steady_clock::now() < hold_end &&
+                 !session.wait_for(std::chrono::milliseconds{50})) {
+            if (poll)
+              poll();
+          }
         }
-        if (session.wait_for(slice_ns))
-          break;
+        if (!(has_visualization && cfg.visualize_hold_s < 0.0 && eos_flushed()))
+          session.request_stop();
       }
-      if (eos_flushed() && has_visualization && !cfg.headless && cfg.visualize_hold_s > 0.0) {
-        const auto hold = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::duration<double>(cfg.visualize_hold_s));
-        [[maybe_unused]] const bool hold_finished = session.wait_for(hold);
+      while (!session.wait_for(std::chrono::milliseconds{50})) {
+        if (poll)
+          poll();
       }
-      if (!(has_visualization && cfg.visualize_hold_s < 0.0 && eos_flushed()))
-        session.request_stop();
-    }
-    session.wait();
-    if (const auto closed = managed_signals.close(); !closed) {
-      throw std::runtime_error(std::string("SAR: managed SIGINT/SIGTERM domain close failed: ") +
-                               holoscan::runtime_error_message(closed.error()));
+      session.wait();
+    } catch (...) {
+      session.request_stop();
+      session.wait();
+      throw;
     }
     if (session.termination() == holoscan::RunTermination::kFailed ||
         !session.diagnostics().empty()) {
@@ -620,7 +679,7 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
               "This is expected when data playback rate is higher than the compute capacity.\n\n"
               "Options:\n"
               " 1. Lower playback via cphd_reader.playback_rate in " +
-              config_hint_path(cli.config, name) +
+              config_hint_path(cli.config, name.c_str()) +
               "\n"
               " 2. Decrease image size\n"
               " 3. Use a platform with a more capable GPU\n";
@@ -634,6 +693,36 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
       throw std::runtime_error("SAR graph ended without an image");
     if (session.termination() == holoscan::RunTermination::kStopped)
       HOLOSCAN_LOG_INFO("{}: stopped after {} image(s)", name, images);
+    return images;
+  }
+};
+
+template <typename T = float, typename TGeom = double, typename LoadConfig, typename BuildGraph>
+int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig load_config,
+                         BuildGraph build_graph) {
+  try {
+    // Own SIGINT/SIGTERM before Holoviz or the runtime start threads. Host
+    // `holoscan run` maps Ctrl-C to `docker stop` (SIGTERM); without this
+    // domain the looping presets ignore both signals until the CLI SIGKILLs.
+    auto created_signals = holoscan::ManagedShutdownSignals::create();
+    if (!created_signals) {
+      throw std::runtime_error(std::string("SAR: managed SIGINT/SIGTERM domain failed: ") +
+                               holoscan::runtime_error_message(created_signals.error()));
+    }
+    auto managed_signals = std::move(created_signals).value();
+    const CliPaths cli = parse_cli(argc, argv, (std::string(name) + ".yaml").c_str());
+    SarGraphRuntime<T, TGeom> runtime(name, cli, load_config(cli.config, cli.cphd_override));
+    auto& r = runtime;
+    r.graph.add_flow(r.reader->phase_history, r.range->phase_history, r.queue);
+    const auto* formed =
+        build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg, r.reader, r.range,
+                    r.manager, r.bp, r.source, r.application, r.formation, r.extents);
+    r.finish(formed);
+    r.run(&managed_signals);
+    if (const auto closed = managed_signals.close(); !closed) {
+      throw std::runtime_error(std::string("SAR: managed SIGINT/SIGTERM domain close failed: ") +
+                               holoscan::runtime_error_message(closed.error()));
+    }
     return 0;
   } catch (const std::exception& error) {
     HOLOSCAN_LOG_ERROR("{}: {}", name, error.what());
