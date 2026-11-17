@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <future>
 #include <limits>
 #include <random>
 #include <stdexcept>
@@ -29,6 +30,62 @@ radar::CFARParams params(radar::CfarVariant variant = radar::CfarVariant::kGO) {
   p.training_cells = {1, 1};
   p.pfa = 0.01;
   return p;
+}
+
+TEST(CfarCalibration, ClippedRectangleCountsMatchIndependentStencil) {
+  // Include sub-window maps, asymmetric footprints, zero training, and every border.
+  for (int nd : {1, 3, 8})
+    for (int nr : {1, 4, 9})
+      for (int gd : {0, 2})
+        for (int gr : {0, 1})
+          for (int td : {0, 1, 3})
+            for (int tr : {0, 2})
+              for (int d = 0; d < nd; ++d)
+                for (int r = 0; r < nr; ++r) {
+                  std::int64_t expected = 0;
+                  for (int y = 0; y < nd; ++y)
+                    for (int x = 0; x < nr; ++x)
+                      if (std::abs(y - d) <= gd + td && std::abs(x - r) <= gr + tr &&
+                          (std::abs(y - d) > gd || std::abs(x - r) > gr))
+                        ++expected;
+                  EXPECT_EQ(detail::training_cell_count(d, r, nd, nr, gd, gr, td, tr), expected);
+                }
+}
+
+TEST(CfarCalibration, ConcurrentCacheEvictionNeverReturnsAnEmptyOrWrongLut) {
+  constexpr int kKeys = 96;  // Exceeds the 64-entry FIFO cache.
+  std::vector<radar::CfarAlphaLutKey> keys;
+  std::vector<std::vector<double>> expected;
+  for (int i = 0; i < kKeys; ++i) {
+    keys.push_back({radar::CfarVariant::kCA, 0.02 + i * 0.0001, 1, -1, 1, 1, 1, 1, 5, 5});
+    expected.push_back(detail::build_ca_alpha_lut(keys.back().pfa, 1, 5, 5, 1, 1, 1, 1));
+  }
+  std::vector<std::future<bool>> readers;
+  for (int worker = 0; worker < 4; ++worker)
+    readers.push_back(std::async(std::launch::async, [&, worker] {
+      for (int i = 0; i < kKeys * 3; ++i) {
+        const int index = (i + worker * 23) % kKeys;
+        if (detail::get_cached_alpha_lut(keys[index]) != expected[index])
+          return false;
+      }
+      return true;
+    }));
+  for (auto& reader : readers)
+    EXPECT_TRUE(reader.get());
+}
+
+TEST(CfarCalibration, FailedBackgroundJobIsRetiredWhileOwnersRemain) {
+  radar::CfarAlphaLutKey key{radar::CfarVariant::kGO, 1e-40, 1, 0, 1, 1, 1, 1, 16, 16};
+  int owner = 0;
+  detail::ensure_alpha_lut_build(key, &owner);
+  detail::join_inflight_alpha_lut_builds();
+  // Failure must not poison the registry until this owner's eventual stop().
+  EXPECT_NO_THROW(EXPECT_FALSE(detail::poll_cached_alpha_lut(key).ready));
+  // A new caller can attempt a replacement; its failure is independently retired too.
+  detail::ensure_alpha_lut_build(key, &owner);
+  detail::join_inflight_alpha_lut_builds();
+  EXPECT_NO_THROW(EXPECT_FALSE(detail::poll_cached_alpha_lut(key).ready));
+  detail::release_alpha_lut_builds(&owner);
 }
 
 TEST(CfarCalibration, RarePfaBudgetsAreNotSilentlyTruncated) {

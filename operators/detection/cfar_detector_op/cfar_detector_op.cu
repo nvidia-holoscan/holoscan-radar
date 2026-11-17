@@ -725,12 +725,15 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
         state.stale_lut_warned = false;
       }
       const auto adopt_ready_lut = [&](std::vector<double> lut) -> expected<void, Error> {
+        if (lut.empty())
+          return fail_runtime("CFARDetectorOp: calibration returned an empty alpha LUT");
+        HOLOSCAN_TRY(upload_alpha_lut<T>(state, lut, stream));
         state.alpha_lut_host_cache = std::move(lut);
         state.alpha_lut_key = lut_key;
         state.pending_lut_key = {};
         state.pending_lut_active = false;
         state.stale_lut_warned = false;
-        return upload_alpha_lut<T>(state, state.alpha_lut_host_cache, stream);
+        return {};
       };
       const auto warn_slow_pfa_lut = [&]() {
         if (state.pfa_lut_slow_warned ||

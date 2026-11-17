@@ -190,27 +190,15 @@ double regularized_incomplete_beta(double a, double b, double x) {
 
 int64_t training_cell_count(int d, int r, int num_doppler, int num_range, int guard_d, int guard_r,
                             int train_d, int train_r) {
-  const int half_d = guard_d + train_d;
-  const int half_r = guard_r + train_r;
-  int64_t train_cnt = 0;
-  for (int dd = -half_d; dd <= half_d; ++dd) {
-    const int64_t nd = static_cast<int64_t>(d) + dd;
-    if (nd < 0 || nd >= num_doppler) {
-      continue;
-    }
-    const bool guard_row = (dd >= -guard_d && dd <= guard_d);
-    for (int rr = -half_r; rr <= half_r; ++rr) {
-      const int64_t nr = static_cast<int64_t>(r) + rr;
-      if (nr < 0 || nr >= num_range) {
-        continue;
-      }
-      if (guard_row && rr >= -guard_r && rr <= guard_r) {
-        continue;
-      }
-      ++train_cnt;
-    }
-  }
-  return train_cnt;
+  // The in-bounds training footprint is the clipped window rectangle minus
+  // the clipped guard+CUT rectangle. Count each axis without visiting offsets.
+  const auto extent = [](int position, int size, int64_t radius) -> int64_t {
+    return 1 + std::min<int64_t>(position, radius) +
+           std::min<int64_t>(static_cast<int64_t>(size) - 1 - position, radius);
+  };
+  return extent(d, num_doppler, static_cast<int64_t>(guard_d) + train_d) *
+             extent(r, num_range, static_cast<int64_t>(guard_r) + train_r) -
+         extent(d, num_doppler, guard_d) * extent(r, num_range, guard_r);
 }
 
 int64_t max_training_cell_count(int num_doppler, int num_range, int guard_d, int guard_r,
@@ -993,7 +981,9 @@ void run_lut_build(CfarAlphaLutKey key, std::shared_ptr<AlphaLutJob> job, int de
   } catch (...) {
     std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
     job->promise.set_exception(std::current_exception());
-    if (auto it = g_jobs.find(key); it != g_jobs.end() && it->second == job && job->owners.empty())
+    // Existing waiters retain this job and its exception through shared_ptr.
+    // Fresh callers must be free to retry without waiting for those owners to stop.
+    if (auto it = g_jobs.find(key); it != g_jobs.end() && it->second == job)
       g_jobs.erase(it);
   }
 }
@@ -1010,13 +1000,20 @@ AlphaLutSnapshot poll_cached_alpha_lut(const CfarAlphaLutKey& key) {
   return {};
 }
 
-std::shared_ptr<AlphaLutJob> acquire_job(const CfarAlphaLutKey& key, const void* owner) {
+struct AlphaLutAcquisition {
+  std::shared_ptr<AlphaLutJob> job;
+  AlphaLutSnapshot cached;
+};
+
+AlphaLutAcquisition acquire_job(const CfarAlphaLutKey& key, const void* owner) {
   std::lock_guard<std::mutex> lock(g_alpha_lut_cache_mutex);
-  if (g_alpha_lut_cache.contains(key))
-    return {};
+  // Copy under the same lock as the lookup: FIFO eviction may remove the entry
+  // as soon as this operation returns, so a second poll cannot recover it safely.
+  if (auto it = g_alpha_lut_cache.find(key); it != g_alpha_lut_cache.end())
+    return {{}, {true, it->second}};
   if (auto it = g_jobs.find(key); it != g_jobs.end() && !it->second->stop.stop_requested()) {
     it->second->owners.insert(owner);
-    return it->second;
+    return {it->second, {}};
   }
   int device = 0;
   if (cudaGetDevice(&device) != cudaSuccess)
@@ -1030,7 +1027,7 @@ std::shared_ptr<AlphaLutJob> acquire_job(const CfarAlphaLutKey& key, const void*
     g_jobs.erase(key);
     throw;
   }
-  return job;
+  return {job, {}};
 }
 
 void ensure_alpha_lut_build(const CfarAlphaLutKey& key, const void* owner) {
@@ -1062,13 +1059,12 @@ void release_alpha_lut_builds(const void* owner) {
 
 std::vector<double> get_cached_alpha_lut(const CfarAlphaLutKey& key,
                                          std::function<bool()> cancelled, const void* owner) {
-  if (auto snap = poll_cached_alpha_lut(key); snap.ready)
-    return snap.lut;
   int local_owner = 0;
   const void* subscriber = owner ? owner : &local_owner;
-  auto job = acquire_job(key, subscriber);
-  if (!job)
-    return poll_cached_alpha_lut(key).lut;
+  auto acquired = acquire_job(key, subscriber);
+  if (acquired.cached.ready)
+    return std::move(acquired.cached.lut);
+  auto job = std::move(acquired.job);
   try {
     while (job->future.wait_for(std::chrono::milliseconds{10}) != std::future_status::ready) {
       if (cancelled && cancelled())
