@@ -100,6 +100,13 @@ endforeach()
 
 target_compile_definitions(holoscan_radar_python PRIVATE HOLOSCAN_RADAR_SAR_HOLOVIZ=1)
 
+foreach(_radar_app IN ITEMS spotlight video_sar tiled_strip continuous_strip independent_images autofocus)
+    set(_radar_app_source
+        "${PROJECT_SOURCE_DIR}/applications/sar/${_radar_app}/python/${_radar_app}.py")
+    configure_file("${_radar_app_source}"
+        "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/${_radar_app}.py" COPYONLY)
+    install(FILES "${_radar_app_source}" DESTINATION holoscan_radar/applications)
+endforeach()
 configure_file(applications/sar_graph.py
     "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/sar_graph.py" COPYONLY)
 install(FILES applications/sar_graph.py DESTINATION holoscan_radar/applications)
