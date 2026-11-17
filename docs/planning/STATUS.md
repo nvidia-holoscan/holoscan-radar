@@ -4,6 +4,17 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-17** — **SAR Python review follow-up** on `deustice/sar-python`:
+  prepared contexts retain compute/display/composer choices through attachment
+  and finalization; failed CFAR futures are cleared before reporting errors so
+  later ticks can retry. Provider fixture discovery uses the nested project build
+  tree. CPHD preparation rejects duplicate YAML keys before selection or side
+  effects and supports direct Python when `uv` is unavailable. All 104 selected
+  CTests pass in a nested GA SDK build, including 281 provider cases, 76 native
+  CFAR cases, the placement regression, 25 SAR application checks, and fixture
+  setup. All 16 offline downloader tests and repository-wide pinned lint pass.
+  Public operator contracts and device-selection policy are unchanged.
+
 - **2026-11-17** — **Complete Python operator coverage and SAR applications** on
   `deustice/sar-python`, based on `deustice/cfar-calibration` at `57061f50`. The provider now
   covers all 33 operators (68 precision-aware factories), including explicit
