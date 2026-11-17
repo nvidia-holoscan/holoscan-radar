@@ -659,6 +659,7 @@ void register_catalog() {
 }
 }  // namespace
 
+void register_sar_bindings(nanobind::module_& module);
 void register_calibration_bindings(nanobind::module_& module);
 void register_siso_bindings(nanobind::module_& module);
 void register_tdm_bindings(nanobind::module_& module);
@@ -670,5 +671,6 @@ NB_MODULE(_radar, module) {
   register_siso_bindings(module);
   register_tdm_bindings(module);
   register_viz_bindings(module);
+  register_sar_bindings(module);
   module.doc() = "FMCW and SAR radar operator catalog for HSDK 5";
 }
