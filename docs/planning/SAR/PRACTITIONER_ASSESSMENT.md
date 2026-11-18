@@ -190,7 +190,7 @@ SICD out is unfinished.
 
 ### 3. Operational strip still chooses seams or sidelobes
 
-Mode 3 (tiled): taper allowed, under-integrated joins. Mode 4 (continuous
+Tiled strip (tiled): taper allowed, under-integrated joins. Continuous strip (continuous
 scroll): seam-free, **no** cross-range taper through `weight` (~−13 dB). The
 product most operational strip processors ship — continuous, unjoined,
 azimuth-weighted — is **deferred**, not missing by accident. The design
@@ -244,8 +244,8 @@ if Holoscan does not honour that within a tick, the path is not implementable
 as drawn. `PhaseCorrectionOp.sense` is required with no default — right, but
 easy to get fatally wrong.
 
-**ScanSAR / TOPS and tomography stop early.** Mode 6: N tiled strips, no
-mosaic, no pattern compensation. Mode 9: N formation instances (geometry has
+**ScanSAR / TOPS and tomography stop early.** Wide swath: N tiled strips, no
+mosaic, no pattern compensation. 3D / tomographic volume: N formation instances (geometry has
 no batch axis — D19 deferred); fine for small N, awkward for dense height
 stacks. Circular SAR is supported but explicitly untested on PSF claims.
 
@@ -338,7 +338,7 @@ geometry FFT formation would corrupt both contracts. The clean shape is a
    centroid, effective velocity / FM rate, RCMC, block size, azimuth window).
    Manager outputs feed it; it emits `(..., Naz, Nrg)` in radar geometry.
 
-4. **Strip / scroll semantics do not transfer.** Mode 4 continuous strip is
+4. **Strip / scroll semantics do not transfer.** Continuous strip continuous strip is
    “translate a Cartesian lattice + ring accumulator” — meaningless for RDA.
    FD stripmap looks like contiguous pulse blocks → radar-geometry strip/tile
    → **mandatory** `GeocodeOp` (or mosaic) for map products. Azimuth taper is
@@ -367,7 +367,7 @@ geometry FFT formation would corrupt both contracts. The clean shape is a
 
 **Minimum credible stripmap-throughput slice:** `MotionCompensationOp`, a
 radar-geometry descriptor, `RangeDopplerFormationOp` (P0), manager wired for
-**block** apertures (mode-3-like, not BP scroll), `GeocodeOp` documented as
+**block** apertures (tiled strip-like, not BP scroll), `GeocodeOp` documented as
 the map path, and an azimuth window on the FD former (weighted strip without
 BP’s deferred per-pixel taper story). PFA is another geometry again; CSA /
 ω-k are mostly kernel variants once radar-geometry + MoCo exist.
@@ -385,7 +385,7 @@ implies RDA-class strip throughput is a small follow-on to wave one.
 | Audience | Fit today | Notes |
 | :--- | :--- | :--- |
 | Spaceborne spotlight / DEM SLC, AF off, CPHD → SICD | Strong, if R7 + R5 close | Primary path |
-| Spaceborne continuous strip, sidelobes OK | Strong after R7 | Mode 4 scroll |
+| Spaceborne continuous strip, sidelobes OK | Strong after R7 | Continuous strip scroll |
 | Spaceborne continuous strip, need azimuth taper | Weak | Deferred tapered seam-free strip |
 | Spaceborne tiled strip catalogue | Usable | Accept seams or shorten tiles |
 | Spaceborne strip at RDA-class throughput | Poor | Needs FD wave |

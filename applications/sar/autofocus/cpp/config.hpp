@@ -502,7 +502,8 @@ inline AppConfig load_autofocus_config(const std::filesystem::path& path,
     throw std::runtime_error("autofocus is Figure 2 (spotlight reform), not tiles");
   }
   if (cfg.cphd_paths.size() > 1) {
-    throw std::runtime_error("autofocus is one collection; use independent_images for mode 5");
+    throw std::runtime_error(
+        "autofocus accepts one collection; use independent_images for multiple collections");
   }
   if (!cfg.nvradar_vph_path.empty()) {
     throw std::runtime_error("autofocus does not take nvradar_vph_path");

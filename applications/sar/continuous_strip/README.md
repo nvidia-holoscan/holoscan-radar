@@ -71,14 +71,14 @@ real collections.
 
 ## Real collection preset
 
-The preset uses the same Capella CPHD as tiled strip. Download it into the host `data/sar/imperial/` directory below. The preset resolves `sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd` under the build data directory. Reader batches contain up to 1024 pulses; the stager makes 256-pulse slices, including a shorter final slice at the collection seam. `geometry_change: scroll` requires the forward v-axis geometry supplied by this app.
+The preset uses the same Capella CPHD as tiled strip. Download it into the host `data/sar/` directory below. The preset resolves `sar/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd` under the build data directory. Reader batches contain up to 1024 pulses; the stager makes 256-pulse slices, including a shorter final slice at the collection seam. `geometry_change: scroll` requires the forward v-axis geometry supplied by this app.
 
 From the repository root **on the host**, with the Holoscan CLI installed,
 run:
 
 ```bash
 python3 tools/sar_data/pull_cphd.py --app continuous_strip \
-  --dest data/sar/imperial
+  --dest data/sar
 ./holoscan-radar run continuous_strip
 ```
 

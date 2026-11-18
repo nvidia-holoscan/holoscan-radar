@@ -74,7 +74,7 @@ SDK container is needed for the C++ applications or generated-fixture tests.
 
 Run these commands from the repository root **on the host**. Save downloads
 under the ignored `data/sar/` directory. The shipped YAML presets use paths
-such as `sar/imperial/...`, resolved under the build's `HOLOHUB_DATA_DIR`
+such as `sar/...`, resolved under the build's `HOLOHUB_DATA_DIR`
 (default: the repository `data/` directory). Both the host CLI and DevContainer
 already mount this tree, so no additional bind mount is required. The paths
 work even when the CLI runs the executable from its build directory.
@@ -83,7 +83,7 @@ For example, download the Imperial Valley collect and run continuous strip:
 
 ```bash
 uv run tools/sar_data/pull_cphd.py --app continuous_strip \
-  --dest data/sar/imperial
+  --dest data/sar
 ./holoscan-radar run continuous_strip
 ```
 
@@ -139,9 +139,9 @@ The commands use isolated dependencies as described above.
 | Application / preset | Collection | Download / preparation command | Destination |
 | --- | --- | --- | --- |
 | Autofocus default | Kourou Umbra, 2023-06-24 | `uv run tools/sar_data/pull_cphd.py --app autofocus` | `data/sar/` |
-| Tiled strip | Imperial Valley Capella | `uv run tools/sar_data/pull_cphd.py --app tiled_strip` | `data/sar/imperial/` |
-| Continuous strip / autofocus Imperial | Same Imperial Valley Capella | `uv run tools/sar_data/pull_cphd.py --app continuous_strip` | `data/sar/imperial/` |
-| Independent images | Six Umbra collections | `uv run tools/sar_data/pull_cphd.py --app independent_images` | `data/sar/mode5/` |
+| Tiled strip | Imperial Valley Capella | `uv run tools/sar_data/pull_cphd.py --app tiled_strip` | `data/sar/` |
+| Continuous strip / autofocus Imperial | Same Imperial Valley Capella | `uv run tools/sar_data/pull_cphd.py --app continuous_strip` | `data/sar/` |
+| Independent images | Six Umbra collections | `uv run tools/sar_data/pull_cphd.py --app independent_images` | `data/sar/` |
 | Spotlight / autofocus Atlanta | Atlanta Umbra | `uv run tools/sar_data/pull_cphd.py --app spotlight` | `data/sar/` |
 | Video SAR / autofocus Houston | Houston FX subset | `uv run tools/sar_data/pull_cphd.py --app video_sar` | `data/sar/` |
 
@@ -156,10 +156,8 @@ uv run tools/sar_data/pull_cphd.py --app autofocus
 This downloads about 4.19 GiB to
 `data/sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd`, matching the default
 [autofocus preset](../../applications/sar/autofocus/config/autofocus.yaml).
-Do not use `--dest data/sar/imperial` for Kourou: that directory is for the
-alternate Imperial Valley collection. An explicit `--dest` overrides the
-single application's destination, so a different location also requires a
-matching `cphd.path` in your YAML.
+An explicit `--dest` overrides the application's destination, so a different
+location also requires a matching `cphd.path` in your YAML.
 
 `--app all` downloads the collections supported by **this script**: Kourou
 for autofocus, Imperial Valley for both strip apps, and the six independent-image
@@ -172,19 +170,30 @@ uv run tools/sar_data/pull_cphd.py --app all --list
 uv run tools/sar_data/pull_cphd.py --app all --dest data/sar
 ```
 
-With `--app all`, `--dest` replaces the `data/sar/` root: Kourou goes directly
-under it, and the other sets go under `imperial/` and `mode5/`.
-Use `--dest data/sar`, not `--dest data/sar/imperial`; the script rejects the
-known collection subdirectories as an `all` destination before downloading.
+All selected CPHD files go directly into `data/sar/`, without per-collection or
+per-workflow subdirectories. With `--app all`, `--dest` replaces that directory
+for every selected file; no subdirectory names receive special treatment.
 To fetch only Imperial Valley, use `--app continuous_strip` or `--app tiled_strip`.
 Each transfer prints byte progress, rate, and an ETA on stderr. Existing readable
 files are reused unless `--force` is set. The downloader checks that the six
 independent-image collections have distinct image reference points. These are
 multi-gigabyte downloads; inspect the manifest with `--list` before fetching.
 
+## Existing local data
+
+This layout is a clean switch. Move existing CPHD inputs from collection
+subdirectories directly into `data/sar/`, keeping their basenames. Check for
+destination collisions before moving anything; never overwrite a different
+file with the same name. Remove old directories only when empty. Rename any
+previously prepared Houston subset to `houston_1p0m.cphd` (or `houston_0p5m.cphd`
+for the optional finer subset), along with its matching `.subset.json` sidecar.
+Apply the same path changes to custom YAML.
+The applications and downloader do not search old locations or migrate data.
+Full collection files retain their original vendor filenames and contents.
+
 ## Houston video subset
 
-The video preset expects `data/sar/mode02_houston_1p0m.cphd` in the
+The video preset expects `data/sar/houston_1p0m.cphd` in the
 repository. On the **host**, create it under `data/sar/` without downloading
 the full 110 GiB signal block:
 

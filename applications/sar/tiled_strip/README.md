@@ -76,14 +76,14 @@ execution; they do not establish focus on real collections.
 
 ## Real collection preset
 
-The preset uses the Capella Imperial Valley collection at `data/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd`. Download it into the host `data/sar/imperial/` directory below; inspect the manifest first with `--list`. The YAML selects 159,050 pulses, divides them into ten 15,905-pulse tiles, and uses a 4096-pixel cap on each tile. The CPHD is about 3.45 GiB.
+The preset uses the Capella Imperial Valley collection at `data/sar/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd`. Download it into the host `data/sar/` directory below; inspect the manifest first with `--list`. The YAML selects 159,050 pulses, divides them into ten 15,905-pulse tiles, and uses a 4096-pixel cap on each tile. The CPHD is about 3.45 GiB.
 
 From the repository root **on the host**, with the Holoscan CLI installed,
 run:
 
 ```bash
 python3 tools/sar_data/pull_cphd.py --app tiled_strip \
-  --dest data/sar/imperial
+  --dest data/sar
 ./holoscan-radar run tiled_strip
 ```
 

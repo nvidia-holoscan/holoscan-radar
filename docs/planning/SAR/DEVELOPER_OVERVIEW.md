@@ -4,7 +4,7 @@
 
 Onboarding for someone who will **implement or extend** this SAR stack: expert at software and Holoscan-style graphs, comfortable with basic SAR ideas (range, Doppler, synthetic aperture, complex imagery), **not** expected to know collection-mode jargon or which product names map to which pipeline knobs.
 
-**Status (HSDK 5, 2026-11-02):** Seven SAR and I/O operators — `CPHDReaderOp`, `SARRangeCompressionOp`, `ApertureManagerOp`, `BackprojectionOp`, `PhaseCorrectionOp`, `AutofocusOp`, `TensorDumpOp` — and six [standalone C++ apps](../../../applications/sar/README.md) are implemented: modes 1–5, plus Figure 2 autofocus. Modes 6–9, the SICD/CPHD writers, product stages (multilook, geocode), and the deramp and direct-sample ingress branches are deferred. The [HSDK 5 contract](OPERATOR_API.md#hsdk-5-ccuda-port-contract-2026-09-28) is what the code implements; the design sections after it are historical rationale.
+**Status (HSDK 5, 2026-11-02):** Seven SAR and I/O operators — `CPHDReaderOp`, `SARRangeCompressionOp`, `ApertureManagerOp`, `BackprojectionOp`, `PhaseCorrectionOp`, `AutofocusOp`, `TensorDumpOp` — and six [standalone C++ apps](../../../applications/sar/README.md) are implemented: spotlight, video SAR, tiled strip, continuous strip, and independent images, plus Figure 2 autofocus. Wide swath, sub-aperture looks, circular SAR, and 3D / tomographic volume, the SICD/CPHD writers, product stages (multilook, geocode), and the deramp and direct-sample ingress branches are deferred. The [HSDK 5 contract](OPERATOR_API.md#hsdk-5-ccuda-port-contract-2026-09-28) is what the code implements; the design sections after it are historical rationale.
 
 It is a derivative of [WORKFLOWS.md](WORKFLOWS.md) (modes + wiring) with contracts from [OPERATOR_API.md](OPERATOR_API.md). Where this disagrees with those, **they win**. Regenerate from the prompt in WORKFLOWS.md → *Appendix*, do not hand-patch. The sibling [PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) is the same scope stripped of software detail for external SAR reviewers.
 
@@ -64,7 +64,7 @@ Use this when reading mode names in WORKFLOWS or talking to radar folks.
 | **Aperture** | The set of pulses coherently combined into **one** image (not the whole collect) | Membership (`weight`) plus when to emit (`control`); both usually from `ApertureManagerOp` |
 | **Spotlight** | Radar stares at one patch; usually one image at end | Per-aperture formation; one geometry; flush at end of stream |
 | **Video SAR** | Same patch, images emitted repeatedly while collecting | Overlapping apertures: retain pulses, `weight = −1` to evict |
-| **Stripmap / strip** | Platform flies past; ground scrolls under the beam | Tiled products (mode 3) or one scrolling product (mode 4) |
+| **Stripmap / strip** | Platform flies past; ground scrolls under the beam | Tiled products (tiled strip) or one scrolling product (continuous strip) |
 | **Tiled strip** | Strip delivered as separate scene files | Step `sample_geometry` each tile; reset accumulator; **seams** at joins |
 | **Continuous strip** | One long image that grows with flight | `geometry_change = scroll`; no taper via `weight` |
 | **ScanSAR / TOPS** | Beam hops between elevation sub-swaths (TOPS also steers in azimuth) | **N** formation instances; zero-weight foreign bursts; library mosaicking absent |
@@ -98,7 +98,7 @@ Orientation only — contracts are in OPERATOR_API.
 
 **The two edges into formation are both optional to wire, but not equally harmless to leave out**, which is what decides how much you take on by omitting the manager. `weight` defaults to `+1` per pulse when absent, so an untapered aperture needs nothing. An unwired `control` means formation accumulates and **never emits**; the only signal is a warning at `stop()` about unemitted pulses.
 
-**Running without a manager** is legal in every mode; mode 4 is the case the contract singles out, since scroll leaves a manager nothing to do but the emit cadence (the shipped continuous-strip app keeps it anyway, behind its scroll stager). It transfers four things to the application. Only the third fails loudly.
+**Running without a manager** is legal in every mode; continuous strip is the case the contract singles out, since scroll leaves a manager nothing to do but the emit cadence (the shipped continuous-strip app keeps it anyway, behind its scroll stager). It transfers four things to the application. Only the third fails loudly.
 
 1. **A `control` producer.** Leave it out and no image is ever emitted; you find out from the `stop()` warning.
 2. **Hearing end of stream.** Your control operator must consume the reader's `stream_boundary` (or your own source's equivalent, which every custom pulse source must publish on each batch). Without it the final aperture is never flushed and is silently lost. `ApertureManagerOp` cannot have this bug — `stream_boundary` is a required input there, joined to the same tick as the pulses.
@@ -147,17 +147,17 @@ Precision is a compile-time template parameter, single or double, fixed per inst
 
 ---
 
-## Modes → what you configure
+## Workflows → what you configure
 
 Nine named modes collapse to **three** software configurations:
 
-| Configuration | Modes | Software essence |
+| Configuration | Workflows | Software essence |
 | --- | --- | --- |
-| **Per-aperture** | 1, 3, 5, 6†, 7 (disjoint), 8, 9† | Each pulse in one image; reset at boundary; manager optional |
-| **Overlapping** | 2, 7 (overlapping looks) | Retain pulses; `weight −1` eviction; the one place manager retention **earns its keep** |
-| **Scrolling** | 4 | `geometry_change = scroll`; translate lattice along `v`; no `weight`; a manager here is reduced to the emit cadence |
+| **Per-aperture** | Spotlight, tiled strip, independent images, wide swath†, sub-aperture looks (disjoint), circular SAR, 3D / tomographic volume† | Each pulse in one image; reset at boundary; manager optional |
+| **Overlapping** | Video SAR, sub-aperture looks (overlapping) | Retain pulses; `weight −1` eviction; the one place manager retention **earns its keep** |
+| **Scrolling** | Continuous strip | `geometry_change = scroll`; translate lattice along `v`; no `weight`; a manager here is reduced to the emit cadence |
 
-† Modes 6 and 9 are **N instances** of the per-aperture pattern (sub-swaths or height planes).
+† Wide swath and 3D / tomographic volume are **N instances** of the per-aperture pattern (sub-swaths or height planes).
 
 "Manager optional" throughout means the *operator*, never the emit decision: `control` is driven in every column, and only the identity of the producer changes.
 
@@ -172,7 +172,7 @@ Typical manager knobs (see OPERATOR_API table for full matrix):
 
 Five of the six configurations in OPERATOR_API's table are a pure YAML edit with no application-owned ports wired at all, which is what D22's boundary announcement bought: only the application-chosen sliding window still needs an operator of your own, because only you know the count you put on `evict`.
 
-Mode 3 seams and mode 4 “no taper / buffer depth” are **product physics**, not missing operators. Do not “fix” them in formation.
+Tiled strip seams and continuous strip “no taper / buffer depth” are **product physics**, not missing operators. Do not “fix” them in formation.
 
 ---
 

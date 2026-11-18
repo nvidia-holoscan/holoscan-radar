@@ -50,7 +50,7 @@ CAPELLA_BUCKET = "capella-open-data"
 CAPELLA_HTTPS = f"https://{CAPELLA_BUCKET}.s3.amazonaws.com/"
 
 # Settled 2026-08-25. A swap needs a broken key or an explicit reopen.
-MODE5: list[tuple[str, str]] = [
+INDEPENDENT_IMAGES: list[tuple[str, str]] = [
     (
         "Panama Canal",
         "sar-data/tasks/Panama Canal, Panama/"
@@ -96,7 +96,7 @@ MODE5: list[tuple[str, str]] = [
 ]
 
 # Re-verified 2026-08-30. INPUT_DATA.md open item 3.
-# Modes 3 and 4 share Imperial Valley. Palmdale stays in
+# Tiled strip and continuous strip share Imperial Valley. Palmdale stays in
 # INPUT_DATA as an optional CPHD 1.0.1 spare, not this pin.
 IMPERIAL_VALLEY: list[tuple[str, str]] = [
     (
@@ -107,7 +107,7 @@ IMPERIAL_VALLEY: list[tuple[str, str]] = [
     ),
 ]
 
-# The default autofocus preset uses this collect, distinct from MODE5's Kourou.
+# The default autofocus preset uses this collect, distinct from INDEPENDENT_IMAGES's Kourou.
 AUTOFOCUS_KOUROU: list[tuple[str, str]] = [
     (
         "Kourou autofocus",
@@ -150,8 +150,8 @@ def dataset_catalog() -> dict[Path, Dataset]:
     datasets = []
     for collects, bucket, prefix, directory, check in (
         (AUTOFOCUS_KOUROU, UMBRA_BUCKET, UMBRA_HTTPS, "sar", False),
-        (IMPERIAL_VALLEY, CAPELLA_BUCKET, CAPELLA_HTTPS, "sar/imperial", False),
-        (MODE5, UMBRA_BUCKET, UMBRA_HTTPS, "sar/mode5", True),
+        (IMPERIAL_VALLEY, CAPELLA_BUCKET, CAPELLA_HTTPS, "sar", False),
+        (INDEPENDENT_IMAGES, UMBRA_BUCKET, UMBRA_HTTPS, "sar", True),
     ):
         for scene, key in collects:
             datasets.append(
@@ -381,11 +381,7 @@ def jobs_for(app: str, dest: Path | None) -> list[PullJob]:
     for name in ALL_APPS if app == "all" else (app,):
         for job in jobs_for_config(APPS[name]):
             if dest is not None:
-                directory = dest
-                if app == "all":
-                    root = Path(os.environ.get("HOLOHUB_DATA_DIR", "data")) / "sar"
-                    directory /= job.dest_dir.relative_to(root)
-                job = replace(job, dest_dir=directory)
+                job = replace(job, dest_dir=dest)
             jobs[job.destination.resolve()] = job
     return list(jobs.values())
 
@@ -656,7 +652,7 @@ def main() -> int:
         default=None,
         help=(
             "directory to write CPHD files into (default: app preset path). "
-            "With --app all, this replaces data/sar while preserving preset subdirectories."
+            "All selected files go directly into this directory."
         ),
     )
     parser.add_argument(
@@ -669,10 +665,6 @@ def main() -> int:
         parser.error("--config uses exact configured paths; use --data-root instead of --dest")
     if args.data_root is not None and args.config is None:
         parser.error("--data-root requires --config")
-    if args.app == "all" and args.dest is not None:
-        root = Path(os.environ.get("HOLOHUB_DATA_DIR", "data")) / "sar"
-        if args.dest.resolve() in {(root / name).resolve() for name in ("imperial", "mode5")}:
-            parser.error("--app all needs the SAR data root; use --app all --dest data/sar")
     try:
         jobs = (
             jobs_for_config(args.config, args.data_root)

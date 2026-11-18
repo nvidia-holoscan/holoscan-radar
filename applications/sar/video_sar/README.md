@@ -67,7 +67,7 @@ real collections.
 
 ## Real collection preset
 
-The Houston preset expects `data/sar/mode02_houston_1p0m.cphd` in the repository. The commands below write the subset to that directory. The recipe fetches the full dwell and central 16,753-sample FX subband; the output is about 27 GiB. The YAML retains 8262 pulses, emits every 4096, and forms a grid capped at 5632 pixels per side. Disk and GPU memory requirements are substantial.
+The Houston preset expects `data/sar/houston_1p0m.cphd` in the repository. The commands below write the subset to that directory. The recipe fetches the full dwell and central 16,753-sample FX subband; the output is about 27 GiB. The YAML retains 8262 pulses, emits every 4096, and forms a grid capped at 5632 pixels per side. Disk and GPU memory requirements are substantial.
 
 From the repository root **on the host**, with the Holoscan CLI installed,
 run:

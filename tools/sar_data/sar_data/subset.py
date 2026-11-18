@@ -35,7 +35,7 @@ import sarkit.cphd as skcphd
 import yaml
 
 # CF8 only: Houston and the CI smoke fixture are CF8, and a subband of CI4
-# is a later demo's problem (Capella / mode 3).
+# is a later demo's problem (Capella / tiled strip).
 _CF8_BYTES = 8
 _HEADER_PROBE = 64 * 1024
 _DEFAULT_CONNECTIONS = 128

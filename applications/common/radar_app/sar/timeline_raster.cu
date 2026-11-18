@@ -394,7 +394,7 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
       tx = x - 4 - tw;
     // Off-screen or overlapping the previous label: keep the tick, skip the
     // text. Pinning to x=2 made the number sit on the left edge while the
-    // tick scrolled away (mode 4 parked this HUD for the same overlap).
+    // tick scrolled away (continuous strip parked this HUD for the same overlap).
     if (tx < 2 || tx + tw > w - 2 || tx < last_label_right + 4)
       continue;
     draw_text(&img, w, h, tx, lat_y, lab, tick_c, kScale);

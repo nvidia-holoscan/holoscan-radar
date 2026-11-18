@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Mode-5 demo: rotate six unique-IARP Umbra SNAPSHOT CPHDs (INPUT_DATA.md).
+# Independent images demo: rotate six unique-IARP Umbra SNAPSHOT CPHDs (INPUT_DATA.md).
 # Pull first (~10.5 GiB); the app never reaches the network.
 #
 #   python3 tools/sar_data/pull_cphd.py --app independent_images \
-#     --dest data/sar/mode5
+#     --dest data/sar
 #   Paths below resolve under the build data directory (default: data/).
 #
 # Each collection gets an IARP-centred east-north square inscribed
@@ -28,12 +28,12 @@
 
 cphd:
   path:
-    - sar/mode5/2023-09-12-02-36-33_UMBRA-04_CPHD.cphd
-    - sar/mode5/2023-07-14-23-20-06_UMBRA-05_CPHD.cphd
-    - sar/mode5/2023-10-20-04-22-56_UMBRA-04_CPHD.cphd
-    - sar/mode5/2023-02-22-12-54-56_UMBRA-04_CPHD.cphd
-    - sar/mode5/2023-02-08-02-11-21_UMBRA-05_CPHD.cphd
-    - sar/mode5/2023-10-11-02-20-47_UMBRA-05_CPHD.cphd
+    - sar/2023-09-12-02-36-33_UMBRA-04_CPHD.cphd
+    - sar/2023-07-14-23-20-06_UMBRA-05_CPHD.cphd
+    - sar/2023-10-20-04-22-56_UMBRA-04_CPHD.cphd
+    - sar/2023-02-22-12-54-56_UMBRA-04_CPHD.cphd
+    - sar/2023-02-08-02-11-21_UMBRA-05_CPHD.cphd
+    - sar/2023-10-11-02-20-47_UMBRA-05_CPHD.cphd
   names:
     - Panama Canal
     - Melbourne
@@ -52,13 +52,13 @@ lattice:
 
 # dump: true writes npy (off by default). Ohio's dump was 4.6 s.
 # output:
-#   path: data/sar/mode5/image_{index}.npy
+#   path: data/sar/image_{index}.npy
 #   max_files: 6
 
 cphd_reader:
   coordinate_frame: ecef
   # 1024 pulses per tick (Ohio is 22 ticks). 100 was NVRadar
-  # Atlanta parity (NVRADAR_PARITY.md item 5), not a mode-5
+  # Atlanta parity (NVRADAR_PARITY.md item 5), not an independent-images workflow
   # constraint. 32768 still fits a whole SNAPSHOT on this 96 GiB
   # GPU if you want one tick per collect.
   pulses_per_tick: 1024
@@ -71,7 +71,7 @@ cphd_reader:
 # App-owned. Smallest 5-smooth FFT length covering every collect
 # (numpy.fft.next_fast_len). the Graph driver passes it as a parameter
 # so the operator and dr stay one static length. Omit for native
-# N (mode 1). Mutually exclusive with range_compression.nfft.
+# N (spotlight). Mutually exclusive with range_compression.nfft.
 nfft_pad: next_fast
 
 # Spotlight spelling: no retention, emit-and-reset on each seam.

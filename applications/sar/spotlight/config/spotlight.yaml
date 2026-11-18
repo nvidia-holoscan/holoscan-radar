@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Mode-1 demo: Umbra spotlight of Hartsfield-Jackson Atlanta, the
+# Spotlight demo: Umbra spotlight of Hartsfield-Jackson Atlanta, the
 # collection the MatX sar_bp example images (INPUT_DATA.md).
 #
 # Download once (28.59 GiB), then form. The app never reaches the

@@ -532,7 +532,7 @@ __global__ void promote_image_kernel(const float* src, double* dst, int64_t n) {
 }
 
 // Host-side pulse tile for kernel launches. Not a contract parameter:
-// the operator still consumes the whole tick. 1024 keeps a mode-5
+// the operator still consumes the whole tick. 1024 keeps an independent-images workflow
 // pulses_per_tick tick as one launch (256 forced an extra simg write
 // per inner smem chunk). Ticks with Np <= this stay one launch.
 inline constexpr int kKernelPulseTile = 1024;

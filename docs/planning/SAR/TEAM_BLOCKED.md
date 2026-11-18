@@ -380,7 +380,7 @@ accumulation
 
 Deferred 2026-08-04. `sample_points` is `(num_v, num_u, 3)`, shared across the
 data's leading axes, so a batch is a batch of collections rather than of
-scenes. Consequence: a tomographic volume (mode 9) is `N` operator instances
+scenes. Consequence: a tomographic volume (3D / tomographic volume) is `N` operator instances
 over one pulse stream, one per height plane — even though the planes share
 pulses, weights and aperture boundaries and differ only in geometry, which
 makes one operator forming all `N` per tick the shape to want.
@@ -389,7 +389,7 @@ Deferred rather than rejected: letting `sample_points` carry a leading axis the
 data does not, so the output batch is the outer product of the two, at
 identical compute and memory. Additive, and not needed until tomography is in
 scope; grid mode has no equivalent spelling, `SampleGeometry` being one atomic
-descriptor. Wide swath (mode 6) is unaffected — its sub-swaths close apertures
+descriptor. Wide swath (wide swath) is unaffected — its sub-swaths close apertures
 at different pulses, which one `control` port cannot express, so separate
 instances are structural there.
 

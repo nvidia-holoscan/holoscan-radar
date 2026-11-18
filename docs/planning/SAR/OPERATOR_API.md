@@ -177,7 +177,7 @@ None of these is mechanically rejectable in the general case. The one place a re
 
 Abbreviated from [WORKFLOWS.md](WORKFLOWS.md); see that doc for the full rationale and the port-level diagrams. `→` is a port connection, `[...]` is optional.
 
-Modes in scope: the nine image-formation modes [WORKFLOWS.md](WORKFLOWS.md) → *Image-formation modes* enumerates, which reduce to one graph — `ApertureManagerOp` optional in all of them — and two accumulator behaviours, resetting at an aperture boundary or scrolling with a translating lattice. What drives the design is streaming rather than any one mode. Monostatic, single-pol, time-domain backprojection only; PFA, range-Doppler, chirp scaling and omega-k are named and deferred, and bistatic geometry is foreclosed by the `positions` port's shape.
+Modes in scope: the nine image-formation modes [WORKFLOWS.md](WORKFLOWS.md) → *Image-formation workflows* enumerates, which reduce to one graph — `ApertureManagerOp` optional in all of them — and two accumulator behaviours, resetting at an aperture boundary or scrolling with a translating lattice. What drives the design is streaming rather than any one mode. Monostatic, single-pol, time-domain backprojection only; PFA, range-Doppler, chirp scaling and omega-k are named and deferred, and bistatic geometry is foreclosed by the `positions` port's shape.
 
 ```text
 CPHD file
@@ -253,10 +253,11 @@ Both of `BackprojectionOp`'s non-pulse inputs are the application's to produce �
 
 Frequency-domain image formation (PFA, range-Doppler, chirp scaling, omega-k); interferometry and coherent change detection; polarimetry; multi-channel GMTI; bistatic geometry; SAR detection. Each is deferred on **merit** — a distinct capability with its own contract surface — except bistatic geometry, which the `positions` port's shape forecloses. See [WORKFLOWS.md](WORKFLOWS.md) → *Deferred*, *Foreclosed* and *Downstream of formation* for the per-item rationale, including the clutter-model argument against reusing `CFARDetectorOp`.
 
-**One deferral is a gap in formation rather than a capability alongside it**, and is worth naming here because nothing in the operator list shows it: the **tapered seam-free strip** — continuous, unjoined, and cross-range weighted. Modes 3 and 4 each reach for it and give up a different half, and the two parameters are exactly that trade: `emit_mode = reform` buys the taper and pays in seams, `geometry_change = scroll` buys the seamlessness and pays the taper.
+**One deferral is a gap in formation rather than a capability alongside it**, and is worth naming here because nothing in the operator list shows it: the **tapered seam-free strip** — continuous, unjoined, and cross-range weighted. Tiled strip and continuous strip each reach for it and give up a different half, and the two parameters are exactly that trade: `emit_mode = reform` buys the taper and pays in seams, `geometry_change = scroll` buys the seamlessness and pays the taper.
 Closing it needs a taper referenced to each pixel's own illumination interval rather than to a pulse's slot in a shared aperture, which is an addition to this contract and not a change to it — deferred because the information that taper needs has no settled place in the interface, not because the result is in doubt. See `BackprojectionOp` → *Scrolling accumulation*.
 
-**ScanSAR/TOPS and circular collection are *in* scope**, as [WORKFLOWS.md](WORKFLOWS.md) modes 6 and 8, and were listed here before that document's mode inventory settled. Neither needs anything new from formation: a wide swath is one formation instance per sub-swath with other sub-swaths' bursts admitted at zero weight, and a circular collect is a spotlight on a circular trajectory. What is absent for them is **downstream** — sub-swath mosaicking and antenna-pattern compensation — plus, for circular, the caveat that a 360° aperture's point-spread function is not separable, so the resolution and sidelobe assertions in [TESTING.md](TESTING.md) do not describe it.
+**ScanSAR/TOPS and circular collection are *in* scope**, as [wide swath](WORKFLOWS.md#wide-swath-scansar--tops) and
+[circular SAR](WORKFLOWS.md#circular-sar), and were listed here before that document's mode inventory settled. Neither needs anything new from formation: a wide swath is one formation instance per sub-swath with other sub-swaths' bursts admitted at zero weight, and a circular collect is a spotlight on a circular trajectory. What is absent for them is **downstream** — sub-swath mosaicking and antenna-pattern compensation — plus, for circular, the caveat that a 360° aperture's point-spread function is not separable, so the resolution and sidelobe assertions in [TESTING.md](TESTING.md) do not describe it.
 
 ---
 
@@ -569,7 +570,7 @@ What makes the manager worth wiring in is a **sliding window**, because eviction
 
 ##### Scrolling accumulation
 
-This is how the **continuous strip** of [WORKFLOWS.md](WORKFLOWS.md) → *Image-formation modes* is produced, and it is the whole of what `geometry_change = scroll` means.
+This is how the **continuous strip** of [WORKFLOWS.md](WORKFLOWS.md) → *Image-formation workflows* is produced, and it is the whole of what `geometry_change = scroll` means.
 
 **A strip is one product, not a sequence of frames, and forming it as frames is what creates seams.** Tiles are disjoint in pixels but overlap in pulses by a synthetic aperture length, so a tile boundary discards exactly the pulses the next tile's leading edge wants and those pixels form under-integrated. Every mitigation within the tiled model — replaying a retained tail across the step, having the reader re-emit a range of pulses — pays to re-present pulses that the previous aperture already formed.
 
@@ -774,7 +775,14 @@ Estimates a residual phase correction along the azimuth-conjugate axis, and appl
 
 - **In:** `image` — complex64 / complex128, `(..., num_v, num_u)`. The formed SLC image.
 - **Out:** `image_out` **[CONTRACT CHANGE 2026-10-26]** — complex64 / complex128, same shape. The corrected image. Renamed from `image` for the same reason as `range_profiles_out` and `sample_geometry_out`: HSDK 5 requires input and output port names to be unique within an operator, and this is the only SAR operator that names both an input and an output `image`. The rename was missed when the others were made because this operator had not been ported.
-- **Out:** `phase_correction` (optional) **[CONTRACT CHANGE 2026-10-31]** — float32 / float64, `(..., num_az)`, the extent of the image's `azimuth_axis`. **Ordered by pulse** — the operator un-shifts the azimuth-FFT bin axis before emitting, so it runs monotonically across the dwell — **but its length is the azimuth extent, not the pulse count.** The old `(..., num_pulses)` was right about the ordering and wrong about the extent: the operator sees an `image` and nothing else, so the pulse count is not available to it. The two agree only on a grid formed at one azimuth sample per pulse. `PhaseCorrectionOp` takes `(num_pulses)`, so an app whose extents differ must resample the length; this one uses an app-owned `PhaseResampleOp`. No library operator for it is specified; see [OPEN_ITEMS.md](OPEN_ITEMS.md).
+- **Out:** `phase_correction` (optional) **[CONTRACT CHANGE 2026-10-31]** — float32 / float64, `(..., num_az)`, the
+extent of the image's `azimuth_axis`. **Ordered by pulse** — the operator un-shifts the azimuth-FFT bin axis before
+emitting, so it runs monotonically across the dwell — **but its length is the azimuth extent, not the pulse
+count.** The old `(..., num_pulses)` was right about the ordering and wrong about the extent: the operator sees an
+`image` and nothing else, so the pulse count is not available to it. The two agree only on a grid formed at one
+azimuth sample per pulse. `PhaseCorrectionOp` takes `(num_pulses)`, so an app whose extents differ must resample
+the length; this one uses an app-owned `PhaseResampleOp`. No library operator for it is specified; see
+[OPEN_ITEMS.md](OPEN_ITEMS.md).
 - **Out:** `sharpness` (optional) — float32 / float64, `(..., num_iterations + 1)`. The focus metric before each iteration and after the last, so a caller can see whether the estimate converged rather than inferring it from the image.
 - **Out:** `termination` (optional) **[CONTRACT CHANGE 2026-10-30]** — int32, `(1,)`. Why the refinement loop stopped: `0 converged`, `1 budget_exhausted`, `2 refused_sharpness`, `3 refused_scatterers`, `4 refused_max_correction`, `5 stopped_scatterers`. **Provenance, not quality** — it reports what the operator did and never whether the estimate is right; see *Notes*. Codes 2–4 mean the image was returned untouched. int32 rather than the instance precision because it encodes control flow, not samples.
 - **Out:** `iterations` (optional) **[CONTRACT CHANGE 2026-10-30]** — int32, `(1,)`. How many iterations' phase is in `phase_correction`, which is **not** how many were attempted: each iteration is applied, scored, and discarded if sharpness fell, so the last attempt is routinely absent. `0` whenever the estimate was refused.

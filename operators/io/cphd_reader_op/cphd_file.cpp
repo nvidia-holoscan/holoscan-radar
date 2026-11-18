@@ -546,7 +546,7 @@ void CphdFile::parse_xml(const std::string& xml) {
   }
 
   // Optional: a geolocated collection names the image-area reference
-  // point. The mode-5 lattice is built from this; a file without it
+  // point. The independent images lattice is built from this; a file without it
   // still reads, and the accessor throws if a caller needs it.
   const tinyxml2::XMLElement* iarp_x = find_path(root, "SceneCoordinates/IARP/ECF/X");
   const tinyxml2::XMLElement* iarp_y = find_path(root, "SceneCoordinates/IARP/ECF/Y");
@@ -561,7 +561,7 @@ void CphdFile::parse_xml(const std::string& xml) {
 
   // Optional: the declared imaged rectangle in the IA plane. A
   // file without it still reads; the accessor throws if a caller
-  // needs it. Mode 5's default lattice is collection_physics(),
+  // needs it. Independent images's default lattice is collection_physics(),
   // not this rectangle.
   const tinyxml2::XMLElement* image_x1 = find_path(root, "SceneCoordinates/ImageArea/X1Y1/X");
   if (image_x1 != nullptr) {

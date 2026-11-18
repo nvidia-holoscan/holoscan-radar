@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Mode-2 demo: video SAR of downtown Houston (INPUT_DATA.md).
+# Video SAR demo: video SAR of downtown Houston (INPUT_DATA.md).
 # Full 23.5 s dwell at ~1.0 m ground-range GSD. Sliding window:
 # retain ~0.92 s of pulses (1.0 m azimuth), emit every 4096
 # pulses (~2.18 Hz at PRF 8942 Hz; four 1024-pulse reader
@@ -25,7 +25,7 @@
 # straddle it.
 
 cphd:
-  path: sar/mode02_houston_1p0m.cphd
+  path: sar/houston_1p0m.cphd
   names:
     - Houston
   sidecar: ""
@@ -51,7 +51,7 @@ cphd_reader:
 
 # Sliding window. emit_interval is a multiple of
 # pulses_per_tick (4096 = 4 ticks ≈ 2.18 Hz). weight is wired
-# (modes 1 / 5 leave it unconnected).
+# (spotlight and independent images leave it unconnected).
 aperture_manager:
   max_aperture_pulses: 8262
   emit_interval_pulses: 4096

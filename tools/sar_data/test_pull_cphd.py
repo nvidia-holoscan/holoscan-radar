@@ -39,28 +39,27 @@ class DownloadCliTest(unittest.TestCase):
             self.assertEqual(len(destinations), 8)
             self.assertEqual(len(set(destinations)), 8)
             self.assertIn(root / "2023-06-24-13-22-56_UMBRA-05_CPHD.cphd", destinations)
-            self.assertEqual(sum(p.parent == root / "imperial" for p in destinations), 1)
-            self.assertEqual(sum(p.parent == root / "mode5" for p in destinations), 6)
+            self.assertTrue(all(p.parent == root for p in destinations))
             self.assertFalse(root.exists())
 
-    def test_all_rejects_collection_subdirectory_before_download(self):
-        for dest in (
-            "data/sar/imperial",
-            "data/sar/mode5",
-            str(Path("data/sar/imperial").resolve()),
-        ):
-            with self.subTest(dest=dest):
-                output = io.StringIO()
-                with (
-                    mock.patch("sys.argv", ["pull_cphd.py", "--app", "all", "--dest", dest]),
-                    mock.patch.object(pull_cphd, "pull_one") as pull,
-                    contextlib.redirect_stderr(output),
-                    self.assertRaises(SystemExit) as caught,
-                ):
-                    pull_cphd.main()
-                self.assertEqual(caught.exception.code, 2)
-                self.assertIn("--app all --dest data/sar", output.getvalue())
-                pull.assert_not_called()
+    def test_all_accepts_arbitrary_destination_offline(self):
+        with tempfile.TemporaryDirectory() as temp:
+            destination = Path(temp) / "collections"
+            output = io.StringIO()
+            with (
+                mock.patch(
+                    "sys.argv",
+                    ["pull_cphd.py", "--app", "all", "--dest", str(destination), "--list"],
+                ),
+                mock.patch.object(pull_cphd, "prepare_one") as prepare,
+                contextlib.redirect_stdout(output),
+            ):
+                self.assertEqual(pull_cphd.main(), 0)
+            paths = [Path(line.split(" -> ")[1]) for line in output.getvalue().splitlines()]
+            self.assertEqual(len(paths), 8)
+            self.assertTrue(all(path.parent == destination for path in paths))
+            prepare.assert_not_called()
+            self.assertFalse(destination.exists())
 
     def test_every_shipped_config_has_an_exact_offline_plan(self):
         configs = sorted((pull_cphd.REPO_ROOT / "applications/sar").glob("*/config/*.yaml"))
@@ -74,9 +73,10 @@ class DownloadCliTest(unittest.TestCase):
                     jobs = pull_cphd.jobs_for_config(config, root)
                     self.assertEqual({job.destination for job in jobs}, {root / p for p in inputs})
                     for job in jobs:
+                        self.assertEqual(job.destination.parent, root / "sar")
                         if "houston" in config.name or "video_sar" in config.name:
                             self.assertEqual(job.recipe.name, "houston_1m.yaml")
-                            self.assertEqual(job.destination.name, "mode02_houston_1p0m.cphd")
+                            self.assertEqual(job.destination.name, "houston_1p0m.cphd")
                         else:
                             self.assertIsNone(job.recipe)
                             self.assertEqual(Path(job.key).name, job.destination.name)
@@ -90,6 +90,7 @@ class DownloadCliTest(unittest.TestCase):
             42,
             [known, "sar/unknown.cphd"],
             [known, "wrong/" + Path(known).name],
+            ["sar/collections/" + Path(known).name],
             [known, ""],
             [known, 42],
         ):
@@ -183,7 +184,7 @@ class DownloadCliTest(unittest.TestCase):
         run.assert_not_called()
         urlopen.assert_not_called()
         self.assertIn("houston_1m.yaml", output.getvalue())
-        self.assertIn("mode02_houston_1p0m.cphd", output.getvalue())
+        self.assertIn("houston_1p0m.cphd", output.getvalue())
         job = pull_cphd.jobs_for_config(config)[0]
         with mock.patch.object(pull_cphd.subprocess, "run") as run:
             self.assertEqual(pull_cphd.prepare_one(job, True, 1, 1), job.destination)

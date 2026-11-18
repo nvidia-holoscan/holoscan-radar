@@ -4,6 +4,25 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-17** — **SAR workflow names and flat CPHD storage** on
+  `deustice/sar-gui`: replaced numbered SAR shorthand with descriptive workflow
+  names in guides, comments, diagnostics, and metadata. Named sections in
+  [SAR/WORKFLOWS.md](SAR/WORKFLOWS.md) provide the shared references.
+  All 12 shipped presets now use flat `data/sar/` input paths; the Houston
+  subset recipe uses `houston_1p0m.cphd`. Downloader defaults and explicit
+  destinations use the same flat layout without old-path aliases or runtime
+  migration. Six local downloaded CPHDs were moved once, preserving their
+  inodes, sizes, modification times, and contents; the empty directory was
+  removed. Existing Houston subsets must also keep their `.subset.json`
+  sidecars when renamed. All 14 offline downloader tests pass, and the real
+  independent-images command reuses all six files and passes IARP checks.
+  Normalized YAML comparisons confirm that other preset settings are unchanged.
+  The pinned HSDK 5 build and all-file lint pass. Of 87 selected CTests, 75
+  pass, including the Python provider, numerical/dump checks, headless rendering,
+  and X11 windows. The other 12 are native-window checks, all failing at the
+  established CUDA/Vulkan display-presentation restriction on this host.
+  Public operator contracts and numerical processing are unchanged.
+
 - **2026-11-17** — **Docked SAR timeline** on `deustice/sar-gui`. The default
   viewer uses one window with a 112-pixel bottom strip and independent 10 Hz
   timeline updates. X11 retains separate panel caches and transport; timeline
@@ -172,8 +191,8 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 - **2026-11-05** — **Autofocus has a matching data download command.**
   `tools/sar_data/pull_cphd.py --app autofocus` downloads the default Kourou
-  collect into `data/sar/`. `--app all` includes it, preserves the `imperial/`
-  and `mode5/` layout under an overridden root, and deduplicates shared
+  collect into `data/sar/`. `--app all` includes it, originally kept collection subdirectories
+  under an overridden root (replaced by flat storage on 2026-11-17), and deduplicates shared
   Imperial Valley downloads. The autofocus and SAR data guides share a
   uv-based setup/download/run quick-start and distinguish the separate Atlanta
   download and Houston subset recipe. Offline CLI manifests match the eight
@@ -182,7 +201,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   `sar-data/tasks/Kourou, French Guiana/` and verified all eight objects with
   HTTP HEAD. A 64 KiB range read confirms Kourou's 23375 by 23999 dimensions.
   Transfer failures now report the source and destination without a traceback;
-  `--app all` rejects the known per-collection destinations. Four offline
+  `--app all` originally rejected per-collection destinations (removed with flat storage). Four offline
   downloader regressions pass. No full collections downloaded or operator
   contracts changed.
 
@@ -362,7 +381,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   alone.** `AutofocusOp` accuracy had only ever been measured on Kourou, which
   was *screened* for PGA — an isolated reflector lit across the whole dwell — so
   the operator's precondition was satisfied there by construction. Atlanta
-  (UMBRA-07 airport), Houston (mode02 dense urban) and Imperial Valley (Capella
+  (UMBRA-07 airport), Houston (video SAR dense urban) and Imperial Valley (Capella
   stripmap over agriculture) now have configs beside it and
   `tools/sar_autofocus/sweep.py --scenes all` sweeps across them. **The fixes
   generalize:** all five injected symmetries recover to 0.04–0.22 rad on the
@@ -1014,7 +1033,14 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 - **2026-09-29** — **HSDK 5 Holoviz dashboard runtime binding fixed.** The compositor declares its contiguous RGBA layout. The visualization bridge copies each frame into its own device-bound ImageT output pool, allowing Holoviz to consume it on a separate CUDA stream. A visualization-enabled two-frame SISO run under Xvfb completed with two sink frames and no Graph or runtime diagnostics; the graph admission test now binds the image output pool.
 
-- **2026-09-24** — **Holoscan-native C++ operator testing migration complete.** Against immutable HSDK `main-5x` revision `79dc6cb48e5b571b6f0a6daf2b5dbc783de01b76`, after !5394 and !5397 merged, every single-operator suite uses `holoscan::testing`; the local arity-specific fixture, wire-capture helper, sources, collectors, polling loops, and frame banks are removed from that boundary. Eight whole-Graph integration sites retain narrowly named integration-only finite source/capture plumbing. The 1,024-test macro inventory is unchanged from the qualification baseline, no C++ test is skipped or disabled, all 1,002 non-performance CTests pass serially, and the complete pinned pre-commit suite passes. Non-contiguous Tensor fixture coverage remains deferred under [CLARAHOLOS-3423](https://jirasw.nvidia.com/browse/CLARAHOLOS-3423).
+- **2026-09-24** — **Holoscan-native C++ operator testing migration complete.** Against immutable HSDK `main-5x`
+revision `79dc6cb48e5b571b6f0a6daf2b5dbc783de01b76`, after !5394 and !5397 merged, every single-operator suite uses
+`holoscan::testing`; the local arity-specific fixture, wire-capture helper, sources, collectors, polling loops, and
+frame banks are removed from that boundary. Eight whole-Graph integration sites retain narrowly named
+integration-only finite source/capture plumbing. The 1,024-test macro inventory is unchanged from the qualification
+baseline, no C++ test is skipped or disabled, all 1,002 non-performance CTests pass serially, and the complete
+pinned pre-commit suite passes. Non-contiguous Tensor fixture coverage remains deferred under
+[CLARAHOLOS-3423](https://jirasw.nvidia.com/browse/CLARAHOLOS-3423).
 
 - **2026-09-23** — **Deterministic C++/CUDA formatting enforcement complete.** [CLARAHOLOS-3386](https://jirasw.nvidia.com/browse/CLARAHOLOS-3386) is implemented with a checked-in 100-column `.clang-format` policy, clang-format 18.1.8 pinned through pre-commit, and the existing CI-wide `pre-commit run --all-files` command enforcing the same hook. The bootstrap sweep formats all 325 tracked `.cpp`, `.hpp`, `.cu`, and `.cuh` files under `applications/`, `operators/`, `performance/`, `tests/`, and `cmake/pydoc/` separately from behavioral changes. The authoritative command is documented in `DEVELOPER.md`; formatter idempotence, the complete pinned pre-commit suite, the 100-column audit (with only the existing 104-column SPDX exception), and the complete HSDK 5/CUDA 13 module build pass.
 
@@ -1208,7 +1234,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 - **2026-09-28 — standalone SAR apps:** split the five SAR graphs into `spotlight`,
   `video_sar`, `tiled_strip`, `continuous_strip`, and `independent_images`. Each
   has an `APP_<name>` gate, YAML, metadata, README, and fixture smoke. The
-  former `sar_formation` command and mode-numbered app YAMLs are removed.
+  former `sar_formation` command and obsolete shared-app YAMLs are removed.
   Shared SAR Graph driving and visualization live under `radar_app/sar/`;
   library operator contracts are unchanged. A generated CPHD fixture gave
   identical complex image tensors for every old/new pair (1, 5, 5, 5, and 2
@@ -1230,7 +1256,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   [SAR open-items roll-up](SAR/OPEN_ITEMS.md). The six operators, five app modes,
   C++ fixture generator, C++ operator tests, and headless Holoviz smoke path
   build in the pinned HSDK 5 GPU image. The non-performance C++ suite passed
-  1018/1018 tests, including synthetic mode 1–5 and headless Holoviz smoke;
+  1018/1018 tests, including synthetic spotlight, video SAR, tiled strip, continuous strip, and independent images and headless Holoviz smoke;
   the repository-wide pinned pre-commit suite passed. Final focused reruns
   cover test-harness corrections added after that full run. Public CPHD
   collection validation remains open. HSDK 5 visualization uses the
@@ -1398,9 +1424,9 @@ still declare SDK 4.3.0.
 | CPHDReaderOp console warn when paced playback is behind | current workspace | `dpc/main-5x-catchup` | **implemented:** paced `playback_rate > 0` WARNs at most 1 Hz while `behind_s >= 0.2` (Gantt entry); stops at `<= 0.05`. Unpaced `0` stays quiet. Verify with a high-`playback_rate` continuous-strip run. |
 | Optional static Param to wait on `kBackpressured` | current workspace | `dpc/main-5x-catchup` | **Reader-only Param.** Unmetered `playback_rate` 0 waits on a full ingest queue; paced ingest fail-fasts unless `wait_for_downstream` (schema v2). Formation and app-owned stages fail-fast. Continuous strip deepens the 4-slice fan-out edges to 16 so the default rate-1 preset is not aborted by depth 4. Spotlight is unmetered wait; other paced demos fail-fast at ingest. Queue-full abort prints the shared hint. FMCW operators do not take the Param. |
 | SAR fixture smokes on staging `/usr/lib` SDK | current workspace | `dpc/main-5x-catchup` | **implemented:** existing stager `bind_outputs` are required on `/usr/lib` (implicit device 0 is rejected). Smoke count uses `stopped after N image(s)` because report INFO is 1 Hz plus formed-size change. All 20 `Sar*` CTests pass. |
-| Restore SAR on-image Holoviz HUD (chevron/lag) | current workspace | `dpc/main-5x-catchup` | **implemented and visually checked** for modes 1–5. Live `FormationHud` mailbox; lag is collect TxTime vs `now`. Compass inset dropped (normalized coords squash it on a landscape strip). Source/ingest/formation partitions bind dedicated `ThreadPlacement` lanes so the reader keeps the playback clock. Staging `/usr/lib` requires `bind_outputs` on pass-through stager `range_profiles_out` (`IMPLICIT_DEVICE_ZERO_REJECTED`); the older `/opt` image rejected that bind as `PHYSICAL_TENSOR_DEVICE_BINDING_UNUSED`. Strip crop and indefinite hold remain. |
-| Restore SAR Gantt timeline window | current workspace | `dpc/main-5x-catchup` | **implemented and visually checked** for modes 1–5. Second Holoviz window (`SAR timeline`) is the 20 s scrolling Gantt (dwell bars, duty-cycle quiet, image-emit ticks with per-tick last-pulse latency labels, 1 Hz lag HUD on the platform lane). Windowed path only; headless smokes unchanged. |
-| Make host `holoscan run` SAR demos interruptible | current workspace | `dpc/main-5x-catchup` | **implemented:** SAR Graph driver binds an early `ManagedShutdownSignals` domain so Ctrl-C / `docker stop` SIGTERM cooperatively stop looping presets; CPHD playback and viz-hold sleeps honor cancellation. One in-flight backprojection can still delay exit. Exercised during the mode 1–5 GUI walkthrough. |
+| Restore SAR on-image Holoviz HUD (chevron/lag) | current workspace | `dpc/main-5x-catchup` | **implemented and visually checked** for spotlight, video SAR, tiled strip, continuous strip, and independent images. Live `FormationHud` mailbox; lag is collect TxTime vs `now`. Compass inset dropped (normalized coords squash it on a landscape strip). Source/ingest/formation partitions bind dedicated `ThreadPlacement` lanes so the reader keeps the playback clock. Staging `/usr/lib` requires `bind_outputs` on pass-through stager `range_profiles_out` (`IMPLICIT_DEVICE_ZERO_REJECTED`); the older `/opt` image rejected that bind as `PHYSICAL_TENSOR_DEVICE_BINDING_UNUSED`. Strip crop and indefinite hold remain. |
+| Restore SAR Gantt timeline window | current workspace | `dpc/main-5x-catchup` | **implemented and visually checked** for spotlight, video SAR, tiled strip, continuous strip, and independent images. Second Holoviz window (`SAR timeline`) is the 20 s scrolling Gantt (dwell bars, duty-cycle quiet, image-emit ticks with per-tick last-pulse latency labels, 1 Hz lag HUD on the platform lane). Windowed path only; headless smokes unchanged. |
+| Make host `holoscan run` SAR demos interruptible | current workspace | `dpc/main-5x-catchup` | **implemented:** SAR Graph driver binds an early `ManagedShutdownSignals` domain so Ctrl-C / `docker stop` SIGTERM cooperatively stop looping presets; CPHD playback and viz-hold sleeps honor cancellation. One in-flight backprojection can still delay exit. Exercised during the spotlight, video SAR, tiled strip, continuous strip, and independent images GUI walkthrough. |
 | Developer-guide accuracy pass | Codex | current workspace | **complete:** README, DEVELOPER, SDK_DEVELOPMENT, and AGENTS now reflect seven FMCW apps, C++ YAML performance recipes, the disabled Python bindings and pytest registration, and validated SAR GUI presets; pinned documentation hooks pass |
 | Performance harness YAML refactor | deustice | `deustice/perf-refactor` | **Layout complete:** all 26 schema-v2 recipes and typed adapters are paired under `performance/operators/<group>/<operator>/`; shared C++ code lives under `performance/harness/cpp/`. One explicit CMake registry preserves executable names and `build/performance/cpp/` output. The pinned HSDK 5 build, 26 Minimal GPU smokes, 20 focused Overrides/cache smokes, and 30 harness tests pass. YAML case content and measurement behavior are unchanged. The unbuildable legacy Python performance matrix was removed; C++ performance coverage still lacks CFAR rank-four full-axis peak suppression and FeatureAssembly score/AoA packs. Future Python Graph profiling awaits buildable HSDK 5 bindings. |
 | Direct Holoscan CLI workflow and HSDK 5 Holoviz integration | Codex | `codex/holoscan-cli-direct` | **ready for review:** host CLI build/run/test integration, top-level Python dependencies, and CTest script; dashboard now finds and links the separate HSDK 5 visualization package and bridges RGBA Tensor to ImageT at Holoviz. All C++ targets build in the pinned image; focused Holoviz Graph admission test and lint pass. Window rendering still needs a display-equipped run. |
