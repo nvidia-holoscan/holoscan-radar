@@ -122,6 +122,36 @@ def check(args):
                         lambda: colors(lib, display, timeline, geometry(lib, display, timeline)) > 8
                     )
 
+                def first_image_is_displayed():
+                    log.seek(0)
+                    if "SAR: image 1 formed" not in log.read():
+                        return False
+                    width, height = geometry(lib, display, image_panel)
+                    image_height = height - (112 if docked else 0)
+                    # SAR pixels are grayscale. The startup background is tinted
+                    # charcoal; sample below its centered text, above the footer.
+                    data = lib.XGetImage(
+                        display,
+                        image_panel,
+                        width // 2,
+                        max(0, image_height * 4 // 5),
+                        1,
+                        1,
+                        c.c_ulong(-1).value,
+                        2,
+                    )
+                    if not data:
+                        return False
+                    try:
+                        pixel = lib.XGetPixel(data, 0, 0)
+                        return (pixel & 255) == ((pixel >> 8) & 255) == ((pixel >> 16) & 255)
+                    finally:
+                        lib.XDestroyImage(data)
+
+                # The visible startup canvas must never satisfy formed-image,
+                # resize-recovery, or EOF idle-counter assertions.
+                wait(first_image_is_displayed)
+
                 def status_width(width):
                     return min(320, args.canvas_width // 2, max(1, width // 2))
 

@@ -114,11 +114,18 @@ shared Graph driver owns SIGINT/SIGTERM so host `holoscan run` does not need
 When Holoviz is enabled, scene name, formed size, backprojection rate,
 last-pulse latency, and paced collect-vs-wall lag appear in a compact left status
 panel beside the docked timeline. The status follows its displayed image; the
-APC look chevron remains over the image. Separate-window or timeline-disabled
+APC look chevron remains over the image. Status text is larger, and GUI
+throughput uses readable units such as `12.4 Gpx*pulse/s`; console measurements
+retain their original format. Separate-window or timeline-disabled
 layouts retain the on-image HUD. The timeline shows a
 20 s scrolling Gantt of collection dwells, image-emit ticks with last-pulse
 latency labels, and a 1 Hz lag HUD. Set
 `app.visualization.timeline.placement: window` for a separate timeline window.
+Collection names sit above their scrolling bars; these describe collection
+history rather than the image currently displayed. Interactive startup shows
+a distinct cached PREPARING canvas until the first image arrives. The timeline
+reports observed startup stage and elapsed time independently, without repeatedly
+rendering or downloading the main canvas.
 
 The former `applications/sar_formation/` path and `sar_formation` executable
 were replaced by the five image-formation workflows above; autofocus adds

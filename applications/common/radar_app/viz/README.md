@@ -447,3 +447,31 @@ The live timeline retains its independent clock; it is not forced to match an ac
 Native combined display frames preserve the main image's capture time and
 provenance. Headless execution renders and consumes both completed panels
 independently, without creating a window or adding an interactive hold.
+
+## SAR startup and readable diagnostics
+
+Interactive SAR viewers show a charcoal startup canvas with a cyan PREPARING
+label, a larger centered first-image message, and the first configured collection
+name when available. The existing GPU compositor renders the background and
+native SDK text once. Timeline ticks never regenerate or download this canvas.
+The first completed image replaces it permanently. Headless execution emits no
+placeholder. Closing the window works while the first aperture is accumulating.
+
+The small timeline panel shows observed startup stage and elapsed time at 1 Hz;
+its stage comes from existing reader/BP diagnostics and presentation progress.
+It distinguishes starting up, receiving a collection, forming the first image
+after reader EOF, and preparing the display. It does not invent a percentage
+or claim a stage for which no diagnostic exists. The main placeholder stays
+static while that text changes independently.
+
+The left status panel uses 16-pixel titles and 14-pixel details at native canvas
+resolution. Collection names scroll above their corresponding thinner bars;
+image latency labels sit above the image-emission ticks. The footer remains
+112 pixels high by default. The sidebar title describes the displayed image;
+timeline labels describe collection history, which may run ahead of display.
+
+GUI throughput uses readable SI prefixes, for example `12.4 Gpx*pulse/s`.
+The displayed number converts the same held report measurement, preserving
+its pairing with the image. Console measurements retain their original
+scientific notation and units. Neither signal processing nor saved products
+change. All six SAR applications and both languages share this implementation.

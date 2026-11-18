@@ -3,9 +3,12 @@
 
 #pragma once
 
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <system_error>
 
 namespace holoscan::radar::app::sar {
 
@@ -63,6 +66,44 @@ inline std::string format_sci(double value) {
   }
   out += std::to_string(exp);
   return out;
+}
+
+// Display-only conversion of the report's rounded measurement. Preserve the
+// console format and measured value; never resample a later BP diagnostic.
+inline std::string format_display_rate_line(std::string_view line) {
+  constexpr std::string_view suffix = " px*pls/s";
+  if (!line.ends_with(suffix))
+    return std::string(line);
+  const auto end = line.size() - suffix.size();
+  if (end == 0)
+    return std::string(line);
+  const auto start = line.rfind(' ', end - 1);
+  if (start == std::string_view::npos)
+    return std::string(line);
+  double rate = 0;
+  const auto parsed = std::from_chars(line.data() + start + 1, line.data() + end, rate);
+  if (parsed.ec != std::errc() || parsed.ptr != line.data() + end || !std::isfinite(rate) ||
+      rate < 0)
+    return std::string(line);
+  constexpr std::string_view prefixes[] = {"", "k", "M", "G", "T"};
+  int unit = 0;
+  while (rate >= 1000 && unit < 4) {
+    rate /= 1000;
+    ++unit;
+  }
+  // Round before selecting the final prefix, so 999.99 M never displays as 1000 M.
+  rate = std::round(rate * 10) / 10;
+  if (rate >= 1000 && unit < 4) {
+    rate /= 1000;
+    ++unit;
+  }
+  char digits[48]{};
+  const auto formatted =
+      std::to_chars(digits, digits + sizeof(digits), rate, std::chars_format::fixed, 1);
+  if (formatted.ec != std::errc())
+    return std::string(line);
+  return std::string(line.substr(0, start + 1)) + std::string(digits, formatted.ptr) + " " +
+         std::string(prefixes[unit]) + "px*pulse/s";
 }
 
 // Same rate line the on-image HUD draws. Prefix the BP lattice when it

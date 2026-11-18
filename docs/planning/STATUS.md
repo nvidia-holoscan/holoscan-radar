@@ -4,6 +4,18 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-18** — **SAR startup and typography polish** on `deustice/sar-gui`:
+  added a distinct cached startup placeholder, enlarged footer text, moved
+  collection labels above slimmer timeline bars, and formatted GUI throughput
+  with readable SI units. Completed-image timestamps, numerical/dump results,
+  bounded transport, and independent timeline updates are preserved. All 203
+  selected checks pass, including GPU composition and C++/Python startup windows.
+  Delayed-display soaks keep processing active with stable RSS/FDs. Direct laptop
+  SSH/X11 runs in both languages complete startup, handoff, and final hold with
+  two image uploads and 61 independent timeline uploads each. Fixture captures
+  were visually inspected; complete forwarded pixel/interaction review and
+  positive native-window review remain unqualified. See the GUI decision record.
+
 - **2026-11-18** — **SAR footer status panel** on `deustice/sar-gui`: docked
   viewers now place image-specific text in a compact left panel beside the
   timeline, shared by all six workflows and both languages. Image and status

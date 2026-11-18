@@ -29,7 +29,8 @@ namespace holoscan::radar::app::sar {
 // `run_sar_graph_app`. Optional `overlay` fills host Holoviz text (`labels`)
 // and line-list (`overlay`) layers. The docked layout places text in a footer
 // viewport while keeping the APC marker over the image. `TimelineRasterOp`
-// independently renders the Gantt panel.
+// independently renders the Gantt panel. Interactive runs enable a clocked,
+// one-shot startup canvas; after handoff, only new images activate GPU rendering.
 class SarImageVizOp : public Operator<> {
  public:
   // `product_extent` is the formed product's size when the tensor on `image`
@@ -38,7 +39,8 @@ class SarImageVizOp : public Operator<> {
   // reports the tensor.
   SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side, bool transpose_axes,
                 OverlayConfig overlay = {}, std::array<int64_t, 2> product_extent = {0, 0},
-                double display_rate_hz = 60.0, std::function<bool()> terminal = {});
+                double display_rate_hz = 60.0, std::function<bool()> terminal = {},
+                bool startup_placeholder = false);
   ~SarImageVizOp() override;
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
@@ -50,6 +52,8 @@ class SarImageVizOp : public Operator<> {
   Output<Tensor> overlay{"overlay"};
 
  private:
+  expected<void, Error> emit_startup(ExecutionContext& context);
+  bool startup_placeholder_{false}, startup_emitted_{false};
   int64_t max_v_{0}, max_u_{0}, display_side_{0};
   bool transpose_axes_{false};
   OverlayConfig overlay_{};

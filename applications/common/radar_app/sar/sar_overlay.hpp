@@ -198,7 +198,7 @@ inline void write_footer_hud_rows(std::uint8_t* rows, const std::vector<std::str
       text = text.substr(0, limit - 3) + "...";
     write_hud_run(rows + index * kHudRowBytes,
                   TextRunHeader{.x = 10.0F / layout.canvas_width,
-                                .y = (layout.image_height + 7.0F + index * 16.0F) / total_height,
+                                .y = (layout.image_height + 7.0F + index * 17.0F) / total_height,
                                 .size_px = pixels,
                                 .color = color},
                   text);
@@ -208,25 +208,69 @@ inline void write_footer_hud_rows(std::uint8_t* rows, const std::vector<std::str
   const auto rate_color = hud_rgba(194, 211, 228);
   if (!lines.empty()) {
     const auto split = lines[0].rfind("  ");
-    write(0, split == std::string::npos ? "SAR image" : lines[0].substr(0, split), 14, title_color);
-    write(1, "Image " + (split == std::string::npos ? lines[0] : lines[0].substr(split + 2)), 12,
+    write(0, split == std::string::npos ? "SAR image" : lines[0].substr(0, split), 16, title_color);
+    write(1, "Image " + (split == std::string::npos ? lines[0] : lines[0].substr(split + 2)), 14,
           detail_color);
   }
   if (lines.size() > 1) {
-    const auto count = static_cast<std::size_t>(std::max(4, (layout.status_width - 20) / 8));
-    const auto split = lines[1].size() > count ? lines[1].rfind(' ', count) : std::string::npos;
+    const auto count = static_cast<std::size_t>(std::max(4, (layout.status_width - 20) / 9));
+    // Keep the throughput value and its unit together when wrapping.
+    const auto split = lines[1].size() > count ? lines[1].find("  ") : std::string::npos;
     if (split != std::string::npos) {
-      write(2, lines[1].substr(0, split), 12, rate_color);
-      write(3, lines[1].substr(split + 1), 12, rate_color);
+      write(2, lines[1].substr(0, split), 14, rate_color);
+      write(3, lines[1].substr(split + 2), 14, rate_color);
     } else {
-      write(2, lines[1], 12, rate_color);
+      write(2, lines[1], 14, rate_color);
     }
   }
   if (lines.size() > 2)
-    write(4, lines[2], 12, detail_color);
+    write(4, lines[2], 14, detail_color);
   if (show_lag && diag.playback_valid && diag.playback_paced)
     write(5, format_lag_line(diag.playback_behind_s, diag.playback_target_s, diag.playback_wall_s),
-          11, diag.playback_behind_s > 0.2 ? hud_rgba(255, 120, 105) : hud_rgba(115, 200, 150));
+          14, diag.playback_behind_s > 0.2 ? hud_rgba(255, 120, 105) : hud_rgba(115, 200, 150));
+}
+
+// Static startup text uses the existing native GPU text layer and one exact
+// stamp with its charcoal image. Live elapsed/stage text belongs to the small
+// timeline panel, so no clock tick needs to recreate this completed canvas.
+inline void write_startup_hud_rows(std::uint8_t* rows, const OverlayConfig& layout) {
+  using holoscan::visualization::TextRunHeader;
+  std::memset(rows, 0, kHudRuns * kHudRowBytes);
+  const float width = layout.canvas_width;
+  const float height = layout.image_height;
+  const float total = height + layout.footer_height;
+  auto centered = [&](std::size_t row, std::string text, float y, float size, std::uint32_t color) {
+    const auto limit = static_cast<std::size_t>(
+        std::clamp((width - 24) / (size * 0.6F), 3.0F, static_cast<float>(kHudChars)));
+    if (text.size() > limit)
+      text = text.substr(0, limit - 3) + "...";
+    const float x = std::max(4.0F, (width - text.size() * size * 7 / 13) / 2);
+    write_hud_run(
+        rows + row * kHudRowBytes,
+        TextRunHeader{
+            .x = x / width, .y = std::max(0.0F, y) / total, .size_px = size, .color = color},
+        text);
+  };
+  const float title_size = std::clamp((width - 24) / 14, 12.0F, 26.0F);
+  centered(0, "PREPARING", height / 2 - 45, 14, hud_rgba(75, 205, 220));
+  centered(1, "Preparing first SAR image", height / 2 - 17, title_size, hud_rgba(230, 237, 243));
+  if (height >= 100 && !layout.scene_names.empty())
+    centered(2, layout.scene_names.front(), height / 2 + 24, 16, hud_rgba(145, 163, 181));
+  if (layout.status_width > 0) {
+    write_hud_run(rows + 3 * kHudRowBytes,
+                  TextRunHeader{.x = 10 / width,
+                                .y = (height + 8) / total,
+                                .size_px = 16,
+                                .color = hud_rgba(75, 205, 220)},
+                  "STARTING UP");
+    const std::string text = layout.status_width >= 220 ? "Waiting for first image" : "Waiting...";
+    write_hud_run(rows + 4 * kHudRowBytes,
+                  TextRunHeader{.x = 10 / width,
+                                .y = (height + 32) / total,
+                                .size_px = 14,
+                                .color = hud_rgba(165, 175, 188)},
+                  text);
+  }
 }
 
 }  // namespace holoscan::radar::app::sar

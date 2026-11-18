@@ -423,19 +423,21 @@ struct SarGraphRuntime {
       const int status_width =
           docked && width >= 2 ? std::min(320, static_cast<int>(width) / 2) : 0;
       const int footer_height = status_width > 0 ? cfg.visualization.timeline.window_height : 0;
+      overlay.canvas_width = width;
+      overlay.image_height = height;
       if (status_width > 0) {
         overlay.status_width = status_width;
         overlay.footer_height = footer_height;
-        overlay.canvas_width = width;
-        overlay.image_height = height;
       }
       // Hold is session-level after the image, not a sleep in this operator:
       // raster and Holoviz share `visualization`, so a hold here never presents.
       auto raster = graph.op<app::sar::SarImageVizOp>(
           "sar_image_viz", raster_max_v, raster_max_u, lut_side, transpose_display_axes,
-          std::move(overlay), product_extent, cfg.visualization.display_rate_hz, [hud = hud] {
+          std::move(overlay), product_extent, cfg.visualization.display_rate_hz,
+          [hud = hud] {
             return hud->snapshot().reader_stopped;
-          });
+          },
+          !cfg.headless);
       bind_outputs(options, "sar_image_viz", {"frame"}, devices.compute);
       auto raster_partition = graph.partition("raster");
       raster_partition.add(raster);
@@ -465,7 +467,8 @@ struct SarGraphRuntime {
             "timeline_raster", hud, cfg.scene_names, cfg.show_playback_lag,
             cfg.visualization.timeline.display_rate_hz,
             docked ? width - status_width : cfg.visualization.timeline.window_width,
-            cfg.visualization.timeline.window_height);
+            cfg.visualization.timeline.window_height,
+            cfg.headless ? std::shared_ptr<app::FrameProgress>{} : display_progress);
         bind_outputs(options, "timeline_raster", {"frame"}, devices.compute);
         auto timeline_part = graph.partition("timeline");
         timeline_part.add(timeline);

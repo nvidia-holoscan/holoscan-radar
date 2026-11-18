@@ -237,10 +237,12 @@ std::string fit_label(const std::string& name, int64_t max_w, int scale) {
 
 TimelineRasterOp::TimelineRasterOp(std::shared_ptr<radar::FormationHud> hud,
                                    std::vector<std::string> scene_names, bool show_playback_lag,
-                                   double rate, int64_t width, int64_t height)
+                                   double rate, int64_t width, int64_t height,
+                                   std::shared_ptr<FrameProgress> progress)
 : hud_(std::move(hud)),
   scene_names_(std::move(scene_names)),
   show_playback_lag_(show_playback_lag),
+  progress_(std::move(progress)),
   period_(std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::duration<double>(1.0 / rate))),
   width_(width),
@@ -272,6 +274,7 @@ Contract TimelineRasterOp::contract() const {
 }
 
 void TimelineRasterOp::start() {
+  started_at_ = Clock::now();
   if (cudaMalloc(&commands_, kMaxRects * sizeof(Rect)) != cudaSuccess)
     throw std::runtime_error("Timeline command allocation failed");
 }
@@ -284,6 +287,19 @@ void TimelineRasterOp::stop() {
 expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   const auto snap = hud_->snapshot();
   const auto now = Clock::now();
+  const bool starting = progress_ && progress_->capture_ns.load() < 0;
+  const bool hud_due = !hud_held_ || std::chrono::duration<double>(now - hud_at_).count() >= 1.0;
+  if (starting && hud_due) {
+    const std::string phase = snap.bp.emit_at       ? "Preparing display"
+                              : snap.reader_stopped ? "Forming first image"
+                              : snap.last_packet_at ? "Receiving collection"
+                                                    : "Starting up";
+    startup_line_ =
+        phase + "  " +
+        std::to_string(
+            std::chrono::duration_cast<std::chrono::seconds>(now - started_at_).count()) +
+        "s elapsed";
+  }
   const auto origin =
       now - std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(kWindowS));
   if (snap.bp.emit_at.has_value() &&
@@ -327,11 +343,15 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   const int64_t lab_gap = 6;
   const int64_t bot = 4;
   const int64_t axis_block = axis_gap + 1 + lab_gap + label_h + bot;
-  const int64_t usable = std::max(int64_t{24}, h - top - lane_gap - axis_block);
+  const int64_t label_gap = 3;
+  const int64_t usable =
+      std::max(int64_t{4}, h - top - lane_gap - axis_block - 2 * (label_h + label_gap));
   const int64_t plat_h = usable / 2;
-  const int64_t plat_y0 = top;
+  const int64_t plat_label_y = top;
+  const int64_t plat_y0 = plat_label_y + label_h + label_gap;
   const int64_t plat_y1 = plat_y0 + plat_h;
-  const int64_t prod_y0 = plat_y1 + lane_gap;
+  const int64_t prod_label_y = plat_y1 + lane_gap;
+  const int64_t prod_y0 = prod_label_y + label_h + label_gap;
   const int64_t prod_y1 = prod_y0 + (usable - plat_h);
   const int64_t axis_y = prod_y1 + axis_gap;
   fill_rect(&img, w, h, 0, plat_y0, w, plat_y1, std::array<uint8_t, 3>{28, 28, 28});
@@ -370,17 +390,16 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
       const int64_t vis1 = std::min(w, x1);
       name = fit_label(name, vis1 - vis0 - 8, kScale);
       if (!name.empty()) {
-        const int64_t ty = plat_y0 + (plat_y1 - plat_y0 - label_h) / 2;
-        draw_text(&img, w, h, vis0 + 4, ty, name, fg, kScale);
+        draw_text(&img, w, h, vis0 + 4, plat_label_y, name, fg, kScale);
       }
     }
   }
-  const int64_t lat_y = prod_y0 + (prod_y1 - prod_y0 - label_h) / 2;
+  const int64_t lat_y = prod_label_y;
   int64_t last_label_right = -8;
   for (const auto& mark : image_emits_) {
     const auto tick_c = collect_color(mark.file_index);
     draw_tick(&img, w, h, mark.at, origin, kWindowS, prod_y0, prod_y1, tick_c);
-    if (!mark.latency_s.has_value())
+    if (starting || !mark.latency_s.has_value())
       continue;
     const std::string lab = format_latency_ms(*mark.latency_s);
     if (lab.empty())
@@ -401,6 +420,9 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
     last_label_right = tx + tw;
   }
 
+  if (starting)
+    draw_text(&img, w, h, 4, prod_label_y, fit_label(startup_line_, w - 8, kScale),
+              std::array<uint8_t, 3>{145, 180, 195}, kScale);
   fill_rect(&img, w, h, 0, axis_y, w, axis_y + 1, axis_c);
   const int n_ticks = 5;
   for (int i = 0; i <= n_ticks; ++i) {
@@ -424,7 +446,6 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   }
   fill_rect(&img, w, h, w - 2, 0, w, h, head_c);
 
-  const bool hud_due = !hud_held_ || std::chrono::duration<double>(now - hud_at_).count() >= 1.0;
   if (hud_due) {
     hud_at_ = now;
     hud_held_ = true;

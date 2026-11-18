@@ -173,3 +173,31 @@ The `SarFooterStatus` GPU test composes an exact-timestamp image/status pair and
 checks every image pixel stays unobscured, SDK text lands below the image, and
 status pixels do not enter the timeline area. `CompletedFrameDock` checks native
 status placement, physical sizing after resize, and independent timeline startup.
+
+## SAR startup placeholder
+
+`SarStartupWindow_<language>_<behavior>` uses a paced CPHD fixture so startup is
+observable before the first image. Both C++ and Python must show the distinct
+charcoal placeholder. The `close` case closes before formation and asserts
+exactly one main-panel upload; the `handoff` case waits for a formed image to
+replace the placeholder, then closes normally. The existing window tests still
+cover resizing, EOF idle updates, separate windows, and Escape.
+
+`SarStartup` GPU tests hold back the first input, prove repeated clock ticks
+emit no extra placeholder or held-image frames, verify the first real image's
+capture timestamp, and render the actual native text through the shared SDK
+composer. The placeholder's -1 stamp cannot advance completed-image drain.
+`SarDisplayRate` checks SI conversions and unchanged console measurements.
+`SarTimeline` verifies collection-title placement above its colored bar using
+the GPU raster and native text records.
+
+The startup probe can also save a visual-review artifact inside the container:
+
+```bash
+xvfb-run -a python3 tests/gui/check_sar_startup.py build-test/applications/sar/spotlight/cpp/spotlight build-test/applications/sar/spotlight/cpp/spotlight_generated_smoke.yaml --capture build-test/gui-sar/startup.png
+```
+
+Omit `xvfb-run` to use a real forwarded display. These pixel-readback probes
+require a responsive X11 server; a timeout does not establish visual success.
+Native-window and real-collection visual qualification remain separate from
+GPU composition, isolated X11, and synthetic-fixture checks.

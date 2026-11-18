@@ -24,11 +24,18 @@
 #include <holoscan/core/tensor_output_loan.hpp>
 #include <holoscan/logger/logger.hpp>
 #include <holoscan/sensor_io/image_metadata.hpp>
+#include <holoscan/sensor_io/provenance.hpp>
 
 #include "radar_common/sdk/tensor_io.hpp"
 
 namespace holoscan::radar::app::sar {
 namespace {
+__global__ void startup_pixel(std::uint8_t* rgba) {
+  rgba[0] = 19;
+  rgba[1] = 24;
+  rgba[2] = 31;
+  rgba[3] = 255;
+}
 template <typename T>
 __global__ void sample_magnitude(const T* input, int64_t source_v, int64_t source_u, float* output,
                                  int64_t height, int64_t width, bool transpose_axes) {
@@ -77,8 +84,9 @@ __global__ void render_gray(const float* magnitude, std::uint8_t* output, int64_
 SarImageVizOp::SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side,
                              bool transpose_axes, OverlayConfig overlay,
                              std::array<int64_t, 2> product_extent, double display_rate_hz,
-                             std::function<bool()> terminal)
-: max_v_(max_v),
+                             std::function<bool()> terminal, bool startup_placeholder)
+: startup_placeholder_(startup_placeholder),
+  max_v_(max_v),
   max_u_(max_u),
   display_side_(display_side),
   transpose_axes_(transpose_axes),
@@ -88,6 +96,10 @@ SarImageVizOp::SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side,
   terminal_(std::move(terminal)) {
   if (max_v_ < 1 || max_u_ < 1 || display_side_ < 1)
     throw std::invalid_argument("SarImageVizOp: invalid image extents");
+  if (overlay_.canvas_width <= 0)
+    overlay_.canvas_width = display_side_;
+  if (overlay_.image_height <= 0)
+    overlay_.image_height = display_side_;
 }
 SarImageVizOp::~SarImageVizOp() {
   if (sampled_magnitude_ != nullptr)
@@ -117,7 +129,14 @@ void SarImageVizOp::setup(OperatorSpec& spec) {
 }
 Contract SarImageVizOp::contract() const {
   Contract result;
-  result.trigger(OnEach{image});
+  if (startup_placeholder_)
+    result
+        .trigger(
+            OnClock{.period = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::duration<double>(1.0 / std::max(20.0, display_rate_hz_)))})
+        .input(image, DrainAll{});
+  else
+    result.trigger(OnEach{image});
   return result;
 }
 void SarImageVizOp::start() {
@@ -126,9 +145,66 @@ void SarImageVizOp::start() {
                  static_cast<size_t>(display_side_ * display_side_) * sizeof(float)) != cudaSuccess)
     throw std::runtime_error("SarImageVizOp: sampled magnitude allocation failed");
 }
+expected<void, Error> SarImageVizOp::emit_startup(ExecutionContext& context) {
+  // A 1x1 GPU color fills the image viewport; native SDK text supplies the
+  // typography at the configured canvas resolution. No host frame raster.
+  HOLOSCAN_TRY(auto pixel,
+               frame.allocate_tensor(TensorLoanRequest{.shape = std::array<int64_t, 3>{1, 1, 4},
+                                                       .dtype = DLDataType{kDLUInt, 8U, 1U}}));
+  HOLOSCAN_TRY(auto writer, pixel.write(context.cuda_stream()));
+  startup_pixel<<<1, 1, 0, context.cuda_stream().get()>>>(writer.data_as<std::uint8_t>());
+  if (cudaPeekAtLastError() != cudaSuccess)
+    return make_unexpected(Error{ErrorCode::kFailure, "SAR startup color failed"});
+  HOLOSCAN_RETURN_IF_ERROR(std::move(writer).commit());
+  HOLOSCAN_TRY(auto text, labels.allocate_tensor(TensorLoanRequest{
+                              .shape = std::array<int64_t, 2>{kHudRuns, kHudRowBytes},
+                              .dtype = DLDataType{kDLUInt, 8U, 1U}}));
+  HOLOSCAN_RETURN_IF_ERROR(
+      text.write_host_and_commit([&](const TensorOutputWriteGuard& out) -> expected<void, Error> {
+        write_startup_hud_rows(out.data_as<std::uint8_t>(), overlay_);
+        return {};
+      }));
+  HOLOSCAN_TRY(auto geometry, overlay.allocate_tensor(
+                                  TensorLoanRequest{.shape = std::array<int64_t, 1>{kHudLineFloats},
+                                                    .dtype = DLDataType{kDLFloat, 32U, 1U}}));
+  HOLOSCAN_RETURN_IF_ERROR(geometry.write_host_and_commit(
+      [](const TensorOutputWriteGuard& out) -> expected<void, Error> {
+        std::memset(out.data(), 0, kHudLineFloats * sizeof(float));
+        return {};
+      }));
+  auto stamp = context.activation_time();
+  // Startup chrome is not an acquired image: it must not satisfy EOF display
+  // drain. Real images retain their original capture time and provenance.
+  stamp.timestamp_ns = -1;
+  const EmitOptions startup{.capture_time = stamp};
+  HOLOSCAN_RETURN_IF_ERROR(labels.emit(std::move(text), startup));
+  HOLOSCAN_RETURN_IF_ERROR(overlay.emit(std::move(geometry), startup));
+  schema::ImageT descriptor;
+  descriptor.width = 1;
+  descriptor.height = 1;
+  descriptor.encoding = schema::ImageEncoding_RGBA8;
+  HOLOSCAN_RETURN_IF_ERROR(frame.emit_tensor(std::move(pixel), descriptor, startup));
+  startup_emitted_ = true;
+  return {};
+}
 expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
-  // Receive and validate inputs
-  HOLOSCAN_TRY(auto input, receive_tensor(image, "SarImageVizOp"));
+  // The GUI clock emits the cached placeholder once, then does no rendering
+  // without new data. Headless authoring retains its original OnEach behavior.
+  Tensor input;
+  EmitOptions options;
+  if (startup_placeholder_) {
+    HOLOSCAN_TRY(auto samples, image.selected_batch());
+    if (samples.empty())
+      return startup_emitted_ ? expected<void, Error>{} : emit_startup(context);
+    startup_emitted_ = true;
+    overlay_index_ += static_cast<int>(samples.size() - 1);
+    input = samples.back().data;
+    options = sensor_io::derive_from(samples.back());
+  } else {
+    HOLOSCAN_TRY(auto sample, image.receive());
+    input = sample.data;
+    options = sensor_io::derive_from(sample);
+  }
   const auto now = std::chrono::steady_clock::now();
   if (last_display_at_ &&
       std::chrono::duration<double>(now - *last_display_at_).count() < 1.0 / display_rate_hz_ &&
@@ -137,6 +213,8 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
     return {};
   }
   last_display_at_ = now;
+  if (input.nbytes() > 0 && input.data() == nullptr)
+    return make_unexpected(Error{ErrorCode::kInvalidArgument, "SarImageVizOp: null image storage"});
   const auto shape = input.shape();
   const auto dtype = input.dtype();
   if (shape.size() != 2U || shape[0] < 1 || shape[1] < 1 || shape[0] > max_v_ ||
@@ -199,7 +277,7 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
   }
   ++overlay_index_;
   if (!diag.rate_line.empty()) {
-    banner.push_back(diag.rate_line);
+    banner.push_back(format_display_rate_line(diag.rate_line));
   } else {
     const std::string rate_line =
         format_bp_rate_line(diag.bp_compute_s, diag.pulses, diag.pixels, diag.bp_num_v,
@@ -213,7 +291,7 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
       held_rate_line_ = rate_line;
     }
     if (!held_rate_line_.empty())
-      banner.push_back(held_rate_line_);
+      banner.push_back(format_display_rate_line(held_rate_line_));
   }
   if (diag.form_latency_s.has_value()) {
     const auto latency = format_form_latency(*diag.form_latency_s);
@@ -269,7 +347,6 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
   if (!overlay_filled)
     return make_unexpected(std::move(overlay_filled).error());
 
-  const EmitOptions options{.capture_time = context.activation_time()};
   HOLOSCAN_RETURN_IF_ERROR(labels.emit(std::move(*records), options));
   HOLOSCAN_RETURN_IF_ERROR(overlay.emit(std::move(*lines), options));
   schema::ImageT descriptor{};

@@ -333,6 +333,11 @@ target_include_directories(test_sar_config_paths PRIVATE ${PROJECT_SOURCE_DIR}/o
 target_compile_definitions(test_sar_config_paths PRIVATE
     HOLOSCAN_RADAR_DATA_DIR="${CMAKE_CURRENT_BINARY_DIR}/sar_config_data")
 
+if(TARGET sar_image_viz AND TARGET holoscan::visualization::op_holoviz)
+    radar_add_test(app/test_sar_startup holoscan::radar_app sar_image_viz
+        holoscan::visualization::op_holoviz)
+endif()
+
 if(TARGET spotlight AND TARGET holoscan::visualization::op_holoviz)
     add_executable(test_sar_runtime app/test_sar_runtime.cpp)
     target_link_libraries(test_sar_runtime PRIVATE radar_test_utils GTest::gtest_main
@@ -696,5 +701,32 @@ if(TARGET spotlight AND HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ AND HOLOSCAN_RADAR_HAS_
             LABELS "application;smoke;integration;visualization"
             RESOURCE_LOCK fmcw_gui TIMEOUT 60 FIXTURES_REQUIRED sar_cphd
             ENVIRONMENT "PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT}:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
+    endforeach()
+endif()
+
+if(TARGET spotlight AND HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ AND HOLOSCAN_RADAR_HAS_X11)
+    foreach(language IN ITEMS cpp python)
+        if(language STREQUAL "python" AND NOT HOLOSCAN_RADAR_BUILD_PYTHON)
+            continue()
+        endif()
+        foreach(behavior IN ITEMS handoff close)
+            set(startup_args)
+            if(language STREQUAL "python")
+                list(APPEND startup_args --python)
+            endif()
+            if(behavior STREQUAL "close")
+                list(APPEND startup_args --close-before-image)
+            endif()
+            set(startup_name "SarStartupWindow_${language}_${behavior}")
+            add_test(NAME ${startup_name}
+                COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
+                    ${PROJECT_SOURCE_DIR}/tests/gui/check_sar_startup.py $<TARGET_FILE:spotlight>
+                    ${PROJECT_BINARY_DIR}/applications/sar/spotlight/cpp/spotlight_generated_smoke.yaml
+                    ${startup_args})
+            set_tests_properties(${startup_name} PROPERTIES
+                LABELS "application;smoke;integration;visualization"
+                RESOURCE_LOCK fmcw_gui TIMEOUT 45 FIXTURES_REQUIRED sar_cphd
+                ENVIRONMENT "PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT}:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
+        endforeach()
     endforeach()
 endif()

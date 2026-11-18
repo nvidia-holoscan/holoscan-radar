@@ -255,3 +255,64 @@ window-query and pixel-readback probes repeatedly stalled, including checks of
 the existing separate-window layout; complete forwarded interaction and pixel
 qualification is therefore not claimed. Positive native-window visual review
 still requires a compatible display. Repository-wide pinned lint passes.
+
+## Startup and typography follow-up
+
+The approved UI retains image titles in the left status panel and moves each
+collection name above its corresponding scrolling timeline bar. Collection and
+image-emission bars are thinner; both label rows fit the existing 112-pixel
+footer. Sidebar titles increase to 16 pixels and details to 14. Display-only
+throughput conversion replaces scientific notation with k/M/G/T prefixes,
+while the console retains its existing measurement string. The GUI converts
+that same held string rather than sampling a later BP measurement.
+
+`SarImageVizOp` now optionally uses a clock/DrainAll selector for interactive
+startup. With no image yet, it emits one 1-by-1 opaque charcoal GPU background
+and bounded native SDK text records. The existing exact image/text/geometry
+composer expands those into the configured display canvas. Subsequent idle
+clock activations return immediately; they never rerender or redownload the
+placeholder. After input arrives, the newest queued display image is rendered
+with its original capture time and provenance, and startup never reappears.
+Display admission remains best-effort and bounded. Headless graphs retain the
+original OnEach selector and emit no startup frame. No public operator contract
+or scientific port changes.
+
+Startup display chrome uses capture time -1, the existing unset-presentation
+sentinel. It therefore cannot satisfy the EOF display-drain check or masquerade
+as an acquired image. All three composer inputs carry that same stamp. The
+clocked GPU tests exercise this sentinel through the real SDK composer and
+verify the handoff preserves the real image's stamp. Numerical reporting and
+dumping branch before this private display operator.
+
+The timeline's existing small-frame updates show elapsed time and a truthful
+startup stage at 1 Hz from reader/BP diagnostics and presentation progress.
+Stage changes are not inferred as numerical progress percentages. Names above
+bars stay tied to their collection spans; the sidebar stays tied to its image.
+
+Validation in the pinned HSDK 5 GA image:
+
+- All 202 selected non-performance CTests passed, covering the Python provider,
+  SAR numerical/dump/headless checks, all six C++/Python X11 workflows, existing
+  FMCW presentation checks, and startup composition/handoff/closure checks.
+  The subsequently added GPU timeline test also passed, bringing the total to
+  203. It locates the collection label and colored bar and verifies that the
+  glyphs sit above the bar rather than relying on hardcoded layout coordinates.
+  After the host reboot, all nine focused fixture/startup/rate/timeline checks
+  passed again in the same pinned image.
+- Startup GPU checks verify one placeholder emission, original real-image
+  timestamps, charcoal/native-text composition, and display-only SI formatting.
+  Four Xvfb window checks cover handoff and closing before the first image in
+  both languages. Existing resize/EOF checks now wait for an actual formed
+  grayscale image so the placeholder cannot satisfy their assertions.
+- Ten-second C++/Python X11 runs with 10-ms delayed transport at 1024-by-768
+  continue processing through resize/recovery and shutdown. RSS remains
+  341.0 MiB for C++ and 574.2 MiB for Python; FD counts remain 149 and 146–148,
+  respectively. Startup and settled fixture screenshots were visually inspected.
+- Direct laptop-forwarded `localhost:10.0` runs in both languages complete
+  startup, first-image handoff, and final hold. Each logs two completed-image
+  uploads and 61 independent timeline uploads: timeline ticks do not rerender
+  or redownload the main image. This is execution/transport evidence; complete
+  SSH pixel/interaction review is still unqualified because cross-client remote
+  pixel/geometry probes previously stalled. Positive native-window review still
+  requires a display with Vulkan presentation support. Real-collection scientific
+  image quality is outside the synthetic-fixture visual checks.
