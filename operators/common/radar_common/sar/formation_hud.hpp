@@ -8,10 +8,13 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "radar_common/sar/formation_progress.hpp"
 
 namespace holoscan::radar {
 
@@ -104,6 +107,14 @@ inline bool sar_eof_drained(const FormationHudSnapshot& snapshot, int64_t report
 
 class FormationHud {
  public:
+  void enable_progress(int64_t cadence, int64_t reader_batch) {
+    const std::lock_guard lock(mu_);
+    progress_ = std::make_shared<sar_progress::Monitor>(cadence, reader_batch);
+  }
+  [[nodiscard]] std::shared_ptr<sar_progress::Monitor> progress() const {
+    const std::lock_guard lock(mu_);
+    return progress_;
+  }
   void publish_reader(std::vector<CollectionSpan> spans, PlaybackStatus playback, LastMeanApc apc,
                       std::optional<std::chrono::steady_clock::time_point> last_packet,
                       bool reader_stopped = false, std::optional<int64_t> capture_time_ns = {}) {
@@ -161,6 +172,7 @@ class FormationHud {
   bool reader_stopped_{false};
   FormationHudBp bp_{};
   std::string rate_line_;
+  std::shared_ptr<sar_progress::Monitor> progress_;
 };
 
 }  // namespace holoscan::radar

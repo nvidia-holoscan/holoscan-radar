@@ -126,6 +126,10 @@ history rather than the image currently displayed. Interactive startup shows
 a distinct cached PREPARING canvas until the first image arrives. The timeline
 reports observed startup stage and elapsed time independently, without repeatedly
 rendering or downloading the main canvas.
+The timeline also shows received versus GPU-completed pulse counts toward the
+next image and an approximate remaining wall time. It honors playback pacing;
+until timing measurements are available it displays Estimating. The readout
+updates independently at 1 Hz, with progress advancing in completed GPU batches.
 
 The former `applications/sar_formation/` path and `sar_formation` executable
 were replaced by the five image-formation workflows above; autofocus adds

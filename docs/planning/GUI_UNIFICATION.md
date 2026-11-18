@@ -316,3 +316,84 @@ Validation in the pinned HSDK 5 GA image:
   pixel/geometry probes previously stalled. Positive native-window review still
   requires a display with Vulkan presentation support. Real-collection scientific
   image quality is outside the synthetic-fixture visual checks.
+
+## Live pulse progress and next-image estimate
+
+The approved follow-up shows separate Received and Formed pulse counts/bars,
+plus an approximate wall time to the next image. The readout lives in the
+independent timeline frame, beside history at normal widths and above a compact
+history at narrow widths. It refreshes at 1 Hz. Neither readout changes nor
+ETA ticks render/download the main image or its image-specific sidebar.
+
+`FormationHud` optionally owns a pure host `sar_progress::Monitor`. The reader
+announces bounded packet identity/ranges before publication and acknowledges
+receipt after every required output succeeds. It reads only the selected first
+and last TxTime PVP records for a collection-duration estimate; speculative
+prefetch never advances received counts. The aperture manager records unique
+admissions before its corresponding output, preserving the order of slices
+that share a capture stamp. Signed evictions and reform replay never inflate
+acquisition counts. Loop generations distinguish repeated files. Packet,
+collection, and pending-work histories each have a fixed 128-record bound;
+overflow discards ambiguous diagnostics instead of changing the data graph.
+
+`radar_common/sdk/sar_gpu_progress.hpp` owns a fixed 16-pair CUDA event ring on
+the actual compute device. Formation records each admitted output batch around
+its existing GPU work. The timeline queries completion without waiting; the
+producer also reclaims completed event slots when beginning a batch. A full
+ring drops diagnostic tracking rather than backpressuring processing. Query
+and lifetime ownership are independent of operator clones; cross-device polls
+restore the caller's selected CUDA device. No stream callbacks, extra GPU
+synchronization, or raw aperture/image downloads are introduced.
+
+Only completed event batches advance Formed. A long single batch or a whole
+reform replay can leave this bar stationary until that work finishes. The ETA
+uses observed effective unique-pulse throughput for the image lattice and the
+remaining acquisition deadline (including playback rate and first-batch-ASAP
+release), taking the larger duration because acquisition and processing
+overlap. Collection TxTime interpolation is approximate; irregular pulse times,
+GPU contention, changed grids, and output/display overhead limit accuracy.
+Unpaced acquisition uses its observed wall rate. Reform timing includes the
+wait through auxiliary formation/autofocus to product formation, where present.
+Without a matching measurement, the readout says Estimating rather than using
+hardware-specific guesses. Image ready means formation completed, not that a
+remote display or a saved-product write has finished. Numerical reports,
+scientific color scaling, EOF drain, and saved products retain their contracts.
+
+The shared runtime enables this only for interactive, timeline-enabled viewers
+in both languages. No YAML defaults or user config files change. The optional
+manager HUD constructor argument is source-compatible and documented in the
+SAR contract; data ports, selectors, and parameters do not change.
+
+Validation in the pinned GA image passes all 221 selected non-performance
+checks, including the Python provider, SAR numerical/dump and headless cases,
+C++/Python X11 windows for all six workflows, completed-frame transport, FMCW
+regressions, aperture admission diagnostics, and the new progress/ETA tests.
+The 19 focused GPU/model/layout/startup checks pass again after exact count
+formatting. Window probes wait for both received and formed bars to fill on
+the actual reader/manager/BP path before closing.
+
+C++/Python 10-second 1024-by-768 soaks with 10-ms delayed X11 transport pass
+resize, recovery, EOF, and closure. Processing advances from 6,716 to 19,769
+images for C++ and 5,632 to 18,674 for Python during the delayed interval.
+C++ RSS remains 345.93 MiB with 149–151 FDs; Python RSS is 581.51–581.64 MiB
+with 146–148 FDs. These bounded soaks are functional/performance diagnostics,
+not a controlled estimate of instrumentation overhead.
+
+Startup, compact and wide footer, and formed-fixture captures were visually
+inspected. A real Panama Canal CPHD preview uses a temporary one-eighth linear
+pixel scale and the inherited 0.02 playback rate: it shows Received and Formed
+1,024 / 9,693 with an approximate 1m 32s remaining. Closing before the first
+image completes logs one main upload and 46 independent timeline uploads.
+This qualifies live diagnostics and early closure on real input, not completed
+real-product numerical accuracy or full-resolution performance. Original user
+configuration files are preserved and excluded from the commit.
+
+After forwarding was restored on `localhost:11.0`, direct laptop SSH/X11
+checks passed in both C++ and Python: startup, first-image handoff, native-text
+captures, and actual pixel reads of both completed progress bars. Additional
+1024-by-768 forwarded-window checks passed resizing, recovery, EOF idle
+behavior, window closure, and Python Escape with fit resizing. These checks
+use the real forwarded X server without a remote desktop. Isolated screenshots
+and real-input diagnostic captures received visual review; broader human
+scientific-image review is separate. Positive native Vulkan window review
+still requires a compatible display. Repository-wide pinned lint passes.

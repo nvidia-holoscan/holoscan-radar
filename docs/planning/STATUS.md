@@ -4,6 +4,21 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-18** — **SAR live pulse progress and next-image estimate** on
+  `deustice/sar-gui`: implemented separate unique-pulse received and GPU-completed
+  progress, with pacing-aware approximate ETA in the independent timeline.
+  Bounded host histories and a fixed nonblocking GPU event ring preserve
+  processing and completed-image caches. All 221 selected regressions pass;
+  19 focused checks pass again after final count formatting. C++/Python delayed
+  X11 runs retain stable RSS/FD bounds while processing advances through resize
+  and recovery. A bounded real Panama Canal preview shows measured first-image
+  progress and ETA at 0.02 pacing with one main upload and 46 timeline uploads.
+  Direct laptop SSH/X11 checks on `localhost:11.0` pass C++/Python first-image
+  handoff, bar-completion pixel reads, resize/recovery, EOF idle behavior,
+  window close, and Escape. Pinned all-file lint passes; user configuration
+  edits are excluded. Positive native-window review remains hardware-limited.
+  See the GUI decision record for validation details and limits.
+
 - **2026-11-18** — **SAR startup and typography polish** on `deustice/sar-gui`:
   added a distinct cached startup placeholder, enlarged footer text, moved
   collection labels above slimmer timeline bars, and formatted GUI throughput

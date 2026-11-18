@@ -21,6 +21,17 @@ input and output names within an operator.
 
 ### Implemented operator ports
 
+**Application diagnostics:** the optional `FormationHud` constructor capture
+already supported by `CPHDReaderOp` and `BackprojectionOp` is also accepted by
+`ApertureManagerOp` (default empty; existing construction stays compatible).
+Interactive applications can enable bounded pulse-progress diagnostics through
+that mailbox. These are host diagnostic records, never config descriptors or
+tensor ports. They do not alter parameters, temporal selectors, emit/reset
+policy, or numerical results. GPU completion uses a fixed event ring with
+nonblocking queries; missing diagnostic history suppresses progress/ETA rather
+than delaying formation. Headless and visualization-disabled applications do
+not enable this additional tracking.
+
 | Operator | Inputs | Outputs |
 | --- | --- | --- |
 | `CPHDReaderOp<T, TGeom>` | source | `phase_history`: complex T `(num_pulses,num_samples)`; `positions`, `reference_position`, optional `velocities`: real TGeom `(num_pulses,3)`; optional `sample_axis`: real T `(num_samples)`; optional `pulse_times`: float64 `(num_pulses)`; optional `coordinate_frame`: descriptor; `stream_boundary`: uint8 scalar every batch |

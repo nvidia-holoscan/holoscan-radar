@@ -189,6 +189,64 @@ TEST(SarTimeline, PlacesCollectionTitleAboveItsColoredBar) {
   EXPECT_TRUE(found) << "The collection title must remain attached to its visible span";
 }
 
+TEST(SarTimeline, ShowsLivePulseProgressAtWideAndCompactSizes) {
+  for (const int width : {320, 704}) {
+    SCOPED_TRACE(width);
+    constexpr int height = 112;
+    auto hud = std::make_shared<holoscan::radar::FormationHud>();
+    hud->enable_progress(0, 20);
+    auto monitor = hud->progress();
+    monitor->begin_packet(1, 0, 0, 20, 100, 99, 0.1, true);
+    monitor->received(1);
+    monitor->admit(1, 20, false, true);
+    auto work = monitor->take_work(1);
+    ASSERT_TRUE(work);
+    monitor->submitted();
+    work->pixels = 10;
+    monitor->set_probe([work] {
+      return holoscan::radar::sar_progress::GpuState{
+          .completed = work, .pixel_pulses_per_s = 100, .measured_pixels = 10};
+    });
+    auto harness = holoscan::testing::create_operator_test<sar::TimelineRasterOp>(
+        hud, std::vector<std::string>{"Panama Canal"}, false, 10.0, width, height);
+    harness.output_device("frame", holoscan::DeviceId{holoscan::radar::app::application_device()});
+    harness.capture_snapshot<holoscan::schema::ImageT>("frame", 1U, width * height * 4);
+    harness.capture_snapshot<holoscan::Tensor>("labels", 1U, 65536U);
+    testing::FixtureCompletion completion;
+    auto running = harness.run_async(completion.run_options());
+    const bool ready = completion.wait_for_output(running, "frame", 1U) &&
+                       completion.wait_for_output(running, "labels", 1U);
+    running.request_stop();
+    const auto result = running.finish();
+    completion.check(result);
+    ASSERT_TRUE(ready);
+    ASSERT_TRUE(result.ok()) << result.describe_failure();
+    const auto frame = result.snapshot<holoscan::schema::ImageT>("frame");
+    const auto pixels = testing::to_host(frame.tensor(holoscan::schema::ImageTensorFields::data));
+    EXPECT_EQ(pixels.shape, (std::vector<int64_t>{height, width, 4}));
+    const auto records = testing::to_host(result.snapshot<holoscan::Tensor>("labels"));
+    bool received = false, formed = false, eta = false;
+    for (int64_t row = 0; row < records.shape[0]; ++row) {
+      const auto* record = records.as<std::uint8_t>() + row * records.shape[1];
+      const auto* text = reinterpret_cast<const char*>(record + sar::kTextRunHeaderBytes);
+      received = received || std::strcmp(text, "Received 20/100") == 0;
+      formed = formed || std::strcmp(text, "Formed 20/100") == 0;
+      eta = eta || std::strncmp(text, "Next image: ~", 13) == 0;
+    }
+    EXPECT_TRUE(received);
+    EXPECT_TRUE(formed);
+    EXPECT_TRUE(eta);
+    int cyan = 0, green = 0;
+    for (int64_t pixel = 0; pixel < width * height; ++pixel) {
+      const auto* rgba = pixels.as<std::uint8_t>() + 4 * pixel;
+      cyan += rgba[0] == 75 && rgba[1] == 205 && rgba[2] == 220;
+      green += rgba[0] == 115 && rgba[1] == 200 && rgba[2] == 150;
+    }
+    EXPECT_GT(cyan, 0);
+    EXPECT_GT(green, 0);
+  }
+}
+
 TEST(SarDisplayRate, UsesReadablePrefixesWithoutChangingConsoleMeasurements) {
   const auto report = sar::format_bp_rate_line(0.02, 1000, 248000, 0, 0, 0, 0);
   EXPECT_EQ(report, "20ms  1.24e10 px*pls/s");

@@ -190,6 +190,16 @@ composer. The placeholder's -1 stamp cannot advance completed-image drain.
 `SarDisplayRate` checks SI conversions and unchanged console measurements.
 `SarTimeline` verifies collection-title placement above its colored bar using
 the GPU raster and native text records.
+It also verifies pulse counts, ETA labels, and colored progress bars at compact
+and normal panel widths. The C++/Python handoff probes wait for the received and
+formed bars to reach completion on the actual CPHD/formation path.
+
+`SarPulseProgress` checks pacing-aware and unpaced ETA overlap, distinct receipt
+and completion, slices sharing a stamp, reform replay, loop generations, partial
+cadences, and expired diagnostic history. `SarGpuProgress` holds real CUDA work
+behind a gate, fills the fixed event ring, and proves that queries return pending
+without claiming completion or waiting for a slot. Numerical operator and dump
+regressions remain separate from these UI/diagnostic assertions.
 
 The startup probe can also save a visual-review artifact inside the container:
 

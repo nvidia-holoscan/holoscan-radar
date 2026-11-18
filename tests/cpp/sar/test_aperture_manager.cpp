@@ -7,6 +7,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <holoscan/testing/operator_test_harness.hpp>
@@ -31,7 +32,14 @@ TEST(ApertureManagerOp, RetainsEvictsAndFlushesOnTypedBoundary) {
   extents.max_range_bins = 2;
   extents.max_image_v = 1;
   extents.max_image_u = 1;
-  auto fixture = holoscan::testing::create_operator_test<ApertureManagerOp<float>>(extents);
+  auto hud = std::make_shared<holoscan::radar::FormationHud>();
+  hud->enable_progress(0, 1);
+  auto monitor = hud->progress();
+  for (int tick = 0; tick < 3; ++tick) {
+    monitor->begin_packet(tick + 1, 0, tick, 1, 3, 2, 0, tick == 0);
+    monitor->received(tick + 1);
+  }
+  auto fixture = holoscan::testing::create_operator_test<ApertureManagerOp<float>>(extents, hud);
   fixture.set_params(ApertureManagerParams{.max_aperture_pulses = 2, .emit_interval_pulses = 0});
   std::vector<std::shared_ptr<holoscan::Tensor>> retained;
   for (int tick = 0; tick < 3; ++tick) {
@@ -80,6 +88,12 @@ TEST(ApertureManagerOp, RetainsEvictsAndFlushesOnTypedBoundary) {
   auto controls = result.snapshots<holoscan::Tensor>("control_out");
   ASSERT_EQ(controls.size(), 1U);
   EXPECT_EQ(to_host(controls[0]).as<uint8_t>()[0], 1U);
+  for (int tick = 0; tick < 3; ++tick) {
+    const auto work = monitor->take_work(tick + 1);
+    ASSERT_TRUE(work);
+    EXPECT_EQ(work->admissions, 1) << "Signed departures must not count as new received pulses";
+    EXPECT_EQ(work->end, tick + 1);
+  }
 }
 
 // The pair every application runs is `<float, double>`: samples in single,

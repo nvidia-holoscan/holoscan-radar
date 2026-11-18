@@ -61,8 +61,17 @@ def check(args):
                 window = wait(lambda: find_window(lib, display, root, b"Radar CI SAR startup"))
                 panel = wait(lambda: find_window(lib, display, window, b"SAR image"))
 
-                def pixel():
-                    image = lib.XGetImage(display, panel, 2, 2, 1, 1, c.c_ulong(-1).value, 2)
+                def pixel(x=2, y=2, surface=None):
+                    image = lib.XGetImage(
+                        display,
+                        panel if surface is None else surface,
+                        x,
+                        y,
+                        1,
+                        1,
+                        c.c_ulong(-1).value,
+                        2,
+                    )
                     if not image:
                         return None
                     try:
@@ -91,6 +100,12 @@ def check(args):
                     picture.save(args.capture)
                 if not args.close_before_image:
                     wait(lambda: pixel() not in (None, 0x13181F))
+                    timeline = wait(lambda: find_window(lib, display, window, b"SAR timeline"))
+                    width, _ = geometry(lib, display, timeline)
+                    # The compact progress panel must reach full receipt and
+                    # GPU completion independently of the main image upload.
+                    wait(lambda: pixel(width - 20, 5, timeline) == 0x4BCDDC)
+                    wait(lambda: pixel(width - 20, 19, timeline) == 0x73C896)
                     log.seek(0)
                     assert "SAR: image 1 formed" in log.read()
                 event = Event()

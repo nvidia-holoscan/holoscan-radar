@@ -203,7 +203,7 @@ struct SarGraphRuntime {
   holoscan::OperatorHandle<radar::SARRangeCompressionOp<T>> range{
       graph.op<radar::SARRangeCompressionOp<T>>("range_compression", ingest_extents)};
   holoscan::OperatorHandle<radar::ApertureManagerOp<T, TGeom>> manager{
-      graph.op<radar::ApertureManagerOp<T, TGeom>>("aperture_manager", extents)};
+      graph.op<radar::ApertureManagerOp<T, TGeom>>("aperture_manager", extents, hud)};
   holoscan::OperatorHandle<radar::BackprojectionOp<T, TGeom>> bp{
       graph.op<radar::BackprojectionOp<T, TGeom>>("backprojection", extents, hud)};
   std::array<int64_t, 2> product_extent{
@@ -255,6 +255,8 @@ struct SarGraphRuntime {
     radar::ApertureManagerParams manager_seed;
     manager_seed.emit_interval_pulses = cfg.tile_pulses;
     auto manager_params = app::config::decode_params(document, "/aperture_manager", manager_seed);
+    if (visualize && !cfg.headless && cfg.visualization.timeline.enabled)
+      hud->enable_progress(manager_params->emit_interval_pulses, reader_params->pulses_per_tick);
     radar::BackprojectionParams bp_seed;
     bp_seed.sample_geometry = cfg.sample_geometry;
     bp_seed.range_bin_spacing = cfg.range_bin_spacing;

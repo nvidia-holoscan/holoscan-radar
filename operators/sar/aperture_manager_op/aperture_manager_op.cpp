@@ -124,7 +124,12 @@ expected<TensorOutputLoan, Error> prepare_geometry(Output<WireSampleGeometry>& o
 
 template <typename T, typename TGeom>
 ApertureManagerOp<T, TGeom>::ApertureManagerOp(const MaxTensorExtents& extents)
-: extents_(extents) {
+: ApertureManagerOp(extents, {}) {}
+
+template <typename T, typename TGeom>
+ApertureManagerOp<T, TGeom>::ApertureManagerOp(const MaxTensorExtents& extents,
+                                               std::shared_ptr<FormationHud> hud)
+: extents_(extents), hud_(std::move(hud)) {
   require_extent(extents.max_pulses, "max_pulses", kWho);
   require_extent(extents.max_range_bins, "max_range_bins", kWho);
 }
@@ -182,6 +187,7 @@ Contract ApertureManagerOp<T, TGeom>::contract() const {
 
 template <typename T, typename TGeom>
 void ApertureManagerOp<T, TGeom>::start() {
+  progress_ = hud_ ? hud_->progress() : nullptr;
   const auto& p = params();
   if (p.max_aperture_pulses < 0 || p.emit_interval_pulses < 0 ||
       (p.emit_mode == ApertureEmitMode::kReform && p.max_aperture_pulses == 0)) {
@@ -371,6 +377,10 @@ expected<void, Error> ApertureManagerOp<T, TGeom>::compute(ExecutionContext& con
       return make_unexpected(Error{ErrorCode::kFailure, "ApertureManagerOp: stream sync failed"});
     output_batch.emplace(std::move(batch));
   }
+  if (progress_)
+    progress_->admit(context.activation_time().timestamp_ns, np,
+                     emit_now && output_control != FormationControl::kResetWithoutEmit,
+                     output_batch.has_value(), reform);
   if (pending_geometry_ && geometry_output_.active()) {
     HOLOSCAN_TRY(auto loan, prepare_geometry(sample_geometry_out, *pending_geometry_));
     geometry_output_.emit_schema_tensor(sample_geometry_out, context, std::move(loan),

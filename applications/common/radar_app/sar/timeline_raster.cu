@@ -233,6 +233,70 @@ std::string fit_label(const std::string& name, int64_t max_w, int scale) {
   return s;
 }
 
+std::string pulse_count(int64_t count) {
+  auto text = std::to_string(count);
+  for (auto position = static_cast<int64_t>(text.size()) - 3; position > 0; position -= 3)
+    text.insert(static_cast<std::size_t>(position), ",");
+  return text;
+}
+
+std::string next_image_eta(const radar::sar_progress::View& view) {
+  if (view.image_complete)
+    return "Image ready";
+  if (!view.eta_s)
+    return "Next image: Estimating...";
+  // Rounded approximate wall time, not a promised countdown to GPU completion.
+  const auto seconds = static_cast<int64_t>(std::ceil(std::min(*view.eta_s, 359999.0)));
+  if (seconds >= 3600)
+    return "Next image: ~" + std::to_string(seconds / 3600) + "h " +
+           std::to_string((seconds % 3600) / 60) + "m";
+  if (seconds >= 60)
+    return "Next image: ~" + std::to_string(seconds / 60) + "m " + std::to_string(seconds % 60) +
+           "s";
+  return "Next image: ~" + std::to_string(seconds) + "s";
+}
+
+void draw_pulse_progress(TimelineCommands* img, int64_t width, int64_t height,
+                         const radar::sar_progress::View& view,
+                         const std::vector<std::string>& names, bool compact) {
+  const std::array<uint8_t, 3> detail{180, 194, 207}, received{75, 205, 220}, formed{115, 200, 150};
+  const auto fit = [](std::string text, int64_t pixels) {
+    // Native 14px text advances about 7.5px per character; leave a margin.
+    const auto chars = static_cast<std::size_t>(std::max(int64_t{0}, pixels / 8));
+    if (text.size() > chars)
+      text = chars >= 3 ? text.substr(0, chars - 3) + "..." : "";
+    return text;
+  };
+  const auto row = [&](const std::string& label, int64_t value, int64_t y,
+                       const std::array<uint8_t, 3>& color) {
+    const auto count = view.valid ? pulse_count(value) + "/" + pulse_count(view.total) : "--";
+    const int64_t bar_x = compact ? std::max(int64_t{180}, width - 80) : 8;
+    const int64_t bar_y = compact ? y + 5 : y + 18;
+    const int64_t bar_w = std::max(int64_t{1}, width - bar_x - 8);
+    draw_text(img, width, height, 8, y, fit(label + " " + count, compact ? bar_x - 16 : width - 16),
+              color, 2);
+    fill_rect(img, width, height, bar_x, bar_y, bar_x + bar_w, bar_y + 4, {40, 49, 58});
+    if (view.total > 0)
+      fill_rect(img, width, height, bar_x, bar_y, bar_x + bar_w * value / view.total, bar_y + 4,
+                color);
+  };
+  if (compact) {
+    row("Received", view.received, 0, received);
+    row("Formed", view.formed, 14, formed);
+    draw_text(img, width, height, 8, 28, fit(next_image_eta(view), width - 16), detail, 2);
+  } else {
+    std::string name = "Pulse progress";
+    if (view.valid && view.file_index >= 0 &&
+        static_cast<std::size_t>(view.file_index) < names.size())
+      name = names[view.file_index];
+    draw_text(img, width, height, 8, 3, fit(name, width - 16), detail, 2);
+    draw_text(img, width, height, 8, 23, fit(next_image_eta(view), width - 16), detail, 2);
+    row("Received", view.received, 46, received);
+    row("Formed", view.formed, 78, formed);
+    fill_rect(img, width, height, width - 1, 0, width, height, {45, 55, 65});
+  }
+}
+
 }  // namespace
 
 TimelineRasterOp::TimelineRasterOp(std::shared_ptr<radar::FormationHud> hud,
@@ -275,6 +339,7 @@ Contract TimelineRasterOp::contract() const {
 
 void TimelineRasterOp::start() {
   started_at_ = Clock::now();
+  pulse_progress_ = hud_->progress();
   if (cudaMalloc(&commands_, kMaxRects * sizeof(Rect)) != cudaSuccess)
     throw std::runtime_error("Timeline command allocation failed");
 }
@@ -289,6 +354,8 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   const auto now = Clock::now();
   const bool starting = progress_ && progress_->capture_ns.load() < 0;
   const bool hud_due = !hud_held_ || std::chrono::duration<double>(now - hud_at_).count() >= 1.0;
+  if (pulse_progress_ && hud_due)
+    pulse_view_ = pulse_progress_->snapshot(now);
   if (starting && hud_due) {
     const std::string phase = snap.bp.emit_at       ? "Preparing display"
                               : snap.reader_stopped ? "Forming first image"
@@ -324,8 +391,11 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   });
   image_emits_.erase(image_emits_.begin(), keep);
 
-  const int64_t w = width_;
-  const int64_t h = height_;
+  const bool compact_progress = pulse_progress_ && width_ < 620;
+  const int64_t progress_width = pulse_progress_ && !compact_progress ? 264 : 0;
+  const int64_t progress_height = compact_progress ? 42 : 0;
+  const int64_t w = width_ - progress_width;
+  const int64_t h = height_ - progress_height;
   TimelineCommands img;
   const std::array<uint8_t, 3> bg{16, 16, 16};
   fill_rect(&img, w, h, 0, 0, w, h, bg);
@@ -420,7 +490,7 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
     last_label_right = tx + tw;
   }
 
-  if (starting)
+  if (starting && !pulse_progress_)
     draw_text(&img, w, h, 4, prod_label_y, fit_label(startup_line_, w - 8, kScale),
               std::array<uint8_t, 3>{145, 180, 195}, kScale);
   fill_rect(&img, w, h, 0, axis_y, w, axis_y + 1, axis_c);
@@ -460,8 +530,27 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   if (show_playback_lag_)
     draw_hud(plat_y0, plat_y1, lag_hud_, lag_hud_fg_);
 
-  auto loan = frame.allocate_tensor(TensorLoanRequest{.shape = std::vector<int64_t>{h, w, 4},
-                                                      .dtype = DLDataType{kDLUInt, 8U, 1U}});
+  // Shift only bounded commands/text, never pixels or the completed SAR image.
+  if (pulse_progress_) {
+    for (auto& rect : img.rectangles) {
+      rect.x0 = std::clamp(rect.x0, int64_t{0}, w) + progress_width;
+      rect.x1 = std::clamp(rect.x1, int64_t{0}, w) + progress_width;
+      rect.y0 = std::clamp(rect.y0, int64_t{0}, h) + progress_height;
+      rect.y1 = std::clamp(rect.y1, int64_t{0}, h) + progress_height;
+    }
+    for (std::size_t row = 0; row < img.rows; ++row) {
+      visualization::TextRunHeader header;
+      auto* record = img.text.data() + row * kTextBytes;
+      std::memcpy(&header, record, sizeof(header));
+      header.x += progress_width;
+      header.y += progress_height;
+      std::memcpy(record, &header, sizeof(header));
+    }
+    draw_pulse_progress(&img, compact_progress ? width_ : progress_width, height_, pulse_view_,
+                        scene_names_, compact_progress);
+  }
+  auto loan = frame.allocate_tensor(TensorLoanRequest{
+      .shape = std::vector<int64_t>{height_, width_, 4}, .dtype = DLDataType{kDLUInt, 8U, 1U}});
   if (!loan)
     return make_unexpected(std::move(loan).error());
   auto writer = loan->write(context.cuda_stream());
@@ -474,8 +563,8 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   // Finish its H2D read before releasing it; pixels remain GPU-rendered.
   if (cudaStreamSynchronize(context.cuda_stream().get()) != cudaSuccess)
     return make_unexpected(Error{ErrorCode::kFailure, "Timeline command transfer failed"});
-  render_timeline<<<(w * h + 255) / 256, 256, 0, context.cuda_stream().get()>>>(
-      static_cast<uint8_t*>(writer->data()), w, h, static_cast<const Rect*>(commands_),
+  render_timeline<<<(width_ * height_ + 255) / 256, 256, 0, context.cuda_stream().get()>>>(
+      static_cast<uint8_t*>(writer->data()), width_, height_, static_cast<const Rect*>(commands_),
       img.rectangles.size());
   if (cudaPeekAtLastError() != cudaSuccess)
     return make_unexpected(Error{ErrorCode::kFailure, "Timeline GPU raster failed"});
@@ -493,8 +582,8 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   HOLOSCAN_RETURN_IF_ERROR(
       labels.emit(std::move(*text), EmitOptions{.capture_time = context.activation_time()}));
   schema::ImageT descriptor{};
-  descriptor.height = static_cast<std::int32_t>(h);
-  descriptor.width = static_cast<std::int32_t>(w);
+  descriptor.height = static_cast<std::int32_t>(height_);
+  descriptor.width = static_cast<std::int32_t>(width_);
   descriptor.encoding = schema::ImageEncoding_RGBA8;
   descriptor.color_space = schema::ColorSpace_UNSPECIFIED;
   return frame.emit_tensor(std::move(*loan), descriptor,

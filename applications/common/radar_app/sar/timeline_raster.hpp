@@ -55,6 +55,8 @@ class TimelineRasterOp : public Operator<> {
   std::vector<std::string> scene_names_;
   bool show_playback_lag_{false};
   std::shared_ptr<FrameProgress> progress_;
+  std::shared_ptr<radar::sar_progress::Monitor> pulse_progress_;
+  radar::sar_progress::View pulse_view_;
   std::chrono::steady_clock::time_point started_at_{};
   std::string startup_line_;
   std::chrono::nanoseconds period_;

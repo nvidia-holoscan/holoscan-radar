@@ -12,6 +12,19 @@ tolerances, not fixture checksums. Public CPHD collections are optional local
 validation and are tracked as open until this HSDK 5 binary is run on them.
 The Python generator and Python tests are outside this implementation.
 
+Interactive pulse diagnostics add a separate application gate: received counts
+must follow successful publication, GPU-completed counts must follow completion
+events, and signed evictions/replay must not inflate acquisition. Check sliced
+ticks with the same stamp, loop generations, early/final partial cadences,
+bounded-history overflow and recovery, paced first-batch release, and overlapped
+acquisition/formation ETA. Unknown or changed-grid timing must stay unknown.
+Hold a real CUDA stream pending and exhaust the fixed event ring to prove that
+progress polling never waits or claims completion; the existing synchronized
+image boundary may acknowledge completion without allocating another event.
+Exercise wide/compact native text layouts and actual C++/Python X11 bars through
+first-image handoff. Keep numerical/dump parity, main-frame upload independence,
+delayed-display recovery, and bounded host resources as separate assertions.
+
 ## Purpose
 
 Defines what the SAR operators must be tested against: (1) the **point-target simulator** — an analytic signal model that produces phase history with known ground truth — and (2) the **high-level, I/O-level tests** each operator must pass. Like the FMCW [TESTING.md](../TESTING.md) one level up, this document stays at the interface level: it specifies *what property* each test asserts, not the fixtures, tolerances, or framework. Lower-level unit tests (kernel internals, numerical tolerances, boundary indexing) are deferred.

@@ -475,3 +475,14 @@ The displayed number converts the same held report measurement, preserving
 its pairing with the image. Console measurements retain their original
 scientific notation and units. Neither signal processing nor saved products
 change. All six SAR applications and both languages share this implementation.
+
+Interactive timelines also show Received and Formed pulse progress toward the
+next image, with an approximate ETA once a matching timing measurement exists.
+Received counts unique ingested pulses; Formed advances only after GPU batches
+complete. Replay and signed eviction work never inflate received counts.
+Long batches may leave the formed bar stationary. Estimates account for playback
+pacing and overlapping processing, but can change with GPU contention or a new
+image lattice; Estimating means a suitable measurement is not available yet.
+The readout refreshes at 1 Hz within the cached timeline panel, beside history
+at normal widths and above compact history in narrower windows. Headless runs
+and runs without a timeline do not enable the extra completion tracking.
