@@ -4,6 +4,15 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-18** — **CPHD subset retry/resume** on `deustice/sar-gui`: implemented.
+  Retry transient HTTP responses and preserve durable, source/window-validated
+  chunk checkpoints so the same download command resumes after interruption.
+  This side-conversation change preserves the pending GUI work and user presets.
+  All 33 offline checks pass, including a terminated process resuming its saved
+  chunks, transient HTTP retries, source/range validation, corrupted checkpoints,
+  writer exclusion, publication recovery, exact signal/PVP results, and stable
+  padded metadata through the real CPHD writer. No public transfer was started.
+
 - **2026-11-18** — **SAR live pulse progress and next-image estimate** on
   `deustice/sar-gui`: implemented separate unique-pulse received and GPU-completed
   progress, with pacing-aware approximate ETA in the independent timeline.

@@ -696,7 +696,7 @@ def main() -> int:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="re-download files that already exist",
+        help="re-download existing files and restart partial subsets",
     )
     args = parser.parse_args()
     if args.config is not None and args.dest is not None:

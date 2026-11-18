@@ -141,7 +141,7 @@ def main() -> int:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="rewrite the destination even if the same window is already there",
+        help="restart a partial download and rewrite even an existing matching destination",
     )
     parser.add_argument(
         "--dry-run",

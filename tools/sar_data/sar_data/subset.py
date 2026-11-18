@@ -18,16 +18,29 @@ is request-rate bound: 128 keep-alive connections is the measured optimum.
 from __future__ import annotations
 
 import copy
+import fcntl
+import hashlib
 import http.client
 import json
+import logging
+import os
+import random
+import re
+import shutil
 import ssl
+import sys
+import tempfile
 import threading
 import time
 import urllib.parse
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Protocol
+from typing import BinaryIO, Protocol
 
 import lxml.etree
 import numpy as np
@@ -41,6 +54,7 @@ _HEADER_PROBE = 64 * 1024
 _DEFAULT_CONNECTIONS = 128
 _HTTPS_TIMEOUT_S = 60.0
 _FETCH_RETRIES = 5
+_RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 # Host RAM on the demo box is 62 GiB; a 0.5 m Houston subband is ~52 GiB.
 # Stream that many bytes through the writer rather than materialising them.
 _SIGNAL_CHUNK_BYTES = 64 * 1024 * 1024
@@ -50,6 +64,8 @@ class ByteSource(Protocol):
     def read(self, offset: int, size: int) -> bytes: ...
 
     def close(self) -> None: ...
+
+    def identity(self) -> dict: ...
 
 
 @dataclass(frozen=True)
@@ -100,6 +116,20 @@ class FileByteSource:
         self._local = threading.local()
         self._handles: list[object] = []
         self._lock = threading.Lock()
+        self._identity = self.identity()
+
+    def identity(self) -> dict:
+        stat = self._path.stat()
+        identity = {
+            "path": str(self._path.resolve()),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "device": stat.st_dev,
+            "inode": stat.st_ino,
+        }
+        if hasattr(self, "_identity") and identity != self._identity:
+            raise RuntimeError("source file changed while preparing the subset")
+        return identity
 
     def read(self, offset: int, size: int) -> bytes:
         if size == 0:
@@ -142,6 +172,26 @@ class HttpByteSource:
         self._local = threading.local()
         self._conns: list[http.client.HTTPConnection] = []
         self._lock = threading.Lock()
+        self._identity: dict | None = None
+
+    def identity(self) -> dict:
+        with self._lock:
+            return dict(self._identity or {})
+
+    def _validate_response(self, response, offset: int, last: int) -> None:
+        span = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", response.getheader("Content-Range", ""))
+        if not span or tuple(map(int, span.groups()[:2])) != (offset, last) or int(span[3]) <= last:
+            raise RuntimeError(f"incorrect Content-Range for bytes={offset}-{last}")
+        identity = {
+            "size": int(span[3]),
+            "etag": response.getheader("ETag"),
+            "last_modified": response.getheader("Last-Modified"),
+        }
+        with self._lock:
+            if self._identity is None:
+                self._identity = identity
+            elif self._identity != identity:
+                raise RuntimeError("HTTP source changed while preparing the subset")
 
     def _connect(self) -> http.client.HTTPConnection:
         if self._scheme == "https":
@@ -170,6 +220,8 @@ class HttpByteSource:
             except OSError:
                 pass
             self._local.conn = None
+            with self._lock:
+                self._conns.remove(conn)
 
     def read(self, offset: int, size: int) -> bytes:
         if size == 0:
@@ -182,10 +234,19 @@ class HttpByteSource:
         }
         last_error: Exception | None = None
         for attempt in range(_FETCH_RETRIES):
+            retry_after = None
             try:
+                identity = self.identity()
+                if identity.get("etag") and not identity["etag"].startswith("W/"):
+                    headers["If-Match"] = identity["etag"]
+                elif identity.get("last_modified"):
+                    headers["If-Unmodified-Since"] = identity["last_modified"]
                 conn = self._connection()
                 conn.request("GET", self._path, headers=headers)
                 response = conn.getresponse()
+                if response.status in _RETRY_STATUSES:
+                    retry_after = response.getheader("Retry-After")
+                    raise OSError(f"HTTP {response.status} for Range bytes={offset}-{last}")
                 if response.status == 200:
                     self._drop()
                     raise RuntimeError(
@@ -199,16 +260,23 @@ class HttpByteSource:
                         f"HTTP {status} for Range bytes={offset}-{last} "
                         f"on {self._host}{self._path}"
                     )
-                data = response.read()
+                self._validate_response(response, offset, last)
+                data = response.read(size + 1)
                 if len(data) != size:
-                    raise RuntimeError(f"short HTTP body at {offset}: {len(data)} of {size} bytes")
+                    raise OSError(f"short HTTP body at {offset}: {len(data)} of {size} bytes")
                 return data
             except RuntimeError:
+                self._drop()
                 raise
             except (http.client.HTTPException, OSError, TimeoutError) as exc:
                 last_error = exc
                 self._drop()
-                time.sleep(0.25 * (2**attempt))
+                if attempt + 1 < _FETCH_RETRIES:
+                    delay = _retry_delay(attempt, retry_after)
+                    logging.warning(
+                        "%s; retry %s/%s in %.1fs", exc, attempt + 1, _FETCH_RETRIES - 1, delay
+                    )
+                    time.sleep(delay)
         raise RuntimeError(
             f"Range bytes={offset}-{last} failed after {_FETCH_RETRIES} tries"
         ) from last_error
@@ -222,6 +290,20 @@ class HttpByteSource:
                     pass
             self._conns.clear()
         self._local.conn = None
+
+
+def _retry_delay(attempt: int, retry_after: str | None) -> float:
+    delay = min(30.0, 2.0**attempt + random.uniform(0, 0.25))
+    if retry_after:
+        try:
+            seconds = float(retry_after)
+        except ValueError:
+            try:
+                seconds = (parsedate_to_datetime(retry_after) - datetime.now(UTC)).total_seconds()
+            except (ValueError, TypeError, OverflowError):
+                seconds = 0.0
+        delay = max(delay, min(60.0, seconds))
+    return delay
 
 
 def parse_index_range(value) -> tuple[int, int] | None:
@@ -576,10 +658,197 @@ def _dest_already_matches(
 def _write_sidecar(
     dest: Path, source: str | Path, pulses: tuple[int, int], samples: tuple[int, int]
 ) -> None:
-    _sidecar_path(dest).write_text(
-        json.dumps(_window_record(source, pulses, samples), indent=2) + "\n",
-        encoding="utf-8",
-    )
+    _write_json_atomic(_sidecar_path(dest), _window_record(source, pulses, samples))
+
+
+def _sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_json_atomic(path: Path, record: dict) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(record, handle, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+    _sync_directory(path.parent)
+
+
+def _hash_region(handle: BinaryIO, offset: int, size: int) -> str:
+    handle.seek(offset)
+    digest = hashlib.sha256()
+    while size:
+        block = handle.read(min(size, 1024 * 1024))
+        if not block:
+            raise RuntimeError("partial download is truncated; use --force to restart")
+        digest.update(block)
+        size -= len(block)
+    return digest.hexdigest()
+
+
+@contextmanager
+def _destination_lock(dest: Path):
+    # Retain the tiny lock file: unlinking it lets a third process bypass a
+    # waiter that still owns the previous inode. No lock is held after exit.
+    with dest.with_name("." + dest.name + ".lock").open("a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(f"another download is already writing {dest}") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _validate_checkpoint(handle: BinaryIO, state: dict, request: dict) -> int:
+    if state.get("version") != 1 or state.get("request") != request:
+        raise RuntimeError("partial download source/window changed; use --force to restart")
+    count = state.get("written_vectors")
+    start = state.get("last_chunk_start")
+    if (
+        type(count) is not int
+        or not 0 <= count <= request["num_vectors"]
+        or type(start) is not int
+        or not 0 <= start <= count
+    ):
+        raise RuntimeError("invalid download checkpoint; use --force to restart")
+    offset, row_size = request["dest_offset"], request["row_size"]
+    if os.fstat(handle.fileno()).st_size < offset + count * row_size:
+        raise RuntimeError("partial download is truncated; use --force to restart")
+    if _hash_region(handle, 0, offset) != request["prefix_sha256"]:
+        raise RuntimeError("partial download metadata changed; use --force to restart")
+    if count and (
+        start == count
+        or _hash_region(handle, offset + start * row_size, (count - start) * row_size)
+        != state.get("last_chunk_sha256")
+    ):
+        raise RuntimeError("partial download tail is corrupt; use --force to restart")
+    return count
+
+
+def _download_signal(
+    dest: Path,
+    source_name: str | Path,
+    source: ByteSource,
+    prefix: BinaryIO,
+    dest_offset: int,
+    *,
+    pulses: tuple[int, int],
+    samples: tuple[int, int],
+    force: bool,
+    **stream_options,
+) -> None:
+    part = dest.with_suffix(dest.suffix + ".part")
+    journal = part.with_suffix(part.suffix + ".json")
+    identity = source.identity()
+    request = {
+        **_window_record(source_name, pulses, samples),
+        "source_identity": identity,
+        "prefix_sha256": _hash_region(prefix, 0, dest_offset),
+        "dest_offset": dest_offset,
+        "num_vectors": stream_options["num_vectors"],
+        "row_size": stream_options["num_samples"] * _CF8_BYTES,
+    }
+    with _destination_lock(dest):
+        if force:
+            part.unlink(missing_ok=True)
+            journal.unlink(missing_ok=True)
+        if journal.exists() or part.exists():
+            etag = identity.get("etag")
+            if isinstance(source, HttpByteSource) and not (
+                (etag and not etag.startswith("W/")) or identity.get("last_modified")
+            ):
+                raise RuntimeError(
+                    "server has no source validator for resume; use --force to restart"
+                )
+            try:
+                state = json.loads(journal.read_text(encoding="utf-8"))
+                if not isinstance(state, dict):
+                    raise ValueError("checkpoint is not an object")
+            except (OSError, ValueError) as exc:
+                raise RuntimeError(
+                    "missing/invalid download checkpoint; use --force to restart"
+                ) from exc
+            # Recover a crash between publishing the complete CPHD and writing
+            # its sidecar. Never infer completion solely from a file's length.
+            published = not part.exists() and state.get("written_vectors") == request["num_vectors"]
+            candidate = dest if published else part
+            if not candidate.is_file():
+                raise RuntimeError("checkpoint has no partial file; use --force to restart")
+            with candidate.open("rb") as handle:
+                count = _validate_checkpoint(handle, state, request)
+            if published:
+                _write_sidecar(dest, source_name, pulses, samples)
+                journal.unlink()
+                _sync_directory(dest.parent)
+                return
+        else:
+            state = {
+                "version": 1,
+                "request": request,
+                "written_vectors": 0,
+                "last_chunk_start": 0,
+                "last_chunk_sha256": None,
+            }
+            count = 0
+            prefix.seek(0)
+            with part.open("xb") as handle:
+                shutil.copyfileobj(prefix, handle, 1024 * 1024)
+                handle.flush()
+                os.fsync(handle.fileno())
+            _write_json_atomic(journal, state)
+        if stream_options["progress"] and count:
+            print(
+                f"resume {dest}: {count}/{request['num_vectors']} vectors checkpointed", flush=True
+            )
+        with part.open("r+b") as handle:
+            # Drop only uncheckpointed bytes from an interrupted chunk.
+            handle.truncate(dest_offset + count * request["row_size"])
+
+            def checkpoint(written: int, start: int, payload: np.ndarray) -> None:
+                if source.identity() != identity:
+                    raise RuntimeError("source changed while preparing the subset")
+                handle.flush()
+                os.fsync(handle.fileno())
+                update = {
+                    **state,
+                    "written_vectors": written,
+                    "last_chunk_start": start,
+                    "last_chunk_sha256": hashlib.sha256(payload).hexdigest(),
+                }
+                _write_json_atomic(journal, update)
+                state.update(update)
+
+            try:
+                _stream_signal(
+                    handle,
+                    source,
+                    dest_offset=dest_offset,
+                    start_vector=count,
+                    checkpoint=checkpoint,
+                    **stream_options,
+                )
+            except BaseException:
+                if stream_options["progress"]:
+                    print(
+                        f"Kept {state['written_vectors']}/{request['num_vectors']} vectors in {part}; "
+                        "rerun the same command to resume.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                raise
+        part.replace(dest)
+        _sync_directory(dest.parent)
+        _write_sidecar(dest, source_name, pulses, samples)
+        journal.unlink()
+        _sync_directory(dest.parent)
 
 
 def _signal_row_offset(
@@ -612,6 +881,7 @@ def _fetch_signal(
     num_samples: int,
     connections: int,
     progress: bool,
+    pool: ThreadPoolExecutor | None = None,
 ) -> np.ndarray:
     row_bytes = orig_num_samples * _CF8_BYTES
     row_size = num_samples * _CF8_BYTES
@@ -644,17 +914,21 @@ def _fetch_signal(
             fetch_one(index)
         return out
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for _ in pool.map(fetch_one, range(num_vectors), chunksize=32):
+    if pool is not None:
+        for _ in pool.map(fetch_one, range(num_vectors)):
             pass
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for _ in executor.map(fetch_one, range(num_vectors)):
+                pass
     return out
 
 
 def _stream_signal(
-    writer: skcphd.Writer,
+    handle: BinaryIO,
     source: ByteSource,
     *,
-    channel_id: str,
+    dest_offset: int,
     signal_block: int,
     channel_offset: int,
     orig_num_samples: int,
@@ -664,47 +938,52 @@ def _stream_signal(
     num_samples: int,
     connections: int,
     progress: bool,
+    start_vector: int = 0,
+    checkpoint: Callable[[int, int, np.ndarray], None],
 ) -> None:
     """Write CF8 rows in bounded chunks. sarkit Writer has no partial API."""
     row_size = num_samples * _CF8_BYTES
     chunk_n = max(1, _SIGNAL_CHUNK_BYTES // row_size)
     expected = num_vectors * row_size
-    dest_off = int(writer._file_header_kvp["SIGNAL_BLOCK_BYTE_OFFSET"]) + int(  # noqa: SLF001
-        writer._channel_size_offsets[channel_id]["signal_offset"]  # noqa: SLF001
-    )
-    handle = writer._file_object  # noqa: SLF001
-    handle.seek(dest_off)
-    written_bytes = 0
-    written_vectors = 0
+    handle.seek(dest_offset + start_vector * row_size)
+    written_bytes = start_vector * row_size
+    written_vectors = start_vector
     started = time.perf_counter()
-    while written_vectors < num_vectors:
-        n_keep = min(chunk_n, num_vectors - written_vectors)
-        chunk = _fetch_signal(
-            source,
-            signal_block=signal_block,
-            channel_offset=channel_offset,
-            orig_num_samples=orig_num_samples,
-            pulse_start=pulse_start + written_vectors,
-            num_vectors=n_keep,
-            sample_start=sample_start,
-            num_samples=num_samples,
-            connections=connections,
-            progress=False,
-        )
-        payload = np.ascontiguousarray(chunk)
-        payload.tofile(handle)
-        written_bytes += int(payload.nbytes)
-        written_vectors += n_keep
-        if progress and (written_vectors % (chunk_n * 8) == 0 or written_vectors == num_vectors):
-            elapsed = max(time.perf_counter() - started, 1e-6)
-            print(
-                f"  {written_vectors}/{num_vectors} vectors "
-                f"({written_vectors / elapsed:.0f} vec/s)",
-                flush=True,
+    # Keep the same workers/connections across chunks, rather than retaining
+    # another pool's sockets in HttpByteSource for every 64 MiB of the file.
+    with ThreadPoolExecutor(max_workers=_fetch_workers(source, connections, num_vectors)) as pool:
+        while written_vectors < num_vectors:
+            n_keep = min(chunk_n, num_vectors - written_vectors)
+            chunk = _fetch_signal(
+                source,
+                signal_block=signal_block,
+                channel_offset=channel_offset,
+                orig_num_samples=orig_num_samples,
+                pulse_start=pulse_start + written_vectors,
+                num_vectors=n_keep,
+                sample_start=sample_start,
+                num_samples=num_samples,
+                connections=connections,
+                progress=False,
+                pool=pool,
             )
+            payload = np.ascontiguousarray(chunk)
+            payload.tofile(handle)
+            chunk_start = written_vectors
+            written_bytes += int(payload.nbytes)
+            written_vectors += n_keep
+            checkpoint(written_vectors, chunk_start, payload)
+            if progress and (
+                written_vectors % (chunk_n * 8) == 0 or written_vectors == num_vectors
+            ):
+                elapsed = max(time.perf_counter() - started, 1e-6)
+                print(
+                    f"  {written_vectors}/{num_vectors} vectors "
+                    f"({(written_vectors - start_vector) / elapsed:.0f} vec/s)",
+                    flush=True,
+                )
     if written_bytes != expected:
         raise RuntimeError(f"streamed {written_bytes} signal bytes, expected {expected}")
-    writer._signal_arrays_written.add(channel_id)  # noqa: SLF001
 
 
 def _read_support_arrays(
@@ -734,36 +1013,17 @@ def _read_support_arrays(
     return arrays
 
 
-def _write_minimal_fixture_subset(
-    dest: Path,
+def _write_minimal_prefix(
+    handle: BinaryIO,
     xmltree: lxml.etree.ElementTree,
     pvps: np.ndarray,
-    source: ByteSource,
     *,
-    signal_block: int,
-    channel_offset: int,
-    orig_num_samples: int,
-    pulse_start: int,
     num_vectors: int,
-    sample_start: int,
     num_samples: int,
-) -> None:
+) -> int:
     """Write the C++ smoke fixture's intentionally unnamespaced CPHD dialect."""
     xml_bytes = lxml.etree.tostring(xmltree.getroot(), encoding="UTF-8")
     pvp_bytes = pvps.tobytes()
-    signal = _fetch_signal(
-        source,
-        signal_block=signal_block,
-        channel_offset=channel_offset,
-        orig_num_samples=orig_num_samples,
-        pulse_start=pulse_start,
-        num_vectors=num_vectors,
-        sample_start=sample_start,
-        num_samples=num_samples,
-        connections=1,
-        progress=False,
-    )
-    signal_bytes = signal.tobytes()
 
     def align(value: int) -> int:
         return (value + 1023) & ~1023
@@ -778,24 +1038,17 @@ def _write_minimal_fixture_subset(
         f"PVP_BLOCK_BYTE_OFFSET := {pvp_offset}\n"
         f"PVP_BLOCK_SIZE := {len(pvp_bytes)}\n"
         f"SIGNAL_BLOCK_BYTE_OFFSET := {signal_offset}\n"
-        f"SIGNAL_BLOCK_SIZE := {len(signal_bytes)}\n"
+        f"SIGNAL_BLOCK_SIZE := {num_vectors * num_samples * _CF8_BYTES}\n"
         "\f\n"
     ).encode("ascii")
     if len(header) > xml_offset:
         raise RuntimeError("minimal CPHD header exceeds its XML offset")
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    try:
-        with tmp.open("wb") as handle:
-            handle.write(header)
-            handle.seek(xml_offset)
-            handle.write(xml_bytes)
-            handle.seek(pvp_offset)
-            handle.write(pvp_bytes)
-            handle.seek(signal_offset)
-            handle.write(signal_bytes)
-        tmp.replace(dest)
-    finally:
-        tmp.unlink(missing_ok=True)
+    handle.write(header)
+    handle.seek(xml_offset)
+    handle.write(xml_bytes)
+    handle.seek(pvp_offset)
+    handle.write(pvp_bytes)
+    return signal_offset
 
 
 def subset_cphd(
@@ -812,7 +1065,8 @@ def subset_cphd(
     """Write a pulse-and/or-sample subset of ``source`` to ``dest``.
 
     ``progress`` is off by default so importing this as a library is quiet.
-    The CLI passes ``progress=True``.
+    The CLI passes ``progress=True``. Matching partial downloads resume
+    automatically; ``force`` explicitly discards their checkpoint.
     """
     dest = Path(dest)
     pulse_spec = as_axis_window(pulses, axis="pulses")
@@ -878,6 +1132,8 @@ def subset_cphd(
         if (
             dest.is_file()
             and not force
+            and not dest.with_suffix(dest.suffix + ".part").exists()
+            and not dest.with_suffix(dest.suffix + ".part.json").exists()
             and _dest_already_matches(
                 dest, source, (pulse_start, pulse_stop), (sample_start, sample_stop)
             )
@@ -902,12 +1158,54 @@ def subset_cphd(
         )
         _validate_xmltree(xml_out)
 
-        if lxml.etree.QName(xml_out.getroot()).namespace is None:
-            _write_minimal_fixture_subset(
+        # Structured dtype conversions can leave padding bytes uninitialised.
+        # Encode directly in wire byte order with zeroed padding so rebuilding
+        # the metadata on resume produces an identical prefix fingerprint.
+        encoded_pvps = np.zeros(pvps.shape, dtype=skcphd.get_pvp_dtype(xml_out).newbyteorder(">"))
+        for name in encoded_pvps.dtype.names:
+            encoded_pvps[name] = pvps[name]
+
+        # Encode only header/XML/PVP/support in a small temporary file. This
+        # validates the current writer layout before touching a resumed file.
+        with tempfile.TemporaryFile() as prefix:
+            if lxml.etree.QName(xml_out.getroot()).namespace is None:
+                dest_offset = _write_minimal_prefix(
+                    prefix, xml_out, encoded_pvps, num_vectors=num_vectors, num_samples=num_samples
+                )
+            else:
+                extra = {
+                    key: value
+                    for key, value in kvps.items()
+                    if key not in skcphd.DEFINED_HEADER_KEYS
+                }
+                metadata = skcphd.Metadata(
+                    xmltree=xml_out, file_header_part=skcphd.FileHeaderPart(additional_kvps=extra)
+                )
+                with skcphd.Writer(prefix, metadata) as writer:
+                    writer.write_pvp(channel_id, encoded_pvps)
+                    for ident, array in support.items():
+                        writer.write_support_array(
+                            ident, np.asarray(array, dtype=array.dtype.newbyteorder("="))
+                        )
+                    dest_offset = int(
+                        writer._file_header_kvp["SIGNAL_BLOCK_BYTE_OFFSET"]
+                    ) + int(  # noqa: SLF001
+                        writer._channel_size_offsets[channel_id]["signal_offset"]  # noqa: SLF001
+                    )
+                    # Transfer responsibility for the signal to our bounded,
+                    # checkpointed stream; this writer encodes metadata only.
+                    writer._signal_arrays_written.add(channel_id)  # noqa: SLF001
+            prefix.truncate(dest_offset)
+            prefix.flush()
+            _download_signal(
                 dest,
-                xml_out,
-                pvps,
+                source,
                 src,
+                prefix,
+                dest_offset,
+                pulses=(pulse_start, pulse_stop),
+                samples=(sample_start, sample_stop),
+                force=force,
                 signal_block=int(kvps["SIGNAL_BLOCK_BYTE_OFFSET"]),
                 channel_offset=signal_offset,
                 orig_num_samples=orig_ns,
@@ -915,46 +1213,9 @@ def subset_cphd(
                 num_vectors=num_vectors,
                 sample_start=sample_start,
                 num_samples=num_samples,
+                connections=connections,
+                progress=progress,
             )
-            _write_sidecar(dest, source, (pulse_start, pulse_stop), (sample_start, sample_stop))
-            return SubsetResult(skipped=False, **result_kw)
-
-        extra = {key: value for key, value in kvps.items() if key not in skcphd.DEFINED_HEADER_KEYS}
-        metadata = skcphd.Metadata(
-            xmltree=xml_out,
-            file_header_part=skcphd.FileHeaderPart(additional_kvps=extra),
-        )
-        pvp_native = np.asarray(pvps, dtype=skcphd.get_pvp_dtype(xml_out))
-        tmp = dest.with_suffix(dest.suffix + ".part")
-        if tmp.exists():
-            tmp.unlink()
-        try:
-            with tmp.open("wb") as handle, skcphd.Writer(handle, metadata) as writer:
-                writer.write_pvp(channel_id, pvp_native)
-                for ident, array in support.items():
-                    writer.write_support_array(
-                        ident, np.asarray(array, dtype=array.dtype.newbyteorder("="))
-                    )
-                _stream_signal(
-                    writer,
-                    src,
-                    channel_id=channel_id,
-                    signal_block=int(kvps["SIGNAL_BLOCK_BYTE_OFFSET"]),
-                    channel_offset=signal_offset,
-                    orig_num_samples=orig_ns,
-                    pulse_start=pulse_start,
-                    num_vectors=num_vectors,
-                    sample_start=sample_start,
-                    num_samples=num_samples,
-                    connections=connections,
-                    progress=progress,
-                )
-            tmp.replace(dest)
-        except BaseException:
-            if tmp.exists():
-                tmp.unlink()
-            raise
-        _write_sidecar(dest, source, (pulse_start, pulse_stop), (sample_start, sample_stop))
         return SubsetResult(skipped=False, **result_kw)
     finally:
         src.close()

@@ -212,6 +212,29 @@ remote source with a local CPHD; `--force` rebuilds an existing matching file.
 The reader supports the tool's CF8 output. Keep the sample window and the
 video preset's lattice and aperture settings together when changing GSD.
 
+Houston subset preparation retries connection failures, short responses, and
+HTTP 408/429/500/502/503/504 up to five attempts per range. Retries use exponential
+backoff with jitter and honor `Retry-After` up to 60 seconds. Permanent errors
+(such as 403/404/412/416) and ignored or incorrect byte ranges fail immediately.
+One bounded worker pool reuses its HTTP connections across the entire subset.
+
+Interrupted subset downloads now resume automatically when you rerun the same
+`pull_cphd.py --config ...` or `subset_cphd.py ...` command. Keep both
+`houston_1p0m.cphd.part` and `houston_1p0m.cphd.part.json`: the checkpoint advances
+only after a complete chunk (about 64 MiB) is flushed to disk. At most the
+incomplete/uncheckpointed chunk is fetched again. The final `.cphd` is replaced
+only after all signal rows are complete; an existing completed file remains
+usable during a replacement download. A small hidden destination lock file
+prevents concurrent writers and is harmless after the process exits.
+
+Resume validates the source identity, requested pulse/sample windows, encoded
+CPHD metadata/layout, committed file length, and last chunk checksum. HTTP
+sources need a strong ETag or Last-Modified validator; requests pin that version
+while downloading. Changed requests/sources or damaged checkpoints are refused
+with instructions to use `--force` for an explicit restart. The old downloader
+deleted partial data on failure, so progress already lost by that version cannot
+be recovered. The completed `.subset.json` provenance sidecar is unchanged.
+
 For an immediate offline check of any app, run its `Sar_<app>_smoke` CTest.
 CTest generates its small CPHD fixture once in C++ and asserts image count
 and dimensions. Passing that test does not validate real-collection focus.
@@ -248,8 +271,12 @@ flow; it does not replace validation against the Houston collection.
 Run the offline CLI regressions from the repository root:
 
 ```bash
-python3 -m unittest discover -s tools/sar_data -v
+uv run --no-project --with-requirements tools/sar_data/requirements.txt \
+  python -m unittest discover -s tools/sar_data -v
 ```
 
-These checks cover the autofocus manifest, shared collection layout, invalid
-`all` destinations, and HTTP failure reporting without downloading data.
+These checks cover the catalog/config resolver plus transient and permanent
+HTTP failures, range/source validation, bounded worker connections, interrupted
+and process-terminated resume, corrupt/mismatched checkpoints, concurrent-writer
+exclusion, publication recovery, and exact subset samples/PVPs. They use small
+local files and a local HTTP server; no public collections are downloaded.
