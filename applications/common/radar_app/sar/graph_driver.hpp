@@ -414,6 +414,21 @@ struct SarGraphRuntime {
             static_cast<uint32_t>(std::max<int64_t>(1, lut_side * horizontal_extent / max_side));
         height = static_cast<uint32_t>(std::max<int64_t>(1, lut_side * vertical_extent / max_side));
       }
+      if (cfg.explicit_window_size) {
+        width = static_cast<uint32_t>(cfg.visualization.window_width);
+        height = static_cast<uint32_t>(cfg.visualization.window_height);
+      }
+      const bool docked =
+          cfg.visualization.timeline.enabled && cfg.visualization.timeline.placement == "bottom";
+      const int status_width =
+          docked && width >= 2 ? std::min(320, static_cast<int>(width) / 2) : 0;
+      const int footer_height = status_width > 0 ? cfg.visualization.timeline.window_height : 0;
+      if (status_width > 0) {
+        overlay.status_width = status_width;
+        overlay.footer_height = footer_height;
+        overlay.canvas_width = width;
+        overlay.image_height = height;
+      }
       // Hold is session-level after the image, not a sleep in this operator:
       // raster and Holoviz share `visualization`, so a hold here never presents.
       auto raster = graph.op<app::sar::SarImageVizOp>(
@@ -422,17 +437,13 @@ struct SarGraphRuntime {
             return hud->snapshot().reader_stopped;
           });
       bind_outputs(options, "sar_image_viz", {"frame"}, devices.compute);
-      if (cfg.explicit_window_size) {
-        width = static_cast<uint32_t>(cfg.visualization.window_width);
-        height = static_cast<uint32_t>(cfg.visualization.window_height);
-      }
       auto raster_partition = graph.partition("raster");
       raster_partition.add(raster);
       auto visualization = graph.partition("visualization");
       const auto renderer_device = devices.composer;
-      auto composed =
-          graph.op<app::viz::FrameComposerOp>("holoviz", width, height, app::sar::kHudMaxGlyphs,
-                                              true, app::sar::kHudMaxLines, lut_side);
+      auto composed = graph.op<app::viz::FrameComposerOp>(
+          "holoviz", width, height + footer_height, app::sar::kHudMaxGlyphs, true,
+          app::sar::kHudMaxLines, lut_side, status_width > 0 ? height : 0);
       visualization.add(composed);
       options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
           .operator_path = "holoviz", .output_port = "output", .device = renderer_device});
@@ -443,8 +454,6 @@ struct SarGraphRuntime {
                                       raster->frame, composed->image_layer_input(0), "sar_composer",
                                       lut_side, lut_side, devices.compute, renderer_device,
                                       overlay_queue);
-      const bool docked =
-          cfg.visualization.timeline.enabled && cfg.visualization.timeline.placement == "bottom";
       if (!docked)
         app::viz::add_image_presentation(graph, options, visualization, composed->output(), "sar",
                                          width, height, cfg.visualization.window_title,
@@ -455,13 +464,13 @@ struct SarGraphRuntime {
         auto timeline = graph.op<app::sar::TimelineRasterOp>(
             "timeline_raster", hud, cfg.scene_names, cfg.show_playback_lag,
             cfg.visualization.timeline.display_rate_hz,
-            docked ? width : cfg.visualization.timeline.window_width,
+            docked ? width - status_width : cfg.visualization.timeline.window_width,
             cfg.visualization.timeline.window_height);
         bind_outputs(options, "timeline_raster", {"frame"}, devices.compute);
         auto timeline_part = graph.partition("timeline");
         timeline_part.add(timeline);
         auto timeline_display = graph.partition("timeline_display");
-        const auto tw = docked ? width : cfg.visualization.timeline.window_width;
+        const auto tw = docked ? width - status_width : cfg.visualization.timeline.window_width;
         const auto th = cfg.visualization.timeline.window_height;
         auto timeline_frame = graph.op<app::viz::FrameComposerOp>("timeline_frame", tw, th, 16384U);
         timeline_display.add(timeline_frame);
@@ -476,7 +485,7 @@ struct SarGraphRuntime {
           app::viz::add_docked_presentation(graph, options, visualization, composed->output(),
                                             timeline_display, timeline_frame->output(), width,
                                             height, th, cfg.visualization, display_progress,
-                                            devices.composer, devices.display);
+                                            devices.composer, devices.display, status_width);
         } else {
           auto timeline_config = cfg.visualization;
           timeline_config.display_rate_hz = cfg.visualization.timeline.display_rate_hz;

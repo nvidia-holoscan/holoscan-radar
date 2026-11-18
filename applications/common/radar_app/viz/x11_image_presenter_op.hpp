@@ -47,7 +47,7 @@ class X11ImagePresenterOp final : public Operator<> {
   X11ImagePresenterOp(std::int32_t width, std::int32_t height, std::string title, bool fit = false,
                       std::shared_ptr<FrameProgress> progress = authoring_frame_progress(),
                       std::string position = {}, std::shared_ptr<X11DockedWindow> dock = {},
-                      bool footer = false)
+                      bool footer = false, int docked_footer_height = 0, int status_width = 0)
   : width_(width),
     height_(height),
     title_(std::move(title)),
@@ -55,7 +55,9 @@ class X11ImagePresenterOp final : public Operator<> {
     progress_(std::move(progress)),
     position_(std::move(position)),
     dock_(std::move(dock)),
-    footer_(footer) {
+    footer_(footer),
+    docked_footer_height_(docked_footer_height),
+    status_width_(status_width) {
     if (width_ <= 0 || height_ <= 0)
       throw std::invalid_argument("X11 image dimensions must be positive");
   }
@@ -211,23 +213,37 @@ class X11ImagePresenterOp final : public Operator<> {
         progress_->capture_ns.store(sample.metadata.capture_time().timestamp_ns);
     }
     if (redraw && have_frame_ && state.width > 0 && state.height > 0) {
+      const int footer_height = docked_footer_height_ > 0
+                                    ? std::min(docked_footer_height_, std::max(1, state.height / 2))
+                                    : 0;
+      const int source_height = height_ - docked_footer_height_;
+      const int available_height = state.height - footer_height;
       int target_width = state.width;
-      int target_height = state.height;
+      int target_height = available_height;
       if (fit_) {
         const double scale = std::min(static_cast<double>(state.width) / width_,
-                                      static_cast<double>(state.height) / height_);
+                                      static_cast<double>(available_height) / source_height);
         target_width = std::max(1, static_cast<int>(width_ * scale));
-        target_height = std::max(1, static_cast<int>(height_ * scale));
+        target_height = std::max(1, static_cast<int>(source_height * scale));
+      }
+      if (fit_ || docked_footer_height_ > 0) {
         XSetForeground(state.display, state.gc, 0);
         XFillRectangle(state.display, state.window, state.gc, 0, 0, state.width, state.height);
       }
-      XTransform transform{{{XDoubleToFixed(static_cast<double>(width_) / target_width), 0, 0},
-                            {0, XDoubleToFixed(static_cast<double>(height_) / target_height), 0},
-                            {0, 0, XDoubleToFixed(1.0)}}};
-      XRenderSetPictureTransform(state.display, state.source, &transform);
-      XRenderComposite(state.display, PictOpSrc, state.source, 0, state.target, 0, 0, 0, 0,
-                       (state.width - target_width) / 2, (state.height - target_height) / 2,
-                       target_width, target_height);
+      auto paint = [&](int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh) {
+        XTransform transform{{{XDoubleToFixed(static_cast<double>(sw) / dw), 0, XDoubleToFixed(sx)},
+                              {0, XDoubleToFixed(static_cast<double>(sh) / dh), XDoubleToFixed(sy)},
+                              {0, 0, XDoubleToFixed(1.0)}}};
+        XRenderSetPictureTransform(state.display, state.source, &transform);
+        XRenderComposite(state.display, PictOpSrc, state.source, 0, state.target, 0, 0, 0, 0, dx,
+                         dy, dw, dh);
+      };
+      paint(0, 0, width_, source_height, (state.width - target_width) / 2,
+            (available_height - target_height) / 2, target_width, target_height);
+      if (docked_footer_height_ > 0) {
+        const int sw = std::min(status_width_, std::max(1, state.width / 2));
+        paint(0, source_height, sw, docked_footer_height_, 0, available_height, sw, footer_height);
+      }
       ++state.repaints;
       if (dock_) {
         // Xlib format-32 properties use native unsigned long array elements.
@@ -291,6 +307,7 @@ class X11ImagePresenterOp final : public Operator<> {
   std::string position_;
   std::shared_ptr<X11DockedWindow> dock_;
   bool footer_;
+  int docked_footer_height_, status_width_;
   std::shared_ptr<State> state_;
 };
 

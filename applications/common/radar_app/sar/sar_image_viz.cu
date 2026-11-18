@@ -233,7 +233,10 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
         if (rows == nullptr || guard.byte_size() < kHudRuns * kHudRowBytes)
           return make_unexpected(
               Error{ErrorCode::kFailure, "SarImageVizOp: text record loan is too small"});
-        write_hud_rows(rows, banner, diag, overlay_.show_playback_lag, height);
+        if (overlay_.status_width > 0)
+          write_footer_hud_rows(rows, banner, diag, overlay_.show_playback_lag, overlay_);
+        else
+          write_hud_rows(rows, banner, diag, overlay_.show_playback_lag, height);
         return {};
       });
   if (!labels_filled)
@@ -241,6 +244,12 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
 
   std::vector<float> geom;
   fill_hud_geometry(&geom, diag, transpose_axes_);
+  if (overlay_.status_width > 0) {
+    const float fraction = static_cast<float>(overlay_.image_height) /
+                           (overlay_.image_height + overlay_.footer_height);
+    for (std::size_t i = 1; i < geom.size(); i += 2)
+      geom[i] *= fraction;
+  }
   if (geom.empty())
     geom.assign(kHudLineFloats, 0.0F);
   const std::array<int64_t, 1> overlay_shape{static_cast<int64_t>(geom.size())};

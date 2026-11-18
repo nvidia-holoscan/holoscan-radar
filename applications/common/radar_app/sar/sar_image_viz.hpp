@@ -27,8 +27,9 @@ namespace holoscan::radar::app::sar {
 // partition with Holoviz, so a hold would block presentation of the frame it
 // just emitted. Finite `visualize_hold_s` is the session wait in
 // `run_sar_graph_app`. Optional `overlay` fills host Holoviz text (`labels`)
-// and line-list (`overlay`) layers — the source-branch on-image HUD. The
-// Gantt is a separate `TimelineRasterOp` window.
+// and line-list (`overlay`) layers. The docked layout places text in a footer
+// viewport while keeping the APC marker over the image. `TimelineRasterOp`
+// independently renders the Gantt panel.
 class SarImageVizOp : public Operator<> {
  public:
   // `product_extent` is the formed product's size when the tensor on `image`

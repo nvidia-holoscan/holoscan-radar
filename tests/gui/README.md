@@ -111,7 +111,9 @@ C++ and Python with explicit X11/native modes and isolated preferences. The
 fixture uses inherited configuration, verifies formation and timeline pixels,
 resizes the viewing window, and closes during final-image hold. The default
 timeline is a child panel in the same window; its height stays 112 pixels as
-the window resizes. While the source is at EOF, the timeline must advance
+the window resizes. A left status panel belongs to the cached SAR surface;
+the probe verifies its pixels after each resize and checks the narrower timeline
+child extent. While the source is at EOF, the timeline must advance
 without either uploading or repainting the held image. C++ closes
 formation; Python exercises aspect fit and closes timeline. Native tests
 require a presentation-capable CUDA/Vulkan display and do not skip renderer
@@ -160,7 +162,14 @@ counts must stay unchanged while the footer upload count increases. This
 assertion detects full-image redraw or transport triggered by timeline ticks.
 `--timeline-placement window` covers the compatibility layout instead.
 `--capture --canvas-width 1024 --canvas-height 768` saves a larger preview of the
-final layout after the normal resize checks; these are synthetic fixture images,
+final layout after the normal resize checks. Capture waits for status pixels
+at the new footer origin as well as child geometry, so a delayed cached repaint
+cannot leave stale pre-resize content in the preview. These are synthetic fixture images,
 not scientific image-quality qualification. Native probes verify footer pixels;
 GPU tests check physical-height compensation, fit, blank startup, and independent
 old panel timestamps. Positive native-window review requires capable hardware.
+
+The `SarFooterStatus` GPU test composes an exact-timestamp image/status pair and
+checks every image pixel stays unobscured, SDK text lands below the image, and
+status pixels do not enter the timeline area. `CompletedFrameDock` checks native
+status placement, physical sizing after resize, and independent timeline startup.

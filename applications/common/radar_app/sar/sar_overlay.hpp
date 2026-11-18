@@ -49,6 +49,8 @@ struct OverlayConfig {
   std::function<FormationDiag()> diag;
   std::vector<std::string> scene_names;
   bool show_playback_lag{false};
+  // Docked output keeps the status and image in the same timestamped canvas.
+  int status_width{0}, footer_height{0}, canvas_width{0}, image_height{0};
 };
 
 using holoscan::visualization::kTextRunHeaderBytes;
@@ -178,6 +180,53 @@ inline void write_hud_rows(std::uint8_t* rows, const std::vector<std::string>& l
     write_hud_run(rows + 4U * kHudRowBytes,
                   TextRunHeader{.x = 0.02F, .y = 0.94F, .size_px = 16.0F, .color = color}, lag);
   }
+}
+
+// A bounded left-hand status panel. The timeline never regenerates these rows:
+// they are part of the completed image whose acquisition stamp they describe.
+inline void write_footer_hud_rows(std::uint8_t* rows, const std::vector<std::string>& lines,
+                                  const FormationDiag& diag, bool show_lag,
+                                  const OverlayConfig& layout) {
+  using holoscan::visualization::TextRunHeader;
+  std::memset(rows, 0, kHudRuns * kHudRowBytes);
+  const int total_height = layout.image_height + layout.footer_height;
+  auto write = [&](std::size_t index, std::string text, float pixels, std::uint32_t color) {
+    const auto limit = static_cast<std::size_t>(std::max(
+        3,
+        std::min<int>(kHudChars, static_cast<int>((layout.status_width - 20) / (pixels * 0.65F)))));
+    if (text.size() > limit)
+      text = text.substr(0, limit - 3) + "...";
+    write_hud_run(rows + index * kHudRowBytes,
+                  TextRunHeader{.x = 10.0F / layout.canvas_width,
+                                .y = (layout.image_height + 7.0F + index * 16.0F) / total_height,
+                                .size_px = pixels,
+                                .color = color},
+                  text);
+  };
+  const auto title_color = hud_rgba(235, 239, 244);
+  const auto detail_color = hud_rgba(165, 175, 188);
+  const auto rate_color = hud_rgba(194, 211, 228);
+  if (!lines.empty()) {
+    const auto split = lines[0].rfind("  ");
+    write(0, split == std::string::npos ? "SAR image" : lines[0].substr(0, split), 14, title_color);
+    write(1, "Image " + (split == std::string::npos ? lines[0] : lines[0].substr(split + 2)), 12,
+          detail_color);
+  }
+  if (lines.size() > 1) {
+    const auto count = static_cast<std::size_t>(std::max(4, (layout.status_width - 20) / 8));
+    const auto split = lines[1].size() > count ? lines[1].rfind(' ', count) : std::string::npos;
+    if (split != std::string::npos) {
+      write(2, lines[1].substr(0, split), 12, rate_color);
+      write(3, lines[1].substr(split + 1), 12, rate_color);
+    } else {
+      write(2, lines[1], 12, rate_color);
+    }
+  }
+  if (lines.size() > 2)
+    write(4, lines[2], 12, detail_color);
+  if (show_lag && diag.playback_valid && diag.playback_paced)
+    write(5, format_lag_line(diag.playback_behind_s, diag.playback_target_s, diag.playback_wall_s),
+          11, diag.playback_behind_s > 0.2 ? hud_rgba(255, 120, 105) : hud_rgba(115, 200, 150));
 }
 
 }  // namespace holoscan::radar::app::sar

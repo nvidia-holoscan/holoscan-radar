@@ -212,28 +212,31 @@ inline void add_docked_presentation(
     const Output<schema::ImageT>& footer, int width, int image_height, int footer_height,
     const VisualizationConfig& config, std::shared_ptr<FrameProgress> progress,
     DeviceId composer_device = DeviceId{application_composer_device()},
-    DeviceId display_device = DeviceId{application_display_device()}) {
+    DeviceId display_device = DeviceId{application_display_device()}, int status_width = 0) {
+  const int image_rows = image_height + (status_width > 0 ? footer_height : 0);
+  const int timeline_width = width - status_width;
   const ConnectionOptions queue{.queue_policy = QueuePolicy::kDropOldest, .queue_depth = 1U};
   if (config.headless) {
-    add_image_presentation(graph, options, image_partition, image, "sar", width, image_height,
+    add_image_presentation(graph, options, image_partition, image, "sar", width, image_rows,
                            config.window_title, config, progress, {}, composer_device,
                            display_device);
-    add_image_presentation(graph, options, footer_partition, footer, "timeline", width,
+    add_image_presentation(graph, options, footer_partition, footer, "timeline", timeline_width,
                            footer_height, "SAR timeline", config, {}, {}, composer_device,
                            display_device);
     return;
   }
 #if HOLOSCAN_RADAR_HAS_X11
   if (config.x11_presentation.value_or(true)) {
-    auto dock =
-        std::make_shared<X11DockedWindow>(width, image_height, footer_height, config.window_title);
-    auto image_download = graph.op<ImageDownloadOp>("sar_download", width, image_height);
-    auto footer_download = graph.op<ImageDownloadOp>("timeline_download", width, footer_height);
-    auto image_viewer = graph.op<X11ImagePresenterOp>("sar_viewer", width, image_height,
-                                                      "SAR image", config.resize_mode == "fit",
-                                                      progress, std::string{}, dock, false);
+    auto dock = std::make_shared<X11DockedWindow>(width, image_height, footer_height,
+                                                  config.window_title, status_width);
+    auto image_download = graph.op<ImageDownloadOp>("sar_download", width, image_rows);
+    auto footer_download =
+        graph.op<ImageDownloadOp>("timeline_download", timeline_width, footer_height);
+    auto image_viewer = graph.op<X11ImagePresenterOp>(
+        "sar_viewer", width, image_rows, "SAR image", config.resize_mode == "fit", progress,
+        std::string{}, dock, false, status_width > 0 ? footer_height : 0, status_width);
     auto footer_viewer = graph.op<X11ImagePresenterOp>(
-        "timeline_viewer", width, footer_height, "SAR timeline", false,
+        "timeline_viewer", timeline_width, footer_height, "SAR timeline", false,
         std::shared_ptr<FrameProgress>{}, std::string{}, dock, true);
     image_partition.add(image_download);
     footer_partition.add(footer_download);
@@ -252,7 +255,7 @@ inline void add_docked_presentation(
 #endif
   auto dock = graph.op<DockedFrameOp>("sar_dock", width, image_height, footer_height,
                                       config.display_rate_hz, config.resize_mode == "fit",
-                                      config.window_title, progress);
+                                      config.window_title, progress, status_width);
   auto repaint = graph.partition("sar_repaint");
   repaint.add(dock);
   options.deployment.bind_thread_placement("sar_repaint", ThreadPlacement{});

@@ -4,6 +4,18 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-18** — **SAR footer status panel** on `deustice/sar-gui`: docked
+  viewers now place image-specific text in a compact left panel beside the
+  timeline, shared by all six workflows and both languages. Image and status
+  travel in one completed frame; timeline ticks retain independent caches and
+  transport. Scientific pixels, markers, products, and explicit separate-window
+  behavior are preserved. All 195 selected checks pass after refining one GUI
+  sampling assertion; pinned all-file lint passes. C++/Python 1024-by-768 delayed
+  X11 soaks pass with stable RSS/FDs, and settled captures were visually inspected.
+  Direct forwarded-display startup/hold works, but remote geometry/pixel readback
+  probes timed out; complete SSH visual and positive native-window review remain
+  unqualified. See the GUI decision record for evidence and limits.
+
 - **2026-11-18** — **Merge current main into SAR GUI** on `deustice/sar-gui`:
   integrated `origin/main` at `ff302931`, preserving shared GUI presentation,
   docked panels, named workflows, and flat CPHD storage. Retained upstream CFAR

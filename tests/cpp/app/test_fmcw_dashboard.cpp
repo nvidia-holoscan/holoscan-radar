@@ -33,6 +33,7 @@
 #include "radar_app/app/angle_presentation.hpp"
 #include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/app/application_descriptions.hpp"
+#include "radar_app/sar/sar_overlay.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
 #include "radar_app/viz/dashboard_text.hpp"
 #include "radar_app/viz/fmcw_holoviz_op.hpp"
@@ -168,6 +169,76 @@ TEST(FmcwDashboardTest, ComposesOnlyMatchedImageAndTextIntoOneCudaFrame) {
     }
   }
   EXPECT_TRUE(found_native_text) << "SDK text must be present in the emitted GPU image";
+}
+
+TEST(SarFooterStatus, ComposesMatchedStatusBelowTheUnobscuredImage) {
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  namespace sar = radar::app::sar;
+  constexpr int width = 640, ih = 64, fh = 112;
+  constexpr DLDataType rgba_type{kDLUInt, 8U, 1U};
+  std::vector<std::uint8_t> pixels(width * ih * 4, 255);
+  for (int y = 0; y < ih; ++y) {
+    for (int x = 0; x < width; ++x) {
+      pixels[4 * (y * width + x)] = x < width / 2 ? 40 : 160;
+      pixels[4 * (y * width + x) + 1] = y < ih / 2 ? 60 : 180;
+    }
+  }
+  holoscan::schema::ImageT image;
+  image.width = width;
+  image.height = ih;
+  image.encoding = holoscan::schema::ImageEncoding_RGBA8;
+  image.data = radar::testing::to_device_tensor(pixels, {ih, width, 4}, rgba_type);
+  std::vector<std::uint8_t> records(sar::kHudRuns * sar::kHudRowBytes);
+  sar::OverlayConfig layout;
+  layout.status_width = 320;
+  layout.footer_height = fh;
+  layout.canvas_width = width;
+  layout.image_height = ih;
+  sar::write_footer_hud_rows(records.data(),
+                             {std::string(64, 'W') + "  64 x 640", "BP 12 Hz", "Latency 0.1 s"},
+                             sar::FormationDiag{}, false, layout);
+  const auto text = radar::testing::to_pageable_host_tensor(
+      records, {sar::kHudRuns, sar::kHudRowBytes}, rgba_type);
+  auto harness = holoscan::testing::create_operator_test<viz::FrameComposerOp>(
+      width, ih + fh, sar::kHudMaxGlyphs, true, 0U, 0, ih);
+  harness.push_frame(frame_at(std::chrono::milliseconds{1}, input("image", image)));
+  harness.push_frame(frame_at(std::chrono::milliseconds{2}, input("text", *text)));
+  harness.push_frame(
+      frame_at(std::chrono::milliseconds{3}, input("image", image), input("text", *text)));
+  const holoscan::DeviceId device{radar::app::application_device()};
+  harness.input_source_device("image", device);
+  harness.output_device("output", device);
+  harness.capture_snapshot<holoscan::schema::ImageT>("output", 1U, width * (ih + fh) * 4);
+  radar::testing::FixtureCompletion completion;
+  auto running = harness.run_async(completion.run_options());
+  const bool ready = completion.wait_for_output(running, "output", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto composed = result.snapshot<holoscan::schema::ImageT>("output");
+  const auto output =
+      radar::testing::to_host(composed.tensor(holoscan::schema::ImageTensorFields::data));
+  ASSERT_EQ(output.shape, (std::vector<std::int64_t>{ih + fh, width, 4}));
+  const auto* rgba = output.as<std::uint8_t>();
+  int status_pixels = 0;
+  for (int y = 0; y < ih + fh; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const auto value = rgba[4 * (y * width + x)];
+      if (y < ih) {
+        for (int channel = 0; channel < 4; ++channel)
+          ASSERT_EQ(rgba[4 * (y * width + x) + channel], pixels[4 * (y * width + x) + channel])
+              << "Status must not obscure, crop, or rescale the SAR image";
+      } else if (x >= layout.status_width) {
+        ASSERT_EQ(value, 0U) << "Status must not overlap the timeline";
+      } else if (value > 100U) {
+        ++status_pixels;
+      }
+    }
+  }
+  EXPECT_GT(status_pixels, 100) << "SDK text must render in the footer";
 }
 
 TEST(ImageDeviceBridgeTest, PreservesPixelsAndMetadataThroughHostStaging) {
@@ -964,6 +1035,39 @@ TEST(CompletedFrameDock, KeepsFooterHeightAndImageFitIndependentOnResize) {
   ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
   EXPECT_EQ(output[0], 0);  // timeline is valid before the first SAR image
   EXPECT_EQ(output[width * 5 * 4], 200);
+  EXPECT_EQ(cudaFree(target), cudaSuccess);
+  EXPECT_EQ(cudaFree(strip), cudaSuccess);
+  EXPECT_EQ(cudaFree(main), cudaSuccess);
+}
+
+TEST(CompletedFrameDock, KeepsStatusWithItsImageAndReservesTimelineSpaceOnResize) {
+  constexpr int width = 8, ih = 4, fh = 2, sw = 2;
+  std::vector<std::uint8_t> image(width * (ih + fh) * 4, 127);
+  std::fill(image.begin() + width * ih * 4, image.end(), 99);
+  std::vector<std::uint8_t> footer((width - sw) * fh * 4, 200);
+  std::vector<std::uint8_t> output(image.size());
+  void *main = nullptr, *strip = nullptr, *target = nullptr;
+  ASSERT_EQ(cudaMalloc(&main, image.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&strip, footer.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&target, output.size()), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(main, image.data(), image.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(strip, footer.data(), footer.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  for (const int scale : {1, 2}) {
+    ASSERT_EQ(viz::compose_docked_panels(main, strip, target, width, ih, fh, width * scale,
+                                         (ih + fh) * scale, false, nullptr, sw),
+              cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    EXPECT_EQ(output[0], 127);
+    for (int x = 0; x < width; ++x)
+      EXPECT_EQ(output[4 * ((ih + fh - 1) * width + x)], x * scale < sw ? 99 : 200);
+  }
+  ASSERT_EQ(viz::compose_docked_panels(nullptr, strip, target, width, ih, fh, width, ih + fh, false,
+                                       nullptr, sw),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  EXPECT_EQ(output[4 * ih * width], 0);           // no status before its image
+  EXPECT_EQ(output[4 * (ih * width + sw)], 200);  // timeline already updates
   EXPECT_EQ(cudaFree(target), cudaSuccess);
   EXPECT_EQ(cudaFree(strip), cudaSuccess);
   EXPECT_EQ(cudaFree(main), cudaSuccess);

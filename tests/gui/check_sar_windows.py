@@ -99,10 +99,14 @@ def check(args):
                 timeline = (
                     formation
                     if docked and not x11_dock
-                    else wait(lambda: find_window(lib, display, root, b"SAR timeline"))
+                    else wait(
+                        lambda: find_window(
+                            lib, display, formation if x11_dock else root, b"SAR timeline"
+                        )
+                    )
                 )
                 image_panel = (
-                    wait(lambda: find_window(lib, display, root, b"SAR image"))
+                    wait(lambda: find_window(lib, display, formation, b"SAR image"))
                     if x11_dock
                     else formation
                 )
@@ -117,15 +121,62 @@ def check(args):
                     wait(
                         lambda: colors(lib, display, timeline, geometry(lib, display, timeline)) > 8
                     )
+
+                def status_width(width):
+                    return min(320, args.canvas_width // 2, max(1, width // 2))
+
+                def image_has_content(width, height):
+                    if colors(lib, display, image_panel, (width, height)) > 1:
+                        return True
+                    # A flat synthetic raster can have only a thin APC marker.
+                    # The coarse 48-by-32 grid may miss it after aspect-fit resize.
+                    data = lib.XGetImage(
+                        display, image_panel, 0, 0, width, height, c.c_ulong(-1).value, 2
+                    )
+                    if not data:
+                        return False
+                    try:
+                        background = lib.XGetPixel(data, 0, 0)
+                        return any(
+                            lib.XGetPixel(data, x, y) != background
+                            for y in range(height)
+                            for x in range(width)
+                        )
+                    finally:
+                        lib.XDestroyImage(data)
+
                 for width, height in ((640, 360), (320, 480), (256, 256)):
                     lib.XResizeWindow(display, formation, width, height)
                     lib.XFlush(display)
                     wait(lambda: geometry(lib, display, formation) == (width, height))
                     if x11_dock:
-                        wait(lambda: geometry(lib, display, timeline) == (width, 112))
-                        wait(lambda: geometry(lib, display, image_panel) == (width, height - 112))
-                        wait(lambda: colors(lib, display, image_panel, (width, height - 112)) > 8)
-                        wait(lambda: colors(lib, display, timeline, (width, 112)) > 8)
+                        wait(
+                            lambda: geometry(lib, display, timeline)
+                            == (width - status_width(width), 112)
+                        )
+                        wait(lambda: geometry(lib, display, image_panel) == (width, height))
+                        # This tiny numerical fixture can have a flat SAR raster.
+                        # Its direction marker must survive; status text is
+                        # checked separately below, outside the image viewport.
+                        wait(lambda: image_has_content(width, height - 112))
+                        wait(
+                            lambda: colors(
+                                lib, display, timeline, (width - status_width(width), 112)
+                            )
+                            > 8
+                        )
+                        # The status belongs to the cached SAR surface, below its
+                        # image viewport, and must remain legible after resizing.
+                        wait(
+                            lambda: colors(
+                                lib,
+                                display,
+                                image_panel,
+                                (status_width(width), 112),
+                                (0, height - 112),
+                            )
+                            > 8
+                        )
                     wait(lambda: colors(lib, display, formation, (width, height)) > 8)
                     if docked and not x11_dock:
                         wait(
@@ -234,18 +285,42 @@ def check(args):
                         == (args.canvas_width, capture_height)
                     )
                     if x11_dock:
-                        wait(lambda: geometry(lib, display, timeline) == (args.canvas_width, 112))
+                        wait(
+                            lambda: geometry(lib, display, timeline)
+                            == (args.canvas_width - status_width(args.canvas_width), 112)
+                        )
                         wait(
                             lambda: geometry(lib, display, image_panel)
-                            == (args.canvas_width, args.canvas_height)
+                            == (args.canvas_width, capture_height)
                         )
                         wait(
                             lambda: colors(
                                 lib, display, image_panel, (args.canvas_width, args.canvas_height)
                             )
+                            > 1
+                        )
+                        wait(
+                            lambda: colors(
+                                lib,
+                                display,
+                                timeline,
+                                (args.canvas_width - status_width(args.canvas_width), 112),
+                            )
                             > 8
                         )
-                        wait(lambda: colors(lib, display, timeline, (args.canvas_width, 112)) > 8)
+                    if x11_dock:
+                        # Geometry can arrive before the delayed presenter has
+                        # repainted its cached status at the new footer origin.
+                        wait(
+                            lambda: colors(
+                                lib,
+                                display,
+                                image_panel,
+                                (status_width(args.canvas_width), 112),
+                                (0, capture_height - 112),
+                            )
+                            > 8
+                        )
                     time.sleep(0.2)
                     save_windows()
                 # The fixture reaches EOF quickly. Exercise closure while the

@@ -203,3 +203,55 @@ Graph compiler without starting a window: this checks its partitions, typed
 viewer ports, and device placement. All seven render/configuration rechecks
 passed, including that additional native wiring test. This is distinct from
 positive native visual validation, which remains unavailable on this display.
+
+## Docked status panel follow-up
+
+The docked SAR default moves image-specific text into a compact status panel to
+the left of the timeline. Its source width is at most 320 pixels and half the
+image canvas; the timeline uses the remaining width. Scene, product dimensions,
+backprojection timing/rate, last-pulse latency, and paced playback lag use a
+restrained text palette. Long labels use ellipses; narrow windows crop the
+panel rather than shrinking or stretching its text. The APC direction marker
+remains over the SAR image. No new config setting or migration is required.
+Separate-window and timeline-disabled layouts retain their previous HUD.
+
+Status is rendered with the exact-timestamp image/geometry join into extra
+footer rows of the same completed GPU frame. This deliberately avoids a
+latest-status side channel, which could advance labels beyond the displayed
+image under display drops. The X11 image/status child spans the parent and
+paints the two source regions independently; the narrower timeline child sits
+above its unused footer-right region. Timeline updates do not repaint or
+transport the image/status frame. Resize/expose repaints use cached pixels.
+The fixed extra footer rows add bounded completed-frame transport only on
+new image arrivals. Native composition reads the paired image/status frame
+and independent timeline from GPU caches. Its existing full-window refresh
+remains unchanged. Scientific rasters and saved products are unchanged.
+
+The affected selection covers 195 CTests: SAR numerical/dump checks, provider
+parity, both precision paths, headless rendering, shared FMCW presentation,
+all twelve SAR X11 workflow/language cases, separate-window compatibility,
+GPU image/status composition, cached native panel placement, and lifecycle.
+194 passed initially; the sole failure was a sparse pixel grid missing a thin
+APC marker on the flat spotlight fixture after aspect-fit resize. A dense
+fallback resolves that assertion, and the fixture plus failed case pass on
+rerun. The new GPU test uses a patterned image and checks every pixel/channel
+above the footer, long-label containment, and visible native footer text.
+
+Repeated C++/Python X11 soaks at a 1024-by-768 image canvas, with 10 ms/chunk
+delay for ten seconds, pass. Final RSS medians were 340.5→340.5 MiB (C++) and
+574.4→574.4 MiB (Python); descriptor ranges were 149–151 and 146–148. Processing
+advanced from image 5,351 to 17,593 and 5,354 to 17,483. Settled synthetic
+captures were visually inspected. Capture now waits for status pixels at the
+new footer origin: window geometry alone can advance before a delayed cached
+repaint finishes. These checks establish bounded recovery, not a production
+latency guarantee or real-collection image-quality qualification.
+
+Direct C++ and Python runs on the forwarded `localhost:10.0` display initialized
+and held the docked view, then stopped cleanly. The five-second Python hold
+logged one image upload and 52 timeline uploads. A 640-by-480 run logged one image upload
+(1,515,520 bytes including the footer) and 430 timeline uploads over its hold,
+confirming independent transport at the default 10 Hz content cadence. Remote
+window-query and pixel-readback probes repeatedly stalled, including checks of
+the existing separate-window layout; complete forwarded interaction and pixel
+qualification is therefore not claimed. Positive native-window visual review
+still requires a compatible display. Repository-wide pinned lint passes.

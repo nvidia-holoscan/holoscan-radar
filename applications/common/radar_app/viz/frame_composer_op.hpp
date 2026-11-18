@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -19,12 +20,18 @@
 
 namespace holoscan::radar::app::viz {
 
-inline visualization::LayerStack dashboard_image_layers(std::int32_t width, std::int32_t height) {
+inline visualization::LayerStack dashboard_image_layers(std::int32_t width, std::int32_t height,
+                                                        float image_fraction = 1.0F) {
   visualization::LayerStack layers;
   layers.add_image_layer(
-      "image", visualization::ImageLayerDesc{.format = visualization::ImageFormat::kR8G8B8A8Unorm,
-                                             .max_width = static_cast<std::uint32_t>(width),
-                                             .max_height = static_cast<std::uint32_t>(height)});
+      "image",
+      visualization::ImageLayerDesc{
+          .format = visualization::ImageFormat::kR8G8B8A8Unorm,
+          .max_width = static_cast<std::uint32_t>(width),
+          .max_height = static_cast<std::uint32_t>(height),
+          .view = image_fraction == 1.0F
+                      ? std::nullopt
+                      : std::optional{visualization::ViewTransform{.scale_y = image_fraction}}});
   return layers;
 }
 
@@ -36,8 +43,9 @@ class FrameComposerOp : public holoscan::visualization::HolovizOp {
                   std::uint32_t max_glyphs = detail::kDashboardTextRows *
                                              detail::kDashboardTextBytes,
                   bool normalized_text = false, std::uint32_t max_lines = 0,
-                  std::int32_t image_max_side = 0)
-  : HolovizOp(make_layers(width, height, max_glyphs, normalized_text, max_lines, image_max_side),
+                  std::int32_t image_max_side = 0, std::int32_t image_view_height = 0)
+  : HolovizOp(make_layers(width, height, max_glyphs, normalized_text, max_lines, image_max_side,
+                          image_view_height),
               visualization::CudaSinkDesc{.width = static_cast<std::uint32_t>(width),
                                           .height = static_cast<std::uint32_t>(height)}),
     width_(width),
@@ -109,10 +117,11 @@ class FrameComposerOp : public holoscan::visualization::HolovizOp {
  private:
   static visualization::LayerStack make_layers(std::int32_t width, std::int32_t height,
                                                std::uint32_t max_glyphs, bool normalized_text,
-                                               std::uint32_t max_lines,
-                                               std::int32_t image_max_side) {
+                                               std::uint32_t max_lines, std::int32_t image_max_side,
+                                               std::int32_t image_view_height) {
     const auto side = std::max({width, height, image_max_side});
-    auto layers = dashboard_image_layers(side, side);
+    auto layers = dashboard_image_layers(
+        side, side, image_view_height > 0 ? static_cast<float>(image_view_height) / height : 1.0F);
     layers.add_text_layer("text",
                           visualization::TextLayerDesc{.max_glyphs = max_glyphs,
                                                        .normalized_coordinates = normalized_text});

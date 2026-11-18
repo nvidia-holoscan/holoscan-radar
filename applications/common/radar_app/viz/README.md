@@ -386,12 +386,15 @@ window events even when the scientific display-rate cap is lower.
 ## Docked SAR timeline
 
 SAR now defaults to one viewing window with the timeline docked below the
-formation/HUD image. The image canvas keeps its configured resolution; initial
+formation image. A compact left status panel shares the footer with the timeline;
+scene, formed dimensions, backprojection rate, last-pulse latency, and paced lag
+no longer cover the image. The APC direction marker stays over the image.
+The image canvas keeps its configured resolution; initial
 window height adds the timeline height. On resize, the footer stays 112 physical
 pixels high by default and the image uses the remaining height. Very short
 windows clamp the footer to half the available height. The image honors
-`resize_mode`; the timeline fills the footer independently. Text and diagnostic
-lanes retain their own update rate, which defaults to 10 Hz.
+`resize_mode`; the timeline fills its footer region independently and updates
+at 10 Hz by default. Status text updates only with its associated SAR image.
 
 ```yaml
 app:
@@ -403,9 +406,12 @@ app:
       window_height: 112
 ```
 
-The docked timeline raster takes the image canvas width. `timeline.window_width`
-applies to separate-window mode; `window_height` is the dock height in either
-layout. Disabling the timeline removes the footer. C++ and Python share this
+The status panel takes up to 320 canvas pixels, capped at half the canvas width.
+Its text uses a fixed pixel size; narrow windows crop its right edge rather than
+stretching the font. Long labels use an ellipsis. The timeline raster takes the
+remaining width. `timeline.window_width` applies to separate-window mode; `window_height` is the dock height in either
+layout. Disabling the timeline removes the footer. Separate-window and
+timeline-disabled layouts retain the on-image HUD. C++ and Python share this
 layout through the same native runtime. Saved image extents and values remain
 independent of the viewing window.
 
@@ -429,8 +435,15 @@ for window size so its physical height stays fixed. Without accessible window
 extents, native sizing falls back to the configured canvas. This path requires positive visual qualification on a
 presentation-capable GPU/display; GPU tests cover pixel placement and timestamps.
 
-The image and its HUD still join exactly before caching. The live timeline
-retains its independent clock; it is not forced to match an acquisition time.
+The image and its HUD still join exactly before caching. For the docked layout,
+`FrameComposerOp` renders the SAR image into its top viewport and the status
+into additional footer rows of the same completed GPU frame. Their acquisition
+time, queue admission, and transport remain inseparable under stalls or drops.
+X11 caches this combined frame and paints its image and status regions separately;
+the independently updated timeline child occupies the footer's right side.
+The extra footer rows add a fixed bounded amount of completed-frame transport,
+only when a new image arrives. No raw aperture or complex product is downloaded.
+The live timeline retains its independent clock; it is not forced to match an acquisition time.
 Native combined display frames preserve the main image's capture time and
 provenance. Headless execution renders and consumes both completed panels
 independently, without creating a window or adding an interactive hold.

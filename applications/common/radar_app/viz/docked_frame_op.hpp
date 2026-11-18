@@ -32,10 +32,11 @@ namespace holoscan::radar::app::viz {
 class DockedFrameOp final : public Operator<> {
  public:
   DockedFrameOp(int width, int image_height, int footer_height, double rate, bool fit,
-                std::string title, std::shared_ptr<FrameProgress> progress)
+                std::string title, std::shared_ptr<FrameProgress> progress, int status_width = 0)
   : width_(width),
     image_height_(image_height),
     footer_height_(footer_height),
+    status_width_(status_width),
     fit_(fit),
     extent_(std::move(title)),
     progress_(std::move(progress)),
@@ -71,12 +72,13 @@ class DockedFrameOp final : public Operator<> {
       held_image_ = images.back();
     if (!footers.empty())
       held_footer_ = footers.back();
-    for (const auto& [held, height] :
-         {std::pair{&held_image_, image_height_}, std::pair{&held_footer_, footer_height_}}) {
-      if (*held &&
-          (!(*held)->data.data || (*held)->data.width != width_ || (*held)->data.height != height))
-        return make_unexpected(Error{ErrorCode::kInvalidArgument, "Docked panel shape mismatch"});
-    }
+    if ((held_image_ &&
+         (!held_image_->data.data || held_image_->data.width != width_ ||
+          held_image_->data.height != image_height_ + (status_width_ > 0 ? footer_height_ : 0))) ||
+        (held_footer_ &&
+         (!held_footer_->data.data || held_footer_->data.width != width_ - status_width_ ||
+          held_footer_->data.height != footer_height_)))
+      return make_unexpected(Error{ErrorCode::kInvalidArgument, "Docked panel shape mismatch"});
     const int height = image_height_ + footer_height_;
     const std::array<std::int64_t, 3> shape{height, width_, 4};
     HOLOSCAN_TRY(auto loan, output.allocate_tensor(TensorLoanRequest{
@@ -86,7 +88,7 @@ class DockedFrameOp final : public Operator<> {
     const auto status = compose_docked_panels(
         held_image_ ? held_image_->data.data->data() : nullptr,
         held_footer_ ? held_footer_->data.data->data() : nullptr, writer.data(), width_,
-        image_height_, footer_height_, ww, wh, fit_, context.cuda_stream().get());
+        image_height_, footer_height_, ww, wh, fit_, context.cuda_stream().get(), status_width_);
     if (status != cudaSuccess)
       return make_unexpected(Error{ErrorCode::kFailure, "Docked GPU presentation failed"});
     HOLOSCAN_RETURN_IF_ERROR(std::move(writer).commit());
@@ -111,7 +113,7 @@ class DockedFrameOp final : public Operator<> {
   Output<schema::ImageT> output{"output"};
 
  private:
-  int width_, image_height_, footer_height_;
+  int width_, image_height_, footer_height_, status_width_;
   bool fit_;
   WindowExtent extent_;
   std::shared_ptr<FrameProgress> progress_;

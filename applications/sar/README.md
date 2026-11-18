@@ -111,10 +111,11 @@ the live playback clock (TxTime versus now), not GPU time on the controller.
 Looping presets (`loop: true`) stop with Ctrl-C in the launch terminal; the
 shared Graph driver owns SIGINT/SIGTERM so host `holoscan run` does not need
 `docker kill`. One in-flight backprojection may finish before the process exits.
-When Holoviz is enabled, the formed-image window composites the source-branch
-on-image HUD (scene name, formed size, backprojection rate, last-pulse latency,
-paced collect-vs-wall lag, and APC look chevron) as text and
-geometry layers. The timeline docks below the image by default and shows a
+When Holoviz is enabled, scene name, formed size, backprojection rate,
+last-pulse latency, and paced collect-vs-wall lag appear in a compact left status
+panel beside the docked timeline. The status follows its displayed image; the
+APC look chevron remains over the image. Separate-window or timeline-disabled
+layouts retain the on-image HUD. The timeline shows a
 20 s scrolling Gantt of collection dwells, image-emit ticks with last-pulse
 latency labels, and a 1 Hz lag HUD. Set
 `app.visualization.timeline.placement: window` for a separate timeline window.

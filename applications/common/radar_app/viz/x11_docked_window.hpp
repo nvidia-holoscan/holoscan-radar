@@ -22,10 +22,12 @@ namespace holoscan::radar::app::viz {
 // never uploads or composites pixels; a timeline tick touches only its child.
 class X11DockedWindow {
  public:
-  X11DockedWindow(int width, int image_height, int footer_height, std::string title)
+  X11DockedWindow(int width, int image_height, int footer_height, std::string title,
+                  int status_width = 0)
   : width_(width),
     height_(image_height + footer_height),
     footer_height_(footer_height),
+    status_width_(status_width),
     title_(std::move(title)) {}
   ~X11DockedWindow() {
     if (display_)
@@ -105,10 +107,15 @@ class X11DockedWindow {
   void layout() {
     const int footer = std::min(footer_height_, std::max(1, height_ / 2));
     const int image = std::max(1, height_ - footer);
+    const int status = std::min(status_width_, std::max(1, width_ / 2));
     if (children_[0])
-      XMoveResizeWindow(display_, children_[0], 0, 0, width_, image);
-    if (children_[1])
-      XMoveResizeWindow(display_, children_[1], 0, image, width_, footer);
+      XMoveResizeWindow(display_, children_[0], 0, 0, width_, status_width_ > 0 ? height_ : image);
+    if (children_[1]) {
+      XMoveResizeWindow(display_, children_[1], status, image, std::max(1, width_ - status),
+                        footer);
+      // The cached image/status surface spans the parent; timeline is above it.
+      XRaiseWindow(display_, children_[1]);
+    }
     XFlush(display_);
   }
   std::mutex mutex_;
@@ -117,7 +124,7 @@ class X11DockedWindow {
   Atom close_{};
   std::array<Window, 2> children_{};
   std::array<std::uint64_t, 2> uploads_{}, bytes_{};
-  int width_, height_, footer_height_;
+  int width_, height_, footer_height_, status_width_;
   std::string title_;
 };
 }  // namespace holoscan::radar::app::viz
