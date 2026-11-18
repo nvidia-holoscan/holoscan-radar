@@ -58,30 +58,19 @@ else()
 endif()
 
 # HSDK 5 exposes Python as an installed package, rather than a CMake pybind11
-# target. Require the Core module from the selected SDK root, and Visualization
-# when the example-application bindings are built.
+# target. Require the Core module from the selected SDK root;
+# python/holoscan_radar also requires Visualization when it builds app bindings.
 option(HOLOSCAN_RADAR_BUILD_PYTHON "Build the HSDK 5 holoscan.radar provider" OFF)
-option(HOLOSCAN_RADAR_BUILD_PYTHON_APPS
-    "Build the example-application bindings and holoscan_radar.applications" ON)
 option(HOLOSCAN_RADAR_PYTHON_TENSOR_DUMP "Register the TensorDumpOp debugging tap in the provider" ON)
 if(HOLOSCAN_RADAR_BUILD_PYTHON)
     find_package(Python3 3.12 EXACT REQUIRED COMPONENTS Interpreter Development.Module)
     set(HOLOSCAN_RADAR_SDK_PYTHON_SITE "${holoscan_DIR}/../../python3.12/site-packages")
     cmake_path(NORMAL_PATH HOLOSCAN_RADAR_SDK_PYTHON_SITE)
-    set(_radar_modules holoscan/_core.abi3.so)
-    if(HOLOSCAN_RADAR_BUILD_PYTHON_APPS)
-        list(APPEND _radar_modules holoscan_visualization/_visualization.abi3.so)
+    if(NOT EXISTS "${HOLOSCAN_RADAR_SDK_PYTHON_SITE}/holoscan/_core.abi3.so")
+        message(FATAL_ERROR
+            "HOLOSCAN_RADAR_BUILD_PYTHON requires HSDK 5 Python Core at ${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
     endif()
-    foreach(_radar_module IN LISTS _radar_modules)
-        if(NOT EXISTS "${HOLOSCAN_RADAR_SDK_PYTHON_SITE}/${_radar_module}")
-            message(FATAL_ERROR
-                "HOLOSCAN_RADAR_BUILD_PYTHON requires ${_radar_module} at "
-                "${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
-        endif()
-    endforeach()
-    unset(_radar_module)
-    unset(_radar_modules)
-    message(STATUS "HSDK 5 Python modules found (app bindings: ${HOLOSCAN_RADAR_BUILD_PYTHON_APPS})")
+    message(STATUS "HSDK 5 Python Core: found")
 else()
     message(STATUS "Python bindings disabled (HOLOSCAN_RADAR_BUILD_PYTHON=OFF)")
 endif()

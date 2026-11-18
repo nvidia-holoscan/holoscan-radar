@@ -125,15 +125,18 @@ if(HOLOSCAN_RADAR_BUILD_PYTHON OR HOLOSCAN_RADAR_BUILD_TESTING)
     unset(_radar_op)
 endif()
 
-# The Python provider tests cover the example applications.
-if(HOLOSCAN_RADAR_BUILD_PYTHON AND HOLOSCAN_RADAR_BUILD_TESTING AND NOT HOLOSCAN_RADAR_BUILD_PYTHON_APPS)
-    message(FATAL_ERROR "HOLOSCAN_RADAR_BUILD_TESTING with Python requires HOLOSCAN_RADAR_BUILD_PYTHON_APPS")
-endif()
+# Example apps with Python graphs. Selecting any of them (or BUILD_ALL) adds the
+# app bindings to the provider; wheels select none.
+set(HOLOSCAN_RADAR_PYTHON_FMCW_APPS
+    siso simo dense_beamforming mimo_tdm mimo_ddm adaptive_aoa multi_waveform)
+set(HOLOSCAN_RADAR_PYTHON_SAR_APPS
+    spotlight video_sar tiled_strip continuous_strip independent_images autofocus)
 
-# Python application parity tests execute the C++ reference applications.
+# The Python provider tests cover every example application, and the SAR
+# parity tests execute the C++ reference applications.
 if(HOLOSCAN_RADAR_BUILD_PYTHON AND HOLOSCAN_RADAR_BUILD_TESTING)
-    foreach(_sar_app IN ITEMS spotlight video_sar tiled_strip continuous_strip independent_images autofocus)
-        set(APP_${_sar_app} ON CACHE BOOL "Required by SAR Python parity tests" FORCE)
+    foreach(_sar_app IN ITEMS ${HOLOSCAN_RADAR_PYTHON_FMCW_APPS} ${HOLOSCAN_RADAR_PYTHON_SAR_APPS})
+        set(APP_${_sar_app} ON CACHE BOOL "Required by Python provider tests" FORCE)
     endforeach()
     unset(_sar_app)
 endif()

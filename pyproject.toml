@@ -57,7 +57,6 @@ install.components = ["holoscan-wheel-radar"]
 BUILD_SHARED_LIBS = true
 BUILD_ALL = false
 HOLOSCAN_RADAR_BUILD_PYTHON = true
-HOLOSCAN_RADAR_BUILD_PYTHON_APPS = false
 HOLOSCAN_RADAR_BUILD_TESTING = false
 # TensorDumpOp is a debugging tap; source builds keep it, the wheel omits it.
 HOLOSCAN_RADAR_PYTHON_TENSOR_DUMP = false

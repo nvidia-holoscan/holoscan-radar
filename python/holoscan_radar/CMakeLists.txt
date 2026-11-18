@@ -23,11 +23,25 @@ set(_radar_python_operators ${HOLOSCAN_RADAR_OPERATORS})
 if(NOT HOLOSCAN_RADAR_PYTHON_TENSOR_DUMP)
     list(REMOVE_ITEM _radar_python_operators tensor_dump_op)
 endif()
+# Selecting any example app with a Python graph (or BUILD_ALL) adds the app
+# bindings: simulator sources, reports, dashboards, presenters, config loaders,
+# and, for SAR apps, the SAR graph runtime. Wheels select no apps.
+set(_radar_python_apps)
+set(_radar_python_sar_apps)
+foreach(_radar_app IN LISTS HOLOSCAN_RADAR_PYTHON_FMCW_APPS HOLOSCAN_RADAR_PYTHON_SAR_APPS)
+    if(BUILD_ALL OR APP_${_radar_app})
+        list(APPEND _radar_python_apps ${_radar_app})
+        if(_radar_app IN_LIST HOLOSCAN_RADAR_PYTHON_SAR_APPS)
+            list(APPEND _radar_python_sar_apps ${_radar_app})
+        endif()
+    endif()
+endforeach()
 set(_radar_python_sources _radar.cpp _calibration.cpp)
-if(HOLOSCAN_RADAR_BUILD_PYTHON_APPS)
-    # Example-application support: simulator sources, reports, dashboards,
-    # presenters, config loaders, and the SAR graph runtime.
-    list(APPEND _radar_python_sources _siso.cpp _tdm.cpp _viz.cpp _sar.cpp)
+if(_radar_python_apps)
+    list(APPEND _radar_python_sources _siso.cpp _tdm.cpp _viz.cpp)
+endif()
+if(_radar_python_sar_apps)
+    list(APPEND _radar_python_sources _sar.cpp)
 endif()
 nanobind_add_module(holoscan_radar_python NB_STATIC STABLE_ABI ${_radar_python_sources})
 set_target_properties(holoscan_radar_python PROPERTIES
@@ -58,37 +72,45 @@ install(FILES __init__.py __init__.pyi py.typed DESTINATION holoscan_radar)
 # The wheel component covers only the provider and its native libraries.
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/wheel.cmake")
 
-if(NOT HOLOSCAN_RADAR_BUILD_PYTHON_APPS)
+if(NOT _radar_python_apps)
     return()
 endif()
-
+if(NOT EXISTS "${HOLOSCAN_RADAR_SDK_PYTHON_SITE}/holoscan_visualization/_visualization.abi3.so")
+    message(FATAL_ERROR "Python bindings for ${_radar_python_apps} require HSDK 5 Python "
+        "Visualization at ${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
+endif()
 target_compile_definitions(holoscan_radar_python PRIVATE HOLOSCAN_RADAR_PYTHON_APPS=1)
 target_include_directories(holoscan_radar_python PRIVATE "${PROJECT_SOURCE_DIR}/applications/common")
 target_link_libraries(holoscan_radar_python PRIVATE
-    holoscan::radar_common_simulator radar_app fmcw_dashboard sar_mosaic)
-if(TARGET sar_image_viz)
-    target_link_libraries(holoscan_radar_python PRIVATE sar_image_viz)
-    target_compile_definitions(holoscan_radar_python PRIVATE HOLOSCAN_RADAR_SAR_HOLOVIZ=1)
-endif()
-get_filename_component(_radar_python_data_dir "${HOLOHUB_DATA_DIR}" ABSOLUTE
-    BASE_DIR "${PROJECT_SOURCE_DIR}")
-target_compile_definitions(holoscan_radar_python PRIVATE
-    HOLOSCAN_RADAR_DATA_DIR="${_radar_python_data_dir}")
+    holoscan::radar_common_simulator radar_app fmcw_dashboard)
 
 # App graphs live beside their C++ counterparts. Stage them under
 # holoscan_radar.applications so build-tree and installed imports match.
 set(_radar_python_app_modules)
-foreach(_radar_app IN ITEMS siso simo dense_beamforming mimo_tdm mimo_ddm adaptive_aoa multi_waveform)
+foreach(_radar_app IN LISTS HOLOSCAN_RADAR_PYTHON_FMCW_APPS)
     list(APPEND _radar_python_app_modules
         "${PROJECT_SOURCE_DIR}/applications/fmcw/${_radar_app}/python/${_radar_app}.py")
 endforeach()
-foreach(_radar_app IN ITEMS spotlight video_sar tiled_strip continuous_strip independent_images autofocus)
-    list(APPEND _radar_python_app_modules
-        "${PROJECT_SOURCE_DIR}/applications/sar/${_radar_app}/python/${_radar_app}.py")
-endforeach()
-foreach(_radar_helper IN ITEMS __init__.py fmcw_dashboard.py cli.py presentation.py sar_graph.py)
+foreach(_radar_helper IN ITEMS __init__.py fmcw_dashboard.py cli.py presentation.py)
     list(APPEND _radar_python_app_modules "${CMAKE_CURRENT_SOURCE_DIR}/applications/${_radar_helper}")
 endforeach()
+if(_radar_python_sar_apps)
+    target_compile_definitions(holoscan_radar_python PRIVATE HOLOSCAN_RADAR_PYTHON_SAR_APPS=1)
+    target_link_libraries(holoscan_radar_python PRIVATE sar_mosaic)
+    if(TARGET sar_image_viz)
+        target_link_libraries(holoscan_radar_python PRIVATE sar_image_viz)
+        target_compile_definitions(holoscan_radar_python PRIVATE HOLOSCAN_RADAR_SAR_HOLOVIZ=1)
+    endif()
+    get_filename_component(_radar_python_data_dir "${HOLOHUB_DATA_DIR}" ABSOLUTE
+        BASE_DIR "${PROJECT_SOURCE_DIR}")
+    target_compile_definitions(holoscan_radar_python PRIVATE
+        HOLOSCAN_RADAR_DATA_DIR="${_radar_python_data_dir}")
+    foreach(_radar_app IN LISTS _radar_python_sar_apps)
+        list(APPEND _radar_python_app_modules
+            "${PROJECT_SOURCE_DIR}/applications/sar/${_radar_app}/python/${_radar_app}.py")
+    endforeach()
+    list(APPEND _radar_python_app_modules "${CMAKE_CURRENT_SOURCE_DIR}/applications/sar_graph.py")
+endif()
 foreach(_radar_app_source IN LISTS _radar_python_app_modules)
     get_filename_component(_radar_app_module "${_radar_app_source}" NAME)
     configure_file("${_radar_app_source}"

@@ -12,8 +12,8 @@ if(NOT COMMAND holoscan_add_python_wheel_component)
     endif()
     return()
 endif()
-if(SKBUILD AND HOLOSCAN_RADAR_BUILD_PYTHON_APPS)
-    message(FATAL_ERROR "Radar wheels contain operators only; set HOLOSCAN_RADAR_BUILD_PYTHON_APPS=OFF")
+if(SKBUILD AND _radar_python_apps)
+    message(FATAL_ERROR "Radar wheels contain operators only; select no APP_<name> applications")
 endif()
 
 # The helper does not follow link dependencies, so list every owned runtime:

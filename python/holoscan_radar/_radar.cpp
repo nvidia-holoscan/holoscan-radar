@@ -664,8 +664,10 @@ void register_catalog() {
 }  // namespace
 
 void register_calibration_bindings(nanobind::module_& module);
-#ifdef HOLOSCAN_RADAR_PYTHON_APPS
+#ifdef HOLOSCAN_RADAR_PYTHON_SAR_APPS
 void register_sar_bindings(nanobind::module_& module);
+#endif
+#ifdef HOLOSCAN_RADAR_PYTHON_APPS
 void register_siso_bindings(nanobind::module_& module);
 void register_tdm_bindings(nanobind::module_& module);
 void register_viz_bindings(nanobind::module_& module);
@@ -678,6 +680,8 @@ NB_MODULE(_radar, module) {
   register_siso_bindings(module);
   register_tdm_bindings(module);
   register_viz_bindings(module);
+#endif
+#ifdef HOLOSCAN_RADAR_PYTHON_SAR_APPS
   register_sar_bindings(module);
 #endif
 #ifdef HOLOSCAN_RADAR_PYTHON_NO_TENSOR_DUMP
