@@ -116,8 +116,7 @@ include(HoloscanRadarOptionalFeatures)
 # including when a selected application defaults BUILD_ALL to OFF.
 if(HOLOSCAN_RADAR_BUILD_PYTHON OR HOLOSCAN_RADAR_BUILD_TESTING)
     foreach(_radar_op IN LISTS HOLOSCAN_RADAR_OPERATORS)
-        if(_radar_op STREQUAL "tensor_dump_op" AND NOT HOLOSCAN_RADAR_BUILD_TESTING AND
-                NOT HOLOSCAN_RADAR_PYTHON_TENSOR_DUMP)
+        if(_radar_op STREQUAL "tensor_dump_op" AND NOT HOLOSCAN_RADAR_BUILD_TESTING)
             continue()
         endif()
         set(OP_${_radar_op} ON CACHE BOOL "Required by the Radar provider or test suite" FORCE)

@@ -61,7 +61,6 @@ endif()
 # target. Require the Core module from the selected SDK root;
 # python/holoscan_radar also requires Visualization when it builds app bindings.
 option(HOLOSCAN_RADAR_BUILD_PYTHON "Build the HSDK 5 holoscan.radar provider" OFF)
-option(HOLOSCAN_RADAR_PYTHON_TENSOR_DUMP "Register the TensorDumpOp debugging tap in the provider" ON)
 if(HOLOSCAN_RADAR_BUILD_PYTHON)
     find_package(Python3 3.12 EXACT REQUIRED COMPONENTS Interpreter Development.Module)
     set(HOLOSCAN_RADAR_SDK_PYTHON_SITE "${holoscan_DIR}/../../python3.12/site-packages")

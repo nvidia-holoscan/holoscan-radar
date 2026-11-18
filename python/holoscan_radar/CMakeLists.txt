@@ -19,10 +19,9 @@ else()
         GIT_SUBMODULES_RECURSE TRUE)
     FetchContent_MakeAvailable(nanobind)
 endif()
+# TensorDumpOp is a C++ debugging tap; the Python provider does not register it.
 set(_radar_python_operators ${HOLOSCAN_RADAR_OPERATORS})
-if(NOT HOLOSCAN_RADAR_PYTHON_TENSOR_DUMP)
-    list(REMOVE_ITEM _radar_python_operators tensor_dump_op)
-endif()
+list(REMOVE_ITEM _radar_python_operators tensor_dump_op)
 # Selecting any example app with a Python graph (or BUILD_ALL) adds the app
 # bindings: simulator sources, reports, dashboards, presenters, config loaders,
 # and, for SAR apps, the SAR graph runtime. Wheels select no apps.
@@ -60,9 +59,6 @@ target_include_directories(holoscan_radar_python PRIVATE
     "${PROJECT_SOURCE_DIR}")
 target_link_libraries(holoscan_radar_python PRIVATE holoscan::core holoscan::params_io
     holoscan::radar_common holoscan::radar_schemas ${_radar_python_operators})
-if(NOT HOLOSCAN_RADAR_PYTHON_TENSOR_DUMP)
-    target_compile_definitions(holoscan_radar_python PRIVATE HOLOSCAN_RADAR_PYTHON_NO_TENSOR_DUMP=1)
-endif()
 configure_file(__init__.py "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/__init__.py" COPYONLY)
 configure_file(py.typed "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/py.typed" COPYONLY)
 configure_file(__init__.pyi "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/__init__.pyi" COPYONLY)

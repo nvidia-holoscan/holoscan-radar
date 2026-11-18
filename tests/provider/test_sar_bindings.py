@@ -4,7 +4,6 @@
 """Exercise the public SAR/I/O factories across the native GPU boundary."""
 
 import os
-import time
 from pathlib import Path
 
 import cupy as cp
@@ -250,25 +249,6 @@ def test_autofocus_flat_image_reports_refusal(suffix, dtype):
         np.frombuffer(result.snapshot("image_out").bytes, dtype=dtype).reshape(image.shape), image
     )
     assert np.frombuffer(result.snapshot("iterations").bytes, dtype=np.int32)[0] == 0
-
-
-@pytest.mark.parametrize("format", ("npy", "raw"))
-def test_tensor_dump_writes_dtype_independent_values(format, tmp_path):
-    path = tmp_path / f"tensor.{format}"
-    values = np.array([1, -3, 7], dtype=np.int16)
-    captured = _configure(radar.TensorDumpOp, path=str(path), format=format, max_files=1)
-    with OperatorTestHarness(captured.type_name, params=captured.params, outputs=[]) as harness:
-        tensors = _tensor_inputs(harness, {"tensor": values})
-        harness.push("tensor", tensors["tensor"])
-        with harness.run_async(TestRunOptions(expect_stop=True)) as running:
-            deadline = time.monotonic() + 10
-            while not path.exists() and time.monotonic() < deadline:
-                time.sleep(0.01)
-            running.request_stop()
-            running.finish()
-    assert path.exists()
-    actual = np.load(path) if format == "npy" else np.fromfile(path, dtype=np.int16)
-    np.testing.assert_array_equal(actual, values)
 
 
 @pytest.mark.parametrize("suffix,dtype", [("F32", np.complex64), ("F64", np.complex128)])

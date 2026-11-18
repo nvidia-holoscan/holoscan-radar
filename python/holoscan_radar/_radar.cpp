@@ -74,10 +74,6 @@
 #include "sar/sar_range_compression_op/params_config.hpp"
 #include "sar/phase_correction_op/phase_correction_op.hpp"
 #include "sar/autofocus_op/autofocus_op.hpp"
-#ifndef HOLOSCAN_RADAR_PYTHON_NO_TENSOR_DUMP
-#include "io/tensor_dump_op/tensor_dump_op.hpp"
-#include "io/tensor_dump_op/params_config.hpp"
-#endif
 #include "radar_schemas/coordinate_frame_bridge.hpp"
 #include "radar_schemas/sample_geometry_bridge.hpp"
 #include "radar_schemas/lfm_waveform_bridge.hpp"
@@ -537,9 +533,6 @@ void register_catalog() {
       "holoscan.radar.PhaseCorrectionOpF64");
   register_one<radar::AutofocusOp<float>, radar::AutofocusParams>("holoscan.radar.AutofocusOpF32");
   register_one<radar::AutofocusOp<double>, radar::AutofocusParams>("holoscan.radar.AutofocusOpF64");
-#ifndef HOLOSCAN_RADAR_PYTHON_NO_TENSOR_DUMP
-  register_one<radar::TensorDumpOp, radar::TensorDumpParams>("holoscan.radar.TensorDumpOp");
-#endif
 
   register_payload<radar::WireCoordinateFrame>(
       holoscan::schema_identity<radar::WireCoordinateFrame>().canonical_name);
@@ -683,11 +676,6 @@ NB_MODULE(_radar, module) {
 #endif
 #ifdef HOLOSCAN_RADAR_PYTHON_SAR_APPS
   register_sar_bindings(module);
-#endif
-#ifdef HOLOSCAN_RADAR_PYTHON_NO_TENSOR_DUMP
-  module.attr("_has_tensor_dump") = false;
-#else
-  module.attr("_has_tensor_dump") = true;
 #endif
   module.doc() = "FMCW and SAR radar operator catalog for HSDK 5";
 }

@@ -31,12 +31,6 @@ PhaseCorrectionOpF64: RadarOperator
 AutofocusOpF32: RadarOperator
 AutofocusOpF64: RadarOperator
 
-class TensorDumpOperator(Protocol):
-    registry_name: str
-    def __call__(self, graph: Graph, name: str, **params: Any) -> OperatorHandle: ...
-
-TensorDumpOp: TensorDumpOperator
-
 BeamscanEstimatorOpF32: RadarOperator
 BeamscanEstimatorOpF64: RadarOperator
 CFARDetectorOpF32: RadarOperator
