@@ -180,7 +180,7 @@ struct PythonSarContext : std::enable_shared_from_this<PythonSarContext<T>> {
       if (port.direction == holoscan::PortDirection::kOutput &&
           port.payload_identity.kind == holoscan::PayloadIdentityKind::kTensor) {
         runtime->options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
-            .operator_path = name, .output_port = port.name, .device = app::application_device()});
+            .operator_path = name, .output_port = port.name, .device = runtime->devices.compute});
       }
     }
     return result;

@@ -320,10 +320,50 @@ def format_duration(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
+class UniqueKeySafeLoader(yaml.SafeLoader):
+    """Reject ambiguous mappings while retaining safe YAML construction."""
+
+    def __init__(self, stream):
+        super().__init__(stream)
+        self._checked_mappings = set()
+
+    def flatten_mapping(self, node):
+        # SafeLoader recursively flattens merge sources without constructing
+        # them as mappings. Validate here so inline merge sources are checked
+        # too, before expansion introduces legitimate override duplicates.
+        if node not in self._checked_mappings:
+            self._checked_mappings.add(node)
+            keys = set()
+            for key_node, _ in node.value:
+                key = (
+                    key_node.tag
+                    if key_node.tag == "tag:yaml.org,2002:merge"
+                    else self.construct_object(key_node)
+                )
+                try:
+                    duplicate = key in keys
+                    keys.add(key)
+                except TypeError as exc:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        "found an unhashable key",
+                        key_node.start_mark,
+                    ) from exc
+                if duplicate:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        f"found duplicate key {key!r}",
+                        key_node.start_mark,
+                    )
+        super().flatten_mapping(node)
+
+
 def jobs_for_config(config: Path, data_root: Path | None = None) -> list[PullJob]:
     """Validate the entire config against the catalog before doing any work."""
     root = data_root if data_root is not None else Path(os.environ.get("HOLOHUB_DATA_DIR", "data"))
-    spec = yaml.safe_load(config.read_text())
+    spec = yaml.load(config.read_text(), Loader=UniqueKeySafeLoader)
     cphd = spec.get("cphd") if isinstance(spec, dict) else None
     paths = cphd.get("path") if isinstance(cphd, dict) else None
     paths = [paths] if isinstance(paths, str) else paths
@@ -389,9 +429,7 @@ def jobs_for(app: str, dest: Path | None) -> list[PullJob]:
 def prepare_one(job: PullJob, force: bool, index: int, total: int) -> Path:
     if job.recipe is None:
         return pull_one(job, force, index, total)
-    command = [
-        "uv",
-        "run",
+    command = (["uv", "run"] if shutil.which("uv") else [sys.executable]) + [
         str(REPO_ROOT / "tools/sar_data/subset_cphd.py"),
         str(job.recipe),
         "--output",

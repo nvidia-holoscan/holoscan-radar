@@ -164,7 +164,9 @@ inline void add_image_presentation(
     const Output<schema::ImageT>& frame, const std::string& prefix, std::int32_t width,
     std::int32_t height, const std::string& title, const VisualizationConfig& config,
     std::shared_ptr<FrameProgress> progress = authoring_frame_progress(),
-    const std::string& position = {}) {
+    const std::string& position = {},
+    DeviceId composer_device = DeviceId{application_composer_device()},
+    DeviceId display_device = DeviceId{application_display_device()}) {
   const ConnectionOptions queue{.queue_policy = QueuePolicy::kDropOldest, .queue_depth = 1U};
   auto presentation = graph.partition(prefix + "_presentation");
   options.deployment.bind_thread_placement(prefix + "_presentation", ThreadPlacement{});
@@ -195,15 +197,12 @@ inline void add_image_presentation(
   repaint.add(replay);
   options.deployment.bind_thread_placement(prefix + "_repaint", ThreadPlacement{});
   presentation.add(viewer);
-  options.deployment.bind_tensor_output_device(
-      TensorOutputDevicePlacement{.operator_path = prefix + "_replay",
-                                  .output_port = "output",
-                                  .device = DeviceId{application_composer_device()}});
+  options.deployment.bind_tensor_output_device(TensorOutputDevicePlacement{
+      .operator_path = prefix + "_replay", .output_port = "output", .device = composer_device});
   graph.add_flow(frame, replay->image, queue);
   connect_image_devices(graph, options, repaint, presentation, replay->output,
                         viewer->image_layer_input(0), prefix + "_display", width, height,
-                        DeviceId{application_composer_device()},
-                        DeviceId{application_display_device()}, queue);
+                        composer_device, display_device, queue);
 }
 
 // Both panels are already GPU-composed, with independent content timestamps.
@@ -211,13 +210,17 @@ inline void add_docked_presentation(
     Graph& graph, CompileOptions& options, PartitionHandle& image_partition,
     const Output<schema::ImageT>& image, PartitionHandle& footer_partition,
     const Output<schema::ImageT>& footer, int width, int image_height, int footer_height,
-    const VisualizationConfig& config, std::shared_ptr<FrameProgress> progress) {
+    const VisualizationConfig& config, std::shared_ptr<FrameProgress> progress,
+    DeviceId composer_device = DeviceId{application_composer_device()},
+    DeviceId display_device = DeviceId{application_display_device()}) {
   const ConnectionOptions queue{.queue_policy = QueuePolicy::kDropOldest, .queue_depth = 1U};
   if (config.headless) {
     add_image_presentation(graph, options, image_partition, image, "sar", width, image_height,
-                           config.window_title, config, progress);
+                           config.window_title, config, progress, {}, composer_device,
+                           display_device);
     add_image_presentation(graph, options, footer_partition, footer, "timeline", width,
-                           footer_height, "SAR timeline", config, {});
+                           footer_height, "SAR timeline", config, {}, {}, composer_device,
+                           display_device);
     return;
   }
 #if HOLOSCAN_RADAR_HAS_X11
@@ -253,10 +256,8 @@ inline void add_docked_presentation(
   auto repaint = graph.partition("sar_repaint");
   repaint.add(dock);
   options.deployment.bind_thread_placement("sar_repaint", ThreadPlacement{});
-  options.deployment.bind_tensor_output_device(
-      TensorOutputDevicePlacement{.operator_path = "sar_dock",
-                                  .output_port = "output",
-                                  .device = DeviceId{application_composer_device()}});
+  options.deployment.bind_tensor_output_device(TensorOutputDevicePlacement{
+      .operator_path = "sar_dock", .output_port = "output", .device = composer_device});
   graph.add_flow(image, dock->image, queue);
   graph.add_flow(footer, dock->footer, queue);
   auto viewer = graph.op<NativeImagePresenterOp>("sar_viewer", width, image_height + footer_height,
@@ -266,8 +267,7 @@ inline void add_docked_presentation(
   options.deployment.bind_thread_placement("sar_presentation", ThreadPlacement{});
   connect_image_devices(graph, options, repaint, presentation, dock->output,
                         viewer->image_layer_input(0), "sar_display", width,
-                        image_height + footer_height, DeviceId{application_composer_device()},
-                        DeviceId{application_display_device()}, queue);
+                        image_height + footer_height, composer_device, display_device, queue);
 }
 
 }  // namespace holoscan::radar::app::viz

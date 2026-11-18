@@ -69,10 +69,11 @@ namespace radar = holoscan::radar;
 namespace app = holoscan::radar::app;
 
 inline void bind_outputs(holoscan::CompileOptions& options, const char* op,
-                         std::initializer_list<const char*> names) {
+                         std::initializer_list<const char*> names,
+                         holoscan::DeviceId device = app::application_device()) {
   for (const char* port : names) {
     options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
-        .operator_path = op, .output_port = port, .device = app::application_device()});
+        .operator_path = op, .output_port = port, .device = device});
   }
 }
 
@@ -136,15 +137,26 @@ struct Precision {
   using Geometry = TGeometry;
 };
 
-inline bool select_sar_device(AppConfig& cfg, const std::string& path) {
+// Keep prepared contexts independent of later thread-local device discovery.
+struct SarDeviceSelection {
+  bool visualize;
+  holoscan::DeviceId compute;
+  holoscan::DeviceId display;
+  holoscan::DeviceId composer;
+};
+
+inline SarDeviceSelection select_sar_device(AppConfig& cfg, const std::string& path) {
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
   app::prepare_presentation(cfg, path, cfg.presenter, cfg.choose_presenter);
   cfg.visualize_hold_s = cfg.visualization.final_image_hold_s;
-  return cfg.visualize;
+  const bool visualize = cfg.visualize;
 #else
   app::select_application_device(false, false);
-  return false;
+  const bool visualize = false;
 #endif
+  return {visualize, app::application_device(),
+          holoscan::DeviceId{app::application_display_device()},
+          holoscan::DeviceId{app::application_composer_device()}};
 }
 
 inline radar::MaxTensorExtents prepare_sar_extents(const AppConfig& cfg,
@@ -161,7 +173,7 @@ inline radar::MaxTensorExtents prepare_sar_extents(const AppConfig& cfg,
 struct SarRuntimeInputs {
   holoscan::config::Document document;
   radar::MaxTensorExtents extents;
-  bool visualize;
+  SarDeviceSelection devices;
 };
 
 inline SarRuntimeInputs prepare_sar_runtime(AppConfig& cfg, const std::filesystem::path& path) {
@@ -177,6 +189,7 @@ struct SarGraphRuntime {
   std::string name;
   CliPaths cli;
   AppConfig cfg;
+  const SarDeviceSelection devices;
   bool visualize;
   std::shared_ptr<holoscan::Graph> owned_graph;
   holoscan::Graph& graph;
@@ -214,8 +227,8 @@ struct SarGraphRuntime {
   : name(std::move(app_name)),
     cli(std::move(paths)),
     cfg(std::move(config)),
-    visualize(prepared == nullptr ? select_sar_device(cfg, cli.config.string())
-                                  : prepared->visualize),
+    devices(prepared == nullptr ? select_sar_device(cfg, cli.config.string()) : prepared->devices),
+    visualize(devices.visualize),
     owned_graph(external_graph == nullptr ? std::make_shared<holoscan::Graph>(name) : nullptr),
     graph(external_graph == nullptr ? *owned_graph : *external_graph),
     extents(prepared == nullptr ? prepare_sar_extents(cfg, cli.config) : prepared->extents),
@@ -251,15 +264,17 @@ struct SarGraphRuntime {
     reader.set_params(std::move(reader_params));
     bind_outputs(options, "cphd_reader",
                  {"phase_history", "positions", "reference_position", "sample_axis", "pulse_times",
-                  "velocities"});
+                  "velocities"},
+                 devices.compute);
     range.set_params(std::move(range_params));
-    bind_outputs(options, "range_compression", {"range_profiles", "range_bins"});
+    bind_outputs(options, "range_compression", {"range_profiles", "range_bins"}, devices.compute);
     manager.set_params(std::move(manager_params));
     bind_outputs(options, "aperture_manager",
                  {"range_profiles_out", "positions_out", "reference_position_out", "weight",
-                  "sample_points_out", "control_out"});
+                  "sample_points_out", "control_out"},
+                 devices.compute);
     bp.set_params(std::move(bp_params));
-    bind_outputs(options, "backprojection", {"image"});
+    bind_outputs(options, "backprojection", {"image"}, devices.compute);
     // A scroll mosaic publishes a decimated view of its accumulator, so the
     // tensor reaching the report is not the formed strip. Report the strip.
     // Authored partitions only get independent workers when each one has a
@@ -406,7 +421,7 @@ struct SarGraphRuntime {
           std::move(overlay), product_extent, cfg.visualization.display_rate_hz, [hud = hud] {
             return hud->snapshot().reader_stopped;
           });
-      bind_outputs(options, "sar_image_viz", {"frame"});
+      bind_outputs(options, "sar_image_viz", {"frame"}, devices.compute);
       if (cfg.explicit_window_size) {
         width = static_cast<uint32_t>(cfg.visualization.window_width);
         height = static_cast<uint32_t>(cfg.visualization.window_height);
@@ -414,7 +429,7 @@ struct SarGraphRuntime {
       auto raster_partition = graph.partition("raster");
       raster_partition.add(raster);
       auto visualization = graph.partition("visualization");
-      const holoscan::DeviceId renderer_device{app::application_composer_device()};
+      const auto renderer_device = devices.composer;
       auto composed =
           graph.op<app::viz::FrameComposerOp>("holoviz", width, height, app::sar::kHudMaxGlyphs,
                                               true, app::sar::kHudMaxLines, lut_side);
@@ -426,14 +441,15 @@ struct SarGraphRuntime {
       graph.add_flow(raster->overlay, composed->tensor_layer_input(2), overlay_queue);
       app::viz::connect_image_devices(graph, options, raster_partition, visualization,
                                       raster->frame, composed->image_layer_input(0), "sar_composer",
-                                      lut_side, lut_side, app::application_device(),
-                                      renderer_device, overlay_queue);
+                                      lut_side, lut_side, devices.compute, renderer_device,
+                                      overlay_queue);
       const bool docked =
           cfg.visualization.timeline.enabled && cfg.visualization.timeline.placement == "bottom";
       if (!docked)
         app::viz::add_image_presentation(graph, options, visualization, composed->output(), "sar",
                                          width, height, cfg.visualization.window_title,
-                                         cfg.visualization, display_progress);
+                                         cfg.visualization, display_progress, {}, devices.composer,
+                                         devices.display);
       has_visualization = true;
       if (cfg.visualization.timeline.enabled) {
         auto timeline = graph.op<app::sar::TimelineRasterOp>(
@@ -441,7 +457,7 @@ struct SarGraphRuntime {
             cfg.visualization.timeline.display_rate_hz,
             docked ? width : cfg.visualization.timeline.window_width,
             cfg.visualization.timeline.window_height);
-        bind_outputs(options, "timeline_raster", {"frame"});
+        bind_outputs(options, "timeline_raster", {"frame"}, devices.compute);
         auto timeline_part = graph.partition("timeline");
         timeline_part.add(timeline);
         auto timeline_display = graph.partition("timeline_display");
@@ -454,18 +470,20 @@ struct SarGraphRuntime {
         graph.add_flow(timeline->labels, timeline_frame->tensor_layer_input(1), overlay_queue);
         app::viz::connect_image_devices(graph, options, timeline_part, timeline_display,
                                         timeline->frame, timeline_frame->image_layer_input(0),
-                                        "timeline_composer", tw, th, app::application_device(),
+                                        "timeline_composer", tw, th, devices.compute,
                                         renderer_device, overlay_queue);
         if (docked) {
           app::viz::add_docked_presentation(graph, options, visualization, composed->output(),
                                             timeline_display, timeline_frame->output(), width,
-                                            height, th, cfg.visualization, display_progress);
+                                            height, th, cfg.visualization, display_progress,
+                                            devices.composer, devices.display);
         } else {
           auto timeline_config = cfg.visualization;
           timeline_config.display_rate_hz = cfg.visualization.timeline.display_rate_hz;
           app::viz::add_image_presentation(graph, options, timeline_display,
                                            timeline_frame->output(), "timeline", tw, th,
-                                           "SAR timeline", timeline_config, {}, "bottom_left");
+                                           "SAR timeline", timeline_config, {}, "bottom_left",
+                                           devices.composer, devices.display);
         }
         has_timeline = true;
       }

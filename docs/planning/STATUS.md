@@ -4,6 +4,46 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-18** — **Merge current main into SAR GUI** on `deustice/sar-gui`:
+  integrated `origin/main` at `ff302931`, preserving shared GUI presentation,
+  docked panels, named workflows, and flat CPHD storage. Retained upstream CFAR
+  empty-axis and failed-future fixes, runtime data-root precedence, optional SAR
+  visualization linking, strict downloader YAML parsing, direct Python subset
+  preparation, and nested provider fixture discovery. Per-context GPU placement
+  now reaches the shared compositor and both timeline layouts; the upstream
+  placement regression covers their retained compute/composer/display bindings.
+  The merge adopts main's GO/SO populated-axis contract clarification.
+  The pinned HSDK 5 GA build, all 410 selected non-performance CTests, all 17
+  offline downloader cases, and pinned all-file lint pass. Coverage includes
+  the Python provider, CFAR numerical checks, SAR numerical/dump checks,
+  runtime data paths, headless rendering, and C++/Python X11 windows via Xvfb.
+  Positive native-window checks remain excluded for the established display
+  limitation; laptop SSH visual checks were not repeated for this merge.
+
+- **2026-11-17** — **SAR Python packaging review follow-up** on
+  `deustice/sar-python`: the provider links/enables SAR visualization only when
+  `sar_image_viz` exists. CPHD lookup checks runtime `HOLOHUB_DATA_DIR` before
+  the compiled data root, preserving explicit caller/YAML-relative paths and
+  the compiled fallback. Installed-wheel usage and precedence are documented.
+  All 31 selected GA SDK CTests pass, including the full provider suite, three
+  native path-resolution cases, the placement regression, 25 SAR application
+  checks, and fixture setup. The final path cases also pass after adding the
+  explicit runtime-versus-compiled-root precedence assertion. CMake probes pass
+  with the SAR visualization target present and absent, and `_sar.cpp` compiles
+  with SAR visualization disabled. Repository-wide pinned lint passes.
+
+- **2026-11-17** — **SAR Python review follow-up** on `deustice/sar-python`:
+  prepared contexts retain compute/display/composer choices through attachment
+  and finalization; failed CFAR futures are cleared before reporting errors so
+  later ticks can retry. Provider fixture discovery uses the nested project build
+  tree. CPHD preparation rejects duplicate YAML keys, including inline merge
+  sources, before selection or side effects and supports direct Python when
+  `uv` is unavailable; valid merge overrides and reused anchors are preserved. All 104 selected
+  CTests pass in a nested GA SDK build, including 281 provider cases, 76 native
+  CFAR cases, the placement regression, 25 SAR application checks, and fixture
+  setup. All 17 offline downloader tests and repository-wide pinned lint pass.
+  Public operator contracts and device-selection policy are unchanged.
+
 - **2026-11-17** — **SAR workflow names and flat CPHD storage** on
   `deustice/sar-gui`: replaced numbered SAR shorthand with descriptive workflow
   names in guides, comments, diagnostics, and metadata. Named sections in
@@ -1345,6 +1385,7 @@ still declare SDK 4.3.0.
 | FMCW log timestamps | Codex | `deustice/gui-updates` | **verified locally:** shared C++/Python app logging includes wall-clock date/time, milliseconds and UTC offset; explicit `HOLOSCAN_LOG_FORMAT` overrides remain supported. All seven C++ apps build; all seven C++ and Python smoke runs, both format-override checks and pinned lint pass on GPU 7. |
 | Multi-GPU application placement | Codex | `deustice/gui-updates` | **implemented, visual validation limited (2026-10-26):** seven FMCW C++/Python workflows and five SAR apps retain compute placement and discover each renderer's adapter; explicit bounded host transfers join differing GPUs. All 12 apps build; 58 provider checks, eight C++ FMCW smoke modes, 13 SAR smoke/topology checks and 29 focused native checks pass, including exact image/metadata transfer. Original HEAD compositor also times out; live visual runs stall or report Vulkan device loss after formation, so clean presentation remains unverified here. Renderer-device API request: [CLARAHOLOS-3592](https://nvidia.atlassian.net/browse/CLARAHOLOS-3592). Logs: `/tmp/holoscan-radar-gpu-placement/siso`. |
 | PR 58 main merge | Codex | `tbirdsong/aivo/cphd-pvp-offset-overflow` | **verified locally:** merged `main` at `d54bfdad` after PR 68 landed; retained both status histories. CPHD code and tests merge cleanly; all 14 focused CPHD file/reader GPU CTests and pinned all-file lint pass. The earlier merge combined CPHD test headers and preserved the overflow regression and reader lifecycle tests. No public contract changes. |
+| CFAR SO empty-axis calibration consistency | Codex | `deustice/cfar-calibration` | **verified locally (2026-11-17):** reproduced the singleton-axis SO zero-noise/score bug before fixing runtime fusion to ignore empty axes, matching calibration and LUT indexing. Clarified the GO/SO boundary contract; neither axis populated still yields zeros. Float/double tests cover both axis orientations, populated borders, target detection, and offline LUT noise/score/mask and empirical Pfa. All 211 CFAR GPU tests, 14 Python calibration tests, and pinned all-file lint pass. |
 | CFAR failed nonblocking rebuild results | Codex | `deustice/cfar-calibration` | **verified locally (2026-11-17):** retain subscribed calibration futures through failure while allowing fresh callers to retry; convert polling failures to runtime Errors. A manual-frame GO regression verifies a working LUT, one stale tick at unsupported `pfa=1e-30`, then the original budget Error. All 90 focused GPU tests, 14 Python calibration tests, and pinned all-file lint pass. |
 | CFAR calibration review fixes | Codex | `deustice/cfar-calibration` | **verified locally (2026-11-17):** release superseded live/startup build subscriptions while preserving other consumers; match the external LUT contract by ignoring slot 0 and surplus entries; validate full-tail sort/memory needs before timing probes. All 85 focused GPU tests, 14 Python calibration tests, and pinned all-file lint pass in an isolated worktree. |
 | CPHD PVP offset-overflow hardening | Codex | `tbirdsong/aivo/cphd-pvp-offset-overflow` | **ready for review:** PVP field placement now uses a word-domain subtraction proof, rejecting negative, overflowing, and past-record layouts before pointer arithmetic while preserving an exact-boundary field. The focused parser regression passes under host ASan/UBSan, and changed-file pinned hooks pass; PR #58 now includes current `main`; the staging HSDK 5 clean build and all 1,088 non-performance CTests pass with zero failures or skips, including the overflow regression and SAR application smokes. Pinned all-file lint passes. |

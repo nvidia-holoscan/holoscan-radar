@@ -186,13 +186,81 @@ class DownloadCliTest(unittest.TestCase):
         self.assertIn("houston_1m.yaml", output.getvalue())
         self.assertIn("houston_1p0m.cphd", output.getvalue())
         job = pull_cphd.jobs_for_config(config)[0]
-        with mock.patch.object(pull_cphd.subprocess, "run") as run:
+        with (
+            mock.patch.object(pull_cphd.shutil, "which", return_value="/usr/bin/uv"),
+            mock.patch.object(pull_cphd.subprocess, "run") as run,
+        ):
             self.assertEqual(pull_cphd.prepare_one(job, True, 1, 1), job.destination)
         command = run.call_args.args[0]
         self.assertEqual(command[:2], ["uv", "run"])
         self.assertIn(str(job.recipe), command)
         self.assertIn(str(job.destination), command)
         self.assertIn("--force", command)
+
+    def test_duplicate_config_keys_fail_before_selection_or_side_effects(self):
+        known = "sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd"
+        for text in (
+            f"cphd:\n  path: {known}\n  path: {known}\n",
+            f"cphd: {{path: {known}}}\ncphd: {{path: {known}}}\n",
+            f"cphd: {{<<: {{path: {known}, path: {known}}}}}\n",
+            f"cphd: {{<<: [{{path: {known}, path: {known}}}]}}\n",
+        ):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as temp:
+                config = Path(temp) / "config.yaml"
+                config.write_text(text)
+                root = Path(temp) / "absent"
+                output = io.StringIO()
+                with (
+                    mock.patch(
+                        "sys.argv",
+                        ["pull_cphd.py", "--config", str(config), "--data-root", str(root)],
+                    ),
+                    mock.patch.object(pull_cphd, "dataset_catalog") as catalog,
+                    mock.patch.object(pull_cphd, "prepare_one") as prepare,
+                    mock.patch.object(Path, "mkdir") as mkdir,
+                    contextlib.redirect_stderr(output),
+                    self.assertRaises(SystemExit) as caught,
+                ):
+                    pull_cphd.main()
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn("duplicate key", output.getvalue())
+                self.assertNotIn("Traceback", output.getvalue())
+                catalog.assert_not_called()
+                prepare.assert_not_called()
+                mkdir.assert_not_called()
+                self.assertFalse(root.exists())
+
+    def test_yaml_merge_overrides_and_reused_anchors_remain_supported(self):
+        known = "sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd"
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / "config.yaml"
+            config.write_text(
+                "defaults: &defaults {path: unused.cphd}\n"
+                f"cphd: &cphd {{<<: *defaults, path: {known}}}\n"
+                "copy: {<<: *cphd}\n"
+            )
+            root = Path(temp) / "data"
+            jobs = pull_cphd.jobs_for_config(config, root)
+            self.assertEqual([job.destination for job in jobs], [root / known])
+            self.assertFalse(root.exists())
+
+    def test_houston_preparation_uses_current_python_when_uv_is_unavailable(self):
+        job = pull_cphd.jobs_for_config(pull_cphd.APPS["video_sar"])[0]
+        with (
+            mock.patch.object(pull_cphd.shutil, "which", return_value=None),
+            mock.patch.object(pull_cphd.subprocess, "run") as run,
+        ):
+            self.assertEqual(pull_cphd.prepare_one(job, False, 1, 1), job.destination)
+        run.assert_called_once_with(
+            [
+                pull_cphd.sys.executable,
+                str(pull_cphd.REPO_ROOT / "tools/sar_data/subset_cphd.py"),
+                str(job.recipe),
+                "--output",
+                str(job.destination),
+            ],
+            check=True,
+        )
 
     def test_https_length_mismatch_preserves_destination(self):
         for expected in (0, 2, 8):
