@@ -110,7 +110,6 @@ _REGISTRY_NAMES = (
     "PhaseCorrectionOpF64",
     "AutofocusOpF32",
     "AutofocusOpF64",
-    "TensorDumpOp",
     "BeamscanEstimatorOpF32",
     "BeamscanEstimatorOpF64",
     "CFARDetectorOpF32",
@@ -167,13 +166,17 @@ _REGISTRY_NAMES = (
 globals().update({name: _make_operator(f"holoscan.radar.{name}") for name in _REGISTRY_NAMES})
 
 
-def TensorDumpOp(graph: Any, name: str, **params: object) -> Any:
-    """Create the dtype-independent tensor dump sink (no pool extents)."""
-    return _operator_call("holoscan.radar.TensorDumpOp", graph, name, extents={}, **params)
-
-
-TensorDumpOp.registry_name = "holoscan.radar.TensorDumpOp"
 __all__ = list(_REGISTRY_NAMES)
+
+# Source builds register the TensorDumpOp debugging tap; the wheel omits it.
+if _radar._has_tensor_dump:
+
+    def TensorDumpOp(graph: Any, name: str, **params: object) -> Any:
+        """Create the dtype-independent tensor dump sink (no pool extents)."""
+        return _operator_call("holoscan.radar.TensorDumpOp", graph, name, extents={}, **params)
+
+    TensorDumpOp.registry_name = "holoscan.radar.TensorDumpOp"
+    __all__.append("TensorDumpOp")
 
 
 def plan_cfar_calibration(params: Mapping[str, object], input_shape: list[int]) -> dict[str, Any]:

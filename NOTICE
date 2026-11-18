@@ -47,3 +47,8 @@ GoogleTest (https://github.com/google/googletest)
 Copyright 2008, Google Inc. All rights reserved.
 Licensed under BSD-3-Clause (https://github.com/google/googletest/blob/v1.17.0/LICENSE)
 Used only to build and run unit tests. It is not installed by the holoscan-radar package.
+
+tinyxml2 (https://github.com/leethomason/tinyxml2)
+Original code by Lee Thomason (www.grinninglizard.com)
+Licensed under Zlib (https://github.com/leethomason/tinyxml2/blob/10.0.0/LICENSE.txt)
+The holoscan_radar wheel bundles the shared library (libtinyxml2.so.10) for CPHDReaderOp; the Debian package uses the distribution's copy.

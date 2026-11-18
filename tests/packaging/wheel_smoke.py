@@ -5,15 +5,14 @@
 
 import argparse
 import importlib.metadata
+import importlib.util
 import sys
 from pathlib import Path
 
 
 def check_installed_wheel(expected_prefix):
-    from importlib import import_module
 
     import holoscan_radar as radar
-    from holoscan_radar.applications.siso import build_graph
 
     import holoscan as hs
 
@@ -31,25 +30,17 @@ def check_installed_wheel(expected_prefix):
     extents = dict(max_chirps=4, max_samples_per_chirp=16, max_range_bins=16)
     radar.FMCWRangeProcessorOpF32(graph, "single", extents=extents)
     radar.FMCWRangeProcessorOpF64(graph, "dual", extents=extents)
-    if not callable(build_graph):
-        raise RuntimeError("Installed wheel is missing the SISO graph builder")
-    for application in (
-        "spotlight",
-        "video_sar",
-        "tiled_strip",
-        "continuous_strip",
-        "independent_images",
-        "autofocus",
-    ):
-        if not callable(import_module(f"holoscan_radar.applications.{application}").build_graph):
-            raise RuntimeError(f"Installed wheel is missing the {application} graph builder")
     extents = dict(
         max_pulses=2, max_samples_per_pulse=8, max_range_bins=8, max_image_v=2, max_image_u=2
     )
     for name in radar.__all__:
         if "Geom" in name or name.startswith(("SARRange", "Autofocus", "PhaseCorrection")):
             getattr(radar, name)(graph, name, extents=extents)
-    radar.TensorDumpOp(graph, "dump", path="unused.npy")
+    # The wheel distributes operators only: no TensorDumpOp and no example-app support.
+    if hasattr(radar, "TensorDumpOp"):
+        raise RuntimeError("Installed wheel unexpectedly registers TensorDumpOp")
+    if importlib.util.find_spec("holoscan_radar.applications") is not None:
+        raise RuntimeError("Installed wheel unexpectedly contains holoscan_radar.applications")
     print("Installed wheel import, provider discovery, and Graph authoring passed")
 
 
