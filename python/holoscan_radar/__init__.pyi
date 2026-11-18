@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed HSDK 5 FMCW Graph operator facade."""
+"""Typed HSDK 5 Radar Graph operator facade."""
 
 from collections.abc import Mapping
 from typing import Any, Protocol
@@ -14,6 +14,28 @@ class RadarOperator(Protocol):
     def __call__(
         self, graph: Graph, name: str, *, extents: Mapping[str, int], **params: Any
     ) -> OperatorHandle: ...
+
+CPHDReaderOpF32GeomF32: RadarOperator
+CPHDReaderOpF32GeomF64: RadarOperator
+CPHDReaderOpF64GeomF64: RadarOperator
+ApertureManagerOpF32GeomF32: RadarOperator
+ApertureManagerOpF32GeomF64: RadarOperator
+ApertureManagerOpF64GeomF64: RadarOperator
+BackprojectionOpF32GeomF32: RadarOperator
+BackprojectionOpF32GeomF64: RadarOperator
+BackprojectionOpF64GeomF64: RadarOperator
+SARRangeCompressionOpF32: RadarOperator
+SARRangeCompressionOpF64: RadarOperator
+PhaseCorrectionOpF32: RadarOperator
+PhaseCorrectionOpF64: RadarOperator
+AutofocusOpF32: RadarOperator
+AutofocusOpF64: RadarOperator
+
+class TensorDumpOperator(Protocol):
+    registry_name: str
+    def __call__(self, graph: Graph, name: str, **params: Any) -> OperatorHandle: ...
+
+TensorDumpOp: TensorDumpOperator
 
 BeamscanEstimatorOpF32: RadarOperator
 BeamscanEstimatorOpF64: RadarOperator

@@ -4,6 +4,49 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-17** — **SAR Python packaging review follow-up** on
+  `deustice/sar-python`: the provider links/enables SAR visualization only when
+  `sar_image_viz` exists. CPHD lookup checks runtime `HOLOHUB_DATA_DIR` before
+  the compiled data root, preserving explicit caller/YAML-relative paths and
+  the compiled fallback. Installed-wheel usage and precedence are documented.
+  All 31 selected GA SDK CTests pass, including the full provider suite, three
+  native path-resolution cases, the placement regression, 25 SAR application
+  checks, and fixture setup. The final path cases also pass after adding the
+  explicit runtime-versus-compiled-root precedence assertion. CMake probes pass
+  with the SAR visualization target present and absent, and `_sar.cpp` compiles
+  with SAR visualization disabled. Repository-wide pinned lint passes.
+
+- **2026-11-17** — **SAR Python review follow-up** on `deustice/sar-python`:
+  prepared contexts retain compute/display/composer choices through attachment
+  and finalization; failed CFAR futures are cleared before reporting errors so
+  later ticks can retry. Provider fixture discovery uses the nested project build
+  tree. CPHD preparation rejects duplicate YAML keys, including inline merge
+  sources, before selection or side effects and supports direct Python when
+  `uv` is unavailable; valid merge overrides and reused anchors are preserved. All 104 selected
+  CTests pass in a nested GA SDK build, including 281 provider cases, 76 native
+  CFAR cases, the placement regression, 25 SAR application checks, and fixture
+  setup. All 17 offline downloader tests and repository-wide pinned lint pass.
+  Public operator contracts and device-selection policy are unchanged.
+
+- **2026-11-17** — **Complete Python operator coverage and SAR applications** on
+  `deustice/sar-python`, based on `deustice/cfar-calibration` at `57061f50`. The provider now
+  covers all 33 operators (68 precision-aware factories), including explicit
+  sample/geometry precision pairs and dtype-independent tensor dumping. Six
+  Python SAR graphs share the native configuration, visualization, playback,
+  reporting, and shutdown support with their C++ references. Validation includes
+  a full 1,393-test non-performance CTest pass and focused CFAR retests after
+  base updates. On the final base, all 75 affected native tests and 281 provider
+  pytest cases pass, including complex fixture parity in both sample precisions,
+  direct SAR operator checks, headless rendering, context isolation, and
+  SIGINT/SIGTERM shutdown. The release wheel builds for all major CUDA
+  architectures without app executables; isolated installation, provider
+  discovery, all new factory constructors, and SAR image formation pass.
+  Repository-wide pinned lint passes.
+  The user will perform the interactive six-app visual walkthrough manually;
+  the local virtual display cannot present CUDA/Vulkan windows. Real-collection
+  image-quality qualification remains deferred; public contracts and the GA
+  SDK's documented Python live-enum limitation are unchanged.
+
 - **2026-11-17** — **CFAR calibration log levels** on
   `deustice/cfar-calibration`: routine start/ETA/progress/completion at INFO;
   warn once per build when estimated total duration exceeds 60 seconds, with
@@ -1245,6 +1288,8 @@ still declare SDK 4.3.0.
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| SAR missing-input CLI diagnostics | Codex | `deustice/sar-python` | **verified locally:** missing-CPHD errors show the next preparation command and documentation without a Python traceback. Terminal headings use red/bold cyan/bold; redirected output, `NO_COLOR`, and dumb terminals stay plain. Six host-only CLI checks pass; unexpected build/run errors still propagate. Native diagnostic fragment compiles and passes host-path, shell-quoting, and override checks; full applications were not rebuilt. |
+| Config-driven SAR data preparation | Codex | `deustice/sar-python` | **verified locally:** selected YAML inputs are checked against pinned dataset paths and subset recipes before downloads or directory creation. All 12 shipped presets resolve offline; 14 downloader regressions pass, including mismatches, malformed YAML, custom data roots, deduplication, and Houston recipe dispatch. Missing-file guidance prints the selected config in a shell-quoted host command. Native diagnostic fragment compiles and passes path/quoting checks; no full collections downloaded. |
 | SAR autofocus saved-image workflow | Codex | `dpc/sar-autofocus` | **verified locally:** shipped `autofocus_blurred`, `autofocus_corrected`, and `autofocus_reference` presets replace config generation and the single recovery preset. Five-step walkthrough runs all three with distinct output directories. All presets ran on Kourou: both baselines apply zero correction, corrected residual is 0.1813 rad, and the three-panel PNG renders. Pinned lint passes. |
 | SAR autofocus data download | Codex | `dpc/sar-autofocus` | Verified offline: `pull_cphd.py --app autofocus` selects the default Kourou collect and destination; `--app all` includes it and preserves preset subdirectories with shared-collection deduplication. Both guides use the same uv-based quick-start and document alternate-scene preparation. CLI manifests match all eight shipped collection paths with default and custom roots; all eight URLs return HTTP 200. Corrected the Kourou catalog prefix and verified its dimensions with a bounded range read. Four offline regressions cover destinations and HTTP failure reporting; no full collections downloaded. Pinned lint passes. |
 | Packaging review follow-up | Codex | `deustice/packaging-ci` | **verified locally:** the shared external C++ consumer builds and runs against existing CLI-built Debian and TGZ artifacts in the SDK container; nine helper fixtures pass there. The installed-wheel smoke check now uses public `__all__`; isolated import, factory, and float/double Graph checks pass against the existing CLI-built wheel. Removed the obsolete invalid-name probe; remaining subset and explicit/cached-test configuration probes pass in fresh SDK build directories. Documented selection-key/library naming and artifact-check limits beside the curated list, checker, and developer workflow. |
@@ -1314,6 +1359,7 @@ still declare SDK 4.3.0.
 | GA migration review corrections | Codex | `deustice/hsdk-ga-image` | **complete:** aligned tutorial SDK minimum, unconditional aligned-input guidance, and L18 implementation status; restored the helper diagnostic's documented EA attribution from Git history. Exact original SDK/reproducer unavailable, so no new reproduction claimed. Documentation/comment-only; pinned focused and all-file lint pass. |
 | EA-only source and documentation qualifiers | Codex | `deustice/hsdk-ga-image` | **complete:** audited identifiers, feature gates, type/schema comments, test labels, and planning guidance across tracked files. Removed stale qualifiers from schema/test comments and current guidance; no active HSDK5-EA identifiers or EA-only gates remain. Schema fields and executable code are unchanged; historical measurements retain their SDK versions. All-file pinned lint passes. |
 | Repository-wide EA reference sweep | Codex | `deustice/hsdk-ga-image` | **complete:** audited all 743 tracked paths, hidden configuration, and ignored local `uv.lock`; no active EA/RC image or dependency pins remain. Refreshed local CLI/lock from rc1 to GA 5.0.0, corrected the tutorial image tag, and clarified temporal measurement provenance. Historical records and workaround rationale retained. GA CLI Python SISO smoke, lock consistency, and all-file pinned lint pass. |
+| Complete SAR/IO Python bindings and six SAR applications | Codex | `deustice/sar-python` | **implemented:** all 33 operators and six Python SAR graphs; automated GPU, fixture parity, and headless rendering checks pass. Interactive visual walkthrough assigned to the user. |
 | HSDK 5 GA image migration | Codex | `deustice/hsdk-ga-image` | **verified locally:** Dockerfile, CLI wrapper, and devcontainer use the public CUDA 13 GA image; active setup guides updated. GB10 arm64 SDK layout/import checks, development-image build, all 1,094 CTests (zero failures/skips), Python SISO CLI smoke, and all-file pinned lint pass. |
 | Rebase Python provider onto staging SDK and wrapper | Codex | `deustice/python` | **verified locally:** branch rebased onto `origin/main` at `22df786f`; seven Python manifests and guides use the `/usr` SDK and `./holoscan-radar`; wrapper Python SISO smoke, 1,089 Python-enabled CTests, and 80 direct provider cases pass on staging SDK 5.0.0.7. |
 | Python binding runtime coverage and Doppler FFT pool sizing | Codex | `deustice/python` | **complete:** three provider runtime checks cover both precisions, GPU Tensor transport, Params decoding, and one-tick `nfft`; split/fused pools honor `max_doppler_bins`. All 80 provider tests, the CTest entry, and focused C++ nfft regressions pass in the pinned GPU image. |

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""HSDK 5 registry and native constructor checks for FMCW Python operators."""
+"""HSDK 5 registry and native constructor checks for Python operators."""
 
 import ast
 from pathlib import Path
@@ -21,18 +21,18 @@ def test_facade_stub_matches_public_operators():
         if isinstance(node, ast.AnnAssign)
         and isinstance(node.target, ast.Name)
         and isinstance(node.annotation, ast.Name)
-        and node.annotation.id == "RadarOperator"
+        and node.annotation.id in {"RadarOperator", "TensorDumpOperator"}
     }
     assert declared == set(radar.__all__)
 
 
-def test_all_fmcw_precisions_are_registered():
+def test_all_public_precisions_are_registered():
     registered = {
         item.name
         for item in hs.registry.operators()
         if item.name.startswith("holoscan.radar.") and "._app." not in item.name
     }
-    assert len(registered) == 52
+    assert len(registered) == 68
     assert registered == {f"holoscan.radar.{name}" for name in radar.__all__}
     assert "holoscan.radar.SubarraySelectionOpF32" in registered
     assert "holoscan.radar.SubarraySelectionOpF64" in registered
@@ -41,6 +41,10 @@ def test_all_fmcw_precisions_are_registered():
 @pytest.mark.parametrize("name", radar.__all__)
 def test_public_facade_constructs_both_precisions(name):
     extents = {
+        "max_samples_per_pulse": 8,
+        "max_pulses": 8,
+        "max_image_v": 8,
+        "max_image_u": 8,
         "max_samples_per_chirp": 8,
         "max_chirps": 8,
         "max_range_bins": 8,
@@ -63,7 +67,10 @@ def test_public_facade_constructs_both_precisions(name):
     }
     graph = hs.Graph(name)
     params = {"features": ["range"]} if name.startswith("FeatureAssembly") else {}
-    handle = getattr(radar, name)(graph, "operator", extents=extents, **params)
+    if name == "TensorDumpOp":
+        handle = radar.TensorDumpOp(graph, "operator", path="unused.npy")
+    else:
+        handle = getattr(radar, name)(graph, "operator", extents=extents, **params)
     assert handle.name == "operator"
 
 

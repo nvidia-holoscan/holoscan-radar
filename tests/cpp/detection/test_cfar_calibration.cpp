@@ -457,11 +457,15 @@ TEST(CfarCalibration, SharedBuildSurvivesOneConsumerAndCancelsAfterLast) {
   detail::ensure_alpha_lut_build(key, &a);
   detail::ensure_alpha_lut_build(key, &b);
   detail::release_alpha_lut_builds(&a);
-  EXPECT_FALSE(detail::poll_cached_alpha_lut(key).ready);
+  const auto shared = detail::poll_cached_alpha_lut(key);
+  EXPECT_FALSE(shared.ready);
+  EXPECT_TRUE(shared.building);
   const auto start = std::chrono::steady_clock::now();
   detail::release_alpha_lut_builds(&b);
   EXPECT_LT(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), 2.0);
-  EXPECT_FALSE(detail::poll_cached_alpha_lut(key).ready);
+  const auto released = detail::poll_cached_alpha_lut(key);
+  EXPECT_FALSE(released.ready);
+  EXPECT_FALSE(released.building);
   auto changed = key;
   changed.relative_error = 0.2;
   EXPECT_NE(changed, key);

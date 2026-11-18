@@ -64,7 +64,30 @@
 #include "fmcw/fmcw_range_processor_op/fmcw_range_processor_op.hpp"
 #include "fmcw/fmcw_range_doppler_processor_op/fmcw_range_doppler_processor_op.hpp"
 
+#include "io/cphd_reader_op/cphd_reader_op.hpp"
+#include "io/cphd_reader_op/params_config.hpp"
+#include "sar/aperture_manager_op/aperture_manager_op.hpp"
+#include "sar/aperture_manager_op/params_config.hpp"
+#include "sar/backprojection_op/backprojection_op.hpp"
+#include "sar/backprojection_op/params_config.hpp"
+#include "sar/sar_range_compression_op/sar_range_compression_op.hpp"
+#include "sar/sar_range_compression_op/params_config.hpp"
+#include "sar/phase_correction_op/phase_correction_op.hpp"
+#include "sar/autofocus_op/autofocus_op.hpp"
+#include "io/tensor_dump_op/tensor_dump_op.hpp"
+#include "io/tensor_dump_op/params_config.hpp"
+#include "radar_schemas/coordinate_frame_bridge.hpp"
+#include "radar_schemas/sample_geometry_bridge.hpp"
+#include "radar_schemas/lfm_waveform_bridge.hpp"
+
 namespace holoscan::config {
+template <>
+struct ConfigCodec<radar::PhaseCorrectionParams>
+: params::DefaultedParamSchemaCodec<radar::PhaseCorrectionParams> {};
+template <>
+struct ConfigCodec<radar::AutofocusParams>
+: params::DefaultedParamSchemaCodec<radar::AutofocusParams> {};
+
 template <>
 struct ConfigCodec<radar::TDMSparseCompensationParams>
 : params::DefaultedParamSchemaCodec<radar::TDMSparseCompensationParams> {};
@@ -387,7 +410,13 @@ struct RadarThunks : authoring::ManualOperatorRegistrationThunks<Op> {
       }
       return RadarThunks::make_operator_ref(graph.op<Op>(name, extents, std::move(features)));
     } else {
-      auto handle = graph.op<Op>(name, extents);
+      auto handle = [&] {
+        if constexpr (std::is_constructible_v<Op, const radar::MaxTensorExtents&>) {
+          return graph.op<Op>(name, extents);
+        } else {
+          return graph.op<Op>(name);
+        }
+      }();
       if constexpr (!std::is_void_v<Params>) {
         if (!representative) {
           auto document =
@@ -478,6 +507,40 @@ void register_payload(std::string_view name) {
 }
 
 void register_catalog() {
+  register_one<radar::CPHDReaderOp<float, float>, radar::CphdReaderParams>(
+      "holoscan.radar.CPHDReaderOpF32GeomF32");
+  register_one<radar::CPHDReaderOp<float, double>, radar::CphdReaderParams>(
+      "holoscan.radar.CPHDReaderOpF32GeomF64");
+  register_one<radar::CPHDReaderOp<double, double>, radar::CphdReaderParams>(
+      "holoscan.radar.CPHDReaderOpF64GeomF64");
+  register_one<radar::ApertureManagerOp<float, float>, radar::ApertureManagerParams>(
+      "holoscan.radar.ApertureManagerOpF32GeomF32");
+  register_one<radar::ApertureManagerOp<float, double>, radar::ApertureManagerParams>(
+      "holoscan.radar.ApertureManagerOpF32GeomF64");
+  register_one<radar::ApertureManagerOp<double, double>, radar::ApertureManagerParams>(
+      "holoscan.radar.ApertureManagerOpF64GeomF64");
+  register_one<radar::BackprojectionOp<float, float>, radar::BackprojectionParams>(
+      "holoscan.radar.BackprojectionOpF32GeomF32");
+  register_one<radar::BackprojectionOp<float, double>, radar::BackprojectionParams>(
+      "holoscan.radar.BackprojectionOpF32GeomF64");
+  register_one<radar::BackprojectionOp<double, double>, radar::BackprojectionParams>(
+      "holoscan.radar.BackprojectionOpF64GeomF64");
+  register_one<radar::SARRangeCompressionOp<float>, radar::SARRangeCompressionParams>(
+      "holoscan.radar.SARRangeCompressionOpF32");
+  register_one<radar::SARRangeCompressionOp<double>, radar::SARRangeCompressionParams>(
+      "holoscan.radar.SARRangeCompressionOpF64");
+  register_one<radar::PhaseCorrectionOp<float>, radar::PhaseCorrectionParams>(
+      "holoscan.radar.PhaseCorrectionOpF32");
+  register_one<radar::PhaseCorrectionOp<double>, radar::PhaseCorrectionParams>(
+      "holoscan.radar.PhaseCorrectionOpF64");
+  register_one<radar::AutofocusOp<float>, radar::AutofocusParams>("holoscan.radar.AutofocusOpF32");
+  register_one<radar::AutofocusOp<double>, radar::AutofocusParams>("holoscan.radar.AutofocusOpF64");
+  register_one<radar::TensorDumpOp, radar::TensorDumpParams>("holoscan.radar.TensorDumpOp");
+
+  register_payload<radar::WireCoordinateFrame>(
+      holoscan::schema_identity<radar::WireCoordinateFrame>().canonical_name);
+  register_payload<radar::WireSampleGeometry>(
+      holoscan::schema_identity<radar::WireSampleGeometry>().canonical_name);
   register_payload<radar::WireArrayGeometry>(
       holoscan::schema_identity<radar::WireArrayGeometry>().canonical_name);
   register_payload<radar::WireWindowSpec>(
@@ -596,6 +659,7 @@ void register_catalog() {
 }
 }  // namespace
 
+void register_sar_bindings(nanobind::module_& module);
 void register_calibration_bindings(nanobind::module_& module);
 void register_siso_bindings(nanobind::module_& module);
 void register_tdm_bindings(nanobind::module_& module);
@@ -607,5 +671,6 @@ NB_MODULE(_radar, module) {
   register_siso_bindings(module);
   register_tdm_bindings(module);
   register_viz_bindings(module);
-  module.doc() = "FMCW radar operator catalog for HSDK 5";
+  register_sar_bindings(module);
+  module.doc() = "FMCW and SAR radar operator catalog for HSDK 5";
 }

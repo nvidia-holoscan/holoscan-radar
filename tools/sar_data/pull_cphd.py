@@ -14,16 +14,22 @@ file's CPHD XML, not the folder name.
 
 Tiled and continuous strip share the Imperial Valley Capella collection.
 
-python3 tools/sar_data/pull_cphd.py --app autofocus
-python3 tools/sar_data/pull_cphd.py --app tiled_strip
-python3 tools/sar_data/pull_cphd.py --app independent_images
-python3 tools/sar_data/pull_cphd.py --app all --dest data/sar
+uv run tools/sar_data/pull_cphd.py --config applications/sar/autofocus/config/autofocus.yaml
+uv run tools/sar_data/pull_cphd.py --app tiled_strip
+uv run tools/sar_data/pull_cphd.py --app independent_images
+uv run tools/sar_data/pull_cphd.py --app all --dest data/sar
 """
+
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pyyaml>=6.0"]
+# ///
 
 from __future__ import annotations
 
 import argparse
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -32,8 +38,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+
+import yaml
 
 UMBRA_BUCKET = "umbra-open-data-catalog"
 UMBRA_HTTPS = f"https://{UMBRA_BUCKET}.s3.us-west-2.amazonaws.com/"
@@ -109,19 +117,72 @@ AUTOFOCUS_KOUROU: list[tuple[str, str]] = [
     ),
 ]
 
-# app -> (bucket, https prefix, collects, default dest, iarp check)
-APPS: dict[str, tuple[str, str, list[tuple[str, str]], str, bool]] = {
-    "autofocus": (UMBRA_BUCKET, UMBRA_HTTPS, AUTOFOCUS_KOUROU, "data/sar", False),
-    "tiled_strip": (CAPELLA_BUCKET, CAPELLA_HTTPS, IMPERIAL_VALLEY, "data/sar/imperial", False),
-    "continuous_strip": (
-        CAPELLA_BUCKET,
-        CAPELLA_HTTPS,
-        IMPERIAL_VALLEY,
-        "data/sar/imperial",
-        False,
-    ),
-    "independent_images": (UMBRA_BUCKET, UMBRA_HTTPS, MODE5, "data/sar/mode5", True),
+REPO_ROOT = Path(__file__).resolve().parents[2]
+APPS = {
+    name: REPO_ROOT / f"applications/sar/{name}/config/{name}.yaml"
+    for name in (
+        "autofocus",
+        "tiled_strip",
+        "continuous_strip",
+        "independent_images",
+        "spotlight",
+        "video_sar",
+    )
 }
+# Preserve the historical eight-object --app all selection.
+ALL_APPS = ("autofocus", "tiled_strip", "continuous_strip", "independent_images")
+
+
+@dataclass(frozen=True)
+class Dataset:
+    """Pinned source and exact path relative to the application's data root."""
+
+    scene: str
+    key: str
+    bucket: str
+    https_prefix: str
+    path: Path
+    check_iarp: bool = False
+    recipe: Path | None = None
+
+
+def dataset_catalog() -> dict[Path, Dataset]:
+    datasets = []
+    for collects, bucket, prefix, directory, check in (
+        (AUTOFOCUS_KOUROU, UMBRA_BUCKET, UMBRA_HTTPS, "sar", False),
+        (IMPERIAL_VALLEY, CAPELLA_BUCKET, CAPELLA_HTTPS, "sar/imperial", False),
+        (MODE5, UMBRA_BUCKET, UMBRA_HTTPS, "sar/mode5", True),
+    ):
+        for scene, key in collects:
+            datasets.append(
+                Dataset(scene, key, bucket, prefix, Path(directory) / Path(key).name, check)
+            )
+    atlanta = "2026-02-20-03-03-38_UMBRA-07"
+    datasets.append(
+        Dataset(
+            "Atlanta",
+            f"sar-data/task-data/0f1231be-26d3-4b98-96ab-f675a5375c14/"
+            f"{atlanta}/{atlanta}_CPHD.cphd",
+            UMBRA_BUCKET,
+            UMBRA_HTTPS,
+            Path(f"sar/{atlanta}_CPHD.cphd"),
+        )
+    )
+    recipe = REPO_ROOT / "tools/sar_data/recipes/houston_1m.yaml"
+    spec = yaml.safe_load(recipe.read_text())
+    # The recipe owns Houston's source and window; never substitute the full raw object.
+    datasets.append(
+        Dataset(
+            "Houston 1 m subset",
+            spec["source"]["key"],
+            spec["source"]["bucket"],
+            UMBRA_HTTPS,
+            Path("sar") / f"{spec['name']}.cphd",
+            recipe=recipe,
+        )
+    )
+    return {dataset.path: dataset for dataset in datasets}
+
 
 # Two IARPs closer than this are the same scene (Ohio's second plant
 # cluster is ~10 km west; 1 km catches a duplicate of one collect).
@@ -141,6 +202,12 @@ class PullJob:
     https_prefix: str
     dest_dir: Path
     check_iarp: bool
+    recipe: Path | None = None
+    output_name: str | None = None
+
+    @property
+    def destination(self) -> Path:
+        return self.dest_dir / (self.output_name or Path(self.key).name)
 
 
 def local_name(tag: str) -> str:
@@ -253,40 +320,129 @@ def format_duration(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
-def jobs_for(app: str, dest: Path | None) -> list[PullJob]:
-    """Collections for one app, or every pinned collection when app is ``all``.
+class UniqueKeySafeLoader(yaml.SafeLoader):
+    """Reject ambiguous mappings while retaining safe YAML construction."""
 
-    Strip apps share Imperial Valley, so ``all`` downloads that object once.
-    ``--dest`` for ``all`` replaces ``data/sar``, preserving the relative
-    preset layout (Kourou at the root, plus ``imperial`` and ``mode5``).
-    """
-    selected = list(APPS) if app == "all" else [app]
-    jobs: list[PullJob] = []
-    seen: set[tuple[str, str, Path]] = set()
-    for name in selected:
-        bucket, https_prefix, collects, dest_default, check_iarp = APPS[name]
-        if dest is None:
-            dest_dir = Path(dest_default)
-        elif app == "all":
-            dest_dir = dest / Path(dest_default).relative_to("data/sar")
-        else:
-            dest_dir = dest
-        for scene, key in collects:
-            identity = (bucket, key, dest_dir)
-            if identity in seen:
-                continue
-            seen.add(identity)
-            jobs.append(
-                PullJob(
-                    scene=scene,
-                    key=key,
-                    bucket=bucket,
-                    https_prefix=https_prefix,
-                    dest_dir=dest_dir,
-                    check_iarp=check_iarp,
+    def __init__(self, stream):
+        super().__init__(stream)
+        self._checked_mappings = set()
+
+    def flatten_mapping(self, node):
+        # SafeLoader recursively flattens merge sources without constructing
+        # them as mappings. Validate here so inline merge sources are checked
+        # too, before expansion introduces legitimate override duplicates.
+        if node not in self._checked_mappings:
+            self._checked_mappings.add(node)
+            keys = set()
+            for key_node, _ in node.value:
+                key = (
+                    key_node.tag
+                    if key_node.tag == "tag:yaml.org,2002:merge"
+                    else self.construct_object(key_node)
                 )
+                try:
+                    duplicate = key in keys
+                    keys.add(key)
+                except TypeError as exc:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        "found an unhashable key",
+                        key_node.start_mark,
+                    ) from exc
+                if duplicate:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        f"found duplicate key {key!r}",
+                        key_node.start_mark,
+                    )
+        super().flatten_mapping(node)
+
+
+def jobs_for_config(config: Path, data_root: Path | None = None) -> list[PullJob]:
+    """Validate the entire config against the catalog before doing any work."""
+    root = data_root if data_root is not None else Path(os.environ.get("HOLOHUB_DATA_DIR", "data"))
+    spec = yaml.load(config.read_text(), Loader=UniqueKeySafeLoader)
+    cphd = spec.get("cphd") if isinstance(spec, dict) else None
+    paths = cphd.get("path") if isinstance(cphd, dict) else None
+    paths = [paths] if isinstance(paths, str) else paths
+    if (
+        not isinstance(paths, list)
+        or not paths
+        or any(not isinstance(path, str) or not path.strip() for path in paths)
+    ):
+        raise ValueError(f"{config}: cphd.path must be a nonempty string or list of strings")
+    catalog = dataset_catalog()
+    jobs: dict[Path, PullJob] = {}
+    for text in paths:
+        given = Path(text)
+        # Match the application's existing-file precedence before its data-root fallback.
+        candidates = (given, config.parent / given) if not given.is_absolute() else (given,)
+        existing = next((path for path in candidates if path.is_file()), None)
+        destination = (
+            existing
+            if existing is not None
+            else (root / given if not given.is_absolute() else given)
+        )
+        dataset = next(
+            (
+                item
+                for rel, item in catalog.items()
+                if (root / rel).resolve() == destination.resolve()
+            ),
+            None,
+        )
+        if dataset is None:
+            raise ValueError(
+                f"{config}: no manifest entry matches cphd.path {text!r} "
+                f"(resolved destination: {destination}); register its dataset or recipe"
             )
-    return jobs
+        if dataset.recipe is None and Path(dataset.key).name != destination.name:
+            raise ValueError(
+                f"{config}: manifest source {dataset.key!r} does not produce {destination}"
+            )
+        jobs[destination.resolve()] = PullJob(
+            dataset.scene,
+            dataset.key,
+            dataset.bucket,
+            dataset.https_prefix,
+            destination.parent,
+            dataset.check_iarp,
+            dataset.recipe,
+            destination.name,
+        )
+    return list(jobs.values())
+
+
+def jobs_for(app: str, dest: Path | None) -> list[PullJob]:
+    """Resolve default configs; retain the legacy --dest directory override."""
+    jobs: dict[Path, PullJob] = {}
+    for name in ALL_APPS if app == "all" else (app,):
+        for job in jobs_for_config(APPS[name]):
+            if dest is not None:
+                directory = dest
+                if app == "all":
+                    root = Path(os.environ.get("HOLOHUB_DATA_DIR", "data")) / "sar"
+                    directory /= job.dest_dir.relative_to(root)
+                job = replace(job, dest_dir=directory)
+            jobs[job.destination.resolve()] = job
+    return list(jobs.values())
+
+
+def prepare_one(job: PullJob, force: bool, index: int, total: int) -> Path:
+    if job.recipe is None:
+        return pull_one(job, force, index, total)
+    command = (["uv", "run"] if shutil.which("uv") else [sys.executable]) + [
+        str(REPO_ROOT / "tools/sar_data/subset_cphd.py"),
+        str(job.recipe),
+        "--output",
+        str(job.destination),
+    ]
+    if force:
+        command.append("--force")
+    subprocess.run(command, check=True)
+    return job.destination
 
 
 class DownloadProgress:
@@ -517,10 +673,15 @@ def report_positions(files: list[tuple[str, Path]]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--config", type=Path, help="read required CPHD inputs from this YAML")
     parser.add_argument(
+        "--data-root", type=Path, help="data root for --config (default: HOLOHUB_DATA_DIR or data)"
+    )
+    selection.add_argument(
         "--app",
         choices=[*sorted(APPS), "all"],
-        help="SAR application to download, or 'all' for every pinned collection",
+        help="select a default config, or 'all' for the historical eight-object collection set",
     )
     parser.add_argument(
         "--list",
@@ -542,22 +703,30 @@ def main() -> int:
         help="re-download files that already exist",
     )
     args = parser.parse_args()
-    if args.app is None:
-        parser.error("--app is required")
+    if args.config is not None and args.dest is not None:
+        parser.error("--config uses exact configured paths; use --data-root instead of --dest")
+    if args.data_root is not None and args.config is None:
+        parser.error("--data-root requires --config")
     if args.app == "all" and args.dest is not None:
-        collection_dirs = {
-            Path(spec[3]).resolve() for spec in APPS.values() if spec[3] != "data/sar"
-        }
-        if args.dest.resolve() in collection_dirs:
-            parser.error(
-                "--app all needs the SAR data root, not a collection subdirectory. "
-                "Use --app all --dest data/sar (or omit --dest)."
-            )
-    jobs = jobs_for(args.app, args.dest)
+        root = Path(os.environ.get("HOLOHUB_DATA_DIR", "data")) / "sar"
+        if args.dest.resolve() in {(root / name).resolve() for name in ("imperial", "mode5")}:
+            parser.error("--app all needs the SAR data root; use --app all --dest data/sar")
+    try:
+        jobs = (
+            jobs_for_config(args.config, args.data_root)
+            if args.config is not None
+            else jobs_for(args.app, args.dest)
+        )
+    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as exc:
+        parser.error(str(exc))
     if args.list:
         for job in jobs:
             url = https_url(job.https_prefix, job.key)
-            print(f"{job.scene}: {url} -> {job.dest_dir / Path(job.key).name}")
+            print(f"{job.scene}: {url} -> {job.destination}")
+            if job.recipe is not None:
+                print(
+                    f"  Prepare with recipe: {job.recipe.relative_to(REPO_ROOT)} (HTTP ranges; not the full object)"
+                )
         return 0
 
     for job in jobs:
@@ -567,12 +736,12 @@ def main() -> int:
     count = len(jobs)
     for index, job in enumerate(jobs, start=1):
         try:
-            pulled.append((job, pull_one(job, args.force, index, count)))
+            pulled.append((job, prepare_one(job, args.force, index, count)))
         except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
             print(
                 f"error: {job.scene}: download failed: {exc}\n"
                 f"Source: {https_url(job.https_prefix, job.key)}\n"
-                f"Destination: {job.dest_dir / Path(job.key).name}\n"
+                f"Destination: {job.destination}\n"
                 "See tools/sar_data/README.md for download instructions.",
                 file=sys.stderr,
             )
@@ -585,7 +754,7 @@ def main() -> int:
     report_positions([(job.scene, path) for job, path in pulled if not job.check_iarp])
 
     dests = ", ".join(str(path) for path in dict.fromkeys(job.dest_dir for job in jobs))
-    print(f"{args.app} collection set ready in {dests}")
+    print(f"{args.config or args.app} collection set ready in {dests}")
     return 0
 
 

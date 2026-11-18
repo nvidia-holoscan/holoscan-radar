@@ -10,7 +10,7 @@ get_filename_component(_sar_data_dir "${HOLOHUB_DATA_DIR}" ABSOLUTE
 add_compile_definitions(HOLOSCAN_RADAR_DATA_DIR="${_sar_data_dir}")
 unset(_sar_data_dir)
 
-if(BUILD_ALL OR APP_spotlight OR APP_video_sar OR APP_tiled_strip OR
+if(HOLOSCAN_RADAR_BUILD_PYTHON OR BUILD_ALL OR APP_spotlight OR APP_video_sar OR APP_tiled_strip OR
         APP_continuous_strip OR APP_independent_images OR APP_autofocus)
     find_package(holoscan 5 CONFIG REQUIRED COMPONENTS core visualization)
     # SarMosaicOp decimates its parent view with a CUDA kernel, and it is used
@@ -19,7 +19,7 @@ if(BUILD_ALL OR APP_spotlight OR APP_video_sar OR APP_tiled_strip OR
     # two strip apps build a mosaic at all, so it is gated on them rather than
     # on any SAR app -- a spotlight-only configure was compiling a translation
     # unit nothing linked.
-    if(BUILD_ALL OR APP_tiled_strip OR APP_continuous_strip)
+    if(HOLOSCAN_RADAR_BUILD_PYTHON OR BUILD_ALL OR APP_tiled_strip OR APP_continuous_strip)
         add_library(sar_mosaic STATIC
             ${PROJECT_SOURCE_DIR}/applications/common/radar_app/sar/mosaic_sample.cu)
         target_include_directories(sar_mosaic PRIVATE
@@ -37,6 +37,7 @@ if(BUILD_ALL OR APP_spotlight OR APP_video_sar OR APP_tiled_strip OR
         ${PROJECT_SOURCE_DIR}/applications/common)
         target_link_libraries(sar_image_viz PUBLIC holoscan::core holoscan::sensor_io
         holoscan::visualization::op_holoviz CUDA::cudart)
+        set_property(TARGET sar_image_viz PROPERTY POSITION_INDEPENDENT_CODE ON)
     endif()
 endif()
 

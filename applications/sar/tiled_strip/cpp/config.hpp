@@ -8,8 +8,8 @@
 
 #include "radar_app/sar/config.hpp"
 
-inline AppConfig load_config(const std::filesystem::path& path,
-                             const std::filesystem::path& cphd_override) {
+inline AppConfig load_tiled_strip_config(const std::filesystem::path& path,
+                                         const std::filesystem::path& cphd_override) {
   AppConfig cfg = load_sar_config(path, cphd_override);
   if (!(cfg.cphd_paths.size() == 1 && cfg.tile_geometries.size() > 1 && !cfg.scroll &&
         cfg.parent_geometry.is_valid()))

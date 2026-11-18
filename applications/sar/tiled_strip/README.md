@@ -103,3 +103,15 @@ See [SAR data preparation](../../../tools/sar_data/README.md),
 [SAR operator references](../../../operators/sar/README.md),
 [CPHD reader](../../../operators/io/cphd_reader_op/README.md), and the
 [current SAR HSDK 5 contract](../../../docs/planning/SAR/OPERATOR_API.md).
+
+## Python graph
+
+This workflow also has a Python implementation with the same presets and
+processing graph shown above. Run it from the host:
+
+```bash
+./holoscan-radar run tiled_strip --language python
+```
+
+See the [shared Python guide](../README.md#python-applications) for CPHD
+inputs, precision, programmatic composition, dumping, and shutdown behavior.

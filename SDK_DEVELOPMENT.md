@@ -50,7 +50,7 @@ images so CMake does not retain old paths.
 ## Python provider
 
 The GA image installs HSDK 5 Python Core and Visualization under
-`/usr/lib/python3.12/site-packages`. Radar's FMCW provider uses nanobind and
+`/usr/lib/python3.12/site-packages`. Radar's FMCW/SAR provider uses nanobind and
 does not require the SDK's former pybind11 CMake target. The development image
 installs nanobind 3.0.1. `./holoscan-radar test` enables the provider and its
 `pytest_provider` CTest entry by default. For a C++-only test run, pass
@@ -61,6 +61,21 @@ default to Python off; enable them with `-DHOLOSCAN_RADAR_BUILD_PYTHON=ON`.
 ./holoscan-radar test
 ./holoscan-radar run siso --language python --run-args=siso_smoke.yaml
 ```
+
+The provider covers all 33 public operators: 26 FMCW operators with F32/F64
+variants; `SARRangeCompressionOp`, `PhaseCorrectionOp`, and `AutofocusOp` with
+F32/F64 variants; and `CPHDReaderOp`, `ApertureManagerOp`, and `BackprojectionOp`
+with `F32GeomF32`, `F32GeomF64`, and `F64GeomF64` variants. `TensorDumpOp` is a
+single dtype-independent sink without an `extents` argument. Existing FMCW
+imports and call signatures are unchanged.
+
+All six SAR applications also have Python graphs with the same YAML,
+visualization, dumping, and playback behavior as C++. They default to single
+samples with double geometry; `sample_precision: double` selects double for
+both. Python owns its signal handlers and polls interrupts while native
+execution releases the GIL; SIGINT/SIGTERM stop and join the session before
+propagating `KeyboardInterrupt`. The C++ driver establishes its managed signal
+domain before CUDA creates threads.
 
 Python `[live]` enum inputs remain unavailable because the SDK cannot register
 those port payloads; the corresponding C++ contracts are unchanged.

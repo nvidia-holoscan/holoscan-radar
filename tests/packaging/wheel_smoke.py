@@ -10,6 +10,8 @@ from pathlib import Path
 
 
 def check_installed_wheel(expected_prefix):
+    from importlib import import_module
+
     import holoscan_radar as radar
     from holoscan_radar.applications.siso import build_graph
 
@@ -31,6 +33,23 @@ def check_installed_wheel(expected_prefix):
     radar.FMCWRangeProcessorOpF64(graph, "dual", extents=extents)
     if not callable(build_graph):
         raise RuntimeError("Installed wheel is missing the SISO graph builder")
+    for application in (
+        "spotlight",
+        "video_sar",
+        "tiled_strip",
+        "continuous_strip",
+        "independent_images",
+        "autofocus",
+    ):
+        if not callable(import_module(f"holoscan_radar.applications.{application}").build_graph):
+            raise RuntimeError(f"Installed wheel is missing the {application} graph builder")
+    extents = dict(
+        max_pulses=2, max_samples_per_pulse=8, max_range_bins=8, max_image_v=2, max_image_u=2
+    )
+    for name in radar.__all__:
+        if "Geom" in name or name.startswith(("SARRange", "Autofocus", "PhaseCorrection")):
+            getattr(radar, name)(graph, name, extents=extents)
+    radar.TensorDumpOp(graph, "dump", path="unused.npy")
     print("Installed wheel import, provider discovery, and Graph authoring passed")
 
 

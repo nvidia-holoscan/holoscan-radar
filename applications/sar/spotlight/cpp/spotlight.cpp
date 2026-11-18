@@ -11,7 +11,7 @@ namespace app = holoscan::radar::app;
 
 int main(int argc, char** argv) {
   return run_sar_graph_app(
-      argc, argv, "spotlight", load_config,
+      argc, argv, "spotlight", load_spotlight_config,
       [](auto precision, auto& graph, auto& options, const auto& queue, const auto& cfg,
          auto& reader, auto& range, auto& manager, auto& bp, auto& source, auto& /*application*/,
          auto& /*formation*/, const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {

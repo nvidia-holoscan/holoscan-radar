@@ -768,9 +768,16 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
                 : "serving the previous LUT while building");
         state.runtime_build_warned = true;
       };
-      detail::AlphaLutSnapshot snap = state.pending_lut_active
-                                          ? detail::poll_alpha_lut_build(state.pending_lut_future)
-                                          : detail::poll_cached_alpha_lut(lut_key);
+      detail::AlphaLutSnapshot snap;
+      try {
+        snap = state.pending_lut_active ? detail::poll_alpha_lut_build(state.pending_lut_future)
+                                        : detail::poll_cached_alpha_lut(lut_key);
+      } catch (const std::exception& e) {
+        state.pending_lut_active = false;
+        state.pending_lut_future = {};
+        state.pending_lut_key = {};
+        return fail_runtime(e.what());
+      }
       if (snap.ready) {
         HOLOSCAN_TRY(adopt_ready_lut(std::move(snap.lut)));
       } else if (stage.blocking_alpha_lut_rebuild || state.alpha_lut_host_cache.empty()) {
@@ -784,6 +791,9 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
               },
               &state, state.pending_lut_future)));
         } catch (const std::exception& e) {
+          state.pending_lut_active = false;
+          state.pending_lut_future = {};
+          state.pending_lut_key = {};
           return fail_runtime(e.what());
         }
       } else {
@@ -801,7 +811,15 @@ expected<void, Error> update_alpha_lut(detail::CfarDetectorState& state, const C
         }
       }
     } else if (state.pending_lut_active && state.pending_lut_key == lut_key) {
-      detail::AlphaLutSnapshot snap = detail::poll_alpha_lut_build(state.pending_lut_future);
+      detail::AlphaLutSnapshot snap;
+      try {
+        snap = detail::poll_alpha_lut_build(state.pending_lut_future);
+      } catch (const std::exception& e) {
+        state.pending_lut_active = false;
+        state.pending_lut_future = {};
+        state.pending_lut_key = {};
+        return fail_runtime(e.what());
+      }
       if (snap.ready) {
         state.alpha_lut_host_cache = std::move(snap.lut);
         state.alpha_lut_key = lut_key;

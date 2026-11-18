@@ -19,7 +19,7 @@ else()
         GIT_SUBMODULES_RECURSE TRUE)
     FetchContent_MakeAvailable(nanobind)
 endif()
-nanobind_add_module(holoscan_radar_python NB_STATIC STABLE_ABI _radar.cpp _siso.cpp _tdm.cpp _viz.cpp _calibration.cpp)
+nanobind_add_module(holoscan_radar_python NB_STATIC STABLE_ABI _radar.cpp _siso.cpp _tdm.cpp _viz.cpp _calibration.cpp _sar.cpp)
 set_target_properties(holoscan_radar_python PROPERTIES
     OUTPUT_NAME _radar
     LIBRARY_OUTPUT_DIRECTORY "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar"
@@ -38,7 +38,14 @@ target_include_directories(holoscan_radar_python PRIVATE
 target_link_libraries(holoscan_radar_python PRIVATE holoscan::core holoscan::params_io
     holoscan::radar_common holoscan::radar_common_simulator holoscan::radar_schemas
     radar_app
-    fmcw_dashboard
+    fmcw_dashboard sar_mosaic
+    cphd_reader_op
+    aperture_manager_op
+    backprojection_op
+    sar_range_compression_op
+    phase_correction_op
+    autofocus_op
+    tensor_dump_op
     clutter_filter_op
     snapshot_gather_op
     phase_shift_beamformer_op
@@ -90,3 +97,24 @@ foreach(_radar_helper IN ITEMS __init__.py fmcw_dashboard.py cli.py)
     configure_file("applications/${_radar_helper}"
         "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/${_radar_helper}" COPYONLY)
 endforeach()
+
+if(TARGET sar_image_viz)
+    target_link_libraries(holoscan_radar_python PRIVATE sar_image_viz)
+    target_compile_definitions(holoscan_radar_python PRIVATE HOLOSCAN_RADAR_SAR_HOLOVIZ=1)
+endif()
+
+foreach(_radar_app IN ITEMS spotlight video_sar tiled_strip continuous_strip independent_images autofocus)
+    set(_radar_app_source
+        "${PROJECT_SOURCE_DIR}/applications/sar/${_radar_app}/python/${_radar_app}.py")
+    configure_file("${_radar_app_source}"
+        "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/${_radar_app}.py" COPYONLY)
+    install(FILES "${_radar_app_source}" DESTINATION holoscan_radar/applications)
+endforeach()
+configure_file(applications/sar_graph.py
+    "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/sar_graph.py" COPYONLY)
+install(FILES applications/sar_graph.py DESTINATION holoscan_radar/applications)
+
+get_filename_component(_radar_python_data_dir "${HOLOHUB_DATA_DIR}" ABSOLUTE
+    BASE_DIR "${PROJECT_SOURCE_DIR}")
+target_compile_definitions(holoscan_radar_python PRIVATE
+    HOLOSCAN_RADAR_DATA_DIR="${_radar_python_data_dir}")
