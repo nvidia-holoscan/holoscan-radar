@@ -19,6 +19,7 @@
 #include <cstring>
 #include <exception>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -34,6 +35,24 @@
 namespace holoscan::radar::cphd {
 
 namespace {
+
+int64_t checked_product(int64_t left, int64_t right) {
+  if (left < 0 || right < 0 || (right != 0 && left > std::numeric_limits<int64_t>::max() / right)) {
+    throw std::runtime_error("CphdFile: negative or overflowing byte/element count");
+  }
+  const int64_t result = left * right;
+  if (static_cast<uint64_t>(result) > std::numeric_limits<size_t>::max()) {
+    throw std::runtime_error("CphdFile: byte/element count exceeds addressable memory");
+  }
+  return result;
+}
+
+int64_t checked_sum(int64_t left, int64_t right) {
+  if (left < 0 || right < 0 || left > std::numeric_limits<int64_t>::max() - right) {
+    throw std::runtime_error("CphdFile: negative or overflowing byte offset");
+  }
+  return left + right;
+}
 
 // CPHD stores every numeric field big-endian regardless of the host, so the
 // reads below always swap.
@@ -277,11 +296,12 @@ int io_thread_count(int64_t bytes) {
 }
 
 void pread_fully(int fd, char* dest, int64_t bytes, int64_t offset, const std::string& path,
-                 const char* what) {
+                 const char* what, int64_t io_chunk_bytes) {
   int64_t got = 0;
   while (got < bytes) {
     const ssize_t n =
-        ::pread(fd, dest + got, static_cast<size_t>(bytes - got), static_cast<off_t>(offset + got));
+        ::pread(fd, dest + got, static_cast<size_t>(std::min(bytes - got, io_chunk_bytes)),
+                static_cast<off_t>(offset + got));
     if (n < 0) {
       if (errno == EINTR) {
         continue;
@@ -316,7 +336,11 @@ const char* to_string(SampleDomain domain) {
   return domain == SampleDomain::kFX ? "FX" : "TOA";
 }
 
-CphdFile::CphdFile(const std::string& path) : path_(path) {
+CphdFile::CphdFile(const std::string& path, int64_t io_chunk_bytes)
+: path_(path), io_chunk_bytes_(io_chunk_bytes) {
+  if (io_chunk_bytes_ < 8 || io_chunk_bytes_ % 8 != 0) {
+    throw std::invalid_argument("CphdFile: io_chunk_bytes must be at least 8 and a multiple of 8");
+  }
   fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd_ < 0) {
     throw std::runtime_error("CphdFile: cannot open '" + path + "'");
@@ -424,6 +448,19 @@ void CphdFile::parse_ascii_header(std::ifstream* stream) {
   xml_block_size_ = required("XML_BLOCK_SIZE");
   pvp_block_offset_ = required("PVP_BLOCK_BYTE_OFFSET");
   signal_block_offset_ = required("SIGNAL_BLOCK_BYTE_OFFSET");
+  if (header_.count("PVP_BLOCK_SIZE")) {
+    pvp_block_size_ = required("PVP_BLOCK_SIZE");
+    if (pvp_block_size_ < 0)
+      throw std::runtime_error("CphdFile: negative PVP block size");
+  }
+  if (header_.count("SIGNAL_BLOCK_SIZE")) {
+    signal_block_size_ = required("SIGNAL_BLOCK_SIZE");
+    if (signal_block_size_ < 0)
+      throw std::runtime_error("CphdFile: negative signal block size");
+  }
+  if (pvp_block_offset_ < 0 || signal_block_offset_ < 0) {
+    throw std::runtime_error("CphdFile: negative block offset");
+  }
 }
 
 void CphdFile::parse_xml(const std::string& xml) {
@@ -618,7 +655,29 @@ void CphdFile::parse_xml(const std::string& xml) {
   }
 }
 
+void CphdFile::check_span(int64_t offset, int64_t bytes, const char* what) const {
+  struct stat st {};
+  if (::fstat(fd_, &st) != 0 || st.st_size < 0 || offset < 0 || bytes < 0 || bytes > st.st_size ||
+      offset > st.st_size - bytes ||
+      static_cast<uint64_t>(bytes) > std::numeric_limits<size_t>::max() ||
+      static_cast<uint64_t>(offset) > static_cast<uint64_t>(std::numeric_limits<off_t>::max())) {
+    throw std::runtime_error("CphdFile: " + path_ + ": invalid or truncated " + what + " span");
+  }
+}
+
+int64_t CphdFile::checked_block_span(int64_t block_offset, int64_t block_size, int64_t relative,
+                                     int64_t bytes, const char* what) const {
+  if (block_size >= 0 &&
+      (relative < 0 || bytes < 0 || bytes > block_size || relative > block_size - bytes)) {
+    throw std::runtime_error("CphdFile: " + path_ + ": requested span exceeds declared " + what);
+  }
+  const int64_t offset = checked_sum(block_offset, relative);
+  check_span(offset, bytes, what);
+  return offset;
+}
+
 void CphdFile::read_at(int64_t offset, char* dest, int64_t bytes, const char* what) const {
+  check_span(offset, bytes, what);
   if (bytes == 0) {
     return;
   }
@@ -627,7 +686,7 @@ void CphdFile::read_at(int64_t offset, char* dest, int64_t bytes, const char* wh
   }
   const int nthreads = io_thread_count(bytes);
   if (nthreads <= 1) {
-    pread_fully(fd_, dest, bytes, offset, path_, what);
+    pread_fully(fd_, dest, bytes, offset, path_, what, io_chunk_bytes_);
     return;
   }
 
@@ -642,7 +701,7 @@ void CphdFile::read_at(int64_t offset, char* dest, int64_t bytes, const char* wh
     char* const p = dest + cursor;
     auto run = [this, i, off, nbyte, p, what, &errors]() {
       try {
-        pread_fully(fd_, p, nbyte, off, path_, what);
+        pread_fully(fd_, p, nbyte, off, path_, what, io_chunk_bytes_);
       } catch (...) {
         errors[static_cast<size_t>(i)] = std::current_exception();
       }
@@ -816,7 +875,7 @@ std::vector<double> PvpBlock::field(const std::string& name, int64_t components)
                              "' is not in this file");
   }
   const PvpField& layout = found->second;
-  if (components > layout.size_words) {
+  if (components < 0 || components > layout.size_words) {
     throw std::runtime_error("CphdFile: " + *path_ + ": PVP field '" + name + "' has " +
                              std::to_string(layout.size_words) + " words, asked for " +
                              std::to_string(components));
@@ -849,7 +908,9 @@ std::vector<double> PvpBlock::field(const std::string& name, int64_t components)
     return static_cast<double>(raw);
   };
 
-  std::vector<double> values(static_cast<size_t>(count_ * components));
+  const int64_t elements = checked_product(count_, components);
+  (void)checked_product(elements, sizeof(double));
+  std::vector<double> values(static_cast<size_t>(elements));
   for (int64_t vector = 0; vector < count_; ++vector) {
     const char* record = bytes_.data() + vector * record_bytes_;
     for (int64_t component = 0; component < components; ++component) {
@@ -894,8 +955,12 @@ PvpBlock CphdFile::read_pvp_block(int64_t channel_index, int64_t first, int64_t 
   // One read for the whole span. Reading per vector would cost `count`
   // seeks, and reading per field would cost one pass over the same bytes for
   // each of the eight or so fields a tick wants.
-  std::vector<char> block(static_cast<size_t>(count * num_bytes_pvp_));
-  const int64_t base = pvp_block_offset_ + info.pvp_byte_offset + first * num_bytes_pvp_;
+  const int64_t bytes = checked_product(count, num_bytes_pvp_);
+  const int64_t relative =
+      checked_sum(info.pvp_byte_offset, checked_product(first, num_bytes_pvp_));
+  const int64_t base =
+      checked_block_span(pvp_block_offset_, pvp_block_size_, relative, bytes, "PVP block");
+  std::vector<char> block(static_cast<size_t>(bytes));
   read_at(base, block.data(), static_cast<int64_t>(block.size()), "PVP block");
   return PvpBlock(std::move(block), count, num_bytes_pvp_, &pvp_fields_, &path_);
 }
@@ -916,6 +981,10 @@ const ChannelInfo& CphdFile::check_signal_request(int64_t channel_index, int64_t
                              " are out of range (channel has " + std::to_string(info.num_vectors) +
                              ")");
   }
+  const int64_t row_bytes = checked_product(info.num_samples, signal_bytes_per_sample());
+  (void)checked_block_span(signal_block_offset_, signal_block_size_,
+                           checked_sum(info.signal_byte_offset, checked_product(first, row_bytes)),
+                           checked_product(count, row_bytes), "signal block");
   return info;
 }
 
@@ -955,8 +1024,8 @@ void CphdFile::ensure_decode_scratch(size_t bytes) const {
 void CphdFile::read_signal_bytes(int64_t channel_index, int64_t first, int64_t count, char* dest,
                                  size_t dest_bytes) const {
   const ChannelInfo& info = check_signal_request(channel_index, first, count);
-  const int64_t row_bytes = info.num_samples * signal_bytes_per_sample();
-  const int64_t bytes = count * row_bytes;
+  const int64_t row_bytes = checked_product(info.num_samples, signal_bytes_per_sample());
+  const int64_t bytes = checked_product(count, row_bytes);
   if (dest == nullptr || dest_bytes < static_cast<size_t>(bytes)) {
     throw std::runtime_error("CphdFile: " + path_ +
                              ": stored-signal buffer is smaller than the requested span");
@@ -964,7 +1033,9 @@ void CphdFile::read_signal_bytes(int64_t channel_index, int64_t first, int64_t c
   if (bytes == 0) {
     return;
   }
-  const int64_t base = signal_block_offset_ + info.signal_byte_offset + first * row_bytes;
+  const int64_t base =
+      checked_sum(signal_block_offset_,
+                  checked_sum(info.signal_byte_offset, checked_product(first, row_bytes)));
   read_at(base, dest, bytes, "signal block");
 }
 
@@ -977,10 +1048,16 @@ void CphdFile::read_signal_into(int64_t channel_index, int64_t first, int64_t co
   const ChannelInfo& info = check_signal_request(channel_index, first, count);
   const std::vector<double> amp = amplitude_scale(pvp, count);
 
-  const int64_t row_bytes = info.num_samples * signal_bytes_per_sample();
-  const int64_t bytes = count * row_bytes;
-  const int64_t total = count * info.num_samples;
-  const int64_t base = signal_block_offset_ + info.signal_byte_offset + first * row_bytes;
+  const int64_t row_bytes = checked_product(info.num_samples, signal_bytes_per_sample());
+  const int64_t bytes = checked_product(count, row_bytes);
+  const int64_t total = checked_product(count, info.num_samples);
+  (void)checked_product(total, sizeof(std::complex<T>));
+  const int64_t base =
+      checked_sum(signal_block_offset_,
+                  checked_sum(info.signal_byte_offset, checked_product(first, row_bytes)));
+  if (total > 0 && out == nullptr) {
+    throw std::runtime_error("CphdFile: null decoded-signal buffer");
+  }
 
   bool decoded = false;
   if constexpr (std::is_same_v<T, float>) {
@@ -1058,7 +1135,9 @@ template void CphdFile::read_signal_into<double>(int64_t, int64_t, int64_t, std:
 std::vector<std::complex<float>> CphdFile::read_signal(int64_t channel_index, int64_t first,
                                                        int64_t count) const {
   const ChannelInfo& info = check_signal_request(channel_index, first, count);
-  std::vector<std::complex<float>> samples(static_cast<size_t>(count * info.num_samples));
+  const int64_t elements = checked_product(count, info.num_samples);
+  (void)checked_product(elements, sizeof(std::complex<float>));
+  std::vector<std::complex<float>> samples(static_cast<size_t>(elements));
   if (has_amp_sf()) {
     const PvpBlock pvp = read_pvp_block(channel_index, first, count);
     read_signal_into(channel_index, first, count, samples.data(), &pvp);

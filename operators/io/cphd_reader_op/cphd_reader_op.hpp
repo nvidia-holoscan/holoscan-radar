@@ -55,10 +55,11 @@ struct CphdReaderParams {
   double playback_rate{0.0};
   double duty_cycle{1.0};
   bool wait_for_downstream{false};
+  int64_t io_chunk_bytes{64 * 1024 * 1024};
 };
 
 HOLOSCAN_PARAM_SCHEMA(CphdReaderParams,
-                      holoscan::param_schema("com.nvidia.holoscan.radar.CphdReaderParams", 2),
+                      holoscan::param_schema("com.nvidia.holoscan.radar.CphdReaderParams", 3),
                       holoscan::field<&CphdReaderParams::path>("path"),
                       holoscan::field<&CphdReaderParams::coordinate_frame>("coordinate_frame"),
                       holoscan::field<&CphdReaderParams::pulses_per_tick>("pulses_per_tick"),
@@ -70,7 +71,10 @@ HOLOSCAN_PARAM_SCHEMA(CphdReaderParams,
                       holoscan::field<&CphdReaderParams::wait_for_downstream>("wait_for_downstream")
                           .description("When true, required Tensor emits wait on kBackpressured / "
                                        "kResourceExhausted instead of failing compute(). Unmetered "
-                                       "playback_rate 0 always waits. Static. Default false."));
+                                       "playback_rate 0 always waits. Static. Default false."),
+                      holoscan::field<&CphdReaderParams::io_chunk_bytes>("io_chunk_bytes")
+                          .description("Maximum bytes per filesystem read per I/O worker; at least "
+                                       "8 and a multiple of 8. Static. Default 67108864."));
 
 // Unmetered ingest (playback_rate 0) waits on a full queue. A positive rate
 // fail-fasts unless wait_for_downstream is true.

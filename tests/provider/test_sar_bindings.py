@@ -204,6 +204,7 @@ def test_cphd_source_exposes_both_precision_axes(suffix, samples, geometry):
         path=str(path),
         coordinate_frame="ecef",
         pulses_per_tick=3,
+        io_chunk_bytes=8,
     )
     with OperatorTestHarness(
         captured.type_name,

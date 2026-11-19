@@ -94,7 +94,7 @@ struct ChannelInfo {
 // collection costs only its metadata.
 class CphdFile {
  public:
-  explicit CphdFile(const std::string& path);
+  explicit CphdFile(const std::string& path, int64_t io_chunk_bytes = 64 * 1024 * 1024);
   ~CphdFile();
   CphdFile(const CphdFile&) = delete;
   CphdFile& operator=(const CphdFile&) = delete;
@@ -214,6 +214,10 @@ class CphdFile {
   // at or above 1 MiB are split across a few threads: one outstanding
   // sequential read is ~2 GB/s on NVMe here, four-way ~4.4 GB/s.
   void read_at(int64_t offset, char* dest, int64_t bytes, const char* what) const;
+  // Validate before any allocation, not just when the read is issued.
+  void check_span(int64_t offset, int64_t bytes, const char* what) const;
+  int64_t checked_block_span(int64_t block_offset, int64_t block_size, int64_t relative,
+                             int64_t bytes, const char* what) const;
   // Shared validation for the signal entry points.
   const ChannelInfo& check_signal_request(int64_t channel_index, int64_t first,
                                           int64_t count) const;
@@ -222,6 +226,7 @@ class CphdFile {
   void ensure_decode_scratch(size_t bytes) const;
 
   std::string path_;
+  int64_t io_chunk_bytes_;
   std::string version_;
   std::map<std::string, std::string> header_;
   std::vector<ChannelInfo> channels_;
@@ -234,7 +239,9 @@ class CphdFile {
   int64_t xml_block_offset_{0};
   int64_t xml_block_size_{0};
   int64_t pvp_block_offset_{0};
+  int64_t pvp_block_size_{-1};
   int64_t signal_block_offset_{0};
+  int64_t signal_block_size_{-1};
   bool has_iarp_{false};
   std::array<double, 3> iarp_ecef_{};
   bool has_image_area_{false};
