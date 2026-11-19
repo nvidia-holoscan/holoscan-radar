@@ -43,6 +43,14 @@
         "run": {
           "command": "<holohub_app_bin>/mimo_ddm",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=mimo_ddm"
+          ]
         }
       },
       "smoke": {
@@ -50,6 +58,14 @@
         "run": {
           "command": "<holohub_app_bin>/mimo_ddm mimo_ddm_linear_smoke.yaml",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=mimo_ddm"
+          ]
         }
       },
       "nonlinear_ddm": {
@@ -57,6 +73,14 @@
         "run": {
           "command": "<holohub_app_bin>/mimo_ddm mimo_ddm_nonlinear.yaml",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=mimo_ddm"
+          ]
         }
       },
       "nonlinear_ddm_smoke": {
@@ -64,6 +88,14 @@
         "run": {
           "command": "<holohub_app_bin>/mimo_ddm mimo_ddm_nonlinear_smoke.yaml",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=mimo_ddm"
+          ]
         }
       }
     }

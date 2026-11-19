@@ -120,10 +120,11 @@ include(HoloHubConfigHelpers)
 # Optional SDK features (Holoviz, …) — see HoloscanRadarOptionalFeatures.cmake.
 include(HoloscanRadarOptionalFeatures)
 
-# The provider links every public FMCW operator even when BUILD_ALL is OFF.
-if(HOLOSCAN_RADAR_BUILD_PYTHON)
+# The provider and module-wide test suite require every public operator,
+# including when a selected application defaults BUILD_ALL to OFF.
+if(HOLOSCAN_RADAR_BUILD_PYTHON OR HOLOSCAN_RADAR_BUILD_TESTING)
     foreach(_radar_op IN LISTS HOLOSCAN_RADAR_OPERATORS)
-        set(OP_${_radar_op} ON CACHE BOOL "Required by the Radar Python provider" FORCE)
+        set(OP_${_radar_op} ON CACHE BOOL "Required by the Radar provider or test suite" FORCE)
     endforeach()
     unset(_radar_op)
 endif()
@@ -202,3 +203,8 @@ if(NOT SKBUILD)
     install(FILES "${PROJECT_SOURCE_DIR}/NOTICE"
         DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/doc/holoscan-radar")
 endif()
+
+# Application manifests opt into a dependency-only default build. Keep this last
+# so every configured target (including stale cached selections) is considered.
+include(HoloscanRadarApplicationBuild)
+holoscan_radar_select_application_build()

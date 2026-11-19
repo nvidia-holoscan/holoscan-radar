@@ -4,6 +4,17 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **Application build scope** on `deustice/sar-gui`: implemented.
+  All 26 language manifests select narrow defaults and an application-only default
+  build target. Three configure-only regressions pass. SDK graph checks show
+  spotlight at 52 commands and SIMO at 73, excluding unrelated targets; a reused
+  broad cache retains its switches but builds only spotlight's 52 commands.
+  Python selects its provider (184 commands, including required public operators),
+  and switching back restores the C++ graph. Explicit test builds retain their
+  full operator dependencies. Module/package/wheel and explicit broad builds
+  preserve their defaults. No developer caches or user presets were reset.
+
+
 - **2026-11-19** — **SAR GUI checkpoint verification**: 174 of 175 selected
   CTests passed initially; update the stale footer assertion to require all five
   agreed rows, including grouped pulses and BP work. Its rebuilt GPU composition
