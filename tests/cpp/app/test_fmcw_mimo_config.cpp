@@ -479,6 +479,38 @@ TEST(FmcwMimoConfig, DecodesNonlinearDdmGeneratorAliases) {
   }
 }
 
+TEST(FmcwMimoConfig, RejectsGeneratedDdmTableAboveDefaultBeforeGeneration) {
+  EXPECT_EQ(mimo::DdmSimulationConfig{}.max_generated_code_bytes, 67108864);
+  for (const char* generator : {"zc", "sin"}) {
+    const PresetOverride preset(config_path("mimo_ddm/config/mimo_ddm_nonlinear_smoke.yaml"),
+                                "app:\n    cube: {num_chirps: 1000000000}\n"
+                                "ddm:\n    generate_phase_codes: " +
+                                    std::string(generator));
+    try {
+      (void)mimo::load_ddm_config(preset.path());
+      FAIL() << "Oversized generated table was accepted";
+    } catch (const std::runtime_error& error) {
+      EXPECT_NE(std::string(error.what()).find("ddm.max_generated_code_bytes"), std::string::npos);
+    }
+  }
+}
+
+TEST(FmcwMimoConfig, GeneratedDdmLimitIsConfigurableAndInclusive) {
+  const auto path = config_path("mimo_ddm/config/mimo_ddm_nonlinear_smoke.yaml");
+  const auto baseline = mimo::load_ddm_config(path);
+  for (int64_t bytes : {4096LL, 134217728LL}) {
+    const PresetOverride preset(path,
+                                "ddm:\n    max_generated_code_bytes: " + std::to_string(bytes));
+    const auto config = mimo::load_ddm_config(preset.path());
+    EXPECT_EQ(config.ddm_code.phase_codes, baseline.ddm_code.phase_codes);
+  }
+  for (int64_t bytes : {-1, 0, 4095}) {
+    const PresetOverride preset(path,
+                                "ddm:\n    max_generated_code_bytes: " + std::to_string(bytes));
+    EXPECT_THROW(mimo::load_ddm_config(preset.path()), std::runtime_error);
+  }
+}
+
 TEST(FmcwMimoConfig, SmokeConfigsOnlyApplyAllowedOverrides) {
   expect_smoke_matches_production("mimo_tdm/config/mimo_tdm.yaml",
                                   "mimo_tdm/config/mimo_tdm_smoke.yaml");

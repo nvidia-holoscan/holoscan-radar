@@ -505,10 +505,9 @@ inline DdmConfig load_ddm_config(const std::filesystem::path& path) {
     throw std::runtime_error("ddm: app.tdm must not be authored");
   }
   reject_authored(document, "/clutter_filter");
-  CommonPrepared common = prepare_common(document, *app_params, "ddm");
 
   DDMDenseDemultiplexParams demultiplex_baseline;
-  std::optional<std::string> generator;
+  DdmSimulationConfig simulation;
   auto root_ddm = document.try_find("/ddm");
   if (!root_ddm) {
     throw std::runtime_error(holoscan::config::format_error(root_ddm.error()));
@@ -518,8 +517,21 @@ inline DdmConfig load_ddm_config(const std::filesystem::path& path) {
     if (!decoded) {
       throw std::runtime_error(holoscan::config::format_error(decoded.error()));
     }
-    generator = decoded->generate_phase_codes;
+    simulation = *decoded;
   }
+  require_positive("ddm.max_generated_code_bytes", simulation.max_generated_code_bytes);
+  const auto& generator = simulation.generate_phase_codes;
+  if (generator.has_value()) {
+    const auto elements = checked_element_count<std::complex<double>>(
+        {app_params->tx_array.num_tx, app_params->cube.num_chirps}, "DDM generated code");
+    if (elements >
+        simulation.max_generated_code_bytes / static_cast<int64_t>(sizeof(std::complex<double>))) {
+      throw std::runtime_error(
+          "generated DDM code table exceeds ddm.max_generated_code_bytes; "
+          "reduce app.tx_array.num_tx/app.cube.num_chirps or raise the byte limit");
+    }
+  }
+  CommonPrepared common = prepare_common(document, *app_params, "ddm");
   if (generator.has_value()) {
     reject_authored(document, "/ddm_dense_demultiplex/ddm_code");
     if (*generator == "zadoff_chu" || *generator == "zc") {

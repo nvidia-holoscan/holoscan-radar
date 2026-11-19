@@ -82,6 +82,7 @@ struct DdmSimulationConfig {
   // Empty uses the authored native ddm_code. Supported generated values:
   // zadoff_chu (or zc) and sin.
   std::optional<std::string> generate_phase_codes{};
+  int64_t max_generated_code_bytes{64 * 1024 * 1024};
 };
 
 // Constructor-capture authoring for FeatureAssemblyOp.features.
@@ -263,7 +264,8 @@ struct ConfigCodec<radar::app::mimo::DdmSimulationConfig>
 : ObjectCodec<radar::app::mimo::DdmSimulationConfig> {
   using Config = radar::app::mimo::DdmSimulationConfig;
   static constexpr auto fields = std::make_tuple(
-      defaulted_object_field("generate_phase_codes", &Config::generate_phase_codes));
+      defaulted_object_field("generate_phase_codes", &Config::generate_phase_codes),
+      defaulted_object_field("max_generated_code_bytes", &Config::max_generated_code_bytes));
 };
 
 using AppParamsCodec = params::DefaultedParamSchemaCodec<radar::app::mimo::AppParams>;  // NOLINT

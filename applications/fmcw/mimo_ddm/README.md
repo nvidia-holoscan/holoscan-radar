@@ -36,8 +36,19 @@ Option B, nonlinear DDM: `config/mimo_ddm_nonlinear.yaml`. It authors the root s
 ```yaml
 ddm:
     generate_phase_codes: zadoff_chu
+    max_generated_code_bytes: 67108864  # 64 MiB; raise or lower as needed
 ddm_dense_demultiplex: {}
 ```
+
+Both C++ and Python loaders reject generated tables above this positive byte limit
+before generating codes or building geometry. Omitting it uses 64 MiB. Table
+payload is `num_tx * num_chirps * sizeof(complex<double>)` (16 bytes per code
+on supported platforms); the shipped 2-TX, 128-chirp example uses 4096 bytes.
+The limit covers one generated table's payload, excluding copies, generator
+scratch, source buffers and the rest of the graph. It does not restrict authored
+code tables, custom files, or the general library generators/operators.
+Because YAML may raise its own limit, this is an accidental-allocation guard,
+not a boundary for hostile configuration files.
 
 The normal linear and nonlinear presets enable relative monostatic free-space range loss with a 100 m reference. The matching `_smoke.yaml` files disable range loss, use the constant-amplitude analytic model with a warning, and otherwise retain the same waveform and DSP tuning while changing only the frame count, visualization enablement, and target list.
 
