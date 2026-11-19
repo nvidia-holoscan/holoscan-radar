@@ -128,23 +128,32 @@ def check(args):
                         return False
                     width, height = geometry(lib, display, image_panel)
                     image_height = height - (112 if docked else 0)
-                    # SAR pixels are grayscale. The startup background is tinted
-                    # charcoal; sample below its centered text, above the footer.
+                    # SAR pixels are grayscale; the startup background is tinted
+                    # charcoal. Sample a region so a sensor arrow or its label
+                    # cannot hide the formed image from a single-pixel probe.
                     data = lib.XGetImage(
                         display,
                         image_panel,
-                        width // 2,
-                        max(0, image_height * 4 // 5),
-                        1,
-                        1,
+                        0,
+                        0,
+                        width,
+                        image_height,
                         c.c_ulong(-1).value,
                         2,
                     )
                     if not data:
                         return False
                     try:
-                        pixel = lib.XGetPixel(data, 0, 0)
-                        return (pixel & 255) == ((pixel >> 8) & 255) == ((pixel >> 16) & 255)
+                        gray = 0
+                        for row in range(3):
+                            for column in range(5):
+                                x = min(width - 1, width * (2 + column) // 8)
+                                y = min(image_height - 1, image_height * (7 + row) // 10)
+                                pixel = lib.XGetPixel(data, x, y)
+                                gray += (
+                                    (pixel & 255) == ((pixel >> 8) & 255) == ((pixel >> 16) & 255)
+                                )
+                        return gray >= 12
                     finally:
                         lib.XDestroyImage(data)
 
