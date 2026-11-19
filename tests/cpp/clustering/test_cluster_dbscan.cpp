@@ -49,11 +49,11 @@ std::shared_ptr<holoscan::Tensor> points_tensor(const std::vector<double>& host,
 }
 
 template <typename T>
-holoscan::testing::TestResult run_dbscan_result(std::shared_ptr<holoscan::Tensor> points,
-                                                ClusterDBSCANParams params) {
+holoscan::testing::TestResult run_dbscan_result(
+    std::shared_ptr<holoscan::Tensor> points, ClusterDBSCANParams params,
+    holoscan::radar::MaxTensorExtents extents = holoscan::radar::testing::default_test_extents()) {
   using Op = ClusterDBSCANOp<T>;
-  auto fixture =
-      holoscan::testing::create_operator_test<Op>(holoscan::radar::testing::default_test_extents());
+  auto fixture = holoscan::testing::create_operator_test<Op>(extents);
   fixture.set_params(std::move(params));
   fixture.push(&Op::points, *points);
   constexpr std::size_t kMaximumBytes = 256U * 1024U * 1024U;
@@ -489,6 +489,35 @@ TEST(ClusterDBSCANOpTest, MaxClustersConfigurableFromParams) {
 }
 
 // ---- Error paths ----------------------------------------------------------
+
+template <typename T>
+void check_point_capacity() {
+  auto extents = holoscan::radar::testing::default_test_extents();
+  extents.max_points = 2;
+  const auto exact = run_dbscan_result<T>(points_tensor<T>({0.0, 0.0, 0.1, 0.1}, 2, 2),
+                                          make_params({0.5}, 2), extents);
+  ASSERT_TRUE(exact.ok()) << exact.describe_failure();
+  const auto host =
+      holoscan::radar::testing::to_host(exact.template snapshot<holoscan::Tensor>("labels"));
+  ASSERT_EQ(host.shape, (std::vector<int64_t>{2}));
+  EXPECT_EQ(host.template as<int64_t>()[0], 0);
+  EXPECT_EQ(host.template as<int64_t>()[1], 0);
+  const auto overflow = run_dbscan_result<T>(points_tensor<T>({0.0, 0.0, 0.1, 0.1, 0.2, 0.2}, 3, 2),
+                                             make_params({0.5}, 2), extents);
+  EXPECT_FALSE(overflow.ok());
+  EXPECT_NE(overflow.describe_failure().find("exceeds MaxTensorExtents.max_points 2"),
+            std::string::npos)
+      << overflow.describe_failure();
+  EXPECT_TRUE(overflow.template snapshots<holoscan::Tensor>("labels").empty());
+}
+
+TEST(ClusterDBSCANOpTest, RejectsPointCapacityOverflowAndAcceptsExactBoundFloat) {
+  check_point_capacity<float>();
+}
+
+TEST(ClusterDBSCANOpTest, RejectsPointCapacityOverflowAndAcceptsExactBoundDouble) {
+  check_point_capacity<double>();
+}
 
 TEST(ClusterDBSCANOpTest, RejectsEmptyEpsilon) {
   std::vector<double> pts = {0.0, 0.0, 1.0, 1.0};
