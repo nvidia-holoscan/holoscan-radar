@@ -1728,6 +1728,16 @@ still declare SDK 4.3.0.
 
 ## In flight / claims
 
+- **2026-11-19 — AIVO performance device locks** (`deustice/aivo-fixes`, Codex):
+  per-user coordination approved; locks retain cross-directory/process exclusion
+  for that user, without claiming cross-user GPU scheduling. Use an owned 0700
+  directory and owned 0600 regular, single-link files, opened relative to a
+  validated directory descriptor without following symlinks. Reject unsafe
+  entries; retain lock inodes after release. All 138 performance-tool checks
+  pass, including eleven focused contention, cleanup, ownership, permission,
+  symlink, hard-link and FIFO regressions. Full pinned lint passes. AIVO
+  confirmation will be pinned to the pushed commit.
+
 - **2026-11-19 — AIVO X11 property validation** (`deustice/aivo-fixes`, Codex):
   merged `origin/deustice/sar-gui` through `d958019e` without conflicts; full
   lint passes. Work-area, frame-extents and client-list decoding now validates
@@ -1736,8 +1746,8 @@ still declare SDK 4.3.0.
   pass, including short format-8/16 buffers, cleanup and native-long stride;
   AddressSanitizer/UndefinedBehaviorSanitizer are clean. The merged build and
   all 1,605 non-performance native/application CTests pass, including 80
-  visualization checks and six SAR smokes. Isolated provider testing is next;
-  AIVO confirmation will be pinned to the pushed commit.
+  visualization checks and six SAR smokes. All 293 provider checks also pass
+  in isolation. AIVO confirmation will be pinned to the pushed commit.
 
 - **2026-11-19 — CPHD preparation XML** (`deustice/aivo-fixes`, Codex):
   implemented the approved rejection of every DOCTYPE declaration, with
