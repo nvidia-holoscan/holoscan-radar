@@ -285,6 +285,27 @@ only after all signal rows are complete; an existing completed file remains
 usable during a replacement download. A small hidden destination lock file
 prevents concurrent writers and is harmless after the process exits.
 
+Bundled example downloads verify the source size and SHA-256 of the original
+CPHD header and XML against the repository's
+[metadata baseline](sar_data/metadata_pins.yaml). All ten catalog objects are
+covered, including Houston's full source object before a subset is prepared.
+HTTPS and AWS downloads verify their temporary files before publishing them;
+existing pinned full files are checked before parsing or skipping. Subsetting
+checks the small source metadata ranges before parsing, including on resume,
+and retains normal partial-download behavior.
+
+This is a project baseline collected from supplier HTTPS responses on
+2026-11-19, not a publisher signature or proof of original provenance. It detects
+later replacement of the header/XML or a change in total object size. PVP,
+support arrays and radar samples are not authenticated by these hashes. A
+baseline change requires review of the intended example data; a mismatch is
+refused rather than automatically replacing the expected hash.
+
+These checks belong only to the download/preparation tools' known remote
+examples. Custom URLs and local CPHD files do not need catalog hashes. The
+native CPHD operator continues to accept any valid CPHD; it has no catalog or
+hash requirement.
+
 Remote sources are restricted to these HTTPS origins by default:
 
 - `https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com`

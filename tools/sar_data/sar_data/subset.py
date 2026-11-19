@@ -45,6 +45,7 @@ import lxml.etree
 import numpy as np
 import sarkit.cphd as skcphd
 import yaml
+from sar_data.integrity import metadata_pin, verify_metadata
 from sar_data.network import validate_source_url
 from sar_data.progress import DownloadProgress
 from sar_data.recipe import validate_recipe_name
@@ -1192,6 +1193,11 @@ def _subset_cphd(
     sample_spec = as_axis_window(samples, axis="samples")
     src = open_source(source, allowed_source_origins=allowed_source_origins)
     try:
+        pin = metadata_pin(source)
+        if pin is not None:
+            if reporter is not None:
+                reporter.message("Validation: checking bundled source header/XML baseline")
+            verify_metadata(pin, src.size(), src.read)
         kvps = _read_header(src)
         xml_size = int(kvps["XML_BLOCK_SIZE"])
         if xml_size <= 0:

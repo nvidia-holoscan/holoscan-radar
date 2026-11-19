@@ -1728,6 +1728,20 @@ still declare SDK 4.3.0.
 
 ## In flight / claims
 
+- **2026-11-19 — AIVO bundled dataset metadata integrity** (`deustice/aivo-fixes`, Codex):
+  approved download-only header/XML baselines for bundled examples. Collecting
+  current supplier HTTPS Range responses into a reviewed manifest; verify before
+  parsing remote metadata, accepting existing pinned files or publishing complete
+  HTTPS/AWS downloads. Local/custom CPHDs and the native CPHD operator remain
+  unrestricted. This is change detection from the project baseline, not publisher
+  authentication; PVP, support and radar sample bytes remain outside its scope.
+  All ten catalog objects are pinned. All 76 offline preparation checks pass,
+  including metadata tamper rejection before parse/publication, bounded reads,
+  existing-file protection and pinned-source HTTP interruption/resume. Baselines
+  also match the existing local Kourou autofocus and Atlanta files. Pinned lint
+  passes. This is the approved metadata-only mitigation, not whole-object
+  authentication; remote AIVO verification awaits the developer's push.
+
 - **2026-11-19 — AIVO dataset HTTP destinations** (`deustice/aivo-fixes`, Codex):
   approved default Umbra/Capella origins with explicit caller/CLI approval for
   extras; recipes cannot expand their own permissions. Applying exact
@@ -1736,8 +1750,8 @@ still declare SDK 4.3.0.
   remain supported. All 66 offline preparation checks pass, including real
   loopback redirect isolation, CLI approval, recipe self-approval rejection,
   preservation of existing outputs/checkpoints and interrupted Range resume.
-  Header/XML integrity pinning remains a separate pending download-only decision;
-  the native CPHD operator continues to accept arbitrary valid CPHD files.
+  The separately approved header/XML baseline applies only to bundled example
+  downloads; the native CPHD operator continues to accept arbitrary valid CPHD files.
 
 - **2026-11-19 — AIVO devcontainer X11 authorization** (`deustice/aivo-fixes`, Codex):
   replacing the all-local-users grant with the current host account's

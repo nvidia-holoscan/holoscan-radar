@@ -42,6 +42,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
+from sar_data.integrity import verify_metadata_file
 from sar_data.network import open_source_url, validate_source_url
 from sar_data.progress import DownloadProgress
 from sar_data.recipe import validate_recipe_name
@@ -519,6 +520,7 @@ def download_https(url: str, dest: Path, progress: DownloadProgress) -> None:
                 )
         if progress.total is None:
             progress.total = received_bytes
+        verify_metadata_file(partial, url)
         partial.replace(dest)
         progress.finish()
     except BaseException:
@@ -570,6 +572,7 @@ def download_aws(bucket: str, key: str, dest: Path, progress: DownloadProgress) 
             raise RuntimeError(f"aws s3 cp produced no file at {partial}")
         progress.total = partial.stat().st_size
         progress.set(progress.total)
+        verify_metadata_file(partial, uri)
         partial.replace(dest)
         progress.finish()
     except BaseException:
@@ -584,6 +587,7 @@ def pull_one(job: PullJob, force: bool, index: int, count: int) -> Path:
     label = f"[{index}/{count}] {job.scene}"
     if dest.is_file() and not force:
         print(f"Validation {label}: checking existing CPHD", file=sys.stderr, flush=True)
+        verify_metadata_file(dest, f"s3://{job.bucket}/{job.key}")
         if cphd_readable(dest):
             print(f"Skipped {label}: {dest.name} already present", file=sys.stderr, flush=True)
             return dest
