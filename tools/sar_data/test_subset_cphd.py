@@ -80,7 +80,8 @@ def range_server(payload):
     server.daemon_threads = True
     thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.02), daemon=True)
     thread.start()
-    source = subset.HttpByteSource(f"http://127.0.0.1:{server.server_port}/source.cphd")
+    origin = f"http://127.0.0.1:{server.server_port}"
+    source = subset.HttpByteSource(origin + "/source.cphd", allowed_source_origins=(origin,))
     try:
         yield source, state
     finally:
@@ -90,9 +91,77 @@ def range_server(payload):
         thread.join()
 
 
+class RemoteSourcePolicyTest(unittest.TestCase):
+    def test_recipe_cannot_approve_its_own_server_or_touch_existing_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe = root / "untrusted.yaml"
+            recipe.write_text(
+                json.dumps(
+                    {
+                        "name": "untrusted",
+                        "source": {"url": "http://127.0.0.1:1234/admin"},
+                        "allowed_source_origins": ["http://127.0.0.1:1234"],
+                    }
+                )
+            )
+            spec = subset.load_subset_recipe(recipe)
+            dest = root / "keep.cphd"
+            dest.write_bytes(b"keep output")
+            checkpoint = root / "keep.cphd.part.json"
+            checkpoint.write_bytes(b"keep checkpoint")
+            before = {p.name: p.read_bytes() for p in root.iterdir()}
+            for dry_run in (False, True):
+                with (
+                    self.subTest(dry_run=dry_run),
+                    mock.patch.object(subset.HttpByteSource, "_connect") as connect,
+                    self.assertRaisesRegex(ValueError, "not approved"),
+                ):
+                    try:
+                        subset.subset_cphd(spec.source, dest, force=True, dry_run=dry_run)
+                    finally:
+                        connect.assert_not_called()
+                self.assertEqual({p.name: p.read_bytes() for p in root.iterdir()}, before)
+
+    def test_cli_requires_explicit_server_approval_and_then_preserves_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.cphd"
+            dest = Path(directory) / "subset.cphd"
+            values = make_cphd(source, None)
+            with range_server(source.read_bytes()) as (remote, state):
+                origin = f"http://127.0.0.1:{remote._port}"
+                command = [
+                    sys.executable,
+                    str(Path(subset_cli.__file__)),
+                    "--source",
+                    origin + "/source.cphd",
+                    "--samples",
+                    "2:6",
+                    "--connections",
+                    "2",
+                    "-o",
+                    str(dest),
+                ]
+                blocked = subprocess.run(command, capture_output=True, text=True, check=False)
+                self.assertNotEqual(blocked.returncode, 0)
+                self.assertIn("not approved", blocked.stderr)
+                self.assertEqual(state.requests, [])
+                self.assertFalse(dest.exists())
+                subprocess.run(
+                    command + ["--allow-source-origin", origin],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+            with dest.open("rb") as handle, skcphd.Reader(handle) as reader:
+                np.testing.assert_array_equal(reader.read_signal("Primary"), values[:, 2:6])
+
+
 class HttpRangeTest(unittest.TestCase):
     def test_oversized_response_body_is_read_with_a_bound_and_rejected(self):
-        source = subset.HttpByteSource("https://example.invalid/input.cphd")
+        source = subset.HttpByteSource(
+            "https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com/input.cphd"
+        )
         response = mock.Mock(status=206)
         response.getheader.side_effect = lambda name, default=None: {
             "Content-Range": "bytes 0-3/8",
@@ -794,7 +863,12 @@ class SubsetFileTest(unittest.TestCase):
                 with (mock.patch.object(subset, "_FETCH_RETRIES", 1),):
                     with self.assertRaisesRegex(RuntimeError, "after 1 tries"):
                         subset.subset_cphd(
-                            url, dest, samples=(2, 6), connections=2, io_chunk_bytes=64
+                            url,
+                            dest,
+                            samples=(2, 6),
+                            connections=2,
+                            io_chunk_bytes=64,
+                            allowed_source_origins=(f"http://127.0.0.1:{http_source._port}",),
                         )
                     state.fail_from = None
                     state.requests.clear()
@@ -807,6 +881,7 @@ class SubsetFileTest(unittest.TestCase):
                             progress=True,
                             connections=2,
                             io_chunk_bytes=128,
+                            allowed_source_origins=(f"http://127.0.0.1:{http_source._port}",),
                         )
                 self.assertIn("4/6 vectors checkpointed", output.getvalue())
                 signal_reads = [start for start, _end, _etag in state.requests if start >= 8192]

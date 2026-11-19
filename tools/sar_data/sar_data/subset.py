@@ -45,6 +45,7 @@ import lxml.etree
 import numpy as np
 import sarkit.cphd as skcphd
 import yaml
+from sar_data.network import validate_source_url
 from sar_data.progress import DownloadProgress
 from sar_data.recipe import validate_recipe_name
 
@@ -205,12 +206,14 @@ class FileByteSource:
 class HttpByteSource:
     """Keep-alive HTTP(S) Range GETs, one connection per calling thread."""
 
-    def __init__(self, url: str, timeout: float = _HTTPS_TIMEOUT_S):
-        parsed = urllib.parse.urlsplit(url)
-        if parsed.scheme not in ("http", "https"):
-            raise ValueError(f"unsupported URL scheme: {url}")
-        if not parsed.hostname:
-            raise ValueError(f"URL has no host: {url}")
+    def __init__(
+        self,
+        url: str,
+        timeout: float = _HTTPS_TIMEOUT_S,
+        *,
+        allowed_source_origins: tuple[str, ...] = (),
+    ):
+        parsed = validate_source_url(url, allowed_source_origins)
         self._scheme = parsed.scheme
         self._host = parsed.hostname
         self._port = parsed.port
@@ -535,10 +538,10 @@ def load_subset_recipe(path: str | Path) -> SubsetRecipe:
     )
 
 
-def open_source(spec: str | Path) -> ByteSource:
+def open_source(spec: str | Path, *, allowed_source_origins: tuple[str, ...] = ()) -> ByteSource:
     text = str(spec)
     if text.startswith("http://") or text.startswith("https://"):
-        return HttpByteSource(text)
+        return HttpByteSource(text, allowed_source_origins=allowed_source_origins)
     return FileByteSource(Path(text))
 
 
@@ -1139,6 +1142,7 @@ def subset_cphd(
     dry_run: bool = False,
     progress: bool = False,
     progress_label: str | None = None,
+    allowed_source_origins: tuple[str, ...] = (),
 ) -> SubsetResult:
     """Write a pulse-and/or-sample subset of ``source`` to ``dest``.
 
@@ -1163,6 +1167,7 @@ def subset_cphd(
             force=force,
             dry_run=dry_run,
             reporter=reporter,
+            allowed_source_origins=allowed_source_origins,
         )
         if reporter is not None and result.skipped:
             reporter.message("Skipped: existing subset matches source and windows")
@@ -1180,11 +1185,12 @@ def _subset_cphd(
     force: bool,
     dry_run: bool,
     reporter: DownloadProgress | None,
+    allowed_source_origins: tuple[str, ...],
 ) -> SubsetResult:
     dest = Path(dest)
     pulse_spec = as_axis_window(pulses, axis="pulses")
     sample_spec = as_axis_window(samples, axis="samples")
-    src = open_source(source)
+    src = open_source(source, allowed_source_origins=allowed_source_origins)
     try:
         kvps = _read_header(src)
         xml_size = int(kvps["XML_BLOCK_SIZE"])

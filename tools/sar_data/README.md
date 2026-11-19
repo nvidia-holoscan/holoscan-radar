@@ -285,6 +285,30 @@ only after all signal rows are complete; an existing completed file remains
 usable during a replacement download. A small hidden destination lock file
 prevents concurrent writers and is harmless after the process exits.
 
+Remote sources are restricted to these HTTPS origins by default:
+
+- `https://umbra-open-data-catalog.s3.us-west-2.amazonaws.com`
+- `https://capella-open-data.s3.amazonaws.com`
+- `https://capella-open-data.s3.us-west-2.amazonaws.com`
+
+A custom server requires explicit caller approval outside the recipe:
+
+```bash
+uv run --with-requirements tools/sar_data/requirements.txt tools/sar_data/subset_cphd.py \
+  --source https://datasets.example.org/scene.cphd \
+  --allow-source-origin https://datasets.example.org -o data/sar/custom.cphd
+```
+
+Repeat `--allow-source-origin` to approve more servers. Approval covers exactly
+that scheme, host and port, not subdomains or other ports. Python callers pass
+`allowed_source_origins=("https://datasets.example.org",)` to `subset_cphd()`
+or `HttpByteSource`. A recipe cannot approve itself. Internal/loopback servers
+and plain HTTP require the same explicit approval; the caller is responsible
+for trusting those destinations. Range requests reject redirects. Whole-object
+GET/HEAD requests check every redirect before connecting to its destination;
+an HTTPS-to-HTTP redirect is refused unless that HTTP origin was also approved.
+Local file sources and existing pulse/sample selection are unchanged.
+
 Resume validates the source identity, requested pulse/sample windows, encoded
 CPHD metadata/layout, committed file length, and last chunk checksum. HTTP
 sources need a strong ETag or Last-Modified validator; requests pin that version

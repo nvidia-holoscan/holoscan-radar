@@ -1728,6 +1728,17 @@ still declare SDK 4.3.0.
 
 ## In flight / claims
 
+- **2026-11-19 — AIVO dataset HTTP destinations** (`deustice/aivo-fixes`, Codex):
+  approved default Umbra/Capella origins with explicit caller/CLI approval for
+  extras; recipes cannot expand their own permissions. Applying exact
+  scheme/host/port checks before Range connections, whole-file requests and
+  redirects. Existing range/resume and caller-approved internal/test servers
+  remain supported. All 66 offline preparation checks pass, including real
+  loopback redirect isolation, CLI approval, recipe self-approval rejection,
+  preservation of existing outputs/checkpoints and interrupted Range resume.
+  Header/XML integrity pinning remains a separate pending download-only decision;
+  the native CPHD operator continues to accept arbitrary valid CPHD files.
+
 - **2026-11-19 — AIVO devcontainer X11 authorization** (`deustice/aivo-fixes`, Codex):
   replacing the all-local-users grant with the current host account's
   server-interpreted `localuser` grant, matching the existing container UID

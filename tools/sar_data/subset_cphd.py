@@ -83,6 +83,13 @@ def main() -> int:
         help="subset recipe YAML (source + window knobs)",
     )
     parser.add_argument(
+        "--allow-source-origin",
+        action="append",
+        default=[],
+        metavar="ORIGIN",
+        help="explicitly trust an additional HTTP(S) server (scheme://host[:port]); repeatable",
+    )
+    parser.add_argument(
         "--source",
         type=str,
         help="local CPHD path or HTTPS URL (overrides the recipe source)",
@@ -221,6 +228,7 @@ def main() -> int:
         dry_run=args.dry_run,
         progress=True,
         progress_label=args.progress_label or str(dest),
+        allowed_source_origins=tuple(args.allow_source_origin),
     )
     if result.dry_run:
         print(f"dry-run: would write {dest} ({result.num_vectors} x {result.num_samples})")

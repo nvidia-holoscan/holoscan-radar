@@ -42,6 +42,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
+from sar_data.network import open_source_url, validate_source_url
 from sar_data.progress import DownloadProgress
 from sar_data.recipe import validate_recipe_name
 
@@ -448,9 +449,10 @@ def content_length(headers: object) -> int | None:
 
 
 def https_size(url: str) -> int | None:
+    validate_source_url(url)
     request = urllib.request.Request(url, method="HEAD")
     try:
-        with urllib.request.urlopen(request, timeout=HTTPS_TIMEOUT_S) as response:
+        with open_source_url(request, timeout=HTTPS_TIMEOUT_S) as response:
             return content_length(response.headers)
     except (OSError, urllib.error.URLError, ValueError):
         return None
@@ -488,6 +490,7 @@ def partial_path(dest: Path) -> Path:
 
 
 def download_https(url: str, dest: Path, progress: DownloadProgress) -> None:
+    validate_source_url(url)
     dest.parent.mkdir(parents=True, exist_ok=True)
     partial = partial_path(dest)
     if partial.exists():
@@ -495,7 +498,7 @@ def download_https(url: str, dest: Path, progress: DownloadProgress) -> None:
     progress.start()
     try:
         with (
-            urllib.request.urlopen(url, timeout=HTTPS_TIMEOUT_S) as response,
+            open_source_url(url, timeout=HTTPS_TIMEOUT_S) as response,
             partial.open("wb") as out,
         ):
             expected_bytes = content_length(response.headers)

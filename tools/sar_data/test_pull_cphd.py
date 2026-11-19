@@ -298,13 +298,13 @@ class DownloadCliTest(unittest.TestCase):
                         # A prior HEAD length must not override the GET length.
                         progress = pull_cphd.DownloadProgress("test", 4)
                         with (
-                            mock.patch.object(
-                                pull_cphd.urllib.request, "urlopen", return_value=response
-                            ),
+                            mock.patch.object(pull_cphd, "open_source_url", return_value=response),
                             contextlib.redirect_stderr(io.StringIO()),
                             self.assertRaisesRegex(RuntimeError, "download size mismatch"),
                         ):
-                            pull_cphd.download_https("https://example.test/collect", dest, progress)
+                            pull_cphd.download_https(
+                                pull_cphd.UMBRA_HTTPS + "collect", dest, progress
+                            )
                         if existing is None:
                             self.assertFalse(dest.exists())
                         else:
@@ -320,13 +320,11 @@ class DownloadCliTest(unittest.TestCase):
                     response = io.BytesIO(b"data")
                     response.headers = headers
                     with (
-                        mock.patch.object(
-                            pull_cphd.urllib.request, "urlopen", return_value=response
-                        ),
+                        mock.patch.object(pull_cphd, "open_source_url", return_value=response),
                         contextlib.redirect_stderr(io.StringIO()),
                     ):
                         pull_cphd.download_https(
-                            "https://example.test/collect",
+                            pull_cphd.UMBRA_HTTPS + "collect",
                             dest,
                             pull_cphd.DownloadProgress("test", None),
                         )
@@ -342,8 +340,8 @@ class DownloadCliTest(unittest.TestCase):
                 mock.patch.object(pull_cphd.shutil, "which", return_value=None),
                 mock.patch.object(pull_cphd, "https_size", return_value=None),
                 mock.patch.object(
-                    pull_cphd.urllib.request,
-                    "urlopen",
+                    pull_cphd,
+                    "open_source_url",
                     side_effect=urllib.error.HTTPError(
                         "https://example.test/missing", 404, "Not Found", {}, None
                     ),
