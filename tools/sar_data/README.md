@@ -174,7 +174,13 @@ All selected CPHD files go directly into `data/sar/`, without per-collection or
 per-workflow subdirectories. With `--app all`, `--dest` replaces that directory
 for every selected file; no subdirectory names receive special treatment.
 To fetch only Imperial Valley, use `--app continuous_strip` or `--app tiled_strip`.
-Each transfer prints byte progress, rate, and an ETA on stderr. Existing readable
+AWS, HTTPS, and subset preparation share one progress display on stderr:
+completed/total bytes, percentage, rate, elapsed time, and ETA. Unknown totals
+or estimates display `?` or `--:--`. Terminals update one line; redirected logs
+receive a fresh line every two seconds, including while waiting for I/O.
+Subset bytes count the selected signal payload (not the full source object);
+resumed bytes count toward completion but not the current transfer rate.
+Validation, skipped inputs, failures, and completion are labeled explicitly. Existing readable
 files are reused unless `--force` is set. The downloader checks that the six
 independent-image collections have distinct image reference points. These are
 multi-gigabyte downloads; inspect the manifest with `--list` before fetching.

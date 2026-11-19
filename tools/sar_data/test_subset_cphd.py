@@ -7,6 +7,8 @@ import contextlib
 import io
 import json
 import multiprocessing
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -181,7 +183,6 @@ class ResumeTest(unittest.TestCase):
                     sample_start=2,
                     num_samples=4,
                     connections=2,
-                    progress=False,
                     **options,
                 )
         finally:
@@ -407,6 +408,35 @@ class SubsetFileTest(unittest.TestCase):
                     np.testing.assert_array_equal(reader.read_pvps("Primary")["SC0"], 9.002e9)
                 self.assertTrue(subset.subset_cphd(source, dest, samples=(2, 6)).skipped)
 
+    def test_cli_reports_preparation_validation_completion_and_skip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, dest = Path(directory) / "input.cphd", Path(directory) / "out.cphd"
+            values = make_cphd(source, None)
+            command = [
+                sys.executable,
+                str(Path(__file__).with_name("subset_cphd.py")),
+                "--source",
+                str(source),
+                "--samples",
+                "2:6",
+                "--output",
+                str(dest),
+                "--progress-label",
+                "[1/1] Houston test",
+            ]
+            first = subprocess.run(command, check=True, capture_output=True, text=True)
+            self.assertIn("Subset preparation [1/1] Houston test", first.stderr)
+            self.assertIn("Validation [1/1] Houston test", first.stderr)
+            self.assertIn("192.0 B / 192.0 B | 100.0%", first.stderr)
+            self.assertIn("elapsed", first.stderr)
+            self.assertIn("ETA 00:00 | Complete", first.stderr)
+            self.assertNotIn("vec/s", first.stdout + first.stderr)
+            self.assertEqual(first.stdout, "")
+            second = subprocess.run(command, check=True, capture_output=True, text=True)
+            self.assertIn("Skipped", second.stderr)
+            with dest.open("rb") as handle, skcphd.Reader(handle) as reader:
+                np.testing.assert_array_equal(reader.read_signal("Primary"), values[:, 2:6])
+
     def test_http_failure_and_rerun_resume_through_the_public_subset_entry_point(self):
         with tempfile.TemporaryDirectory() as directory:
             source, dest = Path(directory) / "source.cphd", Path(directory) / "out.cphd"
@@ -423,7 +453,7 @@ class SubsetFileTest(unittest.TestCase):
                     state.fail_from = None
                     state.requests.clear()
                     output = io.StringIO()
-                    with contextlib.redirect_stdout(output):
+                    with contextlib.redirect_stderr(output):
                         subset.subset_cphd(url, dest, samples=(2, 6), progress=True, connections=2)
                 self.assertIn("4/6 vectors checkpointed", output.getvalue())
                 signal_reads = [start for start, _end, _etag in state.requests if start >= 8192]

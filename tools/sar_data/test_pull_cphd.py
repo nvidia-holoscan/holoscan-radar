@@ -258,6 +258,8 @@ class DownloadCliTest(unittest.TestCase):
                 str(job.recipe),
                 "--output",
                 str(job.destination),
+                "--progress-label",
+                "[1/1] Houston 1 m subset",
             ],
             check=True,
         )

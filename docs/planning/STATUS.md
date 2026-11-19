@@ -4,6 +4,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-18** — **CPHD pull progress** on `deustice/pull-script`: implemented.
+  AWS, HTTPS, and subset preparation share byte/rate/elapsed/ETA reporting,
+  terminal updates, and periodic redirected logs. All 41 offline tests pass,
+  including subprocess output, fallback, interruption/resume, and subset CLI
+  completion/skip checks. Selection, transfers, validation, placement, and
+  application presets are preserved; no public collection was downloaded.
+
 - **2026-11-18** — **CPHD subset retry/resume** on `deustice/sar-gui`: implemented.
   Retry transient HTTP responses and preserve durable, source/window-validated
   chunk checkpoints so the same download command resumes after interruption.
@@ -1409,6 +1416,7 @@ still declare SDK 4.3.0.
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| CPHD pull progress | Codex | `deustice/pull-script` | **verified locally:** shared AWS/HTTPS/subset byte, percentage, rate, elapsed, and ETA display; terminal updates and periodic log lines during waits; explicit validation, skip, failure, and completion labels. All 41 offline checks pass, including existing selection and resume regressions. Application YAMLs are unchanged. |
 | SAR missing-input CLI diagnostics | Codex | `deustice/sar-python` | **verified locally:** missing-CPHD errors show the next preparation command and documentation without a Python traceback. Terminal headings use red/bold cyan/bold; redirected output, `NO_COLOR`, and dumb terminals stay plain. Six host-only CLI checks pass; unexpected build/run errors still propagate. Native diagnostic fragment compiles and passes host-path, shell-quoting, and override checks; full applications were not rebuilt. |
 | Config-driven SAR data preparation | Codex | `deustice/sar-python` | **verified locally:** selected YAML inputs are checked against pinned dataset paths and subset recipes before downloads or directory creation. All 12 shipped presets resolve offline; 14 downloader regressions pass, including mismatches, malformed YAML, custom data roots, deduplication, and Houston recipe dispatch. Missing-file guidance prints the selected config in a shell-quoted host command. Native diagnostic fragment compiles and passes path/quoting checks; no full collections downloaded. |
 | SAR autofocus saved-image workflow | Codex | `dpc/sar-autofocus` | **verified locally:** shipped `autofocus_blurred`, `autofocus_corrected`, and `autofocus_reference` presets replace config generation and the single recovery preset. Five-step walkthrough runs all three with distinct output directories. All presets ran on Kourou: both baselines apply zero correction, corrected residual is 0.1813 rad, and the three-panel PNG renders. Pinned lint passes. |

@@ -28,14 +28,13 @@ import random
 import re
 import shutil
 import ssl
-import sys
 import tempfile
 import threading
 import time
 import urllib.parse
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -46,6 +45,7 @@ import lxml.etree
 import numpy as np
 import sarkit.cphd as skcphd
 import yaml
+from sar_data.progress import DownloadProgress
 
 # CF8 only: Houston and the CI smoke fixture are CF8, and a subband of CI4
 # is a later demo's problem (Capella / tiled strip).
@@ -804,10 +804,15 @@ def _download_signal(
                 handle.flush()
                 os.fsync(handle.fileno())
             _write_json_atomic(journal, state)
-        if stream_options["progress"] and count:
-            print(
-                f"resume {dest}: {count}/{request['num_vectors']} vectors checkpointed", flush=True
+        reporter = stream_options.get("reporter")
+        if reporter is not None:
+            reporter.phase(
+                "Subset preparation",
+                total=request["num_vectors"] * request["row_size"],
+                initial=count * request["row_size"],
             )
+            if count:
+                reporter.message(f"resuming {count}/{request['num_vectors']} vectors checkpointed")
         with part.open("r+b") as handle:
             # Drop only uncheckpointed bytes from an interrupted chunk.
             handle.truncate(dest_offset + count * request["row_size"])
@@ -836,12 +841,10 @@ def _download_signal(
                     **stream_options,
                 )
             except BaseException:
-                if stream_options["progress"]:
-                    print(
+                if reporter is not None:
+                    reporter.message(
                         f"Kept {state['written_vectors']}/{request['num_vectors']} vectors in {part}; "
-                        "rerun the same command to resume.",
-                        file=sys.stderr,
-                        flush=True,
+                        "rerun the same command to resume."
                     )
                 raise
         part.replace(dest)
@@ -880,34 +883,21 @@ def _fetch_signal(
     sample_start: int,
     num_samples: int,
     connections: int,
-    progress: bool,
     pool: ThreadPoolExecutor | None = None,
+    reporter: DownloadProgress | None = None,
 ) -> np.ndarray:
     row_bytes = orig_num_samples * _CF8_BYTES
     row_size = num_samples * _CF8_BYTES
     out = np.empty((num_vectors, num_samples), dtype=np.dtype(">c8"))
     workers = _fetch_workers(source, connections, num_vectors)
-    done = 0
-    lock = threading.Lock()
-    started = time.perf_counter()
 
     def fetch_one(index: int) -> None:
-        nonlocal done
         vector = pulse_start + index
         offset = _signal_row_offset(signal_block, channel_offset, vector, row_bytes, sample_start)
         payload = source.read(offset, row_size)
         out[index] = np.frombuffer(payload, dtype=np.dtype(">c8"))
-        if not progress:
-            return
-        with lock:
-            done += 1
-            current = done
-        if current % 2000 == 0 or current == num_vectors:
-            elapsed = max(time.perf_counter() - started, 1e-6)
-            print(
-                f"  {current}/{num_vectors} vectors ({current / elapsed:.0f} req/s)",
-                flush=True,
-            )
+        if reporter is not None:
+            reporter.add(len(payload))
 
     if workers == 1:
         for index in range(num_vectors):
@@ -937,9 +927,9 @@ def _stream_signal(
     sample_start: int,
     num_samples: int,
     connections: int,
-    progress: bool,
     start_vector: int = 0,
     checkpoint: Callable[[int, int, np.ndarray], None],
+    reporter: DownloadProgress | None = None,
 ) -> None:
     """Write CF8 rows in bounded chunks. sarkit Writer has no partial API."""
     row_size = num_samples * _CF8_BYTES
@@ -948,7 +938,6 @@ def _stream_signal(
     handle.seek(dest_offset + start_vector * row_size)
     written_bytes = start_vector * row_size
     written_vectors = start_vector
-    started = time.perf_counter()
     # Keep the same workers/connections across chunks, rather than retaining
     # another pool's sockets in HttpByteSource for every 64 MiB of the file.
     with ThreadPoolExecutor(max_workers=_fetch_workers(source, connections, num_vectors)) as pool:
@@ -964,8 +953,8 @@ def _stream_signal(
                 sample_start=sample_start,
                 num_samples=num_samples,
                 connections=connections,
-                progress=False,
                 pool=pool,
+                reporter=reporter,
             )
             payload = np.ascontiguousarray(chunk)
             payload.tofile(handle)
@@ -973,15 +962,6 @@ def _stream_signal(
             written_bytes += int(payload.nbytes)
             written_vectors += n_keep
             checkpoint(written_vectors, chunk_start, payload)
-            if progress and (
-                written_vectors % (chunk_n * 8) == 0 or written_vectors == num_vectors
-            ):
-                elapsed = max(time.perf_counter() - started, 1e-6)
-                print(
-                    f"  {written_vectors}/{num_vectors} vectors "
-                    f"({(written_vectors - start_vector) / elapsed:.0f} vec/s)",
-                    flush=True,
-                )
     if written_bytes != expected:
         raise RuntimeError(f"streamed {written_bytes} signal bytes, expected {expected}")
 
@@ -1061,6 +1041,7 @@ def subset_cphd(
     force: bool = False,
     dry_run: bool = False,
     progress: bool = False,
+    progress_label: str | None = None,
 ) -> SubsetResult:
     """Write a pulse-and/or-sample subset of ``source`` to ``dest``.
 
@@ -1068,6 +1049,38 @@ def subset_cphd(
     The CLI passes ``progress=True``. Matching partial downloads resume
     automatically; ``force`` explicitly discards their checkpoint.
     """
+    reporting = (
+        DownloadProgress(progress_label or str(dest), None, stage="Subset preparation")
+        if progress
+        else nullcontext()
+    )
+    with reporting as reporter:
+        result = _subset_cphd(
+            source,
+            dest,
+            pulses=pulses,
+            samples=samples,
+            connections=connections,
+            force=force,
+            dry_run=dry_run,
+            reporter=reporter,
+        )
+        if reporter is not None and result.skipped:
+            reporter.message("Skipped: existing subset matches source and windows")
+        return result
+
+
+def _subset_cphd(
+    source: str | Path,
+    dest: str | Path,
+    *,
+    pulses: AxisWindow | tuple[int, int] | None,
+    samples: AxisWindow | tuple[int, int] | None,
+    connections: int,
+    force: bool,
+    dry_run: bool,
+    reporter: DownloadProgress | None,
+) -> SubsetResult:
     dest = Path(dest)
     pulse_spec = as_axis_window(pulses, axis="pulses")
     sample_spec = as_axis_window(samples, axis="samples")
@@ -1111,7 +1124,13 @@ def subset_cphd(
         pvps = _apply_subband_pvps(channel_pvps[pulse_start:pulse_stop], sample_start, num_samples)
 
         request_bytes = num_vectors * num_samples * _CF8_BYTES
-        if progress or dry_run:
+        if reporter is not None:
+            reporter.message(
+                f"pulses [{pulse_start}, {pulse_stop}) of {orig_nv}; "
+                f"samples [{sample_start}, {sample_stop}) of {orig_ns}; "
+                f"{request_bytes} selected signal bytes"
+            )
+        if dry_run:
             print(
                 f"pulses  [{pulse_start}, {pulse_stop}) of {orig_nv}\n"
                 f"samples [{sample_start}, {sample_stop}) of {orig_ns}\n"
@@ -1138,11 +1157,6 @@ def subset_cphd(
                 dest, source, (pulse_start, pulse_stop), (sample_start, sample_stop)
             )
         ):
-            if progress:
-                print(
-                    f"skip {dest}: already pulses [{pulse_start}, {pulse_stop}) "
-                    f"samples [{sample_start}, {sample_stop})"
-                )
             return SubsetResult(skipped=True, **result_kw)
 
         support = _read_support_arrays(src, xmltree, kvps)
@@ -1156,6 +1170,9 @@ def subset_cphd(
             num_vectors=num_vectors,
             num_samples=num_samples,
         )
+        if reporter is not None:
+            reporter.phase("Validation")
+            reporter.message("checking subset XML")
         _validate_xmltree(xml_out)
 
         # Structured dtype conversions can leave padding bytes uninitialised.
@@ -1214,7 +1231,7 @@ def subset_cphd(
                 sample_start=sample_start,
                 num_samples=num_samples,
                 connections=connections,
-                progress=progress,
+                reporter=reporter,
             )
         return SubsetResult(skipped=False, **result_kw)
     finally:
