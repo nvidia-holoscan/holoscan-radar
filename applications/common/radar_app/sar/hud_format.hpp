@@ -37,6 +37,24 @@ inline std::string format_autofocus_status(const radar::AutofocusHudStatus& stat
   return "AF status unavailable";
 }
 
+inline std::string format_autofocus_stage(const radar::AutofocusHudStatus& status) {
+  if (status.outcome == radar::AutofocusHudOutcome::kDisabled)
+    return {};
+  switch (status.stage) {
+    case radar::AutofocusHudStage::kReceiving:
+      return "Receiving pulses";
+    case radar::AutofocusHudStage::kFormingAuxiliary:
+      return "Forming autofocus image";
+    case radar::AutofocusHudStage::kEstimating:
+      return "Estimating correction";
+    case radar::AutofocusHudStage::kFormingFinal:
+      return "Forming final image";
+    case radar::AutofocusHudStage::kReady:
+      return "Image ready";
+  }
+  return {};
+}
+
 inline std::string format_seconds(double seconds) {
   if (!std::isfinite(seconds) || seconds < 0.0)
     return "0ms";

@@ -329,58 +329,60 @@ struct SarGraphRuntime {
       app::sar::OverlayConfig overlay;
       overlay.scene_names = cfg.scene_names;
       overlay.show_playback_lag = cfg.show_playback_lag;
-      overlay.diag = [hud = hud, show_lag = cfg.show_playback_lag, mosaic, scroll = cfg.scroll,
-                      parent = cfg.parent_geometry, scroll_parent = cfg.scroll_parent,
-                      geoms = cfg.collection_geometries, to_enu = cfg.transform_to_scene_enu,
-                      origin = cfg.enu_origin_ecef]() {
-        const auto snap = hud->snapshot();
-        app::sar::FormationDiag d;
-        d.bp_compute_s = snap.bp.compute_s;
-        d.collection_elapsed_s = snap.bp.collection_elapsed_s;
-        d.budget_s = snap.bp.budget_s;
-        d.budget_playback_rate = snap.bp.budget_playback_rate;
-        d.capture_time_ns = snap.bp.capture_time_ns;
-        d.pulses = snap.bp.pulses;
-        d.pixels = snap.bp.pixels;
-        d.bp_num_v = snap.bp.num_v;
-        d.bp_num_u = snap.bp.num_u;
-        d.rate_line = snap.rate_line;
-        d.emit_at = snap.bp.emit_at;
-        d.last_packet_at =
-            snap.bp.last_packet_at.has_value() ? snap.bp.last_packet_at : snap.last_packet_at;
-        if (show_lag) {
-          d.playback_valid = snap.playback.valid;
-          d.playback_paced = snap.playback.paced;
-          d.playback_behind_s = snap.playback.behind_s;
-          d.playback_target_s = snap.playback.target_s();
-          d.playback_wall_s = snap.playback.wall_s;
-        }
-        if (snap.bp.emit_at.has_value() && d.last_packet_at.has_value()) {
-          d.form_latency_s =
-              std::chrono::duration<double>(*snap.bp.emit_at - *d.last_packet_at).count();
-        }
-        const auto& apc = snap.apc;
-        if (apc.valid) {
-          const radar::SampleGeometry* g = nullptr;
-          if (mosaic && parent.is_valid()) {
-            g = &parent;
-          } else if (scroll && scroll_parent.is_valid()) {
-            g = &scroll_parent;
-          } else if (!geoms.empty()) {
-            const size_t i = static_cast<size_t>(apc.file_index) % geoms.size();
-            g = &geoms[i];
-          }
-          if (g != nullptr) {
-            const auto uv = apc_raster_uv(apc.ecef, *g, to_enu, origin);
-            if (uv.has_value()) {
-              d.apc_valid = true;
-              d.raster_u = (*uv)[0];
-              d.raster_v = (*uv)[1];
+      overlay.strip_update_metrics = cfg.scroll;
+      overlay.diag_at_capture =
+          [hud = hud, show_lag = cfg.show_playback_lag, mosaic, scroll = cfg.scroll,
+           parent = cfg.parent_geometry, scroll_parent = cfg.scroll_parent,
+           geoms = cfg.collection_geometries, to_enu = cfg.transform_to_scene_enu,
+           origin = cfg.enu_origin_ecef](int64_t capture_ns) {
+            const auto snap = hud->snapshot(capture_ns);
+            app::sar::FormationDiag d;
+            d.bp_compute_s = snap.bp.compute_s;
+            d.collection_elapsed_s = snap.bp.collection_elapsed_s;
+            d.budget_s = snap.bp.budget_s;
+            d.budget_playback_rate = snap.bp.budget_playback_rate;
+            d.capture_time_ns = snap.bp.capture_time_ns;
+            d.pulses = snap.bp.pulses;
+            d.pixels = snap.bp.pixels;
+            d.bp_num_v = snap.bp.num_v;
+            d.bp_num_u = snap.bp.num_u;
+            d.rate_line = snap.rate_line;
+            d.emit_at = snap.bp.emit_at;
+            d.last_packet_at =
+                snap.bp.last_packet_at.has_value() ? snap.bp.last_packet_at : snap.last_packet_at;
+            if (show_lag) {
+              d.playback_valid = snap.playback.valid;
+              d.playback_paced = snap.playback.paced;
+              d.playback_behind_s = snap.playback.behind_s;
+              d.playback_target_s = snap.playback.target_s();
+              d.playback_wall_s = snap.playback.wall_s;
             }
-          }
-        }
-        return d;
-      };
+            if (snap.bp.emit_at.has_value() && d.last_packet_at.has_value()) {
+              d.form_latency_s =
+                  std::chrono::duration<double>(*snap.bp.emit_at - *d.last_packet_at).count();
+            }
+            const auto& apc = snap.apc;
+            if (apc.valid) {
+              const radar::SampleGeometry* g = nullptr;
+              if (mosaic && parent.is_valid()) {
+                g = &parent;
+              } else if (scroll && scroll_parent.is_valid()) {
+                g = &scroll_parent;
+              } else if (!geoms.empty()) {
+                const size_t i = static_cast<size_t>(apc.file_index) % geoms.size();
+                g = &geoms[i];
+              }
+              if (g != nullptr) {
+                const auto uv = apc_raster_uv(apc.ecef, *g, to_enu, origin);
+                if (uv.has_value()) {
+                  d.apc_valid = true;
+                  d.raster_u = (*uv)[0];
+                  d.raster_v = (*uv)[1];
+                }
+              }
+            }
+            return d;
+          };
       const bool strip_fit = cfg.scroll || mosaic;
       const int64_t viz_u = (cfg.viz_crop_nu > 0) ? cfg.viz_crop_nu : viz_geometry.num_u();
       int64_t lut_side = cfg.visualize_size;

@@ -51,6 +51,8 @@ struct FormationDiag {
 
 struct OverlayConfig {
   std::function<FormationDiag()> diag;
+  std::function<FormationDiag(int64_t)> diag_at_capture;
+  bool strip_update_metrics{false};
   std::vector<std::string> scene_names;
   bool show_playback_lag{false};
   // Docked output keeps the status and image in the same timestamped canvas.
@@ -223,20 +225,24 @@ inline void write_footer_hud_rows(std::uint8_t* rows, const std::vector<std::str
     for (std::size_t end = pulses.size(); end > 3; end -= 3)
       pulses.insert(end - 3, ",");
   }
-  write(1, (dimensions.empty() ? "--" : dimensions) + " pixels  " + pulses + " pulses", 25, 14,
-        detail_color);
-  write(2, "BP work: " + format_bp_giga_work(diag.pulses, diag.pixels) + " Gpx*pulses", 45, 14,
-        rate_color);
+  write(1,
+        (dimensions.empty() ? "--" : dimensions) + " pixels" +
+            (layout.strip_update_metrics ? " (mosaic)" : "  " + pulses + " pulses"),
+        25, 14, detail_color);
+  write(2, "BP work: " + format_bp_giga_work(diag.pulses, diag.pixels) + " Gpx*pulses",
+        layout.strip_update_metrics ? 43 : 45, 14, rate_color);
   const bool timed = std::isfinite(diag.bp_compute_s) && diag.bp_compute_s > 0;
   write(3,
         "Latency: " + (timed ? format_seconds(diag.bp_compute_s) : "--") + " / " +
             format_playback_budget(diag.budget_s, diag.budget_playback_rate),
-        65, 14, rate_color);
+        layout.strip_update_metrics ? 61 : 65, 14, rate_color);
   write(4,
         "Throughput: " + format_bp_giga_throughput(diag.bp_compute_s, diag.pulses, diag.pixels) +
             " Gpx*pulses/sec",
-        85, 14, rate_color);
-  // Acquisition/elapsed progress stays in the adjacent live panel. These five
+        layout.strip_update_metrics ? 79 : 85, 14, rate_color);
+  if (layout.strip_update_metrics)
+    write(5, "Last strip update: " + pulses + " pulses", 97, 12, detail_color);
+  // Acquisition/elapsed progress stays in the adjacent live panel. These
   // rows remain frozen with the completed image; no timeline tick redraws them.
 }
 

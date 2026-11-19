@@ -4,6 +4,57 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **Autofocus GUI stages** on `deustice/sar-gui`: implemented.
+  C++ and Python report capture-stamped receiving, auxiliary BP, estimation, final
+  BP, and ready checkpoints through zero-copy application boundaries. Correction
+  outcomes remain separate; no new GPU synchronization or ETA. All 26 selected
+  CTest checks and ten autofocus Python numerical/parity checks pass. Stage names
+  and outcomes fit both footer layouts; intermediate stages may be skipped during
+  GPU stalls. Forwarded `localhost:10.0` C++/Python windows pass resize and
+  idle-close checks; settled captures show separate ready/declined rows. Full
+  repository lint passes. Native interactive presentation was not revalidated.
+
+- **2026-11-19** — **Application build scope** on `deustice/sar-gui`: implemented.
+  All 26 language manifests select narrow defaults and an application-only default
+  build target. Three configure-only regressions pass. SDK graph checks show
+  spotlight at 52 commands and SIMO at 73, excluding unrelated targets; a reused
+  broad cache retains its switches but builds only spotlight's 52 commands.
+  Python selects its provider (184 commands, including required public operators),
+  and switching back restores the C++ graph. Explicit test builds retain their
+  full operator dependencies. Module/package/wheel and explicit broad builds
+  preserve their defaults. No developer caches or user presets were reset.
+
+- **2026-11-19** — **Continuous-strip completed-update metrics** on
+  `deustice/sar-gui`: retain 64 capture-stamped BP measurements so newer work
+  cannot erase the displayed mosaic's matching compute statistics. Label mosaic
+  dimensions separately from the last strip update's pulse count and BP workload.
+  All 34 selected X11/headless/startup/layout checks and 41 Python application
+  checks pass, including C++/Python complex-product comparisons. Real forwarded
+  strip windows are captured in both languages. Native presentation is unavailable
+  on this display; its probe correctly rejects the incompatible Vulkan adapter.
+  User presets and scientific processing remain unchanged.
+
+- **2026-11-19** — **Event-anchored SAR history** on
+  `deustice/sar-gui`: retain real time spacing, ending the 20-second window at
+  the latest received/processed batch. Label the endpoints `-20s` / `Latest batch`
+  and show the relative-time caption in normal-height history. Hold geometry
+  between events and skip unchanged GPU footer frames; retain completion polling,
+  resize recovery, bounded queues and independent window closure. All 34 selected
+  GUI/startup/headless checks and the final label regressions pass. Real forwarded
+  C++/Python fixture windows remain pixel-identical across idle observations,
+  with five footer uploads and two scientific-panel uploads per run. Presets
+  and signal processing remain unchanged.
+
+- **2026-11-19** — **SAR middle-panel checkpoints** on
+  `deustice/sar-gui`: replace the countdown/running clock with stable formation
+  status, `Last completed` progress and an update-on-completion hint. Preserve
+  autofocus outcomes, the shared receipt/completion bar, scientific rendering,
+  the right history panel, scheduling and user presets. Use existing snapshots;
+  this is a presentation change, not a fix for GPU-service stalls. All 34 selected
+  GUI/startup/headless checks pass; seven final composition/layout checks also
+  cover pending autofocus and label separation. C++ and Python fixture footers
+  were captured on forwarded `localhost:10.0`. Full pinned lint passes.
+
 - **2026-11-19** — **SAR GUI synchronization experiment** on
   `deustice/sar-gui`: retain the packet-cleanup fix, retiring completed retained
   storage before replay publication while preserving output ownership and stamps.
@@ -19,18 +70,6 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   `localhost:10.0` completes a real run with observed frame delivery and a
   bit-exact image; long footer pauses remain. Native interactive presentation
   remains unverified.
-
-
-- **2026-11-19** — **Application build scope** on `deustice/sar-gui`: implemented.
-  All 26 language manifests select narrow defaults and an application-only default
-  build target. Three configure-only regressions pass. SDK graph checks show
-  spotlight at 52 commands and SIMO at 73, excluding unrelated targets; a reused
-  broad cache retains its switches but builds only spotlight's 52 commands.
-  Python selects its provider (184 commands, including required public operators),
-  and switching back restores the C++ graph. Explicit test builds retain their
-  full operator dependencies. Module/package/wheel and explicit broad builds
-  preserve their defaults. No developer caches or user presets were reset.
-
 
 - **2026-11-19** — **SAR GUI checkpoint verification**: 174 of 175 selected
   CTests passed initially; update the stale footer assertion to require all five

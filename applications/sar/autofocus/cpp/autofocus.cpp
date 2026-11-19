@@ -14,6 +14,7 @@
 
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/sar/coordinate_ops.hpp"
+#include "radar_app/sar/autofocus_stage_op.hpp"
 #include "radar_app/sar/graph_driver.hpp"
 #include "aux_points_op.hpp"        // NOLINT(build/include_subdir)
 #include "config.hpp"               // NOLINT(build/include_subdir)
@@ -135,6 +136,11 @@ int main(int argc, char** argv) {
       graph.add_flow(*src_reference, manager->reference_position, queue);
     }
 
+    const auto stage = [&](const char* name, radar::AutofocusHudStage value) {
+      auto op = graph.template op<app::sar::AutofocusStageOp>(name, hud, value);
+      bind_outputs(options, name, {"output"});
+      return op;
+    };
     auto estimate = graph.partition("estimate");
     if (pe.oracle) {
       // Skip the estimator and feed PhaseCorrectionOp the exact phase the
@@ -173,6 +179,11 @@ int main(int argc, char** argv) {
       aux_bp.set_params(std::move(aux_params));
       bind_outputs(options, "aux_bp", {"image"});
 
+      auto auxiliary_stage = stage("af_aux_stage", radar::AutofocusHudStage::kFormingAuxiliary);
+      estimate.add(auxiliary_stage);
+      graph.add_flow(manager->range_profiles_out, auxiliary_stage->input, replay);
+      auto estimator_stage = stage("af_estimator_stage", radar::AutofocusHudStage::kEstimating);
+
       // A polar aux is not a SampleGeometry, so it rides sample_points.
       // The source sits in series on the replay edge so the lattice and the
       // profiles leave one producer on one tick; a trigger-only tap races
@@ -181,12 +192,12 @@ int main(int argc, char** argv) {
         auto aux_points =
             graph.template op<app::sar::AuxPointsSourceOp>("aux_points", extras->aux_polar_lattice);
         bind_outputs(options, "aux_points", {"range_profiles_out", "sample_points"});
-        graph.add_flow(manager->range_profiles_out, aux_points->range_profiles, replay);
+        graph.add_flow(auxiliary_stage->output, aux_points->range_profiles, replay);
         graph.add_flow(aux_points->range_profiles_out, aux_bp->range_profiles, replay);
         graph.add_flow(aux_points->sample_points, aux_bp->sample_points, replay);
         estimate.add(aux_points);
       } else {
-        graph.add_flow(manager->range_profiles_out, aux_bp->range_profiles, replay);
+        graph.add_flow(auxiliary_stage->output, aux_bp->range_profiles, replay);
       }
 
       // PGA's first window is a fraction of the azimuth extent. On a
@@ -234,14 +245,15 @@ int main(int argc, char** argv) {
       if (cfg.wire_weight) {
         graph.add_flow(manager->weight, aux_bp->weight, queue);
       }
-      graph.add_flow(aux_bp->image, af->image, queue);
+      graph.add_flow(aux_bp->image, estimator_stage->input, queue);
+      graph.add_flow(estimator_stage->output, af->image, queue);
       graph.add_flow(af->image_out, af_drain->input, queue);
       graph.add_flow(af->sharpness, sharp->sharpness, queue);
       graph.add_flow(af->termination, sharp->termination, queue);
       graph.add_flow(af->iterations, sharp->iterations, queue);
       graph.add_flow(af->phase_correction, resample->phase_correction, queue);
       graph.add_flow(resample->phase_correction_out, pc->phase_correction, queue);
-      estimate.add(aux_bp).add(af).add(resample).add(af_drain);
+      estimate.add(aux_bp).add(estimator_stage).add(af).add(resample).add(af_drain);
       // Each authored partition is one directed chain, and `estimate`
       // already ends at the resampler, so the sharpness tap is its own.
       graph.partition("sharpness").add(sharp);
@@ -274,7 +286,9 @@ int main(int argc, char** argv) {
 
     // --- correct the same replayed pulses and form the product
     graph.add_flow(manager->range_profiles_out, pc->range_profiles_in, replay);
-    graph.add_flow(pc->range_profiles_out, bp->range_profiles, replay);
+    auto final_stage = stage("af_final_stage", radar::AutofocusHudStage::kFormingFinal);
+    graph.add_flow(pc->range_profiles_out, final_stage->input, replay);
+    graph.add_flow(final_stage->output, bp->range_profiles, replay);
     graph.add_flow(manager->positions_out, bp->positions, queue);
     graph.add_flow(manager->reference_position_out, bp->reference_position, queue);
     graph.add_flow(manager->control_out, bp->control, queue);
@@ -284,7 +298,7 @@ int main(int argc, char** argv) {
 
     // Each authored partition must be a single directed chain, so the
     // correction sits apart from the product formation it feeds.
-    graph.partition("correction").add(pc);
+    graph.partition("correction").add(pc).add(final_stage);
     return &bp->image;
   };
   return run_sar_graph_app(argc, argv, "autofocus", load, build);

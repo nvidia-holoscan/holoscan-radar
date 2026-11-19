@@ -286,8 +286,9 @@ def check(args):
                             > 8
                         )
                 if x11_dock and not args.soak_seconds:
-                    # With the source at EOF, timeline ticks must neither upload
-                    # nor repaint the cached image panel, even though time advances.
+                    # With the source at EOF and the resize settled, neither
+                    # cached surface needs a new upload. Window events/closure
+                    # remain serviced independently of the held event history.
                     def counters(window):
                         return property_pair(window, b"RADAR_PRESENTATION_COUNTERS")
 
@@ -300,8 +301,8 @@ def check(args):
                         counters(image_panel) == before_image
                     ), "Timeline repainted/uploaded SAR image"
                     assert (
-                        counters(timeline)[0] > before_timeline[0]
-                    ), "Timeline stopped at image EOF"
+                        counters(timeline)[0] == before_timeline[0]
+                    ), "Idle timeline uploaded a duplicate GPU footer at EOF"
                 # Read through a separate descriptor. Seeking the writer's
                 # descriptor also moves the child's stdout offset and can
                 # overwrite startup diagnostics during a busy looping run.

@@ -24,6 +24,7 @@
 
 #include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/sar/hud_format.hpp"
+#include "radar_app/sar/autofocus_stage_op.hpp"
 #include "radar_app/sar/sar_image_viz.hpp"
 #include "radar_app/sar/sar_overlay.hpp"
 #include "radar_app/sar/timeline_raster.hpp"
@@ -150,29 +151,56 @@ TEST(SarTimeline, ShowsSeparateSourceBatchReceiptAndCompletedProcessingLanes) {
   hud->enable_progress(0, 20);
   auto monitor = hud->progress();
   monitor->begin_packet(1, 0, 0, 20, 100, 10, 1, true);
-  monitor->received(1);
+  const auto receipt = std::chrono::steady_clock::now() - std::chrono::seconds{35};
+  monitor->received(1, receipt);
   monitor->admit(1, 20, false, true);
   const auto work = monitor->take_work(1);
   ASSERT_TRUE(work);
-  monitor->processed(*work, std::chrono::steady_clock::now());
+  monitor->processed(*work, receipt + std::chrono::seconds{5});
+  auto viewport =
+      std::make_shared<holoscan::radar::app::viz::FrameViewport>(width, height, width, height);
   auto harness = holoscan::testing::create_operator_test<sar::TimelineRasterOp>(
-      hud, std::vector<std::string>{"Panama Canal"}, false, 10.0, width, height);
+      hud, std::vector<std::string>{"Panama Canal"}, false, 10.0, width, height,
+      std::shared_ptr<holoscan::radar::app::FrameProgress>{}, viewport);
   harness.output_device("frame", holoscan::DeviceId{holoscan::radar::app::application_device()});
-  harness.capture_snapshot<holoscan::schema::ImageT>("frame", 1U, width * height * 4);
-  harness.capture_snapshot<holoscan::Tensor>("labels", 1U, 65536U);
+  harness.capture_snapshot<holoscan::schema::ImageT>("frame", 4U, width * height * 4);
+  harness.capture_snapshot<holoscan::Tensor>("labels", 4U, 65536U);
   testing::FixtureCompletion completion;
   auto running = harness.run_async(completion.run_options());
   const bool frame_ready = completion.wait_for_output(running, "frame", 1U);
   const bool text_ready = completion.wait_for_output(running, "labels", 1U);
+  // History older than 20 seconds of wall time stays visible, and idle clock
+  // ticks do not allocate/emit identical GPU frames. Both event kinds advance it.
+  const bool idle_frame = running.wait_for_output("frame", 2U, std::chrono::milliseconds{250});
+  monitor->begin_packet(2, 0, 20, 20, 100, 10, 1, false);
+  monitor->received(2, receipt + std::chrono::seconds{10});
+  const bool receipt_frame = completion.wait_for_output(running, "frame", 2U) &&
+                             completion.wait_for_output(running, "labels", 2U);
+  monitor->admit(2, 20, false, true);
+  const auto second_work = monitor->take_work(2);
+  if (second_work)
+    monitor->processed(*second_work, receipt + std::chrono::seconds{15});
+  const bool completed_frame = completion.wait_for_output(running, "frame", 3U) &&
+                               completion.wait_for_output(running, "labels", 3U);
+  viewport->set(width - 32, height);
+  const bool resized_frame = completion.wait_for_output(running, "frame", 4U) &&
+                             completion.wait_for_output(running, "labels", 4U);
+  const bool after_resize = running.wait_for_output("frame", 5U, std::chrono::milliseconds{1200});
   running.request_stop();
   const auto result = running.finish();
   completion.check(result);
+  EXPECT_FALSE(idle_frame);
+  EXPECT_FALSE(after_resize);
+  ASSERT_TRUE(receipt_frame);
+  ASSERT_TRUE(second_work);
+  ASSERT_TRUE(completed_frame);
+  ASSERT_TRUE(resized_frame);
   ASSERT_TRUE(frame_ready);
   ASSERT_TRUE(text_ready);
   ASSERT_TRUE(result.ok()) << result.describe_failure();
-  const auto frame = result.snapshot<holoscan::schema::ImageT>("frame");
+  const auto frame = result.snapshots<holoscan::schema::ImageT>("frame").front();
   const auto pixels = testing::to_host(frame.tensor(holoscan::schema::ImageTensorFields::data));
-  const auto records = testing::to_host(result.snapshot<holoscan::Tensor>("labels"));
+  const auto records = testing::to_host(result.snapshots<holoscan::Tensor>("labels").front());
   bool received = false, processed = false;
   for (int64_t row = 0; row < records.shape[0]; ++row) {
     const auto* record = records.as<std::uint8_t>() + row * records.shape[1];
@@ -269,14 +297,15 @@ TEST(SarTimeline, DrawsMatchedDiagonalsWithoutFillAndPlacesLargerLabelsOutsideTr
         const auto* pixel = pixels.as<std::uint8_t>() + 4 * (processed_y * width + x);
         green_on_track += pixel[0] == 115 && pixel[1] == 200 && pixel[2] == 150;
       }
-      EXPECT_EQ(green_on_track, completed ? 3 : 0);
+      EXPECT_EQ(green_on_track, completed ? 2 : 0);
       const auto* at_now =
           pixels.as<std::uint8_t>() + 4 * (((received_y + processed_y) / 2) * width + width - 9);
       EXPECT_EQ(at_now[0], 0);
       EXPECT_EQ(at_now[1], 0);
       EXPECT_EQ(at_now[2], 0);
       std::optional<holoscan::visualization::TextRunHeader> received_label, processed_label;
-      std::optional<holoscan::visualization::TextRunHeader> past_label, now_label;
+      std::optional<holoscan::visualization::TextRunHeader> past_label, latest_label;
+      bool relative_caption = false;
       for (int64_t row = 0; row < records.shape[0]; ++row) {
         const auto* record = records.as<std::uint8_t>() + row * records.shape[1];
         const std::string text{reinterpret_cast<const char*>(record + sar::kTextRunHeaderBytes)};
@@ -286,29 +315,33 @@ TEST(SarTimeline, DrawsMatchedDiagonalsWithoutFillAndPlacesLargerLabelsOutsideTr
           received_label = header;
         else if (text == "Pulse batch processed")
           processed_label = header;
-        else if (text == "20s")
+        else if (text == "-20s")
           past_label = header;
-        else if (text == "Now")
-          now_label = header;
+        else if (text == "Latest batch")
+          latest_label = header;
+        else if (text == "Time relative to last batch update")
+          relative_caption = true;
+        EXPECT_NE(text, "Now");
       }
       ASSERT_TRUE(received_label);
       ASSERT_TRUE(processed_label);
       ASSERT_TRUE(past_label);
-      ASSERT_TRUE(now_label);
+      ASSERT_TRUE(latest_label);
+      EXPECT_EQ(relative_caption, !compact);
       const int font = compact ? 14 : 16;
       EXPECT_EQ(received_label->size_px, font);
       EXPECT_EQ(processed_label->size_px, font);
       EXPECT_EQ(past_label->size_px, font);
-      EXPECT_EQ(now_label->size_px, font);
+      EXPECT_EQ(latest_label->size_px, font);
       EXPECT_LT(received_label->y + font, received_y);
       EXPECT_GT(processed_label->y, processed_y + 2);
-      EXPECT_EQ(past_label->y, now_label->y);
+      EXPECT_EQ(past_label->y, latest_label->y);
       EXPECT_GT(past_label->y, received_y);
       EXPECT_LT(past_label->y + font, processed_y);
       const int advance = font * 7 / 13;
-      EXPECT_LT(past_label->x + 3 * advance, history_x + (compact ? 40 : 64));
-      EXPECT_GT(now_label->x, width - (compact ? 40 : 64));
-      EXPECT_LE(now_label->x + 3 * advance, width - 8);
+      EXPECT_LT(past_label->x + 4 * advance, history_x + (compact ? 40 : 64));
+      EXPECT_GT(latest_label->x, width - 16 - 12 * font * 7.0 / 13);
+      EXPECT_LE(latest_label->x + 12 * advance, width - 8);
       if (scenario == 1) {
         // Compare actual native-rendered pixels for the common "Pulse batch "
         // prefix, independently of the distinct words' ascenders/descenders.
@@ -371,7 +404,9 @@ TEST(SarFooterTiming, MatchesProcessingCostToImageCaptureInEventAndClockedPaths)
   const auto image = testing::to_device_tensor(std::vector<std::complex<float>>(16, {1, 0}), {4, 4},
                                                DLDataType{kDLComplex, 64U, 1U});
   for (const bool clocked : {false, true}) {
-    for (const bool matching : {true, false}) {
+    for (const int mode : {0, 1, 2}) {
+      const bool matching = mode != 1;
+      SCOPED_TRACE(mode);
       SCOPED_TRACE(clocked);
       SCOPED_TRACE(matching);
       sar::OverlayConfig layout;
@@ -391,6 +426,29 @@ TEST(SarFooterTiming, MatchesProcessingCostToImageCaptureInEventAndClockedPaths)
         diag.pixels = 315700000;
         return diag;
       };
+      if (mode == 2) {
+        auto hud = std::make_shared<holoscan::radar::FormationHud>();
+        const auto expected = layout.diag();
+        hud->publish_bp({.capture_time_ns = 123000000,
+                         .compute_s = expected.bp_compute_s,
+                         .budget_s = expected.budget_s,
+                         .budget_playback_rate = expected.budget_playback_rate,
+                         .pulses = expected.pulses,
+                         .pixels = expected.pixels});
+        // A later formation completes before the older mosaic reaches display.
+        hud->publish_bp({.capture_time_ns = 124000000, .compute_s = 99, .pulses = 42});
+        layout.diag_at_capture = [hud](int64_t stamp) {
+          const auto bp = hud->snapshot(stamp).bp;
+          sar::FormationDiag diag;
+          diag.capture_time_ns = bp.capture_time_ns;
+          diag.bp_compute_s = bp.compute_s;
+          diag.budget_s = bp.budget_s;
+          diag.budget_playback_rate = bp.budget_playback_rate;
+          diag.pulses = bp.pulses;
+          diag.pixels = bp.pixels;
+          return diag;
+        };
+      }
       auto harness = holoscan::testing::create_operator_test<sar::SarImageVizOp>(
           4, 4, 320, false, layout, std::array<int64_t, 2>{0, 0}, 60.0, std::function<bool()>{},
           clocked);
@@ -448,8 +506,48 @@ TEST(SarFooterTiming, MatchesProcessingCostToImageCaptureInEventAndClockedPaths)
   }
 }
 
-TEST(SarTimeline, ShowsLivePulseProgressAtWideAndCompactSizes) {
-  const std::array<std::array<int, 2>, 4> frontiers{{{0, 0}, {20, 40}, {40, 40}, {100, 100}}};
+TEST(SarFooterTiming, BoundsCompletedMeasurementHistoryAndNeverSubstitutesNewerWork) {
+  holoscan::radar::FormationHud hud;
+  for (int64_t stamp = 1; stamp <= 65; ++stamp)
+    hud.publish_bp({.capture_time_ns = stamp, .pulses = stamp * 10});
+  EXPECT_EQ(hud.snapshot().bp.capture_time_ns, 65);
+  EXPECT_EQ(hud.snapshot(2).bp.pulses, 20);
+  EXPECT_EQ(hud.snapshot(65).bp.pulses, 650);
+  EXPECT_EQ(hud.snapshot(1).bp.pulses, 0);  // Evicted, never replaced with stamp 65.
+  EXPECT_EQ(hud.snapshot(66).bp.pulses, 0);
+}
+
+TEST(SarFooterTiming, SeparatesMosaicExtentFromLastStripUpdateWorkload) {
+  sar::OverlayConfig layout;
+  layout.canvas_width = 1400;
+  layout.image_height = 200;
+  layout.footer_height = 112;
+  layout.status_width = 400;
+  layout.strip_update_metrics = true;
+  sar::FormationDiag diag;
+  diag.pulses = 256;
+  diag.pixels = 1000000;
+  diag.bp_compute_s = 0.5;
+  std::vector<std::uint8_t> rows(sar::kHudRuns * sar::kHudRowBytes);
+  sar::write_footer_hud_rows(rows.data(), {"Imperial Valley  40247x6029"}, diag, false, layout);
+  const auto text = [&](int index) {
+    return reinterpret_cast<const char*>(rows.data() + index * sar::kHudRowBytes +
+                                         sar::kTextRunHeaderBytes);
+  };
+  EXPECT_STREQ(text(1), "40247x6029 pixels (mosaic)");
+  EXPECT_STREQ(text(2), "BP work: 0.3 Gpx*pulses");
+  EXPECT_STREQ(text(5), "Last strip update: 256 pulses");
+  for (std::size_t i = 0; i < sar::kHudRuns; ++i) {
+    holoscan::visualization::TextRunHeader header;
+    std::memcpy(&header, rows.data() + i * sar::kHudRowBytes, sizeof(header));
+    EXPECT_LE(header.y * (layout.image_height + layout.footer_height) + header.size_px,
+              layout.image_height + layout.footer_height);
+  }
+}
+
+TEST(SarTimeline, ShowsCheckpointProgressAtWideAndCompactSizes) {
+  const std::array<std::array<int, 2>, 5> frontiers{
+      {{0, 0}, {20, 40}, {40, 40}, {0, 100}, {100, 100}}};
   for (const auto& counts : frontiers) {
     const auto formed_count = counts[0], received_count = counts[1];
     SCOPED_TRACE(formed_count);
@@ -458,6 +556,10 @@ TEST(SarTimeline, ShowsLivePulseProgressAtWideAndCompactSizes) {
       SCOPED_TRACE(width);
       constexpr int height = 112;
       auto hud = std::make_shared<holoscan::radar::FormationHud>();
+      // Full receipt does not prove a processing boundary was reached. Until
+      // a real stage notification arrives, autofocus remains at receiving.
+      if (formed_count == 0 && received_count == 100)
+        hud->enable_autofocus();
       hud->enable_progress(0, 40);
       auto monitor = hud->progress();
       monitor->begin_packet(1, 1, 0, std::max(1, received_count), 100, 99, 0.1, true);
@@ -497,31 +599,44 @@ TEST(SarTimeline, ShowsLivePulseProgressAtWideAndCompactSizes) {
       const auto pixels = testing::to_host(frame.tensor(holoscan::schema::ImageTensorFields::data));
       EXPECT_EQ(pixels.shape, (std::vector<int64_t>{height, width, 4}));
       const auto records = testing::to_host(result.snapshot<holoscan::Tensor>("labels"));
-      bool received = false, formed = false, eta = false, total_time = false, next = false;
+      bool received = false, formed = false, stage = false, update_hint = false, next = false;
       bool workload = false;
-      float eta_size = 0, count_size = 0, eta_y = 0, title_y = 0, title_size = 0;
+      float stage_size = 0, count_size = 0, stage_y = 0, title_y = 0, title_size = 0;
+      float completed_right = 0, receipt_x = 0;
       for (int64_t row = 0; row < records.shape[0]; ++row) {
         const auto* record = records.as<std::uint8_t>() + row * records.shape[1];
         const auto* text = reinterpret_cast<const char*>(record + sar::kTextRunHeaderBytes);
         received = received || text == "Received " + std::to_string(received_count) + "%";
-        formed = formed || text == "Formed " + std::to_string(formed_count) + "%";
+        formed = formed || text == "Last completed " + std::to_string(formed_count) + "%";
         const bool image_title = std::strncmp(text, "Bingham", 7) == 0;
         next = next || image_title;
         holoscan::visualization::TextRunHeader header;
         std::memcpy(&header, record, sizeof(header));
-        if (std::strncmp(text, "Next image", 10) == 0 || std::strncmp(text, "ETA ", 4) == 0 ||
+        if (std::strncmp(text, "Last completed ", 15) == 0)
+          completed_right = header.x + std::strlen(text) * header.size_px * 0.6F;
+        if (std::strncmp(text, "Received ", 9) == 0)
+          receipt_x = header.x;
+        EXPECT_NE(std::strncmp(text, "Next image", 10), 0);
+        EXPECT_NE(std::strncmp(text, "ETA ", 4), 0);
+        EXPECT_NE(std::strncmp(text, "Total time ", 11), 0);
+        if (std::strcmp(text, "Forming image") == 0 || std::strcmp(text, "Receiving pulses") == 0 ||
             std::strcmp(text, "Image ready") == 0) {
-          eta = true;
-          eta_size = header.size_px;
-          eta_y = header.y;
+          stage = true;
+          stage_size = header.size_px;
+          stage_y = header.y;
+          EXPECT_STREQ(text, formed_count == 100                          ? "Image ready"
+                             : formed_count == 0 && received_count == 100 ? "Receiving pulses"
+                             : received_count > 0                         ? "Forming image"
+                                                                          : "Receiving pulses");
         }
         if (image_title) {
           title_y = header.y;
           title_size = header.size_px;
         }
         EXPECT_NE(std::strncmp(text, "Elapsed ", 8), 0);
-        if (std::strncmp(text, "Total time ", 11) == 0)
-          total_time = true;
+        if (std::strcmp(text, "Updates on completion") == 0 ||
+            std::strcmp(text, "Last reported stage") == 0)
+          update_hint = true;
         if (std::strncmp(text, "BP work: ", 9) == 0) {
           workload = true;
           EXPECT_EQ(header.size_px, 14);
@@ -533,17 +648,20 @@ TEST(SarTimeline, ShowsLivePulseProgressAtWideAndCompactSizes) {
       }
       EXPECT_TRUE(received);
       EXPECT_TRUE(formed);
-      EXPECT_TRUE(eta);
-      EXPECT_TRUE(total_time);
+      EXPECT_TRUE(stage);
+      if (!(width < 620 && formed_count == 0 && received_count == 100))
+        EXPECT_TRUE(update_hint);
+      EXPECT_GE(receipt_x, completed_right + 6);
       EXPECT_TRUE(workload);
       EXPECT_TRUE(next);
-      EXPECT_GE(title_y, eta_y + eta_size);
+      EXPECT_GE(title_y, stage_y + stage_size);
       EXPECT_EQ(title_size, 14);
       if (width >= 620)
-        EXPECT_GT(eta_size, count_size);
+        EXPECT_GT(stage_size, count_size);
       const int bar_width = width < 620 ? width - 16 : 248;
-      const int bar_y = width < 620 ? 46 : 82;
-      const int bar_height = width < 620 ? 4 : 6;
+      const bool compact_autofocus = width < 620 && formed_count == 0 && received_count == 100;
+      const int bar_y = width < 620 ? (compact_autofocus ? 53 : 46) : 82;
+      const int bar_height = width < 620 ? (compact_autofocus ? 3 : 4) : 6;
       const int filled = bar_width * formed_count / 100;
       const int marker = std::min(bar_width * received_count / 100, bar_width - 2);
       int cyan = 0, green = 0;
@@ -560,7 +678,8 @@ TEST(SarTimeline, ShowsLivePulseProgressAtWideAndCompactSizes) {
         }
         green += rgba[0] == 115 && rgba[1] == 200 && rgba[2] == 150;
       }
-      EXPECT_EQ(cyan, 2 * (bar_height + 4)) << "Received is a visible marker on the same track";
+      EXPECT_EQ(cyan, 2 * (bar_height + (compact_autofocus ? 2 : 4)))
+          << "Received is a visible marker on the same track";
       const int overlap = std::max(0, std::min(filled, marker + 2) - marker);
       EXPECT_EQ(green, (filled - overlap) * bar_height)
           << "Fill tracks GPU completion; marker remains visible when both frontiers meet";
@@ -698,3 +817,114 @@ TEST(SarAutofocusStatus, TimelineShowsOutcomeAndDeclineWarningInBothLayouts) {
     }
   }
 }
+
+namespace {
+TEST(SarAutofocusStages, RetainsOrderingOutcomeAndCollectionCoherence) {
+  using Stage = holoscan::radar::AutofocusHudStage;
+  using Reason = holoscan::radar::AutofocusTermination;
+  holoscan::radar::FormationHud hud;
+  hud.publish_autofocus_stage(Stage::kEstimating, 110);
+  EXPECT_TRUE(sar::format_autofocus_stage(hud.snapshot().autofocus).empty());
+  hud.enable_autofocus();
+  const auto now = std::chrono::steady_clock::now();
+  hud.publish_reader({{.dwell_start = now}}, {}, {}, {}, false, 100);
+  EXPECT_EQ(sar::format_autofocus_stage(hud.snapshot().autofocus), "Receiving pulses");
+  hud.publish_autofocus_stage(Stage::kFormingAuxiliary, 110);
+  EXPECT_EQ(sar::format_autofocus_stage(hud.snapshot().autofocus), "Forming autofocus image");
+  hud.publish_autofocus_stage(Stage::kEstimating, 110);
+  hud.publish_autofocus_stage(Stage::kFormingAuxiliary, 110);
+  EXPECT_EQ(sar::format_autofocus_stage(hud.snapshot().autofocus), "Estimating correction");
+  hud.publish_autofocus(static_cast<int32_t>(Reason::kRefusedSharpness), 0, 110);
+  EXPECT_EQ(hud.snapshot().autofocus.stage, Stage::kEstimating);
+  hud.publish_autofocus_stage(Stage::kFormingFinal, 110);
+  hud.publish_bp({.capture_time_ns = 110, .emit_at = now});
+  EXPECT_EQ(sar::format_autofocus_stage(hud.snapshot().autofocus), "Image ready");
+  hud.publish_autofocus(static_cast<int32_t>(Reason::kRefusedSharpness), 0, 110);
+  EXPECT_EQ(hud.snapshot().autofocus.stage, Stage::kReady);
+  EXPECT_EQ(sar::format_autofocus_status(hud.snapshot().autofocus, true, true),
+            "Correction declined");
+  hud.publish_reader({{.dwell_start = now + std::chrono::seconds(1)}}, {}, {}, {}, false, 200);
+  hud.publish_autofocus_stage(Stage::kReady, 110);
+  EXPECT_EQ(hud.snapshot().autofocus.stage, Stage::kReceiving);
+  EXPECT_EQ(hud.snapshot().autofocus.stage_capture_ns, 200);
+}
+
+TEST(SarAutofocusStages, ForwardsTensorContentsAndCaptureStamp) {
+  auto hud = std::make_shared<holoscan::radar::FormationHud>();
+  hud->enable_autofocus();
+  const auto tensor = testing::to_device_tensor(std::vector<float>{1, 2, 3, 4}, {2, 2},
+                                                DLDataType{kDLFloat, 32U, 1U});
+  auto harness = holoscan::testing::create_operator_test<sar::AutofocusStageOp>(
+      hud, holoscan::radar::AutofocusHudStage::kEstimating);
+  harness.push_frame(frame_at(std::chrono::milliseconds{123}, input("input", *tensor)));
+  const holoscan::DeviceId device{holoscan::radar::app::application_device()};
+  harness.input_source_device("input", device);
+  harness.output_device("output", device);
+  harness.capture_snapshot<holoscan::Tensor>("output", 1U, 4U * sizeof(float));
+  testing::FixtureCompletion completion;
+  auto running = harness.run_async(completion.run_options());
+  const bool ready = completion.wait_for_output(running, "output", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(ready);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto samples = result.snapshots<holoscan::Tensor>("output");
+  ASSERT_EQ(samples.size(), 1U);
+  EXPECT_EQ(samples[0].sample_metadata().capture_time().timestamp_ns, 123000000);
+  EXPECT_EQ(hud->snapshot().autofocus.stage_capture_ns, 123000000);
+  const auto values = testing::to_host(samples[0]);
+  EXPECT_FLOAT_EQ(values.as<float>()[3], 4);
+}
+
+TEST(SarAutofocusStages, FullStageNamesFitAndOutcomeIsASeparateRow) {
+  using Stage = holoscan::radar::AutofocusHudStage;
+  for (const auto stage : {Stage::kReceiving, Stage::kFormingAuxiliary, Stage::kEstimating,
+                           Stage::kFormingFinal, Stage::kReady}) {
+    for (const int width : {320, 704}) {
+      auto hud = std::make_shared<holoscan::radar::FormationHud>();
+      hud->enable_autofocus();
+      hud->enable_progress(0, 10);
+      hud->publish_autofocus_stage(stage, 123);
+      hud->publish_autofocus(
+          static_cast<int32_t>(holoscan::radar::AutofocusTermination::kConverged), 1, 123);
+      const auto expected = sar::format_autofocus_stage(hud->snapshot().autofocus);
+      auto harness = holoscan::testing::create_operator_test<sar::TimelineRasterOp>(
+          hud, std::vector<std::string>{"Kourou"}, false, 10.0, width, 112);
+      harness.output_device("frame",
+                            holoscan::DeviceId{holoscan::radar::app::application_device()});
+      harness.capture_snapshot<holoscan::schema::ImageT>("frame", 1U, width * 112 * 4);
+      harness.capture_snapshot<holoscan::Tensor>("labels", 1U, 65536U);
+      testing::FixtureCompletion completion;
+      auto running = harness.run_async(completion.run_options());
+      const bool ready = completion.wait_for_output(running, "labels", 1U);
+      running.request_stop();
+      const auto result = running.finish();
+      completion.check(result);
+      ASSERT_TRUE(ready);
+      ASSERT_TRUE(result.ok()) << result.describe_failure();
+      const auto records = testing::to_host(result.snapshot<holoscan::Tensor>("labels"));
+      bool found_stage = false, found_outcome = false;
+      float stage_y = 0, outcome_y = 0;
+      for (int64_t i = 0; i < records.shape[0]; ++i) {
+        const auto* record = records.as<std::uint8_t>() + i * records.shape[1];
+        const auto* text = reinterpret_cast<const char*>(record + sar::kTextRunHeaderBytes);
+        holoscan::visualization::TextRunHeader header;
+        std::memcpy(&header, record, sizeof(header));
+        if (text == expected) {
+          found_stage = true;
+          stage_y = header.y;
+        }
+        if (std::strcmp(text, "Correction accepted") == 0) {
+          found_outcome = true;
+          outcome_y = header.y;
+        }
+      }
+      EXPECT_TRUE(found_stage) << expected << " at width " << width;
+      EXPECT_TRUE(found_outcome);
+      EXPECT_GT(outcome_y, stage_y);
+    }
+  }
+}
+
+}  // namespace

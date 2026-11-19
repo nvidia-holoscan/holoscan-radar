@@ -393,24 +393,29 @@ The image canvas keeps its configured resolution; initial
 window height adds the timeline height. On resize, the footer stays 112 physical
 pixels high by default and the image uses the remaining height. Very short
 windows clamp the footer to half the available height. The image honors
-`resize_mode`; the timeline fills its footer region independently and updates
+`resize_mode`; the timeline fills its footer region independently and polls for batch events
 at 10 Hz by default. Status text updates only with its associated SAR image.
 
 While forming, the independent progress panel shows the forming image's title
-and emphasizes the next-image ETA. A shared track uses green fill for Formed
-(GPU-completed pulses) and a thin cyan marker for Received. Both percentages
-sit above the track, with collection wall time labeled `Total time` below. The marker remains
-visible when the frontiers meet, including at zero and completion.
-The title has no prefix; the ETA line shows `Image ready` on completion. These
-readouts refresh at 1 Hz; the timeline still refreshes independently at 10 Hz.
+under a stable checkpoint: `Receiving pulses`, `Forming image`, or `Image ready`.
+Accepted/declined autofocus outcomes remain visible; a pending autofocus result
+uses `Forming image` because the diagnostics do not distinguish auxiliary BP from
+estimation. The panel labels green GPU-completed progress `Last completed` and
+keeps the cyan Received marker and percentage on the same track. The marker
+remains visible when the frontiers meet, including at zero and completion.
+`Updates on completion` replaces the running collection clock; there is no
+next-image countdown. These readouts use existing snapshots at batch events and otherwise at 1 Hz;
+the timeline polls for completions at up to 10 Hz. GPU work can delay either presentation;
+the checkpoint is not a heartbeat or a promise of immediate phase updates.
+The right-hand time history advances only at batch events, as described below.
 The current-image `BP work` line uses its known processing grid and expected
 pulse count; replayed apertures count their retained pulses, while incremental
 formation counts the current update. Unknown grids show `--`, never another
-image's work. This diagnostic needs no new GPU transfer and does not affect ETA.
-BP work uses 14px text in both the completed-image and live panels, including
-the compact layout.
-Compact layouts put Total time beside the ETA and BP work beside the title
-above the percentage labels and shared track; long titles use ellipses.
+image's work. This diagnostic needs no new GPU transfer.
+BP work uses 14px text in both the completed-image and progress panels, including
+the compact layout. Compact layouts put the update hint beside the checkpoint
+and BP work beside the title above the percentage labels and shared track;
+long titles use ellipses.
 This strip uses 56 pixels within the
 existing footer; the main SAR image keeps its height. The left panel describes the displayed image in
 five rows: title, `<px>x<px> pixels  <count> pulses`,
@@ -530,16 +535,14 @@ its pairing with the image. Console measurements retain their original
 scientific notation and units. Neither signal processing nor saved products
 change. All six SAR applications and both languages share this implementation.
 
-Interactive timelines also show Received and Formed pulse progress toward the
-next image, with an approximate ETA once a matching timing measurement exists.
-Received counts unique ingested pulses; Formed advances only after GPU batches
-complete. Replay and signed eviction work never inflate received counts.
-Long batches may leave the formed bar stationary. Estimates account for playback
-pacing and overlapping processing, but can change with GPU contention or a new
-image lattice; Estimating means a suitable measurement is not available yet.
-The readout refreshes at 1 Hz within the cached timeline panel, beside history
-at normal widths and above compact history in narrower windows. Headless runs
-and runs without a timeline do not enable the extra completion tracking.
+Interactive timelines show Received and Last completed pulse progress toward
+an image. Received counts unique ingested pulses; Last completed advances only
+after GPU batches complete. Replay and signed eviction work never inflate
+received counts. Long batches may leave the completed bar stationary. The panel
+uses a stable status and update-on-completion hint rather than an ETA or ticking
+elapsed time. The readout refreshes at 1 Hz within the cached timeline panel,
+beside history at normal widths and above compact history in narrower windows.
+Headless runs and runs without a timeline do not enable extra completion tracking.
 
 ### SAR input/output event history
 
@@ -555,10 +558,20 @@ once. File and loop generations remain separate. Tick times are the host times
 when completion was observed, not precise GPU finish timestamps or measured
 end-to-end latency. Several ticks can share a pixel.
 
-The common 20-second wall-clock axis scrolls at the existing timeline cadence
-(default 10 Hz). Collection-colored dwell bars and image-emission ticks are
+The common 20-second time axis ends at the latest observed batch receipt or
+completion, labeled `Latest batch`, with `-20s` at the left. Tick spacing remains
+actual elapsed time between events. Normal-height history adds `Time relative to
+last batch update`; compact history uses the bookends alone. The window stays
+fixed between events and after EOF, so delayed presentations never age events
+out merely because wall time passed. Both received and processed events can
+advance the endpoint. Completion observation is still polled at the configured
+timeline cadence (default 10 Hz), without changing processing or event timestamps.
+Identical bounded drawing/text snapshots skip GPU rasterization and display
+transport. Changed status, optional playback lag, or resize feedback can redraw
+the footer while preserving its event-time axis. Independent cached presentation
+continues servicing window events and closure. Collection-colored dwell bars and image-emission ticks are
 replaced by these two event lanes; the image title remains in the image and
-progress cards. Optional playback lag stays available. ETA text remains at
+progress cards. Optional playback lag stays available. Checkpoint text refreshes at
 1 Hz. The main SAR image and HUD caches are unchanged. Timeline ticks do not
 rerun backprojection or scientific image rendering. X11 keeps the main image
 cached; native presentation composites its cached panels.
@@ -601,16 +614,20 @@ X11 paints completed footer pixels one-to-one rather than stretching them;
 scientific image interpolation is unchanged. Rendering remains native HoloViz
 text composed into the GPU frame.
 
-The next-image title uses 14px text below its estimated arrival time in both
-footer layouts. Total time includes acquisition, playback pacing, and processing
-since the collection began, and freezes at completion; it is not BP compute
-time or a prediction of the eventual collection duration.
+The next-image title uses 14px text below its processing checkpoint in both
+footer layouts. Completion and receipt labels use matching 12px text; BP work
+remains 14px. The panel omits countdown and elapsed-clock text so a held frame
+reads as a checkpoint rather than a stalled timer.
 
 ### Autofocus outcome and strip sizing
 
-The autofocus footer reports preparing/running status, then whether correction
-was accepted or declined, using the existing aligned termination and accepted
-iteration reports. Declined results use amber and retain the uncorrected image.
+The autofocus footer reports capture-stamped receiving, auxiliary formation,
+estimation, final formation and image-ready checkpoints from application stage
+boundaries. Correction accepted/declined is a separate detail, using the existing
+aligned termination and accepted-iteration reports. Zero-copy boundary operators
+forward original tensor samples without copying their storage or waiting on CUDA.
+Intermediate checkpoints can be skipped during a GPU presentation stall; there is
+no additional ETA or stage percentage. The oracle workflow skips estimation. Declined results use amber and retain the uncorrected image.
 Zero accepted iterations without a refusal are reported as no correction
 applied; the oracle diagnostic is labeled separately. Missing status never
 implies acceptance. A new collection clears the prior outcome, and late reports
@@ -622,6 +639,15 @@ Automatic strip windows fit within both the available desktop work area and
 desktop can span several physical screens; its combined width is no longer the
 initial window width. Explicit window dimensions retain precedence, and users
 can resize normally. Formation geometry and dump products are unchanged.
+
+The completed-image HUD selects BP measurements from a fixed 64-entry host
+history using the displayed image's capture stamp. A newer BP completion cannot
+blank the matching older mosaic's metrics. Evicted or unknown stamps remain
+unavailable rather than borrowing a different image's work or timing. Continuous
+strip labels its full product dimensions as a mosaic and adds `Last strip update:
+<N> pulses`; BP work, latency and throughput describe that update's BP window,
+not the full mosaic. These rows remain cached with the image between updates;
+no extra image readback, GPU synchronization or timer-driven redraw is added.
 
 Continuous-strip diagnostic history explicitly maps the stager's distinct slice
 stamps to their source packet. Every proven slice contributes to completion and

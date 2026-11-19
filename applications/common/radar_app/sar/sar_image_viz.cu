@@ -263,7 +263,9 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
 
   // Publish outputs: HUD tensors before the ImageT trigger
   FormationDiag diag{};
-  if (overlay_.diag)
+  if (overlay_.diag_at_capture && options.capture_time)
+    diag = overlay_.diag_at_capture(options.capture_time->timestamp_ns);
+  else if (overlay_.diag)
     diag = overlay_.diag();
   // The interactive activation is a GUI clock tick. Match diagnostics against
   // the selected image's genuine capture stamp, never that clock's timestamp.

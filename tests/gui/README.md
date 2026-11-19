@@ -188,9 +188,13 @@ emit no extra placeholder or held-image frames, verify the first real image's
 capture timestamp, and render the actual native text through the shared SDK
 composer. The placeholder's -1 stamp cannot advance completed-image drain.
 `SarDisplayRate` checks SI conversions and unchanged console measurements.
-`SarTimeline` verifies collection-title placement above its colored bar using
-the GPU raster and native text records.
-It also verifies the next-image title, percentage/ETA labels, and the single
+`SarTimeline` verifies batch-event lanes, actual time spacing, relative-time
+bookends/caption, and native text records. Backdated batches remain visible
+relative to the latest event, idle clock ticks emit no duplicate GPU footer,
+and either receipt or completion advances the history. Resize still emits a
+newly sized frame without a new batch.
+It also verifies the next-image title, stable processing checkpoint, completion
+hint, absence of countdown/elapsed-clock labels, and the single
 shared progress track at compact and normal widths. Unequal received/formed
 counts prove that the green fill follows GPU completion and the cyan marker
 follows ingestion. Coincident frontiers, zero, and completion verify marker

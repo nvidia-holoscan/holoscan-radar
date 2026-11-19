@@ -22,6 +22,7 @@
 #include <holoscan/core/graph.hpp>
 
 #include "radar_app/sar/graph_driver.hpp"
+#include "radar_app/sar/autofocus_stage_op.hpp"
 #include "radar_app/sar/coordinate_ops.hpp"
 #include "radar_app/sar/mosaic_op.hpp"
 #include "radar_app/report/report_ops.hpp"
@@ -274,6 +275,12 @@ struct PythonSarContext : std::enable_shared_from_this<PythonSarContext<T>> {
     }
     if (role == "oracle_phase") {
       return add<app::sar::OraclePhaseOp<T>>(role, lies, runtime->extents);
+    }
+    if (role == "af_aux_stage" || role == "af_estimator_stage" || role == "af_final_stage") {
+      const auto stage = role == "af_aux_stage" ? radar::AutofocusHudStage::kFormingAuxiliary
+                         : role == "af_estimator_stage" ? radar::AutofocusHudStage::kEstimating
+                                                        : radar::AutofocusHudStage::kFormingFinal;
+      return add<app::sar::AutofocusStageOp>(role, runtime->hud, stage);
     }
     if (role == "aux_bp") {
       radar::BackprojectionParams seed;

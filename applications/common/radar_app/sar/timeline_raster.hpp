@@ -26,8 +26,8 @@
 
 namespace holoscan::radar::app::sar {
 
-// 20 s scrolling wall-clock input/output history: source-batch receipt and
-// observed GPU completion, pulse progress/ETA, and a 1 Hz elapsed/lag HUD.
+// 20 s history ending at the latest source-batch receipt or observed GPU
+// completion, with checkpoint progress and a 1 Hz optional playback-lag HUD.
 // Polls FormationHud (live mailbox), not Graph handles.
 class TimelineRasterOp : public Operator<> {
  public:
@@ -35,6 +35,7 @@ class TimelineRasterOp : public Operator<> {
                    bool show_playback_lag, double rate = 10.0, int64_t width = kWidth,
                    int64_t height = kHeight, std::shared_ptr<FrameProgress> progress = {},
                    std::shared_ptr<viz::FrameViewport> viewport = {});
+  ~TimelineRasterOp() override;
   void start() override;
   void stop() override;
   void setup(OperatorSpec& spec) override;
@@ -58,6 +59,8 @@ class TimelineRasterOp : public Operator<> {
   int64_t width_, height_;
   std::shared_ptr<viz::FrameViewport> viewport_;
   void* commands_{nullptr};
+  struct RenderCache;
+  std::unique_ptr<RenderCache> rendered_;
   std::chrono::steady_clock::time_point hud_at_{};
   bool hud_held_{false};
   std::string lag_hud_;

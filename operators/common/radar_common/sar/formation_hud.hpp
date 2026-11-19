@@ -7,6 +7,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstddef>
 #include <mutex>
 #include <memory>
 #include <optional>
@@ -95,9 +96,13 @@ enum class AutofocusHudOutcome {
   kUnavailable
 };
 
+enum class AutofocusHudStage { kReceiving, kFormingAuxiliary, kEstimating, kFormingFinal, kReady };
+
 struct AutofocusHudStatus {
   AutofocusHudOutcome outcome{AutofocusHudOutcome::kDisabled};
   int32_t iterations{0};
+  AutofocusHudStage stage{AutofocusHudStage::kReceiving};
+  std::optional<int64_t> stage_capture_ns;
 };
 
 struct FormationHudSnapshot {
@@ -140,7 +145,8 @@ class FormationHud {
     const std::lock_guard lock(mu_);
     if (capture_ns && autofocus_collection_stamp_ && *capture_ns < *autofocus_collection_stamp_)
       return;
-    autofocus_ = {AutofocusHudOutcome::kUnavailable, iterations.value_or(0)};
+    autofocus_.outcome = AutofocusHudOutcome::kUnavailable;
+    autofocus_.iterations = iterations.value_or(0);
     if (!termination || !iterations || *iterations < 0)
       return;
     switch (static_cast<AutofocusTermination>(*termination)) {
@@ -158,6 +164,11 @@ class FormationHud {
     }
   }
 
+  void publish_autofocus_stage(AutofocusHudStage stage, int64_t capture_ns) {
+    const std::lock_guard lock(mu_);
+    publish_autofocus_stage_locked(stage, capture_ns);
+  }
+
   void enable_progress(int64_t cadence, int64_t reader_batch) {
     const std::lock_guard lock(mu_);
     progress_ = std::make_shared<sar_progress::Monitor>(cadence, reader_batch);
@@ -173,8 +184,9 @@ class FormationHud {
     if (autofocus_.outcome != AutofocusHudOutcome::kDisabled && !spans.empty() &&
         (spans_.empty() || spans.back().dwell_start != spans_.back().dwell_start)) {
       autofocus_collection_stamp_ = capture_time_ns;
-      if (autofocus_.outcome != AutofocusHudOutcome::kOracle)
-        autofocus_ = {AutofocusHudOutcome::kPending, 0};
+      const bool oracle = autofocus_.outcome == AutofocusHudOutcome::kOracle;
+      autofocus_ = {oracle ? AutofocusHudOutcome::kOracle : AutofocusHudOutcome::kPending, 0};
+      autofocus_.stage_capture_ns = capture_time_ns;
     }
     spans_ = std::move(spans);
     playback_ = playback;
@@ -190,7 +202,12 @@ class FormationHud {
 
   void publish_bp(FormationHudBp bp) {
     const std::lock_guard lock(mu_);
+    if (bp.emit_at)
+      publish_autofocus_stage_locked(AutofocusHudStage::kReady, bp.capture_time_ns);
     bp_ = bp;
+    bp_history_[bp_history_next_] = bp;
+    bp_history_next_ = (bp_history_next_ + 1) % bp_history_.size();
+    bp_history_size_ = std::min(bp_history_size_ + 1, bp_history_.size());
   }
 
   void publish_rate_line(std::string line) {
@@ -198,7 +215,7 @@ class FormationHud {
     rate_line_ = std::move(line);
   }
 
-  [[nodiscard]] FormationHudSnapshot snapshot() const {
+  [[nodiscard]] FormationHudSnapshot snapshot(std::optional<int64_t> image_capture_ns = {}) const {
     const std::lock_guard lock(mu_);
     FormationHudSnapshot snap{.spans = spans_,
                               .playback = playback_,
@@ -210,6 +227,20 @@ class FormationHud {
                               .bp = bp_,
                               .autofocus = autofocus_,
                               .rate_line = rate_line_};
+    // A best-effort display can trail the producer. Match its actual image,
+    // never relabel newer BP work as the cost of an older mosaic. This fixed
+    // ring stores only host diagnostics; eviction leaves metrics unavailable.
+    if (image_capture_ns) {
+      snap.bp = {};
+      snap.rate_line.clear();
+      for (std::size_t i = 0; i < bp_history_size_; ++i) {
+        const auto index = (bp_history_next_ + bp_history_.size() - 1 - i) % bp_history_.size();
+        if (bp_history_[index].capture_time_ns == *image_capture_ns) {
+          snap.bp = bp_history_[index];
+          break;
+        }
+      }
+    }
     if (snap.playback.valid && snap.playback.live) {
       const auto now = std::chrono::steady_clock::now();
       snap.playback.wall_s =
@@ -220,6 +251,17 @@ class FormationHud {
   }
 
  private:
+  void publish_autofocus_stage_locked(AutofocusHudStage stage, int64_t capture_ns) {
+    if (autofocus_.outcome == AutofocusHudOutcome::kDisabled ||
+        (autofocus_collection_stamp_ && capture_ns < *autofocus_collection_stamp_) ||
+        (autofocus_.stage_capture_ns && capture_ns < *autofocus_.stage_capture_ns))
+      return;
+    if (autofocus_.stage_capture_ns == capture_ns && stage < autofocus_.stage)
+      return;  // A late boundary/report cannot move an image back a stage.
+    autofocus_.stage = stage;
+    autofocus_.stage_capture_ns = capture_ns;
+  }
+
   mutable std::mutex mu_;
   std::vector<CollectionSpan> spans_;
   PlaybackStatus playback_{};
@@ -229,6 +271,8 @@ class FormationHud {
   std::optional<int64_t> reader_capture_time_ns_;
   bool reader_stopped_{false};
   FormationHudBp bp_{};
+  std::array<FormationHudBp, 64> bp_history_{};
+  std::size_t bp_history_next_{0}, bp_history_size_{0};
   AutofocusHudStatus autofocus_{};
   std::optional<int64_t> autofocus_collection_stamp_;
   std::string rate_line_;
