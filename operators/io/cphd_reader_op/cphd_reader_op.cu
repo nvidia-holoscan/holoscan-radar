@@ -632,7 +632,7 @@ expected<void, Error> CPHDReaderOp<T, TGeom>::compute(ExecutionContext& context)
         progress_->begin_packet(*capture_time_ns_, static_cast<int64_t>(current.file_index),
                                 current.progress_offset, current.count, current.progress_total,
                                 current.progress_duration_s, p.playback_rate,
-                                current.collection_start);
+                                current.collection_start, current.times);
       if (current.collection_start) {
         const auto now = std::chrono::steady_clock::now();
         collection_wall_start_ = now;

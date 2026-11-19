@@ -122,6 +122,8 @@ struct PythonSarContext : std::enable_shared_from_this<PythonSarContext<T>> {
     if (runtime)
       throw std::logic_error("SAR context is already attached to a graph");
     runtime = std::make_unique<Base>(setup.name, setup.paths, setup.config, &target, &prepared);
+    if (setup.name == "autofocus")
+      runtime->hud->enable_autofocus(extras.position_error.oracle);
     partitions.emplace("source", runtime->source);
     partitions.emplace("application", runtime->application);
     partitions.emplace("formation", runtime->formation);
@@ -244,7 +246,7 @@ struct PythonSarContext : std::enable_shared_from_this<PythonSarContext<T>> {
       return add<app::sar::ScrollGeometryStagerOp>(
           role, runtime->cfg.scroll_parent, runtime->cfg.sample_geometry,
           runtime->cfg.scroll_anchor, runtime->cfg.reader_loop, slice,
-          runtime->cfg.reader_pulses_per_tick, *runtime->extents.max_range_bins);
+          runtime->cfg.reader_pulses_per_tick, *runtime->extents.max_range_bins, runtime->hud);
     }
     if (role == "sar_mosaic") {
       if (runtime->cfg.scroll) {
@@ -305,7 +307,7 @@ struct PythonSarContext : std::enable_shared_from_this<PythonSarContext<T>> {
     if (role == "af_image_drain")
       return add<app::NullSinkOp>(role);
     if (role == "autofocus_sharpness")
-      return add<app::sar::AutofocusSharpnessReportOp>(role);
+      return add<app::sar::AutofocusSharpnessReportOp>(role, runtime->hud);
     if (role == "autofocus_score") {
       std::string dump_dir;
       if (runtime->cfg.dump && !runtime->cfg.dump_path.empty()) {

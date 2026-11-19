@@ -4,6 +4,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **SAR diagnostic accounting and workflow status**:
+  record bounded source-batch receipt/completion pairs, exact playback budgets,
+  and collection wall time without changing tensor contracts. Wire autofocus
+  accepted/declined outcomes and strip-slice accounting in both languages;
+  cap automatic strip windows. Preserve user presets. Dedicated model,
+  reader, BP and configuration regressions accompany the change.
+
 - **2026-11-19** — **Profiler-compatible C++ shutdown** on `deustice/sar-gui`:
   implemented. FMCW and SAR share caller-owned SIGINT/SIGTERM handlers; the
   signal callback only stores a lock-free flag and control loops request

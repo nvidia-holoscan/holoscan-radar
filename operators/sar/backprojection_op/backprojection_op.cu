@@ -266,7 +266,12 @@ void BackprojectionOp<T, TGeom>::start() {
   state_ = std::make_shared<detail::BackprojectionState<T, TGeom>>();
   progress_ = hud_ ? hud_->progress() : nullptr;
   if (progress_) {
-    gpu_progress_ = std::make_shared<sar_progress::GpuProgress>();
+    gpu_progress_ = std::make_shared<sar_progress::GpuProgress>(
+        [monitor = std::weak_ptr<sar_progress::Monitor>{progress_}](
+            const sar_progress::Work& work, sar_progress::Clock::time_point at) {
+          if (auto progress = monitor.lock())
+            progress->processed(work, at);
+        });
     progress_->set_probe([tracker = gpu_progress_] {
       return tracker->snapshot();
     });
@@ -809,11 +814,11 @@ expected<void, Error> BackprojectionOp<T, TGeom>::compute(ExecutionContext& cont
         throw std::runtime_error(who + ": emit stream sync failed");
       }
       aperture_compute_s_ = state_->take_tick_gpu_s();
-      if (gpu_progress_ && progress_work)
-        gpu_progress_->completed_emit(*progress_work);
     }
     const auto now = std::chrono::steady_clock::now();
     if (emitted) {
+      if (gpu_progress_ && progress_work)
+        gpu_progress_->completed_emit(*progress_work, now);
       // Timing is published before the image port so EventBased
       // downstream host code (the overlay) reads this emit, not the
       // previous collection's.
@@ -831,6 +836,16 @@ expected<void, Error> BackprojectionOp<T, TGeom>::compute(ExecutionContext& cont
             .capture_time_ns = context.activation_time().timestamp_ns,
             .closes_aperture = completes_aperture,
             .compute_s = aperture_compute_s_,
+            .collection_elapsed_s =
+                progress_work
+                    ? std::optional{std::max(0.0, std::chrono::duration<double>(
+                                                      now - progress_work->collection.started)
+                                                      .count())}
+                    : std::nullopt,
+            .budget_s = progress_work ? progress_work->budget_s : std::nullopt,
+            .budget_playback_rate = progress_work
+                                        ? std::optional{progress_work->collection.playback_rate}
+                                        : std::nullopt,
             .pulses = emitted_pulses,
             .pixels = emitted_pixels,
             .num_v = num_v,

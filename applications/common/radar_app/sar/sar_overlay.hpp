@@ -27,6 +27,10 @@ namespace holoscan::radar::app::sar {
 // coordinates squash it on a landscape strip.
 struct FormationDiag {
   double bp_compute_s{0.0};
+  std::optional<double> collection_elapsed_s;
+  std::optional<double> budget_s;
+  std::optional<double> budget_playback_rate;
+  std::optional<int64_t> capture_time_ns;
   int64_t pulses{0};
   int64_t pixels{0};
   int64_t bp_num_v{0};

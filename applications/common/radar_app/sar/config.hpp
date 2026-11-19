@@ -175,9 +175,9 @@ struct AppConfig : radar::app::CommonRunConfig {
   // an unpaced YAML stays blank.
   bool show_playback_lag{false};
   // Holoviz window: longest side (px) for square collects, and
-  // the no-DISPLAY fallback for a parent strip. A parent strip
+  // the maximum automatic initial size for a parent strip. A parent strip
   // (tiled strip mosaic / continuous strip scroll blit) fits the desktop work
-  // area (full width on a typical 16:9). LUT box-averages toward
+  // area within this cap, including on multi-monitor X11 desktops. LUT box-averages toward
   // that side; a dump is the formed lattice (parent when tiling
   // or scrolling).
   int64_t visualize_size{1024};
@@ -541,12 +541,15 @@ inline std::array<uint32_t, 2> holoviz_window_wh(int64_t num_v, int64_t num_u, i
   return {std::max(uint32_t{1}, w), std::max(uint32_t{1}, h)};
 }
 
-// Fit a landscape lattice into the work area so at least one
-// desktop edge is used (full width for a wide/short strip on
-// 16:9). Caller passes _NET_WORKAREA size; GLFW client size is
-// the result (title bar does not eat width).
-inline std::array<uint32_t, 2> holoviz_fit_wh(int64_t num_v, int64_t num_u, int work_w,
-                                              int work_h) {
+// Fit a landscape lattice into the work area, optionally capped at the
+// configured display size. A forwarded X11 work area can span several physical
+// monitors, so it must not determine an unbounded initial strip-window width.
+inline std::array<uint32_t, 2> holoviz_fit_wh(int64_t num_v, int64_t num_u, int work_w, int work_h,
+                                              int64_t max_side = 0) {
+  if (max_side > 0) {
+    work_w = static_cast<int>(std::min<int64_t>(work_w, max_side));
+    work_h = static_cast<int>(std::min<int64_t>(work_h, max_side));
+  }
   const double long_n = static_cast<double>(std::max(num_v, num_u));
   const double short_n = static_cast<double>(std::min(num_v, num_u));
   if (!(long_n > 0.0) || !(short_n > 0.0) || work_w <= 0 || work_h <= 0) {

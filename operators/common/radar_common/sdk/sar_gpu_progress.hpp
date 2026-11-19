@@ -10,6 +10,8 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <utility>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -19,12 +21,13 @@
 namespace holoscan::radar::sar_progress {
 
 // A fixed, best-effort event ring. The operator records events on its stream;
-// the timeline queries completion at 1 Hz. No kernel changes, host tensor
+// the timeline queries completion at its display cadence. No kernel changes, host tensor
 // copies, synchronization, callbacks on the CUDA stream, or waiting for slots.
 class GpuProgress {
  public:
   static constexpr std::size_t kSlots = 16;
-  GpuProgress() {
+  explicit GpuProgress(std::function<void(const Work&, Clock::time_point)> completed = {})
+  : completed_(std::move(completed)) {
     if (cudaGetDevice(&device_) != cudaSuccess)
       throw std::runtime_error("SAR progress: cannot identify compute device");
     for (auto& slot : slots_) {
@@ -62,10 +65,13 @@ class GpuProgress {
   }
   // The image boundary already synchronizes its stream for the product. Use
   // that existing proof of completion even if tracking slots were exhausted.
-  void completed_emit(const Work& work) {
+  void completed_emit(const Work& work, Clock::time_point at = Clock::now()) {
     const std::lock_guard lock(mu_);
     poll();
     state_.completed = work;
+    state_.completed_at = at;
+    if (completed_)
+      completed_(work, at);
   }
   GpuState snapshot() {
     const std::lock_guard lock(mu_);
@@ -122,6 +128,9 @@ class GpuProgress {
         state_.measured_pixels = work.pixels;
       }
       state_.completed = work;
+      state_.completed_at = Clock::now();
+      if (completed_)
+        completed_(work, *state_.completed_at);
       head_ = (head_ + 1) % kSlots;
       --count_;
     }
@@ -145,6 +154,7 @@ class GpuProgress {
   int device_{0};
   bool valid_{true};
   GpuState state_;
+  std::function<void(const Work&, Clock::time_point)> completed_;
 };
 
 }  // namespace holoscan::radar::sar_progress

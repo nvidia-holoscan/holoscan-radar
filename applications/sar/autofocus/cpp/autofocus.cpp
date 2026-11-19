@@ -34,8 +34,8 @@ int main(int argc, char** argv) {
   };
   auto build = [extras](auto precision, auto& graph, auto& options, const auto& queue,
                         const auto& cfg, auto& reader, auto& range, auto& manager, auto& bp,
-                        auto& source, auto& application, auto& formation,
-                        const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {
+                        auto& source, auto& application, auto& formation, const auto& extents,
+                        const auto& hud) -> const holoscan::Output<holoscan::Tensor>* {
     // The auxiliary chain forms at the driver's precisions, not a fixed
     // double: the whole point of a float-sample run is that the replay it
     // consumes is complex64.
@@ -81,6 +81,7 @@ int main(int argc, char** argv) {
     // 23k pulses the difference is 17.45 GiB per pool.
     const radar::MaxTensorExtents ingest_extents = make_ingest_extents(extents, cfg);
     const auto& pe = extras->position_error;
+    hud->enable_autofocus(pe.oracle);
     HOLOSCAN_LOG_INFO(
         "autofocus: {} over {} pulses; correction={}",
         pe.enabled ? "injected-error validation" : "input-data run (no injected error)",
@@ -224,7 +225,8 @@ int main(int argc, char** argv) {
       // run. The same report takes termination and iterations, which say
       // whether a flat trace was PGA refusing or PGA having nothing to do --
       // the one thing sharpness cannot distinguish.
-      auto sharp = graph.template op<app::sar::AutofocusSharpnessReportOp>("autofocus_sharpness");
+      auto sharp =
+          graph.template op<app::sar::AutofocusSharpnessReportOp>("autofocus_sharpness", hud);
 
       graph.add_flow(manager->positions_out, aux_bp->positions, queue);
       graph.add_flow(manager->reference_position_out, aux_bp->reference_position, queue);

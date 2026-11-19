@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "radar_common/descriptors/enums.hpp"
 #include "radar_common/sar/formation_progress.hpp"
 
 namespace holoscan::radar {
@@ -63,6 +64,13 @@ struct FormationHudBp {
   int64_t capture_time_ns{0};
   bool closes_aperture{false};
   double compute_s{0.0};
+  // Wall time from this collection's first batch to this image's GPU completion.
+  // Frozen with the formed image; absent if diagnostic history was unavailable.
+  std::optional<double> collection_elapsed_s;
+  // Original (1x) TxTime interval advanced by this image, not paced wall time.
+  std::optional<double> budget_s;
+  // Frozen with the same image; zero means unpaced, absent means unknown.
+  std::optional<double> budget_playback_rate;
   int64_t pulses{0};
   int64_t pixels{0};
   int64_t num_v{0};
@@ -77,6 +85,21 @@ struct FormationHudBp {
   PlaybackStatus playback{};
 };
 
+enum class AutofocusHudOutcome {
+  kDisabled,
+  kPending,
+  kAccepted,
+  kDeclined,
+  kUnchanged,
+  kOracle,
+  kUnavailable
+};
+
+struct AutofocusHudStatus {
+  AutofocusHudOutcome outcome{AutofocusHudOutcome::kDisabled};
+  int32_t iterations{0};
+};
+
 struct FormationHudSnapshot {
   std::vector<CollectionSpan> spans;
   PlaybackStatus playback{};
@@ -88,6 +111,7 @@ struct FormationHudSnapshot {
   // dwell_end is not EOS: independent_images still has files to read.
   bool reader_stopped{false};
   FormationHudBp bp{};
+  AutofocusHudStatus autofocus{};
   // Last INFO heartbeat rate line from SarImageReportOp. The HUD draws this
   // instead of live-polling `bp` after the LUT: visualization is drop-oldest
   // on another partition, so a live poll can read a later BP emit than the
@@ -107,6 +131,33 @@ inline bool sar_eof_drained(const FormationHudSnapshot& snapshot, int64_t report
 
 class FormationHud {
  public:
+  void enable_autofocus(bool oracle = false) {
+    const std::lock_guard lock(mu_);
+    autofocus_.outcome = oracle ? AutofocusHudOutcome::kOracle : AutofocusHudOutcome::kPending;
+  }
+  void publish_autofocus(std::optional<int32_t> termination, std::optional<int32_t> iterations,
+                         std::optional<int64_t> capture_ns = {}) {
+    const std::lock_guard lock(mu_);
+    if (capture_ns && autofocus_collection_stamp_ && *capture_ns < *autofocus_collection_stamp_)
+      return;
+    autofocus_ = {AutofocusHudOutcome::kUnavailable, iterations.value_or(0)};
+    if (!termination || !iterations || *iterations < 0)
+      return;
+    switch (static_cast<AutofocusTermination>(*termination)) {
+      case AutofocusTermination::kRefusedSharpness:
+      case AutofocusTermination::kRefusedScatterers:
+      case AutofocusTermination::kRefusedMaxCorrection:
+        autofocus_.outcome = AutofocusHudOutcome::kDeclined;
+        break;
+      case AutofocusTermination::kConverged:
+      case AutofocusTermination::kBudgetExhausted:
+      case AutofocusTermination::kStoppedScatterers:
+        autofocus_.outcome =
+            *iterations > 0 ? AutofocusHudOutcome::kAccepted : AutofocusHudOutcome::kUnchanged;
+        break;
+    }
+  }
+
   void enable_progress(int64_t cadence, int64_t reader_batch) {
     const std::lock_guard lock(mu_);
     progress_ = std::make_shared<sar_progress::Monitor>(cadence, reader_batch);
@@ -119,6 +170,12 @@ class FormationHud {
                       std::optional<std::chrono::steady_clock::time_point> last_packet,
                       bool reader_stopped = false, std::optional<int64_t> capture_time_ns = {}) {
     const std::lock_guard lock(mu_);
+    if (autofocus_.outcome != AutofocusHudOutcome::kDisabled && !spans.empty() &&
+        (spans_.empty() || spans.back().dwell_start != spans_.back().dwell_start)) {
+      autofocus_collection_stamp_ = capture_time_ns;
+      if (autofocus_.outcome != AutofocusHudOutcome::kOracle)
+        autofocus_ = {AutofocusHudOutcome::kPending, 0};
+    }
     spans_ = std::move(spans);
     playback_ = playback;
     apc_ = apc;
@@ -151,6 +208,7 @@ class FormationHud {
                               .reader_capture_time_ns = reader_capture_time_ns_,
                               .reader_stopped = reader_stopped_,
                               .bp = bp_,
+                              .autofocus = autofocus_,
                               .rate_line = rate_line_};
     if (snap.playback.valid && snap.playback.live) {
       const auto now = std::chrono::steady_clock::now();
@@ -171,6 +229,8 @@ class FormationHud {
   std::optional<int64_t> reader_capture_time_ns_;
   bool reader_stopped_{false};
   FormationHudBp bp_{};
+  AutofocusHudStatus autofocus_{};
+  std::optional<int64_t> autofocus_collection_stamp_;
   std::string rate_line_;
   std::shared_ptr<sar_progress::Monitor> progress_;
 };

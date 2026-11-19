@@ -4,14 +4,18 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <complex>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <vector>
 
 #include <holoscan/testing/operator_test_harness.hpp>
 
 #include "utils/fixture_completion.hpp"
+#include "radar_common/sar/formation_hud.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 #include "sar/backprojection_op/backprojection_op.hpp"
 #include "radar_schemas/sample_geometry_bridge.hpp"
@@ -37,7 +41,16 @@ TEST(BackprojectionOp, PointTargetFormsAtSceneCentreAndResets) {
   extents.max_range_bins = 64;
   extents.max_image_v = 5;
   extents.max_image_u = 5;
-  auto fixture = holoscan::testing::create_operator_test<BackprojectionOp<float>>(extents);
+  auto hud = std::make_shared<holoscan::radar::FormationHud>();
+  hud->enable_progress(1, 1);
+  const auto progress = hud->progress();
+  const std::array first_time{100.};
+  const std::array second_time{102.4};
+  progress->begin_packet(1, 0, 0, 1, 2, 2.4, 0.2, true, first_time);
+  progress->admit(1, 1, true, true);
+  progress->begin_packet(2, 0, 1, 1, 2, 2.4, 0.2, false, second_time);
+  progress->admit(2, 1, true, true);
+  auto fixture = holoscan::testing::create_operator_test<BackprojectionOp<float>>(extents, hud);
   BackprojectionParams params;
   params.coordinate_frame =
       CoordinateFrame(CoordinateFrameSpec{.frame = CoordinateFrameType::kSceneLocal});
@@ -82,6 +95,11 @@ TEST(BackprojectionOp, PointTargetFormsAtSceneCentreAndResets) {
   ASSERT_TRUE(result.ok()) << result.describe_failure();
   const auto captures = result.snapshots<holoscan::Tensor>("image");
   ASSERT_EQ(captures.size(), 2U);
+  const auto diagnostic = hud->snapshot().bp;
+  EXPECT_EQ(diagnostic.capture_time_ns, 2);
+  ASSERT_TRUE(diagnostic.budget_s);
+  EXPECT_NEAR(*diagnostic.budget_s, 2.4, 1e-12);
+  EXPECT_EQ(diagnostic.budget_playback_rate, std::optional{0.2});
   const auto image = to_host(captures[0]);
   const auto reset_image = to_host(captures[1]);
   ASSERT_EQ(image.shape, (std::vector<int64_t>{5, 5}));

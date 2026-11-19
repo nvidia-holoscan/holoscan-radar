@@ -336,6 +336,10 @@ struct SarGraphRuntime {
         const auto snap = hud->snapshot();
         app::sar::FormationDiag d;
         d.bp_compute_s = snap.bp.compute_s;
+        d.collection_elapsed_s = snap.bp.collection_elapsed_s;
+        d.budget_s = snap.bp.budget_s;
+        d.budget_playback_rate = snap.bp.budget_playback_rate;
+        d.capture_time_ns = snap.bp.capture_time_ns;
         d.pulses = snap.bp.pulses;
         d.pixels = snap.bp.pixels;
         d.bp_num_v = snap.bp.num_v;
@@ -382,23 +386,22 @@ struct SarGraphRuntime {
       int64_t lut_side = cfg.visualize_size;
       uint32_t width = 0;
       uint32_t height = 0;
-      // Parent strips fill the desktop work-area width (and leave a band for
-      // the Gantt). visualize_size is the square-collect size and the no-DISPLAY
-      // fallback. HolovizOp has no position field; strip windows are moved by
-      // title after they map.
+      // Fit parent strips within the desktop work area and configured display
+      // cap, reserving space for the footer. Forwarded work areas may span
+      // multiple laptop monitors; never expand to their combined width.
       if (strip_fit && !cfg.headless) {
         int work_w = 0;
         int work_h = 0;
         if (desktop_work_area(&work_w, &work_h)) {
           const int timeline_reserve = static_cast<int>(app::sar::TimelineRasterOp::kHeight) + 48;
           const int fit_h = std::max(1, work_h - timeline_reserve);
-          const auto fit = holoviz_fit_wh(viz_geometry.num_v(), viz_u, work_w, fit_h);
+          const auto fit =
+              holoviz_fit_wh(viz_geometry.num_v(), viz_u, work_w, fit_h, cfg.visualize_size);
           width = fit[0];
           height = fit[1];
           lut_side = static_cast<int64_t>(std::max(width, height));
-          HOLOSCAN_LOG_INFO(
-              "SAR: Holoviz {}x{} (desktop work area {}x{}; visualize_size {} fallback)", width,
-              height, work_w, work_h, cfg.visualize_size);
+          HOLOSCAN_LOG_INFO("SAR: Holoviz {}x{} (desktop work area {}x{}; visualize_size {} cap)",
+                            width, height, work_w, work_h, cfg.visualize_size);
         } else {
           const auto wh = holoviz_window_wh(viz_geometry.num_v(), viz_u, cfg.visualize_size);
           width = wh[0];
@@ -725,9 +728,22 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
     SarGraphRuntime<T, TGeom> runtime(name, cli, std::move(config));
     auto& r = runtime;
     r.graph.add_flow(r.reader->phase_history, r.range->phase_history, r.queue);
-    const auto* formed =
-        build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg, r.reader, r.range,
-                    r.manager, r.bp, r.source, r.application, r.formation, r.extents);
+    const auto* formed = [&] {
+      // Workflows with app-owned diagnostics can opt into the shared mailbox.
+      if constexpr (requires {
+                      build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg,
+                                  r.reader, r.range, r.manager, r.bp, r.source, r.application,
+                                  r.formation, r.extents, r.hud);
+                    }) {
+        return build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg, r.reader,
+                           r.range, r.manager, r.bp, r.source, r.application, r.formation,
+                           r.extents, r.hud);
+      } else {
+        return build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg, r.reader,
+                           r.range, r.manager, r.bp, r.source, r.application, r.formation,
+                           r.extents);
+      }
+    }();
     r.finish(formed);
     r.run(&signals);
     return 0;
