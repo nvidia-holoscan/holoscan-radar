@@ -79,6 +79,8 @@ target_compile_definitions(test_perf_yaml_standard PRIVATE
     HOLOSCAN_RADAR_PERF_OPERATOR_ROOT="${PROJECT_SOURCE_DIR}/performance/operators")
 radar_add_test(common/test_sim)
 radar_add_test(common/test_sar_progress)
+radar_add_test(common/test_window_place ${CMAKE_DL_LIBS})
+target_include_directories(test_window_place PRIVATE ${PROJECT_SOURCE_DIR})
 radar_add_test(sar/test_phase_correction holoscan::phase_correction_op)
 radar_add_test(sar/test_aperture_manager holoscan::aperture_manager_op)
 radar_add_test(sar/test_backprojection holoscan::backprojection_op)

@@ -140,7 +140,7 @@ inline bool x11_work_area(const X11Api& x, XDisplay* dpy, XWindow root, int* ox,
   unsigned char* data = nullptr;
   if (x.XGetWindowProperty(dpy, root, work, 0, 4, 0, kXaCardinal, &actual, &fmt, &nitems, &after,
                            &data) != kXSuccess ||
-      data == nullptr || nitems < 4) {
+      data == nullptr || actual != kXaCardinal || fmt != 32 || nitems != 4) {
     if (data != nullptr) {
       x.XFree(data);
     }
@@ -170,7 +170,7 @@ inline void x11_frame_top_bottom(const X11Api& x, XDisplay* dpy, XWindow win, in
   unsigned char* data = nullptr;
   if (x.XGetWindowProperty(dpy, win, ext, 0, 4, 0, kXaCardinal, &actual, &fmt, &nitems, &after,
                            &data) != kXSuccess ||
-      data == nullptr || nitems < 4) {
+      data == nullptr || actual != kXaCardinal || fmt != 32 || nitems != 4) {
     if (data != nullptr) {
       x.XFree(data);
     }
@@ -184,6 +184,33 @@ inline void x11_frame_top_bottom(const X11Api& x, XDisplay* dpy, XWindow win, in
 
 enum class WindowCorner { kBottomLeft, kTopLeft };
 
+inline XWindow x11_find_window(const X11Api& x, XDisplay* dpy, XWindow root,
+                               const std::string& title) {
+  XWindow found = 0;
+  const XAtom list = x.XInternAtom(dpy, "_NET_CLIENT_LIST", 1);
+  XAtom actual = 0;
+  int fmt = 0;
+  X11ULong nitems = 0;
+  X11ULong after = 0;
+  unsigned char* data = nullptr;
+  if (list != 0 &&
+      x.XGetWindowProperty(dpy, root, list, 0, 1024, 0, kXaWindow, &actual, &fmt, &nitems, &after,
+                           &data) == kXSuccess &&
+      data != nullptr && actual == kXaWindow && fmt == 32 && nitems <= 1024) {
+    const auto* wins = reinterpret_cast<const XWindow*>(data);
+    for (X11ULong i = 0; i < nitems; ++i) {
+      if (x11_window_title(x, dpy, wins[i]) == title) {
+        found = wins[i];
+        break;
+      }
+    }
+  }
+  if (data != nullptr) {
+    x.XFree(data);
+  }
+  return found;
+}
+
 inline bool try_place_x11(const std::string& title, WindowCorner corner) {
   const X11Api* x = x11();
   if (x == nullptr) {
@@ -194,26 +221,7 @@ inline bool try_place_x11(const std::string& title, WindowCorner corner) {
     return false;
   }
   const XWindow root = x->XDefaultRootWindow(dpy);
-  XWindow found = 0;
-  const XAtom list = x->XInternAtom(dpy, "_NET_CLIENT_LIST", 1);
-  XAtom actual = 0;
-  int fmt = 0;
-  X11ULong nitems = 0;
-  X11ULong after = 0;
-  unsigned char* data = nullptr;
-  if (list != 0 &&
-      x->XGetWindowProperty(dpy, root, list, 0, 1024, 0, kXaWindow, &actual, &fmt, &nitems, &after,
-                            &data) == kXSuccess &&
-      data != nullptr) {
-    const auto* wins = reinterpret_cast<const XWindow*>(data);
-    for (X11ULong i = 0; i < nitems; ++i) {
-      if (x11_window_title(*x, dpy, wins[i]) == title) {
-        found = wins[i];
-        break;
-      }
-    }
-    x->XFree(data);
-  }
+  const XWindow found = x11_find_window(*x, dpy, root, title);
   if (found == 0) {
     x->XCloseDisplay(dpy);
     return false;
