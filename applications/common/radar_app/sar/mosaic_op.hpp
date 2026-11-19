@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -27,6 +28,7 @@
 
 #include "radar_app/sar/mosaic_sample.hpp"
 #include "radar_common/descriptors/sample_geometry.hpp"
+#include "radar_common/tensor/max_byte_span.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_schemas/sample_geometry_bridge.hpp"
 
@@ -67,8 +69,10 @@ class SarMosaicOp : public Operator<> {
     display_max_side_(display_max_side) {
     if (!parent_.is_valid())
       throw std::invalid_argument("SarMosaicOp: invalid parent geometry");
-    if (crop_u0_ < 0 || crop_nu_ < 0 || display_max_side_ < 0 ||
-        crop_u0_ + crop_nu_ > parent_.num_u())
+    // Validate both the resident canvas and the pool before either can allocate.
+    (void)canvas_bytes(complex_element_bytes<T>());
+    if (crop_u0_ < 0 || crop_nu_ < 0 || display_max_side_ < 0 || crop_nu_ > parent_.num_u() ||
+        crop_u0_ > parent_.num_u() - crop_nu_)
       throw std::invalid_argument("SarMosaicOp: invalid parent-u crop or display budget");
     if (crop_nu_ == 0 && crop_u0_ != 0)
       throw std::invalid_argument("SarMosaicOp: a parent-u crop offset needs a crop width");
@@ -80,7 +84,7 @@ class SarMosaicOp : public Operator<> {
     if (display_max_side_ > 0) {
       const int64_t longest = std::max(parent_.num_v(), crop_nu_);
       if (longest > display_max_side_)
-        factor_ = (longest + display_max_side_ - 1) / display_max_side_;
+        factor_ = 1 + (longest - 1) / display_max_side_;
       // A factor wider than the shorter axis leaves that axis under one whole
       // box. Capping keeps every box inside the canvas; clamping the output
       // extent up to 1 instead does not, because the kernel still reads
@@ -111,8 +115,7 @@ class SarMosaicOp : public Operator<> {
     spec.input(image).queue_depth(8U).expects_tensor(tensor_input(device));
     spec.input(sample_geometry).queue_depth(8U);
     spec.output(image_out).produces_tensor(pooled_tensor_output(
-        device, 2U,
-        static_cast<uint64_t>(out_v_) * static_cast<uint64_t>(out_u_) * 2U * sizeof(T)));
+        device, 2U, byte_span_complex_cube<T>({out_v_, out_u_}, "SarMosaicOp output")));
   }
   [[nodiscard]] Contract contract() const override {
     Contract result;
@@ -137,7 +140,8 @@ class SarMosaicOp : public Operator<> {
           Error{ErrorCode::kInvalidArgument, "SarMosaicOp: expected complex64 or complex128"});
     const int64_t pv = parent_.num_v(), pu = parent_.num_u();
     const std::size_t elem = static_cast<std::size_t>(dtype.bits / 8U);
-    const std::size_t bytes = static_cast<std::size_t>(pv * pu) * elem;
+    const std::size_t bytes = canvas_bytes(elem);
+    const std::size_t pitch = byte_span_elems(static_cast<std::size_t>(pu), elem, "SarMosaicOp");
     const auto stream = context.cuda_stream().get();
     if (canvas_ == nullptr) {
       if (cudaMalloc(&canvas_, bytes) != cudaSuccess)
@@ -158,11 +162,17 @@ class SarMosaicOp : public Operator<> {
     const auto& au = parent_.axis_u();
     const double v = (dx * av[0] + dy * av[1] + dz * av[2]) / parent_.spacing()[0];
     const double u = (dx * au[0] + dy * au[1] + dz * au[2]) / parent_.spacing()[1];
+    // llround has no defined result for non-finite or out-of-range coordinates.
+    const double limit = static_cast<double>(std::numeric_limits<int64_t>::max());
+    if (!std::isfinite(v) || !std::isfinite(u) || v <= -limit || v >= limit || u <= -limit ||
+        u >= limit)
+      return make_unexpected(
+          Error{ErrorCode::kInvalidArgument, "SarMosaicOp: window outside parent lattice"});
     const int64_t v0 = static_cast<int64_t>(std::llround(v));
     const int64_t u0 = static_cast<int64_t>(std::llround(u));
     if (std::abs(v - static_cast<double>(v0)) > 0.25 ||
-        std::abs(u - static_cast<double>(u0)) > 0.25 || v0 < 0 || u0 < 0 || v0 + shape[0] > pv ||
-        u0 + shape[1] > pu) {
+        std::abs(u - static_cast<double>(u0)) > 0.25 || v0 < 0 || u0 < 0 || shape[0] > pv ||
+        shape[1] > pu || v0 > pv - shape[0] || u0 > pu - shape[1]) {
       return make_unexpected(
           Error{ErrorCode::kInvalidArgument, "SarMosaicOp: window outside parent lattice"});
     }
@@ -170,11 +180,13 @@ class SarMosaicOp : public Operator<> {
         cudaMemsetAsync(canvas_, 0, bytes, stream) != cudaSuccess) {
       return make_unexpected(Error{ErrorCode::kFailure, "SarMosaicOp: wrap clear failed"});
     }
-    auto* dst = static_cast<char*>(canvas_) + static_cast<std::size_t>(v0 * pu + u0) * elem;
-    if (cudaMemcpy2DAsync(
-            dst, static_cast<std::size_t>(pu) * elem, tile.data(),
-            static_cast<std::size_t>(shape[1]) * elem, static_cast<std::size_t>(shape[1]) * elem,
-            static_cast<std::size_t>(shape[0]), cudaMemcpyDeviceToDevice, stream) != cudaSuccess) {
+    // The validated canvas span and subtraction-based bounds prove these offsets fit.
+    auto* dst = static_cast<char*>(canvas_) + static_cast<std::size_t>(v0) * pitch +
+                static_cast<std::size_t>(u0) * elem;
+    if (cudaMemcpy2DAsync(dst, pitch, tile.data(), static_cast<std::size_t>(shape[1]) * elem,
+                          static_cast<std::size_t>(shape[1]) * elem,
+                          static_cast<std::size_t>(shape[0]), cudaMemcpyDeviceToDevice,
+                          stream) != cudaSuccess) {
       return make_unexpected(Error{ErrorCode::kFailure, "SarMosaicOp: blit failed"});
     }
     last_v0_ = v0;
@@ -182,7 +194,8 @@ class SarMosaicOp : public Operator<> {
       return prepare_device_tensor(
           image_out, context, std::vector<int64_t>{out_v_, out_u_}, dtype,
           [&](void* output, std::size_t size) -> expected<void, Error> {
-            if (size != static_cast<std::size_t>(out_v_ * out_u_) * elem)
+            if (size != byte_span_elems(product_extents({out_v_, out_u_}, "SarMosaicOp"), elem,
+                                        "SarMosaicOp"))
               return make_unexpected(Error{ErrorCode::kFailure, "SarMosaicOp: view size mismatch"});
             // Keyed on the factor alone. `sample_mosaic_rect` multi-looks
             // unconditionally, so it publishes amplitude with a zeroed
@@ -196,8 +209,8 @@ class SarMosaicOp : public Operator<> {
               if (cudaMemcpy2DAsync(
                       output, row,
                       static_cast<const char*>(canvas_) + static_cast<std::size_t>(crop_u0_) * elem,
-                      static_cast<std::size_t>(pu) * elem, row, static_cast<std::size_t>(out_v_),
-                      cudaMemcpyDeviceToDevice, stream) != cudaSuccess)
+                      pitch, row, static_cast<std::size_t>(out_v_), cudaMemcpyDeviceToDevice,
+                      stream) != cudaSuccess)
                 return make_unexpected(
                     Error{ErrorCode::kFailure, "SarMosaicOp: parent copy failed"});
               return {};
@@ -214,6 +227,16 @@ class SarMosaicOp : public Operator<> {
   Output<Tensor> image_out{"image_out"};
 
  private:
+  [[nodiscard]] std::size_t canvas_bytes(std::size_t elem) const {
+    const auto bytes =
+        byte_span_elems(product_extents({parent_.num_v(), parent_.num_u()}, "SarMosaicOp canvas"),
+                        elem, "SarMosaicOp canvas");
+    // Tensor sizes and the sampling kernel use signed 64-bit offsets.
+    if (bytes > static_cast<std::size_t>(std::numeric_limits<int64_t>::max()))
+      throw std::invalid_argument("SarMosaicOp: canvas exceeds signed byte range");
+    return bytes;
+  }
+
   SampleGeometry parent_;
   bool loop_{false};
   int64_t crop_u0_{0}, crop_nu_{0}, display_max_side_{0};

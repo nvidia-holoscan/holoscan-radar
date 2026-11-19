@@ -1423,6 +1423,14 @@ still declare SDK 4.3.0.
 
 ## In flight / claims
 
+- **2026-11-19 — AIVO SAR arithmetic** (`deustice/aivo-fixes`, Codex):
+  mosaic canvas/crop/tile arithmetic is hardened before allocation and copies;
+  six float/double overflow, malformed-placement, phase-preserving crop and
+  power-decimation tests pass, and both strip applications rebuild. No resource
+  cap or valid-input contract change. Backprojection conversion sizing/indexing
+  follows in its own commit. AIVO confirms both new CPHD PVP-extent and
+  signal-product reports remediated at `2cd95dce`; the cache fix is also confirmed.
+
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
 | Operator cache byte budgets | Codex | `deustice/aivo-fixes` | **implemented; contract change approved 2026-11-19:** shared instance LRU budget; 64 MiB generally, 128 MiB dense DDM, 2 GiB SAR range compression; zero disables retention. Charge artifacts, keys/bookkeeping and cached scratch; oversized entries execute uncached with bounded warnings; leave MatX caches alone. All 1,422 other unit/fixture CTests and 293 provider checks pass; provider startup-log check failed in parallel and passed in isolation. Float/double partial DDM tiles, SAR eviction and steering reuse pass; GB10 DDM scratch is about 64 MiB. Full lint passes. AIVO re-verification is pending portal connectivity. |

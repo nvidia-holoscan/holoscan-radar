@@ -328,6 +328,9 @@ target_include_directories(test_fmcw_simo_report PRIVATE
 
 radar_add_test(app/test_report_shapes holoscan::radar_app)
 radar_add_test(app/test_sar_diagnostics holoscan::radar_app)
+radar_add_test(app/test_sar_mosaic holoscan::radar_app)
+target_sources(test_sar_mosaic PRIVATE
+    ${PROJECT_SOURCE_DIR}/applications/common/radar_app/sar/mosaic_sample.cu)
 radar_add_test(app/test_shutdown_signals holoscan::radar_app)
 
 radar_add_test(app/test_sar_config_paths holoscan::radar_app holoscan::params_io)
