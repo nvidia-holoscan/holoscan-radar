@@ -4,6 +4,17 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **AIVO branch SAR GUI integration validation** on
+  `deustice/aivo-fixes`: merged `deustice/sar-gui` through `3ed553af` without
+  conflicts. Full build and lint pass; 47 focused SAR/display/X11 checks pass.
+  All 1,616 native cases are covered: 1,612 initially passed; four video SAR
+  false failures came from a single-pixel probe covered by the new sensor arrow.
+  Probe a grayscale region instead; all 28 SAR window/fixture reruns pass.
+  All 297 provider, 254 host-tool and 28 CI helper checks pass, including all
+  14 native application smoke workflows. Updated a stale CLI test to expect
+  existing presenter arguments. Full pinned lint passes. Diagnostic performance
+  runs and physical-display appearance are outside this correctness validation.
+
 - **2026-11-19** — **GUI review: final-frame retention and unavailable display**
   on `deustice/sar-gui`: implemented. Retain one newest rate-deferred SAR sample,
   capture metadata and scene index until a clock tick can render it, without

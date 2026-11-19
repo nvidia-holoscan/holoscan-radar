@@ -71,7 +71,9 @@ class ApplicationCliErrorTest(unittest.TestCase):
             self.assertIn("Error: CPHD input file not found:", output.getvalue())
             self.assertIn("Next step: prepare the data", output.getvalue())
             self.assertNotIn("Traceback", output.getvalue())
-            build.assert_called_once_with(config, cphd_override=None)
+            build.assert_called_once_with(
+                config, cphd_override=None, presenter=None, choose_presenter=False
+            )
 
     def test_unexpected_builder_failure_propagates(self):
         with tempfile.TemporaryDirectory() as temp:
