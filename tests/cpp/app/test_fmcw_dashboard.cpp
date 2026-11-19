@@ -21,6 +21,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <variant>
 
 #include <holoscan/core/compile.hpp>
 #include <holoscan/core/graph.hpp>
@@ -39,6 +40,8 @@
 #include "radar_app/viz/fmcw_holoviz_op.hpp"
 #include "radar_app/viz/image_device_bridge_op.hpp"
 #include "radar_app/viz/image_fit.hpp"
+#include "radar_app/viz/frame_viewport.hpp"
+#include "radar_app/viz/frame_composer_op.hpp"
 #include "radar_app/viz/presentation_graph.hpp"
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
 #include "utils/tensor_fixtures.hpp"
@@ -331,6 +334,65 @@ TEST(ImageDeviceBridgeTest, PreservesPixelsAndMetadataThroughHostStaging) {
   EXPECT_EQ(result.metadata().color_space, image.color_space);
   EXPECT_EQ(result.sample_metadata().capture_time().timestamp_ns,
             std::chrono::duration_cast<std::chrono::nanoseconds>(time).count());
+}
+
+TEST(FmcwDashboardTest, BoundsWideFooterTextureByItsActualHeight) {
+  viz::FrameComposerOp composer(8192, 112, 4096U);
+  const auto& layer = std::get<holoscan::visualization::ImageLayerDesc>(
+      composer.layer_stack().layers().front().desc);
+  EXPECT_EQ(layer.max_width, 8192U);
+  EXPECT_EQ(layer.max_height, 112U);
+}
+
+TEST(ImageDeviceBridgeTest, CropsOnlyVisibleFooterRowsAndPreservesCaptureTime) {
+  using holoscan::schema::ImageT;
+  constexpr int width = 17, height = 9, visible_width = 7, visible_height = 4;
+  std::vector<std::uint8_t> pixels(width * height * 4);
+  for (std::size_t i = 0; i < pixels.size(); ++i)
+    pixels[i] = static_cast<std::uint8_t>(i * 17U + 3U);
+  ImageT image;
+  image.width = width;
+  image.height = height;
+  image.encoding = holoscan::schema::ImageEncoding_RGBA8;
+  image.data =
+      radar::testing::to_device_tensor(pixels, {height, width, 4}, DLDataType{kDLUInt, 8U, 1U});
+  auto viewport =
+      std::make_shared<viz::FrameViewport>(visible_width, visible_height, width, height);
+  viewport->drawn(123000000, visible_width, visible_height);
+  viewport->set(width, height);  // Resize raced ahead of this completed frame.
+  auto harness =
+      holoscan::testing::create_operator_test<viz::ImageDownloadOp>(width, height, viewport);
+  harness.push_frame(holoscan::testing::frame_at(std::chrono::milliseconds{123},
+                                                 holoscan::testing::input("image_in", image)));
+  harness.input_source_device("image_in", holoscan::DeviceId{radar::app::application_device()});
+  harness.capture_snapshot<ImageT>("image_out", 1U, pixels.size());
+  radar::testing::FixtureCompletion completion;
+  auto running = harness.run_async(completion.run_options());
+  const bool ready = completion.wait_for_output(running, "image_out", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(ready);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frame = result.snapshot<ImageT>("image_out");
+  const auto actual =
+      radar::testing::to_host(frame.tensor(holoscan::schema::ImageTensorFields::data));
+  EXPECT_EQ(frame.metadata().width, visible_width);
+  EXPECT_EQ(frame.metadata().height, visible_height);
+  ASSERT_EQ(actual.data.size(), visible_width * visible_height * 4U);
+  for (int y = 0; y < visible_height; ++y)
+    EXPECT_EQ(std::memcmp(actual.data.data() + y * visible_width * 4, pixels.data() + y * width * 4,
+                          visible_width * 4),
+              0);
+  EXPECT_EQ(frame.sample_metadata().capture_time().timestamp_ns, 123000000);
+  viewport->set(width * 2, height * 2);
+  EXPECT_EQ(viewport->get(), (std::pair{width, height}));
+  viewport->set(0, 0);
+  EXPECT_EQ(viewport->get(), (std::pair{1, 1}));
+  for (int i = 0; i < 65; ++i)
+    viewport->drawn(i, 1, 1);
+  EXPECT_FALSE(viewport->drawn(123000000));
+  EXPECT_EQ(viewport->drawn(64), (std::pair{1, 1}));
 }
 
 struct PowerLegendCase {
@@ -1094,6 +1156,26 @@ TEST(CompletedFrameDock, KeepsStatusWithItsImageAndReservesTimelineSpaceOnResize
   EXPECT_EQ(cudaFree(target), cudaSuccess);
   EXPECT_EQ(cudaFree(strip), cudaSuccess);
   EXPECT_EQ(cudaFree(main), cudaSuccess);
+}
+
+TEST(CompletedFrameDock, SamplesResizedFooterInPhysicalPixelsInsteadOfStretching) {
+  constexpr int width = 8, image_height = 4, footer_height = 2, footer_width = 16;
+  constexpr DLDataType rgba{kDLUInt, 8U, 1U};
+  std::vector<std::uint8_t> footer(footer_width * footer_height * 4, 255);
+  for (int y = 0; y < footer_height; ++y)
+    for (int x = 0; x < footer_width; ++x)
+      footer[4 * (y * footer_width + x)] = static_cast<std::uint8_t>(10 + x);
+  auto source = radar::testing::to_device_tensor(footer, {footer_height, footer_width, 4}, rgba);
+  std::vector<std::uint8_t> output(width * (image_height + footer_height) * 4);
+  void* target = nullptr;
+  ASSERT_EQ(cudaMalloc(&target, output.size()), cudaSuccess);
+  ASSERT_EQ(viz::compose_docked_panels(nullptr, source->data(), target, width, image_height,
+                                       footer_height, 16, 6, false, nullptr, 2, footer_width),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  for (int x = 1; x < width; ++x)
+    EXPECT_EQ(output[4 * (image_height * width + x)], 10 + 2 * x - 1);
+  EXPECT_EQ(cudaFree(target), cudaSuccess);
 }
 
 TEST(CompletedFrameDock, RetainsOldContentStampsWithoutWaitingForMatchingTimelineTimes) {

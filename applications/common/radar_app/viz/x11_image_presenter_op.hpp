@@ -106,6 +106,8 @@ class X11ImagePresenterOp final : public Operator<> {
     XStoreName(state.display, state.window, title_.c_str());
     if (dock_)
       state.counters = XInternAtom(state.display, "RADAR_PRESENTATION_COUNTERS", False);
+    if (footer_)
+      state.extent = XInternAtom(state.display, "RADAR_PRESENTED_EXTENT", False);
     state.close = XInternAtom(state.display, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(state.display, state.window, &state.close, 1);
     XSelectInput(state.display, state.window, ExposureMask | StructureNotifyMask | KeyPressMask);
@@ -113,7 +115,10 @@ class X11ImagePresenterOp final : public Operator<> {
     state.gc = XCreateGC(state.display, state.pixmap, 0, nullptr);
     state.source = XRenderCreatePicture(state.display, state.pixmap, format, 0, nullptr);
     state.target = XRenderCreatePicture(state.display, state.window, format, 0, nullptr);
-    XRenderSetPictureFilter(state.display, state.source, FilterBilinear, nullptr, 0);
+    // Preserve the GPU-rendered timeline glyphs when resizing its child window.
+    // Scientific imagery keeps its existing smooth interpolation.
+    XRenderSetPictureFilter(state.display, state.source, footer_ ? FilterNearest : FilterBilinear,
+                            nullptr, 0);
     state.pixels =
         XCreateImage(state.display, visual, depth, ZPixmap, 0, nullptr, width_, height_, 32, 0);
     if (!state.pixels)
@@ -167,9 +172,12 @@ class X11ImagePresenterOp final : public Operator<> {
     if (!frames.empty()) {
       const auto& sample = frames.back();
       const auto& frame = sample.data;
-      if (frame.width != width_ || frame.height != height_ || !frame.data || !frame.data->data() ||
+      const bool valid_extent = footer_ ? frame.width > 0 && frame.width <= width_ &&
+                                              frame.height > 0 && frame.height <= height_
+                                        : frame.width == width_ && frame.height == height_;
+      if (!valid_extent || !frame.data || !frame.data->data() ||
           frame.encoding != schema::ImageEncoding_RGBA8 || frame.data->ndim() != 3 ||
-          frame.data->shape()[0] != height_ || frame.data->shape()[1] != width_ ||
+          frame.data->shape()[0] != frame.height || frame.data->shape()[1] != frame.width ||
           frame.data->shape()[2] != 4)
         return make_unexpected(Error{ErrorCode::kInvalidArgument, "X11 RGBA frame shape mismatch"});
 
@@ -196,17 +204,20 @@ class X11ImagePresenterOp final : public Operator<> {
       }
       const auto opaque =
           ~(state.pixels->red_mask | state.pixels->green_mask | state.pixels->blue_mask);
-      for (std::int32_t y = 0; y < height_; ++y) {
-        for (std::int32_t x = 0; x < width_; ++x) {
-          const auto* pixel = rgba + (static_cast<std::size_t>(y) * width_ + x) * 4U;
+      for (std::int32_t y = 0; y < frame.height; ++y) {
+        for (std::int32_t x = 0; x < frame.width; ++x) {
+          const auto* pixel = rgba + (static_cast<std::size_t>(y) * frame.width + x) * 4U;
           const std::uint64_t packed = red[pixel[0]] | green[pixel[1]] | blue[pixel[2]] | opaque;
           XPutPixel(state.pixels, x, y, packed);
         }
       }
-      XPutImage(state.display, state.pixmap, state.gc, state.pixels, 0, 0, 0, 0, width_, height_);
+      XPutImage(state.display, state.pixmap, state.gc, state.pixels, 0, 0, 0, 0, frame.width,
+                frame.height);
+      state.frame_width = frame.width;
+      state.frame_height = frame.height;
       ++state.uploads;
       if (dock_)
-        dock_->uploaded(footer_, static_cast<std::uint64_t>(width_) * height_ * 4U);
+        dock_->uploaded(footer_, static_cast<std::uint64_t>(frame.width) * frame.height * 4U);
       redraw = true;
       have_frame_ = true;
       if (progress_)
@@ -226,7 +237,7 @@ class X11ImagePresenterOp final : public Operator<> {
         target_width = std::max(1, static_cast<int>(width_ * scale));
         target_height = std::max(1, static_cast<int>(source_height * scale));
       }
-      if (fit_ || docked_footer_height_ > 0) {
+      if (fit_ || docked_footer_height_ > 0 || footer_) {
         XSetForeground(state.display, state.gc, 0);
         XFillRectangle(state.display, state.window, state.gc, 0, 0, state.width, state.height);
       }
@@ -238,13 +249,28 @@ class X11ImagePresenterOp final : public Operator<> {
         XRenderComposite(state.display, PictOpSrc, state.source, 0, state.target, 0, 0, 0, 0, dx,
                          dy, dw, dh);
       };
-      paint(0, 0, width_, source_height, (state.width - target_width) / 2,
-            (available_height - target_height) / 2, target_width, target_height);
+      if (footer_) {
+        // A resize changes the next GPU layout, never the glyph aspect ratio.
+        // Until that frame arrives, display the cached pixels without stretching.
+        const int w = std::min(state.width, state.frame_width);
+        const int h = std::min(state.height, state.frame_height);
+        paint(0, 0, w, h, 0, 0, w, h);
+      } else {
+        paint(0, 0, width_, source_height, (state.width - target_width) / 2,
+              (available_height - target_height) / 2, target_width, target_height);
+      }
       if (docked_footer_height_ > 0) {
         const int sw = std::min(status_width_, std::max(1, state.width / 2));
         paint(0, source_height, sw, docked_footer_height_, 0, available_height, sw, footer_height);
       }
       ++state.repaints;
+      if (footer_) {
+        const std::array<X11PropertyWord, 2> extent{
+            static_cast<X11PropertyWord>(state.frame_width),
+            static_cast<X11PropertyWord>(state.frame_height)};
+        XChangeProperty(state.display, state.window, state.extent, XA_CARDINAL, 32, PropModeReplace,
+                        reinterpret_cast<const unsigned char*>(extent.data()), extent.size());
+      }
       if (dock_) {
         // Xlib format-32 properties use native unsigned long array elements.
         const std::array<X11PropertyWord, 2> counters{state.uploads, state.repaints};
@@ -268,12 +294,13 @@ class X11ImagePresenterOp final : public Operator<> {
     Picture source{};
     Picture target{};
     XImage* pixels{};
-    Atom close{}, counters{};
+    Atom close{}, counters{}, extent{};
     X11PropertyWord uploads{0}, repaints{0};
     std::shared_ptr<X11DockedWindow> dock;
     bool footer{false};
     int width{};
     int height{};
+    int frame_width{}, frame_height{};
 
     ~State() {
       if (pixels)

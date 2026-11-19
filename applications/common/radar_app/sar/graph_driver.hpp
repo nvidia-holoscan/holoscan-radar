@@ -468,32 +468,37 @@ struct SarGraphRuntime {
                                          devices.display);
       has_visualization = true;
       if (cfg.visualization.timeline.enabled) {
+        const auto tw = docked ? width - status_width : cfg.visualization.timeline.window_width;
+        const auto th = cfg.visualization.timeline.window_height;
+        // HSDK 5 CUDA sinks have an immutable extent. Reserve a bounded canvas
+        // for up to an 8K-wide footer, and lay out only its visible region.
+        auto viewport = docked && !cfg.headless ? std::make_shared<app::viz::FrameViewport>(
+                                                      tw, th, std::max<int>(tw, 8192), th)
+                                                : std::shared_ptr<app::viz::FrameViewport>{};
+        const auto canvas_width = viewport ? viewport->max_width : tw;
         auto timeline = graph.op<app::sar::TimelineRasterOp>(
             "timeline_raster", hud, cfg.scene_names, cfg.show_playback_lag,
-            cfg.visualization.timeline.display_rate_hz,
-            docked ? width - status_width : cfg.visualization.timeline.window_width,
-            cfg.visualization.timeline.window_height,
-            cfg.headless ? std::shared_ptr<app::FrameProgress>{} : display_progress);
+            cfg.visualization.timeline.display_rate_hz, canvas_width, th,
+            cfg.headless ? std::shared_ptr<app::FrameProgress>{} : display_progress, viewport);
         bind_outputs(options, "timeline_raster", {"frame"}, devices.compute);
         auto timeline_part = graph.partition("timeline");
         timeline_part.add(timeline);
         auto timeline_display = graph.partition("timeline_display");
-        const auto tw = docked ? width - status_width : cfg.visualization.timeline.window_width;
-        const auto th = cfg.visualization.timeline.window_height;
-        auto timeline_frame = graph.op<app::viz::FrameComposerOp>("timeline_frame", tw, th, 16384U);
+        auto timeline_frame =
+            graph.op<app::viz::FrameComposerOp>("timeline_frame", canvas_width, th, 16384U);
         timeline_display.add(timeline_frame);
         options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
             .operator_path = "timeline_frame", .output_port = "output", .device = renderer_device});
         graph.add_flow(timeline->labels, timeline_frame->tensor_layer_input(1), overlay_queue);
         app::viz::connect_image_devices(graph, options, timeline_part, timeline_display,
                                         timeline->frame, timeline_frame->image_layer_input(0),
-                                        "timeline_composer", tw, th, devices.compute,
+                                        "timeline_composer", canvas_width, th, devices.compute,
                                         renderer_device, overlay_queue);
         if (docked) {
-          app::viz::add_docked_presentation(graph, options, visualization, composed->output(),
-                                            timeline_display, timeline_frame->output(), width,
-                                            height, th, cfg.visualization, display_progress,
-                                            devices.composer, devices.display, status_width);
+          app::viz::add_docked_presentation(
+              graph, options, visualization, composed->output(), timeline_display,
+              timeline_frame->output(), width, height, th, cfg.visualization, display_progress,
+              devices.composer, devices.display, status_width, viewport);
         } else {
           auto timeline_config = cfg.visualization;
           timeline_config.display_rate_hz = cfg.visualization.timeline.display_rate_hz;

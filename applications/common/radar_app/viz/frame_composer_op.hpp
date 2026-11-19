@@ -120,8 +120,12 @@ class FrameComposerOp : public holoscan::visualization::HolovizOp {
                                                std::uint32_t max_lines, std::int32_t image_max_side,
                                                std::int32_t image_view_height) {
     const auto side = std::max({width, height, image_max_side});
+    // A wide, shallow footer must not reserve a square max-width texture.
+    // Only scientific inputs that explicitly request a larger image extent
+    // need the existing square bound.
     auto layers = dashboard_image_layers(
-        side, side, image_view_height > 0 ? static_cast<float>(image_view_height) / height : 1.0F);
+        image_max_side > 0 ? side : width, image_max_side > 0 ? side : height,
+        image_view_height > 0 ? static_cast<float>(image_view_height) / height : 1.0F);
     layers.add_text_layer("text",
                           visualization::TextLayerDesc{.max_glyphs = max_glyphs,
                                                        .normalized_coordinates = normalized_text});

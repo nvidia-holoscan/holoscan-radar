@@ -124,8 +124,7 @@ def check(args):
                     )
 
                 def first_image_is_displayed():
-                    log.seek(0)
-                    if "SAR: image 1 formed" not in log.read():
+                    if "SAR: image 1 formed" not in (Path(directory) / "run.log").read_text():
                         return False
                     width, height = geometry(lib, display, image_panel)
                     image_height = height - (112 if docked else 0)
@@ -176,6 +175,78 @@ def check(args):
                     finally:
                         lib.XDestroyImage(data)
 
+                lib.XGetWindowProperty.argtypes = [
+                    c.c_void_p,
+                    c.c_ulong,
+                    c.c_ulong,
+                    c.c_long,
+                    c.c_long,
+                    c.c_int,
+                    c.c_ulong,
+                    c.POINTER(c.c_ulong),
+                    c.POINTER(c.c_int),
+                    c.POINTER(c.c_ulong),
+                    c.POINTER(c.c_ulong),
+                    c.POINTER(c.c_void_p),
+                ]
+
+                def property_pair(window, name):
+                    atom = lib.XInternAtom(display, name, 0)
+                    actual, count, remaining = c.c_ulong(), c.c_ulong(), c.c_ulong()
+                    form, data = c.c_int(), c.c_void_p()
+                    lib.XGetWindowProperty(
+                        display,
+                        window,
+                        atom,
+                        0,
+                        2,
+                        0,
+                        6,
+                        c.byref(actual),
+                        c.byref(form),
+                        c.byref(count),
+                        c.byref(remaining),
+                        c.byref(data),
+                    )
+                    try:
+                        if form.value == 32 and count.value == 2:
+                            return tuple(c.cast(data, c.POINTER(c.c_ulong))[i] for i in range(2))
+                        return None
+                    finally:
+                        if data:
+                            lib.XFree(data)
+
+                if x11_dock:
+                    # Both widths select the full footer layout. Rendering at
+                    # physical pixels must preserve the entire static lane label
+                    # while its timeline expands, then shrinks back.
+                    reference = None
+                    for width in (960, 1200, 960):
+                        lib.XResizeWindow(display, formation, width, 640)
+                        lib.XFlush(display)
+                        panel_width = width - status_width(width)
+                        wait(lambda: geometry(lib, display, timeline) == (panel_width, 112))
+                        # Wait for a frame drawn for this exact extent, not
+                        # merely a resized child still holding an older frame.
+                        wait(
+                            lambda: property_pair(timeline, b"RADAR_PRESENTED_EXTENT")
+                            == (panel_width, 112)
+                        )
+                        data = lib.XGetImage(
+                            display, timeline, 264 + 8, 0, 200, 24, c.c_ulong(-1).value, 2
+                        )
+                        assert data, "Cannot capture native footer glyphs"
+                        try:
+                            glyphs = tuple(
+                                lib.XGetPixel(data, x, y) for y in range(24) for x in range(200)
+                            )
+                        finally:
+                            lib.XDestroyImage(data)
+                        assert any(glyphs), "Receipt label is missing"
+                        if reference is not None:
+                            assert glyphs == reference, "Resize stretched native footer glyphs"
+                        reference = glyphs
+
                 for width, height in ((640, 360), (320, 480), (256, 256)):
                     lib.XResizeWindow(display, formation, width, height)
                     lib.XFlush(display)
@@ -217,48 +288,8 @@ def check(args):
                 if x11_dock and not args.soak_seconds:
                     # With the source at EOF, timeline ticks must neither upload
                     # nor repaint the cached image panel, even though time advances.
-                    lib.XGetWindowProperty.argtypes = [
-                        c.c_void_p,
-                        c.c_ulong,
-                        c.c_ulong,
-                        c.c_long,
-                        c.c_long,
-                        c.c_int,
-                        c.c_ulong,
-                        c.POINTER(c.c_ulong),
-                        c.POINTER(c.c_int),
-                        c.POINTER(c.c_ulong),
-                        c.POINTER(c.c_ulong),
-                        c.POINTER(c.c_void_p),
-                    ]
-                    atom = lib.XInternAtom(display, b"RADAR_PRESENTATION_COUNTERS", 0)
-
                     def counters(window):
-                        actual, count, remaining = c.c_ulong(), c.c_ulong(), c.c_ulong()
-                        form, data = c.c_int(), c.c_void_p()
-                        lib.XGetWindowProperty(
-                            display,
-                            window,
-                            atom,
-                            0,
-                            2,
-                            0,
-                            6,
-                            c.byref(actual),
-                            c.byref(form),
-                            c.byref(count),
-                            c.byref(remaining),
-                            c.byref(data),
-                        )
-                        try:
-                            if form.value == 32 and count.value == 2:
-                                return tuple(
-                                    c.cast(data, c.POINTER(c.c_ulong))[i] for i in range(2)
-                                )
-                            return None
-                        finally:
-                            if data:
-                                lib.XFree(data)
+                        return property_pair(window, b"RADAR_PRESENTATION_COUNTERS")
 
                     wait(lambda: counters(image_panel))
                     wait(lambda: counters(timeline))
@@ -271,9 +302,14 @@ def check(args):
                     assert (
                         counters(timeline)[0] > before_timeline[0]
                     ), "Timeline stopped at image EOF"
-                log.seek(0)
+                # Read through a separate descriptor. Seeking the writer's
+                # descriptor also moves the child's stdout offset and can
+                # overwrite startup diagnostics during a busy looping run.
                 initial_counts = [
-                    int(x) for x in re.findall(r"SAR: image (\d+) formed", log.read())
+                    int(x)
+                    for x in re.findall(
+                        r"SAR: image (\d+) formed", (Path(directory) / "run.log").read_text()
+                    )
                 ]
                 initial_count = max(initial_counts, default=0)
                 samples = []
@@ -381,8 +417,7 @@ def check(args):
                     )
                     lib.XFlush(display)
                 assert process.wait(timeout=10) == 0
-                log.seek(0)
-                output = log.read()
+                output = (Path(directory) / "run.log").read_text()
                 marker = (
                     "X11 finished-image transport"
                     if args.presenter == "x11"
@@ -405,9 +440,8 @@ def check(args):
                     f"resize, idle {args.close} close"
                 )
             except BaseException:
-                log.seek(0)
-                print(log.read()[-10000:], file=sys.stderr)
-                if "formation" in locals() and "timeline" in locals():
+                print((Path(directory) / "run.log").read_text()[-10000:], file=sys.stderr)
+                if process.poll() is None and "formation" in locals() and "timeline" in locals():
                     save_windows()
                 raise
             finally:

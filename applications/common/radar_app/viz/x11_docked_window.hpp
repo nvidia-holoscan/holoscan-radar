@@ -10,11 +10,14 @@
 #include <array>
 #include <cstdint>
 #include <mutex>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 #include <holoscan/logger/logger.hpp>
+
+#include "radar_app/viz/frame_viewport.hpp"
 
 namespace holoscan::radar::app::viz {
 
@@ -23,12 +26,13 @@ namespace holoscan::radar::app::viz {
 class X11DockedWindow {
  public:
   X11DockedWindow(int width, int image_height, int footer_height, std::string title,
-                  int status_width = 0)
+                  int status_width = 0, std::shared_ptr<FrameViewport> viewport = {})
   : width_(width),
     height_(image_height + footer_height),
     footer_height_(footer_height),
     status_width_(status_width),
-    title_(std::move(title)) {}
+    title_(std::move(title)),
+    viewport_(std::move(viewport)) {}
   ~X11DockedWindow() {
     if (display_)
       XCloseDisplay(display_);
@@ -108,6 +112,8 @@ class X11DockedWindow {
     const int footer = std::min(footer_height_, std::max(1, height_ / 2));
     const int image = std::max(1, height_ - footer);
     const int status = std::min(status_width_, std::max(1, width_ / 2));
+    if (viewport_)
+      viewport_->set(width_ - status, footer);
     if (children_[0])
       XMoveResizeWindow(display_, children_[0], 0, 0, width_, status_width_ > 0 ? height_ : image);
     if (children_[1]) {
@@ -126,5 +132,6 @@ class X11DockedWindow {
   std::array<std::uint64_t, 2> uploads_{}, bytes_{};
   int width_, height_, footer_height_, status_width_;
   std::string title_;
+  std::shared_ptr<FrameViewport> viewport_;
 };
 }  // namespace holoscan::radar::app::viz

@@ -318,7 +318,8 @@ void draw_pulse_progress(TimelineCommands* img, int64_t width, int64_t height,
 TimelineRasterOp::TimelineRasterOp(std::shared_ptr<radar::FormationHud> hud,
                                    std::vector<std::string> scene_names, bool show_playback_lag,
                                    double rate, int64_t width, int64_t height,
-                                   std::shared_ptr<FrameProgress> progress)
+                                   std::shared_ptr<FrameProgress> progress,
+                                   std::shared_ptr<viz::FrameViewport> viewport)
 : hud_(std::move(hud)),
   scene_names_(std::move(scene_names)),
   show_playback_lag_(show_playback_lag),
@@ -326,7 +327,8 @@ TimelineRasterOp::TimelineRasterOp(std::shared_ptr<radar::FormationHud> hud,
   period_(std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::duration<double>(1.0 / rate))),
   width_(width),
-  height_(height) {
+  height_(height),
+  viewport_(std::move(viewport)) {
   if (!std::isfinite(rate) || rate <= 0.0 || rate > 1000.0 || width < 1 || height < 1)
     throw std::invalid_argument("Invalid timeline dimensions/rate");
   if (!hud_)
@@ -366,7 +368,7 @@ void TimelineRasterOp::stop() {
 
 expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   const auto [layout_width, layout_height] =
-      std::pair{static_cast<int>(width_), static_cast<int>(height_)};
+      viewport_ ? viewport_->get() : std::pair{static_cast<int>(width_), static_cast<int>(height_)};
   const auto snap = hud_->snapshot();
   const auto now = Clock::now();
   const bool hud_due = !hud_held_ || std::chrono::duration<double>(now - hud_at_).count() >= 1.0;
@@ -520,6 +522,8 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   descriptor.width = static_cast<std::int32_t>(width_);
   descriptor.encoding = schema::ImageEncoding_RGBA8;
   descriptor.color_space = schema::ColorSpace_UNSPECIFIED;
+  if (viewport_)
+    viewport_->drawn(context.activation_time().timestamp_ns, layout_width, layout_height);
   return frame.emit_tensor(std::move(*loan), descriptor,
                            EmitOptions{.capture_time = context.activation_time()});
 }

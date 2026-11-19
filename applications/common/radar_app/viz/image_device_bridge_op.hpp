@@ -6,7 +6,9 @@
 #include <cuda_runtime_api.h>
 
 #include <array>
+#include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -26,6 +28,8 @@
 #include <holoscan/sensor_io/provenance.hpp>
 #include <holoscan/sensor_io/schemas/image_schema_traits.hpp>
 
+#include "radar_app/viz/frame_viewport.hpp"
+
 namespace holoscan::radar::app::viz {
 
 // An explicit host boundary joins GPUs even when CUDA peer access is unavailable.
@@ -34,7 +38,9 @@ namespace holoscan::radar::app::viz {
 template <bool Upload>
 class ImageDeviceBridgeOp final : public Operator<> {
  public:
-  ImageDeviceBridgeOp(std::int32_t width, std::int32_t height) : width_(width), height_(height) {}
+  ImageDeviceBridgeOp(std::int32_t width, std::int32_t height,
+                      std::shared_ptr<FrameViewport> viewport = {})
+  : width_(width), height_(height), viewport_(std::move(viewport)) {}
 
   void setup(OperatorSpec& spec) override {
     const TensorBounds bounds{.max_rank = 3U,
@@ -69,12 +75,23 @@ class ImageDeviceBridgeOp final : public Operator<> {
     if (!sample)
       return make_unexpected(std::move(sample).error());
     const auto& image = sample->data;
-    const std::array<std::int64_t, 3U> shape{image.height, image.width, 4};
     if (image.width < 1 || image.width > width_ || image.height < 1 || image.height > height_ ||
         !image.data || image.data->ndim() != 3 || image.data->shape()[0] != image.height ||
         image.data->shape()[1] != image.width || image.data->shape()[2] != 4) {
       return make_unexpected(Error{ErrorCode::kInvalidArgument, "image transfer shape mismatch"});
     }
+    auto descriptor = image;
+    if (viewport_) {
+      const auto drawn = viewport_->drawn(sample->metadata.capture_time().timestamp_ns);
+      // A display stall may outlive the bounded layout history. Drop that
+      // stale display frame rather than guessing at a newer frame's extent.
+      if (!drawn)
+        return {};
+      const auto [width, height] = *drawn;
+      descriptor.width = std::min(width, image.width);
+      descriptor.height = std::min(height, image.height);
+    }
+    const std::array<std::int64_t, 3U> shape{descriptor.height, descriptor.width, 4};
     auto loan = image_out.allocate_tensor(
         TensorLoanRequest{.shape = shape, .dtype = DLDataType{kDLUInt, 8U, 1U}});
     if (!loan)
@@ -89,8 +106,9 @@ class ImageDeviceBridgeOp final : public Operator<> {
     if (!writer)
       return make_unexpected(std::move(writer).error());
     const auto status =
-        cudaMemcpyAsync(writer->data(), image.data->data(), writer->byte_size(),
-                        Upload ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost, stream.get());
+        cudaMemcpy2DAsync(writer->data(), descriptor.width * 4U, image.data->data(),
+                          image.width * 4U, descriptor.width * 4U, descriptor.height,
+                          Upload ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost, stream.get());
     // Publish host bytes only after D2H completes, and keep the H2D source
     // loan alive until its read completes. This cold topology choice adds
     // synchronization only to the optional cross-GPU image boundary.
@@ -100,7 +118,7 @@ class ImageDeviceBridgeOp final : public Operator<> {
     auto committed = std::move(*writer).commit();
     if (!committed)
       return make_unexpected(std::move(committed).error());
-    return image_out.emit_tensor(std::move(*loan), image, sensor_io::derive_from(*sample));
+    return image_out.emit_tensor(std::move(*loan), descriptor, sensor_io::derive_from(*sample));
   }
 
   Input<schema::ImageT> image_in{"image_in"};
@@ -109,6 +127,7 @@ class ImageDeviceBridgeOp final : public Operator<> {
  private:
   std::int32_t width_;
   std::int32_t height_;
+  std::shared_ptr<FrameViewport> viewport_;
 };
 
 using ImageDownloadOp = ImageDeviceBridgeOp<false>;

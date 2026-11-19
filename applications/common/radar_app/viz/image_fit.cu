@@ -48,7 +48,8 @@ __device__ uchar4 sample_panel(const uchar4* source, int width, int height, floa
 }
 __global__ void dock_kernel(const uchar4* image, const uchar4* footer, uchar4* target, int width,
                             int image_height, int footer_height, int window_width,
-                            int window_height, bool fit, int status_width) {
+                            int window_height, bool fit, int status_width,
+                            int footer_canvas_width) {
   const int height = image_height + footer_height;
   const int index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= width * height)
@@ -65,9 +66,13 @@ __global__ void dock_kernel(const uchar4* image, const uchar4* footer, uchar4* t
       target[index] = sample_panel(image, width, image_height + footer_height, x,
                                    image_height + (y - ih) * footer_height / fh);
     } else {
-      target[index] = sample_panel(footer, width - status_width, footer_height,
-                                   (x - sw) * (width - status_width) / (window_width - sw),
-                                   (y - ih) * footer_height / fh);
+      if (footer_canvas_width > 0) {
+        target[index] = sample_panel(footer, footer_canvas_width, footer_height, x - sw, y - ih);
+      } else {
+        target[index] = sample_panel(footer, width - status_width, footer_height,
+                                     (x - sw) * (width - status_width) / (window_width - sw),
+                                     (y - ih) * footer_height / fh);
+      }
     }
   } else {
     const float scale =
@@ -82,11 +87,11 @@ __global__ void dock_kernel(const uchar4* image, const uchar4* footer, uchar4* t
 cudaError_t compose_docked_panels(const void* image, const void* footer, void* target, int width,
                                   int image_height, int footer_height, int window_width,
                                   int window_height, bool fit, cudaStream_t stream,
-                                  int status_width) {
+                                  int status_width, int footer_canvas_width) {
   dock_kernel<<<(width * (image_height + footer_height) + 255) / 256, 256, 0, stream>>>(
       static_cast<const uchar4*>(image), static_cast<const uchar4*>(footer),
       static_cast<uchar4*>(target), width, image_height, footer_height, window_width, window_height,
-      fit, status_width);
+      fit, status_width, footer_canvas_width);
   return cudaGetLastError();
 }
 }  // namespace holoscan::radar::app::viz

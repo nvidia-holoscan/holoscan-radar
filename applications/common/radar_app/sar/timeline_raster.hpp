@@ -22,6 +22,7 @@
 
 #include "radar_common/sar/formation_hud.hpp"
 #include "radar_app/app/gui_lifecycle.hpp"
+#include "radar_app/viz/frame_viewport.hpp"
 
 namespace holoscan::radar::app::sar {
 
@@ -32,7 +33,8 @@ class TimelineRasterOp : public Operator<> {
  public:
   TimelineRasterOp(std::shared_ptr<radar::FormationHud> hud, std::vector<std::string> scene_names,
                    bool show_playback_lag, double rate = 10.0, int64_t width = kWidth,
-                   int64_t height = kHeight, std::shared_ptr<FrameProgress> progress = {});
+                   int64_t height = kHeight, std::shared_ptr<FrameProgress> progress = {},
+                   std::shared_ptr<viz::FrameViewport> viewport = {});
   void start() override;
   void stop() override;
   void setup(OperatorSpec& spec) override;
@@ -54,6 +56,7 @@ class TimelineRasterOp : public Operator<> {
   radar::sar_progress::View pulse_view_;
   std::chrono::nanoseconds period_;
   int64_t width_, height_;
+  std::shared_ptr<viz::FrameViewport> viewport_;
   void* commands_{nullptr};
   std::chrono::steady_clock::time_point hud_at_{};
   bool hud_held_{false};

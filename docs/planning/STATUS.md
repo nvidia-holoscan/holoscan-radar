@@ -4,6 +4,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **Resize-aware cached footer presentation**:
+  feed visible window extents into bounded GPU footer layout; preserve glyph
+  proportions with capture-matched cropped transport and physical-pixel native
+  composition. Keep the scientific image cached and resource pools fixed.
+  Regression coverage includes exact crop provenance, bounded layout history,
+  rectangular textures, wide/compact resizes and delayed-display recovery.
+
 - **2026-11-19** — **SAR footer layout and batch history**:
   unify footer typography and workload/latency readouts, show shared received
   and formed progress, and connect matched receipt/completion marks with bounded
