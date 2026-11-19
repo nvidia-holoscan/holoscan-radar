@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 4.0)
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/HoloscanRadarCudaArchitectures.cmake")
 
 project(holoscan_radar
-    VERSION 0.2.0
+    VERSION 1.0.0
     DESCRIPTION "Accelerated radar signal processing operators for the Holoscan ecosystem"
     LANGUAGES CXX CUDA
 )

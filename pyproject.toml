@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "holoscan-radar"
-version = "0.2.0"
+version = "1.0.0"
 description = "Accelerated radar signal processing operators for the Holoscan ecosystem"
 readme = "README.md"
 license = { text = "Apache-2.0" }

@@ -4,6 +4,11 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
 
 ## Where the project stands
 
+- **2026-11-19** â€” **Version 1.0.0.** The checked-in project version moves from
+  0.2.0 to 1.0.0 in `CMakeLists.txt`, `pyproject.toml`, and `metadata.json`.
+  Shared libraries now carry SONAME `.so.1`; per-operator and per-application
+  `metadata.json` versions are unchanged.
+
 - **2026-11-19** â€” **SAR GUI CI image-probe correction** on
   `deustice/sar-gui`: port the existing `deustice/aivo-fixes` correction for
   Jenkins #279. The cyan sensor-look overlay can cover the grayscale test's
@@ -414,6 +419,8 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) â†
   runtime data paths, headless rendering, and C++/Python X11 windows via Xvfb.
   Positive native-window checks remain excluded for the established display
   limitation; laptop SSH visual checks were not repeated for this merge.
+
+||||||| parent of a545f350 (Release: Bump version to 1.0.0)
 
 - **2026-11-17** â€” **SAR Python packaging review follow-up** on
   `deustice/sar-python`: the provider links/enables SAR visualization only when
