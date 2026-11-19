@@ -20,6 +20,7 @@ else()
     FetchContent_MakeAvailable(nanobind)
 endif()
 # TensorDumpOp is a C++ debugging tap; the Python provider does not register it.
+# SAR app support links it below for the graph runtime's `dump: true` output.
 set(_radar_python_operators ${HOLOSCAN_RADAR_OPERATORS})
 list(REMOVE_ITEM _radar_python_operators tensor_dump_op)
 # Selecting any example app with a Python graph (or BUILD_ALL) adds the app
@@ -92,7 +93,8 @@ foreach(_radar_helper IN ITEMS __init__.py fmcw_dashboard.py cli.py presentation
 endforeach()
 if(_radar_python_sar_apps)
     target_compile_definitions(holoscan_radar_python PRIVATE HOLOSCAN_RADAR_PYTHON_SAR_APPS=1)
-    target_link_libraries(holoscan_radar_python PRIVATE sar_mosaic)
+    # The SAR graph runtime writes `dump: true` products through the C++ TensorDumpOp.
+    target_link_libraries(holoscan_radar_python PRIVATE sar_mosaic tensor_dump_op)
     if(TARGET sar_image_viz)
         target_link_libraries(holoscan_radar_python PRIVATE sar_image_viz)
         target_compile_definitions(holoscan_radar_python PRIVATE HOLOSCAN_RADAR_SAR_HOLOVIZ=1)

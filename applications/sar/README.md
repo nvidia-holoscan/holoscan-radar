@@ -68,8 +68,8 @@ Public SAR operators use mapping parameters, matching their YAML spelling.
 `F32GeomF32`, `F32GeomF64`, and `F64GeomF64` factories. The apps choose
 `F32GeomF64` by default, preserving ECEF precision; `sample_precision: double`
 selects `F64GeomF64`. Other SAR operators expose F32/F64 factories.
-`TensorDumpOp(graph, name, path=...)` accepts any tensor dtype and takes no
-pool extents. Python live enum ports retain the
+`TensorDumpOp` is not a Python factory; Python SAR apps keep `dump: true`
+because the shared graph runtime adds the C++ operator itself. Python live enum ports retain the
 [documented SDK limitation](../../DEVELOPER.md).
 
 The provider suite compares complex C++/Python fixture products in both sample
