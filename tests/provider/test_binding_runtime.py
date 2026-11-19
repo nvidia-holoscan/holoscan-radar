@@ -87,13 +87,15 @@ def test_python_binding_moves_gpu_tensors_and_applies_params(operator, dtype, bi
     )
 
 
-def test_python_binding_live_nfft_applies_for_one_tick():
+@pytest.mark.parametrize("cache_budget_bytes", [0, 768, 67108864, 4294967296])
+def test_python_binding_live_nfft_applies_for_one_tick(cache_budget_bytes):
     graph = _CapturedOperator()
     radar.FMCWDopplerProcessorOpF32(
         graph,
         "doppler",
         extents={"max_chirps": 4, "max_range_bins": 2, "max_doppler_bins": 8},
         nfft=4,
+        cache_budget_bytes=cache_budget_bytes,
     )
     samples = np.ones((4, 2), dtype=np.complex64)
     tensor = hs.Tensor.as_tensor(cp.asarray(samples))

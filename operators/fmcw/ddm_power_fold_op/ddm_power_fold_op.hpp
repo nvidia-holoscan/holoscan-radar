@@ -26,10 +26,14 @@ namespace holoscan::radar {
 
 struct DDMPowerFoldParams {
   DDMCodeDescriptor ddm_code{};
+  std::uint64_t cache_budget_bytes{67108864ULL};
 };
 
 HOLOSCAN_PARAM_SCHEMA(DDMPowerFoldParams,
-                      holoscan::param_schema("com.nvidia.holoscan.radar.DDMPowerFoldParams", 1),
+                      holoscan::param_schema("com.nvidia.holoscan.radar.DDMPowerFoldParams", 2),
+                      holoscan::field<&DDMPowerFoldParams::cache_budget_bytes>("cache_budget_bytes")
+                          .description("Retained operator cache bytes; 0 disables retention. "
+                                       "Oversized artifacts run uncached with a warning."),
                       holoscan::field<&DDMPowerFoldParams::ddm_code>("ddm_code")
                           .description("Required static linear exact-bin DDM layout."));
 
@@ -48,8 +52,13 @@ class DDMPowerFoldOp : public holoscan::Operator<DDMPowerFoldParams> {
   Output<Tensor> power_map{"power_map"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   struct CachedTable {
     std::shared_ptr<Tensor> device_table;
+    std::size_t cache_bytes() const {
+      return cache_size_add(0U, cache_payload_bytes(device_table));
+    }
   };
 
   Tensor retained_input_;

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -26,6 +27,7 @@ struct CachedWindow {
   matx::tensor_t<T, 1> taps;
   double sum;
   double absolute_sum;
+  std::size_t cache_bytes() const { return cache_payload_bytes(taps); }
 };
 
 template <typename T>

@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -141,6 +142,121 @@ TEST(ConfigCacheTest, FirstBuildIsSilentThenReconfigurationWarnsOnce) {
   EXPECT_TRUE(warned_building("b"));   // reconfigured to an unseen key
   EXPECT_FALSE(warned_building("b"));  // cached: warns once per config
   EXPECT_FALSE(warned_building("a"));  // prior config still cached
+}
+
+TEST(ConfigCacheTest, SharedBudgetEvictsLeastRecentlyUsedAcrossCaches) {
+  auto budget = std::make_shared<holoscan::radar::ConfigCacheBudget>();
+  ConfigCache<int> a;
+  ConfigCache<int> b;
+  a.bind(budget);
+  b.bind(budget);
+  auto build = [] {
+    return 9;
+  };
+  a.get_or_build("a", "a", build);
+  const auto one_entry = budget->bytes();
+  int waits = 0;
+  {
+    holoscan::radar::ConfigCacheBudget::Tick tick(*budget, 2 * one_entry, [&] {
+      ++waits;
+    });
+    b.get_or_build("b", "b", build);
+    a.get_or_build("a", "a", build);  // refresh A before introducing C
+    b.get_or_build("c", "b", build);
+    EXPECT_TRUE(a.contains("a"));
+    EXPECT_FALSE(b.contains("b"));
+    EXPECT_TRUE(b.contains("c"));
+    EXPECT_LE(budget->bytes(), budget->limit());
+  }
+  EXPECT_GT(waits, 0);
+}
+
+TEST(ConfigCacheTest, ZeroBudgetPinsUncachedArtifactsUntilGpuBarrier) {
+  auto budget = std::make_shared<holoscan::radar::ConfigCacheBudget>();
+  ConfigCache<std::shared_ptr<int>> cache;
+  cache.bind(budget);
+  std::weak_ptr<int> borrowed;
+  int barriers = 0;
+  {
+    holoscan::radar::ConfigCacheBudget::Tick tick(*budget, 0, [&] {
+      EXPECT_FALSE(borrowed.expired());
+      ++barriers;
+    });
+    const auto& first = cache.get_or_build("a", "value", [&] {
+      auto value = std::make_shared<int>(42);
+      borrowed = value;
+      return value;
+    });
+    cache.get_or_build("b", "value", [] {
+      return std::make_shared<int>(13);
+    });
+    EXPECT_EQ(*first, 42);  // another uncached miss cannot invalidate this borrow
+    EXPECT_EQ(cache.size(), 0U);
+    EXPECT_EQ(budget->bytes(), 0U);
+  }
+  EXPECT_TRUE(borrowed.expired());
+  EXPECT_EQ(barriers, 1);
+}
+
+TEST(ConfigCacheTest, HitsDoNotWaitAndKeySweepStaysBounded) {
+  auto budget = std::make_shared<holoscan::radar::ConfigCacheBudget>();
+  ConfigCache<int> cache;
+  cache.bind(budget);
+  int barriers = 0;
+  {
+    holoscan::radar::ConfigCacheBudget::Tick tick(*budget, 1024, [&] {
+      ++barriers;
+    });
+    for (int i = 0; i < 100; ++i)
+      cache.get_or_build("a", "value", [] {
+        return 1;
+      });
+  }
+  EXPECT_EQ(barriers, 0);
+  for (int i = 0; i < 1000; ++i) {
+    holoscan::radar::ConfigCacheBudget::Tick tick(*budget, 1024, [&] {
+      ++barriers;
+    });
+    cache.get_or_build(std::to_string(i), "value", [] {
+      return 1;
+    });
+    EXPECT_LE(budget->bytes(), 1024U);
+    EXPECT_LE(cache.size(), 3U);
+  }
+  EXPECT_GT(barriers, 0);
+}
+
+TEST(ConfigCacheTest, LargeKeysAreChargedAndWarningsStayBounded) {
+  auto budget = std::make_shared<holoscan::radar::ConfigCacheBudget>();
+  ConfigCache<int> cache;
+  cache.bind(budget);
+  ScopedLogCapture log;
+  for (int i = 0; i < 10; ++i) {
+    holoscan::radar::ConfigCacheBudget::Tick tick(*budget, 1024, [] {});
+    cache.get_or_build(std::string(4096, 'x') + std::to_string(i), "value", [] {
+      return 1;
+    });
+  }
+  EXPECT_EQ(cache.size(), 0U);
+  const auto text = log.text();
+  const auto first = text.find("using it without caching");
+  ASSERT_NE(first, std::string::npos);
+  EXPECT_EQ(text.find("using it without caching", first + 1), std::string::npos);
+  EXPECT_LT(text.size(), 4096U);  // diagnostic never copies an attacker-sized key
+}
+
+TEST(ConfigCacheTest, FailedBuilderDoesNotChangeRetention) {
+  ConfigCache<int> cache;
+  cache.get_or_build("a", "value", [] {
+    return 3;
+  });
+  EXPECT_THROW(cache.get_or_build("b", "value",
+                                  []() -> int {
+                                    throw std::runtime_error("builder failed");
+                                  }),
+               std::runtime_error);
+  EXPECT_TRUE(cache.contains("a"));
+  EXPECT_FALSE(cache.contains("b"));
 }
 
 // ---- Config codecs ---------------------------------------------------------

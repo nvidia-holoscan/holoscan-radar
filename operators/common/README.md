@@ -91,3 +91,20 @@ memory.
 The locked interface definitions are in
 [`OPERATOR_API.md`](../../docs/planning/OPERATOR_API.md), while each operator
 README gives the compact user-facing port, construction, and parameter tables.
+
+## Configurable cache retention
+
+See the [shared cache budget contract](../../docs/planning/OPERATOR_API.md#retained-configuration-cache-budget)
+for the affected operators and defaults. For example, an application may retain
+up to 4 GiB of range-compression artifacts by adding this static parameter to
+its existing operator YAML block:
+
+```yaml
+range_compression:
+  cache_budget_bytes: 4294967296
+```
+
+This is a per-instance retention ceiling; it allocates nothing upfront.
+`0` executes without retaining artifacts. Oversized entries remain valid and
+execute uncached with a warning. A smaller budget can cause rebuilds and GPU
+waits on eviction. MatX-owned caches are managed by MatX.

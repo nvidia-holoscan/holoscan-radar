@@ -36,6 +36,7 @@ pre-demux rd_maps -> DDMPowerFoldOp -> CFARDetectorOp -> DDMSparseDemultiplexOp
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
+| `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `ddm_code` | `DDMCodeDescriptor` | none (required) | static | Defines linear integer-bin TX bands and discarded guards. |
 
 Contract: [`OPERATOR_API.md` section `DDMPowerFoldOp`](../../../docs/planning/OPERATOR_API.md) - group: [`operators/fmcw/README.md`](../README.md)

@@ -30,15 +30,19 @@ namespace holoscan::radar {
 struct TDMDenseCompensationParams {
   FMCWWaveformDescriptor waveform{};
   TXSchedule tx_schedule{};
+  std::uint64_t cache_budget_bytes{67108864ULL};
 };
-HOLOSCAN_PARAM_SCHEMA(TDMDenseCompensationParams,
-                      holoscan::param_schema("com.nvidia.holoscan.radar.TDMDenseCompensationParams",
-                                             1),
-                      holoscan::field<&TDMDenseCompensationParams::waveform>("waveform")
-                          .description("Per-TX PRI for Doppler-dependent inter-TX phase "
-                                       "correction. [live]."),
-                      holoscan::field<&TDMDenseCompensationParams::tx_schedule>("tx_schedule")
-                          .description("Static TDM firing cycle. Empty = identity round-robin."));
+HOLOSCAN_PARAM_SCHEMA(
+    TDMDenseCompensationParams,
+    holoscan::param_schema("com.nvidia.holoscan.radar.TDMDenseCompensationParams", 2),
+    holoscan::field<&TDMDenseCompensationParams::cache_budget_bytes>("cache_budget_bytes")
+        .description("Retained operator cache bytes; 0 disables retention. "
+                     "Oversized artifacts run uncached with a warning."),
+    holoscan::field<&TDMDenseCompensationParams::waveform>("waveform")
+        .description("Per-TX PRI for Doppler-dependent inter-TX phase "
+                     "correction. [live]."),
+    holoscan::field<&TDMDenseCompensationParams::tx_schedule>("tx_schedule")
+        .description("Static TDM firing cycle. Empty = identity round-robin."));
 static_assert(holoscan::param_schema_availability<TDMDenseCompensationParams>() ==
               holoscan::ParamSchemaAvailability::kDeclared);
 template <typename T>
@@ -55,8 +59,13 @@ class TDMDenseCompensationOp : public holoscan::Operator<TDMDenseCompensationPar
   Input<wire::FMCWWaveformT> waveform_in{"waveform"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   struct CachedCorrection {
     std::shared_ptr<Tensor> device_table;
+    std::size_t cache_bytes() const {
+      return cache_size_add(0U, cache_payload_bytes(device_table));
+    }
   };
   expected<void, Error> run_compute(ExecutionContext& context,
                                     const detail::TdmRdMapsLayout& layout,

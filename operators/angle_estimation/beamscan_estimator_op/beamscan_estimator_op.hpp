@@ -22,6 +22,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
+#include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/descriptors/angle_convention.hpp"
 #include "radar_common/descriptors/array_geometry.hpp"
 #include "radar_common/descriptors/enums.hpp"
@@ -57,10 +58,14 @@ struct BeamscanParams {
   std::vector<double> el_coordinates{};
   WindowSpec array_taper{};
   PeakInterpolation peak_interpolation{PeakInterpolation::kNone};
+  std::uint64_t cache_budget_bytes{67108864ULL};
 };
 
 HOLOSCAN_PARAM_SCHEMA(BeamscanParams,
-                      holoscan::param_schema("com.nvidia.holoscan.radar.BeamscanParams", 2),
+                      holoscan::param_schema("com.nvidia.holoscan.radar.BeamscanParams", 3),
+                      holoscan::field<&BeamscanParams::cache_budget_bytes>("cache_budget_bytes")
+                          .description("Retained operator cache bytes; 0 disables retention. "
+                                       "Oversized artifacts run uncached with a warning."),
                       holoscan::field<&BeamscanParams::array_geometry>("array_geometry")
                           .description("Element positions and wavelength; num_elements must match "
                                        "snapshot channels"),
@@ -109,6 +114,8 @@ class BeamscanEstimatorOp : public holoscan::Operator<BeamscanParams> {
   Input<PeakInterpolation> peak_interpolation{"peak_interpolation"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   // Keep the previous activation's inputs alive across ticks so async
   // device reads cannot outlive the buffers.
   Tensor retained_snapshot_;

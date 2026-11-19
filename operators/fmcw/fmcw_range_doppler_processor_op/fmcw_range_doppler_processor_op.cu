@@ -5,6 +5,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
 #include <algorithm>
 #include <cstdint>
 #include <memory>
@@ -294,6 +295,16 @@ expected<void, Error> FMCWRangeDopplerProcessorOp<T>::compute(ExecutionContext& 
     const std::string& msg = std::string(kOpName) + ": no CUDA compute stream";
     return make_unexpected(Error{ErrorCode::kNotSupported, msg});
   }
+  // All retained artifacts on this instance share one static byte budget.
+  range_state_->premultipliers.bind(cache_budget_);
+  range_state_->windows.bind(cache_budget_);
+  range_state_->seen_fft_keys.bind(cache_budget_);
+  doppler_state_->windows.bind(cache_budget_);
+  doppler_state_->seen_fft_keys.bind(cache_budget_);
+  ConfigCacheBudget::Tick cache_tick(
+      *cache_budget_, context.params<FMCWRangeDopplerProcessorParams>().cache_budget_bytes, [] {
+        cudaDeviceSynchronize();
+      });
 
   // Range compression into a stream-ordered intermediate (never a port).
   // MATX_ASYNC_DEVICE_MEMORY frees at scope exit after the enqueued kernels.

@@ -881,10 +881,11 @@ TEST(PhaseShiftBeamformerOpTest, LiveOverridesRejectMalformedAndBounds) {
 }
 
 template <typename T>
-void expect_signed_zero_grid_cache_returns_to_pinned() {
+void expect_signed_zero_grid_cache_returns_to_pinned(std::uint64_t budget) {
   using Op = PhaseShiftBeamformerOp<T>;
   auto geometry = make_ula_geometry(2, 0.5, 1.0);
   auto params = make_params(geometry, AngleConvention{}, {0.0}, {0.0});
+  params.cache_budget_bytes = budget;
   auto rd = vector_to_rd_maps<T>({{1.0, 2.0}, {3.0, -1.0}}, {2, 1, 1});
   auto negative_zero = holoscan::radar::testing::to_pageable_host_tensor<double>(
       {-0.0}, {1}, holoscan::radar::real_dtype<double>());
@@ -938,11 +939,17 @@ void expect_signed_zero_grid_cache_returns_to_pinned() {
 }
 
 TEST(PhaseShiftBeamformerOpTest, SignedZeroGridCacheReturnsToPinnedFloat) {
-  expect_signed_zero_grid_cache_returns_to_pinned<float>();
+  for (const std::uint64_t budget : {0ULL, 768ULL, 67108864ULL}) {
+    SCOPED_TRACE(budget);
+    expect_signed_zero_grid_cache_returns_to_pinned<float>(budget);
+  }
 }
 
 TEST(PhaseShiftBeamformerOpTest, SignedZeroGridCacheReturnsToPinnedDouble) {
-  expect_signed_zero_grid_cache_returns_to_pinned<double>();
+  for (const std::uint64_t budget : {0ULL, 768ULL, 67108864ULL}) {
+    SCOPED_TRACE(budget);
+    expect_signed_zero_grid_cache_returns_to_pinned<double>(budget);
+  }
 }
 
 }  // namespace

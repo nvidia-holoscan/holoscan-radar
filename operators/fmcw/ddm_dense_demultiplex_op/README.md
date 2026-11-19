@@ -38,6 +38,7 @@ FMCWDopplerProcessorOp -> DDMDenseDemultiplexOp -> [DopplerNotchOp] -> VirtualAr
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
+| `cache_budget_bytes` | unsigned bytes | 134217728 (128 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `ddm_code` | `DDMCodeDescriptor` | none (required) | static | Defines TX count and exactly one linear-offset or nonlinear phase-code layout. |
 
 Contract: [`OPERATOR_API.md` section `DDMDenseDemultiplexOp`](../../../docs/planning/OPERATOR_API.md) - group: [`operators/fmcw/README.md`](../README.md)

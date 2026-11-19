@@ -44,6 +44,7 @@ Set `max_pulses`, `max_samples_per_pulse`, and `max_range_bins` for the largest 
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
+| `cache_budget_bytes` | unsigned bytes | 2147483648 (2 GiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `range_window` | `WindowSpec` | rectangular | [live] | Fast-time taper |
 | `waveform` | `LFMWaveformDescriptor` | unset | [live] | Physical range axis |
 | `fft_norm` | `FftNorm` | backward | [live] | Inverse FFT scaling |

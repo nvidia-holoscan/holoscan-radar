@@ -42,6 +42,7 @@ rd_maps → PhaseShiftBeamformerOp → rda_cube → CFARDetectorOp.rd_maps
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
+| `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `array_geometry` | `ArrayGeometry` | none (required; empty fails `validate`) | `[live]` Exact wire-schema override | Virtual/physical element positions + wavelength. `num_elements` must match `rd_maps` channels. Cost: Rebuilds cached steering weights. |
 | `angle_convention` | `AngleConvention` | `radar_boresight` | static | How `az_coordinates` / `el_coordinates` and the output beam axes map to unit vectors, or `direction_cosine` for `(u, v)`. Cost: Rebuilds weights (part of the cache key). |
 | `az_coordinates` | `std::vector<double>` | none (required; empty rejected) | `[live]` Exact host config Tensor, extent bounded by `max_az` | First coordinate: azimuth radians for angular conventions, dimensionless `u` for `direction_cosine`. Cost: Rebuilds weights. |

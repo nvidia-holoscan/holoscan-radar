@@ -48,6 +48,11 @@ struct MUSICSteeringArtifact {
   std::shared_ptr<holoscan::Tensor> manifold;
   std::shared_ptr<holoscan::Tensor> az_grid;
   std::shared_ptr<holoscan::Tensor> el_grid;
+  std::size_t cache_bytes() const {
+    return cache_size_add(cache_size_add(cache_size_add(0U, cache_payload_bytes(manifold)),
+                                         cache_payload_bytes(az_grid)),
+                          cache_payload_bytes(el_grid));
+  }
 };
 
 template <typename T>
@@ -805,6 +810,12 @@ expected<void, Error> MUSICEstimatorOp<T>::compute(ExecutionContext& context) {
     return make_unexpected(
         Error{ErrorCode::kNotSupported, "MUSICEstimatorOp: no CUDA compute stream"});
   }
+  // All retained artifacts on this instance share one static byte budget.
+  state_->steering_cache.bind(cache_budget_);
+  ConfigCacheBudget::Tick cache_tick(*cache_budget_,
+                                     context.params<MUSICParams>().cache_budget_bytes, [] {
+                                       cudaDeviceSynchronize();
+                                     });
 
   // 3. Preserve the output contract for an empty item axis without entering
   // covariance, eigendecomposition, or scan work.

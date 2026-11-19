@@ -20,6 +20,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
+#include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
@@ -62,11 +63,15 @@ struct FMCWRangeProcessorParams {
   double propagation_speed{kDefaultPropagationSpeed};
   // 0 = exact (no zero-padding); ≥ samples_per_chirp when non-zero.
   int64_t nfft{0};
+  std::uint64_t cache_budget_bytes{67108864ULL};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
     FMCWRangeProcessorParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.FMCWRangeProcessorParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.FMCWRangeProcessorParams", 2),
+    holoscan::field<&FMCWRangeProcessorParams::cache_budget_bytes>("cache_budget_bytes")
+        .description("Retained operator cache bytes; 0 disables retention. "
+                     "Oversized artifacts run uncached with a warning."),
     holoscan::field<&FMCWRangeProcessorParams::range_window>("range_window")
         .description("WindowSpec applied along fast-time before the range FFT "
                      "(coherent-gain normalized). Default: none (rectangular)."),
@@ -117,6 +122,8 @@ class FMCWRangeProcessorOp : public holoscan::Operator<FMCWRangeProcessorParams>
   Input<int64_t> nfft_in{"nfft"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   Tensor retained_input_;
 
   // range_bins is optional/latched (OPERATOR_API.md).

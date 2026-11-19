@@ -6,6 +6,7 @@
 #include <cuda/std/complex>
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
 #include <algorithm>
 #include <cstdint>
 #include <optional>
@@ -116,6 +117,13 @@ expected<void, Error> DDMPowerFoldOp<T>::compute(ExecutionContext& context) {
     return make_unexpected(
         Error{ErrorCode::kNotSupported, "DDMPowerFoldOp: no CUDA compute stream"});
   }
+  // All retained artifacts on this instance share one static byte budget.
+  table_cache_.bind(cache_budget_);
+  ConfigCacheBudget::Tick cache_tick(*cache_budget_,
+                                     context.params<DDMPowerFoldParams>().cache_budget_bytes, [] {
+                                       cudaDeviceSynchronize();
+                                     });
+
   // Prepare or reuse cached artifacts without changing tick coherence.
   const auto key = detail::ddm_demux_cache_key(code, layout.num_doppler);
   const CachedTable& cached = table_cache_.get_or_build(key, "DDM power-fold table", [&] {

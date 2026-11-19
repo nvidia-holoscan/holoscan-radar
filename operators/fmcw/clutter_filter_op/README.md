@@ -38,6 +38,7 @@ FMCWRangeProcessorOp → ClutterFilterOp → FMCWDopplerProcessorOp
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
+| `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `method` | `ClutterFilterMethod` {`none`, `mean_subtraction`, `single_delay`, `double_delay`} | `mean_subtraction` | `[live]` Exact | Slow-time clutter suppression or materialized pass-through Cost: Shape-changing when a delay canceller is selected. |
 | `doppler_window` | `WindowSpec` | `none` | `[live]` Exact via wire schema | Weighting for `mean_subtraction`; ignored by other methods Cost: Unseen windows rebuild and cache taps, warning once. |
 

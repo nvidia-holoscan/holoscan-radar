@@ -5,6 +5,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -157,6 +158,12 @@ expected<void, Error> ClutterFilterOp<T>::compute(ExecutionContext& context) {
     const std::string& msg = std::string(kOpName) + ": no CUDA compute stream";
     return make_unexpected(Error{ErrorCode::kNotSupported, msg});
   }
+  // All retained artifacts on this instance share one static byte budget.
+  state_->windows.bind(cache_budget_);
+  ConfigCacheBudget::Tick cache_tick(*cache_budget_,
+                                     context.params<ClutterFilterParams>().cache_budget_bytes, [] {
+                                       cudaDeviceSynchronize();
+                                     });
 
   // Clutter suppression into a pool loan, then publish range_profiles_out.
   const std::vector<int64_t> out_shape = full_rank_shape(batched, plan.chirps_out, batched.cols);

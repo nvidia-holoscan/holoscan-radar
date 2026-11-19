@@ -5,6 +5,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
 #include <complex>
 #include <cstdint>
 #include <optional>
@@ -45,9 +46,7 @@ DDMDenseDemultiplexOp<T>::DDMDenseDemultiplexOp(const MaxTensorExtents& e) {
   velocity_bins_max_byte_span_ = byte_span_real_cube<T>({md}, kOpName);
 }
 template <typename T>
-DDMDenseDemultiplexOp<T>::~DDMDenseDemultiplexOp() {
-  detail::release_ddm_correlate_scratch(this);
-}
+DDMDenseDemultiplexOp<T>::~DDMDenseDemultiplexOp() {}
 template <typename T>
 void DDMDenseDemultiplexOp<T>::setup(OperatorSpec& spec) {
   constexpr TensorRepresentation device{
@@ -129,13 +128,24 @@ expected<TensorOutputLoan, Error> DDMDenseDemultiplexOp<T>::prepare_correlate(
           throw std::runtime_error(std::string(kOpName) + ": corr-weights H2D failed");
         return e;
       });
+  const std::string scratch_key =
+      std::to_string(layout.batch) + ":" + std::to_string(layout.num_rx) + ":" +
+      std::to_string(layout.num_doppler) + ":" + std::to_string(layout.num_range);
+  const auto& scratch = scratch_cache_.get_or_build(
+      scratch_key, "DDM correlate scratch",
+      [&] {
+        return detail::make_ddm_correlate_scratch(layout, sizeof(T) == 4, stream);
+      },
+      [](const auto& value) {
+        return detail::ddm_correlate_scratch_bytes(*value) + 64U;
+      });
   const void* p = input.data();
   return prepare_device_tensor(rd_maps_out, context, shape, input.dtype(),
                                [&](void* out, std::size_t) -> expected<void, Error> {
                                  try {
                                    detail::run_ddm_correlate_stage<T>(
                                        p, out, layout, code.num_tx,
-                                       cached.device_corr_weights->data(), this, stream);
+                                       cached.device_corr_weights->data(), *scratch, stream);
                                  } catch (const std::invalid_argument& e) {
                                    return fail_invalid(e.what());
                                  }
@@ -212,6 +222,15 @@ expected<void, Error> DDMDenseDemultiplexOp<T>::compute(ExecutionContext& contex
   if (!stream)
     return make_unexpected(
         Error{ErrorCode::kNotSupported, std::string(kOpName) + ": no CUDA compute stream"});
+  // All retained artifacts on this instance share one static byte budget.
+  demux_cache_.bind(cache_budget_);
+  correlate_cache_.bind(cache_budget_);
+  scratch_cache_.bind(cache_budget_);
+  ConfigCacheBudget::Tick cache_tick(
+      *cache_budget_, context.params<DDMDenseDemultiplexParams>().cache_budget_bytes, [] {
+        cudaDeviceSynchronize();
+      });
+
   HOLOSCAN_TRY(auto rd_loan,
                mode == detail::DdmCodeMode::kNonLinear
                    // Allocate exact-sized outputs before launching device work.

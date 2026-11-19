@@ -42,6 +42,7 @@ rd_maps + folded detections [+ fold_idx] -> DDMSparseDemultiplexOp -> snapshot +
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
+| `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `ddm_code` | `DDMCodeDescriptor` | none (required) | static | Linear integer-bin code layout. |
 | `tx_positions` | `vector<double>` | none (required) | static | Row-major TX positions. |
 | `rx_positions` | `vector<double>` | none (required) | static | Row-major RX positions. |

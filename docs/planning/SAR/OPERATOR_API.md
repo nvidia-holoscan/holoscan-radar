@@ -19,6 +19,19 @@ for a missing tick, and never latch an earlier override. Optional outputs are
 latched so unwired outputs cause no work. The HSDK 5 Graph requires distinct
 input and output names within an operator.
 
+### Retained range-compression caches
+
+`SARRangeCompressionOp` adds static `cache_budget_bytes` (unsigned bytes,
+default 2147483648 = 2 GiB); users can raise/lower it in Params/YAML/Python.
+It is a retention ceiling with no upfront reservation; `0` disables retention.
+Windows, transform-warning keys and shape scratch share this budget and LRU
+eviction. Oversized artifacts execute uncached with a bounded warning. Active
+GPU borrowers stay alive until completion. Eviction/uncached cleanup can wait
+for device completion; ordinary cache hits do not synchronize. MatX-owned caches and
+ordinary execution state/output pools are excluded. See the shared
+[cache budget contract](../OPERATOR_API.md#retained-configuration-cache-budget)
+for accounting, diagnostics and the workload sizing audit.
+
 ### Implemented operator ports
 
 **Application diagnostics:** the optional `FormationHud` constructor capture

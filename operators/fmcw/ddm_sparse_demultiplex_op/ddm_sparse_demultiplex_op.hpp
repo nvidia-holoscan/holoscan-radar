@@ -70,11 +70,15 @@ struct DDMSparseDemultiplexParams {
   std::vector<int64_t> snapshot_window{0, 0};
   SnapshotEdgeMode doppler_edge{SnapshotEdgeMode::kWrap};
   SnapshotEdgeMode range_edge{SnapshotEdgeMode::kShift};
+  std::uint64_t cache_budget_bytes{67108864ULL};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
     DDMSparseDemultiplexParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.DDMSparseDemultiplexParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.DDMSparseDemultiplexParams", 2),
+    holoscan::field<&DDMSparseDemultiplexParams::cache_budget_bytes>("cache_budget_bytes")
+        .description("Retained operator cache bytes; 0 disables retention. "
+                     "Oversized artifacts run uncached with a warning."),
     holoscan::field<&DDMSparseDemultiplexParams::ddm_code>("ddm_code"),
     holoscan::field<&DDMSparseDemultiplexParams::tx_positions>("tx_positions"),
     holoscan::field<&DDMSparseDemultiplexParams::rx_positions>("rx_positions"),
@@ -107,10 +111,17 @@ class DDMSparseDemultiplexOp : public holoscan::Operator<DDMSparseDemultiplexPar
   Output<WireArrayGeometry> array_geometry{"array_geometry"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   struct CachedDdmTables {
     std::shared_ptr<Tensor> demux;
     std::shared_ptr<Tensor> tx_by_band;
     std::shared_ptr<Tensor> initial_phase;
+    std::size_t cache_bytes() const {
+      return cache_size_add(cache_size_add(cache_size_add(0U, cache_payload_bytes(demux)),
+                                           cache_payload_bytes(tx_by_band)),
+                            cache_payload_bytes(initial_phase));
+    }
   };
 
   expected<void, Error> ensure_virtual_tables(const detail::VirtualAssemblyPlan& plan,

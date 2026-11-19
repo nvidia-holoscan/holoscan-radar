@@ -42,6 +42,7 @@ rd_maps + detection_idx + optional fold_idx -> TDMSparseCompensationOp -> snapsh
 
 | Parameter | Type | Default | Mutability | Responsibility |
 | --- | --- | --- | --- | --- |
+| `cache_budget_bytes` | unsigned bytes | 67108864 (64 MiB) | static | Instance-wide retained cache ceiling; 0 disables retention. Oversized entries execute uncached with a warning. |
 | `waveform` | `FMCWWaveformDescriptor` | none (required) | `[live]` Exact | PRI and carrier frequency. |
 | `tx_schedule` | `TXSchedule` | identity round-robin | static | Uniform firing-slot mapping. |
 | `tx_positions` | `vector<double>` | none (required) | static | Row-major TX positions. |

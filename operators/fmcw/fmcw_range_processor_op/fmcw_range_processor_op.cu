@@ -5,6 +5,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -214,6 +215,14 @@ expected<void, Error> FMCWRangeProcessorOp<T>::compute(ExecutionContext& context
     const std::string& msg = std::string(kOpName) + ": no CUDA compute stream";
     return make_unexpected(Error{ErrorCode::kNotSupported, msg});
   }
+  // All retained artifacts on this instance share one static byte budget.
+  state_->premultipliers.bind(cache_budget_);
+  state_->windows.bind(cache_budget_);
+  state_->seen_fft_keys.bind(cache_budget_);
+  ConfigCacheBudget::Tick cache_tick(
+      *cache_budget_, context.params<FMCWRangeProcessorParams>().cache_budget_bytes, [] {
+        cudaDeviceSynchronize();
+      });
 
   // Range compression into a pool loan, then publish range_profiles.
   const std::vector<int64_t> out_shape = full_rank_shape(batched, batched.rows, plan.num_bins);

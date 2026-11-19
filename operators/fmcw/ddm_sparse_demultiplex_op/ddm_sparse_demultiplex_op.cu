@@ -5,6 +5,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -310,6 +311,13 @@ expected<void, Error> DDMSparseDemultiplexOp<T>::compute(ExecutionContext& conte
     return make_unexpected(
         Error{ErrorCode::kNotSupported, "DDMSparseDemultiplexOp: no CUDA compute stream"});
   }
+  // All retained artifacts on this instance share one static byte budget.
+  ddm_cache_.bind(cache_budget_);
+  ConfigCacheBudget::Tick cache_tick(
+      *cache_budget_, context.params<DDMSparseDemultiplexParams>().cache_budget_bytes, [] {
+        cudaDeviceSynchronize();
+      });
+
   HOLOSCAN_TRY(
       ensure_virtual_tables(plan.virtual_plan, params.tx_positions, params.rx_positions, stream));
   // Prepare or reuse cached artifacts without changing tick coherence.

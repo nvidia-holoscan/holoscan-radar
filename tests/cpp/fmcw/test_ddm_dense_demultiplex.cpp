@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -73,6 +74,72 @@ using holoscan::radar::testing::to_device_tensor;
 
 DDMDenseDemultiplexParams ddm_params(const DDMCodeDescriptor& code) {
   return DDMDenseDemultiplexParams{.ddm_code = code};
+}
+
+TEST(DDMDenseDemultiplexOp, LargeBenchmarkScratchFitsDefaultBudget) {
+  holoscan::radar::detail::DdmRdMapsLayout layout;
+  layout.batch = 1;
+  layout.num_rx = 32;
+  layout.num_doppler = 256;
+  layout.num_range = 1024;
+  for (const bool use_float : {true, false}) {
+    auto scratch = holoscan::radar::detail::make_ddm_correlate_scratch(layout, use_float, nullptr);
+    const auto bytes = holoscan::radar::detail::ddm_correlate_scratch_bytes(*scratch);
+    RecordProperty(use_float ? "scratch_float_bytes" : "scratch_double_bytes",
+                   std::to_string(bytes));
+    EXPECT_LT(bytes + 1024U, DDMDenseDemultiplexParams{}.cache_budget_bytes);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+  }
+}
+
+// A partial final tile uses a different cuFFT batch plan. Unit correlation
+// weights make the independently known result the original input on every row.
+template <typename T>
+void expect_partial_correlation_tile_preserves_rows() {
+  namespace stage = holoscan::radar::detail;
+  stage::DdmRdMapsLayout layout;
+  layout.batch = 1;
+  layout.num_rx = 1;
+  layout.num_doppler = 4096;
+  layout.num_range = 1025;  // full tile(s), followed by exactly one range bin
+  const int64_t count = layout.num_doppler * layout.num_range;
+  std::vector<std::complex<T>> host(static_cast<size_t>(count));
+  for (int64_t d = 0; d < layout.num_doppler; ++d) {
+    for (int64_t r = 0; r < layout.num_range; ++r) {
+      host[static_cast<size_t>(d * layout.num_range + r)] = {static_cast<T>(r) / T{2048},
+                                                             static_cast<T>(d % 13) / T{32}};
+    }
+  }
+  auto input =
+      to_device_tensor(host, {1, layout.num_doppler, layout.num_range}, complex_dtype<T>());
+  auto weights = to_device_tensor(
+      std::vector<std::complex<T>>(static_cast<size_t>(layout.num_doppler), {T{1}, T{0}}),
+      {1, layout.num_doppler}, complex_dtype<T>());
+  auto output = holoscan::radar::make_device_tensor({1, 1, layout.num_doppler, layout.num_range},
+                                                    complex_dtype<T>());
+  auto scratch = stage::make_ddm_correlate_scratch(layout, sizeof(T) == 4, nullptr);
+  auto writable = output->mutable_data();
+  ASSERT_TRUE(writable);
+  stage::run_ddm_correlate_stage<T>(input->data(), *writable, layout, 1, weights->data(), *scratch,
+                                    nullptr);
+  ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+  const auto result = holoscan::radar::testing::to_host(*output);
+  const auto* actual = result.template as<std::complex<T>>();
+  const double tolerance = sizeof(T) == 4 ? 1e-5 : 1e-12;
+  for (const int64_t d : {int64_t{0}, layout.num_doppler / 2, layout.num_doppler - 1}) {
+    for (int64_t r = 0; r < layout.num_range; ++r) {
+      const auto index = static_cast<size_t>(d * layout.num_range + r);
+      ASSERT_NEAR(std::abs(actual[index] - host[index]), 0.0, tolerance) << "range " << r;
+    }
+  }
+}
+
+TEST(DDMDenseDemultiplexOp, FloatPartialCorrelationTilePreservesRows) {
+  expect_partial_correlation_tile_preserves_rows<float>();
+}
+
+TEST(DDMDenseDemultiplexOp, DoublePartialCorrelationTilePreservesRows) {
+  expect_partial_correlation_tile_preserves_rows<double>();
 }
 
 // ---- DDM helpers ----------------------------------------------------------
@@ -434,7 +501,9 @@ TEST(DDMDenseDemultiplexOp, DdmNonLinearPhaseCodesCorrelateRecovers) {
   }
 
   const std::vector<int64_t> shape{kNlRx, kNlDoppler, kNlRange};
-  const auto out = run_ddm_from_host<float>(host, shape, code);
+  const auto out =
+      run_ddm_once<float>(to_device_tensor(host, shape, complex_dtype<float>()),
+                          DDMDenseDemultiplexParams{.ddm_code = code, .cache_budget_bytes = 0});
   ASSERT_EQ(out.shape.size(), 4U);
   EXPECT_EQ(out.shape[0], kNlTx);
   EXPECT_EQ(out.shape[1], kNlRx);

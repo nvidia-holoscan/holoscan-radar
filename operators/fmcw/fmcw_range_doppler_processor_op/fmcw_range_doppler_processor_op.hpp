@@ -20,6 +20,7 @@
 #include <holoscan/core/temporal_contract.hpp>
 #include <holoscan/core/tensor_output_loan.hpp>
 
+#include "radar_common/sdk/config_cache.hpp"
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/fmcw_waveform_descriptor.hpp"
 #include "radar_common/descriptors/max_tensor_extents.hpp"
@@ -74,11 +75,15 @@ struct FMCWRangeDopplerProcessorParams {
   int64_t nfft_range{0};
   // 0 = exact (no zero-padding); >= post-clutter chirp count when non-zero.
   int64_t nfft_doppler{0};
+  std::uint64_t cache_budget_bytes{67108864ULL};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
     FMCWRangeDopplerProcessorParams,
-    holoscan::param_schema("com.nvidia.holoscan.radar.FMCWRangeDopplerProcessorParams", 1),
+    holoscan::param_schema("com.nvidia.holoscan.radar.FMCWRangeDopplerProcessorParams", 2),
+    holoscan::field<&FMCWRangeDopplerProcessorParams::cache_budget_bytes>("cache_budget_bytes")
+        .description("Retained operator cache bytes; 0 disables retention. "
+                     "Oversized artifacts run uncached with a warning."),
     holoscan::field<&FMCWRangeDopplerProcessorParams::range_window>("range_window")
         .description("WindowSpec applied along fast-time before the range FFT "
                      "(coherent-gain normalized). Default: none (rectangular)."),
@@ -148,6 +153,8 @@ class FMCWRangeDopplerProcessorOp : public holoscan::Operator<FMCWRangeDopplerPr
   Input<int64_t> nfft_doppler_in{"nfft_doppler"};
 
  private:
+  std::shared_ptr<ConfigCacheBudget> cache_budget_{std::make_shared<ConfigCacheBudget>()};
+
   Tensor retained_input_;
 
   // Both axis outputs are optional/latched (OPERATOR_API.md).
