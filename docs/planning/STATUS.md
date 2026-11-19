@@ -15,6 +15,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   existing presenter arguments. Full pinned lint passes. Diagnostic performance
   runs and physical-display appearance are outside this correctness validation.
 
+- **2026-11-19** — **SAR GUI CI image-probe correction** on
+  `deustice/sar-gui`: port the existing `deustice/aivo-fixes` correction for
+  Jenkins #279. The cyan sensor-look overlay can cover the grayscale test's
+  single sampled pixel; inspect 15 locations and require 12 grayscale matches.
+  All four C++/Python X11/native video SAR window cases and their fixture pass
+  in the SDK container. Full pinned repository lint passes.
+
 - **2026-11-19** — **GUI review: final-frame retention and unavailable display**
   on `deustice/sar-gui`: implemented. Retain one newest rate-deferred SAR sample,
   capture metadata and scene index until a clock tick can render it, without
