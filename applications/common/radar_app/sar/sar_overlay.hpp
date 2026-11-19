@@ -22,8 +22,8 @@
 namespace holoscan::radar::app::sar {
 
 // Host HUD sampled beside the formed-image raster. Matches the source-branch
-// on-image chrome (name, lattice, BP rate, lag) plus an APC look chevron as
-// Holoviz text/geometry layers. The N-up compass inset is omitted: normalized
+// on-image chrome (name, lattice, BP rate, lag) plus a sensor look annotation as
+// native text and cached display pixels. The N-up compass inset is omitted: normalized
 // coordinates squash it on a landscape strip.
 struct FormationDiag {
   double bp_compute_s{0.0};
@@ -60,7 +60,7 @@ struct OverlayConfig {
 };
 
 using holoscan::visualization::kTextRunHeaderBytes;
-inline constexpr std::uint32_t kHudRuns = 6U;
+inline constexpr std::uint32_t kHudRuns = 7U;
 inline constexpr std::uint32_t kHudChars = 64U;
 inline constexpr std::size_t kHudRowBytes = kTextRunHeaderBytes + kHudChars;
 inline constexpr std::uint32_t kHudMaxGlyphs = kHudRuns * kHudChars;
@@ -81,82 +81,83 @@ inline void write_hud_run(std::uint8_t* row, const holoscan::visualization::Text
   std::memcpy(chars, text.data(), std::min<std::size_t>(text.size(), kHudChars));
 }
 
-inline void add_hud_line(std::vector<float>* lines, float x0, float y0, float x1, float y1) {
-  if (lines->size() / kHudLineFloats >= kHudMaxLines)
-    return;
-  lines->insert(lines->end(), {x0, y0, x1, y1});
+// Pixel-space display annotation. The cone is a direction cue, not a beamwidth.
+// Keep its short dimensions in pixels so wide strip images do not squash it.
+struct SensorLookAnnotation {
+  float origin_x{}, origin_y{};
+  float label_x{}, label_y{}, label_width{}, label_height{22};
+  float left{}, top{}, right{}, bottom{};
+  float segments[7][4]{};
+};
+inline constexpr std::string_view kSensorLookLabel = "Sensor look angle";
+inline constexpr float kSensorLookFont = 14;
+
+inline std::optional<SensorLookAnnotation> sensor_look_annotation(const FormationDiag& diag,
+                                                                  bool transpose_axes, int width,
+                                                                  int height) {
+  if (!diag.apc_valid || width < 180 || height < 100)
+    return std::nullopt;
+  const double x = transpose_axes ? diag.raster_v : diag.raster_u;
+  const double y = transpose_axes ? diag.raster_u : diag.raster_v;
+  const double length = std::hypot(x, y);
+  if (!std::isfinite(length) || length <= 0)
+    return std::nullopt;
+  const double dx = x / length, dy = y / length;
+  constexpr double margin = 16;
+  const double cx = width * 0.5, cy = height * 0.5;
+  const double tx = dx == 0 ? 1.0e30 : (cx - margin) / std::abs(dx);
+  const double ty = dy == 0 ? 1.0e30 : (cy - margin) / std::abs(dy);
+  const double t = std::min(tx, ty);
+  SensorLookAnnotation result;
+  result.origin_x = static_cast<float>(cx + dx * t);
+  result.origin_y = static_cast<float>(cy + dy * t);
+  const float ox = result.origin_x, oy = result.origin_y;
+  // At most 54px long: substantially shorter than the preview's viewing cone.
+  const float reach = std::clamp(std::min(width, height) * 0.07F, 24.0F, 54.0F);
+  const float tip_x = ox - dx * reach, tip_y = oy - dy * reach;
+  const float px = -dy, py = dx;
+  const float spread = reach * 0.18F;
+  result.label_width = kSensorLookLabel.size() * kSensorLookFont * 7 / 13 + 12;
+  result.label_x = std::clamp(ox - result.label_width * (dx >= 0 ? 1.0F : 0.0F), 6.0F,
+                              width - result.label_width - 6);
+  // Above/below-edge cues need the label beyond the arrow tip, not over it.
+  const float label_offset = dy < -0.5          ? reach + 12
+                             : dy > 0.5         ? -reach - result.label_height - 12
+                             : oy < height - 56 ? 24
+                                                : -46;
+  result.label_y = std::clamp(oy + label_offset, 6.0F, height - result.label_height - 6);
+  const float anchor_x =
+      std::clamp(ox, result.label_x + 6, result.label_x + result.label_width - 6);
+  const float anchor_y =
+      result.label_y > oy ? result.label_y : result.label_y + result.label_height;
+  const auto segment = [&](int i, float ax, float ay, float bx, float by) {
+    result.segments[i][0] = ax;
+    result.segments[i][1] = ay;
+    result.segments[i][2] = bx;
+    result.segments[i][3] = by;
+  };
+  segment(0, ox, oy, tip_x + px * spread, tip_y + py * spread);
+  segment(1, ox, oy, tip_x - px * spread, tip_y - py * spread);
+  segment(2, ox, oy, tip_x, tip_y);
+  segment(3, tip_x, tip_y, tip_x + dx * 6 + px * 3, tip_y + dy * 6 + py * 3);
+  segment(4, tip_x, tip_y, tip_x + dx * 6 - px * 3, tip_y + dy * 6 - py * 3);
+  segment(5, ox, oy, anchor_x, anchor_y + (anchor_y > oy ? -8 : 8));
+  segment(6, anchor_x, anchor_y + (anchor_y > oy ? -8 : 8), anchor_x, anchor_y);
+  result.left = std::min(result.label_x, ox - reach - 3);
+  result.top = std::min(result.label_y, oy - reach - 3);
+  result.right = std::max(result.label_x + result.label_width, ox + reach + 3);
+  result.bottom = std::max(result.label_y + result.label_height, oy + reach + 3);
+  return result;
 }
 
-// Border chevron in display coordinates (+x right, +y down). `east`/`north`
-// are already swapped for landscape rasters.
-inline void add_chevron_lines(std::vector<float>* lines, double east, double north) {
-  const double len = std::hypot(east, north);
-  if (!(len > 0.0))
-    return;
-  const double dx = east / len;
-  const double dy = -north / len;
-  constexpr double kCx = 0.5;
-  constexpr double kCy = 0.5;
-  constexpr double kX0 = 0.03;
-  constexpr double kY0 = 0.03;
-  constexpr double kX1 = 0.97;
-  constexpr double kY1 = 0.97;
-  double t_hit = 1.0e300;
-  double hx = kCx;
-  double hy = kCy;
-  auto consider_x = [&](double xe) {
-    if (dx == 0.0)
-      return;
-    const double t = (xe - kCx) / dx;
-    if (!(t > 0.0) || t >= t_hit)
-      return;
-    const double y = kCy + t * dy;
-    if (y >= kY0 && y <= kY1) {
-      t_hit = t;
-      hx = xe;
-      hy = y;
-    }
-  };
-  auto consider_y = [&](double ye) {
-    if (dy == 0.0)
-      return;
-    const double t = (ye - kCy) / dy;
-    if (!(t > 0.0) || t >= t_hit)
-      return;
-    const double x = kCx + t * dx;
-    if (x >= kX0 && x <= kX1) {
-      t_hit = t;
-      hx = x;
-      hy = ye;
-    }
-  };
-  consider_x(kX0);
-  consider_x(kX1);
-  consider_y(kY0);
-  consider_y(kY1);
-  if (!(t_hit < 1.0e299))
-    return;
-  const double px = -dy;
-  const double py = dx;
-  const float tx = static_cast<float>(hx);
-  const float ty = static_cast<float>(hy);
-  const float l0 = static_cast<float>(hx - dx * 0.035 + px * 0.018);
-  const float l1 = static_cast<float>(hy - dy * 0.035 + py * 0.018);
-  const float r0 = static_cast<float>(hx - dx * 0.035 - px * 0.018);
-  const float r1 = static_cast<float>(hy - dy * 0.035 - py * 0.018);
-  add_hud_line(lines, tx, ty, l0, l1);
-  add_hud_line(lines, tx, ty, r0, r1);
-  add_hud_line(lines, l0, l1, r0, r1);
-}
-
-inline void fill_hud_geometry(std::vector<float>* lines, const FormationDiag& diag,
-                              bool transpose_axes) {
-  lines->clear();
-  if (!diag.apc_valid)
-    return;
-  const double chev_e = transpose_axes ? diag.raster_v : diag.raster_u;
-  const double chev_n = transpose_axes ? -diag.raster_u : -diag.raster_v;
-  add_chevron_lines(lines, chev_e, chev_n);
+inline void write_sensor_look_row(std::uint8_t* rows, const SensorLookAnnotation& look,
+                                  int canvas_width, int total_height) {
+  write_hud_run(rows + 6U * kHudRowBytes,
+                holoscan::visualization::TextRunHeader{.x = (look.label_x + 6) / canvas_width,
+                                                       .y = (look.label_y + 4) / total_height,
+                                                       .size_px = kSensorLookFont,
+                                                       .color = hud_rgba(157, 211, 219)},
+                kSensorLookLabel);
 }
 
 inline void write_hud_rows(std::uint8_t* rows, const std::vector<std::string>& lines,

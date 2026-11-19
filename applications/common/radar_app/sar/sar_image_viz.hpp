@@ -8,6 +8,9 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <optional>
+
+#include <holoscan/core/sample.hpp>
 
 #include <holoscan/core/domain/tensor.hpp>
 #include <holoscan/core/errors.hpp>
@@ -30,7 +33,7 @@ namespace holoscan::radar::app::sar {
 // and line-list (`overlay`) layers. The docked layout places text in a footer
 // viewport while keeping the APC marker over the image. `TimelineRasterOp`
 // independently renders the Gantt panel. Interactive runs enable a clocked,
-// one-shot startup canvas; after handoff, only new images activate GPU rendering.
+// one-shot startup canvas; afterward only new or rate-deferred images render.
 class SarImageVizOp : public Operator<> {
  public:
   // `product_extent` is the formed product's size when the tensor on `image`
@@ -59,6 +62,9 @@ class SarImageVizOp : public Operator<> {
   OverlayConfig overlay_{};
   std::array<int64_t, 2> product_extent_{0, 0};
   int overlay_index_{0};
+  // One owning sample, replaced by newer arrivals without copying GPU storage.
+  std::optional<Sample<Tensor>> pending_image_;
+  int pending_scene_index_{0};
   double display_rate_hz_;
   std::function<bool()> terminal_;
   std::optional<std::chrono::steady_clock::time_point> last_display_at_;

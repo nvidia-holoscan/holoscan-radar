@@ -74,6 +74,10 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
     prepare_presentation(cfg, launch.config_path.string(), launch.presenter,
                          launch.choose_presenter);
 #else
+    // No composition/presentation branch can be authored in this build. Keep
+    // the effective flags consistent so neither display drain nor hold runs.
+    cfg.visualize = false;
+    cfg.visualization.enabled = false;
     select_application_device(false, false);
 #endif
     AppFrameBank::reset(static_cast<int>(cfg.num_frames));

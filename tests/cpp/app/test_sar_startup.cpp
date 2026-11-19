@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
@@ -927,4 +929,189 @@ TEST(SarAutofocusStages, FullStageNamesFitAndOutcomeIsASeparateRow) {
   }
 }
 
+}  // namespace
+
+namespace {
+TEST(SarSensorLook, FitsEdgesAndPointsIntoSceneWithPixelSizedGeometry) {
+  for (const auto size : {std::array{640, 256}, std::array{256, 640}, std::array{1024, 1024}}) {
+    for (const auto direction : {std::array{1., 0.}, std::array{-1., 0.}, std::array{0., 1.},
+                                 std::array{0., -1.}, std::array{1., 1.}, std::array{-1., -1.}}) {
+      for (const bool transpose : {false, true}) {
+        sar::FormationDiag diag;
+        diag.apc_valid = true;
+        diag.raster_u = direction[0];
+        diag.raster_v = direction[1];
+        const auto look = sar::sensor_look_annotation(diag, transpose, size[0], size[1]);
+        ASSERT_TRUE(look);
+        EXPECT_GE(look->label_x, 0);
+        EXPECT_GE(look->label_y, 0);
+        EXPECT_LE(look->label_x + look->label_width, size[0]);
+        EXPECT_LE(look->label_y + look->label_height, size[1]);
+        const auto& shaft = look->segments[2];
+        const float dx = shaft[2] - shaft[0], dy = shaft[3] - shaft[1];
+        EXPECT_LE(std::hypot(dx, dy), 54.001);
+        EXPECT_GT(dx * (size[0] / 2 - shaft[0]) + dy * (size[1] / 2 - shaft[1]), 0);
+        if (std::abs(dx) < 0.001F) {
+          if (dy > 0)
+            EXPECT_GT(look->label_y, shaft[3] + 8);
+          else
+            EXPECT_LT(look->label_y + look->label_height, shaft[3] - 8);
+        }
+        std::vector<std::uint8_t> rows(sar::kHudRuns * sar::kHudRowBytes);
+        sar::write_sensor_look_row(rows.data(), *look, size[0], size[1] + 112);
+        holoscan::visualization::TextRunHeader header;
+        std::memcpy(&header, rows.data() + 6U * sar::kHudRowBytes, sizeof(header));
+        EXPECT_EQ(header.size_px, 14);
+        EXPECT_LT(header.y + 14.0F / (size[1] + 112),
+                  static_cast<float>(size[1]) / (size[1] + 112));
+        EXPECT_STREQ(reinterpret_cast<const char*>(rows.data() + 6U * sar::kHudRowBytes +
+                                                   sar::kTextRunHeaderBytes),
+                     "Sensor look angle");
+      }
+    }
+  }
+  sar::FormationDiag diag;
+  EXPECT_FALSE(sar::sensor_look_annotation(diag, false, 640, 256));
+  diag.apc_valid = true;
+  EXPECT_FALSE(sar::sensor_look_annotation(diag, false, 640, 256));
+  diag.raster_u = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(sar::sensor_look_annotation(diag, false, 640, 256));
+  diag.raster_u = 1;
+  EXPECT_FALSE(sar::sensor_look_annotation(diag, false, 160, 80));
+}
+
+TEST(SarSensorLook, PaintsOnlySmallDisplayPatchAndPreservesCaptureStamp) {
+  constexpr int side = 256;
+  const auto image = testing::to_device_tensor(std::vector<std::complex<float>>(16, {1, 0}), {4, 4},
+                                               DLDataType{kDLComplex, 64U, 1U});
+  sar::FormationDiag diag;
+  diag.apc_valid = true;
+  diag.raster_u = 1;
+  sar::OverlayConfig layout;
+  layout.canvas_width = side;
+  layout.image_height = side;
+  layout.diag = [diag] {
+    return diag;
+  };
+  const auto look = sar::sensor_look_annotation(diag, false, side, side);
+  ASSERT_TRUE(look);
+  auto harness =
+      holoscan::testing::create_operator_test<sar::SarImageVizOp>(4, 4, side, false, layout);
+  harness.push_frame(frame_at(std::chrono::milliseconds{123}, input("image", *image)));
+  const holoscan::DeviceId device{holoscan::radar::app::application_device()};
+  harness.input_source_device("image", device);
+  harness.output_device("frame", device);
+  harness.capture_snapshot<holoscan::schema::ImageT>("frame", 1U, side * side * 4U);
+  harness.capture_snapshot<holoscan::Tensor>("labels", 1U, sar::kHudRuns * sar::kHudRowBytes);
+  harness.capture_snapshot<holoscan::Tensor>(
+      "overlay", 1U, sar::kHudMaxLines * sar::kHudLineFloats * sizeof(float));
+  testing::FixtureCompletion completion;
+  auto running = harness.run_async(completion.run_options());
+  const bool ready = completion.wait_for_output(running, "frame", 1U) &&
+                     completion.wait_for_output(running, "labels", 1U) &&
+                     completion.wait_for_output(running, "overlay", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frame = result.snapshot<holoscan::schema::ImageT>("frame");
+  EXPECT_EQ(frame.sample_metadata().capture_time().timestamp_ns, 123000000);
+  const auto pixels = testing::to_host(frame.tensor(holoscan::schema::ImageTensorFields::data));
+  int cyan = 0, dark = 0;
+  for (int y = 0; y < side; ++y) {
+    for (int x = 0; x < side; ++x) {
+      const auto* pixel = pixels.as<std::uint8_t>() + (y * side + x) * 4;
+      if (x < std::floor(look->left) || x >= std::ceil(look->right) || y < std::floor(look->top) ||
+          y >= std::ceil(look->bottom)) {
+        EXPECT_EQ(pixel[0], 255);
+        EXPECT_EQ(pixel[1], 255);
+        EXPECT_EQ(pixel[2], 255);
+      }
+      cyan += pixel[2] > pixel[0] && pixel[1] > pixel[0];
+      dark += pixel[0] < 50;
+    }
+  }
+  EXPECT_GT(cyan, 20);
+  EXPECT_GT(dark, 100);
+  const auto rows = testing::to_host(result.snapshot<holoscan::Tensor>("labels"));
+  EXPECT_STREQ(reinterpret_cast<const char*>(rows.as<std::uint8_t>() + 6U * sar::kHudRowBytes +
+                                             sar::kTextRunHeaderBytes),
+               "Sensor look angle");
+}
+}  // namespace
+
+namespace {
+TEST(SarStartup, FlushesNewestRateDeferredImageWithoutAnotherInputOrReaderEof) {
+  for (const int mode : {0, 1, 2}) {
+    const bool clocked = mode != 2;
+    SCOPED_TRACE(mode);
+    const auto eof = std::make_shared<std::atomic<bool>>(false);
+    const auto image = testing::to_device_tensor(std::vector<std::complex<float>>(16, {1, 0}),
+                                                 {4, 4}, DLDataType{kDLComplex, 64U, 1U});
+    sar::OverlayConfig layout;
+    layout.scene_names = {"First", "Second", "Third"};
+    auto harness = holoscan::testing::create_operator_test<sar::SarImageVizOp>(
+        4, 4, 4, false, layout, std::array<int64_t, 2>{0, 0}, 1.0,
+        [eof] {
+          return eof->load();
+        },
+        clocked);
+    const auto stamps = mode == 1 ? std::vector{123, 125} : std::vector{123, 124, 125};
+    for (const int stamp : stamps)
+      harness.push_frame(frame_at(std::chrono::milliseconds{stamp}, input("image", *image)));
+    // Keep the finite fixture source alive without delivering any more data.
+    // Releasing its final staged frame would stop the whole fixture graph,
+    // unlike the application driver's explicit EOF display-drain phase.
+    harness.push_frame(frame_at(std::chrono::seconds{99}, input("image", *image)));
+    const holoscan::DeviceId device{holoscan::radar::app::application_device()};
+    harness.input_source_device("image", device);
+    harness.output_device("frame", device);
+    harness.capture_snapshot<holoscan::schema::ImageT>("frame", 4U, 64U);
+    harness.capture_snapshot<holoscan::Tensor>("labels", 4U, sar::kHudRuns * sar::kHudRowBytes);
+    harness.capture_snapshot<holoscan::Tensor>("overlay", 4U, 4U * sizeof(float));
+    testing::FixtureCompletion completion{std::chrono::seconds{5}};
+    auto running =
+        harness.run_async(completion.run_options(holoscan::testing::FrameRelease::kManual));
+    if (clocked)
+      ASSERT_TRUE(completion.wait_for_output(running, "frame", 1U));
+    ASSERT_TRUE(running.release_frame(completion.remaining()));
+    const unsigned first = clocked ? 2U : 1U;
+    ASSERT_TRUE(completion.wait_for_output(running, "frame", first));
+    ASSERT_TRUE(completion.wait_for_output(running, "labels", first));
+    ASSERT_TRUE(running.release_frame(completion.remaining()));
+    if (clocked)
+      EXPECT_FALSE(running.wait_for_output("frame", first + 1U, std::chrono::milliseconds{150}));
+    if (mode != 1)
+      ASSERT_TRUE(running.release_frame(completion.remaining()));
+    if (mode == 1)
+      eof->store(true);  // EOF may follow the rate-deferred input on a later tick.
+    const unsigned expected = 3U;
+    const bool ready = completion.wait_for_output(running, "frame", expected) &&
+                       completion.wait_for_output(running, "labels", expected) &&
+                       completion.wait_for_output(running, "overlay", expected);
+    const bool repeated =
+        running.wait_for_output("frame", expected + 1U, std::chrono::milliseconds{150});
+    running.request_stop();
+    const auto result = running.finish();
+    ASSERT_TRUE(ready) << "mode=" << mode << " " << result.describe_failure();
+    completion.check(result);
+    ASSERT_TRUE(result.ok()) << result.describe_failure();
+    EXPECT_FALSE(repeated);
+    const auto frames = result.snapshots<holoscan::schema::ImageT>("frame");
+    const auto labels = result.snapshots<holoscan::Tensor>("labels");
+    ASSERT_EQ(frames.size(), expected);
+    ASSERT_EQ(labels.size(), expected);
+    EXPECT_EQ(frames[first - 1U].sample_metadata().capture_time().timestamp_ns, 123000000);
+    EXPECT_EQ(frames.back().sample_metadata().capture_time().timestamp_ns, 125000000);
+    EXPECT_EQ(labels.back().sample_metadata().capture_time().timestamp_ns, 125000000);
+    const auto text = testing::to_host(labels.back());
+    EXPECT_STREQ(reinterpret_cast<const char*>(text.as<std::uint8_t>() + sar::kTextRunHeaderBytes),
+                 mode == 1 ? "Second  4x4" : "Third  4x4");
+    if (!clocked)
+      EXPECT_EQ(frames[1].sample_metadata().capture_time().timestamp_ns, 124000000);
+    if (mode == 0)
+      EXPECT_FALSE(eof->load());
+  }
+}
 }  // namespace

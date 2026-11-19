@@ -4,6 +4,25 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **GUI review: final-frame retention and unavailable display**
+  on `deustice/sar-gui`: implemented. Retain one newest rate-deferred SAR sample,
+  capture metadata and scene index until a clock tick can render it, without
+  requiring another input or reader EOF; do not throttle OnEach headless renders.
+  Disable effective FMCW visualization when HoloViz is absent so no drain or
+  indefinite window hold can run. All 36 selected CTests pass, including the
+  deferred/coalesced/EOF/headless regression, forced-no-HoloViz driver, real X11
+  windows, startup, and numerical checks. Preserve local presets.
+
+- **2026-11-19** — **SAR sensor look annotation** on `deustice/sar-gui`: implemented.
+  Replace the unlabeled triangle with a cyan inward arrow and schematic rays
+  capped at 54px, plus native `Sensor look angle` text on a dark backing. Cache
+  the small GPU-painted patch with each completed display image. Label placement
+  handles wide strips, corners and vertical cues; invalid/tiny views omit it.
+  Bounds, unchanged pixels outside the patch, and capture stamps are tested.
+  C++/Python numerical parity and forwarded-X11 resize/close checks pass. No
+  beamwidth claim, extra image readback, GPU wait or periodic image redraw.
+  Preserve user presets; native interactive appearance remains unverified.
+
 - **2026-11-19** — **Autofocus GUI stages** on `deustice/sar-gui`: implemented.
   C++ and Python report capture-stamped receiving, auxiliary BP, estimation, final
   BP, and ready checkpoints through zero-copy application boundaries. Correction
