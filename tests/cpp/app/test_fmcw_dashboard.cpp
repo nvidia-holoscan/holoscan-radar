@@ -217,12 +217,12 @@ TEST(SarFooterStatus, ComposesMatchedStatusBelowTheUnobscuredImage) {
     return reinterpret_cast<const char*>(records.data() + row * sar::kHudRowBytes +
                                          sar::kTextRunHeaderBytes);
   };
-  EXPECT_STREQ(row_text(1), "64 x 640 pixels");
-  EXPECT_STREQ(row_text(2), "Latency: 8.2s / 12.0s @0.2x");
+  EXPECT_STREQ(row_text(1), "64 x 640 pixels  1,000 pulses");
+  EXPECT_STREQ(row_text(2), "BP work: 315.7 Gpx*pulses");
+  EXPECT_STREQ(row_text(3), "Latency: 8.2s / 12.0s @0.2x");
   // Both metrics use actual BP work, not acquisition wall time, final-batch
   // latency, display dimensions, or a differently rounded report sample.
-  EXPECT_STREQ(row_text(3), "Throughput: 38.5 Gpx*pulses/sec");
-  EXPECT_STREQ(row_text(4), "");
+  EXPECT_STREQ(row_text(4), "Throughput: 38.5 Gpx*pulses/sec");
   EXPECT_STREQ(row_text(5), "");
   const auto text = radar::testing::to_pageable_host_tensor(
       records, {sar::kHudRuns, sar::kHudRowBytes}, rgba_type);

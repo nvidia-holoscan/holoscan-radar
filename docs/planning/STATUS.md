@@ -4,6 +4,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **SAR GUI checkpoint verification**: 174 of 175 selected
+  CTests passed initially; update the stale footer assertion to require all five
+  agreed rows, including grouped pulses and BP work. Its rebuilt GPU composition
+  test passes, as do all 63 Python binding/workflow checks, including complex
+  C++/Python product comparisons at both precisions. No renderer or numerical
+  code changed in this test correction. Keep user presets local.
+
 - **2026-11-19** — **SAR GUI commit checkpoint**: split the reviewed GUI work
   into diagnostic/workflow accounting (`96e4fc69`), footer rendering/history
   (`c9787081`), and resize-aware presentation (`7349e35c`), followed by the
