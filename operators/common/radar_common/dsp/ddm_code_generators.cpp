@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "radar_common/math/constants.hpp"
+#include "radar_common/math/checked_sizes.hpp"
 
 namespace holoscan::radar {
 namespace {
@@ -31,6 +32,7 @@ void require_generator_extents(int64_t num_tx, int64_t num_chirps, const char* g
 DDMCodeDescriptor make_zadoff_chu_ddm_code(int64_t num_tx, int64_t num_chirps) {
   constexpr const char* kGenerator = "make_zadoff_chu_ddm_code";
   require_generator_extents(num_tx, num_chirps, kGenerator);
+  const auto count = checked_element_count<std::complex<double>>({num_tx, num_chirps}, kGenerator);
 
   std::vector<int64_t> roots;
   for (int64_t root = 1; root < num_chirps && static_cast<int64_t>(roots.size()) < num_tx; ++root) {
@@ -46,7 +48,7 @@ DDMCodeDescriptor make_zadoff_chu_ddm_code(int64_t num_tx, int64_t num_chirps) {
 
   DDMCodeDescriptor code;
   code.num_tx = num_tx;
-  code.phase_codes.resize(static_cast<std::size_t>(num_tx * num_chirps));
+  code.phase_codes.resize(static_cast<std::size_t>(count));
   const bool odd = num_chirps % 2 != 0;
   for (int64_t tx = 0; tx < num_tx; ++tx) {
     const double root = static_cast<double>(roots[static_cast<std::size_t>(tx)]);
@@ -64,10 +66,11 @@ DDMCodeDescriptor make_zadoff_chu_ddm_code(int64_t num_tx, int64_t num_chirps) {
 DDMCodeDescriptor make_sinusoidal_ddm_stress_code(int64_t num_tx, int64_t num_chirps) {
   constexpr const char* kGenerator = "make_sinusoidal_ddm_stress_code";
   require_generator_extents(num_tx, num_chirps, kGenerator);
+  const auto count = checked_element_count<std::complex<double>>({num_tx, num_chirps}, kGenerator);
 
   DDMCodeDescriptor code;
   code.num_tx = num_tx;
-  code.phase_codes.resize(static_cast<std::size_t>(num_tx * num_chirps));
+  code.phase_codes.resize(static_cast<std::size_t>(count));
   for (int64_t tx = 0; tx < num_tx; ++tx) {
     for (int64_t chirp = 0; chirp < num_chirps; ++chirp) {
       const double phase =

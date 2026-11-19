@@ -8,6 +8,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 
 #include "radar_common/dsp/ddm_code_generators.hpp"
@@ -106,6 +107,16 @@ TEST(DdmCodeGenerators, RejectsInvalidExtentsAndInsufficientRoots) {
   EXPECT_THROW(make_zadoff_chu_ddm_code(2, 2), std::invalid_argument);
   EXPECT_THROW(make_sinusoidal_ddm_stress_code(0, 64), std::invalid_argument);
   EXPECT_THROW(make_sinusoidal_ddm_stress_code(2, 0), std::invalid_argument);
+}
+
+TEST(DdmCodeGenerators, RejectsUnrepresentableCountsBeforeSearchingRootsOrAllocating) {
+  constexpr int64_t huge = std::numeric_limits<int64_t>::max();
+  for (const auto generator : {make_zadoff_chu_ddm_code, make_sinusoidal_ddm_stress_code}) {
+    EXPECT_THROW(generator(huge, huge), std::invalid_argument);
+    EXPECT_THROW(generator(huge, 2), std::invalid_argument);
+    EXPECT_THROW(generator(1, huge / 16 + 1), std::invalid_argument);
+    EXPECT_THROW(generator(-1, 64), std::invalid_argument);
+  }
 }
 
 }  // namespace
