@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -1037,5 +1038,80 @@ TEST(SarSensorLook, PaintsOnlySmallDisplayPatchAndPreservesCaptureStamp) {
   EXPECT_STREQ(reinterpret_cast<const char*>(rows.as<std::uint8_t>() + 6U * sar::kHudRowBytes +
                                              sar::kTextRunHeaderBytes),
                "Sensor look angle");
+}
+}  // namespace
+
+namespace {
+TEST(SarStartup, FlushesNewestRateDeferredImageWithoutAnotherInputOrReaderEof) {
+  for (const int mode : {0, 1, 2}) {
+    const bool clocked = mode != 2;
+    SCOPED_TRACE(mode);
+    const auto eof = std::make_shared<std::atomic<bool>>(false);
+    const auto image = testing::to_device_tensor(std::vector<std::complex<float>>(16, {1, 0}),
+                                                 {4, 4}, DLDataType{kDLComplex, 64U, 1U});
+    sar::OverlayConfig layout;
+    layout.scene_names = {"First", "Second", "Third"};
+    auto harness = holoscan::testing::create_operator_test<sar::SarImageVizOp>(
+        4, 4, 4, false, layout, std::array<int64_t, 2>{0, 0}, 1.0,
+        [eof] {
+          return eof->load();
+        },
+        clocked);
+    const auto stamps = mode == 1 ? std::vector{123, 125} : std::vector{123, 124, 125};
+    for (const int stamp : stamps)
+      harness.push_frame(frame_at(std::chrono::milliseconds{stamp}, input("image", *image)));
+    // Keep the finite fixture source alive without delivering any more data.
+    // Releasing its final staged frame would stop the whole fixture graph,
+    // unlike the application driver's explicit EOF display-drain phase.
+    harness.push_frame(frame_at(std::chrono::seconds{99}, input("image", *image)));
+    const holoscan::DeviceId device{holoscan::radar::app::application_device()};
+    harness.input_source_device("image", device);
+    harness.output_device("frame", device);
+    harness.capture_snapshot<holoscan::schema::ImageT>("frame", 4U, 64U);
+    harness.capture_snapshot<holoscan::Tensor>("labels", 4U, sar::kHudRuns * sar::kHudRowBytes);
+    harness.capture_snapshot<holoscan::Tensor>("overlay", 4U, 4U * sizeof(float));
+    testing::FixtureCompletion completion{std::chrono::seconds{5}};
+    auto running =
+        harness.run_async(completion.run_options(holoscan::testing::FrameRelease::kManual));
+    if (clocked)
+      ASSERT_TRUE(completion.wait_for_output(running, "frame", 1U));
+    ASSERT_TRUE(running.release_frame(completion.remaining()));
+    const unsigned first = clocked ? 2U : 1U;
+    ASSERT_TRUE(completion.wait_for_output(running, "frame", first));
+    ASSERT_TRUE(completion.wait_for_output(running, "labels", first));
+    ASSERT_TRUE(running.release_frame(completion.remaining()));
+    if (clocked)
+      EXPECT_FALSE(running.wait_for_output("frame", first + 1U, std::chrono::milliseconds{150}));
+    if (mode != 1)
+      ASSERT_TRUE(running.release_frame(completion.remaining()));
+    if (mode == 1)
+      eof->store(true);  // EOF may follow the rate-deferred input on a later tick.
+    const unsigned expected = 3U;
+    const bool ready = completion.wait_for_output(running, "frame", expected) &&
+                       completion.wait_for_output(running, "labels", expected) &&
+                       completion.wait_for_output(running, "overlay", expected);
+    const bool repeated =
+        running.wait_for_output("frame", expected + 1U, std::chrono::milliseconds{150});
+    running.request_stop();
+    const auto result = running.finish();
+    ASSERT_TRUE(ready) << "mode=" << mode << " " << result.describe_failure();
+    completion.check(result);
+    ASSERT_TRUE(result.ok()) << result.describe_failure();
+    EXPECT_FALSE(repeated);
+    const auto frames = result.snapshots<holoscan::schema::ImageT>("frame");
+    const auto labels = result.snapshots<holoscan::Tensor>("labels");
+    ASSERT_EQ(frames.size(), expected);
+    ASSERT_EQ(labels.size(), expected);
+    EXPECT_EQ(frames[first - 1U].sample_metadata().capture_time().timestamp_ns, 123000000);
+    EXPECT_EQ(frames.back().sample_metadata().capture_time().timestamp_ns, 125000000);
+    EXPECT_EQ(labels.back().sample_metadata().capture_time().timestamp_ns, 125000000);
+    const auto text = testing::to_host(labels.back());
+    EXPECT_STREQ(reinterpret_cast<const char*>(text.as<std::uint8_t>() + sar::kTextRunHeaderBytes),
+                 mode == 1 ? "Second  4x4" : "Third  4x4");
+    if (!clocked)
+      EXPECT_EQ(frames[1].sample_metadata().capture_time().timestamp_ns, 124000000);
+    if (mode == 0)
+      EXPECT_FALSE(eof->load());
+  }
 }
 }  // namespace

@@ -330,6 +330,15 @@ radar_add_test(app/test_report_shapes holoscan::radar_app)
 radar_add_test(app/test_sar_diagnostics holoscan::radar_app)
 radar_add_test(app/test_shutdown_signals holoscan::radar_app)
 
+# Exercise the driver fallback even on SDK images that include visualization.
+add_executable(test_fmcw_without_holoviz app/test_fmcw_without_holoviz.cpp)
+target_link_libraries(test_fmcw_without_holoviz PRIVATE
+    radar_test_utils GTest::gtest_main holoscan::radar_app holoscan::params_io)
+target_compile_definitions(test_fmcw_without_holoviz PRIVATE
+    HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ=0)
+gtest_discover_tests(test_fmcw_without_holoviz PROPERTIES LABELS "unit" TIMEOUT 5)
+
+
 radar_add_test(app/test_sar_config_paths holoscan::radar_app holoscan::params_io)
 target_include_directories(test_sar_config_paths PRIVATE ${PROJECT_SOURCE_DIR}/operators)
 target_compile_definitions(test_sar_config_paths PRIVATE

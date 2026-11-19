@@ -224,30 +224,34 @@ expected<void, Error> SarImageVizOp::emit_startup(ExecutionContext& context) {
   return {};
 }
 expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
-  // The GUI clock emits the cached placeholder once, then does no rendering
-  // without new data. Headless authoring retains its original OnEach behavior.
-  Tensor input;
-  EmitOptions options;
+  // Empty clock ticks may flush a deferred final image even before the paced
+  // reader declares EOF. Retain at most the newest owning sample and its stamp.
   if (startup_placeholder_) {
     HOLOSCAN_TRY(auto samples, image.selected_batch());
-    if (samples.empty())
+    if (!samples.empty()) {
+      pending_scene_index_ = overlay_index_ + static_cast<int>(samples.size()) - 1;
+      overlay_index_ += static_cast<int>(samples.size());
+      pending_image_ = std::move(samples.back());
+      startup_emitted_ = true;
+    }
+    if (!pending_image_)
       return startup_emitted_ ? expected<void, Error>{} : emit_startup(context);
-    startup_emitted_ = true;
-    overlay_index_ += static_cast<int>(samples.size() - 1);
-    input = samples.back().data;
-    options = sensor_io::derive_from(samples.back());
   } else {
     HOLOSCAN_TRY(auto sample, image.receive());
-    input = sample.data;
-    options = sensor_io::derive_from(sample);
+    pending_image_ = std::move(sample);
+    pending_scene_index_ = overlay_index_++;
   }
   const auto now = std::chrono::steady_clock::now();
-  if (last_display_at_ &&
+  // OnEach headless execution has no future clock tick to flush a pending
+  // sample, so render every supplied image there. Windowed runs remain capped.
+  if (startup_placeholder_ && last_display_at_ &&
       std::chrono::duration<double>(now - *last_display_at_).count() < 1.0 / display_rate_hz_ &&
-      !(terminal_ && terminal_())) {
-    ++overlay_index_;
+      !(terminal_ && terminal_()))
     return {};
-  }
+  auto sample = std::move(*pending_image_);
+  pending_image_.reset();
+  const EmitOptions options = sensor_io::derive_from(sample);
+  const Tensor input = std::move(sample.data);
   last_display_at_ = now;
   if (input.nbytes() > 0 && input.data() == nullptr)
     return make_unexpected(Error{ErrorCode::kInvalidArgument, "SarImageVizOp: null image storage"});
@@ -338,12 +342,11 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
   const int64_t banner_u = product_extent_[1] > 0 ? product_extent_[1] : shape[1];
   const std::string size = std::to_string(banner_v) + "x" + std::to_string(banner_u);
   if (!overlay_.scene_names.empty()) {
-    const size_t idx = static_cast<size_t>(overlay_index_) % overlay_.scene_names.size();
+    const size_t idx = static_cast<size_t>(pending_scene_index_) % overlay_.scene_names.size();
     banner.push_back(overlay_.scene_names[idx] + "  " + size);
   } else {
     banner.push_back(size);
   }
-  ++overlay_index_;
   if (!diag.rate_line.empty()) {
     banner.push_back(format_display_rate_line(diag.rate_line));
   } else {

@@ -695,3 +695,17 @@ The backing and colored lines touch only a small display-raster patch on the GPU
 when a new image is rendered. Text and patch remain cached with that image and
 share its capture stamp; timeline updates do not repaint them. Scientific image
 and dump tensors are unchanged.
+
+### Deferred final frames and unavailable visualization
+
+The interactive SAR display-rate cap retains one newest input sample, including
+its capture metadata, until a later clock tick can render it. New arrivals
+replace that pending reference; an empty input queue never discards it. This
+works before the paced reader reports EOF and during display drain. Once the
+pending image is rendered, idle ticks do not redraw it. Event-driven headless
+SAR rendering processes each supplied image because it has no display clock to
+flush deferred inputs. No tensor copy or additional GPU wait is introduced.
+
+FMCW builds without the optional HoloViz package disable effective visualization
+before graph construction, regardless of YAML display or hold settings. Their
+processing graph runs normally without a display drain or final-window hold.
