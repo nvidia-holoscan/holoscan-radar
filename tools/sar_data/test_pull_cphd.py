@@ -197,6 +197,14 @@ class DownloadCliTest(unittest.TestCase):
         self.assertIn(str(job.destination), command)
         self.assertIn("--force", command)
 
+    def test_subset_transfer_size_is_forwarded(self):
+        job = pull_cphd.jobs_for_config(pull_cphd.APPS["video_sar"])[0]
+        with mock.patch.object(pull_cphd.subprocess, "run") as run:
+            pull_cphd.prepare_one(job, False, 1, 1, io_chunk_bytes=16777216)
+        command = run.call_args.args[0]
+        position = command.index("--io-chunk-bytes")
+        self.assertEqual(command[position + 1], "16777216")
+
     def test_duplicate_config_keys_fail_before_selection_or_side_effects(self):
         known = "sar/2023-06-24-13-22-56_UMBRA-05_CPHD.cphd"
         for text in (

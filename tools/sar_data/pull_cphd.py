@@ -406,7 +406,9 @@ def jobs_for(app: str, dest: Path | None) -> list[PullJob]:
     return list(jobs.values())
 
 
-def prepare_one(job: PullJob, force: bool, index: int, total: int) -> Path:
+def prepare_one(
+    job: PullJob, force: bool, index: int, total: int, io_chunk_bytes: int | None = None
+) -> Path:
     if job.recipe is None:
         return pull_one(job, force, index, total)
     command = (["uv", "run"] if shutil.which("uv") else [sys.executable]) + [
@@ -419,6 +421,8 @@ def prepare_one(job: PullJob, force: bool, index: int, total: int) -> Path:
     ]
     if force:
         command.append("--force")
+    if io_chunk_bytes is not None:
+        command.extend(["--io-chunk-bytes", str(io_chunk_bytes)])
     subprocess.run(command, check=True)
     return job.destination
 
@@ -661,7 +665,17 @@ def main() -> int:
         action="store_true",
         help="re-download existing files and restart partial subsets",
     )
+    parser.add_argument(
+        "--io-chunk-bytes",
+        type=int,
+        default=None,
+        help="override recipe signal staging/transfer bytes for subset preparation",
+    )
     args = parser.parse_args()
+    if args.io_chunk_bytes is not None and (
+        args.io_chunk_bytes < 8 or args.io_chunk_bytes % 8 or args.io_chunk_bytes > sys.maxsize
+    ):
+        parser.error("--io-chunk-bytes must be at least 8, a multiple of 8, and addressable")
     if args.config is not None and args.dest is not None:
         parser.error("--config uses exact configured paths; use --data-root instead of --dest")
     if args.data_root is not None and args.config is None:
@@ -691,7 +705,8 @@ def main() -> int:
     count = len(jobs)
     for index, job in enumerate(jobs, start=1):
         try:
-            pulled.append((job, prepare_one(job, args.force, index, count)))
+            options = {} if args.io_chunk_bytes is None else {"io_chunk_bytes": args.io_chunk_bytes}
+            pulled.append((job, prepare_one(job, args.force, index, count, **options)))
         except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
             print(
                 f"error: {job.scene}: download failed: {exc}\n"

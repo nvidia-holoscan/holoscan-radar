@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sar_data.subset import (  # noqa: E402
+    DEFAULT_IO_CHUNK_BYTES,
     AxisWindow,
     load_subset_recipe,
     parse_axis_window,
@@ -132,6 +133,12 @@ def main() -> int:
         help="sample-window bandwidth; count = round(bandwidth / SCSS)",
     )
     parser.add_argument(
+        "--io-chunk-bytes",
+        type=int,
+        default=None,
+        help="signal staging/transfer bytes (default 67108864; recipe may set)",
+    )
+    parser.add_argument(
         "--connections",
         type=int,
         default=None,
@@ -149,6 +156,10 @@ def main() -> int:
     )
     parser.add_argument("--progress-label", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.io_chunk_bytes is not None and (
+        args.io_chunk_bytes < 8 or args.io_chunk_bytes % 8 or args.io_chunk_bytes > sys.maxsize
+    ):
+        parser.error("--io-chunk-bytes must be at least 8, a multiple of 8, and addressable")
 
     if args.recipe is None and args.source is None:
         parser.error("a recipe or --source is required")
@@ -178,6 +189,9 @@ def main() -> int:
     pulses = pulse_override
     samples = sample_override
     connections = args.connections if args.connections is not None else 128
+    io_chunk_bytes = (
+        args.io_chunk_bytes if args.io_chunk_bytes is not None else DEFAULT_IO_CHUNK_BYTES
+    )
 
     if args.recipe is not None:
         recipe = load_subset_recipe(args.recipe)
@@ -190,6 +204,8 @@ def main() -> int:
             samples = recipe.samples
         if args.connections is None:
             connections = recipe.connections
+        if args.io_chunk_bytes is None:
+            io_chunk_bytes = recipe.io_chunk_bytes
 
     dest = _output_path(args.output, name)
     result = subset_cphd(
@@ -198,6 +214,7 @@ def main() -> int:
         pulses=pulses,
         samples=samples,
         connections=connections,
+        io_chunk_bytes=io_chunk_bytes,
         force=args.force,
         dry_run=args.dry_run,
         progress=True,

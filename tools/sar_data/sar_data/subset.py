@@ -57,7 +57,19 @@ _FETCH_RETRIES = 5
 _RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 # Host RAM on the demo box is 62 GiB; a 0.5 m Houston subband is ~52 GiB.
 # Stream that many bytes through the writer rather than materialising them.
-_SIGNAL_CHUNK_BYTES = 64 * 1024 * 1024
+DEFAULT_IO_CHUNK_BYTES = 64 * 1024 * 1024
+
+
+def _validate_io_chunk_bytes(value: int) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < _CF8_BYTES
+        or value % _CF8_BYTES
+        or value > np.iinfo(np.intp).max
+    ):
+        raise ValueError("io_chunk_bytes must be at least 8, a multiple of 8, and addressable")
+    return value
 
 
 class ByteSource(Protocol):
@@ -66,6 +78,37 @@ class ByteSource(Protocol):
     def close(self) -> None: ...
 
     def identity(self) -> dict: ...
+
+    def size(self) -> int: ...
+
+
+def _checked_span(offset: int, size: int, extent: int, what: str) -> None:
+    if offset < 0 or size < 0 or size > extent or offset > extent - size:
+        raise RuntimeError(f"{what}: byte span ({offset}, {size}) exceeds {extent} bytes")
+
+
+def _checked_elements(*dimensions: int, itemsize: int = 1) -> int:
+    elements = 1
+    limit = np.iinfo(np.intp).max // itemsize
+    for dimension in dimensions:
+        if dimension < 0 or (dimension and elements > limit // dimension):
+            raise RuntimeError("negative or unrepresentable CPHD array dimensions")
+        elements *= dimension
+    return elements
+
+
+def _block_span(
+    source: ByteSource, kvps: dict[str, str], block: str, relative: int, size: int
+) -> int:
+    base = int(kvps[f"{block}_BLOCK_BYTE_OFFSET"])
+    declared = kvps.get(f"{block}_BLOCK_SIZE")
+    if declared is not None:
+        _checked_span(relative, size, int(declared), f"{block} block")
+    if base < 0 or relative < 0:
+        raise RuntimeError(f"{block}: negative block or array offset")
+    _checked_span(base + relative, size, source.size(), f"{block} source")
+    _checked_elements(size)
+    return base + relative
 
 
 @dataclass(frozen=True)
@@ -106,6 +149,7 @@ class SubsetRecipe:
     pulses: AxisWindow | None
     samples: AxisWindow | None
     connections: int = _DEFAULT_CONNECTIONS
+    io_chunk_bytes: int = DEFAULT_IO_CHUNK_BYTES
 
 
 class FileByteSource:
@@ -131,7 +175,11 @@ class FileByteSource:
             raise RuntimeError("source file changed while preparing the subset")
         return identity
 
+    def size(self) -> int:
+        return self.identity()["size"]
+
     def read(self, offset: int, size: int) -> bytes:
+        _checked_span(offset, size, self.size(), "local source")
         if size == 0:
             return b""
         handle = getattr(self._local, "handle", None)
@@ -177,6 +225,11 @@ class HttpByteSource:
     def identity(self) -> dict:
         with self._lock:
             return dict(self._identity or {})
+
+    def size(self) -> int:
+        if not self.identity():
+            self.read(0, 1)
+        return self.identity()["size"]
 
     def _validate_response(self, response, offset: int, last: int) -> None:
         span = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", response.getheader("Content-Range", ""))
@@ -224,6 +277,12 @@ class HttpByteSource:
                 self._conns.remove(conn)
 
     def read(self, offset: int, size: int) -> bytes:
+        if offset < 0 or size < 0:
+            raise RuntimeError("negative HTTP byte range")
+        identity = self.identity()
+        if identity:
+            _checked_span(offset, size, identity["size"], "HTTP source")
+        _checked_elements(size)
         if size == 0:
             return b""
         last = offset + size - 1
@@ -470,6 +529,7 @@ def load_subset_recipe(path: str | Path) -> SubsetRecipe:
         pulses=parse_axis_window(raw.get("pulses"), axis="pulses"),
         samples=parse_axis_window(raw.get("samples"), axis="samples"),
         connections=connections,
+        io_chunk_bytes=_validate_io_chunk_bytes(raw.get("io_chunk_bytes", DEFAULT_IO_CHUNK_BYTES)),
     )
 
 
@@ -483,17 +543,13 @@ def open_source(spec: str | Path) -> ByteSource:
 def _read_header(source: ByteSource) -> dict[str, str]:
     # Tiny generated fixtures can be shorter than the remote-object probe.
     # Keep strict exact reads for the actual XML, PVP, and signal blocks.
-    local_size = source._path.stat().st_size if isinstance(source, FileByteSource) else None
-    probe = source.read(
-        0, min(_HEADER_PROBE, local_size) if local_size is not None else _HEADER_PROBE
-    )
+    source_size = source.size()
+    probe = source.read(0, min(_HEADER_PROBE, source_size))
     if not probe.startswith(b"CPHD/"):
         raise RuntimeError("not a CPHD file (missing CPHD/ magic)")
     term = probe.find(skcphd.SECTION_TERMINATOR)
     if term < 0:
-        probe = source.read(
-            0, min(1024 * 1024, local_size) if local_size is not None else 1024 * 1024
-        )
+        probe = source.read(0, min(1024 * 1024, source_size))
         term = probe.find(skcphd.SECTION_TERMINATOR)
         if term < 0:
             raise RuntimeError("ASCII header has no form-feed terminator")
@@ -817,7 +873,7 @@ def _download_signal(
             # Drop only uncheckpointed bytes from an interrupted chunk.
             handle.truncate(dest_offset + count * request["row_size"])
 
-            def checkpoint(written: int, start: int, payload: np.ndarray) -> None:
+            def checkpoint(written: int, start: int, payload: np.ndarray | None) -> None:
                 if source.identity() != identity:
                     raise RuntimeError("source changed while preparing the subset")
                 handle.flush()
@@ -826,7 +882,15 @@ def _download_signal(
                     **state,
                     "written_vectors": written,
                     "last_chunk_start": start,
-                    "last_chunk_sha256": hashlib.sha256(payload).hexdigest(),
+                    "last_chunk_sha256": (
+                        hashlib.sha256(payload).hexdigest()
+                        if payload is not None
+                        else _hash_region(
+                            handle,
+                            dest_offset + start * request["row_size"],
+                            (written - start) * request["row_size"],
+                        )
+                    ),
                 }
                 _write_json_atomic(journal, update)
                 state.update(update)
@@ -927,19 +991,43 @@ def _stream_signal(
     sample_start: int,
     num_samples: int,
     connections: int,
+    io_chunk_bytes: int = DEFAULT_IO_CHUNK_BYTES,
     start_vector: int = 0,
-    checkpoint: Callable[[int, int, np.ndarray], None],
+    checkpoint: Callable[[int, int, np.ndarray | None], None],
     reporter: DownloadProgress | None = None,
 ) -> None:
     """Write CF8 rows in bounded chunks. sarkit Writer has no partial API."""
+    io_chunk_bytes = _validate_io_chunk_bytes(io_chunk_bytes)
     row_size = num_samples * _CF8_BYTES
-    chunk_n = max(1, _SIGNAL_CHUNK_BYTES // row_size)
+    chunk_n = max(1, io_chunk_bytes // row_size)
     expected = num_vectors * row_size
     handle.seek(dest_offset + start_vector * row_size)
     written_bytes = start_vector * row_size
     written_vectors = start_vector
+    if row_size > io_chunk_bytes:
+        # A row is the checkpoint unit, not a minimum allocation unit. An
+        # interrupted wide row is discarded on resume just like an incomplete
+        # ordinary chunk. Read raw CF8 bytes: no conversion or full-row copy.
+        transfer_bytes = io_chunk_bytes
+        for vector in range(start_vector, num_vectors):
+            source_offset = _signal_row_offset(
+                signal_block,
+                channel_offset,
+                pulse_start + vector,
+                orig_num_samples * _CF8_BYTES,
+                sample_start,
+            )
+            for cursor in range(0, row_size, transfer_bytes):
+                payload = source.read(
+                    source_offset + cursor, min(transfer_bytes, row_size - cursor)
+                )
+                handle.write(payload)
+                if reporter is not None:
+                    reporter.add(len(payload))
+            checkpoint(vector + 1, vector, None)
+        return
     # Keep the same workers/connections across chunks, rather than retaining
-    # another pool's sockets in HttpByteSource for every 64 MiB of the file.
+    # another pool's sockets in HttpByteSource for every transfer chunk.
     with ThreadPoolExecutor(max_workers=_fetch_workers(source, connections, num_vectors)) as pool:
         while written_vectors < num_vectors:
             n_keep = min(chunk_n, num_vectors - written_vectors)
@@ -974,7 +1062,6 @@ def _read_support_arrays(
     if "SUPPORT_BLOCK_BYTE_OFFSET" not in kvps:
         return {}
     arrays: dict[str, np.ndarray] = {}
-    support_base = int(kvps["SUPPORT_BLOCK_BYTE_OFFSET"])
     for node in xmltree.findall("{*}Data/{*}SupportArray"):
         ident = node.findtext("{*}Identifier")
         if ident is None:
@@ -982,13 +1069,20 @@ def _read_support_arrays(
         num_rows = int(node.findtext("{*}NumRows"))
         num_cols = int(node.findtext("{*}NumCols"))
         bytes_per = int(node.findtext("{*}BytesPerElement"))
-        offset = support_base + int(node.findtext("{*}ArrayByteOffset"))
-        payload = source.read(offset, num_rows * num_cols * bytes_per)
+        if min(num_rows, num_cols, bytes_per) <= 0:
+            raise RuntimeError(f"support array {ident!r}: dimensions must be positive")
+        size = _checked_elements(num_rows, num_cols, itemsize=bytes_per) * bytes_per
+        offset = _block_span(
+            source, kvps, "SUPPORT", int(node.findtext("{*}ArrayByteOffset")), size
+        )
         sa_elem = xmltree.find(f"{{*}}SupportArray/*[{{*}}Identifier='{ident}']")
         if sa_elem is None:
             raise RuntimeError(f"support array {ident!r} missing from SupportArray")
         fmt = sa_elem.findtext("{*}ElementFormat")
         dtype = skcphd.binary_format_string_to_dtype(fmt).newbyteorder(">")
+        if dtype.itemsize != bytes_per:
+            raise RuntimeError(f"support array {ident!r}: BytesPerElement disagrees with format")
+        payload = source.read(offset, size)
         arrays[ident] = np.frombuffer(payload, dtype=dtype).reshape(num_rows, num_cols)
     return arrays
 
@@ -1038,6 +1132,7 @@ def subset_cphd(
     pulses: AxisWindow | tuple[int, int] | None = None,
     samples: AxisWindow | tuple[int, int] | None = None,
     connections: int = _DEFAULT_CONNECTIONS,
+    io_chunk_bytes: int = DEFAULT_IO_CHUNK_BYTES,
     force: bool = False,
     dry_run: bool = False,
     progress: bool = False,
@@ -1049,6 +1144,7 @@ def subset_cphd(
     The CLI passes ``progress=True``. Matching partial downloads resume
     automatically; ``force`` explicitly discards their checkpoint.
     """
+    io_chunk_bytes = _validate_io_chunk_bytes(io_chunk_bytes)
     reporting = (
         DownloadProgress(progress_label or str(dest), None, stage="Subset preparation")
         if progress
@@ -1061,6 +1157,7 @@ def subset_cphd(
             pulses=pulses,
             samples=samples,
             connections=connections,
+            io_chunk_bytes=io_chunk_bytes,
             force=force,
             dry_run=dry_run,
             reporter=reporter,
@@ -1077,6 +1174,7 @@ def _subset_cphd(
     pulses: AxisWindow | tuple[int, int] | None,
     samples: AxisWindow | tuple[int, int] | None,
     connections: int,
+    io_chunk_bytes: int,
     force: bool,
     dry_run: bool,
     reporter: DownloadProgress | None,
@@ -1087,7 +1185,11 @@ def _subset_cphd(
     src = open_source(source)
     try:
         kvps = _read_header(src)
-        xml_bytes = src.read(int(kvps["XML_BLOCK_BYTE_OFFSET"]), int(kvps["XML_BLOCK_SIZE"]))
+        xml_size = int(kvps["XML_BLOCK_SIZE"])
+        if xml_size <= 0:
+            raise RuntimeError("XML block size must be positive")
+        xml_offset = _block_span(src, kvps, "XML", 0, xml_size)
+        xml_bytes = src.read(xml_offset, xml_size)
         xmltree = lxml.etree.fromstring(xml_bytes).getroottree()
         _require_cf8(xmltree)
         channel = _channel_data(xmltree)
@@ -1098,17 +1200,21 @@ def _subset_cphd(
             raise RuntimeError("CPHD channel Identifier is missing")
         signal_offset = int(channel.findtext("{*}SignalArrayByteOffset"))
         pvp_offset = int(channel.findtext("{*}PVPArrayByteOffset"))
-
+        stride = int(xmltree.findtext("{*}Data/{*}NumBytesPVP"))
+        if min(orig_nv, orig_ns, stride) <= 0 or stride % 8:
+            raise RuntimeError("CPHD dimensions and aligned PVP stride must be positive")
+        pvp_size = _checked_elements(orig_nv, itemsize=stride) * stride
+        pvp_base = _block_span(src, kvps, "PVP", pvp_offset, pvp_size)
+        for field in xmltree.findall("{*}PVP//*"):
+            offset_text, size_text = field.findtext("{*}Offset"), field.findtext("{*}Size")
+            if offset_text is None and size_text is None:
+                continue
+            if offset_text is None or size_text is None or int(size_text) <= 0:
+                raise RuntimeError("invalid PVP field layout")
+            _checked_span(int(offset_text), int(size_text), stride // 8, "PVP field")
         pvp_dtype = skcphd.get_pvp_dtype(xmltree).newbyteorder(">")
-        # Some C++ fixtures omit PVP_BLOCK_SIZE; the single-channel XML still
-        # gives the exact number of PVP records, excluding alignment padding.
-        pvp_size = int(kvps.get("PVP_BLOCK_SIZE", str(pvp_offset + orig_nv * pvp_dtype.itemsize)))
-        pvp_block = src.read(int(kvps["PVP_BLOCK_BYTE_OFFSET"]), pvp_size)
-        itemsize = pvp_dtype.itemsize
-        n_records = len(pvp_block) // itemsize
-        pvps_all = np.frombuffer(pvp_block, dtype=pvp_dtype, count=n_records)
-        first = pvp_offset // itemsize
-        channel_pvps = pvps_all[first : first + orig_nv]
+        pvp_block = src.read(pvp_base, pvp_size)
+        channel_pvps = np.frombuffer(pvp_block, dtype=pvp_dtype, count=orig_nv)
         if channel_pvps.shape[0] != orig_nv:
             raise RuntimeError(
                 f"PVP block has {channel_pvps.shape[0]} records, XML declares {orig_nv}"
@@ -1121,6 +1227,17 @@ def _subset_cphd(
         sample_start, sample_stop = resolve_axis_window(sample_spec, orig_ns, "samples", scss=scss0)
         num_vectors = pulse_stop - pulse_start
         num_samples = sample_stop - sample_start
+        _checked_elements(orig_ns, itemsize=_CF8_BYTES)
+        row_bytes = orig_ns * _CF8_BYTES
+        # Validate the envelope of the selected rectangle, including gaps
+        # between selected row slices, before creating download state.
+        _block_span(
+            src,
+            kvps,
+            "SIGNAL",
+            signal_offset + pulse_start * row_bytes + sample_start * _CF8_BYTES,
+            (num_vectors - 1) * row_bytes + num_samples * _CF8_BYTES,
+        )
         pvps = _apply_subband_pvps(channel_pvps[pulse_start:pulse_stop], sample_start, num_samples)
 
         request_bytes = num_vectors * num_samples * _CF8_BYTES
@@ -1231,6 +1348,7 @@ def _subset_cphd(
                 sample_start=sample_start,
                 num_samples=num_samples,
                 connections=connections,
+                io_chunk_bytes=io_chunk_bytes,
                 reporter=reporter,
             )
         return SubsetResult(skipped=False, **result_kw)

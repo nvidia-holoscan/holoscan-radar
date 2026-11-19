@@ -224,6 +224,46 @@ backoff with jitter and honor `Retry-After` up to 60 seconds. Permanent errors
 (such as 403/404/412/416) and ignored or incorrect byte ranges fail immediately.
 One bounded worker pool reuses its HTTP connections across the entire subset.
 
+Subset preparation validates XML, PVP, support-array, and selected signal byte
+spans against the source length and declared block sizes before fetching
+payloads or creating partial-download state. Dimensions must be positive and
+representable; PVP fields must fit their stride, and support-array element
+sizes must match their format. A one-byte HTTP range probe establishes the
+remote length, including for files shorter than the normal header probe.
+Only the selected channel's PVP records are fetched, excluding block padding.
+Signal rows wider than the staging target (64 MiB by default) are transferred in
+sample-aligned pieces and checkpointed after each complete row. Interruption
+inside a wide row refetches that row on resume; existing checkpoints remain
+compatible. The staging target is not a total memory budget: valid XML, PVP,
+and support-array representations can still consume proportional memory.
+
+Set `io_chunk_bytes` in a subset recipe, pass `--io-chunk-bytes 16777216`
+to either preparation CLI, or call `subset_cphd(..., io_chunk_bytes=16777216)`
+for a 16 MiB staging/transfer target. Values must be integers of at least
+8 bytes, divisible by 8. CLI overrides take precedence over the recipe;
+the default is 67108864 bytes. This controls signal transfer pieces and
+staging chunks, not total memory or metadata sizes. It may be changed when
+resuming: checkpoints still describe complete rows, and neither output bytes
+nor source/window identity depends on chunk size. Plain object downloads
+through `pull_cphd.py` do not use this subset-only setting.
+
+Measured on GB10 with warm local NVMe/ext4 inputs, Python 3.13.13, NumPy 2.5.4,
+and sarkit 1.12.0: nine alternating baseline/hardened process pairs, including
+checkpoint flush/fsync, gave these median paired elapsed-time changes versus
+`e1ae6390`. Output file checksums matched in every pair.
+
+| Preparation case | Elapsed-time change | Median peak process memory |
+| --- | --- | --- |
+| Kourou local subset, 1024 pulses by 16000 samples | +7.8% | 181.7 to 181.6 MiB |
+| Kourou loopback HTTP subset, 256 pulses by 8000 samples, 16 workers | -0.9% | 72.9 to 72.9 MiB |
+| Synthetic two-row signal, 80 MiB per row | +12.5% | 286.6 to 126.6 MiB |
+
+Positive means slower. The local case includes added per-row file-identity checks;
+the wide-row case trades extra output-file checksum reads for about 56% less
+peak memory. The HTTP difference is within observed variation, and loopback
+does not characterize WAN behavior. These measure subset preparation, not
+the CPHD writer operator or complete SAR Graph throughput.
+
 Interrupted subset downloads now resume automatically when you rerun the same
 `pull_cphd.py --config ...` or `subset_cphd.py ...` command. Keep both
 `houston_1p0m.cphd.part` and `houston_1p0m.cphd.part.json`: the checkpoint advances
