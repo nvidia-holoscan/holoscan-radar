@@ -46,6 +46,7 @@ import numpy as np
 import sarkit.cphd as skcphd
 import yaml
 from sar_data.progress import DownloadProgress
+from sar_data.recipe import validate_recipe_name
 
 # CF8 only: Houston and the CI smoke fixture are CF8, and a subband of CI4
 # is a later demo's problem (Capella / tiled strip).
@@ -507,6 +508,7 @@ def load_subset_recipe(path: str | Path) -> SubsetRecipe:
         raw = yaml.safe_load(handle)
     if not isinstance(raw, dict) or "name" not in raw:
         raise ValueError(f"{path}: recipe must be a mapping with a name")
+    name = validate_recipe_name(raw["name"])
     source_block = raw.get("source") or {}
     if isinstance(source_block, str):
         source = source_block
@@ -524,7 +526,7 @@ def load_subset_recipe(path: str | Path) -> SubsetRecipe:
     if connections < 1:
         raise ValueError(f"{path}: connections must be >= 1")
     return SubsetRecipe(
-        name=str(raw["name"]),
+        name=name,
         source=source,
         pulses=parse_axis_window(raw.get("pulses"), axis="pulses"),
         samples=parse_axis_window(raw.get("samples"), axis="samples"),

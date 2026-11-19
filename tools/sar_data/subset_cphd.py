@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from sar_data.recipe import validate_recipe_name  # noqa: E402
 from sar_data.subset import (  # noqa: E402
     DEFAULT_IO_CHUNK_BYTES,
     AxisWindow,
@@ -35,6 +36,7 @@ from sar_data.subset import (  # noqa: E402
 
 
 def _output_path(output: Path, name: str) -> Path:
+    name = validate_recipe_name(name)
     if output.suffix.lower() == ".cphd":
         return output
     return output / f"{name}.cphd"

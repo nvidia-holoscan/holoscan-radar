@@ -43,6 +43,7 @@ from pathlib import Path
 
 import yaml
 from sar_data.progress import DownloadProgress
+from sar_data.recipe import validate_recipe_name
 
 UMBRA_BUCKET = "umbra-open-data-catalog"
 UMBRA_HTTPS = f"https://{UMBRA_BUCKET}.s3.us-west-2.amazonaws.com/"
@@ -178,7 +179,7 @@ def dataset_catalog() -> dict[Path, Dataset]:
             spec["source"]["key"],
             spec["source"]["bucket"],
             UMBRA_HTTPS,
-            Path("sar") / f"{spec['name']}.cphd",
+            Path("sar") / f"{validate_recipe_name(spec['name'])}.cphd",
             recipe=recipe,
         )
     )

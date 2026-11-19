@@ -237,6 +237,12 @@ inside a wide row refetches that row on resume; existing checkpoints remain
 compatible. The staging target is not a total memory budget: valid XML, PVP,
 and support-array representations can still consume proportional memory.
 
+Recipe `name` must be a non-empty single filename component. Empty names,
+`.` / `..`, path separators (including backslashes), and absolute or
+drive-qualified paths are rejected rather than rewritten. Use `--output`
+to select a directory or an explicit `.cphd` destination. Explicit output
+selection does not bypass recipe-name validation.
+
 Set `io_chunk_bytes` in a subset recipe, pass `--io-chunk-bytes 16777216`
 to either preparation CLI, or call `subset_cphd(..., io_chunk_bytes=16777216)`
 for a 16 MiB staging/transfer target. Values must be integers of at least

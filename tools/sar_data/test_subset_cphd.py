@@ -405,6 +405,46 @@ def make_cphd(path, namespace):
 
 
 class IngestionBoundsTest(unittest.TestCase):
+    def test_unsafe_recipe_names_fail_before_preparation_with_any_output(self):
+        names = (
+            "",
+            " ",
+            ".",
+            "..",
+            "../escape",
+            "nested/name",
+            "nested\\name",
+            "/tmp/escape",
+            "C:\\escape",
+            "C:escape",
+            "\0",
+            None,
+            123,
+            True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            recipe = Path(directory) / "recipe.yaml"
+            for name in names:
+                recipe.write_text(json.dumps({"name": name, "source": "unused.cphd"}))
+                for output in (Path(directory) / "output", Path(directory) / "explicit.cphd"):
+                    with (
+                        self.subTest(name=name, output=output),
+                        mock.patch("sys.argv", ["subset_cphd.py", str(recipe), "-o", str(output)]),
+                        mock.patch.object(subset_cli, "subset_cphd") as prepare,
+                        self.assertRaisesRegex(ValueError, "single filename component"),
+                    ):
+                        subset_cli.main()
+                    prepare.assert_not_called()
+            self.assertEqual(sorted(p.name for p in Path(directory).iterdir()), ["recipe.yaml"])
+
+    def test_safe_recipe_name_preserves_explicit_output_selection(self):
+        output = Path("chosen") / "directory"
+        explicit = Path("another") / "chosen.cphd"
+        for name in ("houston_1p0m", "scene with spaces", "échantillon-01"):
+            with self.subTest(name=name):
+                self.assertEqual(subset_cli._output_path(output, name), output / f"{name}.cphd")
+                self.assertEqual(subset_cli._output_path(explicit, name), explicit)
+
     def test_recipe_chunk_size_and_cli_override_precedence(self):
         with tempfile.TemporaryDirectory() as directory:
             recipe = Path(directory) / "recipe.yaml"

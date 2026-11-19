@@ -15,6 +15,19 @@ import pull_cphd
 
 
 class DownloadCliTest(unittest.TestCase):
+    def test_catalog_rejects_unsafe_recipe_names(self):
+        for name in ("../escape", "/tmp/escape", "nested\\name", "", None):
+            with (
+                self.subTest(name=name),
+                mock.patch.object(
+                    pull_cphd.yaml,
+                    "safe_load",
+                    return_value={"name": name, "source": {"bucket": "unused", "key": "unused"}},
+                ),
+                self.assertRaisesRegex(ValueError, "single filename component"),
+            ):
+                pull_cphd.dataset_catalog()
+
     def test_autofocus_uses_original_catalog_object_and_preset_path(self):
         output = io.StringIO()
         with (
