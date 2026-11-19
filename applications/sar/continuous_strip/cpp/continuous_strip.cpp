@@ -16,7 +16,8 @@ int main(int argc, char** argv) {
       argc, argv, "continuous_strip", load_continuous_strip_config,
       [](auto precision, auto& graph, auto& options, const auto& queue, const auto& cfg,
          auto& reader, auto& range, auto& manager, auto& bp, auto& /*source*/, auto& application,
-         auto& formation, const auto& extents) -> const holoscan::Output<holoscan::Tensor>* {
+         auto& formation, const auto& extents,
+         const auto& hud) -> const holoscan::Output<holoscan::Tensor>* {
         // The mosaic's declared pool follows the formed image's precision.
         using T = typename decltype(precision)::Sample;
         const int64_t slice =
@@ -25,7 +26,7 @@ int main(int argc, char** argv) {
                 : cfg.reader_pulses_per_tick;
         auto scroll = graph.template op<app::sar::ScrollGeometryStagerOp>(
             "scroll_stager", cfg.scroll_parent, cfg.sample_geometry, cfg.scroll_anchor,
-            cfg.reader_loop, slice, cfg.reader_pulses_per_tick, *extents.max_range_bins);
+            cfg.reader_loop, slice, cfg.reader_pulses_per_tick, *extents.max_range_bins, hud);
         application.add(scroll);
         bind_outputs(options, "scroll_stager",
                      {"range_profiles_out", "positions_out", "reference_position_out"});

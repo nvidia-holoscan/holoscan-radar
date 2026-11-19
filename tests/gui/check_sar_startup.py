@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "cpp"))
-from check_fmcw_x11 import Event, find_window, geometry, xlib  # noqa: E402
+from check_fmcw_x11 import Event, WindowAttributes, find_window, geometry, xlib  # noqa: E402
 
 
 def check(args):
@@ -62,16 +62,23 @@ def check(args):
                 panel = wait(lambda: find_window(lib, display, window, b"SAR image"))
 
                 def pixel(x=2, y=2, surface=None):
-                    image = lib.XGetImage(
-                        display,
-                        panel if surface is None else surface,
-                        x,
-                        y,
-                        1,
-                        1,
-                        c.c_ulong(-1).value,
-                        2,
-                    )
+                    drawable = panel if surface is None else surface
+                    # A named child can exist before it is mapped. Keep the
+                    # map/size check and read atomic with respect to X clients.
+                    lib.XGrabServer(display)
+                    try:
+                        attributes = WindowAttributes()
+                        if (
+                            not lib.XGetWindowAttributes(display, drawable, c.byref(attributes))
+                            or attributes.map_state != 2  # IsViewable
+                            or not 0 <= x < attributes.width
+                            or not 0 <= y < attributes.height
+                        ):
+                            return None
+                        image = lib.XGetImage(display, drawable, x, y, 1, 1, c.c_ulong(-1).value, 2)
+                    finally:
+                        lib.XUngrabServer(display)
+                        lib.XFlush(display)
                     if not image:
                         return None
                     try:
@@ -102,10 +109,10 @@ def check(args):
                     wait(lambda: pixel() not in (None, 0x13181F))
                     timeline = wait(lambda: find_window(lib, display, window, b"SAR timeline"))
                     width, _ = geometry(lib, display, timeline)
-                    # The compact progress panel must reach full receipt and
-                    # GPU completion independently of the main image upload.
-                    wait(lambda: pixel(width - 20, 5, timeline) == 0x4BCDDC)
-                    wait(lambda: pixel(width - 20, 19, timeline) == 0x73C896)
+                    # The shared track must reach GPU completion, with its
+                    # Received marker still visible at the completed edge.
+                    wait(lambda: pixel(width - 20, 47, timeline) == 0x73C896)
+                    wait(lambda: pixel(width - 9, 47, timeline) == 0x4BCDDC)
                     log.seek(0)
                     assert "SAR: image 1 formed" in log.read()
                 event = Event()

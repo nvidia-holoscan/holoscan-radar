@@ -14,7 +14,9 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -30,6 +32,7 @@
 #include <holoscan/logger/logger.hpp>
 
 #include "radar_common/descriptors/enums.hpp"
+#include "radar_common/sar/formation_hud.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_common/tensor/tensor_utils.hpp"
 
@@ -65,7 +68,8 @@ using holoscan::Tensor;
 // zero-window alignment is the right join.
 class AutofocusSharpnessReportOp : public holoscan::Operator<> {
  public:
-  AutofocusSharpnessReportOp() = default;
+  explicit AutofocusSharpnessReportOp(std::shared_ptr<radar::FormationHud> hud = {})
+  : hud_(std::move(hud)) {}
 
   void setup(OperatorSpec& spec) override {
     spec.input(sharpness).queue_depth(2U);
@@ -145,6 +149,8 @@ class AutofocusSharpnessReportOp : public holoscan::Operator<> {
     const double gain = values[0] > 0.0 ? values[n - 1] / values[0] : 0.0;
     const auto reason = read_status(termination, stream);
     const auto accepted = read_status(iterations, stream);
+    if (hud_)
+      hud_->publish_autofocus(reason, accepted, context.activation_time().timestamp_ns);
     HOLOSCAN_LOG_INFO(
         "AutofocusSharpnessReportOp: sharpness {} ({:.3f}x; {} iteration(s) accepted; budget {})",
         trace_text, gain, accepted.value_or(-1), n - 1U);
@@ -177,6 +183,7 @@ class AutofocusSharpnessReportOp : public holoscan::Operator<> {
   Input<Tensor> iterations{"iterations"};
 
  private:
+  std::shared_ptr<radar::FormationHud> hud_;
   // One int32 off the device, or nothing when the port is unwired or had no
   // match this tick. A read failure is reported as absent rather than failing
   // the tick: this operator is a report, and losing the log line must not take

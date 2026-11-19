@@ -27,6 +27,10 @@ namespace holoscan::radar::app::sar {
 // coordinates squash it on a landscape strip.
 struct FormationDiag {
   double bp_compute_s{0.0};
+  std::optional<double> collection_elapsed_s;
+  std::optional<double> budget_s;
+  std::optional<double> budget_playback_rate;
+  std::optional<int64_t> capture_time_ns;
   int64_t pulses{0};
   int64_t pixels{0};
   int64_t bp_num_v{0};
@@ -47,6 +51,8 @@ struct FormationDiag {
 
 struct OverlayConfig {
   std::function<FormationDiag()> diag;
+  std::function<FormationDiag(int64_t)> diag_at_capture;
+  bool strip_update_metrics{false};
   std::vector<std::string> scene_names;
   bool show_playback_lag{false};
   // Docked output keeps the status and image in the same timestamped canvas.
@@ -185,49 +191,59 @@ inline void write_hud_rows(std::uint8_t* rows, const std::vector<std::string>& l
 // A bounded left-hand status panel. The timeline never regenerates these rows:
 // they are part of the completed image whose acquisition stamp they describe.
 inline void write_footer_hud_rows(std::uint8_t* rows, const std::vector<std::string>& lines,
-                                  const FormationDiag& diag, bool show_lag,
+                                  const FormationDiag& diag, bool /*show_lag*/,
                                   const OverlayConfig& layout) {
   using holoscan::visualization::TextRunHeader;
   std::memset(rows, 0, kHudRuns * kHudRowBytes);
   const int total_height = layout.image_height + layout.footer_height;
-  auto write = [&](std::size_t index, std::string text, float pixels, std::uint32_t color) {
+  auto write = [&](std::size_t index, std::string text, float y, float pixels,
+                   std::uint32_t color) {
     const auto limit = static_cast<std::size_t>(std::max(
         3,
         std::min<int>(kHudChars, static_cast<int>((layout.status_width - 20) / (pixels * 0.65F)))));
     if (text.size() > limit)
       text = text.substr(0, limit - 3) + "...";
     write_hud_run(rows + index * kHudRowBytes,
-                  TextRunHeader{.x = 10.0F / layout.canvas_width,
-                                .y = (layout.image_height + 7.0F + index * 17.0F) / total_height,
+                  TextRunHeader{.x = 8.0F / layout.canvas_width,
+                                .y = (layout.image_height + y) / total_height,
                                 .size_px = pixels,
                                 .color = color},
                   text);
   };
-  const auto title_color = hud_rgba(235, 239, 244);
-  const auto detail_color = hud_rgba(165, 175, 188);
-  const auto rate_color = hud_rgba(194, 211, 228);
+  const auto title_color = hud_rgba(75, 205, 220);
+  const auto detail_color = hud_rgba(205, 217, 229);
+  const auto rate_color = hud_rgba(230, 237, 243);
+  std::string dimensions;
   if (!lines.empty()) {
     const auto split = lines[0].rfind("  ");
-    write(0, split == std::string::npos ? "SAR image" : lines[0].substr(0, split), 16, title_color);
-    write(1, "Image " + (split == std::string::npos ? lines[0] : lines[0].substr(split + 2)), 14,
-          detail_color);
+    write(0, split == std::string::npos ? "SAR image" : lines[0].substr(0, split), 2, 18,
+          title_color);
+    dimensions = split == std::string::npos ? lines[0] : lines[0].substr(split + 2);
   }
-  if (lines.size() > 1) {
-    const auto count = static_cast<std::size_t>(std::max(4, (layout.status_width - 20) / 9));
-    // Keep the throughput value and its unit together when wrapping.
-    const auto split = lines[1].size() > count ? lines[1].find("  ") : std::string::npos;
-    if (split != std::string::npos) {
-      write(2, lines[1].substr(0, split), 14, rate_color);
-      write(3, lines[1].substr(split + 2), 14, rate_color);
-    } else {
-      write(2, lines[1], 14, rate_color);
-    }
+  std::string pulses = diag.pulses > 0 ? std::to_string(diag.pulses) : "--";
+  if (diag.pulses > 0) {
+    for (std::size_t end = pulses.size(); end > 3; end -= 3)
+      pulses.insert(end - 3, ",");
   }
-  if (lines.size() > 2)
-    write(4, lines[2], 14, detail_color);
-  if (show_lag && diag.playback_valid && diag.playback_paced)
-    write(5, format_lag_line(diag.playback_behind_s, diag.playback_target_s, diag.playback_wall_s),
-          14, diag.playback_behind_s > 0.2 ? hud_rgba(255, 120, 105) : hud_rgba(115, 200, 150));
+  write(1,
+        (dimensions.empty() ? "--" : dimensions) + " pixels" +
+            (layout.strip_update_metrics ? " (mosaic)" : "  " + pulses + " pulses"),
+        25, 14, detail_color);
+  write(2, "BP work: " + format_bp_giga_work(diag.pulses, diag.pixels) + " Gpx*pulses",
+        layout.strip_update_metrics ? 43 : 45, 14, rate_color);
+  const bool timed = std::isfinite(diag.bp_compute_s) && diag.bp_compute_s > 0;
+  write(3,
+        "Latency: " + (timed ? format_seconds(diag.bp_compute_s) : "--") + " / " +
+            format_playback_budget(diag.budget_s, diag.budget_playback_rate),
+        layout.strip_update_metrics ? 61 : 65, 14, rate_color);
+  write(4,
+        "Throughput: " + format_bp_giga_throughput(diag.bp_compute_s, diag.pulses, diag.pixels) +
+            " Gpx*pulses/sec",
+        layout.strip_update_metrics ? 79 : 85, 14, rate_color);
+  if (layout.strip_update_metrics)
+    write(5, "Last strip update: " + pulses + " pulses", 97, 12, detail_color);
+  // Acquisition/elapsed progress stays in the adjacent live panel. These
+  // rows remain frozen with the completed image; no timeline tick redraws them.
 }
 
 // Static startup text uses the existing native GPU text layer and one exact

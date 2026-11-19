@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -17,6 +18,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -37,6 +40,7 @@
 #include <holoscan/sensor_io/sensor_schema_package.hpp>
 
 #include "radar_app/sar/plot_raster.hpp"
+#include "radar_app/sar/hud_format.hpp"
 #include "radar_common/sar/formation_hud.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 
@@ -51,6 +55,8 @@ constexpr size_t kTextBytes = 128;
 struct Rect {
   int64_t x0, y0, x1, y1;
   uint8_t r, g, b;
+  float line_x{0}, slope{0}, half_width{0};
+  bool operator==(const Rect&) const = default;
 };
 struct TimelineCommands {
   std::vector<Rect> rectangles;
@@ -67,15 +73,15 @@ void fill_rect(TimelineCommands* img, int64_t, int64_t, int64_t x0, int64_t y0, 
         {std::min(x0, x1), std::min(y0, y1), std::max(x0, x1), std::max(y0, y1), c[0], c[1], c[2]});
 }
 
-void draw_text(TimelineCommands* img, int64_t, int64_t, int64_t x, int64_t y,
-               const std::string& text, const std::array<uint8_t, 3>& color, int scale) {
+void draw_text_px(TimelineCommands* img, int64_t x, int64_t y, const std::string& text,
+                  const std::array<uint8_t, 3>& color, float pixels) {
   if (img->rows >= kTextRows)
     return;
   auto* row = img->text.data() + img->rows++ * kTextBytes;
   const visualization::TextRunHeader header{
       .x = static_cast<float>(x),
       .y = static_cast<float>(y),
-      .size_px = static_cast<float>(7 * scale),
+      .size_px = pixels,
       .color = 0xff000000U | (static_cast<uint32_t>(color[2]) << 16U) |
                (static_cast<uint32_t>(color[1]) << 8U) | color[0]};
   std::memcpy(row, &header, sizeof(header));
@@ -83,16 +89,56 @@ void draw_text(TimelineCommands* img, int64_t, int64_t, int64_t x, int64_t y,
               std::min(text.size(), kTextBytes - sizeof(header) - 1));
 }
 
+// Merge only drawing coverage. Original batch pairs were already matched in
+// the diagnostics mailbox; sorting independent lane events cannot match them.
+void draw_intervals(TimelineCommands* img, int64_t w, int64_t h,
+                    std::vector<std::pair<int64_t, int64_t>> intervals, int64_t y0, int64_t y1,
+                    const std::array<uint8_t, 3>& color) {
+  std::sort(intervals.begin(), intervals.end());
+  int64_t left = -1, right = -1;
+  const auto emit = [&] {
+    if (left >= 0)
+      fill_rect(img, w, h, left, y0, right, y1, color);
+  };
+  for (const auto& interval : intervals) {
+    if (left < 0 || interval.first > right) {
+      emit();
+      left = interval.first;
+      right = interval.second;
+    } else {
+      right = std::max(right, interval.second);
+    }
+  }
+  emit();
+}
+
+// One bounded command per connection. The GPU evaluates a thin line directly,
+// rather than expanding a diagonal into many host-generated rectangles.
+void draw_connection(TimelineCommands* img, int64_t left, int64_t right, int64_t x0, int64_t y0,
+                     int64_t x1, int64_t y1, const std::array<uint8_t, 3>& color) {
+  if (img->rectangles.size() == kMaxRects)
+    return;
+  const float slope = static_cast<float>(x1 - x0) / static_cast<float>(y1 - y0);
+  img->rectangles.push_back({left, y0, right, y1 + 1, color[0], color[1], color[2],
+                             static_cast<float>(x0), slope,
+                             0.55F * std::sqrt(1.0F + slope * slope)});
+}
+
 __global__ void render_timeline(uint8_t* output, int64_t width, int64_t height,
-                                const Rect* rectangles, size_t count) {
+                                const Rect* rectangles, size_t count, int64_t visible_width,
+                                int64_t visible_height) {
   const int64_t pixel = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (pixel >= width * height)
     return;
   const int64_t x = pixel % width, y = pixel / width;
-  uint8_t r = 16, g = 16, b = 16;
-  for (size_t i = 0; i < count; ++i) {
+  uint8_t r = 0, g = 0, b = 0;
+  for (size_t i = 0; x < visible_width && y < visible_height && i < count; ++i) {
     const auto rect = rectangles[i];
     if (x >= rect.x0 && x < rect.x1 && y >= rect.y0 && y < rect.y1) {
+      if (rect.half_width > 0 &&
+          fabsf(static_cast<float>(x) -
+                (rect.line_x + static_cast<float>(y - rect.y0) * rect.slope)) > rect.half_width)
+        continue;
       r = rect.r;
       g = rect.g;
       b = rect.b;
@@ -108,55 +154,6 @@ int64_t time_to_x(Clock::time_point t, Clock::time_point origin, double window_s
   const double age = std::chrono::duration<double>(t - origin).count();
   const double frac = age / window_s;
   return static_cast<int64_t>(std::llround(frac * static_cast<double>(w)));
-}
-
-void draw_bar(TimelineCommands* img, int64_t w, int64_t h, Clock::time_point t0,
-              Clock::time_point t1, Clock::time_point origin, double window_s, int64_t y0,
-              int64_t y1, const std::array<uint8_t, 3>& c) {
-  const int64_t x0 = time_to_x(t0, origin, window_s, w);
-  const int64_t x1 = time_to_x(t1, origin, window_s, w);
-  if (x1 <= 0 || x0 >= w)
-    return;
-  fill_rect(img, w, h, x0, y0, x1, y1, c);
-}
-
-void draw_tick(TimelineCommands* img, int64_t w, int64_t h, Clock::time_point t,
-               Clock::time_point origin, double window_s, int64_t y0, int64_t y1,
-               const std::array<uint8_t, 3>& c) {
-  const int64_t x = time_to_x(t, origin, window_s, w);
-  fill_rect(img, w, h, x - 1, y0, x + 2, y1, c);
-}
-
-std::array<uint8_t, 3> collect_color(int file_index) {
-  static constexpr std::array<std::array<uint8_t, 3>, 8> k{{
-      {{36, 158, 186}},
-      {{222, 118, 36}},
-      {{62, 168, 82}},
-      {{156, 92, 198}},
-      {{214, 78, 98}},
-      {{204, 168, 40}},
-      {{72, 128, 220}},
-      {{150, 178, 48}},
-  }};
-  if (file_index < 0)
-    return {{50, 140, 190}};
-  return k[static_cast<size_t>(file_index) % k.size()];
-}
-
-int span_file_at(const std::vector<radar::CollectionSpan>& spans, Clock::time_point t) {
-  int idx = -1;
-  bool have = false;
-  Clock::time_point start{};
-  for (const auto& span : spans) {
-    if (span.dwell_start > t)
-      continue;
-    if (!have || span.dwell_start >= start) {
-      have = true;
-      start = span.dwell_start;
-      idx = span.file_index;
-    }
-  }
-  return idx;
 }
 
 std::string format_tenths_s(double s) {
@@ -212,97 +209,132 @@ std::array<uint8_t, 3> lag_band_color(LagBand band, double behind) {
   return {{80, 200, 80}};
 }
 
-std::string format_latency_ms(double s) {
-  if (!std::isfinite(s) || s < 0.0)
-    return {};
-  if (s < 1.0) {
-    const int ms = static_cast<int>(std::llround(s * 1000.0));
-    return std::to_string(ms) + "ms";
-  }
-  return format_tenths_s(s);
-}
-
-std::string fit_label(const std::string& name, int64_t max_w, int scale) {
-  if (max_w <= 0)
-    return {};
-  if (plot_text_width_5x7(name, scale) <= max_w)
-    return name;
-  std::string s = name;
-  while (!s.empty() && plot_text_width_5x7(s, scale) > max_w)
-    s.pop_back();
-  return s;
-}
-
-std::string pulse_count(int64_t count) {
-  auto text = std::to_string(count);
-  for (auto position = static_cast<int64_t>(text.size()) - 3; position > 0; position -= 3)
-    text.insert(static_cast<std::size_t>(position), ",");
-  return text;
-}
-
-std::string next_image_eta(const radar::sar_progress::View& view) {
+// This is a checkpoint, not a live countdown: the GPU may be busy between
+// presentations. The monitor cannot distinguish auxiliary BP from autofocus,
+// so do not infer a more specific active stage from received pulse counts.
+std::string image_checkpoint(const radar::sar_progress::View& view) {
   if (view.image_complete)
     return "Image ready";
-  if (!view.eta_s)
-    return "Next image: Estimating...";
-  // Rounded approximate wall time, not a promised countdown to GPU completion.
-  const auto seconds = static_cast<int64_t>(std::ceil(std::min(*view.eta_s, 359999.0)));
-  if (seconds >= 3600)
-    return "Next image: ~" + std::to_string(seconds / 3600) + "h " +
-           std::to_string((seconds % 3600) / 60) + "m";
-  if (seconds >= 60)
-    return "Next image: ~" + std::to_string(seconds / 60) + "m " + std::to_string(seconds % 60) +
-           "s";
-  return "Next image: ~" + std::to_string(seconds) + "s";
+  return view.valid && view.received > 0 ? "Forming image" : "Receiving pulses";
 }
 
 void draw_pulse_progress(TimelineCommands* img, int64_t width, int64_t height,
                          const radar::sar_progress::View& view,
-                         const std::vector<std::string>& names, bool compact) {
-  const std::array<uint8_t, 3> detail{180, 194, 207}, received{75, 205, 220}, formed{115, 200, 150};
-  const auto fit = [](std::string text, int64_t pixels) {
-    // Native 14px text advances about 7.5px per character; leave a margin.
-    const auto chars = static_cast<std::size_t>(std::max(int64_t{0}, pixels / 8));
+                         const std::vector<std::string>& names, bool compact,
+                         const radar::AutofocusHudStatus& autofocus) {
+  const std::array<uint8_t, 3> detail{205, 217, 229}, formed{115, 200, 150}, received{75, 205, 220};
+  const auto fit = [](std::string text, int64_t width, float pixels = 14) {
+    const auto chars = static_cast<std::size_t>(std::max(0.0F, width / (pixels * 0.6F)));
     if (text.size() > chars)
       text = chars >= 3 ? text.substr(0, chars - 3) + "..." : "";
     return text;
   };
-  const auto row = [&](const std::string& label, int64_t value, int64_t y,
-                       const std::array<uint8_t, 3>& color) {
-    const auto count = view.valid ? pulse_count(value) + "/" + pulse_count(view.total) : "--";
-    const int64_t bar_x = compact ? std::max(int64_t{180}, width - 80) : 8;
-    const int64_t bar_y = compact ? y + 5 : y + 18;
-    const int64_t bar_w = std::max(int64_t{1}, width - bar_x - 8);
-    draw_text(img, width, height, 8, y, fit(label + " " + count, compact ? bar_x - 16 : width - 16),
-              color, 2);
-    fill_rect(img, width, height, bar_x, bar_y, bar_x + bar_w, bar_y + 4, {40, 49, 58});
-    if (view.total > 0)
-      fill_rect(img, width, height, bar_x, bar_y, bar_x + bar_w * value / view.total, bar_y + 4,
-                color);
+  const auto percent = [&](int64_t value) {
+    return view.valid && view.total > 0
+               ? std::to_string(static_cast<int>(100.0 * std::clamp(value, int64_t{0}, view.total) /
+                                                 view.total)) +
+                     "%"
+               : "--";
   };
-  if (compact) {
-    row("Received", view.received, 0, received);
-    row("Formed", view.formed, 14, formed);
-    draw_text(img, width, height, 8, 28, fit(next_image_eta(view), width - 16), detail, 2);
+  std::string title = "waiting";
+  if (view.valid && view.file_index >= 0 &&
+      static_cast<std::size_t>(view.file_index) < names.size())
+    title = names[view.file_index];
+  const bool has_stages = autofocus.outcome != radar::AutofocusHudOutcome::kDisabled;
+  const bool has_outcome = has_stages && autofocus.outcome != radar::AutofocusHudOutcome::kPending;
+  const std::string detail_line = has_outcome  ? format_autofocus_status(autofocus, true, true)
+                                  : has_stages ? "Last reported stage"
+                                               : "Updates on completion";
+  std::string work = "--";
+  if (view.giga_pixel_pulses) {
+    char digits[48]{};
+    const auto formatted = std::to_chars(digits, digits + sizeof(digits), *view.giga_pixel_pulses,
+                                         std::chars_format::fixed, 1);
+    if (formatted.ec == std::errc())
+      work.assign(digits, formatted.ptr);
+  }
+  const std::string work_line = "BP work: " + work + " Gpx*pulses";
+  const auto bar = [&](int64_t bar_x, int64_t bar_y, int64_t bar_height) {
+    const int64_t bar_w = std::max(int64_t{1}, width - bar_x - 8);
+    fill_rect(img, width, height, bar_x, bar_y, bar_x + bar_w, bar_y + bar_height, {40, 49, 58});
+    if (view.valid && view.total > 0) {
+      const auto filled =
+          static_cast<int64_t>(static_cast<double>(bar_w) *
+                               std::clamp(view.formed, int64_t{0}, view.total) / view.total);
+      fill_rect(img, width, height, bar_x, bar_y, bar_x + filled, bar_y + bar_height, formed);
+      const auto admitted =
+          static_cast<int64_t>(static_cast<double>(bar_w) *
+                               std::clamp(view.received, int64_t{0}, view.total) / view.total);
+      const auto marker = bar_x + std::min(admitted, std::max(int64_t{0}, bar_w - 2));
+      // Draw last and beyond the track height so the marker remains visible
+      // when both frontiers meet, including zero and full completion.
+      fill_rect(img, width, height, marker, bar_y - 2, marker + 2, bar_y + bar_height + 2,
+                received);
+    }
+  };
+  const auto timing_text = has_stages ? format_autofocus_stage(autofocus) : image_checkpoint(view);
+  const std::array<uint8_t, 3> primary{230, 237, 243}, warning{255, 180, 60};
+  const auto timing_color = autofocus.outcome == radar::AutofocusHudOutcome::kDeclined ||
+                                    autofocus.outcome == radar::AutofocusHudOutcome::kUnavailable
+                                ? warning
+                            : view.image_complete ? formed
+                                                  : primary;
+  const auto progress_labels = [&](int64_t y) {
+    const auto receipt = "Received " + percent(view.received);
+    const auto receipt_width = static_cast<int64_t>(std::ceil(receipt.size() * 12 * 0.6));
+    const auto receipt_x = std::max(width / 2, width - 8 - receipt_width);
+    draw_text_px(img, 8, y, fit("Last completed " + percent(view.formed), receipt_x - 16, 12),
+                 formed, 12);
+    draw_text_px(img, receipt_x, y, receipt, received, 12);
+  };
+  if (compact && has_stages) {
+    // Keep the history's full 56px below. A reported outcome takes the
+    // redundant scene-title row (also present in the completed-image card).
+    draw_text_px(img, 8, 0, fit(timing_text, width - 16, 12), primary, 12);
+    draw_text_px(img, 8, 13, fit(has_outcome ? detail_line : title, width - 16, 14),
+                 has_outcome ? timing_color : detail, 14);
+    draw_text_px(img, 8, 27, fit(work_line, width - 16, 14), detail, 14);
+    progress_labels(41);
+    bar(8, 53, 3);
+  } else if (compact) {
+    const int64_t split = width / 2;
+    draw_text_px(img, 8, 0, fit(timing_text, split - 16, 12), timing_color, 12);
+    draw_text_px(img, split, 0, fit(detail_line, width - split - 8, 12), detail, 12);
+    const int64_t work_width = static_cast<int64_t>(std::ceil(work_line.size() * 14 * 0.6)) + 8;
+    const int64_t work_x = std::max(int64_t{8}, width - 8 - work_width);
+    draw_text_px(img, 8, 14, fit(title, work_x - 16, 14), detail, 14);
+    draw_text_px(img, work_x, 14, fit(work_line, width - work_x - 8, 14), detail, 14);
+    progress_labels(30);
+    bar(8, 46, 4);
   } else {
-    std::string name = "Pulse progress";
-    if (view.valid && view.file_index >= 0 &&
-        static_cast<std::size_t>(view.file_index) < names.size())
-      name = names[view.file_index];
-    draw_text(img, width, height, 8, 3, fit(name, width - 16), detail, 2);
-    draw_text(img, width, height, 8, 23, fit(next_image_eta(view), width - 16), detail, 2);
-    row("Received", view.received, 46, received);
-    row("Formed", view.formed, 78, formed);
+    draw_text_px(img, 8, 25, fit(title, width - 16, 14), detail, 14);
+    draw_text_px(img, 8, 45, fit(work_line, width - 16, 14), detail, 14);
+    const float headline_px = has_stages ? 16 : 18;
+    draw_text_px(img, 8, 2, fit(timing_text, width - 16, headline_px),
+                 has_stages ? primary : timing_color, headline_px);
+    progress_labels(63);
+    bar(8, 82, 6);
+    draw_text_px(img, 8, 96, fit(detail_line, width - 16, 12), has_stages ? timing_color : detail,
+                 12);
     fill_rect(img, width, height, width - 1, 0, width, height, {45, 55, 65});
   }
 }
 
 }  // namespace
 
+struct TimelineRasterOp::RenderCache {
+  TimelineCommands commands;
+  int64_t width{0}, height{0};
+  Clock::time_point history_end{};
+};
+
+TimelineRasterOp::~TimelineRasterOp() = default;
+
 TimelineRasterOp::TimelineRasterOp(std::shared_ptr<radar::FormationHud> hud,
                                    std::vector<std::string> scene_names, bool show_playback_lag,
                                    double rate, int64_t width, int64_t height,
-                                   std::shared_ptr<FrameProgress> progress)
+                                   std::shared_ptr<FrameProgress> progress,
+                                   std::shared_ptr<viz::FrameViewport> viewport)
 : hud_(std::move(hud)),
   scene_names_(std::move(scene_names)),
   show_playback_lag_(show_playback_lag),
@@ -310,7 +342,8 @@ TimelineRasterOp::TimelineRasterOp(std::shared_ptr<radar::FormationHud> hud,
   period_(std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::duration<double>(1.0 / rate))),
   width_(width),
-  height_(height) {
+  height_(height),
+  viewport_(std::move(viewport)) {
   if (!std::isfinite(rate) || rate <= 0.0 || rate > 1000.0 || width < 1 || height < 1)
     throw std::invalid_argument("Invalid timeline dimensions/rate");
   if (!hud_)
@@ -338,184 +371,119 @@ Contract TimelineRasterOp::contract() const {
 }
 
 void TimelineRasterOp::start() {
-  started_at_ = Clock::now();
+  rendered_.reset();
   pulse_progress_ = hud_->progress();
   if (cudaMalloc(&commands_, kMaxRects * sizeof(Rect)) != cudaSuccess)
     throw std::runtime_error("Timeline command allocation failed");
 }
 void TimelineRasterOp::stop() {
+  rendered_.reset();
   if (commands_)
     (void)cudaFree(commands_);
   commands_ = nullptr;
 }
 
 expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
+  const auto [layout_width, layout_height] =
+      viewport_ ? viewport_->get() : std::pair{static_cast<int>(width_), static_cast<int>(height_)};
   const auto snap = hud_->snapshot();
   const auto now = Clock::now();
-  const bool starting = progress_ && progress_->capture_ns.load() < 0;
-  const bool hud_due = !hud_held_ || std::chrono::duration<double>(now - hud_at_).count() >= 1.0;
+  const auto batch_events = pulse_progress_ ? pulse_progress_->batch_history()
+                                            : std::vector<radar::sar_progress::BatchEvent>{};
+
+  const auto batch_spans = pulse_progress_ ? pulse_progress_->batch_spans()
+                                           : std::vector<radar::sar_progress::BatchSpan>{};
+  // Event time, not poll time: held history remains fixed during long GPU
+  // work and after EOF. Exact spans may be newer than the coalesced snapshot.
+  std::optional<Clock::time_point> latest;
+  const auto observe = [&](Clock::time_point at) {
+    latest = latest ? std::max(*latest, at) : at;
+  };
+  for (const auto& event : batch_events)
+    observe(event.at);
+  for (const auto& span : batch_spans) {
+    observe(span.received);
+    if (span.processed)
+      observe(*span.processed);
+  }
+  const auto history_end = latest.value_or(Clock::time_point{});
+  const bool hud_due = !hud_held_ || !rendered_ || rendered_->history_end != history_end ||
+                       std::chrono::duration<double>(now - hud_at_).count() >= 1.0;
   if (pulse_progress_ && hud_due)
     pulse_view_ = pulse_progress_->snapshot(now);
-  if (starting && hud_due) {
-    const std::string phase = snap.bp.emit_at       ? "Preparing display"
-                              : snap.reader_stopped ? "Forming first image"
-                              : snap.last_packet_at ? "Receiving collection"
-                                                    : "Starting up";
-    startup_line_ =
-        phase + "  " +
-        std::to_string(
-            std::chrono::duration_cast<std::chrono::seconds>(now - started_at_).count()) +
-        "s elapsed";
-  }
-  const auto origin =
-      now - std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(kWindowS));
-  if (snap.bp.emit_at.has_value() &&
-      (!last_seen_emit_.has_value() || *snap.bp.emit_at != *last_seen_emit_)) {
-    last_seen_emit_ = snap.bp.emit_at;
-    ImageMark mark;
-    mark.at = *snap.bp.emit_at;
-    Clock::time_point color_at = *snap.bp.emit_at;
-    const auto packet_at =
-        snap.bp.last_packet_at.has_value() ? snap.bp.last_packet_at : snap.last_packet_at;
-    if (packet_at.has_value()) {
-      color_at = *packet_at;
-      mark.latency_s = std::chrono::duration<double>(*snap.bp.emit_at - *packet_at).count();
-    }
-    mark.file_index = span_file_at(snap.spans, color_at);
-    if (image_emits_.size() >= 256)
-      image_emits_.erase(image_emits_.begin());
-    image_emits_.push_back(mark);
-  }
-  const auto keep = std::find_if(image_emits_.begin(), image_emits_.end(), [&](const ImageMark& m) {
-    return m.at >= origin;
-  });
-  image_emits_.erase(image_emits_.begin(), keep);
-
-  const bool compact_progress = pulse_progress_ && width_ < 620;
+  const auto origin = history_end - std::chrono::duration_cast<Clock::duration>(
+                                        std::chrono::duration<double>(kWindowS));
+  const bool compact_progress = pulse_progress_ && layout_width < 620;
   const int64_t progress_width = pulse_progress_ && !compact_progress ? 264 : 0;
-  const int64_t progress_height = compact_progress ? 42 : 0;
-  const int64_t w = width_ - progress_width;
-  const int64_t h = height_ - progress_height;
+  const int64_t progress_height = compact_progress ? std::min(56, layout_height / 2) : 0;
+  const int64_t w = layout_width - progress_width;
+  const int64_t h = layout_height - progress_height;
   TimelineCommands img;
-  const std::array<uint8_t, 3> bg{16, 16, 16};
+  const std::array<uint8_t, 3> bg{0, 0, 0}, fg{205, 217, 229}, track{53, 64, 76};
+  const std::array<uint8_t, 3> connector{75, 94, 113};
+  const std::array<uint8_t, 3> received_c{75, 205, 220}, processed_c{115, 200, 150};
   fill_rect(&img, w, h, 0, 0, w, h, bg);
-
-  const std::array<uint8_t, 3> quiet_c{90, 90, 90};
-  const std::array<uint8_t, 3> fg{220, 220, 220};
-  const std::array<uint8_t, 3> axis_c{80, 80, 80};
-  const std::array<uint8_t, 3> head_c{255, 80, 80};
-
-  constexpr int kScale = 2;
-  const int64_t label_h = kFont5x7Rows * kScale;
-  const int64_t top = 4;
-  const int64_t lane_gap = 3;
-  const int64_t axis_gap = 4;
-  const int64_t lab_gap = 6;
-  const int64_t bot = 4;
-  const int64_t axis_block = axis_gap + 1 + lab_gap + label_h + bot;
-  const int64_t label_gap = 3;
-  const int64_t usable =
-      std::max(int64_t{4}, h - top - lane_gap - axis_block - 2 * (label_h + label_gap));
-  const int64_t plat_h = usable / 2;
-  const int64_t plat_label_y = top;
-  const int64_t plat_y0 = plat_label_y + label_h + label_gap;
-  const int64_t plat_y1 = plat_y0 + plat_h;
-  const int64_t prod_label_y = plat_y1 + lane_gap;
-  const int64_t prod_y0 = prod_label_y + label_h + label_gap;
-  const int64_t prod_y1 = prod_y0 + (usable - plat_h);
-  const int64_t axis_y = prod_y1 + axis_gap;
-  fill_rect(&img, w, h, 0, plat_y0, w, plat_y1, std::array<uint8_t, 3>{28, 28, 28});
-  fill_rect(&img, w, h, 0, prod_y0, w, prod_y1, std::array<uint8_t, 3>{28, 28, 28});
-
-  const int64_t hud_slot = 14 * kFont5x7Advance * kScale;
-  auto draw_hud = [&](int64_t y0, int64_t y1, const std::string& lab,
-                      const std::array<uint8_t, 3>& color) {
-    if (lab.empty())
-      return;
-    const int64_t pad = 4;
-    const int64_t tx = w - 8 - hud_slot;
-    const int64_t ty = y0 + (y1 - y0 - label_h) / 2;
-    fill_rect(&img, w, h, tx - pad, y0, w - 2, y1, bg);
-    draw_text(&img, w, h, tx, ty, lab, color, kScale);
+  const bool compact_history = h < 80;
+  // Keep matching glyph metrics across lane titles and time bookends.
+  const float font = compact_history ? 14 : 16;
+  const int64_t gutter = compact_history ? 40 : 64;
+  const int64_t plot_left = std::min(gutter, std::max(int64_t{0}, w - 2));
+  constexpr std::string_view latest_label = "Latest batch";
+  const auto latest_width = static_cast<int64_t>(std::ceil(latest_label.size() * font * 7 / 13));
+  const int64_t right_gutter = latest_width + 16;
+  const int64_t plot_right = std::max(plot_left + 1, w - right_gutter);
+  const int64_t plot_width = plot_right - plot_left;
+  const int64_t received_y = compact_history ? 18 : 36;
+  const int64_t processed_y = compact_history ? 34 : 70;
+  const int64_t axis_y = (received_y + processed_y - static_cast<int64_t>(font)) / 2;
+  const auto raw_x_at = [&](Clock::time_point at) {
+    return plot_left + time_to_x(at, origin, kWindowS, plot_width);
   };
-
-  for (const auto& span : snap.spans) {
-    const auto dwell_end = span.dwell_end.value_or(now);
-    const auto dwell_c = collect_color(span.file_index);
-    draw_bar(&img, w, h, span.dwell_start, dwell_end, origin, kWindowS, plat_y0, plat_y1, dwell_c);
-    if (span.quiet_start.has_value()) {
-      const auto quiet_end = span.quiet_end.value_or(now);
-      draw_bar(&img, w, h, *span.quiet_start, quiet_end, origin, kWindowS, plat_y0, plat_y1,
-               quiet_c);
-    }
-    std::string name;
-    if (!scene_names_.empty() && span.file_index >= 0) {
-      const size_t idx = static_cast<size_t>(span.file_index) % scene_names_.size();
-      name = scene_names_[idx];
-    }
-    if (!name.empty()) {
-      const int64_t x0 = time_to_x(span.dwell_start, origin, kWindowS, w);
-      const int64_t x1 = time_to_x(dwell_end, origin, kWindowS, w);
-      const int64_t vis0 = std::max(int64_t{0}, x0);
-      const int64_t vis1 = std::min(w, x1);
-      name = fit_label(name, vis1 - vis0 - 8, kScale);
-      if (!name.empty()) {
-        draw_text(&img, w, h, vis0 + 4, plat_label_y, name, fg, kScale);
-      }
-    }
+  const auto x_at = [&](Clock::time_point at) {
+    return std::clamp(raw_x_at(at), plot_left, plot_right - 1);
+  };
+  std::vector<std::pair<int64_t, int64_t>> connections;
+  for (const auto& span : batch_spans) {
+    // A pending batch has no known completion endpoint. Keep its receipt tick
+    // without drawing a fictitious completion at the right endpoint.
+    if (!span.processed || *span.processed < origin || *span.processed > history_end ||
+        span.received > history_end)
+      continue;
+    connections.emplace_back(raw_x_at(span.received), raw_x_at(*span.processed));
   }
-  const int64_t lat_y = prod_label_y;
-  int64_t last_label_right = -8;
-  for (const auto& mark : image_emits_) {
-    const auto tick_c = collect_color(mark.file_index);
-    draw_tick(&img, w, h, mark.at, origin, kWindowS, prod_y0, prod_y1, tick_c);
-    if (starting || !mark.latency_s.has_value())
-      continue;
-    const std::string lab = format_latency_ms(*mark.latency_s);
-    if (lab.empty())
-      continue;
-    const int64_t x = time_to_x(mark.at, origin, kWindowS, w);
-    if (x < 0 || x >= w)
-      continue;
-    const int64_t tw = plot_text_width_5x7(lab, kScale);
-    int64_t tx = x + 4;
-    if (tx + tw > w - 4)
-      tx = x - 4 - tw;
-    // Off-screen or overlapping the previous label: keep the tick, skip the
-    // text. Pinning to x=2 made the number sit on the left edge while the
-    // tick scrolled away (continuous strip parked this HUD for the same overlap).
-    if (tx < 2 || tx + tw > w - 2 || tx < last_label_right + 4)
-      continue;
-    draw_text(&img, w, h, tx, lat_y, lab, tick_c, kScale);
-    last_label_right = tx + tw;
+  std::sort(connections.begin(), connections.end());
+  connections.erase(std::unique(connections.begin(), connections.end()), connections.end());
+  // All event ticks remain. At dense rates, display representative real pairs
+  // across history, bounded independently of the source batch rate.
+  constexpr std::size_t kMaxConnections = 64;
+  const auto count = std::min(connections.size(), kMaxConnections);
+  for (std::size_t i = 0; i < count; ++i) {
+    const auto index = count <= 1 ? 0 : i * (connections.size() - 1) / (count - 1);
+    const auto [received_x, processed_x] = connections[index];
+    draw_connection(&img, plot_left, plot_right, received_x, received_y, processed_x, processed_y,
+                    connector);
   }
-
-  if (starting && !pulse_progress_)
-    draw_text(&img, w, h, 4, prod_label_y, fit_label(startup_line_, w - 8, kScale),
-              std::array<uint8_t, 3>{145, 180, 195}, kScale);
-  fill_rect(&img, w, h, 0, axis_y, w, axis_y + 1, axis_c);
-  const int n_ticks = 5;
-  for (int i = 0; i <= n_ticks; ++i) {
-    const double frac = static_cast<double>(i) / static_cast<double>(n_ticks);
-    const int64_t x = static_cast<int64_t>(std::llround(frac * static_cast<double>(w)));
-    fill_rect(&img, w, h, x, axis_y - 2, x + 1, axis_y + 3, axis_c);
-    std::string lab;
-    if (i == n_ticks) {
-      lab = "now";
-    } else {
-      const double ago = kWindowS * (1.0 - frac);
-      lab = std::to_string(static_cast<int>(std::llround(ago))) + "s";
-    }
-    const int64_t tw = plot_text_width_5x7(lab, kScale);
-    int64_t tx = x - tw / 2;
-    if (tx < 2)
-      tx = 2;
-    if (tx + tw > w - 2)
-      tx = w - 2 - tw;
-    draw_text(&img, w, h, tx, axis_y + lab_gap, lab, fg, kScale);
+  for (const auto y : {received_y, processed_y})
+    fill_rect(&img, w, h, plot_left, y, plot_right, y + 1, track);
+  std::array<std::vector<std::pair<int64_t, int64_t>>, 2> ticks;
+  for (const auto& event : batch_events) {
+    if (event.at < origin || event.at > history_end)
+      continue;
+    const auto x = x_at(event.at);
+    ticks[event.processed ? 1 : 0].emplace_back(std::max(plot_left, x - 1),
+                                                std::min(plot_right, x + 2));
   }
-  fill_rect(&img, w, h, w - 2, 0, w, h, head_c);
-
+  draw_intervals(&img, w, h, std::move(ticks[0]), received_y - 4, received_y + 5, received_c);
+  draw_intervals(&img, w, h, std::move(ticks[1]), processed_y - 2, processed_y + 3, processed_c);
+  draw_text_px(&img, 8, compact_history ? 0 : 2, "Pulse batch received", fg, font);
+  draw_text_px(&img, 8, compact_history ? 41 : 80, "Pulse batch processed", fg, font);
+  draw_text_px(&img, 8, axis_y, "-" + std::to_string(static_cast<int>(kWindowS)) + "s", fg, font);
+  draw_text_px(&img, w - 8 - latest_width, axis_y, std::string(latest_label), fg, font);
+  if (!compact_history) {
+    const std::string caption = "Time relative to last batch update";
+    const auto caption_width = static_cast<int64_t>(std::ceil(caption.size() * 12 * 7.0 / 13));
+    draw_text_px(&img, std::max(int64_t{8}, (w - caption_width) / 2), h - 14, caption, fg, 12);
+  }
   if (hud_due) {
     hud_at_ = now;
     hud_held_ = true;
@@ -527,8 +495,15 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
       lag_hud_fg_ = lag_band_color(band, snap.playback.behind_s);
     }
   }
-  if (show_playback_lag_)
-    draw_hud(plat_y0, plat_y1, lag_hud_, lag_hud_fg_);
+  if (show_playback_lag_ && !lag_hud_.empty()) {
+    const float lag_font = font;
+    const float lag_advance = lag_font * 7 / 13;
+    const auto title_end = 8 + 20 * font * 7 / 13;
+    const auto chars = static_cast<std::size_t>(std::max(0.0F, (w - title_end - 24) / lag_advance));
+    const auto text = lag_hud_.substr(0, chars);
+    draw_text_px(&img, w - 8 - static_cast<int64_t>(text.size() * lag_advance),
+                 compact_history ? 0 : 8, text, lag_hud_fg_, lag_font);
+  }
 
   // Shift only bounded commands/text, never pixels or the completed SAR image.
   if (pulse_progress_) {
@@ -537,6 +512,7 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
       rect.x1 = std::clamp(rect.x1, int64_t{0}, w) + progress_width;
       rect.y0 = std::clamp(rect.y0, int64_t{0}, h) + progress_height;
       rect.y1 = std::clamp(rect.y1, int64_t{0}, h) + progress_height;
+      rect.line_x += static_cast<float>(progress_width);
     }
     for (std::size_t row = 0; row < img.rows; ++row) {
       visualization::TextRunHeader header;
@@ -546,8 +522,15 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
       header.y += progress_height;
       std::memcpy(record, &header, sizeof(header));
     }
-    draw_pulse_progress(&img, compact_progress ? width_ : progress_width, height_, pulse_view_,
-                        scene_names_, compact_progress);
+    draw_pulse_progress(&img, compact_progress ? layout_width : progress_width, layout_height,
+                        pulse_view_, scene_names_, compact_progress, snap.autofocus);
+  }
+  // Polling still services completion proof and resize feedback. An identical
+  // bounded command/text snapshot needs no new GPU frame or display download.
+  if (rendered_ && rendered_->width == layout_width && rendered_->height == layout_height &&
+      rendered_->commands.rectangles == img.rectangles && rendered_->commands.text == img.text) {
+    rendered_->history_end = history_end;
+    return {};
   }
   auto loan = frame.allocate_tensor(TensorLoanRequest{
       .shape = std::vector<int64_t>{height_, width_, 4}, .dtype = DLDataType{kDLUInt, 8U, 1U}});
@@ -565,7 +548,7 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
     return make_unexpected(Error{ErrorCode::kFailure, "Timeline command transfer failed"});
   render_timeline<<<(width_ * height_ + 255) / 256, 256, 0, context.cuda_stream().get()>>>(
       static_cast<uint8_t*>(writer->data()), width_, height_, static_cast<const Rect*>(commands_),
-      img.rectangles.size());
+      img.rectangles.size(), layout_width, layout_height);
   if (cudaPeekAtLastError() != cudaSuccess)
     return make_unexpected(Error{ErrorCode::kFailure, "Timeline GPU raster failed"});
   HOLOSCAN_RETURN_IF_ERROR(std::move(*writer).commit());
@@ -586,8 +569,17 @@ expected<void, Error> TimelineRasterOp::compute(ExecutionContext& context) {
   descriptor.width = static_cast<std::int32_t>(width_);
   descriptor.encoding = schema::ImageEncoding_RGBA8;
   descriptor.color_space = schema::ColorSpace_UNSPECIFIED;
-  return frame.emit_tensor(std::move(*loan), descriptor,
-                           EmitOptions{.capture_time = context.activation_time()});
+  if (viewport_)
+    viewport_->drawn(context.activation_time().timestamp_ns, layout_width, layout_height);
+  HOLOSCAN_RETURN_IF_ERROR(frame.emit_tensor(
+      std::move(*loan), descriptor, EmitOptions{.capture_time = context.activation_time()}));
+  if (!rendered_)
+    rendered_ = std::make_unique<RenderCache>();
+  rendered_->commands = std::move(img);
+  rendered_->width = layout_width;
+  rendered_->height = layout_height;
+  rendered_->history_end = history_end;
+  return {};
 }
 
 }  // namespace holoscan::radar::app::sar

@@ -329,76 +329,81 @@ struct SarGraphRuntime {
       app::sar::OverlayConfig overlay;
       overlay.scene_names = cfg.scene_names;
       overlay.show_playback_lag = cfg.show_playback_lag;
-      overlay.diag = [hud = hud, show_lag = cfg.show_playback_lag, mosaic, scroll = cfg.scroll,
-                      parent = cfg.parent_geometry, scroll_parent = cfg.scroll_parent,
-                      geoms = cfg.collection_geometries, to_enu = cfg.transform_to_scene_enu,
-                      origin = cfg.enu_origin_ecef]() {
-        const auto snap = hud->snapshot();
-        app::sar::FormationDiag d;
-        d.bp_compute_s = snap.bp.compute_s;
-        d.pulses = snap.bp.pulses;
-        d.pixels = snap.bp.pixels;
-        d.bp_num_v = snap.bp.num_v;
-        d.bp_num_u = snap.bp.num_u;
-        d.rate_line = snap.rate_line;
-        d.emit_at = snap.bp.emit_at;
-        d.last_packet_at =
-            snap.bp.last_packet_at.has_value() ? snap.bp.last_packet_at : snap.last_packet_at;
-        if (show_lag) {
-          d.playback_valid = snap.playback.valid;
-          d.playback_paced = snap.playback.paced;
-          d.playback_behind_s = snap.playback.behind_s;
-          d.playback_target_s = snap.playback.target_s();
-          d.playback_wall_s = snap.playback.wall_s;
-        }
-        if (snap.bp.emit_at.has_value() && d.last_packet_at.has_value()) {
-          d.form_latency_s =
-              std::chrono::duration<double>(*snap.bp.emit_at - *d.last_packet_at).count();
-        }
-        const auto& apc = snap.apc;
-        if (apc.valid) {
-          const radar::SampleGeometry* g = nullptr;
-          if (mosaic && parent.is_valid()) {
-            g = &parent;
-          } else if (scroll && scroll_parent.is_valid()) {
-            g = &scroll_parent;
-          } else if (!geoms.empty()) {
-            const size_t i = static_cast<size_t>(apc.file_index) % geoms.size();
-            g = &geoms[i];
-          }
-          if (g != nullptr) {
-            const auto uv = apc_raster_uv(apc.ecef, *g, to_enu, origin);
-            if (uv.has_value()) {
-              d.apc_valid = true;
-              d.raster_u = (*uv)[0];
-              d.raster_v = (*uv)[1];
+      overlay.strip_update_metrics = cfg.scroll;
+      overlay.diag_at_capture =
+          [hud = hud, show_lag = cfg.show_playback_lag, mosaic, scroll = cfg.scroll,
+           parent = cfg.parent_geometry, scroll_parent = cfg.scroll_parent,
+           geoms = cfg.collection_geometries, to_enu = cfg.transform_to_scene_enu,
+           origin = cfg.enu_origin_ecef](int64_t capture_ns) {
+            const auto snap = hud->snapshot(capture_ns);
+            app::sar::FormationDiag d;
+            d.bp_compute_s = snap.bp.compute_s;
+            d.collection_elapsed_s = snap.bp.collection_elapsed_s;
+            d.budget_s = snap.bp.budget_s;
+            d.budget_playback_rate = snap.bp.budget_playback_rate;
+            d.capture_time_ns = snap.bp.capture_time_ns;
+            d.pulses = snap.bp.pulses;
+            d.pixels = snap.bp.pixels;
+            d.bp_num_v = snap.bp.num_v;
+            d.bp_num_u = snap.bp.num_u;
+            d.rate_line = snap.rate_line;
+            d.emit_at = snap.bp.emit_at;
+            d.last_packet_at =
+                snap.bp.last_packet_at.has_value() ? snap.bp.last_packet_at : snap.last_packet_at;
+            if (show_lag) {
+              d.playback_valid = snap.playback.valid;
+              d.playback_paced = snap.playback.paced;
+              d.playback_behind_s = snap.playback.behind_s;
+              d.playback_target_s = snap.playback.target_s();
+              d.playback_wall_s = snap.playback.wall_s;
             }
-          }
-        }
-        return d;
-      };
+            if (snap.bp.emit_at.has_value() && d.last_packet_at.has_value()) {
+              d.form_latency_s =
+                  std::chrono::duration<double>(*snap.bp.emit_at - *d.last_packet_at).count();
+            }
+            const auto& apc = snap.apc;
+            if (apc.valid) {
+              const radar::SampleGeometry* g = nullptr;
+              if (mosaic && parent.is_valid()) {
+                g = &parent;
+              } else if (scroll && scroll_parent.is_valid()) {
+                g = &scroll_parent;
+              } else if (!geoms.empty()) {
+                const size_t i = static_cast<size_t>(apc.file_index) % geoms.size();
+                g = &geoms[i];
+              }
+              if (g != nullptr) {
+                const auto uv = apc_raster_uv(apc.ecef, *g, to_enu, origin);
+                if (uv.has_value()) {
+                  d.apc_valid = true;
+                  d.raster_u = (*uv)[0];
+                  d.raster_v = (*uv)[1];
+                }
+              }
+            }
+            return d;
+          };
       const bool strip_fit = cfg.scroll || mosaic;
       const int64_t viz_u = (cfg.viz_crop_nu > 0) ? cfg.viz_crop_nu : viz_geometry.num_u();
       int64_t lut_side = cfg.visualize_size;
       uint32_t width = 0;
       uint32_t height = 0;
-      // Parent strips fill the desktop work-area width (and leave a band for
-      // the Gantt). visualize_size is the square-collect size and the no-DISPLAY
-      // fallback. HolovizOp has no position field; strip windows are moved by
-      // title after they map.
+      // Fit parent strips within the desktop work area and configured display
+      // cap, reserving space for the footer. Forwarded work areas may span
+      // multiple laptop monitors; never expand to their combined width.
       if (strip_fit && !cfg.headless) {
         int work_w = 0;
         int work_h = 0;
         if (desktop_work_area(&work_w, &work_h)) {
           const int timeline_reserve = static_cast<int>(app::sar::TimelineRasterOp::kHeight) + 48;
           const int fit_h = std::max(1, work_h - timeline_reserve);
-          const auto fit = holoviz_fit_wh(viz_geometry.num_v(), viz_u, work_w, fit_h);
+          const auto fit =
+              holoviz_fit_wh(viz_geometry.num_v(), viz_u, work_w, fit_h, cfg.visualize_size);
           width = fit[0];
           height = fit[1];
           lut_side = static_cast<int64_t>(std::max(width, height));
-          HOLOSCAN_LOG_INFO(
-              "SAR: Holoviz {}x{} (desktop work area {}x{}; visualize_size {} fallback)", width,
-              height, work_w, work_h, cfg.visualize_size);
+          HOLOSCAN_LOG_INFO("SAR: Holoviz {}x{} (desktop work area {}x{}; visualize_size {} cap)",
+                            width, height, work_w, work_h, cfg.visualize_size);
         } else {
           const auto wh = holoviz_window_wh(viz_geometry.num_v(), viz_u, cfg.visualize_size);
           width = wh[0];
@@ -465,32 +470,37 @@ struct SarGraphRuntime {
                                          devices.display);
       has_visualization = true;
       if (cfg.visualization.timeline.enabled) {
+        const auto tw = docked ? width - status_width : cfg.visualization.timeline.window_width;
+        const auto th = cfg.visualization.timeline.window_height;
+        // HSDK 5 CUDA sinks have an immutable extent. Reserve a bounded canvas
+        // for up to an 8K-wide footer, and lay out only its visible region.
+        auto viewport = docked && !cfg.headless ? std::make_shared<app::viz::FrameViewport>(
+                                                      tw, th, std::max<int>(tw, 8192), th)
+                                                : std::shared_ptr<app::viz::FrameViewport>{};
+        const auto canvas_width = viewport ? viewport->max_width : tw;
         auto timeline = graph.op<app::sar::TimelineRasterOp>(
             "timeline_raster", hud, cfg.scene_names, cfg.show_playback_lag,
-            cfg.visualization.timeline.display_rate_hz,
-            docked ? width - status_width : cfg.visualization.timeline.window_width,
-            cfg.visualization.timeline.window_height,
-            cfg.headless ? std::shared_ptr<app::FrameProgress>{} : display_progress);
+            cfg.visualization.timeline.display_rate_hz, canvas_width, th,
+            cfg.headless ? std::shared_ptr<app::FrameProgress>{} : display_progress, viewport);
         bind_outputs(options, "timeline_raster", {"frame"}, devices.compute);
         auto timeline_part = graph.partition("timeline");
         timeline_part.add(timeline);
         auto timeline_display = graph.partition("timeline_display");
-        const auto tw = docked ? width - status_width : cfg.visualization.timeline.window_width;
-        const auto th = cfg.visualization.timeline.window_height;
-        auto timeline_frame = graph.op<app::viz::FrameComposerOp>("timeline_frame", tw, th, 16384U);
+        auto timeline_frame =
+            graph.op<app::viz::FrameComposerOp>("timeline_frame", canvas_width, th, 16384U);
         timeline_display.add(timeline_frame);
         options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
             .operator_path = "timeline_frame", .output_port = "output", .device = renderer_device});
         graph.add_flow(timeline->labels, timeline_frame->tensor_layer_input(1), overlay_queue);
         app::viz::connect_image_devices(graph, options, timeline_part, timeline_display,
                                         timeline->frame, timeline_frame->image_layer_input(0),
-                                        "timeline_composer", tw, th, devices.compute,
+                                        "timeline_composer", canvas_width, th, devices.compute,
                                         renderer_device, overlay_queue);
         if (docked) {
-          app::viz::add_docked_presentation(graph, options, visualization, composed->output(),
-                                            timeline_display, timeline_frame->output(), width,
-                                            height, th, cfg.visualization, display_progress,
-                                            devices.composer, devices.display, status_width);
+          app::viz::add_docked_presentation(
+              graph, options, visualization, composed->output(), timeline_display,
+              timeline_frame->output(), width, height, th, cfg.visualization, display_progress,
+              devices.composer, devices.display, status_width, viewport);
         } else {
           auto timeline_config = cfg.visualization;
           timeline_config.display_rate_hz = cfg.visualization.timeline.display_rate_hz;
@@ -725,9 +735,22 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
     SarGraphRuntime<T, TGeom> runtime(name, cli, std::move(config));
     auto& r = runtime;
     r.graph.add_flow(r.reader->phase_history, r.range->phase_history, r.queue);
-    const auto* formed =
-        build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg, r.reader, r.range,
-                    r.manager, r.bp, r.source, r.application, r.formation, r.extents);
+    const auto* formed = [&] {
+      // Workflows with app-owned diagnostics can opt into the shared mailbox.
+      if constexpr (requires {
+                      build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg,
+                                  r.reader, r.range, r.manager, r.bp, r.source, r.application,
+                                  r.formation, r.extents, r.hud);
+                    }) {
+        return build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg, r.reader,
+                           r.range, r.manager, r.bp, r.source, r.application, r.formation,
+                           r.extents, r.hud);
+      } else {
+        return build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg, r.reader,
+                           r.range, r.manager, r.bp, r.source, r.application, r.formation,
+                           r.extents);
+      }
+    }();
     r.finish(formed);
     r.run(&signals);
     return 0;

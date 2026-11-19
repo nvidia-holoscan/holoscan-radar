@@ -43,6 +43,14 @@
         "run": {
           "command": "<holohub_app_bin>/adaptive_aoa",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa"
+          ]
         }
       },
       "smoke": {
@@ -50,6 +58,14 @@
         "run": {
           "command": "<holohub_app_bin>/adaptive_aoa adaptive_aoa_smoke.yaml",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa"
+          ]
         }
       },
       "root_music": {
@@ -57,6 +73,14 @@
         "run": {
           "command": "<holohub_app_bin>/adaptive_aoa adaptive_aoa_root_music.yaml",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa"
+          ]
         }
       },
       "esprit": {
@@ -64,6 +88,14 @@
         "run": {
           "command": "<holohub_app_bin>/adaptive_aoa adaptive_aoa_esprit.yaml",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa"
+          ]
         }
       },
       "mvdr": {
@@ -71,6 +103,14 @@
         "run": {
           "command": "<holohub_app_bin>/adaptive_aoa adaptive_aoa_mvdr.yaml",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=adaptive_aoa"
+          ]
         }
       }
     }

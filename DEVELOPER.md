@@ -213,6 +213,39 @@ selection. Some operators allocate CUDA scratch in construction or `start()`,
 where the installed SDK does not establish the output pool's device scope.
 Moving their output bindings alone to a different device can therefore fail.
 
+### Application build scope
+
+Application `build` and `run` modes default to `BUILD_ALL=OFF`,
+`HOLOSCAN_RADAR_BUILD_TESTING=OFF`, and `PKG_holoscan_radar=OFF`. Their
+`HOLOSCAN_RADAR_APPLICATION=<name>` selection makes the default build depend
+only on the C++ executable, or on `holoscan_radar_python` for Python. The shared
+Python provider still needs every public operator. A configure diagnostic prints
+the selected default build target.
+
+Existing `build/<app>` caches need no reset: cached `APP_*` and `OP_*` switches
+remain available, but unrelated targets are excluded from the application default
+build. This also excludes unused common CUDA helpers. Explicit `build --target`
+requests can still build any enabled target. C++/Python switches select the right
+default target when reusing the same application directory.
+
+CLI `--configure-args` follow the mode defaults. An explicit `BUILD_ALL=ON`,
+`HOLOSCAN_RADAR_BUILD_TESTING=ON`, `HOLOSCAN_RADAR_BUILD_PERFORMANCE=ON`, or
+`PKG_holoscan_radar=ON` retains the broad default build. Module-wide tests enable
+their required operator libraries even with `BUILD_ALL=OFF`. To disable only the
+application default selection, pass `--configure-args=-DHOLOSCAN_RADAR_APPLICATION=`.
+
+Full module builds (`./holoscan-radar build holoscan-radar --language cpp`),
+package/wheel builds, nested module consumers, and `./holoscan-radar test` keep
+their existing scope. Use a full module tree for installation and packaging;
+application trees intentionally omit unneeded installable libraries from their
+default build.
+
+An aggregate module build lives in `build/holoscan-radar`; ordinary runs continue
+to use `build/<app>`. They do not automatically reuse aggregate binaries. To use
+an aggregate binary, invoke it from that tree inside the container, supplying the
+configuration path explicitly. Python likewise needs that tree's `python/lib` on
+`PYTHONPATH`. No build-directory aliases or automatic cache migrations are used.
+
 ## Inside a development container
 
 For manual CMake work, first open the devcontainer or run

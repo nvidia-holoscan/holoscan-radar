@@ -432,6 +432,7 @@ TEST(CphdReaderOp, FirstBatchAsapAndStopInterruptsPacingQuietAndEof) {
     p.playback_rate = state == 0 ? 0.0001 : 0.0;
     p.loop = state == 1;
     p.duty_cycle = state == 1 ? 0.0001 : 1.0;
+    hud->enable_progress(2, 5);
     fixture.set_params(p);
     fixture.capture_snapshot<holoscan::Tensor>("phase_history", 1U, 5U * 8U * 16U);
     fixture.capture_snapshot<holoscan::Tensor>("positions", 1U, 5U * 3U * 8U);
@@ -457,6 +458,19 @@ TEST(CphdReaderOp, FirstBatchAsapAndStopInterruptsPacingQuietAndEof) {
     EXPECT_LT(std::chrono::steady_clock::now() - before, std::chrono::milliseconds{500});
     EXPECT_TRUE(result.ok()) << result.describe_failure();
     const auto snapshot = hud->snapshot();
+    ASSERT_TRUE(snapshot.reader_capture_time_ns);
+    const auto progress = hud->progress();
+    const auto stamp = *snapshot.reader_capture_time_ns;
+    progress->admit(stamp, 2, true, true);
+    const auto first = progress->take_work(stamp);
+    ASSERT_TRUE(first);
+    ASSERT_TRUE(first->budget_s);
+    EXPECT_NEAR(*first->budget_s, 0.01, 1e-12);
+    progress->admit(stamp, 3, true, true);
+    const auto final = progress->take_work(stamp);
+    ASSERT_TRUE(final);
+    ASSERT_TRUE(final->budget_s);
+    EXPECT_NEAR(*final->budget_s, 0.03, 1e-12);
     if (state == 0) {
       EXPECT_FALSE(snapshot.reader_stopped);
       EXPECT_FALSE(snapshot.spans.back().dwell_end.has_value());

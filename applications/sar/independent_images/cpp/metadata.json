@@ -41,6 +41,14 @@
                 "run": {
                     "command": "<holohub_app_bin>/independent_images",
                     "workdir": "holohub_app_bin"
+                },
+                "build": {
+                    "cmake_options": [
+                        "-DBUILD_ALL=OFF",
+                        "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+                        "-DPKG_holoscan_radar=OFF",
+                        "-DHOLOSCAN_RADAR_APPLICATION=independent_images"
+                    ]
                 }
             }
         }

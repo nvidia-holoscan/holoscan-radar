@@ -51,6 +51,8 @@
           "cmake_options": [
             "-DBUILD_ALL=OFF",
             "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=multi_waveform",
             "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
             "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
           ]
@@ -70,6 +72,8 @@
           "cmake_options": [
             "-DBUILD_ALL=OFF",
             "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=multi_waveform",
             "-DHOLOSCAN_RADAR_BUILD_PYTHON=ON",
             "-Dholoscan_DIR=/usr/lib/cmake/holoscan"
           ]

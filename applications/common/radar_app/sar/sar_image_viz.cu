@@ -263,8 +263,21 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
 
   // Publish outputs: HUD tensors before the ImageT trigger
   FormationDiag diag{};
-  if (overlay_.diag)
+  if (overlay_.diag_at_capture && options.capture_time)
+    diag = overlay_.diag_at_capture(options.capture_time->timestamp_ns);
+  else if (overlay_.diag)
     diag = overlay_.diag();
+  // The interactive activation is a GUI clock tick. Match diagnostics against
+  // the selected image's genuine capture stamp, never that clock's timestamp.
+  if (diag.capture_time_ns &&
+      (!options.capture_time || *diag.capture_time_ns != options.capture_time->timestamp_ns)) {
+    diag.collection_elapsed_s.reset();
+    diag.budget_s.reset();
+    diag.budget_playback_rate.reset();
+    diag.bp_compute_s = 0;
+    diag.pulses = diag.pixels = 0;
+    diag.rate_line.clear();
+  }
   std::vector<std::string> banner;
   const int64_t banner_v = product_extent_[0] > 0 ? product_extent_[0] : shape[0];
   const int64_t banner_u = product_extent_[1] > 0 ? product_extent_[1] : shape[1];

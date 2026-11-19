@@ -43,6 +43,14 @@
         "run": {
           "command": "<holohub_app_bin>/mimo_tdm",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=mimo_tdm"
+          ]
         }
       },
       "smoke": {
@@ -50,6 +58,14 @@
         "run": {
           "command": "<holohub_app_bin>/mimo_tdm mimo_tdm_smoke.yaml",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=mimo_tdm"
+          ]
         }
       }
     }
