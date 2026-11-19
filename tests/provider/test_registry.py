@@ -32,7 +32,7 @@ def test_all_public_precisions_are_registered():
         for item in hs.registry.operators()
         if item.name.startswith("holoscan.radar.") and "._app." not in item.name
     }
-    assert len(registered) == 68
+    assert len(registered) == 67
     assert registered == {f"holoscan.radar.{name}" for name in radar.__all__}
     assert "holoscan.radar.SubarraySelectionOpF32" in registered
     assert "holoscan.radar.SubarraySelectionOpF64" in registered
