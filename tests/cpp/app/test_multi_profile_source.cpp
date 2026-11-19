@@ -60,6 +60,12 @@ TEST(TransmitFrameCoordinator, PreservesTransmitStampAcrossDifferentSourceActiva
   EXPECT_THROW(coordinator.claim(11U), std::runtime_error);
 }
 
+TEST(MultiProfileConfig, RejectsOverflowingLaterProfileBeforeAllocating) {
+  const PresetOverride invalid(smoke_config(),
+                               profile_patch("chirps_per_tx", "9223372036854775807"));
+  EXPECT_THROW(workflow::load_config(invalid.path()), std::invalid_argument);
+}
+
 TEST(TransmitFrameCoordinator, ExpiresAndFinalizesUnmatchedFrames) {
   app::TransmitFrameCoordinator coordinator(2U);
   coordinator.register_transmit(app::TransmitReceipt{4U, time_at(40), 0U});

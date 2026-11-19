@@ -12,11 +12,14 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 #include "radar_common/descriptors/ddm_code_descriptor.hpp"
 #include "radar_common/descriptors/tx_schedule.hpp"
 #include "radar_common/math/constants.hpp"
+#include "radar_common/sim/array_builders.hpp"
 #include "utils/additives_reference.hpp"
 #include "utils/mimo_reference.hpp"
 #include "utils/sim_reference.hpp"
@@ -28,6 +31,30 @@ using holoscan::radar::kPi;
 namespace sim = holoscan::radar::sim;
 namespace rd = holoscan::radar;            // descriptor types (TXSchedule, DDMCode...)
 namespace fix = holoscan::radar::testing;  // bin-model / fixture helpers
+
+TEST(ArrayBuilders, RejectInvalidOrUnrepresentableExtentsBeforeGeneration) {
+  constexpr int64_t huge = std::numeric_limits<int64_t>::max();
+  EXPECT_THROW(sim::make_ura_geometry(huge, 2, 0.5, 1.0), std::invalid_argument);
+  EXPECT_THROW(sim::make_ura_rx_positions(huge, 2, 0.5, 1.0), std::invalid_argument);
+  EXPECT_THROW(sim::make_linear_positions(huge, 0.5, 1.0), std::invalid_argument);
+  EXPECT_THROW(sim::make_ura_rx_positions(-2, -2, 0.5, 1.0), std::invalid_argument);
+  EXPECT_THROW(sim::make_linear_positions(0, 0.5, 1.0), std::invalid_argument);
+}
+
+TEST(ArrayBuilders, PreservePositionOrderAndVirtualSums) {
+  const auto rx = sim::make_ura_rx_positions(2, 2, 0.5, 2.0);
+  const std::vector<sim::Vec3> expected{
+      {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 1.0, 1.0}};
+  EXPECT_EQ(rx, expected);
+  EXPECT_EQ(sim::make_ura_geometry(2, 2, 0.5, 2.0).element_positions,
+            sim::flatten_positions(expected));
+  const auto tx = sim::make_linear_positions(2, 1.0, 2.0);
+  const auto geometry = sim::make_virtual_geometry(tx, rx, 2.0);
+  const std::vector<double> virtual_expected{0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1,
+                                             0, 2, 0, 0, 3, 0, 0, 2, 1, 0, 3, 1};
+  EXPECT_EQ(geometry.element_positions, virtual_expected);
+  EXPECT_TRUE(sim::flatten_positions({}).empty());
+}
 
 sim::SimScene single_target_scene() {
   sim::SimScene scene;

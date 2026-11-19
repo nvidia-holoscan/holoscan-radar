@@ -8,6 +8,7 @@
 #include <span>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -32,6 +33,32 @@ using holoscan::radar::testing::with_value;
 
 namespace mimo = holoscan::radar::app::mimo;
 namespace radar = holoscan::radar;
+
+TEST(FmcwMimoConfig, RejectsOverflowingSourceProductsBeforeBuildingGeometry) {
+  constexpr int64_t huge = std::numeric_limits<int64_t>::max();
+  for (bool tdm : {false, true}) {
+    mimo::AppParams params;
+    params.tx_array.num_tx = 2;
+    params.tx_array.spacing = 0.5;
+    params.rx_array.az_elements = 2;
+    params.rx_array.el_elements = 2;
+    params.rx_array.spacing = 0.5;
+    params.cube.num_chirps = huge;
+    params.cube.samples_per_chirp = 8;
+    EXPECT_THROW(mimo::make_runtime_config(params, "overflow test", tdm), std::invalid_argument);
+    params.cube.num_chirps = 8;
+    params.rx_array.az_elements = huge;
+    EXPECT_THROW(mimo::make_runtime_config(params, "overflow test", tdm), std::invalid_argument);
+  }
+}
+
+TEST(FmcwMimoConfig, RejectsOverflowingSnapshotExtents) {
+  constexpr int64_t huge = std::numeric_limits<int64_t>::max();
+  EXPECT_THROW(mimo::snapshot_count({huge}), std::invalid_argument);
+  EXPECT_THROW(mimo::snapshot_count({huge / 2, 2}), std::invalid_argument);
+  EXPECT_THROW(mimo::snapshot_count({-1}), std::invalid_argument);
+  EXPECT_EQ(mimo::snapshot_count({2, 3}), 35);
+}
 
 std::filesystem::path config_path(const char* name) {
   return std::filesystem::path(HOLOSCAN_RADAR_SOURCE_DIR) / "applications/fmcw" / name;

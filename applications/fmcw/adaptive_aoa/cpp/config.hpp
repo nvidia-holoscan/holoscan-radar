@@ -154,7 +154,7 @@ inline Config load_config(const std::filesystem::path& path) {
   }
 
   // Reuse common scene, array, run, visualization, and tensor-bound parsing.
-  mimo::RuntimeConfig runtime = mimo::make_runtime_config(*app_params, "adaptive_aoa");
+  mimo::RuntimeConfig runtime = mimo::make_runtime_config(*app_params, "adaptive_aoa", true);
   // YAML authors the effective per-TX DSP PRI and the physical on-wire slot
   // PRI. The source simulator uses physical timing; downstream DSP keeps the
   // authored effective descriptor.

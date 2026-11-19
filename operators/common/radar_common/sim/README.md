@@ -12,6 +12,13 @@ slow-time carrier phase) is summed over `(rx, slot, fast-time sample)`.
 
 ## Files
 
+Geometry builders and GPU simulator entry points validate positive extents
+and element/byte counts before allocation or generation. MIMO application
+configuration also checks source weights and the double-precision synthesis
+accumulator before constructing geometry. These checks enforce representable
+sizes, not a memory budget: large valid requests may still exhaust available
+memory. The signal model and generated values are unchanged.
+
 | File | Role |
 | --- | --- |
 | `scene.hpp` | Scene model — `SimScene`, `PointTarget`, `SimWaveform`, `derive_truth`, the `SceneMover` seam. STL-only, header-only. |

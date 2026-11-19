@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <stdexcept>
@@ -15,6 +16,7 @@
 
 #include "radar_app/app/multi_profile_source.hpp"
 #include "radar_app/fmcw/mimo_config.hpp"
+#include "radar_common/math/checked_sizes.hpp"
 
 namespace holoscan::radar::app::multi_waveform {
 
@@ -116,6 +118,10 @@ inline Config load_config(const std::filesystem::path& path) {
   // Resolve profiles once, derive both physical and effective-TDM timing,
   // and accumulate pool maxima across every possible frame shape.
   const int64_t num_tx = document.get<int64_t>("/app/tx_array/num_tx");
+  const int64_t num_rx =
+      checked_element_count<sim::Vec3>({document.get<int64_t>("/app/rx_array/az_elements"),
+                                        document.get<int64_t>("/app/rx_array/el_elements")},
+                                       "multi_waveform RX");
   std::unordered_map<std::string, std::size_t> by_name;
   std::vector<TdmTransmitProfile> decoded_profiles;
   std::vector<std::size_t> decoded_sequence;
@@ -140,6 +146,12 @@ inline Config load_config(const std::filesystem::path& path) {
         require_scalar(document, profile_path, "physical_chirp_repetition_interval");
     const int64_t chirps = require_integer(document, profile_path, "chirps_per_tx");
     const int64_t samples = require_integer(document, profile_path, "samples_per_chirp");
+    const int64_t slow_time =
+        checked_element_count<int64_t>({num_tx, chirps}, "multi_waveform TDM");
+    (void)checked_element_count<std::complex<double>>({num_tx, slow_time},
+                                                      "multi_waveform weights");
+    (void)checked_element_count<std::complex<double>>({num_rx, slow_time, samples},
+                                                      "multi_waveform accumulator");
     if (physical_pri < duration) {
       throw std::runtime_error("profile physical PRI must be >= chirp duration");
     }
@@ -175,7 +187,7 @@ inline Config load_config(const std::filesystem::path& path) {
     decoded_profiles.push_back(std::move(profile));
     max_chirps = std::max(max_chirps, chirps);
     max_samples = std::max(max_samples, samples);
-    longest_cpi = std::max(longest_cpi, physical_pri * static_cast<double>(num_tx * chirps));
+    longest_cpi = std::max(longest_cpi, physical_pri * static_cast<double>(slow_time));
   }
   // Convert the authored name schedule to stable profile indices.
   for (const auto& name : document.get<std::vector<std::string>>("/app/profile_sequence")) {
@@ -239,11 +251,13 @@ inline Config load_config(const std::filesystem::path& path) {
 
   // Tensor pools must admit the largest shape from any scheduled profile.
   result.extents.max_chirps = max_chirps;
-  result.extents.max_interleaved_chirps = num_tx * max_chirps;
+  result.extents.max_interleaved_chirps =
+      checked_element_count<int64_t>({num_tx, max_chirps}, "multi_waveform TDM");
   result.extents.max_samples_per_chirp = max_samples;
   result.extents.max_range_bins = max_samples;
   result.extents.max_doppler_bins = max_chirps;
-  const int64_t max_cells = max_chirps * max_samples;
+  const int64_t max_cells =
+      checked_element_count<int64_t>({max_chirps, max_samples}, "multi_waveform range-Doppler map");
   result.extents.max_detections = max_cells;
   result.extents.max_items = max_cells;
   result.extents.max_points = max_cells;
