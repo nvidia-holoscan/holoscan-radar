@@ -214,14 +214,154 @@ positive native visual validation, which remains unavailable on this display.
 
 ## Docked status panel follow-up
 
+The latest middle-panel review separates the displayed image title on the
+left from the forming image's title in the middle. A subsequent label review
+removes title prefixes; completion remains indicated by the ETA's `Image ready`.
+Next-image ETA remains the largest text. A shared track shows GPU-completed
+Formed pulses as green fill and Received pulses as a thin cyan marker, with
+both percentages above and elapsed time below. The marker is drawn last and
+extends beyond the track height to stay visible when the frontiers coincide,
+including at zero and completion. Narrow layouts put title/ETA on one row
+and use a 56-pixel strip for the four compact rows within the existing footer;
+this does not change the scientific image canvas. Unknown progress stays `--`. This replaces the earlier
+two-bar layout described below without changing progress semantics, the
+1 Hz diagnostic refresh, 10 Hz timeline cadence, caches, or image transport.
+
+This panel passes all 81 selected GUI regressions, including GPU-rendered
+pixels/native text, distinct received/formed percentages, title selection,
+wide/compact layouts, all six C++/Python X11 workflows under Xvfb, headless,
+startup, resize, shutdown, and separate-window compatibility. The initial run
+exposed a startup probe reading a named child before it was viewable; the probe
+now checks map state and bounds atomically around its pixel read. All four
+startup cases then passed three consecutive runs and the full 81-check suite
+passed again. Pinned all-file lint passes. Logs/scripts are under
+`build/holoscan-radar/gui-sar-next-panel/`; this adds no laptop SSH or positive
+native-window visual claim. Processing kernels and scientific products were
+not changed.
+
+The subsequent shared-track change retains those caches and update rates.
+Its GPU regression checks unequal frontiers, coincident frontiers, zero, and
+100 percent at both widths, including marker position and visible overlap at
+completion. Startup handoff probes sample the formed fill and the received
+marker at their completed edges.
+All 81 selected GUI checks and pinned all-file lint pass after this change.
+Evidence/scripts are in `build/holoscan-radar/gui-sar-shared-track/`; actual
+window tests use Xvfb, with laptop/native visual review still pending.
+
 The docked SAR default moves image-specific text into a compact status panel to
 the left of the timeline. Its source width is at most 320 pixels and half the
 image canvas; the timeline uses the remaining width. Scene, product dimensions,
-backprojection timing/rate, last-pulse latency, and paced playback lag use a
+backprojection processing time, and throughput use a
 restrained text palette. Long labels use ellipses; narrow windows crop the
 panel rather than shrinking or stretching its text. The APC direction marker
 remains over the SAR image. No new config setting or migration is required.
 Separate-window and timeline-disabled layouts retain their previous HUD.
+
+Fullscreen/resize reflows the middle and right panels at physical pixel sizes.
+Interactive docked viewers use a bounded rectangular offscreen footer canvas
+because the pinned SDK CUDA sink cannot resize. A 64-entry capture-stamp/layout
+history makes X11 crop each completed frame using its own extent, including
+after a delayed display; expired frames drop safely. Only visible footer pixels
+are sent to X11; existing cross-device bridges retain bounded completed-frame
+transport. Cached SAR images remain independent of footer ticks. Native
+composition samples the same footer in window pixel coordinates.
+
+The subsequent manual review settled the left panel on five rows:
+title, product dimensions with `pixels` and grouped measured pulse count,
+`BP work: <work> Gpx*pulses`, `Latency: <time> / <budget> @<rate>x`, and
+`Throughput: <rate> Gpx*pulses/sec`. Latency is explicitly the accumulated GPU
+backprojection work time, excluding acquisition/pacing waits. Throughput uses
+the same time denominator and measured BP pixel-pulse counts, with a fixed giga
+unit; the scientific product dimensions may differ from the BP lattice. BP work
+uses that same measured pixel-pulse numerator, including incremental work for
+periodic outputs. Five rows fit the existing footer without shrinking the image.
+This replaces the completed-image elapsed-time hierarchy described below.
+The middle progress/ETA panel also shows expected current-image BP work from
+its matching processing grid, with unknown work shown as `--`. Collection wall
+time is labeled Total time at the bottom (wide) or beside the ETA (compact);
+compact BP work shares the title row with safe title truncation. Image metrics use the
+selected image's capture timestamp rather than the interactive GUI clock;
+missing or newer measurements show `--` instead of a different image's cost.
+
+The Latency budget uses the image's original radar interval divided by its
+configured positive playback rate, replacing the initial fixed-1x comparison.
+Whole-collection images use the selected first-to-last pulse span. Periodic
+images use the interval between successive image-closing pulse `TxTime` values,
+including an irregular or partial final cadence, rather than the full retained
+aperture; the first image starts at the collection's first pulse. Duty-cycle
+quiet time is excluded. The rate is captured alongside that image's budget,
+not sampled from the live reader after it advances to another collection.
+For example, a 2.4-second radar interval gives a 12-second budget at 0.2x and
+shows `Latency: 8.2s / 12.0s @0.2x`. Unpaced playback (`playback_rate: 0`) shows
+`-- unpaced`, with no fixed deadline; missing or invalid rates show `-- @--`.
+Measured GPU time and throughput stay unchanged. This compares backprojection
+cost with its required update interval; it does not certify end-to-end real-time
+performance.
+Existing host timestamps supply these intervals without extra I/O, device
+transfers, or GPU waits. The optional progress mailbox retains at most 4096
+timestamps per packet across 128 packets (4 MiB of pulse-time samples), with
+endpoints only for larger packets. Missing history, unavailable internal seams,
+and invalid/nonpositive intervals remain unknown; known seams restore tracking.
+The budget follows the image's capture stamp through the existing host HUD
+diagnostics. Public operator ports, parameters, processing, and the middle
+panel are unchanged. No configuration setting or migration is needed.
+
+The playback-rate refinement passes 157 selected CTests and 63 SAR Python
+checks, including slower/faster pacing, unpaced playback, unavailable and
+out-of-range timing, frozen per-image rate propagation, image-matched GPU text
+in both clocked and event-driven paths, and the six-workflow X11/headless and
+numerical/dump checks below. Pinned all-file lint passes. Logs and the script
+are in `build/holoscan-radar/gui-sar-playback-budget/`. Window checks in this
+run use Xvfb; laptop and positive native visual review remain pending.
+
+The initial 1x budget follow-up passed 156 selected CTests and 63 SAR Python checks.
+Coverage includes exact irregular pulse-time intervals at different playback
+rates, multiple image seams within a source packet, partial cadence, collection
+loop reset, oversized-packet timing limits, lost-history recovery, real reader
+and backprojection diagnostic propagation, image-matched native GPU text, and
+unchanged scientific pixels. All six workflows pass automated C++/Python X11
+window checks under Xvfb, headless runs, and numerical/dump parity in both
+precisions, with resize/shutdown and separate-window coverage. Pinned all-file
+lint passes. Evidence and the reproduction script are in
+`build/holoscan-radar/gui-sar-budget/`. This does not add a new laptop SSH visual
+review or a positive native-window presentation result; those remain manual
+validation items.
+
+The four-row card passes 80 selected checks, including exact row contents and
+unchanged scientific pixels through the GPU composer, matching and newer
+diagnostics under both event-driven and clocked startup, all six C++/Python
+X11 workflows, separate-window compatibility, startup handoff, headless
+rendering, and resize/shutdown. Pinned repository-wide lint passes. Middle-panel
+rendering and numerical operator code are unchanged in this follow-up.
+Logs and the reproduction script are under
+`build/holoscan-radar/gui-sar-card/`; manual visual review is still pending.
+
+The timing hierarchy now puts next-image ETA and live collection elapsed in
+the independent progress panel, and frozen collection-start-to-formation wall
+time first in the completed-image status. GPU time/rate and final-batch latency
+are secondary. Paced playback lag stays in the live timeline; image completion
+ticks retain their positions but omit numeric latency labels. The larger
+primary text and smaller diagnostics fit the existing 112-pixel footer using
+the actual SDK native text renderer, not the generated design mockup's fonts.
+The original compact progress preserved both bars and combined ETA/elapsed;
+the latest middle-panel review above replaces that arrangement with one bar.
+Elapsed uses the matching bounded collection record and the existing GPU
+completion observation; it never adds a GPU wait or includes display hold.
+Periodic images share collection start, and a loop resets that start. Missing
+history omits timing. Separate-window/on-image latency is renamed consistently.
+
+The timing follow-up passes 150 selected CTests and 63 SAR Python checks in the
+pinned HSDK 5 GA GPU image. Coverage includes frozen elapsed during hold,
+collection-loop reset, periodic-image clock semantics, declining a newer
+image's elapsed time for a delayed older image, native GPU text composition,
+cached native docking, all six C++/Python X11 workflows, separate-window
+compatibility, startup/first-image handoff, resize/shutdown, headless rendering,
+and complex-product/dump parity in both precisions. Repository-wide pinned
+lint passes. These are automated checks; the user will review the real viewer's
+appearance manually. No new SSH/laptop visual capture or positive native-window
+review is claimed for this follow-up, and the generated mockup is not rendering
+evidence or an application asset. Logs are under
+`build/holoscan-radar/gui-sar-timing/` in this checkout.
 
 Status is rendered with the exact-timestamp image/geometry join into extra
 footer rows of the same completed GPU frame. This deliberately avoids a
@@ -405,3 +545,198 @@ use the real forwarded X server without a remote desktop. Isolated screenshots
 and real-input diagnostic captures received visual review; broader human
 scientific-image review is separate. Positive native Vulkan window review
 still requires a compatible display. Repository-wide pinned lint passes.
+
+### SAR input/output event history
+
+The right timeline shows `Pulse batch received` in cyan and
+`Pulse batch processed` in green. Ticks mark original reader batches,
+rather than running counts or newly formed images; nearby events can coalesce. Receipt means all
+required reader outputs were published. Processed means nonblocking CUDA event
+queries (or the existing image-boundary synchronization) proved completion of
+backprojection covering that entire batch. Pulses discarded before GPU work
+never produce a processed event. Split batches produce one processed
+event after their final slice; replay can complete several source batches at
+once. File and loop generations remain separate. Tick times are the host times
+when completion was observed, not precise GPU finish timestamps or measured
+end-to-end latency. Several ticks can share a pixel.
+
+The common 20-second wall-clock axis scrolls at the existing timeline cadence
+(default 10 Hz). Collection-colored dwell bars and image-emission ticks are
+replaced by these two event lanes; the image title remains in the image and
+progress cards. Optional playback lag stays available. ETA text remains at
+1 Hz. The main SAR image and HUD caches are unchanged. Timeline ticks do not
+rerun backprojection or scientific image rendering. X11 keeps the main image
+cached; native presentation composites its cached panels.
+
+Diagnostics retain at most 1024 event-bin records and 128 source-packet records.
+Events of the same kind within 40 ms coalesce, preserving the full 20-second
+activity window at high batch rates. Overlapping tick rectangles merge before
+GPU rasterization, keeping dense activity inexpensive to draw. History remains
+best effort: expired packet metadata suppresses completion ticks rather than
+inventing correspondences. No queue waits, new GPU synchronization, pulse-data copies,
+public operator parameters, or preset changes are introduced. Automated GPU
+pixel/text and real X11 window checks supplement manual visual review.
+
+The batch-history follow-up passes 164 selected CTests and 63 SAR Python tests
+in the pinned HSDK 5 GA GPU image. Coverage includes complete source-batch
+proof across slices, replay and evicted prefixes, collection generations,
+receipt retries/publication races, bounded/coalesced history under bursts,
+nonblocking queries with a blocked GPU stream, native GPU text composition,
+all six C++/Python X11 workflows, headless rendering, shutdown, and unchanged
+complex products/dumps in both precisions. Additional 12-second C++ independent
+images and Python video SAR runs use a 10 ms X11 delay proxy, resize and capture
+wide/compact footers, and verify continued formation and RSS/FD bounds. Median
+RSS stays at 343.07 MiB for C++ and 572.72 MiB for Python; FDs span 149–151 and
+146 respectively. These short fixture runs qualify bounded recovery, rather
+than general application throughput or long-run memory behavior.
+
+The stress probe now reads application logs through an independent descriptor,
+avoiding changes to the child's write offset, and avoids querying already-closed
+windows in failure capture. Evidence, reproduction scripts, resource samples,
+and actual viewer footer captures are under
+`build/holoscan-radar/gui-sar-batch-history/`. The captures confirm the final
+coalesced history retains older activity under dense input. They use real GPU
+rendering with Xvfb; no new laptop forwarding or native-window visual approval
+is claimed. Manual appearance review remains pending.
+
+The pulse-history follow-up uses thin tracks, short cyan/green markers, and
+labels beside the tracks. A faint span connects receipt to observed GPU
+completion for the same source batch. Retained unfinished batches extend their
+shading to Now; they do not gain a processed marker until completion is proven.
+Green is reserved for short completion markers on the lower track; connecting
+spans never fill that track with green. Matching
+happens before coalescing: independent received/processed ticks are never paired
+by proximity or order. Overlapping matched intervals merge at 40 ms resolution
+in a fixed 512-bin occupancy ring; pending intervals use the existing bounded
+128-packet history. Discarded or unproven prefixes already passed by ordered GPU
+work are omitted rather than shown pending forever. These spans describe
+observed input-to-processing delay, including queueing, rather than GPU service
+time. Both lanes keep the existing 20-second window and 10 Hz default cadence.
+Only the timeline raster and its bounded drawing records change each tick;
+completed SAR image/HUD caches and scientific processing remain unchanged.
+
+Validation for paired shading passes all 169 selected CTests and 63 SAR Python
+tests in the pinned GA GPU image. This includes controlled-timestamp host tests,
+wide/compact GPU pixel and label alignment checks, all six SAR workflows in
+both languages, headless rendering, GPU composition, shutdown, and numerical/dump
+regressions. A real forwarded-window check on `localhost:14.0` passes resize,
+continued image formation, capture, and closure; its sampled RSS stays at
+342.98 MiB, with 149–150 FDs. Two further 12-second runs use a 10 ms X11 delay
+proxy and Xvfb: C++ independent images holds RSS at 340.78 MiB with 149–151 FDs;
+Python video SAR moves from 572.55 to 572.36 MiB with 146–148 FDs. Formation
+continues in both runs. These are bounded fixture/recovery checks, not general
+throughput claims. Actual forwarded and wide/compact viewer captures and
+reproduction scripts are under `build/holoscan-radar/gui-sar-pulse-shading/`.
+Native-window and real-collection visual qualification remain separate from
+these automated and captured-viewer checks. No global Keeping pace/Falling
+behind heuristic is introduced by this appearance follow-up.
+
+The subsequent completion-marker correction removes the green horizontal fill
+across completed receipt-to-processing spans. Overlapping spans had made the
+processed track solid green even between distinct completion events. Connecting
+shading remains neutral, and green now marks only observed completion events.
+Wide/compact GPU regression checks assert that one batch completed several
+seconds after receipt produces only one three-pixel green marker. All 10
+targeted startup/timeline and independent-images/video-SAR C++/Python X11 checks
+pass after the correction. A paced fixture on actual forwarded
+`localhost:14.0` passes resize, continued formation, and closure; the viewer
+capture confirms distinct ticks. Evidence is under
+`build/holoscan-radar/gui-sar-marker-fix/`. User presets are unchanged.
+
+### SAR matched diagonal follow-up
+
+Replace receipt-to-completion area fills with thin neutral diagonal connectors.
+Place larger received/processed labels above/below the tracks, reclaiming the
+side-label column for history; compact history keeps time labels in small side
+gutters. The previous occupancy union cannot preserve batch identity, so it is
+replaced by a fixed 512-slot history retaining one exact actual pair per 40 ms
+completion-time bin. Endpoints are never combined across batches. Clip old
+receipts geometrically, preserving their slope. Pending batches retain their
+receipt ticks without an invented completed endpoint at Now. At most 64 actual
+representative pairs are drawn after identical projected pairs merge; all
+independently coalesced event ticks remain. Each connection is one bounded GPU
+command, evaluated directly by the existing timeline kernel. The default 10 Hz
+cadence, 20-second window, scientific processing, image/HUD caches, public
+operator contracts, and user presets remain unchanged. No global pacing-health
+heuristic is added.
+
+Diagonal-history validation passes all 170 selected CTests and 63 SAR Python
+tests. Host checks verify exact overlapping pairs, pending/partial/replayed
+batches, publication races, and bounded histories. GPU checks verify sloping
+thin lines without interval fills, geometric clipping, pending work without a
+fabricated completion, and larger labels outside both tracks in wide/compact
+layouts. Broader coverage includes all six C++/Python workflows, headless
+rendering, native GPU composition, shutdown, and unchanged numerical/dump
+products. Actual forwarded `localhost:14.0` passes a paced fixture with resize,
+continued formation, capture, and closure; sampled RSS holds at 335.23 MiB with
+149 FDs. Two further 12-second Xvfb runs with a 10 ms X11 delay proxy exercise
+wide C++ independent images (342.47 MiB RSS, 149–151 FDs) and compact Python video
+SAR (572.24 to 572.36 MiB RSS, 146–148 FDs), with continued formation and bounded
+resource checks passing. Actual viewer captures, samples, logs, and reproduction
+scripts are under `build/holoscan-radar/gui-sar-diagonals/`. These fixture checks
+qualify rendering/recovery; native-window and real-collection visual review
+remain separate, and no general throughput claim is made.
+
+### SAR typography and time bookends
+
+Both titles were already authored with the same size, but fractional native-font
+scaling and X11 resampling could soften their appearance. Use consistent integer
+font scales, with 26px full-history and 13px compact-history titles and time
+captions. Increase text contrast. Replace the small bottom time captions with
+`20s` and `Now` in reserved side gutters, vertically centered beside the tracks.
+Lane titles remain above/below the tracks. Use nearest sampling only for the
+docked X11 timeline's completed GPU frame, avoiding another smoothing pass at
+resize; scientific image interpolation and cache independence remain unchanged.
+The native GPU text regression compares actual pixels of the common title
+prefix, alongside exact size and time-bookend position checks.
+
+Typography validation passes 170 selected CTests and 63 SAR Python tests. The
+native compositor renders the common `Pulse batch` prefix consistently for
+both titles in wide/compact layouts; maximum per-channel pixel difference is
+bounded at two levels. Header checks require all four captions to share size,
+with time bookends outside the plot and vertically centered beside it. Actual
+forwarded `localhost:14.0` passes paced resize/capture/closure checks with RSS at
+334.04 MiB and 149 FDs. Two 12-second Xvfb runs with a 10 ms delay proxy pass
+wide C++ independent images (341.75 to 341.88 MiB, 149–151 FDs) and compact Python
+video SAR (572.68 to 572.62 MiB, 146–148 FDs), with continued formation. Evidence
+is under `build/holoscan-radar/gui-sar-text/`. HoloViz's existing font remains;
+this change removes additional X11 resize smoothing without introducing a font
+replacement or claiming native-window visual approval.
+
+### Footer spacing refinement and workflow review (2026-11-18)
+
+Reduce all four history captions together to 24px in the full layout and 12px
+in compact history. Increase the next-image title from 12px to 14px and place
+it below the ETA. The compact title occupies its own full-width row; elapsed
+moves beside the ETA, with pulse counts and their shared bar below the title.
+Preserve the existing ETA calculation, cached images, and presenter behavior.
+Update both GPU layout assertions and actual-window handoff pixel coordinates.
+
+Ten targeted native-text/layout and C++/Python X11 startup checks pass, alongside
+63 Python checks. Workflow review uses actual forwarded X11 captures; it does
+not establish native-window appearance approval. The shared footer omits
+modality details: autofocus stage, iterations, sharpness and refusal status;
+strip mosaic coverage and active tile/window context; and video aperture/hop
+context. In particular, BP compute cost and ETA do not measure the entire
+autofocus pipeline. Those semantic additions need a separate UI decision.
+
+A second requested reduction sets full-history captions to 22px and compact
+captions to 11px, keeping lane titles and both time bookends matched.
+
+### Autofocus outcome and continuous-strip corrections (2026-11-18)
+
+Expose the existing autofocus termination/accepted-iteration reports in the
+middle footer, with amber declined status and explicit no-correction, unknown,
+and oracle cases. Before a result, show preparing/running status rather than an
+ETA that excludes auxiliary formation and estimation. Reset on collection
+change and reject late prior-collection reports. The app-owned report already
+reads the tiny diagnostics; the shared mailbox adds no device transfers.
+
+Continuous-strip slices use explicit base+slice-index stamps. Register their
+bounded interval with the diagnostic monitor before emission, preserving exact
+source-packet completion and pulse-time budgets without changing data-plane
+stamps or temporal contracts. The reported missing history was also explained
+by Now being offscreen: cap automatic strip window size at the configured
+visualization maximum while fitting the desktop work area. Explicit YAML window
+sizes and manual resize behavior retain precedence. Collection numbering and
+other proposed footer additions remain out of scope.

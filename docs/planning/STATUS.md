@@ -4,6 +4,14 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **SAR GUI commit checkpoint**: split the reviewed GUI work
+  into diagnostic/workflow accounting (`96e4fc69`), footer rendering/history
+  (`c9787081`), and resize-aware presentation (`7349e35c`), followed by the
+  consolidated GUI documentation. Earlier November 18 entries retain their
+  review-time validation notes; that implementation is now committed. The
+  three user-edited SAR presets remain local. The separately profiled aperture
+  cleanup and locality-readback synchronization fixes remain pending.
+
 - **2026-11-19** — **Resize-aware cached footer presentation**:
   feed visible window extents into bounded GPU footer layout; preserve glyph
   proportions with capture-matched cropped transport and physical-pixel native
@@ -25,6 +33,16 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   cap automatic strip windows. Preserve user presets. Dedicated model,
   reader, BP and configuration regressions accompany the change.
 
+- **2026-11-19** — **Autofocus GUI frame stalls** on `deustice/sar-gui`:
+  assessment complete after shutdown commit `e1ae6390`; fixes pending. Real
+  Kourou Nsight captures reproduce local-X11 and headless footer stalls before
+  transport. Retained-aperture cleanup issues 69 synchronous frees during
+  auxiliary BP; a post-launch warning readback blocks 17.9s in headless mode.
+  Recommend releasing completed retained temporaries before replay publication
+  and moving that diagnostic readback before BP launches. Numerical kernels,
+  user presets, and public contracts unchanged. Local traces/report remain in
+  `build/holoscan-radar/gui-af-profile/`. Native interactive cadence unmeasured.
+
 - **2026-11-19** — **Profiler-compatible C++ shutdown** on `deustice/sar-gui`:
   implemented. FMCW and SAR share caller-owned SIGINT/SIGTERM handlers; the
   signal callback only stores a lock-free flag and control loops request
@@ -34,12 +52,194 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   captures real CUDA/NVTX data for SISO, spotlight, autofocus, and the autofocus
   X11 GUI. No operator contracts or user presets changed.
 
+- **2026-11-18** — **SAR footer resize proportions** on `deustice/sar-gui`:
+  implemented. Feed window dimensions back into footer layout, preserve native
+  glyph proportions, and crop completed X11 footer transport to its visible
+  region using a bounded capture-stamp/layout history. Keep fixed bounded
+  rectangular GPU/host pools and the cached scientific image. All 63 selected
+  checks pass. Actual C++ and Python X11 fullscreen at 1920x1200, restore, and
+  compact captures pass pixel comparison; delayed-display checks preserve
+  processing progress, stable RSS, and bounded descriptors. Presets and public
+  operator contracts are unchanged; edits remain uncommitted.
+
+- **2026-11-18** — **SAR live workload and total-time placement** on
+  `deustice/sar-gui`: implemented. Add expected current-image BP work from
+  matching processing metadata; preserve replay versus incremental pulse scope.
+  Both panels' BP work labels use 14px text, including compact layout.
+  Rename elapsed collection wall time to Total time, at the bottom in the wide
+  panel and top in compact layout. All 51 selected checks and full pinned lint
+  pass; actual C++ wide and Python compact windows reviewed on `localhost:11.0`.
+  Preserve bounded diagnostics and presets; edits remain uncommitted.
+
+- **2026-11-18** — **SAR image workload readout** on `deustice/sar-gui`:
+  add grouped measured pulse counts and BP work in Gpx*pulses to the completed
+  image panel; fit five rows in the existing footer. Increase history text to
+  16px full / 14px compact. Reuse timestamp-matched diagnostic counters with no
+  new GPU transfers or image refreshes. All 33 selected checks and full pinned
+  lint pass. Actual C++ wide and Python compact X11 captures on `localhost:11.0`
+  show the five rows without clipping. Preserve presets; edits remain uncommitted.
+
+- **2026-11-18** — **SAR history font adjustment** on `deustice/sar-gui`:
+  increase history labels and bookends by 1px to 15px full / 13px compact;
+  preserve all event geometry and scientific processing. All three timeline
+  checks pass, including actual native glyph comparison and wide/compact
+  layouts. C++ applications and Python bindings rebuilt; full pinned lint passes.
+
+- **2026-11-18** — **SAR history font alignment** on `deustice/sar-gui`:
+  match history titles, bookends, and optional lag text to adjacent body text
+  (14px full layout, 12px compact). Preserve event geometry and cached images;
+  all 33 targeted GUI checks and an actual forwarded X11 capture pass. The
+  user's screenshot has pixel-identical shared lane-label prefixes; descenders
+  explain the apparent height difference. Local application presets remain untouched.
+
+- **2026-11-18** — **SAR footer theme and pull-script integration** on
+  `deustice/sar-gui`: implemented. Reduce history labels to 20px/10px, align
+  footer backgrounds and text insets, and emphasize the completed image title
+  and metrics. Pull progress changes are cherry-picked as `58869a59` after 41
+  offline tests and full pinned lint; its clean worktree and source branch were
+  removed. All 33 selected GUI checks pass after updating the background-color
+  assertion. Actual forwarded C++/Python captures on `localhost:11.0` and wide/
+  compact delayed-display resize, cache, and shutdown checks pass. Resident
+  memory stays within 0.13 MiB and file descriptors within two of baseline
+  during the bounded delay checks. Full pinned lint passes. Preserve all local
+  application config edits and image caches; GUI edits remain uncommitted.
+
 - **2026-11-18** — **CPHD pull progress** on `deustice/pull-script`: implemented.
   AWS, HTTPS, and subset preparation share byte/rate/elapsed/ETA reporting,
   terminal updates, and periodic redirected logs. All 41 offline tests pass,
   including subprocess output, fallback, interruption/resume, and subset CLI
   completion/skip checks. Selection, transfers, validation, placement, and
   application presets are preserved; no public collection was downloaded.
+
+- **2026-11-18** — **SAR autofocus outcome and scrolling diagnostics** on
+  `deustice/sar-gui`: implemented. Show preparing/running and accepted/declined
+  autofocus outcomes using existing reports; clear stale collection results.
+  Register stamped scroll slices in bounded diagnostic history to restore exact
+  packet completion and budgets. Cap automatic strip windows at visualization
+  max-side so a multi-monitor X11 desktop cannot push Now offscreen; explicit
+  sizes and manual resizing retain precedence. All 175 selected regression checks
+  and 63 Python checks pass, including corrected-fixture rerun. Actual forwarded
+  C++/Python strip windows show processed ticks within their cap; clean autofocus
+  declines and injected-error autofocus accepts one iteration (2.945x sharpness).
+  Public contracts, scientific processing, collection labels and user presets
+  are preserved. Changes remain uncommitted.
+
+- **2026-11-18** — **SAR footer refinement and workflow visual review** on
+  `deustice/sar-gui`: typography implemented. History labels use matching
+  22px/11px; the 14px next-image title sits below its ETA, with a full-width
+  compact title row. Ten targeted GUI checks and 63 Python checks pass. Actual
+  six-workflow real-data X11 captures and semantic audit are complete. Autofocus refusal/stage diagnostics and strip coverage are
+  absent from the shared footer. Preserve ETA behavior and user presets.
+
+- **2026-11-18** — **SAR timeline typography and endpoint labels** on
+  `deustice/sar-gui`: implemented. Use matching integer-scale glyph sizes,
+  brighter labels, and readable `20s` / `Now` bookends beside the tracks. Avoid
+  a second smoothing pass for the docked X11 timeline. All 170 selected checks
+  and 63 Python checks pass, including actual native-rendered prefix comparison.
+  Actual forwarded `localhost:14.0` and delayed-display wide/compact resource
+  checks pass. Preserve caches, HoloViz's font, and user presets; uncommitted.
+
+- **2026-11-18** — **SAR matched diagonal history** on `deustice/sar-gui`:
+  implemented. Replace filled interval unions with bounded exact matched pairs
+  and thin GPU-rendered diagonal connectors. Place larger labels above/below
+  the tracks. Pending work keeps its receipt tick without a false completion
+  endpoint; draw at most 64 real representative connections at dense rates.
+  All 170 selected checks and 63 Python checks pass, including overlapping pairs,
+  clipped diagonals, text placement, all six C++/Python workflows, and numerical
+  products. Actual forwarded X11 on `localhost:14.0` and two delayed-display
+  wide/compact resource checks pass. Image caches and user presets are unchanged;
+  changes remain uncommitted. Native-window appearance review remains separate.
+
+- **2026-11-18** — **SAR completion marker correction** on `deustice/sar-gui`:
+  implemented. Remove green fills across matched receipt/completion intervals;
+  reserve green for short completion markers and keep interval shading neutral.
+  Wide/compact GPU tests assert a long completed interval produces one short
+  green marker. All 10 targeted startup/timeline and C++/Python X11 checks pass.
+  A paced forwarded run on `localhost:14.0` passes resize and closure; its actual
+  viewer capture confirms separated completion ticks. User presets are untouched;
+  changes remain uncommitted.
+
+- **2026-11-18** — **SAR paired pulse-indicator shading** on `deustice/sar-gui`:
+  implemented. Match receipt/completion before coalescing; shade unfinished
+  batches to Now, use thin tracks/short marks and labels beside the plot.
+  Keep completed coverage in a fixed 512-bin ring; preserve GPU completion
+  proof, image caches, and user presets. All 169 selected checks and 63 Python
+  checks pass. Actual forwarded X11 on `localhost:14.0` passes resize, capture,
+  continued formation, and closure; two delayed-display wide/compact runs pass
+  bounded RSS/FD checks. Native-window and real-collection appearance review
+  remain separate. Changes are uncommitted.
+
+- **2026-11-18** — **SAR input/output batch history** on `deustice/sar-gui`:
+  implemented. Replace collection colors with singular received/processed batch
+  lanes. Require GPU-proven coverage of entire source batches, including split
+  and replay handling; never claim evicted, unprocessed pulses were formed.
+  Coalesce dense events into bounded 40 ms bins and merge overlapping marks,
+  retaining the 20-second history without reprocessing the SAR image.
+  All 164 selected checks and 63 Python checks pass, alongside two delayed-X11
+  resource/capture runs with continued formation and stable RSS/FDs. Harden
+  stress-test log reads and failure capture. User presets remain untouched;
+  changes are uncommitted. Manual laptop/native appearance review remains pending.
+
+- **2026-11-18** — **SAR shared pulse-progress track** on `deustice/sar-gui`:
+  implemented. Combine Formed fill and Received marker on one track, with
+  percentages above and elapsed time below. Preserve image caches and presets.
+  All 81 selected GPU composition, C++/Python X11, headless, resize, and
+  shutdown checks pass, including separated/coincident frontiers, zero/full
+  progress, and marker visibility in real startup handoff windows. Pinned
+  all-file lint passes; manual laptop/native visual review remains pending.
+
+- **2026-11-18** — **SAR middle title cleanup** on `deustice/sar-gui`: implemented.
+  Show the image title without `Next:`/`Ready:` prefixes; retain the existing
+  ETA/completion status and all other panel behavior. All eight focused GPU
+  footer/startup/timeline checks and pinned all-file lint pass. User presets
+  remain untouched; changes are uncommitted.
+
+- **2026-11-18** — **SAR next-image panel** on `deustice/sar-gui`: implemented.
+  Label the forming image with `Next:`, emphasize ETA, show one GPU-completed
+  Formed percentage/bar, and combine Received percentage with elapsed time in
+  a smaller line. Preserve independent caches, cadence, and user presets.
+  All 81 selected GPU composition, timestamp, C++/Python X11, headless, resize,
+  and shutdown checks pass. Fixed an early pixel-read race in the startup
+  probe; all four startup cases also pass three consecutive runs. Pinned
+  all-file lint passes. Manual laptop/native visual review remains pending.
+
+- **2026-11-18** — **SAR left-card spacing** on `deustice/sar-gui`: implemented.
+  Tighten row spacing from 25 to 21 pixels, keeping text sizes and the top
+  margin. Preserve the middle panel for the next design discussion.
+  All eight focused GPU composition, footer, startup, and timeline checks pass;
+  pinned all-file lint passes. User configuration edits remain untouched.
+
+- **2026-11-18** — **SAR playback-rate processing budget** on `deustice/sar-gui`:
+  implemented. Scale the displayed image's radar-time budget by its configured
+  playback rate and label that rate; unpaced playback has no fixed budget.
+  Preserve GPU timing, throughput, middle panel, and user configuration edits.
+  All 157 selected CTests and 63 SAR Python checks pass, including slowed/fast
+  playback, unpaced/unknown budgets, image-matched rate propagation, GPU text,
+  all six C++/Python X11 workflows under Xvfb, headless rendering, resize,
+  shutdown, and numerical/dump parity. Pinned all-file lint passes. Changes
+  remain uncommitted for user review; no new laptop/native visual claim.
+
+- **2026-11-18** — **SAR 1x processing budget** on `deustice/sar-gui`: implemented.
+  This initial fixed-1x display is superseded by the playback-rate display above.
+  Pair Latency with the original radar-time budget, independent of playback
+  speed. Use collection duration for a whole image and the new-data interval
+  between periodic images, with bounded host timestamp metadata. Preserve the
+  middle panel, processing kernels, and user presets. All 156 selected CTests
+  and 63 SAR Python checks pass, including exact irregular TxTime intervals,
+  intra-batch image seams, loop resets, bounded-history recovery, image-matched
+  GPU text composition, C++/Python X11 windows, headless rendering, resize,
+  shutdown, and numerical/dump parity. Pinned all-file lint passes. This run
+  uses automated Xvfb windows; laptop visual and positive native-window review
+  remain pending. No additional GPU work, transfers, or file reads are added.
+
+- **2026-11-18** — **SAR displayed-image information card** on `deustice/sar-gui`:
+  implemented. Use four rows: image title, product pixels, accumulated GPU
+  backprojection time labeled Latency, and throughput in Gpx*pulses/sec using
+  the same time basis. Exclude pacing waits; preserve the middle progress panel
+  and user configuration edits. Fixed image-metric matching to use the image's
+  capture stamp rather than the GUI clock. All 80 selected GPU composition,
+  timestamp/coherence, startup, C++/Python X11, headless, resize, and shutdown
+  checks pass; pinned all-file lint passes. User visual review remains pending.
 
 - **2026-11-18** — **CPHD subset retry/resume** on `deustice/sar-gui`: implemented.
   Retry transient HTTP responses and preserve durable, source/window-validated
@@ -49,6 +249,16 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   chunks, transient HTTP retries, source/range validation, corrupted checkpoints,
   writer exclusion, publication recovery, exact signal/PVP results, and stable
   padded metadata through the real CPHD writer. No public transfer was started.
+
+- **2026-11-18** — **SAR timing hierarchy** on `deustice/sar-gui`: implemented.
+  Put next-image ETA and collection elapsed time first; retain GPU time,
+  throughput, and renamed final-batch latency as secondary diagnostics. Preserve
+  independent timeline updates, image-matched status, and user preset edits.
+  All 150 selected CTests and 63 SAR Python checks pass, including elapsed
+  freeze/reset, delayed-image timing coherence, GPU composition, C++/Python X11
+  startup/resize/shutdown, headless rendering, and numerical/dump parity.
+  Pinned all-file lint passes. User visual review and positive native-window
+  review remain pending; no generated mockup assets enter the viewer.
 
 - **2026-11-18** — **SAR live pulse progress and next-image estimate** on
   `deustice/sar-gui`: implemented separate unique-pulse received and GPU-completed

@@ -190,9 +190,13 @@ composer. The placeholder's -1 stamp cannot advance completed-image drain.
 `SarDisplayRate` checks SI conversions and unchanged console measurements.
 `SarTimeline` verifies collection-title placement above its colored bar using
 the GPU raster and native text records.
-It also verifies pulse counts, ETA labels, and colored progress bars at compact
-and normal panel widths. The C++/Python handoff probes wait for the received and
-formed bars to reach completion on the actual CPHD/formation path.
+It also verifies the next-image title, percentage/ETA labels, and the single
+shared progress track at compact and normal widths. Unequal received/formed
+counts prove that the green fill follows GPU completion and the cyan marker
+follows ingestion. Coincident frontiers, zero, and completion verify marker
+visibility and bounds. The C++/Python handoff probes wait for the fill and
+marker to reach completion on the actual
+CPHD/formation path.
 
 `SarPulseProgress` checks pacing-aware and unpaced ETA overlap, distinct receipt
 and completion, slices sharing a stamp, reform replay, loop generations, partial
@@ -211,6 +215,43 @@ Omit `xvfb-run` to use a real forwarded display. These pixel-readback probes
 require a responsive X11 server; a timeout does not establish visual success.
 Native-window and real-collection visual qualification remain separate from
 GPU composition, isolated X11, and synthetic-fixture checks.
+
+The SAR input/output history uses singular `Pulse batch received` and
+`Pulse batch processed` lane labels with cyan and green event ticks. GPU tests
+check the lane pixels and text independently of the shared middle progress
+track. Host/CUDA diagnostics tests cover split source batches, replay, loop
+generations, retry deduplication, late receipt publication, packet expiration,
+bounded retained events, dense-event coalescing, and a blocked GPU stream that must not produce any
+processed event before release. Window checks continue to cover image-cache
+independence, resize/delayed-display recovery, shutdown, headless rendering,
+and numerical/dump equivalence. The real viewer's appearance still needs human
+review; Xvfb checks alone do not qualify laptop forwarding or native display
+presentation.
+
+The stress probe reads logs through a separate descriptor so polling cannot
+move the running application's stdout offset or overwrite startup diagnostics.
+Failure capture skips windows once the application has exited.
+
+Matched-pair coverage additionally checks exact receipt/completion matching,
+overlapping pairs, idle gaps, partial batches, discarded prefixes, loop
+boundaries, late publication, and bounded long/dense histories. GPU pixel
+readback checks wide and compact layouts: completed pairs produce thin sloping
+lines instead of interval fills, connections crossing the history edge retain
+their true slope, and pending work has no fabricated completion endpoint.
+Both lane labels use the same 16px full/14px compact font above/below the tracks;
+`20s` and `Now` use matching sizes in side gutters at the tracks' midpoint.
+A native GPU composition check compares the actual rendered common prefix of
+the two labels, independently of distinct words' ascenders/descenders. A long completed interval
+still produces only a short green completion marker. These tests use controlled
+diagnostic timestamps rather than assumptions about GPU speed.
+
+Docked X11 checks now expand to two wide layouts and shrink back, waiting for
+`RADAR_PRESENTED_EXTENT` to prove that a frame drawn at the new width reached
+the screen. The static receipt-label pixels must match exactly at all three
+sizes. This supplements compact resize, EOF image-cache counters, delayed
+display recovery, resource plateaus, and shutdown checks. Unit coverage checks
+rectangular texture allocation, capture-matched cropped host transport, bounded
+layout-history expiration, and physical-pixel sampling in native composition.
 
 ## C++ signal ownership and profiling
 
