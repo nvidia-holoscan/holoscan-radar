@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17): repo builds with C++17
 #include <iterator>
+#include <initializer_list>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -57,6 +58,35 @@ using config::reject_authored;
 using config::require_finite_positive;
 using config::require_positive;
 using config::validate_frame_period;
+
+// Conservative logical payload estimate for one source synthesis, not a bound
+// on allocator reservations, queued frames, code descriptors or graph pools.
+inline void validate_source_working_bytes(int64_t num_tx, int64_t num_rx, int64_t slow_time,
+                                          int64_t samples, bool tdm, int64_t allowance) {
+  require_positive("app.max_source_working_bytes", allowance);
+  int64_t remaining = allowance;
+  const auto charge = [&remaining](int64_t count, int64_t bytes) {
+    if (count > remaining / bytes) {
+      throw std::runtime_error(
+          "estimated MIMO source working memory exceeds app.max_source_working_bytes; "
+          "reduce TX/RX/chirp/sample dimensions or raise the byte allowance");
+    }
+    remaining -= count * bytes;
+  };
+  const auto count = [](std::initializer_list<int64_t> dims) {
+    return checked_element_count<double>(dims, "MIMO source working memory");
+  };
+  charge(count({num_rx, slow_time, samples}), 24);  // float output + double accumulator
+  charge(count({num_rx, slow_time}), 80);  // host/device beat, phase, weights + upload cast
+  charge(count({num_tx, slow_time}), 16);  // excitation weights
+  charge(count({samples}), 64);  // sample times and optional reference chirp, including uploads
+  if (tdm) {
+    charge(count({slow_time}), 8);  // TX pattern
+  }
+  charge(count({num_tx, num_rx}), 24);  // virtual-array positions
+  charge(count({num_tx}), 48);          // scene and flattened TX positions
+  charge(count({num_rx}), 48);          // scene and flattened RX positions
+}
 
 struct RuntimeConfig : CommonRunConfig {
   sim::SimScene scene;
@@ -179,7 +209,7 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored, const char* 
   require_finite_positive("app.rx_array.spacing", authored.rx_array.spacing);
 
   // Validate every source/geometry product before even building the antenna
-  // vectors. Valid large configurations remain subject to available memory.
+  // vectors, then enforce the caller-configurable source payload allowance.
   const int64_t num_tx = authored.tx_array.num_tx;
   const int64_t num_rx = checked_element_count<sim::Vec3>(
       {authored.rx_array.az_elements, authored.rx_array.el_elements}, workflow_name);
@@ -190,6 +220,9 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored, const char* 
   (void)checked_element_count<std::complex<double>>({num_tx, slow_time}, workflow_name);
   (void)checked_element_count<std::complex<double>>(
       {num_rx, slow_time, authored.cube.samples_per_chirp}, workflow_name);
+
+  validate_source_working_bytes(num_tx, num_rx, slow_time, authored.cube.samples_per_chirp, tdm,
+                                authored.max_source_working_bytes);
 
   const auto& waveform = authored.waveform;
   result.scene.waveform.carrier_frequency = waveform.carrier_frequency();

@@ -151,13 +151,14 @@ struct AppParams {
   std::optional<TdmSimulationConfig> tdm{};
   std::vector<TdmProfileConfig> profiles{};
   std::vector<std::string> profile_sequence{};
+  int64_t max_source_working_bytes{512 * 1024 * 1024};
   int64_t max_frames_in_flight{4};
   double rx_poll_period{0.001};
   int64_t simulated_receive_polls{2};
 };
 
 HOLOSCAN_PARAM_SCHEMA(
-    AppParams, holoscan::param_schema("com.nvidia.holoscan.radar.app.mimo.AppParams", 1),
+    AppParams, holoscan::param_schema("com.nvidia.holoscan.radar.app.mimo.AppParams", 2),
     holoscan::field<&AppParams::aoa_algorithm>("aoa_algorithm"),
     holoscan::field<&AppParams::waveform>("waveform"), holoscan::field<&AppParams::cube>("cube"),
     holoscan::field<&AppParams::run>("run"),
@@ -170,6 +171,7 @@ HOLOSCAN_PARAM_SCHEMA(
     holoscan::field<&AppParams::noise_snr_db>("noise_snr_db"),
     holoscan::field<&AppParams::tdm>("tdm"), holoscan::field<&AppParams::profiles>("profiles"),
     holoscan::field<&AppParams::profile_sequence>("profile_sequence"),
+    holoscan::field<&AppParams::max_source_working_bytes>("max_source_working_bytes"),
     holoscan::field<&AppParams::max_frames_in_flight>("max_frames_in_flight"),
     holoscan::field<&AppParams::rx_poll_period>("rx_poll_period"),
     holoscan::field<&AppParams::simulated_receive_polls>("simulated_receive_polls"));

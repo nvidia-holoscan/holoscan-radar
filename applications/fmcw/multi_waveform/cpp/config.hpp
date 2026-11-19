@@ -122,6 +122,10 @@ inline Config load_config(const std::filesystem::path& path) {
       checked_element_count<sim::Vec3>({document.get<int64_t>("/app/rx_array/az_elements"),
                                         document.get<int64_t>("/app/rx_array/el_elements")},
                                        "multi_waveform RX");
+  const int64_t max_source_working_bytes =
+      document.find("/app/max_source_working_bytes")
+          ? document.get<int64_t>("/app/max_source_working_bytes")
+          : mimo::AppParams{}.max_source_working_bytes;
   std::unordered_map<std::string, std::size_t> by_name;
   std::vector<TdmTransmitProfile> decoded_profiles;
   std::vector<std::size_t> decoded_sequence;
@@ -152,6 +156,8 @@ inline Config load_config(const std::filesystem::path& path) {
                                                       "multi_waveform weights");
     (void)checked_element_count<std::complex<double>>({num_rx, slow_time, samples},
                                                       "multi_waveform accumulator");
+    mimo::validate_source_working_bytes(num_tx, num_rx, slow_time, samples, true,
+                                        max_source_working_bytes);
     if (physical_pri < duration) {
       throw std::runtime_error("profile physical PRI must be >= chirp duration");
     }

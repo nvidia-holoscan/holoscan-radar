@@ -52,6 +52,26 @@ TEST(FmcwMimoConfig, RejectsOverflowingSourceProductsBeforeBuildingGeometry) {
   }
 }
 
+TEST(FmcwMimoConfig, RejectsOversizedSourceBeforeBuildingGeometry) {
+  EXPECT_EQ(mimo::AppParams{}.max_source_working_bytes, 536870912);
+  for (bool tdm : {false, true}) {
+    mimo::AppParams params;
+    params.tx_array.num_tx = 2;
+    params.tx_array.spacing = 0.5;
+    params.rx_array.az_elements = 16;
+    params.rx_array.el_elements = 16;
+    params.rx_array.spacing = 0.5;
+    params.cube.num_chirps = 1000000;
+    params.cube.samples_per_chirp = 256;
+    try {
+      (void)mimo::make_runtime_config(params, "oversized source", tdm);
+      FAIL() << "Oversized source was accepted";
+    } catch (const std::runtime_error& error) {
+      EXPECT_NE(std::string(error.what()).find("app.max_source_working_bytes"), std::string::npos);
+    }
+  }
+}
+
 TEST(FmcwMimoConfig, RejectsOverflowingSnapshotExtents) {
   constexpr int64_t huge = std::numeric_limits<int64_t>::max();
   EXPECT_THROW(mimo::snapshot_count({huge}), std::invalid_argument);
@@ -508,6 +528,36 @@ TEST(FmcwMimoConfig, GeneratedDdmLimitIsConfigurableAndInclusive) {
     const PresetOverride preset(path,
                                 "ddm:\n    max_generated_code_bytes: " + std::to_string(bytes));
     EXPECT_THROW(mimo::load_ddm_config(preset.path()), std::runtime_error);
+  }
+}
+
+TEST(FmcwMimoConfig, SourceAllowanceIsConfigurableForTdmAndDdm) {
+  for (bool tdm : {false, true}) {
+    const auto path = config_path(tdm ? "mimo_tdm/config/mimo_tdm_smoke.yaml"
+                                      : "mimo_ddm/config/mimo_ddm_linear_smoke.yaml");
+    for (int64_t bytes : {-1, 0, 1}) {
+      const PresetOverride preset(path,
+                                  "app:\n    max_source_working_bytes: " + std::to_string(bytes));
+      if (tdm) {
+        EXPECT_THROW(mimo::load_tdm_config(preset.path()), std::runtime_error);
+      } else {
+        EXPECT_THROW(mimo::load_ddm_config(preset.path()), std::runtime_error);
+      }
+    }
+    const PresetOverride preset(path, "app:\n    max_source_working_bytes: 1073741824");
+    if (tdm) {
+      const auto baseline = mimo::load_tdm_config(path);
+      const auto config = mimo::load_tdm_config(preset.path());
+      EXPECT_EQ(config.tx_positions, baseline.tx_positions);
+      EXPECT_EQ(config.rx_positions, baseline.rx_positions);
+      EXPECT_EQ(config.scene.num_chirps, baseline.scene.num_chirps);
+    } else {
+      const auto baseline = mimo::load_ddm_config(path);
+      const auto config = mimo::load_ddm_config(preset.path());
+      EXPECT_EQ(config.ddm_code.doppler_offsets, baseline.ddm_code.doppler_offsets);
+      EXPECT_EQ(config.ddm_code.num_tx, baseline.ddm_code.num_tx);
+      EXPECT_EQ(config.scene.num_chirps, baseline.scene.num_chirps);
+    }
   }
 }
 
