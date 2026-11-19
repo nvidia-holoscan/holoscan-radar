@@ -322,6 +322,17 @@ recipes, and output formats.
 
 ---
 
+## Blossom CI for pull requests
+
+Blossom accepts `/build` comments only from its maintainer allowlist. Its
+credential-bearing vulnerability scan and dependent CI trigger run only when
+the authorized PR source repository matches this repository. Fork PRs are
+skipped; a maintainer must review the changes and copy the reviewed commit to
+a branch here before requesting a Blossom build. Ordinary PR lint workflows
+keep their own triggers. The scanner token permits content reads and
+commit-status writes. The pinned action runs a bundled scanner binary; this
+restriction avoids giving its build-enabled scanner outside-repository code.
+
 ## From the host: full test suite
 
 From the host, `./holoscan-radar test` builds the project image if needed,

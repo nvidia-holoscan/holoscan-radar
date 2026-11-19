@@ -1728,6 +1728,20 @@ still declare SDK 4.3.0.
 
 ## In flight / claims
 
+- **2026-11-19 — AIVO Blossom checkout trust** (`deustice/aivo-fixes`, Codex):
+  repository-owned source requirement approved. The credential-bearing scan now
+  requires the authorized PR source repository to match `github.repository`;
+  fork scans and their dependent CI trigger are skipped. Its token explicitly
+  permits only content reads and commit-status writes. Static inspection of the
+  pinned public action shows a binary-only implementation running a source-mounted
+  scanner container with a build option and scanner API token. This establishes
+  potential exposure of scanner credentials; it does not demonstrate forwarding
+  of the GitHub token or Blossom key into the scanner container. All three
+  security-policy checks pass locally and through CTest in the SDK container;
+  the build and pinned lint pass. A live Blossom run with production credentials
+  has not been triggered. X11, per-user locks and this fix are local;
+  automatic approval review requires explicit destination authorization to push.
+
 - **2026-11-19 — AIVO performance device locks** (`deustice/aivo-fixes`, Codex):
   per-user coordination approved; locks retain cross-directory/process exclusion
   for that user, without claiming cross-user GPU scheduling. Use an owned 0700
