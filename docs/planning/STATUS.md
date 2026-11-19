@@ -4,6 +4,13 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **SAR footer layout and batch history**:
+  unify footer typography and workload/latency readouts, show shared received
+  and formed progress, and connect matched receipt/completion marks with bounded
+  diagonals. Show autofocus outcomes and keep startup distinct from formed
+  imagery. Native-text GPU layout and real-window startup regressions accompany
+  the rendering change; scientific image caching and products are preserved.
+
 - **2026-11-19** — **SAR diagnostic accounting and workflow status**:
   record bounded source-batch receipt/completion pairs, exact playback budgets,
   and collection wall time without changing tensor contracts. Wire autofocus

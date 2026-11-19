@@ -25,8 +25,8 @@
 
 namespace holoscan::radar::app::sar {
 
-// 20 s scrolling wall-clock Gantt: per-collect dwell bars, duty-cycle quiet,
-// image-emit ticks with last-packet→image latency labels, and a 1 Hz lag HUD.
+// 20 s scrolling wall-clock input/output history: source-batch receipt and
+// observed GPU completion, pulse progress/ETA, and a 1 Hz elapsed/lag HUD.
 // Polls FormationHud (live mailbox), not Graph handles.
 class TimelineRasterOp : public Operator<> {
  public:
@@ -46,24 +46,15 @@ class TimelineRasterOp : public Operator<> {
   static constexpr double kWindowS = 20.0;
 
  private:
-  struct ImageMark {
-    std::chrono::steady_clock::time_point at{};
-    int file_index{-1};
-    std::optional<double> latency_s;
-  };
   std::shared_ptr<radar::FormationHud> hud_;
   std::vector<std::string> scene_names_;
   bool show_playback_lag_{false};
   std::shared_ptr<FrameProgress> progress_;
   std::shared_ptr<radar::sar_progress::Monitor> pulse_progress_;
   radar::sar_progress::View pulse_view_;
-  std::chrono::steady_clock::time_point started_at_{};
-  std::string startup_line_;
   std::chrono::nanoseconds period_;
   int64_t width_, height_;
   void* commands_{nullptr};
-  std::vector<ImageMark> image_emits_;
-  std::optional<std::chrono::steady_clock::time_point> last_seen_emit_;
   std::chrono::steady_clock::time_point hud_at_{};
   bool hud_held_{false};
   std::string lag_hud_;

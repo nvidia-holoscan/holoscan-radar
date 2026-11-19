@@ -195,9 +195,32 @@ TEST(SarFooterStatus, ComposesMatchedStatusBelowTheUnobscuredImage) {
   layout.footer_height = fh;
   layout.canvas_width = width;
   layout.image_height = ih;
+  sar::FormationDiag diagnostic;
+  diagnostic.collection_elapsed_s = 94.7;
+  diagnostic.bp_compute_s = 8.2;
+  diagnostic.budget_s = 2.4;
+  diagnostic.budget_playback_rate = 0.2;
+  diagnostic.pulses = 1000;
+  diagnostic.pixels = 315700000;
   sar::write_footer_hud_rows(records.data(),
-                             {std::string(64, 'W') + "  64 x 640", "BP 12 Hz", "Latency 0.1 s"},
-                             sar::FormationDiag{}, false, layout);
+                             {std::string(64, 'W') + "  64 x 640", "8.2s  38.5 Gpx*pulse/s",
+                              sar::format_form_latency(0.8)},
+                             diagnostic, false, layout);
+  holoscan::visualization::TextRunHeader primary{}, secondary{};
+  std::memcpy(&primary, records.data(), sizeof(primary));
+  std::memcpy(&secondary, records.data() + 3 * sar::kHudRowBytes, sizeof(secondary));
+  EXPECT_GT(primary.size_px, secondary.size_px);
+  auto row_text = [&](std::size_t row) {
+    return reinterpret_cast<const char*>(records.data() + row * sar::kHudRowBytes +
+                                         sar::kTextRunHeaderBytes);
+  };
+  EXPECT_STREQ(row_text(1), "64 x 640 pixels");
+  EXPECT_STREQ(row_text(2), "Latency: 8.2s / 12.0s @0.2x");
+  // Both metrics use actual BP work, not acquisition wall time, final-batch
+  // latency, display dimensions, or a differently rounded report sample.
+  EXPECT_STREQ(row_text(3), "Throughput: 38.5 Gpx*pulses/sec");
+  EXPECT_STREQ(row_text(4), "");
+  EXPECT_STREQ(row_text(5), "");
   const auto text = radar::testing::to_pageable_host_tensor(
       records, {sar::kHudRuns, sar::kHudRowBytes}, rgba_type);
   auto harness = holoscan::testing::create_operator_test<viz::FrameComposerOp>(
