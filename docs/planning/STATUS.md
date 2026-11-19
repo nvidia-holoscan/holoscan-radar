@@ -4,6 +4,23 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **SAR GUI synchronization experiment** on
+  `deustice/sar-gui`: retain the packet-cleanup fix, retiring completed retained
+  storage before replay publication while preserving output ownership and stamps.
+  Reject and restore the separately tested locality-readback move: exact products
+  and processing time were preserved, but fresh X11 footer gaps were still
+  21.0s versus 22.1s original. Headless rendering also still stalls, so neither
+  SSH transport nor that diagnostic alone explains the remaining GPU-service
+  delays. No kernels, public contracts or user presets changed. The two-change
+  build passed 117 selected SAR checks and 63 Python checks. The retained-state
+  rebuild passes 16 targeted checks; its real image is bit-exact, with 30.59s
+  runtime versus 30.44s fresh original. Two-candidate experiment and evidence:
+  `build-optimization/operator-perf/autofocus/gui-sync/`. Restored SSH/X11
+  `localhost:10.0` completes a real run with observed frame delivery and a
+  bit-exact image; long footer pauses remain. Native interactive presentation
+  remains unverified.
+
+
 - **2026-11-19** — **Application build scope** on `deustice/sar-gui`: implemented.
   All 26 language manifests select narrow defaults and an application-only default
   build target. Three configure-only regressions pass. SDK graph checks show

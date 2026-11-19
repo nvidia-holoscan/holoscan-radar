@@ -377,6 +377,16 @@ expected<void, Error> ApertureManagerOp<T, TGeom>::compute(ExecutionContext& con
       return make_unexpected(Error{ErrorCode::kFailure, "ApertureManagerOp: stream sync failed"});
     output_batch.emplace(std::move(batch));
   }
+  const int64_t closing_pulses = end_aperture ? buffer_.occupancy() : 0;
+  if (end_aperture) {
+    // Concatenation above has completed on this stream. The replay owns its
+    // storage independently, so retire every packet reference before publishing
+    // outputs that can start downstream BP. Ordinary cudaFree at callback exit
+    // would otherwise wait behind that long-running work and stall GUI CUDA calls.
+    output_groups.clear();
+    departing.clear();
+    buffer_.clear();
+  }
   if (progress_)
     progress_->admit(context.activation_time().timestamp_ns, np,
                      emit_now && output_control != FormationControl::kResetWithoutEmit,
@@ -439,8 +449,7 @@ expected<void, Error> ApertureManagerOp<T, TGeom>::compute(ExecutionContext& con
           "(use emit_mode reform for an exact taper on a short aperture)",
           kWho, slot_, stamp_window_.size());
     }
-    dropped_ += buffer_.occupancy();
-    buffer_.clear();
+    dropped_ += closing_pulses;
     slot_ = admitted_since_emit_ = 0;
     pending_geometry_.reset();
     pending_points_.reset();
