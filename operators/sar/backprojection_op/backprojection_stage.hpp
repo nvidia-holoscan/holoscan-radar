@@ -17,6 +17,7 @@
 #include "radar_common/descriptors/enums.hpp"
 #include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/math/constants.hpp"
+#include "sar/backprojection_op/backprojection_convert.cuh"
 #include "sar/backprojection_op/nvradar_kernels.cuh"
 #include "sar/backprojection_op/nvradar_kernels_fp32.cuh"
 #include "sar/backprojection_op/nvradar_kernels_lut.cuh"
@@ -483,30 +484,6 @@ __global__ void scale_interleaved_kernel(const T* src, const T* weight, T* dst, 
   dst[idx * 2 + 1] = src[idx * 2 + 1] * w;
 }
 
-__global__ void upcast_vph_kernel(const float* src, double* dst, int n) {
-  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-  if (i >= n) {
-    return;
-  }
-  dst[i] = static_cast<double>(src[i]);
-}
-
-__global__ void downcast_vph_kernel(const double* src, float* dst, int n) {
-  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-  if (i >= n) {
-    return;
-  }
-  dst[i] = static_cast<float>(src[i]);
-}
-
-__global__ void downcast_real_kernel(const double* src, float* dst, int n) {
-  const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-  if (i >= n) {
-    return;
-  }
-  dst[i] = static_cast<float>(src[i]);
-}
-
 __global__ void zero_float_kernel(float* dst, int64_t n) {
   const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (i >= n) {
@@ -745,19 +722,20 @@ void prepare_float_scene(BackprojectionState<T, TGeom>& state, int64_t num_pixel
                          cudaStream_t stream) {
   const int64_t full = state.lattice_num_v * state.lattice_num_u;
   const int64_t off = state.launch_row0 * state.lattice_num_u;
-  auto downcast = [&](DeviceBuffer& src, DeviceBuffer& dst, int n, size_t bytes, int64_t poff) {
+  auto downcast = [&](DeviceBuffer& src, DeviceBuffer& dst, int64_t n, size_t bytes, int64_t poff) {
     dst.ensure(bytes, stream);
-    const int threads = 256;
-    const int blocks = (n + threads - 1) / threads;
-    downcast_real_kernel<<<blocks, threads, 0, stream>>>(src.template as<double>() + poff,
-                                                         dst.template as<float>() + poff, n);
+    convert_backprojection(src.template as<double>() + poff, dst.template as<float>() + poff, n,
+                           stream);
   };
   const size_t plane_bytes = static_cast<size_t>(full) * sizeof(float);
-  downcast(state.x_plane, state.x_plane_f, static_cast<int>(num_pixels), plane_bytes, off);
-  downcast(state.y_plane, state.y_plane_f, static_cast<int>(num_pixels), plane_bytes, off);
-  downcast(state.z_plane, state.z_plane_f, static_cast<int>(num_pixels), plane_bytes, off);
-  downcast(state.apc, state.apc_f, Np * 3, static_cast<size_t>(Np * 3) * sizeof(float), 0);
-  downcast(state.mcp, state.mcp_f, Np * 3, static_cast<size_t>(Np * 3) * sizeof(float), 0);
+  downcast(state.x_plane, state.x_plane_f, num_pixels, plane_bytes, off);
+  downcast(state.y_plane, state.y_plane_f, num_pixels, plane_bytes, off);
+  downcast(state.z_plane, state.z_plane_f, num_pixels, plane_bytes, off);
+  const auto coordinates = checked_element_count<float>({Np, 3}, "BackprojectionOp positions");
+  downcast(state.apc, state.apc_f, coordinates, static_cast<size_t>(coordinates) * sizeof(float),
+           0);
+  downcast(state.mcp, state.mcp_f, coordinates, static_cast<size_t>(coordinates) * sizeof(float),
+           0);
   downcast(state.r0, state.r0_f, Np, static_cast<size_t>(Np) * sizeof(float), 0);
 }
 
@@ -798,7 +776,7 @@ void launch_nvradar(BackprojectionBackend backend, BackprojectionState<T, TGeom>
   LaunchRowGuard guard(state, row0);
   const int img_width = num_u;
   const int img_height = num_v;
-  const int pixels = num_v * num_u;
+  const int64_t pixels = static_cast<int64_t>(num_v) * num_u;
   float* simg =
       state.accum.template as<float>() +
       (static_cast<size_t>(batch_index) * static_cast<size_t>(full_v) + static_cast<size_t>(row0)) *
@@ -810,9 +788,10 @@ void launch_nvradar(BackprojectionBackend backend, BackprojectionState<T, TGeom>
   // Kernels += into simg. Planar APC/R0 keep the tick stride; packed
   // vph is a pointer offset. Np <= kKernelPulseTile is one launch.
   auto tiles = [&](auto&& launch) {
-    for (int p0 = 0; p0 < Np; p0 += kKernelPulseTile) {
+    for (int p0 = 0; p0 < Np;) {
       const int n = std::min(kKernelPulseTile, Np - p0);
       launch(p0, n);
+      p0 += n;
     }
   };
 
@@ -821,12 +800,10 @@ void launch_nvradar(BackprojectionBackend backend, BackprojectionState<T, TGeom>
     if constexpr (std::is_same_v<T, double>) {
       vph = static_cast<const double*>(profiles);
     } else {
-      const int n = Np * Nfft * 2;
+      const int64_t n = profile_scalar_count<double>(Np, Nfft);
       state.vph_cast.ensure(static_cast<size_t>(n) * sizeof(double), stream);
-      const int threads = 256;
-      const int blocks = (n + threads - 1) / threads;
-      upcast_vph_kernel<<<blocks, threads, 0, stream>>>(static_cast<const float*>(profiles),
-                                                        state.vph_cast.template as<double>(), n);
+      convert_backprojection(static_cast<const float*>(profiles),
+                             state.vph_cast.template as<double>(), n, stream);
       vph = state.vph_cast.template as<double>();
     }
     tiles([&](int p0, int n) {
@@ -842,12 +819,10 @@ void launch_nvradar(BackprojectionBackend backend, BackprojectionState<T, TGeom>
     if constexpr (std::is_same_v<T, float>) {
       return static_cast<const float*>(profiles);
     }
-    const int n = Np * Nfft * 2;
+    const int64_t n = profile_scalar_count<float>(Np, Nfft);
     state.vph_cast.ensure(static_cast<size_t>(n) * sizeof(float), stream);
-    const int threads = 256;
-    const int blocks = (n + threads - 1) / threads;
-    downcast_vph_kernel<<<blocks, threads, 0, stream>>>(static_cast<const double*>(profiles),
-                                                        state.vph_cast.template as<float>(), n);
+    convert_backprojection(static_cast<const double*>(profiles),
+                           state.vph_cast.template as<float>(), n, stream);
     return state.vph_cast.template as<float>();
   };
 
@@ -907,12 +882,10 @@ void launch_nvradar(BackprojectionBackend backend, BackprojectionState<T, TGeom>
     if constexpr (std::is_same_v<T, float>) {
       vph = static_cast<const float*>(profiles);
     } else {
-      const int n = Np * Nfft * 2;
+      const int64_t n = profile_scalar_count<float>(Np, Nfft);
       state.vph_cast.ensure(static_cast<size_t>(n) * sizeof(float), stream);
-      const int threads = 256;
-      const int blocks = (n + threads - 1) / threads;
-      downcast_vph_kernel<<<blocks, threads, 0, stream>>>(static_cast<const double*>(profiles),
-                                                          state.vph_cast.template as<float>(), n);
+      convert_backprojection(static_cast<const double*>(profiles),
+                             state.vph_cast.template as<float>(), n, stream);
       vph = state.vph_cast.template as<float>();
     }
     const double dr_inv_d = 1.0 / dr;

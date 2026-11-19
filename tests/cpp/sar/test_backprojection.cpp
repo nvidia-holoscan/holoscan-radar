@@ -101,7 +101,8 @@ TEST(BackprojectionOp, PointTargetFormsAtSceneCentreAndResets) {
 // coordinates do not survive float32 -- and nothing here constructed it, so
 // the split-precision path was exercised only by the app smoke tests.
 template <typename T, typename TGeom>
-std::vector<double> form_point_target() {
+std::vector<double> form_point_target(holoscan::radar::BackprojectionBackend backend =
+                                          holoscan::radar::kDefaultBackprojectionBackend) {
   MaxTensorExtents extents;
   extents.max_pulses = 1;
   extents.max_range_bins = 64;
@@ -109,6 +110,7 @@ std::vector<double> form_point_target() {
   extents.max_image_u = 5;
   auto fixture = holoscan::testing::create_operator_test<BackprojectionOp<T, TGeom>>(extents);
   BackprojectionParams params;
+  params.backend = backend;
   params.coordinate_frame =
       CoordinateFrame(CoordinateFrameSpec{.frame = CoordinateFrameType::kSceneLocal});
   params.sample_geometry = SampleGeometry(SampleGeometrySpec{.origin = {-2.0, -2.0, 0.0},
@@ -178,6 +180,24 @@ TEST(BackprojectionOp, MixedGeometryPrecisionMatchesUniform) {
   EXPECT_NEAR(mixed[12], 1.0, 1e-3) << "the mixed pair did not form the point target";
   for (size_t i = 0; i < 25U; ++i) {
     EXPECT_NEAR(mixed[i], uniform[i], 1e-3) << "pixel " << i;
+  }
+}
+
+TEST(BackprojectionOp, PrecisionConversionBackendsPreservePointTarget) {
+  using Backend = holoscan::radar::BackprojectionBackend;
+  for (const auto backend : {Backend::kNvradarFp64Reference, Backend::kNvradarCudaFp32,
+                             Backend::kNvradarBlockAnchoredRefinedThroughput}) {
+    const auto single = form_point_target<float, double>(backend);
+    const auto dual = form_point_target<double, double>(backend);
+    ASSERT_EQ(single.size(), 25U);
+    ASSERT_EQ(dual.size(), 25U);
+    EXPECT_NEAR(single[12], 1.0, 1e-3);
+    EXPECT_NEAR(dual[12], 1.0, 1e-3);
+    for (std::size_t i = 0; i < single.size(); ++i) {
+      EXPECT_LE(single[i], single[12] + 1e-3);
+      EXPECT_LE(dual[i], dual[12] + 1e-3);
+      EXPECT_NEAR(single[i], dual[i], 1e-3) << "pixel " << i;
+    }
   }
 }
 

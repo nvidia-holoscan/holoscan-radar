@@ -1428,8 +1428,16 @@ still declare SDK 4.3.0.
   six float/double overflow, malformed-placement, phase-preserving crop and
   power-decimation tests pass, and both strip applications rebuild. No resource
   cap or valid-input contract change. Backprojection conversion sizing/indexing
-  follows in its own commit. AIVO confirms both new CPHD PVP-extent and
-  signal-product reports remediated at `2cd95dce`; the cache fix is also confirmed.
+  now uses checked 64-bit counts and grid-stride kernels, including coordinate
+  conversion. All eight focused backprojection checks pass: large counts,
+  overflow rejection, float/double grid-stride tails/guards, three precision
+  conversion backend oracles, scroll and sample-lattice regressions. Full build
+  and lint pass; all 1,432 other native/fixture CTests pass. The provider run
+  had a calibration-log deadline failure and video-SAR timeout under parallel
+  GPU load; the complete 293-check provider suite passes in isolation. All six
+  SAR application fixture smokes pass. AIVO confirms both new CPHD
+  PVP-extent and signal-product reports remediated at `2cd95dce`; the cache fix
+  is also confirmed. Ref-pinned checks leave portal status unchanged.
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
