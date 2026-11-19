@@ -19,13 +19,13 @@
 #include <holoscan/core/compile.hpp>
 #include <holoscan/core/graph.hpp>
 #include <holoscan/core/run.hpp>
-#include <holoscan/core/managed_shutdown_signals.hpp>
 #include <holoscan/logger/logger.hpp>
 #include <holoscan/time/realtime_clock.hpp>
 
 #include "radar_app/app/config_path.hpp"
 #include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/app/logging.hpp"
+#include "radar_app/app/shutdown_signals.hpp"
 #include "radar_app/report/cadence_meter.hpp"
 #include "radar_app/report/report_ops.hpp"
 #include "radar_app/viz/display_probe.hpp"
@@ -37,12 +37,17 @@ inline constexpr auto kAppPoll = std::chrono::milliseconds{50};
 
 // Wait until AppFrameBank captures `total_frames`, a diagnostic appears, or
 // progress stalls for kAppStall (resets on each completed sink frame).
-inline void wait_for_app_frames(holoscan::RunSession& session, int total_frames) {
+inline void wait_for_app_frames(holoscan::RunSession& session, int total_frames,
+                                const std::function<void()>& poll = {}) {
   auto last_progress = std::chrono::steady_clock::now();
   int seen = 0;
   std::unique_lock lock(AppFrameBank::mutex);
   while (AppFrameBank::captured < total_frames && session.diagnostics().empty() &&
          session.termination() == holoscan::RunTermination::kRunning) {
+    lock.unlock();
+    if (poll)
+      poll();
+    lock.lock();
     AppFrameBank::ready.wait_for(lock, kAppPoll);
     const auto now = std::chrono::steady_clock::now();
     if (AppFrameBank::captured != seen) {
@@ -62,10 +67,7 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
                        BuildFn&& build) {
   configure_fmcw_logging();
   try {
-    auto created_signals = holoscan::ManagedShutdownSignals::create();
-    if (!created_signals)
-      throw std::runtime_error("Radar: cannot establish managed shutdown signals");
-    auto managed_signals = std::move(created_signals).value();
+    ShutdownSignals signals;
     const auto launch = parse_fmcw_launch_options(argc, argv, default_yaml);
     Config cfg = load_config(launch.config_path);
 #if HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ
@@ -88,8 +90,13 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
                                " compile failed: " + std::string(plan.json()));
     }
 
-    holoscan::RunSession session = holoscan::run_async(plan, managed_signals);
-    wait_for_app_frames(session, static_cast<int>(cfg.num_frames));
+    holoscan::RunSession session = holoscan::run_async(plan);
+    const auto poll = [&] {
+      if (signals.requested())
+        session.request_stop();
+    };
+    poll();
+    wait_for_app_frames(session, static_cast<int>(cfg.num_frames), poll);
     if (cfg.visualize) {
       // Display is best effort, but do not stop the graph before the final
       // source frame has had a bounded opportunity to complete composition.
@@ -100,6 +107,7 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
               progress->capture_ns.load() < progress->expected_ns.load()) &&
              std::chrono::steady_clock::now() < deadline &&
              session.termination() == holoscan::RunTermination::kRunning) {
+        poll();
         if (session.wait_for(kAppPoll) || !session.diagnostics().empty())
           break;
       }
@@ -110,6 +118,7 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
           std::chrono::duration<double>(std::max(0.0, cfg.visualization.final_image_hold_s));
       while (session.termination() == holoscan::RunTermination::kRunning &&
              (cfg.visualization.final_image_hold_s < 0 || std::chrono::steady_clock::now() < end)) {
+        poll();
         if (session.wait_for(kAppPoll) || !session.diagnostics().empty())
           break;
       }
@@ -131,7 +140,6 @@ int run_fmcw_graph_app(int argc, char** argv, const char* log_prefix, const char
                                std::to_string(AppFrameBank::captured) + " / " +
                                std::to_string(cfg.num_frames) + " frames");
     }
-    (void)managed_signals.close();
     if (cadence) {
       cadence->log_summary();
     }

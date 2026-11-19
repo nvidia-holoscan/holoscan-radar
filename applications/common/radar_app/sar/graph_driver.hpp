@@ -29,7 +29,6 @@
 #include <holoscan/core/errors.hpp>
 #include <holoscan/core/execution_plan.hpp>
 #include <holoscan/core/graph.hpp>
-#include <holoscan/core/managed_shutdown_signals.hpp>
 #include <holoscan/core/run.hpp>
 #include <holoscan/logger/logger.hpp>
 #include <holoscan/threading/thread_placement.hpp>
@@ -43,6 +42,7 @@
 #include "radar_app/app/config_utils.hpp"
 #include "radar_app/app/config_loader.hpp"
 #include "radar_app/app/gpu_placement.hpp"
+#include "radar_app/app/shutdown_signals.hpp"
 #ifdef HOLOSCAN_RADAR_HAS_X11
 #include "radar_app/viz/x11_display.hpp"
 #endif
@@ -530,8 +530,8 @@ struct SarGraphRuntime {
     finished = true;
   }
 
-  int64_t run(holoscan::ManagedShutdownSignals* managed_signals = nullptr,
-              const std::function<void()>& poll = {}) {
+  int64_t run(app::ShutdownSignals* signals = nullptr,
+              const std::function<void()>& caller_poll = {}) {
     if (!finished || started)
       throw std::logic_error("SAR graph must be finalized and run once");
     started = true;
@@ -576,8 +576,13 @@ struct SarGraphRuntime {
       HOLOSCAN_LOG_INFO("SAR: images will not be saved; set dump: true in {} to save .npy images",
                         config_hint_path(cli.config, name.c_str()));
     }
-    auto session = managed_signals == nullptr ? holoscan::run_async(plan)
-                                              : holoscan::run_async(plan, *managed_signals);
+    auto session = holoscan::run_async(plan);
+    const std::function<void()> poll = [&] {
+      if (signals && signals->requested())
+        session.request_stop();
+      if (caller_poll)
+        caller_poll();
+    };
     try {
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
       if (has_visualization && !cfg.headless &&
@@ -712,15 +717,7 @@ template <typename T = float, typename TGeom = double, typename LoadConfig, type
 int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig load_config,
                          BuildGraph build_graph) {
   try {
-    // Own SIGINT/SIGTERM before Holoviz or the runtime start threads. Host
-    // `holoscan run` maps Ctrl-C to `docker stop` (SIGTERM); without this
-    // domain the looping presets ignore both signals until the CLI SIGKILLs.
-    auto created_signals = holoscan::ManagedShutdownSignals::create();
-    if (!created_signals) {
-      throw std::runtime_error(std::string("SAR: managed SIGINT/SIGTERM domain failed: ") +
-                               holoscan::runtime_error_message(created_signals.error()));
-    }
-    auto managed_signals = std::move(created_signals).value();
+    app::ShutdownSignals signals;
     const CliPaths cli = parse_cli(argc, argv, (std::string(name) + ".yaml").c_str());
     auto config = load_config(cli.config, cli.cphd_override);
     config.presenter = cli.presenter;
@@ -732,11 +729,7 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
         build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg, r.reader, r.range,
                     r.manager, r.bp, r.source, r.application, r.formation, r.extents);
     r.finish(formed);
-    r.run(&managed_signals);
-    if (const auto closed = managed_signals.close(); !closed) {
-      throw std::runtime_error(std::string("SAR: managed SIGINT/SIGTERM domain close failed: ") +
-                               holoscan::runtime_error_message(closed.error()));
-    }
+    r.run(&signals);
     return 0;
   } catch (const std::exception& error) {
     HOLOSCAN_LOG_ERROR("{}: {}", name, error.what());

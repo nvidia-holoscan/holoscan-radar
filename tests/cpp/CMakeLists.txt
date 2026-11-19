@@ -328,6 +328,7 @@ target_include_directories(test_fmcw_simo_report PRIVATE
 
 radar_add_test(app/test_report_shapes holoscan::radar_app)
 radar_add_test(app/test_sar_diagnostics holoscan::radar_app)
+radar_add_test(app/test_shutdown_signals holoscan::radar_app)
 
 radar_add_test(app/test_sar_config_paths holoscan::radar_app holoscan::params_io)
 target_include_directories(test_sar_config_paths PRIVATE ${PROJECT_SOURCE_DIR}/operators)
@@ -398,6 +399,17 @@ function(radar_add_fmcw_workflow_checks application preset smoke_name)
     set(window_config "${config_dir}/${preset}.yaml")
     if(EXISTS "${config_dir}/${preset}_viz_smoke.yaml")
         set(window_config "${config_dir}/${preset}_viz_smoke.yaml")
+    endif()
+    if(preset STREQUAL "siso")
+        foreach(stop_signal IN ITEMS SIGINT SIGTERM)
+            add_test(NAME FmcwSignal_${stop_signal}_cpp
+                COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/check_fmcw_x11.py $<TARGET_FILE:${application}>
+                    "${window_config}" --smoke --signal ${stop_signal})
+            set_tests_properties(FmcwSignal_${stop_signal}_cpp PROPERTIES
+                LABELS "application;smoke;integration;visualization"
+                RESOURCE_LOCK fmcw_gui TIMEOUT 60)
+        endforeach()
     endif()
     foreach(language IN ITEMS cpp python)
         if(language STREQUAL "python" AND NOT HOLOSCAN_RADAR_BUILD_PYTHON)
@@ -682,6 +694,19 @@ foreach(application IN ITEMS spotlight video_sar tiled_strip continuous_strip in
         endforeach()
     endforeach()
 endforeach()
+
+if(TARGET spotlight AND HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ AND HOLOSCAN_RADAR_HAS_X11)
+    foreach(stop_signal IN ITEMS SIGINT SIGTERM)
+        add_test(NAME SarSignal_${stop_signal}_cpp
+            COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
+                ${PROJECT_SOURCE_DIR}/tests/gui/check_sar_windows.py $<TARGET_FILE:spotlight>
+                ${PROJECT_BINARY_DIR}/applications/sar/spotlight/cpp/spotlight_generated_smoke.yaml
+                --application spotlight --presenter x11 --signal ${stop_signal})
+        set_tests_properties(SarSignal_${stop_signal}_cpp PROPERTIES
+            LABELS "application;smoke;integration;visualization"
+            RESOURCE_LOCK fmcw_gui TIMEOUT 60 FIXTURES_REQUIRED sar_cphd)
+    endforeach()
+endif()
 
 # Keep the explicit legacy layout covered alongside the new docked default.
 if(TARGET spotlight AND HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ AND HOLOSCAN_RADAR_HAS_X11)

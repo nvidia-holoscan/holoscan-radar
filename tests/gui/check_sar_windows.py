@@ -8,6 +8,7 @@ import ctypes as c
 import json
 import os
 import re
+import signal
 import statistics
 import subprocess
 import sys
@@ -372,8 +373,13 @@ def check(args):
                     event.key.root = root
                     event.key.same_screen = 1
                     event.key.keycode = lib.XKeysymToKeycode(display, 0xFF1B)
-                assert lib.XSendEvent(display, window, 0, 1 if args.escape else 0, c.byref(event))
-                lib.XFlush(display)
+                if args.signal:
+                    process.send_signal(getattr(signal, args.signal))
+                else:
+                    assert lib.XSendEvent(
+                        display, window, 0, 1 if args.escape else 0, c.byref(event)
+                    )
+                    lib.XFlush(display)
                 assert process.wait(timeout=10) == 0
                 log.seek(0)
                 output = log.read()
@@ -418,6 +424,7 @@ if __name__ == "__main__":
     parser.add_argument("--application", required=True)
     parser.add_argument("--python", action="store_true")
     parser.add_argument("--presenter", choices=("x11", "native"), default="x11")
+    parser.add_argument("--signal", choices=("SIGINT", "SIGTERM"))
     parser.add_argument("--close", choices=("formation", "timeline"), default="formation")
     parser.add_argument("--resize-mode", choices=("stretch", "fit"), default="stretch")
     parser.add_argument("--latency-ms", type=float, default=0.0)

@@ -211,3 +211,14 @@ Omit `xvfb-run` to use a real forwarded display. These pixel-readback probes
 require a responsive X11 server; a timeout does not establish visual success.
 Native-window and real-collection visual qualification remain separate from
 GPU composition, isolated X11, and synthetic-fixture checks.
+
+## C++ signal ownership and profiling
+
+`FmcwSignal_SIGINT_cpp`, `FmcwSignal_SIGTERM_cpp`, and the corresponding
+`SarSignal_*` checks send process signals after real X11 pixels have appeared,
+then require a clean cooperative exit. Existing window/Escape tests remain
+separate. `ShutdownSignals.*` covers delivery on a thread that predates handler
+installation, unchanged signal masks, prior-disposition restoration, and
+exclusive ownership. The applications use caller-managed HSDK sessions so
+Nsight helper threads do not violate managed-signal admission. See
+[SDK_DEVELOPMENT.md](../../SDK_DEVELOPMENT.md) for a profiling invocation.

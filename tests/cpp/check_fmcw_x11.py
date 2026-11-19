@@ -9,6 +9,7 @@ import argparse
 import ctypes as c
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -238,6 +239,7 @@ def check(
     application: str,
     presenter: str,
     smoke: bool,
+    stop_signal: str | None = None,
 ):
     if tcp:
         os.environ["DISPLAY"] = "localhost:" + os.environ["DISPLAY"].lstrip(":")
@@ -299,8 +301,11 @@ def check(
                 event.client.message_type = lib.XInternAtom(display, b"WM_PROTOCOLS", 0)
                 event.client.format = 32
                 event.client.data.longs[0] = lib.XInternAtom(display, b"WM_DELETE_WINDOW", 0)
-                assert lib.XSendEvent(display, window, 0, 0, c.byref(event))
-                lib.XFlush(display)
+                if stop_signal:
+                    process.send_signal(getattr(signal, stop_signal))
+                else:
+                    assert lib.XSendEvent(display, window, 0, 0, c.byref(event))
+                    lib.XFlush(display)
                 result = process.wait(timeout=max(0.1, deadline - time.monotonic()))
                 assert result == 0, f"window close returned {result}"
                 log.seek(0)
@@ -341,6 +346,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--smoke", action="store_true", help="Check pixels and close without resize"
     )
+    parser.add_argument("--signal", choices=("SIGINT", "SIGTERM"))
     arguments = parser.parse_args()
     check(
         arguments.executable,
@@ -350,4 +356,5 @@ if __name__ == "__main__":
         arguments.application,
         arguments.presenter,
         arguments.smoke,
+        arguments.signal,
     )

@@ -4,6 +4,15 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **Profiler-compatible C++ shutdown** on `deustice/sar-gui`:
+  implemented. FMCW and SAR share caller-owned SIGINT/SIGTERM handlers; the
+  signal callback only stores a lock-free flag and control loops request
+  cooperative stop. Preserve close/Escape, EOF drain, final hold, and Python
+  signal ownership. All 57 selected checks and two Python interrupt checks pass.
+  Actual forwarded X11 SISO SIGINT and spotlight SIGTERM checks pass. Nsight
+  captures real CUDA/NVTX data for SISO, spotlight, autofocus, and the autofocus
+  X11 GUI. No operator contracts or user presets changed.
+
 - **2026-11-18** — **CPHD pull progress** on `deustice/pull-script`: implemented.
   AWS, HTTPS, and subset preparation share byte/rate/elapsed/ETA reporting,
   terminal updates, and periodic redirected logs. All 41 offline tests pass,

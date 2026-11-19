@@ -55,6 +55,14 @@ A separate remote desktop is unnecessary for that mode.
   driver/BuiltGraph and SAR's runtime preserve their own completion conditions,
   then allow up to ten seconds for the final completed frame before stopping.
   SAR explicitly waits for report and dump completion before GUI hold.
+- `app/shutdown_signals.hpp` owns the shared C++ SIGINT/SIGTERM dispositions.
+  A lock-free signal flag is polled by each driver's control loop, which calls
+  `request_stop()` on a caller-managed HSDK session. No HSDK/CUDA work runs in
+  the signal callback and no thread-mask adoption is required. This permits
+  profiler-created startup threads. Window-close/Escape stop requests stay in
+  the presenters; Python retains its own signal handlers. Cleanup waits for
+  in-flight GPU work. Actual CUDA/NVTX captures and X11 signal tests passed on
+  2026-11-19; native interactive presentation remains unverified on SSH X11.
 
 Canonical settings live under `app.visualization`. SAR's `visualize`, `headless`,
 `skip_display_check`, `visualize_size`, and `visualize_hold_s` remain aliases.
