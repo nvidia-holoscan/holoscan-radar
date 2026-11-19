@@ -681,3 +681,17 @@ until the resized GPU frame arrives. Native composition samples the footer in
 physical window coordinates using the same resize feedback. Neither route
 reruns formation, converts the scientific image, nor uploads its cached pixels
 because of a timeline update. No user config migration is required.
+
+### Sensor look annotation
+
+SAR images label the projected direction of the radar platform with **Sensor look
+angle**. A short cyan arrow points inward from the sensor-facing image edge;
+subtle schematic rays suggest viewing direction, not a measured beamwidth or an
+incidence-angle value. The native HoloViz text sits on a dark backing. Pixel-based
+layout keeps the cue compact on wide strips and clamps the label inside the image.
+Invalid directions and very small image canvases omit the annotation.
+
+The backing and colored lines touch only a small display-raster patch on the GPU
+when a new image is rendered. Text and patch remain cached with that image and
+share its capture stamp; timeline updates do not repaint them. Scientific image
+and dump tensors are unchanged.

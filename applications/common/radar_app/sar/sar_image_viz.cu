@@ -79,6 +79,42 @@ __global__ void render_gray(const float* magnitude, std::uint8_t* output, int64_
   output[4 * i + 2] = gray;
   output[4 * i + 3] = 255U;
 }
+// Only the small annotation rectangle is touched, once per formed image.
+// Coordinates use the presentation canvas, independently of raster resolution.
+__global__ void render_sensor_look(std::uint8_t* rgba, int64_t width, int64_t height,
+                                   int canvas_width, int image_height, SensorLookAnnotation look,
+                                   int x0, int y0, int patch_width, int patch_height) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= patch_width * patch_height)
+    return;
+  const int x = x0 + i % patch_width, y = y0 + i / patch_width;
+  if (x < 0 || x >= width || y < 0 || y >= height)
+    return;
+  const float fx = (x + 0.5F) * canvas_width / width;
+  const float fy = (y + 0.5F) * image_height / height;
+  auto* pixel = rgba + (y * width + x) * 4;
+  if (fx >= look.label_x && fx <= look.label_x + look.label_width && fy >= look.label_y &&
+      fy <= look.label_y + look.label_height) {
+    for (int c = 0; c < 3; ++c)
+      pixel[c] = static_cast<std::uint8_t>(pixel[c] * 0.18F);
+  }
+  float opacity = 0;
+  for (int j = 0; j < 7; ++j) {
+    const float* line = look.segments[j];
+    const float dx = line[2] - line[0], dy = line[3] - line[1];
+    const float norm = dx * dx + dy * dy;
+    const float t =
+        norm > 0 ? fminf(1, fmaxf(0, ((fx - line[0]) * dx + (fy - line[1]) * dy) / norm)) : 0;
+    const float ex = fx - line[0] - t * dx, ey = fy - line[1] - t * dy;
+    const float coverage = fminf(1, fmaxf(0, 1.4F - hypotf(ex, ey)));
+    opacity = fmaxf(opacity, coverage * (j < 2 ? 0.45F : 0.9F));
+  }
+  const float dot = hypotf(fx - look.origin_x, fy - look.origin_y);
+  opacity = fmaxf(opacity, fminf(1, fmaxf(0, 2.5F - dot)));
+  pixel[0] = static_cast<std::uint8_t>(pixel[0] * (1 - opacity) + 75 * opacity);
+  pixel[1] = static_cast<std::uint8_t>(pixel[1] * (1 - opacity) + 180 * opacity);
+  pixel[2] = static_cast<std::uint8_t>(pixel[2] * (1 - opacity) + 195 * opacity);
+}
 }  // namespace
 
 SarImageVizOp::SarImageVizOp(int64_t max_v, int64_t max_u, int64_t display_side,
@@ -248,6 +284,13 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
   high = valid ? std::max(high, 1.0e-20f) : 1.0f;
   const float floor_db =
       valid ? std::min(-0.001f, std::max(-30.0f, 20.0f * log10f(low / high))) : -30.0f;
+  FormationDiag diag{};
+  if (overlay_.diag_at_capture && options.capture_time)
+    diag = overlay_.diag_at_capture(options.capture_time->timestamp_ns);
+  else if (overlay_.diag)
+    diag = overlay_.diag();
+  const auto look =
+      sensor_look_annotation(diag, transpose_axes_, overlay_.canvas_width, overlay_.image_height);
   auto loan = frame.allocate_tensor(TensorLoanRequest{
       .shape = std::vector<int64_t>{height, width, 4}, .dtype = DLDataType{kDLUInt, 8U, 1U}});
   if (!loan)
@@ -259,14 +302,26 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
       sampled_magnitude_, static_cast<std::uint8_t*>(writer->data()), output_count, high, floor_db);
   if (cudaPeekAtLastError() != cudaSuccess)
     return make_unexpected(Error{ErrorCode::kFailure, "SarImageVizOp: render kernel failed"});
+  if (look) {
+    const int x0 =
+        std::max(0, static_cast<int>(std::floor(look->left * width / overlay_.canvas_width)));
+    const int y0 =
+        std::max(0, static_cast<int>(std::floor(look->top * height / overlay_.image_height)));
+    const int patch_width =
+        std::min<int64_t>(width, std::ceil(look->right * width / overlay_.canvas_width)) - x0;
+    const int patch_height =
+        std::min<int64_t>(height, std::ceil(look->bottom * height / overlay_.image_height)) - y0;
+    render_sensor_look<<<(patch_width * patch_height + kThreads - 1) / kThreads, kThreads, 0,
+                         stream>>>(static_cast<std::uint8_t*>(writer->data()), width, height,
+                                   overlay_.canvas_width, overlay_.image_height, *look, x0, y0,
+                                   patch_width, patch_height);
+    if (cudaPeekAtLastError() != cudaSuccess)
+      return make_unexpected(Error{ErrorCode::kFailure, "SarImageVizOp: sensor look failed"});
+  }
   HOLOSCAN_RETURN_IF_ERROR(std::move(*writer).commit());
 
   // Publish outputs: HUD tensors before the ImageT trigger
-  FormationDiag diag{};
-  if (overlay_.diag_at_capture && options.capture_time)
-    diag = overlay_.diag_at_capture(options.capture_time->timestamp_ns);
-  else if (overlay_.diag)
-    diag = overlay_.diag();
+
   // The interactive activation is a GUI clock tick. Match diagnostics against
   // the selected image's genuine capture stamp, never that clock's timestamp.
   if (diag.capture_time_ns &&
@@ -328,21 +383,17 @@ expected<void, Error> SarImageVizOp::compute(ExecutionContext& context) {
           write_footer_hud_rows(rows, banner, diag, overlay_.show_playback_lag, overlay_);
         else
           write_hud_rows(rows, banner, diag, overlay_.show_playback_lag, height);
+        if (look)
+          write_sensor_look_row(rows, *look, overlay_.canvas_width,
+                                overlay_.image_height + overlay_.footer_height);
         return {};
       });
   if (!labels_filled)
     return make_unexpected(std::move(labels_filled).error());
 
-  std::vector<float> geom;
-  fill_hud_geometry(&geom, diag, transpose_axes_);
-  if (overlay_.status_width > 0) {
-    const float fraction = static_cast<float>(overlay_.image_height) /
-                           (overlay_.image_height + overlay_.footer_height);
-    for (std::size_t i = 1; i < geom.size(); i += 2)
-      geom[i] *= fraction;
-  }
-  if (geom.empty())
-    geom.assign(kHudLineFloats, 0.0F);
+  // Keep the existing exact-stamp geometry input; the colored annotation is
+  // already in the completed display raster, so this is an empty primitive.
+  std::vector<float> geom(kHudLineFloats, 0.0F);
   const std::array<int64_t, 1> overlay_shape{static_cast<int64_t>(geom.size())};
   auto lines = overlay.allocate_tensor(
       TensorLoanRequest{.shape = overlay_shape, .dtype = DLDataType{kDLFloat, 32U, 1U}});
