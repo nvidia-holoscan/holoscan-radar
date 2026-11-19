@@ -1728,6 +1728,17 @@ still declare SDK 4.3.0.
 
 ## In flight / claims
 
+- **2026-11-19 — AIVO devcontainer X11 authorization** (`deustice/aivo-fixes`, Codex):
+  replacing the all-local-users grant with the current host account's
+  server-interpreted `localuser` grant, matching the existing container UID
+  mapping. Preserve soft startup and cookie-based forwarded display setup;
+  never broaden authorization if the scoped grant fails. Document removal of
+  legacy grants without revoking unrelated sessions automatically. All seven
+  mocked-host startup tests pass, including local/forwarded environment handling,
+  headless/no-xhost startup, identity failures and no broader fallback on error.
+  New fixes remain local; the developer owns pushing and subsequent
+  exact-commit AIVO verification.
+
 - **2026-11-19 — AIVO Blossom checkout trust** (`deustice/aivo-fixes`, Codex):
   repository-owned source requirement approved. The credential-bearing scan now
   requires the authorized PR source repository to match `github.repository`;
@@ -1740,7 +1751,7 @@ still declare SDK 4.3.0.
   security-policy checks pass locally and through CTest in the SDK container;
   the build and pinned lint pass. A live Blossom run with production credentials
   has not been triggered. X11, per-user locks and this fix are local;
-  automatic approval review requires explicit destination authorization to push.
+  further commits stay local at the developer's request; the developer will push.
 
 - **2026-11-19 — AIVO performance device locks** (`deustice/aivo-fixes`, Codex):
   per-user coordination approved; locks retain cross-directory/process exclusion

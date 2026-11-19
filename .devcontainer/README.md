@@ -51,14 +51,26 @@ CMake, CTest, or built executables directly from the repository root; see the
 Startup forwards the host X11 display into the container so apps like
 `siso` with `visualize: true` can open a window:
 
-- `initializeCommand` runs `xhost +local:docker` (or `+local:`) on the **host**
+- `initializeCommand` authorizes only the current host account with
+  `xhost "+SI:localuser:$(id -un)"`; the container's `dev` user matches that UID
 - `DISPLAY` is copied from the host via `containerEnv`
 - `/tmp/.X11-unix` is bind-mounted
 
 Rebuild/reopen the container after pulling these settings. On a headless host
 (or without `xhost`), startup still succeeds; visualization simply won't work.
-If Holoviz still can't authenticate after a rebuild, also mount the host
-Xauthority cookie (not enabled by default — paths vary by desktop).
+If Holoviz still can't authenticate after a rebuild, mount the host Xauthority
+cookie read-only and set the container's `XAUTHORITY` to that mount (paths vary
+by desktop). SSH-forwarded displays still need their existing cookie and network
+forwarding setup; this account-scoped Unix-socket grant does not replace SSH
+proxy authentication. Startup never grants all local accounts or adds root as
+a fallback. Running GUI apps as the UID-matched `dev` user preserves local access.
+
+Older versions added a persistent `LOCAL:` grant. If `xhost` lists it, remove
+that old grant once on the host with `xhost -local:`. Review other sessions that
+may have depended on it before removing it. The new startup command does not
+alter pre-existing grants owned by other workflows. To remove the new per-user
+grant manually, run `xhost "-SI:localuser:$(id -un)"` after closing the container;
+this also affects other local clients using that account's grant.
 
 ## Data Directory
 

@@ -10,6 +10,10 @@ add_test(NAME BlossomCheckoutTrust
     COMMAND ${Python3_EXECUTABLE} -m unittest discover
         -s ${PROJECT_SOURCE_DIR}/tests/scripts -p test_blossom_trust.py)
 set_tests_properties(BlossomCheckoutTrust PROPERTIES LABELS "build;unit" TIMEOUT 60)
+add_test(NAME DevcontainerX11Authorization
+    COMMAND ${Python3_EXECUTABLE} -m unittest discover
+        -s ${PROJECT_SOURCE_DIR}/tests/scripts -p test_devcontainer_x11.py)
+set_tests_properties(DevcontainerX11Authorization PROPERTIES LABELS "build;unit" TIMEOUT 60)
 
 add_subdirectory(cpp)
 
