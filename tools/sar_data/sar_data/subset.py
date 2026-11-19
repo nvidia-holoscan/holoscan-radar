@@ -1192,7 +1192,12 @@ def _subset_cphd(
             raise RuntimeError("XML block size must be positive")
         xml_offset = _block_span(src, kvps, "XML", 0, xml_size)
         xml_bytes = src.read(xml_offset, xml_size)
-        xmltree = lxml.etree.fromstring(xml_bytes).getroottree()
+        # Set protections before parsing: a post-parse DOCTYPE check alone
+        # cannot undo external reads or entity expansion performed by a parser.
+        parser = lxml.etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
+        xmltree = lxml.etree.fromstring(xml_bytes, parser=parser).getroottree()
+        if xmltree.docinfo.doctype:
+            raise RuntimeError("CPHD XML must not contain a DOCTYPE declaration")
         _require_cf8(xmltree)
         channel = _channel_data(xmltree)
         orig_nv = int(channel.findtext("{*}NumVectors"))

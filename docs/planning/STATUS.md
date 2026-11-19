@@ -1423,6 +1423,15 @@ still declare SDK 4.3.0.
 
 ## In flight / claims
 
+- **2026-11-19 — CPHD preparation XML** (`deustice/aivo-fixes`, Codex):
+  implemented the approved rejection of every DOCTYPE declaration, with
+  entity resolution, external-DTD loading and parser-network access disabled
+  before parsing. All 57 offline preparation tests pass, including 60 malicious
+  XML combinations (five declaration forms, UTF-8/UTF-16, namespaced/minimal,
+  normal/forced/dry-run). External resolvers are never called and existing
+  output/resume files remain unchanged. Ordinary CPHD writer/reader, samples,
+  metadata and resume regressions pass. No C++ operator interface change.
+
 - **2026-11-19 — AIVO SAR arithmetic** (`deustice/aivo-fixes`, Codex):
   mosaic canvas/crop/tile arithmetic is hardened before allocation and copies;
   six float/double overflow, malformed-placement, phase-preserving crop and

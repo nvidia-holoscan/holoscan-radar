@@ -237,6 +237,12 @@ inside a wide row refetches that row on resume; existing checkpoints remain
 compatible. The staging target is not a total memory budget: valid XML, PVP,
 and support-array representations can still consume proportional memory.
 
+CPHD XML containing a `DOCTYPE` declaration is rejected, including declarations
+without entities. Entity resolution and external DTD loading are disabled before
+parsing, and parser network access is disabled. This policy also applies to dry
+runs and forced replacement, before modifying an existing output or resume state.
+Ordinary XML without a `DOCTYPE` keeps the existing validation and preparation path.
+
 Recipe `name` must be a non-empty single filename component. Empty names,
 `.` / `..`, path separators (including backslashes), and absolute or
 drive-qualified paths are rejected rather than rewritten. Use `--output`

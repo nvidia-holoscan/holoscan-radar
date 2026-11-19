@@ -405,6 +405,80 @@ def make_cphd(path, namespace):
 
 
 class IngestionBoundsTest(unittest.TestCase):
+    def test_doctypes_reject_without_external_resolution_or_output_changes(self):
+        parser_type = lxml.etree.XMLParser
+        resolutions = []
+
+        class RejectExternal(lxml.etree.Resolver):
+            def resolve(self, url, public_id, context):
+                resolutions.append(url)
+                raise AssertionError(f"unexpected XML resource lookup: {url}")
+
+        def parser_factory(**kwargs):
+            parser = parser_type(**kwargs)
+            parser.resolvers.add(RejectExternal())
+            return parser
+
+        declarations = (
+            "<!DOCTYPE CPHD>",
+            '<!DOCTYPE CPHD [<!ENTITY label "replacement">]>',
+            '<!DOCTYPE CPHD [<!ENTITY label SYSTEM "file:///aivo-probe">]>',
+            '<!DOCTYPE CPHD SYSTEM "https://example.invalid/aivo.dtd">',
+            '<!DOCTYPE CPHD [<!ENTITY % schema SYSTEM "file:///aivo-probe">%schema;]>',
+        )
+        for namespace in (None, "http://api.nsgreg.nga.mil/schema/cphd/1.1.0"):
+            for encoding in ("utf-8", "utf-16"):
+                for declaration in declarations:
+                    for force, dry_run in ((False, False), (True, False), (False, True)):
+                        with (
+                            self.subTest(
+                                namespace=namespace,
+                                encoding=encoding,
+                                declaration=declaration,
+                                force=force,
+                                dry_run=dry_run,
+                            ),
+                            tempfile.TemporaryDirectory() as directory,
+                        ):
+                            path = Path(directory) / "input.cphd"
+                            dest = Path(directory) / "out.cphd"
+                            make_cphd(path, namespace)
+                            data = bytearray(path.read_bytes())
+                            body = bytes(data[1024:4096]).rstrip(b"\0").decode()
+                            if "<!ENTITY label " in declaration:
+                                body = body.replace("UNRESTRICTED", "&label;")
+                            encoded = (
+                                f'<?xml version="1.0" encoding="{encoding}"?>'
+                                f"{declaration}{body}"
+                            ).encode(encoding)
+                            self.assertLess(len(encoded), 3072)
+                            data[1024:4096] = encoded.ljust(3072, b"\0")
+                            header = bytes(data[: data.index(b"\f") + 2]).decode()
+                            marker = "XML_BLOCK_SIZE := "
+                            start = header.index(marker) + len(marker)
+                            stop = header.index("\n", start)
+                            header = header[:start] + str(len(encoded)) + header[stop:]
+                            data[:1024] = header.encode().ljust(1024, b"\0")
+                            path.write_bytes(data)
+                            for existing in (
+                                dest,
+                                dest.with_suffix(".cphd.part"),
+                                dest.with_suffix(".subset.json"),
+                            ):
+                                existing.write_bytes(b"preserve existing output and resume state")
+                            before = {p.name: p.read_bytes() for p in Path(directory).iterdir()}
+                            with (
+                                mock.patch.object(
+                                    subset.lxml.etree, "XMLParser", side_effect=parser_factory
+                                ),
+                                self.assertRaisesRegex(RuntimeError, "DOCTYPE"),
+                            ):
+                                subset.subset_cphd(path, dest, force=force, dry_run=dry_run)
+                            self.assertEqual(
+                                {p.name: p.read_bytes() for p in Path(directory).iterdir()}, before
+                            )
+        self.assertEqual(resolutions, [])
+
     def test_unsafe_recipe_names_fail_before_preparation_with_any_output(self):
         names = (
             "",
