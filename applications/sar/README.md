@@ -1,21 +1,22 @@
 # Standalone SAR applications
 
 The six HSDK 5 C++ and Python SAR workflows share the CPHD reader, range compression,
-aperture manager, and backprojection operators. Five are formation modes; the
+aperture manager, and backprojection operators. Five are image-formation workflows; the
 sixth, autofocus, adds the opt-in phase gradient autofocus chain (WORKFLOWS
 Figure 2) over a retained, replayed aperture. Each executable
 owns its graph wiring, config validation, build gate, YAML, metadata, and
-fixture smoke. Shared Graph driving, geometry conversion, reporting, mosaics,
+fixture smoke. See the [workflow guide](../../docs/planning/SAR/WORKFLOWS.md)
+for the named image-formation workflows and their relationships. Shared Graph driving, geometry conversion, reporting, mosaics,
 and CUDA visualization live in `applications/common/radar_app/sar/`.
 
-| Application | Former mode | Main behavior |
-| --- | --- | --- |
-| [spotlight](spotlight/README.md) | 1 | One reset image |
-| [video_sar](video_sar/README.md) | 2 | Retained sliding aperture and signed eviction weights |
-| [tiled_strip](tiled_strip/README.md) | 3 | Staged tile lattices and parent mosaic |
-| [continuous_strip](continuous_strip/README.md) | 4 | Batch slicing, scroll geometry, and mosaic |
-| [independent_images](independent_images/README.md) | 5 | Per-collection geometry, spacing, and frequency |
-| [autofocus](autofocus/README.md) | — | Retained aperture, conjugate-grid PGA estimate, corrected product formation |
+| Application | Main behavior |
+| --- | --- |
+| [spotlight](spotlight/README.md) | One reset image |
+| [video_sar](video_sar/README.md) | Retained sliding aperture and signed eviction weights |
+| [tiled_strip](tiled_strip/README.md) | Staged tile lattices and parent mosaic |
+| [continuous_strip](continuous_strip/README.md) | Batch slicing, scroll geometry, and mosaic |
+| [independent_images](independent_images/README.md) | Per-collection geometry, spacing, and frequency |
+| [autofocus](autofocus/README.md) | Retained aperture, conjugate-grid PGA estimate, corrected product formation |
 
 ## Python applications
 
@@ -110,15 +111,29 @@ the live playback clock (TxTime versus now), not GPU time on the controller.
 Looping presets (`loop: true`) stop with Ctrl-C in the launch terminal; the
 shared Graph driver owns SIGINT/SIGTERM so host `holoscan run` does not need
 `docker kill`. One in-flight backprojection may finish before the process exits.
-When Holoviz is enabled, the formed-image window composites the source-branch
-on-image HUD (scene name, formed size, backprojection rate, last-pulse latency,
-paced collect-vs-wall lag, and APC look chevron) as text and
-geometry layers. A second `SAR timeline` window is a 20 s scrolling Gantt of
-collection dwells, image-emit ticks with last-pulse latency labels, and a 1 Hz lag HUD.
+When Holoviz is enabled, scene name, formed size, backprojection rate,
+last-pulse latency, and paced collect-vs-wall lag appear in a compact left status
+panel beside the docked timeline. The status follows its displayed image; the
+APC look chevron remains over the image. Status text is larger, and GUI
+throughput uses readable units such as `12.4 Gpx*pulse/s`; console measurements
+retain their original format. Separate-window or timeline-disabled
+layouts retain the on-image HUD. The timeline shows a
+20 s scrolling Gantt of collection dwells, image-emit ticks with last-pulse
+latency labels, and a 1 Hz lag HUD. Set
+`app.visualization.timeline.placement: window` for a separate timeline window.
+Collection names sit above their scrolling bars; these describe collection
+history rather than the image currently displayed. Interactive startup shows
+a distinct cached PREPARING canvas until the first image arrives. The timeline
+reports observed startup stage and elapsed time independently, without repeatedly
+rendering or downloading the main canvas.
+The timeline also shows received versus GPU-completed pulse counts toward the
+next image and an approximate remaining wall time. It honors playback pacing;
+until timing measurements are available it displays Estimating. The readout
+updates independently at 1 Hz, with progress advancing in completed GPU batches.
 
 The former `applications/sar_formation/` path and `sar_formation` executable
-were replaced by the five formation-mode entries above; autofocus is a new
-workflow, not a former mode. There is no compatibility launcher.
+were replaced by the five image-formation workflows above; autofocus adds
+a separate workflow. There is no compatibility launcher.
 The host `./holoscan-radar test` command includes generated CPHD smokes and
 headless visualization. The CPHD fixture is generated once by C++.
 See the [SAR open-items roll-up](../../docs/planning/SAR/OPEN_ITEMS.md) for

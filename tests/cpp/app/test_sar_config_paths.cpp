@@ -80,3 +80,15 @@ TEST_F(SarConfigPaths, EmptyUnsetAndMissingRuntimeRootsRetainCompiledFallback) {
 }
 
 }  // namespace
+
+TEST(SarWindowSizing, CapsVirtualDesktopWidthWithoutChangingStripAspect) {
+  const auto fit = holoviz_fit_wh(40247, 6029, 5360, 1280, 1400);
+  EXPECT_EQ(fit[0], 1400U);
+  EXPECT_NEAR(static_cast<double>(fit[0]) / fit[1], 40247.0 / 6029.0, 0.02);
+  const auto small = holoviz_fit_wh(40247, 6029, 900, 600, 1400);
+  EXPECT_EQ(small[0], 900U);
+  EXPECT_LT(small[1], 600U);
+  const auto tall = holoviz_fit_wh(100, 100, 5360, 600, 1400);
+  EXPECT_EQ(tall[0], 600U);
+  EXPECT_EQ(tall[1], 600U);
+}

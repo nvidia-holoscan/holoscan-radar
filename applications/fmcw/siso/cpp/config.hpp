@@ -77,7 +77,10 @@ inline RuntimeConfig make_runtime_config(const AppParams& authored) {
   result.meter_cadence = authored.run.meter_cadence;
   result.meter_log_every = authored.run.meter_log_every;
   result.visualization = authored.visualization;
+  result.visualization.total_frames = result.num_frames;
   result.visualize = authored.visualization.enabled;
+  result.headless = authored.visualization.headless;
+  result.skip_display_check = authored.visualization.skip_display_check;
   result.viz.window_width = authored.visualization.window_width;
   result.viz.window_height = authored.visualization.window_height;
 

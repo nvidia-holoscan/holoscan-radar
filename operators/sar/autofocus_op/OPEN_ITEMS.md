@@ -85,7 +85,7 @@ Symmetry grid, 8000 pulses, 1000-sample first window, 0.02 m injected:
 | --- | --- | --- | --- | --- | --- | --- |
 | Kourou (screened reflector) | UMBRA-05 | 0.181 | 0.183 | 0.219 | 0.186 | 0.178 |
 | Atlanta (airport) | UMBRA-07 | 0.093 | 0.101 | 0.081 | 0.177 | 0.165 |
-| Houston (dense urban) | mode02 | 0.065 | 0.099 | 0.044 | 0.059 | 0.107 |
+| Houston (dense urban) | video SAR | 0.065 | 0.099 | 0.044 | 0.059 | 0.107 |
 | Imperial Valley (agriculture) | Capella SM | refused | refused | refused | refused | refused |
 
 Three readings, in descending confidence:

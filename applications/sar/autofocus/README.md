@@ -1,5 +1,7 @@
 # SAR autofocus
 
+See [shared GUI configuration and presentation](../../common/radar_app/viz/README.md#shared-presentation-controls).
+
 Phase gradient autofocus (PGA) estimates phase errors that blur a synthetic
 aperture radar (SAR) image. This application retains the received pulses,
 forms an auxiliary image for estimating the error, applies the estimated phase
@@ -351,10 +353,13 @@ flowchart LR
     E -. scene positions .-> A
     RC -- profiles --> L
     L -. profiles / positions / reference .-> A
-    A -- profiles --> P[AuxPointsSourceOp]
+    A -- profiles --> AS[AutofocusStageOp: auxiliary formation]
+    AS -- profiles --> P[AuxPointsSourceOp]
     P -- profiles + polar lattice --> AB[aux BackprojectionOp]
-    A -- profiles / positions / control --> AB
-    AB -- aux image --> AF[AutofocusOp]
+    AS -. Cartesian profiles .-> AB
+    A -- positions / reference / control --> AB
+    AB -- aux image --> ES[AutofocusStageOp: estimation]
+    ES --> AF[AutofocusOp]
     AF -- phase_correction --> PR[PhaseResampleOp]
     AF -- image_out --> Drain[NullSinkOp]
     AF -- sharpness / termination / iterations --> SR[AutofocusSharpnessReportOp]
@@ -363,12 +368,36 @@ flowchart LR
     A -. profiles .-> O[OraclePhaseOp]
     O -. oracle .-> PC
     A -- profiles --> PC
-    PC -- corrected profiles --> B[product BackprojectionOp]
+    PC -- corrected profiles --> FS[AutofocusStageOp: final formation]
+    FS --> B[product BackprojectionOp]
     A -- positions / reference / control --> B
     B --> Report[Image report]
     B -. dump .-> Dump[TensorDumpOp]
-    B -. visualize .-> Viz[HolovizOp]
+    B -. image / look / HUD .-> Compose[GPU frame composer]
+    Compose -->|X11| ImageView[Image download and X11 image panel]
+    Timeline[Timeline GPU composer] -->|X11| TimelineView[Timeline download and X11 footer panel]
+    Compose -->|Native| Dock[DockedFrameOp] --> Native[NativeImagePresenterOp]
+    Timeline -->|Native| Dock
+    ImageView -. child of .-> Window[One viewing window]
+    TimelineView -. child of .-> Window
+    Compose -->|Headless| ImageSink[CompletedFrameSinkOp]
+    Timeline -->|Headless| TimelineSink[CompletedFrameSinkOp]
 ```
+
+The middle panel reports the last reached application boundary: **Receiving
+pulses**, **Forming autofocus image**, **Estimating correction**, **Forming final
+image**, then **Image ready**. Correction accepted/declined (or no correction,
+oracle, or unavailable) remains a separate detail. These are capture-stamped
+checkpoints, not a continuous activity indicator or an ETA. A busy GPU can delay
+presentation and intermediate stages may never be shown. The oracle workflow
+skips auxiliary formation and estimation. The zero-copy boundary operators
+forward the original samples without tensor copies, pools, or CUDA waits.
+
+The default viewer docks the timeline below the image at 112 pixels high,
+updating independently at 10 Hz. `app.visualization.timeline.placement: window`
+restores a separate timeline window. See the
+[shared presentation controls](../../common/radar_app/viz/README.md#docked-sar-timeline)
+for resize and transport behavior.
 
 `PerturbPositionsOp` adds the configured error. `AutofocusScoreOp` compares the
 estimate with that injected error. Both are absent when `position_error` is

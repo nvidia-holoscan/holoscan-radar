@@ -29,7 +29,6 @@
 #include <holoscan/core/errors.hpp>
 #include <holoscan/core/execution_plan.hpp>
 #include <holoscan/core/graph.hpp>
-#include <holoscan/core/managed_shutdown_signals.hpp>
 #include <holoscan/core/run.hpp>
 #include <holoscan/logger/logger.hpp>
 #include <holoscan/threading/thread_placement.hpp>
@@ -41,7 +40,9 @@
 #include "io/tensor_dump_op/tensor_dump_op.hpp"
 #include "io/tensor_dump_op/output_paths.hpp"
 #include "radar_app/app/config_utils.hpp"
+#include "radar_app/app/config_loader.hpp"
 #include "radar_app/app/gpu_placement.hpp"
+#include "radar_app/app/shutdown_signals.hpp"
 #ifdef HOLOSCAN_RADAR_HAS_X11
 #include "radar_app/viz/x11_display.hpp"
 #endif
@@ -58,6 +59,8 @@
 #include <holoscan/visualization/holoviz_op.hpp>
 #include "radar_app/sar/sar_image_viz.hpp"
 #include "radar_app/viz/image_device_bridge_op.hpp"
+#include "radar_app/viz/frame_composer_op.hpp"
+#include "radar_app/viz/presentation_graph.hpp"
 #include "radar_app/sar/timeline_raster.hpp"
 #include "radar_app/sar/window_place.hpp"
 #endif
@@ -134,7 +137,7 @@ struct Precision {
   using Geometry = TGeometry;
 };
 
-// Snapshot thread-local discovery results before another context can replace them.
+// Keep prepared contexts independent of later thread-local device discovery.
 struct SarDeviceSelection {
   bool visualize;
   holoscan::DeviceId compute;
@@ -142,19 +145,14 @@ struct SarDeviceSelection {
   holoscan::DeviceId composer;
 };
 
-inline SarDeviceSelection select_sar_device(const AppConfig& cfg) {
+inline SarDeviceSelection select_sar_device(AppConfig& cfg, const std::string& path) {
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
-  bool visualize = cfg.visualize;
-#ifdef HOLOSCAN_RADAR_HAS_X11
-  if (visualize && !cfg.headless && !cfg.skip_display_check && !app::gui_available()) {
-    HOLOSCAN_LOG_WARN("SAR: no X11 display; skipping visualization");
-    visualize = false;
-  }
-#endif
-  app::select_application_device(visualize && !cfg.headless, visualize && cfg.headless);
+  app::prepare_presentation(cfg, path, cfg.presenter, cfg.choose_presenter);
+  cfg.visualize_hold_s = cfg.visualization.final_image_hold_s;
+  const bool visualize = cfg.visualize;
 #else
-  const bool visualize = false;
   app::select_application_device(false, false);
+  const bool visualize = false;
 #endif
   return {visualize, app::application_device(),
           holoscan::DeviceId{app::application_display_device()},
@@ -164,7 +162,7 @@ inline SarDeviceSelection select_sar_device(const AppConfig& cfg) {
 inline radar::MaxTensorExtents prepare_sar_extents(const AppConfig& cfg,
                                                    const std::filesystem::path& path) {
   auto document = app::config::normalize_enum_field<radar::ApertureEmitMode>(
-      app::config::load_document(path), "/aperture_manager/emit_mode");
+      app::config::load_inherited_document(path), "/aperture_manager/emit_mode");
   radar::ApertureManagerParams seed;
   seed.emit_interval_pulses = cfg.tile_pulses;
   return make_extents(cfg, *app::config::decode_params(document, "/aperture_manager", seed));
@@ -178,9 +176,9 @@ struct SarRuntimeInputs {
   SarDeviceSelection devices;
 };
 
-inline SarRuntimeInputs prepare_sar_runtime(const AppConfig& cfg,
-                                            const std::filesystem::path& path) {
-  return {app::config::load_document(path), prepare_sar_extents(cfg, path), select_sar_device(cfg)};
+inline SarRuntimeInputs prepare_sar_runtime(AppConfig& cfg, const std::filesystem::path& path) {
+  return {app::config::load_inherited_document(path), prepare_sar_extents(cfg, path),
+          select_sar_device(cfg, path.string())};
 }
 
 // Shared native scaffolding for C++ and Python-authored SAR graphs. Each context
@@ -205,7 +203,7 @@ struct SarGraphRuntime {
   holoscan::OperatorHandle<radar::SARRangeCompressionOp<T>> range{
       graph.op<radar::SARRangeCompressionOp<T>>("range_compression", ingest_extents)};
   holoscan::OperatorHandle<radar::ApertureManagerOp<T, TGeom>> manager{
-      graph.op<radar::ApertureManagerOp<T, TGeom>>("aperture_manager", extents)};
+      graph.op<radar::ApertureManagerOp<T, TGeom>>("aperture_manager", extents, hud)};
   holoscan::OperatorHandle<radar::BackprojectionOp<T, TGeom>> bp{
       graph.op<radar::BackprojectionOp<T, TGeom>>("backprojection", extents, hud)};
   std::array<int64_t, 2> product_extent{
@@ -217,6 +215,9 @@ struct SarGraphRuntime {
   holoscan::PartitionHandle source{graph.partition("source")};
   holoscan::PartitionHandle application{graph.partition("application")};
   holoscan::PartitionHandle formation{graph.partition("formation")};
+#ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
+  std::shared_ptr<app::FrameProgress> display_progress{std::make_shared<app::FrameProgress>()};
+#endif
   bool has_visualization{false}, has_timeline{false};
   bool finished{false}, started{false};
 
@@ -226,14 +227,14 @@ struct SarGraphRuntime {
   : name(std::move(app_name)),
     cli(std::move(paths)),
     cfg(std::move(config)),
-    devices(prepared == nullptr ? select_sar_device(cfg) : prepared->devices),
+    devices(prepared == nullptr ? select_sar_device(cfg, cli.config.string()) : prepared->devices),
     visualize(devices.visualize),
     owned_graph(external_graph == nullptr ? std::make_shared<holoscan::Graph>(name) : nullptr),
     graph(external_graph == nullptr ? *owned_graph : *external_graph),
     extents(prepared == nullptr ? prepare_sar_extents(cfg, cli.config) : prepared->extents),
     ingest_extents(make_ingest_extents(extents, cfg)) {
     auto document =
-        prepared == nullptr ? app::config::load_document(cli.config) : prepared->document;
+        prepared == nullptr ? app::config::load_inherited_document(cli.config) : prepared->document;
     document = app::config::normalize_enum_field<radar::FftNorm>(std::move(document),
                                                                  "/range_compression/fft_norm");
     document = app::config::normalize_enum_field<radar::ApertureEmitMode>(
@@ -254,6 +255,8 @@ struct SarGraphRuntime {
     radar::ApertureManagerParams manager_seed;
     manager_seed.emit_interval_pulses = cfg.tile_pulses;
     auto manager_params = app::config::decode_params(document, "/aperture_manager", manager_seed);
+    if (visualize && !cfg.headless && cfg.visualization.timeline.enabled)
+      hud->enable_progress(manager_params->emit_interval_pulses, reader_params->pulses_per_tick);
     radar::BackprojectionParams bp_seed;
     bp_seed.sample_geometry = cfg.sample_geometry;
     bp_seed.range_bin_spacing = cfg.range_bin_spacing;
@@ -326,76 +329,81 @@ struct SarGraphRuntime {
       app::sar::OverlayConfig overlay;
       overlay.scene_names = cfg.scene_names;
       overlay.show_playback_lag = cfg.show_playback_lag;
-      overlay.diag = [hud = hud, show_lag = cfg.show_playback_lag, mosaic, scroll = cfg.scroll,
-                      parent = cfg.parent_geometry, scroll_parent = cfg.scroll_parent,
-                      geoms = cfg.collection_geometries, to_enu = cfg.transform_to_scene_enu,
-                      origin = cfg.enu_origin_ecef]() {
-        const auto snap = hud->snapshot();
-        app::sar::FormationDiag d;
-        d.bp_compute_s = snap.bp.compute_s;
-        d.pulses = snap.bp.pulses;
-        d.pixels = snap.bp.pixels;
-        d.bp_num_v = snap.bp.num_v;
-        d.bp_num_u = snap.bp.num_u;
-        d.rate_line = snap.rate_line;
-        d.emit_at = snap.bp.emit_at;
-        d.last_packet_at =
-            snap.bp.last_packet_at.has_value() ? snap.bp.last_packet_at : snap.last_packet_at;
-        if (show_lag) {
-          d.playback_valid = snap.playback.valid;
-          d.playback_paced = snap.playback.paced;
-          d.playback_behind_s = snap.playback.behind_s;
-          d.playback_target_s = snap.playback.target_s();
-          d.playback_wall_s = snap.playback.wall_s;
-        }
-        if (snap.bp.emit_at.has_value() && d.last_packet_at.has_value()) {
-          d.form_latency_s =
-              std::chrono::duration<double>(*snap.bp.emit_at - *d.last_packet_at).count();
-        }
-        const auto& apc = snap.apc;
-        if (apc.valid) {
-          const radar::SampleGeometry* g = nullptr;
-          if (mosaic && parent.is_valid()) {
-            g = &parent;
-          } else if (scroll && scroll_parent.is_valid()) {
-            g = &scroll_parent;
-          } else if (!geoms.empty()) {
-            const size_t i = static_cast<size_t>(apc.file_index) % geoms.size();
-            g = &geoms[i];
-          }
-          if (g != nullptr) {
-            const auto uv = apc_raster_uv(apc.ecef, *g, to_enu, origin);
-            if (uv.has_value()) {
-              d.apc_valid = true;
-              d.raster_u = (*uv)[0];
-              d.raster_v = (*uv)[1];
+      overlay.strip_update_metrics = cfg.scroll;
+      overlay.diag_at_capture =
+          [hud = hud, show_lag = cfg.show_playback_lag, mosaic, scroll = cfg.scroll,
+           parent = cfg.parent_geometry, scroll_parent = cfg.scroll_parent,
+           geoms = cfg.collection_geometries, to_enu = cfg.transform_to_scene_enu,
+           origin = cfg.enu_origin_ecef](int64_t capture_ns) {
+            const auto snap = hud->snapshot(capture_ns);
+            app::sar::FormationDiag d;
+            d.bp_compute_s = snap.bp.compute_s;
+            d.collection_elapsed_s = snap.bp.collection_elapsed_s;
+            d.budget_s = snap.bp.budget_s;
+            d.budget_playback_rate = snap.bp.budget_playback_rate;
+            d.capture_time_ns = snap.bp.capture_time_ns;
+            d.pulses = snap.bp.pulses;
+            d.pixels = snap.bp.pixels;
+            d.bp_num_v = snap.bp.num_v;
+            d.bp_num_u = snap.bp.num_u;
+            d.rate_line = snap.rate_line;
+            d.emit_at = snap.bp.emit_at;
+            d.last_packet_at =
+                snap.bp.last_packet_at.has_value() ? snap.bp.last_packet_at : snap.last_packet_at;
+            if (show_lag) {
+              d.playback_valid = snap.playback.valid;
+              d.playback_paced = snap.playback.paced;
+              d.playback_behind_s = snap.playback.behind_s;
+              d.playback_target_s = snap.playback.target_s();
+              d.playback_wall_s = snap.playback.wall_s;
             }
-          }
-        }
-        return d;
-      };
+            if (snap.bp.emit_at.has_value() && d.last_packet_at.has_value()) {
+              d.form_latency_s =
+                  std::chrono::duration<double>(*snap.bp.emit_at - *d.last_packet_at).count();
+            }
+            const auto& apc = snap.apc;
+            if (apc.valid) {
+              const radar::SampleGeometry* g = nullptr;
+              if (mosaic && parent.is_valid()) {
+                g = &parent;
+              } else if (scroll && scroll_parent.is_valid()) {
+                g = &scroll_parent;
+              } else if (!geoms.empty()) {
+                const size_t i = static_cast<size_t>(apc.file_index) % geoms.size();
+                g = &geoms[i];
+              }
+              if (g != nullptr) {
+                const auto uv = apc_raster_uv(apc.ecef, *g, to_enu, origin);
+                if (uv.has_value()) {
+                  d.apc_valid = true;
+                  d.raster_u = (*uv)[0];
+                  d.raster_v = (*uv)[1];
+                }
+              }
+            }
+            return d;
+          };
       const bool strip_fit = cfg.scroll || mosaic;
       const int64_t viz_u = (cfg.viz_crop_nu > 0) ? cfg.viz_crop_nu : viz_geometry.num_u();
       int64_t lut_side = cfg.visualize_size;
       uint32_t width = 0;
       uint32_t height = 0;
-      // Parent strips fill the desktop work-area width (and leave a band for
-      // the Gantt). visualize_size is the square-collect size and the no-DISPLAY
-      // fallback. HolovizOp has no position field; strip windows are moved by
-      // title after they map.
+      // Fit parent strips within the desktop work area and configured display
+      // cap, reserving space for the footer. Forwarded work areas may span
+      // multiple laptop monitors; never expand to their combined width.
       if (strip_fit && !cfg.headless) {
         int work_w = 0;
         int work_h = 0;
         if (desktop_work_area(&work_w, &work_h)) {
           const int timeline_reserve = static_cast<int>(app::sar::TimelineRasterOp::kHeight) + 48;
           const int fit_h = std::max(1, work_h - timeline_reserve);
-          const auto fit = holoviz_fit_wh(viz_geometry.num_v(), viz_u, work_w, fit_h);
+          const auto fit =
+              holoviz_fit_wh(viz_geometry.num_v(), viz_u, work_w, fit_h, cfg.visualize_size);
           width = fit[0];
           height = fit[1];
           lut_side = static_cast<int64_t>(std::max(width, height));
-          HOLOSCAN_LOG_INFO(
-              "SAR: Holoviz {}x{} (desktop work area {}x{}; visualize_size {} fallback)", width,
-              height, work_w, work_h, cfg.visualize_size);
+          HOLOSCAN_LOG_INFO("SAR: Holoviz {}x{} (desktop work area {}x{}; visualize_size {} cap)",
+                            width, height, work_w, work_h, cfg.visualize_size);
         } else {
           const auto wh = holoviz_window_wh(viz_geometry.num_v(), viz_u, cfg.visualize_size);
           width = wh[0];
@@ -413,99 +421,95 @@ struct SarGraphRuntime {
             static_cast<uint32_t>(std::max<int64_t>(1, lut_side * horizontal_extent / max_side));
         height = static_cast<uint32_t>(std::max<int64_t>(1, lut_side * vertical_extent / max_side));
       }
+      if (cfg.explicit_window_size) {
+        width = static_cast<uint32_t>(cfg.visualization.window_width);
+        height = static_cast<uint32_t>(cfg.visualization.window_height);
+      }
+      const bool docked =
+          cfg.visualization.timeline.enabled && cfg.visualization.timeline.placement == "bottom";
+      const int status_width =
+          docked && width >= 2 ? std::min(320, static_cast<int>(width) / 2) : 0;
+      const int footer_height = status_width > 0 ? cfg.visualization.timeline.window_height : 0;
+      overlay.canvas_width = width;
+      overlay.image_height = height;
+      if (status_width > 0) {
+        overlay.status_width = status_width;
+        overlay.footer_height = footer_height;
+      }
       // Hold is session-level after the image, not a sleep in this operator:
       // raster and Holoviz share `visualization`, so a hold here never presents.
-      auto raster = graph.op<app::sar::SarImageVizOp>("sar_image_viz", raster_max_v, raster_max_u,
-                                                      lut_side, transpose_display_axes,
-                                                      std::move(overlay), product_extent);
+      auto raster = graph.op<app::sar::SarImageVizOp>(
+          "sar_image_viz", raster_max_v, raster_max_u, lut_side, transpose_display_axes,
+          std::move(overlay), product_extent, cfg.visualization.display_rate_hz,
+          [hud = hud] {
+            return hud->snapshot().reader_stopped;
+          },
+          !cfg.headless);
       bind_outputs(options, "sar_image_viz", {"frame"}, devices.compute);
-      auto make_layers = [&] {
-        holoscan::visualization::LayerStack layers;
-        layers.add_image_layer("sar_image",
-                               holoscan::visualization::ImageLayerDesc{
-                                   .format = holoscan::visualization::ImageFormat::kR8G8B8A8Unorm,
-                                   .max_width = static_cast<uint32_t>(lut_side),
-                                   .max_height = static_cast<uint32_t>(lut_side)});
-        layers.add_geometry_layer(
-            "look", holoscan::visualization::GeometryLayerDesc{
-                        .topologies = {holoscan::visualization::GeometryTopology::kLineList},
-                        .max_primitives = app::sar::kHudMaxLines,
-                        .default_line_width = 2.0F});
-        layers.add_text_layer(
-            "labels", holoscan::visualization::TextLayerDesc{.max_glyphs = app::sar::kHudMaxGlyphs,
-                                                             .normalized_coordinates = true});
-        return layers;
-      };
       auto raster_partition = graph.partition("raster");
       raster_partition.add(raster);
       auto visualization = graph.partition("visualization");
-      const auto renderer_device = cfg.headless ? devices.composer : devices.display;
-      const auto hud_age = std::chrono::seconds{5};
-      auto wire_overlay = [&](auto& viz) {
-        graph.add_flow(*formed, raster->image, raster_queue);
-        graph.add_flow(raster->overlay, viz->tensor_layer_input(1), overlay_queue);
-        graph.add_flow(raster->labels, viz->tensor_layer_input(2), overlay_queue);
-        app::viz::connect_image_devices(graph, options, raster_partition, visualization,
-                                        raster->frame, viz->image_layer_input(0), "sar_display",
-                                        lut_side, lut_side, devices.compute, renderer_device,
-                                        display_queue);
-      };
-      if (cfg.headless) {
-        auto viz = graph.op<holoscan::visualization::HolovizOp>(
-            "holoviz", make_layers(),
-            holoscan::visualization::CudaSinkDesc{
-                .width = width,
-                .height = height,
-                .format = holoscan::visualization::ImageFormat::kR8G8B8A8Unorm},
-            holoscan::visualization::LayerTrigger{}, hud_age);
-        auto sink = graph.op<app::sar::SarImageSchemaSinkOp>("viz_sink");
-        visualization.add(viz).add(sink);
-        has_visualization = true;
-        options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
-            .operator_path = "holoviz", .output_port = "output", .device = renderer_device});
-        wire_overlay(viz);
-        graph.add_flow(viz->output(), sink->frame, queue);
-      } else {
-        auto viz = graph.op<holoscan::visualization::HolovizOp>(
-            "holoviz", make_layers(),
-            holoscan::visualization::WindowSinkDesc{.title = "SAR formation",
-                                                    .width = width,
-                                                    .height = height,
-                                                    .close_on_escape = true},
-            holoscan::visualization::LayerTrigger{}, hud_age);
-        visualization.add(viz);
-        has_visualization = true;
-        wire_overlay(viz);
+      const auto renderer_device = devices.composer;
+      auto composed = graph.op<app::viz::FrameComposerOp>(
+          "holoviz", width, height + footer_height, app::sar::kHudMaxGlyphs, true,
+          app::sar::kHudMaxLines, lut_side, status_width > 0 ? height : 0);
+      visualization.add(composed);
+      options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+          .operator_path = "holoviz", .output_port = "output", .device = renderer_device});
+      graph.add_flow(*formed, raster->image, raster_queue);
+      graph.add_flow(raster->labels, composed->tensor_layer_input(1), overlay_queue);
+      graph.add_flow(raster->overlay, composed->tensor_layer_input(2), overlay_queue);
+      app::viz::connect_image_devices(graph, options, raster_partition, visualization,
+                                      raster->frame, composed->image_layer_input(0), "sar_composer",
+                                      lut_side, lut_side, devices.compute, renderer_device,
+                                      overlay_queue);
+      if (!docked)
+        app::viz::add_image_presentation(graph, options, visualization, composed->output(), "sar",
+                                         width, height, cfg.visualization.window_title,
+                                         cfg.visualization, display_progress, {}, devices.composer,
+                                         devices.display);
+      has_visualization = true;
+      if (cfg.visualization.timeline.enabled) {
+        const auto tw = docked ? width - status_width : cfg.visualization.timeline.window_width;
+        const auto th = cfg.visualization.timeline.window_height;
+        // HSDK 5 CUDA sinks have an immutable extent. Reserve a bounded canvas
+        // for up to an 8K-wide footer, and lay out only its visible region.
+        auto viewport = docked && !cfg.headless ? std::make_shared<app::viz::FrameViewport>(
+                                                      tw, th, std::max<int>(tw, 8192), th)
+                                                : std::shared_ptr<app::viz::FrameViewport>{};
+        const auto canvas_width = viewport ? viewport->max_width : tw;
         auto timeline = graph.op<app::sar::TimelineRasterOp>(
-            "timeline_raster", hud, cfg.scene_names, cfg.show_playback_lag);
+            "timeline_raster", hud, cfg.scene_names, cfg.show_playback_lag,
+            cfg.visualization.timeline.display_rate_hz, canvas_width, th,
+            cfg.headless ? std::shared_ptr<app::FrameProgress>{} : display_progress, viewport);
         bind_outputs(options, "timeline_raster", {"frame"}, devices.compute);
-        holoscan::visualization::LayerStack tl_layers;
-        tl_layers.add_image_layer(
-            "timeline",
-            holoscan::visualization::ImageLayerDesc{
-                .format = holoscan::visualization::ImageFormat::kR8G8B8A8Unorm,
-                .max_width = static_cast<uint32_t>(app::sar::TimelineRasterOp::kWidth),
-                .max_height = static_cast<uint32_t>(app::sar::TimelineRasterOp::kHeight)});
-        auto timeline_viz = graph.op<holoscan::visualization::HolovizOp>(
-            "timeline_holoviz", std::move(tl_layers),
-            holoscan::visualization::WindowSinkDesc{
-                .title = "SAR timeline",
-                .width = static_cast<uint32_t>(app::sar::TimelineRasterOp::kWidth),
-                .height = static_cast<uint32_t>(app::sar::TimelineRasterOp::kHeight),
-                .close_on_escape = true},
-            holoscan::visualization::LayerTrigger{}, std::chrono::milliseconds(500));
-        // serial_baseline exact-cover: one connected chain per authored partition.
-        // The Gantt is an OnClock producer + window, independent of formation Holoviz.
         auto timeline_part = graph.partition("timeline");
         timeline_part.add(timeline);
         auto timeline_display = graph.partition("timeline_display");
-        timeline_display.add(timeline_viz);
-        has_timeline = true;
+        auto timeline_frame =
+            graph.op<app::viz::FrameComposerOp>("timeline_frame", canvas_width, th, 16384U);
+        timeline_display.add(timeline_frame);
+        options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+            .operator_path = "timeline_frame", .output_port = "output", .device = renderer_device});
+        graph.add_flow(timeline->labels, timeline_frame->tensor_layer_input(1), overlay_queue);
         app::viz::connect_image_devices(graph, options, timeline_part, timeline_display,
-                                        timeline->frame, timeline_viz->image_layer_input(0),
-                                        "timeline_display", app::sar::TimelineRasterOp::kWidth,
-                                        app::sar::TimelineRasterOp::kHeight, devices.compute,
+                                        timeline->frame, timeline_frame->image_layer_input(0),
+                                        "timeline_composer", canvas_width, th, devices.compute,
                                         renderer_device, overlay_queue);
+        if (docked) {
+          app::viz::add_docked_presentation(
+              graph, options, visualization, composed->output(), timeline_display,
+              timeline_frame->output(), width, height, th, cfg.visualization, display_progress,
+              devices.composer, devices.display, status_width, viewport);
+        } else {
+          auto timeline_config = cfg.visualization;
+          timeline_config.display_rate_hz = cfg.visualization.timeline.display_rate_hz;
+          app::viz::add_image_presentation(graph, options, timeline_display,
+                                           timeline_frame->output(), "timeline", tw, th,
+                                           "SAR timeline", timeline_config, {}, "bottom_left",
+                                           devices.composer, devices.display);
+        }
+        has_timeline = true;
       }
     }
 #else
@@ -513,7 +517,7 @@ struct SarGraphRuntime {
       HOLOSCAN_LOG_WARN("SAR visualization component is unavailable");
 #endif
     if (cfg.dump) {
-      auto dump = graph.op<radar::TensorDumpOp>("tensor_dump");
+      auto dump = graph.op<app::sar::TrackedTensorDumpOp>("tensor_dump", counter);
       radar::TensorDumpParams params;
       params.path = cfg.dump_path;
       if (cfg.dump_max_files >= 0)
@@ -536,8 +540,8 @@ struct SarGraphRuntime {
     finished = true;
   }
 
-  int64_t run(holoscan::ManagedShutdownSignals* managed_signals = nullptr,
-              const std::function<void()>& poll = {}) {
+  int64_t run(app::ShutdownSignals* signals = nullptr,
+              const std::function<void()>& caller_poll = {}) {
     if (!finished || started)
       throw std::logic_error("SAR graph must be finalized and run once");
     started = true;
@@ -549,23 +553,12 @@ struct SarGraphRuntime {
       std::ofstream(plan_dump) << plan.json();
     }
     if (!plan.ok()) {
-      const std::string json = std::string(plan.json());
-      std::string hint;
-      if (json.find("PHYSICAL_TENSOR_DEVICE_BINDING_UNUSED") != std::string::npos) {
-        hint =
-            " (a GPU device binding was set on an output that forwards an upstream "
-            "tensor and has no pool)";
-      } else if (json.find("IMPLICIT_DEVICE_ZERO_REJECTED") != std::string::npos) {
-        hint =
-            " (a GPU tensor output is missing bind_tensor_output_device; implicit "
-            "device 0 is not admitted)";
-      } else if (json.find("\"token\":\"PARTITION_") != std::string::npos ||
-                 json.find("holoscan.partition.exact_cover") != std::string::npos) {
-        hint =
-            " (partition exact_cover: each authored partition must be one directed chain, "
-            "not a join of two producers)";
+      std::string error = "SAR graph compile failed:";
+      for (const auto& diagnostic : plan.diagnostics()) {
+        if (diagnostic.severity == holoscan::DiagnosticSeverity::kError)
+          error += " [" + holoscan::format_diagnostic(diagnostic, plan.graph()) + "]";
       }
-      throw std::runtime_error(std::string("SAR graph compile failed") + hint);
+      throw std::runtime_error(error);
     }
     const auto sched = plan.scheduler_plan();
     HOLOSCAN_LOG_INFO("SAR: scheduler workers={} overlap={} max_concurrent={} lanes={}",
@@ -593,14 +586,20 @@ struct SarGraphRuntime {
       HOLOSCAN_LOG_INFO("SAR: images will not be saved; set dump: true in {} to save .npy images",
                         config_hint_path(cli.config, name.c_str()));
     }
-    auto session = managed_signals == nullptr ? holoscan::run_async(plan)
-                                              : holoscan::run_async(plan, *managed_signals);
+    auto session = holoscan::run_async(plan);
+    const std::function<void()> poll = [&] {
+      if (signals && signals->requested())
+        session.request_stop();
+      if (caller_poll)
+        caller_poll();
+    };
     try {
 #ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
-      if (has_visualization && !cfg.headless) {
+      if (has_visualization && !cfg.headless &&
+          !cfg.visualization.x11_presentation.value_or(true)) {
         if (cfg.scroll || !cfg.tile_geometries.empty())
           spawn_place_window_top_left("SAR formation");
-        if (has_timeline)
+        if (has_timeline && cfg.visualization.timeline.placement == "window")
           spawn_place_window_bottom_left("SAR timeline");
       }
 #endif
@@ -614,7 +613,9 @@ struct SarGraphRuntime {
         auto eos_flushed = [&] {
           const auto snap = hud->snapshot();
           return sar_eof_drained(snap,
-                                 counter->reported_capture_ns.load(std::memory_order_acquire));
+                                 counter->reported_capture_ns.load(std::memory_order_acquire)) &&
+                 (!cfg.dump ||
+                  counter->dumped_capture_ns.load() >= counter->reported_capture_ns.load());
         };
         while (!eos_flushed()) {
           if (poll)
@@ -637,6 +638,17 @@ struct SarGraphRuntime {
           if (session.wait_for(slice_ns))
             break;
         }
+#ifdef HOLOSCAN_RADAR_SAR_HOLOVIZ
+        if (eos_flushed() && has_visualization) {
+          const auto display_deadline =
+              std::chrono::steady_clock::now() + app::kDisplayDrainTimeout;
+          while (display_progress->capture_ns.load() < counter->reported_capture_ns.load() &&
+                 std::chrono::steady_clock::now() < display_deadline && !session.wait_for(kPoll)) {
+            if (poll)
+              poll();
+          }
+        }
+#endif
         if (eos_flushed() && has_visualization && !cfg.headless && cfg.visualize_hold_s > 0.0) {
           const auto hold = std::chrono::duration_cast<std::chrono::nanoseconds>(
               std::chrono::duration<double>(cfg.visualize_hold_s));
@@ -647,7 +659,7 @@ struct SarGraphRuntime {
               poll();
           }
         }
-        if (!(has_visualization && cfg.visualize_hold_s < 0.0 && eos_flushed()))
+        if (!(has_visualization && !cfg.headless && cfg.visualize_hold_s < 0.0 && eos_flushed()))
           session.request_stop();
       }
       while (!session.wait_for(std::chrono::milliseconds{50})) {
@@ -703,7 +715,7 @@ struct SarGraphRuntime {
       throw std::runtime_error(error);
     }
     const auto images = counter->count.load();
-    if (images == 0)
+    if (images == 0 && session.termination() != holoscan::RunTermination::kStopped)
       throw std::runtime_error("SAR graph ended without an image");
     if (session.termination() == holoscan::RunTermination::kStopped)
       HOLOSCAN_LOG_INFO("{}: stopped after {} image(s)", name, images);
@@ -715,28 +727,32 @@ template <typename T = float, typename TGeom = double, typename LoadConfig, type
 int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig load_config,
                          BuildGraph build_graph) {
   try {
-    // Own SIGINT/SIGTERM before Holoviz or the runtime start threads. Host
-    // `holoscan run` maps Ctrl-C to `docker stop` (SIGTERM); without this
-    // domain the looping presets ignore both signals until the CLI SIGKILLs.
-    auto created_signals = holoscan::ManagedShutdownSignals::create();
-    if (!created_signals) {
-      throw std::runtime_error(std::string("SAR: managed SIGINT/SIGTERM domain failed: ") +
-                               holoscan::runtime_error_message(created_signals.error()));
-    }
-    auto managed_signals = std::move(created_signals).value();
+    app::ShutdownSignals signals;
     const CliPaths cli = parse_cli(argc, argv, (std::string(name) + ".yaml").c_str());
-    SarGraphRuntime<T, TGeom> runtime(name, cli, load_config(cli.config, cli.cphd_override));
+    auto config = load_config(cli.config, cli.cphd_override);
+    config.presenter = cli.presenter;
+    config.choose_presenter = cli.choose_presenter;
+    SarGraphRuntime<T, TGeom> runtime(name, cli, std::move(config));
     auto& r = runtime;
     r.graph.add_flow(r.reader->phase_history, r.range->phase_history, r.queue);
-    const auto* formed =
-        build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg, r.reader, r.range,
-                    r.manager, r.bp, r.source, r.application, r.formation, r.extents);
+    const auto* formed = [&] {
+      // Workflows with app-owned diagnostics can opt into the shared mailbox.
+      if constexpr (requires {
+                      build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg,
+                                  r.reader, r.range, r.manager, r.bp, r.source, r.application,
+                                  r.formation, r.extents, r.hud);
+                    }) {
+        return build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg, r.reader,
+                           r.range, r.manager, r.bp, r.source, r.application, r.formation,
+                           r.extents, r.hud);
+      } else {
+        return build_graph(Precision<T, TGeom>{}, r.graph, r.options, r.queue, r.cfg, r.reader,
+                           r.range, r.manager, r.bp, r.source, r.application, r.formation,
+                           r.extents);
+      }
+    }();
     r.finish(formed);
-    r.run(&managed_signals);
-    if (const auto closed = managed_signals.close(); !closed) {
-      throw std::runtime_error(std::string("SAR: managed SIGINT/SIGTERM domain close failed: ") +
-                               holoscan::runtime_error_message(closed.error()));
-    }
+    r.run(&signals);
     return 0;
   } catch (const std::exception& error) {
     HOLOSCAN_LOG_ERROR("{}: {}", name, error.what());
@@ -755,7 +771,7 @@ int run_sar_graph_app_at(int argc, char** argv, const char* name, LoadConfig loa
 // in for a collect that genuinely carries more. See the precision section of
 // SAR/OPERATOR_API.md.
 inline bool single_sample_precision(const std::filesystem::path& config) {
-  const auto document = app::config::load_document(config);
+  const auto document = app::config::load_inherited_document(config);
   if (!document.find("/sample_precision")) {
     return true;
   }

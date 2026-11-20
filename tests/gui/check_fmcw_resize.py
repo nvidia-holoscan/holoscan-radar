@@ -45,7 +45,10 @@ language = args.language
 preset = "mimo_ddm_linear" if name == "mimo_ddm" else name
 config = {
     "extends": str(root / f"applications/fmcw/{name}/config/{preset}.yaml"),
-    "app": {"run": {"num_frames": 1000}, "visualization": {"enabled": True}},
+    "app": {
+        "run": {"num_frames": 1000},
+        "visualization": {"enabled": True, "x11_presentation": True},
+    },
 }
 path = out / f"resize_{name}_{language}.yaml"
 path.write_text(yaml.safe_dump(config))
@@ -149,7 +152,11 @@ try:
     )
     with (out / f"resize_{name}_{language}.log").open("w") as log:
         process = subprocess.Popen(
-            command, env={**os.environ, "DISPLAY": "localhost:97"}, stdout=log, stderr=log
+            command,
+            env={**os.environ, "DISPLAY": "localhost:97", "XDG_CACHE_HOME": str(out / "cache")},
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
         )
         try:
             window = None

@@ -1,4 +1,4 @@
-# FMCW GUI checks
+# Radar GUI checks
 
 ## Registered CI smoke coverage
 
@@ -9,7 +9,9 @@ The default GPU CTest dashboard includes these checks for enabled applications:
 | C++ without visualization | All eight smoke presets complete two frames, including linear and nonlinear DDM. |
 | Python without visualization | The same eight workflows run through `pytest_provider`. |
 | X11 presentation | All eight presets in C++ and Python produce visible pixels and close successfully. |
-| Native HoloViz window | SISO in C++ and Python produces visible pixels, resizes, and closes successfully. |
+| Native HoloViz window | All eight FMCW presets in C++ and Python produce visible pixels and close successfully. |
+| Headless GPU rendering | Eight FMCW presets and six SAR workflows in C++; eight FMCW presets and SAR execution in provider tests. No display environment or interactive hold. |
+| SAR windows | Six workflows in both languages and both window transports; formation and timeline pixels, resize, idle closure, and Escape. |
 
 SISO retains detailed X11 resize/close checks, including Python over TCP X11.
 Other X11 cases perform shorter pixel/close checks. GUI probes explicitly enable
@@ -32,13 +34,12 @@ and Python provider:
 ctest --test-dir build --output-on-failure -L visualization
 ```
 
-This adds 22 CTest entries to the default all-application Python-enabled build:
-six missing C++ smokes, fourteen X11 workflow/language cases, and two native
-window cases. Existing SISO X11 and adaptive/multi-waveform smoke names remain
-unchanged. No compiled source, executable target, or dependency is added; the
-default CI build already builds these applications.
+The full Python-enabled window matrix has 58 cases: 32 FMCW (eight presets,
+two languages, two presenters) and 24 SAR (six workflows, two languages, two
+presenters), plus two explicit separate-window compatibility cases. Fourteen C++ headless cases additionally exercise the real launch
+override without a display. Native cases require a presentation-capable display.
 
-## Measured test-stage cost
+## Historical PR #69 test-stage cost
 
 A local check on 2026-11-03 used an NVIDIA GB10 (Linux ARM64, driver
 580.173.02), the HSDK 5.0.0 development image, and serial CTest (`-j1`). Three
@@ -70,7 +71,8 @@ CI build cost.
 
 Raw CTest JUnit reports, timing samples, the original probe snapshot, and the
 summary are under ignored `build/mimo_tdm/ci-gui-timing/` in the measurement
-checkout. The broader delayed-display diagnostic below remains manual.
+checkout. These historical measurements predate SAR GUI unification; they do not estimate
+the current matrix cost.
 
 ## Delayed-display resize diagnostic
 
@@ -101,3 +103,167 @@ Python case, as with direct provider tests. `--app` selects another FMCW workflo
 The status-header capture follows the scaled canvas as the window changes size.
 Text and plots are composed into one GPU frame, so their alignment is preserved.
 This checks update recovery; it does not require the panel layout to reflow.
+
+## SAR panel and window checks
+
+`SarWindow_<application>_<language>_<presenter>` covers all six SAR apps in
+C++ and Python with explicit X11/native modes and isolated preferences. The
+fixture uses inherited configuration, verifies formation and timeline pixels,
+resizes the viewing window, and closes during final-image hold. The default
+timeline is a child panel in the same window; its height stays 112 pixels as
+the window resizes. A left status panel belongs to the cached SAR surface;
+the probe verifies its pixels after each resize and checks the narrower timeline
+child extent. While the source is at EOF, the timeline must advance
+without either uploading or repainting the held image. C++ closes
+formation; Python exercises aspect fit and closes timeline. Native tests
+require a presentation-capable CUDA/Vulkan display and do not skip renderer
+failures. The fixtures share the existing GUI resource lock.
+
+Actual laptop-to-Thor SSH/X11 windows require a separate visual walkthrough of
+all 13 applications in both languages. Inspect text/overlay alignment, SAR
+mosaic orientation and crops, autofocus products, timeline annotations, both
+resize policies, placement, and close/Escape behavior. Also review native
+presentation on capable hardware. Automated pixel checks and headless success
+alone cannot establish interactive visual correctness.
+
+For bounded delay and resource diagnostics, the SAR probe accepts
+`--latency-ms 10 --soak-seconds 10`. It forwards X11 through a local proxy,
+checks image recovery at each size, and records RSS and file-descriptor samples
+under `<build-dir>/gui-sar/`. Add `--capture` to save both completed window
+images for visual review. Processing must continue during the soak. RSS must
+plateau within 64 MiB or 10%, and file descriptors within four. These short
+checks detect regressions; long-duration deployment qualification remains a
+separate measurement.
+
+## Real forwarded-display probes
+
+The same scripts run directly on the `DISPLAY` forwarded into the project
+container; omit `xvfb-run`. For example, inside that container:
+
+```bash
+python3 tests/gui/check_sar_windows.py build-test/applications/sar/spotlight/cpp/spotlight build-test/applications/sar/spotlight/cpp/spotlight_generated_smoke.yaml --application spotlight --presenter x11
+python3 tests/cpp/check_fmcw_x11.py build-test/applications/fmcw/simo/cpp/simo "$PWD/applications/fmcw/simo/config/simo.yaml" --application simo --presenter x11
+```
+
+Add `--python` for Python. For SAR, `--close timeline --escape --resize-mode fit`
+checks the alternate window and resize policy. The provider must be on
+`PYTHONPATH`, as with registered tests. These commands open, resize, and close
+actual laptop windows. The probe traverses reparented windows with bounded work,
+waits for mapping, and reads application pixels instead of desktop pixels.
+
+The 2026-11-17 Thor-to-laptop run passed all 28 X11 cases (13 applications in
+both languages plus the second DDM variant). This establishes transport and
+basic interaction behavior; scientific image-quality review remains separate.
+
+For the docked SAR default, the X11 probe checks the panel's parent window and
+reads `RADAR_PRESENTATION_COUNTERS` on each child: upload count and repaint
+count (two format-32 CARDINAL values). After EOF and resize settling, the image
+counts must stay unchanged while the footer upload count increases. This
+assertion detects full-image redraw or transport triggered by timeline ticks.
+`--timeline-placement window` covers the compatibility layout instead.
+`--capture --canvas-width 1024 --canvas-height 768` saves a larger preview of the
+final layout after the normal resize checks. Capture waits for status pixels
+at the new footer origin as well as child geometry, so a delayed cached repaint
+cannot leave stale pre-resize content in the preview. These are synthetic fixture images,
+not scientific image-quality qualification. Native probes verify footer pixels;
+GPU tests check physical-height compensation, fit, blank startup, and independent
+old panel timestamps. Positive native-window review requires capable hardware.
+
+The `SarFooterStatus` GPU test composes an exact-timestamp image/status pair and
+checks every image pixel stays unobscured, SDK text lands below the image, and
+status pixels do not enter the timeline area. `CompletedFrameDock` checks native
+status placement, physical sizing after resize, and independent timeline startup.
+
+## SAR startup placeholder
+
+`SarStartupWindow_<language>_<behavior>` uses a paced CPHD fixture so startup is
+observable before the first image. Both C++ and Python must show the distinct
+charcoal placeholder. The `close` case closes before formation and asserts
+exactly one main-panel upload; the `handoff` case waits for a formed image to
+replace the placeholder, then closes normally. The existing window tests still
+cover resizing, EOF idle updates, separate windows, and Escape.
+
+`SarStartup` GPU tests hold back the first input, prove repeated clock ticks
+emit no extra placeholder or held-image frames, verify the first real image's
+capture timestamp, and render the actual native text through the shared SDK
+composer. The placeholder's -1 stamp cannot advance completed-image drain.
+`SarDisplayRate` checks SI conversions and unchanged console measurements.
+`SarTimeline` verifies batch-event lanes, actual time spacing, relative-time
+bookends/caption, and native text records. Backdated batches remain visible
+relative to the latest event, idle clock ticks emit no duplicate GPU footer,
+and either receipt or completion advances the history. Resize still emits a
+newly sized frame without a new batch.
+It also verifies the next-image title, stable processing checkpoint, completion
+hint, absence of countdown/elapsed-clock labels, and the single
+shared progress track at compact and normal widths. Unequal received/formed
+counts prove that the green fill follows GPU completion and the cyan marker
+follows ingestion. Coincident frontiers, zero, and completion verify marker
+visibility and bounds. The C++/Python handoff probes wait for the fill and
+marker to reach completion on the actual
+CPHD/formation path.
+
+`SarPulseProgress` checks pacing-aware and unpaced ETA overlap, distinct receipt
+and completion, slices sharing a stamp, reform replay, loop generations, partial
+cadences, and expired diagnostic history. `SarGpuProgress` holds real CUDA work
+behind a gate, fills the fixed event ring, and proves that queries return pending
+without claiming completion or waiting for a slot. Numerical operator and dump
+regressions remain separate from these UI/diagnostic assertions.
+
+The startup probe can also save a visual-review artifact inside the container:
+
+```bash
+xvfb-run -a python3 tests/gui/check_sar_startup.py build-test/applications/sar/spotlight/cpp/spotlight build-test/applications/sar/spotlight/cpp/spotlight_generated_smoke.yaml --capture build-test/gui-sar/startup.png
+```
+
+Omit `xvfb-run` to use a real forwarded display. These pixel-readback probes
+require a responsive X11 server; a timeout does not establish visual success.
+Native-window and real-collection visual qualification remain separate from
+GPU composition, isolated X11, and synthetic-fixture checks.
+
+The SAR input/output history uses singular `Pulse batch received` and
+`Pulse batch processed` lane labels with cyan and green event ticks. GPU tests
+check the lane pixels and text independently of the shared middle progress
+track. Host/CUDA diagnostics tests cover split source batches, replay, loop
+generations, retry deduplication, late receipt publication, packet expiration,
+bounded retained events, dense-event coalescing, and a blocked GPU stream that must not produce any
+processed event before release. Window checks continue to cover image-cache
+independence, resize/delayed-display recovery, shutdown, headless rendering,
+and numerical/dump equivalence. The real viewer's appearance still needs human
+review; Xvfb checks alone do not qualify laptop forwarding or native display
+presentation.
+
+The stress probe reads logs through a separate descriptor so polling cannot
+move the running application's stdout offset or overwrite startup diagnostics.
+Failure capture skips windows once the application has exited.
+
+Matched-pair coverage additionally checks exact receipt/completion matching,
+overlapping pairs, idle gaps, partial batches, discarded prefixes, loop
+boundaries, late publication, and bounded long/dense histories. GPU pixel
+readback checks wide and compact layouts: completed pairs produce thin sloping
+lines instead of interval fills, connections crossing the history edge retain
+their true slope, and pending work has no fabricated completion endpoint.
+Both lane labels use the same 16px full/14px compact font above/below the tracks;
+`20s` and `Now` use matching sizes in side gutters at the tracks' midpoint.
+A native GPU composition check compares the actual rendered common prefix of
+the two labels, independently of distinct words' ascenders/descenders. A long completed interval
+still produces only a short green completion marker. These tests use controlled
+diagnostic timestamps rather than assumptions about GPU speed.
+
+Docked X11 checks now expand to two wide layouts and shrink back, waiting for
+`RADAR_PRESENTED_EXTENT` to prove that a frame drawn at the new width reached
+the screen. The static receipt-label pixels must match exactly at all three
+sizes. This supplements compact resize, EOF image-cache counters, delayed
+display recovery, resource plateaus, and shutdown checks. Unit coverage checks
+rectangular texture allocation, capture-matched cropped host transport, bounded
+layout-history expiration, and physical-pixel sampling in native composition.
+
+## C++ signal ownership and profiling
+
+`FmcwSignal_SIGINT_cpp`, `FmcwSignal_SIGTERM_cpp`, and the corresponding
+`SarSignal_*` checks send process signals after real X11 pixels have appeared,
+then require a clean cooperative exit. Existing window/Escape tests remain
+separate. `ShutdownSignals.*` covers delivery on a thread that predates handler
+installation, unchanged signal masks, prior-disposition restoration, and
+exclusive ownership. The applications use caller-managed HSDK sessions so
+Nsight helper threads do not violate managed-signal admission. See
+[SDK_DEVELOPMENT.md](../../SDK_DEVELOPMENT.md) for a profiling invocation.

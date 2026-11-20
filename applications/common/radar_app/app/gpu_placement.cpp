@@ -155,7 +155,7 @@ int select_fmcw_application_device(bool window, bool cuda_sink, bool x11_present
   const bool x11 = window && fmcw_uses_x11_presentation(x11_presentation);
 #if HOLOSCAN_RADAR_HAS_X11
   // Initialize before either the main-thread probe or the SDK's GLFW opens X11.
-  if (x11 && XInitThreads() == 0)
+  if (window && XInitThreads() == 0)
     throw std::runtime_error("X11 thread initialization failed");
 #endif
   const int selected = select_application_device(window && !x11, cuda_sink);

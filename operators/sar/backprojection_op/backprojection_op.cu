@@ -18,6 +18,7 @@
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/override_param.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
+#include "radar_common/sdk/sar_gpu_progress.hpp"
 #include "radar_common/tensor/max_byte_span.hpp"
 #include <holoscan/core/expected_macros.hpp>
 #include <holoscan/logger/logger.hpp>
@@ -263,6 +264,18 @@ void BackprojectionOp<T, TGeom>::start() {
   require_backend(backend_value_, who);
   geometry_change_value_ = p.geometry_change;
   state_ = std::make_shared<detail::BackprojectionState<T, TGeom>>();
+  progress_ = hud_ ? hud_->progress() : nullptr;
+  if (progress_) {
+    gpu_progress_ = std::make_shared<sar_progress::GpuProgress>(
+        [monitor = std::weak_ptr<sar_progress::Monitor>{progress_}](
+            const sar_progress::Work& work, sar_progress::Clock::time_point at) {
+          if (auto progress = monitor.lock())
+            progress->processed(work, at);
+        });
+    progress_->set_probe([tracker = gpu_progress_] {
+      return tracker->snapshot();
+    });
+  }
 }
 
 template <typename T, typename TGeom>
@@ -272,6 +285,8 @@ expected<void, Error> BackprojectionOp<T, TGeom>::compute(ExecutionContext& cont
 
     // Join this pulse block with same-tick controls and geometry overrides.
     HOLOSCAN_TRY(auto profiles_value, receive_tensor(range_profiles, who));
+    auto progress_work = progress_ ? progress_->take_work(context.activation_time().timestamp_ns)
+                                   : std::optional<sar_progress::Work>{};
     HOLOSCAN_TRY(auto positions_value, receive_tensor(positions, who));
     HOLOSCAN_TRY(auto reference_value, receive_tensor(reference_position, who));
     auto profiles = std::make_shared<Tensor>(std::move(profiles_value));
@@ -684,6 +699,8 @@ expected<void, Error> BackprojectionOp<T, TGeom>::compute(ExecutionContext& cont
       }
     }
 
+    const auto progress_slot = gpu_progress_ && progress_work ? gpu_progress_->begin(stream)
+                                                              : std::optional<std::size_t>{};
     state_->record_tick_gpu_start(stream);
     const double pc_partial = 4.0 * kPi * effective_frequency_ / kSpeedOfLight;
     const int64_t pulse_stride = num_pulses * 3;
@@ -781,6 +798,15 @@ expected<void, Error> BackprojectionOp<T, TGeom>::compute(ExecutionContext& cont
     }
 
     state_->record_tick_gpu_stop(stream);
+    if (progress_work) {
+      progress_work->gpu_pulses = num_pulses;
+      progress_work->pixels = num_v * num_u;
+    }
+    if (progress_slot) {
+      gpu_progress_->end(*progress_slot, stream, *progress_work);
+    }
+    if (progress_)
+      progress_->submitted();
 
     // Synchronize only at an image boundary, when downstream reads the result.
     if (emitted) {
@@ -791,6 +817,8 @@ expected<void, Error> BackprojectionOp<T, TGeom>::compute(ExecutionContext& cont
     }
     const auto now = std::chrono::steady_clock::now();
     if (emitted) {
+      if (gpu_progress_ && progress_work)
+        gpu_progress_->completed_emit(*progress_work, now);
       // Timing is published before the image port so EventBased
       // downstream host code (the overlay) reads this emit, not the
       // previous collection's.
@@ -808,6 +836,16 @@ expected<void, Error> BackprojectionOp<T, TGeom>::compute(ExecutionContext& cont
             .capture_time_ns = context.activation_time().timestamp_ns,
             .closes_aperture = completes_aperture,
             .compute_s = aperture_compute_s_,
+            .collection_elapsed_s =
+                progress_work
+                    ? std::optional{std::max(0.0, std::chrono::duration<double>(
+                                                      now - progress_work->collection.started)
+                                                      .count())}
+                    : std::nullopt,
+            .budget_s = progress_work ? progress_work->budget_s : std::nullopt,
+            .budget_playback_rate = progress_work
+                                        ? std::optional{progress_work->collection.playback_rate}
+                                        : std::nullopt,
             .pulses = emitted_pulses,
             .pixels = emitted_pixels,
             .num_v = num_v,

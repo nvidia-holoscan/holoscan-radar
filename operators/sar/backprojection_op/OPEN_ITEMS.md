@@ -1,6 +1,6 @@
 # BackprojectionOp — open items
 
-This operator landed as a **mode-1 slice** plus mode-4 scroll. It does not clear
+This operator landed as a **spotlight slice** plus continuous strip scroll. It does not clear
 [`NEW_OPERATOR_CHECKLIST.md`](../../../docs/planning/NEW_OPERATOR_CHECKLIST.md).
 Do not resolve team-blocked items here.
 
@@ -31,7 +31,7 @@ Do not resolve team-blocked items here.
    this operator — not a MatX pin bump. Still experimental.
 
 5. **`initial_image`.** Declared and rejected this slice.
-   `geometry_change = scroll` landed with mode 4 (ring buffer,
+   `geometry_change = scroll` landed with continuous strip (ring buffer,
    two slab launches, logical-order emit).
 
 6. **`sinc` / `nearest` interpolation.** Named in the enum, rejected.

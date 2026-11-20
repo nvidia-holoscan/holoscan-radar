@@ -13,14 +13,14 @@
 // Lattice: `sample_geometry` (Atlanta ENU), sidecar truth, or
 // `lattice` — explicit counts/spacing (IARP ENU; counts may be N
 // or [num_v, num_u]), collection physics (XY square at the
-// coarser GSD), `lattice.tiles` > 1 (mode 3: parent strip +
+// coarser GSD), `lattice.tiles` > 1 (tiled strip: parent strip +
 // ROI tiles along a travelling SRP; one file; omit
-// counts/spacing), or `lattice.scroll` (mode 4: same parent,
+// counts/spacing), or `lattice.scroll` (continuous strip: same parent,
 // one window `max_side` deep along v). Along-track follows the
 // SRP chord, not the IARP tangent plane. `max_side` caps each
-// tile's along-track axis in mode 3 (the parent is n_tiles of
+// tile's along-track axis in tiled strip (the parent is n_tiles of
 // those along v; tile and parent u may exceed the cap so the
-// IFFT swath stays native GSD). Mode 4 uses `max_side` as the
+// IFFT swath stays native GSD). Continuous strip uses `max_side` as the
 // buffer depth, not a coarsening cap.
 // `pixel_scale` is a per-collect factor on N. A guessed sidecar
 // must not override an explicit YAML lattice.
@@ -51,6 +51,11 @@
 #include "radar_common/math/constants.hpp"
 #include "radar_common/sdk/config_codecs.hpp"
 #include "radar_app/app/config_utils.hpp"
+#include "radar_app/app/visualization_config.hpp"
+
+#include "radar_app/app/presentation_config.hpp"
+
+#include "radar_app/app/config_loader.hpp"
 #include "radar_app/app/run_config.hpp"
 
 namespace radar = holoscan::radar;
@@ -87,6 +92,10 @@ inline bool is_number(ConfigValueKind kind) {
 }  // namespace sar_config
 
 struct AppConfig : radar::app::CommonRunConfig {
+  radar::app::VisualizationConfig visualization;
+  bool choose_presenter{false};
+  std::string presenter;
+  bool explicit_window_size{false};
   std::string cphd_path;
   std::vector<std::string> cphd_paths;
   std::vector<std::string> scene_names;
@@ -97,7 +106,7 @@ struct AppConfig : radar::app::CommonRunConfig {
   int64_t dump_max_files{-1};
   radar::SampleGeometry sample_geometry;
   double reference_frequency{0.0};
-  // Metres per compressed range bin. Mode 1 leaves range_bins
+  // Metres per compressed range bin. Spotlight leaves range_bins
   // unconnected; this is BackprojectionOp.range_bin_spacing, with
   // the centred origin default. Derived from the CPHD (SCSS, N)
   // so it matches RC's axis when bandwidth = (N-1)*SCSS.
@@ -105,16 +114,16 @@ struct AppConfig : radar::app::CommonRunConfig {
   // 0 = operator default (num_samples). Mirrored from
   // range_compression.nfft when that YAML key is set.
   int64_t nfft{0};
-  // Mode 3: parent strip plus one lattice per tile along a
+  // Tiled strip: parent strip plus one lattice per tile along a
   // travelling SRP, from lattice.tiles > 1. Size 0 when not
-  // tiling. collection_geometries stays length 1 so the mode-5
+  // tiling. collection_geometries stays length 1 so the independent images
   // collection_boundary stager stays off; tile 0 is also
   // sample_geometry (BP parameter). parent_geometry is the
   // mosaic canvas (LUT / Holoviz / optional dump).
   std::vector<radar::SampleGeometry> tile_geometries;
   radar::SampleGeometry parent_geometry;
   int64_t tile_pulses{0};
-  // Mode 4: lattice.scroll. Parent is the SRP-chord strip;
+  // Continuous strip: lattice.scroll. Parent is the SRP-chord strip;
   // sample_geometry is the scrolling window (max_side along v).
   bool scroll{false};
   radar::SampleGeometry scroll_parent;
@@ -128,16 +137,16 @@ struct AppConfig : radar::app::CommonRunConfig {
   // operator parameters.
   int64_t reader_pulses_per_tick{0};
   int64_t emit_interval_pulses{0};
-  // Mode 5: one lattice / dr / f0 per collection, aligned with
-  // cphd_paths. Modes 1 and 3 have a single entry.
+  // Independent images: one lattice / dr / f0 per collection, aligned with
+  // cphd_paths. Spotlight and tiled strip have a single entry.
   std::vector<radar::SampleGeometry> collection_geometries;
   std::vector<double> collection_spacings;
   std::vector<double> collection_frequencies;
   // Timing cap on each physics-derived (or explicit-count) lattice
   // axis. 0 = no cap (native collection-physics N, or the YAML
   // counts). A positive cap coarsens GSD and keeps the scene.
-  // Mode 3: each tile's along-track axis (u may exceed so the
-  // IFFT swath stays native). Mode 2 / 5: the formed image.
+  // Tiled strip: each tile's along-track axis (u may exceed so the
+  // IFFT swath stays native). Video SAR and independent images: the formed image.
   // Lower it on a slower GPU.
   int64_t lattice_max_side{0};
   // Per-collection factor on native N (both axes). 1 = native.
@@ -157,18 +166,18 @@ struct AppConfig : radar::app::CommonRunConfig {
   std::string nvradar_vph_path;
   // Wire manager.weight → BP.weight. True when the manager
   // retains (max_aperture_pulses > 0, eviction −1) or stamps an
-  // aperture_window (mode 3 Taylor). Mode 1 / 5 stay unconnected
+  // aperture_window (tiled strip Taylor). Spotlight and independent images stay unconnected
   // (all +1, no D2H of weights).
   bool wire_weight{false};
-  // Collect-vs-wall lag timeline HUD. Retention (mode 2) and
-  // paced strips (mode 3 mosaic / mode 4 scroll). Modes 1 and
-  // 5 omit it. Display still gates on HUD playback.paced so
+  // Collect-vs-wall lag timeline HUD. Retention (video SAR) and
+  // paced strips (tiled strip mosaic / continuous strip scroll). Spotlight and
+  // independent images omit it. Display still gates on HUD playback.paced so
   // an unpaced YAML stays blank.
   bool show_playback_lag{false};
   // Holoviz window: longest side (px) for square collects, and
-  // the no-DISPLAY fallback for a parent strip. A parent strip
-  // (mode 3 mosaic / mode 4 scroll blit) fits the desktop work
-  // area (full width on a typical 16:9). LUT box-averages toward
+  // the maximum automatic initial size for a parent strip. A parent strip
+  // (tiled strip mosaic / continuous strip scroll blit) fits the desktop work
+  // area within this cap, including on multi-monitor X11 desktops. LUT box-averages toward
   // that side; a dump is the formed lattice (parent when tiling
   // or scrolling).
   int64_t visualize_size{1024};
@@ -178,15 +187,17 @@ struct AppConfig : radar::app::CommonRunConfig {
   int64_t viz_crop_u0{0};
   int64_t viz_crop_nu{0};
   // Seconds the Holoviz window keeps the formed image after emit.
-  // Also the max wait for the first frame (Atlanta ~9 s). Mode 1
+  // Also the max wait for the first frame (Atlanta ~9 s). Spotlight
   // emits once; 0 closes with the graph. Negative: hold until
-  // SIGINT (mode 3 / 5 looping).
+  // SIGINT (tiled strip and independent images looping).
   double visualize_hold_s{30.0};
 };
 
 struct CliPaths {
   std::filesystem::path config;
   std::filesystem::path cphd_override;
+  bool choose_presenter{false};
+  std::string presenter;
 };
 
 // First CLI argument is the YAML, unless it is a .cphd — then the
@@ -195,25 +206,50 @@ struct CliPaths {
 inline CliPaths parse_cli(int argc, char** argv, const char* default_yaml) {
   const auto bin_dir = std::filesystem::path(argv[0]).parent_path();
   CliPaths out;
-  if (argc <= 1) {
-    out.config = bin_dir / default_yaml;
-    return out;
+  out.config = bin_dir / default_yaml;
+  std::vector<std::string> positional;
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg(argv[i]);
+    if (arg == "--choose-presenter") {
+      out.choose_presenter = true;
+    } else if (arg == "--presenter" || arg == "--cphd") {
+      if (++i >= argc)
+        throw std::invalid_argument(arg + " requires a value");
+      if (arg == "--presenter")
+        out.presenter = argv[i];
+      else
+        out.cphd_override = argv[i];
+    } else if (arg.starts_with("--presenter=")) {
+      out.presenter = arg.substr(12);
+      if (out.presenter.empty())
+        throw std::invalid_argument("--presenter requires a mode");
+    } else if (arg.starts_with("-")) {
+      throw std::invalid_argument("Unknown SAR argument: " + arg);
+    } else {
+      positional.push_back(arg);
+    }
   }
-  const std::filesystem::path first(argv[1]);
-  const std::string ext = first.extension().string();
-  if (ext == ".cphd" || ext == ".CPHD") {
-    out.config = bin_dir / default_yaml;
-    out.cphd_override = first;
-    return out;
-  }
-  if (std::filesystem::is_regular_file(first)) {
-    out.config = first;
-  } else {
-    const auto beside = bin_dir / first.filename();
-    out.config = std::filesystem::is_regular_file(beside) ? beside : first;
-  }
-  if (argc > 2) {
-    out.cphd_override = argv[2];
+  radar::app::validate_presenter(out.presenter);
+  if (positional.size() > 2)
+    throw std::invalid_argument(
+        "Usage: <application> [config.yaml] [input.cphd] [--presenter MODE]");
+  if (!positional.empty()) {
+    const std::filesystem::path first(positional.front());
+    if (first.extension() == ".cphd" || first.extension() == ".CPHD") {
+      if (!out.cphd_override.empty() || positional.size() > 1)
+        throw std::invalid_argument("Supply only one CPHD override");
+      out.cphd_override = first;
+    } else {
+      const auto beside = bin_dir / first.filename();
+      out.config = std::filesystem::is_regular_file(first)    ? first
+                   : std::filesystem::is_regular_file(beside) ? beside
+                                                              : first;
+      if (positional.size() == 2) {
+        if (!out.cphd_override.empty())
+          throw std::invalid_argument("Supply only one CPHD override");
+        out.cphd_override = positional[1];
+      }
+    }
   }
   return out;
 }
@@ -249,7 +285,7 @@ inline std::string config_hint_path(const std::filesystem::path& config, const c
 
 // dr = c / (2 * N_bins * df), df = SCSS. Same formula RC uses when
 // bandwidth is the CPHD span (N_samples - 1)*SCSS. nfft_or_0 == 0
-// means N_bins = num_samples (the mode-1 default).
+// means N_bins = num_samples (the spotlight default).
 inline double range_bin_spacing_from_cphd(const std::string& path, int64_t nfft_or_0,
                                           double propagation_speed) {
   radar::cphd::CphdFile file(path);
@@ -505,12 +541,15 @@ inline std::array<uint32_t, 2> holoviz_window_wh(int64_t num_v, int64_t num_u, i
   return {std::max(uint32_t{1}, w), std::max(uint32_t{1}, h)};
 }
 
-// Fit a landscape lattice into the work area so at least one
-// desktop edge is used (full width for a wide/short strip on
-// 16:9). Caller passes _NET_WORKAREA size; GLFW client size is
-// the result (title bar does not eat width).
-inline std::array<uint32_t, 2> holoviz_fit_wh(int64_t num_v, int64_t num_u, int work_w,
-                                              int work_h) {
+// Fit a landscape lattice into the work area, optionally capped at the
+// configured display size. A forwarded X11 work area can span several physical
+// monitors, so it must not determine an unbounded initial strip-window width.
+inline std::array<uint32_t, 2> holoviz_fit_wh(int64_t num_v, int64_t num_u, int work_w, int work_h,
+                                              int64_t max_side = 0) {
+  if (max_side > 0) {
+    work_w = static_cast<int>(std::min<int64_t>(work_w, max_side));
+    work_h = static_cast<int>(std::min<int64_t>(work_h, max_side));
+  }
   const double long_n = static_cast<double>(std::max(num_v, num_u));
   const double short_n = static_cast<double>(std::min(num_v, num_u));
   if (!(long_n > 0.0) || !(short_n > 0.0) || work_w <= 0 || work_h <= 0) {
@@ -597,7 +636,7 @@ struct StripmapTiling {
   int64_t display_nu{0};
 };
 
-// Mode 3: parent strip plus ROI tiles. Along-track (v) follows
+// Tiled strip: parent strip plus ROI tiles. Along-track (v) follows
 // the SRP chord in ECEF. Cross-track is the IA across-axis,
 // orthogonalized against the chord. Parent u is every ground
 // point the pulses can light (IFFT window on the plane, first
@@ -866,9 +905,8 @@ inline std::filesystem::path resolve_existing(const std::filesystem::path& given
   if (std::filesystem::is_regular_file(beside_yaml)) {
     return std::filesystem::absolute(beside_yaml);
   }
-  // Wheels may run away from the build machine's data tree. Keep existing
-  // caller/YAML-relative files authoritative, then try the runtime data root
-  // before falling back to the data root selected at build time.
+  // Keep existing caller/YAML-relative files authoritative, then check the
+  // runtime data root before falling back to the build-time data directory.
   if (given.is_relative()) {
     if (const char* root = std::getenv("HOLOHUB_DATA_DIR"); root != nullptr && root[0] != '\0') {
       const auto in_runtime_data = std::filesystem::path(root) / given;
@@ -892,7 +930,7 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
   using sar_config::ConfigValueKind;
   using sar_config::get_if;
   using sar_config::get_if_set;
-  const auto doc = radar::app::config::load_document(path);
+  const auto doc = radar::app::config::load_inherited_document(path);
   const auto yaml_dir = path.parent_path();
 
   AppConfig cfg;
@@ -1021,7 +1059,7 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
     if (n_tiles > 1) {
       if (cfg.cphd_paths.size() != 1) {
         throw std::runtime_error(
-            "lattice.tiles is one-file (mode 3); mode 5 uses "
+            "lattice.tiles requires one file (tiled strip); independent_images uses "
             "one lattice per cphd.path instead");
       }
       if (has_counts) {
@@ -1037,10 +1075,10 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
       if (n_tiles > 1) {
         throw std::runtime_error(
             "lattice.scroll and lattice.tiles are mutually "
-            "exclusive (mode 4 is one window, not tiles)");
+            "exclusive (continuous strip is one window, not tiles)");
       }
       if (cfg.cphd_paths.size() != 1) {
-        throw std::runtime_error("lattice.scroll is one-file (mode 4)");
+        throw std::runtime_error("lattice.scroll is one-file (continuous strip)");
       }
       if (has_counts) {
         throw std::runtime_error(
@@ -1106,7 +1144,7 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
     }
     if (cfg.cphd_paths.size() > 1 && doc.find("/enu_origin_ecef")) {
       throw std::runtime_error(
-          "enu_origin_ecef is a single-scene rotate; mode 5 "
+          "enu_origin_ecef is a single-scene rotate; independent_images "
           "forms in ECEF at each IARP instead");
     }
     for (size_t i = 0; i < cfg.cphd_paths.size(); ++i) {
@@ -1394,26 +1432,24 @@ inline AppConfig load_sar_config(const std::filesystem::path& path,
       }
     }
   }
-  if (const auto v = get_if_set<bool>(doc, "/visualize")) {
-    cfg.visualize = *v;
-  }
-  if (const auto v = get_if_set<int64_t>(doc, "/visualize_size")) {
-    cfg.visualize_size = *v;
-  }
-  if (cfg.visualize_size <= 0) {
-    throw std::runtime_error("visualize_size must be > 0");
-  }
-  if (const auto v = get_if_set<bool>(doc, "/skip_display_check")) {
-    cfg.skip_display_check = *v;
-  }
-  if (const auto v = get_if_set<bool>(doc, "/headless")) {
-    cfg.headless = *v;
-  }
-  if (const auto v = get_if_set<double>(doc, "/visualize_hold_s")) {
-    cfg.visualize_hold_s = *v;
-  }
-  if (!std::isfinite(cfg.visualize_hold_s)) {
-    throw std::runtime_error("visualize_hold_s must be finite");
-  }
+  cfg.visualization.enabled = false;
+  cfg.visualization.final_image_hold_s = 30.0;
+  cfg.visualization.window_title = "SAR formation";
+  if (doc.find("/app/visualization"))
+    cfg.visualization = doc.get<radar::app::VisualizationConfig>("/app/visualization");
+  if (!doc.find("/app/visualization/enabled"))
+    cfg.visualization.enabled = false;
+  if (!doc.find("/app/visualization/final_image_hold_s"))
+    cfg.visualization.final_image_hold_s = 30.0;
+  if (!doc.find("/app/visualization/window_title"))
+    cfg.visualization.window_title = "SAR formation";
+  cfg.visualization.validate_layout();
+  cfg.visualize = cfg.visualization.enabled;
+  cfg.headless = cfg.visualization.headless;
+  cfg.skip_display_check = cfg.visualization.skip_display_check;
+  cfg.visualize_size = cfg.visualization.max_side;
+  cfg.visualize_hold_s = cfg.visualization.final_image_hold_s;
+  cfg.explicit_window_size = doc.find("/app/visualization/window_width").has_value() ||
+                             doc.find("/app/visualization/window_height").has_value();
   return cfg;
 }

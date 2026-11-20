@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Mode-1 demo: Umbra spotlight of Hartsfield-Jackson Atlanta, the
+# Spotlight demo: Umbra spotlight of Hartsfield-Jackson Atlanta, the
 # collection the MatX sar_bp example images (INPUT_DATA.md).
 #
 # Download once (28.59 GiB), then form. The app never reaches the
@@ -77,8 +77,11 @@ backprojection:
 # visualize_size is the window (px); the LUT box-averages Atlanta's
 # 8192² image to that. visualize_hold_s keeps the window up after the
 # single emit. dump: true writes a full-resolution .npy.
-visualize: true
-visualize_size: 1024
-skip_display_check: false
-headless: false
-visualize_hold_s: 30
+
+app:
+  visualization:
+    enabled: true
+    max_side: 1024
+    skip_display_check: false
+    headless: false
+    final_image_hold_s: 30

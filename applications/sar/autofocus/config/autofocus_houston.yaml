@@ -23,7 +23,7 @@
 # tools/sar_data/recipes/houston_1m.yaml pulls it.
 
 cphd:
-  path: sar/mode02_houston_1p0m.cphd
+  path: sar/houston_1p0m.cphd
   names:
     - Houston
   sidecar: ""
@@ -66,4 +66,6 @@ phase_correction:
 aux_lattice:
   mode: polar
 
-visualize: false
+app:
+  visualization:
+    enabled: false

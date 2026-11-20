@@ -1,6 +1,6 @@
 # Atlanta vs NVRadar — forced matches
 
-Historical source-branch walk-back list for the mode-1 Umbra Atlanta demo against NVRadar's
+Historical source-branch walk-back list for the spotlight Umbra Atlanta demo against NVRadar's
 `spaceborne-spotlight-sar` example (same CPHD, same lut-vec kernel).
 This is a record of source-branch parity experiments, not an HSDK 5
 runbook. The HSDK 5 app has not been validated on the real Atlanta file. That is what tells us which match was load-bearing.

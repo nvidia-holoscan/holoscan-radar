@@ -129,6 +129,8 @@ class CPHDReaderOp : public holoscan::Operator<CphdReaderParams> {
   void maybe_warn_behind();
   MaxTensorExtents extents_;
   std::shared_ptr<FormationHud> hud_{};
+  std::shared_ptr<sar_progress::Monitor> progress_;
+  double progress_duration_s_{0};
   std::vector<std::string> files_;
   std::unique_ptr<cphd::CphdFile> file_;
   size_t file_index_{0};

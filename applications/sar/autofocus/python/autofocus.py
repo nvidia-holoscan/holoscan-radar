@@ -8,9 +8,17 @@ from pathlib import Path
 from holoscan_radar.applications.sar_graph import BuiltSarGraph, prepare
 
 
-def build_graph(config: str | Path, *, cphd_override: str | Path | None = None) -> BuiltSarGraph:
+def build_graph(
+    config: str | Path,
+    *,
+    cphd_override: str | Path | None = None,
+    presenter: str | None = None,
+    choose_presenter: bool = False,
+) -> BuiltSarGraph:
     """Compose the C++-equivalent processing graph using native SAR helpers."""
-    ctx = prepare("autofocus", config, cphd_override)
+    ctx = prepare(
+        "autofocus", config, cphd_override, presenter=presenter, choose_presenter=choose_presenter
+    )
     reader = ctx.op("cphd_reader")
     range_op = ctx.op("range_compression")
     manager = ctx.op("aperture_manager")
@@ -49,20 +57,24 @@ def build_graph(config: str | Path, *, cphd_override: str | Path | None = None) 
         ctx.add_flow(manager.range_profiles_out, oracle.range_profiles, queue_depth=1)
         ctx.add_flow(oracle.phase_correction, pc.phase_correction)
     else:
+        auxiliary_stage = ctx.op("af_aux_stage")
+        ctx.partition("estimate", auxiliary_stage)
+        ctx.add_flow(manager.range_profiles_out, auxiliary_stage.input, queue_depth=1)
+        estimator_stage = ctx.op("af_estimator_stage")
         aux = ctx.op("aux_bp")
         if ctx.flags["aux_polar"]:
             points = ctx.op("aux_points")
             ctx.partition("estimate", points)
-            ctx.add_flow(manager.range_profiles_out, points.range_profiles, queue_depth=1)
+            ctx.add_flow(auxiliary_stage.output, points.range_profiles, queue_depth=1)
             ctx.add_flow(points.range_profiles_out, aux.range_profiles, queue_depth=1)
             ctx.add_flow(points.sample_points, aux.sample_points, queue_depth=1)
         else:
-            ctx.add_flow(manager.range_profiles_out, aux.range_profiles, queue_depth=1)
+            ctx.add_flow(auxiliary_stage.output, aux.range_profiles, queue_depth=1)
         af = ctx.op("autofocus")
         resample = ctx.op("phase_resample")
         drain = ctx.op("af_image_drain")
         sharp = ctx.op("autofocus_sharpness")
-        for member in (aux, af, resample, drain):
+        for member in (aux, estimator_stage, af, resample, drain):
             ctx.partition("estimate", member)
         ctx.partition("sharpness", sharp)
         ctx.add_flow(manager.positions_out, aux.positions)
@@ -70,7 +82,8 @@ def build_graph(config: str | Path, *, cphd_override: str | Path | None = None) 
         ctx.add_flow(manager.control_out, aux.control)
         if ctx.flags["wire_weight"]:
             ctx.add_flow(manager.weight, aux.weight)
-        ctx.add_flow(aux.image, af.image)
+        ctx.add_flow(aux.image, estimator_stage.input)
+        ctx.add_flow(estimator_stage.output, af.image)
         ctx.add_flow(af.image_out, drain.input)
         ctx.add_flow(af.sharpness, sharp.sharpness)
         ctx.add_flow(af.termination, sharp.termination)
@@ -84,12 +97,15 @@ def build_graph(config: str | Path, *, cphd_override: str | Path | None = None) 
 
     ctx.add_flow(ingest, manager.range_profiles)
     ctx.add_flow(manager.range_profiles_out, pc.range_profiles, queue_depth=1)
-    ctx.add_flow(pc.range_profiles_out, bp.range_profiles, queue_depth=1)
+    final_stage = ctx.op("af_final_stage")
+    ctx.add_flow(pc.range_profiles_out, final_stage.input, queue_depth=1)
+    ctx.add_flow(final_stage.output, bp.range_profiles, queue_depth=1)
     ctx.add_flow(manager.positions_out, bp.positions)
     ctx.add_flow(manager.reference_position_out, bp.reference_position)
     ctx.add_flow(manager.control_out, bp.control)
     if ctx.flags["wire_weight"]:
         ctx.add_flow(manager.weight, bp.weight)
     ctx.partition("correction", pc)
+    ctx.partition("correction", final_stage)
     ctx.finish()
     return BuiltSarGraph(ctx)

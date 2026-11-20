@@ -5,12 +5,25 @@
 The source branch's Python-only simulator and sarpy fixture policy below are
 historical for this port. CI generates a small CPHD fixture with the C++
 `generate_cphd_fixture` executable, then runs C++ operator tests and synthetic
-`SarFormation` smoke tests for modes 1–5 plus headless Holoviz. The C++
+`SarFormation` smoke tests for spotlight, video SAR, tiled strip, continuous strip, and independent images plus headless Holoviz. The C++
 `radar_common/sim/sar_phase_history_sim.hpp` provides independent analytic
 point-target phase history. Tests assert numerical and graph properties within
 tolerances, not fixture checksums. Public CPHD collections are optional local
 validation and are tracked as open until this HSDK 5 binary is run on them.
 The Python generator and Python tests are outside this implementation.
+
+Interactive pulse diagnostics add a separate application gate: received counts
+must follow successful publication, GPU-completed counts must follow completion
+events, and signed evictions/replay must not inflate acquisition. Check sliced
+ticks with the same stamp, loop generations, early/final partial cadences,
+bounded-history overflow and recovery, paced first-batch release, and overlapped
+acquisition/formation ETA. Unknown or changed-grid timing must stay unknown.
+Hold a real CUDA stream pending and exhaust the fixed event ring to prove that
+progress polling never waits or claims completion; the existing synchronized
+image boundary may acknowledge completion without allocating another event.
+Exercise wide/compact native text layouts and actual C++/Python X11 bars through
+first-image handoff. Keep numerical/dump parity, main-frame upload independence,
+delayed-display recovery, and bounded host resources as separate assertions.
 
 ## Purpose
 
@@ -101,7 +114,7 @@ The convention leg. Real data is where frame, sign, epoch and reference-point co
 
 **Umbra CPHD collections are in hand.** Matching SICD products are also available and are **authoritative for geometry** — scene centre, grid vectors, spacings — making them the reference for whether the image is in the right place at the right scale.
 
-Which collections, their keys, headers and pull cost are in [INPUT_DATA.md](INPUT_DATA.md) → *Public collections, per mode*; they are credential-free and pinned per first-ship mode rather than chosen per test.
+Which collections, their keys, headers and pull cost are in [INPUT_DATA.md](INPUT_DATA.md) → *Public collections, per workflow*; they are credential-free and pinned per first-ship workflow rather than chosen per test.
 
 **SICD is not usable as a pixel-level golden reference.** The provider's image-formation chain includes autofocus corrections not recoverable from the delivered product, so a pixel comparison would measure the difference between two focus solutions rather than the module's correctness. Used that way it would produce a test that fails for the wrong reason and gets tuned until it passes.
 

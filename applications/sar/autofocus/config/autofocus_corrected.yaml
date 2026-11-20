@@ -53,7 +53,6 @@ phase_correction:
   sense: subtract
 aux_lattice:
   mode: polar
-visualize: false
 position_error:
   axis: look
   polynomial:
@@ -64,3 +63,7 @@ position_error:
 dump: true
 output:
   path: outputs/corrected/autofocus_corrected_{index}.npy
+
+app:
+  visualization:
+    enabled: false

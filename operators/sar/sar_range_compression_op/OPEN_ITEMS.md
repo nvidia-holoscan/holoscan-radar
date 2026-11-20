@@ -104,7 +104,7 @@ the shared problem rather than fix it. Two-slot ping-pong of
 `range_profiles` *and* of the reader's `phase_history` was tried 2026-08-26
 and reverted. RC output reuse raced BP's in-flight kernel; reader reuse
 removed the `cudaFree` device-sync that had been serializing decode off
-BP's GPU time. Mode-5 Ohio BP dropped ~8.7e11 → ~7.5–7.7e11 px·pls/s
+BP's GPU time. Independent images Ohio BP dropped ~8.7e11 → ~7.5–7.7e11 px·pls/s
 either way. A pooled allocator or a completion-event N-buffer is the
 remaining path; two slots are not enough when GPU lag ≫ one host tick.
 

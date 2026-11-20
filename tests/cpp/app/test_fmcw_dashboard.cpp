@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cuda_runtime_api.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -12,15 +14,18 @@
 #include <cstring>
 #include <deque>
 #include <optional>
+#include <memory>
 #include <limits>
 #include <ostream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+#include <variant>
 
 #include <holoscan/core/compile.hpp>
 #include <holoscan/core/graph.hpp>
+#include <holoscan/core/run.hpp>
 #include <holoscan/sensor_io/schemas/image_schema_traits.hpp>
 #include <holoscan/time/realtime_clock.hpp>
 #include <holoscan/testing/operator_test_harness.hpp>
@@ -29,10 +34,15 @@
 #include "radar_app/app/angle_presentation.hpp"
 #include "radar_app/app/gpu_placement.hpp"
 #include "radar_app/app/application_descriptions.hpp"
+#include "radar_app/sar/sar_overlay.hpp"
 #include "radar_app/viz/fmcw_dashboard_op.hpp"
 #include "radar_app/viz/dashboard_text.hpp"
 #include "radar_app/viz/fmcw_holoviz_op.hpp"
 #include "radar_app/viz/image_device_bridge_op.hpp"
+#include "radar_app/viz/image_fit.hpp"
+#include "radar_app/viz/frame_viewport.hpp"
+#include "radar_app/viz/frame_composer_op.hpp"
+#include "radar_app/viz/presentation_graph.hpp"
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
 #include "utils/tensor_fixtures.hpp"
 #include "utils/fixture_completion.hpp"
@@ -164,6 +174,99 @@ TEST(FmcwDashboardTest, ComposesOnlyMatchedImageAndTextIntoOneCudaFrame) {
   EXPECT_TRUE(found_native_text) << "SDK text must be present in the emitted GPU image";
 }
 
+TEST(SarFooterStatus, ComposesMatchedStatusBelowTheUnobscuredImage) {
+  using holoscan::testing::frame_at;
+  using holoscan::testing::input;
+  namespace sar = radar::app::sar;
+  constexpr int width = 640, ih = 64, fh = 112;
+  constexpr DLDataType rgba_type{kDLUInt, 8U, 1U};
+  std::vector<std::uint8_t> pixels(width * ih * 4, 255);
+  for (int y = 0; y < ih; ++y) {
+    for (int x = 0; x < width; ++x) {
+      pixels[4 * (y * width + x)] = x < width / 2 ? 40 : 160;
+      pixels[4 * (y * width + x) + 1] = y < ih / 2 ? 60 : 180;
+    }
+  }
+  holoscan::schema::ImageT image;
+  image.width = width;
+  image.height = ih;
+  image.encoding = holoscan::schema::ImageEncoding_RGBA8;
+  image.data = radar::testing::to_device_tensor(pixels, {ih, width, 4}, rgba_type);
+  std::vector<std::uint8_t> records(sar::kHudRuns * sar::kHudRowBytes);
+  sar::OverlayConfig layout;
+  layout.status_width = 320;
+  layout.footer_height = fh;
+  layout.canvas_width = width;
+  layout.image_height = ih;
+  sar::FormationDiag diagnostic;
+  diagnostic.collection_elapsed_s = 94.7;
+  diagnostic.bp_compute_s = 8.2;
+  diagnostic.budget_s = 2.4;
+  diagnostic.budget_playback_rate = 0.2;
+  diagnostic.pulses = 1000;
+  diagnostic.pixels = 315700000;
+  sar::write_footer_hud_rows(records.data(),
+                             {std::string(64, 'W') + "  64 x 640", "8.2s  38.5 Gpx*pulse/s",
+                              sar::format_form_latency(0.8)},
+                             diagnostic, false, layout);
+  holoscan::visualization::TextRunHeader primary{}, secondary{};
+  std::memcpy(&primary, records.data(), sizeof(primary));
+  std::memcpy(&secondary, records.data() + 3 * sar::kHudRowBytes, sizeof(secondary));
+  EXPECT_GT(primary.size_px, secondary.size_px);
+  auto row_text = [&](std::size_t row) {
+    return reinterpret_cast<const char*>(records.data() + row * sar::kHudRowBytes +
+                                         sar::kTextRunHeaderBytes);
+  };
+  EXPECT_STREQ(row_text(1), "64 x 640 pixels  1,000 pulses");
+  EXPECT_STREQ(row_text(2), "BP work: 315.7 Gpx*pulses");
+  EXPECT_STREQ(row_text(3), "Latency: 8.2s / 12.0s @0.2x");
+  // Both metrics use actual BP work, not acquisition wall time, final-batch
+  // latency, display dimensions, or a differently rounded report sample.
+  EXPECT_STREQ(row_text(4), "Throughput: 38.5 Gpx*pulses/sec");
+  EXPECT_STREQ(row_text(5), "");
+  const auto text = radar::testing::to_pageable_host_tensor(
+      records, {sar::kHudRuns, sar::kHudRowBytes}, rgba_type);
+  auto harness = holoscan::testing::create_operator_test<viz::FrameComposerOp>(
+      width, ih + fh, sar::kHudMaxGlyphs, true, 0U, 0, ih);
+  harness.push_frame(frame_at(std::chrono::milliseconds{1}, input("image", image)));
+  harness.push_frame(frame_at(std::chrono::milliseconds{2}, input("text", *text)));
+  harness.push_frame(
+      frame_at(std::chrono::milliseconds{3}, input("image", image), input("text", *text)));
+  const holoscan::DeviceId device{radar::app::application_device()};
+  harness.input_source_device("image", device);
+  harness.output_device("output", device);
+  harness.capture_snapshot<holoscan::schema::ImageT>("output", 1U, width * (ih + fh) * 4);
+  radar::testing::FixtureCompletion completion;
+  auto running = harness.run_async(completion.run_options());
+  const bool ready = completion.wait_for_output(running, "output", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(ready) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto composed = result.snapshot<holoscan::schema::ImageT>("output");
+  const auto output =
+      radar::testing::to_host(composed.tensor(holoscan::schema::ImageTensorFields::data));
+  ASSERT_EQ(output.shape, (std::vector<std::int64_t>{ih + fh, width, 4}));
+  const auto* rgba = output.as<std::uint8_t>();
+  int status_pixels = 0;
+  for (int y = 0; y < ih + fh; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const auto value = rgba[4 * (y * width + x)];
+      if (y < ih) {
+        for (int channel = 0; channel < 4; ++channel)
+          ASSERT_EQ(rgba[4 * (y * width + x) + channel], pixels[4 * (y * width + x) + channel])
+              << "Status must not obscure, crop, or rescale the SAR image";
+      } else if (x >= layout.status_width) {
+        ASSERT_EQ(value, 0U) << "Status must not overlap the timeline";
+      } else if (value > 100U) {
+        ++status_pixels;
+      }
+    }
+  }
+  EXPECT_GT(status_pixels, 100) << "SDK text must render in the footer";
+}
+
 TEST(ImageDeviceBridgeTest, PreservesPixelsAndMetadataThroughHostStaging) {
   using holoscan::schema::ImageT;
   using holoscan::testing::frame_at;
@@ -231,6 +334,65 @@ TEST(ImageDeviceBridgeTest, PreservesPixelsAndMetadataThroughHostStaging) {
   EXPECT_EQ(result.metadata().color_space, image.color_space);
   EXPECT_EQ(result.sample_metadata().capture_time().timestamp_ns,
             std::chrono::duration_cast<std::chrono::nanoseconds>(time).count());
+}
+
+TEST(FmcwDashboardTest, BoundsWideFooterTextureByItsActualHeight) {
+  viz::FrameComposerOp composer(8192, 112, 4096U);
+  const auto& layer = std::get<holoscan::visualization::ImageLayerDesc>(
+      composer.layer_stack().layers().front().desc);
+  EXPECT_EQ(layer.max_width, 8192U);
+  EXPECT_EQ(layer.max_height, 112U);
+}
+
+TEST(ImageDeviceBridgeTest, CropsOnlyVisibleFooterRowsAndPreservesCaptureTime) {
+  using holoscan::schema::ImageT;
+  constexpr int width = 17, height = 9, visible_width = 7, visible_height = 4;
+  std::vector<std::uint8_t> pixels(width * height * 4);
+  for (std::size_t i = 0; i < pixels.size(); ++i)
+    pixels[i] = static_cast<std::uint8_t>(i * 17U + 3U);
+  ImageT image;
+  image.width = width;
+  image.height = height;
+  image.encoding = holoscan::schema::ImageEncoding_RGBA8;
+  image.data =
+      radar::testing::to_device_tensor(pixels, {height, width, 4}, DLDataType{kDLUInt, 8U, 1U});
+  auto viewport =
+      std::make_shared<viz::FrameViewport>(visible_width, visible_height, width, height);
+  viewport->drawn(123000000, visible_width, visible_height);
+  viewport->set(width, height);  // Resize raced ahead of this completed frame.
+  auto harness =
+      holoscan::testing::create_operator_test<viz::ImageDownloadOp>(width, height, viewport);
+  harness.push_frame(holoscan::testing::frame_at(std::chrono::milliseconds{123},
+                                                 holoscan::testing::input("image_in", image)));
+  harness.input_source_device("image_in", holoscan::DeviceId{radar::app::application_device()});
+  harness.capture_snapshot<ImageT>("image_out", 1U, pixels.size());
+  radar::testing::FixtureCompletion completion;
+  auto running = harness.run_async(completion.run_options());
+  const bool ready = completion.wait_for_output(running, "image_out", 1U);
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(ready);
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto frame = result.snapshot<ImageT>("image_out");
+  const auto actual =
+      radar::testing::to_host(frame.tensor(holoscan::schema::ImageTensorFields::data));
+  EXPECT_EQ(frame.metadata().width, visible_width);
+  EXPECT_EQ(frame.metadata().height, visible_height);
+  ASSERT_EQ(actual.data.size(), visible_width * visible_height * 4U);
+  for (int y = 0; y < visible_height; ++y)
+    EXPECT_EQ(std::memcmp(actual.data.data() + y * visible_width * 4, pixels.data() + y * width * 4,
+                          visible_width * 4),
+              0);
+  EXPECT_EQ(frame.sample_metadata().capture_time().timestamp_ns, 123000000);
+  viewport->set(width * 2, height * 2);
+  EXPECT_EQ(viewport->get(), (std::pair{width, height}));
+  viewport->set(0, 0);
+  EXPECT_EQ(viewport->get(), (std::pair{1, 1}));
+  for (int i = 0; i < 65; ++i)
+    viewport->drawn(i, 1, 1);
+  EXPECT_FALSE(viewport->drawn(123000000));
+  EXPECT_EQ(viewport->drawn(64), (std::pair{1, 1}));
 }
 
 struct PowerLegendCase {
@@ -823,3 +985,263 @@ TEST(FmcwDashboardTest, TruthVisibilityTracksTargetMotion) {
 }
 
 }  // namespace
+
+TEST(CompletedFrameFit, AddsBordersWithoutChangingTheScientificCanvas) {
+  constexpr int width = 8, height = 4;
+  std::vector<std::uint8_t> input(width * height * 4, 127);
+  std::vector<std::uint8_t> output(input.size());
+  void* source = nullptr;
+  void* target = nullptr;
+  ASSERT_EQ(cudaMalloc(&source, input.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&target, output.size()), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(source, input.data(), input.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  EXPECT_EQ(viz::fit_image(source, target, width, height, 400, 400, nullptr), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  EXPECT_EQ(output[0], 0);
+  EXPECT_EQ(output[3], 255);
+  EXPECT_EQ(output[width * 4], 127);
+  EXPECT_EQ(output[(height - 1) * width * 4], 0);
+  EXPECT_EQ(cudaFree(target), cudaSuccess);
+  EXPECT_EQ(cudaFree(source), cudaSuccess);
+}
+
+namespace {
+class AgedCompletedFrameSourceOp final : public holoscan::Operator<> {
+ public:
+  explicit AgedCompletedFrameSourceOp(std::shared_ptr<radar::app::FrameProgress> progress,
+                                      std::chrono::seconds age = std::chrono::seconds{30})
+  : progress_(std::move(progress)), age_(age) {}
+  void setup(holoscan::OperatorSpec& spec) override {
+    spec.output(image)
+        .tensor_field(holoscan::schema::ImageTensorFields::data)
+        .produces_tensor(holoscan::TensorOutputSpec{
+            .representation = {.memory_kind = holoscan::MemoryKind::kCudaDevice,
+                               .dtype = DLDataType{kDLUInt, 8U, 1U},
+                               .rank = 3U,
+                               .strides = holoscan::TensorStridePolicy::kContiguousOnly},
+            .bounds = holoscan::TensorBounds{.max_rank = 3U, .max_byte_span = 16U},
+            .storage = holoscan::TensorOutputStorage::kRuntimePool});
+  }
+  holoscan::Contract contract() const override {
+    holoscan::Contract result;
+    result.trigger(holoscan::OnClock{.period = std::chrono::milliseconds{10}});
+    return result;
+  }
+  holoscan::expected<void, holoscan::Error> compute(holoscan::ExecutionContext& context) override {
+    if (sent_)
+      return {};
+    const std::array<int64_t, 3> shape{2, 2, 4};
+    HOLOSCAN_TRY(auto loan, image.allocate_tensor(holoscan::TensorLoanRequest{
+                                .shape = shape, .dtype = DLDataType{kDLUInt, 8U, 1U}}));
+    HOLOSCAN_TRY(auto writer, loan.write(context.cuda_stream()));
+    if (cudaMemsetAsync(writer.data(), 127, writer.byte_size(), context.cuda_stream().get()) !=
+        cudaSuccess)
+      return holoscan::make_unexpected(holoscan::Error{holoscan::ErrorCode::kFailure});
+    HOLOSCAN_RETURN_IF_ERROR(std::move(writer).commit());
+    holoscan::schema::ImageT descriptor{};
+    descriptor.width = 2;
+    descriptor.height = 2;
+    descriptor.encoding = holoscan::schema::ImageEncoding_RGBA8;
+    auto stamp = context.activation_time();
+    stamp.timestamp_ns -= std::chrono::duration_cast<std::chrono::nanoseconds>(age_).count();
+    progress_->expected_ns.store(stamp.timestamp_ns);
+    HOLOSCAN_RETURN_IF_ERROR(image.emit_tensor(std::move(loan), descriptor,
+                                               holoscan::EmitOptions{.capture_time = stamp}));
+    sent_ = true;
+    return {};
+  }
+  holoscan::Output<holoscan::schema::ImageT> image{"image"};
+
+ private:
+  std::shared_ptr<radar::app::FrameProgress> progress_;
+  bool sent_{false};
+  std::chrono::seconds age_;
+};
+}  // namespace
+
+TEST(CompletedFrameReplay, AcceptsOldAcquisitionTimesAndRetainsTheOriginalStamp) {
+  auto progress = std::make_shared<radar::app::FrameProgress>();
+  holoscan::Graph graph{"aged-completed-frame"};
+  auto source = graph.op<AgedCompletedFrameSourceOp>("source", progress);
+  auto replay = graph.op<viz::CompletedFrameReplayOp>("replay", 2, 2, 0.1,
+                                                      std::shared_ptr<radar::app::FrameProgress>{});
+  auto sink = graph.op<viz::CompletedFrameSinkOp>("sink", progress);
+  graph.partition("source").add(source);
+  graph.partition("replay").add(replay);
+  graph.partition("sink").add(sink);
+  graph.add_flow(source->image, replay->image);
+  graph.add_flow(replay->output, sink->image);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>(
+      "clock", holoscan::RealtimeClock::Config{.initial_time_offset = 60.0}));
+  holoscan::CompileOptions options;
+  const auto device = radar::app::application_device();
+  for (const auto* name : {"source", "replay"})
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = name,
+        .output_port = std::string(name) == "source" ? "image" : "output",
+        .device = device});
+  const auto plan = holoscan::compile(graph, options);
+  ASSERT_TRUE(plan.ok()) << plan.json();
+  auto session = holoscan::run_async(plan);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+  while ((progress->expected_ns.load() < 0 ||
+          progress->capture_ns.load() != progress->expected_ns.load()) &&
+         std::chrono::steady_clock::now() < deadline &&
+         !session.wait_for(std::chrono::milliseconds{10})) {
+  }
+  session.request_stop();
+  session.wait();
+  EXPECT_TRUE(session.diagnostics().empty());
+  ASSERT_GE(progress->expected_ns.load(), 0);
+  EXPECT_EQ(progress->capture_ns.load(), progress->expected_ns.load());
+}
+
+TEST(CompletedFrameDock, KeepsFooterHeightAndImageFitIndependentOnResize) {
+  constexpr int width = 8, ih = 4, fh = 2;
+  std::vector<std::uint8_t> image(width * ih * 4, 127), footer(width * fh * 4, 200);
+  std::vector<std::uint8_t> output(width * (ih + fh) * 4);
+  void *main = nullptr, *strip = nullptr, *target = nullptr;
+  ASSERT_EQ(cudaMalloc(&main, image.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&strip, footer.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&target, output.size()), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(main, image.data(), image.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(strip, footer.data(), footer.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  // A doubled window height leaves the footer two physical pixels high: one
+  // row in the bounded six-row presentation canvas. The SAR region can fit.
+  ASSERT_EQ(viz::compose_docked_panels(main, strip, target, width, ih, fh, 8, 12, true, nullptr),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  EXPECT_EQ(output[0], 0);  // letterbox above the cached SAR canvas
+  EXPECT_EQ(output[width * 2 * 4], 127);
+  EXPECT_EQ(output[width * 4 * 4], 0);
+  EXPECT_EQ(output[width * 5 * 4], 200);  // independently positioned footer
+  ASSERT_EQ(viz::compose_docked_panels(nullptr, strip, target, width, ih, fh, 8, 3, false, nullptr),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  EXPECT_EQ(output[0], 0);  // timeline is valid before the first SAR image
+  EXPECT_EQ(output[width * 5 * 4], 200);
+  EXPECT_EQ(cudaFree(target), cudaSuccess);
+  EXPECT_EQ(cudaFree(strip), cudaSuccess);
+  EXPECT_EQ(cudaFree(main), cudaSuccess);
+}
+
+TEST(CompletedFrameDock, KeepsStatusWithItsImageAndReservesTimelineSpaceOnResize) {
+  constexpr int width = 8, ih = 4, fh = 2, sw = 2;
+  std::vector<std::uint8_t> image(width * (ih + fh) * 4, 127);
+  std::fill(image.begin() + width * ih * 4, image.end(), 99);
+  std::vector<std::uint8_t> footer((width - sw) * fh * 4, 200);
+  std::vector<std::uint8_t> output(image.size());
+  void *main = nullptr, *strip = nullptr, *target = nullptr;
+  ASSERT_EQ(cudaMalloc(&main, image.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&strip, footer.size()), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&target, output.size()), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(main, image.data(), image.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(strip, footer.data(), footer.size(), cudaMemcpyHostToDevice), cudaSuccess);
+  for (const int scale : {1, 2}) {
+    ASSERT_EQ(viz::compose_docked_panels(main, strip, target, width, ih, fh, width * scale,
+                                         (ih + fh) * scale, false, nullptr, sw),
+              cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    EXPECT_EQ(output[0], 127);
+    for (int x = 0; x < width; ++x)
+      EXPECT_EQ(output[4 * ((ih + fh - 1) * width + x)], x * scale < sw ? 99 : 200);
+  }
+  ASSERT_EQ(viz::compose_docked_panels(nullptr, strip, target, width, ih, fh, width, ih + fh, false,
+                                       nullptr, sw),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  EXPECT_EQ(output[4 * ih * width], 0);           // no status before its image
+  EXPECT_EQ(output[4 * (ih * width + sw)], 200);  // timeline already updates
+  EXPECT_EQ(cudaFree(target), cudaSuccess);
+  EXPECT_EQ(cudaFree(strip), cudaSuccess);
+  EXPECT_EQ(cudaFree(main), cudaSuccess);
+}
+
+TEST(CompletedFrameDock, SamplesResizedFooterInPhysicalPixelsInsteadOfStretching) {
+  constexpr int width = 8, image_height = 4, footer_height = 2, footer_width = 16;
+  constexpr DLDataType rgba{kDLUInt, 8U, 1U};
+  std::vector<std::uint8_t> footer(footer_width * footer_height * 4, 255);
+  for (int y = 0; y < footer_height; ++y)
+    for (int x = 0; x < footer_width; ++x)
+      footer[4 * (y * footer_width + x)] = static_cast<std::uint8_t>(10 + x);
+  auto source = radar::testing::to_device_tensor(footer, {footer_height, footer_width, 4}, rgba);
+  std::vector<std::uint8_t> output(width * (image_height + footer_height) * 4);
+  void* target = nullptr;
+  ASSERT_EQ(cudaMalloc(&target, output.size()), cudaSuccess);
+  ASSERT_EQ(viz::compose_docked_panels(nullptr, source->data(), target, width, image_height,
+                                       footer_height, 16, 6, false, nullptr, 2, footer_width),
+            cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(output.data(), target, output.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  for (int x = 1; x < width; ++x)
+    EXPECT_EQ(output[4 * (image_height * width + x)], 10 + 2 * x - 1);
+  EXPECT_EQ(cudaFree(target), cudaSuccess);
+}
+
+TEST(CompletedFrameDock, RetainsOldContentStampsWithoutWaitingForMatchingTimelineTimes) {
+  auto progress = std::make_shared<radar::app::FrameProgress>();
+  holoscan::Graph graph{"aged-docked-frame"};
+  auto source = graph.op<AgedCompletedFrameSourceOp>("source", progress);
+  auto dock = graph.op<viz::DockedFrameOp>("dock", 2, 2, 2, 20.0, true, std::string{},
+                                           std::shared_ptr<radar::app::FrameProgress>{});
+  auto footer = graph.op<AgedCompletedFrameSourceOp>(
+      "footer", std::make_shared<radar::app::FrameProgress>(), std::chrono::seconds{40});
+  auto sink = graph.op<viz::CompletedFrameSinkOp>("sink", progress);
+  graph.partition("source").add(source);
+  graph.partition("footer").add(footer);
+  graph.partition("dock").add(dock);
+  graph.partition("sink").add(sink);
+  graph.add_flow(source->image, dock->image);
+  graph.add_flow(footer->image, dock->footer);
+  // Independent panel acquisition times must never form an exact timestamp join.
+  graph.add_flow(dock->output, sink->image);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>(
+      "clock", holoscan::RealtimeClock::Config{.initial_time_offset = 60.0}));
+  holoscan::CompileOptions options;
+  for (const auto* name : {"source", "footer", "dock"})
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = name,
+        .output_port = std::string(name) == "dock" ? "output" : "image",
+        .device = radar::app::application_device()});
+  const auto plan = holoscan::compile(graph, options);
+  ASSERT_TRUE(plan.ok()) << plan.json();
+  auto session = holoscan::run_async(plan);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+  while ((progress->expected_ns.load() < 0 ||
+          progress->capture_ns.load() != progress->expected_ns.load()) &&
+         std::chrono::steady_clock::now() < deadline &&
+         !session.wait_for(std::chrono::milliseconds{10})) {
+  }
+  session.request_stop();
+  session.wait();
+  EXPECT_TRUE(session.diagnostics().empty());
+  ASSERT_GE(progress->expected_ns.load(), 0);
+  EXPECT_EQ(progress->capture_ns.load(), progress->expected_ns.load());
+}
+
+TEST(CompletedFrameDock, CompilesTheActualNativePresentationBranchWithoutOpeningAWindow) {
+  holoscan::Graph graph{"native-docked-wiring"};
+  auto progress = std::make_shared<radar::app::FrameProgress>();
+  auto image = graph.op<AgedCompletedFrameSourceOp>("image", progress);
+  auto footer = graph.op<AgedCompletedFrameSourceOp>("footer", progress);
+  auto image_partition = graph.partition("image");
+  auto footer_partition = graph.partition("footer");
+  image_partition.add(image);
+  footer_partition.add(footer);
+  radar::app::VisualizationConfig config;
+  config.x11_presentation = false;
+  config.window_title = "native dock compile check";
+  holoscan::CompileOptions options;
+  for (const auto* name : {"image", "footer"})
+    options.deployment.bind_tensor_output_device(holoscan::TensorOutputDevicePlacement{
+        .operator_path = name,
+        .output_port = "image",
+        .device = holoscan::DeviceId{radar::app::application_composer_device()}});
+  viz::add_docked_presentation(graph, options, image_partition, image->image, footer_partition,
+                               footer->image, 2, 2, 2, config, progress);
+  graph.set_default_clock(graph.add_clock<holoscan::RealtimeClock>("clock"));
+  // Compilation exercises the real helper's partitions, device placement and
+  // native viewer ports. Window/Vulkan surface creation belongs to start().
+  const auto plan = holoscan::compile(graph, options);
+  EXPECT_TRUE(plan.ok()) << plan.json();
+}

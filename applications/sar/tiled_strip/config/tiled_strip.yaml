@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Mode-3 demo: tiled strip of Imperial Valley Capella stripmap
-# (INPUT_DATA.md). Same collect as mode 4; mode 3 steps geometry
+# Tiled strip demo: tiled strip of Imperial Valley Capella stripmap
+# (INPUT_DATA.md). Same collect as continuous strip; tiled strip steps geometry
 # and resets (seams), a parent mosaic holds finished squares so
 # Holoviz is the strip, not the last chip. Pull first (~3.45 GiB);
 # the app never reaches the network.
 #
 #   python3 tools/sar_data/pull_cphd.py --app tiled_strip \
-#     --dest data/sar/imperial
+#     --dest data/sar
 #   Paths below resolve under the build data directory (default: data/).
 #
 # nvec 159051 does not divide by 10; pulse_range drops the last
@@ -30,7 +30,7 @@
 # formation and dump keep (v,u). visualize_size bounds the raster.
 
 cphd:
-  path: sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
+  path: sar/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
   names:
     - Imperial Valley
   sidecar: ""
@@ -61,8 +61,10 @@ range_compression:
 backprojection:
   coordinate_frame: ecef
 
-visualize: true
-visualize_size: 1400
-skip_display_check: false
-headless: false
-visualize_hold_s: -1
+app:
+  visualization:
+    enabled: true
+    max_side: 1400
+    skip_display_check: false
+    headless: false
+    final_image_hold_s: -1

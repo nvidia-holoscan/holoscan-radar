@@ -11,6 +11,7 @@
 
 #include "app/config_fixture.hpp"
 #include "radar_app/fmcw/config_loader.hpp"
+#include "radar_app/app/visualization_config.hpp"
 
 namespace {
 namespace config = holoscan::radar::app::config;
@@ -100,3 +101,36 @@ TEST(FmcwConfigLoader, Accepts32FilesAndRejects33) {
   EXPECT_THROW(config::load_inherited_document(first), std::runtime_error);
 }
 }  // namespace
+
+TEST(SharedGuiConfig, NormalizesAliasesBeforeInheritanceAndHonorsSameFileCommonFields) {
+  ConfigDirectory files;
+  files.write("base.yaml", "app: {visualization: {enabled: true, final_image_hold_s: 30}}\n");
+  const auto child =
+      files.write("child.yaml",
+                  "extends: base.yaml\nvisualize: false\n"
+                  "visualize_hold_s: 2\napp: {visualization: {headless: true}}\nheadless: false\n");
+  const auto doc = config::load_inherited_document(child);
+  EXPECT_FALSE(doc.get<bool>("/app/visualization/enabled"));
+  EXPECT_TRUE(doc.get<bool>("/app/visualization/headless"));
+  EXPECT_DOUBLE_EQ(doc.get<double>("/app/visualization/final_image_hold_s"), 2.0);
+}
+
+TEST(SharedGuiConfig, DefaultsToDockedTimelineAndPreservesInheritedWindowOverride) {
+  ConfigDirectory files;
+  files.write("base.yaml", "app: {visualization: {timeline: {display_rate_hz: 7}}}\n");
+  const auto child = files.write(
+      "child.yaml", "extends: base.yaml\napp: {visualization: {timeline: {placement: window}}}\n");
+  const auto base = config::load_inherited_document(child.parent_path() / "base.yaml")
+                        .get<holoscan::radar::app::VisualizationConfig>("/app/visualization");
+  const auto inherited =
+      config::load_inherited_document(child).get<holoscan::radar::app::VisualizationConfig>(
+          "/app/visualization");
+  EXPECT_EQ(base.timeline.placement, "bottom");
+  EXPECT_EQ(base.timeline.window_height, 112);
+  EXPECT_EQ(inherited.timeline.placement, "window");
+  EXPECT_DOUBLE_EQ(inherited.timeline.display_rate_hz, 7.0);
+  EXPECT_NO_THROW(inherited.validate_layout());
+  auto invalid = inherited;
+  invalid.timeline.placement = "overlay";
+  EXPECT_THROW(invalid.validate_layout(), std::runtime_error);
+}

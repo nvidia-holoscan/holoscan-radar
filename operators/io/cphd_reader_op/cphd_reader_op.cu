@@ -204,6 +204,8 @@ void check_sample_axis(const std::vector<double>& values, const char* name) {
 template <typename T, typename TGeom>
 struct CPHDReaderOp<T, TGeom>::Batch {
   int64_t first{}, count{}, samples{};
+  int64_t progress_offset{}, progress_total{};
+  double progress_duration_s{};
   size_t file_index{};
   bool collection_start{}, nonfinite{};
   LastMeanApc mean_apc{};
@@ -373,10 +375,18 @@ void CPHDReaderOp<T, TGeom>::open_file() {
     throw std::invalid_argument("CPHDReaderOp: pulse range or sample count exceeds bounds");
   }
   next_pulse_ = first_pulse_;
+  progress_duration_s_ = 0;
+  if (progress_) {
+    const auto first = file_->read_pvp(p.channel, "TxTime", first_pulse_, 1, 1).front();
+    const auto last = file_->read_pvp(p.channel, "TxTime", last_pulse_ - 1, 1, 1).front();
+    if (std::isfinite(first) && std::isfinite(last) && last >= first)
+      progress_duration_s_ = last - first;
+  }
 }
 
 template <typename T, typename TGeom>
 void CPHDReaderOp<T, TGeom>::start() {
+  progress_ = hud_ ? hud_->progress() : nullptr;
   stopped_ = false;
   capture_time_ns_.reset();
   stage_ = Stage::kRead;
@@ -539,6 +549,9 @@ std::unique_ptr<typename CPHDReaderOp<T, TGeom>::Batch> CPHDReaderOp<T, TGeom>::
       .first = first,
       .count = count,
       .samples = info.num_samples,
+      .progress_offset = first - first_pulse_,
+      .progress_total = last_pulse_ - first_pulse_,
+      .progress_duration_s = progress_duration_s_,
       .file_index = file_index_,
       .collection_start = first == first_pulse_,
       .nonfinite = nonfinite,
@@ -615,6 +628,11 @@ expected<void, Error> CPHDReaderOp<T, TGeom>::compute(ExecutionContext& context)
       auto& current = *batch_;
       current.capture_time = context.activation_time();
       capture_time_ns_ = current.capture_time.timestamp_ns;
+      if (progress_)
+        progress_->begin_packet(*capture_time_ns_, static_cast<int64_t>(current.file_index),
+                                current.progress_offset, current.count, current.progress_total,
+                                current.progress_duration_s, p.playback_rate,
+                                current.collection_start, current.times);
       if (current.collection_start) {
         const auto now = std::chrono::steady_clock::now();
         collection_wall_start_ = now;
@@ -790,6 +808,8 @@ expected<void, Error> CPHDReaderOp<T, TGeom>::compute(ExecutionContext& context)
                                   });
     }
     last_packet_at_ = std::chrono::steady_clock::now();
+    if (progress_)
+      progress_->received(batch.capture_time.timestamp_ns);
     publish_playback(!final);
     HOLOSCAN_LOG_DEBUG("CPHDReaderOp: pulses {}-{} collect={:.3f}s wall={:.3f}s slack={:.3f}s",
                        batch.first, batch.first + count - 1, collect_span, playback_.wall_s,

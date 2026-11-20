@@ -30,10 +30,10 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -42,6 +42,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
+from sar_data.progress import DownloadProgress
 
 UMBRA_BUCKET = "umbra-open-data-catalog"
 UMBRA_HTTPS = f"https://{UMBRA_BUCKET}.s3.us-west-2.amazonaws.com/"
@@ -50,7 +51,7 @@ CAPELLA_BUCKET = "capella-open-data"
 CAPELLA_HTTPS = f"https://{CAPELLA_BUCKET}.s3.amazonaws.com/"
 
 # Settled 2026-08-25. A swap needs a broken key or an explicit reopen.
-MODE5: list[tuple[str, str]] = [
+INDEPENDENT_IMAGES: list[tuple[str, str]] = [
     (
         "Panama Canal",
         "sar-data/tasks/Panama Canal, Panama/"
@@ -96,7 +97,7 @@ MODE5: list[tuple[str, str]] = [
 ]
 
 # Re-verified 2026-08-30. INPUT_DATA.md open item 3.
-# Modes 3 and 4 share Imperial Valley. Palmdale stays in
+# Tiled strip and continuous strip share Imperial Valley. Palmdale stays in
 # INPUT_DATA as an optional CPHD 1.0.1 spare, not this pin.
 IMPERIAL_VALLEY: list[tuple[str, str]] = [
     (
@@ -107,7 +108,7 @@ IMPERIAL_VALLEY: list[tuple[str, str]] = [
     ),
 ]
 
-# The default autofocus preset uses this collect, distinct from MODE5's Kourou.
+# The default autofocus preset uses this collect, distinct from INDEPENDENT_IMAGES's Kourou.
 AUTOFOCUS_KOUROU: list[tuple[str, str]] = [
     (
         "Kourou autofocus",
@@ -150,8 +151,8 @@ def dataset_catalog() -> dict[Path, Dataset]:
     datasets = []
     for collects, bucket, prefix, directory, check in (
         (AUTOFOCUS_KOUROU, UMBRA_BUCKET, UMBRA_HTTPS, "sar", False),
-        (IMPERIAL_VALLEY, CAPELLA_BUCKET, CAPELLA_HTTPS, "sar/imperial", False),
-        (MODE5, UMBRA_BUCKET, UMBRA_HTTPS, "sar/mode5", True),
+        (IMPERIAL_VALLEY, CAPELLA_BUCKET, CAPELLA_HTTPS, "sar", False),
+        (INDEPENDENT_IMAGES, UMBRA_BUCKET, UMBRA_HTTPS, "sar", True),
     ):
         for scene, key in collects:
             datasets.append(
@@ -189,7 +190,6 @@ def dataset_catalog() -> dict[Path, Dataset]:
 IARP_COLLISION_M = 1000.0
 HTTPS_TIMEOUT_S = 60.0
 CHUNK_BYTES = 1024 * 1024
-PROGRESS_INTERVAL_S = 0.25
 
 
 @dataclass(frozen=True)
@@ -300,26 +300,6 @@ def https_url(https_prefix: str, key: str) -> str:
     return https_prefix + urllib.parse.quote(key, safe="/")
 
 
-def format_bytes(num_bytes: float) -> str:
-    size = float(num_bytes)
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if size < 1024.0 or unit == "TiB":
-            if unit == "B":
-                return f"{int(size)} B"
-            return f"{size:.1f} {unit}"
-        size /= 1024.0
-    return f"{size:.1f} TiB"
-
-
-def format_duration(seconds: float) -> str:
-    whole = int(max(0.0, seconds))
-    hours, rem = divmod(whole, 3600)
-    minutes, secs = divmod(rem, 60)
-    if hours:
-        return f"{hours:d}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:02d}:{secs:02d}"
-
-
 class UniqueKeySafeLoader(yaml.SafeLoader):
     """Reject ambiguous mappings while retaining safe YAML construction."""
 
@@ -421,11 +401,7 @@ def jobs_for(app: str, dest: Path | None) -> list[PullJob]:
     for name in ALL_APPS if app == "all" else (app,):
         for job in jobs_for_config(APPS[name]):
             if dest is not None:
-                directory = dest
-                if app == "all":
-                    root = Path(os.environ.get("HOLOHUB_DATA_DIR", "data")) / "sar"
-                    directory /= job.dest_dir.relative_to(root)
-                job = replace(job, dest_dir=directory)
+                job = replace(job, dest_dir=dest)
             jobs[job.destination.resolve()] = job
     return list(jobs.values())
 
@@ -438,62 +414,13 @@ def prepare_one(job: PullJob, force: bool, index: int, total: int) -> Path:
         str(job.recipe),
         "--output",
         str(job.destination),
+        "--progress-label",
+        f"[{index}/{total}] {job.scene}",
     ]
     if force:
         command.append("--force")
     subprocess.run(command, check=True)
     return job.destination
-
-
-class DownloadProgress:
-    """Single-line byte progress with rate and, when the size is known, ETA."""
-
-    def __init__(self, label: str, total: int | None) -> None:
-        self.label = label
-        self.total = total if total and total > 0 else None
-        self.done = 0
-        self.started = time.monotonic()
-        self.last_draw = 0.0
-        self.tty = sys.stderr.isatty()
-
-    def add(self, num_bytes: int) -> None:
-        self.done += num_bytes
-        self._draw(final=False)
-
-    def set(self, num_bytes: int) -> None:
-        self.done = num_bytes
-        self._draw(final=False)
-
-    def finish(self) -> None:
-        self._draw(final=True)
-
-    def abort(self) -> None:
-        if self.tty:
-            print(file=sys.stderr)
-
-    def _draw(self, final: bool) -> None:
-        now = time.monotonic()
-        interval = PROGRESS_INTERVAL_S if self.tty else 2.0
-        if not final and now - self.last_draw < interval:
-            return
-        self.last_draw = now
-        elapsed = max(now - self.started, 1e-6)
-        rate = self.done / elapsed
-        line = f"{self.label}  {format_bytes(self.done)}"
-        if self.total is not None:
-            pct = 100.0 * self.done / self.total
-            line += f" / {format_bytes(self.total)}  {pct:5.1f}%"
-        line += f"  {format_bytes(rate)}/s"
-        if final:
-            line += f"  in {format_duration(elapsed)}"
-        elif self.total is not None and rate > 0.0 and self.done < self.total:
-            remaining = (self.total - self.done) / rate
-            line += f"  ETA {format_duration(remaining)}"
-        if self.tty:
-            end = "\n" if final else ""
-            print(f"\r{line}\033[K", end=end, file=sys.stderr, flush=True)
-        elif final or now - self.started >= interval:
-            print(line, file=sys.stderr, flush=True)
 
 
 def cphd_readable(path: Path) -> bool:
@@ -560,6 +487,7 @@ def download_https(url: str, dest: Path, progress: DownloadProgress) -> None:
     partial = partial_path(dest)
     if partial.exists():
         partial.unlink()
+    progress.start()
     try:
         with (
             urllib.request.urlopen(url, timeout=HTTPS_TIMEOUT_S) as response,
@@ -581,6 +509,8 @@ def download_https(url: str, dest: Path, progress: DownloadProgress) -> None:
                     f"HTTPS download size mismatch: received {received_bytes} bytes, "
                     f"expected {expected_bytes} bytes"
                 )
+        if progress.total is None:
+            progress.total = received_bytes
         partial.replace(dest)
         progress.finish()
     except BaseException:
@@ -597,19 +527,41 @@ def download_aws(bucket: str, key: str, dest: Path, progress: DownloadProgress) 
         partial.unlink()
     uri = f"s3://{bucket}/{key}"
     cmd = ["aws", "s3", "cp", uri, str(partial), "--no-sign-request"]
-    if not sys.stderr.isatty():
-        cmd.append("--no-progress")
+    progress.start()
     try:
-        # AWS CLI writes a transfer-manager temp and only renames to `partial`
-        # on success, so polling `.part` stays at 0. Native CLI progress is
-        # the live indicator (stdout); our meter records the size after rename.
-        output = sys.stderr if sys.stderr.isatty() else subprocess.DEVNULL
-        completed = subprocess.run(cmd, check=False, stdout=output)
-        if completed.returncode != 0:
-            raise subprocess.CalledProcessError(completed.returncode, cmd)
+        # Consume native progress rather than displaying a second indicator.
+        # CLI temp files may be preallocated, so their length is not progress.
+        with subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        ) as process:
+            try:
+                for line in process.stdout:
+                    match = re.search(
+                        r"Completed ([\d.]+) (Bytes|[KMGT]i?B)/([\d.]+) (Bytes|[KMGT]i?B)",
+                        line,
+                    )
+                    if match:
+
+                        def byte_count(number, unit):
+                            power = " KMGT".index(unit[0]) if unit != "Bytes" else 0
+                            return int(float(number) * 1024**power)
+
+                        if progress.total is None:
+                            progress.total = byte_count(match[3], match[4])
+                        progress.set(min(byte_count(match[1], match[2]), progress.total))
+                    elif line.strip() and not line.startswith("download:"):
+                        progress.message(line.strip())
+                returncode = process.wait()
+            except BaseException:
+                process.terminate()
+                process.wait()
+                raise
+        if returncode != 0:
+            raise subprocess.CalledProcessError(returncode, cmd)
         if not partial.exists():
             raise RuntimeError(f"aws s3 cp produced no file at {partial}")
-        progress.set(partial.stat().st_size)
+        progress.total = partial.stat().st_size
+        progress.set(progress.total)
         partial.replace(dest)
         progress.finish()
     except BaseException:
@@ -623,22 +575,29 @@ def pull_one(job: PullJob, force: bool, index: int, count: int) -> Path:
     dest = job.dest_dir / Path(job.key).name
     label = f"[{index}/{count}] {job.scene}"
     if dest.is_file() and not force:
+        print(f"Validation {label}: checking existing CPHD", file=sys.stderr, flush=True)
         if cphd_readable(dest):
-            print(f"skip {label}: {dest.name} already present")
+            print(f"Skipped {label}: {dest.name} already present", file=sys.stderr, flush=True)
             return dest
-        print(f"re-pull {label}: existing file is unreadable")
-    print(f"pull {label} -> {dest}")
+        print(
+            f"Validation {label}: existing file is unreadable; downloading again",
+            file=sys.stderr,
+            flush=True,
+        )
+    print(f"Download {label} -> {dest}", file=sys.stderr, flush=True)
     aws = shutil.which("aws")
     if aws is not None:
         try:
-            progress = DownloadProgress(label, aws_size(job.bucket, job.key))
-            download_aws(job.bucket, job.key, dest, progress)
+            with DownloadProgress(label, None) as progress:
+                progress.total = aws_size(job.bucket, job.key)
+                download_aws(job.bucket, job.key, dest, progress)
             return dest
         except (subprocess.CalledProcessError, OSError) as exc:
             print(f"aws s3 failed ({exc}); falling back to HTTPS", file=sys.stderr)
     url = https_url(job.https_prefix, job.key)
-    progress = DownloadProgress(label, https_size(url))
-    download_https(url, dest, progress)
+    with DownloadProgress(label, None) as progress:
+        progress.total = https_size(url)
+        download_https(url, dest, progress)
     return dest
 
 
@@ -694,23 +653,19 @@ def main() -> int:
         default=None,
         help=(
             "directory to write CPHD files into (default: app preset path). "
-            "With --app all, this replaces data/sar while preserving preset subdirectories."
+            "All selected files go directly into this directory."
         ),
     )
     parser.add_argument(
         "--force",
         action="store_true",
-        help="re-download files that already exist",
+        help="re-download existing files and restart partial subsets",
     )
     args = parser.parse_args()
     if args.config is not None and args.dest is not None:
         parser.error("--config uses exact configured paths; use --data-root instead of --dest")
     if args.data_root is not None and args.config is None:
         parser.error("--data-root requires --config")
-    if args.app == "all" and args.dest is not None:
-        root = Path(os.environ.get("HOLOHUB_DATA_DIR", "data")) / "sar"
-        if args.dest.resolve() in {(root / name).resolve() for name in ("imperial", "mode5")}:
-            parser.error("--app all needs the SAR data root; use --app all --dest data/sar")
     try:
         jobs = (
             jobs_for_config(args.config, args.data_root)
@@ -749,12 +704,13 @@ def main() -> int:
 
     iarp_files = [(job.scene, path) for job, path in pulled if job.check_iarp]
     if iarp_files:
-        print("checking IARPs (must be unique)…")
+        print("Validation: checking IARPs (must be unique)…", file=sys.stderr, flush=True)
         refuse_colliding_iarps(iarp_files)
+    print("Validation: reading collection positions", file=sys.stderr, flush=True)
     report_positions([(job.scene, path) for job, path in pulled if not job.check_iarp])
 
     dests = ", ".join(str(path) for path in dict.fromkeys(job.dest_dir for job in jobs))
-    print(f"{args.config or args.app} collection set ready in {dests}")
+    print(f"Complete: {args.config or args.app} collection set ready in {dests}", flush=True)
     return 0
 
 

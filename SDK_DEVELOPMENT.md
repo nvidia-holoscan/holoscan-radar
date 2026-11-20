@@ -74,8 +74,22 @@ visualization, dumping, and playback behavior as C++. They default to single
 samples with double geometry; `sample_precision: double` selects double for
 both. Python owns its signal handlers and polls interrupts while native
 execution releases the GIL; SIGINT/SIGTERM stop and join the session before
-propagating `KeyboardInterrupt`. The C++ driver establishes its managed signal
-domain before CUDA creates threads.
+propagating `KeyboardInterrupt`. The C++ drivers own SIGINT/SIGTERM handlers and poll a lock-free stop flag
+from their control loops, then request cooperative session shutdown. They use
+caller-managed `run_async(plan)`, so profiler-created startup threads do not
+conflict with HSDK managed-signal admission. Window closure and Escape request
+graph shutdown directly. In-flight GPU work must finish before cleanup returns.
+
+For an operator trace, run the built executable inside the development container:
+
+```bash
+nsys profile --trace=cuda,nvtx --sample=none --backtrace=none --cpuctxsw=none \
+  -o /tmp/siso-profile build/holoscan-radar/applications/fmcw/siso/cpp/siso \
+  build/holoscan-radar/applications/fmcw/siso/cpp/siso_smoke.yaml
+```
+
+Use a fresh output name and the actual generated preset path for your build.
+No profiling-specific application flag or signal-mask changes are required.
 
 Python `[live]` enum inputs remain unavailable because the SDK cannot register
 those port payloads; the corresponding C++ contracts are unchanged.

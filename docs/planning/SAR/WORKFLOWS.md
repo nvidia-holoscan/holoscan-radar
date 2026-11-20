@@ -2,9 +2,9 @@
 
 ## HSDK 5 implementation scope (2026-11-02)
 
-Six C++ applications under `applications/sar/` are implemented: five implement modes 1–5 in this document, and the sixth runs the Figure 2 autofocus chain. Their
+Six C++ applications under `applications/sar/` are implemented: five implement spotlight, video SAR, tiled strip, continuous strip, and independent images in this document, and the sixth runs the Figure 2 autofocus chain. Their
 [README](../../../applications/sar/README.md) contains the current
-HSDK 5 Graph diagrams for each one. Modes 6–9, Figure 3 in-place autofocus, and the operators in the
+HSDK 5 Graph diagrams for each one. Wide swath, sub-aperture looks, circular SAR, and 3D / tomographic volume, Figure 3 in-place autofocus, and the operators in the
 deramped, direct-sampled, and product branches remain planned.
 Historical diagrams below may use the source branch's metadata boundary and
 old port names; the current [operator contract](OPERATOR_API.md) governs
@@ -14,7 +14,7 @@ HSDK 5 wiring. Every CPHD batch carries a typed `stream_boundary` scalar.
 
 Enumerates the **image-formation modes** in scope for SAR — which the proposed API supports, which are deferred, and which one it forecloses — and the **operator chain** each runs, end to end: ingress → range compression → image formation → products. For the wave-one chain this doc gives both the **descriptive chain** (which operators touch the data, in what order, how the tensor shape evolves) and a **Mermaid wire diagram** with the actual Holoscan port names on every edge.
 
-The two halves are written for two readers. *Image-formation modes* names each mode as a practitioner already knows it, in their vocabulary and not ours; *How the modes reach the operator chain* is where those names meet the operators, and says what each mode costs to build.
+The two halves are written for two readers. *Image-formation workflows* names each mode as a practitioner already knows it, in their vocabulary and not ours; *How workflows reach the operator chain* is where those names meet the operators, and says what each mode costs to build.
 
 This is the SAR analogue of the FMCW [WORKFLOWS.md](../WORKFLOWS.md) one level up, and it plays the same role: the operators in [OPERATOR_API.md](OPERATOR_API.md) are **derived from these chains**, not the other way round. If a chain does not need an operator, that operator does not exist.
 
@@ -22,7 +22,7 @@ This is the SAR analogue of the FMCW [WORKFLOWS.md](../WORKFLOWS.md) one level u
 
 The goal is to cover the large majority of real SAR deployments with a small, composable operator set — not to enumerate every corner case.
 
-**Two audience derivatives** of this document (regenerate from the *Appendix* prompts when modes, deferred list, quality claims, mode→config mapping, or *Application responsibilities* change — do not hand-patch):
+**Two audience derivatives** of this document (regenerate from the *Appendix* prompts when modes, deferred list, quality claims, workflow→config mapping, or *Application responsibilities* change — do not hand-patch):
 
 - [PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) — SAR expert outside the project; no operators/ports; judges coverage and image quality.
 - [DEVELOPER_OVERVIEW.md](DEVELOPER_OVERVIEW.md) — software engineer who will build this stack; keeps operator names and wiring; translates collection-mode jargon into graph/config terms.
@@ -31,91 +31,91 @@ This document remains the source of truth for modes and chains; [OPERATOR_API.md
 
 ---
 
-## Image-formation modes
+## Image-formation workflows
 
 **Operating modes of a radar *system* — the radar and the processing that forms its images, together.** They are distinguished by **what image formation emits over one continuous run of pulses**, because that is what a user is choosing between and what our operators have to be able to produce.
 
-**This section is written for a reader who knows SAR and not this library.** Nothing below names an operator, a port or a parameter; find the mode you collect in, and *How the modes reach the operator chain* further down says how it is built and what it costs. A product assembled across *separate* collections — imaging a site again tomorrow — is not a mode here: that is this stage run twice, with the radar doing other things in between.
+**This section is written for a reader who knows SAR and not this library.** Nothing below names an operator, a port or a parameter; find the mode you collect in, and *How workflows reach the operator chain* further down says how it is built and what it costs. A product assembled across *separate* collections — imaging a site again tomorrow — is not a mode here: that is this stage run twice, with the radar doing other things in between.
 
 The list exists to answer one question: **does our proposed API foreclose a mode anyone would want?** A mode earns a place because listing it forces that check, independent of when it is scheduled: the intent is to serve every mode here well, though not necessarily in the first wave. The exercise has a clean result — **exactly one mode is foreclosed**, and several that looked blocked turned out to be reachable. Where one mode is another in disguise, it still gets its own entry, because a practitioner should find their mode rather than have to recognize it.
 
-**The three lists sort on that same question asked per mode.** *Supported* is a mode the API as proposed can express. *Deferred* is one it cannot, where closing the gap is an **addition** that conflicts with nothing already decided. *Foreclosed* is one it cannot, where closing the gap would **break** something already committed. "Supported" is a claim about the proposal rather than about what exists — nothing here is built yet. Scheduling likewise plays no part in the sort: a mode does not move between lists because of when it is planned, and the wave-one build order lives in [STATUS.md](../STATUS.md) and [SIGPROC_PLAN.md](SIGPROC_PLAN.md) instead. Reading "deferred" as "not yet scheduled" rather than "not yet expressible in the API" is the confusion this rule exists to prevent.
+**The three lists sort on that same question asked per workflow.** *Supported* is a mode the API as proposed can express. *Deferred* is one it cannot, where closing the gap is an **addition** that conflicts with nothing already decided. *Foreclosed* is one it cannot, where closing the gap would **break** something already committed. "Supported" is a claim about the proposal rather than about what exists — nothing here is built yet. Scheduling likewise plays no part in the sort: a mode does not move between lists because of when it is planned, and the wave-one build order lives in [STATUS.md](../STATUS.md) and [SIGPROC_PLAN.md](SIGPROC_PLAN.md) instead. Reading "deferred" as "not yet scheduled" rather than "not yet expressible in the API" is the confusion this rule exists to prevent.
 
 ---
 
-### Supported modes — our proposed API supports these
+### Supported workflows — our proposed API supports these
 
-**The nine fall into three groups, marked below:** the four products most collections deliver, the general case those four specialize, and four specialized or composite modes built from it. Several are one another rearranged and each entry says which — only modes 2 and 4 stand alone, the rest being **mode 5, *Independent images*, the general case** with the scene moved, repeated, or held still.
+**The nine fall into three groups, marked below:** the four products most collections deliver, the general case those four specialize, and four specialized or composite modes built from it. Several are one another rearranged and each entry says which — only video SAR and continuous strip stand alone, the rest being **independent images, the general case** with the scene moved, repeated, or held still.
 
 ---
 
-**Modes 1–4 — the common products.** What most collections are flown to deliver, and what most readers arrive already able to name.
+**Spotlight, video SAR, tiled strip, and continuous strip — the common products.** What most collections are flown to deliver, and what most readers arrive already able to name.
 
-#### 1. Spotlight image
+#### Spotlight image
 
 The radar stares at one patch for the pass, and **a single image** comes out at the end, at the finest resolution the dwell allows. One deliverable, one scene. The classic tasked-collection product.
 
-Formally it is mode 5 with a sequence length of one — and in fact the single-image case of *every* mode here, since every distinction in this list is a statement about how consecutive images relate and there are no consecutive images. It keeps its own entry because it is what most users arrive looking for.
+Formally it is the [independent images](#independent-images) workflow with a sequence length of one — and in fact the single-image case of *every* mode here, since every distinction in this list is a statement about how consecutive images relate and there are no consecutive images. It keeps its own entry because it is what most users arrive looking for.
 
-#### 2. Video SAR
+#### Video SAR
 
 The radar stares at one patch and **frames come out continuously** while the collection runs, giving a stream of images of an unchanging scene. Whether consecutive frames share pulses is a knob within the mode: sharing them buys frame rate at a fixed resolution, not sharing them yields independent frames at whatever rate the aperture length allows. Watching a site steadily through a single pass sits at the slow end of that same knob.
 
-Sharing pulses is what makes this mode its own thing — at the non-sharing end of the knob it is mode 5 with the scene held fixed, which is also where sub-aperture looks (mode 7) sit.
+Sharing pulses is what makes this mode its own thing — at the non-sharing end of the knob it is independent images with the scene held fixed, which is also where sub-aperture looks sit.
 
-#### 3. Tiled strip
+#### Tiled strip
 
 The terrain moves past the beam and **a sequence of independent images** comes out, covering successive segments of ground. Each tile is a complete product with its own metadata and is separately writable — a catalogue of scenes rather than one growing product, which is a different deliverable regardless of quality.
 
 Each tile can carry a **cross-range taper**, since a taper is a function of a pulse's position within an aperture and this mode has apertures that end. The cost is at the joins: a tile's edge pixels are illuminated from beyond the tile, so the pulses those pixels needed went into the neighbouring tile's aperture and they form under-integrated. That seam is intrinsic to delivering a strip as separate products.
 
-It is mode 5 with the scene stepping regularly along track rather than being re-tasked arbitrarily.
+It is independent images with the scene stepping regularly along track rather than being re-tasked arbitrarily.
 
-#### 4. Continuous strip
+#### Continuous strip
 
 The terrain moves past the beam and **one strip grows as the platform flies**, handed out in sections as they complete. Every pixel accumulates from the moment it enters the beam until it leaves, so no join appears anywhere in the product.
 
-The trade against mode 3 is exact: no seams and no repeated work, in exchange for **no cross-range taper**, so sidelobes are the unweighted ~−13 dB across the whole strip. Neither dominates — pick according to whether joins or sidelobes hurt more for the work being done.
+The trade against tiled strip is exact: no seams and no repeated work, in exchange for **no cross-range taper**, so sidelobes are the unweighted ~−13 dB across the whole strip. Neither dominates — pick according to whether joins or sidelobes hurt more for the work being done.
 
-With mode 2 it is one of the two modes that is not a rearrangement of another: a scene that moves continuously underneath a running sum is a different thing to accumulate, not a different way of scheduling apertures.
+With video SAR it is one of the two modes that is not a rearrangement of another: a scene that moves continuously underneath a running sum is a different thing to accumulate, not a different way of scheduling apertures.
 
 ---
 
-**Mode 5 — the general case.** The mode the four above are specializations of, and the escape hatch for a collection that matches none of them.
+**Independent images — the general case.** The mode the four above are specializations of, and the escape hatch for a collection that matches none of them.
 
-#### 5. Independent images
+#### Independent images
 
 **An image per aperture, each onto whatever scene geometry is supplied**, with no relationship required between one and the next: a sensor re-tasked between scenes, a per-patch terrain surface, pointing driven by something outside the radar.
 
-Every other mode here is this one constrained. Mode 1 is a sequence of one, mode 3 steps the scene regularly along track, mode 7 holds it fixed, mode 8 puts it on a circular trajectory, and modes 6 and 9 run several of it at once. The one requirement it keeps is that each aperture is its own — no pulse is shared between two images, which is what distinguishes it from mode 2.
+Every other mode here is this one constrained. Spotlight is a sequence of one, tiled strip steps the scene regularly along track, sub-aperture looks hold it fixed, circular SAR puts it on a circular trajectory, and wide swath and 3D / tomographic volume run several of it at once. The one requirement it keeps is that each aperture is its own — no pulse is shared between two images, which is what distinguishes it from video SAR.
 
 ---
 
-**Modes 6–9 — specialized and composite.** Each repeats or constrains one of the five above. They are listed separately because practitioners name them, not because any of them needs a mechanism the first five do not.
+**Wide swath, sub-aperture looks, circular SAR, and 3D / tomographic volume — specialized and composite.** Each repeats or constrains one of the five above. They are listed separately because practitioners name them, not because any of them needs a mechanism the first five do not.
 
-#### 6. Wide swath (ScanSAR / TOPS)
+#### Wide swath (ScanSAR / TOPS)
 
 The beam switches between **sub-swaths in elevation**, dwelling on each for a burst of pulses, so the swath widens and each ground point receives a correspondingly shorter aperture. **TOPS** additionally steers the beam forward in azimuth during each burst so that every ground point sees the whole azimuth antenna pattern, which removes ScanSAR's periodic along-track brightness banding at the cost of shorter dwell still.
 
-Each sub-swath yields its own tiled strip, so the mode is mode 3 run once per sub-swath with the beam scanning between them — each strip simply ignoring the bursts that belong to its neighbours. Mosaicking the strips into one wide product, and compensating the antenna pattern, are separate stages this wave does not provide.
+Each sub-swath yields its own tiled strip, so the mode is tiled strip run once per sub-swath with the beam scanning between them — each strip simply ignoring the bursts that belong to its neighbours. Mosaicking the strips into one wide product, and compensating the antenna pattern, are separate stages this wave does not provide.
 
-#### 7. Sub-aperture looks
+#### Sub-aperture looks
 
 One dwell is split into several apertures, each forming its own image of the same scene. Because each views the scene over a different span of look angles, their speckle patterns are partly decorrelated, so combining them trades azimuth resolution for radiometric quality. Combining them is a separate stage this wave does not provide, and it is not the same technique as averaging neighbouring pixels within one image.
 
-Disjoint looks are mode 5 with the scene held fixed; overlapping looks are mode 2, whatever mode the collection itself is flown as.
+Disjoint looks are independent images with the scene held fixed; overlapping looks are video SAR, whatever mode the collection itself is flown as.
 
-#### 8. Circular SAR
+#### Circular SAR
 
-The platform circles a fixed scene and collects over a full 360°, which is mode 1 on a circular trajectory. Backprojection is the *right* algorithm for it — frequency-domain methods are the ones that struggle with a full-circle aperture — so nothing about the geometry is a difficulty here.
+The platform circles a fixed scene and collects over a full 360°, which is spotlight on a circular trajectory. Backprojection is the *right* algorithm for it — frequency-domain methods are the ones that struggle with a full-circle aperture — so nothing about the geometry is a difficulty here.
 
 Two caveats. A 360° aperture's point-spread function is not separable, so the usual resolution and sidelobe checks do not describe it, and the mode is supported but untested. And a full circle is usually wanted as sub-aperture products or as height information rather than as one image, both of which are separate stages.
 
-#### 9. 3D / tomographic volume
+#### 3D / tomographic volume
 
 A **stack of image planes at different heights** rather than one surface, which is what tomographic SAR reconstructs from a collection spanning enough cross-track baseline. Each plane images the same scene at a different elevation, and the stack is the deliverable.
 
-It is mode 5 run once per height plane over the same pulses — the same repetition that gives mode 6 its sub-swaths, applied to elevation instead of to swath.
+It is independent images run once per height plane over the same pulses — the same repetition that gives wide swath its sub-swaths, applied to elevation instead of to swath.
 
 ---
 
@@ -123,7 +123,7 @@ It is mode 5 run once per height plane over the same pulses — the same repetit
 
 Closing each is an **addition** that conflicts with nothing already decided, and **both are deferred for the same reason**: each needs the caller to supply information this contract has no established way to express, and settling that now — with no implementation to check it against — would add contract surface we would probably get wrong. Neither is deferred because it is out of reach or because the arithmetic is unclear. What is unsettled in both is the **interface**, not the algorithm, which is also why neither conflicts with anything: an addition made later against a working kernel is a better addition than one guessed at now.
 
-- **Tapered seam-free strip.** The strip operational processors ship — continuous, no joins, cross-range weighted. Modes 3 and 4 each reach for it and give up a different half. What is missing is each pixel's own illumination interval: in a strip no two pixels along track share an aperture, so a pulse sits at a different point in the interval of every row it touches, and the weighting is a function of *(pulse, pixel)* rather than of pulse alone.
+- **Tapered seam-free strip.** The strip operational processors ship — continuous, no joins, cross-range weighted. Tiled strip and continuous strip each reach for it and give up a different half. What is missing is each pixel's own illumination interval: in a strip no two pixels along track share an aperture, so a pulse sits at a different point in the interval of every row it touches, and the weighting is a function of *(pulse, pixel)* rather than of pulse alone.
 It is exactly computable as pulses arrive — the interval is fixed by geometry, so unlike a tapered aperture it needs no deferral, no retention and no re-forming — but computing it means telling the formation stage the along-track aperture length, and under squint the pointing as well.
 That is collection-geometry knowledge the rest of this design deliberately keeps out of formation, so where those values belong is the open question, not whether the result is right. Its absence is the most likely reason a practitioner judges this library not ready for operational strip work.
 - **Frequency-domain image formation** — PFA, range-Doppler, chirp scaling, omega-k. What is missing is a second kind of image geometry. Everything here says where a pixel is by giving its position, which is what makes forming straight onto a DEM natural; these methods form in a radar-geometry grid and resample afterwards, which makes geocoding mandatory rather than optional, and each additionally needs a nominal track to correct to (see *What "motion compensation" means here*). Carrying both kinds of grid in one contract is the unsettled part, and it is not worth settling before a frequency-domain kernel exists to constrain it.
@@ -146,9 +146,9 @@ Look combination, sub-swath and tile mosaicking, geocoding, detection, interfero
 
 **Aperture** here means the one behind a single image, not the extent of the collection — a distinction that matters, since a collection spans far more angle than any one image uses.
 
-Most modes above are named for the collection that produces them, so a reader arrives at their own entry. The one collection mode that is not a mode name is **stripmap**, which produces mode 3 or 4 according to whether the deliverable is a catalogue of scenes or one strip, and whether a taper matters more than the joins. **Sliding spotlight** produces the same two: the beam is steered toward a virtual rotation point below the scene, so the footprint advances more slowly than the platform and each ground point dwells longer than stripmap allows, buying finer resolution at proportionally less coverage. That changes the aperture length and the margin depth, not how the pipeline is driven.
+Most modes above are named for the collection that produces them, so a reader arrives at their own entry. The one collection mode that is not a mode name is **stripmap**, which produces tiled strip or continuous strip according to whether the deliverable is a catalogue of scenes or one strip, and whether a taper matters more than the joins. **Sliding spotlight** produces the same two: the beam is steered toward a virtual rotation point below the scene, so the footprint advances more slowly than the platform and each ground point dwells longer than stripmap allows, buying finer resolution at proportionally less coverage. That changes the aperture length and the margin depth, not how the pipeline is driven.
 
-**Streaming drives the architecture, and the modes force different halves of it.** Pulses arrive indefinitely and images must come out while collection continues, so the chain is stateful across ticks — retention in `ApertureManagerOp`, an image accumulator in `BackprojectionOp`. Mode 2 forces the retention, the signed-weight eviction, and an aperture length only the application knows. Modes 3 and 4 force the moving scene, and force it differently: mode 3 brings geometry staging and the reset that admits a new tile, mode 4 the scrolling accumulator that needs neither. Mode 1 is the degenerate case that falls out of all of them for free.
+**Streaming drives the architecture, and the modes force different halves of it.** Pulses arrive indefinitely and images must come out while collection continues, so the chain is stateful across ticks — retention in `ApertureManagerOp`, an image accumulator in `BackprojectionOp`. Video SAR forces the retention, the signed-weight eviction, and an aperture length only the application knows. Tiled strip and continuous strip force the moving scene, and force it differently: tiled strip brings geometry staging and the reset that admits a new tile, continuous strip the scrolling accumulator that needs neither. Spotlight is the degenerate case that falls out of all of them for free.
 
 ### Cross-cutting scope
 
@@ -229,7 +229,7 @@ Because no operator encodes the convention, **the port specification carries the
 
 **Image sample geometry.** A uniform grid is one `SampleGeometry` descriptor — origin, both axes, spacing, and counts as a single atomic value, since they only make sense changing together. An explicit geometry is a `(num_v, num_u, 3)` lattice on an optional input port, because a DEM-derived set of positions cannot live in YAML. Neither needs a library operator to produce it.
 
-Either form goes to `ApertureManagerOp` where one is in the graph, rather than to formation: the manager holds it and forwards it with the reset that ends the current aperture, so the application never has to time the change against an emit — see *How a moving scene coexists with an accumulator*. Two cases bypass that. Mode 4 sends the geometry straight to formation, having no aperture to end; either form works there, and an explicit lattice sends only the rows entering the leading edge after the first message, so a DEM-conformal strip costs one slab of positions per advance rather than a whole re-send. A graph with no manager sends it straight to formation too, at which point that timing becomes the application's — see the control-source obligations below.
+Either form goes to `ApertureManagerOp` where one is in the graph, rather than to formation: the manager holds it and forwards it with the reset that ends the current aperture, so the application never has to time the change against an emit — see *How a moving scene coexists with an accumulator*. Two cases bypass that. Continuous strip sends the geometry straight to formation, having no aperture to end; either form works there, and an explicit lattice sends only the rows entering the leading edge after the first message, so a DEM-conformal strip costs one slab of positions per advance rather than a whole re-send. A graph with no manager sends it straight to formation too, at which point that timing becomes the application's — see the control-source obligations below.
 
 The lattice's positions are arbitrary, but they must be **locally coherent** — a compact tile of pixels should correspond to a compact region of space — because the Taylor formation variants expand about a per-block reference. A DEM raster satisfies this naturally; a deliberately scattered lattice does not, and the operator warns.
 
@@ -243,7 +243,7 @@ Four things transfer along with that edge. Only the third fails loudly; the firs
 3. **Timing a geometry change.** With no manager holding a new lattice until the aperture ends, the application emits the geometry and the resetting control message that admits it **on the same tick**; a geometry arriving without one is an error rather than a buffered request. Scroll is the exception — a pure translation along `v` invalidates nothing and needs no reset. See *How a moving scene coexists with an accumulator*.
 4. **Weights, if a taper is wanted.** `weight` is genuinely optional and defaults to `+1` for every pulse, so an untapered aperture costs nothing to give up. A cross-range taper means computing the window across the aperture's final membership and driving `weight` directly, which an application handing over whole apertures can do because it knows every pulse's slot. Under `geometry_change = scroll` the port is rejected outright and a strip cannot taper at all.
 
-Nothing is given up by owning these — tapering included — and the manager reaches nothing an application cannot. What is taken on is the bookkeeping, and in one configuration that bookkeeping is a stateful retention operator rather than a counter: see *How the modes reach the operator chain*.
+Nothing is given up by owning these — tapering included — and the manager reaches nothing an application cannot. What is taken on is the bookkeeping, and in one configuration that bookkeeping is a stateful retention operator rather than a counter: see *How workflows reach the operator chain*.
 
 **The boundary is a port, not metadata.** The source branch carried D22's announcement as a message-metadata key, which needed a merge policy and could be dropped by an operator with metadata disabled. The HSDK 5 port replaced it with the typed `stream_boundary` scalar, stamped with the batch's capture time and joined by the manager on that tick, so there is no metadata setup and no metadata hazard. What remains is the wiring: an application that builds its own pulse source must publish the scalar on every batch, and a stage between source and manager that splits or coalesces batches must carry it through.
 
@@ -282,7 +282,7 @@ Cross-cutting wiring facts, which apply across the diagrams:
 
 **One chain serves every mode.** Ingress, range compression, formation, and the optional product stages are the same operators in the same order throughout; what varies is which optional operators are present and how a handful of parameters are set. The subsections below are therefore ingress branches, not chain variants.
 
-`ApertureManagerOp` is the operator whose presence varies most visibly, since it is optional everywhere (see *How the modes reach the operator chain*) and mode 4 leaves nothing for it to do but the emit cadence, so that mode usually does without one.
+`ApertureManagerOp` is the operator whose presence varies most visibly, since it is optional everywhere (see *How workflows reach the operator chain*) and continuous strip leaves nothing for it to do but the emit cadence, so that mode usually does without one.
 
 Leaving it out is not a different chain — the same operators in the same order, geometry going straight to formation — but it is not free either: the emit decision has to come from somewhere, and an unwired `BackprojectionOp.control` never emits, so a small app-owned operator takes its place rather than the edge disappearing. Not `CPHDReaderOp`, which has no `control` output — it announces boundaries on `stream_boundary` (**D22**) and leaves the vocabulary to whoever owns the aperture, so that operator must consume `stream_boundary` to hear one. *Application responsibilities* enumerates the four things that transfer.
 
@@ -308,7 +308,14 @@ CPHD file
 
 **Two nodes are stateful, and they hold different things.** `ApertureManagerOp` decides membership and emission, and retains pulses where it is configured to — with `max_aperture_pulses = 0` it holds nothing and only the emission decision is left; `BackprojectionOp` holds an image accumulator and sums whatever it is handed, signed by `weight`. Splitting them is what lets the sliding window be a manager configuration rather than a formation mode — see *Aperture and emit policy*.
 
-**Every mode is this graph with different YAML.** A spotlight image (mode 1) never evicts and emits once when end of stream is announced, which makes it the useful smoke test for the accumulation convention: seeding and the announced flush, without the sliding window. Video SAR (mode 2) adds retention and eviction on the same geometry. A tiled strip (mode 3) steps the geometry at each boundary and re-forms if it wants a taper. A continuous strip (mode 4) sets `geometry_change = scroll`, translates the lattice instead of stepping it, and drops the manager — but not its `control` edge. Modes 5 through 9 differ only in the geometry the application supplies and how many formation instances run over the one pulse stream. Across all nine, the only operator that comes and goes is the manager.
+**Every mode is this graph with different YAML.** A spotlight image never evicts and emits once when
+end of stream is announced, which makes it the useful smoke test for the accumulation convention: seeding and the
+announced flush, without the sliding window. Video SAR adds retention and eviction on the same geometry. A tiled
+strip steps the geometry at each boundary and re-forms if it wants a taper. A continuous strip sets
+`geometry_change = scroll`, translates the lattice instead of stepping it, and drops the manager — but not its
+`control` edge. Independent images, wide swath, sub-aperture looks, circular SAR, and 3D / tomographic volume
+differ only in the geometry the application supplies and how many formation instances run over the one pulse
+stream. Across all nine, the only operator that comes and goes is the manager.
 
 ### Live radar, deramped front end
 
@@ -339,7 +346,7 @@ live radar (app source)   → pulses (num_pulses, num_samples)
 
 ## Port-level wiring
 
-**Figure 1 — The wave-one chain (autofocus off)**, the default path, serving every mode. The usual product is a ground / DEM lattice (`sample_points` or `sample_geometry`); nothing here requires a radar-geometry grid. Dashed nodes/edges are optional. `ApertureManagerOp` is drawn where used (solid because its edges exist when present, not because it is mandatory). An app owning apertures drives `control` itself — without it formation never emits, manager or not — and drives `weight` only if it wants a taper, `+1` being the default. Mode 4 drives `control` alone, scroll rejecting `weight`. Autofocus is omitted unless the app opts into Figure 2 or 3.
+**Figure 1 — The wave-one chain (autofocus off)**, the default path, serving every mode. The usual product is a ground / DEM lattice (`sample_points` or `sample_geometry`); nothing here requires a radar-geometry grid. Dashed nodes/edges are optional. `ApertureManagerOp` is drawn where used (solid because its edges exist when present, not because it is mandatory). An app owning apertures drives `control` itself — without it formation never emits, manager or not — and drives `weight` only if it wants a taper, `+1` being the default. Continuous strip drives `control` alone, scroll rejecting `weight`. Autofocus is omitted unless the app opts into Figure 2 or 3.
 
 Two groups of dashed edges are worth reading deliberately, because both were added by decisions rather than by the signal path.
 
@@ -459,31 +466,31 @@ flowchart LR
 
 ---
 
-## How the modes reach the operator chain
+## How workflows reach the operator chain
 
 The nine supported modes are named for what a practitioner collects. This section is the other half: what each one costs to build, and what it runs into. **Nine modes are three configurations.**
 
-**Per-aperture formation** — modes 1, 3, 5, 6, 7 (disjoint looks), 8 and 9. An application-supplied scene geometry, an image per aperture, a reset at each boundary, and every pulse belonging to exactly one aperture. This is Figure 1 as drawn, and the differences between these seven modes are entirely in what geometry the application supplies and how many formation instances run.
+**Per-aperture formation** — spotlight, tiled strip, independent images, wide swath, sub-aperture looks (disjoint looks), circular SAR, and 3D / tomographic volume. An application-supplied scene geometry, an image per aperture, a reset at each boundary, and every pulse belonging to exactly one aperture. This is Figure 1 as drawn, and the differences between these seven modes are entirely in what geometry the application supplies and how many formation instances run.
 
-**Overlapping apertures** — mode 2, and sub-aperture looks where the looks overlap. Consecutive images share pulses, so the accumulator is not only added to: a pulse that has left the aperture has to be subtracted back out of it, and subtracting a pulse means still holding it long after the image it was admitted for was emitted. **This is the one configuration where the manager's retention earns its keep.** Nothing makes the operator mandatory — an application can retain the profiles itself and re-emit them at weight `−1` — but here that means writing a stateful retention operator, where everywhere else it stands in for a pulse counter or a window function the application already has.
+**Overlapping apertures** — video SAR, and sub-aperture looks where the looks overlap. Consecutive images share pulses, so the accumulator is not only added to: a pulse that has left the aperture has to be subtracted back out of it, and subtracting a pulse means still holding it long after the image it was admitted for was emitted. **This is the one configuration where the manager's retention earns its keep.** Nothing makes the operator mandatory — an application can retain the profiles itself and re-emit them at weight `−1` — but here that means writing a stateful retention operator, where everywhere else it stands in for a pulse counter or a window function the application already has.
 
-**Scrolling accumulation** — mode 4 alone. The lattice translates rather than being replaced, and the accumulator translates with it, so no partial sum is ever invalidated and there is no boundary to reset at. It looks like a second chain and is not: this is Figure 1 with `BackprojectionOp.geometry_change = scroll` set and nothing left for a manager to do but the emit cadence, which changes what the accumulator is made of and nothing about what connects to what.
+**Scrolling accumulation** — continuous strip alone. The lattice translates rather than being replaced, and the accumulator translates with it, so no partial sum is ever invalidated and there is no boundary to reset at. It looks like a second chain and is not: this is Figure 1 with `BackprojectionOp.geometry_change = scroll` set and nothing left for a manager to do but the emit cadence, which changes what the accumulator is made of and nothing about what connects to what.
 
-| Mode                 | Configuration                | What the application supplies                              | What it runs into                                                                                                                                                                                                                                     |
-| -------------------- | ---------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 Spotlight image    | per-aperture                 | one geometry; end-of-stream announcement                   | nothing                                                                                                                                                                                                                                               |
-| 2 Video SAR          | overlapping                  | geometry; `evict` counts where it owns the window length   | the only mode needing retention; drift over a long window wants periodic re-forming                                                                                                                                                                   |
-| 3 Tiled strip        | per-aperture                 | a geometry per tile; tile length                           | seams at the joins, intrinsic to the mode                                                                                                                                                                                                             |
-| 4 Continuous strip   | scrolling                    | geometry translating along `v`; emit cadence               | no taper; buffer depth is its one silent mis-configuration                                                                                                                                                                                            |
-| 5 Independent images | per-aperture                 | a geometry per aperture                                    | geometry changes only at a boundary, never mid-aperture                                                                                                                                                                                               |
-| 6 Wide swath         | per-aperture ×N              | one instance per sub-swath; zero weights on foreign bursts | mosaicking and antenna-pattern compensation absent                                                                                                                                                                                                    |
-| 7 Sub-aperture looks | per-aperture, or overlapping | a fixed geometry; aperture boundaries                      | the look-combination stage is absent; `MultilookOp` averages pixels within one image, which is a different technique                                                                                                                                  |
-| 8 Circular SAR       | per-aperture                 | a circular trajectory                                      | non-separable PSF, so the resolution and sidelobe assertions in [TESTING.md](TESTING.md) do not apply                                                                                                                                                 |
-| 9 3D volume          | per-aperture ×N              | one lattice per height plane                               | the planes share pulses, weights and aperture boundaries and differ only in geometry, so one operator forming all `N` per tick is the shape to want; `sample_points` admits no leading batch axis today, which is the only reason it is `N` instances |
+| Workflow | Configuration | What the application supplies | What it runs into |
+| --- | --- | --- | --- |
+| Spotlight image | per-aperture | one geometry; end-of-stream announcement | nothing |
+| Video SAR | overlapping | geometry; `evict` counts where it owns the window length | the only mode needing retention; drift over a long window wants periodic re-forming |
+| Tiled strip | per-aperture | a geometry per tile; tile length | seams at the joins, intrinsic to the mode |
+| Continuous strip | scrolling | geometry translating along `v`; emit cadence | no taper; buffer depth is its one silent mis-configuration |
+| Independent images | per-aperture | a geometry per aperture | geometry changes only at a boundary, never mid-aperture |
+| Wide swath | per-aperture ×N | one instance per sub-swath; zero weights on foreign bursts | mosaicking and antenna-pattern compensation absent |
+| Sub-aperture looks | per-aperture, or overlapping | a fixed geometry; aperture boundaries | the look-combination stage is absent; `MultilookOp` averages pixels within one image, which is a different technique |
+| Circular SAR | per-aperture | a circular trajectory | non-separable PSF, so the resolution and sidelobe assertions in [TESTING.md](TESTING.md) do not apply |
+| 3D volume | per-aperture ×N | one lattice per height plane | the planes share pulses, weights and aperture boundaries and differ only in geometry, so one operator forming all `N` per tick is the shape to want; `sample_points` admits no leading batch axis today, which is the only reason it is `N` instances |
 
 Three consequences worth reading before choosing:
 
-- **Mode 4's constraints are real and are not settings.** The strip must run along the image's `v` axis, and a taper is refused rather than approximated. Either sample-geometry form works, and a DEM-conformal lattice is the case the mode most wants to serve. See [OPERATOR_API.md](OPERATOR_API.md) → `BackprojectionOp` → *Scrolling accumulation*.
+- **Continuous strip's constraints are real and are not settings.** The strip must run along the image's `v` axis, and a taper is refused rather than approximated. Either sample-geometry form works, and a DEM-conformal lattice is the case the mode most wants to serve. See [OPERATOR_API.md](OPERATOR_API.md) → `BackprojectionOp` → *Scrolling accumulation*.
 - **The emit decision is needed in every graph; only the operator is optional.** Something has to tell formation when an image comes out, so the question is who drives `control`, never whether. Outside the overlapping configuration an aperture's length is usually known before it ends, so its taper is stamped at admission and nothing is retained — leaving the operator to supply a pulse counter the application has by construction. Where the length is not known in advance — an adaptive dwell, a preemptible collect — a taper defers to the boundary and replays (`emit_mode = reform`), which is buffering rather than retention, and buys an application out of a small buffering operator rather than a capability. See [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp` → *Optional by design*.
 - **Fan-out is what rescues the modes that looked blocked.** Wide swath, sub-aperture looks and tomographic volumes are all several formation instances over one pulse stream, each selecting its pulses with weights and forming onto its own geometry. That is why only bistatic geometry is foreclosed: it is the one case no arrangement of instances and weights can express.
 - **Wide swath is the only one of those that wants separate instances.** Its sub-swaths close their apertures at different pulses, and a single `control` port cannot say that one sub-swath's tile is done while another's continues. Tomographic planes differ in geometry alone — same pulses, same weights, same boundaries — so they are separate instances only because the geometry ports carry no batch axis, not because the mode needs them to be.
@@ -492,12 +499,12 @@ Three consequences worth reading before choosing:
 
 ## Aperture and emit policy
 
-Retention and the emit decision belong to `ApertureManagerOp`, not to formation. The two axes are still real; they are now manager configuration rather than formation parameters. Mode 4 is outside this section entirely — a scrolling accumulator has no aperture, so neither axis has anything to configure.
+Retention and the emit decision belong to `ApertureManagerOp`, not to formation. The two axes are still real; they are now manager configuration rather than formation parameters. Continuous strip is outside this section entirely — a scrolling accumulator has no aperture, so neither axis has anything to configure.
 
 - **Aperture membership** — which pulses are in. `max_aperture_pulses` is the retention capacity: `0` means no retention, so nothing evicts and the aperture grows or blocks. With a capacity and no `evict` port wired, the manager runs a trailing-N sliding window — each newly admitted pulse displaces the oldest, which leaves on the same tick. Wiring `evict` hands that choice to the application, which is what an aperture defined by angle subtended rather than by pulse count requires: at constant PRF, a varying ground speed means a varying number of pulses per degree of orbit, and only the application knows it.
 - **Emit and reset** — when an image comes out and what happens next. `emit_interval_pulses` sets the cadence, or `0` defers entirely to end of stream and upstream flush requests; `emit_mode` picks `continue`, which sends *emit-and-continue* and is what the sliding window uses, `reset`, which sends *emit-and-reset* and gives block apertures, or `reform`, which replays the retained aperture at each boundary under *reset-then-emit* and is what a cross-range taper requires where the length is not known at admission. The six configurations are tabulated in [OPERATOR_API.md](OPERATOR_API.md) → `ApertureManagerOp`, and collection mode is orthogonal to all of them. Five are a YAML edit with no application-owned ports wired, which is what D22's announcement bought.
 
-**Both reach formation as data rather than configuration** — a per-pulse signed `weight` and a `control` message. That is what makes modes 1, 2, 3 and 5 through 9 the same graph with different YAML instead of eight pipelines, and it is why an application needing a rule we did not anticipate (angle-subtended, quality-gated, externally triggered) writes its own manager against the same ports rather than asking for another enum value.
+**Both reach formation as data rather than configuration** — a per-pulse signed `weight` and a `control` message. That is what makes spotlight, video SAR, tiled strip, independent images, wide swath, sub-aperture looks, circular SAR, and 3D / tomographic volume the same graph with different YAML instead of eight pipelines, and it is why an application needing a rule we did not anticipate (angle-subtended, quality-gated, externally triggered) writes its own manager against the same ports rather than asking for another enum value.
 
 **And the control message is now closed (D23):** it carries emit-and-continue, emit-and-reset, reset-without-emit, or reset-then-emit, and nothing else — no aperture identifier, no sequence number, no reason code. A writer that wants to label its product counts its own emitted images, and the *reason* an aperture ends is needed by whoever translates a boundary into one of these values, not by the operator obeying it. See [OPERATOR_API.md](OPERATOR_API.md) → *Cross-tick accumulation* and [TEAM_BLOCKED.md](TEAM_BLOCKED.md).
 
@@ -511,12 +518,12 @@ Autofocus is **orthogonal to the collection mode** and **off by default** on the
 
 They differ along three axes: **what the scene must contain**, **what order of phase error they can estimate**, and — the one that matters most here — **what image geometry they assume**.
 
-| Algorithm                             | Family                      | Estimates                                    | Scene requirement                                            | Geometry constraint        | Tier |
-| ------------------------------------- | --------------------------- | -------------------------------------------- | ------------------------------------------------------------ | -------------------------- | ---- |
-| **PGA** (phase gradient autofocus)    | scatterer-based, parametric | phase to arbitrary order along azimuth       | several strong, isolated scatterers spread across range      | **azimuth-conjugate grid** | P0   |
-| **Map drift**                         | subaperture correlation     | low-order (quadratic, sometimes cubic) phase | distributed scene contrast; no isolated scatterers needed    | subaperture-formable       | P1   |
-| **Minimum entropy / image sharpness** | metric optimization         | arbitrary order, by search                   | none — works on distributed clutter                          | **any geometry**           | P1   |
-| **Prominent point processing**        | single-scatterer            | full phase history                           | one dominant isolated scatterer (often a deployed reflector) | any                        | —    |
+| Algorithm | Family | Estimates | Scene requirement | Geometry constraint | Tier |
+| --- | --- | --- | --- | --- | --- |
+| **PGA** (phase gradient autofocus) | scatterer-based, parametric | phase to arbitrary order along azimuth | several strong, isolated scatterers spread across range | **azimuth-conjugate grid** | P0 |
+| **Map drift** | subaperture correlation | low-order (quadratic, sometimes cubic) phase | distributed scene contrast; no isolated scatterers needed | subaperture-formable | P1 |
+| **Minimum entropy / image sharpness** | metric optimization | arbitrary order, by search | none — works on distributed clutter | **any geometry** | P1 |
+| **Prominent point processing** | single-scatterer | full phase history | one dominant isolated scatterer (often a deployed reflector) | any | — |
 
 Consequences for the operator interface:
 
@@ -542,38 +549,38 @@ On navigation *uncertainty* specifically: an unknown position error cannot be co
 
 ## Workflow comparison
 
-Two things vary independently, so this is two tables rather than one. **Ingress branch** decides everything ahead of the shared phase-history node; **mode** decides everything after it. Any branch composes with any mode. This is the parameter-level view of *How the modes reach the operator chain* above, which gives the structural picture; the second table covers modes 1 through 4, where the configurations actually differ.
+Two things vary independently, so this is two tables rather than one. **Ingress branch** decides everything ahead of the shared phase-history node; **mode** decides everything after it. Any branch composes with any mode. This is the parameter-level view of *How workflows reach the operator chain* above, which gives the structural picture; the second table covers spotlight, video SAR, tiled strip, and continuous strip, where the configurations actually differ.
 
-| Ingress branch       | CPHD file                | Live deramped                         | Live direct-sampled        |
-| -------------------- | ------------------------ | ------------------------------------- | -------------------------- |
-| Source               | `CPHDReaderOp`           | app source                            | app source                 |
-| Branch-entry stages  | none                     | `RVPRemovalOp` → `BandEqualizationOp` | `RangeReferenceMultiplyOp` |
-| Positions from       | the file                 | the application                       | the application            |
-| Announces a boundary | file end + end of stream | only where the source knows one       | same                       |
+| Ingress branch | CPHD file | Live deramped | Live direct-sampled |
+| --- | --- | --- | --- |
+| Source | `CPHDReaderOp` | app source | app source |
+| Branch-entry stages | none | `RVPRemovalOp` → `BandEqualizationOp` | `RangeReferenceMultiplyOp` |
+| Positions from | the file | the application | the application |
+| Announces a boundary | file end + end of stream | only where the source knows one | same |
 
 The boundary announcement is the reader's job on the CPHD path, published as the typed `stream_boundary` scalar on every batch (**D22**); a live source publishes `0` until it has a boundary to announce, which an unbounded radar never does.
 
-| Mode                   | 1, spotlight image       | 2, video SAR                                          | 3, tiled strip                                         | 4, continuous strip                                  |
-| ---------------------- | ------------------------ | ----------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------- |
-| Scene                  | fixed for the collection | fixed for the collection                              | steps per tile                                         | translates along `v`                                 |
-| `geometry_change`      | reset                    | reset                                                 | reset                                                  | **scroll**                                           |
-| `ApertureManagerOp`    | optional                 | **recommended**                                       | optional                                               | cadence only                                         |
-| `max_aperture_pulses`  | 0                        | `N`, or ≥ longest with `evict`                        | 0                                                      | —                                                    |
-| `emit_interval_pulses` | `N` where known, else 0  | `< N`, or 0 with `evict`                              | `N`, one tile's worth                                  | —                                                    |
-| `emit_mode`            | reset                    | continue                                              | reset                                                  | —                                                    |
-| App ports              | `control`                | `control`, plus `evict` where the app owns the length | `sample_geometry` per tile; `control` at end of stream | `sample_geometry` and `control`, both into formation |
+| Workflow | spotlight image | video SAR | tiled strip | continuous strip |
+| --- | --- | --- | --- | --- |
+| Scene | fixed for the collection | fixed for the collection | steps per tile | translates along `v` |
+| `geometry_change` | reset | reset | reset | **scroll** |
+| `ApertureManagerOp` | optional | **recommended** | optional | cadence only |
+| `max_aperture_pulses` | 0 | `N`, or ≥ longest with `evict` | 0 | — |
+| `emit_interval_pulses` | `N` where known, else 0 | `< N`, or 0 with `evict` | `N`, one tile's worth | — |
+| `emit_mode` | reset | continue | reset | — |
+| App ports | `control` | `control`, plus `evict` where the app owns the length | `sample_geometry` per tile; `control` at end of stream | `sample_geometry` and `control`, both into formation |
 
-Modes 5 through 9 are not columns because they are not distinct configurations — each replicates one of the above across geometries, so a column would repeat its neighbour. *How the modes reach the operator chain* gives the mapping. The manager rows are how a column is spelled **if** a manager is used, which outside mode 2 it need not be. The `control` entry in the last row is **not** conditional in the same way: something drives it in every column, and only who drives it changes.
+Independent images, wide swath, sub-aperture looks, circular SAR, and 3D / tomographic volume are not columns because they are not distinct configurations — each replicates one of the above across geometries, so a column would repeat its neighbour. *How workflows reach the operator chain* gives the mapping. The manager rows are how a column is spelled **if** a manager is used, which outside video SAR it need not be. The `control` entry in the last row is **not** conditional in the same way: something drives it in every column, and only who drives it changes.
 
-**How a moving scene coexists with an accumulator.** The scene row and the aperture rows interact, and the interaction is easy to misread as a contradiction. Partial sums computed against one set of sample points mean nothing against another, so the scene cannot drift arbitrarily underneath a running sum. The two moving-scene columns resolve that differently, and the difference is the whole distinction between modes 3 and 4.
+**How a moving scene coexists with an accumulator.** The scene row and the aperture rows interact, and the interaction is easy to misread as a contradiction. Partial sums computed against one set of sample points mean nothing against another, so the scene cannot drift arbitrarily underneath a running sum. The two moving-scene columns resolve that differently, and the difference is the whole distinction between tiled strip and continuous strip.
 
-**Mode 3 steps, and the manager times the step.** A new `sample_geometry` goes to the manager, which holds it, keeps admitting pulses into the aperture in flight, and forwards it to formation together with a reset when that aperture ends (see [OPERATOR_API.md](OPERATOR_API.md) → *Who owns reset*). So an app pushes a new scene whenever it likes and never has to reason about where it lands relative to an emit; the change takes effect at the next boundary by construction. Formation buffers nothing — a geometry change reaching it without a reset is an error, which is what stops a mis-behaving manager from quietly forming the wrong scene.
+**Tiled strip steps, and the manager times the step.** A new `sample_geometry` goes to the manager, which holds it, keeps admitting pulses into the aperture in flight, and forwards it to formation together with a reset when that aperture ends (see [OPERATOR_API.md](OPERATOR_API.md) → *Who owns reset*). So an app pushes a new scene whenever it likes and never has to reason about where it lands relative to an emit; the change takes effect at the next boundary by construction. Formation buffers nothing — a geometry change reaching it without a reset is an error, which is what stops a mis-behaving manager from quietly forming the wrong scene.
 
-The cost is at the joins. A tile's edge pixels are illuminated for a full synthetic aperture length, so the pulse set a tile needs extends past the tile itself and consecutive tiles' sets overlap by that length. `CPHDReaderOp` emits each pulse once and a reset drops the manager's retention, so a tile boundary discards exactly the pulses the next tile's leading edge wants and those pixels form at degraded azimuth resolution — a seam, not a failure. It is the price of separately writable products, and the reason mode 4 exists.
+The cost is at the joins. A tile's edge pixels are illuminated for a full synthetic aperture length, so the pulse set a tile needs extends past the tile itself and consecutive tiles' sets overlap by that length. `CPHDReaderOp` emits each pulse once and a reset drops the manager's retention, so a tile boundary discards exactly the pulses the next tile's leading edge wants and those pixels form at degraded azimuth resolution — a seam, not a failure. It is the price of separately writable products, and the reason continuous strip exists.
 
-**Mode 4 translates, and nothing needs timing at all.** A pure translation along `v` by a whole number of pixels leaves every pixel still in view holding sums that remain correct for it, so there is nothing to invalidate and no reset to arrange: the accumulator advances with the lattice, each pixel accumulates from the moment it enters the beam until it leaves, and no pulse is formed twice. The general rule survives intact, because it is about invalidation rather than about geometry, and this is the one change that invalidates nothing. What the mode gives up is the taper, for D15's reason — deferring weights to an aperture boundary needs a boundary, and there is none.
+**Continuous strip translates, and nothing needs timing at all.** A pure translation along `v` by a whole number of pixels leaves every pixel still in view holding sums that remain correct for it, so there is nothing to invalidate and no reset to arrange: the accumulator advances with the lattice, each pixel accumulates from the moment it enters the beam until it leaves, and no pulse is formed twice. The general rule survives intact, because it is about invalidation rather than about geometry, and this is the one change that invalidates nothing. What the mode gives up is the taper, for D15's reason — deferring weights to an aperture boundary needs a boundary, and there is none.
 
-Everything from the shared phase-history node downstream is the same operators in the same order, whichever branch fed it and whichever mode is configured — save that `ApertureManagerOp` may or may not be among them, which is a per-application choice everywhere and the usual omission in mode 4. That is what makes alternate ingress additive rather than a second pipeline, and what reduces most of the mode distinction to a handful of YAML values.
+Everything from the shared phase-history node downstream is the same operators in the same order, whichever branch fed it and whichever mode is configured — save that `ApertureManagerOp` may or may not be among them, which is a per-application choice everywhere and the usual omission in continuous strip. That is what makes alternate ingress additive rather than a second pipeline, and what reduces most of the mode distinction to a handful of YAML values.
 
 Autofocus is not a column in the sense the FMCW comparison uses columns: like clustering there, it is orthogonal to the mode. It is off in Figure 1; when opted in it attaches as Figure 2 or Figure 3, not as a per-mode variant.
 
@@ -591,7 +598,7 @@ Autofocus is not a column in the sense the FMCW comparison uses columns: like cl
 
 ## Appendix — prompts for regenerating audience derivatives
 
-[PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) and [DEVELOPER_OVERVIEW.md](DEVELOPER_OVERVIEW.md) are derived from this document (and, for the developer overview, from [OPERATOR_API.md](OPERATOR_API.md) for contracts and mechanisms). When the mode inventory, the deferred list, a quality claim, the mode→configuration mapping, or *Application responsibilities* changes here, **regenerate the affected derivative(s) from the prompt(s) below rather than hand-patching** — patching is how a derivative drifts from its source while continuing to look maintained. Diff each regenerated file against the previous version and confirm every change traces to a change in the sources.
+[PRACTITIONER_OVERVIEW.md](PRACTITIONER_OVERVIEW.md) and [DEVELOPER_OVERVIEW.md](DEVELOPER_OVERVIEW.md) are derived from this document (and, for the developer overview, from [OPERATOR_API.md](OPERATOR_API.md) for contracts and mechanisms). When the workflow inventory, the deferred list, a quality claim, the workflow→configuration mapping, or *Application responsibilities* changes here, **regenerate the affected derivative(s) from the prompt(s) below rather than hand-patching** — patching is how a derivative drifts from its source while continuing to look maintained. Diff each regenerated file against the previous version and confirm every change traces to a change in the sources.
 
 **The developer overview was regenerated on 2026-11-02** against the HSDK 5 port contract, after Prompt B was corrected for the typed `stream_boundary`, optional `control`, `<T, TGeom>` precision and `AutofocusOp`. The practitioner overview was brought current in the same pass, after Prompt A was corrected to state implementation status rather than "nothing is built".
 
@@ -609,7 +616,7 @@ docs/planning/SAR/WORKFLOWS.md. Read the sources first; do not work from this
 prompt's summary of them.
 
 SOURCES, in precedence order. Invent nothing absent from both.
-1. SAR/WORKFLOWS.md — primary. The mode inventory, the deferred and foreclosed
+1. SAR/WORKFLOWS.md — primary. The workflow inventory, the deferred and foreclosed
    lists, the ingress forms, the motion-compensation section, and scope.
 2. SAR/OPERATOR_API.md — secondary, and only for two things: the obligations
    the reader must meet, and the image-quality consequences they inherit. Never
@@ -638,7 +645,7 @@ SECTION ORDER.
 1. About this document
 2. What it is
 3. The pipeline, including where the reader's data enters
-4. Image-formation modes: Supported, Deferred, Foreclosed
+4. Image-formation workflows: Supported, Deferred, Foreclosed
 5. What you supply
 6. What you get, and what it costs
 7. What "motion compensation" means here
@@ -679,10 +686,10 @@ RULES.
   geocode) as provided.
 - Name WORKFLOWS.md as the source of truth and link it. Mention
   DEVELOPER_OVERVIEW.md only as the sibling aimed at implementers, if at all.
-- Follow the source's mode numbering and inventory exactly. If the source has
-  gained, lost or renumbered a mode, follow it — do not preserve the previous
+- Follow the source's workflow names and inventory exactly. If the source has
+  gained, lost or renamed a workflow, follow it — do not preserve the previous
   version of the overview's list.
-- Keep a mode's decomposition note ("it is mode N with the scene held fixed")
+- Keep a mode's decomposition note ("independent images with the scene held fixed")
   only where it helps a reader find their mode, not where it justifies the
   list's structure.
 - Keep every quantitative claim with its numbers: decibels, wavelengths,
@@ -717,7 +724,7 @@ Regenerate docs/planning/SAR/DEVELOPER_OVERVIEW.md from the current state of the
 sources below. Read the sources first; do not work from this prompt's summary.
 
 SOURCES, in precedence order. Invent nothing absent from them.
-1. SAR/WORKFLOWS.md — primary for modes, chains, figures, mode→config mapping,
+1. SAR/WORKFLOWS.md — primary for modes, chains, figures, workflow→config mapping,
    autofocus framing, application responsibilities, deferred/foreclosed.
 2. SAR/OPERATOR_API.md — primary for contracts that implementers must obey:
    cross-tick accumulation, ApertureManagerOp / BackprojectionOp split,
@@ -781,7 +788,7 @@ KEEP (translated or summarized, not stripped):
 - Operator and class names, important ports (range_profiles, positions,
   weight, control, sample_geometry/sample_points, phase_correction).
 - Figure numbers from WORKFLOWS when citing wiring.
-- Mode numbers and the three-configuration collapse.
+- Workflow names and the three-configuration collapse.
 - Quantitative limits that affect implementation (e.g. unweighted ~−13 dB,
   scroll axis = v, Figure 2 memory = aperture retention).
 - Autofocus off by default; Figure 2 requires max_aperture_pulses > 0 and

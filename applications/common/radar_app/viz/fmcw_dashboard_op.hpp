@@ -27,6 +27,8 @@
 #include "radar_common/sim/scene.hpp"
 #include "radar_schemas/fmcw_waveform_bridge.hpp"
 
+#include "radar_app/app/gui_lifecycle.hpp"
+
 namespace holoscan::radar::app::viz {
 
 // Common render/history item produced from either a raw detection row or a
@@ -80,6 +82,7 @@ struct BackgroundScaleState {
 }  // namespace detail
 
 struct FmcwDashboardConfig {
+  int64_t total_frames{0};
   DashboardMode mode{DashboardMode::kRawDetections};
   bool show_angles{true};
   float dynamic_range_db{60.0F};
@@ -110,7 +113,8 @@ struct FmcwDashboardConfig {
 
 class FmcwDashboardOp : public holoscan::Operator<> {
  public:
-  explicit FmcwDashboardOp(FmcwDashboardConfig config);
+  explicit FmcwDashboardOp(FmcwDashboardConfig config,
+                           std::shared_ptr<FrameProgress> progress = {});
 
   void setup(holoscan::OperatorSpec& spec) override;
   [[nodiscard]] holoscan::Contract contract() const override;
@@ -131,6 +135,7 @@ class FmcwDashboardOp : public holoscan::Operator<> {
 
  private:
   FmcwDashboardConfig config_;
+  std::shared_ptr<FrameProgress> progress_;
   std::size_t max_byte_span_{0U};
   std::shared_ptr<holoscan::Tensor> peak_power_;
   std::shared_ptr<holoscan::Tensor> annotation_;

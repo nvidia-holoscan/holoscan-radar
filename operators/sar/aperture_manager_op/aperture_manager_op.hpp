@@ -24,6 +24,7 @@
 #include "radar_common/descriptors/sample_geometry.hpp"
 #include "radar_common/descriptors/window_spec.hpp"
 #include "radar_common/sar/aperture_buffer.hpp"
+#include "radar_common/sar/formation_hud.hpp"
 #include "radar_common/sdk/config_codecs.hpp"
 #include "radar_common/sdk/tensor_io.hpp"
 #include "radar_schemas/sample_geometry_bridge.hpp"
@@ -55,6 +56,7 @@ class ApertureManagerOp : public holoscan::Operator<ApertureManagerParams> {
 
  public:
   explicit ApertureManagerOp(const MaxTensorExtents& extents);
+  ApertureManagerOp(const MaxTensorExtents& extents, std::shared_ptr<FormationHud> hud);
   void setup(OperatorSpec& spec) override;
   [[nodiscard]] Contract contract() const override;
   void start() override;
@@ -84,6 +86,8 @@ class ApertureManagerOp : public holoscan::Operator<ApertureManagerParams> {
 
  private:
   MaxTensorExtents extents_;
+  std::shared_ptr<FormationHud> hud_;
+  std::shared_ptr<sar_progress::Monitor> progress_;
   ApertureBuffer buffer_{0};
   int64_t admitted_since_emit_{0}, slot_{0};
   int64_t admitted_{0}, evicted_{0}, dropped_{0};

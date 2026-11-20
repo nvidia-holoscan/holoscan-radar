@@ -1,5 +1,7 @@
 # Tiled strip SAR
 
+See [shared GUI configuration and presentation](../../common/radar_app/viz/README.md#shared-presentation-controls).
+
 The tile stager supplies a lattice per tile. The aperture manager stamps a Taylor pulse taper; reset backprojection forms each tile and a mosaic places it in the parent strip.
 
 > **Prerequisite: download data before running the application.**
@@ -25,14 +27,24 @@ flowchart LR
     M --> Report[Image report]
     M -. dump .-> Dump[TensorDumpOp]
     M -. visualize .-> Raster[CUDA SAR raster]
-    Raster -->|Same GPU| Viz[HolovizOp]
-    Raster -.->|Different GPUs| Download[ImageDownloadOp]
-    Download -.-> Upload[ImageUploadOp] -.-> Viz
-    Raster -->|Host overlay and labels| Viz
-    Timeline[TimelineRasterOp - window mode] -->|Same GPU| TimelineViz[Timeline HolovizOp]
-    Timeline -.->|Different GPUs| TimelineDownload[ImageDownloadOp]
-    TimelineDownload -.-> TimelineUpload[ImageUploadOp] -.-> TimelineViz
+    Raster -->|Image, look, labels| Frame[GPU FrameComposerOp]
+    Raster -. Different GPUs .-> Bridge[Bounded RGBA device bridge] -.-> Frame
+    Frame -->|X11| Download[ImageDownloadOp] --> X11[X11ImagePresenterOp]
+    Frame -->|Native| Dock[DockedFrameOp] --> Viz[NativeImagePresenterOp]
+    Frame -->|Headless| Sink[CompletedFrameSinkOp]
+    Timeline[GPU TimelineRasterOp] -->|Image and SDK text| TimelineFrame[GPU timeline composer]
+    TimelineFrame -->|Native| Dock
+    TimelineFrame -->|X11| TimelineDownload[ImageDownloadOp] --> TimelineView[X11 timeline panel]
+    X11 -. child of .-> Window[One viewing window]
+    TimelineView -. child of .-> Window
+    TimelineFrame -->|Headless| TimelineSink[CompletedFrameSinkOp]
 ```
+
+The default viewer docks the timeline below the image at 112 pixels high,
+updating independently at 10 Hz. `app.visualization.timeline.placement: window`
+restores a separate timeline window. See the
+[shared presentation controls](../../common/radar_app/viz/README.md#docked-sar-timeline)
+for resize and transport behavior.
 
 The solid paths are required data and control flows. Dashed dump and
 visualization branches are enabled by application configuration. The reader's
@@ -64,14 +76,14 @@ execution; they do not establish focus on real collections.
 
 ## Real collection preset
 
-The preset uses the Capella Imperial Valley collection at `data/sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd`. Download it into the host `data/sar/imperial/` directory below; inspect the manifest first with `--list`. The YAML selects 159,050 pulses, divides them into ten 15,905-pulse tiles, and uses a 4096-pixel cap on each tile. The CPHD is about 3.45 GiB.
+The preset uses the Capella Imperial Valley collection at `data/sar/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd`. Download it into the host `data/sar/` directory below; inspect the manifest first with `--list`. The YAML selects 159,050 pulses, divides them into ten 15,905-pulse tiles, and uses a 4096-pixel cap on each tile. The CPHD is about 3.45 GiB.
 
 From the repository root **on the host**, with the Holoscan CLI installed,
 run:
 
 ```bash
 python3 tools/sar_data/pull_cphd.py --app tiled_strip \
-  --dest data/sar/imperial
+  --dest data/sar
 ./holoscan-radar run tiled_strip
 ```
 

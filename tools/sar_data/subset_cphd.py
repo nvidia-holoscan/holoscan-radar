@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -141,13 +140,14 @@ def main() -> int:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="rewrite the destination even if the same window is already there",
+        help="restart a partial download and rewrite even an existing matching destination",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="parse header/XML and print resolved windows; do not fetch signal or write",
     )
+    parser.add_argument("--progress-label", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if args.recipe is None and args.source is None:
@@ -192,7 +192,6 @@ def main() -> int:
             connections = recipe.connections
 
     dest = _output_path(args.output, name)
-    started = time.perf_counter()
     result = subset_cphd(
         source,
         dest,
@@ -202,15 +201,11 @@ def main() -> int:
         force=args.force,
         dry_run=args.dry_run,
         progress=True,
+        progress_label=args.progress_label or str(dest),
     )
-    elapsed = time.perf_counter() - started
     if result.dry_run:
         print(f"dry-run: would write {dest} ({result.num_vectors} x {result.num_samples})")
         return 0
-    if result.skipped:
-        return 0
-    size_gib = dest.stat().st_size / (1024**3)
-    print(f"{dest}  ({size_gib:.2f} GiB, {elapsed:.1f} s)")
     return 0
 
 

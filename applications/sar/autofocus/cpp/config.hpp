@@ -502,7 +502,8 @@ inline AppConfig load_autofocus_config(const std::filesystem::path& path,
     throw std::runtime_error("autofocus is Figure 2 (spotlight reform), not tiles");
   }
   if (cfg.cphd_paths.size() > 1) {
-    throw std::runtime_error("autofocus is one collection; use independent_images for mode 5");
+    throw std::runtime_error(
+        "autofocus accepts one collection; use independent_images for multiple collections");
   }
   if (!cfg.nvradar_vph_path.empty()) {
     throw std::runtime_error("autofocus does not take nvradar_vph_path");
@@ -512,7 +513,7 @@ inline AppConfig load_autofocus_config(const std::filesystem::path& path,
   // app only needs to know which topology was asked for before the graph
   // exists.
   using sar_config::get_if;
-  const auto doc = radar::app::config::load_document(path);
+  const auto doc = radar::app::config::load_inherited_document(path);
   const int64_t max_ap = get_if<int64_t>(doc, "/aperture_manager/max_aperture_pulses").value_or(0);
   const std::string emit =
       get_if<std::string>(doc, "/aperture_manager/emit_mode")

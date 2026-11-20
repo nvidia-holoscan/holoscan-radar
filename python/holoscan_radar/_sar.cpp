@@ -22,6 +22,7 @@
 #include <holoscan/core/graph.hpp>
 
 #include "radar_app/sar/graph_driver.hpp"
+#include "radar_app/sar/autofocus_stage_op.hpp"
 #include "radar_app/sar/coordinate_ops.hpp"
 #include "radar_app/sar/mosaic_op.hpp"
 #include "radar_app/report/report_ops.hpp"
@@ -122,6 +123,8 @@ struct PythonSarContext : std::enable_shared_from_this<PythonSarContext<T>> {
     if (runtime)
       throw std::logic_error("SAR context is already attached to a graph");
     runtime = std::make_unique<Base>(setup.name, setup.paths, setup.config, &target, &prepared);
+    if (setup.name == "autofocus")
+      runtime->hud->enable_autofocus(extras.position_error.oracle);
     partitions.emplace("source", runtime->source);
     partitions.emplace("application", runtime->application);
     partitions.emplace("formation", runtime->formation);
@@ -187,7 +190,7 @@ struct PythonSarContext : std::enable_shared_from_this<PythonSarContext<T>> {
   }
 
   holoscan::config::Document autofocus_document() const {
-    auto document = app::config::load_document(extras.config_path);
+    auto document = app::config::load_inherited_document(extras.config_path);
     document = app::config::normalize_enum_field<radar::BackprojectionBackend>(
         std::move(document), "/backprojection/backend");
     document = app::config::normalize_enum_field<radar::GeometryChange>(
@@ -244,7 +247,7 @@ struct PythonSarContext : std::enable_shared_from_this<PythonSarContext<T>> {
       return add<app::sar::ScrollGeometryStagerOp>(
           role, runtime->cfg.scroll_parent, runtime->cfg.sample_geometry,
           runtime->cfg.scroll_anchor, runtime->cfg.reader_loop, slice,
-          runtime->cfg.reader_pulses_per_tick, *runtime->extents.max_range_bins);
+          runtime->cfg.reader_pulses_per_tick, *runtime->extents.max_range_bins, runtime->hud);
     }
     if (role == "sar_mosaic") {
       if (runtime->cfg.scroll) {
@@ -272,6 +275,12 @@ struct PythonSarContext : std::enable_shared_from_this<PythonSarContext<T>> {
     }
     if (role == "oracle_phase") {
       return add<app::sar::OraclePhaseOp<T>>(role, lies, runtime->extents);
+    }
+    if (role == "af_aux_stage" || role == "af_estimator_stage" || role == "af_final_stage") {
+      const auto stage = role == "af_aux_stage" ? radar::AutofocusHudStage::kFormingAuxiliary
+                         : role == "af_estimator_stage" ? radar::AutofocusHudStage::kEstimating
+                                                        : radar::AutofocusHudStage::kFormingFinal;
+      return add<app::sar::AutofocusStageOp>(role, runtime->hud, stage);
     }
     if (role == "aux_bp") {
       radar::BackprojectionParams seed;
@@ -305,7 +314,7 @@ struct PythonSarContext : std::enable_shared_from_this<PythonSarContext<T>> {
     if (role == "af_image_drain")
       return add<app::NullSinkOp>(role);
     if (role == "autofocus_sharpness")
-      return add<app::sar::AutofocusSharpnessReportOp>(role);
+      return add<app::sar::AutofocusSharpnessReportOp>(role, runtime->hud);
     if (role == "autofocus_score") {
       std::string dump_dir;
       if (runtime->cfg.dump && !runtime->cfg.dump_path.empty()) {
@@ -473,13 +482,18 @@ void register_sar_bindings(nb::module_& module) {
   register_anchor<double>();
   bind_context<float>(module, "_SarF32Context");
   bind_context<double>(module, "_SarF64Context");
-  module.def("_prepare_sar",
-             [](const std::string& name, const std::string& path,
-                const std::string& cphd_override) -> nb::object {
-               auto setup = prepare(name, path, cphd_override);
-               if (single_sample_precision(path)) {
-                 return nb::cast(std::make_shared<PythonSarContext<float>>(std::move(setup)));
-               }
-               return nb::cast(std::make_shared<PythonSarContext<double>>(std::move(setup)));
-             });
+  module.def(
+      "_prepare_sar",
+      [](const std::string& name, const std::string& path, const std::string& cphd_override,
+         const std::string& presenter, bool choose_presenter) -> nb::object {
+        auto setup = prepare(name, path, cphd_override);
+        setup.config.presenter = presenter;
+        setup.config.choose_presenter = choose_presenter;
+        if (single_sample_precision(path)) {
+          return nb::cast(std::make_shared<PythonSarContext<float>>(std::move(setup)));
+        }
+        return nb::cast(std::make_shared<PythonSarContext<double>>(std::move(setup)));
+      },
+      nb::arg("application"), nb::arg("path"), nb::arg("cphd_override"), nb::arg("presenter") = "",
+      nb::arg("choose_presenter") = false);
 }

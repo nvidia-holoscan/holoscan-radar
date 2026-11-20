@@ -1,4 +1,4 @@
-# Shared FMCW dashboard
+# Shared radar visualization
 
 All seven FMCW applications use `FmcwDashboardOp` and the same C++/Python
 visualization wiring. The dashboard presents the CFAR power surface, current
@@ -257,7 +257,8 @@ window systems retain the image-only SDK `FmcwHolovizOp` presentation path.
 Joining both inputs lets the viewer recover after resize or remote-display stalls
 have dropped queued frames. An image-driven `OnEach` with an `Exact` text side
 selector can strand a stale image after its matching text is evicted. An independent
-render clock can also redraw the image without its labels. The compositor caps
+composition clock can also redraw the image without its labels. The terminal
+event clock therefore replays only already-composed complete frames. The compositor caps
 rasterization at `visualization.display_rate_hz`, while updating histories for
 every admitted radar frame. Display products share a completion timestamp so
 presentation alignment excludes upstream processing latency. Radar data and
@@ -291,12 +292,420 @@ existing target-color distinction. Dear ImGui and configurable TTF rendering
 are available through the lower-level renderer, rather than callbacks on
 `HolovizOp`; they would require a custom presentation operator.
 
-Window events are serviced on rendered frames. A stalled or stopped producer
-leaves the last image visible but does not provide an independent UI event
-pump; this is an SDK operator limitation.
+X11 events are polled independently of scientific frame arrivals. Native
+windows receive bounded periodic replay of the last completed frame, including
+an initial blank frame, so the SDK can service close and resize during producer
+gaps and final-image hold. Closing a window or pressing Escape stops the whole
+application cooperatively; SAR's docked view and either separate window have this behavior.
 
 Resize recovery can be checked with the delayed-X11 regression probe in
 [`tests/gui/README.md`](../../../../tests/gui/README.md). It verifies update
 recovery across resize bursts and delayed X11 traffic. The GPU dashboard test
 also checks that native text is embedded in the emitted frame and unmatched
 image/text inputs do not render.
+
+## Shared presentation controls
+
+All seven FMCW and six SAR applications expose the same C++ and Python options:
+
+```bash
+./holoscan-radar run spotlight --language cpp --run-args='--presenter x11'
+./holoscan-radar run spotlight --language python --run-args='--presenter x11'
+./holoscan-radar run simo --language python --run-args='--presenter headless'
+```
+
+Executables accept `--presenter x11|native|headless|off` before or after the
+YAML path, plus `--choose-presenter`. SAR retains positional CPHD paths and
+`--cphd`. Python builders accept `presenter=None` and
+`choose_presenter=False`; SAR also retains `cphd_override`.
+
+An explicit launch mode overrides YAML. Explicit YAML overrides preferences
+and prompts. With no explicit selection, both modalities reuse the existing
+FMCW version-2 cache, keyed by display and local/SSH setup. Its expiration,
+reset, interactive, and unattended behavior is described above. Headless and
+off modes never prompt. An explicit X11 selection cannot silently fall back to
+native Vulkan presentation. A remote desktop is unnecessary for X11.
+
+```yaml
+app:
+  visualization:
+    enabled: true
+    x11_presentation: true
+    headless: false
+    display_rate_hz: 60
+    resize_mode: stretch  # fit preserves the whole canvas aspect ratio
+    final_image_hold_s: 30  # 0: finish; positive: seconds; negative: until closed
+    max_side: 1024  # SAR display downsampling, independent of product resolution
+    timeline:  # SAR diagnostics; ignored by FMCW scientific rendering
+      enabled: true
+      display_rate_hz: 10
+      window_width: 1280
+      window_height: 112
+```
+
+FMCW retains its zero-second hold default. SAR retains its 30-second default
+and preset overrides. Headless/off runs do not wait for an interactive hold.
+SAR's omitted width/height use existing product-aware sizing and desktop-fitted
+strip sizing; explicit `window_width`/`window_height` override the window canvas.
+Resizing scales a bounded complete canvas rather than changing formation
+resolution, reallocating pools, or reflowing scientific plots.
+
+SAR's old `visualize`, `headless`, `skip_display_check`, `visualize_size`, and
+`visualize_hold_s` remain aliases for `enabled`, `headless`,
+`skip_display_check`, `max_side`, and `final_image_hold_s` in this block.
+Aliases normalize within each file before inheritance. A child alias overrides
+a parent setting; common spelling wins over a conflicting alias in the same
+file, with a warning. Relative `extends` paths resolve against their containing
+file; existing data paths retain leaf-config-relative resolution. Arrays and
+scalars replace; mappings merge recursively; explicit nulls remain explicit.
+
+SAR keeps grayscale percentile scaling, product orientation, crops, mosaics,
+HUD, playback diagnostics, and autofocus displays. FMCW keeps its dashboard
+plots, physical axes, truth/detection annotations, and noise scaling. Timeline
+pixels render on the GPU from bounded host commands; its labels use the same
+SDK GPU text renderer as formation and dashboards.
+
+X11 transfers only finished display frames through bounded host pools. Native
+presentation requires a CUDA-backed Vulkan adapter that can present to the
+selected display. X11 and headless require an offscreen CUDA/Vulkan renderer,
+but never create a native presentation surface during startup. GPU indices and
+visibility are not changed. Cross-device bridges transfer bounded display RGBA
+images, never raw apertures or complex mosaics.
+
+Normal completion drains reporting and enabled dump sinks and gives the final
+display frame a bounded completion opportunity. SIGINT/SIGTERM and window close
+stop cooperatively and join execution. Display queues discard stale frames;
+window resize and display delay must not corrupt saved scientific products.
+
+Completed frames are consumed from bounded arrival queues without a short
+capture-age cutoff: a SAR image may finish long after acquisition. Image,
+geometry, and text join exactly before this boundary; retained/replayed frames
+keep their original content timestamp. Native replay polls at least 20 Hz for
+window events even when the scientific display-rate cap is lower.
+
+## Docked SAR timeline
+
+SAR now defaults to one viewing window with the timeline docked below the
+formation image. A compact left status panel shares the footer with the timeline;
+scene, formed dimensions, and backprojection processing cost
+no longer cover the image. The APC direction marker stays over the image.
+The image canvas keeps its configured resolution; initial
+window height adds the timeline height. On resize, the footer stays 112 physical
+pixels high by default and the image uses the remaining height. Very short
+windows clamp the footer to half the available height. The image honors
+`resize_mode`; the timeline fills its footer region independently and polls for batch events
+at 10 Hz by default. Status text updates only with its associated SAR image.
+
+While forming, the independent progress panel shows the forming image's title
+under a stable checkpoint: `Receiving pulses`, `Forming image`, or `Image ready`.
+Accepted/declined autofocus outcomes remain visible; a pending autofocus result
+uses `Forming image` because the diagnostics do not distinguish auxiliary BP from
+estimation. The panel labels green GPU-completed progress `Last completed` and
+keeps the cyan Received marker and percentage on the same track. The marker
+remains visible when the frontiers meet, including at zero and completion.
+`Updates on completion` replaces the running collection clock; there is no
+next-image countdown. These readouts use existing snapshots at batch events and otherwise at 1 Hz;
+the timeline polls for completions at up to 10 Hz. GPU work can delay either presentation;
+the checkpoint is not a heartbeat or a promise of immediate phase updates.
+The right-hand time history advances only at batch events, as described below.
+The current-image `BP work` line uses its known processing grid and expected
+pulse count; replayed apertures count their retained pulses, while incremental
+formation counts the current update. Unknown grids show `--`, never another
+image's work. This diagnostic needs no new GPU transfer.
+BP work uses 14px text in both the completed-image and progress panels, including
+the compact layout. Compact layouts put the update hint beside the checkpoint
+and BP work beside the title above the percentage labels and shared track;
+long titles use ellipses.
+This strip uses 56 pixels within the
+existing footer; the main SAR image keeps its height. The left panel describes the displayed image in
+five rows: title, `<px>x<px> pixels  <count> pulses`,
+`BP work: <work> Gpx*pulses`, `Latency: <time> / <budget> @<rate>x`, and
+`Throughput: <rate> Gpx*pulses/sec`. Here Latency means accumulated GPU
+backprojection work time, excluding waits for incoming batches, playback pacing,
+and display hold/transport. Throughput divides the measured BP pixel-pulse work
+by that same time and always uses giga-units, including rates below one.
+BP work uses the same measured processing lattice and pulse count as throughput,
+including incremental processing for periodic outputs. The pulse count is
+grouped with commas; unavailable diagnostics show `--`. The measured BP lattice
+may differ from the displayed product or mosaic size. These five rows fit the
+existing footer and remain frozen with the completed image.
+The second Latency value is the time budget to keep up at the configured
+`playback_rate`. Its radar-time basis is the selected collection's first-to-last
+pulse `TxTime` span for a whole image, or the interval between image-closing
+pulse times for periodic/overlapping updates (first pulse to closing pulse for
+the initial image). This interval excludes duty-cycle quiet periods and is
+divided by the positive playback rate frozen
+with that image. For example, `Latency: 8.2s / 12.0s @0.2x` means 8.2 seconds of
+GPU work against a 12-second budget at 0.2x playback. With `playback_rate: 0`,
+there is no fixed pacing deadline, so the row shows `-- unpaced` for the budget.
+A missing or invalid rate shows `-- @--`. A GPU time above the paced
+budget means backprojection alone cannot sustain that playback update cadence;
+a time below it does not guarantee that the complete pipeline keeps up.
+The reader reuses its existing host pulse timestamps, with no additional file
+reads, GPU transfers, or synchronization. Diagnostic history holds at most
+4096 timestamps per packet across 128 packets (4 MiB of pulse-time samples);
+larger packets retain endpoints only. Unknown/nonpositive intervals and missing
+internal seams show `--`; exact interval tracking recovers at subsequent known
+image boundaries without interpolating a pulse rate.
+These rows freeze with the completed image; they do not show acquisition elapsed
+or final-batch latency. Diagnostics match the image's capture timestamp in both
+event-driven and clocked startup paths; unavailable measurements show `--`.
+Periodic images share collection start in the middle panel; a replay loop begins
+a new collection clock. Batch receipt/completion history and live playback lag remain on the timeline.
+Missing diagnostic history leaves percentages/timing unknown rather than
+substituting a later collection's measurement.
+
+```yaml
+app:
+  visualization:
+    timeline:
+      enabled: true
+      placement: bottom  # window restores the previous separate timeline
+      display_rate_hz: 10
+      window_height: 112
+```
+
+The status panel takes up to 320 canvas pixels, capped at half the canvas width.
+Its text uses a fixed pixel size; narrow windows crop its right edge rather than
+stretching the font. Long labels use an ellipsis. The timeline raster takes the
+remaining width. `timeline.window_width` applies to separate-window mode; `window_height` is the dock height in either
+layout. Disabling the timeline removes the footer. Separate-window and
+timeline-disabled layouts retain the on-image HUD. C++ and Python share this
+layout through the same native runtime. Saved image extents and values remain
+independent of the viewing window.
+
+For X11, one managed parent owns two child drawing surfaces. Each panel retains
+its own server pixmap, bounded finished-frame download, presentation worker,
+and event clock. A timeline tick uploads and paints only the footer; it cannot
+activate formation, grayscale conversion, image HUD composition, or image
+transport. Resizes and expose events repaint affected cached panels. Closing
+the parent or pressing Escape in either panel stops the complete application.
+The child windows are implementation details, with no separate taskbar entries
+or decorations. Host and GPU work remain bounded by the configured canvases.
+
+Native HoloViz presents a complete window on each refresh. `DockedFrameOp`
+retains at most one completed GPU image and one completed GPU timeline and
+composites them into a bounded GPU output pool. It does not rerun SAR rendering
+or download the image when the timeline changes. Native composition/window
+presentation still reads the cached image each refresh; this differs from X11's
+partial repaint. Native refresh retains the existing display-rate setting and
+minimum 20 Hz event pump; new timeline content still defaults to 10 Hz. The native footer uses the existing X11 window-extent integration to compensate
+for window size so its physical height stays fixed. Without accessible window
+extents, native sizing falls back to the configured canvas. This path requires positive visual qualification on a
+presentation-capable GPU/display; GPU tests cover pixel placement and timestamps.
+
+The image and its HUD still join exactly before caching. For the docked layout,
+`FrameComposerOp` renders the SAR image into its top viewport and the status
+into additional footer rows of the same completed GPU frame. Their acquisition
+time, queue admission, and transport remain inseparable under stalls or drops.
+X11 caches this combined frame and paints its image and status regions separately;
+the independently updated timeline child occupies the footer's right side.
+The extra footer rows add a fixed bounded amount of completed-frame transport,
+only when a new image arrives. No raw aperture or complex product is downloaded.
+The live timeline retains its independent clock; it is not forced to match an acquisition time.
+Native combined display frames preserve the main image's capture time and
+provenance. Headless execution renders and consumes both completed panels
+independently, without creating a window or adding an interactive hold.
+
+## SAR startup and readable diagnostics
+
+Interactive SAR viewers show a charcoal startup canvas with a cyan PREPARING
+label, a larger centered first-image message, and the first configured collection
+name when available. The existing GPU compositor renders the background and
+native SDK text once. Timeline ticks never regenerate or download this canvas.
+The first completed image replaces it permanently. Headless execution emits no
+placeholder. Closing the window works while the first aperture is accumulating.
+
+The small timeline panel shows observed startup stage and elapsed time at 1 Hz;
+its stage comes from existing reader/BP diagnostics and presentation progress.
+It distinguishes starting up, receiving a collection, forming the first image
+after reader EOF, and preparing the display. It does not invent a percentage
+or claim a stage for which no diagnostic exists. The main placeholder stays
+static while that text changes independently.
+
+The left status panel uses 16-pixel titles and 14-pixel details at native canvas
+resolution. Collection names scroll above their corresponding thinner bars;
+image latency labels sit above the image-emission ticks. The footer remains
+112 pixels high by default. The sidebar title describes the displayed image;
+timeline labels describe collection history, which may run ahead of display.
+
+GUI throughput uses readable SI prefixes, for example `12.4 Gpx*pulse/s`.
+The displayed number converts the same held report measurement, preserving
+its pairing with the image. Console measurements retain their original
+scientific notation and units. Neither signal processing nor saved products
+change. All six SAR applications and both languages share this implementation.
+
+Interactive timelines show Received and Last completed pulse progress toward
+an image. Received counts unique ingested pulses; Last completed advances only
+after GPU batches complete. Replay and signed eviction work never inflate
+received counts. Long batches may leave the completed bar stationary. The panel
+uses a stable status and update-on-completion hint rather than an ETA or ticking
+elapsed time. The readout refreshes at 1 Hz within the cached timeline panel,
+beside history at normal widths and above compact history in narrower windows.
+Headless runs and runs without a timeline do not enable extra completion tracking.
+
+### SAR input/output event history
+
+The right timeline shows `Pulse batch received` in cyan and
+`Pulse batch processed` in green. Ticks mark original reader batches,
+rather than running counts or newly formed images; nearby events can coalesce. Receipt means all
+required reader outputs were published. Processed means nonblocking CUDA event
+queries (or the existing image-boundary synchronization) proved completion of
+backprojection covering that entire batch. Pulses discarded before GPU work
+never produce a processed event. Split batches produce one processed
+event after their final slice; replay can complete several source batches at
+once. File and loop generations remain separate. Tick times are the host times
+when completion was observed, not precise GPU finish timestamps or measured
+end-to-end latency. Several ticks can share a pixel.
+
+The common 20-second time axis ends at the latest observed batch receipt or
+completion, labeled `Latest batch`, with `-20s` at the left. Tick spacing remains
+actual elapsed time between events. Normal-height history adds `Time relative to
+last batch update`; compact history uses the bookends alone. The window stays
+fixed between events and after EOF, so delayed presentations never age events
+out merely because wall time passed. Both received and processed events can
+advance the endpoint. Completion observation is still polled at the configured
+timeline cadence (default 10 Hz), without changing processing or event timestamps.
+Identical bounded drawing/text snapshots skip GPU rasterization and display
+transport. Changed status, optional playback lag, or resize feedback can redraw
+the footer while preserving its event-time axis. Independent cached presentation
+continues servicing window events and closure. Collection-colored dwell bars and image-emission ticks are
+replaced by these two event lanes; the image title remains in the image and
+progress cards. Optional playback lag stays available. Checkpoint text refreshes at
+1 Hz. The main SAR image and HUD caches are unchanged. Timeline ticks do not
+rerun backprojection or scientific image rendering. X11 keeps the main image
+cached; native presentation composites its cached panels.
+
+Diagnostics retain at most 1024 event-bin records and 128 source-packet records.
+Events of the same kind within 40 ms coalesce, preserving the full 20-second
+activity window at high batch rates. Overlapping tick rectangles merge before
+GPU rasterization, keeping dense activity inexpensive to draw. History remains
+best effort: expired packet metadata suppresses completion ticks rather than
+inventing correspondences. No queue waits, new GPU synchronization, pulse-data copies,
+public operator parameters, or preset changes are introduced. Automated GPU
+pixel/text and real X11 window checks supplement manual visual review.
+
+The history uses thin tracks and short cyan/green markers, with larger labels
+above and below the tracks. Thin neutral diagonals connect exact receipt and
+observed GPU-completion timestamps for the same source batch. Connecting areas
+are never filled. Pending work keeps its receipt tick without a diagonal to an
+invented completion at Now. Horizontal displacement describes observed delay,
+including waiting, rather than GPU service time. A connection whose receipt
+predates the window is clipped geometrically without moving its endpoints.
+
+The bounded diagnostic history retains one actual matched pair per 40 ms
+completion-time bin in 512 slots; both endpoints come from that batch and retain
+their exact timestamps. This supplements the existing 1024 event bins and 128
+source-packet records. Expired or unproven work never gains a completion link.
+At dense rates, identical projected connectors merge and at most 64 real pairs
+are selected across the retained history; the separate receipt/completion ticks
+remain. Each connector is one bounded GPU drawing command. No full-frame host
+raster or scientific image refresh is added. Both lanes retain the 20-second
+window and default 10 Hz cadence. Optional playback lag remains in the header.
+
+Both lane titles and the `20s` / `Now` bookends use identical, brighter glyph
+metrics within each layout: 16px in the full history and 14px in the compact
+history, slightly above the adjacent panel's body text and using the native monospace font. Titles stay above
+and below the tracks; time captions sit beside the tracks at their vertical
+midpoint. Reserved side gutters keep time captions outside connection geometry.
+The docked timeline lays out its middle and history panels at the actual footer
+width, retaining native glyph proportions through fullscreen and restore.
+X11 paints completed footer pixels one-to-one rather than stretching them;
+scientific image interpolation is unchanged. Rendering remains native HoloViz
+text composed into the GPU frame.
+
+The next-image title uses 14px text below its processing checkpoint in both
+footer layouts. Completion and receipt labels use matching 12px text; BP work
+remains 14px. The panel omits countdown and elapsed-clock text so a held frame
+reads as a checkpoint rather than a stalled timer.
+
+### Autofocus outcome and strip sizing
+
+The autofocus footer reports capture-stamped receiving, auxiliary formation,
+estimation, final formation and image-ready checkpoints from application stage
+boundaries. Correction accepted/declined is a separate detail, using the existing
+aligned termination and accepted-iteration reports. Zero-copy boundary operators
+forward original tensor samples without copying their storage or waiting on CUDA.
+Intermediate checkpoints can be skipped during a GPU presentation stall; there is
+no additional ETA or stage percentage. The oracle workflow skips estimation. Declined results use amber and retain the uncorrected image.
+Zero accepted iterations without a refusal are reported as no correction
+applied; the oracle diagnostic is labeled separately. Missing status never
+implies acceptance. A new collection clears the prior outcome, and late reports
+from an older collection cannot overwrite current status. No image transfer or
+additional GPU synchronization is introduced by this status mailbox.
+
+Automatic strip windows fit within both the available desktop work area and
+`app.visualization.max_side` (1400px in the strip presets). The X11 virtual
+desktop can span several physical screens; its combined width is no longer the
+initial window width. Explicit window dimensions retain precedence, and users
+can resize normally. Formation geometry and dump products are unchanged.
+
+The completed-image HUD selects BP measurements from a fixed 64-entry host
+history using the displayed image's capture stamp. A newer BP completion cannot
+blank the matching older mosaic's metrics. Evicted or unknown stamps remain
+unavailable rather than borrowing a different image's work or timing. Continuous
+strip labels its full product dimensions as a mosaic and adds `Last strip update:
+<N> pulses`; BP work, latency and throughput describe that update's BP window,
+not the full mosaic. These rows remain cached with the image between updates;
+no extra image readback, GPU synchronization or timer-driven redraw is added.
+
+Continuous-strip diagnostic history explicitly maps the stager's distinct slice
+stamps to their source packet. Every proven slice contributes to completion and
+exact pulse-time budgets; a processed history tick still means completion of
+one original reader batch, rather than one slice. Mapping uses one bounded
+interval per retained packet and changes no processing timestamps or joins.
+
+The three footer panels share a black background and an 8px text inset. The
+completed image title uses an 18px cyan heading aligned with the middle panel's
+headline. Dimensions and metrics use brighter, consistent secondary/primary
+colors. This theme changes only cached text and timeline drawing commands;
+scientific images and their refresh/upload behavior are unchanged.
+
+### Docked footer resize bounds
+
+The pinned SDK's CUDA sink extent is immutable. Interactive docked SAR viewers
+reserve a rectangular footer canvas of `max(initial_footer_width, 8192)` by
+the configured footer height. The raster evaluates drawing commands only in
+the visible region and clears the rest; image-layer textures use rectangular
+bounds rather than allocating a max-width square. Headless and separate-window
+layouts retain their configured canvas sizes. Windows wider than the bound
+clip the footer at that bound rather than stretching text.
+
+Window resize feedback uses an atomic width/height snapshot. Each GPU-drawn
+footer records its exact capture stamp and layout in a 64-entry bounded
+history. The X11 download copies only that frame's visible rectangle with a
+pitched CUDA copy, preserving its capture time. A stalled frame that outlives
+the history is dropped; the next current frame recovers without guessing at
+another frame's layout. The presenter holds old pixels without stretching
+until the resized GPU frame arrives. Native composition samples the footer in
+physical window coordinates using the same resize feedback. Neither route
+reruns formation, converts the scientific image, nor uploads its cached pixels
+because of a timeline update. No user config migration is required.
+
+### Sensor look annotation
+
+SAR images label the projected direction of the radar platform with **Sensor look
+angle**. A short cyan arrow points inward from the sensor-facing image edge;
+subtle schematic rays suggest viewing direction, not a measured beamwidth or an
+incidence-angle value. The native HoloViz text sits on a dark backing. Pixel-based
+layout keeps the cue compact on wide strips and clamps the label inside the image.
+Invalid directions and very small image canvases omit the annotation.
+
+The backing and colored lines touch only a small display-raster patch on the GPU
+when a new image is rendered. Text and patch remain cached with that image and
+share its capture stamp; timeline updates do not repaint them. Scientific image
+and dump tensors are unchanged.
+
+### Deferred final frames and unavailable visualization
+
+The interactive SAR display-rate cap retains one newest input sample, including
+its capture metadata, until a later clock tick can render it. New arrivals
+replace that pending reference; an empty input queue never discards it. This
+works before the paced reader reports EOF and during display drain. Once the
+pending image is rendered, idle ticks do not redraw it. Event-driven headless
+SAR rendering processes each supplied image because it has no display clock to
+flush deferred inputs. No tensor copy or additional GPU wait is introduced.
+
+FMCW builds without the optional HoloViz package disable effective visualization
+before graph construction, regardless of YAML display or hold settings. Their
+processing graph runs normally without a display drain or final-window hold.

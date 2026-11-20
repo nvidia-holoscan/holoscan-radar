@@ -10,7 +10,7 @@
 #     --source data/sar/2024-10-30-16-10-33_UMBRA-06_CPHD.cphd \
 #     -o data/sar
 
-name: mode02_houston_1p0m
+name: houston_1p0m
 description: >-
   Full-dwell downtown Houston (Umbra, 2024-10-30). Central FX subband
   sized for ~1.0 m ground-range GSD (~1.2 GB/s collect-time ingest).

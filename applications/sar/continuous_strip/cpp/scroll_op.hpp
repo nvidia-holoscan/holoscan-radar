@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -33,18 +34,22 @@
 #include "radar_schemas/sample_geometry_bridge.hpp"
 #include "radar_app/sar/staging_detail.hpp"
 
+#include "radar_common/sar/formation_hud.hpp"
+
 namespace holoscan::radar::app::sar {
 class ScrollGeometryStagerOp : public Operator<> {
  public:
   ScrollGeometryStagerOp(SampleGeometry parent, SampleGeometry window, int64_t anchor, bool loop,
-                         int64_t slice_pulses, int64_t max_pulses, int64_t max_bins)
+                         int64_t slice_pulses, int64_t max_pulses, int64_t max_bins,
+                         std::shared_ptr<radar::FormationHud> hud = {})
   : parent_(std::move(parent)),
     window_(std::move(window)),
     anchor_(anchor),
     loop_(loop),
     slice_pulses_(slice_pulses),
     max_pulses_(max_pulses),
-    max_bins_(max_bins) {
+    max_bins_(max_bins),
+    hud_(std::move(hud)) {
     if (!parent_.is_valid() || !window_.is_valid() || window_.num_v() > parent_.num_v() ||
         window_.num_u() != parent_.num_u() || anchor_ < 0 || anchor_ >= window_.num_v() ||
         max_pulses_ < 1 || max_bins_ < 1) {
@@ -101,6 +106,10 @@ class ScrollGeometryStagerOp : public Operator<> {
     const auto stream = context.cuda_stream().get();
     const int64_t np = ps[0];
     const int64_t step = std::min(np, slice_pulses_);
+    if (hud_) {
+      if (const auto progress = hud_->progress())
+        progress->split_packet(context.activation_time().timestamp_ns, (np + step - 1) / step);
+    }
     for (int64_t first = 0; first < np; first += step) {
       const int64_t count = std::min(step, np - first);
       const bool last = first + count == np;
@@ -196,6 +205,7 @@ class ScrollGeometryStagerOp : public Operator<> {
   int64_t anchor_{0};
   bool loop_{false};
   int64_t slice_pulses_{0}, max_pulses_{0}, max_bins_{0};
+  std::shared_ptr<radar::FormationHud> hud_;
   std::uint32_t capacity_{1U};
   int64_t v0_{0};
 };

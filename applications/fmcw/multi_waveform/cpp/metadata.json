@@ -42,6 +42,14 @@
         "run": {
           "command": "<holohub_app_bin>/multi_waveform",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=multi_waveform"
+          ]
         }
       },
       "smoke": {
@@ -49,6 +57,14 @@
         "run": {
           "command": "<holohub_app_bin>/multi_waveform multi_waveform_smoke.yaml",
           "workdir": "holohub_app_bin"
+        },
+        "build": {
+          "cmake_options": [
+            "-DBUILD_ALL=OFF",
+            "-DHOLOSCAN_RADAR_BUILD_TESTING=OFF",
+            "-DPKG_holoscan_radar=OFF",
+            "-DHOLOSCAN_RADAR_APPLICATION=multi_waveform"
+          ]
         }
       }
     }

@@ -7,7 +7,7 @@ defines the shared encoding exists. Item 2, the entry that recorded a landed
 slice narrower than `OPERATOR_API.md`, is closed. What otherwise remains is
 conventions the contract permits several readings of, costs measured and
 consciously not paid, and paths no available collection exercises. None block
-the mode 1 demo.
+the spotlight demo.
 
 Team-blocked questions belong in
 [`docs/planning/SAR/TEAM_BLOCKED.md`](../../../docs/planning/SAR/TEAM_BLOCKED.md);
@@ -23,7 +23,7 @@ bistatic approximation otherwise. `velocities` follows the same rule.
 
 The contract does not say which of the three readings it means, and
 [`SIGPROC_PLAN.md`](../../../docs/planning/SAR/SIGPROC_PLAN.md) names "the
-Tx/Rcv phase-centre convention" as one of the reader paths the mode 3
+Tx/Rcv phase-centre convention" as one of the reader paths the tiled strip
 collections force.
 
 *Updated 2026-08-09 by the public-collection survey below.* The two **always**
@@ -51,15 +51,15 @@ correct delay when they do not. Comparing an Atlanta operator dump to a
 cupy formation is therefore **midpoint-as-one-APC versus two-leg range**,
 not Tx-only versus midpoint.
 
-## 2. The paths deferred to mode 3 — closed, pulled forward to clear the checklist
+## 2. The paths deferred to tiled strip — closed, pulled forward to clear the checklist
 
-*Closed 2026-08-09.* All four landed together, ahead of the mode 3 slice
+*Closed 2026-08-09.* All four landed together, ahead of the tiled strip slice
 [`SIGPROC_PLAN.md`](../../../docs/planning/SAR/SIGPROC_PLAN.md) scheduled them
 into. The minimum-per-demo rule says implement what the next demo forces; the
 [new-operator checklist](../../../docs/planning/NEW_OPERATOR_CHECKLIST.md) says
 a vertical slice never clears the gate. Both are right and they point opposite
 ways here, so the reader was carried to full contract rather than being called
-done at the mode 1 subset. What each now does:
+done at the spotlight subset. What each now does:
 
 - **Multi-file `path`.** A single file, a directory (lexicographic), or an
   explicit ordered list. Each file is its own collection: `pulse_range` applies
@@ -101,7 +101,7 @@ behaves that way. Revisit if one does.
 
 *Updated 2026-08-26.* The check is a **relative ramp bound of 1e-5**, not
 bit-identity and not last-place jitter. Public Umbra SNAPSHOT CPHDs (the six
-mode-5 files) ramp `SC0` by ~0.02 Hz/pulse (~2e-12 relative at X-band) and
+independent images files) ramp `SC0` by ~0.02 Hz/pulse (~2e-12 relative at X-band) and
 `SCSS` by ~4e-6 Hz/pulse (~1e-10 relative), monotonically, unique on every
 vector of the first 100. That is a recorded-grid residual, not a stepped
 sample axis. The previous 1e-12 bound refused Panama on pulse 1 of the first
@@ -183,7 +183,7 @@ Three readings, none of which the original entry would have predicted:
   4.1 GB/s with the file in page cache. On a cold 28 GiB Atlanta pull the disk
   will dominate all three columns and none of this will matter.
 
-*Paid 2026-08-24, once the mode 1 chain ran end to end.* Atlanta (11500 ×
+*Paid 2026-08-24, once the spotlight chain ran end to end.* Atlanta (11500 ×
 37268 CF8, `CPHDReaderOp<double>`) spent **12.4 s in the reader** — not the
 3.19 GiB of CF8, which isolated `read_signal_into` into a reused buffer does
 in 1.71 s. Two host costs each tick: (1) `std::vector<complex<double>>(n)`
@@ -199,7 +199,7 @@ measured and declined — extra complexity for ~0.8 s. `CphdFile` reuses an
 uninitialized `new char[n]` scratch on the widen path the same way;
 `vector<char>(n)` is gone there too.
 
-*Paid 2026-08-26.* Mode-5 Ohio spent **8.2 s in `CPHDReaderOp<double>`**
+*Paid 2026-08-26.* Independent images Ohio spent **8.2 s in `CPHDReaderOp<double>`**
 after the pinned-staging fix, against 3.9 s of backprojection. The files
 are CF8; the double host path widened every sample in a scalar loop
 (~6 s) and H2D'd 16 bytes/sample. CF8 now reads stored bytes into the
@@ -328,8 +328,8 @@ our `CphdFile` and independently by sarkit 1.10.1 **from the same local
 bytes**, so any disagreement is a parser difference rather than a data
 difference.
 
-**Both pinned demo collects are included and both pass** — Atlanta (mode 1,
-28.59 GiB) and Houston (mode 2, 110.31 GiB). They were missed by the first
+**Both pinned demo collects are included and both pass** — Atlanta (spotlight,
+28.59 GiB) and Houston (video SAR, 110.31 GiB). They were missed by the first
 sweep, whose diversity sampling took the smallest files per satellite-year and
 so excluded the two largest, which happen to be the ones the demos actually
 read. Both are `CF8` / FX / `SGN` -1 / no `AmpSF`, both agree with sarkit, and
@@ -366,18 +366,18 @@ field. On the 18 fully-downloaded CF8 collections the decoded samples are
 
 What the survey says about coverage, which is the more consequential finding:
 
-| | Capella (111) | Umbra (118) |
+| Collection | Capella (111) | Umbra (118) |
 | --- | --- | --- |
 | Signal format | `CI4`, all 111 | `CF8` 116, `CI2` 2 |
 | `AmpSF` present | all 111 | 2 of 118 |
 | `SGN` | `+1` | `-1` |
-| Accepted at the mode 1 subset | 0 | 115 |
+| Accepted at the spotlight subset | 0 | 115 |
 | Accepted now (item 2 closed) | **111** | **118** |
 
 *Table amended 2026-08-09*, when item 2 closed. The survey's sharpest finding
 was that **Capella was entirely gated**, and not marginally — every one of its
 111 files needs both `CI4` decoding and `AmpSF`, so neither alone unlocked any
-of it. That is what made deferring both to mode 3 expensive: it left half the
+of it. That is what made deferring both to tiled strip expensive: it left half the
 credential-free CPHD world unreadable while the reader was being called done.
 All 229 now read.
 
@@ -413,7 +413,7 @@ check this infrequent.
 ## 10. No Python bindings
 
 Every FMCW operator has a `python/` submodule; this one does not yet. Nothing
-in the mode 1 path needs it, so it is left for the first Python consumer.
+in the spotlight path needs it, so it is left for the first Python consumer.
 
 ## 11. The boundary value is a string, not the contract's `uint8` — mid-implementation
 

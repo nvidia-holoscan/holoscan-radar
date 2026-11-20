@@ -107,4 +107,6 @@ aux_lattice:
 #   polynomial: [0, 0, 0.02]
 #   score_warn_rms_rad: 1.0
 
-visualize: false
+app:
+  visualization:
+    enabled: false

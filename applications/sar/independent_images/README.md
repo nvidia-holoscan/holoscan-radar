@@ -1,5 +1,7 @@
 # Independent SAR images
 
+See [shared GUI configuration and presentation](../../common/radar_app/viz/README.md#shared-presentation-controls).
+
 The collection stager supplies a new lattice, range spacing, and first fast-time sample frequency for each CPHD. Each collection boundary emits and resets its image.
 
 > **Prerequisite: download data before running the application.**
@@ -25,14 +27,24 @@ flowchart LR
     B --> Report[Image report]
     B -. dump .-> Dump[TensorDumpOp]
     B -. visualize .-> Raster[CUDA SAR raster]
-    Raster -->|Same GPU| Viz[HolovizOp]
-    Raster -.->|Different GPUs| Download[ImageDownloadOp]
-    Download -.-> Upload[ImageUploadOp] -.-> Viz
-    Raster -->|Host overlay and labels| Viz
-    Timeline[TimelineRasterOp - window mode] -->|Same GPU| TimelineViz[Timeline HolovizOp]
-    Timeline -.->|Different GPUs| TimelineDownload[ImageDownloadOp]
-    TimelineDownload -.-> TimelineUpload[ImageUploadOp] -.-> TimelineViz
+    Raster -->|Image, look, labels| Frame[GPU FrameComposerOp]
+    Raster -. Different GPUs .-> Bridge[Bounded RGBA device bridge] -.-> Frame
+    Frame -->|X11| Download[ImageDownloadOp] --> X11[X11ImagePresenterOp]
+    Frame -->|Native| Dock[DockedFrameOp] --> Viz[NativeImagePresenterOp]
+    Frame -->|Headless| Sink[CompletedFrameSinkOp]
+    Timeline[GPU TimelineRasterOp] -->|Image and SDK text| TimelineFrame[GPU timeline composer]
+    TimelineFrame -->|Native| Dock
+    TimelineFrame -->|X11| TimelineDownload[ImageDownloadOp] --> TimelineView[X11 timeline panel]
+    X11 -. child of .-> Window[One viewing window]
+    TimelineView -. child of .-> Window
+    TimelineFrame -->|Headless| TimelineSink[CompletedFrameSinkOp]
 ```
+
+The default viewer docks the timeline below the image at 112 pixels high,
+updating independently at 10 Hz. `app.visualization.timeline.placement: window`
+restores a separate timeline window. See the
+[shared presentation controls](../../common/radar_app/viz/README.md#docked-sar-timeline)
+for resize and transport behavior.
 
 The solid paths are required data and control flows. Dashed dump and
 visualization branches are enabled by application configuration. The reader's
@@ -62,14 +74,14 @@ real collections.
 
 ## Real collection preset
 
-The preset rotates six distinct Umbra SNAPSHOT CPHDs under `data/sar/mode5/`. Run `python3 tools/sar_data/pull_cphd.py --app independent_images --list` to inspect their paths, then use the commands below to download about 10.5 GiB to the host `data/sar/mode5/` directory. It derives an IARP-centred ENU grid per file and chooses a common padded FFT length. The ordered `cphd.path` list and `pixel_scale` list correspond by index. A single-CPHD CLI override is rejected because the topology requires multiple collections.
+The preset rotates six distinct Umbra SNAPSHOT CPHDs under `data/sar/`. Run `python3 tools/sar_data/pull_cphd.py --app independent_images --list` to inspect their paths, then use the commands below to download about 10.5 GiB to the host `data/sar/` directory. It derives an IARP-centred ENU grid per file and chooses a common padded FFT length. The ordered `cphd.path` list and `pixel_scale` list correspond by index. A single-CPHD CLI override is rejected because the topology requires multiple collections.
 
 From the repository root **on the host**, with the Holoscan CLI installed,
 run:
 
 ```bash
 python3 tools/sar_data/pull_cphd.py --app independent_images \
-  --dest data/sar/mode5
+  --dest data/sar
 ./holoscan-radar run independent_images
 ```
 

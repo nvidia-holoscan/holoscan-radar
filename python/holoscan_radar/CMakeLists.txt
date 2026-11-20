@@ -91,9 +91,9 @@ foreach(_radar_app IN ITEMS siso simo dense_beamforming mimo_tdm mimo_ddm adapti
         "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/${_radar_app}.py" COPYONLY)
     install(FILES "${_radar_app_source}" DESTINATION holoscan_radar/applications)
 endforeach()
-install(FILES applications/__init__.py applications/fmcw_dashboard.py applications/cli.py
+install(FILES applications/__init__.py applications/fmcw_dashboard.py applications/cli.py applications/presentation.py
     DESTINATION holoscan_radar/applications)
-foreach(_radar_helper IN ITEMS __init__.py fmcw_dashboard.py cli.py)
+foreach(_radar_helper IN ITEMS __init__.py fmcw_dashboard.py cli.py presentation.py)
     configure_file("applications/${_radar_helper}"
         "${HOLOSCAN_RADAR_PYTHON_ROOT}/holoscan_radar/applications/${_radar_helper}" COPYONLY)
 endforeach()

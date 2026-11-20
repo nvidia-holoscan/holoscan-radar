@@ -7,6 +7,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <holoscan/testing/operator_test_harness.hpp>
@@ -31,7 +32,14 @@ TEST(ApertureManagerOp, RetainsEvictsAndFlushesOnTypedBoundary) {
   extents.max_range_bins = 2;
   extents.max_image_v = 1;
   extents.max_image_u = 1;
-  auto fixture = holoscan::testing::create_operator_test<ApertureManagerOp<float>>(extents);
+  auto hud = std::make_shared<holoscan::radar::FormationHud>();
+  hud->enable_progress(0, 1);
+  auto monitor = hud->progress();
+  for (int tick = 0; tick < 3; ++tick) {
+    monitor->begin_packet(tick + 1, 0, tick, 1, 3, 2, 0, tick == 0);
+    monitor->received(tick + 1);
+  }
+  auto fixture = holoscan::testing::create_operator_test<ApertureManagerOp<float>>(extents, hud);
   fixture.set_params(ApertureManagerParams{.max_aperture_pulses = 2, .emit_interval_pulses = 0});
   std::vector<std::shared_ptr<holoscan::Tensor>> retained;
   for (int tick = 0; tick < 3; ++tick) {
@@ -80,6 +88,12 @@ TEST(ApertureManagerOp, RetainsEvictsAndFlushesOnTypedBoundary) {
   auto controls = result.snapshots<holoscan::Tensor>("control_out");
   ASSERT_EQ(controls.size(), 1U);
   EXPECT_EQ(to_host(controls[0]).as<uint8_t>()[0], 1U);
+  for (int tick = 0; tick < 3; ++tick) {
+    const auto work = monitor->take_work(tick + 1);
+    ASSERT_TRUE(work);
+    EXPECT_EQ(work->admissions, 1) << "Signed departures must not count as new received pulses";
+    EXPECT_EQ(work->end, tick + 1);
+  }
 }
 
 // The pair every application runs is `<float, double>`: samples in single,
@@ -223,6 +237,109 @@ TEST(ApertureManagerOp, ReformWeightsTheWholeReplayPositively) {
   for (int64_t i = 0; i < kTicks; ++i) {
     EXPECT_FLOAT_EQ(replay.as<float>()[i], 1.F) << "replayed pulse " << i << " is not an admission";
   }
+}
+
+// Independent snapshots must survive retirement at a collection seam and a
+// subsequent collection reusing the same output pools.
+template <typename T, typename TGeom>
+void check_terminal_replay_lifetime() {
+  MaxTensorExtents extents;
+  extents.max_pulses = 2;
+  extents.max_range_bins = 2;
+  extents.max_image_v = 1;
+  extents.max_image_u = 1;
+  auto fixture = holoscan::testing::create_operator_test<ApertureManagerOp<T, TGeom>>(extents);
+  fixture.set_params(ApertureManagerParams{
+      .max_aperture_pulses = 2,
+      .emit_interval_pulses = 0,
+      .emit_mode = holoscan::radar::ApertureEmitMode::kReform,
+  });
+  std::vector<std::shared_ptr<holoscan::Tensor>> retained;
+  for (int tick = 0; tick < 4; ++tick) {
+    const T v = static_cast<T>(tick + 1);
+    const TGeom g = static_cast<TGeom>(tick + 1);
+    auto profile = to_device_tensor(std::vector<std::complex<T>>{{v, -v}, {v + T{8}, v}}, {1, 2},
+                                    complex_dtype<T>());
+    auto position =
+        to_device_tensor(std::vector<TGeom>{g, g + TGeom{8}, -g}, {1, 3}, real_dtype<TGeom>());
+    auto reference =
+        to_device_tensor(std::vector<TGeom>{-g, g, g + TGeom{16}}, {1, 3}, real_dtype<TGeom>());
+    fixture.push_frame(holoscan::testing::frame_at(
+        std::chrono::nanoseconds{tick + 1}, holoscan::testing::input("range_profiles", *profile),
+        holoscan::testing::input("positions", *position),
+        holoscan::testing::input("reference_position", *reference),
+        holoscan::testing::input("stream_boundary", static_cast<uint8_t>(tick == 3   ? 2
+                                                                         : tick == 1 ? 1
+                                                                                     : 0))));
+    retained.insert(retained.end(), {profile, position, reference});
+  }
+  for (const char* port : {"range_profiles", "positions", "reference_position"})
+    fixture.input_source_device(port, holoscan::DeviceId{0});
+  fixture.output_device("sample_points_out", holoscan::DeviceId{0});
+  for (const char* port :
+       {"range_profiles_out", "positions_out", "reference_position_out", "weight", "control_out"}) {
+    fixture.output_device(port, holoscan::DeviceId{0});
+    fixture.template capture_snapshot<holoscan::Tensor>(port, 2U, 128U);
+  }
+  holoscan::radar::testing::FixtureCompletion completion;
+  auto running = fixture.run_async(completion.run_options());
+  bool observed = true;
+  for (const char* port :
+       {"range_profiles_out", "positions_out", "reference_position_out", "weight", "control_out"})
+    observed = completion.wait_for_output(running, port, 2U) && observed;
+  running.request_stop();
+  const auto result = running.finish();
+  completion.check(result);
+  ASSERT_TRUE(observed) << result.describe_failure();
+  ASSERT_TRUE(result.ok()) << result.describe_failure();
+  const auto profiles = result.template snapshots<holoscan::Tensor>("range_profiles_out");
+  const auto positions = result.template snapshots<holoscan::Tensor>("positions_out");
+  const auto references = result.template snapshots<holoscan::Tensor>("reference_position_out");
+  const auto weights = result.template snapshots<holoscan::Tensor>("weight");
+  const auto controls = result.template snapshots<holoscan::Tensor>("control_out");
+  ASSERT_EQ(profiles.size(), 2U);
+  ASSERT_EQ(positions.size(), 2U);
+  ASSERT_EQ(references.size(), 2U);
+  ASSERT_EQ(weights.size(), 2U);
+  ASSERT_EQ(controls.size(), 2U);
+  for (int aperture = 0; aperture < 2; ++aperture) {
+    const int64_t expected_stamp = 2 * aperture + 2;
+    for (const auto* tensor : {&profiles[aperture], &positions[aperture], &references[aperture],
+                               &weights[aperture], &controls[aperture]})
+      EXPECT_EQ(tensor->sample_metadata().capture_time().timestamp_ns, expected_stamp);
+    const auto hp = to_host(profiles[aperture]);
+    const auto hx = to_host(positions[aperture]);
+    const auto hr = to_host(references[aperture]);
+    const auto hw = to_host(weights[aperture]);
+    ASSERT_EQ(hp.shape, (std::vector<int64_t>{2, 2}));
+    ASSERT_EQ(hx.shape, (std::vector<int64_t>{2, 3}));
+    ASSERT_EQ(hr.shape, (std::vector<int64_t>{2, 3}));
+    ASSERT_EQ(hw.shape, (std::vector<int64_t>{2}));
+    EXPECT_EQ(to_host(controls[aperture]).template as<uint8_t>()[0], 3U);
+    for (int pulse = 0; pulse < 2; ++pulse) {
+      const T v = static_cast<T>(aperture * 2 + pulse + 1);
+      const TGeom g = static_cast<TGeom>(aperture * 2 + pulse + 1);
+      EXPECT_EQ(hp.template as<std::complex<T>>()[pulse * 2], (std::complex<T>{v, -v}));
+      EXPECT_EQ(hp.template as<std::complex<T>>()[pulse * 2 + 1], (std::complex<T>{v + T{8}, v}));
+      EXPECT_EQ(hx.template as<TGeom>()[pulse * 3], g);
+      EXPECT_EQ(hx.template as<TGeom>()[pulse * 3 + 1], g + TGeom{8});
+      EXPECT_EQ(hx.template as<TGeom>()[pulse * 3 + 2], -g);
+      EXPECT_EQ(hr.template as<TGeom>()[pulse * 3], -g);
+      EXPECT_EQ(hr.template as<TGeom>()[pulse * 3 + 1], g);
+      EXPECT_EQ(hr.template as<TGeom>()[pulse * 3 + 2], g + TGeom{16});
+      EXPECT_EQ(hw.template as<T>()[pulse], T{1});
+    }
+  }
+}
+
+TEST(ApertureManagerOp, TerminalReplayLifetimeSingle) {
+  check_terminal_replay_lifetime<float, float>();
+}
+TEST(ApertureManagerOp, TerminalReplayLifetimeMixed) {
+  check_terminal_replay_lifetime<float, double>();
+}
+TEST(ApertureManagerOp, TerminalReplayLifetimeDouble) {
+  check_terminal_replay_lifetime<double, double>();
 }
 
 // A taper over an incrementally slid window would change every retained

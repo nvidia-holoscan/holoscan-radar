@@ -124,7 +124,12 @@ expected<TensorOutputLoan, Error> prepare_geometry(Output<WireSampleGeometry>& o
 
 template <typename T, typename TGeom>
 ApertureManagerOp<T, TGeom>::ApertureManagerOp(const MaxTensorExtents& extents)
-: extents_(extents) {
+: ApertureManagerOp(extents, {}) {}
+
+template <typename T, typename TGeom>
+ApertureManagerOp<T, TGeom>::ApertureManagerOp(const MaxTensorExtents& extents,
+                                               std::shared_ptr<FormationHud> hud)
+: extents_(extents), hud_(std::move(hud)) {
   require_extent(extents.max_pulses, "max_pulses", kWho);
   require_extent(extents.max_range_bins, "max_range_bins", kWho);
 }
@@ -182,6 +187,7 @@ Contract ApertureManagerOp<T, TGeom>::contract() const {
 
 template <typename T, typename TGeom>
 void ApertureManagerOp<T, TGeom>::start() {
+  progress_ = hud_ ? hud_->progress() : nullptr;
   const auto& p = params();
   if (p.max_aperture_pulses < 0 || p.emit_interval_pulses < 0 ||
       (p.emit_mode == ApertureEmitMode::kReform && p.max_aperture_pulses == 0)) {
@@ -371,6 +377,20 @@ expected<void, Error> ApertureManagerOp<T, TGeom>::compute(ExecutionContext& con
       return make_unexpected(Error{ErrorCode::kFailure, "ApertureManagerOp: stream sync failed"});
     output_batch.emplace(std::move(batch));
   }
+  const int64_t closing_pulses = end_aperture ? buffer_.occupancy() : 0;
+  if (end_aperture) {
+    // Concatenation above has completed on this stream. The replay owns its
+    // storage independently, so retire every packet reference before publishing
+    // outputs that can start downstream BP. Ordinary cudaFree at callback exit
+    // would otherwise wait behind that long-running work and stall GUI CUDA calls.
+    output_groups.clear();
+    departing.clear();
+    buffer_.clear();
+  }
+  if (progress_)
+    progress_->admit(context.activation_time().timestamp_ns, np,
+                     emit_now && output_control != FormationControl::kResetWithoutEmit,
+                     output_batch.has_value(), reform);
   if (pending_geometry_ && geometry_output_.active()) {
     HOLOSCAN_TRY(auto loan, prepare_geometry(sample_geometry_out, *pending_geometry_));
     geometry_output_.emit_schema_tensor(sample_geometry_out, context, std::move(loan),
@@ -429,8 +449,7 @@ expected<void, Error> ApertureManagerOp<T, TGeom>::compute(ExecutionContext& con
           "(use emit_mode reform for an exact taper on a short aperture)",
           kWho, slot_, stamp_window_.size());
     }
-    dropped_ += buffer_.occupancy();
-    buffer_.clear();
+    dropped_ += closing_pulses;
     slot_ = admitted_since_emit_ = 0;
     pending_geometry_.reset();
     pending_points_.reset();

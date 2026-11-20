@@ -6,6 +6,7 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -68,6 +69,7 @@ struct AppFrameBank {
     const std::lock_guard lock(mutex);
     target = count;
     captured = 0;
+    last_capture_ns.store(-1);
   }
 
   static void mark_done() {
@@ -82,6 +84,7 @@ struct AppFrameBank {
   static inline std::condition_variable ready;
   static inline int target{0};
   static inline int captured{0};
+  static inline std::atomic<int64_t> last_capture_ns{-1};
 };
 
 enum class DetectionReportMode {
@@ -180,7 +183,7 @@ class DetectionReportOp : public holoscan::Operator<> {
   }
 
   [[nodiscard]] holoscan::expected<void, holoscan::Error> compute(
-      holoscan::ExecutionContext&) override {
+      holoscan::ExecutionContext& context) override {
     constexpr const char* kWho = "DetectionReportOp";
     HOLOSCAN_TRY(auto points_t, receive_tensor(points, kWho));
     HOLOSCAN_TRY(auto detection_idx_t, receive_tensor(detection_idx, kWho));
@@ -361,6 +364,7 @@ class DetectionReportOp : public holoscan::Operator<> {
     if (cadence) {
       cadence->on_sink_done();
     }
+    AppFrameBank::last_capture_ns.store(context.activation_time().timestamp_ns);
     AppFrameBank::mark_done();
     return {};
   }

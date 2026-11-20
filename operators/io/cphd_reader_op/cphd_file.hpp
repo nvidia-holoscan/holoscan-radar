@@ -121,13 +121,13 @@ class CphdFile {
   std::vector<double> amplitude_scale(const PvpBlock* pvp, int64_t count) const;
 
   // SceneCoordinates/IARP/ECF when the XML declares it. Spotlight
-  // collections stare here; the mode-5 lattice is centred on this point.
+  // collections stare here; the independent images lattice is centred on this point.
   bool has_iarp() const { return has_iarp_; }
   const std::array<double, 3>& iarp_ecef() const;
 
   // SceneCoordinates ImageArea in the planar IA frame (metres from
   // IARP, along uIAX / uIAY). Explicit lattice.counts still uses
-  // this; the mode-5 default is collection_physics() instead.
+  // this; the independent images default is collection_physics() instead.
   struct ImageArea {
     std::array<double, 3> u_iax{};
     std::array<double, 3> u_iay{};

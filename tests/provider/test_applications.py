@@ -36,13 +36,23 @@ _ROOT = Path(__file__).resolve().parents[2] / "applications" / "fmcw"
 
 @pytest.fixture(autouse=True)
 def isolate_presenter_choice(monkeypatch):
-    monkeypatch.setattr(
-        _radar,
-        "_resolve_x11_presentation",
-        lambda window, configured, choose_again=False, config_path="": (
-            True if configured is None else configured
-        ),
-    )
+    native = _radar._prepare_presentation
+
+    def prepare(enabled, headless, skip, configured, path, mode, choose_again):
+        # Graph-shape tests model device capabilities without creating windows.
+        # Explicit-mode execution tests below use the real native resolver.
+        if mode:
+            return native(enabled, headless, skip, configured, path, mode, choose_again)
+        return {
+            "enabled": enabled,
+            "headless": headless,
+            "x11_presentation": _radar._fmcw_uses_x11_presentation(
+                True if configured is None else configured
+            ),
+            "device": 0,
+        }
+
+    monkeypatch.setattr(_radar, "_prepare_presentation", prepare)
 
 
 @pytest.mark.parametrize(
@@ -92,7 +102,8 @@ def test_visualization_preset_compiles(module, directory, preset, monkeypatch):
     monkeypatch.setattr(_radar, "_application_composer_device", lambda: select(False, False, True))
     path = _ROOT / directory / "config" / f"{preset}.yaml"
     workflow = module.build_graph(path)
-    assert hs.compile(workflow.graph, workflow.options).ok
+    plan = hs.compile(workflow.graph, workflow.options)
+    assert plan.ok, plan.json()
 
 
 @pytest.mark.parametrize("module,directory,preset", _CASES, ids=[item[2] for item in _CASES])
@@ -105,15 +116,20 @@ def test_all_tensor_placements_follow_selected_nonzero_device(
     placements = []
     queries = []
 
-    def select_device(window, cuda_sink, x11_presentation):
-        queries.append((window, cuda_sink, x11_presentation))
-        return 3
+    def select_device(enabled, headless, skip, configured, path, mode, choose_again):
+        queries.append((enabled, enabled, True if configured is None else configured))
+        return {
+            "enabled": enabled,
+            "headless": headless,
+            "x11_presentation": True if configured is None else configured,
+            "device": 3,
+        }
 
     def bind_output(**placement):
         placements.append(placement)
 
     options = SimpleNamespace(deployment=SimpleNamespace(bind_tensor_output_device=bind_output))
-    monkeypatch.setattr(_radar, "_select_application_device", select_device)
+    monkeypatch.setattr(_radar, "_prepare_presentation", select_device)
     monkeypatch.setattr(_radar, "_application_display_device", lambda: 3)
     monkeypatch.setattr(_radar, "_application_composer_device", lambda: 3)
     monkeypatch.setattr(hs, "CompileOptions", lambda: options)
@@ -145,12 +161,17 @@ def test_distinct_display_device_adds_explicit_image_transfer(
     )
     monkeypatch.setattr(hs, "CompileOptions", lambda: options)
 
-    def select_device(window, cuda_sink, enabled):
-        assert window and cuda_sink
-        assert enabled is x11_enabled
-        return 0
+    def select_device(enabled, headless, skip, configured, path, mode, choose_again):
+        assert enabled and not headless
+        assert configured is x11_enabled
+        return {
+            "enabled": enabled,
+            "headless": headless,
+            "x11_presentation": x11 and configured,
+            "device": 0,
+        }
 
-    monkeypatch.setattr(_radar, "_select_application_device", select_device)
+    monkeypatch.setattr(_radar, "_prepare_presentation", select_device)
     monkeypatch.setattr(_radar, "_application_display_device", lambda: 3)
     monkeypatch.setattr(_radar, "_application_composer_device", lambda: composer_device)
     monkeypatch.setattr(_radar, "_fmcw_uses_x11_presentation", lambda enabled: enabled and x11)
@@ -176,6 +197,7 @@ def test_distinct_display_device_adds_explicit_image_transfer(
         assert upload[0]["output_port"] == "image_out"
         assert upload[0]["device"].value == 3
         expected_devices["dashboard_upload"] = 3
+        expected_devices["dashboard_replay"] = composer_device
     if composer_device != 0:
         expected_devices["dashboard_composer_upload"] = composer_device
     assert {item["operator_path"] for item in placements if item["output_port"] == "image_out"} == {
@@ -200,13 +222,28 @@ def test_disabled_x11_presentation_ignores_display(display, monkeypatch):
 def test_choose_presenter_reaches_shared_selector(module, directory, preset, monkeypatch):
     calls = []
 
-    def choose(window, configured, choose_again, config_path):
-        calls.append((window, configured, choose_again, config_path))
-        return False
+    def choose(enabled, headless, skip, configured, config_path, mode, choose_again):
+        calls.append((enabled, configured, choose_again, config_path))
+        return {"enabled": enabled, "headless": headless, "x11_presentation": False, "device": 0}
 
-    monkeypatch.setattr(_radar, "_resolve_x11_presentation", choose)
-    monkeypatch.setattr(_radar, "_select_application_device", lambda *_: 0)
+    monkeypatch.setattr(_radar, "_prepare_presentation", choose)
     monkeypatch.setattr(_radar, "_application_display_device", lambda: 0)
     monkeypatch.setattr(_radar, "_application_composer_device", lambda: 0)
     module.build_graph(_ROOT / directory / "config" / f"{preset}.yaml", choose_presenter=True)
     assert calls == [(True, None, True, str(_ROOT / directory / "config" / f"{preset}.yaml"))]
+
+
+@pytest.mark.parametrize("module,directory,preset", _CASES, ids=[item[2] for item in _CASES])
+def test_four_mode_override_executes_headless_without_display(
+    module, directory, preset, monkeypatch, tmp_path
+):
+    monkeypatch.delenv("DISPLAY", raising=False)
+    source = _ROOT / directory / "config" / f"{preset}.yaml"
+    if directory == "dense_beamforming":
+        source = source.with_name("dense_beamforming_viz_smoke.yaml")
+    config = tmp_path / "headless.yaml"
+    config.write_text(f"extends: {source}\napp:\n  run: {{num_frames: 2}}\n")
+    workflow = module.build_graph(config, presenter="headless")
+    workflow.run()
+    assert workflow.display_progress.expected_ns >= 0
+    assert workflow.display_progress.capture_ns >= workflow.display_progress.expected_ns

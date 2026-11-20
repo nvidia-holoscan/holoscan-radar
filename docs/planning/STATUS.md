@@ -4,6 +4,417 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 ## Where the project stands
 
+- **2026-11-19** — **SAR GUI CI image-probe correction** on
+  `deustice/sar-gui`: port the existing `deustice/aivo-fixes` correction for
+  Jenkins #279. The cyan sensor-look overlay can cover the grayscale test's
+  single sampled pixel; inspect 15 locations and require 12 grayscale matches.
+  All four C++/Python X11/native video SAR window cases and their fixture pass
+  in the SDK container. Full pinned repository lint passes.
+
+- **2026-11-19** — **GUI review: final-frame retention and unavailable display**
+  on `deustice/sar-gui`: implemented. Retain one newest rate-deferred SAR sample,
+  capture metadata and scene index until a clock tick can render it, without
+  requiring another input or reader EOF; do not throttle OnEach headless renders.
+  Disable effective FMCW visualization when HoloViz is absent so no drain or
+  indefinite window hold can run. All 36 selected CTests pass, including the
+  deferred/coalesced/EOF/headless regression, forced-no-HoloViz driver, real X11
+  windows, startup, and numerical checks. Preserve local presets.
+
+- **2026-11-19** — **SAR sensor look annotation** on `deustice/sar-gui`: implemented.
+  Replace the unlabeled triangle with a cyan inward arrow and schematic rays
+  capped at 54px, plus native `Sensor look angle` text on a dark backing. Cache
+  the small GPU-painted patch with each completed display image. Label placement
+  handles wide strips, corners and vertical cues; invalid/tiny views omit it.
+  Bounds, unchanged pixels outside the patch, and capture stamps are tested.
+  C++/Python numerical parity and forwarded-X11 resize/close checks pass. No
+  beamwidth claim, extra image readback, GPU wait or periodic image redraw.
+  Preserve user presets; native interactive appearance remains unverified.
+
+- **2026-11-19** — **Autofocus GUI stages** on `deustice/sar-gui`: implemented.
+  C++ and Python report capture-stamped receiving, auxiliary BP, estimation, final
+  BP, and ready checkpoints through zero-copy application boundaries. Correction
+  outcomes remain separate; no new GPU synchronization or ETA. All 26 selected
+  CTest checks and ten autofocus Python numerical/parity checks pass. Stage names
+  and outcomes fit both footer layouts; intermediate stages may be skipped during
+  GPU stalls. Forwarded `localhost:10.0` C++/Python windows pass resize and
+  idle-close checks; settled captures show separate ready/declined rows. Full
+  repository lint passes. Native interactive presentation was not revalidated.
+
+- **2026-11-19** — **Application build scope** on `deustice/sar-gui`: implemented.
+  All 26 language manifests select narrow defaults and an application-only default
+  build target. Three configure-only regressions pass. SDK graph checks show
+  spotlight at 52 commands and SIMO at 73, excluding unrelated targets; a reused
+  broad cache retains its switches but builds only spotlight's 52 commands.
+  Python selects its provider (184 commands, including required public operators),
+  and switching back restores the C++ graph. Explicit test builds retain their
+  full operator dependencies. Module/package/wheel and explicit broad builds
+  preserve their defaults. No developer caches or user presets were reset.
+
+- **2026-11-19** — **Continuous-strip completed-update metrics** on
+  `deustice/sar-gui`: retain 64 capture-stamped BP measurements so newer work
+  cannot erase the displayed mosaic's matching compute statistics. Label mosaic
+  dimensions separately from the last strip update's pulse count and BP workload.
+  All 34 selected X11/headless/startup/layout checks and 41 Python application
+  checks pass, including C++/Python complex-product comparisons. Real forwarded
+  strip windows are captured in both languages. Native presentation is unavailable
+  on this display; its probe correctly rejects the incompatible Vulkan adapter.
+  User presets and scientific processing remain unchanged.
+
+- **2026-11-19** — **Event-anchored SAR history** on
+  `deustice/sar-gui`: retain real time spacing, ending the 20-second window at
+  the latest received/processed batch. Label the endpoints `-20s` / `Latest batch`
+  and show the relative-time caption in normal-height history. Hold geometry
+  between events and skip unchanged GPU footer frames; retain completion polling,
+  resize recovery, bounded queues and independent window closure. All 34 selected
+  GUI/startup/headless checks and the final label regressions pass. Real forwarded
+  C++/Python fixture windows remain pixel-identical across idle observations,
+  with five footer uploads and two scientific-panel uploads per run. Presets
+  and signal processing remain unchanged.
+
+- **2026-11-19** — **SAR middle-panel checkpoints** on
+  `deustice/sar-gui`: replace the countdown/running clock with stable formation
+  status, `Last completed` progress and an update-on-completion hint. Preserve
+  autofocus outcomes, the shared receipt/completion bar, scientific rendering,
+  the right history panel, scheduling and user presets. Use existing snapshots;
+  this is a presentation change, not a fix for GPU-service stalls. All 34 selected
+  GUI/startup/headless checks pass; seven final composition/layout checks also
+  cover pending autofocus and label separation. C++ and Python fixture footers
+  were captured on forwarded `localhost:10.0`. Full pinned lint passes.
+
+- **2026-11-19** — **SAR GUI synchronization experiment** on
+  `deustice/sar-gui`: retain the packet-cleanup fix, retiring completed retained
+  storage before replay publication while preserving output ownership and stamps.
+  Reject and restore the separately tested locality-readback move: exact products
+  and processing time were preserved, but fresh X11 footer gaps were still
+  21.0s versus 22.1s original. Headless rendering also still stalls, so neither
+  SSH transport nor that diagnostic alone explains the remaining GPU-service
+  delays. No kernels, public contracts or user presets changed. The two-change
+  build passed 117 selected SAR checks and 63 Python checks. The retained-state
+  rebuild passes 16 targeted checks; its real image is bit-exact, with 30.59s
+  runtime versus 30.44s fresh original. Two-candidate experiment and evidence:
+  `build-optimization/operator-perf/autofocus/gui-sync/`. Restored SSH/X11
+  `localhost:10.0` completes a real run with observed frame delivery and a
+  bit-exact image; long footer pauses remain. Native interactive presentation
+  remains unverified.
+
+- **2026-11-19** — **SAR GUI checkpoint verification**: 174 of 175 selected
+  CTests passed initially; update the stale footer assertion to require all five
+  agreed rows, including grouped pulses and BP work. Its rebuilt GPU composition
+  test passes, as do all 63 Python binding/workflow checks, including complex
+  C++/Python product comparisons at both precisions. No renderer or numerical
+  code changed in this test correction. Keep user presets local.
+
+- **2026-11-19** — **SAR GUI commit checkpoint**: split the reviewed GUI work
+  into diagnostic/workflow accounting (`96e4fc69`), footer rendering/history
+  (`c9787081`), and resize-aware presentation (`7349e35c`), followed by the
+  consolidated GUI documentation. Earlier November 18 entries retain their
+  review-time validation notes; that implementation is now committed. The
+  three user-edited SAR presets remain local. The separately profiled aperture
+  cleanup and locality-readback synchronization fixes remain pending.
+
+- **2026-11-19** — **Resize-aware cached footer presentation**:
+  feed visible window extents into bounded GPU footer layout; preserve glyph
+  proportions with capture-matched cropped transport and physical-pixel native
+  composition. Keep the scientific image cached and resource pools fixed.
+  Regression coverage includes exact crop provenance, bounded layout history,
+  rectangular textures, wide/compact resizes and delayed-display recovery.
+
+- **2026-11-19** — **SAR footer layout and batch history**:
+  unify footer typography and workload/latency readouts, show shared received
+  and formed progress, and connect matched receipt/completion marks with bounded
+  diagonals. Show autofocus outcomes and keep startup distinct from formed
+  imagery. Native-text GPU layout and real-window startup regressions accompany
+  the rendering change; scientific image caching and products are preserved.
+
+- **2026-11-19** — **SAR diagnostic accounting and workflow status**:
+  record bounded source-batch receipt/completion pairs, exact playback budgets,
+  and collection wall time without changing tensor contracts. Wire autofocus
+  accepted/declined outcomes and strip-slice accounting in both languages;
+  cap automatic strip windows. Preserve user presets. Dedicated model,
+  reader, BP and configuration regressions accompany the change.
+
+- **2026-11-19** — **Autofocus GUI frame stalls** on `deustice/sar-gui`:
+  assessment complete after shutdown commit `e1ae6390`; fixes pending. Real
+  Kourou Nsight captures reproduce local-X11 and headless footer stalls before
+  transport. Retained-aperture cleanup issues 69 synchronous frees during
+  auxiliary BP; a post-launch warning readback blocks 17.9s in headless mode.
+  Recommend releasing completed retained temporaries before replay publication
+  and moving that diagnostic readback before BP launches. Numerical kernels,
+  user presets, and public contracts unchanged. Local traces/report remain in
+  `build/holoscan-radar/gui-af-profile/`. Native interactive cadence unmeasured.
+
+- **2026-11-19** — **Profiler-compatible C++ shutdown** on `deustice/sar-gui`:
+  implemented. FMCW and SAR share caller-owned SIGINT/SIGTERM handlers; the
+  signal callback only stores a lock-free flag and control loops request
+  cooperative stop. Preserve close/Escape, EOF drain, final hold, and Python
+  signal ownership. All 57 selected checks and two Python interrupt checks pass.
+  Actual forwarded X11 SISO SIGINT and spotlight SIGTERM checks pass. Nsight
+  captures real CUDA/NVTX data for SISO, spotlight, autofocus, and the autofocus
+  X11 GUI. No operator contracts or user presets changed.
+
+- **2026-11-18** — **SAR footer resize proportions** on `deustice/sar-gui`:
+  implemented. Feed window dimensions back into footer layout, preserve native
+  glyph proportions, and crop completed X11 footer transport to its visible
+  region using a bounded capture-stamp/layout history. Keep fixed bounded
+  rectangular GPU/host pools and the cached scientific image. All 63 selected
+  checks pass. Actual C++ and Python X11 fullscreen at 1920x1200, restore, and
+  compact captures pass pixel comparison; delayed-display checks preserve
+  processing progress, stable RSS, and bounded descriptors. Presets and public
+  operator contracts are unchanged; edits remain uncommitted.
+
+- **2026-11-18** — **SAR live workload and total-time placement** on
+  `deustice/sar-gui`: implemented. Add expected current-image BP work from
+  matching processing metadata; preserve replay versus incremental pulse scope.
+  Both panels' BP work labels use 14px text, including compact layout.
+  Rename elapsed collection wall time to Total time, at the bottom in the wide
+  panel and top in compact layout. All 51 selected checks and full pinned lint
+  pass; actual C++ wide and Python compact windows reviewed on `localhost:11.0`.
+  Preserve bounded diagnostics and presets; edits remain uncommitted.
+
+- **2026-11-18** — **SAR image workload readout** on `deustice/sar-gui`:
+  add grouped measured pulse counts and BP work in Gpx*pulses to the completed
+  image panel; fit five rows in the existing footer. Increase history text to
+  16px full / 14px compact. Reuse timestamp-matched diagnostic counters with no
+  new GPU transfers or image refreshes. All 33 selected checks and full pinned
+  lint pass. Actual C++ wide and Python compact X11 captures on `localhost:11.0`
+  show the five rows without clipping. Preserve presets; edits remain uncommitted.
+
+- **2026-11-18** — **SAR history font adjustment** on `deustice/sar-gui`:
+  increase history labels and bookends by 1px to 15px full / 13px compact;
+  preserve all event geometry and scientific processing. All three timeline
+  checks pass, including actual native glyph comparison and wide/compact
+  layouts. C++ applications and Python bindings rebuilt; full pinned lint passes.
+
+- **2026-11-18** — **SAR history font alignment** on `deustice/sar-gui`:
+  match history titles, bookends, and optional lag text to adjacent body text
+  (14px full layout, 12px compact). Preserve event geometry and cached images;
+  all 33 targeted GUI checks and an actual forwarded X11 capture pass. The
+  user's screenshot has pixel-identical shared lane-label prefixes; descenders
+  explain the apparent height difference. Local application presets remain untouched.
+
+- **2026-11-18** — **SAR footer theme and pull-script integration** on
+  `deustice/sar-gui`: implemented. Reduce history labels to 20px/10px, align
+  footer backgrounds and text insets, and emphasize the completed image title
+  and metrics. Pull progress changes are cherry-picked as `58869a59` after 41
+  offline tests and full pinned lint; its clean worktree and source branch were
+  removed. All 33 selected GUI checks pass after updating the background-color
+  assertion. Actual forwarded C++/Python captures on `localhost:11.0` and wide/
+  compact delayed-display resize, cache, and shutdown checks pass. Resident
+  memory stays within 0.13 MiB and file descriptors within two of baseline
+  during the bounded delay checks. Full pinned lint passes. Preserve all local
+  application config edits and image caches; GUI edits remain uncommitted.
+
+- **2026-11-18** — **CPHD pull progress** on `deustice/pull-script`: implemented.
+  AWS, HTTPS, and subset preparation share byte/rate/elapsed/ETA reporting,
+  terminal updates, and periodic redirected logs. All 41 offline tests pass,
+  including subprocess output, fallback, interruption/resume, and subset CLI
+  completion/skip checks. Selection, transfers, validation, placement, and
+  application presets are preserved; no public collection was downloaded.
+
+- **2026-11-18** — **SAR autofocus outcome and scrolling diagnostics** on
+  `deustice/sar-gui`: implemented. Show preparing/running and accepted/declined
+  autofocus outcomes using existing reports; clear stale collection results.
+  Register stamped scroll slices in bounded diagnostic history to restore exact
+  packet completion and budgets. Cap automatic strip windows at visualization
+  max-side so a multi-monitor X11 desktop cannot push Now offscreen; explicit
+  sizes and manual resizing retain precedence. All 175 selected regression checks
+  and 63 Python checks pass, including corrected-fixture rerun. Actual forwarded
+  C++/Python strip windows show processed ticks within their cap; clean autofocus
+  declines and injected-error autofocus accepts one iteration (2.945x sharpness).
+  Public contracts, scientific processing, collection labels and user presets
+  are preserved. Changes remain uncommitted.
+
+- **2026-11-18** — **SAR footer refinement and workflow visual review** on
+  `deustice/sar-gui`: typography implemented. History labels use matching
+  22px/11px; the 14px next-image title sits below its ETA, with a full-width
+  compact title row. Ten targeted GUI checks and 63 Python checks pass. Actual
+  six-workflow real-data X11 captures and semantic audit are complete. Autofocus refusal/stage diagnostics and strip coverage are
+  absent from the shared footer. Preserve ETA behavior and user presets.
+
+- **2026-11-18** — **SAR timeline typography and endpoint labels** on
+  `deustice/sar-gui`: implemented. Use matching integer-scale glyph sizes,
+  brighter labels, and readable `20s` / `Now` bookends beside the tracks. Avoid
+  a second smoothing pass for the docked X11 timeline. All 170 selected checks
+  and 63 Python checks pass, including actual native-rendered prefix comparison.
+  Actual forwarded `localhost:14.0` and delayed-display wide/compact resource
+  checks pass. Preserve caches, HoloViz's font, and user presets; uncommitted.
+
+- **2026-11-18** — **SAR matched diagonal history** on `deustice/sar-gui`:
+  implemented. Replace filled interval unions with bounded exact matched pairs
+  and thin GPU-rendered diagonal connectors. Place larger labels above/below
+  the tracks. Pending work keeps its receipt tick without a false completion
+  endpoint; draw at most 64 real representative connections at dense rates.
+  All 170 selected checks and 63 Python checks pass, including overlapping pairs,
+  clipped diagonals, text placement, all six C++/Python workflows, and numerical
+  products. Actual forwarded X11 on `localhost:14.0` and two delayed-display
+  wide/compact resource checks pass. Image caches and user presets are unchanged;
+  changes remain uncommitted. Native-window appearance review remains separate.
+
+- **2026-11-18** — **SAR completion marker correction** on `deustice/sar-gui`:
+  implemented. Remove green fills across matched receipt/completion intervals;
+  reserve green for short completion markers and keep interval shading neutral.
+  Wide/compact GPU tests assert a long completed interval produces one short
+  green marker. All 10 targeted startup/timeline and C++/Python X11 checks pass.
+  A paced forwarded run on `localhost:14.0` passes resize and closure; its actual
+  viewer capture confirms separated completion ticks. User presets are untouched;
+  changes remain uncommitted.
+
+- **2026-11-18** — **SAR paired pulse-indicator shading** on `deustice/sar-gui`:
+  implemented. Match receipt/completion before coalescing; shade unfinished
+  batches to Now, use thin tracks/short marks and labels beside the plot.
+  Keep completed coverage in a fixed 512-bin ring; preserve GPU completion
+  proof, image caches, and user presets. All 169 selected checks and 63 Python
+  checks pass. Actual forwarded X11 on `localhost:14.0` passes resize, capture,
+  continued formation, and closure; two delayed-display wide/compact runs pass
+  bounded RSS/FD checks. Native-window and real-collection appearance review
+  remain separate. Changes are uncommitted.
+
+- **2026-11-18** — **SAR input/output batch history** on `deustice/sar-gui`:
+  implemented. Replace collection colors with singular received/processed batch
+  lanes. Require GPU-proven coverage of entire source batches, including split
+  and replay handling; never claim evicted, unprocessed pulses were formed.
+  Coalesce dense events into bounded 40 ms bins and merge overlapping marks,
+  retaining the 20-second history without reprocessing the SAR image.
+  All 164 selected checks and 63 Python checks pass, alongside two delayed-X11
+  resource/capture runs with continued formation and stable RSS/FDs. Harden
+  stress-test log reads and failure capture. User presets remain untouched;
+  changes are uncommitted. Manual laptop/native appearance review remains pending.
+
+- **2026-11-18** — **SAR shared pulse-progress track** on `deustice/sar-gui`:
+  implemented. Combine Formed fill and Received marker on one track, with
+  percentages above and elapsed time below. Preserve image caches and presets.
+  All 81 selected GPU composition, C++/Python X11, headless, resize, and
+  shutdown checks pass, including separated/coincident frontiers, zero/full
+  progress, and marker visibility in real startup handoff windows. Pinned
+  all-file lint passes; manual laptop/native visual review remains pending.
+
+- **2026-11-18** — **SAR middle title cleanup** on `deustice/sar-gui`: implemented.
+  Show the image title without `Next:`/`Ready:` prefixes; retain the existing
+  ETA/completion status and all other panel behavior. All eight focused GPU
+  footer/startup/timeline checks and pinned all-file lint pass. User presets
+  remain untouched; changes are uncommitted.
+
+- **2026-11-18** — **SAR next-image panel** on `deustice/sar-gui`: implemented.
+  Label the forming image with `Next:`, emphasize ETA, show one GPU-completed
+  Formed percentage/bar, and combine Received percentage with elapsed time in
+  a smaller line. Preserve independent caches, cadence, and user presets.
+  All 81 selected GPU composition, timestamp, C++/Python X11, headless, resize,
+  and shutdown checks pass. Fixed an early pixel-read race in the startup
+  probe; all four startup cases also pass three consecutive runs. Pinned
+  all-file lint passes. Manual laptop/native visual review remains pending.
+
+- **2026-11-18** — **SAR left-card spacing** on `deustice/sar-gui`: implemented.
+  Tighten row spacing from 25 to 21 pixels, keeping text sizes and the top
+  margin. Preserve the middle panel for the next design discussion.
+  All eight focused GPU composition, footer, startup, and timeline checks pass;
+  pinned all-file lint passes. User configuration edits remain untouched.
+
+- **2026-11-18** — **SAR playback-rate processing budget** on `deustice/sar-gui`:
+  implemented. Scale the displayed image's radar-time budget by its configured
+  playback rate and label that rate; unpaced playback has no fixed budget.
+  Preserve GPU timing, throughput, middle panel, and user configuration edits.
+  All 157 selected CTests and 63 SAR Python checks pass, including slowed/fast
+  playback, unpaced/unknown budgets, image-matched rate propagation, GPU text,
+  all six C++/Python X11 workflows under Xvfb, headless rendering, resize,
+  shutdown, and numerical/dump parity. Pinned all-file lint passes. Changes
+  remain uncommitted for user review; no new laptop/native visual claim.
+
+- **2026-11-18** — **SAR 1x processing budget** on `deustice/sar-gui`: implemented.
+  This initial fixed-1x display is superseded by the playback-rate display above.
+  Pair Latency with the original radar-time budget, independent of playback
+  speed. Use collection duration for a whole image and the new-data interval
+  between periodic images, with bounded host timestamp metadata. Preserve the
+  middle panel, processing kernels, and user presets. All 156 selected CTests
+  and 63 SAR Python checks pass, including exact irregular TxTime intervals,
+  intra-batch image seams, loop resets, bounded-history recovery, image-matched
+  GPU text composition, C++/Python X11 windows, headless rendering, resize,
+  shutdown, and numerical/dump parity. Pinned all-file lint passes. This run
+  uses automated Xvfb windows; laptop visual and positive native-window review
+  remain pending. No additional GPU work, transfers, or file reads are added.
+
+- **2026-11-18** — **SAR displayed-image information card** on `deustice/sar-gui`:
+  implemented. Use four rows: image title, product pixels, accumulated GPU
+  backprojection time labeled Latency, and throughput in Gpx*pulses/sec using
+  the same time basis. Exclude pacing waits; preserve the middle progress panel
+  and user configuration edits. Fixed image-metric matching to use the image's
+  capture stamp rather than the GUI clock. All 80 selected GPU composition,
+  timestamp/coherence, startup, C++/Python X11, headless, resize, and shutdown
+  checks pass; pinned all-file lint passes. User visual review remains pending.
+
+- **2026-11-18** — **CPHD subset retry/resume** on `deustice/sar-gui`: implemented.
+  Retry transient HTTP responses and preserve durable, source/window-validated
+  chunk checkpoints so the same download command resumes after interruption.
+  This side-conversation change preserves the pending GUI work and user presets.
+  All 33 offline checks pass, including a terminated process resuming its saved
+  chunks, transient HTTP retries, source/range validation, corrupted checkpoints,
+  writer exclusion, publication recovery, exact signal/PVP results, and stable
+  padded metadata through the real CPHD writer. No public transfer was started.
+
+- **2026-11-18** — **SAR timing hierarchy** on `deustice/sar-gui`: implemented.
+  Put next-image ETA and collection elapsed time first; retain GPU time,
+  throughput, and renamed final-batch latency as secondary diagnostics. Preserve
+  independent timeline updates, image-matched status, and user preset edits.
+  All 150 selected CTests and 63 SAR Python checks pass, including elapsed
+  freeze/reset, delayed-image timing coherence, GPU composition, C++/Python X11
+  startup/resize/shutdown, headless rendering, and numerical/dump parity.
+  Pinned all-file lint passes. User visual review and positive native-window
+  review remain pending; no generated mockup assets enter the viewer.
+
+- **2026-11-18** — **SAR live pulse progress and next-image estimate** on
+  `deustice/sar-gui`: implemented separate unique-pulse received and GPU-completed
+  progress, with pacing-aware approximate ETA in the independent timeline.
+  Bounded host histories and a fixed nonblocking GPU event ring preserve
+  processing and completed-image caches. All 221 selected regressions pass;
+  19 focused checks pass again after final count formatting. C++/Python delayed
+  X11 runs retain stable RSS/FD bounds while processing advances through resize
+  and recovery. A bounded real Panama Canal preview shows measured first-image
+  progress and ETA at 0.02 pacing with one main upload and 46 timeline uploads.
+  Direct laptop SSH/X11 checks on `localhost:11.0` pass C++/Python first-image
+  handoff, bar-completion pixel reads, resize/recovery, EOF idle behavior,
+  window close, and Escape. Pinned all-file lint passes; user configuration
+  edits are excluded. Positive native-window review remains hardware-limited.
+  See the GUI decision record for validation details and limits.
+
+- **2026-11-18** — **SAR startup and typography polish** on `deustice/sar-gui`:
+  added a distinct cached startup placeholder, enlarged footer text, moved
+  collection labels above slimmer timeline bars, and formatted GUI throughput
+  with readable SI units. Completed-image timestamps, numerical/dump results,
+  bounded transport, and independent timeline updates are preserved. All 203
+  selected checks pass, including GPU composition and C++/Python startup windows.
+  Delayed-display soaks keep processing active with stable RSS/FDs. Direct laptop
+  SSH/X11 runs in both languages complete startup, handoff, and final hold with
+  two image uploads and 61 independent timeline uploads each. Fixture captures
+  were visually inspected; complete forwarded pixel/interaction review and
+  positive native-window review remain unqualified. See the GUI decision record.
+
+- **2026-11-18** — **SAR footer status panel** on `deustice/sar-gui`: docked
+  viewers now place image-specific text in a compact left panel beside the
+  timeline, shared by all six workflows and both languages. Image and status
+  travel in one completed frame; timeline ticks retain independent caches and
+  transport. Scientific pixels, markers, products, and explicit separate-window
+  behavior are preserved. All 195 selected checks pass after refining one GUI
+  sampling assertion; pinned all-file lint passes. C++/Python 1024-by-768 delayed
+  X11 soaks pass with stable RSS/FDs, and settled captures were visually inspected.
+  Direct forwarded-display startup/hold works, but remote geometry/pixel readback
+  probes timed out; complete SSH visual and positive native-window review remain
+  unqualified. See the GUI decision record for evidence and limits.
+
+- **2026-11-18** — **Merge current main into SAR GUI** on `deustice/sar-gui`:
+  integrated `origin/main` at `ff302931`, preserving shared GUI presentation,
+  docked panels, named workflows, and flat CPHD storage. Retained upstream CFAR
+  empty-axis and failed-future fixes, runtime data-root precedence, optional SAR
+  visualization linking, strict downloader YAML parsing, direct Python subset
+  preparation, and nested provider fixture discovery. Per-context GPU placement
+  now reaches the shared compositor and both timeline layouts; the upstream
+  placement regression covers their retained compute/composer/display bindings.
+  The merge adopts main's GO/SO populated-axis contract clarification.
+  The pinned HSDK 5 GA build, all 410 selected non-performance CTests, all 17
+  offline downloader cases, and pinned all-file lint pass. Coverage includes
+  the Python provider, CFAR numerical checks, SAR numerical/dump checks,
+  runtime data paths, headless rendering, and C++/Python X11 windows via Xvfb.
+  Positive native-window checks remain excluded for the established display
+  limitation; laptop SSH visual checks were not repeated for this merge.
+
 - **2026-11-17** — **SAR Python packaging review follow-up** on
   `deustice/sar-python`: the provider links/enables SAR visualization only when
   `sar_image_viz` exists. CPHD lookup checks runtime `HOLOHUB_DATA_DIR` before
@@ -27,6 +438,56 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   CFAR cases, the placement regression, 25 SAR application checks, and fixture
   setup. All 17 offline downloader tests and repository-wide pinned lint pass.
   Public operator contracts and device-selection policy are unchanged.
+
+- **2026-11-17** — **SAR workflow names and flat CPHD storage** on
+  `deustice/sar-gui`: replaced numbered SAR shorthand with descriptive workflow
+  names in guides, comments, diagnostics, and metadata. Named sections in
+  [SAR/WORKFLOWS.md](SAR/WORKFLOWS.md) provide the shared references.
+  All 12 shipped presets now use flat `data/sar/` input paths; the Houston
+  subset recipe uses `houston_1p0m.cphd`. Downloader defaults and explicit
+  destinations use the same flat layout without old-path aliases or runtime
+  migration. Six local downloaded CPHDs were moved once, preserving their
+  inodes, sizes, modification times, and contents; the empty directory was
+  removed. Existing Houston subsets must also keep their `.subset.json`
+  sidecars when renamed. All 14 offline downloader tests pass, and the real
+  independent-images command reuses all six files and passes IARP checks.
+  Normalized YAML comparisons confirm that other preset settings are unchanged.
+  The pinned HSDK 5 build and all-file lint pass. Of 87 selected CTests, 75
+  pass, including the Python provider, numerical/dump checks, headless rendering,
+  and X11 windows. The other 12 are native-window checks, all failing at the
+  established CUDA/Vulkan display-presentation restriction on this host.
+  Public operator contracts and numerical processing are unchanged.
+
+- **2026-11-17** — **Docked SAR timeline** on `deustice/sar-gui`. The default
+  viewer uses one window with a 112-pixel bottom strip and independent 10 Hz
+  timeline updates. X11 retains separate panel caches and transport; timeline
+  ticks neither upload nor repaint the held image. Native HoloViz composites
+  the finished GPU panels for full-window refresh, without rerunning SAR
+  rendering or downloading the main image. `timeline.placement: window`
+  preserves the separate-window layout. All 154 affected CTests pass serially,
+  including numerical/dump parity and explicit panel-counter checks. All 28
+  real SSH/X11 workflow/language cases pass again; native positive visual
+  review still needs capable hardware. Delayed-display resize/resource checks
+  and pinned lint are recorded in [the GUI record](GUI_UNIFICATION.md).
+  The user's local autofocus visualization preset edit is preserved.
+
+- **2026-11-17** — **Shared radar GUI presentation** on `deustice/sar-gui`,
+  based on `deustice/sar-python`. All seven FMCW and six SAR C++/Python apps
+  share presenter policy, canonical configuration with legacy aliases,
+  GPU composition, finished-image X11 transport, native/headless/off options,
+  aspect fit, and cooperative window/EOF lifecycle. SAR formation/HUD and
+  timeline both work through X11 without a native Vulkan presentation surface.
+  Scientific displays, processing, and public operator contracts are preserved.
+  All 1,455 selected non-performance CTests pass, including provider tests,
+  numerical/dump parity, all-app X11 windows, headless execution, signals, and
+  GPU timestamp/fit regressions. Delayed-display resize and short resource soaks
+  pass; repository-wide pinned lint passes. All 28 actual laptop SSH/X11 cases
+  pass across both languages, including both SAR windows, resize, fit, and
+  Escape. The improved window probes also pass all 29 selected Xvfb CTests
+  (including fixture setup). Scientific visual review and positive native
+  presentation validation remain pending; this Thor cannot present Vulkan
+  windows to either the virtual display or the laptop forwarding connection.
+  See [GUI decisions and validation](GUI_UNIFICATION.md).
 
 - **2026-11-17** — **Complete Python operator coverage and SAR applications** on
   `deustice/sar-python`, based on `deustice/cfar-calibration` at `57061f50`. The provider now
@@ -165,8 +626,8 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 - **2026-11-05** — **Autofocus has a matching data download command.**
   `tools/sar_data/pull_cphd.py --app autofocus` downloads the default Kourou
-  collect into `data/sar/`. `--app all` includes it, preserves the `imperial/`
-  and `mode5/` layout under an overridden root, and deduplicates shared
+  collect into `data/sar/`. `--app all` includes it, originally kept collection subdirectories
+  under an overridden root (replaced by flat storage on 2026-11-17), and deduplicates shared
   Imperial Valley downloads. The autofocus and SAR data guides share a
   uv-based setup/download/run quick-start and distinguish the separate Atlanta
   download and Houston subset recipe. Offline CLI manifests match the eight
@@ -175,7 +636,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   `sar-data/tasks/Kourou, French Guiana/` and verified all eight objects with
   HTTP HEAD. A 64 KiB range read confirms Kourou's 23375 by 23999 dimensions.
   Transfer failures now report the source and destination without a traceback;
-  `--app all` rejects the known per-collection destinations. Four offline
+  `--app all` originally rejected per-collection destinations (removed with flat storage). Four offline
   downloader regressions pass. No full collections downloaded or operator
   contracts changed.
 
@@ -355,7 +816,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   alone.** `AutofocusOp` accuracy had only ever been measured on Kourou, which
   was *screened* for PGA — an isolated reflector lit across the whole dwell — so
   the operator's precondition was satisfied there by construction. Atlanta
-  (UMBRA-07 airport), Houston (mode02 dense urban) and Imperial Valley (Capella
+  (UMBRA-07 airport), Houston (video SAR dense urban) and Imperial Valley (Capella
   stripmap over agriculture) now have configs beside it and
   `tools/sar_autofocus/sweep.py --scenes all` sweeps across them. **The fixes
   generalize:** all five injected symmetries recover to 0.04–0.22 rad on the
@@ -1007,7 +1468,14 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 
 - **2026-09-29** — **HSDK 5 Holoviz dashboard runtime binding fixed.** The compositor declares its contiguous RGBA layout. The visualization bridge copies each frame into its own device-bound ImageT output pool, allowing Holoviz to consume it on a separate CUDA stream. A visualization-enabled two-frame SISO run under Xvfb completed with two sink frames and no Graph or runtime diagnostics; the graph admission test now binds the image output pool.
 
-- **2026-09-24** — **Holoscan-native C++ operator testing migration complete.** Against immutable HSDK `main-5x` revision `79dc6cb48e5b571b6f0a6daf2b5dbc783de01b76`, after !5394 and !5397 merged, every single-operator suite uses `holoscan::testing`; the local arity-specific fixture, wire-capture helper, sources, collectors, polling loops, and frame banks are removed from that boundary. Eight whole-Graph integration sites retain narrowly named integration-only finite source/capture plumbing. The 1,024-test macro inventory is unchanged from the qualification baseline, no C++ test is skipped or disabled, all 1,002 non-performance CTests pass serially, and the complete pinned pre-commit suite passes. Non-contiguous Tensor fixture coverage remains deferred under [CLARAHOLOS-3423](https://jirasw.nvidia.com/browse/CLARAHOLOS-3423).
+- **2026-09-24** — **Holoscan-native C++ operator testing migration complete.** Against immutable HSDK `main-5x`
+revision `79dc6cb48e5b571b6f0a6daf2b5dbc783de01b76`, after !5394 and !5397 merged, every single-operator suite uses
+`holoscan::testing`; the local arity-specific fixture, wire-capture helper, sources, collectors, polling loops, and
+frame banks are removed from that boundary. Eight whole-Graph integration sites retain narrowly named
+integration-only finite source/capture plumbing. The 1,024-test macro inventory is unchanged from the qualification
+baseline, no C++ test is skipped or disabled, all 1,002 non-performance CTests pass serially, and the complete
+pinned pre-commit suite passes. Non-contiguous Tensor fixture coverage remains deferred under
+[CLARAHOLOS-3423](https://jirasw.nvidia.com/browse/CLARAHOLOS-3423).
 
 - **2026-09-23** — **Deterministic C++/CUDA formatting enforcement complete.** [CLARAHOLOS-3386](https://jirasw.nvidia.com/browse/CLARAHOLOS-3386) is implemented with a checked-in 100-column `.clang-format` policy, clang-format 18.1.8 pinned through pre-commit, and the existing CI-wide `pre-commit run --all-files` command enforcing the same hook. The bootstrap sweep formats all 325 tracked `.cpp`, `.hpp`, `.cu`, and `.cuh` files under `applications/`, `operators/`, `performance/`, `tests/`, and `cmake/pydoc/` separately from behavioral changes. The authoritative command is documented in `DEVELOPER.md`; formatter idempotence, the complete pinned pre-commit suite, the 100-column audit (with only the existing 104-column SPDX exception), and the complete HSDK 5/CUDA 13 module build pass.
 
@@ -1201,7 +1669,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
 - **2026-09-28 — standalone SAR apps:** split the five SAR graphs into `spotlight`,
   `video_sar`, `tiled_strip`, `continuous_strip`, and `independent_images`. Each
   has an `APP_<name>` gate, YAML, metadata, README, and fixture smoke. The
-  former `sar_formation` command and mode-numbered app YAMLs are removed.
+  former `sar_formation` command and obsolete shared-app YAMLs are removed.
   Shared SAR Graph driving and visualization live under `radar_app/sar/`;
   library operator contracts are unchanged. A generated CPHD fixture gave
   identical complex image tensors for every old/new pair (1, 5, 5, 5, and 2
@@ -1223,7 +1691,7 @@ The coordination point for in-flight work (see [`AGENTS.md`](../../AGENTS.md) �
   [SAR open-items roll-up](SAR/OPEN_ITEMS.md). The six operators, five app modes,
   C++ fixture generator, C++ operator tests, and headless Holoviz smoke path
   build in the pinned HSDK 5 GPU image. The non-performance C++ suite passed
-  1018/1018 tests, including synthetic mode 1–5 and headless Holoviz smoke;
+  1018/1018 tests, including synthetic spotlight, video SAR, tiled strip, continuous strip, and independent images and headless Holoviz smoke;
   the repository-wide pinned pre-commit suite passed. Final focused reruns
   cover test-harness corrections added after that full run. Public CPHD
   collection validation remains open. HSDK 5 visualization uses the
@@ -1288,6 +1756,7 @@ still declare SDK 4.3.0.
 
 | Work | Owner | Branch | Status |
 | --- | --- | --- | --- |
+| CPHD pull progress | Codex | `deustice/pull-script` | **verified locally:** shared AWS/HTTPS/subset byte, percentage, rate, elapsed, and ETA display; terminal updates and periodic log lines during waits; explicit validation, skip, failure, and completion labels. All 41 offline checks pass, including existing selection and resume regressions. Application YAMLs are unchanged. |
 | SAR missing-input CLI diagnostics | Codex | `deustice/sar-python` | **verified locally:** missing-CPHD errors show the next preparation command and documentation without a Python traceback. Terminal headings use red/bold cyan/bold; redirected output, `NO_COLOR`, and dumb terminals stay plain. Six host-only CLI checks pass; unexpected build/run errors still propagate. Native diagnostic fragment compiles and passes host-path, shell-quoting, and override checks; full applications were not rebuilt. |
 | Config-driven SAR data preparation | Codex | `deustice/sar-python` | **verified locally:** selected YAML inputs are checked against pinned dataset paths and subset recipes before downloads or directory creation. All 12 shipped presets resolve offline; 14 downloader regressions pass, including mismatches, malformed YAML, custom data roots, deduplication, and Houston recipe dispatch. Missing-file guidance prints the selected config in a shell-quoted host command. Native diagnostic fragment compiles and passes path/quoting checks; no full collections downloaded. |
 | SAR autofocus saved-image workflow | Codex | `dpc/sar-autofocus` | **verified locally:** shipped `autofocus_blurred`, `autofocus_corrected`, and `autofocus_reference` presets replace config generation and the single recovery preset. Five-step walkthrough runs all three with distinct output directories. All presets ran on Kourou: both baselines apply zero correction, corrected residual is 0.1813 rad, and the three-panel PNG renders. Pinned lint passes. |
@@ -1392,9 +1861,9 @@ still declare SDK 4.3.0.
 | CPHDReaderOp console warn when paced playback is behind | current workspace | `dpc/main-5x-catchup` | **implemented:** paced `playback_rate > 0` WARNs at most 1 Hz while `behind_s >= 0.2` (Gantt entry); stops at `<= 0.05`. Unpaced `0` stays quiet. Verify with a high-`playback_rate` continuous-strip run. |
 | Optional static Param to wait on `kBackpressured` | current workspace | `dpc/main-5x-catchup` | **Reader-only Param.** Unmetered `playback_rate` 0 waits on a full ingest queue; paced ingest fail-fasts unless `wait_for_downstream` (schema v2). Formation and app-owned stages fail-fast. Continuous strip deepens the 4-slice fan-out edges to 16 so the default rate-1 preset is not aborted by depth 4. Spotlight is unmetered wait; other paced demos fail-fast at ingest. Queue-full abort prints the shared hint. FMCW operators do not take the Param. |
 | SAR fixture smokes on staging `/usr/lib` SDK | current workspace | `dpc/main-5x-catchup` | **implemented:** existing stager `bind_outputs` are required on `/usr/lib` (implicit device 0 is rejected). Smoke count uses `stopped after N image(s)` because report INFO is 1 Hz plus formed-size change. All 20 `Sar*` CTests pass. |
-| Restore SAR on-image Holoviz HUD (chevron/lag) | current workspace | `dpc/main-5x-catchup` | **implemented and visually checked** for modes 1–5. Live `FormationHud` mailbox; lag is collect TxTime vs `now`. Compass inset dropped (normalized coords squash it on a landscape strip). Source/ingest/formation partitions bind dedicated `ThreadPlacement` lanes so the reader keeps the playback clock. Staging `/usr/lib` requires `bind_outputs` on pass-through stager `range_profiles_out` (`IMPLICIT_DEVICE_ZERO_REJECTED`); the older `/opt` image rejected that bind as `PHYSICAL_TENSOR_DEVICE_BINDING_UNUSED`. Strip crop and indefinite hold remain. |
-| Restore SAR Gantt timeline window | current workspace | `dpc/main-5x-catchup` | **implemented and visually checked** for modes 1–5. Second Holoviz window (`SAR timeline`) is the 20 s scrolling Gantt (dwell bars, duty-cycle quiet, image-emit ticks with per-tick last-pulse latency labels, 1 Hz lag HUD on the platform lane). Windowed path only; headless smokes unchanged. |
-| Make host `holoscan run` SAR demos interruptible | current workspace | `dpc/main-5x-catchup` | **implemented:** SAR Graph driver binds an early `ManagedShutdownSignals` domain so Ctrl-C / `docker stop` SIGTERM cooperatively stop looping presets; CPHD playback and viz-hold sleeps honor cancellation. One in-flight backprojection can still delay exit. Exercised during the mode 1–5 GUI walkthrough. |
+| Restore SAR on-image Holoviz HUD (chevron/lag) | current workspace | `dpc/main-5x-catchup` | **implemented and visually checked** for spotlight, video SAR, tiled strip, continuous strip, and independent images. Live `FormationHud` mailbox; lag is collect TxTime vs `now`. Compass inset dropped (normalized coords squash it on a landscape strip). Source/ingest/formation partitions bind dedicated `ThreadPlacement` lanes so the reader keeps the playback clock. Staging `/usr/lib` requires `bind_outputs` on pass-through stager `range_profiles_out` (`IMPLICIT_DEVICE_ZERO_REJECTED`); the older `/opt` image rejected that bind as `PHYSICAL_TENSOR_DEVICE_BINDING_UNUSED`. Strip crop and indefinite hold remain. |
+| Restore SAR Gantt timeline window | current workspace | `dpc/main-5x-catchup` | **implemented and visually checked** for spotlight, video SAR, tiled strip, continuous strip, and independent images. Second Holoviz window (`SAR timeline`) is the 20 s scrolling Gantt (dwell bars, duty-cycle quiet, image-emit ticks with per-tick last-pulse latency labels, 1 Hz lag HUD on the platform lane). Windowed path only; headless smokes unchanged. |
+| Make host `holoscan run` SAR demos interruptible | current workspace | `dpc/main-5x-catchup` | **implemented:** SAR Graph driver binds an early `ManagedShutdownSignals` domain so Ctrl-C / `docker stop` SIGTERM cooperatively stop looping presets; CPHD playback and viz-hold sleeps honor cancellation. One in-flight backprojection can still delay exit. Exercised during the spotlight, video SAR, tiled strip, continuous strip, and independent images GUI walkthrough. |
 | Developer-guide accuracy pass | Codex | current workspace | **complete:** README, DEVELOPER, SDK_DEVELOPMENT, and AGENTS now reflect seven FMCW apps, C++ YAML performance recipes, the disabled Python bindings and pytest registration, and validated SAR GUI presets; pinned documentation hooks pass |
 | Performance harness YAML refactor | deustice | `deustice/perf-refactor` | **Layout complete:** all 26 schema-v2 recipes and typed adapters are paired under `performance/operators/<group>/<operator>/`; shared C++ code lives under `performance/harness/cpp/`. One explicit CMake registry preserves executable names and `build/performance/cpp/` output. The pinned HSDK 5 build, 26 Minimal GPU smokes, 20 focused Overrides/cache smokes, and 30 harness tests pass. YAML case content and measurement behavior are unchanged. The unbuildable legacy Python performance matrix was removed; C++ performance coverage still lacks CFAR rank-four full-axis peak suppression and FeatureAssembly score/AoA packs. Future Python Graph profiling awaits buildable HSDK 5 bindings. |
 | Direct Holoscan CLI workflow and HSDK 5 Holoviz integration | Codex | `codex/holoscan-cli-direct` | **ready for review:** host CLI build/run/test integration, top-level Python dependencies, and CTest script; dashboard now finds and links the separate HSDK 5 visualization package and bridges RGBA Tensor to ImageT at Holoviz. All C++ targets build in the pinned image; focused Holoviz Graph admission test and lint pass. Window rendering still needs a display-equipped run. |

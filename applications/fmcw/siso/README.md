@@ -15,13 +15,14 @@ flowchart LR
     Features --> Dashboard
     Range --> Dashboard
     Doppler --> Dashboard
-    Dashboard --> Image[RgbaImageBridgeOp] -->|Same GPU| Frame[FmcwFrameComposerOp] -->|Other window systems, same GPU| Holoviz[FmcwHolovizOp]
+    Dashboard --> Image[RgbaImageBridgeOp] -->|Same GPU| Frame[FrameComposerOp] -->|Native| Replay[CompletedFrameReplayOp] --> Holoviz[NativeImagePresenterOp]
     Image -.->|Different GPUs| InputDownload[ImageDownloadOp]
     InputDownload -.-> InputUpload[ImageUploadOp] -.-> Frame
-    Frame -.->|Other window systems, different GPUs| Download[ImageDownloadOp]
+    Replay -.->|Different GPUs| Download[ImageDownloadOp]
     Download -.-> Upload[ImageUploadOp] -.-> Holoviz
     Frame -->|X11| X11Download[ImageDownloadOp] --> X11Window[X11ImagePresenterOp]
     Dashboard -->|Native text| Frame
+    Frame -->|Headless| Sink[CompletedFrameSinkOp]
 ```
 
 The optional dashboard displays the range-Doppler heatmap and rolling range and velocity histories. SISO has no angle products, so the spatial and angle-history panels are omitted.

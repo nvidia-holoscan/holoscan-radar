@@ -3,6 +3,8 @@
 
 """SISO range-Doppler Graph matching the C++ SISO workflow."""
 
+import signal
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic, sleep
@@ -18,6 +20,7 @@ from holoscan_radar import (
     _radar,
 )
 from holoscan_radar.applications.fmcw_dashboard import add_dashboard
+from holoscan_radar.applications.presentation import prepare_presentation
 
 import holoscan as hs
 
@@ -27,6 +30,9 @@ class BuiltGraph:
     graph: hs.Graph
     options: hs.CompileOptions
     num_frames: int
+    final_image_hold_s: float = 0.0
+    display_progress: object = None
+    final_capture_ns: int = -1
 
     def run(self) -> hs.RunSession:
         """Run until all report frames arrive, then stop clock-driven nodes."""
@@ -35,7 +41,20 @@ class BuiltGraph:
         plan = hs.compile(self.graph, self.options)
         if not plan.ok:
             raise RuntimeError(f"Graph compile failed: {plan.json()}")
-        session = hs.run_async(plan)
+        previous = None
+        if threading.current_thread() is threading.main_thread():
+            previous = signal.getsignal(signal.SIGTERM)
+
+            def stop(_signum, _frame):
+                raise KeyboardInterrupt
+
+            signal.signal(signal.SIGTERM, stop)
+        try:
+            session = hs.run_async(plan)
+        except BaseException:
+            if previous is not None:
+                signal.signal(signal.SIGTERM, previous)
+            raise
         seen = 0
         last_progress = monotonic()
         try:
@@ -52,25 +71,46 @@ class BuiltGraph:
                 if monotonic() - last_progress >= 120:
                     raise TimeoutError(f"Graph stalled after {seen}/{self.num_frames} frames")
                 sleep(0.05)
+            display_deadline = monotonic() + 10.0
+            while (
+                self.display_progress is not None
+                and self.final_capture_ns >= 0
+                and (
+                    self.display_progress.input_ns < _radar._last_report_capture_ns()
+                    or self.display_progress.expected_ns < 0
+                    or self.display_progress.capture_ns < self.display_progress.expected_ns
+                )
+                and session.termination == hs.RunTermination.RUNNING
+                and monotonic() < display_deadline
+            ):
+                if session.diagnostics:
+                    break
+                sleep(0.05)
+            deadline = monotonic() + max(0.0, self.final_image_hold_s)
+            while session.termination == hs.RunTermination.RUNNING and (
+                self.final_image_hold_s < 0 or monotonic() < deadline
+            ):
+                if session.diagnostics:
+                    break
+                sleep(0.05)
         finally:
             session.request_stop()
             session.wait()
+            if previous is not None:
+                signal.signal(signal.SIGTERM, previous)
         if session.diagnostics:
             raise RuntimeError(f"Graph diagnostics: {session.diagnostics}")
         return session
 
 
-def build_graph(config: str | Path, *, choose_presenter: bool = False) -> BuiltGraph:
+def build_graph(
+    config: str | Path, *, choose_presenter: bool = False, presenter: str | None = None
+) -> BuiltGraph:
     """Load the shipped YAML through the C++ loader and compose its SISO Graph."""
 
     path = str(Path(config).resolve())
     cfg = _radar._load_siso(path)
-    cfg["visualization"]["x11_presentation"] = _radar._resolve_x11_presentation(
-        cfg["visualize"], cfg["visualization"]["x11_presentation"], choose_presenter, path
-    )
-    device = _radar._select_application_device(
-        cfg["visualize"], cfg["visualize"], cfg["visualization"]["x11_presentation"]
-    )
+    device = prepare_presentation(cfg, path, presenter, choose_presenter)
     graph = hs.Graph("siso")
     options = hs.CompileOptions()
     extents = cfg["extents"]
@@ -167,4 +207,15 @@ def build_graph(config: str | Path, *, choose_presenter: bool = False) -> BuiltG
             clustered=True,
         )
     graph.set_default_clock(graph.add_clock(hs.RealtimeClock, "clock"))
-    return BuiltGraph(graph, options, cfg["num_frames"])
+    return BuiltGraph(
+        graph,
+        options,
+        cfg["num_frames"],
+        (
+            cfg["visualization"]["final_image_hold_s"]
+            if cfg["visualize"] and not cfg["visualization"]["headless"]
+            else 0.0
+        ),
+        _radar._frame_progress(),
+        0 if cfg["visualize"] else -1,
+    )

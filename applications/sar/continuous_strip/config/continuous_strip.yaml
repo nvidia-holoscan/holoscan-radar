@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Mode-4 demo: continuous strip of Imperial Valley Capella
-# stripmap (INPUT_DATA.md). Same collect as mode 3; mode 4
+# Continuous strip demo: continuous strip of Imperial Valley Capella
+# stripmap (INPUT_DATA.md). Same collect as tiled strip; continuous strip
 # translates the lattice along v and scrolls the accumulator
 # (no tile seams, no cross-range taper). Pull first (~3.45 GiB);
 # the app never reaches the network.
 #
 #   python3 tools/sar_data/pull_cphd.py --app continuous_strip \
-#     --dest data/sar/imperial
+#     --dest data/sar
 #   Paths below resolve under the build data directory (default: data/).
 #
 # Lattice follows the SRP chord (not the IARP tangent plane).
@@ -31,7 +31,7 @@
 # reader batch (256+74 after slicing). playback_rate 1 paces to collect time.
 # nfft_pad: next_fast. loop continues until the process is stopped; wrap restages
 # the opening window with emit-and-reset. Holoviz is the parent
-# strip (same landscape fit as mode 3), not the scrolling chip:
+# strip (same landscape fit as tiled strip), not the scrolling chip:
 # SarMosaicOp blits each window into the parent. The parent is
 # resident and full resolution, but it is never published: a
 # Tensor pool holds 16 slots of whatever rides the port, and a
@@ -47,7 +47,7 @@
 # visualize_size caps that long display axis in pixels.
 
 cphd:
-  path: sar/imperial/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
+  path: sar/CAPELLA_C14_SM_CPHD_VV_20241129025546_20241129025602.cphd
   names:
     - Imperial Valley
   sidecar: ""
@@ -80,8 +80,10 @@ backprojection:
   coordinate_frame: ecef
   geometry_change: scroll
 
-visualize: true
-visualize_size: 1400
-skip_display_check: false
-headless: false
-visualize_hold_s: -1
+app:
+  visualization:
+    enabled: true
+    max_side: 1400
+    skip_display_check: false
+    headless: false
+    final_image_hold_s: -1

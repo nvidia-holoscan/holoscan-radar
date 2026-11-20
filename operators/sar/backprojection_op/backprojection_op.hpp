@@ -30,6 +30,9 @@
 #include "radar_schemas/sample_geometry_bridge.hpp"
 
 namespace holoscan::radar {
+namespace sar_progress {
+class GpuProgress;
+}
 namespace detail {
 template <typename T, typename TGeom>
 struct BackprojectionState;
@@ -134,6 +137,8 @@ class BackprojectionOp : public holoscan::Operator<BackprojectionParams> {
   std::atomic<int64_t> last_image_emit_ns_{0};
   std::atomic<bool> last_image_emit_valid_{false};
   std::shared_ptr<FormationHud> hud_{};
+  std::shared_ptr<sar_progress::Monitor> progress_;
+  std::shared_ptr<sar_progress::GpuProgress> gpu_progress_;
   std::shared_ptr<detail::BackprojectionState<T, TGeom>> state_;
   std::shared_ptr<Tensor> retained_profiles_, retained_positions_, retained_reference_;
   std::shared_ptr<Tensor> retained_sample_points_, retained_weight_;

@@ -4,6 +4,7 @@
 #include <nanobind/nanobind.h>
 
 #include <cstdint>
+#include <type_traits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -14,6 +15,8 @@
 #include <holoscan/authoring/registry.hpp>
 #include <holoscan/core/graph.hpp>
 #include <holoscan/visualization/holoviz_op.hpp>
+
+#include "radar_app/viz/presentation_graph.hpp"
 
 #include "radar_app/viz/rgba_image_bridge_op.hpp"
 #include "radar_app/viz/image_device_bridge_op.hpp"
@@ -30,10 +33,16 @@ namespace {
 struct ImageSize {
   std::int32_t width;
   std::int32_t height;
+  double rate{60.0};
+  bool fit{false};
+  std::string title;
 };
 HOLOSCAN_PARAM_SCHEMA(ImageSize, holoscan::param_schema("com.nvidia.holoscan.radar.ImageSize", 1),
                       holoscan::field<&ImageSize::width>("width"),
-                      holoscan::field<&ImageSize::height>("height"));
+                      holoscan::field<&ImageSize::height>("height"),
+                      holoscan::field<&ImageSize::rate>("rate"),
+                      holoscan::field<&ImageSize::fit>("fit"),
+                      holoscan::field<&ImageSize::title>("title"));
 
 template <typename Op>
 struct SizeThunks : authoring::ManualOperatorRegistrationThunks<Op> {
@@ -45,7 +54,15 @@ struct SizeThunks : authoring::ManualOperatorRegistrationThunks<Op> {
       throw holoscan::RuntimeError{holoscan::ErrorCode::kInvalidArgument,
                                    "dashboard image width and height must be positive"};
     }
-    return SizeThunks::make_operator_ref(graph.op<Op>(name, input->width, input->height));
+    if constexpr (std::is_same_v<Op, viz::CompletedFrameSinkOp>)
+      return SizeThunks::make_operator_ref(
+          graph.op<Op>(name, holoscan::radar::app::authoring_frame_progress()));
+    else if constexpr (std::is_same_v<Op, viz::CompletedFrameReplayOp>)
+      return SizeThunks::make_operator_ref(
+          graph.op<Op>(name, input->width, input->height, input->rate,
+                       holoscan::radar::app::authoring_frame_progress(), input->fit, input->title));
+    else
+      return SizeThunks::make_operator_ref(graph.op<Op>(name, input->width, input->height));
   }
   static holoscan::expected<authoring::OpaqueOperatorRef, holoscan::Error> from_assignments(
       holoscan::Graph& graph, std::string_view name,
@@ -71,12 +88,14 @@ struct DashboardWindow {
   std::int32_t width;
   std::int32_t height;
   std::string title;
+  bool fit{false};
 };
 HOLOSCAN_PARAM_SCHEMA(DashboardWindow,
                       holoscan::param_schema("com.nvidia.holoscan.radar.DashboardWindow", 1),
                       holoscan::field<&DashboardWindow::width>("width"),
                       holoscan::field<&DashboardWindow::height>("height"),
-                      holoscan::field<&DashboardWindow::title>("title"));
+                      holoscan::field<&DashboardWindow::title>("title"),
+                      holoscan::field<&DashboardWindow::fit>("fit"));
 
 template <typename Op>
 struct ViewerThunks : authoring::ManualOperatorRegistrationThunks<Op> {
@@ -88,8 +107,15 @@ struct ViewerThunks : authoring::ManualOperatorRegistrationThunks<Op> {
       throw holoscan::RuntimeError{holoscan::ErrorCode::kInvalidArgument,
                                    "dashboard image width and height must be positive"};
     }
-    return ViewerThunks::make_operator_ref(
-        graph.op<Op>(name, input->width, input->height, input->title));
+#if HOLOSCAN_RADAR_HAS_X11
+    if constexpr (std::is_same_v<Op, viz::X11ImagePresenterOp>)
+      return ViewerThunks::make_operator_ref(
+          graph.op<Op>(name, input->width, input->height, input->title, input->fit,
+                       holoscan::radar::app::authoring_frame_progress()));
+    else
+#endif
+      return ViewerThunks::make_operator_ref(
+          graph.op<Op>(name, input->width, input->height, input->title));
   }
   static holoscan::expected<authoring::OpaqueOperatorRef, holoscan::Error> from_assignments(
       holoscan::Graph& graph, std::string_view name,
@@ -163,6 +189,8 @@ void register_viewer(std::string_view name) {
 }  // namespace
 
 void register_viz_bindings(nanobind::module_&) {
+  register_transfer<viz::CompletedFrameSinkOp>("holoscan.radar._app.CompletedFrameSink");
+  register_transfer<viz::CompletedFrameReplayOp>("holoscan.radar._app.CompletedFrameReplay");
   register_transfer<viz::ImageDownloadOp>("holoscan.radar._app.ImageDownload");
   register_transfer<viz::ImageUploadOp>("holoscan.radar._app.ImageUpload");
   using T = SizeThunks<viz::RgbaImageBridgeOp>;

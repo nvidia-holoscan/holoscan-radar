@@ -78,6 +78,7 @@ target_compile_definitions(test_perf_profiles PRIVATE
 target_compile_definitions(test_perf_yaml_standard PRIVATE
     HOLOSCAN_RADAR_PERF_OPERATOR_ROOT="${PROJECT_SOURCE_DIR}/performance/operators")
 radar_add_test(common/test_sim)
+radar_add_test(common/test_sar_progress)
 radar_add_test(sar/test_phase_correction holoscan::phase_correction_op)
 radar_add_test(sar/test_aperture_manager holoscan::aperture_manager_op)
 radar_add_test(sar/test_backprojection holoscan::backprojection_op)
@@ -327,11 +328,26 @@ target_include_directories(test_fmcw_simo_report PRIVATE
 
 radar_add_test(app/test_report_shapes holoscan::radar_app)
 radar_add_test(app/test_sar_diagnostics holoscan::radar_app)
+radar_add_test(app/test_shutdown_signals holoscan::radar_app)
+
+# Exercise the driver fallback even on SDK images that include visualization.
+add_executable(test_fmcw_without_holoviz app/test_fmcw_without_holoviz.cpp)
+target_link_libraries(test_fmcw_without_holoviz PRIVATE
+    radar_test_utils GTest::gtest_main holoscan::radar_app holoscan::params_io)
+target_compile_definitions(test_fmcw_without_holoviz PRIVATE
+    HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ=0)
+gtest_discover_tests(test_fmcw_without_holoviz PROPERTIES LABELS "unit" TIMEOUT 5)
+
 
 radar_add_test(app/test_sar_config_paths holoscan::radar_app holoscan::params_io)
 target_include_directories(test_sar_config_paths PRIVATE ${PROJECT_SOURCE_DIR}/operators)
 target_compile_definitions(test_sar_config_paths PRIVATE
     HOLOSCAN_RADAR_DATA_DIR="${CMAKE_CURRENT_BINARY_DIR}/sar_config_data")
+
+if(TARGET sar_image_viz AND TARGET holoscan::visualization::op_holoviz)
+    radar_add_test(app/test_sar_startup holoscan::radar_app sar_image_viz
+        holoscan::visualization::op_holoviz)
+endif()
 
 if(TARGET spotlight AND TARGET holoscan::visualization::op_holoviz)
     add_executable(test_sar_runtime app/test_sar_runtime.cpp)
@@ -357,9 +373,11 @@ endif()
 
 # All enabled applications get a real executable smoke. Window tests explicitly
 # choose their presenter and use private preference caches in the shared probe.
-if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ AND HOLOSCAN_RADAR_HAS_X11)
-    find_program(RADAR_XVFB_RUN xvfb-run REQUIRED)
+if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
     find_program(RADAR_TEST_PYTHON python3 REQUIRED)
+    if(HOLOSCAN_RADAR_HAS_X11)
+        find_program(RADAR_XVFB_RUN xvfb-run REQUIRED)
+    endif()
 endif()
 
 function(radar_add_fmcw_workflow_checks application preset smoke_name)
@@ -371,6 +389,18 @@ function(radar_add_fmcw_workflow_checks application preset smoke_name)
         COMMAND $<TARGET_FILE:${application}> "${config_dir}/${preset}_smoke.yaml")
     set_tests_properties(${smoke_name} PROPERTIES LABELS "application;smoke" TIMEOUT 60)
 
+    if(HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
+        set(headless_config "${config_dir}/${preset}_smoke.yaml")
+        if(EXISTS "${config_dir}/${preset}_viz_smoke.yaml")
+            set(headless_config "${config_dir}/${preset}_viz_smoke.yaml")
+        endif()
+        add_test(NAME FmcwHeadless_${preset}_cpp
+            COMMAND ${RADAR_TEST_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/check_headless.py
+                $<TARGET_FILE:${application}> "${headless_config}")
+        set_tests_properties(FmcwHeadless_${preset}_cpp PROPERTIES
+            LABELS "application;smoke;integration;visualization" TIMEOUT 60 RESOURCE_LOCK fmcw_gui)
+    endif()
+
     if(NOT HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ OR NOT HOLOSCAN_RADAR_HAS_X11)
         return()
     endif()
@@ -378,6 +408,17 @@ function(radar_add_fmcw_workflow_checks application preset smoke_name)
     set(window_config "${config_dir}/${preset}.yaml")
     if(EXISTS "${config_dir}/${preset}_viz_smoke.yaml")
         set(window_config "${config_dir}/${preset}_viz_smoke.yaml")
+    endif()
+    if(preset STREQUAL "siso")
+        foreach(stop_signal IN ITEMS SIGINT SIGTERM)
+            add_test(NAME FmcwSignal_${stop_signal}_cpp
+                COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/check_fmcw_x11.py $<TARGET_FILE:${application}>
+                    "${window_config}" --smoke --signal ${stop_signal})
+            set_tests_properties(FmcwSignal_${stop_signal}_cpp PROPERTIES
+                LABELS "application;smoke;integration;visualization"
+                RESOURCE_LOCK fmcw_gui TIMEOUT 60)
+        endforeach()
     endif()
     foreach(language IN ITEMS cpp python)
         if(language STREQUAL "python" AND NOT HOLOSCAN_RADAR_BUILD_PYTHON)
@@ -412,23 +453,24 @@ function(radar_add_fmcw_workflow_checks application preset smoke_name)
                 "PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT}:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
         endif()
 
-        if(preset STREQUAL "siso")
-            set(name "FmcwNative_siso_${language}")
-            set(native_args --application siso --presenter native)
-            if(language STREQUAL "python")
-                list(APPEND native_args --python)
-            endif()
-            add_test(NAME ${name}
-                COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/check_fmcw_x11.py $<TARGET_FILE:siso>
-                    "${config_dir}/${preset}.yaml" ${native_args})
-            set_tests_properties(${name} PROPERTIES
-                LABELS "application;smoke;integration;visualization"
-                RESOURCE_LOCK fmcw_gui TIMEOUT 60)
-            if(language STREQUAL "python")
-                set_tests_properties(${name} PROPERTIES ENVIRONMENT
-                    "PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT}:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
-            endif()
+        set(name "FmcwNative_${preset}_${language}")
+        set(native_args --application ${application} --presenter native)
+        if(NOT preset STREQUAL "siso")
+            list(APPEND native_args --smoke)
+        endif()
+        if(language STREQUAL "python")
+            list(APPEND native_args --python)
+        endif()
+        add_test(NAME ${name}
+            COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
+                ${CMAKE_CURRENT_SOURCE_DIR}/check_fmcw_x11.py $<TARGET_FILE:${application}>
+                "${window_config}" ${native_args})
+        set_tests_properties(${name} PROPERTIES
+            LABELS "application;smoke;integration;visualization"
+            RESOURCE_LOCK fmcw_gui TIMEOUT 60)
+        if(language STREQUAL "python")
+            set_tests_properties(${name} PROPERTIES ENVIRONMENT
+                "PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT}:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
         endif()
     endforeach()
 endfunction()
@@ -617,4 +659,109 @@ if(TARGET spotlight)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/check_sar_dump.cmake)
     set_tests_properties(Sar_spotlight_dump PROPERTIES
         FIXTURES_REQUIRED sar_cphd LABELS "application;smoke")
+endif()
+
+# Shared SAR presentation: native cases require a presentable CUDA/Vulkan display.
+foreach(application IN ITEMS spotlight video_sar tiled_strip continuous_strip independent_images autofocus)
+    if(NOT TARGET ${application} OR NOT HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ)
+        continue()
+    endif()
+    add_test(NAME SarHeadless_${application}_cpp
+        COMMAND ${RADAR_TEST_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/check_headless.py
+            $<TARGET_FILE:${application}>
+            ${PROJECT_BINARY_DIR}/applications/sar/${application}/cpp/${application}_generated_smoke.yaml)
+    set_tests_properties(SarHeadless_${application}_cpp PROPERTIES
+        LABELS "application;smoke;integration;visualization" TIMEOUT 60
+        RESOURCE_LOCK fmcw_gui FIXTURES_REQUIRED sar_cphd)
+    if(NOT HOLOSCAN_RADAR_HAS_X11)
+        continue()
+    endif()
+    foreach(language IN ITEMS cpp python)
+        if(language STREQUAL "python" AND NOT HOLOSCAN_RADAR_BUILD_PYTHON)
+            continue()
+        endif()
+        foreach(presenter IN ITEMS x11 native)
+            set(gui_args --application ${application} --presenter ${presenter})
+            if(language STREQUAL "python")
+                list(APPEND gui_args --python)
+            endif()
+            if(language STREQUAL "python")
+                list(APPEND gui_args --close timeline --resize-mode fit --escape)
+            endif()
+            set(gui_name "SarWindow_${application}_${language}_${presenter}")
+            add_test(NAME ${gui_name}
+                COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
+                    ${PROJECT_SOURCE_DIR}/tests/gui/check_sar_windows.py
+                    $<TARGET_FILE:${application}>
+                    ${PROJECT_BINARY_DIR}/applications/sar/${application}/cpp/${application}_generated_smoke.yaml
+                    ${gui_args})
+            set_tests_properties(${gui_name} PROPERTIES
+                LABELS "application;smoke;integration;visualization"
+                RESOURCE_LOCK fmcw_gui TIMEOUT 60
+                FIXTURES_REQUIRED sar_cphd
+                ENVIRONMENT "PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT}:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
+        endforeach()
+    endforeach()
+endforeach()
+
+if(TARGET spotlight AND HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ AND HOLOSCAN_RADAR_HAS_X11)
+    foreach(stop_signal IN ITEMS SIGINT SIGTERM)
+        add_test(NAME SarSignal_${stop_signal}_cpp
+            COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
+                ${PROJECT_SOURCE_DIR}/tests/gui/check_sar_windows.py $<TARGET_FILE:spotlight>
+                ${PROJECT_BINARY_DIR}/applications/sar/spotlight/cpp/spotlight_generated_smoke.yaml
+                --application spotlight --presenter x11 --signal ${stop_signal})
+        set_tests_properties(SarSignal_${stop_signal}_cpp PROPERTIES
+            LABELS "application;smoke;integration;visualization"
+            RESOURCE_LOCK fmcw_gui TIMEOUT 60 FIXTURES_REQUIRED sar_cphd)
+    endforeach()
+endif()
+
+# Keep the explicit legacy layout covered alongside the new docked default.
+if(TARGET spotlight AND HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ AND HOLOSCAN_RADAR_HAS_X11)
+    foreach(language IN ITEMS cpp python)
+        if(language STREQUAL "python" AND NOT HOLOSCAN_RADAR_BUILD_PYTHON)
+            continue()
+        endif()
+        set(separate_args --application spotlight --presenter x11 --timeline-placement window)
+        if(language STREQUAL "python")
+            list(APPEND separate_args --python --close timeline --escape)
+        endif()
+        add_test(NAME SarWindow_spotlight_${language}_x11_separate
+            COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
+                ${PROJECT_SOURCE_DIR}/tests/gui/check_sar_windows.py $<TARGET_FILE:spotlight>
+                ${PROJECT_BINARY_DIR}/applications/sar/spotlight/cpp/spotlight_generated_smoke.yaml
+                ${separate_args})
+        set_tests_properties(SarWindow_spotlight_${language}_x11_separate PROPERTIES
+            LABELS "application;smoke;integration;visualization"
+            RESOURCE_LOCK fmcw_gui TIMEOUT 60 FIXTURES_REQUIRED sar_cphd
+            ENVIRONMENT "PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT}:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
+    endforeach()
+endif()
+
+if(TARGET spotlight AND HOLOSCAN_RADAR_HAS_HSDK5_HOLOVIZ AND HOLOSCAN_RADAR_HAS_X11)
+    foreach(language IN ITEMS cpp python)
+        if(language STREQUAL "python" AND NOT HOLOSCAN_RADAR_BUILD_PYTHON)
+            continue()
+        endif()
+        foreach(behavior IN ITEMS handoff close)
+            set(startup_args)
+            if(language STREQUAL "python")
+                list(APPEND startup_args --python)
+            endif()
+            if(behavior STREQUAL "close")
+                list(APPEND startup_args --close-before-image)
+            endif()
+            set(startup_name "SarStartupWindow_${language}_${behavior}")
+            add_test(NAME ${startup_name}
+                COMMAND ${RADAR_XVFB_RUN} -a ${RADAR_TEST_PYTHON}
+                    ${PROJECT_SOURCE_DIR}/tests/gui/check_sar_startup.py $<TARGET_FILE:spotlight>
+                    ${PROJECT_BINARY_DIR}/applications/sar/spotlight/cpp/spotlight_generated_smoke.yaml
+                    ${startup_args})
+            set_tests_properties(${startup_name} PROPERTIES
+                LABELS "application;smoke;integration;visualization"
+                RESOURCE_LOCK fmcw_gui TIMEOUT 45 FIXTURES_REQUIRED sar_cphd
+                ENVIRONMENT "PYTHONPATH=${HOLOSCAN_RADAR_PYTHON_ROOT}:${HOLOSCAN_RADAR_SDK_PYTHON_SITE}")
+        endforeach()
+    endforeach()
 endif()

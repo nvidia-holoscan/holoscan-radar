@@ -12,10 +12,10 @@ harness (checklist Performance section skipped).
    `CPHDReaderOp` and item 11 there. The contract's `uint8`
    `StreamBoundary` enum is not switched in this landing.
 
-2. **`weight` is unconnected in `sar_formation` modes 1 and 5.**
+2. **`weight` is unconnected in `sar_formation` spotlight and independent images.**
    All weights are `+1` on the spotlight row, and a connected
    `weight` port makes `BackprojectionOp` D2H-sync every tick to
-   prove that. Mode 2 wires it (`max_aperture_pulses > 0`) so
+   prove that. Video SAR wires it (`max_aperture_pulses > 0`) so
    eviction can emit `−1`.
 
 3. **TESTING.md items not covered as unit tests here:** a fragment

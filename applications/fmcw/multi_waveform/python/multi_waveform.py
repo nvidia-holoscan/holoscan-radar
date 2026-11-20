@@ -19,22 +19,20 @@ from holoscan_radar import (
     _radar,
 )
 from holoscan_radar.applications.fmcw_dashboard import add_dashboard
+from holoscan_radar.applications.presentation import prepare_presentation
 from holoscan_radar.applications.siso import BuiltGraph
 
 import holoscan as hs
 
 
-def build_graph(config: str | Path, *, choose_presenter: bool = False) -> BuiltGraph:
+def build_graph(
+    config: str | Path, *, choose_presenter: bool = False, presenter: str | None = None
+) -> BuiltGraph:
     """Compose the coordinated TX/RX graph with resolved native configuration."""
 
     path = str(Path(config).resolve())
     cfg = _radar._load_multi(path)
-    cfg["visualization"]["x11_presentation"] = _radar._resolve_x11_presentation(
-        cfg["visualize"], cfg["visualization"]["x11_presentation"], choose_presenter, path
-    )
-    device = _radar._select_application_device(
-        cfg["visualize"], cfg["visualize"], cfg["visualization"]["x11_presentation"]
-    )
+    device = prepare_presentation(cfg, path, presenter, choose_presenter)
     graph = hs.Graph("multi_waveform")
     options = hs.CompileOptions()
     extents = cfg["extents"]
@@ -179,4 +177,15 @@ def build_graph(config: str | Path, *, choose_presenter: bool = False) -> BuiltG
             profile_gap=cfg["visualization_profile_max_gap_frames"],
         )
     graph.set_default_clock(graph.add_clock(hs.RealtimeClock, "clock"))
-    return BuiltGraph(graph, options, cfg["num_frames"])
+    return BuiltGraph(
+        graph,
+        options,
+        cfg["num_frames"],
+        (
+            cfg["visualization"]["final_image_hold_s"]
+            if cfg["visualize"] and not cfg["visualization"]["headless"]
+            else 0.0
+        ),
+        _radar._frame_progress(),
+        0 if cfg["visualize"] else -1,
+    )
